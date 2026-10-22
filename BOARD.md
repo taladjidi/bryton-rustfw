@@ -31,9 +31,11 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
     FUN_08007ddc): 3 = SDRAM 0xd0000000 64 MB execute-never, 4 = 0xd0000000 4 MB executable (read-only from
     the second call, just before the jump), 5 = 0xd0400000 2 MB (same attributes as 4), 6 = SRAM4, 7 = ITCM 0x0
     64 KB executable. Regions 3 to 5 are write-through cacheable (C = 1, B = 0, TEX 0), not shareable.
-  - **Seen on the unit (2026-10-22):** our firmware stops between reading MPU_TYPE and writing MPU_RNR /
-    MPU_RBAR for region DREGION - 1 (diag v2, README "First run on the unit"). Why is not known yet; v3 (no
-    MPU write) is pending.
+  - An earlier reading, "our firmware stops in its first MPU writes" (diag v1 / v2), relied on the backlight as
+    a readout, which later proved not to work (section on the backlight below). Unproven.
+  - **Seen on the unit (2026-10-22, diag v9):** an image that turns the I-cache on, reads PC13 and requests a
+    system reset (AIRCR) runs as expected: the reset brings the bootloader up again (README "First run on the
+    unit").
   - Switching the MPU off is not an option: the default memory map makes 0xc0000000..0xdfffffff execute-never.
 - No watchdog is started, by the bootloader or the stock OS.
 - **Recovery mode ("Engineer Mode")**: USB plugged, restart with the four buttons while holding Page. The
@@ -111,7 +113,9 @@ battery on ADC3): not used yet.
   and pixels are written over SPI (RAMWR). It waits 120 ms after the software reset, sets the window before
   each write, and switches the display on after clearing the screen.
 - Backlight: stock drives PG13 with an LPTIM1 PWM on the LSE, output polarity inverted, 1..100 levels. This
-  firmware drives PG13 as a plain output, high = on (derived from the inverted PWM; to confirm on the unit).
+  firmware drives PG13 as a plain output, high = on (derived from the inverted PWM). **Seen on the unit
+  (2026-10-22): no visible effect** (diag v5 to v8: toggled, held high, held low, code proven to run by v9). The
+  backlight likely needs more than PG13 (a supply enable, or the panel on); inferred, to find in the stock OS.
 
 ## 7. USB
 
