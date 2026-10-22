@@ -19,14 +19,18 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 - The bootloader lives in internal flash (0x08000000). It is never modified by this project.
 - It sets up the FMC SDRAM, the eMMC, the clocks, then copies **6 MB of the eMMC OS area to SDRAM 0xd0000000**,
   sets MSP from word 0 of the image and jumps to word 1. It does not check the image.
-- Before the jump it **enables the MPU and both caches**:
+- At start it enables the MPU and both caches, but **just before the jump it turns both caches off again**
+  (I-cache off and invalidated, D-cache cleaned, invalidated and off; IAP 0x0800828a) and stops SysTick. So the
+  firmware starts with the caches off and every instruction is fetched uncached from SDRAM: much slower than the
+  cycle counts suggest, until the firmware turns the I-cache on itself. MPU regions:
   - SDRAM 64 MB at 0xd0000000 no-execute, except the first 4 MB (the image), which is executable and made
     read-only before the jump;
   - ITCM executable.
   - A firmware that wants other attributes adds its own region with a higher number (higher regions win).
   - Regions as the bootloader sets them (HAL_MPU_Disable, 8 regions, enable with PRIVDEFENA; Ghidra, IAP
     FUN_08007ddc): 3 = SDRAM 0xd0000000 64 MB execute-never, 4 = 0xd0000000 4 MB executable (read-only from
-    the second call, just before the jump), 6 = SRAM4, 7 = ITCM 0x0 64 KB executable. D-cache and I-cache on.
+    the second call, just before the jump), 5 = 0xd0400000 2 MB (same attributes as 4), 6 = SRAM4, 7 = ITCM 0x0
+    64 KB executable. Regions 3 to 5 are write-through cacheable (C = 1, B = 0, TEX 0), not shareable.
   - **Seen on the unit (2026-10-22):** our firmware stops between reading MPU_TYPE and writing MPU_RNR /
     MPU_RBAR for region DREGION - 1 (diag v2, README "First run on the unit"). Why is not known yet; v3 (no
     MPU write) is pending.
@@ -35,6 +39,11 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 - **Recovery mode ("Engineer Mode")**: USB plugged, restart with the four buttons while holding Page. The
   bootloader configures the Page pin itself and reads the real key, so no firmware can enter it by software.
   Recovery tools: github.com/taladjidi/bryton-S510-mods (`tools/iaprecover.py`, `docs/recovery.md`).
+  - The bootloader can't be read back over USB: the read path only hands sub-commands 0x03, 0x04, 0x05, 0x0d,
+    0x10, 0x13, 0x14 and 0x15 to the handler, so its "read internal flash" case (0x0b) is unreachable (a stale
+    buffer comes back). Sub 0x04 returns the byte sum of its 128 KB; `iaprecover.py --boot-sum` compares it
+    with R039 `iap.bin`. **Seen on the unit (2026-10-22): MATCH (0x00548f3c)**, so the disassembly is of the
+    bootloader the unit runs.
 
 ## 3. Memory
 

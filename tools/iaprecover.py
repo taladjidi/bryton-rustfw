@@ -5,6 +5,7 @@ Needs sudo (libusb must take the device from the OS disk driver): sudo python3 t
   sudo python3 iaprecover.py [--out FILE] [--bytes N]   read the OS area, compare with vanilla IMG.raw
   sudo python3 iaprecover.py --write-vanilla            write vanilla IMG.raw to the OS area, verify every chunk
   sudo python3 iaprecover.py --write out/IMG.bin        write a bryton-rustfw image (pack.py output) the same way
+  sudo python3 iaprecover.py --boot-sum                 compare the unit's bootloader with iap.bin (its byte sum, read-only)
 
 Put the unit in bootloader USB mode first: USB plugged in, press all four buttons to reboot, keep holding Page
 (lower right) until the screen shows "Engineer Mode" (docs/how-it-works.md).
@@ -13,6 +14,9 @@ Verified 2026-10-19: full 4 026 368 B readback == vanilla IMG.raw (sha256 c7f5e7
 Protocol (recovered from the bootloader, see docs/how-it-works.md): plain USB mass storage (Bulk-Only Transport, EP OUT 0x01 /
 IN 0x81). Opcode 0x28 READ(10) with CDB byte 6 = 0x0d ("read data from iNAND") returns 2 KB of the OS area:
 LBA field k -> OS-area byte offset k*2048; transfer length must be 4 blocks (2048 B).
+Sub 0x04 returns the 32-bit byte sum of the bootloader's 128 KB of flash (0x08000000..0x08020000) in the first 4
+bytes, little-endian. Sub 0x0b ("read internal flash") exists in the handler, but the READ path never calls the
+handler for it: the reply is a stale buffer (seen on the unit 2026-10-22). So the bootloader cannot be dumped over USB.
 Opcode 0x2A WRITE(10) with byte 6 = 0x0c writes 2 KB the same way (bootloader FUN_0800932c case 0xc).
 A failed sector write is only logged on the bootloader's debug UART (the CSW still says OK), so --write-vanilla
 reads every chunk back and stops at the first mismatch. Only the SHA256SUMS-verified vanilla image can be
@@ -81,9 +85,10 @@ def bulk(h, ep, data_or_len, timeout=5000):
     check(lib.libusb_bulk_transfer(h, ep, data_or_len, len(data_or_len), ctypes.byref(n), timeout), 'bulk out')
 
 
-def command(h, k, tag, write=None):
-    """One 2 KB vendor transfer: READ(10)/0x0d, or WRITE(10)/0x0c when write is the 2 KB to send."""
-    op, sub, flags = (0x2a, 0x0c, 0x00) if write else (0x28, 0x0d, 0x80)
+def command(h, k, tag, write=None, sub=0x0d):
+    """One 2 KB vendor transfer: READ(10)/sub (0x0d: 2 KB of the OS area, 0x04: the bootloader sum), or
+    WRITE(10)/0x0c when write is the 2 KB to send."""
+    op, sub, flags = (0x2a, 0x0c, 0x00) if write else (0x28, sub, 0x80)
     cdb = struct.pack('>BBIBH', op, 0, k, sub, CHUNK // 512).ljust(16, b'\0')
     bulk(h, EP_OUT, struct.pack('<4sIIBBB', b'USBC', tag, CHUNK, flags, 0, 10) + cdb)
     data = bulk(h, EP_OUT, write) if write else bulk(h, EP_IN, CHUNK)
@@ -147,6 +152,17 @@ def main():
     if img is not None:
         check_image(img)
     h = open_unit()
+    if '--boot-sum' in args:
+        try:
+            got = int.from_bytes(command(h, 0, 1, sub=0x04)[:4], 'little')
+        finally:
+            lib.libusb_release_interface(h, 0)
+            lib.libusb_attach_kernel_driver(h, 0)
+            lib.libusb_close(h)
+        ref = os.path.join(ROOT, 'firmware', 'R039', 'iap.bin')
+        want = sum(open(ref, 'rb').read()) & 0xffffffff if os.path.isfile(ref) else None
+        return print(f'bootloader byte sum on the unit {got:#010x}, firmware/R039/iap.bin {want and hex(want)}: '
+                     + ('MATCH' if got == want else 'DIFFER'))
     if '--write-vanilla' in args or img is not None:
         try:
             if img is not None:
