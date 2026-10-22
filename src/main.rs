@@ -34,7 +34,6 @@ fn modify(a: u32, clear: u32, set: u32) {
 // device memory (execute-never under the default map), and this code runs there. Highest region number so it
 // wins over anything the bootloader could have left.
 // ---------------------------------------------------------------------------------------------------------------
-#[allow(dead_code)]
 fn mpu_init() {
     const MPU_CTRL: u32 = 0xe000_ed94;
     const MPU_RNR: u32 = 0xe000_ed98;
@@ -221,9 +220,9 @@ const SPI_CR2: u32 = SPI1 + 0x04;
 const SPI_CFG1: u32 = SPI1 + 0x08;
 const SPI_CFG2: u32 = SPI1 + 0x0c;
 const SPI_SR: u32 = SPI1 + 0x14;
+const SPI_IFCR: u32 = SPI1 + 0x18;
 const SPI_TXDR: u32 = SPI1 + 0x20;
 const SR_TXP: u32 = 1 << 1;
-const SR_TXC: u32 = 1 << 12;
 const SPI_TIMEOUT: u32 = CPU_HZ / 100; // 10 ms: a stuck SPI must not hang the loop
 
 fn spi_init() {
@@ -231,13 +230,23 @@ fn spi_init() {
     wr(SPI_CFG1, (2 << 28) | 7); // MBR = /8, DSIZE = 8 bits
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
     wr(SPI_CFG2, (1 << 31) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 22) | (1 << 17));
-    wr(SPI_CR2, 0); // TSIZE 0: endless transfer, bytes go out as they are written
-    wr(SPI_CR1, 1 << 12); // SSI = 1 (with SSM: no mode fault)
-    wr(SPI_CR1, (1 << 12) | 1); // SPE
-    wr(SPI_CR1, (1 << 12) | (1 << 9) | 1); // CSTART
+    wr(SPI_CR1, CR1_SSI);
 }
 
-/// diag v14: SPI waits that ran out (spi_byte, spi_flush).
+const CR1_SSI: u32 = 1 << 12; // with SSM: internal NSS high, no mode fault
+const SR_EOT: u32 = 1 << 3;
+
+/// Starts a transfer of exactly `n` bytes (1..=0xffff), as the stock HAL_SPI_Transmit does (BOARD.md 6). An endless
+/// transfer (TSIZE 0, started once) sent one byte but stalled on long writes on the unit (diag v14).
+fn spi_begin(n: u32) {
+    wr(SPI_CR1, CR1_SSI); // SPE = 0: TSIZE is only writable then
+    wr(SPI_IFCR, 0xff8); // clear every event flag
+    wr(SPI_CR2, n & 0xffff);
+    wr(SPI_CR1, CR1_SSI | 1); // SPE
+    wr(SPI_CR1, CR1_SSI | (1 << 9) | 1); // CSTART
+}
+
+/// SPI waits that ran out (spi_byte, spi_end); diag v14 checks it.
 static SPI_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 fn spi_byte(b: u8) {
@@ -251,14 +260,17 @@ fn spi_byte(b: u8) {
     wr8(SPI_TXDR, b); // 8-bit access: one frame
 }
 
-fn spi_flush() {
+/// Waits for the end of the transfer (EOT: the last byte is out), then disables SPI1 until the next one.
+fn spi_end() {
     let t0 = cycles();
-    while rd(SPI_SR) & SR_TXC == 0 {
+    while rd(SPI_SR) & SR_EOT == 0 {
         if cycles().wrapping_sub(t0) > SPI_TIMEOUT {
             SPI_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
-            return;
+            break;
         }
     }
+    wr(SPI_IFCR, 0xff8);
+    wr(SPI_CR1, CR1_SSI);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -268,13 +280,17 @@ fn spi_flush() {
 fn lcd_cmd(cmd: u8, params: &[u8]) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
+    spi_begin(1);
     spi_byte(cmd);
-    spi_flush();
+    spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
-    for &p in params {
-        spi_byte(p);
+    if !params.is_empty() {
+        spi_begin(params.len() as u32);
+        for &p in params {
+            spi_byte(p);
+        }
+        spi_end();
     }
-    spi_flush();
     pin_set(LCD_CS.0, LCD_CS.1, true);
 }
 
@@ -292,14 +308,21 @@ fn lcd_power_on() {
 fn lcd_ram_write(color: u16, count: u32) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
+    spi_begin(1);
     spi_byte(0x2c); // RAMWR
-    spi_flush();
+    spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
-    for _ in 0..count {
-        spi_byte((color >> 8) as u8);
-        spi_byte(color as u8);
+    let mut left = count;
+    while left > 0 {
+        let n = left.min(0x7fff); // TSIZE is 16 bits: at most 0x7fff pixels (2 bytes each) per transfer
+        left -= n;
+        spi_begin(2 * n);
+        for _ in 0..n {
+            spi_byte((color >> 8) as u8);
+            spi_byte(color as u8);
+        }
+        spi_end();
     }
-    spi_flush();
     pin_set(LCD_CS.0, LCD_CS.1, true);
 }
 
@@ -375,83 +398,6 @@ impl Board for S510 {
     }
 }
 
-// ponytail: diagnostic build only (branch diag-boot). Stage n = n backlight flashes then steady on. The cycle
-// counter is calibrated against the RTC (LSE crystal, independent of the CPU clock), and the measured clock is
-// shown first: a group of round(MHz / 25) flashes (200 MHz = 8), or one 4 s flash if the RTC does not tick.
-fn spin_ms(ms: u32, hz: u32) {
-    let t0 = cycles();
-    while cycles().wrapping_sub(t0) < ms * (hz / 1000) {}
-}
-
-fn rtc_second() -> u32 {
-    rd(RTC_TR) & 0x7f
-}
-
-/// Waits for the RTC seconds to change; false after 2^31 cycles (10 s at 200 MHz) without a change.
-fn rtc_edge() -> bool {
-    let (s0, t0) = (rtc_second(), cycles());
-    while rtc_second() == s0 {
-        if cycles().wrapping_sub(t0) > 1 << 31 {
-            return false;
-        }
-    }
-    true
-}
-
-/// CPU cycles in one RTC second, edge to edge.
-fn measure_hz() -> Option<u32> {
-    if !rtc_edge() {
-        return None;
-    }
-    let t0 = cycles();
-    if !rtc_edge() {
-        return None;
-    }
-    Some(cycles().wrapping_sub(t0))
-}
-
-fn flashes(n: u32, on_ms: u32, hz: u32) {
-    pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-    spin_ms(2000, hz);
-    for _ in 0..n {
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-        spin_ms(on_ms, hz);
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-        spin_ms(400, hz);
-    }
-    pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-    spin_ms(1500, hz);
-}
-
-/// Waits by counting loop iterations: no timer at all (diag v5, since the cycle counter and the RTC are in doubt).
-fn busy(n: u32) {
-    for i in 0..n {
-        core::hint::black_box(i);
-    }
-}
-
-const BEAT: u32 = 20_000_000; // well under a second at 200 MHz, longer if the clock is slower
-
-/// A group of n flashes, separated from the next by 3 beats of steady light then 3 dark.
-fn beats(n: u32) {
-    for _ in 0..n {
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-        busy(BEAT);
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-        busy(BEAT);
-    }
-    busy(4 * BEAT);
-}
-
-/// I-cache on (RM0399 / ARMv7-M: ICIALLU, then CCR.IC). The bootloader jumps with both caches off (BOARD.md 2).
-fn icache_on() {
-    barrier();
-    wr(0xe000_ef50, 0); // ICIALLU
-    barrier();
-    modify(0xe000_ed14, 0, 1 << 17); // CCR.IC
-    barrier();
-}
-
 /// Boot stage at which diag v10 stops: `DIAG_STOP=n cargo build --release` (0: never).
 const STOP: u32 = match option_env!("DIAG_STOP") {
     Some(s) => parse_u32(s),
@@ -499,11 +445,12 @@ fn main() -> ! {
     delay_ms(1);
     checkpoint(9);
     pin_set(LCD_CS.0, LCD_CS.1, true);
+    spi_begin(1);
     spi_byte(0);
-    spi_flush();
-    // Only if the byte really went out: spi_byte / spi_flush give up after a timeout, so passing them proves nothing.
+    spi_end();
+    // Only if the byte really went out: spi_byte / spi_end give up after a timeout, so passing them proves nothing.
     // A stuck SPI would cost 10 ms per byte, about 25 min for the first frame: a hang to the eye.
-    if rd(SPI_SR) & SR_TXC != 0 {
+    if SPI_TIMEOUTS.load(Ordering::Relaxed) == 0 {
         checkpoint(10);
     }
     let mut board = S510;
@@ -563,144 +510,6 @@ fn main() -> ! {
         }
         timer_stop();
         checkpoint(7);
-        uptime_ms = uptime_ms.wrapping_add(POLL_MS);
-    }
-}
-
-#[allow(dead_code)]
-fn main_v9() -> ! {
-    icache_on();
-    main_v7()
-}
-
-#[allow(dead_code)]
-fn main_v8() -> ! {
-    icache_on();
-    main_v6()
-}
-
-#[allow(dead_code)]
-fn main_v7() -> ! {
-    // diag v7: the backlight is no readout (stock drives it as a 327 Hz PWM; a steady pin was only inferred). The
-    // signal is a reset instead: as soon as USB power appears (PC13 high), reset. With Page held while plugging
-    // in, the bootloader then shows Engineer Mode, which proves this code ran. No timer, no clock assumption.
-    modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC only
-    gpio(VBUS.0, VBUS.1, IN, 0);
-    loop {
-        if !pin_low(VBUS.0, VBUS.1) {
-            system_reset();
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn main_v6() -> ! {
-    // diag v6: does the code run, and what does PG13 do to the backlight? No timer, no polarity guess. Repeats
-    // forever: fast toggling (dim if anything), then held high, then held low, each about 2 s at 200 MHz.
-    modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only
-    gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
-    loop {
-        for _ in 0..BEAT {
-            pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-            pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-        }
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-        busy(4 * BEAT);
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-        busy(4 * BEAT);
-    }
-}
-
-#[allow(dead_code)]
-fn main_v5() -> ! {
-    dwt_init();
-    modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only, for the backlight
-    modify(RCC_APB4ENR, 0, 1 << 16); // RTC registers
-    gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
-    beats(3); // group A: alive
-    let c0 = cycles();
-    busy(BEAT);
-    beats(if cycles() != c0 { 1 } else { 2 }); // group B: 1 = the cycle counter counts, 2 = it is stuck
-    let s0 = rtc_second();
-    let mut ticked = false;
-    for _ in 0..40 {
-        busy(BEAT / 2);
-        if rtc_second() != s0 {
-            ticked = true;
-            break;
-        }
-    }
-    beats(if ticked { 1 } else { 2 }); // group C: 1 = the RTC seconds change, 2 = they do not
-    // Group D, polarity: pin high for a long while, then low for good.
-    pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-    busy(20 * BEAT);
-    pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-    loop {
-        busy(BEAT);
-    }
-}
-
-#[allow(dead_code)]
-fn main_v4() -> ! {
-    let hz = measure_hz().unwrap_or(CPU_HZ);
-    let stage = |n| flashes(n, 400, hz);
-    stage(1); // reset handler, DWT, GPIO ran
-    // diag v3: no MPU change at all (v1 and v2 stopped between stage 1 and the RNR / RBAR writes). The bootloader's
-    // regions already make the image executable (region 4, read-only) and ITCM executable (region 7).
-    stage(2); // straight after stage 1: if this never shows, the stop is time-based, not the MPU
-    board_init();
-    spi_init();
-    pin_set(BACKLIGHT.0, BACKLIGHT.1, true); // board_init switched it off
-    stage(3); // clocks and pins set
-    spi_byte(0); // CS high: the panel ignores it
-    let t0 = cycles();
-    while rd(SPI_SR) & SR_TXC == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 1000 {}
-    stage(if rd(SPI_SR) & SR_TXC != 0 { 4 } else { 9 }); // 4: SPI clocks a byte out in under 1 ms; 9: it does not
-    delay_ms(100);
-    stage(5); // SysTick + WFI wakes
-    let mut board = S510;
-    let mut app = App::start(&mut board);
-    stage(6); // panel up and first frame drawn
-    let mut link: Option<usb::Link> = None;
-    let mut usb_tried = false;
-    let mut session = Session::new();
-    let mut uptime_ms = 0u32;
-    loop {
-        app.step(&mut board);
-        let vbus = !pin_low(VBUS.0, VBUS.1);
-        if vbus && !usb_tried {
-            usb_tried = true;
-            link = usb::start();
-            app.set_usb(&mut board, if link.is_some() { UsbDot::Powered } else { UsbDot::Failed });
-        } else if !vbus && usb_tried {
-            // ponytail: unplugged = reset, the simplest way to power the PHY and the USB core down again
-            system_reset();
-        }
-        // Sleep until the next pass, waking for USB activity.
-        timer_start(POLL_MS);
-        loop {
-            if let Some(l) = &mut link {
-                match l.poll(&mut session, &app, uptime_ms) {
-                    Effect::None => {}
-                    Effect::Reset => {
-                        l.linger(50);
-                        system_reset();
-                    }
-                    Effect::Run(size) => {
-                        l.linger(50);
-                        l.disconnect();
-                        hw::run_staged(size);
-                    }
-                }
-                let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
-                app.set_usb(&mut board, dot);
-            }
-            if timer_done() {
-                break;
-            }
-            wfi();
-        }
-        timer_stop();
         uptime_ms = uptime_ms.wrapping_add(POLL_MS);
     }
 }
