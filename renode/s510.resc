@@ -1,0 +1,8 @@
+# Boots the firmware ELF as the bootloader would hand over: image at 0xd0000000, VTOR there, SP from word 0.
+# Variables set by the caller: $elf
+mach create "s510"
+machine LoadPlatformDescription @renode/s510.repl
+sysbus LoadELF $elf
+cpu VectorTableOffset 0xd0000000
+cpu SP 0x20020000
+logLevel 3

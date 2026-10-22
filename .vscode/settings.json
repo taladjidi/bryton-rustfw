@@ -1,0 +1,6 @@
+{
+    // rust-analyzer checks for the Mac: the bike computer's target (.cargo/config.toml) has no `test` crate, so
+    // the tests in lib.rs would show "can't find crate for `test`". The firmware build itself is unchanged;
+    // check.sh still checks it for thumbv7em with clippy.
+    "rust-analyzer.cargo.target": "aarch64-apple-darwin"
+}

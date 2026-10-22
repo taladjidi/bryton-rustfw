@@ -1,0 +1,9 @@
+[build]
+target = "thumbv7em-none-eabihf"     # Cortex-M7 with FPU (STM32H747 CM7)
+
+[target.thumbv7em-none-eabihf]
+rustflags = ["-C", "link-arg=-Tlink.x", "-C", "target-cpu=cortex-m7"]
+
+[alias]
+# The library's tests on the Mac (the default target above is the bike computer, which cannot run them).
+test-host = "test --target aarch64-apple-darwin"

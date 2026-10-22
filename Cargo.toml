@@ -1,0 +1,40 @@
+[package]
+name = "bryton-rustfw"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+publish = false
+description = "Minimal from-scratch firmware for the Bryton Rider S510: shows the RTC time"
+
+[[bin]]
+name = "bryton-rustfw"
+path = "src/main.rs"
+test = false          # firmware only: the tests live in lib.rs and run on the host (cargo test-host)
+bench = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"   # every unsafe block says why it is sound (// SAFETY:)
+
+# Register access is written out and traceable to BOARD.md. The only dependencies are the USB stack
+# for the dev link (AGENTS.md, "Toolchain and dependencies"): the firmware binary uses them, the library does not.
+[dependencies]
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"                                             # CdcAcmClass only (SerialPort is 64-byte FS)
+synopsys-usb-otg = { version = "0.5.0", features = ["hs"] }       # the STM32 OTG core, ULPI PHY supported
+static_cell = "2.1.1"                                             # 'static USB buffers without static mut
+critical-section = "1.2"                                          # implemented in hw.rs (interrupts always off)
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = true          # symbols stay in the ELF only; pack.py copies the loadable bytes
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+opt-level = 1

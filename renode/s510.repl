@@ -1,0 +1,4 @@
+// The S510 as far as Renode can model it: Renode's STM32H747 plus the panel's SPI1, which its platform lacks.
+using "platforms/cpus/stm32h747.repl"
+
+spi1: SPI.STM32H7_SPI @ sysbus 0x40013000

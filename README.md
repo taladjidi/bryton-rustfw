@@ -1,0 +1,107 @@
+# bryton-rustfw
+
+An open, from-scratch Rust firmware for Bryton bike computers. It currently targets the **Bryton Rider S510**,
+as a proof of concept: it replaces Bryton's OS entirely and shows the time kept by the RTC. Not affiliated with
+Bryton.
+
+- **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, so it is
+  obviously not the stock firmware.
+- **Page key:** toggles the backlight (in case its polarity guess is wrong).
+- **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
+- **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
+  build from RAM, reset. A dot at the top right shows its state (orange, then green when ready; red if the PHY
+  did not come up). Unplugging resets the unit.
+
+- **Code:** about 3 KB of firmware code plus about 20 KB of USB stack, no interrupts.
+- **Sources:** every register is traced to [BOARD.md](BOARD.md) (the board, learned from the stock firmware) or
+  the STM32H747 reference manual (RM0399).
+- **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
+
+**Status: built, checked in Ghidra, the simulator and Renode; NOT yet run on the unit.**
+
+## Build
+
+    ./check.sh          # fmt, clippy, host tests, build, pack -> out/IMG.bin (1 MB + trailer), out/update.ini;
+                        # plus the Renode checks when RENODE points at Renode (AGENTS.md, Emulation)
+
+rustup installs the pinned toolchain and target on first use. `cargo test-host` alone runs the tests and draws
+the screen through a simulated panel into `target/sim/preview.bmp`.
+
+`pack.py` re-checks what the stock updater checks (raw tag "R039" at 0x94, size > 1 MB, additive-sum trailer)
+and that the vector table is sane (SP in DTCM, Thumb reset vector inside the image).
+
+## Try it, and go back
+
+This **replaces the OS**: no USB drive, no rides, no updates from this firmware. The way back is the bootloader's
+recovery mode, which this firmware cannot touch (it lives in the internal flash).
+
+1. With the stock (or patched) firmware: plug in, copy `out/IMG.bin` and `out/update.ini` to the BRYTON drive,
+   eject, unplug. The stock OS installs it while starting up (as for any update), then restarts into it.
+2. Expected: black screen with the orange bar, the time in white, the seconds in orange, ticking. If the screen
+   stays dark, press Page once (backlight polarity).
+3. Back to Bryton's firmware (tested on the unit):
+   - USB plugged, press the four buttons to restart, keep holding **Page** until "Engineer Mode".
+   - Then write the stock firmware back with `tools/iaprecover.py --write-vanilla` from
+     [bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods) (see its `docs/recovery.md`).
+   - Restart, then install any firmware as usual.
+
+Once installed, later builds don't need steps 1 and 3. With the cable in and the dot green, `./dev.py run` loads
+`out/IMG.bin` into RAM and runs it, `./dev.py shot` / `watch` take screenshots, and `./dev.py reset` (or
+unplugging) returns to the installed build. See AGENTS.md, "Development loop on the unit".
+
+## Not yet seen on the unit
+
+- Pixels written over SPI with RAMCTRL `B0 00 F0` (standard for this panel class).
+- Backlight polarity (hence the Page toggle).
+- Whether the RTC holds local time or UTC.
+- Whether power off reaches standby or a lighter sleep.
+- The SysTick + WFI sleep in `delay_ms` (a pending SysTick wakes WFI with interrupts masked).
+- **USB:**
+  - PHY enable on PA7;
+  - the ULPI pins;
+  - enumeration at high speed with 512-byte bulk packets;
+  - the OTG_HS IRQ waking WFI.
+- `dev.py run`: the trampoline and the image starting again from RAM, including its USB coming back.
+
+## How it starts (verified)
+
+- **Bootloader** (BOARD.md 2):
+  - copies 6 MB of the eMMC OS area to SDRAM 0xd0000000;
+  - sets MSP from word 0 and jumps to word 1;
+  - never checks the image;
+  - **sets up the MPU and caches before the jump.**
+    - The MPU has SDRAM 64 MB no-execute plus 4 MB executable at 0xd0000000, and ITCM executable.
+    - Our region has the highest number, so it takes priority.
+  - no watchdog (no IWDG/WWDG in the stock OS either).
+- **SDRAM:** the FMC SDRAM is set up by the bootloader (bank 2, no remap: `FMC_BCR1 |= FMCEN` only).
+- **Code placement:** code and constants run from SDRAM, as the stock OS does before its own MPU setup.
+- **MPU:** the firmware adds one MPU region over SDRAM (normal, not cached, executable) and only switches the MPU
+  on. Switching it off would turn 0xc0000000..0xdfffffff into execute-never device memory under the default map.
+- **Data and stack:** in DTCM.
+
+## Hardware used (BOARD.md sections)
+
+- **Panel** (6), ST7789-class, 240 x 320, on SPI1:
+  - SCK PG11 AF5, MOSI PD7 AF5, CS PG10 (driven by hand), D/C PG9, reset PI3, power PG3 (inferred);
+  - SPI mode 3, 8 MHz from HSI (per_ck), so it does not depend on which PLL outputs the bootloader left running;
+  - the stock init sequence, except that the last RAMCTRL is `B0 00 F0` instead of `B0 10 F0`, so pixels are
+    written over SPI (RAMWR) and the LTDC is not needed.
+- **Backlight** PG13: a plain output, high = on (derived from the stock inverted LPTIM1 PWM; Page toggles it).
+- **RTC** (8): TR/DR read after RSF. The stock firmware may keep UTC and add the time zone itself (not traced),
+  so the hour can be off by the time zone.
+- **Keys** (5): PA1 back/power, PE3 page, active low, polled every 50 ms.
+- **Standby** (9): wake-up pin WKUP1 (PA0) rising, PWR_CPUCR PDDS_D2 + PDDS_D1, SLEEPDEEP, WFI, as the stock
+  power-off.
+- **Delays:** SysTick + WFI at 200 MHz (the bootloader's clock setup), so the CPU sleeps; the DWT cycle counter
+  for timeouts.
+
+## Next steps (for an open firmware)
+
+1. Run it.
+2. Then add, one at a time, each with its BOARD.md section written first:
+   - battery voltage (ADC3);
+   - the GNSS on SPI4;
+   - the Nordic link on USART2 (nRF5 serialization; the deciding piece);
+   - FAT on the eMMC (SDMMC1);
+   - USB mass storage, so updates and recovery work from inside the firmware.
+3. Embassy (async) once more than one thing runs at a time.

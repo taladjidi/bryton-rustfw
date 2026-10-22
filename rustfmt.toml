@@ -1,0 +1,2 @@
+max_width = 120                 # as the rest of the bryton code
+use_small_heuristics = "Max"    # use the full width for calls and arrays too

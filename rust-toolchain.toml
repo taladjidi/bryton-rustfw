@@ -1,0 +1,5 @@
+# Same compiler for everyone; rustup installs it and the target on first use.
+[toolchain]
+channel = "1.92"
+targets = ["thumbv7em-none-eabihf"]
+components = ["rustfmt", "clippy", "rust-analyzer"]
