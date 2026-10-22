@@ -412,17 +412,57 @@ fn flashes(n: u32, on_ms: u32, hz: u32) {
     spin_ms(1500, hz);
 }
 
+/// Waits by counting loop iterations: no timer at all (diag v5, since the cycle counter and the RTC are in doubt).
+fn busy(n: u32) {
+    for i in 0..n {
+        core::hint::black_box(i);
+    }
+}
+
+const BEAT: u32 = 20_000_000; // well under a second at 200 MHz, longer if the clock is slower
+
+/// A group of n flashes, separated from the next by 3 beats of steady light then 3 dark.
+fn beats(n: u32) {
+    for _ in 0..n {
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
+        busy(BEAT);
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+        busy(BEAT);
+    }
+    busy(4 * BEAT);
+}
+
 fn main() -> ! {
     dwt_init();
     modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only, for the backlight
     modify(RCC_APB4ENR, 0, 1 << 16); // RTC registers
     gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
-    let measured = measure_hz();
-    let hz = measured.unwrap_or(CPU_HZ);
-    match measured {
-        Some(h) => flashes((h + 12_500_000) / 25_000_000, 400, hz),
-        None => flashes(1, 4000, hz),
+    beats(3); // group A: alive
+    let c0 = cycles();
+    busy(BEAT);
+    beats(if cycles() != c0 { 1 } else { 2 }); // group B: 1 = the cycle counter counts, 2 = it is stuck
+    let s0 = rtc_second();
+    let mut ticked = false;
+    for _ in 0..40 {
+        busy(BEAT / 2);
+        if rtc_second() != s0 {
+            ticked = true;
+            break;
+        }
     }
+    beats(if ticked { 1 } else { 2 }); // group C: 1 = the RTC seconds change, 2 = they do not
+    // Group D, polarity: pin high for a long while, then low for good.
+    pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
+    busy(20 * BEAT);
+    pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+    loop {
+        busy(BEAT);
+    }
+}
+
+#[allow(dead_code)]
+fn main_v4() -> ! {
+    let hz = measure_hz().unwrap_or(CPU_HZ);
     let stage = |n| flashes(n, 400, hz);
     stage(1); // reset handler, DWT, GPIO ran
     // diag v3: no MPU change at all (v1 and v2 stopped between stage 1 and the RNR / RBAR writes). The bootloader's
