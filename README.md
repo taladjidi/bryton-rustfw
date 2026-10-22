@@ -70,8 +70,12 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
     Page, plug the cable in: Engineer Mode appears. Control: with v8 (no reset) the same gesture gives no
     Engineer Mode, so the plug-in alone does not restart the unit. **So our code runs:** the bootloader hand-off,
     the reset handler, I-cache enable, GPIO input and the system reset all work.
-  - Next: the same "reset on VBUS" checkpoint placed at a chosen boot stage of the full firmware, to find where it
-    stops.
+  - **Where the full firmware stops** (the same checkpoint at chosen stages, v10 to v15): MPU, cycle counter,
+    clocks and pins, SPI init, `delay_ms` (SysTick + WFI), one SPI byte and the panel power-on all pass. A long SPI
+    write (2000 bytes) after the panel power-on does not complete, with SPI1 in endless mode (TSIZE 0) or per
+    transfer (TSIZE + EOT, as stock). Renode runs the same images to the end. So every byte of the first frame
+    waits out its timeout: the firmware looks hung. Stock never sends long SPI writes (pixels go over the LTDC).
+  - Next (v16, built): the same probe with the panel off and on, the result coded in the delay before the reset.
 - **The bootloader jumps with both caches off** (BOARD.md 2): the firmware runs uncached from SDRAM until it
   turns the I-cache on.
 - **Renode passed all of these:** it does not model the MPU and caches (BOARD.md 2).
