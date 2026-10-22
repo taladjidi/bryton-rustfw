@@ -442,9 +442,94 @@ fn icache_on() {
     barrier();
 }
 
+/// Boot stage at which diag v10 stops: `DIAG_STOP=n cargo build --release` (0: never).
+const STOP: u32 = match option_env!("DIAG_STOP") {
+    Some(s) => parse_u32(s),
+    None => 0,
+};
+
+const fn parse_u32(s: &str) -> u32 {
+    let b = s.as_bytes();
+    let (mut i, mut n) = (0, 0);
+    while i < b.len() {
+        n = n * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    n
+}
+
+/// diag v10: at stage STOP, wait for USB power, then reset. Power on, hold Page, plug in: Engineer Mode means the
+/// firmware got there (the signal proven by v9; the backlight is no readout). Stages: 1 MPU, 2 DWT, 3 clocks and
+/// pins, 4 SPI, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
+fn checkpoint(n: u32) {
+    if n == STOP {
+        modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
+        gpio(VBUS.0, VBUS.1, IN, 0);
+        while pin_low(VBUS.0, VBUS.1) {}
+        system_reset();
+    }
+}
+
 fn main() -> ! {
-    // diag v9: v7 (reset as soon as USB power appears) with the I-cache on first. v8 (v6 + I-cache) showed nothing,
-    // so the backlight is no readout; the bootloader's Engineer Mode screen is.
+    mpu_init();
+    checkpoint(1);
+    dwt_init();
+    checkpoint(2);
+    board_init();
+    checkpoint(3);
+    spi_init();
+    checkpoint(4);
+    let mut board = S510;
+    let mut app = App::start(&mut board);
+    checkpoint(5);
+    let mut link: Option<usb::Link> = None;
+    let mut usb_tried = false;
+    let mut session = Session::new();
+    let mut uptime_ms = 0u32;
+    loop {
+        app.step(&mut board);
+        checkpoint(6);
+        let vbus = !pin_low(VBUS.0, VBUS.1);
+        if vbus && !usb_tried {
+            usb_tried = true;
+            link = usb::start();
+            app.set_usb(&mut board, if link.is_some() { UsbDot::Powered } else { UsbDot::Failed });
+        } else if !vbus && usb_tried {
+            // ponytail: unplugged = reset, the simplest way to power the PHY and the USB core down again
+            system_reset();
+        }
+        // Sleep until the next pass, waking for USB activity.
+        timer_start(POLL_MS);
+        loop {
+            if let Some(l) = &mut link {
+                match l.poll(&mut session, &app, uptime_ms) {
+                    Effect::None => {}
+                    Effect::Reset => {
+                        l.linger(50);
+                        system_reset();
+                    }
+                    Effect::Run(size) => {
+                        l.linger(50);
+                        l.disconnect();
+                        hw::run_staged(size);
+                    }
+                }
+                let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
+                app.set_usb(&mut board, dot);
+            }
+            if timer_done() {
+                break;
+            }
+            wfi();
+        }
+        timer_stop();
+        checkpoint(7);
+        uptime_ms = uptime_ms.wrapping_add(POLL_MS);
+    }
+}
+
+#[allow(dead_code)]
+fn main_v9() -> ! {
     icache_on();
     main_v7()
 }
