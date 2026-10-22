@@ -151,7 +151,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image that stopped at its first MPU write on the unit |
 | 4. Fuzzing (to add) | random host bytes into `dev::Session` and random images into the image checks, as a host test loop (no new dependency) | panics and out-of-range reads on input from the cable | |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
-| 6. On the unit, boot | branch `diag-boot`: the backlight flashes N times at boot stage N (DWT-timed, no SysTick, no panel), written from Engineer Mode with `tools/iaprecover.py --write` | where a boot stops when nothing else is visible | anything after the panel is up |
+| 6. On the unit, boot | branch `diag-boot`: a checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | README "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
 
 - **A new boot step that touches the core (MPU, caches, clocks, VTOR)** gets a `diag-boot` stage on the unit

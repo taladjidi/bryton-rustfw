@@ -18,8 +18,8 @@ Bryton.
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
 
 **Status: installed on the unit once (2026-10-22): it does not start yet.** Dark screen, keys ignored, no USB
-device. Diagnostic builds (branch `diag-boot`) place the stop in the first MPU register writes; see "First run on
-the unit" below.
+device. Diagnostic builds (branch `diag-boot`) show that our code does run (reset handler, I-cache, GPIO, system
+reset); where the full firmware stops is not known yet. See "First run on the unit" below.
 
 ## Build
 
@@ -61,17 +61,26 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   exactly `out/IMG.bin`, trailer included; the rest still holds the old OS image (never read).
 - **Result:** dark screen, keys ignored, no USB device. So it stops before the first frame and before the USB
   start.
-- **Diagnostic builds** (branch `diag-boot`, written from Engineer Mode with `tools/iaprecover.py --write`): the
-  backlight flashes N times at boot stage N.
-  - v1: stops inside `mpu_init`.
-  - v2, one register per stage: stops between reading MPU_TYPE and writing RNR / RBAR (region DREGION - 1).
-  - v3, no MPU write at all: pending; it tells the MPU apart from a time-based stop.
-- **Renode passed all of these:** it does not model the MPU and caches the bootloader leaves on (BOARD.md 2).
+- **Diagnostic builds** (branch `diag-boot`, written from Engineer Mode with `tools/iaprecover.py --write`; each
+  write is a row in bryton-S510-mods' FLASHLOG):
+  - v1 to v8 used the backlight (PG13 as a plain output) as the readout. v1 to v4 showed a steady light, v5 to v8
+    nothing, whatever the code did with the pin: **PG13 as a plain output is no readout**, and the v1 / v2 "stop in
+    the MPU writes" read from it is unproven.
+  - **The signal that works (v9):** the image waits for USB power (PC13 high) and then resets. Power on, hold
+    Page, plug the cable in: Engineer Mode appears. Control: with v8 (no reset) the same gesture gives no
+    Engineer Mode, so the plug-in alone does not restart the unit. **So our code runs:** the bootloader hand-off,
+    the reset handler, I-cache enable, GPIO input and the system reset all work.
+  - Next: the same "reset on VBUS" checkpoint placed at a chosen boot stage of the full firmware, to find where it
+    stops.
+- **The bootloader jumps with both caches off** (BOARD.md 2): the firmware runs uncached from SDRAM until it
+  turns the I-cache on.
+- **Renode passed all of these:** it does not model the MPU and caches (BOARD.md 2).
 - **The four-button restart works with this firmware stuck**, so Engineer Mode stays reachable (cable in first).
 
 
 - Pixels written over SPI with RAMCTRL `B0 00 F0` (standard for this panel class).
-- Backlight polarity (hence the Page toggle).
+- How to drive the backlight: PG13 as a plain output lit nothing on the unit (diag v5 to v8); stock uses an
+  LPTIM1 PWM (BOARD.md).
 - Whether the RTC holds local time or UTC.
 - Whether power off reaches standby or a lighter sleep.
 - The SysTick + WFI sleep in `delay_ms` (a pending SysTick wakes WFI with interrupts masked).
