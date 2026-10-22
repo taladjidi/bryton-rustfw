@@ -460,8 +460,8 @@ const fn parse_u32(s: &str) -> u32 {
 
 /// diag v10: at stage STOP, wait for USB power, then reset. Power on, hold Page, plug in: Engineer Mode means the
 /// firmware got there (the signal proven by v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
-/// 3 clocks and pins, 4 SPI, 8 cycle counter runs, 9 delay_ms(1) returns, 10 one SPI byte sent, 5 panel up and
-/// first frame, 6 first app step, 7 first SysTick + WFI wait done.
+/// 3 clocks and pins, 4 SPI, 8 cycle counter runs, 9 delay_ms(1) returns, 10 one SPI byte sent, 11 panel power-on,
+/// 12 panel init, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
 fn checkpoint(n: u32) {
     if n == STOP {
         modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
@@ -496,6 +496,12 @@ fn main() -> ! {
         checkpoint(10);
     }
     let mut board = S510;
+    // diag v13: stage 5 split again: the panel power-on and reset pulse, then the whole panel init (commands,
+    // black fill, display on). App::start below repeats both, which is harmless.
+    lcd_power_on();
+    checkpoint(11);
+    bryton_rustfw::panel::init(&mut board);
+    checkpoint(12);
     let mut app = App::start(&mut board);
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
