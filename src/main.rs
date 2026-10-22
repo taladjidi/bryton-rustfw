@@ -20,6 +20,7 @@ mod usb;
 use bryton_rustfw::dev::{Effect, Session};
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS};
+use core::sync::atomic::{AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
 #[inline(always)]
@@ -236,10 +237,14 @@ fn spi_init() {
     wr(SPI_CR1, (1 << 12) | (1 << 9) | 1); // CSTART
 }
 
+/// diag v14: SPI waits that ran out (spi_byte, spi_flush).
+static SPI_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+
 fn spi_byte(b: u8) {
     let t0 = cycles();
     while rd(SPI_SR) & SR_TXP == 0 {
         if cycles().wrapping_sub(t0) > SPI_TIMEOUT {
+            SPI_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             return;
         }
     }
@@ -248,7 +253,12 @@ fn spi_byte(b: u8) {
 
 fn spi_flush() {
     let t0 = cycles();
-    while rd(SPI_SR) & SR_TXC == 0 && cycles().wrapping_sub(t0) < SPI_TIMEOUT {}
+    while rd(SPI_SR) & SR_TXC == 0 {
+        if cycles().wrapping_sub(t0) > SPI_TIMEOUT {
+            SPI_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -461,7 +471,8 @@ const fn parse_u32(s: &str) -> u32 {
 /// diag v10: at stage STOP, wait for USB power, then reset. Power on, hold Page, plug in: Engineer Mode means the
 /// firmware got there (the signal proven by v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
 /// 3 clocks and pins, 4 SPI, 8 cycle counter runs, 9 delay_ms(1) returns, 10 one SPI byte sent, 11 panel power-on,
-/// 12 panel init, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
+/// 13 2000 SPI bytes without a timeout, 12 panel init, 5 panel up and first frame, 6 first app step, 7 first
+/// SysTick + WFI wait done.
 fn checkpoint(n: u32) {
     if n == STOP {
         modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
@@ -500,6 +511,12 @@ fn main() -> ! {
     // black fill, display on). App::start below repeats both, which is harmless.
     lcd_power_on();
     checkpoint(11);
+    // diag v14: 2000 bytes of pixels; stop only if no SPI wait timed out (a stall after the first bytes would make
+    // every later byte cost 10 ms: about 25 min for the black fill, a hang to the eye).
+    lcd_ram_write(0, 1000);
+    if SPI_TIMEOUTS.load(Ordering::Relaxed) == 0 {
+        checkpoint(13);
+    }
     bryton_rustfw::panel::init(&mut board);
     checkpoint(12);
     let mut app = App::start(&mut board);
