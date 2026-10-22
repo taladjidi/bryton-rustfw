@@ -443,8 +443,14 @@ fn icache_on() {
 }
 
 fn main() -> ! {
-    // diag v8: v6 with the I-cache on first. Everything ran uncached from SDRAM so far, so the v5 / v6 phases may
-    // have lasted minutes, not seconds.
+    // diag v9: v7 (reset as soon as USB power appears) with the I-cache on first. v8 (v6 + I-cache) showed nothing,
+    // so the backlight is no readout; the bootloader's Engineer Mode screen is.
+    icache_on();
+    main_v7()
+}
+
+#[allow(dead_code)]
+fn main_v8() -> ! {
     icache_on();
     main_v6()
 }
