@@ -459,8 +459,9 @@ const fn parse_u32(s: &str) -> u32 {
 }
 
 /// diag v10: at stage STOP, wait for USB power, then reset. Power on, hold Page, plug in: Engineer Mode means the
-/// firmware got there (the signal proven by v9; the backlight is no readout). Stages: 1 MPU, 2 DWT, 3 clocks and
-/// pins, 4 SPI, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
+/// firmware got there (the signal proven by v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
+/// 3 clocks and pins, 4 SPI, 8 cycle counter runs, 9 delay_ms(1) returns, 10 one SPI byte sent, 5 panel up and
+/// first frame, 6 first app step, 7 first SysTick + WFI wait done.
 fn checkpoint(n: u32) {
     if n == STOP {
         modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
@@ -479,6 +480,17 @@ fn main() -> ! {
     checkpoint(3);
     spi_init();
     checkpoint(4);
+    // diag v11: stage 5 hangs, so test what it relies on, in order: the cycle counter (SPI timeouts), SysTick + WFI
+    // (every delay), one SPI byte with the panel deselected.
+    let c0 = cycles();
+    while cycles() == c0 {}
+    checkpoint(8);
+    delay_ms(1);
+    checkpoint(9);
+    pin_set(LCD_CS.0, LCD_CS.1, true);
+    spi_byte(0);
+    spi_flush();
+    checkpoint(10);
     let mut board = S510;
     let mut app = App::start(&mut board);
     checkpoint(5);
