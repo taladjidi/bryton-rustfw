@@ -33,6 +33,7 @@ fn modify(a: u32, clear: u32, set: u32) {
 // device memory (execute-never under the default map), and this code runs there. Highest region number so it
 // wins over anything the bootloader could have left.
 // ---------------------------------------------------------------------------------------------------------------
+#[allow(dead_code)]
 fn mpu_init() {
     const MPU_CTRL: u32 = 0xe000_ed94;
     const MPU_RNR: u32 = 0xe000_ed98;
@@ -432,7 +433,38 @@ fn beats(n: u32) {
     busy(4 * BEAT);
 }
 
+/// I-cache on (RM0399 / ARMv7-M: ICIALLU, then CCR.IC). The bootloader jumps with both caches off (BOARD.md 2).
+fn icache_on() {
+    barrier();
+    wr(0xe000_ef50, 0); // ICIALLU
+    barrier();
+    modify(0xe000_ed14, 0, 1 << 17); // CCR.IC
+    barrier();
+}
+
 fn main() -> ! {
+    // diag v8: v6 with the I-cache on first. Everything ran uncached from SDRAM so far, so the v5 / v6 phases may
+    // have lasted minutes, not seconds.
+    icache_on();
+    main_v6()
+}
+
+#[allow(dead_code)]
+fn main_v7() -> ! {
+    // diag v7: the backlight is no readout (stock drives it as a 327 Hz PWM; a steady pin was only inferred). The
+    // signal is a reset instead: as soon as USB power appears (PC13 high), reset. With Page held while plugging
+    // in, the bootloader then shows Engineer Mode, which proves this code ran. No timer, no clock assumption.
+    modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC only
+    gpio(VBUS.0, VBUS.1, IN, 0);
+    loop {
+        if !pin_low(VBUS.0, VBUS.1) {
+            system_reset();
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn main_v6() -> ! {
     // diag v6: does the code run, and what does PG13 do to the backlight? No timer, no polarity guess. Repeats
     // forever: fast toggling (dim if anything), then held high, then held low, each about 2 s at 200 MHz.
     modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only
