@@ -364,30 +364,66 @@ impl Board for S510 {
     }
 }
 
-// ponytail: diagnostic build only (branch diag-boot). Stage n = n backlight flashes then steady on, timed by the
-// DWT cycle counter so it depends on neither SysTick nor the MPU; the last group seen is where boot stopped.
-fn spin_ms(ms: u32) {
+// ponytail: diagnostic build only (branch diag-boot). Stage n = n backlight flashes then steady on. The cycle
+// counter is calibrated against the RTC (LSE crystal, independent of the CPU clock), and the measured clock is
+// shown first: a group of round(MHz / 25) flashes (200 MHz = 8), or one 4 s flash if the RTC does not tick.
+fn spin_ms(ms: u32, hz: u32) {
     let t0 = cycles();
-    while cycles().wrapping_sub(t0) < ms * (CPU_HZ / 1000) {}
+    while cycles().wrapping_sub(t0) < ms * (hz / 1000) {}
 }
 
-fn stage(n: u32) {
+fn rtc_second() -> u32 {
+    rd(RTC_TR) & 0x7f
+}
+
+/// Waits for the RTC seconds to change; false after 2^31 cycles (10 s at 200 MHz) without a change.
+fn rtc_edge() -> bool {
+    let (s0, t0) = (rtc_second(), cycles());
+    while rtc_second() == s0 {
+        if cycles().wrapping_sub(t0) > 1 << 31 {
+            return false;
+        }
+    }
+    true
+}
+
+/// CPU cycles in one RTC second, edge to edge.
+fn measure_hz() -> Option<u32> {
+    if !rtc_edge() {
+        return None;
+    }
+    let t0 = cycles();
+    if !rtc_edge() {
+        return None;
+    }
+    Some(cycles().wrapping_sub(t0))
+}
+
+fn flashes(n: u32, on_ms: u32, hz: u32) {
     pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-    spin_ms(1000);
+    spin_ms(2000, hz);
     for _ in 0..n {
         pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-        spin_ms(250);
+        spin_ms(on_ms, hz);
         pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
-        spin_ms(350);
+        spin_ms(400, hz);
     }
     pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
-    spin_ms(1000);
+    spin_ms(1500, hz);
 }
 
 fn main() -> ! {
     dwt_init();
     modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only, for the backlight
+    modify(RCC_APB4ENR, 0, 1 << 16); // RTC registers
     gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
+    let measured = measure_hz();
+    let hz = measured.unwrap_or(CPU_HZ);
+    match measured {
+        Some(h) => flashes((h + 12_500_000) / 25_000_000, 400, hz),
+        None => flashes(1, 4000, hz),
+    }
+    let stage = |n| flashes(n, 400, hz);
     stage(1); // reset handler, DWT, GPIO ran
     // diag v3: no MPU change at all (v1 and v2 stopped between stage 1 and the RNR / RBAR writes). The bootloader's
     // regions already make the image executable (region 4, read-only) and ITCM executable (region 7).
