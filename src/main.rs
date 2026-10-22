@@ -398,6 +398,49 @@ impl Board for S510 {
     }
 }
 
+/// diag v16: sends `n` bytes as pixel data (CS low, D/C high) in one transfer and stops at the first SPI timeout.
+/// Returns 0: no byte taken, 1: 1 to 15 taken, 2: exactly 16 (the FIFO filled, nothing shifted out), 3: 17 to n - 1
+/// (shifted some, then stalled), 4: all taken but EOT never came, 5: all sent.
+fn spi_probe(n: u32) -> u32 {
+    let t = || SPI_TIMEOUTS.load(Ordering::Relaxed);
+    pin_set(LCD_CS.0, LCD_CS.1, false);
+    pin_set(LCD_DC.0, LCD_DC.1, true);
+    spi_begin(n);
+    let mut sent = n;
+    for i in 0..n {
+        let before = t();
+        spi_byte(0);
+        if t() != before {
+            sent = i;
+            break;
+        }
+    }
+    let before = t();
+    spi_end();
+    let eot = t() == before;
+    pin_set(LCD_CS.0, LCD_CS.1, true);
+    match sent {
+        0 => 0,
+        1..=15 => 1,
+        16 => 2,
+        _ if sent < n => 3,
+        _ if !eot => 4,
+        _ => 5,
+    }
+}
+
+/// diag v16: like checkpoint, but waits `code` x 3 s between USB power and the reset, so the time from plug-in to
+/// Engineer Mode reports `code` (0 = at once; the bootloader adds a second or two).
+fn coded(n: u32, code: u32) {
+    if n == STOP {
+        modify(RCC_AHB4ENR, 0, 1 << 2);
+        gpio(VBUS.0, VBUS.1, IN, 0);
+        while pin_low(VBUS.0, VBUS.1) {}
+        delay_ms(3000 * code);
+        system_reset();
+    }
+}
+
 /// Boot stage at which diag v10 stops: `DIAG_STOP=n cargo build --release` (0: never).
 const STOP: u32 = match option_env!("DIAG_STOP") {
     Some(s) => parse_u32(s),
@@ -416,9 +459,9 @@ const fn parse_u32(s: &str) -> u32 {
 
 /// diag v10: at stage STOP, wait for USB power, then reset. Power on, hold Page, plug in: Engineer Mode means the
 /// firmware got there (the signal proven by v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
-/// 3 clocks and pins, 4 SPI, 8 cycle counter runs, 9 delay_ms(1) returns, 10 one SPI byte sent, 11 panel power-on,
-/// 13 2000 SPI bytes without a timeout, 12 panel init, 5 panel up and first frame, 6 first app step, 7 first
-/// SysTick + WFI wait done.
+/// 3 clocks and pins, 4 SPI, 8 cycle counter runs, 9 delay_ms(1) returns, 10 one SPI byte sent, 15 SPI probe with
+/// the panel off (coded), 11 panel power-on, 14 SPI probe with the panel on (coded), 13 2000 SPI bytes without a
+/// timeout, 12 panel init, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
 fn checkpoint(n: u32) {
     if n == STOP {
         modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
@@ -456,8 +499,11 @@ fn main() -> ! {
     let mut board = S510;
     // diag v13: stage 5 split again: the panel power-on and reset pulse, then the whole panel init (commands,
     // black fill, display on). App::start below repeats both, which is harmless.
+    // diag v16: the same SPI probe with the panel off (15) and on (14), reported by a coded delay.
+    coded(15, spi_probe(2000));
     lcd_power_on();
     checkpoint(11);
+    coded(14, spi_probe(2000));
     // diag v14: 2000 bytes of pixels; stop only if no SPI wait timed out (a stall after the first bytes would make
     // every later byte cost 10 ms: about 25 min for the black fill, a hang to the eye).
     lcd_ram_write(0, 1000);
