@@ -364,13 +364,47 @@ impl Board for S510 {
     }
 }
 
+// ponytail: diagnostic build only (branch diag-boot). Stage n = n backlight flashes then steady on, timed by the
+// DWT cycle counter so it depends on neither SysTick nor the MPU; the last group seen is where boot stopped.
+fn spin_ms(ms: u32) {
+    let t0 = cycles();
+    while cycles().wrapping_sub(t0) < ms * (CPU_HZ / 1000) {}
+}
+
+fn stage(n: u32) {
+    pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+    spin_ms(1000);
+    for _ in 0..n {
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
+        spin_ms(250);
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+        spin_ms(350);
+    }
+    pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
+    spin_ms(1000);
+}
+
 fn main() -> ! {
-    mpu_init();
     dwt_init();
+    modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only, for the backlight
+    gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
+    stage(1); // reset handler, DWT, GPIO ran
+    // diag v3: no MPU change at all (v1 and v2 stopped between stage 1 and the RNR / RBAR writes). The bootloader's
+    // regions already make the image executable (region 4, read-only) and ITCM executable (region 7).
+    stage(2); // straight after stage 1: if this never shows, the stop is time-based, not the MPU
     board_init();
     spi_init();
+    pin_set(BACKLIGHT.0, BACKLIGHT.1, true); // board_init switched it off
+    stage(3); // clocks and pins set
+    spi_byte(0); // CS high: the panel ignores it
+    let t0 = cycles();
+    while rd(SPI_SR) & SR_TXC == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 1000 {}
+    stage(if rd(SPI_SR) & SR_TXC != 0 { 4 } else { 9 }); // 4: SPI clocks a byte out in under 1 ms; 9: it does not
+    delay_ms(100);
+    stage(5); // SysTick + WFI wakes
     let mut board = S510;
     let mut app = App::start(&mut board);
+    stage(6); // panel up and first frame drawn
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;
     let mut session = Session::new();
