@@ -17,7 +17,9 @@ Bryton.
   the STM32H747 reference manual (RM0399).
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
 
-**Status: built, checked in Ghidra, the simulator and Renode; NOT yet run on the unit.**
+**Status: installed on the unit once (2026-10-22): it does not start yet.** Dark screen, keys ignored, no USB
+device. Diagnostic builds (branch `diag-boot`) place the stop in the first MPU register writes; see "First run on
+the unit" below.
 
 ## Build
 
@@ -40,16 +42,33 @@ recovery mode, which this firmware cannot touch (it lives in the internal flash)
 2. Expected: black screen with the orange bar, the time in white, the seconds in orange, ticking. If the screen
    stays dark, press Page once (backlight polarity).
 3. Back to Bryton's firmware (tested on the unit):
-   - USB plugged, press the four buttons to restart, keep holding **Page** until "Engineer Mode".
-   - Then write the stock firmware back with `tools/iaprecover.py --write-vanilla` from
-     [bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods) (see its `docs/recovery.md`).
+   - USB plugged **first**, then press the four buttons to restart, keep holding **Page** until "Engineer Mode"
+     (without the cable the bootloader ignores Page).
+   - Then `sudo python3 tools/iaprecover.py --write-vanilla` (copied from
+     [bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods), see its `docs/recovery.md`; run
+     `tools/fetch_firmware.py` once to get the stock image, which is not in this repository).
+   - Or, to try a new build without the stock OS: `sudo python3 tools/iaprecover.py --write out/IMG.bin`. It
+     checks the image as `pack.py` and the updater do, writes it in 2 KB chunks and reads each one back.
    - Restart, then install any firmware as usual.
 
 Once installed, later builds don't need steps 1 and 3. With the cable in and the dot green, `./dev.py run` loads
 `out/IMG.bin` into RAM and runs it, `./dev.py shot` / `watch` take screenshots, and `./dev.py reset` (or
 unplugging) returns to the installed build. See AGENTS.md, "Development loop on the unit".
 
-## Not yet seen on the unit
+## First run on the unit (2026-10-22)
+
+- **Installed** through the stock updater. Read back from Engineer Mode: bytes 0..0x100003 of the OS area are
+  exactly `out/IMG.bin`, trailer included; the rest still holds the old OS image (never read).
+- **Result:** dark screen, keys ignored, no USB device. So it stops before the first frame and before the USB
+  start.
+- **Diagnostic builds** (branch `diag-boot`, written from Engineer Mode with `tools/iaprecover.py --write`): the
+  backlight flashes N times at boot stage N.
+  - v1: stops inside `mpu_init`.
+  - v2, one register per stage: stops between reading MPU_TYPE and writing RNR / RBAR (region DREGION - 1).
+  - v3, no MPU write at all: pending; it tells the MPU apart from a time-based stop.
+- **Renode passed all of these:** it does not model the MPU and caches the bootloader leaves on (BOARD.md 2).
+- **The four-button restart works with this firmware stuck**, so Engineer Mode stays reachable (cable in first).
+
 
 - Pixels written over SPI with RAMCTRL `B0 00 F0` (standard for this panel class).
 - Backlight polarity (hence the Page toggle).

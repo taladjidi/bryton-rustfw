@@ -138,6 +138,28 @@ Look at `target/sim/preview.bmp` after any drawing change.
 
   This is what embedded-hal plus embedded-hal-mock do in the wider ecosystem.
 
+## Testing strategy
+
+Modelled on the patch repo's layers (bryton-S510-mods `docs/validation.md`: build checks, Ghidra instruction
+review, host tests, Unicorn fuzzing of every patch entry point, a CI gate, then the unit: short test, ride path,
+ride). Each layer catches what the others miss; none proves the firmware right on its own.
+
+| Layer | Tool | Catches | Misses |
+|-------|------|---------|--------|
+| 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
+| 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
+| 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image that stopped at its first MPU write on the unit |
+| 4. Fuzzing (to add) | random host bytes into `dev::Session` and random images into the image checks, as a host test loop (no new dependency) | panics and out-of-range reads on input from the cable | |
+| 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
+| 6. On the unit, boot | branch `diag-boot`: the backlight flashes N times at boot stage N (DWT-timed, no SysTick, no panel), written from Engineer Mode with `tools/iaprecover.py --write` | where a boot stops when nothing else is visible | anything after the panel is up |
+| 7. On the unit, features | README "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
+
+- **A new boot step that touches the core (MPU, caches, clocks, VTOR)** gets a `diag-boot` stage on the unit
+  before it is trusted: Renode does not model it.
+- **Findings go to both repositories:** a hardware, bootloader, updater or recovery fact learned here also goes
+  into bryton-S510-mods (`docs/how-it-works.md`, `docs/recovery.md`, its local FLASHLOG), so the work is not
+  redone there; and the other way.
+
 ## Docs
 
 - `//!` at the top of each file: what it is for.
@@ -164,7 +186,11 @@ Look at `target/sim/preview.bmp` after any drawing change.
 - **Unit safety:**
   - Never flash without the owner present.
   - Never touch IAP.bin or the bootloader.
-  - The way back is Engineer Mode + `iaprecover.py --write-vanilla` from bryton-S510-mods (README).
+  - The way back is Engineer Mode (cable in **before** the four-button restart) + `tools/iaprecover.py
+    --write-vanilla` (README). `--write out/IMG.bin` writes one of our builds the same way, checked first.
+  - Record every write to the unit in bryton-S510-mods' FLASHLOG.
+  - **The USB link to the unit can drop** (2026-10-22, see that repo's `docs/recovery.md`): copy, then verify
+    by reading back; never trust a copy that was not compared.
 - **Evidence:** hardware facts come from the reference manual or from reverse engineering the stock firmware
   (Ghidra) for interoperability. Claims are checked against the binary or marked "inferred". Nothing from
   the stock firmware is copied into this repository except hardware facts (BOARD.md).
@@ -185,14 +211,15 @@ Install the firmware once, as an update (README). From then on, with the cable i
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
   through a trampoline in ITCM, which copies the image over 0xd0000000 and jumps as the bootloader does.
-- **Status: built, tested in the simulator and in Renode, not yet run on the unit.**
+- **Status: built, tested in the simulator and in Renode; not run on the unit yet (the firmware does not start
+  there yet: README, "First run on the unit").**
 - **The dot:**
   - orange: USB powered, not configured yet;
   - green: the dev link is ready;
   - red: the PHY or the core did not come up (the clock keeps running).
 - **Software can't enter Engineer Mode.** The bootloader configures PE3 itself and reads the
   real key, so firmware cannot fake a held Page. Updating the eMMC still goes through the stock updater or
-  Engineer Mode. `run` covers day-to-day iteration.
+  Engineer Mode (`tools/iaprecover.py --write out/IMG.bin`). `run` covers day-to-day iteration.
 - **Still to build:**
   - `log` lines from the firmware over the link;
   - key injection (`press page`), to script tests on the unit;
