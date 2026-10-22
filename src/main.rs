@@ -490,7 +490,11 @@ fn main() -> ! {
     pin_set(LCD_CS.0, LCD_CS.1, true);
     spi_byte(0);
     spi_flush();
-    checkpoint(10);
+    // Only if the byte really went out: spi_byte / spi_flush give up after a timeout, so passing them proves nothing.
+    // A stuck SPI would cost 10 ms per byte, about 25 min for the first frame: a hang to the eye.
+    if rd(SPI_SR) & SR_TXC != 0 {
+        checkpoint(10);
+    }
     let mut board = S510;
     let mut app = App::start(&mut board);
     checkpoint(5);
