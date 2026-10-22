@@ -24,6 +24,12 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
     read-only before the jump;
   - ITCM executable.
   - A firmware that wants other attributes adds its own region with a higher number (higher regions win).
+  - Regions as the bootloader sets them (HAL_MPU_Disable, 8 regions, enable with PRIVDEFENA; Ghidra, IAP
+    FUN_08007ddc): 3 = SDRAM 0xd0000000 64 MB execute-never, 4 = 0xd0000000 4 MB executable (read-only from
+    the second call, just before the jump), 6 = SRAM4, 7 = ITCM 0x0 64 KB executable. D-cache and I-cache on.
+  - **Seen on the unit (2026-10-22):** our firmware stops between reading MPU_TYPE and writing MPU_RNR /
+    MPU_RBAR for region DREGION - 1 (diag v2, README "First run on the unit"). Why is not known yet; v3 (no
+    MPU write) is pending.
   - Switching the MPU off is not an option: the default memory map makes 0xc0000000..0xdfffffff execute-never.
 - No watchdog is started, by the bootloader or the stock OS.
 - **Recovery mode ("Engineer Mode")**: USB plugged, restart with the four buttons while holding Page. The
@@ -128,3 +134,7 @@ The stock OS installs `IMG.bin` from the root of its USB drive at start-up, with
   endian. The OS writes it to the eMMC OS area and reads it back to check that sum.
 - The bootloader then copies it to 0xd0000000 at the next start (section 2).
 - `pack.py` builds this file and re-checks all of the above.
+- **Seen on the unit (2026-10-22):** a raw image is written from offset 0 of the OS area, trailer included, and
+  the rest of the area keeps the previous image (Engineer Mode readback after installing this firmware).
+- In Engineer Mode the bootloader writes the OS area 2 KB at a time (`tools/iaprecover.py`); its write status is
+  not trustworthy, so every chunk is read back.
