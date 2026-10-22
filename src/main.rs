@@ -433,6 +433,24 @@ fn beats(n: u32) {
 }
 
 fn main() -> ! {
+    // diag v6: does the code run, and what does PG13 do to the backlight? No timer, no polarity guess. Repeats
+    // forever: fast toggling (dim if anything), then held high, then held low, each about 2 s at 200 MHz.
+    modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only
+    gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
+    loop {
+        for _ in 0..BEAT {
+            pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
+            pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+        }
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, true);
+        busy(4 * BEAT);
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+        busy(4 * BEAT);
+    }
+}
+
+#[allow(dead_code)]
+fn main_v5() -> ! {
     dwt_init();
     modify(RCC_AHB4ENR, 0, 1 << 6); // GPIOG only, for the backlight
     modify(RCC_APB4ENR, 0, 1 << 16); // RTC registers
