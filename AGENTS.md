@@ -212,6 +212,13 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 - Comments say why, and where a value comes from; the code says what.
 - `cargo doc --target aarch64-apple-darwin --open` renders the library docs.
 
+## Public repository: no personal data
+
+This repository is public. Never commit what locates or identifies the owner: GPS coordinates, the saved last
+position, screenshots of the GPS screen or map taken on the unit, map tiles or tile numbers of their area, sensor
+serial numbers paired with a place. Test data is synthetic; real data stays in ignored tests that read it from
+outside the repository. The ANT+ key never enters it either (docs/install.md).
+
 ## Look it up, don't recall it
 
 Before writing a protocol, a format, an algorithm or a driver from memory, check primary sources online
