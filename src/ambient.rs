@@ -117,11 +117,13 @@ pub fn baro_read(b: &mut impl Board) -> Option<(u32, i16)> {
     Some((((p.max(0) as u32) * 10 + 2048) / 4096, i16::from_le_bytes([d[3], d[4]])))
 }
 
-/// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each.
-/// From stock's table (its auto brightness, middle-high setting): dim in the dark, brighter indoors, and at the
-/// minimum in daylight, where the transflective panel is read by the light it reflects.
-// ponytail: stock offers five such curves (a setting); one here until someone wants another
-pub const AUTO_BANDS: [(u32, u8); 5] = [(50, 14), (200, 40), (500, 50), (1200, 70), (u32::MAX, 1)];
+/// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each. More
+/// light, more backlight. The low bands are stock's (its setting 3: 14 % below 5 lux, 40 % to 20 lux); stock drops to
+/// the 1 % minimum above 120 lux, which on the unit dimmed the screen under a desk lamp (about 480 lux, 2026-10-23:
+/// the owner found it wrong), so here the level keeps rising instead. Whether the panel reads well in sunlight at a
+/// low level (it may be transflective) is still to see outdoors; that would be a lower last band.
+// ponytail: one curve; stock offers five (a setting) if someone wants another
+pub const AUTO_BANDS: [(u32, u8); 6] = [(50, 14), (200, 40), (500, 50), (1200, 70), (10_000, 85), (u32::MAX, 100)];
 
 /// Smoothing and hysteresis for [`AUTO_BANDS`].
 #[derive(Clone, Copy, Debug, Default)]
@@ -168,6 +170,7 @@ mod tests {
 
     #[test]
     fn bands_and_hysteresis() {
+        assert!(AUTO_BANDS.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 <= w[1].1), "more light, more backlight");
         let mut a = Auto::default();
         assert_eq!(a.update(0), 14);
         for _ in 0..20 {
@@ -181,7 +184,7 @@ mod tests {
         for _ in 0..20 {
             a.update(10_000);
         }
-        assert_eq!(a.update(10_000), 1, "daylight: minimum");
+        assert_eq!(a.update(10_000), 85, "a bright room");
         for _ in 0..30 {
             a.update(0);
         }

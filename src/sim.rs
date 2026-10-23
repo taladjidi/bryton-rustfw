@@ -1096,7 +1096,7 @@ mod tests {
         assert_consistent(&sim, &app);
         sim.save("sensor_rows");
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(sim.light_level, 1, "300 lux: daylight band, the minimum");
+        assert_eq!(sim.light_level, 85, "300 lux: a bright room");
 
         sim.bus.lux10 = Some(5); // 0.5 lux: dark
         run(&mut sim, &mut app, 60_000);

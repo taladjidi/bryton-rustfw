@@ -98,10 +98,9 @@ class Bus:
     def acks(self, addr):
         """An empty write: acknowledged or not."""
         self.poke(I2C4 + CR2, addr << 1 | AUTOEND | START)
-        self.wait(STOPF)
-        nack = self.peek(I2C4 + ISR) & NACKF
+        ok = self.wait(STOPF)                                                  # False on a NACK
         self.poke(I2C4 + ICR, NACKF | STOPF)
-        return not nack
+        return ok
 
 
 # (name, address, ID register, expected) as stock checks them (BOARD.md 14)

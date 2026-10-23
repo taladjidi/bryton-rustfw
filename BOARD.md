@@ -514,6 +514,12 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
 | barometer, Bosch BMP280 (the alternative stock tries first) | 0x76 | 0xd0 = 0x58 | `Baro_DetectModel` 0xd023d3dc |
 | accelerometer, ST LIS2DH12 / LIS3DH class | 0x18 | WHO_AM_I 0x0f = 0x33 | `Sensor_GSensorCmd` 0xd0243b60: off is CTRL_REG1 0x20 = 0x07; on, 400 Hz with an interrupt on INT1 (PD11) |
 
+- **Seen on the unit (2026-10-23, `tools/i2c.py`, with a build that never touched the bus):** exactly three chips
+  answer (0x18, 0x53, 0x5c; no BMP280), with the IDs above (0xb1, 0xb3, 0x33). Stock's settings survive a reset
+  (the chips stay powered): the light sensor in standby (MAIN_CTRL 0) with MEAS_RATE 0x05 and GAIN 0x02, the
+  barometer at CTRL_REG1 0x02 (so stock's power-down value is 0x02: output rate 0, BDU) and CTRL_REG2 0x12, the
+  accelerometer off (CTRL_REG1 0x07). Indoors, dim: a light reading of 3 (0.1 lux); the barometer 994.5 hPa,
+  25.5 C.
 - **Light reading** (`Sensor_LightSensorReadLux` 0xd023e1e8): ALS_DATA 0x0d..0x0f, 20 bits little endian; lux =
   reading x 0.025 x calibration / 1000 (the calibration word comes from an eMMC raw sector, 1000 by default). 0.025 is
   the datasheet's 0.6 / (gain 6 x 4), the 4 being the 400 ms of a 20-bit conversion (MEAS_RATE 0x05: 20 bits, one
@@ -535,11 +541,16 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
   panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
 - **This firmware** (src/ambient.rs): the light sensor in standby but for one measurement every 3 s while the
   backlight is AUTO and on (or the main menu shows the light): MAIN_CTRL = 2, 600 ms, MAIN_STATUS, ALS_DATA,
-  MAIN_CTRL = 0. Stock's setting 3, with a running average (a quarter per reading) and a quarter of the edge as
-  hysteresis. The barometer powered down (CTRL_REG1 0x10 = 0x02: output rate 0, BDU) and one one-shot conversion
+  MAIN_CTRL = 0. The level rises with the light (src/ambient.rs `AUTO_BANDS`: stock's setting 3 up to 20 lux, then
+  on up to 100 % instead of stock's drop to 1 % above 120 lux), with a running average (a quarter per reading) and
+  a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
+  480 lux (raw 19304) and dimmed the screen to 1 %, which the owner found wrong; the room read 0.3 to 0.6 lux, a hand
+  over the sensor 0.05. Stock's calibration on this unit is 932 (its debug log, `Light sensor cali value 932`, from
+  the eMMC raw sector at base + 0x4404 with 55 aa markers; `0xd018dc10`), so its lux are this firmware's x 0.93. The barometer powered down (CTRL_REG1 0x10 = 0x02: output rate 0, BDU) and one one-shot conversion
   every 10 s (CTRL_REG2 0x11 = 0x11); STATUS 0x27 bits 0, 1; PRESS_OUT 0x28..0x2a (24 bits, 4096 per hPa) and
   TEMP_OUT 0x2b..0x2c (C x 100). The accelerometer switched off at start (CTRL_REG1 0x20 = 0x07), as stock does at
-  boot.
+  boot. Seen on the unit (2026-10-23, from RAM): the menu rows read LUX 0, TEMP C 25.5, HPA 994, and AUTO in the
+  dark set the PWM to level 14 (LPTIM1_CMP 13).
 - **A register read** (a write of the register address, a repeated start, the read; AUTOEND sends the stop):
 
      SCL  ~~~~\_/~\_/~ ... ~\_/~~~~~\_/~\_/~ ... ~\_/~\_/~ ... ~\_/~~~~~~

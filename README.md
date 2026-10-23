@@ -164,8 +164,9 @@ input. Still to see:
 - A GPS fix (the receiver answers and reports, indoors without satellites), and how much the aiding at power-up
   shortens the next one.
 - The backlight PWM levels and time-out (LPTIM1, as stock), each level by eye.
-- The sensor bus (I2C4, BOARD.md 14): the chips' IDs, a light reading against a known light, the barometer's
-  temperature and pressure, and the AUTO backlight levels by eye (dark, indoors, daylight).
+- The sensor bus (I2C4, BOARD.md 14): seen are the chips' IDs, the barometer's temperature and pressure and a
+  light reading in a dim room (0.1 lux); still to see, a light reading against a known light and the AUTO
+  backlight levels by eye (dark, indoors, daylight).
 - The I-cache from a cold boot (seen from RAM: stable, ride page 0.5 % -> 0.2 % awake, GPS menu 2.2 % -> 1.3 %).
 - The map on a real ride (simulated: 8 full redraws in a 14 min ride out and round a loop, 660 pixels/s between
   them), and the awake time it costs on the map page.
