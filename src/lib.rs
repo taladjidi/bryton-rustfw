@@ -1734,6 +1734,11 @@ impl App {
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {
+                    if kind == Kind::Hr && self.heard_ms[kind as usize] >= sensors::STALE_MS {
+                        // back after a drop-out: the beats before it are not part of this series (and the beat
+                        // time may have wrapped meanwhile, which would make one false interval)
+                        (self.hrv, self.decoders.beats) = Default::default();
+                    }
                     self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
                     for &rr in self.decoders.beats.rr() {
                         self.hrv.push(rr);
