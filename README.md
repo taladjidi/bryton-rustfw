@@ -142,6 +142,8 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   (pins analog for 3 s, then a RAM run); now powered 1 s after the app's first step (BOARD.md 13).
 - **GPS (2026-10-23):** the receiver is a u-blox M10 on SPI4 and already sends NAV-PVT after stock (BOARD.md 13);
   explored with `tools/gnss.py` (peek / poke), then the firmware's driver.
+- **Pixels two per 32-bit SPI write (2026-10-23):** the panel shows everything right (the owner, by eye), so the
+  byte order of SPI FIFO packing is as RM0399 says.
 - **Battery (2026-10-23):** ADC3 reads the battery against VREFINT as stock does; 99 % while charging, in line with
   stock's last stored reading. Three quirks found with `peek` / `poke` (BOARD.md 12).
 - **Heart rate and pairing (2026-10-23, from RAM, the owner's strap):** "HR 58" to "HR 70" from the strap
@@ -157,8 +159,7 @@ holds local time; power off reaches standby (D1 / D2 reset flags) and the power 
 input. Still to see:
 - A GPS fix (the receiver answers and reports, indoors without satellites), and how much the aiding at power-up
   shortens the next one.
-- The panel with pixels sent two per 32-bit SPI write (checked in Renode; on the glass, to see), and the
-  backlight PWM levels and time-out (LPTIM1, as stock).
+- The backlight PWM levels and time-out (LPTIM1, as stock), each level by eye.
 - The I-cache (branch `icache`, not merged): a core change, tried first as a RAM run with the owner present.
 - Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
 - Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
