@@ -105,15 +105,31 @@ The point of this project is a firmware in safe Rust.
 
 Folders sort the files; the modules keep their own names (`crate::ambient`, re-exported from lib.rs):
 - `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `power.rs`, `dev.rs`, `sim.rs` (tests);
+- `src/app/`: the app's parts, one `impl App` per concern;
 - `src/drivers/`: each chip's or radio's protocol against `Board`;
 - `src/ui/`: what is drawn and the menus;
 - `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
 
-- `src/lib.rs`: the `Board` trait, the app (`App::start`, `App::step`), RTC decoding, keys.
+- `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
+  to that: a new concern goes in its own file in `src/app/`.
   - `Board` is the only way to reach hardware. Each method is a primitive: send a panel command, read RTC_TR,
     read the keys, sleep.
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
+- `src/app.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
+  plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
+  `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
+  read; a method another file calls is `pub(crate)`.
+  - `settings.rs`: `Settings`, `PageCfg`, every backup register of the app (`*_BKP`), saving them.
+  - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input`, `touch`.
+  - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
+    the ride card, the basemap, `render_row` (screenshots). `fields.rs`: a ride field's text and colour, number
+    formatting. `graphs.rs`: the graph fields and the course profile.
+  - `menus.rs`: `Menu`, each menu's rows and their text, `activate` (what a row does).
+  - `radio.rs`: the ANT+ channels (`Sensor`), `poll_nrf`, pairing. `gps.rs`: `poll_gnss`, the aiding.
+  - `riding.rs`: Start / pause, the second tick, the recorder glue. `stock_data.rs`: the scan of stock's rides and
+    the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
+  - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
 - `src/ui.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
 - `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
