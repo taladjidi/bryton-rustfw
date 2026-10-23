@@ -148,7 +148,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 |-------|------|---------|--------|
 | 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
 | 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
-| 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image that stopped at its first MPU write on the unit |
+| 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit on the unit |
 | 4. Fuzzing (to add) | random host bytes into `dev::Session` and random images into the image checks, as a host test loop (no new dependency) | panics and out-of-range reads on input from the cable | |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | branch `diag-boot`: a checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
@@ -212,8 +212,8 @@ Install the firmware once, as an update (README). From then on, with the cable i
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
   through a trampoline in ITCM, which copies the image over 0xd0000000 and jumps as the bootloader does.
-- **Status: built, tested in the simulator and in Renode; not run on the unit yet (the firmware does not start
-  there yet: README, "First run on the unit").**
+- **Status: works on the unit (2026-10-23):** `info`, `shot`, `peek` / `poke` and `run` (the build runs from RAM
+  and the link comes back). `peek` / `poke` found both first-run bugs (README, "First run on the unit").
 - **The dot:**
   - orange: USB powered, not configured yet;
   - green: the dev link is ready;
