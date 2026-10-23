@@ -186,7 +186,7 @@ Not used yet: I2C sensors (barometer, accelerometer, light), touch, eMMC on SDMM
 - One command on SPI1 (`lcd_cmd`): chip select low, D/C low for the command byte, high for its parameters (or
   the pixels of a RAMWR), chip select high. Mode 3, 8 MHz, MSB first. Pixels go two per 32-bit FIFO write (FTHLV
   4 frames; the SPI sends the word's bytes from the lowest, so each RGB565 pixel is byte-swapped into it); a fill
-  writes the same word over and over. Checked in Renode against the simulator; on the panel itself: to see.
+  writes the same word over and over. Checked in Renode against the simulator, and **seen on the panel** (2026-10-23).
 
      PG10 CS    ~~~~\______________________________________________/~~~~
      PG9  D/C   ~~~~\________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
