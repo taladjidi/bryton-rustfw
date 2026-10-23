@@ -198,7 +198,7 @@ impl Link {
     }
 
     /// Sends what is buffered; a transfer ending on a full packet needs a zero-length one to end it.
-    fn flush(&mut self) {
+    pub fn flush(&mut self) {
         if self.len > 0 || self.last_full {
             self.write(self.len);
         }

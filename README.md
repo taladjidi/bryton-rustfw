@@ -171,6 +171,8 @@ input. Still to see:
 - Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12). The low-battery switch-off (3.3 V) has not been reached on the unit.
 - The Nordic chip coming back after a power off and on (`sd_power_system_off`, then the reset pulse).
+- The eMMC driver (read only, BOARD.md 14): `dev.py emmc`, then `dev.py sector` compared with a read-only `dd` of
+  the BRYTON drive and with the installed image in the OS area.
 - The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 
 ## How it starts (verified)

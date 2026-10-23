@@ -72,7 +72,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 ## 4. Pins
 
-Every pin this firmware uses, from the MCU's side (arrows: signal direction). Sections 5 to 13 have the details.
+Every pin this firmware uses, from the MCU's side (arrows: signal direction). Sections 5 to 14 have the details.
 
                                       +----------------------------+
      power button --+---------------->| PA0  WKUP1 (rising)        |
@@ -121,6 +121,12 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
          CS    <----------------------| PE4                        |
          power <----------------------| PI6   high = on            |
          line  ---------------------->| PF7   (unused here)        |
+                                      |                            |
+       eMMC (SDMMC1, AF12)            |                            |
+         CLK   <----------------------| PC12                       |
+         CMD   <--------------------->| PD2                        |
+         D0..D3 <-------------------->| PC8 PC9 PC10 PC11          |
+         RST_n or power <-------------| PF8   (inferred; untouched)|
                                       +----------------------------+
 
 | pin | use | section |
@@ -135,13 +141,17 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
 | PC0 | USB ULPI STP (AF10) | 7 |
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
+| PC8..PC11 | eMMC D0..D3, SDMMC1 (AF12) | 14 |
+| PC12 | eMMC CLK, SDMMC1 (AF12) | 14 |
 | PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) | 7 |
+| PD2 | eMMC CMD, SDMMC1 (AF12) | 14 |
 | PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
 | PD7 | SPI1 MOSI (panel), AF5 | 6 |
 | PE2 PE4 PE5 PE6 | SPI4 SCK (pull-down), chip select, MISO, MOSI to the GNSS (AF5; PE4 by hand here) | 13 |
 | PE3 | key 0x08 page, active low | 5 |
 | PF6 | charger status input (not traced) | 12 |
 | PF7 | GNSS line (EXTI in stock; unused here) | 13 |
+| PF8 | eMMC reset or power (inferred); left as the bootloader leaves it | 14 |
 | PG3 | display and touch power enable (inferred) | 6 |
 | PG9 | panel D/C: 0 command, 1 parameter or pixel data | 6 |
 | PG10 | panel chip select (SPI1 NSS, driven by hand) | 6 |
@@ -155,7 +165,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PI6 | GNSS power, high = on | 13 |
 | PI11 | USB ULPI DIR (AF10) | 7 |
 
-Not used yet: I2C sensors (barometer, accelerometer, light), touch, eMMC on SDMMC1, buzzer.
+Not used yet: I2C sensors (barometer, accelerometer, light), touch, buzzer.
 
 ## 5. Keys
 
@@ -484,4 +494,72 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   answered MGA-ACK "used". **The time aiding works** (seen 2026-10-23, indoors, no fix): after power-up the
   receiver's NAV-PVT carried the right UTC date and time, flagged valid, instead of 2021-03-07. How much faster a
   fix comes: to measure outside.
+
+## 14. eMMC
+
+From stock (Ghidra, OS R039 and bootloader R002; the addresses are those of the report
+`ghidra/STORAGE_AND_MAPS.md`, sections 1 and 2), register meanings from RM0399 (SDMMC) and the card side from
+the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: this firmware's driver
+(`src/emmc.rs`, read only) runs only on the dev link's `emmc` and `sector` commands.
+
+- **Card:** a soldered eMMC (stock's log calls it "iNAND"), about 31 GB (SEC_COUNT about 0x3a3_e000, inferred
+  from the ~31 GB USB drive; to see with `dev.py emmc`).
+- **Pins** (stock's Mmc_MspInit 0xd018b790): PC8..PC11 D0..D3, PC12 CLK, PD2 CMD, all AF12, push-pull, no pull,
+  very high speed. No card detect, no write protect.
+- **PF8:** stock drives it low 10 ms, then high, then waits 600 ms before a new card init after a pin or
+  brown-out reset (Pwr_DetectResetCause 0xd018b1c4). RST_n or a power switch: inferred, not settled (RST_n works
+  only if EXT_CSD byte 162 RST_n_FUNCTION enables it). This firmware does not touch PF8.
+- **Clocks:** SDMMC1 on AHB3 (RCC_AHB3ENR bit 16, reset RCC_AHB3RSTR bit 16), kernel clock D1CCIPR.SDMMCSEL = 0,
+  PLL1Q = 100 MHz (section 1; stock 0xd018b790). Bus clock = 100 MHz / (2 x CLKDIV). Stock: CLKDIV 250 (200 kHz)
+  at power-on, 126 (397 kHz) for identification, 2 (25 MHz) after (Mmc_SetClockSpeed 0xd018b896). Default speed,
+  single data rate, no HS_TIMING switch (no 0x03b9.... literal in the image). Whether the bootloader's PLL1Q
+  output (RCC_PLLCFGR DIVQ1EN, bit 17) is on: inferred from the bootloader reading the eMMC with SDMMCSEL at its
+  reset value, to see (`dev.py peek 0x5802442c`).
+- **Controller settings, stock** (Mmc_Init 0xd018b824): falling clock edge (CLKCR NEGEDGE), power save (PWRSAV),
+  4-bit bus, hardware flow control (HWFC_EN), DTIMER 0xffffff. Data path polled through the FIFO (0x80), no IDMA:
+  read 8 words on RXFIFOHF until DCRCFAIL, DTIMEOUT, RXOVERR or DATAEND, then ICR = 0x1fe00fff
+  (Mmc_ReadBlocksPolling 0xd018b8fc). Blocks of 512 bytes (DCTRL DBLOCKSIZE 9).
+- **This firmware:** the same kernel clock, CLKDIV 125 (400 kHz) then 2 (25 MHz), NEGEDGE and HWFC_EN as stock,
+  PWRSAV at 25 MHz only. SDMMC1 is reset through RCC first (a RAM run, or an earlier failed init, can leave it
+  mid-transfer). A read: DCTRL 0, DTIMER 2,500,000 (100 ms), DLEN, DCTRL = 512-byte blocks, card to host, then the
+  command with CMDTRANS (RM0399: the command starts the data path); the FIFO read a word at a time while RXFIFOE is
+  clear, until DATAEND with every word in. CMD12 goes out with CMDSTOP. Every wait has a time-out (10 ms a command,
+  100 ms + 1 ms a block for data).
+- **Bring-up, stock** (uC/FS FSDev_SD_Card_Refresh 0xd0394e96): CMD0; CMD8 0x1a5 and ACMD41 (SD probes, unanswered
+  by an eMMC: about 0.5 s lost); CMD1 0x40ff8000 every 2 ms until OCR bit 31 (bit 30: sector addressing); CMD2;
+  CMD3 0x10000 (the host sets RCA 1); CMD9; 25 MHz; CMD7; CMD16 512; CMD6 0x03b70101 (EXT_CSD[183] BUS_WIDTH = 4
+  bits) and CMD13 until ready; CMD8 SEND_EXT_CSD (FSDev_SD_Card_ParseEXT_CSD 0xd03960a0). Wait-ready (0xd0395830):
+  CMD13 until state 4 (tran) and READY_FOR_DATA, CMD12 first if the card is in state 5 or 6. Reads: CMD17, or CMD18
+  then CMD12 (FSDev_SD_Card_Rd 0xd0394a8c); the argument is the sector number for a high-capacity card.
+- **Bring-up, this firmware** (emmc.rs), the same without the SD probes and CMD9 (emmc.rs says why), and with the
+  EXT_CSD read again on the 4-bit bus as a check. CMD0 first whatever the card's state: the bootloader leaves it
+  selected, in the transfer state, 4-bit (bootloader 0x08008aa4), and CMD0 clears all of that.
+
+      power on  |2 ms|  400 kHz, 1 bit                         |  25 MHz, 1 bit                        | 4 bit
+      CMD       CMD0  CMD1 ... CMD1  CMD2  CMD3   CMD7 CMD13 CMD16 CMD8      CMD6       CMD13  CMD8
+      arg       0     40ff8000      0     10000  10000      200   0         03b70101            0
+      card      idle  busy ... ready ident stby   tran            EXT_CSD   bus 4 bit           EXT_CSD
+      data (D0)                                                   [512 B]                       [512 B]
+                      |<- 1 ms apart, 1 s at most ->|              SEC_COUNT                     same SEC_COUNT
+- **A read** (CMD17; CMD18 the same with more blocks, then CMD12):
+
+      CMD   [CMD13 rca]..[R1: tran]  [CMD17 lba]..[R1]
+      D0..3                                           ..[start][512 B, 4 bits per clock][CRC16 x 4][end]
+      STA                                                   RXFIFOE clear: read FIFO      DATAEND
+- **Layout** (N = SEC_COUNT, B = N - 0x1201a; stock's device size, FSDev_SD_Card_ParseEXT_CSD 0xd03960a0):
+
+| sectors | size | what | evidence |
+|---|---|---|---|
+| 0 .. B-1 | ~31 GB | the FAT volume, the USB drive "BRYTON" (MBR or not: to see) | uC/FS "sdcard:0:", FS_AppOpenSdVolume 0xd02443c8 |
+| B+2 .. B+0x1001 | 2 MB | factory image, header "BRYTONBRYTON" | Cfg_RestoreFactoryImage 0xd018dcb0 |
+| B+0x4000 .. | | TimeZone.bin image | fwupdate.c (recovered source) |
+| B+0x4403 | 1 | NAND serial, 16 bytes at 0x1f0 | Cfg_ReadNandSerial16 0xd018cbd4 |
+| B+0x4404 | 1 | light sensor calibration, `55 aa` `v` `..` `55 aa` | Pwr_ReadLightSensorCali 0xd018dc10 |
+| B+0x501a .. B+0xf019 | 20 MB | DeviceLangs.bin (UI fonts) | Ui_LoadDeviceLangsTtf 0xd0189fc0 |
+| B+0xf01a .. N-1 = N-0x3000 .. N-1 | 6 MB | OS area: what the bootloader copies to SDRAM (section 2) | bootloader 0x08007fe2 |
+
+- The USB drive of the stock OS is exactly sectors 0 .. B-1, so a read-only `dd` of it on a computer gives the
+  same bytes as `dev.py sector` there. The OS area starts with the installed image (section 10).
+- Read only, and only on request: the driver never writes; the one CMD6 is the bus width, a volatile byte the
+  card clears at CMD0 and power-off. The card is identified on the first `emmc` or `sector` command, never at boot.
 

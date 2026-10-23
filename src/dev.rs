@@ -10,6 +10,10 @@
 //!   runs the image ([`Effect::Run`]), or `err <reason>`.
 //! - `key <page|lap|start|back> [long]`: `ok`, then the app acts as if the key was pressed, or held
 //!   ([`Effect::Key`]), to script tests on the unit.
+//! - `emmc`: identifies the eMMC if needed ([`Effect::Emmc`]) and answers `emmc <SEC_COUNT> <B> <OS start>`, three
+//!   hex numbers (BOARD.md 14), or `err <why>`.
+//! - `sector <n>`: reads eMMC sector `n` ([`Effect::Sector`]) and answers its 512 bytes as one line of 1024 hex
+//!   digits, or `err <why>`. Read only; the eMMC is touched by nothing else, and only from the first of these two.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -17,8 +21,8 @@
 //!   peripheral space ([`IO`]), so a peek can't read through a Rust reference. A reserved address there can still
 //!   fault, which parks the CPU (four-button restart).
 
-use crate::App;
 use crate::ui::{H, W};
+use crate::{App, emmc};
 
 /// The other end of the link, as the protocol needs it.
 pub trait Host {
@@ -63,6 +67,10 @@ pub enum Effect {
     Run(u32),
     /// A key press from the computer.
     Key(crate::Press),
+    /// Read this eMMC sector and answer with [`send_sector`].
+    Sector(u32),
+    /// Answer the eMMC layout with [`send_layout`].
+    Emmc,
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -211,6 +219,11 @@ impl Session {
                 }
                 _ => h.send(b"err usage: key <page|lap|start|back> [long]\n"),
             },
+            Some(b"sector") => match (words.next().and_then(parse), words.next()) {
+                (Some(n), None) => return Effect::Sector(n),
+                _ => h.send(b"err usage: sector <n>\n"),
+            },
+            Some(b"emmc") => return Effect::Emmc,
             Some(b"reset") => {
                 h.send(b"ok\n");
                 return Effect::Reset;
@@ -241,6 +254,60 @@ pub fn check_image(head: &[u8], size: u32) -> Result<(), &'static str> {
         return Err("reset vector not Thumb code in the image");
     }
     Ok(())
+}
+
+/// The answer to `sector`: 1024 hex digits and a newline, or the error.
+pub fn send_sector(h: &mut impl Host, r: Result<&[u8; emmc::SECTOR], emmc::Error>) {
+    match r {
+        Ok(data) => {
+            for chunk in data.chunks_exact(4) {
+                let w = hex(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+                h.send(&w[..8]);
+            }
+            h.send(b"\n");
+        }
+        Err(e) => send_error(h, e),
+    }
+}
+
+/// The answer to `emmc`: `emmc <SEC_COUNT> <B> <OS start>` in hex, or the error.
+pub fn send_layout(h: &mut impl Host, r: Result<emmc::Layout, emmc::Error>) {
+    match r {
+        Ok(l) => {
+            h.send(b"emmc");
+            for v in [l.sectors, l.fat_end, l.os_start] {
+                h.send(b" ");
+                h.send(&hex(v)[..8]);
+            }
+            h.send(b"\n");
+        }
+        Err(e) => send_error(h, e),
+    }
+}
+
+/// `err cmd <n> timeout|crc|overrun`, `err busy`, `err status cmd <n> <status>`, `err range` or `err ext_csd`.
+fn send_error(h: &mut impl Host, e: emmc::Error) {
+    use emmc::{BusError, Error};
+    match e {
+        Error::Bus(c, why) => {
+            h.send(b"err cmd ");
+            h.send(decimal(u32::from(c), &mut [0; 10]));
+            h.send(match why {
+                BusError::Timeout => b" timeout\n",
+                BusError::Crc => b" crc\n",
+                BusError::Overrun => b" overrun\n",
+            });
+        }
+        Error::Busy => h.send(b"err busy\n"),
+        Error::Status(c, s) => {
+            h.send(b"err status cmd ");
+            h.send(decimal(u32::from(c), &mut [0; 10]));
+            h.send(b" ");
+            h.send(&hex(s));
+        }
+        Error::Range => h.send(b"err range\n"),
+        Error::ExtCsd => h.send(b"err ext_csd\n"),
+    }
 }
 
 /// A decimal or `0x` hex number.

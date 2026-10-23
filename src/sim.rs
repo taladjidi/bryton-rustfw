@@ -3,7 +3,8 @@
 //!   paints its framebuffer from RAMWR as the real panel would;
 //! - a clock driven by the delays, so the RTC advances as the app waits;
 //! - keys scripted as a function of time;
-//! - a Nordic chip ([`Nordic`]) that answers the commands the way the real one did on the unit (BOARD.md 11).
+//! - a Nordic chip ([`Nordic`]) that answers the commands the way the real one did on the unit (BOARD.md 11);
+//! - an eMMC ([`EmmcCard`]) that answers the commands as JEDEC says, and fails the test on any write command.
 //!
 //! Screenshots: [`Sim::save`] writes the screen as a BMP. [`Sim::record`] saves one frame after every step that
 //! changed the screen (target/sim/<name>/NNNNN.bmp), which gives a continuous capture for debugging.
@@ -50,6 +51,159 @@ pub struct Sim {
     pub gnss: Gnss,
     /// Pixels written to the panel so far (the drawing cost: each one is 16 bits over SPI).
     pub pixels: u64,
+    pub emmc: EmmcCard,
+}
+
+/// SEC_COUNT of the simulated eMMC: about 31 GB, as the unit's.
+pub const EMMC_SECTORS: u32 = 0x03a3_e000;
+
+/// The eMMC as SDMMC1 sees it: the JEDEC states (idle 0, ready 1, ident 2, stby 3, tran 4, data 5), CMD1 busy for a
+/// few polls, an EXT_CSD with [`EMMC_SECTORS`], sector `n` filled with [`emmc_sector`]. It starts as the bootloader
+/// leaves it: selected, in the transfer state, on a 4-bit bus. Driver mistakes that a real card would punish with
+/// garbage fail the test (identification at 25 MHz, any write or erase command); illegal commands are not answered.
+pub struct EmmcCard {
+    /// Never answers (missing or dead card).
+    pub dead: bool,
+    /// CMD1 answers busy this many times after a CMD0 (u32::MAX: forever).
+    pub busy_polls: u32,
+    /// Every command, in order: (index, argument).
+    pub cmds: Vec<(u8, u32)>,
+    state: u32,
+    busy_left: u32,
+    card_wide: bool,
+    host_wide: bool,
+    host_fast: bool,
+    powered: bool,
+}
+
+impl Default for EmmcCard {
+    fn default() -> Self {
+        EmmcCard {
+            dead: false,
+            busy_polls: 3,
+            cmds: Vec::new(),
+            state: 4,
+            busy_left: 0,
+            card_wide: true,
+            host_wide: false,
+            host_fast: false,
+            powered: false,
+        }
+    }
+}
+
+/// What the simulated eMMC holds in sector `lba`: the sector number, then a pattern that depends on it.
+pub fn emmc_sector(lba: u32) -> [u8; 512] {
+    let mut s = [0u8; 512];
+    for (i, b) in s.iter_mut().enumerate() {
+        *b = (i as u8) ^ (lba as u8).wrapping_mul(7) ^ (lba >> 8) as u8;
+    }
+    s[..4].copy_from_slice(&lba.to_le_bytes());
+    s
+}
+
+impl EmmcCard {
+    /// Card status as R1 carries it: the state, ready for data.
+    fn status(&self) -> u32 {
+        self.state << 9 | 1 << 8
+    }
+
+    fn cmd(&mut self, index: u8, arg: u32) -> Result<[u32; 4], crate::emmc::BusError> {
+        use crate::emmc::BusError::Timeout;
+        assert!(self.powered, "eMMC command {index} before the controller was powered");
+        self.cmds.push((index, arg));
+        assert!(
+            ![20, 24, 25, 26, 27, 28, 29, 35, 36, 38, 42, 49].contains(&index),
+            "write, erase, protect or lock command {index} to the eMMC"
+        );
+        assert!(index != 6 || arg == crate::emmc::SWITCH_BUS_4BIT, "CMD6 other than the bus width: {arg:#x}");
+        if [1, 2, 3].contains(&index) {
+            assert!(!self.host_fast, "identification command {index} at 25 MHz");
+        }
+        if self.dead {
+            // CMD0 has no response: the controller only knows it went out
+            return if index == 0 { Ok([0; 4]) } else { Err(Timeout) };
+        }
+        let before = self.status();
+        let r1 = |s| Ok([s, 0, 0, 0]);
+        match (index, self.state) {
+            (0, _) => {
+                (self.state, self.card_wide, self.busy_left) = (0, false, self.busy_polls);
+                Ok([0; 4])
+            }
+            (1, 0 | 1) => {
+                self.state = 1;
+                if self.busy_left > 0 {
+                    self.busy_left -= 1;
+                    return Ok([0x00ff_8080, 0, 0, 0]);
+                }
+                Ok([0xc0ff_8080, 0, 0, 0]) // ready, sector addressing
+            }
+            (2, 1) => {
+                self.state = 2;
+                Ok([0x1501_0044, 0x4a52_3341, 0x0000_0000, 0x0000_0001]) // a CID
+            }
+            (3, 2) => {
+                assert_eq!(arg, 1 << 16, "RCA");
+                self.state = 3;
+                r1(before)
+            }
+            (7, 3) if arg == 1 << 16 => {
+                self.state = 4;
+                r1(before)
+            }
+            (13, _) if arg == 1 << 16 && self.state >= 3 => r1(before),
+            (16, 4) => {
+                assert_eq!(arg, 512, "block length");
+                r1(before)
+            }
+            (6, 4) => {
+                self.card_wide = true;
+                r1(before)
+            }
+            (12, 5) => {
+                self.state = 4;
+                r1(before)
+            }
+            _ => Err(Timeout), // illegal in this state: no answer
+        }
+    }
+
+    fn read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
+        use crate::emmc::BusError::{Crc, Timeout};
+        assert!(buf.len() % 512 == 0 && !buf.is_empty(), "eMMC read of {} bytes", buf.len());
+        let s = self.cmd_data(index, arg)?;
+        if self.host_wide != self.card_wide {
+            return Err(Crc); // the bus widths differ: the data comes out as garbage
+        }
+        if index == 8 {
+            buf.fill(0);
+            buf[212..216].copy_from_slice(&EMMC_SECTORS.to_le_bytes());
+            buf[183] = u8::from(self.card_wide);
+            buf[192] = 8; // EXT_CSD_REV
+            return Ok(s);
+        }
+        if arg.saturating_add((buf.len() / 512) as u32) > EMMC_SECTORS {
+            return Err(Timeout); // out of range: no data
+        }
+        for (i, chunk) in buf.chunks_exact_mut(512).enumerate() {
+            chunk.copy_from_slice(&emmc_sector(arg + i as u32));
+        }
+        if index == 18 {
+            self.state = 5; // sending until CMD12
+        }
+        Ok(s)
+    }
+
+    fn cmd_data(&mut self, index: u8, arg: u32) -> Result<u32, crate::emmc::BusError> {
+        assert!(self.powered, "eMMC command {index} before the controller was powered");
+        self.cmds.push((index, arg));
+        assert!([8, 17, 18].contains(&index), "eMMC data command {index}");
+        if self.dead || self.state != 4 {
+            return Err(crate::emmc::BusError::Timeout);
+        }
+        Ok(self.status())
+    }
 }
 
 /// Where the simulated fix is (degrees x 1e-7).
@@ -292,6 +446,7 @@ impl Sim {
             charger: false,
             gnss: Gnss::default(),
             pixels: 0,
+            emmc: EmmcCard::default(),
         }
     }
 
@@ -484,6 +639,24 @@ impl Board for Sim {
 
     fn backup_write(&mut self, n: usize, v: u32) {
         self.backup[n] = v;
+    }
+
+    fn emmc_power_on(&mut self) {
+        let e = &mut self.emmc;
+        (e.powered, e.host_fast, e.host_wide) = (true, false, false);
+        self.ms += 2;
+    }
+
+    fn emmc_bus(&mut self, fast: bool, wide: bool) {
+        (self.emmc.host_fast, self.emmc.host_wide) = (fast, wide);
+    }
+
+    fn emmc_cmd(&mut self, index: u8, arg: u32, _: crate::emmc::Resp) -> Result<[u32; 4], crate::emmc::BusError> {
+        self.emmc.cmd(index, arg)
+    }
+
+    fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
+        self.emmc.read(index, arg, buf)
     }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
@@ -1201,6 +1374,129 @@ mod dev_tests {
     }
 }
 
+/// The eMMC driver (emmc.rs) against the card model, and the dev link's `sector` and `emmc` commands.
+#[cfg(test)]
+mod emmc_tests {
+    use super::*;
+    use crate::dev::{Effect, Session, Stats, send_layout, send_sector};
+    use crate::emmc::{BusError, Card, Emmc, Error, Layout, SECTOR};
+
+    /// Identification from the state the bootloader leaves (selected, 4-bit), without stock's SD probes, then the
+    /// layout from SEC_COUNT.
+    #[test]
+    fn init_finds_the_layout() {
+        let mut sim = Sim::new(9, 0, 0);
+        let t0 = sim.ms;
+        let card = Card::init(&mut sim).unwrap();
+        assert!(sim.ms - t0 < 20, "init took {} ms", sim.ms - t0);
+        assert_eq!(card.layout, Layout { sectors: EMMC_SECTORS, fat_end: 0x03a2_bfe6, os_start: 0x03a3_b000 });
+        let order: Vec<u8> = sim.emmc.cmds.iter().map(|c| c.0).collect();
+        assert_eq!(order, [0, 1, 1, 1, 1, 2, 3, 7, 13, 16, 8, 6, 13, 8]);
+        assert!(sim.emmc.cmds.contains(&(1, 0x40ff_8000)) && sim.emmc.cmds.contains(&(3, 0x1_0000)));
+        assert!(sim.emmc.host_wide && sim.emmc.card_wide && sim.emmc.host_fast);
+    }
+
+    #[test]
+    fn reads_single_and_multiple_sectors() {
+        let mut sim = Sim::new(9, 0, 0);
+        let card = Card::init(&mut sim).unwrap();
+        let l = card.layout;
+        let mut one = [0u8; SECTOR];
+        for lba in [0, 1, l.fat_end, l.os_start, EMMC_SECTORS - 1] {
+            card.read(&mut sim, lba, &mut one).unwrap();
+            assert_eq!(one, emmc_sector(lba), "sector {lba:#x}");
+        }
+        let mut eight = [0u8; 8 * SECTOR];
+        sim.emmc.cmds.clear();
+        card.read(&mut sim, EMMC_SECTORS - 8, &mut eight).unwrap(); // up to the last sector
+        for (i, s) in eight.chunks_exact(SECTOR).enumerate() {
+            assert_eq!(s, emmc_sector(EMMC_SECTORS - 8 + i as u32));
+        }
+        assert_eq!(sim.emmc.cmds, [(13, 0x1_0000), (18, EMMC_SECTORS - 8), (12, 0)]);
+        // nothing past the end, nothing that is not whole sectors: refused before any command
+        sim.emmc.cmds.clear();
+        assert_eq!(card.read(&mut sim, EMMC_SECTORS - 7, &mut eight), Err(Error::Range));
+        assert_eq!(card.read(&mut sim, u32::MAX, &mut one), Err(Error::Range));
+        assert_eq!(card.read(&mut sim, 0, &mut one[..100]), Err(Error::Range));
+        assert_eq!(card.read(&mut sim, 0, &mut []), Err(Error::Range));
+        assert!(sim.emmc.cmds.is_empty());
+        // the card still works after them
+        card.read(&mut sim, 5, &mut one).unwrap();
+        assert_eq!(one, emmc_sector(5));
+    }
+
+    /// A card that never answers fails at once; one that stays busy, after the 1 s JEDEC allows.
+    #[test]
+    fn a_silent_or_busy_card_costs_bounded_time() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.dead = true;
+        let t0 = sim.ms;
+        assert_eq!(Card::init(&mut sim), Err(Error::Bus(1, BusError::Timeout)));
+        assert!(sim.ms - t0 < 10);
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.busy_polls = u32::MAX;
+        let t0 = sim.ms;
+        assert_eq!(Card::init(&mut sim), Err(Error::Busy));
+        assert!(sim.ms - t0 <= 1010, "{} ms", sim.ms - t0);
+    }
+
+    /// After a bus error the card is forgotten and identified again from CMD0 at the next read.
+    #[test]
+    fn identifies_again_after_an_error() {
+        let mut sim = Sim::new(9, 0, 0);
+        let (mut emmc, mut buf) = (Emmc::new(), [0u8; SECTOR]);
+        emmc.read(&mut sim, 7, &mut buf).unwrap();
+        sim.emmc.dead = true;
+        assert_eq!(emmc.read(&mut sim, 7, &mut buf), Err(Error::Bus(13, BusError::Timeout)));
+        sim.emmc.dead = false;
+        sim.emmc.cmds.clear();
+        emmc.read(&mut sim, 8, &mut buf).unwrap();
+        assert_eq!((sim.emmc.cmds[0], buf), ((0, 0), emmc_sector(8)));
+    }
+
+    /// The eMMC is not touched at boot, only by the dev link; a dead card answers an error, the app runs on, and
+    /// the card is identified again once it answers.
+    #[test]
+    fn sector_command_reads_and_survives_a_dead_card() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.step(&mut sim);
+        assert!(sim.emmc.cmds.is_empty(), "the eMMC was touched at boot");
+        let (mut session, mut pc, mut emmc) = (Session::new(), Pc::default(), Emmc::new());
+        let mut serve = |sim: &mut Sim, session: &mut Session, pc: &mut Pc, line: &[u8]| {
+            pc.got.clear();
+            match session.feed(line, &app, Stats::default(), pc) {
+                Effect::Sector(n) => {
+                    let mut buf = [0u8; SECTOR];
+                    let r = emmc.read(sim, n, &mut buf).map(|()| &buf);
+                    send_sector(pc, r);
+                }
+                Effect::Emmc => send_layout(pc, emmc.layout(sim)),
+                e => panic!("{e:?}"),
+            }
+        };
+        sim.emmc.dead = true;
+        serve(&mut sim, &mut session, &mut pc, b"sector 0\n");
+        assert_eq!(pc.got, b"err cmd 1 timeout\n");
+        sim.emmc.dead = false;
+        serve(&mut sim, &mut session, &mut pc, b"emmc\n");
+        assert_eq!(pc.got, b"emmc 03a3e000 03a2bfe6 03a3b000\n");
+        serve(&mut sim, &mut session, &mut pc, b"sector 0x03a3b000\n");
+        let hex: std::string::String = emmc_sector(0x03a3_b000).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(pc.got, format!("{hex}\n").as_bytes());
+        serve(&mut sim, &mut session, &mut pc, b"sector 0x03a3e000\n");
+        assert_eq!(pc.got, b"err range\n");
+        pc.got.clear();
+        assert_eq!(session.feed(b"sector\nsector 1 2\n", &app, Stats::default(), &mut pc), Effect::None);
+        assert_eq!(pc.got, b"err usage: sector <n>\nerr usage: sector <n>\n");
+        let t = sim.ms;
+        app.step(&mut sim); // the app goes on
+        sim.delay_ms(1000);
+        app.step(&mut sim);
+        assert!(sim.ms > t && sim.visible());
+    }
+}
+
 /// Layer 4 of the testing strategy (AGENTS.md): random bytes through every parser and decoder that takes bytes
 /// from outside (the Nordic chip, the GNSS receiver). A panic there would freeze the unit.
 #[cfg(test)]
@@ -1247,7 +1543,8 @@ mod fuzz {
         use crate::dev::{Session, Stats};
         let mut sim = super::Sim::new(9, 0, 0);
         let app = crate::App::start(&mut sim, None);
-        let words: [&[u8]; 8] = [b"peek ", b"poke ", b"load ", b"key ", b"0x4", b"\n", b"shot\n", b"bat\n"];
+        let words: [&[u8]; 10] =
+            [b"peek ", b"poke ", b"load ", b"key ", b"0x4", b"\n", b"shot\n", b"bat\n", b"sector ", b"emmc\n"];
         for seed in 1..=4u32 {
             let (mut session, mut pc) = (Session::new(), super::Pc::default());
             let mut buf = std::vec::Vec::new();
