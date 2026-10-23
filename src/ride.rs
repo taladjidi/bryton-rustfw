@@ -7,8 +7,9 @@
 //! several percent). Both from GPS altitude; the barometer (ambient.rs, a reading every 10 s) would be steadier.
 //!
 //! **Recorder hook.** Nothing here is stored: every change of state and every second of ride comes out as an
-//! [`Event`], and the app hands each one to one place (`App::recorder` in lib.rs), where the FIT writer (fit.rs)
-//! plugs in once the eMMC has a driver.
+//! [`Event`], and the app hands each one to one place (`App::recorder` in lib.rs), which feeds the recorder
+//! (recorder.rs). [`Ride::to_words`] goes into its recovery record, and [`Ride::resumed`] brings a ride back after
+//! a reset.
 
 /// Where the ride is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +53,9 @@ pub struct Input {
     /// Altitude of a good fix, mm.
     pub alt_mm: Option<i32>,
 }
+
+/// Words of [`Ride::to_words`].
+pub const RIDE_WORDS: usize = 16;
 
 /// Under this speed (km/h x 10) the ride is auto-paused: the timer stops, nothing is added.
 pub const AUTO_PAUSE_X10: u16 = 20;
@@ -187,6 +191,51 @@ impl Ride {
             }
         }
         Some(Event::Second)
+    }
+
+    /// The totals as words, for the recorder's recovery record ([`Ride::resumed`] reads them back).
+    pub fn to_words(&self) -> [u32; RIDE_WORDS] {
+        let (d, l) = (self.dist9, self.lap_dist9);
+        [
+            self.timer_s,
+            d as u32,
+            (d >> 32) as u32,
+            u32::from(self.max_speed),
+            self.hr.sum,
+            self.hr.n,
+            self.power.sum,
+            self.power.n,
+            self.cadence.sum,
+            self.cadence.n,
+            self.ascent_mm,
+            self.lap_timer_s,
+            l as u32,
+            (l >> 32) as u32,
+            u32::from(self.max_hr),
+            0,
+        ]
+    }
+
+    /// A ride from [`Ride::to_words`], paused (a ride resumed after a reset: Start goes on, a long Start ends it).
+    /// The climbing window starts again.
+    pub fn resumed(w: &[u32; RIDE_WORDS]) -> Ride {
+        let avg = |i: usize| Avg { sum: w[i], n: w[i + 1] };
+        let dist9 = u64::from(w[1]) | u64::from(w[2]) << 32;
+        let lap_dist9 = (u64::from(w[12]) | u64::from(w[13]) << 32).min(dist9);
+        Ride {
+            state: State::Paused,
+            timer_s: w[0],
+            dist9,
+            max_speed: w[3] as u16,
+            hr: avg(4),
+            power: avg(6),
+            cadence: avg(8),
+            ascent_mm: w[10],
+            lap_timer_s: w[11].min(w[0]),
+            lap_dist9,
+            max_hr: w[14] as u16,
+            ..Ride::new()
+        }
     }
 
     /// Where the ride is.

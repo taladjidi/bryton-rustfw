@@ -152,14 +152,14 @@ Others
 - [ ] Auto pause threshold set by hand (Garmin, Wahoo)
 - [ ] Auto lap by distance, time or position (Garmin, Wahoo, Karoo)
 - [ ] Start reminder when the bike moves (stock Start Remind, Garmin)
-- [~] FIT activity file written as the ride goes (stock, all): writer done and checked with Garmin's SDK; no eMMC writes yet
-- [~] Checkpoint every minute, two copies of the recovery record, resume after any reset (stock, AGENTS.md): in fit.rs, not wired
-- [ ] Rides saved to \Activities, readable by stock and the computer (stock, all)
+- [~] FIT activity file written as the ride goes (stock, all): sim (recorder.rs, eMMC writes), checked with Garmin's SDK and fitdecode
+- [~] Checkpoint every minute, two copies of the recovery record, resume after any reset (stock, AGENTS.md): sim, power cut after every sector
+- [~] Rides saved to \Activities, readable by stock and the computer (stock, all): sim (stock's name, the history lists them)
 - [ ] Discard a ride (stock, all)
 - [ ] Recording rate: 1 s or smart (stock, Garmin)
 - [ ] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin)
 - [ ] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ)
-- [ ] Laps, session and activity messages at the end (stock, all): in fit.rs, not wired
+- [~] Laps, session and activity messages at the end (stock, all): sim (a lap message per Lap, timer events at pauses)
 - [ ] Power off during a stop, resume at power on (stock Auto Power Off, Garmin)
 - [ ] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all)
 - [ ] Settings in a file, two copies (stock .ini files, all): in RTC backup registers for now
@@ -310,7 +310,7 @@ Touch and buttons
 Storage, USB and updates
 
 - [x] eMMC read: layout, FAT32 volume, files (stock): unit (sector reads); FAT reader in sim
-- [ ] eMMC and FAT32 writes, safe through a power cut (stock)
+- [~] eMMC and FAT32 writes, safe through a power cut (stock): sim (power cut after every sector write)
 - [ ] USB mass storage: the BRYTON drive on a computer (stock, all)
 - [x] USB dev link: screenshots, keys, peek and poke, run from RAM (ours): unit
 - [ ] Update this firmware from a file on the volume (stock IMG.bin + update.ini)

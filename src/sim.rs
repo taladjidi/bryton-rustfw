@@ -4,7 +4,8 @@
 //! - a clock driven by the delays, so the RTC advances as the app waits;
 //! - keys scripted as a function of time;
 //! - a Nordic chip ([`Nordic`]) that answers the commands the way the real one did on the unit (BOARD.md 11);
-//! - an eMMC ([`EmmcCard`]) that answers the commands as JEDEC says, and fails the test on any write command.
+//! - an eMMC ([`EmmcCard`]) that answers the commands as JEDEC says, takes writes below B only, and can lose power
+//!   after any sector written (`cut_after`), in the middle of a multi-block write too.
 //! - the sensor bus ([`Bus`]): the light sensor, the barometer and the accelerometer (BOARD.md 16);
 //! - the touch controller ([`TouchChip`]), with a finger scripted as a function of time like the keys.
 //!
@@ -115,6 +116,9 @@ pub struct EmmcCard {
     pub cmds: Vec<(u8, u32)>,
     /// What the card holds from sector 0 on, zeros after it; empty: [`emmc_sector`] everywhere.
     pub image: Vec<u8>,
+    /// Sectors written so far; the power goes after this many (the card then never answers again).
+    pub sectors_written: u64,
+    pub cut_after: Option<u64>,
     state: u32,
     busy_left: u32,
     card_wide: bool,
@@ -130,6 +134,8 @@ impl Default for EmmcCard {
             busy_polls: 3,
             cmds: Vec::new(),
             image: Vec::new(),
+            sectors_written: 0,
+            cut_after: None,
             state: 4,
             busy_left: 0,
             card_wide: true,
@@ -161,8 +167,8 @@ impl EmmcCard {
         assert!(self.powered, "eMMC command {index} before the controller was powered");
         self.cmds.push((index, arg));
         assert!(
-            ![20, 24, 25, 26, 27, 28, 29, 35, 36, 38, 42, 49].contains(&index),
-            "write, erase, protect or lock command {index} to the eMMC"
+            ![20, 26, 27, 28, 29, 35, 36, 38, 42, 49].contains(&index),
+            "erase, protect, lock or CSD / CID command {index} to the eMMC"
         );
         assert!(index != 6 || arg == crate::emmc::SWITCH_BUS_4BIT, "CMD6 other than the bus width: {arg:#x}");
         if [1, 2, 3].contains(&index) {
@@ -209,7 +215,7 @@ impl EmmcCard {
                 self.card_wide = true;
                 r1(before)
             }
-            (12, 5) => {
+            (12, 5 | 6) => {
                 self.state = 4;
                 r1(before)
             }
@@ -248,6 +254,39 @@ impl EmmcCard {
         }
         if index == 18 {
             self.state = 5; // sending until CMD12
+        }
+        Ok(s)
+    }
+
+    /// CMD24 / CMD25: the sectors land one by one, until the power cut if one is set.
+    fn write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
+        use crate::emmc::BusError::Timeout;
+        assert!(self.powered, "eMMC write before the controller was powered");
+        assert!(buf.len() % 512 == 0 && !buf.is_empty(), "eMMC write of {} bytes", buf.len());
+        assert!([24, 25].contains(&index), "eMMC write command {index}");
+        assert_eq!(index == 24, buf.len() == 512, "CMD24 is one block, CMD25 more");
+        self.cmds.push((index, arg));
+        if self.dead || self.state != 4 {
+            return Err(Timeout);
+        }
+        let end = u64::from(arg) + (buf.len() / 512) as u64;
+        assert!(end <= u64::from(EMMC_SECTORS - crate::emmc::RESERVED), "a write at or past B: {arg:#x}");
+        assert!(!self.image.is_empty(), "a write to the card without an image");
+        let s = self.status();
+        for (i, chunk) in buf.chunks_exact(512).enumerate() {
+            if self.cut_after.is_some_and(|c| self.sectors_written >= c) {
+                self.dead = true; // the power is gone: this sector and the rest never land
+                return Err(Timeout);
+            }
+            let at = (arg as usize + i) * 512;
+            if self.image.len() < at + 512 {
+                self.image.resize(at + 512, 0);
+            }
+            self.image[at..at + 512].copy_from_slice(chunk);
+            self.sectors_written += 1;
+        }
+        if index == 25 {
+            self.state = 6; // receiving until CMD12
         }
         Ok(s)
     }
@@ -844,6 +883,10 @@ impl Board for Sim {
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
         self.emmc.read(index, arg, buf)
+    }
+
+    fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
+        self.emmc.write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
         self.bus.read(self.ms, addr, reg, buf)
@@ -2942,6 +2985,40 @@ mod emmc_tests {
         assert!(sim.emmc.cmds.iter().all(|c| [0, 1, 2, 3, 6, 7, 8, 12, 13, 16, 17, 18].contains(&c.0)));
     }
 
+    /// Writes: CMD24 for one sector, CMD25 + CMD12 for more, CMD13 after each (the card programming); nothing at
+    /// or past B goes out at all; a card that loses power mid-write is an error, and the next use starts from CMD0.
+    #[test]
+    fn writes_below_b_only() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = vec![0; 64 * SECTOR];
+        let card = Card::init(&mut sim).unwrap();
+        sim.emmc.cmds.clear();
+        card.write(&mut sim, 3, &[7u8; SECTOR]).unwrap();
+        card.write(&mut sim, 8, &[9u8; 4 * SECTOR]).unwrap();
+        assert_eq!(
+            sim.emmc.cmds,
+            [(13, 0x1_0000), (24, 3), (13, 0x1_0000), (13, 0x1_0000), (25, 8), (12, 0), (13, 0x1_0000)]
+        );
+        assert!(sim.emmc.image[3 * SECTOR..4 * SECTOR].iter().all(|&b| b == 7));
+        assert!(sim.emmc.image[8 * SECTOR..12 * SECTOR].iter().all(|&b| b == 9));
+        let mut back = [0u8; 4 * SECTOR];
+        card.read(&mut sim, 8, &mut back).unwrap();
+        assert!(back.iter().all(|&b| b == 9));
+        sim.emmc.cmds.clear();
+        let b = card.layout.fat_end;
+        for (lba, n) in [(b, 1), (b - 1, 2), (b - 2, 4), (u32::MAX, 1)] {
+            assert_eq!(card.write(&mut sim, lba, &vec![0u8; n * SECTOR]), Err(Error::Range), "{lba:#x} + {n}");
+        }
+        assert_eq!(card.write(&mut sim, 0, &[0u8; 100]), Err(Error::Range), "not whole sectors");
+        assert!(sim.emmc.cmds.is_empty(), "refused before any command");
+        // the power goes after 2 sectors of a 4-sector write: the first 2 land, the card is gone
+        let mut emmc = Emmc::new();
+        sim.emmc.cut_after = Some(sim.emmc.sectors_written + 2);
+        assert!(emmc.write(&mut sim, 20, &[5u8; 4 * SECTOR]).is_err());
+        assert!(sim.emmc.image[20 * SECTOR..22 * SECTOR].iter().all(|&b| b == 5));
+        assert!(sim.emmc.image[22 * SECTOR..24 * SECTOR].iter().all(|&b| b == 0));
+    }
+
     /// Identification from the state the bootloader leaves (selected, 4-bit), without stock's SD probes, then the
     /// layout from SEC_COUNT.
     #[test]
@@ -3331,5 +3408,68 @@ mod fuzz {
                 }
             }
         }
+    }
+}
+
+/// The ride recorder (recorder.rs) in the app, on the simulated card with the synthetic volume.
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+
+    fn run(sim: &mut Sim, app: &mut App, ms: u64) {
+        let end = sim.ms + ms;
+        while sim.ms < end {
+            app.step(sim);
+            sim.delay_ms(POLL_MS);
+        }
+    }
+
+    /// Start from a key; the unit reset mid-ride (the card and the backup registers kept): at the start the ride
+    /// comes back paused at its last checkpoint; Start goes on, a long Start ends it, and it is saved in
+    /// `\Activities` under stock's name, where the history finds it. The volume stays clean.
+    #[test]
+    fn a_ride_reset_resumed_and_saved() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 150_000);
+        assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "a ride open on the card");
+        let timer = app.ride.timer_s();
+        let writes = sim.emmc.cmds.iter().filter(|c| c.0 == 24 || c.0 == 25).count();
+        std::println!("{timer} s of ride: {writes} write commands, {} sectors", sim.emmc.sectors_written);
+
+        // a reset 30 s after the second checkpoint
+        let mut sim2 = Sim::new(9, 3, 0);
+        sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+        sim2.backup = sim.backup;
+        let mut app = App::start(&mut sim2, None);
+        run(&mut sim2, &mut app, 1000);
+        assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+        assert_eq!(app.ride.state(), ride::State::Paused);
+        let back = app.ride.timer_s();
+        assert!(back <= timer && back + 60 >= timer, "timer {back} of {timer}");
+        assert_eq!(app.ride_started, ((2026, 10, 23), (9, 0)));
+
+        app.press(&mut sim2, Press::Short(Key::Start)); // resume
+        run(&mut sim2, &mut app, 30_000);
+        app.press(&mut sim2, Press::Short(Key::Start)); // pause
+        app.press(&mut sim2, Press::Long(Key::Start)); // end
+        run(&mut sim2, &mut app, 2000);
+        assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+        assert_eq!(sim2.backup[RIDE_BKP], 0);
+        let lost = crate::fat::write::tests::fsck(&sim2.emmc.image).unwrap();
+        assert_eq!(lost, 0);
+
+        // the history lists it first (the newest), with its time
+        app.stock.start(app.date);
+        while app.stock.status() == crate::stock::Status::Running {
+            run(&mut sim2, &mut app, u64::from(POLL_MS));
+        }
+        let r = app.stock.index.get(0).unwrap();
+        assert_eq!(r.start, (2026, 10, 23, 9, 0));
+        let total = app.ride.timer_s();
+        assert!(r.timer_s.abs_diff(total) <= 2, "the file's timer {} s, the ride's {total} s", r.timer_s);
     }
 }

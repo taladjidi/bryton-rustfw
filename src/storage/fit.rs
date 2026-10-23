@@ -2,8 +2,9 @@
 //! power cut never loses more than the data since the last checkpoint (AGENTS.md, "never lose a ride").
 //!
 //! Layout: a 14-byte header (data size, its own CRC), then definition and data messages (little-endian), then the
-//! file CRC. Messages: file_id, event (timer start / stop), one record a second (only the fields that are present:
-//! a new record definition goes out when that set changes), and at the end lap, session and activity.
+//! file CRC. Messages: file_id, event (timer start, stop at a pause, start at a resume), one record a second (only
+//! the fields that are present: a new record definition goes out when that set changes), a lap at each Lap key,
+//! and at the end the last lap, session and activity.
 //!
 //! **Checkpoints.** [`Writer`] holds no file data, only where it is: the data length, the running CRC of the data
 //! bytes, what is defined, and the ride totals. [`Writer::checkpoint`] writes the file CRC after the data and the
@@ -74,17 +75,20 @@ pub struct Sample {
     pub cadence: Option<u8>,
     /// Power, W.
     pub power: Option<u16>,
+    /// Temperature, degrees C.
+    pub temp_c: Option<i8>,
 }
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
 pub const RECORD_LEN: usize = 4 * WORDS + 4;
 
 const HEADER: u32 = 14;
-const WORDS: usize = 16;
-const TAG: u16 = 0xf17e; // first two bytes of a recovery record (and a version: change it with the layout)
+const WORDS: usize = 21;
+const TAG: u16 = 0xf17f; // first two bytes of a recovery record (and a version: change it with the layout)
 
 // base types (FIT profile)
 const ENUM: u8 = 0x00;
+const S8: u8 = 0x01;
 const U8: u8 = 0x02;
 const U16: u8 = 0x84;
 const S32: u8 = 0x85;
@@ -103,9 +107,9 @@ const L_ACTIVITY: u8 = 5;
 
 const FILE_ID: [Field; 4] = [(0, 1, ENUM), (1, 2, U16), (2, 2, U16), (4, 4, U32)];
 const EVENT: [Field; 3] = [(253, 4, U32), (0, 1, ENUM), (1, 1, ENUM)];
-/// timestamp, position_lat, position_long, altitude, speed, distance, heart_rate, cadence, power: the mask bits of
-/// [`Writer`] in this order.
-const RECORD: [Field; 9] = [
+/// timestamp, position_lat, position_long, altitude, speed, distance, heart_rate, cadence, power, temperature: the
+/// mask bits of [`Writer`] in this order.
+const RECORD: [Field; 10] = [
     (253, 4, U32),
     (0, 4, S32),
     (1, 4, S32),
@@ -115,6 +119,7 @@ const RECORD: [Field; 9] = [
     (3, 1, U8),
     (4, 1, U8),
     (7, 2, U16),
+    (13, 1, S8),
 ];
 /// timestamp, start_time, total_elapsed_time, total_timer_time, total_distance, avg / max speed, heart rate,
 /// cadence, power, event, event_type. Lap and session take the same values; the field numbers differ.
@@ -198,18 +203,115 @@ pub struct Writer {
     max_speed: u32,
     /// heart rate, cadence, power
     stats: [Stat; 3],
+    /// The current lap's start (FIT time) and distance then (mm); laps ended so far.
+    lap_start: u32,
+    lap_dist: u32,
+    laps: u32,
+    /// Seconds paused (Start key) so far; when the current pause began (0: not paused).
+    paused_s: u32,
+    paused_at: u32,
 }
 
 impl Writer {
+    /// Nothing written yet ([`Writer::begin`] starts a file).
+    pub const fn new() -> Writer {
+        const S: Stat = Stat { sum: 0, n: 0, max: 0 };
+        Writer {
+            len: 0,
+            crc: 0,
+            defined: 0,
+            mask: 0,
+            start: 0,
+            last: 0,
+            dist_mm: 0,
+            max_speed: 0,
+            stats: [S; 3],
+            lap_start: 0,
+            lap_dist: 0,
+            laps: 0,
+            paused_s: 0,
+            paused_at: 0,
+        }
+    }
+
     /// Starts a ride file at FIT time `time`: header, file_id, timer start, then a checkpoint (its record is
     /// returned). The sink should be empty.
     pub fn start(sink: &mut impl Sink, time: u32) -> Result<(Writer, [u8; RECORD_LEN]), Error> {
-        let mut w = Writer { start: time, last: time, ..Writer::default() };
+        let mut w = Writer::begin(sink, time)?;
+        let rec = w.checkpoint(sink)?;
+        Ok((w, rec))
+    }
+
+    /// [`Writer::start`] without its checkpoint: file_id and timer start only (the recorder buffers them in RAM
+    /// and checkpoints once the file exists).
+    pub fn begin(sink: &mut impl Sink, time: u32) -> Result<Writer, Error> {
+        let mut w = Writer { start: time, last: time, lap_start: time, ..Writer::default() };
         // 255: development (not a registered manufacturer: this is not Bryton's firmware)
         w.message(sink, L_FILE_ID, 0, &FILE_ID, &[4, 255, 0, time])?;
         w.event(sink, time, 0)?;
-        let rec = w.checkpoint(sink)?;
-        Ok((w, rec))
+        Ok(w)
+    }
+
+    /// The Start key paused the ride at FIT time `time`: timer stop.
+    pub fn pause(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        self.last = self.last.max(time);
+        self.event(sink, self.last, 4)?;
+        self.paused_at = self.last;
+        Ok(())
+    }
+
+    /// Resumed at `time`: timer start; the pause is left out of the timer time.
+    pub fn resume(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        self.last = self.last.max(time);
+        self.event(sink, self.last, 0)?;
+        if self.paused_at != 0 {
+            self.paused_s = self.paused_s.saturating_add(self.last.saturating_sub(self.paused_at));
+            self.paused_at = 0;
+        }
+        Ok(())
+    }
+
+    /// A lap ended at `time` (the Lap key): a lap message from the last one. Its averages and maxima are left out
+    /// (invalid; the session has the ride's): they would cost three more stats in the recovery record.
+    pub fn lap(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
+        self.last = self.last.max(time);
+        let mut v = self.lap_values();
+        v[7..13].fill(u32::MAX);
+        self.message(sink, L_LAP, 19, &LAP, &v)?;
+        (self.lap_start, self.lap_dist, self.laps) = (self.last, self.dist_mm, self.laps + 1);
+        Ok(())
+    }
+
+    /// [`LAP`]'s values for the lap from `lap_start` to `last`: elapsed and timer time and distance, with the
+    /// ride's averages and maxima (the lap's when it is the only one).
+    fn lap_values(&self) -> [u32; 15] {
+        let pausing =
+            if self.paused_at != 0 { self.last.saturating_sub(self.paused_at.max(self.lap_start)) } else { 0 };
+        let elapsed = self.last.saturating_sub(self.lap_start);
+        // ponytail: pauses are counted for the ride, not per lap: a lap after the first leaves out only the pause
+        // in progress
+        let paused = if self.lap_start == self.start { self.paused_s + pausing } else { pausing };
+        let timer = elapsed.saturating_sub(paused);
+        let dist = self.dist_mm.saturating_sub(self.lap_dist);
+        let avg_speed = if timer == 0 { 0 } else { dist / timer };
+        let [(ah, mh), (ac, mc), (ap, mp)] = self.stats.map(|s| s.avg_max());
+        [
+            self.last,
+            self.lap_start,
+            elapsed.saturating_mul(1000),
+            timer.saturating_mul(1000),
+            dist / 10,
+            avg_speed.min(0xfffe),
+            self.max_speed.min(0xfffe),
+            ah,
+            mh,
+            ac,
+            mc,
+            ap,
+            mp,
+            9, // event lap
+            1, // stop
+        ]
     }
 
     /// Appends one record. The totals count it even if the write fails.
@@ -231,9 +333,10 @@ impl Writer {
         let speed = s.speed_mm_s.map(|v| v.min(0xfffe));
         let dist = s.speed_mm_s.map(|_| self.dist_mm / 10);
         let (hr, cad, power) = (s.hr.map(u32::from), s.cadence.map(u32::from), s.power.map(u32::from));
-        let all = [Some(s.time), lat, lon, alt, speed, dist, hr, cad, power];
+        let temp = s.temp_c.map(|t| u32::from(t as u8));
+        let all = [Some(s.time), lat, lon, alt, speed, dist, hr, cad, power, temp];
         let mut mask = 0u16;
-        let (mut fields, mut values, mut n) = ([(0, 0, 0); 9], [0u32; 9], 0);
+        let (mut fields, mut values, mut n) = ([(0, 0, 0); 10], [0u32; 10], 0);
         for (i, (f, v)) in RECORD.iter().zip(all).enumerate() {
             if let (Some(v), Some(fs), Some(vs)) = (v, fields.get_mut(n), values.get_mut(n)) {
                 (*fs, *vs) = (*f, v);
@@ -249,40 +352,37 @@ impl Writer {
         Ok(())
     }
 
-    /// Ends the ride at FIT time `time`: timer stop, lap, session, activity, then a checkpoint (the finished file).
+    /// Ends the ride at FIT time `time`: [`Writer::end`], then a checkpoint (the finished file).
     pub fn finish(&mut self, sink: &mut impl Sink, time: u32) -> Result<[u8; RECORD_LEN], Error> {
+        self.end(sink, time)?;
+        self.checkpoint(sink)
+    }
+
+    /// Bytes [`Writer::end`] writes at most (a buffered sink keeps this much room for it).
+    pub const END_BYTES: usize = 320;
+
+    /// The ride's end without the checkpoint: timer stop (unless paused), the last lap, session, activity.
+    pub fn end(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
         self.last = self.last.max(time);
-        self.event(sink, self.last, 4)?; // timer, stop all
-        let elapsed = self.last.saturating_sub(self.start).saturating_mul(1000);
-        let avg_speed = if elapsed == 0 { 0 } else { (u64::from(self.dist_mm) * 1000 / u64::from(elapsed)) as u32 };
-        let [(ah, mh), (ac, mc), (ap, mp)] = self.stats.map(|s| s.avg_max());
-        // lap: event lap (9), stop (1); session: event session (8), stop (1), cycling (2), lap 0, one lap
-        let mut v = [
-            self.last,
-            self.start,
-            elapsed,
-            elapsed, // ponytail: timer = elapsed until there is a pause
-            self.dist_mm / 10,
-            avg_speed.min(0xfffe),
-            self.max_speed.min(0xfffe),
-            ah,
-            mh,
-            ac,
-            mc,
-            ap,
-            mp,
-            9,
-            1,
-            2,
-            0,
-            1,
-        ];
-        self.message(sink, L_LAP, 19, &LAP, &v)?;
-        v[13] = 8;
+        if self.paused_at == 0 {
+            self.event(sink, self.last, 4)?; // timer, stop all
+            self.paused_at = self.last;
+        }
+        let mut lap = self.lap_values();
+        if self.laps > 0 {
+            lap[7..13].fill(u32::MAX);
+        }
+        self.message(sink, L_LAP, 19, &LAP, &lap)?;
+        // the ride as one lap: the session's values
+        let whole = Writer { lap_start: self.start, lap_dist: 0, ..*self }.lap_values();
+        // session: event session (8), stop (1), cycling (2), first lap 0, the laps
+        let mut v = [0u32; 18];
+        v[..15].copy_from_slice(&whole);
+        (v[13], v[15], v[16], v[17]) = (8, 2, 0, self.laps + 1);
         self.message(sink, L_SESSION, 18, &SESSION, &v)?;
         // activity: one session, manual (0), event activity (26), stop (1)
-        self.message(sink, L_ACTIVITY, 34, &ACTIVITY, &[self.last, elapsed, 1, 0, 26, 1])?;
-        self.checkpoint(sink)
+        self.message(sink, L_ACTIVITY, 34, &ACTIVITY, &[self.last, whole[3], 1, 0, 26, 1])?;
+        Ok(())
     }
 
     /// Makes the file on the sink valid as it stands (CRC after the data, header with its size), flushes it, and
@@ -305,9 +405,19 @@ impl Writer {
         Ok(self.to_record())
     }
 
-    /// Bytes of messages in the file (grows with every write; picks the newer of two recovery records).
+    /// Bytes of messages in the file (grows with every write).
     pub fn data_len(&self) -> u32 {
         self.len
+    }
+
+    /// The FIT time of the latest message.
+    pub fn last_time(&self) -> u32 {
+        self.last
+    }
+
+    /// Paused (a timer stop with no start after it).
+    pub fn paused(&self) -> bool {
+        self.paused_at != 0
     }
 
     /// The writer a recovery record holds, if the record is whole.
@@ -331,10 +441,16 @@ impl Writer {
             dist_mm: w[5],
             max_speed: w[6],
             stats: [s(7), s(10), s(13)],
+            lap_start: w[16],
+            lap_dist: w[17],
+            laps: w[18],
+            paused_s: w[19],
+            paused_at: w[20],
         })
     }
 
-    fn to_record(self) -> [u8; RECORD_LEN] {
+    /// The recovery record of this state ([`Writer::from_record`] reads it back).
+    pub fn to_record(self) -> [u8; RECORD_LEN] {
         let [a, b, c] = self.stats;
         let w: [u32; WORDS] = [
             self.len,
@@ -353,6 +469,11 @@ impl Writer {
             c.sum,
             c.n,
             c.max,
+            self.lap_start,
+            self.lap_dist,
+            self.laps,
+            self.paused_s,
+            self.paused_at,
         ];
         let mut r = [0u8; RECORD_LEN];
         r[..2].copy_from_slice(&TAG.to_le_bytes());
@@ -371,7 +492,7 @@ impl Writer {
 
     /// Data message `local` (global number `global`), its definition first if the file does not have it yet.
     fn message(&mut self, sink: &mut impl Sink, local: u8, global: u16, f: &[Field], v: &[u32]) -> Result<(), Error> {
-        let mut buf = [0u8; 128]; // the largest, session with its definition: 101
+        let mut buf = [0u8; 128]; // the largest, session with its definition: 109
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             if let Some(s) = buf.get_mut(n..n + bytes.len()) {
@@ -602,6 +723,7 @@ mod tests {
                 hr: (t >= 10).then_some(120 + (t % 40) as u8),
                 cadence: (t >= 30).then_some(85 + (t % 10) as u8),
                 power: (t >= 30 && !(200..215).contains(&t)).then_some(200 + (t % 60) as u16),
+                temp_c: Some((t % 30) as i8 - 5),
             })
             .collect()
     }
@@ -650,6 +772,47 @@ mod tests {
         assert_eq!(field(session, 17), Some(159), "max HR");
         assert_eq!(field(session, 21), Some(259), "max power");
         assert_eq!(Writer::from_record(&rec).map(|w| w.data_len() as usize), Some(f.len() - 16));
+    }
+
+    /// A pause (timer stop and start events, left out of the timer time), a lap, temperatures below zero; and the
+    /// writer survives a recovery record taken while paused.
+    #[test]
+    fn pauses_laps_and_temperature() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        let samples = ride(300);
+        for s in &samples {
+            let t = s.time - T0;
+            if (101..161).contains(&t) {
+                continue; // paused
+            }
+            w.record(&mut f, s).unwrap();
+            match t {
+                100 => {
+                    w.pause(&mut f, s.time).unwrap();
+                    let rec = w.checkpoint(&mut f).unwrap();
+                    w = Writer::from_record(&rec).unwrap();
+                }
+                161 => w.resume(&mut f, s.time).unwrap(),
+                200 => w.lap(&mut f, s.time).unwrap(),
+                _ => {}
+            }
+        }
+        w.finish(&mut f, T0 + 301).unwrap();
+        let m = decode(&f).unwrap();
+        let events: Vec<u64> = m.iter().filter(|x| x.0 == 21).map(|x| field(x, 1).unwrap()).collect();
+        assert_eq!(events, [0, 4, 0, 4], "start, pause, resume, stop");
+        let laps: Vec<&Msg> = m.iter().filter(|x| x.0 == 19).collect();
+        assert_eq!(laps.len(), 2);
+        assert_eq!(field(laps[0], 2), Some(u64::from(T0)), "the first lap from the start");
+        assert_eq!(field(laps[1], 2), Some(u64::from(T0 + 200)));
+        assert_eq!(field(laps[0], 15), Some(0xff), "no averages per lap");
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!(field(session, 7), Some(301_000), "elapsed");
+        assert_eq!(field(session, 8), Some(240_000), "timer: the 61 s pause left out");
+        assert_eq!(field(session, 26), Some(2), "laps");
+        let r = m.iter().filter(|x| x.0 == 20).nth(3).unwrap();
+        assert_eq!(field(r, 13), Some(0xfe), "-2 C");
     }
 
     /// The golden rule: cut the power after every byte of a ride. The last stored recovery record always gives

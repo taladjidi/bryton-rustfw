@@ -1,13 +1,23 @@
-//! The eMMC on SDMMC1 (BOARD.md 15), **read only**: the card's identification, the bus set to 4 bits at 25 MHz,
-//! SEC_COUNT from the EXT_CSD, single and multi-block reads, and stock's layout derived from SEC_COUNT.
+//! The eMMC on SDMMC1 (BOARD.md 15): the card's identification, the bus set to 4 bits at 25 MHz, SEC_COUNT from
+//! the EXT_CSD, single and multi-block reads and writes, and stock's layout derived from SEC_COUNT.
 //!
-//! The protocol (JEDEC eMMC) lives here, against four [`Board`] primitives: power the controller on, set the bus,
-//! send a command, read blocks through the FIFO. `sim.rs` has a model of the card (`EmmcCard`).
+//! The protocol (JEDEC eMMC) lives here, against five [`Board`] primitives: power the controller on, set the bus,
+//! send a command, read or write blocks through the FIFO. `sim.rs` has a model of the card (`EmmcCard`).
 //!
-//! **Nothing here writes to the card.** No CMD24 / CMD25 (write), no erase (CMD35 / 36 / 38), no lock, no CSD
-//! or CID programming. The one CMD6 SWITCH is the bus width, EXT_CSD byte 183 BUS_WIDTH, a volatile byte the card
-//! clears at every CMD0 and power cycle, the same switch stock and the bootloader make at each start. The
-//! simulated card fails any test that sends anything else.
+//! **Writes** ([`Card::write`]): only inside stock's FAT volume, sectors 0 .. B-1 ([`Layout::fat_end`]); a write
+//! that reaches B or beyond (the factory image, the calibration, the fonts, the OS) is refused here, before any
+//! command, whatever the caller. CMD24 (WRITE_BLOCK) for one sector, CMD25 (WRITE_MULTIPLE_BLOCK) then CMD12
+//! (STOP_TRANSMISSION) for more, then CMD13 until the card has programmed the data (back in the transfer state,
+//! READY_FOR_DATA), at most [`TRIES`] ms, and its status checked (WP_VIOLATION, ADDRESS_OUT_OF_RANGE...). Opcodes,
+//! R1 bits and the open-ended CMD25 + CMD12 sequence as the Linux kernel's MMC core uses them
+//! (include/linux/mmc/mmc.h, drivers/mmc/core/block.c, checked 2026-10-24; JEDEC JESD84-B51 itself is not public);
+//! the controller side (data path to the card, CMDTRANS, the FIFO fed on TXFIFOHE until DATAEND, CMD12 after a
+//! multi-block write) as ST's HAL_MMC_WriteBlocks (github.com/STMicroelectronics/stm32h7xx-hal-driver,
+//! stm32h7xx_hal_mmc.c, checked 2026-10-24) and RM0399 (SDMMC data transfer). No erase (CMD35 / 36 / 38), no lock,
+//! no CSD or CID programming, no reliable write (CMD23 bit 31: open question, docs/status.md). The one CMD6 SWITCH
+//! is the bus width, EXT_CSD byte 183 BUS_WIDTH, a volatile byte the card clears at every CMD0 and power cycle, the
+//! same switch stock and the bootloader make at each start. The simulated card fails any test that sends anything
+//! else.
 //!
 //! Differences from stock's sequence (BOARD.md 15), all on purpose:
 //! - **No CMD8 (SD SEND_IF_COND) or ACMD41 (SD SEND_OP_COND) before CMD1.** They are SD card probes from stock's
@@ -44,8 +54,8 @@ const STATE_TRAN: u32 = 4;
 const STATE_DATA: u32 = 5;
 const STATE_RCV: u32 = 6;
 /// How many times CMD1 (1 ms apart) and CMD13 (1 ms apart when not ready) are tried: 1 s, the JEDEC limit for
-/// the card's power-up.
-const TRIES: u32 = 1000;
+/// the card's power-up, and well over a sector write's programming time.
+pub const TRIES: u32 = 1000;
 
 /// The response a command waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +90,8 @@ pub enum Error {
     Busy,
     /// Command `.0` answered a card status `.1` with error bits.
     Status(u8, u32),
-    /// Past the card's last sector, or a buffer that is not a whole number of sectors.
+    /// Past the card's last sector, a buffer that is not a whole number of sectors, or a write at or past the FAT
+    /// volume's end (sector B).
     Range,
     /// The EXT_CSD's SEC_COUNT is too small for stock's layout, or differs between the 1-bit and the 4-bit read.
     ExtCsd,
@@ -137,7 +148,7 @@ fn wait_ready(b: &mut impl Board) -> Result<u32, Error> {
             STATE_DATA | STATE_RCV => {
                 cmd(b, 12, 0, Resp::R1)?;
             }
-            _ => b.delay_ms(1),
+            _ => b.delay_ms(1), // 7: programming a write; others: not selected yet
         }
     }
     Err(Error::Busy)
@@ -211,6 +222,27 @@ impl Card {
         }
         status(index, got?).map(drop)
     }
+
+    /// Writes `buf.len() / 512` sectors from `lba` on: CMD24 for one, CMD25 then CMD12 for more, then waits for the
+    /// card to program them (CMD13) and checks its status. Refused ([`Error::Range`]) unless every sector is below
+    /// [`Layout::fat_end`]: nothing past stock's FAT volume is ever written.
+    pub fn write(&self, b: &mut impl Board, lba: u32, buf: &[u8]) -> Result<(), Error> {
+        let n = (buf.len() / SECTOR) as u32;
+        let end = lba.checked_add(n).ok_or(Error::Range)?;
+        if n == 0 || !buf.len().is_multiple_of(SECTOR) || end > self.layout.fat_end {
+            return Err(Error::Range);
+        }
+        let arg = if self.sector_mode { lba } else { lba.checked_mul(SECTOR as u32).ok_or(Error::Range)? };
+        wait_ready(b)?;
+        let index = if n == 1 { 24 } else { 25 };
+        let got = b.emmc_write(index, arg, buf).map_err(|e| Error::Bus(index, e));
+        if n > 1 {
+            let _ = cmd(b, 12, 0, Resp::R1); // stop even after an error
+        }
+        status(index, got?)?;
+        // programming: the card leaves STATE_PRG for tran when the data is in; errors found meanwhile show here
+        status(13, wait_ready(b)?).map(drop)
+    }
 }
 
 /// The card for the dev link: identified on first use (never at boot, so a bad driver cannot affect normal use),
@@ -243,6 +275,16 @@ impl Emmc {
     /// Reads sectors as [`Card::read`] (identifies the card if needed).
     pub fn read(&mut self, b: &mut impl Board, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
         let r = self.card(b)?.read(b, lba, buf);
+        self.forget_on_error(r)
+    }
+
+    /// Writes sectors as [`Card::write`] (identifies the card if needed): only below the FAT volume's end.
+    pub fn write(&mut self, b: &mut impl Board, lba: u32, buf: &[u8]) -> Result<(), Error> {
+        let r = self.card(b)?.write(b, lba, buf);
+        self.forget_on_error(r)
+    }
+
+    fn forget_on_error(&mut self, r: Result<(), Error>) -> Result<(), Error> {
         if matches!(r, Err(Error::Bus(..) | Error::Busy | Error::Status(..))) {
             self.card = None;
         }
@@ -250,11 +292,17 @@ impl Emmc {
     }
 }
 
-/// The card as a [`fat::Disk`]: the FAT volume starts at sector 0 (BOARD.md 15, no MBR). Read only, as the driver.
+/// The card as a [`fat::Disk`]: the FAT volume starts at sector 0 (BOARD.md 15, no MBR).
 pub struct Volume<'a, B: Board>(pub &'a mut Emmc, pub &'a mut B);
 
 impl<B: Board> fat::Disk for Volume<'_, B> {
     fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), fat::Error> {
         self.0.read(self.1, lba, buf).map_err(|_| fat::Error::Io)
+    }
+}
+
+impl<B: Board> fat::DiskWrite for Volume<'_, B> {
+    fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), fat::Error> {
+        self.0.write(self.1, lba, buf).map_err(|_| fat::Error::Io)
     }
 }
