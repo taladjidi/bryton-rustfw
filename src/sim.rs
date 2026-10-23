@@ -1296,7 +1296,7 @@ mod tests {
             app.press(&mut sim, Press::Short(Key::Start)); // 60, 30, 10, AUTO
         }
         assert_eq!(main_row(&app, 5), "LIGHT % AUTO");
-        assert_eq!(sim.backup[11] >> 16 & 0xf, LIGHT_AUTO as u32, "kept");
+        assert_eq!(Misc::from_word(sim.backup[11]).light_level, LIGHT_AUTO, "kept");
         run(&mut sim, &mut app, 4000);
         assert_eq!(sensor_row(&app, 5), "LUX 300");
         assert_eq!(sensor_row(&app, 6), "TEMP C 21.5");
@@ -1713,7 +1713,8 @@ mod tests {
         sim.save("ride_ended");
     }
 
-    /// Max HR and FTP from the menu: cycled with Start, kept in the wheel's register beside the other settings.
+    /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,
+    /// holding a key repeats, Start keeps it; kept in the wheel's register beside the other settings.
     #[test]
     fn max_hr_and_ftp_from_the_menu() {
         let mut sim = Sim::new(9, 0, 0);
@@ -1726,15 +1727,26 @@ mod tests {
         for _ in 0..3 {
             app.press(&mut sim, Press::Short(Key::Page));
         }
-        app.press(&mut sim, Press::Short(Key::Start)); // MAX HR 190 -> 195
-        app.press(&mut sim, Press::Short(Key::Page));
-        for _ in 0..12 {
-            app.press(&mut sim, Press::Short(Key::Start)); // FTP 200 -> 400 -> 100 -> 120
+        app.press(&mut sim, Press::Short(Key::Start)); // edit MAX HR
+        for _ in 0..5 {
+            app.press(&mut sim, Press::Short(Key::Lap)); // 190 -> 195
         }
+        app.press(&mut sim, Press::Short(Key::Page)); // 194
+        sim.save("max_hr_edit");
+        app.press(&mut sim, Press::Short(Key::Start)); // kept
+        app.press(&mut sim, Press::Short(Key::Page)); // FTP row
+        app.press(&mut sim, Press::Short(Key::Start));
+        for _ in 0..200 {
+            app.press(&mut sim, Press::Repeat(Key::Page)); // held: 200 W down to the floor
+        }
+        app.press(&mut sim, Press::Short(Key::Page)); // the release does not step again
+        app.press(&mut sim, Press::Short(Key::Lap)); // 55
+        app.press(&mut sim, Press::Short(Key::Back)); // kept, still in the menu
+        assert!(matches!(app.screen, Screen::Menu(Menu::Main, 8)));
         assert_consistent(&sim, &app);
         sim.save("zones_menu");
         let again = App::start(&mut sim, None);
-        assert_eq!((max_hr_of(again.max_hr_bits), ftp_of(again.ftp_bits), again.wheel_mm), (195, 120, WHEELS[2]));
+        assert_eq!((again.max_hr, again.ftp, again.wheel_mm), (194, 55, WHEELS[2]));
         assert_eq!((again.light_level, again.light_timeout), (0, 0), "the backlight settings untouched");
     }
 

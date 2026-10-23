@@ -37,7 +37,8 @@ The power button starts it again. After the backlight's time-out, any key brings
 ## Menu
 
 Sensors (pair, forget; then the light, temperature and pressure readings), pages 1 to 3 (field count, each field),
-wheel size, backlight level (or AUTO) and time-out, MAX HR, FTP, GPS (fix, satellites, position, altitude, UTC),
+wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
+up and Page down, held to repeat, Start to keep), GPS (fix, satellites, position, altitude, UTC),
 BLE devices nearby.
 
 ## Sensors and radios

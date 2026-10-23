@@ -219,7 +219,15 @@ pub enum Press {
     Short(Key),
     /// Held for [`Key::long_ms`].
     Long(Key),
+    /// Still held: one every [`REPEAT_MS`] from [`REPEAT_AFTER_MS`] on (a value editor steps on it). The
+    /// [`Press::Short`] or [`Press::Long`] still follows.
+    Repeat(Key),
 }
+
+/// A held key repeats from then on ([`Press::Repeat`]).
+pub const REPEAT_AFTER_MS: u32 = 500;
+/// Then once per this.
+pub const REPEAT_MS: u32 = 100;
 
 /// How long each key has been held, between polls.
 #[derive(Default)]
@@ -238,6 +246,7 @@ impl Keys {
             let p = match (now, *held) {
                 (0, 1..) if *held < long => Some(Press::Short(key)),
                 (1.., _) if *held < long && now >= long => Some(Press::Long(key)),
+                (REPEAT_AFTER_MS.., _) if now / REPEAT_MS != *held / REPEAT_MS => Some(Press::Repeat(key)),
                 _ => None,
             };
             *held = now;
@@ -292,19 +301,21 @@ const PAGE_BKP: [usize; PAGES] = [14, 15, 16];
 const WHEEL_BKP: usize = 11;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
-/// - tag 0xa6 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 4..7 max heart rate ([`max_hr_of`]),
-///   8..11 FTP ([`ftp_of`]), 16..18 the backlight level (an index in [`LIGHT_LEVELS`], or [`LIGHT_AUTO`]),
-///   20..21 its time-out (an index in [`LIGHT_TIMEOUTS_S`]); the other bits free;
+/// - tag 0xa7 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
+///   [`LIGHT_LEVELS`], or [`LIGHT_AUTO`]), 6..7 its time-out (an index in [`LIGHT_TIMEOUTS_S`]), 8..15 max heart
+///   rate less 100, 16..23 FTP in 5 W;
+/// - tag 0xa6 (earlier builds): the wheel's index in bits 0..2, max heart rate and FTP as 4-bit codes in 4..7 and
+///   8..11 ([`code_hr`], [`code_ftp`]), the backlight level in 16..18 and its time-out in 20..21; read only;
 /// - tag 0xa5 (written by earlier builds): the wheel in mm in bits 0..11, the backlight level in 16..19 and its
 ///   time-out in 20..23; read, never written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Misc {
     /// Wheel circumference, mm (one of [`WHEELS`]).
     pub wheel_mm: u16,
-    /// Max heart rate and FTP as their 4-bit codes.
-    pub max_hr_bits: u32,
-    /// FTP's code ([`ftp_of`]).
-    pub ftp_bits: u32,
+    /// Max heart rate, bpm (in [`MAX_HR_RANGE`]).
+    pub max_hr: u16,
+    /// FTP, W (in [`FTP_RANGE`], a multiple of 5).
+    pub ftp: u16,
     /// Backlight level: an index in [`LIGHT_LEVELS`], or [`LIGHT_AUTO`].
     pub light_level: usize,
     /// Backlight time-out: an index in [`LIGHT_TIMEOUTS_S`].
@@ -316,64 +327,79 @@ impl Misc {
     ///
     /// ```
     /// use bryton_rustfw::{Misc, WHEELS};
-    /// let m = Misc { wheel_mm: WHEELS[3], max_hr_bits: 7, ftp_bits: 11, light_level: 4, light_timeout: 3 };
+    /// let m = Misc { wheel_mm: WHEELS[3], max_hr: 187, ftp: 265, light_level: 4, light_timeout: 3 };
     /// assert_eq!(Misc::from_word(m.to_word()), m);
-    /// // a word from an earlier build: 2136 mm, AUTO, 60 s
+    /// // words from earlier builds: 2136 mm, AUTO, 60 s; then max HR code 7 (225), FTP code 11 (100)
     /// let old = Misc::from_word(0xa5 << 24 | 3 << 20 | 4 << 16 | 2136);
-    /// assert_eq!((old.wheel_mm, old.light_level, old.light_timeout, old.max_hr_bits), (2136, 4, 3, 0));
+    /// assert_eq!((old.wheel_mm, old.light_level, old.light_timeout, old.max_hr), (2136, 4, 3, 190));
+    /// let old = Misc::from_word(0xa6 << 24 | 11 << 8 | 7 << 4 | 3);
+    /// assert_eq!((old.wheel_mm, old.max_hr, old.ftp), (WHEELS[3], 225, 100));
     /// ```
     pub fn from_word(w: u32) -> Misc {
         let wheel = |mm: u16| if WHEELS.contains(&mm) { mm } else { WHEELS[1] };
         let level = |l: u32| (l as usize) % (LIGHT_LEVELS.len() + 1);
+        let index = |i: u32| WHEELS.get(i as usize).copied().unwrap_or(WHEELS[1]);
         match w >> 24 {
+            0xa7 => Misc {
+                wheel_mm: index(w & 7),
+                max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*MAX_HR_RANGE.start(), *MAX_HR_RANGE.end()),
+                ftp: (5 * (w >> 16 & 0xff) as u16).clamp(*FTP_RANGE.start(), *FTP_RANGE.end()),
+                light_level: level(w >> 3 & 7),
+                light_timeout: (w >> 6 & 3) as usize,
+            },
             0xa6 => Misc {
-                wheel_mm: WHEELS.get((w & 7) as usize).copied().unwrap_or(WHEELS[1]),
-                max_hr_bits: w >> 4 & 0xf,
-                ftp_bits: w >> 8 & 0xf,
+                wheel_mm: index(w & 7),
+                max_hr: code_hr(w >> 4 & 0xf),
+                ftp: code_ftp(w >> 8 & 0xf),
                 light_level: level(w >> 16 & 7),
                 light_timeout: (w >> 20 & 3) as usize,
             },
             0xa5 => Misc {
                 wheel_mm: wheel((w & 0xfff) as u16),
-                max_hr_bits: 0,
-                ftp_bits: 0,
+                max_hr: ride::MAX_HR,
+                ftp: ride::FTP,
                 light_level: level(w >> 16 & 0xf),
                 light_timeout: (w >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
             },
-            _ => Misc { wheel_mm: WHEELS[1], max_hr_bits: 0, ftp_bits: 0, light_level: 0, light_timeout: 0 },
+            _ => Misc { wheel_mm: WHEELS[1], max_hr: ride::MAX_HR, ftp: ride::FTP, light_level: 0, light_timeout: 0 },
         }
     }
 
-    /// As kept (tag 0xa6).
+    /// As kept (tag 0xa7).
     pub fn to_word(self) -> u32 {
         let wheel = WHEELS.iter().position(|&w| w == self.wheel_mm).unwrap_or(1) as u32;
-        (0xa6 << 24)
-            | (self.light_timeout as u32 & 3) << 20
-            | (self.light_level as u32 & 7) << 16
-            | (self.ftp_bits & 0xf) << 8
-            | (self.max_hr_bits & 0xf) << 4
+        (0xa7 << 24)
+            | (u32::from(self.ftp / 5) & 0xff) << 16
+            | (u32::from(self.max_hr.saturating_sub(100)) & 0xff) << 8
+            | (self.light_timeout as u32 & 3) << 6
+            | (self.light_level as u32 & 7) << 3
             | wheel
     }
 }
 
-/// Max heart rate from its 4 bits: 150 to 225 in steps of 5, 0 (a register written before it existed) being
-/// stock's default, 190 ([`ride::MAX_HR`]).
+/// Max heart rates offered, bpm, in steps of 1.
+pub const MAX_HR_RANGE: core::ops::RangeInclusive<u16> = 100..=230;
+/// FTPs offered, W, in steps of 5.
+pub const FTP_RANGE: core::ops::RangeInclusive<u16> = 50..=600;
+
+/// Max heart rate from its 4-bit code in a tag 0xa6 word: 150 to 225 in steps of 5, 0 being stock's default, 190
+/// ([`ride::MAX_HR`]).
 ///
 /// ```
-/// use bryton_rustfw::max_hr_of;
-/// assert_eq!([0, 7, 8, 15].map(max_hr_of), [190, 225, 150, 185]);
+/// use bryton_rustfw::code_hr;
+/// assert_eq!([0, 7, 8, 15].map(code_hr), [190, 225, 150, 185]);
 /// ```
-pub fn max_hr_of(bits: u32) -> u16 {
+pub fn code_hr(bits: u32) -> u16 {
     150 + 5 * ((bits + 8) % 16) as u16
 }
 
-/// FTP from its 4 bits: 100 to 400 W in steps of 20, 0 being [`ride::FTP`] (200 W).
+/// FTP from its 4-bit code in a tag 0xa6 word: 100 to 400 W in steps of 20, 0 being [`ride::FTP`] (200 W).
 ///
 /// ```
-/// use bryton_rustfw::ftp_of;
-/// assert_eq!([0, 10, 11, 15].map(ftp_of), [200, 400, 100, 180]);
+/// use bryton_rustfw::code_ftp;
+/// assert_eq!([0, 10, 11, 15].map(code_ftp), [200, 400, 100, 180]);
 /// ```
-pub fn ftp_of(bits: u32) -> u16 {
+pub fn code_ftp(bits: u32) -> u16 {
     100 + 20 * ((bits + 5) % 16) as u16
 }
 /// Backlight levels offered, percent (stock: 1 to 100). One more choice follows them: [`LIGHT_AUTO`].
@@ -497,6 +523,9 @@ pub enum Screen {
 const GPS_ROW: usize = 9;
 /// The nearby BLE devices row of the main menu.
 const NEARBY_ROW: usize = 10;
+/// The max heart rate and FTP rows of the main menu: values changed in place ([`App::step_value`]).
+const MAX_HR_ROW: usize = 7;
+const FTP_ROW: usize = 8;
 
 /// What a graph field shows on screen: the bars up to `n` ([`ride::History::len`]), of power or heart rate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -565,9 +594,13 @@ pub struct App {
     /// The RTC's offset from UTC and the last position, as kept in backup registers.
     aid: gnss::Aid,
     wheel_mm: u16,
-    /// Max heart rate and FTP, as kept ([`max_hr_of`], [`ftp_of`]).
-    max_hr_bits: u32,
-    ftp_bits: u32,
+    /// Max heart rate (bpm) and FTP (W).
+    max_hr: u16,
+    ftp: u16,
+    /// The selected menu row's value is being changed (Lap up, Page down, Start or Back to leave), and whether a
+    /// held key already stepped it (so its release does not step once more).
+    editing: bool,
+    repeated: bool,
     pages: [PageCfg; PAGES],
     /// The ride field values on screen and their colours, to redraw only what changed.
     shown: [Line<8>; 6],
@@ -670,8 +703,10 @@ impl App {
             gnss_sent: 0,
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
             wheel_mm: misc.wheel_mm,
-            max_hr_bits: misc.max_hr_bits,
-            ftp_bits: misc.ftp_bits,
+            max_hr: misc.max_hr,
+            ftp: misc.ftp,
+            editing: false,
+            repeated: false,
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
             shown_fg: [ui::WHITE; 6],
@@ -717,8 +752,8 @@ impl App {
     fn save_misc(&self, b: &mut impl Board) {
         let misc = Misc {
             wheel_mm: self.wheel_mm,
-            max_hr_bits: self.max_hr_bits,
-            ftp_bits: self.ftp_bits,
+            max_hr: self.max_hr,
+            ftp: self.ftp,
             light_level: self.light_level,
             light_timeout: self.light_timeout,
         };
@@ -828,8 +863,8 @@ impl App {
     /// The colour of ride field `f`'s value: heart rate and power in their zone's colour, the rest white.
     fn field_color(&self, f: Field) -> u16 {
         match (f, self.live.get(Metric::Hr), self.live.get(Metric::Power)) {
-            (Field::Hr, Some(v), _) => ride::hr_color(ride::hr_zone(v, max_hr_of(self.max_hr_bits))),
-            (Field::Power, _, Some(v)) => ride::power_color(ride::power_zone(v, ftp_of(self.ftp_bits))),
+            (Field::Hr, Some(v), _) => ride::hr_color(ride::hr_zone(v, self.max_hr)),
+            (Field::Power, _, Some(v)) => ride::power_color(ride::power_zone(v, self.ftp)),
             _ => ui::WHITE,
         }
     }
@@ -847,7 +882,7 @@ impl App {
         if v == 0 {
             return (0, ui::BLACK);
         }
-        let (max, ftp) = (max_hr_of(self.max_hr_bits), ftp_of(self.ftp_bits));
+        let (max, ftp) = (self.max_hr, self.ftp);
         let (low, high, color) = if g.power {
             (0, 2 * u32::from(ftp), ride::power_color(ride::power_zone(v, ftp)))
         } else {
@@ -874,11 +909,11 @@ impl App {
                 }
                 7 => {
                     label.push_str("MAX HR");
-                    value.push_u32(u32::from(max_hr_of(self.max_hr_bits)));
+                    self.push_edited(&mut value, i, self.max_hr);
                 }
                 8 => {
                     label.push_str("FTP W");
-                    value.push_u32(u32::from(ftp_of(self.ftp_bits)));
+                    self.push_edited(&mut value, i, self.ftp);
                 }
                 5 => {
                     label.push_str("LIGHT %");
@@ -1219,6 +1254,24 @@ impl App {
         }
     }
 
+    /// One step up or down of the value edited on main menu row `sel`, held in its range.
+    fn step_value(&mut self, sel: usize, up: bool) {
+        let (v, range, step) = match sel {
+            MAX_HR_ROW => (&mut self.max_hr, MAX_HR_RANGE, 1),
+            FTP_ROW => (&mut self.ftp, FTP_RANGE, 5),
+            _ => return,
+        };
+        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
+    }
+
+    /// `v` into a menu row's value, between arrows while row `i` is being edited.
+    fn push_edited(&self, value: &mut Line<12>, i: usize, v: u16) {
+        let edited = self.editing && matches!(self.screen, Screen::Menu(Menu::Main, s) if s == i);
+        value.push_str(if edited { "< " } else { "" });
+        value.push_u32(u32::from(v));
+        value.push_str(if edited { " >" } else { "" });
+    }
+
     /// Start on menu row `sel`.
     fn activate(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         self.screen = match (menu, sel) {
@@ -1230,10 +1283,11 @@ impl App {
                 self.save_misc(b);
                 Screen::Menu(menu, sel)
             }
-            (Menu::Main, 7 | 8) => {
-                let bits = if sel == 7 { &mut self.max_hr_bits } else { &mut self.ftp_bits };
-                *bits = (*bits + 1) % 16;
-                self.save_misc(b);
+            (Menu::Main, MAX_HR_ROW | FTP_ROW) => {
+                self.editing = !self.editing;
+                if !self.editing {
+                    self.save_misc(b);
+                }
                 Screen::Menu(menu, sel)
             }
             (Menu::Main, 5 | 6) => {
@@ -1295,6 +1349,23 @@ impl App {
         }
         match (self.screen, p) {
             (_, Press::Long(Key::Back)) => return self.power_off(b),
+            (Screen::Menu(menu, sel), _) if self.editing => {
+                match p {
+                    Press::Repeat(k @ (Key::Lap | Key::Page)) => {
+                        self.repeated = true;
+                        self.step_value(sel, k == Key::Lap);
+                    }
+                    Press::Short(k @ (Key::Lap | Key::Page)) if !core::mem::take(&mut self.repeated) => {
+                        self.step_value(sel, k == Key::Lap)
+                    }
+                    Press::Short(Key::Start | Key::Back) => {
+                        self.editing = false;
+                        self.save_misc(b);
+                    }
+                    _ => self.repeated = false,
+                }
+                return self.update_menu_rows(b, menu, sel);
+            }
             (Screen::Main, Press::Short(Key::Page)) => self.screen = Screen::Ride(0),
             (Screen::Ride(n), Press::Short(Key::Page)) => {
                 let next = (n + 1..PAGES).find(|&i| self.pages[i].layout > 0);
@@ -1712,20 +1783,19 @@ mod tests {
     }
 
     #[test]
-    fn short_on_release_long_once_while_held() {
+    fn short_on_release_long_once_while_held_repeats_between() {
         let mut k = Keys::default();
         assert_eq!(k.poll(Key::Page as u8, 50), None);
         assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Page)));
         assert_eq!(k.poll(0, 50), None);
-        for _ in 0..39 {
-            assert_eq!(k.poll(Key::Page as u8, 50), None);
-        }
-        assert_eq!(k.poll(Key::Page as u8, 50), Some(Press::Long(Key::Page)), "at 2 s");
-        assert_eq!(k.poll(Key::Page as u8, 50), None, "once");
+        let held: std::vec::Vec<_> = (0..42).map(|_| k.poll(Key::Page as u8, 50)).collect();
+        let at = |p| held.iter().enumerate().filter(|(_, x)| **x == Some(p)).map(|(i, _)| 50 * (i + 1)).collect();
+        let repeats: std::vec::Vec<usize> = at(Press::Repeat(Key::Page));
+        assert_eq!(repeats.first(), Some(&500), "repeats from 0.5 s");
+        assert!(repeats.windows(2).all(|w| w[1] - w[0] == 100 || w[1] - w[0] == 200), "every 0.1 s");
+        assert_eq!(at(Press::Long(Key::Page)), [2000], "long once, at 2 s");
         assert_eq!(k.poll(0, 50), None, "nothing at the release after a long press");
-        for _ in 0..59 {
-            assert_eq!(k.poll(Key::Back as u8, 50), None);
-        }
-        assert_eq!(k.poll(Key::Back as u8, 50), Some(Press::Long(Key::Back)), "Back: at 3 s");
+        let back: std::vec::Vec<_> = (0..60).map(|_| k.poll(Key::Back as u8, 50)).collect();
+        assert_eq!(back[59], Some(Press::Long(Key::Back)), "Back: at 3 s");
     }
 }
