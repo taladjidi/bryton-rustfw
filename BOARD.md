@@ -183,5 +183,10 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - `sd_ble_version_get` again: result 0, then `04 | 01 00 | 32 00`. Bryton fills these fields with its own
     versions, logged by stock as "Image 4, Bootloader 1, SD 50"; stock keeps the image number in RTC backup
     register 12, which reads 4 on this unit.
+- **This firmware (src/nrf.rs, seen on the unit 2026-10-23):** the same reset sequence, with USART2 on the HSI
+  kernel clock (64 MHz, BRR 64) rather than the bootloader's PLL3; then `sd_ble_enable` and `sd_ble_version_get`
+  without any `sd_ble_cfg_set`, both answered (result 0, version 4 / 1 / 50).
+- **Not done yet:** switching the chip off at power-off (stock sends it a "system off"); left running, it draws
+  current while the STM32 is in standby.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

@@ -376,6 +376,82 @@ fn standby() -> ! {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Nordic BLE / ANT chip (BOARD.md 11): USART2 at 1 Mbaud with RTS / CTS on PD3..PD6 (AF7, pull-up), reset PA6,
+// PI4 high = its application (low through a reset would start its DFU bootloader). Kernel clock HSI 64 MHz, as
+// SPI1, so it does not depend on the PLL3 the bootloader leaves running.
+// ---------------------------------------------------------------------------------------------------------------
+const USART2: u32 = 0x4000_4400;
+const U_CR1: u32 = USART2;
+const U_CR3: u32 = USART2 + 0x08;
+const U_BRR: u32 = USART2 + 0x0c;
+const U_ISR: u32 = USART2 + 0x1c;
+const U_ICR: u32 = USART2 + 0x20;
+const U_RDR: u32 = USART2 + 0x24;
+const U_TDR: u32 = USART2 + 0x28;
+const ISR_RXFNE: u32 = 1 << 5;
+const ISR_TXFNF: u32 = 1 << 7;
+const RCC_D2CCIP2R: u32 = RCC + 0x054;
+const RCC_APB1LENR: u32 = RCC + 0x0e8;
+const NRF_RESET: (Port, u32) = (Port::A, 6);
+const NRF_APP: (Port, u32) = (Port::I, 4);
+
+fn pull_up(p: Port, pin: u32) {
+    modify(gpio_base(p) + 0x0c, 3 << (2 * pin), 1 << (2 * pin)); // PUPDR: pull-up
+}
+
+/// Stock's sequence (BOARD.md 11): application mode, reset held while the UART comes up, release, 800 ms.
+fn nrf_reset() {
+    modify(RCC_D2CCIP2R, 7, 3); // USART234578SEL = hsi_ker_ck (HSI is on: spi_init)
+    modify(RCC_APB1LENR, 0, 1 << 17); // USART2EN
+    for pin in 3..=6 {
+        gpio(Port::D, pin, AF, 7); // CTS, RTS, TX, RX
+        pull_up(Port::D, pin);
+    }
+    pin_set(NRF_APP.0, NRF_APP.1, true);
+    gpio(NRF_APP.0, NRF_APP.1, OUT, 0);
+    pull_up(NRF_APP.0, NRF_APP.1);
+    pin_set(NRF_RESET.0, NRF_RESET.1, false);
+    gpio(NRF_RESET.0, NRF_RESET.1, OUT, 0);
+    pull_up(NRF_RESET.0, NRF_RESET.1);
+    wr(U_CR1, 0);
+    wr(U_BRR, 64); // 64 MHz / 1 Mbaud
+    wr(U_CR3, (1 << 9) | (1 << 8)); // CTSE, RTSE
+    wr(U_CR1, (1 << 29) | (1 << 3) | (1 << 2) | 1); // FIFOEN, TE, RE, UE
+    delay_ms(150);
+    pin_set(NRF_RESET.0, NRF_RESET.1, true);
+    delay_ms(800);
+    while rd(U_ISR) & ISR_RXFNE != 0 {
+        let _ = rd(U_RDR); // a glitch byte at the release (seen on the unit)
+    }
+    wr(U_ICR, 0xf); // PE, FE, NE, ORE
+}
+
+fn nrf_send(data: &[u8]) {
+    for &b in data {
+        let t0 = cycles();
+        while rd(U_ISR) & ISR_TXFNF == 0 {
+            if cycles().wrapping_sub(t0) > CPU_HZ / 100 {
+                return; // 10 ms: the chip holds CTS (not running); the command will time out
+            }
+        }
+        wr(U_TDR, u32::from(b));
+    }
+}
+
+fn nrf_recv(buf: &mut [u8]) -> usize {
+    let mut n = 0;
+    for slot in buf.iter_mut() {
+        if rd(U_ISR) & ISR_RXFNE == 0 {
+            break;
+        }
+        *slot = rd(U_RDR) as u8;
+        n += 1;
+    }
+    wr(U_ICR, 0xf); // an overrun cannot happen with RTS, but never let an error flag stop reception
+    n
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The board for the app in lib.rs: each method is the transport only.
 // ---------------------------------------------------------------------------------------------------------------
 struct S510;
@@ -404,6 +480,15 @@ impl Board for S510 {
     }
     fn standby(&mut self) {
         standby();
+    }
+    fn nrf_reset(&mut self) {
+        nrf_reset();
+    }
+    fn nrf_send(&mut self, data: &[u8]) {
+        nrf_send(data);
+    }
+    fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
+        nrf_recv(buf)
     }
 }
 

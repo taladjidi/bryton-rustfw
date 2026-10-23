@@ -136,11 +136,13 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
 /// shorter value leaves nothing of the previous one. Text wider than the box is cut at the box's last whole
 /// character. Returns the width of the text drawn.
 pub fn draw_in(c: &mut impl Canvas, style: &Style, x: u32, y: u32, w: u32, align: Align, s: &str) -> u32 {
-    let mut end = s.len();
-    while style.width(&s[..end]) > w {
-        end = s[..end].char_indices().next_back().map_or(0, |(i, _)| i);
+    // Cut at the last whole character that fits. `get` and not `[..]`: slicing can panic, and its message alone
+    // pulls about 8 KB of formatting and Unicode tables into the image.
+    let mut s = s;
+    while style.width(s) > w {
+        let end = s.char_indices().next_back().map_or(0, |(i, _)| i);
+        s = s.get(..end).unwrap_or("");
     }
-    let s = &s[..end];
     let tw = style.width(s);
     let left = match align {
         Align::Left => 0,
@@ -188,6 +190,35 @@ impl<const N: usize> Line<N> {
     /// Empties it.
     pub fn clear(&mut self) {
         self.len = 0;
+    }
+
+    /// Appends `s`; what does not fit is dropped.
+    pub fn push_str(&mut self, s: &str) {
+        let _ = core::fmt::Write::write_str(self, s);
+    }
+
+    /// Appends `v` in decimal without core::fmt, whose number formatting costs several KB of image.
+    ///
+    /// ```
+    /// let mut l = bryton_rustfw::text::Line::<16>::new();
+    /// l.push_str("BLE ");
+    /// l.push_u32(4);
+    /// l.push_u32(4_294_967_295);
+    /// assert_eq!(l.as_str(), "BLE 44294967295");
+    /// ```
+    pub fn push_u32(&mut self, v: u32) {
+        let mut digits = [0u8; 10];
+        let mut i = digits.len();
+        let mut v = v;
+        loop {
+            i -= 1;
+            digits[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push_str(core::str::from_utf8(&digits[i..]).unwrap_or(""));
     }
 }
 

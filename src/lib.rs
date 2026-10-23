@@ -10,6 +10,7 @@
 
 pub mod dev;
 pub mod fonts;
+pub mod nrf;
 pub mod panel;
 #[cfg(test)]
 mod sim;
@@ -17,7 +18,7 @@ pub mod text;
 pub mod ui;
 
 use panel::Panel;
-use ui::{Clock, Row, UsbDot, draw_static, draw_usb_dot};
+use ui::{Clock, Row, UsbDot, draw_ble, draw_static, draw_usb_dot};
 
 /// The hardware the app needs, as primitive operations. Each one is a few register writes on the unit.
 // ponytail: one trait while the board is small; split per peripheral (Panel, Rtc, Keys...) when it grows.
@@ -39,6 +40,12 @@ pub trait Board {
     fn delay_ms(&mut self, ms: u32);
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
+    /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands.
+    fn nrf_reset(&mut self);
+    /// Bytes to the Nordic chip, in order (the chip's flow control may hold them a little).
+    fn nrf_send(&mut self, data: &[u8]);
+    /// Bytes received from the Nordic chip, at most `buf.len()`; never waits.
+    fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -118,15 +125,18 @@ pub struct App {
     keys: Keys,
     backlight: bool,
     usb: UsbDot,
+    ble: Option<nrf::Version>,
 }
 
 impl App {
-    /// Panel up, the fixed parts drawn, backlight on.
+    /// Panel up, the fixed parts drawn, backlight on; then the Nordic chip started, its state shown.
     pub fn start(b: &mut impl Board) -> Self {
         panel::init(b);
         draw_static(&mut Panel(b));
         b.backlight(true);
-        App { clock: Clock::new(), keys: Keys::default(), backlight: true, usb: UsbDot::Off }
+        let ble = nrf::start(b).ok();
+        draw_ble(&mut Panel(b), ble);
+        App { clock: Clock::new(), keys: Keys::default(), backlight: true, usb: UsbDot::Off, ble }
     }
 
     /// One pass of the main loop: read the time and the keys, redraw what changed. The caller sleeps
@@ -159,6 +169,7 @@ impl App {
         draw_static(&mut row);
         self.clock.redraw(&mut row);
         draw_usb_dot(&mut row, self.usb);
+        draw_ble(&mut row, self.ble);
         row
     }
 }

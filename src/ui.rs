@@ -121,6 +121,27 @@ pub fn draw_usb_dot(c: &mut impl Canvas, s: UsbDot) {
     text::draw(c, &Style { fg: color, ..LABEL }, USB_LABEL.0, USB_LABEL.1, Align::Right, "USB");
 }
 
+/// The Nordic chip's state, top left: "BLE" and its firmware image number in green once it answered, "BLE ?" in
+/// red if it did not.
+pub fn draw_ble(c: &mut impl Canvas, v: Option<crate::nrf::Version>) {
+    let mut line = text::Line::<8>::new();
+    line.push_str("BLE ");
+    let color = match v {
+        Some(v) => {
+            line.push_u32(u32::from(v.image));
+            GREEN
+        }
+        None => {
+            line.push_str("?");
+            RED
+        }
+    };
+    text::draw_in(c, &Style { fg: color, ..LABEL }, BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, Align::Left, line.as_str());
+}
+
+/// The BLE label's box: left, top (level with the USB label), width.
+pub const BLE_LABEL: (u32, u32, u32) = (20, USB_LABEL.1, 7 * CELL * LABEL.scale);
+
 /// One screen row as a [`Canvas`]: keeps only what falls on row `y`. Rendering the screen row by row takes
 /// 480 bytes instead of a 150 KB framebuffer (screenshots over USB).
 pub struct Row {
@@ -270,6 +291,7 @@ pub(crate) mod tests {
         boxes.push((USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2));
         let usb = LABEL.width("USB");
         boxes.push((USB_LABEL.0 - usb, USB_LABEL.1, usb, LABEL.height()));
+        boxes.push((BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, LABEL.height()));
         for (i, a) in boxes.iter().enumerate() {
             assert!(a.0 + a.2 <= W && a.1 + a.3 <= H, "box {i} off screen");
             for b in &boxes[i + 1..] {

@@ -92,6 +92,8 @@ The point of this project is a firmware in safe Rust.
   - `SANS_16`, `SANS_BOLD_32`: DejaVu Sans, anti-aliased, if smooth text is ever wanted.
   - To change a glyph or add a font, edit those files and run `python3 tools/font.py` (needs PIL).
 - `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
+- `src/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
+  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`).
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests.

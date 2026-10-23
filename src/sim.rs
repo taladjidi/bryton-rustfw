@@ -2,7 +2,8 @@
 //! - a model of the ST7789: it checks the command bytes (power, sleep, pixel format, RAMCTRL, windows) and
 //!   paints its framebuffer from RAMWR as the real panel would;
 //! - a clock driven by the delays, so the RTC advances as the app waits;
-//! - keys scripted as a function of time.
+//! - keys scripted as a function of time;
+//! - a Nordic chip ([`Nordic`]) that answers the commands the way the real one did on the unit (BOARD.md 11).
 //!
 //! Screenshots: [`Sim::save`] writes the screen as a BMP. [`Sim::record`] saves one frame after every step that
 //! changed the screen (target/sim/<name>/NNNNN.bmp), which gives a continuous capture for debugging.
@@ -38,6 +39,41 @@ pub struct Sim {
     keys: KeyScript,
     record: Option<(PathBuf, u32)>,
     dirty: bool,
+    pub nordic: Nordic,
+}
+
+/// The Nordic chip as seen over its link: replies to `sd_ble_enable` and `sd_ble_version_get` as the unit did.
+#[derive(Default)]
+pub struct Nordic {
+    /// False: the chip never answers (not running).
+    pub dead: bool,
+    /// Reset since power-up: before that, commands would go nowhere.
+    pub reset: bool,
+    pub enabled: bool,
+    /// Every payload received, in order.
+    pub got: Vec<Vec<u8>>,
+    rx: crate::nrf::Rx,
+    out: std::collections::VecDeque<u8>,
+}
+
+impl Nordic {
+    fn take(&mut self, p: &[u8]) {
+        self.got.push(p.to_vec());
+        let reply: Vec<u8> = match p {
+            [0, 0x60] => {
+                self.enabled = true;
+                vec![1, 0x60, 0, 0, 0, 0]
+            }
+            [0, 0x65, 1] if !self.enabled => vec![1, 0x65, 0x01, 0x30, 0, 0], // BLE_ERROR_NOT_ENABLED
+            [0, 0x65, 1] => vec![1, 0x65, 0, 0, 0, 0, 4, 1, 0, 0x32, 0],
+            [0, op, ..] => vec![1, *op, 6, 0, 0, 0], // NRF_ERROR_NOT_SUPPORTED
+            _ => return,
+        };
+        if !self.dead {
+            self.out.extend((reply.len() as u16).to_le_bytes());
+            self.out.extend(reply);
+        }
+    }
 }
 
 fn to_bcd(v: u64) -> u32 {
@@ -63,6 +99,7 @@ impl Sim {
             keys: Box::new(|_| (false, false)),
             record: None,
             dirty: false,
+            nordic: Nordic::default(),
         }
     }
 
@@ -185,6 +222,30 @@ impl Board for Sim {
     fn standby(&mut self) {
         self.standby = true;
     }
+
+    fn nrf_reset(&mut self) {
+        self.nordic = Nordic { dead: self.nordic.dead, reset: true, ..Nordic::default() };
+        self.ms += 950;
+    }
+
+    fn nrf_send(&mut self, data: &[u8]) {
+        let n = &mut self.nordic;
+        assert!(n.reset, "bytes to the Nordic chip before its reset");
+        for &b in data {
+            if let Some(p) = n.rx.push(b) {
+                let p = p.to_vec();
+                n.take(&p);
+            }
+        }
+    }
+
+    fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
+        let n = buf.len().min(self.nordic.out.len());
+        for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
+            *slot = b;
+        }
+        n
+    }
 }
 
 #[cfg(test)]
@@ -194,10 +255,14 @@ mod tests {
     use crate::ui::{Clock, draw_static};
 
     /// The screen as the drawing code means it, without the panel protocol in between.
+    /// The version the simulated Nordic chip reports, as the unit did.
+    const V4: crate::nrf::Version = crate::nrf::Version { image: 4, bootloader: 1, sd: 0x32 };
+
     fn expected(h: u8, m: u8, s: u8) -> Vec<u16> {
         let mut f = Frame::new();
         draw_static(&mut f);
         Clock::new().show(&mut f, h, m, s);
+        crate::ui::draw_ble(&mut f, Some(V4));
         f.px
     }
 
@@ -218,12 +283,47 @@ mod tests {
         assert!(sim.visible());
         let pos = |c| sim.cmds.iter().position(|&x| x == c).unwrap();
         assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
+        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
         let mut want = Frame::new();
-        draw_static(&mut want);
-        Clock::new().show(&mut want, 12, 34, 56);
+        want.px = expected(h, m, s);
         crate::ui::draw_usb_dot(&mut want, crate::ui::UsbDot::Ready);
         assert!(sim.screen == want.px, "screen differs from the drawing code");
         sim.save("preview");
+    }
+
+    /// Stock's order: reset, sd_ble_enable, then the version; the label shows the image number in green.
+    #[test]
+    fn starts_the_nordic_chip() {
+        let mut sim = Sim::new(12, 0, 0);
+        let app = App::start(&mut sim);
+        assert_eq!(sim.nordic.got, [vec![0, 0x60], vec![0, 0x65, 1]]);
+        assert_eq!(
+            app.render_row(crate::ui::BLE_LABEL.1 + 4).px,
+            {
+                let mut f = Frame::new();
+                crate::ui::draw_ble(&mut f, Some(V4));
+                f.px[((crate::ui::BLE_LABEL.1 + 4) * W) as usize..((crate::ui::BLE_LABEL.1 + 5) * W) as usize].to_vec()
+            }[..]
+        );
+    }
+
+    /// A chip that never answers costs one timeout per command, then the clock runs and the label is red.
+    #[test]
+    fn a_silent_nordic_chip_does_not_stop_the_clock() {
+        let mut sim = Sim::new(12, 0, 0);
+        sim.nordic.dead = true;
+        let t0 = sim.ms;
+        let mut app = App::start(&mut sim);
+        assert!(sim.ms - t0 < 3000, "start took {} ms", sim.ms - t0);
+        assert_eq!(sim.nordic.got, [vec![0, 0x60]], "gave up after the first timeout");
+        run(&mut sim, &mut app, 2000);
+        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
+        let mut f = Frame::new();
+        draw_static(&mut f);
+        crate::ui::draw_ble(&mut f, None);
+        Clock::new().show(&mut f, h, m, s);
+        assert!(sim.screen == f.px);
+        assert!((0..W).any(|x| f.at(x, crate::ui::BLE_LABEL.1 + 4) == crate::ui::RED));
     }
 
     #[test]
@@ -231,15 +331,19 @@ mod tests {
         let mut sim = Sim::new(23, 59, 58);
         let mut app = App::start(&mut sim);
         run(&mut sim, &mut app, 3000);
-        assert!(sim.screen == expected(0, 0, 1));
+        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
+        assert_eq!((h, m), (0, 0), "past midnight");
+        assert!(sim.screen == expected(h, m, s));
     }
 
     #[test]
     fn page_toggles_the_backlight() {
-        let mut sim = Sim::new(8, 0, 0).keys(|ms| ((1000..1200).contains(&ms) || (2000..2100).contains(&ms), false));
+        // Presses after the start (which takes about 1 s with the Nordic chip): at 3 s and at 4 s.
+        let mut sim = Sim::new(8, 0, 0).keys(|ms| ((3000..3200).contains(&ms) || (4000..4100).contains(&ms), false));
         let mut app = App::start(&mut sim);
         let t0 = sim.ms;
-        run(&mut sim, &mut app, 1500 - t0);
+        assert!(t0 < 3000);
+        run(&mut sim, &mut app, 3500 - t0);
         assert!(!sim.backlight);
         run(&mut sim, &mut app, 1000);
         assert!(sim.backlight);

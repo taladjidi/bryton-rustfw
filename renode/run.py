@@ -2,7 +2,7 @@
 """Runs the firmware ELF on Renode's STM32H747 (s510.repl) and checks the hardware layer the host tests cannot:
 start-up, clocks and GPIO writes, the SPI1 byte stream to the panel, no fault, no hang.
 
-  renode/run.py [--seconds 3] [--vbus] [--renode PATH]
+  renode/run.py [--seconds 8] [--vbus] [--renode PATH]
 
 It logs every SPI1 data write together with the D/C pin (PG9), decodes the panel protocol into a screen
 (target/renode/screen.png) and compares its fixed parts (top bar, Ferris) with the simulator's preview
@@ -99,7 +99,8 @@ def rgb(screen, x, y):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--seconds', type=float, default=3)
+    # 8 s: the start waits about 1 s for the Nordic chip, which Renode lacks, so its commands time out first.
+    ap.add_argument('--seconds', type=float, default=8)
     ap.add_argument('--vbus', action='store_true')
     ap.add_argument('--renode', default=RENODE)
     a = ap.parse_args()

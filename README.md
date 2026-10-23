@@ -8,6 +8,7 @@ Bryton.
   same dot-matrix style, so it is obviously not the stock firmware.
 - **Page key:** toggles the backlight.
 - **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
+- **Top left:** "BLE" and the Nordic chip's firmware number once it has answered (red "BLE ?" if not).
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
   build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
   red if the PHY did not come up). Unplugging resets the unit.
@@ -96,10 +97,10 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 - **Renode passed all of these:** it does not model the MPU, the caches or the SPI mode fault (BOARD.md 2, 6).
 - **The four-button restart works with this firmware stuck**, so Engineer Mode stays reachable (cable in first).
 
-- **The Nordic BLE / ANT chip answers (2026-10-23):** driven from the computer through the dev link
-  (`tools/nrf.py version`), after stock's reset sequence. `sd_ble_enable` succeeds and `sd_ble_version_get`
-  returns the versions stock records (BOARD.md 11). Next: a driver in the firmware, then a BLE scan or an ANT+
-  heart-rate channel.
+- **The Nordic BLE / ANT chip answers (2026-10-23):** first driven from the computer through the dev link
+  (`tools/nrf.py version`), then by the firmware itself (`src/nrf.rs`): at start it resets the chip as stock
+  does, enables BLE and reads the version, shown as "BLE 4" at the top left (BOARD.md 11). Next: a BLE scan or an
+  ANT+ heart-rate channel, and switching the chip off at power-off.
 
 ## Not yet seen on the unit
 
