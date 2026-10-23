@@ -1,7 +1,7 @@
 //! What is on screen: colours, text styles, the seven-segment digits, Ferris, the layout and the clock. Draws
 //! through [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
 
-use crate::fonts::{SANS_16, SANS_BOLD_32};
+use crate::fonts::PIXEL;
 use crate::text::{self, Align, Style};
 
 /// Panel width in pixels (portrait).
@@ -22,10 +22,10 @@ pub const RED: u16 = 0xf800;
 /// RGB565 green.
 pub const GREEN: u16 = 0x07e0;
 
-/// Small text: labels.
-pub const LABEL: Style = Style { font: &SANS_16, fg: WHITE, bg: BLACK };
-/// Large bold text: values.
-pub const VALUE: Style = Style { font: &SANS_BOLD_32, fg: WHITE, bg: BLACK };
+/// Small text: labels. The pixel font at 2x, so its dots match Ferris' look (fonts.rs also has smooth fonts).
+pub const LABEL: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
+/// Large text: values, the pixel font at 4x like Ferris.
+pub const VALUE: Style = Style { font: &PIXEL, scale: 4, fg: WHITE, bg: BLACK };
 
 /// Something that can fill a rectangle with RGB565 pixels: the panel on the unit, a framebuffer in tests.
 pub trait Canvas {
@@ -147,8 +147,8 @@ pub enum UsbDot {
 
 /// The USB dot's box: (x, y, size).
 pub const USB_DOT: (u32, u32, u32) = (W - 20, 12, 8);
-/// The "USB" label: right edge and top, so its capitals sit level with the dot.
-pub const USB_LABEL: (u32, u32) = (USB_DOT.0 - 6, USB_DOT.1 - 5);
+/// The "USB" label: right edge and top, so its capitals (7 font rows at 2x) are centred on the dot.
+pub const USB_LABEL: (u32, u32) = (USB_DOT.0 - 6, USB_DOT.1 + USB_DOT.2 / 2 - 7);
 
 /// Draws the USB state dot and the "USB" label beside it, both in the state's colour (black when unplugged).
 pub fn draw_usb_dot(c: &mut impl Canvas, s: UsbDot) {
@@ -323,8 +323,8 @@ pub(crate) mod tests {
         boxes.push((20, 40, W - 40, 6)); // bar
         boxes.push((CRAB_X, CRAB_Y, 16 * CRAB_SCALE, CRAB.len() as u32 * CRAB_SCALE));
         boxes.push((USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2));
-        let usb = LABEL.font.width("USB");
-        boxes.push((USB_LABEL.0 - usb, USB_LABEL.1, usb, u32::from(LABEL.font.height)));
+        let usb = LABEL.width("USB");
+        boxes.push((USB_LABEL.0 - usb, USB_LABEL.1, usb, LABEL.height()));
         for (i, a) in boxes.iter().enumerate() {
             assert!(a.0 + a.2 <= W && a.1 + a.3 <= H, "box {i} off screen");
             for b in &boxes[i + 1..] {

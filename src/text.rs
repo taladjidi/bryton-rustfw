@@ -74,14 +74,28 @@ pub fn blend(fg: u16, bg: u16, a: u8) -> u16 {
     (mix(11, 0x1f) | mix(5, 0x3f) | mix(0, 0x1f)) as u16
 }
 
-/// How text looks: a font and its colours. The UI defines its styles once (ui.rs) and draws with them.
+/// How text looks: a font, its scale and its colours. The UI defines its styles once (ui.rs) and draws with them.
 pub struct Style {
     /// The font.
     pub font: &'static Font,
+    /// Each font pixel drawn as `scale` x `scale` (1 for the smooth fonts; the pixel font is drawn at 2 or more).
+    pub scale: u32,
     /// Ink colour, RGB565.
     pub fg: u16,
     /// Background the ink is blended onto: what is under the text.
     pub bg: u16,
+}
+
+impl Style {
+    /// Width of `s` in screen pixels.
+    pub fn width(&self, s: &str) -> u32 {
+        self.font.width(s) * self.scale
+    }
+
+    /// Line height in screen pixels.
+    pub fn height(&self) -> u32 {
+        u32::from(self.font.height) * self.scale
+    }
 }
 
 /// Where a string goes, relative to the `x` given to [`draw`].
@@ -97,8 +111,9 @@ pub enum Align {
 
 /// Draws `s` in `style` with its cells' top at `y`, and returns its width. Callers keep it on screen.
 pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s: &str) -> u32 {
-    let Style { font, fg, bg } = *style;
-    let width = font.width(s);
+    let Style { font, scale, fg, bg } = *style;
+    let scale = scale.max(1);
+    let width = style.width(s);
     let mut x = match align {
         Align::Left => x,
         Align::Centre => x.saturating_sub(width / 2),
@@ -110,8 +125,8 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     }
     for ch in s.chars() {
         let g = font.glyph(ch);
-        let w = u32::from(g.advance);
-        c.blit(x, y, w, u32::from(font.height), &mut |px, py| palette[usize::from(font.coverage(g, px, py))]);
+        let w = u32::from(g.advance) * scale;
+        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / scale, py / scale))]);
         x += w;
     }
     width
@@ -121,19 +136,18 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
 /// shorter value leaves nothing of the previous one. Text wider than the box is cut at the box's last whole
 /// character. Returns the width of the text drawn.
 pub fn draw_in(c: &mut impl Canvas, style: &Style, x: u32, y: u32, w: u32, align: Align, s: &str) -> u32 {
-    let font = style.font;
     let mut end = s.len();
-    while font.width(&s[..end]) > w {
+    while style.width(&s[..end]) > w {
         end = s[..end].char_indices().next_back().map_or(0, |(i, _)| i);
     }
     let s = &s[..end];
-    let tw = font.width(s);
+    let tw = style.width(s);
     let left = match align {
         Align::Left => 0,
         Align::Centre => (w - tw) / 2,
         Align::Right => w - tw,
     };
-    let h = u32::from(font.height);
+    let h = style.height();
     c.fill(x, y, left, h, style.bg);
     draw(c, style, x + left, y, Align::Left, s);
     c.fill(x + left + tw, y, w - left - tw, h, style.bg);
@@ -195,16 +209,18 @@ impl<const N: usize> core::fmt::Write for Line<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fonts::{SANS_16, SANS_BOLD_32};
+    use crate::fonts::{PIXEL, SANS_16, SANS_BOLD_32};
     use crate::ui::tests::Frame;
     use crate::ui::{BLACK, WHITE};
 
-    const SMALL: Style = Style { font: &SANS_16, fg: WHITE, bg: BLACK };
-    const BIG: Style = Style { font: &SANS_BOLD_32, fg: WHITE, bg: BLACK };
+    const SMALL: Style = Style { font: &SANS_16, scale: 1, fg: WHITE, bg: BLACK };
+    const BIG: Style = Style { font: &SANS_BOLD_32, scale: 1, fg: WHITE, bg: BLACK };
+    const PIX2: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
+    const PIX4: Style = Style { font: &PIXEL, scale: 4, fg: WHITE, bg: BLACK };
 
     #[test]
     fn every_glyph_fits_its_cell_and_its_data() {
-        for font in [&SANS_16, &SANS_BOLD_32] {
+        for font in [&PIXEL, &SANS_16, &SANS_BOLD_32] {
             assert_eq!(font.glyphs.len(), 0x7f - 0x20);
             for (i, g) in font.glyphs.iter().enumerate() {
                 assert!(g.x + g.w <= g.advance && g.y + g.h <= font.height, "glyph {i} outside its cell");
@@ -219,7 +235,7 @@ mod tests {
     fn draws_in_its_box() {
         let mut f = Frame::new();
         let w = draw(&mut f, &SMALL, 120, 10, Align::Centre, "USB");
-        assert_eq!(w, SANS_16.width("USB"));
+        assert_eq!(w, SMALL.width("USB"));
         let x0 = 120 - w / 2;
         let ink = |x: u32, y: u32| f.at(x, y) != BLACK;
         assert!((x0..x0 + w).any(|x| (10..10 + 19).any(|y| ink(x, y))));
@@ -235,19 +251,19 @@ mod tests {
         let mut f = Frame::new();
         let ascii: std::string::String = (0x20u8..0x7f).map(char::from).collect();
         let mut y = 0;
-        // All of ASCII in the small font; what a bike computer shows in the big one (all of it would not fit).
-        for (style, sample) in [(&SMALL, ascii.as_str()), (&BIG, "0123456789 :.,-+%/ 12:34 25.4 km/h 142 bpm 250 W")] {
+        // All of ASCII in the pixel font at 2x and in the small smooth font; a sample at 4x (all would not fit).
+        for (style, sample) in [(&PIX2, ascii.as_str()), (&PIX4, "12:34 25.4km/h"), (&SMALL, ascii.as_str())] {
             let mut line = std::string::String::new();
             for c in sample.chars() {
-                if style.font.width(&line) + u32::from(style.font.glyph(c).advance) > 236 {
+                if style.width(&line) + u32::from(style.font.glyph(c).advance) * style.scale > 236 {
                     draw(&mut f, style, 2, y, Align::Left, &line);
-                    y += u32::from(style.font.height);
+                    y += style.height();
                     line.clear();
                 }
                 line.push(c);
             }
             draw(&mut f, style, 2, y, Align::Left, &line);
-            y += u32::from(style.font.height) + 4;
+            y += style.height() + 4;
         }
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/sim");
         std::fs::create_dir_all(&dir).unwrap();
@@ -265,7 +281,23 @@ mod tests {
             assert!(a.px == b.px, "{align:?}");
         }
         let mut f = Frame::new();
-        assert_eq!(draw_in(&mut f, &BIG, 0, 0, 30, Align::Left, "12345"), BIG.font.width("1"), "cut to the box");
+        assert_eq!(draw_in(&mut f, &BIG, 0, 0, 30, Align::Left, "12345"), BIG.width("1"), "cut to the box");
+    }
+
+    /// A scaled pixel font is the 1:1 drawing with every pixel a square.
+    #[test]
+    fn scaled_pixels_are_squares() {
+        let (mut one, mut four) = (Frame::new(), Frame::new());
+        let s1 = Style { scale: 1, ..PIX4 };
+        draw(&mut one, &s1, 0, 0, Align::Left, "Ferris 42");
+        let w = draw(&mut four, &PIX4, 0, 0, Align::Left, "Ferris 42");
+        assert_eq!(w, 4 * s1.width("Ferris 42"));
+        for y in 0..PIX4.height() {
+            for x in 0..w {
+                assert_eq!(four.at(x, y), one.at(x / 4, y / 4), "({x}, {y})");
+            }
+        }
+        assert!((0..w).any(|x| four.at(x, 8) == WHITE));
     }
 
     #[test]

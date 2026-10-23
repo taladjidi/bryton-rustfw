@@ -12,7 +12,7 @@ Bryton.
   build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
   red if the PHY did not come up). Unplugging resets the unit.
 
-- **Code:** about 5 KB of firmware code, about 6 KB of font and about 20 KB of USB stack, no interrupts.
+- **Code:** about 5 KB of firmware code, a 2 KB pixel font and about 20 KB of USB stack, no interrupts.
 - **Sources:** every register is traced to [BOARD.md](BOARD.md) (the board, learned from the stock firmware) or
   the STM32H747 reference manual (RM0399).
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).

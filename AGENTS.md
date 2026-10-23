@@ -36,8 +36,8 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `pack.py` prints: about 32 KB, of which about 20 KB is the USB stack and about 6 KB the
-    16 px font (a font costs nothing until something draws with it: the linker drops it).
+  - watch the image size `pack.py` prints: about 29 KB, of which about 20 KB is the USB stack and about 2 KB the
+    pixel font (a font costs nothing until something draws with it: the linker drops it).
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
   high, and unplugging resets the unit, which brings it up without USB.
 - **Measure before and after** a change that could cost: image size, and on the unit, time awake per loop
@@ -86,8 +86,11 @@ The point of this project is a firmware in safe Rust.
 - `src/text.rs`: anti-aliased proportional text (`text::draw`, a `Style`, `Align`), one panel window per glyph.
   For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
   `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.
-- `src/fonts.rs`: glyph data, **generated** by `tools/font.py` (DejaVu Sans, 4 bits per pixel). To add a size or a
-  font, add a line to `FONTS` there and run `python3 tools/font.py` (needs PIL); never edit fonts.rs by hand.
+- `src/fonts.rs`: glyph data, **generated** by `tools/font.py` (4 bits per pixel); never edit it by hand.
+  - `PIXEL`, the UI font: this project's own 5 x 7 dot matrix (`tools/pixel_font.py`, one text grid per glyph),
+    drawn at 2x or 4x (`Style::scale`) so it matches Ferris.
+  - `SANS_16`, `SANS_BOLD_32`: DejaVu Sans, anti-aliased, if smooth text is ever wanted.
+  - To change a glyph or add a font, edit those files and run `python3 tools/font.py` (needs PIL).
 - `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
