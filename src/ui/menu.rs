@@ -173,6 +173,12 @@ pub enum Row {
     Stock(StockRow),
     /// Past ride `n` of the history, newest first: Select opens its card.
     Past(usize),
+    /// Planned workout `n` of the calendar ([`crate::storage::workout::Calendar`]): Select shows its steps.
+    Workout(usize),
+    /// Select starts the workout shown (and the ride, if none runs).
+    WorkoutStart,
+    /// Step `n` of the workout shown: Select starts the workout from it.
+    Step(usize),
 }
 
 /// What the stock data menu shows ([`STOCK`]): read from the rides and settings Bryton's firmware left on the
@@ -232,7 +238,7 @@ pub const STOCK: [StockRow; 11] = {
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
 /// The main menu.
-pub const MAIN: [Row; 17] = [
+pub const MAIN: [Row; 18] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
@@ -250,6 +256,7 @@ pub const MAIN: [Row; 17] = [
     Row::Nearby,
     Row::Open(Menu::History),
     Row::Open(Menu::Stock),
+    Row::Open(Menu::Workouts),
 ];
 
 /// The built-in sensors' readings, under the ANT sensors in the sensors menu.
