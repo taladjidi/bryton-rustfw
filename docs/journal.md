@@ -37,5 +37,9 @@ row in bryton-S510-mods' FLASHLOG.
 - **Sensor bus (I2C4):** LTR-308ALS light sensor, LPS22HH barometer, LIS2DH12 accelerometer; stock's automatic
   backlight dims to 1 % above 120 lux (by design), so ours rises with the light instead.
 - **Beeps** at power-on and power-off: heard.
+- **The cycle counter stops in sleep:** DWT CYCCNT does not count during WFI (the core clock stops; DBGMCU_CR is 0),
+  while SysTick does. A main loop that timed its sleep with CYCCNT never woke by itself: passes went on only when a
+  key or a touch woke it (found by `dev.py info`: uptime stuck at 0). The sleep is now timed by SysTick; the awake
+  figure, which counts CYCCNT, was right all along.
 
 The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).

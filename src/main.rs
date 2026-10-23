@@ -100,6 +100,13 @@ fn timer_done() -> bool {
     rd(SYST_CSR) & (1 << 16) != 0
 }
 
+/// Milliseconds of a period of `ms` gone so far (SysTick keeps counting through WFI; the DWT cycle counter does not:
+/// the core clock stops in sleep, DBGMCU_CR being 0, seen on the unit 2026-10-23).
+fn timer_elapsed_ms(ms: u32) -> u32 {
+    let total = ms.min(80) * (CPU_HZ / 1000);
+    total.saturating_sub(rd(SYST_CVR)) / (CPU_HZ / 1000)
+}
+
 fn timer_stop() {
     wr(SYST_CSR, 0);
     wr(SCB_ICSR, 1 << 25); // PENDSTCLR
@@ -1136,7 +1143,7 @@ fn main() -> ! {
     let mut session = Session::new();
     let mut stats = Stats::default();
     let (mut awake, mut passes) = (0u32, 0u32);
-    let mut last_touch = cycles();
+    let mut since_touch = 0u32; // ms slept since the panel was last read
     loop {
         let t0 = cycles();
         app.step(&mut board);
@@ -1159,13 +1166,15 @@ fn main() -> ! {
         // the pass's sleep, in slices: TOUCH_MS ones while a finger is on the panel, and one ends early when the
         // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
         // while the finger is down)
+        let mut slept = 0; // ms, by SysTick: cycles() stops counting in WFI
         'sleep: loop {
-            let left = (POLL_MS * (CPU_HZ / 1000)).saturating_sub(cycles().wrapping_sub(sleep_start)) / (CPU_HZ / 1000);
+            let left = POLL_MS.saturating_sub(slept);
             if left == 0 {
                 break;
             }
-            timer_start(if app.touching() { left.min(TOUCH_MS) } else { left });
-            let edge = loop {
+            let slice = if app.touching() { left.min(TOUCH_MS) } else { left };
+            timer_start(slice);
+            let (edge, done) = loop {
                 if let Some(l) = &mut link {
                     match l.poll(&mut session, &app, stats) {
                         Effect::None => {}
@@ -1195,24 +1204,23 @@ fn main() -> ! {
                     let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
                     app.set_usb(&mut board, dot);
                 }
-                let edge = touch_edge();
-                if edge || timer_done() || press.is_some() || woke {
+                let (edge, done) = (touch_edge(), timer_done());
+                if edge || done || press.is_some() || woke {
                     // a key from the link acts now, so the next command cannot replace it; board work done for the
                     // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
-                    break edge;
+                    break (edge, done);
                 }
                 wfi();
             };
+            let ms = if done { slice } else { timer_elapsed_ms(slice) };
             timer_stop();
+            (slept, since_touch) = (slept + ms, since_touch.saturating_add(ms));
             if press.is_some() || woke {
                 break;
             }
             if edge || app.touching() {
-                let now = cycles();
-                let dt = now.wrapping_sub(last_touch) / (CPU_HZ / 1000);
-                last_touch = now;
                 // a gesture acts after the sleep: acting may sleep too (delay_ms), which takes over SysTick
-                touched = app.touch(&mut board, dt);
+                touched = app.touch(&mut board, core::mem::take(&mut since_touch));
                 if touched.is_some() {
                     break 'sleep;
                 }
