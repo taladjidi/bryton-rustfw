@@ -66,7 +66,7 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   exactly `out/IMG.bin`, trailer included; the rest still holds the old OS image (never read).
 - **Result:** dark screen, keys ignored, no USB device. So it stops before the first frame and before the USB
   start.
-- **Diagnostic builds** (branch `diag-boot`, written from Engineer Mode with `tools/iaprecover.py --write`; each
+- **Diagnostic builds** (branch `diag-boot`, merged into main on 2026-10-23, written from Engineer Mode with `tools/iaprecover.py --write`; each
   write is a row in bryton-S510-mods' FLASHLOG):
   - v1 to v8 used the backlight (PG13 as a plain output) as the readout. v1 to v4 showed a steady light, v5 to v8
     nothing, whatever the code did with the pin: **PG13 as a plain output is no readout**, and the v1 / v2 "stop in

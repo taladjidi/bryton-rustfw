@@ -20,6 +20,7 @@ mod usb;
 use bryton_rustfw::dev::{Effect, Session};
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS};
+use core::sync::atomic::{AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
 #[inline(always)]
@@ -222,36 +223,62 @@ const SPI_CR2: u32 = SPI1 + 0x04;
 const SPI_CFG1: u32 = SPI1 + 0x08;
 const SPI_CFG2: u32 = SPI1 + 0x0c;
 const SPI_SR: u32 = SPI1 + 0x14;
+const SPI_IFCR: u32 = SPI1 + 0x18;
 const SPI_TXDR: u32 = SPI1 + 0x20;
 const SR_TXP: u32 = 1 << 1;
-const SR_TXC: u32 = 1 << 12;
 const SPI_TIMEOUT: u32 = CPU_HZ / 100; // 10 ms: a stuck SPI must not hang the loop
 
 fn spi_init() {
     // SSI first: with SSM, MASTER set while SSI is 0 is a mode fault, which clears MASTER (seen on the unit,
     // diag v17: CFG2 read back without MASTER, so SPI1 took 16 bytes and never clocked; RM0399 SPI mode fault).
-    wr(SPI_CR1, 1 << 12); // SSI = 1
+    wr(SPI_CR1, CR1_SSI);
     wr(SPI_CFG1, (2 << 28) | 7); // MBR = /8, DSIZE = 8 bits
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
     wr(SPI_CFG2, (1 << 31) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 22) | (1 << 17));
-    wr(SPI_CR2, 0); // TSIZE 0: endless transfer, bytes go out as they are written
-    wr(SPI_CR1, (1 << 12) | 1); // SPE
-    wr(SPI_CR1, (1 << 12) | (1 << 9) | 1); // CSTART
+}
+
+const CR1_SSI: u32 = 1 << 12; // with SSM: internal NSS high, no mode fault
+const SR_EOT: u32 = 1 << 3;
+
+/// Starts a transfer of exactly `n` bytes (1..=0xffff), as the stock HAL_SPI_Transmit does (BOARD.md 6).
+fn spi_begin(n: u32) {
+    wr(SPI_CR1, CR1_SSI); // SPE = 0: TSIZE is only writable then
+    wr(SPI_IFCR, 0xff8); // clear every event flag
+    wr(SPI_CR2, n & 0xffff);
+    wr(SPI_CR1, CR1_SSI | 1); // SPE
+    wr(SPI_CR1, CR1_SSI | (1 << 9) | 1); // CSTART
+}
+
+/// SPI waits that ran out (spi_byte, spi_end).
+static SPI_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+
+/// After a first timeout the SPI is taken as dead: later waits give up at once (still counted), so a stuck panel
+/// costs nothing and the loop and the USB dev link keep running, so `dev.py peek` can find out why (that is how
+/// the SPI1 mode fault was found: README, "First run on the unit").
+// ponytail: dead until reset, even after a one-off timeout; retry later if one ever happens on a working panel.
+fn spi_wait(flag: u32) -> bool {
+    let t0 = cycles();
+    while rd(SPI_SR) & flag == 0 {
+        if SPI_TIMEOUTS.load(Ordering::Relaxed) > 0 || cycles().wrapping_sub(t0) > SPI_TIMEOUT {
+            SPI_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+    }
+    true
 }
 
 fn spi_byte(b: u8) {
-    let t0 = cycles();
-    while rd(SPI_SR) & SR_TXP == 0 {
-        if cycles().wrapping_sub(t0) > SPI_TIMEOUT {
-            return;
-        }
+    if !spi_wait(SR_TXP) {
+        return;
     }
     wr8(SPI_TXDR, b); // 8-bit access: one frame
 }
 
-fn spi_flush() {
-    let t0 = cycles();
-    while rd(SPI_SR) & SR_TXC == 0 && cycles().wrapping_sub(t0) < SPI_TIMEOUT {}
+/// Waits for the end of the transfer (EOT: the last byte is out), then disables SPI1 until the next one.
+fn spi_end() {
+    spi_wait(SR_EOT);
+    wr(SPI_IFCR, 0xff8);
+    wr(SPI_CR1, CR1_SSI);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -261,13 +288,17 @@ fn spi_flush() {
 fn lcd_cmd(cmd: u8, params: &[u8]) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
+    spi_begin(1);
     spi_byte(cmd);
-    spi_flush();
+    spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
-    for &p in params {
-        spi_byte(p);
+    if !params.is_empty() {
+        spi_begin(params.len() as u32);
+        for &p in params {
+            spi_byte(p);
+        }
+        spi_end();
     }
-    spi_flush();
     pin_set(LCD_CS.0, LCD_CS.1, true);
 }
 
@@ -285,14 +316,21 @@ fn lcd_power_on() {
 fn lcd_ram_write(color: u16, count: u32) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
+    spi_begin(1);
     spi_byte(0x2c); // RAMWR
-    spi_flush();
+    spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
-    for _ in 0..count {
-        spi_byte((color >> 8) as u8);
-        spi_byte(color as u8);
+    let mut left = count;
+    while left > 0 {
+        let n = left.min(0x7fff); // TSIZE is 16 bits: at most 0x7fff pixels (2 bytes each) per transfer
+        left -= n;
+        spi_begin(2 * n);
+        for _ in 0..n {
+            spi_byte((color >> 8) as u8);
+            spi_byte(color as u8);
+        }
+        spi_end();
     }
-    spi_flush();
     pin_set(LCD_CS.0, LCD_CS.1, true);
 }
 
@@ -368,19 +406,53 @@ impl Board for S510 {
     }
 }
 
+/// Boot stage at which a diagnostic build stops: `DIAG_STOP=n cargo build --release` (0: never; AGENTS.md layer 6).
+const STOP: u32 = match option_env!("DIAG_STOP") {
+    Some(s) => parse_u32(s),
+    None => 0,
+};
+
+const fn parse_u32(s: &str) -> u32 {
+    let b = s.as_bytes();
+    let (mut i, mut n) = (0, 0);
+    while i < b.len() {
+        n = n * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    n
+}
+
+/// At stage STOP, waits for USB power, then resets. Power on, hold Page, plug in: Engineer Mode means the firmware
+/// got there (the signal proven by diag v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
+/// 3 clocks and pins, 4 SPI, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
+fn checkpoint(n: u32) {
+    if n == STOP {
+        modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
+        gpio(VBUS.0, VBUS.1, IN, 0);
+        while pin_low(VBUS.0, VBUS.1) {}
+        system_reset();
+    }
+}
+
 fn main() -> ! {
     mpu_init();
+    checkpoint(1);
     dwt_init();
+    checkpoint(2);
     board_init();
+    checkpoint(3);
     spi_init();
+    checkpoint(4);
     let mut board = S510;
     let mut app = App::start(&mut board);
+    checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;
     let mut session = Session::new();
     let mut uptime_ms = 0u32;
     loop {
         app.step(&mut board);
+        checkpoint(6);
         let vbus = !pin_low(VBUS.0, VBUS.1);
         if vbus && !usb_tried {
             usb_tried = true;
@@ -415,6 +487,7 @@ fn main() -> ! {
             wfi();
         }
         timer_stop();
+        checkpoint(7);
         uptime_ms = uptime_ms.wrapping_add(POLL_MS);
     }
 }
