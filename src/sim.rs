@@ -63,6 +63,8 @@ pub struct Gnss {
     pub got: Vec<u8>,
     /// UTC of the next report, seconds since 1970 (set by the board: its RTC minus 2 h).
     utc: i64,
+    /// When its power line was last driven low (0: from reset, as the board does at boot).
+    off_since: u64,
     out: std::collections::VecDeque<u8>,
     next_ms: u64,
 }
@@ -419,7 +421,16 @@ impl Board for Sim {
 
     fn gnss_power(&mut self, on: bool) {
         if on && !self.gnss.powered {
+            // as on the unit: switched on too soon after its line was driven low, the receiver does not start
+            assert!(
+                self.ms >= self.gnss.off_since + 500,
+                "GNSS powered {} ms after off",
+                self.ms - self.gnss.off_since
+            );
             self.gnss.next_ms = self.ms + 500; // its first fix report
+        }
+        if !on && self.gnss.powered {
+            self.gnss.off_since = self.ms;
         }
         self.gnss.powered = on;
     }
@@ -778,8 +789,9 @@ mod tests {
     fn gps_fix_and_speed() {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, None);
+        assert!(!sim.gnss.powered, "powered later, after its line has been low long enough");
+        run(&mut sim, &mut app, 3000);
         assert!(sim.gnss.powered);
-        run(&mut sim, &mut app, 2000);
         let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
         assert!(sent(&sim, crate::gnss::config()), "configuration");
         let frames = sim.gnss.got.iter().filter(|&&b| b == 0xb5).count();
@@ -819,9 +831,11 @@ mod tests {
         // the fix taught the RTC's offset (+2 h) and the position (to 1e-4 degrees): kept for the next power-up
         let aid = crate::gnss::Aid::from_words([sim.backup[17], sim.backup[18]]);
         assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((488_566_000, -22_945_000)) });
+        sim.gnss.powered = false; // a power cycle: the board drives the line low at boot
+        sim.gnss.off_since = sim.ms;
         let mut again = App::start(&mut sim, None);
         sim.gnss.got.clear();
-        run(&mut sim, &mut again, 1500);
+        run(&mut sim, &mut again, 2500);
         let (tr, dr) = sim.rtc();
         let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
         let utc = crate::from_epoch_s(crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600);

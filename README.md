@@ -137,6 +137,9 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 - **Unaligned reads from the SDRAM are wrong (2026-10-23):** page 2's default fields showed garbled. Reading the
   app's state in DTCM with `dev.py peek` showed a 7-byte constant copied wrong from SDRAM; the image itself was
   right. Built with `+strict-align` since (BOARD.md 2).
+- **The GPS receiver did not start after a cold boot (2026-10-23, first install with GPS):** powered ~100 ms after
+  its power line went from undriven (after reset) to low, it never answered. Reproduced with `peek` / `poke`
+  (pins analog for 3 s, then a RAM run); now powered 1 s after the app's first step (BOARD.md 13).
 - **GPS (2026-10-23):** the receiver is a u-blox M10 on SPI4 and already sends NAV-PVT after stock (BOARD.md 13);
   explored with `tools/gnss.py` (peek / poke), then the firmware's driver.
 - **Battery (2026-10-23):** ADC3 reads the battery against VREFINT as stock does; 99 % while charging, in line with

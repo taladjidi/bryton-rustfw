@@ -291,9 +291,14 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
 
-/// When the GNSS receiver gets its configuration after power-up (it boots in well under a second; stock waits 3 s
-/// before reading it at all).
-pub const GNSS_CONFIG_MS: u32 = 1000;
+/// When the GNSS receiver is powered, counted from the app's first step: its power line (PI6) has then been
+/// driven low for over a second (the board does it at boot). After a reset the line is left undriven, and powered
+/// again ~100 ms after being driven low, the receiver did not start (seen on the unit, BOARD.md 13).
+pub const GNSS_ON_MS: u32 = 1000;
+
+/// When the GNSS receiver gets its configuration, counted from the app's first step (1 s after its power-up;
+/// stock waits 3 s before reading it at all).
+pub const GNSS_CONFIG_MS: u32 = GNSS_ON_MS + 1000;
 
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).
 const AID_BKP: [usize; 2] = [17, 18];
@@ -376,7 +381,8 @@ pub struct App {
     /// The last fix, and its age.
     pvt: Option<gnss::Pvt>,
     pvt_ms: u32,
-    /// Since the receiver was powered (its configuration and aiding are sent once, from [`GNSS_CONFIG_MS`]).
+    /// Since the app's first step: the receiver is powered at [`GNSS_ON_MS`], its configuration and aiding sent
+    /// once from [`GNSS_CONFIG_MS`].
     gnss_ms: u32,
     /// Messages sent to the receiver so far: configuration, time, position.
     gnss_sent: u8,
@@ -394,7 +400,6 @@ impl App {
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
         b.backlight(true);
-        b.gnss_power(true);
         let mut rx = nrf::Rx::new();
         let ble = nrf::start(b).ok();
         let ant = match (ble, ant_key) {
@@ -838,6 +843,9 @@ impl App {
     /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
     /// and the speed when no speed sensor is paired.
     fn poll_gnss(&mut self, b: &mut impl Board) {
+        if self.gnss_ms < GNSS_ON_MS && self.gnss_ms + POLL_MS >= GNSS_ON_MS {
+            b.gnss_power(true);
+        }
         self.gnss_ms = self.gnss_ms.saturating_add(POLL_MS);
         self.pvt_ms = self.pvt_ms.saturating_add(POLL_MS);
         let mut send = if self.gnss_ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };

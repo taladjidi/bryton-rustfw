@@ -427,7 +427,16 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
 
 - **Receiver:** u-blox M10: UBX-MON-VER answers "ROM SPG 5.10 (7b202e)", hardware 000A0000, PROTVER 34.10,
   GPS, GLONASS, Galileo, BeiDou, SBAS, QZSS.
-- **Power:** PI6, high = on (stock: then 3 s before reading). PI6 is analog (off) after the bootloader.
+- **Power:** PI6, high = on (stock: then 3 s before reading). PI6 is analog (undriven) after a reset and the
+  bootloader. **Powered about 100 ms after being driven low from that state, the receiver does not start** (it
+  never answers on SPI until power-cycled; seen on the unit 2026-10-23, 4 resets out of 4, reproduced by setting
+  PI6 and the SPI4 pins analog for 3 s). Driven low for over a second first, it starts every time. Inferred: the
+  undriven line (or the SPI pins) leave it half powered, and a short low does not reset it. This firmware drives
+  PI6 low at boot and powers the receiver 1 s after the app's first step (over 2 s low in all).
+
+    PI6 power  (reset: undriven) ____________________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                                  |<-- driven low >= 1 s -->|<- 1 s ->| configuration, aiding
+                                  boot (gnss_init)          first step + 1 s
 - **SPI4** (0x40013400): PE2 SCK (pull-down), PE4 NSS, PE5 MISO, PE6 MOSI, AF5; mode 0. Stock: 1 MHz from the
   CSI, hardware NSS, DMA1 streams 6 / 7. This firmware: 1 MHz from the HSI (SPI45SEL = 3, /64), PE4 driven by
   hand, 32-bit FIFO accesses (four 8-bit frames each), polled. SPI4 is reset through RCC_APB2RSTR (bit 13) first:
