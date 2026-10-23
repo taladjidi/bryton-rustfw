@@ -274,6 +274,8 @@ mod tests {
 pub struct Pc {
     pub got: Vec<u8>,
     pub staged: Vec<u8>,
+    /// Registers poked, read back by peek (0 if never written).
+    pub regs: std::collections::BTreeMap<u32, u32>,
 }
 
 impl crate::dev::Host for Pc {
@@ -283,6 +285,12 @@ impl crate::dev::Host for Pc {
     fn stage(&mut self, offset: u32, data: &[u8]) {
         assert_eq!(offset as usize, self.staged.len(), "staged out of order");
         self.staged.extend_from_slice(data);
+    }
+    fn peek(&mut self, addr: u32) -> u32 {
+        self.regs.get(&addr).copied().unwrap_or(0)
+    }
+    fn poke(&mut self, addr: u32, value: u32) {
+        self.regs.insert(addr, value);
     }
 }
 
@@ -316,6 +324,28 @@ mod dev_tests {
             effect = s.feed(chunk, app, 0, pc);
         }
         effect
+    }
+
+    #[test]
+    fn peek_and_poke_registers_only() {
+        let (_, app) = app_at(1, 2, 3);
+        let mut pc = Pc::default();
+        let mut s = Session::new();
+        s.feed(b"poke 0x40013014 4098\npeek 0x40013010 2\n", &app, 0, &mut pc);
+        assert_eq!(pc.got, b"ok\n00000000\n00001002\n");
+        for bad in [
+            "peek 0x20000000",
+            "peek 0x40013001",
+            "peek 0x5ffffffc 2",
+            "peek 0x40000000 65",
+            "peek 0x",
+            "poke 0x40013000",
+        ] {
+            pc.got.clear();
+            s.feed(format!("{bad}\n").as_bytes(), &app, 0, &mut pc);
+            assert!(pc.got.starts_with(b"err usage"), "{bad}");
+        }
+        assert_eq!(pc.regs.len(), 1);
     }
 
     #[test]

@@ -249,26 +249,31 @@ fn spi_begin(n: u32) {
 /// SPI waits that ran out (spi_byte, spi_end); diag v14 checks it.
 static SPI_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
-fn spi_byte(b: u8) {
+/// After a first timeout the SPI is taken as dead: later waits give up at once (still counted), so a stuck panel
+/// costs nothing and the loop and the USB dev link keep running (on the unit SPI1 takes 16 bytes and never clocks:
+/// diag v16; read it with `dev.py peek`).
+// ponytail: dead until reset, even after a one-off timeout; retry later if one ever happens on a working panel.
+fn spi_wait(flag: u32) -> bool {
     let t0 = cycles();
-    while rd(SPI_SR) & SR_TXP == 0 {
-        if cycles().wrapping_sub(t0) > SPI_TIMEOUT {
+    while rd(SPI_SR) & flag == 0 {
+        if SPI_TIMEOUTS.load(Ordering::Relaxed) > 0 || cycles().wrapping_sub(t0) > SPI_TIMEOUT {
             SPI_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
+    }
+    true
+}
+
+fn spi_byte(b: u8) {
+    if !spi_wait(SR_TXP) {
+        return;
     }
     wr8(SPI_TXDR, b); // 8-bit access: one frame
 }
 
 /// Waits for the end of the transfer (EOT: the last byte is out), then disables SPI1 until the next one.
 fn spi_end() {
-    let t0 = cycles();
-    while rd(SPI_SR) & SR_EOT == 0 {
-        if cycles().wrapping_sub(t0) > SPI_TIMEOUT {
-            SPI_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
-            break;
-        }
-    }
+    spi_wait(SR_EOT);
     wr(SPI_IFCR, 0xff8);
     wr(SPI_CR1, CR1_SSI);
 }

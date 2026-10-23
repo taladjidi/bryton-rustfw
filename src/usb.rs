@@ -222,4 +222,12 @@ impl Host for Link {
     fn stage(&mut self, offset: u32, data: &[u8]) {
         stage_write(offset, data);
     }
+
+    fn peek(&mut self, addr: u32) -> u32 {
+        rd(addr)
+    }
+
+    fn poke(&mut self, addr: u32, value: u32) {
+        wr(addr, value);
+    }
 }

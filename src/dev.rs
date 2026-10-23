@@ -8,6 +8,10 @@
 //!   trailer) and the firmware stores them in SDRAM; `sum` is their additive sum. Answer `ok` and the firmware
 //!   runs the image ([`Effect::Run`]), or `err <reason>`.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
+//! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line. `poke <addr>
+//!   <value>`: writes the word, `ok`. Numbers in decimal or `0x` hex; `addr` must be word aligned and in the
+//!   peripheral space ([`IO`]), so a peek can't read through a Rust reference. A reserved address there can still
+//!   fault, which parks the CPU (four-button restart).
 
 use crate::App;
 use crate::ui::{H, W};
@@ -18,7 +22,14 @@ pub trait Host {
     fn send(&mut self, data: &[u8]);
     /// Stores bytes of an image being loaded, `offset` bytes into the staging area.
     fn stage(&mut self, offset: u32, data: &[u8]);
+    /// Reads the register at `addr` (in [`IO`], aligned).
+    fn peek(&mut self, addr: u32) -> u32;
+    /// Writes the register at `addr` (in [`IO`], aligned).
+    fn poke(&mut self, addr: u32, value: u32);
 }
+
+/// The peripheral space (RM0399 memory map) that `peek` and `poke` may reach.
+pub const IO: core::ops::RangeInclusive<u32> = 0x4000_0000..=0x5fff_fffc;
 
 /// Largest image `load` accepts: the 1 MB link region (link.x).
 pub const STAGE_MAX: u32 = 1 << 20;
@@ -138,6 +149,22 @@ impl Session {
                 }
                 _ => h.send(b"err usage: load <size 156..1048576> <sum>\n"),
             },
+            Some(b"peek") => match (words.next().and_then(parse), words.next().map_or(Some(1), parse)) {
+                (Some(a), Some(n @ 1..=64)) if a % 4 == 0 && IO.contains(&a) && IO.contains(&(a + 4 * (n - 1))) => {
+                    for i in 0..n {
+                        let v = h.peek(a + 4 * i);
+                        h.send(&hex(v));
+                    }
+                }
+                _ => h.send(b"err usage: peek <addr 0x40000000..0x5ffffffc, aligned> [n 1..64]\n"),
+            },
+            Some(b"poke") => match (words.next().and_then(parse), words.next().and_then(parse)) {
+                (Some(a), Some(v)) if a % 4 == 0 && IO.contains(&a) => {
+                    h.poke(a, v);
+                    h.send(b"ok\n");
+                }
+                _ => h.send(b"err usage: poke <addr 0x40000000..0x5ffffffc, aligned> <value>\n"),
+            },
             Some(b"reset") => {
                 h.send(b"ok\n");
                 return Effect::Reset;
@@ -170,11 +197,25 @@ pub fn check_image(head: &[u8], size: u32) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A decimal or `0x` hex number.
 fn parse(w: &[u8]) -> Option<u32> {
-    w.iter().try_fold(
-        0u32,
-        |n, &c| if c.is_ascii_digit() { n.checked_mul(10)?.checked_add(u32::from(c - b'0')) } else { None },
-    )
+    let (digits, base) = match w {
+        [b'0', b'x', rest @ ..] => (rest, 16),
+        _ => (w, 10),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    digits.iter().try_fold(0u32, |n, &c| n.checked_mul(base)?.checked_add((c as char).to_digit(base)?))
+}
+
+/// `v` as 8 hex digits and a newline.
+fn hex(v: u32) -> [u8; 9] {
+    let mut out = [b'\n'; 9];
+    for (i, d) in out[..8].iter_mut().enumerate() {
+        *d = b"0123456789abcdef"[(v >> (28 - 4 * i)) as usize & 0xf];
+    }
+    out
 }
 
 fn decimal(mut v: u32, buf: &mut [u8; 10]) -> &[u8] {

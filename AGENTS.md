@@ -207,6 +207,7 @@ Install the firmware once, as an update (README). From then on, with the cable i
     ./dev.py shot -o shot.png     # screenshot (what the app drew, rendered row by row: no framebuffer)
     ./dev.py watch -i 1           # continuous screenshots into target/shots/
     ./check.sh && ./dev.py run    # run the new build from RAM: nothing written to the eMMC
+    ./dev.py peek 0x40013014 2    # read registers (peripheral space only); poke ADDR VALUE writes one
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
