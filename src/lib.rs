@@ -357,6 +357,7 @@ impl App {
                 time: rtc_hm(b),
                 radio: ble.is_some(),
                 gps: None,
+                blink: true,
                 usb: UsbDot::Off,
                 battery: None,
                 charging: false,
@@ -365,6 +366,7 @@ impl App {
                 time: (0, 0),
                 radio: false,
                 gps: None,
+                blink: true,
                 usb: UsbDot::Off,
                 battery: None,
                 charging: false,
@@ -791,6 +793,8 @@ impl App {
             self.pvt = None;
         }
         self.strip.gps = self.pvt.map(|p| p.good());
+        // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
+        self.strip.blink = self.strip.gps != Some(false) || self.seconds.is_multiple_of(2);
     }
 
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps

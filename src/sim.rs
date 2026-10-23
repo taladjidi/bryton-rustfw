@@ -503,7 +503,15 @@ mod tests {
         let mut f = Frame::new();
         crate::ui::draw_strip(
             &mut f,
-            &Strip { time: (h, m), radio, gps: app.strip.gps, usb: UsbDot::Off, battery: Some(63), charging: false },
+            &Strip {
+                time: (h, m),
+                radio,
+                gps: app.strip.gps,
+                blink: app.strip.blink,
+                usb: UsbDot::Off,
+                battery: Some(63),
+                charging: false,
+            },
         );
         let page = app.pages()[n];
         for (i, v) in values.iter().enumerate() {
@@ -525,7 +533,15 @@ mod tests {
         let mut f = Frame::new();
         crate::ui::draw_strip(
             &mut f,
-            &Strip { time: (h, m), radio: true, gps: app.strip.gps, usb, battery: Some(63), charging: false },
+            &Strip {
+                time: (h, m),
+                radio: true,
+                gps: app.strip.gps,
+                blink: app.strip.blink,
+                usb,
+                battery: Some(63),
+                charging: false,
+            },
         );
         crate::ui::draw_main_time(&mut f, &format!("{h:02}:{m:02}"), &format!("{s:02}"));
         crate::ui::draw_ferris(&mut f);
@@ -758,8 +774,15 @@ mod tests {
         let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
         let mut want = Frame::new();
         want.px = ride(&mut sim, &app, 0, &["25.2", "--", "--"], true);
-        let strip =
-            Strip { time: (h, m), radio: true, gps: Some(true), usb: UsbDot::Off, battery: Some(63), charging: false };
+        let strip = Strip {
+            time: (h, m),
+            radio: true,
+            gps: Some(true),
+            blink: true,
+            usb: UsbDot::Off,
+            battery: Some(63),
+            charging: false,
+        };
         crate::ui::draw_strip(&mut want, &strip);
         assert!(want.px == sim.screen, "GPS speed, green GPS");
         sim.save("gps");

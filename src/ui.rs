@@ -47,7 +47,13 @@ pub const CRAB: [u16; 11] = [0x6006, 0x9009, 0xa005, 0x6006, 0x2004, 0x3ffc, 0x7
 
 /// Draws [`CRAB`] at (`x`, `y`), each bitmap pixel `scale` x `scale`, one fill per horizontal run.
 pub fn draw_crab(c: &mut impl Canvas, x: u32, y: u32, scale: u32, color: u16) {
-    for (r, &bits) in CRAB.iter().enumerate() {
+    draw_bitmap(c, &CRAB, x, y, scale, color);
+}
+
+/// Draws a 16-pixel-wide bitmap (bit 15 = leftmost) at (`x`, `y`), each pixel `scale` x `scale`, one fill per
+/// horizontal run; the 0 bits are left as they are.
+pub fn draw_bitmap(c: &mut impl Canvas, bitmap: &[u16], x: u32, y: u32, scale: u32, color: u16) {
+    for (r, &bits) in bitmap.iter().enumerate() {
         let mut col = 0;
         while col < 16 {
             let run = (bits << col).leading_ones();
@@ -103,6 +109,8 @@ pub struct Strip {
     pub radio: bool,
     /// GNSS: None when the receiver is not answering, else whether it has a fix.
     pub gps: Option<bool>,
+    /// The blinking "GPS" while searching is shown (it alternates each second).
+    pub blink: bool,
     /// USB state.
     pub usb: UsbDot,
     /// Battery charge in percent, if known.
@@ -116,12 +124,29 @@ const STRIP_BLE: (u32, u32) = (4, 3 * CELL * 2);
 const STRIP_GPS: (u32, u32) = (STRIP_BLE.0 + STRIP_BLE.1 + 6, 3 * CELL * 2);
 const STRIP_TIME: (u32, u32) = ((W - 5 * CELL * 2) / 2, 5 * CELL * 2);
 const STRIP_BATTERY: (u32, u32) = (W - 4 - 4 * CELL * 2, 4 * CELL * 2);
-/// The USB dot: x, size (it sits between the time and the battery, centred on the text's capitals).
-const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 16, 8);
+/// The USB symbol, 13 x 14 (bit 15 = leftmost): a trident, the plug's arrow on top.
+pub const USB_ICON: [u16; 14] = [
+    0b0000001000000000,
+    0b0000011100000000,
+    0b0000111110000000,
+    0b0000001000000000,
+    0b0100001000111000,
+    0b1110001000111000,
+    0b0100001000010000,
+    0b0010001000100000,
+    0b0001001001000000,
+    0b0000101010000000,
+    0b0000011100000000,
+    0b0000001000000000,
+    0b0000011100000000,
+    0b0000011100000000,
+];
+/// The USB symbol's left edge and width, between the time and the battery.
+const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 
-/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" (grey while
-/// searching, green with a fix, nothing if the receiver is silent), the time in the middle; on
-/// the right a dot in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
+/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" (blinking grey while
+/// searching, green with a fix, nothing if the receiver is silent), the time in the middle; on the right the USB
+/// symbol in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
 /// under); then the orange line.
 pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
     let at = |c: &mut _, (x, w): (u32, u32), fg, align, t: &str| {
@@ -135,7 +160,8 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
     at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
     let gps = match s.gps {
         None => BLACK,
-        Some(false) => GREY,
+        Some(false) if s.blink => GREY,
+        Some(false) => BLACK,
         Some(true) => GREEN,
     };
     at(c, STRIP_GPS, gps, Align::Left, "GPS");
@@ -145,7 +171,7 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
         UsbDot::Powered => ACCENT,
         UsbDot::Ready => GREEN,
     };
-    c.fill(STRIP_USB.0, STRIP_H - LABEL.height() + 3, STRIP_USB.1, STRIP_USB.1, usb);
+    draw_bitmap(c, &USB_ICON, STRIP_USB.0, STRIP_H - 2 - USB_ICON.len() as u32, 1, usb);
     let mut l = text::Line::<8>::new();
     match s.battery {
         Some(p) => l.push_u32(u32::from(p)),
@@ -483,7 +509,7 @@ pub(crate) mod tests {
             }
         }
         assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2);
-        let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, (STRIP_USB.0 - 8, STRIP_USB.1 + 8), STRIP_BATTERY];
+        let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(SECONDS_Y + SECONDS.height() <= CRAB_Y && TIME_Y + TIME.height() <= SECONDS_Y && TIME_Y > STRIP_H);
     }
@@ -494,6 +520,7 @@ pub(crate) mod tests {
             time: (12, 34),
             radio: true,
             gps: Some(true),
+            blink: true,
             usb: UsbDot::Ready,
             battery: Some(87),
             charging: true,
