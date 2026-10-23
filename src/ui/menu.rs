@@ -75,6 +75,13 @@ pub enum Setting {
     Weight,
     /// W' for W' balance (a number, J, shown in kJ).
     WPrime,
+    // alerts.rs (0: off)
+    /// Eat reminder, every so many minutes of ride time.
+    Eat,
+    /// Drink reminder, the same.
+    Drink,
+    /// Heart rate alert over this, bpm.
+    HrAlert,
 }
 
 impl Setting {
@@ -88,6 +95,9 @@ impl Setting {
             Setting::Ftp => "FTP W",
             Setting::Weight => "WEIGHT KG",
             Setting::WPrime => "W' KJ",
+            Setting::Eat => "EAT MIN",
+            Setting::Drink => "DRINK MIN",
+            Setting::HrAlert => "HR OVER",
         }
     }
 
@@ -99,6 +109,8 @@ impl Setting {
             Setting::Ftp => Some((FTP_RANGE, 5)),
             Setting::Weight => Some((WEIGHT_RANGE, 1)),
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
+            Setting::Eat | Setting::Drink => Some((0..=120, 5)),
+            Setting::HrAlert => Some((0..=230, 5)),
             _ => None,
         }
     }
@@ -214,8 +226,11 @@ pub const STOCK: [StockRow; 11] = {
     [Scan, Cp, WPrime, Fit, WeekKm, WeekH, YearKm, YearH, AllKm, AllH, Import]
 };
 
+/// The alerts menu.
+pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
+
 /// The main menu.
-pub const MAIN: [Row; 15] = [
+pub const MAIN: [Row; 16] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
@@ -228,6 +243,7 @@ pub const MAIN: [Row; 15] = [
     Row::Set(Setting::Ftp),
     Row::Set(Setting::Weight),
     Row::Set(Setting::WPrime),
+    Row::Open(Menu::Alerts),
     Row::Open(Menu::Gps),
     Row::Nearby,
     Row::Open(Menu::Stock),

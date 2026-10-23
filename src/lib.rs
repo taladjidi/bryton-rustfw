@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod alerts;
 pub mod dev;
 pub mod drivers;
 pub mod hrv;
@@ -348,6 +349,8 @@ const WHEEL_BKP: usize = 11;
 /// holds stock's Nordic image number (BOARD.md 8, 11): 16 is ours (page 3 of earlier builds, read only to carry it
 /// over; a tagged word here is not a page, [`PageCfg::from_word`] wants tag 0xa).
 const POWER_BKP: usize = 16;
+/// The backup register of the alerts ([`Settings::alerts_word`]); not referenced by stock (BOARD.md 8).
+const ALERTS_BKP: usize = 28;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
 /// - tag 0xa7 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
@@ -373,6 +376,13 @@ pub struct Settings {
     pub weight_kg: u16,
     /// W', J (in [`menu::WPRIME_RANGE`], a multiple of 500); kept in register 16.
     pub wprime_j: u16,
+    /// Eat and drink reminders, minutes of ride time (0: off), and the heart rate alert, bpm (0: off); kept in
+    /// register 28 ([`Settings::alerts_word`]).
+    pub eat_min: u16,
+    /// See `eat_min`.
+    pub drink_min: u16,
+    /// See `eat_min`.
+    pub hr_alert: u16,
 }
 
 impl Settings {
@@ -402,6 +412,9 @@ impl Settings {
                 light_timeout: (w >> 6 & 3) as usize,
                 weight_kg,
                 wprime_j,
+                eat_min: 0,
+                drink_min: 0,
+                hr_alert: 0,
             },
             0xa6 => Settings {
                 wheel_mm: index(w & 7),
@@ -411,6 +424,9 @@ impl Settings {
                 light_timeout: (w >> 20 & 3) as usize,
                 weight_kg,
                 wprime_j,
+                eat_min: 0,
+                drink_min: 0,
+                hr_alert: 0,
             },
             0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
@@ -420,6 +436,9 @@ impl Settings {
                 light_timeout: (w >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
                 weight_kg,
                 wprime_j,
+                eat_min: 0,
+                drink_min: 0,
+                hr_alert: 0,
             },
             _ => Settings {
                 wheel_mm: WHEELS[1],
@@ -429,8 +448,36 @@ impl Settings {
                 light_timeout: 0,
                 weight_kg,
                 wprime_j,
+                eat_min: 0,
+                drink_min: 0,
+                hr_alert: 0,
             },
         }
+    }
+
+    /// The alerts kept in register 28: tag 0xc2 in the top byte, eat and drink reminders in 5 min steps in bits 0..4
+    /// and 8..12, the heart rate alert in 16..23 (0: off for each).
+    ///
+    /// ```
+    /// use bryton_rustfw::Settings;
+    /// let s = Settings { eat_min: 45, drink_min: 20, hr_alert: 175, ..Settings::from_word(0) };
+    /// assert_eq!(Settings::from_word(0).with_alerts_word(s.alerts_word()), s);
+    /// assert_eq!(Settings::from_word(0).with_alerts_word(0).eat_min, 0, "off without the tag");
+    /// ```
+    pub fn alerts_word(self) -> u32 {
+        (0xc2 << 24)
+            | u32::from(self.hr_alert.min(255)) << 16
+            | (u32::from(self.drink_min / 5) & 0x1f) << 8
+            | (u32::from(self.eat_min / 5) & 0x1f)
+    }
+
+    /// Self with the alerts of register 28 ([`Settings::alerts_word`]).
+    pub fn with_alerts_word(self, w: u32) -> Settings {
+        if w >> 24 != 0xc2 {
+            return Settings { eat_min: 0, drink_min: 0, hr_alert: 0, ..self };
+        }
+        let min = |v: u32| ((v & 0x1f) as u16 * 5).min(120);
+        Settings { eat_min: min(w), drink_min: min(w >> 8), hr_alert: (w >> 16 & 0xff) as u16, ..self }
     }
 
     /// These settings with the weight and W' kept in `w` (RTC backup register 16): tag 0xc1 in bits 24..31, the
@@ -496,6 +543,14 @@ impl Settings {
                 l.push_str(".");
                 l.push_u32(u32::from(self.wprime_j % 1000 / 100));
             }
+            Setting::Eat | Setting::Drink | Setting::HrAlert => {
+                let v = match s {
+                    Setting::Eat => self.eat_min,
+                    Setting::Drink => self.drink_min,
+                    _ => self.hr_alert,
+                };
+                if v == 0 { l.push_str("OFF") } else { l.push_u32(u32::from(v)) }
+            }
         }
     }
 
@@ -517,7 +572,7 @@ impl Settings {
             }
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
-            Setting::MaxHr | Setting::Ftp | Setting::Weight | Setting::WPrime => {}
+            _ => {} // numbers: Setting::number
         }
     }
 
@@ -541,6 +596,9 @@ impl Settings {
             Setting::Ftp => Some(&mut self.ftp),
             Setting::Weight => Some(&mut self.weight_kg),
             Setting::WPrime => Some(&mut self.wprime_j),
+            Setting::Eat => Some(&mut self.eat_min),
+            Setting::Drink => Some(&mut self.drink_min),
+            Setting::HrAlert => Some(&mut self.hr_alert),
             _ => None,
         }
     }
@@ -595,6 +653,9 @@ const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
 pub const BEEP_ON: [(u32, u32); 2] = [(1500, 80), (2500, 120)];
 /// The power-off tones.
 pub const BEEP_OFF: [(u32, u32); 2] = [(2500, 80), (1500, 120)];
+
+/// An alert's tones: three short beeps (0 Hz: silence), played without blocking ([`App::tones`]).
+pub const BEEP_ALERT: [(u32, u32); 5] = [(2500, 100), (0, 50), (2500, 100), (0, 50), (2500, 100)];
 
 /// Plays `tones` (blocking: a few hundred ms, only at power-on and power-off).
 fn play(b: &mut impl Board, tones: &[(u32, u32)]) {
@@ -672,6 +733,8 @@ pub enum Menu {
     Gps,
     /// What stock's rides and settings give ([`menu::STOCK`]).
     Stock,
+    /// Reminders and alerts ([`menu::ALERTS`]).
+    Alerts,
 }
 
 /// What is on screen.
@@ -696,9 +759,9 @@ pub const STOCK_SCAN_MS: u32 = 30_000;
 pub const BANNER_MS: u32 = 4000;
 
 /// The GPS row of the main menu.
-pub const GPS_ROW: usize = 12;
+pub const GPS_ROW: usize = 13;
 /// The nearby BLE devices row of the main menu.
-pub const NEARBY_ROW: usize = 13;
+pub const NEARBY_ROW: usize = 14;
 const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
 const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
 
@@ -839,6 +902,11 @@ pub struct App {
     new_ride: bool,
     /// The card's map and elevation profile as drawn (set when the card is shown).
     summary: Option<(map::Shown, GraphShown)>,
+    /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the tones playing: what
+    /// is left of them, how long the current one has left, and whether the buzzer is on.
+    alerts: alerts::Alerts,
+    alert: Option<alerts::Alert>,
+    tones: (&'static [(u32, u32)], u32, bool),
     /// When the ride started: date, hours and minutes (its card's title).
     ride_started: ((u16, u8, u8), (u8, u8)),
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
@@ -887,7 +955,9 @@ impl App {
                 *s = Sensor::Paired(id);
             }
         }
-        let misc = Settings::from_word(b.backup_read(WHEEL_BKP)).with_power_word(b.backup_read(POWER_BKP));
+        let misc = Settings::from_word(b.backup_read(WHEEL_BKP))
+            .with_power_word(b.backup_read(POWER_BKP))
+            .with_alerts_word(b.backup_read(ALERTS_BKP));
         let mut app = App {
             keys: Keys::default(),
             backlight: true,
@@ -963,6 +1033,9 @@ impl App {
             told_low: false,
             graph_whole: false,
             ride_started: ((2000, 1, 1), (0, 0)),
+            alerts: alerts::Alerts::new(),
+            alert: None,
+            tones: (&[], 0, false),
             summary: None,
             new_ride: false,
             drawn: Default::default(),
@@ -1016,6 +1089,7 @@ impl App {
     fn save_misc(&self, b: &mut impl Board) {
         b.backup_write(WHEEL_BKP, self.settings.to_word());
         b.backup_write(POWER_BKP, self.settings.power_word());
+        b.backup_write(ALERTS_BKP, self.settings.alerts_word());
     }
 
     /// Memory for the basemap (at least [`tiles::MEM_WORDS`] words); without it the map has no basemap.
@@ -1422,6 +1496,7 @@ impl App {
             Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len()).map(|&r| Row::Read(r)),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
             Menu::Stock => menu::STOCK.get(i).map(|&r| Row::Stock(r)),
+            Menu::Alerts => menu::ALERTS.get(i).copied(),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
@@ -1707,6 +1782,27 @@ impl App {
         }
     }
 
+    /// The tones playing go on: each lasts its time, in passes of [`POLL_MS`], then the next; the buzzer stops after
+    /// the last. Nothing waits: the loop goes on meanwhile.
+    fn play_tones(&mut self, b: &mut impl Board) {
+        let (left, ms, playing) = self.tones;
+        if ms > 0 {
+            self.tones.1 = ms.saturating_sub(POLL_MS);
+            return;
+        }
+        match left.split_first() {
+            Some((&(hz, len), rest)) => {
+                b.beep(hz);
+                self.tones = (rest, len.saturating_sub(POLL_MS), true);
+            }
+            None if playing => {
+                b.beep(0);
+                self.tones.2 = false;
+            }
+            None => {}
+        }
+    }
+
     /// Shows `text` in the banner for [`BANNER_MS`] (what a key just did, a notice).
     fn say(&mut self, text: &str) {
         self.banner.clear();
@@ -1721,6 +1817,7 @@ impl App {
             // the ride's own track and graphs, from here (the last position kept, so the map is not empty)
             self.ride_started = (self.date, self.strip.time);
             self.history = ride::History::default();
+            self.alerts = alerts::Alerts::new();
             let mut track = map::Track::new();
             if let Some(p) = self.pvt.filter(|p| p.good()) {
                 track.seed(p.lat, p.lon);
@@ -2426,6 +2523,11 @@ impl App {
         if sec != self.seconds {
             self.second();
         }
+        if let Some(a) = self.alert.take() {
+            self.say(a.text());
+            self.tones = (&BEEP_ALERT, 0, false);
+        }
+        self.play_tones(b);
         self.seconds = sec;
         self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
         if self.battery_ms >= BATTERY_MS {
@@ -2602,6 +2704,11 @@ impl App {
         if let Some(ev) = self.ride.second(&input) {
             self.recorder(ev);
         }
+        if self.ride.state() == ride::State::Running {
+            let s = &self.settings;
+            let due = self.alerts.second(self.ride.timer_s(), input.hr, s.eat_min, s.drink_min, s.hr_alert);
+            self.alert = self.alert.or(due);
+        }
         self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
@@ -2748,6 +2855,7 @@ fn menu_title(m: Menu) -> &'static str {
         Menu::Page(_) => "PAGE ",
         Menu::Gps => "GPS",
         Menu::Stock => "STOCK DATA",
+        Menu::Alerts => "ALERTS",
     }
 }
 

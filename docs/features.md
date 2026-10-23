@@ -25,6 +25,10 @@
   the elevation profile, time, distance, average speed, ascent, NP, average power, average and max heart rate, TSS,
   kJ. Any key goes on to the overview.
 
+- **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
+  (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
+  once a minute). Each is a banner and three beeps, played without stopping the loop; nothing while paused.
+
 ## Keys
 
 | Key | Overview and ride pages | Menus |

@@ -242,8 +242,8 @@ Others
 - [x] Beeps at power on and off (stock): unit
 - [ ] Key click (stock Key Tone)
 - [ ] Sound on or off for alerts (stock)
-- [ ] Eat, drink, rest reminders by trip time, clock, distance, kcal, kJ, heart rate, once or repeating, six of them (stock, Garmin, Wahoo)
-- [ ] Heart rate, power, cadence, speed high / low alerts (stock Alert, Garmin, Wahoo)
+- [~] Eat, drink, rest reminders by trip time, clock, distance, kcal, kJ, heart rate, once or repeating, six of them (stock, Garmin, Wahoo): sim, eat and drink by ride time; not by distance, kJ or clock yet
+- [~] Heart rate, power, cadence, speed high / low alerts (stock Alert, Garmin, Wahoo): sim, heart rate high; not power, cadence, speed or low limits yet
 - [ ] Custom alerts with text (Wahoo, Karoo)
 - [~] Notices: GPS fix, sensor paired, battery low (stock, all): sim, on the overview
 - [ ] Turn and off-course beeps (stock, all)

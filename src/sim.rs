@@ -2371,6 +2371,44 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// Reminders: EAT after 5 minutes of riding, said in a banner with three beeps that do not stop the loop;
+    /// nothing while paused; set from the ALERTS menu and kept.
+    #[test]
+    fn eat_reminder_on_a_ride() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Alerts));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Alerts, 0));
+        app.press(&mut sim, Press::Short(Key::Start)); // EAT MIN: edit
+        app.press(&mut sim, Press::Short(Key::Lap)); // 5
+        app.press(&mut sim, Press::Short(Key::Start)); // kept
+        assert_eq!(Settings::from_word(0).with_alerts_word(sim.backup[28]).eat_min, 5);
+        app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Back));
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 2000);
+        app.press(&mut sim, Press::Short(Key::Start)); // the ride
+        let tones0 = sim.tones.len();
+        let steps0 = sim.ms;
+        run(&mut sim, &mut app, 299_000);
+        assert_eq!(sim.tones.len(), tones0, "not yet");
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(app.banner.as_str(), "EAT");
+        let beeps: std::vec::Vec<u32> = sim.tones[tones0..].to_vec();
+        assert_eq!(beeps, [2500, 0, 2500, 0, 2500, 0], "three beeps, then off");
+        assert!(sim.ms - steps0 >= 300_000, "{}", sim.ms - steps0);
+        assert_consistent(&sim, &app);
+        sim.save("eat_reminder");
+        // paused on the minute: nothing more
+        app.press(&mut sim, Press::Short(Key::Start));
+        let n = sim.tones.len();
+        run(&mut sim, &mut app, 120_000);
+        assert_eq!(sim.tones.len(), n, "paused: no reminder");
+    }
+
     /// Performance budgets: in steady state, each kind of screen sends at most so many pixels and panel windows a
     /// second (every pixel is a SPI transfer and CPU time, AGENTS.md "redraw only what changes"). A change that
     /// redraws more than it should fails here before it costs battery on the unit. Measured 2026-10-24, budgets with
