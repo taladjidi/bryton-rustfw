@@ -99,7 +99,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `power.rs`, `dev.rs`, `sim.rs` (tests);
 - `src/drivers/`: each chip's or radio's protocol against `Board`;
 - `src/ui/`: what is drawn and the menus;
-- `src/storage/`: FAT and FIT;
+- `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
 
 - `src/lib.rs`: the `Board` trait, the app (`App::start`, `App::step`), RTC decoding, keys.
@@ -152,7 +152,13 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   model of the card (`EmmcCard`, which serves a FAT image when given one). Used by the basemap and by the dev
   link's `emmc` and `sector` commands; identified at first use, never at boot.
 - `src/storage/fat.rs`: a FAT32 reader, read only (no write path at all): boot sector, chains, 8.3 and long names, files at
-  an offset; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`).
+  an offset, directory listings; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made
+  (`tools/fat_image.py`, which also puts made-up stock rides and settings files on it).
+- `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
+  the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
+- `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
+  over the main loop's passes) and the import of its settings. `src/power_curve.rs`: best powers per duration in
+  one pass, merged across rides, and the 2-parameter CP / W' fit. Pure logic.
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
   restores from under the arrow and the track.
@@ -235,7 +241,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
 | 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
 | 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit on the unit |
-| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, and into `dev::Session` with command words mixed in; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver and the cable (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
+| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, and a damaged volume under the ride scan; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |

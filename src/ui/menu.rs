@@ -157,10 +157,65 @@ pub enum Row {
     Layout(usize),
     /// Ride page `n`'s field `i`.
     Field(usize, usize),
+    /// A row of the stock data menu.
+    Stock(StockRow),
 }
 
+/// What the stock data menu shows ([`STOCK`]): read from the rides and settings Bryton's firmware left on the
+/// card ([`crate::stock`]); only the scan and the import act, on Select.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StockRow {
+    /// Select reads every ride (a scan spread over the passes); the value shows how far.
+    Scan,
+    /// Critical power from the last 90 days' power curve.
+    Cp,
+    /// W'.
+    WPrime,
+    /// How well the 2-parameter model fits: points used, largest error.
+    Fit,
+    /// Distance this week.
+    WeekKm,
+    /// Riding time this week.
+    WeekH,
+    /// Distance this year.
+    YearKm,
+    /// Riding time this year.
+    YearH,
+    /// Distance, all rides.
+    AllKm,
+    /// Riding time, all rides.
+    AllH,
+    /// Select applies stock's settings (FTP, max heart rate, wheel, sensors, pages).
+    Import,
+}
+
+impl StockRow {
+    /// The row's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            StockRow::Scan => "READ RIDES",
+            StockRow::Cp => "CP W",
+            StockRow::WPrime => "W' KJ",
+            StockRow::Fit => "CP FIT",
+            StockRow::WeekKm => "WEEK KM",
+            StockRow::WeekH => "WEEK H",
+            StockRow::YearKm => "YEAR KM",
+            StockRow::YearH => "YEAR H",
+            StockRow::AllKm => "TOTAL KM",
+            StockRow::AllH => "TOTAL H",
+            StockRow::Import => "IMPORT",
+        }
+    }
+}
+
+/// The stock data menu.
+pub const STOCK: [StockRow; 11] = {
+    use StockRow::*;
+    [Scan, Cp, WPrime, Fit, WeekKm, WeekH, YearKm, YearH, AllKm, AllH, Import]
+};
+
 /// The main menu.
-pub const MAIN: [Row; 14] = [
+pub const MAIN: [Row; 15] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
@@ -175,6 +230,7 @@ pub const MAIN: [Row; 14] = [
     Row::Set(Setting::WPrime),
     Row::Open(Menu::Gps),
     Row::Nearby,
+    Row::Open(Menu::Stock),
 ];
 
 /// The built-in sensors' readings, under the ANT sensors in the sensors menu.

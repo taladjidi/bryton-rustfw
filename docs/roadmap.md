@@ -62,6 +62,12 @@ and formats.
 
 The golden rule (AGENTS.md) depends on this whole phase.
 
+0. Read what stock left (done, 2026-10-24): `fitread.rs` streams a FIT file, `stock.rs` scans `\Activities`
+   (power curve of 90 days, CP and W', week / year / all-time totals) and imports `\System\*.ini` (FTP, max HR,
+   wheel, ANT+ sensors, pages); the STOCK DATA menu. Next: weight, CP and W' applied once those settings exist;
+   the scan's result kept (a cache file in our own folder, once there is a write path) so it is not read again
+   at each start; stock's summaries (`.sum` / `.csum`) instead of whole rides for the totals, once their format
+   is known.
 1. eMMC writes (SDMMC single and multiple block writes, bounded busy waits).
 2. FAT32 writes: create, append, truncate, rename, both FAT copies, in an order a power cut can stop at any point.
    Host tests cut the write at every step.
