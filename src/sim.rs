@@ -1027,6 +1027,56 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// Back returns to where the menu was opened, row by row: a submenu to its row, the menu to the ride page.
+    #[test]
+    fn back_returns_where_it_came_from() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(1));
+        app.press(&mut sim, Press::Long(Key::Page));
+        for _ in 0..GPS_ROW {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Gps, 0));
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, GPS_ROW), "the submenu's row");
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Ride(1), "the page the menu was opened from");
+        assert_consistent(&sim, &app);
+        // switching that page off from the menu: Back shows the main screen instead
+        app.press(&mut sim, Press::Long(Key::Page));
+        for _ in 0..2 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start)); // PAGE 2
+        while app.pages()[1].layout != 0 {
+            app.press(&mut sim, Press::Short(Key::Start)); // FIELDS round to OFF
+        }
+        app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Main);
+        assert_consistent(&sim, &app);
+    }
+
+    /// A key held in a menu moves the selection on each repeat, and its release does not move it once more.
+    #[test]
+    fn held_key_scrolls_a_menu() {
+        let mut sim = Sim::new(9, 0, 0).keys(|ms| if (5000..5749).contains(&ms) { Key::Page as u8 } else { 0 });
+        let mut app = App::start(&mut sim, None);
+        assert!(sim.ms < 5000);
+        app.press(&mut sim, Press::Long(Key::Page));
+        let left = 7000 - sim.ms;
+        run(&mut sim, &mut app, left);
+        // held 750 ms: repeats at 500, 600, 700 ms, then the release
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 3));
+        assert_consistent(&sim, &app);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 4), "the next press acts");
+    }
+
     /// Sensors menu: Start on a sensor searches; the first one heard is paired (kept in its backup register) and
     /// its value reaches the ride page. With a key, ANT is started and every channel assigned, none opened yet.
     #[test]
@@ -1296,7 +1346,7 @@ mod tests {
             app.press(&mut sim, Press::Short(Key::Start)); // 60, 30, 10, AUTO
         }
         assert_eq!(main_row(&app, 5), "LIGHT % AUTO");
-        assert_eq!(Misc::from_word(sim.backup[11]).light_level, LIGHT_AUTO, "kept");
+        assert_eq!(Settings::from_word(sim.backup[11]).light_level, LIGHT_AUTO, "kept");
         run(&mut sim, &mut app, 4000);
         assert_eq!(sensor_row(&app, 5), "LUX 300");
         assert_eq!(sensor_row(&app, 6), "TEMP C 21.5");
@@ -1746,8 +1796,12 @@ mod tests {
         assert_consistent(&sim, &app);
         sim.save("zones_menu");
         let again = App::start(&mut sim, None);
-        assert_eq!((again.max_hr, again.ftp, again.wheel_mm), (194, 55, WHEELS[2]));
-        assert_eq!((again.light_level, again.light_timeout), (0, 0), "the backlight settings untouched");
+        assert_eq!((again.settings.max_hr, again.settings.ftp, again.settings.wheel_mm), (194, 55, WHEELS[2]));
+        assert_eq!(
+            (again.settings.light_level, again.settings.light_timeout),
+            (0, 0),
+            "the backlight settings untouched"
+        );
     }
 
     /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

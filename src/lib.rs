@@ -17,6 +17,7 @@ pub mod fit;
 pub mod fonts;
 pub mod gnss;
 pub mod map;
+pub mod menu;
 pub mod nrf;
 pub mod panel;
 pub mod ride;
@@ -27,6 +28,7 @@ pub mod text;
 pub mod tiles;
 pub mod ui;
 
+use menu::{Input, Setting};
 use nrf::SensorId;
 use panel::Panel;
 use sensors::{Decoders, Kind, Live, Metric};
@@ -297,7 +299,7 @@ impl PageCfg {
 pub const PAGES: usize = 3;
 /// The backup registers of the ride pages.
 const PAGE_BKP: [usize; PAGES] = [14, 15, 16];
-/// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Misc`].
+/// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Settings`].
 const WHEEL_BKP: usize = 11;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
@@ -309,12 +311,12 @@ const WHEEL_BKP: usize = 11;
 /// - tag 0xa5 (written by earlier builds): the wheel in mm in bits 0..11, the backlight level in 16..19 and its
 ///   time-out in 20..23; read, never written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Misc {
+pub struct Settings {
     /// Wheel circumference, mm (one of [`WHEELS`]).
     pub wheel_mm: u16,
-    /// Max heart rate, bpm (in [`MAX_HR_RANGE`]).
+    /// Max heart rate, bpm (in [`menu::MAX_HR_RANGE`]).
     pub max_hr: u16,
-    /// FTP, W (in [`FTP_RANGE`], a multiple of 5).
+    /// FTP, W (in [`menu::FTP_RANGE`], a multiple of 5).
     pub ftp: u16,
     /// Backlight level: an index in [`LIGHT_LEVELS`], or [`LIGHT_AUTO`].
     pub light_level: usize,
@@ -322,46 +324,48 @@ pub struct Misc {
     pub light_timeout: usize,
 }
 
-impl Misc {
+impl Settings {
     /// The settings in `w` (defaults for an empty or foreign word).
     ///
     /// ```
-    /// use bryton_rustfw::{Misc, WHEELS};
-    /// let m = Misc { wheel_mm: WHEELS[3], max_hr: 187, ftp: 265, light_level: 4, light_timeout: 3 };
-    /// assert_eq!(Misc::from_word(m.to_word()), m);
+    /// use bryton_rustfw::{Settings, WHEELS};
+    /// let m = Settings { wheel_mm: WHEELS[3], max_hr: 187, ftp: 265, light_level: 4, light_timeout: 3 };
+    /// assert_eq!(Settings::from_word(m.to_word()), m);
     /// // words from earlier builds: 2136 mm, AUTO, 60 s; then max HR code 7 (225), FTP code 11 (100)
-    /// let old = Misc::from_word(0xa5 << 24 | 3 << 20 | 4 << 16 | 2136);
+    /// let old = Settings::from_word(0xa5 << 24 | 3 << 20 | 4 << 16 | 2136);
     /// assert_eq!((old.wheel_mm, old.light_level, old.light_timeout, old.max_hr), (2136, 4, 3, 190));
-    /// let old = Misc::from_word(0xa6 << 24 | 11 << 8 | 7 << 4 | 3);
+    /// let old = Settings::from_word(0xa6 << 24 | 11 << 8 | 7 << 4 | 3);
     /// assert_eq!((old.wheel_mm, old.max_hr, old.ftp), (WHEELS[3], 225, 100));
     /// ```
-    pub fn from_word(w: u32) -> Misc {
+    pub fn from_word(w: u32) -> Settings {
         let wheel = |mm: u16| if WHEELS.contains(&mm) { mm } else { WHEELS[1] };
         let level = |l: u32| (l as usize) % (LIGHT_LEVELS.len() + 1);
         let index = |i: u32| WHEELS.get(i as usize).copied().unwrap_or(WHEELS[1]);
         match w >> 24 {
-            0xa7 => Misc {
+            0xa7 => Settings {
                 wheel_mm: index(w & 7),
-                max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*MAX_HR_RANGE.start(), *MAX_HR_RANGE.end()),
-                ftp: (5 * (w >> 16 & 0xff) as u16).clamp(*FTP_RANGE.start(), *FTP_RANGE.end()),
+                max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end()),
+                ftp: (5 * (w >> 16 & 0xff) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
                 light_level: level(w >> 3 & 7),
                 light_timeout: (w >> 6 & 3) as usize,
             },
-            0xa6 => Misc {
+            0xa6 => Settings {
                 wheel_mm: index(w & 7),
                 max_hr: code_hr(w >> 4 & 0xf),
                 ftp: code_ftp(w >> 8 & 0xf),
                 light_level: level(w >> 16 & 7),
                 light_timeout: (w >> 20 & 3) as usize,
             },
-            0xa5 => Misc {
+            0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
                 max_hr: ride::MAX_HR,
                 ftp: ride::FTP,
                 light_level: level(w >> 16 & 0xf),
                 light_timeout: (w >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
             },
-            _ => Misc { wheel_mm: WHEELS[1], max_hr: ride::MAX_HR, ftp: ride::FTP, light_level: 0, light_timeout: 0 },
+            _ => {
+                Settings { wheel_mm: WHEELS[1], max_hr: ride::MAX_HR, ftp: ride::FTP, light_level: 0, light_timeout: 0 }
+            }
         }
     }
 
@@ -377,10 +381,71 @@ impl Misc {
     }
 }
 
-/// Max heart rates offered, bpm, in steps of 1.
-pub const MAX_HR_RANGE: core::ops::RangeInclusive<u16> = 100..=230;
-/// FTPs offered, W, in steps of 5.
-pub const FTP_RANGE: core::ops::RangeInclusive<u16> = 50..=600;
+impl Settings {
+    /// Setting `s`'s value as its menu row shows it.
+    pub fn text(&self, s: Setting, l: &mut Line<12>) {
+        match s {
+            Setting::Wheel => l.push_u32(u32::from(self.wheel_mm)),
+            Setting::Light => match LIGHT_LEVELS.get(self.light_level) {
+                Some(&v) => l.push_u32(u32::from(v)),
+                None => l.push_str("AUTO"),
+            },
+            Setting::LightOff => match LIGHT_TIMEOUTS_S.get(self.light_timeout) {
+                Some(0) | None => l.push_str("NEVER"),
+                Some(&t) => {
+                    l.push_u32(t);
+                    l.push_str(" S");
+                }
+            },
+            Setting::MaxHr => l.push_u32(u32::from(self.max_hr)),
+            Setting::Ftp => l.push_u32(u32::from(self.ftp)),
+        }
+    }
+
+    /// A choice to its next value (round), as Select does.
+    ///
+    /// ```
+    /// use bryton_rustfw::{Settings, LIGHT_LEVELS, menu::Setting};
+    /// let mut s = Settings::from_word(0);
+    /// for _ in 0..LIGHT_LEVELS.len() + 1 {
+    ///     s.cycle(Setting::Light);
+    /// }
+    /// assert_eq!(s.light_level, 0, "round");
+    /// ```
+    pub fn cycle(&mut self, s: Setting) {
+        match s {
+            Setting::Wheel => {
+                let i = WHEELS.iter().position(|&w| w == self.wheel_mm).map_or(0, |i| (i + 1) % WHEELS.len());
+                self.wheel_mm = WHEELS.get(i).copied().unwrap_or(WHEELS[1]);
+            }
+            Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
+            Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
+            Setting::MaxHr | Setting::Ftp => {}
+        }
+    }
+
+    /// A number one step up or down, held in its range ([`Setting::number`]).
+    ///
+    /// ```
+    /// use bryton_rustfw::{Settings, menu::Setting};
+    /// let mut s = Settings::from_word(0);
+    /// s.step(Setting::Ftp, true);
+    /// s.step(Setting::MaxHr, false);
+    /// assert_eq!((s.ftp, s.max_hr), (205, 189));
+    /// ```
+    pub fn step(&mut self, s: Setting, up: bool) {
+        let (Some((range, step)), Some(v)) = (s.number(), self.number_mut(s)) else { return };
+        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
+    }
+
+    fn number_mut(&mut self, s: Setting) -> Option<&mut u16> {
+        match s {
+            Setting::MaxHr => Some(&mut self.max_hr),
+            Setting::Ftp => Some(&mut self.ftp),
+            _ => None,
+        }
+    }
+}
 
 /// Max heart rate from its 4-bit code in a tag 0xa6 word: 150 to 225 in steps of 5, 0 being stock's default, 190
 /// ([`ride::MAX_HR`]).
@@ -520,12 +585,11 @@ pub enum Screen {
 }
 
 /// The GPS row of the main menu.
-const GPS_ROW: usize = 9;
+pub const GPS_ROW: usize = 9;
 /// The nearby BLE devices row of the main menu.
-const NEARBY_ROW: usize = 10;
-/// The max heart rate and FTP rows of the main menu: values changed in place ([`App::step_value`]).
-const MAX_HR_ROW: usize = 7;
-const FTP_ROW: usize = 8;
+pub const NEARBY_ROW: usize = 10;
+const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
+const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
 
 /// What a graph field shows on screen: the bars up to `n` ([`ride::History::len`]), of power or heart rate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -541,9 +605,6 @@ pub struct App {
     backlight: bool,
     /// The level the backlight is at (0: off).
     light_shown: u8,
-    /// Indexes into [`LIGHT_LEVELS`] and [`LIGHT_TIMEOUTS_S`].
-    light_level: usize,
-    light_timeout: usize,
     /// Since the last key press.
     idle_ms: u32,
     /// The chips found on the sensor bus.
@@ -593,14 +654,16 @@ pub struct App {
     gnss_sent: u8,
     /// The RTC's offset from UTC and the last position, as kept in backup registers.
     aid: gnss::Aid,
-    wheel_mm: u16,
-    /// Max heart rate (bpm) and FTP (W).
-    max_hr: u16,
-    ftp: u16,
-    /// The selected menu row's value is being changed (Lap up, Page down, Start or Back to leave), and whether a
-    /// held key already stepped it (so its release does not step once more).
+    /// Wheel, backlight, max heart rate, FTP.
+    settings: Settings,
+    /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     editing: bool,
+    /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
+    /// when no key is down.
     repeated: bool,
+    /// The screens under this one, the latest last: Back returns to them, with their selection.
+    under: [Screen; 4],
+    depth: usize,
     pages: [PageCfg; PAGES],
     /// The ride field values on screen and their colours, to redraw only what changed.
     shown: [Line<8>; 6],
@@ -645,13 +708,11 @@ impl App {
                 *s = Sensor::Paired(id);
             }
         }
-        let misc = Misc::from_word(b.backup_read(WHEEL_BKP));
+        let misc = Settings::from_word(b.backup_read(WHEEL_BKP));
         let mut app = App {
             keys: Keys::default(),
             backlight: true,
             light_shown: 0,
-            light_level: misc.light_level,
-            light_timeout: misc.light_timeout,
             idle_ms: 0,
             chips: ambient::init(b),
             auto: ambient::Auto::default(),
@@ -702,11 +763,11 @@ impl App {
             gnss_ms: 0,
             gnss_sent: 0,
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
-            wheel_mm: misc.wheel_mm,
-            max_hr: misc.max_hr,
-            ftp: misc.ftp,
+            settings: misc,
             editing: false,
             repeated: false,
+            under: [Screen::Main; 4],
+            depth: 0,
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
             shown_fg: [ui::WHITE; 6],
@@ -735,9 +796,9 @@ impl App {
 
     /// Sets the backlight to what it should be now: the chosen level, unless switched off (Back) or timed out.
     fn update_light(&mut self, b: &mut impl Board) {
-        let timeout_ms = LIGHT_TIMEOUTS_S[self.light_timeout] * 1000;
+        let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;
         let on = self.backlight && (timeout_ms == 0 || self.idle_ms < timeout_ms);
-        let level = match LIGHT_LEVELS.get(self.light_level) {
+        let level = match LIGHT_LEVELS.get(self.settings.light_level) {
             _ if !on => 0,
             Some(&l) => l,
             None => self.auto_level,
@@ -750,14 +811,7 @@ impl App {
 
     /// Writes the wheel size and the backlight settings to their backup register.
     fn save_misc(&self, b: &mut impl Board) {
-        let misc = Misc {
-            wheel_mm: self.wheel_mm,
-            max_hr: self.max_hr,
-            ftp: self.ftp,
-            light_level: self.light_level,
-            light_timeout: self.light_timeout,
-        };
-        b.backup_write(WHEEL_BKP, misc.to_word());
+        b.backup_write(WHEEL_BKP, self.settings.to_word());
     }
 
     /// Memory for the basemap (at least [`tiles::MEM_WORDS`] words); without it the map has no basemap.
@@ -863,8 +917,8 @@ impl App {
     /// The colour of ride field `f`'s value: heart rate and power in their zone's colour, the rest white.
     fn field_color(&self, f: Field) -> u16 {
         match (f, self.live.get(Metric::Hr), self.live.get(Metric::Power)) {
-            (Field::Hr, Some(v), _) => ride::hr_color(ride::hr_zone(v, self.max_hr)),
-            (Field::Power, _, Some(v)) => ride::power_color(ride::power_zone(v, self.ftp)),
+            (Field::Hr, Some(v), _) => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
+            (Field::Power, _, Some(v)) => ride::power_color(ride::power_zone(v, self.settings.ftp)),
             _ => ui::WHITE,
         }
     }
@@ -882,7 +936,7 @@ impl App {
         if v == 0 {
             return (0, ui::BLACK);
         }
-        let (max, ftp) = (self.max_hr, self.ftp);
+        let (max, ftp) = (self.settings.max_hr, self.settings.ftp);
         let (low, high, color) = if g.power {
             (0, 2 * u32::from(ftp), ride::power_color(ride::power_zone(v, ftp)))
         } else {
@@ -892,94 +946,84 @@ impl App {
         (height.clamp(1, h), color)
     }
 
+    /// Row `i` of `menu`; None past its last.
+    fn row(&self, menu: Menu, i: usize) -> Option<menu::Row> {
+        use menu::Row;
+        match menu {
+            Menu::Main => menu::MAIN.get(i).copied(),
+            Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
+            Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len()).map(|&r| Row::Read(r)),
+            Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
+            Menu::Page(n) => match i {
+                0 => Some(Row::Layout(n)),
+                _ if i <= usize::from(self.pages.get(n)?.layout) => Some(Row::Field(n, i - 1)),
+                _ => None,
+            },
+        }
+    }
+
+    /// How many rows `menu` has.
+    fn rows(&self, menu: Menu) -> usize {
+        (0..64).take_while(|&i| self.row(menu, i).is_some()).count()
+    }
+
     /// Menu row `i` of `menu`: label, value, value colour; None past the last row.
     fn menu_row(&self, menu: Menu, i: usize) -> Option<(Line<16>, Line<12>, u16)> {
+        use menu::{Reading, Row};
         let (mut label, mut value, mut color) = (Line::new(), Line::new(), ui::GREY);
-        match menu {
-            Menu::Main => match i {
-                0 => label.push_str("SENSORS"),
-                1..=3 => {
-                    label.push_str("PAGE ");
-                    label.push_u32(i as u32);
-                    layout_text(&mut value, self.pages.get(i - 1)?.layout);
-                }
-                4 => {
-                    label.push_str("WHEEL MM");
-                    value.push_u32(u32::from(self.wheel_mm));
-                }
-                7 => {
-                    label.push_str("MAX HR");
-                    self.push_edited(&mut value, i, self.max_hr);
-                }
-                8 => {
-                    label.push_str("FTP W");
-                    self.push_edited(&mut value, i, self.ftp);
-                }
-                5 => {
-                    label.push_str("LIGHT %");
-                    match LIGHT_LEVELS.get(self.light_level) {
-                        Some(&l) => value.push_u32(u32::from(l)),
-                        None => value.push_str("AUTO"),
-                    }
-                }
-                6 => {
-                    label.push_str("LIGHT OFF");
-                    match LIGHT_TIMEOUTS_S[self.light_timeout] {
-                        0 => value.push_str("NEVER"),
-                        t => {
-                            value.push_u32(t);
-                            value.push_str(" S");
-                        }
-                    }
-                }
-                GPS_ROW => label.push_str("GPS"),
-                NEARBY_ROW => label.push_str("NEARBY BLE"),
-                _ => return None,
-            },
-            // under the ANT sensors, the built-in ones' readings (read only)
-            Menu::Sensors if i >= Kind::ALL.len() => match i - Kind::ALL.len() {
-                0 => {
-                    label.push_str("LUX");
-                    match self.auto.lux10() {
-                        _ if !self.chips.light => value.push_str("NONE"),
-                        None => value.push_str("--"),
-                        Some(l) => value.push_u32(l / 10),
-                    }
-                }
-                k @ (1 | 2) => {
-                    label.push_str(if k == 1 { "TEMP C" } else { "HPA" });
-                    match self.baro {
-                        _ if !self.chips.baro => value.push_str("NONE"),
-                        None => value.push_str("--"),
-                        Some((_, t)) if k == 1 => push_fixed(&mut value, i32::from(t), 2, 1),
-                        Some((p, _)) => push_fixed(&mut value, p as i32, 1, 0),
-                    }
-                }
-                _ => return None,
-            },
-            Menu::Sensors => {
-                let kind = *Kind::ALL.get(i)?;
+        match self.row(menu, i)? {
+            Row::Open(Menu::Page(n)) => {
+                label.push_str("PAGE ");
+                label.push_u32(n as u32 + 1);
+                layout_text(&mut value, self.pages.get(n)?.layout);
+            }
+            Row::Open(m) => label.push_str(menu_title(m)),
+            Row::Nearby => label.push_str("NEARBY BLE"),
+            Row::Set(s) => {
+                label.push_str(s.label());
+                let edited = self.editing && self.screen == Screen::Menu(menu, i);
+                value.push_str(if edited { "< " } else { "" });
+                self.settings.text(s, &mut value);
+                value.push_str(if edited { " >" } else { "" });
+            }
+            Row::Sensor(k) => {
+                let kind = *Kind::ALL.get(k)?;
                 label.push_str(kind.name());
-                match (self.ant, self.sensors[i]) {
+                match (self.ant, self.sensors.get(k)?) {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, Sensor::Off) => value.push_str("OFF"),
                     (true, Sensor::Search) => value.push_str("SEARCH"),
                     (true, Sensor::Paired(id)) => value.push_u32(u32::from(id.device)),
                 }
-                if self.heard_ms[i] < sensors::STALE_MS {
+                if self.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS) {
                     color = ui::GREEN;
                 }
             }
-            Menu::Gps => {
-                let p = self.pvt;
+            Row::Read(r @ (Reading::Lux | Reading::TempC | Reading::Hpa)) => {
+                label.push_str(match r {
+                    Reading::Lux => "LUX",
+                    Reading::TempC => "TEMP C",
+                    _ => "HPA",
+                });
+                let present = if r == Reading::Lux { self.chips.light } else { self.chips.baro };
+                match (r, self.auto.lux10(), self.baro) {
+                    _ if !present => value.push_str("NONE"),
+                    (Reading::Lux, Some(l), _) => value.push_u32(l / 10),
+                    (Reading::TempC, _, Some((_, t))) => push_fixed(&mut value, i32::from(t), 2, 1),
+                    (Reading::Hpa, _, Some((p, _))) => push_fixed(&mut value, p as i32, 1, 0),
+                    _ => value.push_str("--"),
+                }
+            }
+            Row::Read(r) => {
                 let two = |l: &mut Line<12>, v: u8| {
                     for d in [v / 10, v % 10] {
                         l.push_str(ui::DIGITS[usize::from(d)]);
                     }
                 };
-                match (i, p) {
-                    (0, None) => (label.push_str("FIX"), value.push_str("NO GPS")).1,
-                    (0, Some(p)) => {
+                let p = self.pvt;
+                match (r, p) {
+                    (Reading::Fix, None) => (label.push_str("FIX"), value.push_str("NO GPS")).1,
+                    (Reading::Fix, Some(p)) => {
                         label.push_str("FIX");
                         value.push_str(match p.fix {
                             _ if !p.fix_ok => "NONE",
@@ -989,15 +1033,15 @@ impl App {
                         });
                     }
                     (_, None) => return None,
-                    (1, Some(p)) => (label.push_str("SATS"), value.push_u32(u32::from(p.sats))).1,
-                    (2, Some(p)) => (label.push_str("LAT"), push_fixed(&mut value, p.lat, 7, 5)).1,
-                    (3, Some(p)) => (label.push_str("LON"), push_fixed(&mut value, p.lon, 7, 5)).1,
-                    (4, Some(p)) => (label.push_str("ALT M"), push_fixed(&mut value, p.alt_mm, 3, 0)).1,
-                    (5 | 6, Some(p)) if !p.time_ok => {
-                        label.push_str(if i == 5 { "UTC" } else { "DATE" });
+                    (Reading::Sats, Some(p)) => (label.push_str("SATS"), value.push_u32(u32::from(p.sats))).1,
+                    (Reading::Lat, Some(p)) => (label.push_str("LAT"), push_fixed(&mut value, p.lat, 7, 5)).1,
+                    (Reading::Lon, Some(p)) => (label.push_str("LON"), push_fixed(&mut value, p.lon, 7, 5)).1,
+                    (Reading::Alt, Some(p)) => (label.push_str("ALT M"), push_fixed(&mut value, p.alt_mm, 3, 0)).1,
+                    (Reading::Utc | Reading::Date, Some(p)) if !p.time_ok => {
+                        label.push_str(if r == Reading::Utc { "UTC" } else { "DATE" });
                         value.push_str("--"); // the receiver's placeholder until it knows the time
                     }
-                    (5, Some(p)) => {
+                    (Reading::Utc, Some(p)) => {
                         label.push_str("UTC");
                         let (_, _, _, h, m, sec) = p.utc;
                         for (k, v) in [h, m, sec].into_iter().enumerate() {
@@ -1007,7 +1051,7 @@ impl App {
                             two(&mut value, v % 100);
                         }
                     }
-                    (6, Some(p)) => {
+                    (Reading::Date, Some(p)) => {
                         label.push_str("DATE");
                         let (y, mo, d, ..) = p.utc;
                         value.push_u32(u32::from(y));
@@ -1022,18 +1066,14 @@ impl App {
                     color = ui::GREEN;
                 }
             }
-            Menu::Page(n) => {
-                let page = self.pages.get(n)?;
-                if i == 0 {
-                    label.push_str("FIELDS");
-                    layout_text(&mut value, page.layout);
-                } else if i <= usize::from(page.layout) {
-                    label.push_str("FIELD ");
-                    label.push_u32(i as u32);
-                    value.push_str(page.fields.get(i - 1)?.label());
-                } else {
-                    return None;
-                }
+            Row::Layout(n) => {
+                label.push_str("FIELDS");
+                layout_text(&mut value, self.pages.get(n)?.layout);
+            }
+            Row::Field(n, f) => {
+                label.push_str("FIELD ");
+                label.push_u32(f as u32 + 1);
+                value.push_str(self.pages.get(n)?.fields.get(f)?.label());
             }
         }
         Some((label, value, color))
@@ -1063,14 +1103,9 @@ impl App {
             }
             Screen::Menu(menu, sel) => {
                 let mut title = Line::<12>::new();
-                match menu {
-                    Menu::Main => title.push_str("MENU"),
-                    Menu::Gps => title.push_str("GPS"),
-                    Menu::Sensors => title.push_str("SENSORS"),
-                    Menu::Page(n) => {
-                        title.push_str("PAGE ");
-                        title.push_u32(n as u32 + 1);
-                    }
+                title.push_str(menu_title(menu));
+                if let Menu::Page(n) = menu {
+                    title.push_u32(n as u32 + 1);
                 }
                 ui::draw_title(c, title.as_str());
                 self.draw_menu_rows(c, menu, sel);
@@ -1102,15 +1137,18 @@ impl App {
         }
     }
 
-    fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, i: usize) {
+    /// Screen row `slot` of `menu` (the menu turns a screen at a time: [`menu::first_shown`]).
+    fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, slot: usize) {
+        let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         match self.menu_row(menu, i) {
-            Some((label, value, color)) => ui::draw_menu_row(c, i, label.as_str(), value.as_str(), color, i == sel),
-            None => c.fill(0, ui::LIST_Y + i as u32 * ui::LIST_ROW, ui::W, ui::LIST_ROW, ui::BLACK),
+            Some((label, value, color)) => ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel),
+            None => c.fill(0, ui::LIST_Y + slot as u32 * ui::LIST_ROW, ui::W, ui::LIST_ROW, ui::BLACK),
         }
     }
 
-    /// A fingerprint of menu row `i` as it would be drawn (FNV-1a over its text, colour and selection).
-    fn menu_row_print(&self, menu: Menu, sel: usize, i: usize) -> u32 {
+    /// A fingerprint of screen row `slot` as it would be drawn (FNV-1a over its text, colour and selection).
+    fn menu_row_print(&self, menu: Menu, sel: usize, slot: usize) -> u32 {
+        let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         let mut h = 0x811c_9dc5u32;
         let mut eat = |bytes: &[u8]| {
             for &x in bytes {
@@ -1254,164 +1292,164 @@ impl App {
         }
     }
 
-    /// One step up or down of the value edited on main menu row `sel`, held in its range.
-    fn step_value(&mut self, sel: usize, up: bool) {
-        let (v, range, step) = match sel {
-            MAX_HR_ROW => (&mut self.max_hr, MAX_HR_RANGE, 1),
-            FTP_ROW => (&mut self.ftp, FTP_RANGE, 5),
-            _ => return,
+    /// Opens screen `s` over this one: Back returns here.
+    fn open(&mut self, s: Screen) {
+        if let Some(u) = self.under.get_mut(self.depth) {
+            *u = self.screen;
+            self.depth += 1;
+        }
+        self.screen = s;
+    }
+
+    /// Back to the screen under this one (a ride page switched off since shows the main screen).
+    fn close(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+        self.screen = match self.under.get(self.depth) {
+            Some(&Screen::Ride(n)) if self.pages.get(n).is_none_or(|p| p.layout == 0) => Screen::Main,
+            Some(&s) if self.depth > 0 || matches!(s, Screen::Main | Screen::Ride(_)) => s,
+            _ => Screen::Main,
         };
-        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
     }
 
-    /// `v` into a menu row's value, between arrows while row `i` is being edited.
-    fn push_edited(&self, value: &mut Line<12>, i: usize, v: u16) {
-        let edited = self.editing && matches!(self.screen, Screen::Menu(Menu::Main, s) if s == i);
-        value.push_str(if edited { "< " } else { "" });
-        value.push_u32(u32::from(v));
-        value.push_str(if edited { " >" } else { "" });
-    }
-
-    /// Start on menu row `sel`.
+    /// Select on row `sel` of `menu`.
     fn activate(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
-        self.screen = match (menu, sel) {
-            (Menu::Main, 0) => Screen::Menu(Menu::Sensors, 0),
-            (Menu::Main, 1..=3) => Screen::Menu(Menu::Page(sel - 1), 0),
-            (Menu::Main, 4) => {
-                let i = WHEELS.iter().position(|&w| w == self.wheel_mm).map_or(0, |i| (i + 1) % WHEELS.len());
-                self.wheel_mm = WHEELS[i];
-                self.save_misc(b);
-                Screen::Menu(menu, sel)
+        use menu::Row;
+        match self.row(menu, sel) {
+            Some(Row::Open(m)) => self.open(Screen::Menu(m, 0)),
+            Some(Row::Nearby) => {
+                if self.ble.is_some() && !self.scanning {
+                    self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
+                }
+                self.open(Screen::Nearby);
             }
-            (Menu::Main, MAX_HR_ROW | FTP_ROW) => {
+            Some(Row::Set(s)) if s.number().is_some() => {
                 self.editing = !self.editing;
                 if !self.editing {
                     self.save_misc(b);
                 }
-                Screen::Menu(menu, sel)
             }
-            (Menu::Main, 5 | 6) => {
-                if sel == 5 {
-                    self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1);
-                } else {
-                    self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len();
-                }
+            Some(Row::Set(s)) => {
+                self.settings.cycle(s);
                 self.save_misc(b);
                 self.update_light(b);
-                Screen::Menu(menu, sel)
             }
-            (Menu::Main, GPS_ROW) => Screen::Menu(Menu::Gps, 0),
-            (Menu::Gps, _) => Screen::Menu(menu, sel),
-            (Menu::Main, NEARBY_ROW) => {
-                if self.ble.is_some() && !self.scanning {
-                    self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
-                }
-                Screen::Nearby
-            }
-            (Menu::Main, _) => Screen::Menu(menu, sel), // readings only
-            (Menu::Sensors, _) => {
-                if let (true, Some(&kind)) = (self.ant, Kind::ALL.get(sel)) {
-                    let want = if self.sensors[sel] == Sensor::Off { Sensor::Search } else { Sensor::Off };
+            Some(Row::Sensor(k)) => {
+                if let (true, Some(&kind), Some(&now)) = (self.ant, Kind::ALL.get(k), self.sensors.get(k)) {
+                    let want = if now == Sensor::Off { Sensor::Search } else { Sensor::Off };
                     self.set_sensor(b, kind, want);
                 }
-                Screen::Menu(menu, sel)
             }
-            (Menu::Page(n), _) => {
+            Some(Row::Layout(n)) => {
                 if let Some(page) = self.pages.get_mut(n) {
-                    if sel == 0 {
-                        let i = ui::LAYOUTS.iter().position(|&l| l == page.layout).unwrap_or(0);
-                        page.layout = ui::LAYOUTS[(i + 1) % ui::LAYOUTS.len()];
-                        if n == 0 && page.layout == 0 {
-                            page.layout = ui::LAYOUTS[1]; // the first page is never off
-                        }
-                    } else if let Some(f) = page.fields.get_mut(sel - 1) {
-                        *f = f.next();
+                    let i = ui::LAYOUTS.iter().position(|&l| l == page.layout).unwrap_or(0);
+                    page.layout = ui::LAYOUTS[(i + 1) % ui::LAYOUTS.len()];
+                    if n == 0 && page.layout == 0 {
+                        page.layout = ui::LAYOUTS[1]; // the first page is never off
                     }
                     b.backup_write(PAGE_BKP[n], page.to_word());
                 }
-                Screen::Menu(menu, sel)
             }
-        };
+            Some(Row::Field(n, f)) => {
+                if let Some(page) = self.pages.get_mut(n)
+                    && let Some(field) = page.fields.get_mut(f)
+                {
+                    *field = field.next();
+                    b.backup_write(PAGE_BKP[n], page.to_word());
+                }
+            }
+            Some(Row::Read(_)) | None => {}
+        }
     }
 
-    /// Acts on a key press: Page goes from the main screen through the ride pages and back, holding it opens the
-    /// menu, Back toggles the backlight; in the menus Page / Lap move down / up, Start selects or changes, Back goes out. Holding Back
-    /// switches off anywhere.
+    /// Acts on a key press ([`Input::of`]). A key held to repeat that acted (a list scrolled, a value stepped) is
+    /// not acted on again at its release.
     pub fn press(&mut self, b: &mut impl Board, p: Press) {
+        if matches!(p, Press::Short(_)) && core::mem::take(&mut self.repeated) {
+            return;
+        }
+        if let Some(i) = Input::of(p) {
+            self.input(b, i);
+        }
+    }
+
+    /// Acts on an input: Next goes from the main screen through the ride pages and back, Menu opens the menu, Back
+    /// toggles the backlight; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
+    /// number being edited goes up with Prev, down with Next. Off switches off anywhere.
+    pub fn input(&mut self, b: &mut impl Board, i: Input) {
         let before = self.screen;
         let woke = self.light_shown == 0 && self.backlight;
         self.idle_ms = 0;
         if woke {
-            self.update_light(b); // a key press after the time-out: the light comes back (and the key acts)
-            if p == Press::Short(Key::Back) {
+            self.update_light(b); // an input after the time-out: the light comes back (and the input acts)
+            if i == Input::Back {
                 return; // Back's own job is the light: done
             }
         }
-        match (self.screen, p) {
-            (_, Press::Long(Key::Back)) => return self.power_off(b),
+        match (self.screen, i) {
+            (_, Input::Off) => return self.power_off(b),
             (Screen::Menu(menu, sel), _) if self.editing => {
-                match p {
-                    Press::Repeat(k @ (Key::Lap | Key::Page)) => {
+                let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
+                    self.editing = false;
+                    return;
+                };
+                match i {
+                    Input::Next | Input::Prev => self.settings.step(s, i == Input::Prev),
+                    Input::NextHeld | Input::PrevHeld => {
                         self.repeated = true;
-                        self.step_value(sel, k == Key::Lap);
+                        self.settings.step(s, i == Input::PrevHeld);
                     }
-                    Press::Short(k @ (Key::Lap | Key::Page)) if !core::mem::take(&mut self.repeated) => {
-                        self.step_value(sel, k == Key::Lap)
-                    }
-                    Press::Short(Key::Start | Key::Back) => {
+                    Input::Select | Input::Back => {
                         self.editing = false;
                         self.save_misc(b);
                     }
-                    _ => self.repeated = false,
+                    _ => {}
                 }
                 return self.update_menu_rows(b, menu, sel);
             }
-            (Screen::Main, Press::Short(Key::Page)) => self.screen = Screen::Ride(0),
-            (Screen::Ride(n), Press::Short(Key::Page)) => {
+            (Screen::Main, Input::Next) => self.screen = Screen::Ride(0),
+            (Screen::Ride(n), Input::Next) => {
                 let next = (n + 1..PAGES).find(|&i| self.pages[i].layout > 0);
                 self.screen = next.map_or(Screen::Main, Screen::Ride);
             }
-            (Screen::Main | Screen::Ride(_), Press::Long(Key::Page)) => self.screen = Screen::Menu(Menu::Main, 0),
-            // the ride: Start starts, pauses, resumes; held on a paused ride, ends it; Lap marks a lap
-            (Screen::Ride(_), Press::Short(Key::Start)) => {
+            (Screen::Main | Screen::Ride(_), Input::Menu) => self.open(Screen::Menu(Menu::Main, 0)),
+            // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
+            (Screen::Ride(_), Input::Select) => {
                 let ev = self.ride.start_pause();
                 return self.recorder(ev);
             }
-            (Screen::Ride(_), Press::Long(Key::Start)) => {
+            (Screen::Ride(_), Input::End) => {
                 if let Some(ev) = self.ride.end() {
                     self.recorder(ev);
                 }
                 return;
             }
-            (Screen::Ride(_), Press::Short(Key::Lap)) => {
+            (Screen::Ride(_), Input::Prev) => {
                 if let Some(ev) = self.ride.lap() {
                     self.recorder(ev);
                 }
                 return;
             }
-            (Screen::Main | Screen::Ride(_), Press::Short(Key::Back)) => {
+            (Screen::Main | Screen::Ride(_), Input::Back) => {
                 self.backlight = !self.backlight;
                 self.update_light(b);
             }
-            (Screen::Menu(menu, sel), Press::Short(k @ (Key::Page | Key::Lap))) => {
-                let rows = (0..ui::MENU_ROWS).take_while(|&i| self.menu_row(menu, i).is_some()).count().max(1);
-                let sel = if k == Key::Page { (sel + 1) % rows } else { (sel + rows - 1) % rows };
-                self.screen = Screen::Menu(menu, sel);
-                return self.update_menu_rows(b, menu, sel);
+            (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
+                self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
+                let rows = self.rows(menu).max(1);
+                let down = matches!(i, Input::Next | Input::NextHeld);
+                let next = if down { (sel + 1) % rows } else { (sel + rows - 1) % rows };
+                self.screen = Screen::Menu(menu, next);
+                if menu::first_shown(next, ui::MENU_ROWS) == menu::first_shown(sel, ui::MENU_ROWS) {
+                    return self.update_menu_rows(b, menu, next);
+                }
             }
-            (Screen::Menu(menu, sel), Press::Short(Key::Start)) => {
+            (Screen::Menu(menu, sel), Input::Select) => {
                 self.activate(b, menu, sel);
                 if self.screen == before {
                     return self.update_menu_rows(b, menu, sel);
                 }
             }
-            (Screen::Menu(Menu::Main, _), Press::Short(Key::Back)) => self.screen = Screen::Main,
-            (Screen::Menu(Menu::Sensors, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, 0),
-            (Screen::Menu(Menu::Gps, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, GPS_ROW),
-            (Screen::Menu(Menu::Page(n), _), Press::Short(Key::Back)) => {
-                self.screen = Screen::Menu(Menu::Main, n + 1);
-            }
-            (Screen::Nearby, Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, NEARBY_ROW),
+            (Screen::Menu(..) | Screen::Nearby, Input::Back) => self.close(),
             _ => return,
         }
         if self.screen != before {
@@ -1433,7 +1471,7 @@ impl App {
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {
-                    self.decoders.decode(kind, data, self.wheel_mm, &mut self.live);
+                    self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
                     self.heard_ms[kind as usize] = 0;
                     if self.sensors[kind as usize] == Sensor::Search {
                         self.ask |= 1 << ch;
@@ -1639,6 +1677,9 @@ impl App {
         if let Some(p) = self.keys.poll(mask, POLL_MS) {
             self.press(b, p);
         }
+        if mask == 0 {
+            self.repeated = false;
+        }
         self.update_light(b);
     }
 
@@ -1649,7 +1690,7 @@ impl App {
             return;
         }
         self.light_ms = self.light_ms.saturating_add(POLL_MS);
-        let wanted = (self.light_level == LIGHT_AUTO && self.light_shown != 0)
+        let wanted = (self.settings.light_level == LIGHT_AUTO && self.light_shown != 0)
             || matches!(self.screen, Screen::Menu(Menu::Sensors, _));
         if self.measuring && self.light_ms >= LIGHT_WAIT_MS {
             match ambient::light_read(b) {
@@ -1740,6 +1781,16 @@ fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
             l.push_str(ui::DIGITS[(frac / d % 10) as usize]);
             d /= 10;
         }
+    }
+}
+
+/// A menu's title (a page's is followed by its number).
+fn menu_title(m: Menu) -> &'static str {
+    match m {
+        Menu::Main => "MENU",
+        Menu::Sensors => "SENSORS",
+        Menu::Page(_) => "PAGE ",
+        Menu::Gps => "GPS",
     }
 }
 

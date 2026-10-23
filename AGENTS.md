@@ -87,6 +87,11 @@ The point of this project is a firmware in safe Rust.
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
 - `src/ui.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
+- `src/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
+  `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
+  `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,
+  and its arms in `Settings::text` / `cycle` / `step`: never a row number. Back pops a screen stack (`App::open` /
+  `close`), so no screen knows where Back goes.
 - `src/text.rs`: anti-aliased proportional text (`text::draw`, a `Style`, `Align`), one panel window per glyph.
   For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
   `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.
