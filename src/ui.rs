@@ -171,7 +171,8 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
         UsbDot::Powered => ACCENT,
         UsbDot::Ready => GREEN,
     };
-    draw_bitmap(c, &USB_ICON, STRIP_USB.0, STRIP_H - 2 - USB_ICON.len() as u32, 1, usb);
+    // level with the capitals next to it: 7 font rows at 2x = 14 px, the symbol's height, from the text's top
+    draw_bitmap(c, &USB_ICON, STRIP_USB.0, STRIP_H - LABEL.height(), 1, usb);
     let mut l = text::Line::<8>::new();
     match s.battery {
         Some(p) => l.push_u32(u32::from(p)),

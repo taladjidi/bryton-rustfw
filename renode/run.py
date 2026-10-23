@@ -159,7 +159,7 @@ def main():
             fails.append('PC13 high but the USB core was never touched')
         if after_usb == 0:
             fails.append('no panel traffic after the USB start: hung')
-        dot = rgb(screen, 167 + 6, 6 + 6)                                   # the USB symbol's stem (ui.rs)
+        dot = rgb(screen, 167 + 6, 2 + 6)                                   # the USB symbol's stem (ui.rs)
         if dot not in ((248, 164, 0), (248, 0, 0)):                         # powered (no host) or failed
             fails.append(f'USB symbol is {dot}, neither orange nor red')
     for f in fails:
