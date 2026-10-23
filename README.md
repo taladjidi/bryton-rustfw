@@ -6,17 +6,28 @@ Bryton.
 
 - **Screen:** a thin status strip at the top (BLE, GPS, the time, a USB dot, the battery), then the main screen (the
   time, big, and Ferris the Rust crab) and up to three ride pages of 1, 2, 3, 4 or 6 fields (speed, heart rate,
-  cadence, power, time, map), set from the menu; page 3 is the map by default. Everything is in the project's own
+  cadence, power, time, map, and the ride's: timer, distance, average and top speed,
+  average heart rate and power, lap time and distance, ascent, a zone graph), set from the menu; page 3 is the map by default. Everything is in the project's own
   dot-matrix font.
 - **Map:** the ride's track from the GPS fixes (since power-on), north up, scaled to fit the whole track, an arrow
   for the position and heading, a scale bar. It is fitted again (one full redraw) only when the position nears the
   edge; otherwise only the box around the new segment and the arrow is redrawn (src/map.rs). No basemap yet.
+- **Ride:** on a ride page, Start starts the ride, pauses and resumes it; held on a paused ride, it ends it (the
+  totals stay until the next Start); Lap marks a lap. The timer counts moving time (auto-pause under 2 km/h). The
+  distance comes from the wheel sensor when one is paired, else the GPS; the ascent from the GPS altitude (5 m
+  hysteresis). The strip's time is green while recording, orange while paused. Not stored yet: the FIT writer
+  (src/fit.rs) plugs in at one place (`App::recorder`) once the eMMC has a driver.
+- **Zones:** heart rate (5 zones from MAX HR) and power (Coggan's 7 from FTP), both set in the menu. The HR and
+  power values are drawn in their zone's colour, with stock's zone palette (grey, blue, green, yellow, orange, red,
+  purple). The GRAPH field shows bars of the last minutes (one per 10 s) of power, or of heart rate without a
+  power meter, each in its zone's colour; it scrolls by redrawing only the difference of each column.
 - **Keys:** Page goes from the main screen through the ride pages and back; hold Page for the menu (in menus: Page / Lap move, Start selects or
   changes a value, Back goes back). Back toggles the backlight; held 3 s it switches off (standby). The power
   button starts it again, and power off also switches the radio chip off.
-- **Menu:** sensors (Start searches and pairs the first one heard, Start again forgets it), the three pages
-  (field count and each field), the wheel size, GPS (fix, satellites, position, altitude, UTC) and the BLE
-  devices nearby.
+- **Menu:** sensors (Start searches and pairs the first one heard, Start again forgets it; under them the light,
+  temperature and pressure readings), the three pages (field count and each field), the wheel size, the
+  backlight (level or AUTO, time-out), max heart rate and FTP, GPS (fix, satellites, position, altitude, UTC) and
+  the BLE devices nearby.
 - **GPS:** the u-blox M10 is on while the unit is; "GPS" blinks grey in the strip while it searches; with a fix,
   signal bars take its place (1 to 4, from the satellites used). Without a paired speed sensor, the speed comes from it. At power-up it gets the time (UTC, from the RTC)
   and the last position, and predicts orbits itself (AssistNow Autonomous), for a faster fix.

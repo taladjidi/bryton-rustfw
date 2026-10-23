@@ -18,6 +18,7 @@ pub mod gnss;
 pub mod map;
 pub mod nrf;
 pub mod panel;
+pub mod ride;
 pub mod sensors;
 #[cfg(test)]
 mod sim;
@@ -28,7 +29,7 @@ use nrf::SensorId;
 use panel::Panel;
 use sensors::{Decoders, Kind, Live, Metric};
 use text::Line;
-use ui::{Canvas, Field, Row, Strip, UsbDot};
+use ui::{Canvas, Field, Rec, Row, Strip, UsbDot};
 
 /// The hardware the app needs, as primitive operations. Each one is a few register writes on the unit.
 // ponytail: one trait while the board is small; split per peripheral (Panel, Rtc, Keys...) when it grows.
@@ -285,9 +286,94 @@ impl PageCfg {
 pub const PAGES: usize = 3;
 /// The backup registers of the ride pages.
 const PAGE_BKP: [usize; PAGES] = [14, 15, 16];
-/// The backup register of the wheel size (bits 0..15) and the backlight settings (16..19 level or [`LIGHT_AUTO`], 20..23 time-out:
-/// indexes into [`LIGHT_LEVELS`] and [`LIGHT_TIMEOUTS_S`]), behind the tag 0xa5.
+/// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Misc`].
 const WHEEL_BKP: usize = 11;
+
+/// The small settings kept in RTC backup register 11, as one word behind a tag byte:
+/// - tag 0xa6 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 4..7 max heart rate ([`max_hr_of`]),
+///   8..11 FTP ([`ftp_of`]), 16..18 the backlight level (an index in [`LIGHT_LEVELS`], or [`LIGHT_AUTO`]),
+///   20..21 its time-out (an index in [`LIGHT_TIMEOUTS_S`]); the other bits free;
+/// - tag 0xa5 (written by earlier builds): the wheel in mm in bits 0..11, the backlight level in 16..19 and its
+///   time-out in 20..23; read, never written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Misc {
+    /// Wheel circumference, mm (one of [`WHEELS`]).
+    pub wheel_mm: u16,
+    /// Max heart rate and FTP as their 4-bit codes.
+    pub max_hr_bits: u32,
+    /// FTP's code ([`ftp_of`]).
+    pub ftp_bits: u32,
+    /// Backlight level: an index in [`LIGHT_LEVELS`], or [`LIGHT_AUTO`].
+    pub light_level: usize,
+    /// Backlight time-out: an index in [`LIGHT_TIMEOUTS_S`].
+    pub light_timeout: usize,
+}
+
+impl Misc {
+    /// The settings in `w` (defaults for an empty or foreign word).
+    ///
+    /// ```
+    /// use bryton_rustfw::{Misc, WHEELS};
+    /// let m = Misc { wheel_mm: WHEELS[3], max_hr_bits: 7, ftp_bits: 11, light_level: 4, light_timeout: 3 };
+    /// assert_eq!(Misc::from_word(m.to_word()), m);
+    /// // a word from an earlier build: 2136 mm, AUTO, 60 s
+    /// let old = Misc::from_word(0xa5 << 24 | 3 << 20 | 4 << 16 | 2136);
+    /// assert_eq!((old.wheel_mm, old.light_level, old.light_timeout, old.max_hr_bits), (2136, 4, 3, 0));
+    /// ```
+    pub fn from_word(w: u32) -> Misc {
+        let wheel = |mm: u16| if WHEELS.contains(&mm) { mm } else { WHEELS[1] };
+        let level = |l: u32| (l as usize) % (LIGHT_LEVELS.len() + 1);
+        match w >> 24 {
+            0xa6 => Misc {
+                wheel_mm: WHEELS.get((w & 7) as usize).copied().unwrap_or(WHEELS[1]),
+                max_hr_bits: w >> 4 & 0xf,
+                ftp_bits: w >> 8 & 0xf,
+                light_level: level(w >> 16 & 7),
+                light_timeout: (w >> 20 & 3) as usize,
+            },
+            0xa5 => Misc {
+                wheel_mm: wheel((w & 0xfff) as u16),
+                max_hr_bits: 0,
+                ftp_bits: 0,
+                light_level: level(w >> 16 & 0xf),
+                light_timeout: (w >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
+            },
+            _ => Misc { wheel_mm: WHEELS[1], max_hr_bits: 0, ftp_bits: 0, light_level: 0, light_timeout: 0 },
+        }
+    }
+
+    /// As kept (tag 0xa6).
+    pub fn to_word(self) -> u32 {
+        let wheel = WHEELS.iter().position(|&w| w == self.wheel_mm).unwrap_or(1) as u32;
+        (0xa6 << 24)
+            | (self.light_timeout as u32 & 3) << 20
+            | (self.light_level as u32 & 7) << 16
+            | (self.ftp_bits & 0xf) << 8
+            | (self.max_hr_bits & 0xf) << 4
+            | wheel
+    }
+}
+
+/// Max heart rate from its 4 bits: 150 to 225 in steps of 5, 0 (a register written before it existed) being
+/// stock's default, 190 ([`ride::MAX_HR`]).
+///
+/// ```
+/// use bryton_rustfw::max_hr_of;
+/// assert_eq!([0, 7, 8, 15].map(max_hr_of), [190, 225, 150, 185]);
+/// ```
+pub fn max_hr_of(bits: u32) -> u16 {
+    150 + 5 * ((bits + 8) % 16) as u16
+}
+
+/// FTP from its 4 bits: 100 to 400 W in steps of 20, 0 being [`ride::FTP`] (200 W).
+///
+/// ```
+/// use bryton_rustfw::ftp_of;
+/// assert_eq!([0, 10, 11, 15].map(ftp_of), [200, 400, 100, 180]);
+/// ```
+pub fn ftp_of(bits: u32) -> u16 {
+    100 + 20 * ((bits + 5) % 16) as u16
+}
 /// Backlight levels offered, percent (stock: 1 to 100). One more choice follows them: [`LIGHT_AUTO`].
 pub const LIGHT_LEVELS: [u8; 4] = [100, 60, 30, 10];
 /// The backlight setting that follows the ambient light ([`ambient::Auto`]): the index after [`LIGHT_LEVELS`].
@@ -406,9 +492,16 @@ pub enum Screen {
 }
 
 /// The GPS row of the main menu.
-const GPS_ROW: usize = 7;
+const GPS_ROW: usize = 9;
 /// The nearby BLE devices row of the main menu.
-const NEARBY_ROW: usize = 8;
+const NEARBY_ROW: usize = 10;
+
+/// What a graph field shows on screen: the bars up to `n` ([`ride::History::len`]), of power or heart rate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GraphShown {
+    n: u32,
+    power: bool,
+}
 
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
@@ -470,9 +563,18 @@ pub struct App {
     /// The RTC's offset from UTC and the last position, as kept in backup registers.
     aid: gnss::Aid,
     wheel_mm: u16,
+    /// Max heart rate and FTP, as kept ([`max_hr_of`], [`ftp_of`]).
+    max_hr_bits: u32,
+    ftp_bits: u32,
     pages: [PageCfg; PAGES],
-    /// The ride field values on screen, to redraw only what changed.
+    /// The ride field values on screen and their colours, to redraw only what changed.
     shown: [Line<8>; 6],
+    shown_fg: [u16; 6],
+    /// The ride: timer, totals, laps.
+    ride: ride::Ride,
+    /// Heart rate and power over the last minutes, and the graphs on screen by ride field.
+    history: ride::History,
+    graph_shown: [GraphShown; 6],
     /// The main screen's digits on screen.
     main_shown: [u8; 6],
     /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
@@ -504,14 +606,13 @@ impl App {
                 *s = Sensor::Paired(id);
             }
         }
-        let wheel = b.backup_read(WHEEL_BKP);
-        let wheel = if wheel >> 24 == 0xa5 { wheel } else { 0 };
+        let misc = Misc::from_word(b.backup_read(WHEEL_BKP));
         let mut app = App {
             keys: Keys::default(),
             backlight: true,
             light_shown: 0,
-            light_level: (wheel >> 16 & 0xf) as usize % (LIGHT_LEVELS.len() + 1),
-            light_timeout: (wheel >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
+            light_level: misc.light_level,
+            light_timeout: misc.light_timeout,
             idle_ms: 0,
             chips: ambient::init(b),
             auto: ambient::Auto::default(),
@@ -528,6 +629,7 @@ impl App {
                 usb: UsbDot::Off,
                 battery: None,
                 charging: false,
+                rec: Rec::Idle,
             },
             strip_shown: Strip {
                 time: (0, 0),
@@ -537,6 +639,7 @@ impl App {
                 usb: UsbDot::Off,
                 battery: None,
                 charging: false,
+                rec: Rec::Idle,
             },
             screen: Screen::Main,
             ble,
@@ -560,9 +663,15 @@ impl App {
             gnss_ms: 0,
             gnss_sent: 0,
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
-            wheel_mm: if wheel != 0 { wheel as u16 } else { WHEELS[1] },
+            wheel_mm: misc.wheel_mm,
+            max_hr_bits: misc.max_hr_bits,
+            ftp_bits: misc.ftp_bits,
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
+            shown_fg: [ui::WHITE; 6],
+            ride: ride::Ride::new(),
+            history: ride::History::default(),
+            graph_shown: Default::default(),
             main_shown: [0; 6],
             menu_shown: [0; ui::MENU_ROWS],
             track: map::Track::new(),
@@ -595,8 +704,14 @@ impl App {
 
     /// Writes the wheel size and the backlight settings to their backup register.
     fn save_misc(&self, b: &mut impl Board) {
-        let w = (0xa5 << 24) | ((self.light_timeout as u32) << 20) | ((self.light_level as u32) << 16);
-        b.backup_write(WHEEL_BKP, w | u32::from(self.wheel_mm));
+        let misc = Misc {
+            wheel_mm: self.wheel_mm,
+            max_hr_bits: self.max_hr_bits,
+            ftp_bits: self.ftp_bits,
+            light_level: self.light_level,
+            light_timeout: self.light_timeout,
+        };
+        b.backup_write(WHEEL_BKP, misc.to_word());
     }
 
     /// What is on screen.
@@ -617,7 +732,9 @@ impl App {
     /// The text of ride field `f` now ("--" without a value).
     fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
-        let metric = match f {
+        let (r, live) = (&self.ride, |m| self.live.get(m).map(u32::from));
+        // the value, and whether it is in tenths
+        let (v, tenths) = match f {
             Field::Time => {
                 let (h, m) = self.strip.time;
                 for d in [h / 10, h % 10, 10, m / 10, m % 10] {
@@ -625,22 +742,81 @@ impl App {
                 }
                 return l;
             }
-            Field::Hr => Metric::Hr,
-            Field::Speed => Metric::Speed,
-            Field::Cadence => Metric::Cadence,
-            Field::Power => Metric::Power,
-            Field::Map => return l,
-        };
-        match (self.live.get(metric), metric) {
-            (None, _) => l.push_str("--"),
-            (Some(v), Metric::Speed) => {
-                l.push_u32(u32::from(v / 10));
-                l.push_str(".");
-                l.push_u32(u32::from(v % 10));
+            Field::Timer | Field::LapTime => {
+                let s = if f == Field::Timer { r.timer_s() } else { r.lap_s() };
+                l.push_u32(s / 3600);
+                for v in [s / 60 % 60, s % 60] {
+                    l.push_str(":");
+                    l.push_str(ui::DIGITS[(v / 10) as usize % 10]);
+                    l.push_str(ui::DIGITS[(v % 10) as usize]);
+                }
+                return l;
             }
-            (Some(v), _) => l.push_u32(u32::from(v)),
+            Field::Dist | Field::LapDist => {
+                let m = if f == Field::Dist { r.dist_m() } else { r.lap_dist_m() };
+                // as stock: 2 decimals under 100 km, then 1
+                let (unit, digits) = if m < 100_000 { (10, 2) } else { (100, 1) };
+                l.push_u32(m / 1000);
+                l.push_str(".");
+                let frac = m % 1000 / unit;
+                for d in [frac / 10, frac % 10].get(2 - digits..).unwrap_or(&[]) {
+                    l.push_str(ui::DIGITS[*d as usize % 10]);
+                }
+                return l;
+            }
+            Field::Map | Field::Graph => return l,
+            Field::Hr => (live(Metric::Hr), false),
+            Field::Speed => (live(Metric::Speed), true),
+            Field::Cadence => (live(Metric::Cadence), false),
+            Field::Power => (live(Metric::Power), false),
+            Field::AvgSpeed => (r.avg_speed_x10().map(u32::from), true),
+            Field::MaxSpeed => (Some(u32::from(r.max_speed_x10())), true),
+            Field::AvgHr => (r.avg_hr().map(u32::from), false),
+            Field::AvgPower => (r.avg_power().map(u32::from), false),
+            Field::Ascent => (Some(r.ascent_m()), false),
+        };
+        match v {
+            None => l.push_str("--"),
+            Some(v) if tenths => {
+                l.push_u32(v / 10);
+                l.push_str(".");
+                l.push_u32(v % 10);
+            }
+            Some(v) => l.push_u32(v),
         }
         l
+    }
+
+    /// The colour of ride field `f`'s value: heart rate and power in their zone's colour, the rest white.
+    fn field_color(&self, f: Field) -> u16 {
+        match (f, self.live.get(Metric::Hr), self.live.get(Metric::Power)) {
+            (Field::Hr, Some(v), _) => ride::hr_color(ride::hr_zone(v, max_hr_of(self.max_hr_bits))),
+            (Field::Power, _, Some(v)) => ride::power_color(ride::power_zone(v, ftp_of(self.ftp_bits))),
+            _ => ui::WHITE,
+        }
+    }
+
+    /// The graph shows power when a power meter is paired, else heart rate.
+    fn graph_now(&self) -> GraphShown {
+        GraphShown { n: self.history.len(), power: self.sensors[Kind::Power as usize] != Sensor::Off }
+    }
+
+    /// Column `i` of a graph of `cols` columns `h` high showing `g`: the bar's height and colour. Power is drawn
+    /// up to twice the FTP, heart rate from half the maximum to the maximum (a bar of a reading is at least 1 high).
+    fn graph_bar(&self, g: GraphShown, cols: u32, h: u32, i: u32) -> (u32, u16) {
+        let Some(k) = (g.n + i).checked_sub(cols) else { return (0, ui::BLACK) };
+        let v = self.history.bar(k, g.power);
+        if v == 0 {
+            return (0, ui::BLACK);
+        }
+        let (max, ftp) = (max_hr_of(self.max_hr_bits), ftp_of(self.ftp_bits));
+        let (low, high, color) = if g.power {
+            (0, 2 * u32::from(ftp), ride::power_color(ride::power_zone(v, ftp)))
+        } else {
+            (u32::from(max / 2), u32::from(max), ride::hr_color(ride::hr_zone(v, max)))
+        };
+        let height = u32::from(v).saturating_sub(low) * h / (high - low).max(1);
+        (height.clamp(1, h), color)
     }
 
     /// Menu row `i` of `menu`: label, value, value colour; None past the last row.
@@ -657,6 +833,14 @@ impl App {
                 4 => {
                     label.push_str("WHEEL MM");
                     value.push_u32(u32::from(self.wheel_mm));
+                }
+                7 => {
+                    label.push_str("MAX HR");
+                    value.push_u32(u32::from(max_hr_of(self.max_hr_bits)));
+                }
+                8 => {
+                    label.push_str("FTP W");
+                    value.push_u32(u32::from(ftp_of(self.ftp_bits)));
                 }
                 5 => {
                     label.push_str("LIGHT %");
@@ -675,9 +859,13 @@ impl App {
                         }
                     }
                 }
-                7 => label.push_str("GPS"),
-                8 => label.push_str("NEARBY BLE"),
-                9 => {
+                GPS_ROW => label.push_str("GPS"),
+                NEARBY_ROW => label.push_str("NEARBY BLE"),
+                _ => return None,
+            },
+            // under the ANT sensors, the built-in ones' readings (read only)
+            Menu::Sensors if i >= Kind::ALL.len() => match i - Kind::ALL.len() {
+                0 => {
                     label.push_str("LUX");
                     match self.auto.lux10() {
                         _ if !self.chips.light => value.push_str("NONE"),
@@ -685,12 +873,12 @@ impl App {
                         Some(l) => value.push_u32(l / 10),
                     }
                 }
-                10 | 11 => {
-                    label.push_str(if i == 10 { "TEMP C" } else { "HPA" });
+                k @ (1 | 2) => {
+                    label.push_str(if k == 1 { "TEMP C" } else { "HPA" });
                     match self.baro {
                         _ if !self.chips.baro => value.push_str("NONE"),
                         None => value.push_str("--"),
-                        Some((_, t)) if i == 10 => push_fixed(&mut value, i32::from(t), 2, 1),
+                        Some((_, t)) if k == 1 => push_fixed(&mut value, i32::from(t), 2, 1),
                         Some((p, _)) => push_fixed(&mut value, p as i32, 1, 0),
                     }
                 }
@@ -788,9 +976,13 @@ impl App {
             Screen::Ride(n) => {
                 for (i, (bx, f)) in self.boxes(n).enumerate() {
                     ui::draw_field_frame(c, bx, f);
-                    match (f, self.map_shown.get(i)) {
-                        (Field::Map, Some(m)) => map::draw(c, map::area(bx), &self.track, m.view),
-                        _ => ui::draw_field_value(c, bx, f, self.field_text(f).as_str()),
+                    match (f, self.map_shown.get(i), self.graph_shown.get(i)) {
+                        (Field::Map, Some(m), _) => map::draw(c, map::area(bx), &self.track, m.view),
+                        (Field::Graph, _, Some(&g)) => {
+                            let a = ui::graph_area(bx);
+                            ui::draw_graph(c, a, &|i| self.graph_bar(g, a.2, a.3, i));
+                        }
+                        _ => ui::draw_field_value(c, bx, f, self.field_text(f).as_str(), self.field_color(f)),
                     }
                 }
             }
@@ -882,19 +1074,23 @@ impl App {
                     *m = map::Shown::of(&self.track, map::area(bx));
                 }
             }
+            self.graph_shown = [self.graph_now(); 6];
         }
         let mut p = Panel(b);
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
         match self.screen {
-            Screen::Ride(n) => self.shown = self.pages[n].fields.map(|f| self.field_text(f)),
+            Screen::Ride(n) => {
+                self.shown = self.pages[n].fields.map(|f| self.field_text(f));
+                self.shown_fg = self.pages[n].fields.map(|f| self.field_color(f));
+            }
             Screen::Main => self.main_shown = self.main_digits(),
             Screen::Menu(menu, sel) => self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i)),
             Screen::Nearby => {}
         }
     }
 
-    /// Redraws the ride field values that changed, and what changed on a map.
+    /// Redraws the ride field values that changed, what changed on a map, and a graph's new bar.
     fn update_ride(&mut self, b: &mut impl Board, n: usize) {
         for (i, (bx, f)) in self.boxes(n).enumerate() {
             if f == Field::Map {
@@ -903,12 +1099,48 @@ impl App {
                 }
                 continue;
             }
-            let text = self.field_text(f);
-            if self.shown[i].as_str() != text.as_str() {
-                ui::draw_field_value_changes(&mut Panel(b), bx, f, self.shown[i].as_str(), text.as_str());
-                self.shown[i] = text;
+            if f == Field::Graph {
+                self.update_graph(b, i, bx);
+                continue;
+            }
+            let (text, fg) = (self.field_text(f), self.field_color(f));
+            if self.shown[i].as_str() != text.as_str() || self.shown_fg[i] != fg {
+                let old = if self.shown_fg[i] == fg { self.shown[i].as_str() } else { "" }; // a new colour: all of it
+                ui::draw_field_value_changes(&mut Panel(b), bx, f, old, text.as_str(), fg);
+                (self.shown[i], self.shown_fg[i]) = (text, fg);
             }
         }
+    }
+
+    /// Graph field `i` in box `bx` after a new bar: each column changes by the difference between its old bar and
+    /// its new one (the chart scrolls left by one), all of it if the graph changed metric.
+    fn update_graph(&mut self, b: &mut impl Board, i: usize, bx: (u32, u32, u32, u32)) {
+        let (Some(&old), now) = (self.graph_shown.get(i), self.graph_now()) else { return };
+        if old == now {
+            return;
+        }
+        let a = ui::graph_area(bx);
+        if old.power != now.power {
+            ui::draw_graph(&mut Panel(b), a, &|k| self.graph_bar(now, a.2, a.3, k));
+        } else {
+            for k in 0..a.2 {
+                let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
+                ui::draw_graph_column(&mut Panel(b), a, k, was, is);
+            }
+        }
+        if let Some(g) = self.graph_shown.get_mut(i) {
+            *g = now;
+        }
+    }
+
+    /// The ride recorder's one entry point: every [`ride::Event`] goes through here, in order.
+    // ponytail: nothing is stored yet (no eMMC driver). The FIT writer plugs in here and nowhere else:
+    // Start: fit::Writer::start (a new file); Second: Writer::record with a fit::Sample built from self.live,
+    // self.pvt and the RTC (fit::fit_time), then every 60 s Writer::checkpoint, its record kept in two copies
+    // (AGENTS.md, golden rule); Pause / Resume: timer events; Lap: a lap message; End: Writer::finish. Resume on
+    // boot reads the newer valid record back and puts the ride back to Paused.
+    fn recorder(&mut self, ev: ride::Event) {
+        let _ = ev;
     }
 
     /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing.
@@ -942,6 +1174,12 @@ impl App {
             (Menu::Main, 4) => {
                 let i = WHEELS.iter().position(|&w| w == self.wheel_mm).map_or(0, |i| (i + 1) % WHEELS.len());
                 self.wheel_mm = WHEELS[i];
+                self.save_misc(b);
+                Screen::Menu(menu, sel)
+            }
+            (Menu::Main, 7 | 8) => {
+                let bits = if sel == 7 { &mut self.max_hr_bits } else { &mut self.ftp_bits };
+                *bits = (*bits + 1) % 16;
                 self.save_misc(b);
                 Screen::Menu(menu, sel)
             }
@@ -1010,6 +1248,23 @@ impl App {
                 self.screen = next.map_or(Screen::Main, Screen::Ride);
             }
             (Screen::Main | Screen::Ride(_), Press::Long(Key::Page)) => self.screen = Screen::Menu(Menu::Main, 0),
+            // the ride: Start starts, pauses, resumes; held on a paused ride, ends it; Lap marks a lap
+            (Screen::Ride(_), Press::Short(Key::Start)) => {
+                let ev = self.ride.start_pause();
+                return self.recorder(ev);
+            }
+            (Screen::Ride(_), Press::Long(Key::Start)) => {
+                if let Some(ev) = self.ride.end() {
+                    self.recorder(ev);
+                }
+                return;
+            }
+            (Screen::Ride(_), Press::Short(Key::Lap)) => {
+                if let Some(ev) = self.ride.lap() {
+                    self.recorder(ev);
+                }
+                return;
+            }
             (Screen::Main | Screen::Ride(_), Press::Short(Key::Back)) => {
                 self.backlight = !self.backlight;
                 self.update_light(b);
@@ -1171,6 +1426,9 @@ impl App {
     pub fn step(&mut self, b: &mut impl Board) {
         let (h, m, sec) = rtc_time_from_tr(b.rtc().0);
         self.strip.time = (h, m);
+        if sec != self.seconds {
+            self.second();
+        }
         self.seconds = sec;
         self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
         if self.battery_ms >= BATTERY_MS {
@@ -1195,7 +1453,12 @@ impl App {
             self.poll_nrf(b);
         }
         self.poll_gnss(b);
-        self.update_strip(b); // after everything that changes it (time, battery, GPS)
+        self.strip.rec = match self.ride.state() {
+            ride::State::Idle => Rec::Idle,
+            _ if self.ride.moving() => Rec::Running,
+            _ => Rec::Paused,
+        };
+        self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
         for kind in Kind::ALL {
             if self.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
@@ -1256,14 +1519,14 @@ impl App {
     }
 
     /// One light measurement every [`LIGHT_MS`] while the backlight follows the ambient light (and is on), or the
-    /// main menu shows it: the sensor is started, read [`LIGHT_WAIT_MS`] later, and put back in standby.
+    /// sensors menu shows it: the sensor is started, read [`LIGHT_WAIT_MS`] later, and put back in standby.
     fn poll_light(&mut self, b: &mut impl Board) {
         if !self.chips.light {
             return;
         }
         self.light_ms = self.light_ms.saturating_add(POLL_MS);
         let wanted = (self.light_level == LIGHT_AUTO && self.light_shown != 0)
-            || matches!(self.screen, Screen::Menu(Menu::Main, _));
+            || matches!(self.screen, Screen::Menu(Menu::Sensors, _));
         if self.measuring && self.light_ms >= LIGHT_WAIT_MS {
             match ambient::light_read(b) {
                 Some(lux10) => self.auto_level = self.auto.update(lux10),
@@ -1276,6 +1539,21 @@ impl App {
             self.measuring = ambient::light_start(b);
             self.light_ms = 0;
         }
+    }
+
+    /// Once a second (the RTC's second changed): the ride and the history take the readings.
+    fn second(&mut self) {
+        let input = ride::Input {
+            speed_x10: self.live.get(Metric::Speed),
+            hr: self.live.get(Metric::Hr),
+            cadence: self.live.get(Metric::Cadence),
+            power: self.live.get(Metric::Power),
+            alt_mm: self.pvt.filter(|p| p.good()).map(|p| p.alt_mm),
+        };
+        if let Some(ev) = self.ride.second(&input) {
+            self.recorder(ev);
+        }
+        self.history.second(input.hr, input.power);
     }
 
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released

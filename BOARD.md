@@ -647,7 +647,7 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
   Level 0 is the PWM's minimum, 1 % (`Pwr_BacklightSetPwmDuty` clamps to 1..100): in daylight the transflective
   panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
 - **This firmware** (src/ambient.rs): the light sensor in standby but for one measurement every 3 s while the
-  backlight is AUTO and on (or the main menu shows the light): MAIN_CTRL = 2, 600 ms, MAIN_STATUS, ALS_DATA,
+  backlight is AUTO and on (or the sensors menu shows the light): MAIN_CTRL = 2, 600 ms, MAIN_STATUS, ALS_DATA,
   MAIN_CTRL = 0. The level rises with the light (src/ambient.rs `AUTO_BANDS`: stock's setting 3 up to 20 lux, then
   on up to 100 % instead of stock's drop to 1 % above 120 lux), with a running average (a quarter per reading) and
   a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
