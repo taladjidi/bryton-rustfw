@@ -8,7 +8,8 @@
 - **Overview** (the main screen): the time, big (no seconds: it changes once a minute), the date, four fields chosen
   in the menu (OVERVIEW; by default distance, timer, heart rate, temperature), and the latest notices (a GPS fix, a
   sensor paired, the battery low), or Ferris the Rust crab when there are none.
-- **Ride pages:** up to three, each of 1, 2, 3, 4 or 6 fields, chosen in the menu: speed, heart rate, cadence,
+- **Ride pages:** up to three, each in one of eleven layouts (one to six fields: even grids, and uneven ones such as
+  a big box over two or over a 2 x 2 grid, two over a big one, three rows), chosen in the menu: speed, heart rate, cadence,
   power, time, map, timer, distance, average and top speed, average heart rate and power, lap time and distance,
   ascent, and a zone graph. Page 3 is the map by default.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a

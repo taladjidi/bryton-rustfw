@@ -1321,7 +1321,9 @@ mod tests {
         to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(0)));
         app.press(&mut sim, Press::Short(Key::Start));
         assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 0));
-        app.press(&mut sim, Press::Short(Key::Start)); // layout 3 -> 4
+        while app.pages()[0].layout != 4 {
+            app.press(&mut sim, Press::Short(Key::Start)); // layouts round to 2 x 2
+        }
         app.press(&mut sim, Press::Short(Key::Page));
         for _ in 0..2 {
             app.press(&mut sim, Press::Short(Key::Start)); // field 1: speed -> cadence -> power
@@ -1343,6 +1345,24 @@ mod tests {
         assert!(ride(&mut sim, &app, 0, &["300", "--", "85", &t], true) == sim.screen);
         let app = App::start(&mut sim, Some(KEY));
         assert_eq!(app.pages()[0], want, "read back after a restart");
+    }
+
+    /// Every layout draws on the unit as in the screenshot (layout_<id>.bmp, to look at).
+    #[test]
+    fn every_layout_draws() {
+        use Field::*;
+        let fields = [Map, Speed, Hr, Power, Cadence, Timer];
+        for id in 1..ui::LAYOUTS.len() as u8 {
+            let mut sim = Sim::new(9, 0, 0);
+            let words = PageCfg { layout: id, fields }.to_words();
+            (sim.backup[19], sim.backup[20]) = (words[0], words[1]);
+            let mut app = App::start(&mut sim, None);
+            app.press(&mut sim, Press::Short(Key::Page));
+            run(&mut sim, &mut app, 1000);
+            assert_eq!(app.screen(), Screen::Ride(0));
+            assert_consistent(&sim, &app);
+            sim.save(&std::format!("layout_{id}"));
+        }
     }
 
     /// The battery level in the strip (green while charging); an empty battery switches the unit off, but not

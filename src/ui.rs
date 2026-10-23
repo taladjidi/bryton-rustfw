@@ -454,29 +454,73 @@ impl Field {
     }
 }
 
-/// The field counts a page can have, in the order the page menu cycles through them (0: page off).
-pub const LAYOUTS: [u8; 6] = [0, 1, 2, 3, 4, 6];
+/// A page layout: rows top to bottom, each (its share of the height, boxes side by side), and its name in the menu.
+pub type Layout = (&'static [(u8, u8)], &'static str);
+
+/// The layouts by the id a page keeps ([`crate::PageCfg::layout`]); 0 is a page switched off. Ids 1, 2, 3, 4 and 6
+/// are the layouts of earlier builds, whose id was their field count, so pages kept then read the same.
+pub const LAYOUTS: [Layout; 12] = [
+    (&[], "OFF"),
+    (&[(1, 1)], "1"),
+    (&[(1, 1), (1, 1)], "2"),
+    (&[(1, 1), (1, 2)], "1+2"),
+    (&[(1, 2), (1, 2)], "2X2"),
+    (&[(2, 1), (1, 2), (1, 2)], "1+2X2"),
+    (&[(1, 2), (1, 2), (1, 2)], "2X3"),
+    (&[(1, 2), (1, 1)], "2+1"),
+    (&[(1, 1), (1, 1), (1, 1)], "3 ROWS"),
+    (&[(2, 1), (1, 1), (1, 1)], "BIG+2"),
+    (&[(2, 1), (1, 1), (1, 2)], "BIG+1+2"),
+    (&[(1, 2), (1, 1), (1, 2)], "2+1+2"),
+];
+
+/// The order the page menu goes through the layouts: by field count.
+pub const LAYOUT_ORDER: [u8; 12] = [0, 1, 2, 8, 3, 7, 9, 4, 10, 5, 11, 6];
+
+/// Layout `id`, if there is one.
+pub fn layout(id: u8) -> Option<Layout> {
+    LAYOUTS.get(usize::from(id)).copied()
+}
+
+/// How many fields layout `id` shows.
+///
+/// ```
+/// use bryton_rustfw::ui::field_count;
+/// assert_eq!([0, 1, 4, 5, 6, 10, 99].map(field_count), [0, 1, 4, 5, 6, 4, 0]);
+/// ```
+pub fn field_count(id: u8) -> usize {
+    layout(id).map_or(0, |(rows, _)| rows.iter().map(|&(_, n)| usize::from(n)).sum())
+}
 
 /// Top of the ride fields.
 pub const RIDE_Y: u32 = PAGE_Y;
 /// Height of the ride fields: everything under the strip.
 pub const RIDE_H: u32 = H - RIDE_Y;
 
-/// Field box `i` (x, y, w, h) of a page with `n` fields in a field area `h` high: one, two stacked, one big over
-/// two, 2 x 2, 2 x 3. None past the last.
-pub fn field_box(n: u8, h: u32, i: usize) -> Option<(u32, u32, u32, u32)> {
-    let (c, half, third) = (W / 2, h / 2, h / 3);
-    let (col, row) = ((i % 2) as u32, (i / 2) as u32);
-    let b = match (n, i) {
-        (1, 0) => (0, 0, W, h),
-        (2, 0..=1) => (0, i as u32 * half, W, half),
-        (3, 0) => (0, 0, W, half),
-        (3, 1..=2) => ((i as u32 - 1) * c, half, c, half),
-        (4, 0..=3) => (col * c, row * half, c, half),
-        (6, 0..=5) => (col * c, row * third, c, third),
-        _ => return None,
-    };
-    Some((b.0, RIDE_Y + b.1, b.2, b.3))
+/// Field box `i` (x, y, w, h) of layout `id` in a field area `h` high, row by row, left to right; the last row and
+/// the last box of a row take what division leaves. None past the last.
+///
+/// ```
+/// use bryton_rustfw::ui::{field_box, RIDE_Y};
+/// assert_eq!(field_box(5, 300, 0), Some((0, RIDE_Y, 240, 150)), "big over 2 x 2: the big box");
+/// assert_eq!(field_box(5, 300, 4), Some((120, RIDE_Y + 225, 120, 75)));
+/// assert_eq!(field_box(5, 300, 5), None);
+/// ```
+pub fn field_box(id: u8, h: u32, i: usize) -> Option<(u32, u32, u32, u32)> {
+    let (rows, _) = layout(id)?;
+    let total: u32 = rows.iter().map(|&(share, _)| u32::from(share)).sum();
+    let (mut y, mut k) = (0, i);
+    for (r, &(share, n)) in rows.iter().enumerate() {
+        let rh = if r + 1 == rows.len() { h - y } else { h * u32::from(share) / total };
+        let n = usize::from(n);
+        if k < n {
+            let bw = W / n as u32;
+            let w = if k + 1 == n { W - bw * k as u32 } else { bw };
+            return Some((bw * k as u32, RIDE_Y + y, w, rh));
+        }
+        (y, k) = (y + rh, k - n);
+    }
+    None
 }
 
 /// Height of a field's label line.
@@ -729,9 +773,10 @@ pub(crate) mod tests {
     #[test]
     fn ride_layouts_tile_and_fit() {
         for h in [RIDE_H] {
-            for &n in &LAYOUTS[1..] {
+            for n in 1..LAYOUTS.len() as u8 {
                 let b: Vec<_> = (0..8).map_while(|i| field_box(n, h, i)).collect();
-                assert_eq!(b.len(), usize::from(n));
+                assert_eq!(b.len(), field_count(n));
+                assert!(b.len() <= 6, "a page keeps six fields");
                 let area: u32 = b.iter().map(|&(_, _, w, h)| w * h).sum();
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
                 let mut f = Frame::new();

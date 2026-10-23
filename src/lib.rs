@@ -263,10 +263,10 @@ impl Keys {
 // Settings, kept in RTC backup registers until the eMMC holds a settings file (BOARD.md 8: none used by stock)
 // ---------------------------------------------------------------------------------------------------------------
 
-/// A ride page: how many fields (one of [`ui::LAYOUTS`], 0: off) and what each shows.
+/// A ride page: its layout (an id in [`ui::LAYOUTS`], 0: off) and what each field shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageCfg {
-    /// Field count.
+    /// Layout id ([`ui::layout`]).
     pub layout: u8,
     /// The fields, the first `layout` of them used.
     pub fields: [Field; 6],
@@ -291,7 +291,7 @@ impl PageCfg {
     /// The page kept in `w`, if [`PageCfg::to_words`] wrote it.
     pub fn from_words(w: [u32; 2]) -> Option<Self> {
         let layout = (w[0] >> 24 & 0xf) as u8;
-        if w.iter().any(|w| w >> 28 != 0xb) || !ui::LAYOUTS.contains(&layout) {
+        if w.iter().any(|w| w >> 28 != 0xb) || ui::layout(layout).is_none() {
             return None;
         }
         Some(PageCfg { layout, fields: core::array::from_fn(|i| Field::from_index(w[i / 3] >> (8 * (i % 3)) & 0xff)) })
@@ -306,7 +306,7 @@ impl PageCfg {
     /// ```
     pub fn from_word(w: u32) -> Option<Self> {
         let layout = (w >> 24 & 0xf) as u8;
-        if w >> 28 != 0xa || !ui::LAYOUTS.contains(&layout) {
+        if w >> 28 != 0xa || ui::layout(layout).is_none() {
             return None;
         }
         Some(PageCfg { layout, fields: core::array::from_fn(|i| Field::from_index(w >> (4 * i) & 0xf)) })
@@ -1047,7 +1047,7 @@ impl App {
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
-                _ if i <= usize::from(self.pages.get(n)?.layout) => Some(Row::Field(n, i - 1)),
+                _ if i <= ui::field_count(self.pages.get(n)?.layout) => Some(Row::Field(n, i - 1)),
                 _ => None,
             },
         }
@@ -1547,10 +1547,11 @@ impl App {
             }
             Some(Row::Layout(n)) => {
                 if let Some(page) = self.pages.get_mut(n) {
-                    let i = ui::LAYOUTS.iter().position(|&l| l == page.layout).unwrap_or(0);
-                    page.layout = ui::LAYOUTS[(i + 1) % ui::LAYOUTS.len()];
+                    let order = ui::LAYOUT_ORDER;
+                    let i = order.iter().position(|&l| l == page.layout).unwrap_or(0);
+                    page.layout = order[(i + 1) % order.len()];
                     if n == 0 && page.layout == 0 {
-                        page.layout = ui::LAYOUTS[1]; // the first page is never off
+                        page.layout = order[1]; // the first page is never off
                     }
                     save_page(b, n, page);
                 }
@@ -2099,12 +2100,9 @@ fn menu_title(m: Menu) -> &'static str {
     }
 }
 
-/// A page's field count, "OFF" for none.
+/// A page's layout by its name ("OFF" for none).
 fn layout_text(l: &mut Line<12>, layout: u8) {
-    match layout {
-        0 => l.push_str("OFF"),
-        n => l.push_u32(u32::from(n)),
-    }
+    l.push_str(ui::layout(layout).map_or("?", |(_, name)| name));
 }
 
 /// The time of day, hours and minutes.
