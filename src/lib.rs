@@ -1976,9 +1976,10 @@ impl App {
     // What stock left on the card (storage/stock.rs): the stock data menu
     // -----------------------------------------------------------------------------------------------------------
 
-    /// Bytes of stock's rides read per pass: much while no ride runs (the menu answers within ~0.1 s, inferred),
-    /// little during a ride.
-    const SCAN_IDLE: u32 = 256 * 1024;
+    /// Bytes of stock's rides read per pass: more while no ride runs, little during a ride. Seen on the unit
+    /// (2026-10-24): about 450 KB/s read and parsed, so 256 KB made each pass over half a second and the screen and
+    /// keys sluggish; 32 KB keeps a pass near 70 ms (70 rides, 12 MB: about a minute).
+    const SCAN_IDLE: u32 = 32 * 1024;
     const SCAN_RIDING: u32 = 16 * 1024;
 
     /// A stock data row's value.

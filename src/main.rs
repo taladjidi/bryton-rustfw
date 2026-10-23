@@ -1142,7 +1142,7 @@ fn main() -> ! {
     let mut usb_tried = false;
     let mut session = Session::new();
     let mut stats = Stats::default();
-    let (mut awake, mut passes) = (0u32, 0u32);
+    let (mut awake, mut window_ms) = (0u32, 0u32); // awake cycles in the current second, its length
     let mut since_touch = 0u32; // ms slept since the panel was last read
     loop {
         let t0 = cycles();
@@ -1236,12 +1236,15 @@ fn main() -> ! {
         }
         checkpoint(7);
         // the app's work (step and keys), not the USB polls: those happen only while a cable is in
-        awake = awake.saturating_add(t1.wrapping_sub(t0) - sleep_cycles + cycles().wrapping_sub(t1));
-        passes += 1;
-        if passes * POLL_MS >= 1000 {
-            stats.awake_permille = awake / (CPU_HZ / 1000);
-            (awake, passes) = (0, 0);
+        let worked = t1.wrapping_sub(t0) - sleep_cycles + cycles().wrapping_sub(t1);
+        awake = awake.saturating_add(worked);
+        // a pass is its work plus its sleep (a long one, an eMMC scan, is longer than POLL_MS)
+        let pass_ms = worked / (CPU_HZ / 1000) + slept;
+        window_ms += pass_ms;
+        if window_ms >= 1000 {
+            stats.awake_permille = (u64::from(awake / (CPU_HZ / 1000)) * 1000 / u64::from(window_ms)) as u32;
+            (awake, window_ms) = (0, 0);
         }
-        stats.uptime_ms = stats.uptime_ms.wrapping_add(POLL_MS);
+        stats.uptime_ms = stats.uptime_ms.wrapping_add(pass_ms);
     }
 }
