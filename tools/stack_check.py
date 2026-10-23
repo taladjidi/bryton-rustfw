@@ -9,8 +9,9 @@ import pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ELF = ROOT / 'target/thumbv7em-none-eabihf/release/bryton-rustfw'
-# frames allowed, bytes: the app's start (one temporary copy of App, once at boot), main, anything else
-BUDGET = {'make_app': 110_000, 'main': 16_384}
+# frames allowed, bytes: the app's start (one temporary copy of App, once at boot), the course memory's (part of it
+# built on the stack, once at boot, after the app's), main, anything else
+BUDGET = {'make_app': 110_000, 'make_courses': 40_000, 'main': 16_384}
 OTHER = 20_480
 
 sysroot = subprocess.run(['rustc', '--print', 'sysroot'], capture_output=True, text=True, check=True).stdout.strip()

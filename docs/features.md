@@ -85,7 +85,7 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
 wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
 up and Page down, held to repeat, Start to keep), weight (1 kg) and W' (0.5 kJ), GPS (fix, satellites, position,
-altitude, UTC), BLE devices nearby, HISTORY, STOCK DATA, WORKOUTS.
+altitude, UTC), BLE devices nearby, HISTORY, STOCK DATA, WORKOUTS, COURSES.
 
 ## History
 
@@ -112,6 +112,24 @@ TrainingPeaks), read only:
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - Any FIT workout file is read (Garmin's profile: time, distance and open steps, repeats, % FTP or watts, % max HR
   or bpm, zones), and Bryton's own encoding of power targets.
+
+## Courses
+
+The routes Bryton's app syncs to the card (`\PlanTrip\*.fit`, in Bryton's own layout) and FIT courses or GPX files
+copied over USB into `\Courses`, read only:
+- **COURSES** (main menu) lists them with their length; Select follows one (green in the list; the first ride page
+  opens), Select again stops.
+- **The map** draws the course in magenta under the track, and fits the course and the track.
+- **Where the rider is:** the nearest point of the course, looked for around the last one each second; on an
+  out-and-back or a loop the leg the rider is on wins. More than 50 m off for 5 s: "OFF COURSE" and the alert's
+  beeps (once the course was joined); "BACK ON COURSE" within 25 m.
+- **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
+  climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
+- **Fields:** TO GO KM, OFF CRS M (red while off course), CLIMB (on a climb what is left and the grade of the next
+  200 m, "1.6K 6%"; before it the next climb's length and grade; coloured by grade), CLIMB M (the climb's gain left,
+  or the next climb's), UP LEFT M (the course's ascent left), and PROFILE: the course's elevation from the eighth of
+  it the rider is in to the end, the rider's place, the ridden part dark, the climbs green, yellow, orange or red by
+  grade.
 
 ## Stock data
 

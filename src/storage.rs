@@ -1,7 +1,8 @@
 //! Files: the FAT32 volume on the eMMC (read, and written by the ride recorder only), the FIT ride file (written
-//! and read), the recorder, and what the stock firmware left on the volume (its rides, settings and planned
-//! workouts).
+//! and read), the recorder, and what the stock firmware left on the volume (its rides, settings, planned workouts
+//! and courses).
 
+pub mod course;
 pub mod fat;
 pub mod fit;
 pub mod fitread;

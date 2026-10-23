@@ -12,8 +12,9 @@ An empty tile is a 0 count and one 0 byte (stock's Map_WriteEmptyTileCache).
 
 It also holds a made-up `\Activities` (FIT rides with known power, a stop, compressed timestamps, a bad CRC, a
 cut file, stock's `tmp.fit`, a GNSS log) and `\System\*.ini` in stock's layout, for stock.rs (the values the
-tests expect are worked out next to each ride), and a made-up `\Workout\calendar` of planned workouts in stock's
-layout, for storage/workout.rs.
+tests expect are worked out next to each ride), a made-up `\Workout\calendar` of planned workouts in stock's
+layout, for storage/workout.rs, and made-up courses (`\PlanTrip` in Bryton's route layout, `\Courses` as a Garmin
+FIT course and as GPX) near 0 N 0 E, for storage/course.rs.
 
 The 1.1 GB image is mostly zeros, so it is stored sparse: records of u32 LE first sector, u32 LE sector count,
 then the sectors (fat.rs tests expand it).
@@ -102,6 +103,7 @@ def fill(m):
     subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
     rides(m)
     workouts(m)
+    courses(m)
     shutil.rmtree(os.path.join(m, '.fseventsd'), ignore_errors=True)
 
 
@@ -268,6 +270,102 @@ def workouts(m):
     with open(os.path.join(w, 'calendar_temp', 'temp0.fit'), 'wb') as f:
         f.write(days['20261023']['Short Intervals'])
     subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
+
+
+def hill(step=25.0):
+    """The synthetic course (sim.rs `course_ride` rides it): from 2 km west and 1.5 km south of 0 N 0 E, 2 km east
+    on the flat at 100 m, 2 km north climbing to 220 m (6 %), 1 km east on the top. Points every `step` m: (latitude,
+    longitude in degrees, altitude in m, distance in m)."""
+    legs = [((-2000.0, -1500.0, 100.0), (0.0, -1500.0, 100.0)), ((0.0, -1500.0, 100.0), (0.0, 500.0, 220.0)),
+            ((0.0, 500.0, 220.0), (1000.0, 500.0, 220.0))]
+    pts, dist = [], 0.0
+    for i, (a, b) in enumerate(legs):
+        length = math.hypot(b[0] - a[0], b[1] - a[1])
+        n = int(length / step)
+        for k in range(0 if i == 0 else 1, n + 1):
+            t = k / n
+            x, y, z = (a[j] + (b[j] - a[j]) * t for j in range(3))
+            pts.append((y / 111_320, x / 111_320, z, dist + length * t))
+        dist += length
+    return pts
+
+
+def bryton_route(pts):
+    """A route as Bryton's app writes \\PlanTrip\\<name>.fit (storage/course.rs): messages 248, 254, 251 per point,
+    253, 250 (a climb's start and end, types 190 and 191), 252, then 249 per point; degrees x 1e6, altitudes as FIT
+    ((m + 500) x 5)."""
+    U8, U16, S16, S32, U32, STR = 0x00, 0x84, 0x83, 0x85, 0x86, 0x07
+    e6 = lambda v: int(round(v * 1e6))  # noqa: E731
+    alt = lambda m: int(round((m + 500) * 5))  # noqa: E731
+    lats, lons = [e6(p[0]) for p in pts], [e6(p[1]) for p in pts]
+    d = bytearray([0x47, 0, 0, 248, 0, 2, 1, 2, U16, 2, 2, U16, 0x07]) + struct.pack('<HH', 0, 1)
+    d += bytes([0x41, 0, 0, 254, 0, 10, 1, 2, U16, 2, 4, S32, 3, 4, S32, 4, 4, S32, 5, 4, S32, 6, 4, U32,
+                7, 2, U16, 8, 2, U16, 9, 2, U16, 10, 2, U16])
+    d += bytes([0x01]) + struct.pack('<HiiiiIHHHH', len(pts), max(lats), min(lats), max(lons), min(lons),
+                                     int(pts[-1][3]), alt(220), alt(100), 120, 0)
+    d += bytes([0x42, 0, 0, 251, 0, 1, 1, 2, U16])
+    for i in range(len(pts)):
+        d += bytes([0x02]) + struct.pack('<H', i)
+    d += bytes([0x43, 0, 0, 253, 0, 1, 1, 2, U16, 0x03]) + struct.pack('<H', 2)
+    d += bytes([0x44, 0, 0, 250, 0, 5, 1, 2, U16, 2, 1, U8, 3, 4, U32, 4, 4, U32, 5, 32, STR])
+    for i, kind in ((80, 190), (160, 191)):
+        d += bytes([0x04]) + struct.pack('<HBII', i, kind, 0, 0) + bytes(32)
+    d += bytes([0x45, 0, 0, 252, 0, 1, 1, 2, U16, 0x05]) + struct.pack('<H', len(pts))
+    d += bytes([0x46, 0, 0, 249, 0, 4, 1, 4, S32, 2, 4, S32, 3, 2, U16, 4, 2, S16])
+    for i, p in enumerate(pts):
+        grade = 600 if 80 <= i < 160 else 0
+        d += bytes([0x06]) + struct.pack('<iiHh', lats[i], lons[i], alt(p[2]), grade)
+    h = bytearray(struct.pack('<BBHI4s', 14, 0x10, 2167, len(d), b'.FIT'))
+    h += struct.pack('<H', fit_crc(h))
+    f = bytes(h + d)
+    return f + struct.pack('<H', fit_crc(f))
+
+
+def garmin_course(pts):
+    """A FIT course as Garmin's SDK cookbook encodes one (CourseEncode): file_id (type 6), course, lap, a timer
+    start event, a record per point (time, semicircles, altitude, distance), a course point, the stop event."""
+    U8, U16, S32, U32, STR = 0x00, 0x84, 0x85, 0x86, 0x07
+    semi = lambda v: int(round(v * 2**31 / 180))  # noqa: E731
+    t0 = 1_100_000_000
+    d = bytearray([0x40, 0, 0, 0, 0, 3, 0, 1, U8, 1, 2, U16, 4, 4, U32])
+    d += bytes([0x00, 6]) + struct.pack('<HI', 255, t0)
+    d += bytes([0x41, 0, 0, 31, 0, 2, 5, 16, STR, 4, 1, U8, 0x01]) + b'Hill'.ljust(16, b'\0') + bytes([2])
+    d += bytes([0x42, 0, 0, 19, 0, 2, 253, 4, U32, 9, 4, U32, 0x02]) + struct.pack('<II', t0, int(pts[-1][3] * 100))
+    d += bytes([0x43, 0, 0, 21, 0, 3, 253, 4, U32, 0, 1, U8, 1, 1, U8])
+    d += bytes([0x03]) + struct.pack('<IBB', t0, 0, 0)
+    d += bytes([0x44, 0, 0, 20, 0, 5, 253, 4, U32, 0, 4, S32, 1, 4, S32, 2, 2, U16, 5, 4, U32])
+    for i, p in enumerate(pts):
+        d += bytes([0x04]) + struct.pack('<IiiHI', t0 + 3 * i, semi(p[0]), semi(p[1]), int(round((p[2] + 500) * 5)),
+                                         int(p[3] * 100))
+        if i == 80:  # a summit point at the climb's foot, as the cookbook puts one among the records
+            d += bytes([0x45, 0, 0, 32, 0, 3, 1, 4, U32, 2, 4, S32, 5, 1, U8])
+            d += bytes([0x05]) + struct.pack('<IiB', t0 + 3 * i, semi(p[0]), 1)
+    d += bytes([0x03]) + struct.pack('<IBB', t0 + 3 * len(pts), 0, 9)
+    h = bytearray(struct.pack('<BBHI4s', 14, 0x10, 2140, len(d), b'.FIT'))
+    h += struct.pack('<H', fit_crc(h))
+    f = bytes(h + d)
+    return f + struct.pack('<H', fit_crc(f))
+
+
+def gpx(pts):
+    """The same hill as GPX 1.1 track points with elevation."""
+    rows = ''.join('<trkpt lat="%.7f" lon="%.7f"><ele>%.1f</ele></trkpt>\n' % (p[0], p[1], p[2]) for p in pts)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="fat_image.py" '
+            'xmlns="http://www.topografix.com/GPX/1/1">\n<trk><name>Hill</name><trkseg>\n%s</trkseg></trk></gpx>\n'
+            % rows).encode()
+
+
+def courses(m):
+    """Made-up courses (storage/course.rs, sim.rs): stock's \\PlanTrip with a route in Bryton's layout and a file that
+    is no FIT, and \\Courses (copied over USB) with the same hill as a Garmin FIT course and as GPX."""
+    pts = hill()
+    os.makedirs(os.path.join(m, 'PlanTrip', 'LiveSegment'))
+    for name, data in (('PlanTrip/Hill.fit', bryton_route(pts)), ('PlanTrip/Broken.fit', b'not a FIT file\n'),
+                       ('Courses/Hill_Garmin.fit', garmin_course(pts)), ('Courses/Hill.gpx', gpx(hill(10.0)))):
+        os.makedirs(os.path.dirname(os.path.join(m, name)), exist_ok=True)
+        with open(os.path.join(m, name), 'wb') as f:
+            f.write(data)
+        subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
 
 
 def run(*cmd):

@@ -2763,12 +2763,22 @@ mod tests {
         let ride = |pages: [PageCfg; 3], screen: usize| {
             let mut sim = Sim::new(9, 0, 0);
             sim.gnss.route = Some(ride_route);
+            let course = pages.iter().any(|p| p.fields.contains(&Profile));
+            if course {
+                sim.emmc.image = crate::fat::tests::image();
+                sim.gnss.route = Some(course_route);
+            }
             sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
             sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
             sim.backup[Kind::Hr.backup()] = STRAP.to_word();
             sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
             let mut app = App::start(&mut sim, Some(KEY));
             app.pages[..3].copy_from_slice(&pages);
+            if course {
+                app.set_course_memory(crate::storage::course::tests::memory());
+                app.open_courses(&mut sim);
+                app.follow_course(&mut sim, hill(&app));
+            }
             sim.gnss.fix = Some(8000);
             if screen < PAGES {
                 app.press(&mut sim, Press::Short(Key::Start));
@@ -2787,7 +2797,8 @@ mod tests {
         let values = p(6, [Speed, Hr, Power, Power3s, Dist, Timer]);
         let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
         let map = p(1, [Map, Time, Time, Time, Time, Time]);
-        let cases: [(&str, [PageCfg; 3], usize, (u64, u64)); 4] = [
+        let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
+        let cases: [(&str, [PageCfg; 3], usize, (u64, u64)); 5] = [
             // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
             ("overview", [values, graph, map], PAGES, (150, 5)),
             // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
@@ -2796,6 +2807,8 @@ mod tests {
             ("two graphs", [graph, values, map], 0, (1_000, 30)),
             // 1112, 33: the track's new segments and the arrow, refits included
             ("map", [map, values, graph], 0, (1_800, 50)),
+            // 456, 3: on the course, the profile's rider column (a whole profile at each eighth), two values
+            ("course profile", [profile, values, map], 0, (600, 10)),
         ];
         let mut over = std::vec::Vec::new();
         for (name, pages, screen, (px_max, win_max)) in cases {
@@ -2806,6 +2819,151 @@ mod tests {
             }
         }
         assert!(over.is_empty(), "{over:?}");
+    }
+
+    /// The synthetic hill (tools/fat_image.py: 2 km east on the flat at 100 m, 2 km north up to 220 m, 1 km east)
+    /// ridden at 8 m/s from its start, with a detour 150 m south from 60 s to 95 s.
+    fn course_route(ms: u64) -> (i32, i32, i32) {
+        let (s, t) = (ms as f64 * 0.008, ms / 1000);
+        let (x, mut y, heading) = match s {
+            s if s < 2000.0 => (-2000.0 + s, -1500.0, 90.0),
+            s if s < 4000.0 => (0.0, -3500.0 + s, 0.0),
+            s => (s - 4000.0, 500.0, 90.0),
+        };
+        if (60..95).contains(&t) {
+            y -= 150.0;
+        }
+        let m_per_unit = 0.011_132; // metres per 1e-7 degree, as map.rs (at 0 N the same east and north)
+        ((y / m_per_unit) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
+    }
+
+    /// The list row of stock's hill (in \PlanTrip: the first HILL listed).
+    fn hill(app: &App) -> usize {
+        let list = &app.courses.as_deref().unwrap().list;
+        (0..list.len()).find(|&i| list.get(i).unwrap().name() == "HILL").unwrap()
+    }
+
+    /// Following a course (tools/fat_image.py's hill, in stock's \PlanTrip): COURSES lists the card's courses
+    /// with their lengths, Select follows one (the first ride page). On the ride the fields say what is left, the
+    /// climb ahead and the distance off the course; a detour gives "OFF COURSE" (once, with the alert's beeps) and
+    /// "BACK ON COURSE"; the climb's start a banner and a beep; then the fields follow the climb. The map draws the
+    /// course under the track; the profile moves by a column at a time. Following costs a few dozen segments a
+    /// second.
+    #[test]
+    fn course_ride() {
+        use Field::*;
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        sim.gnss.route = Some(course_route);
+        let mut app = App::start(&mut sim, None);
+        app.set_map_memory(crate::tiles::tests::memory());
+        app.set_course_memory(crate::storage::course::tests::memory());
+        app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, Timer] };
+        app.pages[1] = PageCfg { layout: 3, fields: [Profile, Climb, ClimbGain, Time, Time, Time] };
+        app.pages[2] = PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] };
+        let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+        let fields = |app: &App| [ToGo, OffCourse, Climb, ClimbGain, UpToGo].map(|f| text(app, f));
+
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Courses, 0));
+        let row = |app: &App, i| {
+            app.menu_row(Menu::Courses, i).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str())).unwrap_or_default()
+        };
+        let mut rows: Vec<_> = (0..5).map(|i| row(&app, i)).collect();
+        rows.sort();
+        assert_eq!(rows, ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM"]);
+        run(&mut sim, &mut app, 1000);
+        assert_consistent(&sim, &app);
+        sim.save("courses_menu");
+
+        for _ in 0..hill(&app) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(0), "COURSE ON"));
+        assert_eq!(fields(&app), ["--", "--", "--", "--", "--"], "no fix yet");
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start)); // the ride
+        run(&mut sim, &mut app, 30_000);
+        let s = sim.ms as f64 * 0.008;
+        let to_go: f64 = text(&app, ToGo).parse().unwrap();
+        assert!((to_go - (5000.0 - s) / 1000.0).abs() <= 0.15, "{to_go} km to go after {s} m");
+        assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2, "on the course");
+        assert_eq!(fields(&app)[2..], ["2.0K 6%", "120", "120"], "the climb ahead: 2 km at 6 %, 120 m");
+        assert_consistent(&sim, &app);
+
+        // the detour: off course after 5 s beyond 50 m, said once; back
+        let tones = sim.tones.len();
+        while sim.ms < 63_500 {
+            run(&mut sim, &mut app, 500);
+            assert_ne!(app.banner.as_str(), "OFF COURSE", "not before 5 s off: {}", sim.ms);
+        }
+        run(&mut sim, &mut app, 1500);
+        assert_eq!(app.banner.as_str(), "OFF COURSE");
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(sim.tones[tones..tones + 3], [2500, 0, 2500], "the alert's beeps");
+        assert!(
+            text(&app, OffCourse).parse::<u32>().unwrap().abs_diff(150) <= 2 && app.field_color(OffCourse) == ui::RED
+        );
+        assert_consistent(&sim, &app);
+        while sim.ms < 95_500 {
+            run(&mut sim, &mut app, 500);
+        }
+        run(&mut sim, &mut app, 1500);
+        assert_eq!(app.banner.as_str(), "BACK ON COURSE");
+        assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2 && app.field_color(OffCourse) == ui::WHITE);
+
+        // the climb: a banner at its start, then what is left of it
+        while sim.ms < 249_000 {
+            run(&mut sim, &mut app, 1000);
+            assert!(!app.banner.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms);
+        }
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(app.banner.as_str(), "CLIMB 2.0 KM 6%");
+        run(&mut sim, &mut app, 47_000); // 400 m up
+        let f = fields(&app);
+        assert_eq!(f[2], "1.6K 6%", "1.6 km left: {f:?}");
+        let m = |i: usize| f[i].parse::<u32>().unwrap();
+        assert!(m(3).abs_diff(96) <= 2 && m(4).abs_diff(96) <= 6, "96 m left to climb: {f:?}");
+        assert_eq!(app.field_color(Climb), ui::YELLOW, "6 %");
+        assert_consistent(&sim, &app);
+        sim.save("course_fields");
+
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 3000);
+        assert_consistent(&sim, &app);
+        sim.save("course_profile");
+        let (px, t0) = (sim.pixels, sim.ms);
+        run(&mut sim, &mut app, 20_000);
+        assert_consistent(&sim, &app);
+        std::println!("profile page: {} px/s", (sim.pixels - px) * 1000 / (sim.ms - t0));
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 3000);
+        assert_consistent(&sim, &app);
+        sim.save("course_map");
+        let course = sim.screen.iter().filter(|&&p| p == crate::map::COURSE).count();
+        assert!(course > 150, "the course on the map (under the track where ridden): {course} px");
+
+        // the cost: segments and boxes looked at a second, detour included
+        let at = app.courses.as_deref().unwrap().at;
+        let per_s = at.examined / (sim.ms / 1000) as u32;
+        std::println!("course following: {per_s} segments a second ({} in all)", at.examined);
+        assert!(per_s <= 60, "{per_s} segments a second");
+
+        // Select on the course followed stops following it
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+        app.press(&mut sim, Press::Short(Key::Start));
+        for _ in 0..hill(&app) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.banner.as_str(), "COURSE OFF");
+        assert_eq!(fields(&app), ["--", "--", "--", "--", "--"]);
     }
 
     /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,
@@ -3392,6 +3550,90 @@ mod fuzz {
                 let _ = parse(&f);
                 let _ = parse(&f[..f.len() / 2]);
             }
+        }
+    }
+
+    /// Course files (storage/course.rs into course.rs): the synthetic card's hill as Bryton's route, a Garmin course
+    /// and GPX, with bytes changed (the FIT ones with their CRC made right, so the reader gets past it), and random
+    /// text of GPX's own marks; each read into a course, which is then followed from random places (near it and
+    /// anywhere on the globe), asked for its profile, climbs and ascent, and drawn on a map.
+    #[test]
+    fn course_files() {
+        use crate::course::{Course, Tracker};
+        use crate::fitread::{Msg, Reader};
+        use crate::storage::course::Gpx;
+        let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let files = ["PlanTrip/Hill.fit", "Courses/Hill_Garmin.fit", "Courses/Hill.gpx"]
+            .map(|p| crate::fat::tests::read_all(&mut fat, &mut d, p).unwrap());
+        let mut c = std::boxed::Box::new(Course::new());
+        let read = |f: &[u8], gpx: bool, c: &mut Course| {
+            c.clear();
+            if gpx {
+                Gpx::new().push_slice(f, &mut |lat, lon, e| c.push(lat, lon, e));
+            } else {
+                Reader::with_position().push_slice(f, |m| {
+                    if let Msg::Record(r) = m
+                        && let Some((lat, lon)) = r.pos
+                    {
+                        c.push(crate::history::degrees_e7(lat), crate::history::degrees_e7(lon), r.alt_dm);
+                    }
+                });
+            }
+            c.finish();
+        };
+        let mut noise = bytes(21, 1 << 24);
+        let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+        let exercise = |c: &Course, next: &mut dyn FnMut() -> u32| {
+            let mut t = Tracker::new();
+            for k in 0..40 {
+                let (lat, lon) = if k % 4 == 3 {
+                    (next() as i32, next() as i32) // anywhere, or off the globe
+                } else {
+                    ((next() % 400_000) as i32 - 200_000, (next() % 400_000) as i32 - 200_000) // within 2 km
+                };
+                let _ = c.follow(&mut t, lat, lon);
+                let _ = (c.grade_ahead(t.along_m), c.ascent_left(&t), c.climb_at(t.along_m), c.alt_at(next()));
+            }
+            for k in 0..64 {
+                let _ = c.column(next() % 10_000, next() % 10_000, 64, k);
+            }
+            let mut f = crate::ui::tests::Frame::new();
+            let mut track = crate::map::Track::new();
+            track.add(0, 0, 0);
+            let route = c.route((0, 0));
+            let view = crate::map::View::fit(&track, (0, 24, 240, 296), route.as_ref());
+            crate::map::draw(&mut f, (0, 24, 240, 296), &track, view, None, route.as_ref());
+        };
+        for (i, good) in files.iter().enumerate() {
+            let gpx = i == 2;
+            for _ in 0..200 {
+                let mut bad = good.clone();
+                for _ in 0..1 + next() % 8 {
+                    let at = 14 + next() as usize % (bad.len() - 16);
+                    bad[at] = next() as u8;
+                }
+                if !gpx {
+                    let n = bad.len() - 2;
+                    let crc = crate::fit::crc(0, &bad[..n]);
+                    bad[n..].copy_from_slice(&crc.to_le_bytes());
+                }
+                read(&bad, gpx, &mut c);
+                exercise(&c, &mut next);
+                read(&bad[..bad.len() / 3], gpx, &mut c);
+            }
+        }
+        const MARKS: [&str; 18] = [
+            "<trkpt", "<rtept", " lat=\"", " lon='", "\"", "'", ">", "/>", "</trkpt>", "<ele>", "</ele>", "-", ".",
+            "1", "9", " ", "<!--", "=",
+        ];
+        for _ in 0..8 {
+            let mut text = Vec::new();
+            while text.len() < 64 * 1024 {
+                text.extend_from_slice(MARKS[next() as usize % MARKS.len()].as_bytes());
+            }
+            read(&text, true, &mut c);
+            exercise(&c, &mut next);
         }
     }
 
