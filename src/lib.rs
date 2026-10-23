@@ -680,6 +680,9 @@ impl App {
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
         }
+        if let Some((lat, lon)) = app.aid.pos {
+            app.track.seed(lat, lon); // the map shows where the unit last was until the first fix
+        }
         app.strip_shown = app.strip;
         ui::draw_strip(&mut Panel(b), &app.strip);
         app.show(b);

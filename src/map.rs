@@ -63,6 +63,8 @@ pub struct Track {
     /// The last position and heading of motion (degrees x 1e-5).
     pos: Option<(i32, i32)>,
     heading: i32,
+    /// The position is the last one known from an earlier power-up ([`Track::seed`]), not a fix yet.
+    stale: bool,
     /// Everything the track went through: south-west and north-east corners.
     min: (i32, i32),
     max: (i32, i32),
@@ -85,9 +87,24 @@ impl Track {
             thinned: 0,
             pos: None,
             heading: 0,
+            stale: false,
             min: (0, 0),
             max: (0, 0),
         }
+    }
+
+    /// Before any fix: the last position known (degrees x 1e-7, kept from an earlier power-up), shown as such until
+    /// the first fix replaces it. Ignored once there is a track.
+    pub fn seed(&mut self, lat: i32, lon: i32) {
+        if self.origin.is_none() {
+            self.origin = Some((lat, lon, cos_q16(lat)));
+            (self.pos, self.min, self.max, self.stale) = (Some((0, 0)), (0, 0), (0, 0), true);
+        }
+    }
+
+    /// The position shown is the last one known, not a fix.
+    pub fn stale(&self) -> bool {
+        self.stale
     }
 
     /// A good fix: latitude and longitude in degrees x 1e-7, heading of motion in degrees x 1e-5.
@@ -97,8 +114,8 @@ impl Track {
         let x = (i64::from(lon) - i64::from(lon0)) * 11_132 * cos / 65_536 / 1_000_000;
         let y = (i64::from(lat) - i64::from(lat0)) * 11_132 / 1_000_000;
         let p = (x as i32, y as i32);
-        if self.pos.is_none() {
-            (self.min, self.max) = (p, p);
+        if self.pos.is_none() || self.stale {
+            (self.min, self.max, self.stale) = (p, p, false); // the first fix: the last known position goes
         }
         self.min = (self.min.0.min(p.0), self.min.1.min(p.1));
         self.max = (self.max.0.max(p.0), self.max.1.max(p.1));
@@ -185,6 +202,8 @@ pub struct Arrow {
     x: i32,
     y: i32,
     dir: usize,
+    /// The last known position, not a fix: a grey dot, no direction.
+    stale: bool,
 }
 
 impl Arrow {
@@ -192,7 +211,7 @@ impl Arrow {
     fn of(view: &View, area: Rect, track: &Track) -> Option<Arrow> {
         let (x, y) = view.px(area, track.pos?);
         let dir = (track.heading.rem_euclid(36_000_000) + 1_125_000) / 2_250_000 % 16;
-        Some(Arrow { x, y, dir: dir as usize })
+        Some(Arrow { x, y, dir: dir as usize, stale: track.stale })
     }
 
     /// The box it covers, outline included.
@@ -219,13 +238,16 @@ pub struct Shown {
     points: usize,
     thinned: u32,
     arrow: Option<Arrow>,
+    /// Drawn from the last known position, before a fix.
+    stale: bool,
 }
 
 impl Shown {
     /// The map of `track` in `area` as [`draw`] will show it when drawn whole now.
     pub fn of(track: &Track, area: Rect) -> Shown {
         let view = View::fit(track, area);
-        Shown { view, points: track.len, thinned: track.thinned, arrow: view.and_then(|v| Arrow::of(&v, area, track)) }
+        let arrow = view.and_then(|v| Arrow::of(&v, area, track));
+        Shown { view, points: track.len, thinned: track.thinned, arrow, stale: track.stale }
     }
 }
 
@@ -382,9 +404,17 @@ pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>) {
         }
     }
     scale_bar(&mut c, k, area, &v);
-    if let Some(a) = Arrow::of(&v, area, track) {
-        triangle(&mut c, k, a.corners(ARROW + 3), ui::BLACK);
-        triangle(&mut c, k, a.corners(ARROW), ui::WHITE);
+    match Arrow::of(&v, area, track) {
+        Some(a) if a.stale => {
+            // the last known position: a grey dot with a black outline, no direction
+            run(&mut c, k, a.x - 5, a.y - 5, 11, 11, ui::BLACK);
+            run(&mut c, k, a.x - 3, a.y - 3, 7, 7, ui::GREY);
+        }
+        Some(a) => {
+            triangle(&mut c, k, a.corners(ARROW + 3), ui::BLACK);
+            triangle(&mut c, k, a.corners(ARROW), ui::WHITE);
+        }
+        None => {}
     }
 }
 
@@ -394,7 +424,8 @@ pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>) {
 pub fn update(c: &mut dyn Canvas, area: Rect, track: &Track, shown: &mut Shown) {
     let refit = match shown.view {
         None => track.pos.is_some(),
-        Some(v) => shown.thinned != track.thinned || !v.keeps(area, track),
+        // the first fix after the last known position: fitted again around the fix
+        Some(v) => shown.thinned != track.thinned || shown.stale != track.stale || !v.keeps(area, track),
     };
     let Some(v) = shown.view.filter(|_| !refit) else {
         if refit {

@@ -1400,6 +1400,38 @@ mod tests {
     /// The map page (page 3 by default) through a ride: "NO FIX" until the first fix, then the track and the arrow;
     /// fitted again a few times while the ride goes out, never once the loop is closed; between those, only small
     /// boxes are redrawn. The panel always equals the screenshot rendered row by row.
+    /// Before any fix, the map shows the last known position (kept from an earlier power-up) as a grey dot instead
+    /// of "NO FIX"; the first fix replaces it with the arrow.
+    #[test]
+    fn map_shows_the_last_known_position_until_a_fix() {
+        let mut sim = Sim::new(9, 0, 0);
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((FIX_LAT / 1000 * 1000, FIX_LON / 1000 * 1000)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        let mut app = App::start(&mut sim, None);
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        assert_eq!(app.screen(), Screen::Ride(2), "page 3: the map");
+        run(&mut sim, &mut app, 500);
+        // the middle of the map, where the dot or the arrow is (the strip and the scale bar are white too)
+        let count = |sim: &Sim, c: u16| {
+            let (cx, cy) = (W / 2, crate::ui::RIDE_Y + crate::ui::RIDE_H / 2);
+            let mut n = 0;
+            for y in cy - 20..cy + 20 {
+                n += (cx - 20..cx + 20).filter(|&x| sim.screen[(y * W + x) as usize] == c).count();
+            }
+            n
+        };
+        sim.save("map_last_known");
+        assert_eq!(count(&sim, crate::ui::GREY), 49, "the grey dot, 7 x 7");
+        assert_eq!(count(&sim, crate::ui::WHITE), 0, "no arrow, no NO FIX text");
+        assert_consistent(&sim, &app);
+        sim.gnss.fix = Some(5000);
+        run(&mut sim, &mut app, 3000);
+        assert!(!app.track.stale() && count(&sim, crate::ui::WHITE) > 20, "the fix: the arrow");
+        assert_consistent(&sim, &app);
+    }
+
     #[test]
     fn map_page_follows_a_ride() {
         let mut sim = Sim::new(9, 0, 0);
