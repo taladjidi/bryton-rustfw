@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::vec;
 use std::vec::Vec;
 
-type KeyScript = Box<dyn Fn(u64) -> (bool, bool)>;
+type KeyScript = Box<dyn Fn(u64) -> u8>;
 
 pub struct Sim {
     pub screen: Vec<u16>,
@@ -44,7 +44,8 @@ pub struct Sim {
     pub backup: [u32; 32],
 }
 
-/// The Nordic chip as seen over its link: replies to `sd_ble_enable` and `sd_ble_version_get` as the unit did.
+/// The Nordic chip as seen over its link: replies to the commands as the unit did, scans, and has ANT channels that
+/// hear the [`AntSensor`]s in range.
 #[derive(Default)]
 pub struct Nordic {
     /// False: the chip never answers (not running).
@@ -54,18 +55,30 @@ pub struct Nordic {
     pub enabled: bool,
     /// Simulated time (ms) at which the running scan times out.
     scan_end: Option<u64>,
-    /// A heart-rate strap in range sending this rate; it is heard once the HR channel is open for it.
-    pub strap: Option<u8>,
-    /// That strap's device number (the unit's strap: 25126, transmission type 0xf1).
-    pub strap_id: u16,
-    /// The device number the HR channel was opened for (0: any).
-    channel_dev: u16,
-    /// Simulated time of the strap's next broadcast, once the HR channel is open.
-    next_hr: Option<u64>,
+    /// ANT+ sensors in range.
+    pub sensors: Vec<AntSensor>,
+    channels: [Channel; 8],
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
     out: std::collections::VecDeque<u8>,
+}
+
+/// An ANT+ sensor in range: its device type and number, and its 8 data bytes as a function of the time (ms).
+pub struct AntSensor {
+    pub device_type: u8,
+    pub id: u16,
+    pub data: fn(u64) -> [u8; 8],
+}
+
+/// An ANT channel: the ID it was set to, open or not, the sensor it found, its next broadcast.
+#[derive(Default, Clone, Copy)]
+struct Channel {
+    device_type: u8,
+    device: u16,
+    open: bool,
+    found: Option<usize>,
+    next: u64,
 }
 
 /// The advertisers the simulated chip hears: two devices, one of them named, one report repeated.
@@ -85,9 +98,29 @@ fn adv_report(addr: u8, rssi: i8, data: &[u8]) -> Vec<u8> {
 }
 
 impl Nordic {
-    /// The strap is in range and the channel is open for it.
-    fn heard(&self) -> bool {
-        self.strap.is_some() && (self.channel_dev == 0 || self.channel_dev == self.strap_id)
+    /// An ANT event packet: `message` then the event code and the channel, 44 bytes.
+    fn ant_event(&mut self, message: &[u8], event: u8, ch: u8) {
+        let mut p = vec![8];
+        p.extend(message);
+        p.resize(42, 0);
+        p.extend([event, ch]);
+        self.queue(&p);
+    }
+
+    /// Broadcasts from the open channels that hear a sensor, every 250 ms.
+    fn ant_tick(&mut self, now: u64) {
+        for ch in 0..self.channels.len() {
+            let c = self.channels[ch];
+            if !c.open || now < c.next {
+                continue;
+            }
+            self.channels[ch].next = c.next + 250;
+            let hit = |s: &AntSensor| s.device_type == c.device_type && (c.device == 0 || c.device == s.id);
+            let Some(i) = c.found.or_else(|| self.sensors.iter().position(hit)) else { continue };
+            self.channels[ch].found = Some(i);
+            let data = (self.sensors[i].data)(now);
+            self.ant_event(&[&[9, 0x4e, ch as u8][..], &data].concat(), 0x80, ch as u8); // EVENT_RX
+        }
     }
 
     fn queue(&mut self, payload: &[u8]) {
@@ -110,14 +143,28 @@ impl Nordic {
             self.scan_end = Some(now + 1000 * u64::from(u16::from_le_bytes([t0, t1])));
             return;
         }
-        if let [6, op, rest @ ..] = p {
+        if let [6, op, ch, rest @ ..] = p {
+            let ch = usize::from(*ch);
             match (*op, rest) {
-                (0xc4, [0, ..]) => self.next_hr = Some(now), // channel 0 open
-                (0xd3, [0, d0, d1, ..]) => self.channel_dev = u16::from_le_bytes([*d0, *d1]),
-                (0xd4, [0]) => {
-                    let found = self.heard() && self.next_hr.is_some_and(|t| t > now.saturating_sub(1000));
-                    let [d0, d1] = if found { self.strap_id } else { self.channel_dev }.to_le_bytes();
-                    self.queue(&[1, 0xd4, 0, 0, 0, 0, d0, d1, 0x78, if found { 0xf1 } else { 0 }]);
+                (0xd3, [d0, d1, t, _]) => {
+                    self.channels[ch].device = u16::from_le_bytes([*d0, *d1]);
+                    self.channels[ch].device_type = *t;
+                }
+                (0xc4, _) => {
+                    assert!(!self.channels[ch].open, "channel {ch} opened twice");
+                    self.channels[ch] = Channel { open: true, found: None, next: now, ..self.channels[ch] };
+                }
+                (0xc5, _) => {
+                    self.channels[ch].open = false;
+                    self.queue(&[1, 0xc5, 0, 0, 0, 0]);
+                    self.ant_event(&[1, 0x40, ch as u8, 1, 7], 7, ch as u8); // EVENT_CHANNEL_CLOSED
+                    return;
+                }
+                (0xd4, []) => {
+                    let c = self.channels[ch];
+                    let id = c.found.map_or(c.device, |i| self.sensors[i].id);
+                    let [d0, d1] = id.to_le_bytes();
+                    self.queue(&[1, 0xd4, 0, 0, 0, 0, d0, d1, c.device_type, if id > 0 { 0xf1 } else { 0 }]);
                     return;
                 }
                 _ => {}
@@ -159,16 +206,16 @@ impl Sim {
             standby: false,
             ms: 0,
             start_s: h * 3600 + m * 60 + s,
-            keys: Box::new(|_| (false, false)),
+            keys: Box::new(|_| 0),
             record: None,
             dirty: false,
-            nordic: Nordic { strap_id: 25126, ..Nordic::default() },
+            nordic: Nordic::default(),
             backup: [0; 32],
         }
     }
 
-    /// Keys as a function of the simulated time in ms: (page, back).
-    pub fn keys(mut self, f: impl Fn(u64) -> (bool, bool) + 'static) -> Self {
+    /// Keys held as a function of the simulated time in ms: a mask of [`Key`] codes.
+    pub fn keys(mut self, f: impl Fn(u64) -> u8 + 'static) -> Self {
         self.keys = Box::new(f);
         self
     }
@@ -263,7 +310,7 @@ impl Board for Sim {
         self.backlight = on;
     }
 
-    fn keys_down(&mut self) -> (bool, bool) {
+    fn keys_down(&mut self) -> u8 {
         (self.keys)(self.ms)
     }
 
@@ -288,8 +335,8 @@ impl Board for Sim {
     }
 
     fn nrf_reset(&mut self) {
-        let n = &self.nordic;
-        self.nordic = Nordic { dead: n.dead, strap: n.strap, strap_id: n.strap_id, reset: true, ..Nordic::default() };
+        let sensors = std::mem::take(&mut self.nordic.sensors);
+        self.nordic = Nordic { dead: self.nordic.dead, sensors, reset: true, ..Nordic::default() };
         self.ms += 950;
     }
 
@@ -317,16 +364,7 @@ impl Board for Sim {
             self.nordic.scan_end = None;
             self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
         }
-        let n = &mut self.nordic;
-        if let (true, Some(bpm), Some(t)) = (n.heard(), n.strap, n.next_hr)
-            && self.ms >= t
-        {
-            n.next_hr = Some(t + 246); // 8070 / 32768 s
-            let mut p = vec![8, 9, 0x4e, 0, 4, 0, 0, 0, 0, 0, 0, bpm]; // HR data page 4, rate in data byte 7
-            p.resize(42, 0);
-            p.extend([0x80, 0]); // EVENT_RX, channel 0
-            n.queue(&p);
-        }
+        self.nordic.ant_tick(self.ms);
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
             *slot = b;
@@ -339,22 +377,28 @@ impl Board for Sim {
 mod tests {
     use super::*;
     use crate::ui::tests::Frame;
-    use crate::ui::{Clock, draw_static};
-
-    /// The screen as the drawing code means it, without the panel protocol in between.
-    /// The version the simulated Nordic chip reports, as the unit did.
-    const V4: crate::nrf::Version = crate::nrf::Version { image: 4, bootloader: 1, sd: 0x32 };
-
-    fn expected(h: u8, m: u8, s: u8) -> Vec<u16> {
-        let mut f = Frame::new();
-        draw_static(&mut f);
-        Clock::new().show(&mut f, h, m, s);
-        crate::ui::draw_ble(&mut f, Some(V4));
-        f.px
-    }
-
+    use crate::ui::{Field, Strip, UsbDot};
     /// A stand-in for the ANT+ network key (the real one is never in the repository).
     const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    /// The owner's strap, as the unit paired it.
+    const STRAP: SensorId = SensorId { device: 25126, trans: 0xf1 };
+
+    fn hr72(_: u64) -> [u8; 8] {
+        [4, 0, 0, 0, 0, 0, 0, 72]
+    }
+    fn hr80(_: u64) -> [u8; 8] {
+        [4, 0, 0, 0, 0, 0, 0, 80]
+    }
+    /// Speed and cadence: every second one crank turn and three wheel turns.
+    fn spd_cad(ms: u64) -> [u8; 8] {
+        let (t, n) = (((ms / 1000) * 1024) as u16, (ms / 1000) as u16);
+        let [t0, t1] = t.to_le_bytes();
+        let ([c0, c1], [w0, w1]) = (n.to_le_bytes(), (3 * n).to_le_bytes());
+        [t0, t1, c0, c1, t0, t1, w0, w1]
+    }
+    fn power300(_: u64) -> [u8; 8] {
+        [0x10, 1, 0xff, 85, 0, 0, 0x2c, 0x01]
+    }
 
     fn run(sim: &mut Sim, app: &mut App, ms: u64) {
         let end = sim.ms + ms;
@@ -364,145 +408,75 @@ mod tests {
         }
     }
 
+    /// The screen drawn step by step on the panel equals the screen drawn at once from the state (the screenshot).
+    fn assert_consistent(sim: &Sim, app: &App) {
+        for y in 0..H {
+            assert!(app.render_row(y).px[..] == sim.screen[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
+        }
+    }
+
+    /// Ride page `n` of `app` as the drawing code means it, with these values, under a strip at the sim's time
+    /// (`radio`: the Nordic chip answered).
+    fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec<u16> {
+        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
+        let mut f = Frame::new();
+        crate::ui::draw_strip(&mut f, &Strip { time: (h, m), radio, usb: UsbDot::Off, battery: None });
+        let page = app.pages()[n];
+        let height = crate::ui::RIDE_H[usize::from(n > 0)];
+        for (i, v) in values.iter().enumerate() {
+            let bx = crate::ui::field_box(page.layout, height, i).unwrap();
+            crate::ui::draw_field_frame(&mut f, bx, page.fields[i]);
+            crate::ui::draw_field_value(&mut f, bx, page.fields[i], v);
+        }
+        if n == 0 {
+            crate::ui::draw_ferris(&mut f);
+        }
+        f.px
+    }
+
+    fn hm(sim: &mut Sim) -> std::string::String {
+        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
+        format!("{h:02}:{m:02}")
+    }
+
     #[test]
-    fn boots_into_the_clock() {
+    fn boots_into_the_first_ride_page() {
         let mut sim = Sim::new(12, 34, 56);
         let mut app = App::start(&mut sim, None);
         app.step(&mut sim);
-        app.set_usb(&mut sim, crate::ui::UsbDot::Ready);
+        app.set_usb(&mut sim, UsbDot::Ready);
         assert!(sim.visible());
         let pos = |c| sim.cmds.iter().position(|&x| x == c).unwrap();
         assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
-        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
+        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
         let mut want = Frame::new();
-        want.px = expected(h, m, s);
-        crate::ui::draw_usb_dot(&mut want, crate::ui::UsbDot::Ready);
-        assert!(sim.screen == want.px, "screen differs from the drawing code");
+        want.px = ride(&mut sim, &app, 0, &["--", "--", "--"], true);
+        crate::ui::draw_strip(&mut want, &Strip { time: (h, m), radio: true, usb: UsbDot::Ready, battery: None });
+        assert!(sim.screen == want.px, "speed, HR, cadence");
+        assert_consistent(&sim, &app);
         sim.save("preview");
     }
 
-    /// Stock's order: reset, sd_ble_enable, then the version; the label shows the image number in green.
+    /// Stock's order: reset, sd_ble_enable, then the version; no ANT without a key, no scan before the list.
     #[test]
     fn starts_the_nordic_chip() {
         let mut sim = Sim::new(12, 0, 0);
-        let app = App::start(&mut sim, None);
-        assert_eq!(sim.nordic.got, [vec![0, 0x60], vec![0, 0x65, 1]], "no ANT without a key, no scan before the list");
-        assert_eq!(
-            app.render_row(crate::ui::BLE_LABEL.1 + 4).px,
-            {
-                let mut f = Frame::new();
-                crate::ui::draw_ble(&mut f, Some(V4));
-                f.px[((crate::ui::BLE_LABEL.1 + 4) * W) as usize..((crate::ui::BLE_LABEL.1 + 5) * W) as usize].to_vec()
-            }[..]
-        );
+        App::start(&mut sim, None);
+        assert_eq!(sim.nordic.got, [vec![0, 0x60], vec![0, 0x65, 1]]);
     }
 
-    /// A chip that never answers costs one timeout per command, then the clock runs and the label is red.
+    /// A chip that never answers costs one timeout per command, then the pages run and the label is red.
     #[test]
-    fn a_silent_nordic_chip_does_not_stop_the_clock() {
+    fn a_silent_nordic_chip_does_not_stop_the_pages() {
         let mut sim = Sim::new(12, 0, 0);
         sim.nordic.dead = true;
         let t0 = sim.ms;
-        let mut app = App::start(&mut sim, None);
+        let mut app = App::start(&mut sim, Some(KEY));
         assert!(sim.ms - t0 < 3000, "start took {} ms", sim.ms - t0);
         assert_eq!(sim.nordic.got, [vec![0, 0x60]], "gave up after the first timeout");
         run(&mut sim, &mut app, 2000);
-        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
-        let mut f = Frame::new();
-        draw_static(&mut f);
-        crate::ui::draw_ble(&mut f, None);
-        Clock::new().show(&mut f, h, m, s);
-        assert!(sim.screen == f.px);
-        assert!((0..W).any(|x| f.at(x, crate::ui::BLE_LABEL.1 + 4) == crate::ui::RED));
-    }
 
-    /// Page opens the device list and starts a scan: two distinct devices in three reports, strongest first, the
-    /// title "2 NEARBY..." until the scan's timeout; Page again goes back to the clock.
-    #[test]
-    fn page_lists_the_devices_nearby() {
-        let mut sim = Sim::new(9, 0, 0);
-        let mut app = App::start(&mut sim, None);
-        app.next_page(&mut sim);
-        assert_eq!(sim.nordic.got.last().unwrap()[..2], [0, 0x8a], "the scan starts with the list");
-        let want = |app: &App| {
-            let mut f = Frame::new();
-            crate::ui::draw_static(&mut f);
-            crate::ui::clear_page(&mut f);
-            crate::ui::draw_bar(&mut f);
-            crate::ui::draw_ble(&mut f, Some(V4));
-            crate::ui::draw_list(&mut f, &app.nearby);
-            crate::ui::draw_nearby(&mut f, app.nearby.count(), app.scanning);
-            f.px
-        };
-        run(&mut sim, &mut app, 1500);
-        let names: Vec<_> = app.nearby.strongest().map(|d| (d.rssi, std::string::String::from(d.name()))).collect();
-        assert_eq!(names, [(-42, "Bike".into()), (-70, "".into())], "last RSSI kept, the name from the first report");
-        assert!(app.scanning && sim.screen == want(&app), "the list while scanning");
-        sim.save("nearby");
-        run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
-        assert!(!app.scanning && sim.screen == want(&app), "2 NEARBY once the scan timed out");
-        for y in [0, crate::ui::NEARBY.1 + 5, crate::ui::LIST_Y + 5, H - 1] {
-            assert!(app.render_row(y).px[..] == sim.screen[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
-        }
-        app.next_page(&mut sim);
-        run(&mut sim, &mut app, 200);
-        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
-        assert!(sim.screen == expected(h, m, s), "back to the clock");
-    }
-
-    /// The line under the bar, rows NEARBY.1 .. +20.
-    fn line(px: &[u16]) -> Vec<u16> {
-        let y = crate::ui::NEARBY.1;
-        px[(y * W) as usize..((y + 20) * W) as usize].to_vec()
-    }
-
-    fn hr_line(bpm: Option<u8>, paired: bool) -> Vec<u16> {
-        let mut f = Frame::new();
-        crate::ui::draw_hr(&mut f, bpm, paired);
-        line(&f.px)
-    }
-
-    /// With a key: ANT enabled and the HR channel opened as stock does, for any strap; the first rate pairs it
-    /// (kept in a backup register), "HR --" once it stops.
-    #[test]
-    fn pairs_a_strap_and_shows_the_heart_rate() {
-        let mut sim = Sim::new(9, 0, 0);
-        let mut app = App::start(&mut sim, Some(KEY));
-        let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
-        assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xd3, 0xda, 0xcd, 0xd1, 0xc4]);
-        assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
-        assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0, 0, 0x78, 0]), "any strap");
-        assert!(line(&sim.screen) == hr_line(None, false), "HR PAIRING");
-        run(&mut sim, &mut app, 1000);
-        assert!(line(&sim.screen) == hr_line(None, false), "no strap in range: still pairing");
-        sim.nordic.strap = Some(72);
-        run(&mut sim, &mut app, 1000);
-        assert!(line(&sim.screen) == hr_line(Some(72), true), "HR 72");
-        let strap = crate::nrf::Strap { device: 25126, trans: 0xf1 };
-        assert_eq!(sim.backup[STRAP_BKP], strap.to_word(), "paired and kept");
-        sim.nordic.strap = None;
-        run(&mut sim, &mut app, u64::from(HR_STALE_MS) + 500);
-        assert!(line(&sim.screen) == hr_line(None, true), "HR -- once the strap is quiet");
-    }
-
-    /// After a restart the channel opens for the paired strap only: another strap is not taken. Holding Page
-    /// forgets it and pairs with the one in range.
-    #[test]
-    fn keeps_the_paired_strap_until_page_is_held() {
-        let strap = crate::nrf::Strap { device: 25126, trans: 0xf1 };
-        let mut sim = Sim::new(9, 0, 0).keys(|ms| ((5000..7500).contains(&ms), false));
-        sim.backup[STRAP_BKP] = strap.to_word();
-        sim.nordic.strap = Some(80);
-        sim.nordic.strap_id = 999; // a friend's strap
-        let mut app = App::start(&mut sim, Some(KEY));
-        assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0x26, 0x62, 0x78, 0xf1]), "the paired strap only");
-        let t = 4000 - sim.ms;
-        run(&mut sim, &mut app, t);
-        assert!(line(&sim.screen) == hr_line(None, true), "the friend's strap is not shown");
-        run(&mut sim, &mut app, 4000);
-        assert_eq!(app.page(), Page::Clock, "a long hold does not change page");
-        assert_eq!(sim.backup[STRAP_BKP], crate::nrf::Strap { device: 999, trans: 0xf1 }.to_word(), "paired again");
-        assert!(line(&sim.screen) == hr_line(Some(80), true), "HR 80");
+        assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], false) == sim.screen, "BLE in red");
     }
 
     #[test]
@@ -510,15 +484,150 @@ mod tests {
         let mut sim = Sim::new(23, 59, 58);
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 3000);
-        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
-        assert_eq!((h, m), (0, 0), "past midnight");
-        assert!(sim.screen == expected(h, m, s));
+        assert_eq!(hm(&mut sim), "00:00");
+        assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen);
+    }
+
+    /// Page turns the pages that are on (page 3 is off by default), and wraps.
+    #[test]
+    fn page_turns_the_ride_pages() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(1));
+        assert_eq!(app.pages()[1].fields[..4], [Field::Speed, Field::Hr, Field::Cadence, Field::Power]);
+        assert!(ride(&mut sim, &app, 1, &["--"; 4], true) == sim.screen, "no Ferris past the first page");
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(0));
+    }
+
+    /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
+    /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
+    #[test]
+    fn menu_lists_the_devices_nearby() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
+        app.press(&mut sim, Press::Short(Key::Lap));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 5), "Lap from the top wraps to NEARBY BLE");
+        assert_consistent(&sim, &app);
+        sim.save("menu");
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Nearby);
+        assert_eq!(sim.nordic.got.last().unwrap()[..2], [0, 0x8a], "the scan starts with the list");
+        run(&mut sim, &mut app, 1500);
+        let names: Vec<_> = app.nearby.strongest().map(|d| (d.rssi, std::string::String::from(d.name()))).collect();
+        assert_eq!(names, [(-42, "Bike".into()), (-70, "".into())], "last RSSI kept, the name from the first report");
+        assert!(app.scanning);
+        assert_consistent(&sim, &app);
+        sim.save("nearby");
+        run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
+        assert!(!app.scanning);
+        assert_consistent(&sim, &app);
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 5));
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Ride(0));
+        assert_consistent(&sim, &app);
+    }
+
+    /// Sensors menu: Start on a sensor searches; the first one heard is paired (kept in its backup register) and
+    /// its value reaches the ride page. With a key, ANT is started and every channel assigned, none opened yet.
+    #[test]
+    fn pairs_sensors_from_the_menu() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x79, id: 555, data: spd_cad });
+        let mut app = App::start(&mut sim, Some(KEY));
+        let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
+        assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign 5 channels");
+        assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
+        app.press(&mut sim, Press::Long(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0));
+        app.press(&mut sim, Press::Short(Key::Start)); // heart rate: search
+        assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0, 0, 0x78, 0]), "any strap");
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start)); // speed + cadence: search
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "strap paired and kept");
+        assert_eq!(sim.backup[Kind::SpeedCadence.backup()], SensorId { device: 555, trans: 0xf1 }.to_word());
+        assert_consistent(&sim, &app);
+        sim.save("sensors");
+        app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Back));
+        run(&mut sim, &mut app, 200);
+        assert!(ride(&mut sim, &app, 0, &["22.7", "72", "60"], true) == sim.screen, "22.7 km/h, HR 72, 60 rpm");
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 200);
+        assert!(ride(&mut sim, &app, 1, &["22.7", "72", "60", "--"], true) == sim.screen);
+        sim.save("ride");
+    }
+
+    /// After a restart the paired sensor's channel opens for it only: a friend's strap is not taken. Start on it
+    /// in the sensors menu forgets it (channel closed, register cleared).
+    #[test]
+    fn keeps_the_paired_sensor_until_forgotten() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 999, data: hr80 }); // a friend's strap
+        let mut app = App::start(&mut sim, Some(KEY));
+        assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0x26, 0x62, 0x78, 0xf1]), "the paired strap only");
+        run(&mut sim, &mut app, 2000);
+
+        assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen, "the friend's strap is not shown");
+        app.press(&mut sim, Press::Long(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count(), 1, "closed");
+        assert_eq!(sim.backup[Kind::Hr.backup()], 0, "forgotten");
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(sim.backup[Kind::Hr.backup()], SensorId { device: 999, trans: 0xf1 }.to_word(), "paired anew");
+    }
+
+    /// The page menu: Start cycles the layout and the fields; kept in a backup register, read back at the next
+    /// start. A power meter's value shows in the new field.
+    #[test]
+    fn pages_are_configured_from_the_menu() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power300 });
+        let mut app = App::start(&mut sim, Some(KEY));
+        app.press(&mut sim, Press::Long(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 0));
+        app.press(&mut sim, Press::Short(Key::Start)); // layout 3 -> 4
+        app.press(&mut sim, Press::Short(Key::Page));
+        for _ in 0..2 {
+            app.press(&mut sim, Press::Short(Key::Start)); // field 1: speed -> cadence -> power
+        }
+        assert_consistent(&sim, &app);
+        sim.save("page_menu");
+        let want = PageCfg {
+            layout: 4,
+            fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time],
+        };
+        assert_eq!(app.pages()[0], want);
+        assert_eq!(PageCfg::from_word(sim.backup[14]), Some(want));
+        app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Back));
+        run(&mut sim, &mut app, 1000);
+        let t = hm(&mut sim);
+        assert!(ride(&mut sim, &app, 0, &["300", "--", "85", &t], true) == sim.screen);
+        let app = App::start(&mut sim, Some(KEY));
+        assert_eq!(app.pages()[0], want, "read back after a restart");
     }
 
     #[test]
     fn back_short_press_toggles_the_backlight() {
         // Presses after the start (which takes about 1 s with the Nordic chip): at 3 s and at 4 s.
-        let mut sim = Sim::new(8, 0, 0).keys(|ms| (false, (3000..3200).contains(&ms) || (4000..4100).contains(&ms)));
+        let back = |ms| (3000..3200).contains(&ms) || (4000..4100).contains(&ms);
+        let mut sim = Sim::new(8, 0, 0).keys(move |ms| if back(ms) { Key::Back as u8 } else { 0 });
         let mut app = App::start(&mut sim, None);
         let t0 = sim.ms;
         assert!(t0 < 3000);
@@ -530,7 +639,7 @@ mod tests {
 
     #[test]
     fn back_held_3s_powers_off_after_release() {
-        let mut sim = Sim::new(8, 0, 0).keys(|ms| (false, (1000..6000).contains(&ms)));
+        let mut sim = Sim::new(8, 0, 0).keys(|ms| if (1000..6000).contains(&ms) { Key::Back as u8 } else { 0 });
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 10_000);
         assert!(sim.standby);
@@ -542,11 +651,11 @@ mod tests {
     /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.
     #[test]
     fn record_a_run() {
-        let mut sim = Sim::new(9, 59, 57).keys(|ms| (ms / 100 == 25, false)).record("run");
+        let mut sim = Sim::new(9, 59, 57).keys(|ms| if ms / 100 == 25 { Key::Page as u8 } else { 0 }).record("run");
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 4000);
         let frames = std::fs::read_dir(out_dir().join("run")).unwrap().count();
-        assert!(frames >= 4, "one frame per second change at least, got {frames}");
+        assert!(frames >= 2, "the first page, then the second, got {frames}");
     }
 }
 
@@ -615,7 +724,10 @@ mod dev_tests {
         s.feed(b"poke 0x40013014 4098\npeek 0x40013010 2\n", &app, 0, &mut pc);
         assert_eq!(pc.got, b"ok\n00000000\n00001002\n");
         for bad in [
-            "peek 0x20000000",
+            "peek 0x10000000",
+            "peek 0x2001fffc 2",
+            "poke 0x20000000 1",
+            "poke 0xd0000000 1",
             "peek 0x40013001",
             "peek 0x5ffffffc 2",
             "peek 0x40000000 65",

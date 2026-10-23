@@ -107,39 +107,43 @@ pub fn send(b: &mut impl Board, payload: &[u8]) {
     b.nrf_send(payload);
 }
 
-/// Sends the command `payload` (`[CMD][op][arguments]`) and waits for its response; copies the outputs into `out`
-/// and returns their length. Packets that arrive meanwhile (events) are dropped.
-// ponytail: blocking, and events are dropped; an event queue when something listens for events (scanning).
-pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
-    send(b, payload);
-    let op = payload.get(1).copied();
-    // One byte at a time: what follows the response (events) must stay in the chip's stream for the caller.
+/// Reads packets until `f` returns Some for one (other packets are dropped), or [`TIMEOUT_MS`] of silence, or
+/// 64 KB of other packets (a scan's events). One byte at a time: what follows stays in the chip's stream.
+fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
     let mut buf = [0; 1];
-    // Bounded both ways: TIMEOUT_MS of silence, or 64 KB of other packets (a scan's events) without the response.
     let (mut idle_ms, mut bytes) = (0, 0u32);
     while idle_ms < TIMEOUT_MS && bytes < 0x1_0000 {
         let n = b.nrf_recv(&mut buf);
         bytes += n as u32;
-        for &byte in &buf[..n] {
-            let Some(p) = rx.push(byte) else { continue };
-            if p.len() < 6 || p[0] != RESP || Some(p[1]) != op {
-                continue;
-            }
-            let result = u32::from_le_bytes([p[2], p[3], p[4], p[5]]);
-            if result != 0 {
-                return Err(Error::Code(result));
-            }
-            let outputs = &p[6..];
-            let len = outputs.len().min(out.len());
-            out[..len].copy_from_slice(&outputs[..len]);
-            return Ok(len);
-        }
         if n == 0 {
             b.delay_ms(1);
             idle_ms += 1;
+        } else if let Some(t) = rx.push(buf[0]).and_then(&mut f) {
+            return Some(t);
         }
     }
-    Err(Error::Timeout)
+    None
+}
+
+/// Sends the command `payload` (`[type][op][arguments]`) and waits for its response; copies the outputs into `out`
+/// and returns their length. Packets that arrive meanwhile (events) are dropped.
+pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
+    send(b, payload);
+    let op = payload.get(1).copied();
+    let response = |p: &[u8]| match *p {
+        [RESP, o, r0, r1, r2, r3, ref outputs @ ..] if Some(o) == op => {
+            Some(match u32::from_le_bytes([r0, r1, r2, r3]) {
+                0 => {
+                    let len = outputs.len().min(out.len());
+                    out[..len].copy_from_slice(&outputs[..len]);
+                    Ok(len)
+                }
+                code => Err(Error::Code(code)),
+            })
+        }
+        _ => None,
+    };
+    wait(b, rx, response).unwrap_or(Err(Error::Timeout))
 }
 
 /// The version fields as Bryton fills them (stock logs "Image / Bootloader / SD").
@@ -230,60 +234,74 @@ pub fn ad_name(data: &[u8]) -> Option<&[u8]> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// ANT+ heart rate (BOARD.md 11)
+// ANT+ (BOARD.md 11): one channel per sensor kind (sensors.rs), all assigned at start, then opened and closed.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The ANT channel used for heart rate (stock's choice).
-pub const HR_CHANNEL: u8 = 0;
-
-/// A paired strap: its ANT channel ID, so the channel finds that strap and no other.
+/// A paired sensor: its ANT channel ID, so the channel finds that sensor and no other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Strap {
-    /// Device number (the strap's own, printed on some straps).
+pub struct SensorId {
+    /// Device number (the sensor's own, printed on some).
     pub device: u16,
     /// Transmission type (its upper nibble extends the device number to 20 bits).
     pub trans: u8,
 }
 
-impl Strap {
-    /// As kept in a 32-bit backup register, behind a tag byte so an empty or foreign value reads as no strap.
+impl SensorId {
+    /// As kept in a 32-bit backup register, behind a tag byte so an empty or foreign value reads as no sensor.
     ///
     /// ```
-    /// use bryton_rustfw::nrf::Strap;
-    /// let s = Strap { device: 25126, trans: 0xf1 };
-    /// assert_eq!(Strap::from_word(s.to_word()), Some(s));
-    /// assert_eq!(Strap::from_word(0), None);
+    /// use bryton_rustfw::nrf::SensorId;
+    /// let s = SensorId { device: 25126, trans: 0xf1 };
+    /// assert_eq!(SensorId::from_word(s.to_word()), Some(s));
+    /// assert_eq!(SensorId::from_word(0), None);
     /// ```
     pub fn to_word(self) -> u32 {
         (0xa5 << 24) | (u32::from(self.trans) << 16) | u32::from(self.device)
     }
 
-    /// The strap kept in `w`, if [`Strap::to_word`] wrote it.
+    /// The sensor kept in `w`, if [`SensorId::to_word`] wrote it.
     pub fn from_word(w: u32) -> Option<Self> {
-        (w >> 24 == 0xa5).then_some(Strap { device: w as u16, trans: (w >> 16) as u8 })
+        (w >> 24 == 0xa5).then_some(SensorId { device: w as u16, trans: (w >> 16) as u8 })
     }
 }
 
-/// Enables ANT and opens a heart-rate channel with stock's settings, for `strap` only, or for the first strap
-/// heard (pairing) when None. `key` is the ANT+ network key (licensed: build.rs reads it from a private file,
-/// never from this repository).
-pub fn ant_hr_open(b: &mut impl Board, rx: &mut Rx, key: [u8; 8], strap: Option<Strap>) -> Result<(), Error> {
+/// ANT event code: the channel is closed (after [`ant_close`]).
+const EVENT_CHANNEL_CLOSED: u8 = 0x07;
+
+/// Enables ANT, sets the ANT+ network key (licensed: build.rs reads it from a private file, never from this
+/// repository) and assigns channels `0..channels` as receivers on that network, as stock does at start.
+pub fn ant_start(b: &mut impl Board, rx: &mut Rx, key: [u8; 8], channels: u8) -> Result<(), Error> {
     let [k0, k1, k2, k3, k4, k5, k6, k7] = key;
-    let ch = HR_CHANNEL;
-    let Strap { device, trans } = strap.unwrap_or(Strap { device: 0, trans: 0 }); // 0, 0: any strap
+    // enable: 15 channels, 0 encrypted, event queue 32, then stock's buffer pointer and size (sent as stock sends
+    // them; the chip allocates its own, inferred)
+    call(b, rx, &[ANT_CMD, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05], &mut [])?;
+    call(b, rx, &[ANT_CMD, 0xcc, 0, k0, k1, k2, k3, k4, k5, k6, k7], &mut [])?;
+    for ch in 0..channels {
+        call(b, rx, &[ANT_CMD, 0xc2, ch, 0, 0, 0], &mut [])?; // assign: slave, network 0, no extended
+    }
+    Ok(())
+}
+
+/// Opens (closed, assigned) channel `ch` for sensors of `device_type` with stock's settings: for `id` only, or for
+/// the first one heard (pairing) when None.
+pub fn ant_open(
+    b: &mut impl Board,
+    rx: &mut Rx,
+    ch: u8,
+    device_type: u8,
+    period: u16,
+    id: Option<SensorId>,
+) -> Result<(), Error> {
+    let SensorId { device, trans } = id.unwrap_or(SensorId { device: 0, trans: 0 }); // 0, 0: any
     let [d0, d1] = device.to_le_bytes();
-    let cmds: [&[u8]; 8] = [
-        // enable: 15 channels, 0 encrypted, event queue 32, then stock's buffer pointer and size (sent as stock
-        // sends them; the chip allocates its own, inferred)
-        &[ANT_CMD, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05],
-        &[ANT_CMD, 0xcc, 0, k0, k1, k2, k3, k4, k5, k6, k7], // network 0 key
-        &[ANT_CMD, 0xc2, ch, 0, 0, 0],                       // assign: slave, network 0, no extended
-        &[ANT_CMD, 0xd3, ch, d0, d1, 0x78, trans],           // channel id, device type 0x78 (heart rate)
-        // ponytail: searches until a strap answers (stock's 0xff), so the radio stays on; a timeout when it costs
-        &[ANT_CMD, 0xda, ch, 0xff],       // low-priority search timeout
-        &[ANT_CMD, 0xcd, ch, 0x39],       // 2457 MHz, ANT+
-        &[ANT_CMD, 0xd1, ch, 0x86, 0x1f], // period 8070 / 32768 s (4.06 Hz)
-        &[ANT_CMD, 0xc4, ch, 0, 0],       // open
+    let [p0, p1] = period.to_le_bytes();
+    let cmds: [&[u8]; 5] = [
+        &[ANT_CMD, 0xd3, ch, d0, d1, device_type, trans], // channel id
+        // ponytail: searches until the sensor answers (stock's 0xff), so the radio stays on; a timeout if it costs
+        &[ANT_CMD, 0xda, ch, 0xff], // low-priority search timeout
+        &[ANT_CMD, 0xcd, ch, 0x39], // 2457 MHz, ANT+
+        &[ANT_CMD, 0xd1, ch, p0, p1],
+        &[ANT_CMD, 0xc4, ch, 0, 0], // open
     ];
     for cmd in cmds {
         call(b, rx, cmd, &mut [])?;
@@ -291,29 +309,39 @@ pub fn ant_hr_open(b: &mut impl Board, rx: &mut Rx, key: [u8; 8], strap: Option<
     Ok(())
 }
 
-/// The strap the heart-rate channel found (`sd_ant_channel_id_get`, op 0xd4, seen on the unit): the reply's outputs
+/// Closes channel `ch` and waits for the chip to report it closed, so it can be opened again with another ID.
+pub fn ant_close(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<(), Error> {
+    call(b, rx, &[ANT_CMD, 0xc5, ch], &mut [])?;
+    let closed =
+        |p: &[u8]| (p.len() == 44 && p[0] == ANT_EVT && p[42] == EVENT_CHANNEL_CLOSED && p[43] == ch).then_some(());
+    wait(b, rx, closed).ok_or(Error::Timeout)
+}
+
+/// The sensor channel `ch` locked onto (`sd_ant_channel_id_get`, op 0xd4, seen on the unit): the reply's outputs
 /// are the device number, the device type and the transmission type. None while it still searches (number 0).
-pub fn ant_hr_strap(b: &mut impl Board, rx: &mut Rx) -> Result<Option<Strap>, Error> {
+pub fn ant_channel_id(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<Option<SensorId>, Error> {
     let mut out = [0; 4];
-    match (call(b, rx, &[ANT_CMD, 0xd4, HR_CHANNEL], &mut out)?, out) {
+    match (call(b, rx, &[ANT_CMD, 0xd4, ch], &mut out)?, out) {
         (4, [d0, d1, _, trans]) if [d0, d1] != [0, 0] => {
-            Ok(Some(Strap { device: u16::from_le_bytes([d0, d1]), trans }))
+            Ok(Some(SensorId { device: u16::from_le_bytes([d0, d1]), trans }))
         }
         _ => Ok(None),
     }
 }
 
-/// The heart rate (bpm) in ANT event `p`, if it is a broadcast on [`HR_CHANNEL`]: `[ANT_EVT][size][0x4e][channel]
-/// [8 data bytes]...`, 44 bytes; ANT+ HR puts the computed heart rate in data byte 7. 0 means no reading.
+/// The channel and the 8 data bytes of ANT event `p`, if it is a broadcast: `[ANT_EVT][size][0x4e][channel]
+/// [8 data bytes]...`, 44 bytes in all.
 ///
 /// ```
 /// let mut p = [0u8; 44];
-/// p[..12].copy_from_slice(&[8, 9, 0x4e, 0, 4, 0, 0, 0, 0, 0, 0, 72]);
-/// assert_eq!(bryton_rustfw::nrf::ant_hr(&p), Some(72));
+/// p[..12].copy_from_slice(&[8, 9, 0x4e, 3, 4, 0, 0, 0, 0, 0, 0, 72]);
+/// assert_eq!(bryton_rustfw::nrf::ant_broadcast(&p), Some((3, [4, 0, 0, 0, 0, 0, 0, 72])));
 /// ```
-pub fn ant_hr(p: &[u8]) -> Option<u8> {
+pub fn ant_broadcast(p: &[u8]) -> Option<(u8, [u8; 8])> {
     match p {
-        [ANT_EVT, _, 0x4e, HR_CHANNEL, data @ ..] if p.len() == 44 => data.get(7).copied(),
+        [ANT_EVT, _, 0x4e, ch, d0, d1, d2, d3, d4, d5, d6, d7, ..] if p.len() == 44 => {
+            Some((*ch, [*d0, *d1, *d2, *d3, *d4, *d5, *d6, *d7]))
+        }
         _ => None,
     }
 }

@@ -65,43 +65,26 @@ pub fn draw_crab(c: &mut impl Canvas, x: u32, y: u32, scale: u32, color: u16) {
 // Screen layout
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Hours and minutes: the pixel font at 7x, white.
-pub const TIME: Style = Style { font: &PIXEL, scale: 7, fg: WHITE, bg: BLACK };
-/// Seconds: the pixel font at 5x, orange.
-pub const SECONDS: Style = Style { font: &PIXEL, scale: 5, fg: ACCENT, bg: BLACK };
 /// Width of one character cell of the monospaced pixel font, in font pixels.
 const CELL: u32 = 6;
-/// Left edge of "HH:MM", its ink centred (each cell ends with a blank column, the last one does not count).
-pub const TIME_X: u32 = (W - (5 * CELL - 1) * TIME.scale) / 2;
-/// Top of the hours and minutes.
-pub const TIME_Y: u32 = 96;
-/// Left edge of the two seconds digits, their ink centred.
-pub const SECONDS_X: u32 = (W - (2 * CELL - 1) * SECONDS.scale) / 2;
-/// Top of the seconds.
-pub const SECONDS_Y: u32 = 196;
-/// Ferris: scale and top left corner (centred, under the seconds).
+/// Ferris: scale and top left corner (centred, at the bottom of the first ride page).
 pub const CRAB_SCALE: u32 = 4;
 /// Ferris left edge.
 pub const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
 /// Ferris top edge.
-pub const CRAB_Y: u32 = 266;
+pub const CRAB_Y: u32 = 272;
 
-/// The bar at the top, on every page.
-pub fn draw_bar(c: &mut impl Canvas) {
-    c.fill(20, 40, W - 40, 6, ACCENT);
-}
+// ---------------------------------------------------------------------------------------------------------------
+// The status strip: a thin line at the top of every screen
+// ---------------------------------------------------------------------------------------------------------------
 
-/// The parts of the clock page that never change: the bar, the colon, Ferris.
-pub fn draw_static(c: &mut impl Canvas) {
-    text::draw(c, &TIME, TIME_X + 2 * CELL * TIME.scale, TIME_Y, Align::Left, ":");
-    draw_bar(c);
-    draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
-}
+/// Height of the status strip; an orange line follows it.
+pub const STRIP_H: u32 = 20;
 
-/// USB dev link state, shown as a dot in the top right corner.
+/// USB dev link state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsbDot {
-    /// Not plugged in: no dot.
+    /// Not plugged in: not shown.
     Off,
     /// Plugged in, but the PHY or the core did not come up.
     Failed,
@@ -111,42 +94,58 @@ pub enum UsbDot {
     Ready,
 }
 
-/// The USB dot's box: (x, y, size).
-pub const USB_DOT: (u32, u32, u32) = (W - 20, 12, 8);
-/// The "USB" label: right edge and top, so its capitals (7 font rows at 2x) are centred on the dot.
-pub const USB_LABEL: (u32, u32) = (USB_DOT.0 - 6, USB_DOT.1 + USB_DOT.2 / 2 - 7);
+/// What the status strip shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Strip {
+    /// Time of day, hours and minutes.
+    pub time: (u8, u8),
+    /// The Nordic chip answered (BLE / ANT usable).
+    pub radio: bool,
+    /// USB state.
+    pub usb: UsbDot,
+    /// Battery charge in percent, if known.
+    pub battery: Option<u8>,
+}
 
-/// Draws the USB state dot and the "USB" label beside it, both in the state's colour (black when unplugged).
-pub fn draw_usb_dot(c: &mut impl Canvas, s: UsbDot) {
-    let color = match s {
+/// The strip's boxes (x, width): time, BLE, USB, battery.
+const STRIP_TIME: (u32, u32) = (4, 5 * CELL * 2);
+const STRIP_BLE: (u32, u32) = (76, 3 * CELL * 2);
+const STRIP_USB: (u32, u32) = (W - 4 - 4 * CELL * 2 - 8 - 3 * CELL * 2, 3 * CELL * 2);
+const STRIP_BATTERY: (u32, u32) = (W - 4 - 4 * CELL * 2, 4 * CELL * 2);
+
+/// Draws the status strip: the time on the left, "BLE" (green, red if the chip did not answer); on the right
+/// "USB" in its state's colour (nothing when unplugged) and the battery; then the orange line.
+pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
+    let at = |c: &mut _, (x, w): (u32, u32), fg, align, t: &str| {
+        text::draw_in(c, &Style { fg, ..LABEL }, x, 3, w, align, t);
+    };
+    let mut l = text::Line::<8>::new();
+    for d in [s.time.0 / 10, s.time.0 % 10, 10, s.time.1 / 10, s.time.1 % 10] {
+        l.push_str(if d == 10 { ":" } else { DIGITS[usize::from(d % 10)] });
+    }
+    at(c, STRIP_TIME, WHITE, Align::Left, l.as_str());
+    at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
+    let usb = match s.usb {
         UsbDot::Off => BLACK,
         UsbDot::Failed => RED,
         UsbDot::Powered => ACCENT,
         UsbDot::Ready => GREEN,
     };
-    c.fill(USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2, color);
-    text::draw(c, &Style { fg: color, ..LABEL }, USB_LABEL.0, USB_LABEL.1, Align::Right, "USB");
+    at(c, STRIP_USB, usb, Align::Left, "USB");
+    let mut l = text::Line::<8>::new();
+    match s.battery {
+        Some(p) => l.push_u32(u32::from(p)),
+        None => l.push_str("--"),
+    }
+    l.push_str("%");
+    at(c, STRIP_BATTERY, WHITE, Align::Right, l.as_str());
+    c.fill(0, STRIP_H, W, 2, ACCENT);
 }
 
-/// The Nordic chip's state, top left: "BLE" and its firmware image number in green once it answered, "BLE ?" in
-/// red if it did not.
-pub fn draw_ble(c: &mut impl Canvas, v: Option<crate::nrf::Version>) {
-    let mut line = text::Line::<8>::new();
-    line.push_str("BLE ");
-    let color = match v {
-        Some(v) => {
-            line.push_u32(u32::from(v.image));
-            GREEN
-        }
-        None => {
-            line.push_str("?");
-            RED
-        }
-    };
-    text::draw_in(c, &Style { fg: color, ..LABEL }, BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, Align::Left, line.as_str());
-}
+/// One-digit strings, to build numbers without core::fmt.
+pub const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-/// The list page's title, under the bar: "3 NEARBY", with "..." while the scan runs.
+/// The device list's title: "3 NEARBY", with "..." while the scan runs.
 pub fn draw_nearby(c: &mut impl Canvas, count: usize, scanning: bool) {
     let mut line = text::Line::<16>::new();
     line.push_u32(count as u32);
@@ -154,27 +153,13 @@ pub fn draw_nearby(c: &mut impl Canvas, count: usize, scanning: bool) {
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, line.as_str());
 }
 
-/// The line under the bar: left, top, width (between the bar and the time). The heart rate on the clock page, the
-/// device count on the list page.
-pub const NEARBY: (u32, u32, u32) = (20, 58, W - 40);
+/// The title line of the menus and the device list: left, top, width.
+pub const NEARBY: (u32, u32, u32) = (20, PAGE_Y + 4, W - 40);
 
-/// Heart rate from the ANT+ strap, under the bar: "HR 72"; without a reading "HR --" (a strap is paired) or
-/// "HR PAIRING" (the channel takes the first strap it hears).
-pub fn draw_hr(c: &mut impl Canvas, bpm: Option<u8>, paired: bool) {
-    let mut line = text::Line::<12>::new();
-    line.push_str("HR ");
-    match bpm {
-        Some(v) if v > 0 => line.push_u32(u32::from(v)),
-        _ if paired => line.push_str("--"),
-        _ => line.push_str("PAIRING"),
-    }
-    text::draw_in(c, &Style { fg: RED, ..LABEL }, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, line.as_str());
-}
-
-/// Top of the page area, under the bar: what changes with Page.
-pub const PAGE_Y: u32 = 50;
-/// First row of the device list.
-pub const LIST_Y: u32 = 84;
+/// Top of the page area, under the strip and its line.
+pub const PAGE_Y: u32 = STRIP_H + 2;
+/// First row of the device list and the menus.
+pub const LIST_Y: u32 = NEARBY.1 + 24;
 /// Device list row pitch (the font's line height at 2x).
 pub const LIST_ROW: u32 = 20;
 /// Characters of a device's name shown (or its address, 12 hex digits); its RSSI goes on the right.
@@ -222,9 +207,6 @@ pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
     }
 }
 
-/// The BLE label's box: left, top (level with the USB label), width.
-pub const BLE_LABEL: (u32, u32, u32) = (20, USB_LABEL.1, 7 * CELL * LABEL.scale);
-
 /// One screen row as a [`Canvas`]: keeps only what falls on row `y`. Rendering the screen row by row takes
 /// 480 bytes instead of a 150 KB framebuffer (screenshots over USB).
 pub struct Row {
@@ -256,54 +238,135 @@ impl Canvas for Row {
     }
 }
 
-/// Clock digit `i` (0..4: H H M M, 4..6: the seconds) showing `d`, in its fixed cell of the monospaced font.
-fn draw_clock_digit(c: &mut impl Canvas, i: usize, d: u8) {
-    const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-    let s = DIGITS[usize::from(d % 10)];
-    if i < 4 {
-        let col = if i < 2 { i } else { i + 1 } as u32; // the colon is column 2
-        text::draw(c, &TIME, TIME_X + col * CELL * TIME.scale, TIME_Y, Align::Left, s);
-    } else {
-        text::draw(c, &SECONDS, SECONDS_X + (i as u32 - 4) * CELL * SECONDS.scale, SECONDS_Y, Align::Left, s);
+// ---------------------------------------------------------------------------------------------------------------
+// Ride pages: a layout of 1 to 6 fields between the bar and Ferris.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// What a ride page field shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// Time of day, HH:MM.
+    Time,
+    /// Heart rate.
+    Hr,
+    /// Speed, km/h with one decimal.
+    Speed,
+    /// Cadence.
+    Cadence,
+    /// Power.
+    Power,
+}
+
+impl Field {
+    /// Every field, in the order the page menu cycles through them.
+    pub const ALL: [Field; 5] = [Field::Time, Field::Hr, Field::Speed, Field::Cadence, Field::Power];
+
+    /// Its label, top left of its box.
+    pub fn label(self) -> &'static str {
+        ["TIME", "HR", "KM/H", "RPM", "WATTS"][self as usize]
+    }
+
+    /// The widest value it shows: the value's scale is chosen so this fits.
+    fn widest(self) -> &'static str {
+        ["88:88", "888", "88.8", "888", "8888"][self as usize]
+    }
+
+    /// The next one in [`Field::ALL`].
+    pub fn next(self) -> Field {
+        Self::ALL[(self as usize + 1) % Self::ALL.len()]
+    }
+
+    /// From its index in [`Field::ALL`] (anything else: time).
+    pub fn from_index(i: u32) -> Field {
+        Self::ALL.get(i as usize).copied().unwrap_or(Field::Time)
     }
 }
 
-/// The time on screen; redraws only the digits that changed, since each glyph costs SPI time.
-pub struct Clock {
-    shown: [u8; 6],
+/// The field counts a page can have, in the order the page menu cycles through them (0: page off).
+pub const LAYOUTS: [u8; 6] = [0, 1, 2, 3, 4, 6];
+
+/// Top of the ride fields.
+pub const RIDE_Y: u32 = PAGE_Y;
+/// Height of the ride fields with Ferris under them (the first page), and without (the others).
+pub const RIDE_H: [u32; 2] = [CRAB_Y - 6 - RIDE_Y, H - RIDE_Y];
+
+/// Field box `i` (x, y, w, h) of a page with `n` fields in a field area `h` high: one, two stacked, one big over
+/// two, 2 x 2, 2 x 3. None past the last.
+pub fn field_box(n: u8, h: u32, i: usize) -> Option<(u32, u32, u32, u32)> {
+    let (c, half, third) = (W / 2, h / 2, h / 3);
+    let (col, row) = ((i % 2) as u32, (i / 2) as u32);
+    let b = match (n, i) {
+        (1, 0) => (0, 0, W, h),
+        (2, 0..=1) => (0, i as u32 * half, W, half),
+        (3, 0) => (0, 0, W, half),
+        (3, 1..=2) => ((i as u32 - 1) * c, half, c, half),
+        (4, 0..=3) => (col * c, row * half, c, half),
+        (6, 0..=5) => (col * c, row * third, c, third),
+        _ => return None,
+    };
+    Some((b.0, RIDE_Y + b.1, b.2, b.3))
 }
 
-impl Default for Clock {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// Height of a field's label line.
+const FIELD_LABEL_H: u32 = 22;
 
-impl Clock {
-    /// A clock with nothing drawn yet: the first [`Clock::show`] draws every digit.
-    pub const fn new() -> Self {
-        Self { shown: [0xff; 6] }
-    }
-
-    /// Draws again every digit on screen (for screenshots, into a [`Row`]).
-    pub fn redraw(&self, c: &mut impl Canvas) {
-        for (i, &d) in self.shown.iter().enumerate() {
-            if d != 0xff {
-                draw_clock_digit(c, i, d);
-            }
+/// The value style for `field` in a box `w` x `h`: the largest pixel-font scale its widest value fits.
+fn value_style(field: Field, w: u32, h: u32) -> Style {
+    let mut style = Style { scale: 1, ..LABEL };
+    for scale in (1..=8).rev() {
+        style.scale = scale;
+        if style.width(field.widest()) + 8 <= w && style.height() + FIELD_LABEL_H <= h {
+            break;
         }
     }
+    style
+}
 
-    /// Draws HH:MM in white and the seconds in orange below.
-    pub fn show(&mut self, c: &mut impl Canvas, h: u8, m: u8, s: u8) {
-        let digits = [h / 10, h % 10, m / 10, m % 10, s / 10, s % 10];
-        for (i, &d) in digits.iter().enumerate() {
-            if d != self.shown[i] {
-                self.shown[i] = d;
-                draw_clock_digit(c, i, d);
-            }
-        }
+/// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label.
+pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field) {
+    if x + w < W {
+        c.fill(x + w - 1, y, 1, h, GREY);
     }
+    if y + h < H - 2 {
+        c.fill(x, y + h - 1, w, 1, GREY);
+    }
+    text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
+}
+
+/// A field's value, centred under its label, in a fixed box (what was there before is cleared).
+pub fn draw_field_value(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, value: &str) {
+    let style = value_style(field, w, h);
+    let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H - style.height()) / 2;
+    text::draw_in(c, &style, x + 1, top, w - 2, Align::Centre, value);
+}
+
+/// Ferris, under the fields of the first ride page.
+pub fn draw_ferris(c: &mut impl Canvas) {
+    draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Menus: a title, then rows of a label and a value; the selected row in orange.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Rows a menu shows at most.
+pub const MENU_ROWS: usize = ((H - LIST_Y) / LIST_ROW) as usize;
+
+/// The title line of a menu or list.
+pub fn draw_title(c: &mut impl Canvas, title: &str) {
+    text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
+}
+
+/// Menu row `i`: `label` on the left, `value` on the right in `value_color`; selected, the row is orange.
+pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
+    let y = LIST_Y + i as u32 * LIST_ROW;
+    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
+    let name_w = 10 * CELL * LABEL.scale;
+    c.fill(0, y, NEARBY.0, LIST_ROW, bg);
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, y, name_w, Align::Left, label);
+    let fg = if selected { BLACK } else { value_color };
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, y, NEARBY.2 - name_w, Align::Right, value);
+    c.fill(NEARBY.0 + NEARBY.2, y, W - NEARBY.0 - NEARBY.2, LIST_ROW, bg);
 }
 
 #[cfg(test)]
@@ -362,56 +425,38 @@ pub(crate) mod tests {
         assert_eq!(f.count(RUST) as u32, ones * CRAB_SCALE * CRAB_SCALE);
     }
 
-    /// Every element in its own box: the clock cells, the bar, Ferris and the USB dot and label never
-    /// overwrite each other, and everything stays on screen (Frame panics otherwise).
+    /// The ride boxes tile the field area exactly, every value fits its box, and Ferris and the top line stay
+    /// clear (Frame panics on anything off screen).
     #[test]
-    fn layout_does_not_overlap() {
-        let mut boxes = Vec::new();
-        boxes.push((TIME_X, TIME_Y, TIME.width("88:88"), TIME.height()));
-        boxes.push((SECONDS_X, SECONDS_Y, SECONDS.width("88"), SECONDS.height()));
-        boxes.push((20, 40, W - 40, 6)); // bar
-        boxes.push((CRAB_X, CRAB_Y, 16 * CRAB_SCALE, CRAB.len() as u32 * CRAB_SCALE));
-        boxes.push((USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2));
-        let usb = LABEL.width("USB");
-        boxes.push((USB_LABEL.0 - usb, USB_LABEL.1, usb, LABEL.height()));
-        boxes.push((BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, LABEL.height()));
-        boxes.push((NEARBY.0, NEARBY.1, NEARBY.2, LABEL.height()));
-        for (i, a) in boxes.iter().enumerate() {
-            assert!(a.0 + a.2 <= W && a.1 + a.3 <= H, "box {i} off screen");
-            for b in &boxes[i + 1..] {
-                let apart = a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
-                assert!(apart, "{a:?} overlaps {b:?}");
+    fn ride_layouts_tile_and_fit() {
+        for h in RIDE_H {
+            for &n in &LAYOUTS[1..] {
+                let b: Vec<_> = (0..8).map_while(|i| field_box(n, h, i)).collect();
+                assert_eq!(b.len(), usize::from(n));
+                let area: u32 = b.iter().map(|&(_, _, w, h)| w * h).sum();
+                assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
+                let mut f = Frame::new();
+                for (&bx, field) in b.iter().zip(Field::ALL.iter().cycle()) {
+                    draw_field_frame(&mut f, bx, *field);
+                    draw_field_value(&mut f, bx, *field, field.widest());
+                    assert!(value_style(*field, bx.2, bx.3).scale >= 2, "{n} fields: {field:?} readable");
+                }
             }
         }
-        let mut f = Frame::new();
-        draw_static(&mut f);
-        Clock::new().show(&mut f, 88, 88, 88);
+        assert!(RIDE_Y + RIDE_H[0] <= CRAB_Y && RIDE_Y >= STRIP_H + 2);
     }
 
     #[test]
     fn rows_match_the_framebuffer() {
+        let strip = Strip { time: (12, 34), radio: true, usb: UsbDot::Ready, battery: Some(87) };
         let mut f = Frame::new();
-        draw_static(&mut f);
-        draw_usb_dot(&mut f, UsbDot::Ready);
-        for y in [0, USB_DOT.1, 43, CRAB_Y + 20, H - 1] {
+        draw_strip(&mut f, &strip);
+        draw_ferris(&mut f);
+        for y in [0, 8, STRIP_H, CRAB_Y + 20, H - 1] {
             let mut row = Row::new(y);
-            draw_static(&mut row);
-            draw_usb_dot(&mut row, UsbDot::Ready);
+            draw_strip(&mut row, &strip);
+            draw_ferris(&mut row);
             assert!(row.px[..] == f.px[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
         }
-    }
-
-    #[test]
-    fn clock_redraws_only_changes() {
-        let mut f = Frame::new();
-        let mut clock = Clock::new();
-        clock.show(&mut f, 12, 34, 56);
-        assert_eq!(f.fills, 6);
-        clock.show(&mut f, 12, 34, 56);
-        assert_eq!(f.fills, 6);
-        clock.show(&mut f, 12, 34, 57);
-        assert_eq!(f.fills, 7);
-        clock.show(&mut f, 12, 35, 0);
-        assert_eq!(f.fills, 10); // minutes units and both seconds digits
     }
 }

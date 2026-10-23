@@ -36,7 +36,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `pack.py` prints: about 29 KB, of which about 20 KB is the USB stack and about 2 KB the
+  - watch the image size `pack.py` prints: about 48 KB, of which about 20 KB is the USB stack and about 2 KB the
     pixel font (a font costs nothing until something draws with it: the linker drops it).
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
   high, and unplugging resets the unit, which brings it up without USB.
@@ -92,6 +92,8 @@ The point of this project is a firmware in safe Rust.
   - `SANS_16`, `SANS_BOLD_32`: DejaVu Sans, anti-aliased, if smooth text is ever wanted.
   - To change a glyph or add a font, edit those files and run `python3 tools/font.py` (needs PIL).
 - `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
+- `src/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
+  pages show. Pure logic.
 - `src/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
   `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`).
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
@@ -199,6 +201,8 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 - **No `usbd-serial::SerialPort`:** it is hardcoded to 64-byte packets, which is full speed only. On this
   high-speed link, `usb.rs` uses `CdcAcmClass` with 512-byte packets.
 - Release profile: `opt-level = "s"`, LTO, `panic = "abort"`, debug info kept in the ELF only.
+- `+strict-align` (.cargo/config.toml): no unaligned accesses, since unaligned reads from the SDRAM return wrong
+  bytes on the unit (BOARD.md 2). Keep it until the D-cache is on.
 
 ## Project rules
 
@@ -226,8 +230,8 @@ Install the firmware once, as an update (README). From then on, with the cable i
     ./dev.py shot -o shot.png     # screenshot (what the app drew, rendered row by row: no framebuffer)
     ./dev.py watch -i 1           # continuous screenshots into target/shots/
     ./check.sh && ./dev.py run    # run the new build from RAM: nothing written to the eMMC
-    ./dev.py peek 0x40013014 2    # read registers (peripheral space only); poke ADDR VALUE writes one
-    ./dev.py page                 # press Page (scripted tests); repair = hold Page (pair another strap)
+    ./dev.py peek 0x40013014 2    # read registers, or DTCM / SDRAM (read only); poke ADDR VALUE writes a register
+    ./dev.py key page [--long]    # press or hold a key (page, lap, start, back): scripted tests
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
@@ -243,7 +247,6 @@ Install the firmware once, as an update (README). From then on, with the cable i
   Engineer Mode (`tools/iaprecover.py --write out/IMG.bin`). `run` covers day-to-day iteration.
 - **Still to build:**
   - `log` lines from the firmware over the link;
-  - Back key injection (Page is `dev.py page`);
   - an eMMC `reflash` command, once an SDMMC driver exists.
 - **No watchdog, on purpose.** The IWDG keeps counting in standby unless an option byte (FZ_IWDG_SDBY) says
   otherwise, so it would wake the unit from power-off. Option bytes are flash configuration, and we never

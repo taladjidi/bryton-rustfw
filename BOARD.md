@@ -37,6 +37,13 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
     system reset (AIRCR) runs as expected: the reset brings the bootloader up again (README "First run on the
     unit").
   - Switching the MPU off is not an option: the default memory map makes 0xc0000000..0xdfffffff execute-never.
+  - **Unaligned reads from the SDRAM return wrong bytes** (seen on the unit, 2026-10-23, this firmware's region:
+    normal, not cached). A 7-byte constant at 0xd000a0c3 copied with unaligned loads came out as `03 01 03 00`
+    for `02 01 03 04`: bytes from the neighbouring lanes. Aligned word reads of the same memory (`dev.py peek`)
+    are right. This firmware builds with `+strict-align` (.cargo/config.toml), so it never emits unaligned
+    accesses; precompiled `core` code could still, and the D-cache (line fills are aligned bursts) would be the
+    complete fix. Inferred cause: the FMC's handling of unaligned accesses to a 16-bit SDRAM, not traced. Stock
+    runs with the caches on, so it would not see this.
 - No watchdog is started, by the bootloader or the stock OS.
 - **Recovery mode ("Engineer Mode")**: USB plugged, restart with the four buttons while holding Page. The
   bootloader configures the Page pin itself and reads the real key, so no firmware can enter it by software.
@@ -91,6 +98,9 @@ battery on ADC3): not used yet.
 ## 5. Keys
 
 - Four keys, active low: PA1 back / power, PB2 lap, PB4 start / stop, PE3 page.
+- PB4 leaves reset as NJTRST (alternate function, pull-up): it must be made an input (seen on the unit: MODER
+  field 2, PUPDR pull-up, IDR high at rest). PA1, PB2 and PE3 read high at rest without a pull-up (external
+  ones, inferred).
 - Stock reads them by EXTI falling edge and debounces 15 ms later. This firmware polls them every 50 ms.
 
 ## 6. Display
@@ -135,8 +145,12 @@ battery on ADC3): not used yet.
 
 - RTC (0x58004000) on the LSE, 24 h format, prescalers 31 / 1023 (1 Hz). It keeps running in standby.
 - The stock firmware sets it from GPS. It holds **local time** (seen on the unit, 2026-10-23).
-- Backup registers used by stock: 1, 2, 3, 19 (clock), 4 (USB mode), 9, 12, 13. Others are free; the bootloader
-  has no RTC address in it. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
+- Backup registers used by stock: 1, 2, 3, 19 (clock), 4 (USB mode), 9, 12, 13 (last battery voltage, mV: 4178
+  on the unit). Registers 20 to 31 also hold values after stock (0x22, then 0x35a..0x3c5: not traced), so they
+  are not free either. The bootloader has no RTC address in it.
+- This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
+  power), 11 (wheel size) and 14, 15, 16 (ride page layouts), each behind a tag so an empty register reads as
+  unset. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
 
@@ -218,5 +232,29 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     strap (seen). Other ANT ops in stock's encoders: 0xc5 close, 0xc7 / 0xc8 broadcast / acknowledged data,
     0xd5, 0xd7, 0xdd, 0xdf, 0xe7 (not traced).
   - A BLE scan with the channel open (searching) still works: fewer reports, as the radio is shared.
+- **ANT+ sensor channels, as stock opens them** (`Ant_OpenSensorChannel` 0xd025e7f0): channel, device type, period
+  (1/32768 s): 0 heart rate 0x78 8070; 1 speed 0x7b 8118; 2 cadence 0x7a 16204; 3 speed and cadence 0x79 8086;
+  4 power 0x0b 4091; then 5 0x22, 6 0x01, 7 0x28, 8 0x11, 9 0x02, 10 0x14, 11 0x23 (other ANT devices, not used
+  here). All channels are assigned once at start (`06 c2 [ch] 00 00 00`); a channel is reconfigured only while
+  closed. Close: `06 c5 [ch]`, answered `01 c5 [result]`, then an ANT event with event code 0x07 (channel closed)
+  in byte 42 and the channel in byte 43 (inferred from the ANT message format; the simulator models it).
+- **BLE sensors (central), traced in stock, not yet tried on the unit** (Ghidra; ser_*_enc / _dec):
+  - `sd_ble_gap_connect` op 0x8c: `00 8c 01 [addr type byte][6 addr] 01 [scan flags][interval][window][timeout]
+    01 [min ci][max ci][latency][supervision] [conn cfg tag]`, the address byte as in the advertising report.
+    Stock: scan active 0x60 / 0x60, timeout 0; connection 0x0006 / 0x000c, latency 0, supervision 0x0190; tag 1
+    (after `sd_ble_cfg_set`; tag 0 without it, inferred). Disconnect op 0x76 `[conn u16][reason 0x13]`.
+  - Events: connected 0x10 `[conn][addr 7][role][4 x u16 params]`; disconnected 0x11 `[conn][reason]`;
+    connection parameter update request 0x1f (stock accepts: op 0x75 `[conn] 01 [same 4 params]`); PHY update
+    request 0x21 (op 0x8f `[conn] 01 00 00`); data length update request 0x23 (op 0x90).
+  - GATT discovery (stock uses Nordic's ble_db_discovery): primary services op 0x94 `[conn][start 0x0001] 01
+    [uuid u16][type 1]`, characteristics op 0x96 `[conn] 01 [start][end]`, descriptors op 0x97 `[conn] 01
+    [start][end]`. Responses 0x30 / 0x32 / 0x33 `[conn][gatt status u16][error handle u16][count u16]` then 7, 9
+    or 5 bytes per entry. The CCCD is UUID 0x2902.
+  - Enable notifications: op 0x9c `[conn] 01 [write op 1][flags 0][cccd handle][offset 0][len 2] 01 01 00`;
+    write response 0x38. Notification 0x39 `[conn][status][error handle][handle][type 1][len u16][data]`.
+  - Stock's `sd_ble_cfg_set` (op 0x69) frames: connection config tag 1 (6 links, event length 5), role counts
+    (1 peripheral, 5 central), ATT MTU 153, 11 vendor UUIDs, attribute table 0x580, no service changed.
+  - Stock's sensor search keeps reports at RSSI >= -75 dBm listing 0x180d (heart rate) or 0x1816 (speed and
+    cadence); it has no BLE power client (power is ANT+ only on stock).
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

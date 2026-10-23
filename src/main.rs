@@ -1,7 +1,7 @@
 //! bryton-rustfw: a minimal firmware for the Bryton Rider S510 bike computer, written from scratch. It shows the time
 //! kept by the RTC, big, on the panel, the heart rate from an ANT+ strap, and on a second page the BLE devices
-//! nearby. Keys: Page switches pages, hold Page 2 s to pair another heart-rate strap, Back toggles the backlight,
-//! hold Back (power) 3 s to switch off (standby; the power button starts it again).
+//! nearby. Keys: Page turns the ride pages, hold Page for the menu (sensors, pages, wheel, nearby devices), Back
+//! toggles the backlight, hold Back (power) 3 s to switch off (standby; the power button starts it again).
 //!
 //! Every register access below is traced to BOARD.md (the board as the stock firmware sets it up) or
 //! to the STM32H747 reference manual (RM0399). No interrupts, no RTOS: one loop. The only crates are the USB
@@ -181,9 +181,9 @@ const LCD_RESET: (Port, u32) = (Port::I, 3);
 const LCD_DC: (Port, u32) = (Port::G, 9);
 const LCD_CS: (Port, u32) = (Port::G, 10);
 const BACKLIGHT: (Port, u32) = (Port::G, 13);
-// Keys (BOARD.md 5): PA1 back / power (0x01), PE3 page (0x08). PA0 is the power button's standby wake-up.
-const KEY_BACK: (Port, u32) = (Port::A, 1);
-const KEY_PAGE: (Port, u32) = (Port::E, 3);
+// Keys (BOARD.md 5), active low, in stock's key code order: PA1 back / power (0x01), PB2 lap (0x02), PB4 start /
+// stop (0x04), PE3 page (0x08). PA0 is the power button's standby wake-up.
+const KEYS: [(Port, u32); 4] = [(Port::A, 1), (Port::B, 2), (Port::B, 4), (Port::E, 3)];
 // USB power present (BOARD.md 7: VBUS detect is PC13, high when plugged in).
 const VBUS: (Port, u32) = (Port::C, 13);
 
@@ -209,11 +209,15 @@ fn board_init() {
     gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
     gpio(Port::G, 11, AF, 5); // SPI1_SCK
     gpio(Port::D, 7, AF, 5); // SPI1_MOSI
-    gpio(KEY_BACK.0, KEY_BACK.1, IN, 0);
+    for (port, pin) in KEYS {
+        // PB4 leaves reset as NJTRST (alternate function, pull-up, seen on the unit): an input with a pull-up. PA1,
+        // PB2 and PE3 read high without one (external pull-ups); the internal one does no harm.
+        gpio(port, pin, IN, 0);
+        pull_up(port, pin);
+    }
     // PA0 (WKUP1, power button) as an input, as stock: left in its reset analog mode, the press never woke the unit
     // from standby (seen on the unit, 2026-10-23; inferred: the wake-up logic reads after the input buffer).
     gpio(Port::A, 0, IN, 0);
-    gpio(KEY_PAGE.0, KEY_PAGE.1, IN, 0);
     gpio(VBUS.0, VBUS.1, IN, 0);
 }
 
@@ -482,8 +486,8 @@ impl Board for S510 {
     fn backlight(&mut self, on: bool) {
         pin_set(BACKLIGHT.0, BACKLIGHT.1, on);
     }
-    fn keys_down(&mut self) -> (bool, bool) {
-        (pin_low(KEY_PAGE.0, KEY_PAGE.1), pin_low(KEY_BACK.0, KEY_BACK.1))
+    fn keys_down(&mut self) -> u8 {
+        KEYS.iter().enumerate().fold(0, |m, (i, &(port, pin))| m | (u8::from(pin_low(port, pin)) << i))
     }
     fn rtc_tr(&mut self) -> u32 {
         rtc_tr()
@@ -570,15 +574,13 @@ fn main() -> ! {
         }
         // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
         // too (delay_ms), which would take over this timer.
-        let mut page = false;
-        let mut repair = false;
+        let mut press = None;
         timer_start(POLL_MS);
         loop {
             if let Some(l) = &mut link {
                 match l.poll(&mut session, &app, uptime_ms) {
                     Effect::None => {}
-                    Effect::Page => page = true,
-                    Effect::Repair => repair = true,
+                    Effect::Key(p) => press = Some(p),
                     Effect::Reset => {
                         l.linger(50);
                         system_reset();
@@ -592,17 +594,14 @@ fn main() -> ! {
                 let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
                 app.set_usb(&mut board, dot);
             }
-            if timer_done() {
-                break;
+            if timer_done() || press.is_some() {
+                break; // a key from the link acts now, so the next command cannot replace it
             }
             wfi();
         }
         timer_stop();
-        if page {
-            app.next_page(&mut board);
-        }
-        if repair {
-            app.repair(&mut board);
+        if let Some(p) = press {
+            app.press(&mut board, p);
         }
         checkpoint(7);
         uptime_ms = uptime_ms.wrapping_add(POLL_MS);

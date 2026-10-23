@@ -5,7 +5,7 @@ start-up, clocks and GPIO writes, the SPI1 byte stream to the panel, no fault, n
   renode/run.py [--seconds 8] [--vbus] [--renode PATH]
 
 It logs every SPI1 data write together with the D/C pin (PG9), decodes the panel protocol into a screen
-(target/renode/screen.png) and compares its fixed parts (top bar, Ferris) with the simulator's preview
+(target/renode/screen.png) and compares its fixed parts (the status strip's line, Ferris) with the simulator's preview
 (target/sim/preview.bmp, written by cargo test-host). --vbus raises PC13 first, so the USB start path runs: Renode
 models the OTG core but no host, so the dot must turn orange (or red if the core reset fails) and the clock keep
 running.
@@ -140,12 +140,16 @@ def main():
     order = [c for c in cmds if c in (0x01, 0x3a, 0xb0, 0x11, 0x29)]
     if order[:5] != [0x01, 0x3a, 0xb0, 0x11, 0x29]:
         fails.append(f'panel start-up order {[hex(c) for c in order[:5]]}')
-    if fn in ('default_handler', 'panic', '?'):
+    if fn in ('default_handler', 'panic') or (fn == '?' and pc is not None):
         fails.append(f'stopped in {fn} (fault or panic)')
+    elif pc is None:
+        # With PC13 high the emulated USB core keeps flagging interrupts and the polling floods the log; the answer
+        # to `cpu PC` can then be lost at `quit`. The panel traffic checks below still catch a hang.
+        print('note: PC not read (log flooded)')
     preview = ROOT / 'target/sim/preview.bmp'
     if preview.exists():
         sim = bmp_rgb(preview)
-        for y in list(range(40, 46)) + list(range(266, 310)):
+        for y in list(range(20, 22)) + list(range(272, 316)):          # the strip's line, Ferris (ui.rs)
             bad = [x for x in range(W) if rgb(screen, x, y) != sim[y][x]]
             if bad:
                 fails.append(f'row {y} differs from the simulator at x {bad[0]}..{bad[-1]}')
@@ -155,8 +159,9 @@ def main():
             fails.append('PC13 high but the USB core was never touched')
         if after_usb == 0:
             fails.append('no panel traffic after the USB start: hung')
-        if rgb(screen, W - 16, 16) not in ((248, 164, 0), (248, 0, 0)):   # powered (no host) or failed
-            fails.append(f'USB dot is {rgb(screen, W - 16, 16)}, neither orange nor red')
+        label = {rgb(screen, x, y) for x in range(144, 180) for y in range(3, 17)}   # "USB" in the strip (ui.rs)
+        if not label & {(248, 164, 0), (248, 0, 0)}:                                 # powered (no host) or failed
+            fails.append(f'USB label colours {label}, neither orange nor red')
     for f in fails:
         print('FAIL', f)
     print('renode check ok' if not fails else f'{len(fails)} failures (log: {log})')

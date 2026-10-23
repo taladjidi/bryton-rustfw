@@ -7,10 +7,11 @@
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (pack.py, without its
 //!   trailer) and the firmware stores them in SDRAM; `sum` is their additive sum. Answer `ok` and the firmware
 //!   runs the image ([`Effect::Run`]), or `err <reason>`.
-//! - `page`: `ok`, then the app acts as if Page was pressed ([`Effect::Page`]), to script tests on the unit.
-//!   `repair`: the same for a long Page hold ([`Effect::Repair`]: forget the strap, pair again).
+//! - `key <page|lap|start|back> [long]`: `ok`, then the app acts as if the key was pressed, or held
+//!   ([`Effect::Key`]), to script tests on the unit.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
-//! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line. `poke <addr>
+//! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
+//!   peripheral space or the SDRAM (read only). `poke <addr>
 //!   <value>`: writes the word, `ok`. Numbers in decimal or `0x` hex; `addr` must be word aligned and in the
 //!   peripheral space ([`IO`]), so a peek can't read through a Rust reference. A reserved address there can still
 //!   fault, which parks the CPU (four-button restart).
@@ -33,6 +34,11 @@ pub trait Host {
 /// The peripheral space (RM0399 memory map) that `peek` and `poke` may reach.
 pub const IO: core::ops::RangeInclusive<u32> = 0x4000_0000..=0x5fff_fffc;
 
+/// Memory `peek` may read too (never `poke`: that could change running code or the app's state): the DTCM (data
+/// and stack, 128 KB) and the SDRAM (BOARD.md 2: 64 MB from 0xd0000000, set up by the bootloader, where the image
+/// runs). Both are always mapped, so a read cannot fault.
+pub const MEMORY: [core::ops::RangeInclusive<u32>; 2] = [0x2000_0000..=0x2001_fffc, 0xd000_0000..=0xd3ff_fffc];
+
 /// Largest image `load` accepts: the 1 MB link region (link.x).
 pub const STAGE_MAX: u32 = 1 << 20;
 
@@ -45,10 +51,8 @@ pub enum Effect {
     Reset,
     /// Run the staged image of this many bytes.
     Run(u32),
-    /// A Page press, from the computer.
-    Page,
-    /// A long Page hold, from the computer.
-    Repair,
+    /// A key press from the computer.
+    Key(crate::Press),
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -156,13 +160,18 @@ impl Session {
                 _ => h.send(b"err usage: load <size 156..1048576> <sum>\n"),
             },
             Some(b"peek") => match (words.next().and_then(parse), words.next().map_or(Some(1), parse)) {
-                (Some(a), Some(n @ 1..=64)) if a % 4 == 0 && IO.contains(&a) && IO.contains(&(a + 4 * (n - 1))) => {
+                (Some(a), Some(n @ 1..=64))
+                    if a % 4 == 0
+                        && [IO, MEMORY[0].clone(), MEMORY[1].clone()]
+                            .iter()
+                            .any(|r| r.contains(&a) && r.contains(&(a + 4 * (n - 1)))) =>
+                {
                     for i in 0..n {
                         let v = h.peek(a + 4 * i);
                         h.send(&hex(v));
                     }
                 }
-                _ => h.send(b"err usage: peek <addr 0x40000000..0x5ffffffc, aligned> [n 1..64]\n"),
+                _ => h.send(b"err usage: peek <addr 0x40000000..0x5ffffffc or DTCM / SDRAM, aligned> [n 1..64]\n"),
             },
             Some(b"poke") => match (words.next().and_then(parse), words.next().and_then(parse)) {
                 (Some(a), Some(v)) if a % 4 == 0 && IO.contains(&a) => {
@@ -171,14 +180,17 @@ impl Session {
                 }
                 _ => h.send(b"err usage: poke <addr 0x40000000..0x5ffffffc, aligned> <value>\n"),
             },
-            Some(b"page") => {
-                h.send(b"ok\n");
-                return Effect::Page;
-            }
-            Some(b"repair") => {
-                h.send(b"ok\n");
-                return Effect::Repair;
-            }
+            Some(b"key") => match (words.next().and_then(crate::Key::from_name), words.next()) {
+                (Some(k), None) => {
+                    h.send(b"ok\n");
+                    return Effect::Key(crate::Press::Short(k));
+                }
+                (Some(k), Some(b"long")) => {
+                    h.send(b"ok\n");
+                    return Effect::Key(crate::Press::Long(k));
+                }
+                _ => h.send(b"err usage: key <page|lap|start|back> [long]\n"),
+            },
             Some(b"reset") => {
                 h.send(b"ok\n");
                 return Effect::Reset;

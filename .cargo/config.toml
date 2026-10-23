@@ -2,7 +2,9 @@
 target = "thumbv7em-none-eabihf"     # Cortex-M7 with FPU (STM32H747 CM7)
 
 [target.thumbv7em-none-eabihf]
-rustflags = ["-C", "link-arg=-Tlink.x", "-C", "target-cpu=cortex-m7"]
+# strict-align: no unaligned loads or stores. Unaligned reads from the SDRAM, where the image and its constants run,
+# return bytes from the wrong lanes on the unit (BOARD.md 2, seen 2026-10-23: a 7-byte constant copied wrong).
+rustflags = ["-C", "link-arg=-Tlink.x", "-C", "target-cpu=cortex-m7", "-C", "target-feature=+strict-align"]
 
 [alias]
 # The library's tests on the Mac (the default target above is the bike computer, which cannot run them).

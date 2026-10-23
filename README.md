@@ -1,28 +1,28 @@
 # bryton-rustfw
 
 An open, from-scratch Rust firmware for Bryton bike computers. It currently targets the **Bryton Rider S510**,
-as a proof of concept: it replaces Bryton's OS entirely and shows the time kept by the RTC. Not affiliated with
+as a proof of concept: it replaces Bryton's OS entirely, with ride pages fed by ANT+ sensors. Not affiliated with
 Bryton.
 
-- **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, all in the
-  same dot-matrix style, so it is obviously not the stock firmware.
-- **Page key:** switches between the clock and the list of BLE devices nearby. Held 2 s: forgets the heart-rate
-  strap and pairs with the next one heard.
-- **Back key:** a short press toggles the backlight; held 3 s it switches off (standby). The power button starts it
-  again. Power off also switches the radio chip off.
-- **Top left:** "BLE" and the Nordic chip's firmware number once it has answered (red "BLE ?" if not).
-- **Heart rate:** under the bar on the clock page, from an ANT+ strap ("HR 72"). The first strap heard is paired
-  ("HR PAIRING" until then) and kept through power off, so a friend's strap is never taken; "HR --" while the
-  paired one is quiet. Needs the ANT+ network key, which you copy from your own stock firmware (see "ANT+ key" below).
-- **Devices nearby:** opening the list starts a 10 s BLE scan; one row per device, strongest first: its name, or
-  in grey what kind of device it is ("iPhone/Mac", "AirPods", "Find My", "Windows PC"...: phones and laptops
-  advertise no name, only manufacturer data and an address that changes every few
-  minutes), else its address; and its signal strength in dBm.
+- **Screen:** a thin status strip at the top (time, BLE, USB, battery), then up to three ride pages of 1, 2, 3, 4
+  or 6 fields (speed, heart rate, cadence, power, time), set from the menu. Ferris the Rust crab sits under the
+  first page. Everything is in the project's own dot-matrix font.
+- **Keys:** Page turns the ride pages; hold Page for the menu (in menus: Page / Lap move, Start selects or
+  changes a value, Back goes back). Back toggles the backlight; held 3 s it switches off (standby). The power
+  button starts it again, and power off also switches the radio chip off.
+- **Menu:** sensors (Start searches and pairs the first one heard, Start again forgets it), the three pages
+  (field count and each field), the wheel size, and the BLE devices nearby.
+- **ANT+ sensors:** heart rate, speed, cadence, speed and cadence, power, on stock's channels. A paired sensor is
+  kept through power off, so a friend's is never taken. Needs the ANT+ network key, which you copy from your own
+  stock firmware (see "ANT+ key" below).
+- **Devices nearby:** a 10 s BLE scan; one row per device, strongest first: its name, or in grey what kind of
+  device it is ("iPhone/Mac", "AirPods", "Find My", "Windows PC"...: phones and laptops advertise no name, only
+  manufacturer data and an address that changes every few minutes), else its address; and its signal strength.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
   build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
   red if the PHY did not come up). Unplugging resets the unit.
 
-- **Code:** about 5 KB of firmware code, a 2 KB pixel font and about 20 KB of USB stack, no interrupts.
+- **Code:** a 48 KB image, of which about 20 KB is the USB stack and 2 KB the pixel font; no interrupts.
 - **Sources:** every register is traced to [BOARD.md](BOARD.md) (the board, learned from the stock firmware) or
   the STM32H747 reference manual (RM0399).
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
@@ -130,6 +130,9 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   sent over the dev link (`dev.py page`) first froze the main loop: the app's own `delay_ms` inside the sleep
   had taken over its SysTick period, so the loop never woke (only USB was still served). App work now runs after
   the sleep.
+- **Unaligned reads from the SDRAM are wrong (2026-10-23):** page 2's default fields showed garbled. Reading the
+  app's state in DTCM with `dev.py peek` showed a 7-byte constant copied wrong from SDRAM; the image itself was
+  right. Built with `+strict-align` since (BOARD.md 2).
 - **Heart rate and pairing (2026-10-23, from RAM, the owner's strap):** "HR 58" to "HR 70" from the strap
   (once wetted). The first strap heard is paired: its ANT channel ID (device 25126, transmission type 0xf1, read
   with op 0xd4) goes into RTC backup register 5, which kept it through a reset; the next start opened the channel
@@ -141,6 +144,8 @@ Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (
 with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13; the RTC
 holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
 input. Still to see:
+- Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
+- The battery level (ADC3) and charging: this firmware does not drive the charger enable (PG14) yet.
 - The Nordic chip coming back after a power off and on (`sd_power_system_off`, then the reset pulse).
 - The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 
