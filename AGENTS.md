@@ -144,6 +144,8 @@ The point of this project is a firmware in safe Rust.
     ./check.sh
 
 It runs, in order:
+- the layout guard: `src/lib.rs` keeps `#![forbid(unsafe_code)]`, and `unsafe` appears only in hw.rs (plus usb.rs's
+  marker line), so the library cannot reach a register;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - `cargo clippy --release -- -D warnings`;
 - `cargo test-host` (unit tests, simulator tests and doc tests on the Mac; writes `target/sim/preview.bmp`);

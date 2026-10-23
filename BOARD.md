@@ -145,10 +145,12 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PB0 PB1 PB5 PB10..PB13 | USB ULPI D1 D2 D7 D3..D6 (AF10) | 7 |
 | PB2 | key 0x02 lap, active low | 5 |
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
+| PB6 PB7 | I2C1 SCL, SDA: the touch controller (AF4, open drain, no pull; unused here) | 17 |
 | PC0 | USB ULPI STP (AF10) | 7 |
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
 | PC8..PC11 | eMMC D0..D3, SDMMC1 (AF12) | 15 |
 | PC12 | eMMC CLK, SDMMC1 (AF12) | 15 |
+| PC6 | touch interrupt (EXTI falling in stock; unused here) | 17 |
 | PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) | 7 |
 | PD2 | eMMC CMD, SDMMC1 (AF12) | 15 |
 | PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
@@ -161,12 +163,13 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PF7 | GNSS line (EXTI in stock; unused here) | 13 |
 | PF8 | eMMC reset or power (inferred); left as the bootloader leaves it | 15 |
 | PF9 | ambient light sensor interrupt (EXTI falling, pull-up in stock; unused here) | 16 |
-| PG3 | display and touch power enable (inferred) | 6 |
+| PG3 | display and touch power enable (inferred) | 6, 17 |
 | PG9 | panel D/C: 0 command, 1 parameter or pixel data | 6 |
 | PG10 | panel chip select (SPI1 NSS, driven by hand) | 6 |
 | PG11 | SPI1 SCK (panel), AF5 | 6 |
 | PG13 | backlight, high = on (LPTIM1_OUT, AF1, in stock) | 6 |
 | PG14 | charge enable, active low (left low by the bootloader) | 12 |
+| PH3 | touch controller reset, high = run (inferred); unused here | 17 |
 | PH4 | USB ULPI NXT (AF10) | 7 |
 | PH8 | Nordic request line (EXTI wake-up in stock; unused here) | 11 |
 | PI3 | panel reset, low = reset (inferred) | 6 |
@@ -174,8 +177,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PI6 | GNSS power, high = on | 13 |
 | PI11 | USB ULPI DIR (AF10) | 7 |
 
-Not used yet: I2C sensors (barometer, accelerometer, light), touch, buzzer.
-Not used yet: touch, eMMC on SDMMC1, buzzer.
+Not used yet: the touch panel (PB6, PB7, PC6, PH3; section 17).
 
 ## 5. Keys
 
@@ -667,3 +669,40 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
 
   S start, Sr repeated start, P stop, A acknowledge (by the chip, or by the STM32 for data bytes), N the last byte
   not acknowledged. A write is one transfer: address, register, data, with AUTOEND.
+
+## 17. Touchscreen
+
+The S510 has a touch panel over the display (retail spec: 2.8 in colour touchscreen and 4 buttons). From stock
+(Ghidra: `Touch_GpioInit` 0xd0243d90, `Touch_Init` 0xd0243e08, the EXTI6 handler 0xd0243eaa, `Touch_GetState`
+0xd024400e) and Sitronix's "Touch IC Protocol A" v2.7
+(https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf), whose register map
+stock's reads match. Not yet read on the unit.
+
+- **Controller:** Sitronix ST1xxx class at I2C address **0x55** (stock passes 0xaa, 8-bit). Stock reads two point
+  slots (0x12, 0x16), so an ST1232-class part (2 points; Linux `st1232.c`); the exact part is inferred. Registers
+  0x0c..0x0f (firmware revision) and 0x3f (max contacts) would tell.
+- **Bus and pins:**
+
+| what | value |
+|---|---|
+| bus | **I2C1** (0x40005400), PB6 SCL, PB7 SDA, AF4, open drain, no internal pull; RCC_APB1LENR bit 21, reset APB1LRSTR bit 21 |
+| stock's timing | kernel clock D2PCLK1 12.5 MHz, TIMINGR 0x00100414 (about 400 kHz, inferred); HAL analog filter call with 0 (on, inferred from HAL's encoding), digital filter off |
+| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line) |
+| power | PG3 high, shared with the panel (already high in this firmware) |
+| reset | **PH3**, high to run (active-low RESET, inferred from the protocol doc); analog, so held in reset, in this firmware so far |
+
+- **Stock's start:** PC6 as falling-edge EXTI; PG3 high, 10 ms; PH3 high, 100 ms (the protocol doc gives about 50 ms
+  of init); I2C1 up; read status (0x01: low nibble the device status, high nibble the error code), the firmware
+  version (0x00), the resolution (0x04, 3 bytes, decoded as a point). It writes no register: Device Control (0x02)
+  and Timeout to Idle (0x03, the chip idles after 8 s without a touch) stay at their defaults.
+- **A register read:** a 1-byte write of the register, stop, then a separate read (HAL transmit, then receive).
+- **A point:** 3 bytes from 0x12: byte 0 bit 7 valid, X = (b0 & 0x70) << 4 | b1, Y = (b0 & 7) << 8 | b2. Stock
+  maps raw to screen 1:1 (0..240 x 0..320, inferred: no swap seen) and treats a point outside as "no finger"
+  (its sentinel is 241, 321).
+- **Stock's reading loop:** the EXTI6 interrupt only sets a flag and wakes the UI task; the task reads 0x12 while a
+  finger is down and goes back to waiting on the interrupt when none is. A touch turns the backlight on and resets
+  the auto-off counter. On an I2C error: status and version read again, then I2C1 disabled for 10 ms and enabled.
+- **Gestures:** none from the chip (register 0x10, gesture type, exists only on the ST1615 per the protocol doc;
+  stock never reads it). Stock recognises them in software (Embedded Wizard handlers): tap, hold, slide (scrolling
+  lists), wipe. Its page swipe (`Ui_OnTouchReleaseDetectSwipe` 0xd017c894): on release, if the drag was over 10 px
+  or the hold at least 600 ms: dy < -48 is up, dx >= 37 right, dx <= -37 left; otherwise a tap at that point.

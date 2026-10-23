@@ -23,6 +23,7 @@ saved yet: the FIT writer is ready, the eMMC driver reads but does not write yet
 | [docs/install.md](docs/install.md) | build, the ANT+ key, install, and the way back to stock |
 | [docs/status.md](docs/status.md) | what is not yet seen on the unit, next steps |
 | [docs/journal.md](docs/journal.md) | what was found on the unit, dated |
+| [docs/roadmap.md](docs/roadmap.md) | what to build next, in dependency order |
 | [docs/boot.md](docs/boot.md) | how it starts, from the bootloader's hand-off |
 | [BOARD.md](BOARD.md) | the hardware: pin map, timing diagrams, every chip, with evidence |
 | [AGENTS.md](AGENTS.md) | how to work on it: rules, tests, the dev loop |
