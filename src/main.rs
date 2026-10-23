@@ -575,7 +575,7 @@ fn beep(hz: u32) {
     wr(TIM1, 0);
     wr(TIM1 + 0x28, psc); // PSC
     wr(TIM1 + 0x2c, arr); // ARR
-    wr(TIM1 + 0x3c, (arr + 1) / 2); // CCR3: half the period
+    wr(TIM1 + 0x3c, arr.div_ceil(2)); // CCR3: half the period of arr + 1 ticks
     wr(TIM1 + 0x1c, (6 << 4) | (1 << 3)); // CCMR2: OC3M = PWM mode 1, preload
     wr(TIM1 + 0x20, 1 << 8); // CCER: CC3E
     wr(TIM1 + 0x44, 1 << 15); // BDTR: MOE (an advanced timer's outputs stay off without it)
