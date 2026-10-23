@@ -184,7 +184,7 @@ pub fn clear_page(c: &mut impl Canvas) {
 }
 
 /// The devices heard, strongest first, one per row: the name (white); for one that sent none (phones, laptops),
-/// its maker from the manufacturer data, else its address (grey); and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
+/// what kind of device it is from its manufacturer data, else its address (grey); and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
 pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
     let rows = (H - LIST_Y) / LIST_ROW;
     let mut devices = nearby.strongest();
@@ -196,11 +196,10 @@ pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
             continue;
         };
         let mut name = text::Line::<16>::new();
-        let maker = d.company.and_then(crate::nrf::company_name);
         let color = if !d.name().is_empty() {
             name.push_str(d.name());
             WHITE
-        } else if let Some(maker) = maker {
+        } else if let Some(maker) = d.maker {
             name.push_str(maker);
             GREY
         } else {

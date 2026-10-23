@@ -288,8 +288,8 @@ pub struct Device {
     pub rssi: i8,
     name: [u8; Device::NAME],
     name_len: u8,
-    /// Bluetooth SIG company ID of its manufacturer data, if it sent any.
-    pub company: Option<u16>,
+    /// What kind of device it is, from its manufacturer data ([`ad_maker`]).
+    pub maker: Option<&'static str>,
 }
 
 impl Device {
@@ -302,37 +302,44 @@ impl Device {
     }
 }
 
-/// The company ID of the manufacturer data in `data` (AD type 0xff, its first two bytes), if any.
+/// What kind of device sent `data`, from its manufacturer data (AD type 0xff: a Bluetooth SIG company ID, then
+/// the company's own bytes). Phones and laptops advertise no name, only this and a random address that changes
+/// every few minutes. Apple's first byte is its Continuity message type and Microsoft's beacon carries a device type
+/// (both documented by public reverse engineering, e.g. furiousMAC/continuity; not from the stock firmware).
 ///
 /// ```
-/// assert_eq!(bryton_rustfw::nrf::ad_company(&[2, 0x01, 0x1a, 5, 0xff, 0x4c, 0, 0x10, 6]), Some(0x004c));
+/// use bryton_rustfw::nrf::ad_maker;
+/// assert_eq!(ad_maker(&[2, 0x01, 0x1a, 5, 0xff, 0x4c, 0, 0x12, 2]), Some("Find My"));
+/// assert_eq!(ad_maker(&[6, 0xff, 0x06, 0, 0x01, 0x09, 0x20]), Some("Windows PC"));
 /// ```
-pub fn ad_company(data: &[u8]) -> Option<u16> {
+// ponytail: a handful of companies and types; the full SIG list (thousands) is not worth the image size.
+pub fn ad_maker(data: &[u8]) -> Option<&'static str> {
     let mut rest = data;
     while let [len, kind, ..] = *rest {
-        if let (0xff, Some(&[a, b])) = (kind, rest.get(2..4).filter(|_| len >= 3)) {
-            return Some(u16::from_le_bytes([a, b]));
+        let field = rest.get(2..1 + usize::from(len))?;
+        if let (0xff, [a, b, own @ ..]) = (kind, field) {
+            return Some(match (u16::from_le_bytes([*a, *b]), own) {
+                (0x004c, [0x02, ..]) => "iBeacon",
+                (0x004c, [0x07, ..]) => "AirPods",
+                (0x004c, [0x09, ..]) => "AirPlay",
+                (0x004c, [0x12, ..]) => "Find My", // an AirTag, or an Apple device's lost-mode beacon
+                (0x004c, [0x05 | 0x0c | 0x0f | 0x10, ..]) => "iPhone/Mac", // AirDrop, Handoff, Nearby
+                (0x004c, _) => "Apple",
+                (0x0006, [0x01, t, ..]) if matches!(t & 0x1f, 9 | 15) => "Windows PC",
+                (0x0006, [0x01, t, ..]) if t & 0x1f == 1 => "Xbox",
+                (0x0006, _) => "Microsoft",
+                (0x0059, _) => "Nordic",
+                (0x006b, _) => "Polar",
+                (0x0075, _) => "Samsung",
+                (0x0087, _) => "Garmin",
+                (0x00e0, _) => "Google",
+                (0x0171, _) => "Amazon",
+                _ => return None,
+            });
         }
         rest = rest.get(1 + usize::from(len)..)?;
     }
     None
-}
-
-/// The maker for a Bluetooth SIG company ID, for the makers likely around a bike: phones, laptops, sports sensors.
-/// Phones and laptops advertise no name, only this and a random address that changes every few minutes.
-// ponytail: a handful of IDs; the full SIG list (thousands) is not worth the image size.
-pub fn company_name(id: u16) -> Option<&'static str> {
-    Some(match id {
-        0x0006 => "Microsoft",
-        0x004c => "Apple",
-        0x0059 => "Nordic",
-        0x006b => "Polar",
-        0x0075 => "Samsung",
-        0x0087 => "Garmin",
-        0x00e0 => "Google",
-        0x0171 => "Amazon",
-        _ => return None,
-    })
 }
 
 /// The distinct devices heard while scanning (up to [`Nearby::MAX`] remembered; the count stops there).
@@ -353,7 +360,7 @@ impl Nearby {
 
     /// Nobody heard yet.
     pub const fn new() -> Self {
-        const NONE: Device = Device { addr: [0; 6], rssi: 0, name: [0; Device::NAME], name_len: 0, company: None };
+        const NONE: Device = Device { addr: [0; 6], rssi: 0, name: [0; Device::NAME], name_len: 0, maker: None };
         Nearby { devices: [NONE; Self::MAX], count: 0 }
     }
 
@@ -373,8 +380,8 @@ impl Nearby {
         };
         d.addr = r.addr;
         d.rssi = r.rssi;
-        if let Some(id) = ad_company(r.data) {
-            d.company = Some(id);
+        if let Some(m) = ad_maker(r.data) {
+            d.maker = Some(m);
         }
         if let Some(name) = ad_name(r.data) {
             let n = name.len().min(Device::NAME);
@@ -412,7 +419,7 @@ mod tests {
     fn nearby_keeps_names_and_the_last_rssi_strongest_first() {
         let mut n = Nearby::new();
         assert!(n.add(&report(1, -80, &[5, 0xff, 0x4c, 0, 0x10, 6])));
-        assert_eq!(n.strongest().next().unwrap().company, Some(0x004c));
+        assert_eq!(n.strongest().next().unwrap().maker, Some("iPhone/Mac"));
         assert!(n.add(&report(2, -50, &[4, 0x09, b'H', b'R', 0xff])));
         assert!(!n.add(&report(1, -40, &[3, 0x08, b'P', b'C'])), "same address: not new");
         let list: std::vec::Vec<_> =
