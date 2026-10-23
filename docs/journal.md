@@ -42,4 +42,21 @@ row in bryton-S510-mods' FLASHLOG.
   key or a touch woke it (found by `dev.py info`: uptime stuck at 0). The sleep is now timed by SysTick; the awake
   figure, which counts CYCCNT, was right all along.
 
+## 2026-10-24: what a lost ride left on the card
+
+The 2 h 40 ride of 2026-10-22 (lost to the P9 patch's crash at the start and at the save, AGENTS.md) was looked for
+on the eMMC, read only, with new dev link commands (`ls`, `get`, `find`):
+- **Nothing to undelete:** stock's saved file for that day is 3.6 KB; its ride in progress (`\Activities\tmp.fit`)
+  and recovery files (`\System\tmp*.fit`) are gone, and **stock zeroes the directory entries of deleted files**
+  (the four deleted entries in `\Activities` are all zeros), so neither the start cluster nor the size survives.
+- **The GNSS logs did not carry the ride:** the `.ubx` logs of that day are 9 KB and 1.1 KB (the restarts); logging
+  did not go on after the second one.
+- **Carving the free clusters** for the ride's FIT timestamps (the method checked on Tuesday's ride: 10 to 17 hits a
+  sector) found nothing near the clusters stock was allocating then; the full scan was stopped (the owner: move on).
+- **For this firmware's recorder (the golden rule):** keep the ride in progress until the finished file is written
+  and read back whole; finish by rename, never by copy and delete; keep the recovery record and the previous one; do
+  not zero deleted entries, so a file can still be found by hand; write the GNSS position into the ride file itself
+  as it goes (a side log that stops is no backup); and the host tests cut power at every write of the save itself,
+  not only during the ride.
+
 The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).

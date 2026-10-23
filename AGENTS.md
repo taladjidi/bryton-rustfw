@@ -18,6 +18,10 @@ saved"):
 - **Nothing optional can stop the recording:** no `unwrap`, indexing that can panic, or unbounded loops on the
   recording path. Extras (live fields, HRV, analysis) feed the recorder through checked data, and a failing extra
   is dropped instead of taking the recorder down.
+- **The save is the riskiest moment** (2026-10-22, docs/journal.md): stock's crash at the save deleted the ride in
+  progress and zeroed its directory entry, so nothing could be recovered. Keep the ride in progress until the
+  finished file is written and read back whole; finish by rename; keep two recovery records; never zero a deleted
+  entry.
 - **Tested before any ride build:** host tests that cut the write at every point and check the resume, and on
   the unit a start, a restart mid-ride, then a save.
 
