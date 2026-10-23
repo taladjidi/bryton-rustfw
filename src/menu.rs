@@ -146,8 +146,9 @@ pub enum Row {
 }
 
 /// The main menu.
-pub const MAIN: [Row; 11] = [
+pub const MAIN: [Row; 12] = [
     Row::Open(Menu::Sensors),
+    Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
     Row::Open(Menu::Page(1)),
     Row::Open(Menu::Page(2)),

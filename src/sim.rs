@@ -982,12 +982,20 @@ mod tests {
                 rec: app.strip.rec,
             },
         );
-        crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10, s / 10, s % 10]);
+        let _ = s;
+        crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10]);
+        crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
+        let values = [(Field::Dist, "0.00"), (Field::Timer, "0:00:00"), (Field::Hr, "--"), (Field::Temp, "--")];
+        for (i, (field, v)) in values.into_iter().enumerate() {
+            let bx = crate::ui::overview_box(i).unwrap();
+            crate::ui::draw_field_frame(&mut f, bx, field);
+            crate::ui::draw_field_value(&mut f, bx, field, v, crate::ui::WHITE);
+        }
         crate::ui::draw_ferris(&mut f);
         f.px
     }
 
-    /// The main screen: the strip, the time big with its seconds, Ferris.
+    /// The main screen, the overview: the strip, the time, the date, four fields, Ferris (no notices yet).
     #[test]
     fn boots_into_the_main_screen() {
         let mut sim = Sim::new(12, 34, 56);
@@ -1080,7 +1088,7 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         let left_ms = 5500 - sim.ms;
         run(&mut sim, &mut app, left_ms);
-        assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 0));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Page(OVERVIEW), 0), "row 1: the overview's fields");
         assert_consistent(&sim, &app);
     }
 
@@ -1104,7 +1112,7 @@ mod tests {
         let left = 6900 - sim.ms;
         run(&mut sim, &mut app, left);
         assert!(app.editing, "the tap edits");
-        assert_eq!(main_row(&app, 7), "MAX HR < 191 >", "the swipe up adds one");
+        assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::MaxHr))), "MAX HR < 191 >", "the swipe up adds one");
         run(&mut sim, &mut app, 1000);
         assert!(!app.editing, "the second tap keeps it");
         assert_eq!(Settings::from_word(sim.backup[11]).max_hr, 191);
@@ -1165,9 +1173,7 @@ mod tests {
         assert_consistent(&sim, &app);
         // switching that page off from the menu: Back shows the main screen instead
         app.press(&mut sim, Press::Long(Key::Page));
-        for _ in 0..2 {
-            app.press(&mut sim, Press::Short(Key::Page));
-        }
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(1)));
         app.press(&mut sim, Press::Short(Key::Start)); // PAGE 2
         while app.pages()[1].layout != 0 {
             app.press(&mut sim, Press::Short(Key::Start)); // FIELDS round to OFF
@@ -1284,7 +1290,7 @@ mod tests {
         sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power300 });
         let mut app = App::start(&mut sim, Some(KEY));
         app.press(&mut sim, Press::Long(Key::Page));
-        app.press(&mut sim, Press::Short(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(0)));
         app.press(&mut sim, Press::Short(Key::Start));
         assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 0));
         app.press(&mut sim, Press::Short(Key::Start)); // layout 3 -> 4
@@ -1299,7 +1305,7 @@ mod tests {
             fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time],
         };
         assert_eq!(app.pages()[0], want);
-        assert_eq!(PageCfg::from_word(sim.backup[14]), Some(want));
+        assert_eq!(PageCfg::from_words([sim.backup[19], sim.backup[20]]), Some(want));
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Page));
@@ -1328,6 +1334,31 @@ mod tests {
         assert!(!sim.standby, "two low readings: not yet");
         run(&mut sim, &mut app, u64::from(BATTERY_MS));
         assert!(sim.standby && !sim.display_on, "empty: switched off");
+    }
+
+    /// The overview: the first GPS fix becomes a notice in place of Ferris; its fields are chosen in the menu
+    /// (OVERVIEW: four rows, no field count) and kept.
+    #[test]
+    fn overview_notices_and_fields() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 3000);
+        sim.gnss.fix = Some(7000);
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(app.notices[0].as_str(), "09:00 GPS FIX");
+        assert_consistent(&sim, &app);
+        sim.save("overview_notice");
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(OVERVIEW)));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.rows(Menu::Page(OVERVIEW)), 4);
+        app.press(&mut sim, Press::Short(Key::Start)); // KM -> AVG KM/H
+        assert_consistent(&sim, &app);
+        app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Main);
+        assert_consistent(&sim, &app);
+        assert_eq!(App::start(&mut sim, None).pages()[OVERVIEW].fields[0], Field::AvgSpeed, "kept");
     }
 
     /// The receiver is powered at start and gets its configuration (RAM layer) once; with a fix, "GPS" turns green
@@ -1410,9 +1441,7 @@ mod tests {
         let mut app = App::start(&mut sim, None);
         assert_eq!(sim.light_level, 100, "100 % and never off by default");
         app.press(&mut sim, Press::Long(Key::Page));
-        for _ in 0..5 {
-            app.press(&mut sim, Press::Short(Key::Page));
-        }
+        to_row(&mut sim, &mut app, menu::Row::Set(Setting::Light));
         app.press(&mut sim, Press::Short(Key::Start)); // LIGHT %: 60
         app.press(&mut sim, Press::Short(Key::Page));
         app.press(&mut sim, Press::Short(Key::Start)); // LIGHT OFF: 10 s
@@ -1440,6 +1469,18 @@ mod tests {
         format!("{} {}", label.as_str(), value.as_str())
     }
 
+    /// From the main menu's first row, down to `row`.
+    fn to_row(sim: &mut Sim, app: &mut App, row: menu::Row) {
+        for _ in 0..menu::MAIN.iter().position(|&r| r == row).unwrap() {
+            app.press(sim, Press::Short(Key::Page));
+        }
+    }
+
+    /// Main menu row index of `row`.
+    fn row_of(row: menu::Row) -> usize {
+        menu::MAIN.iter().position(|&r| r == row).unwrap()
+    }
+
     /// The text of main menu row `i`: label and value.
     fn main_row(app: &App, i: usize) -> std::string::String {
         let (label, value, _) = app.menu_row(Menu::Main, i).unwrap();
@@ -1456,13 +1497,11 @@ mod tests {
         run(&mut sim, &mut app, 30_000);
         assert_eq!(sim.bus.light_reads, 0, "a fixed level and no menu: the light sensor is never used");
         app.press(&mut sim, Press::Long(Key::Page));
-        for _ in 0..5 {
-            app.press(&mut sim, Press::Short(Key::Page));
-        }
+        to_row(&mut sim, &mut app, menu::Row::Set(Setting::Light));
         for _ in 0..4 {
             app.press(&mut sim, Press::Short(Key::Start)); // 60, 30, 10, AUTO
         }
-        assert_eq!(main_row(&app, 5), "LIGHT % AUTO");
+        assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Light))), "LIGHT % AUTO");
         assert_eq!(Settings::from_word(sim.backup[11]).light_level, LIGHT_AUTO, "kept");
         run(&mut sim, &mut app, 4000);
         assert_eq!(sensor_row(&app, 5), "LUX 300");
@@ -1887,11 +1926,9 @@ mod tests {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, None);
         app.press(&mut sim, Press::Long(Key::Page));
-        for _ in 0..4 {
-            app.press(&mut sim, Press::Short(Key::Page));
-        }
+        to_row(&mut sim, &mut app, menu::Row::Set(Setting::Wheel));
         app.press(&mut sim, Press::Short(Key::Start)); // wheel: next size
-        for _ in 0..3 {
+        for _ in row_of(menu::Row::Set(Setting::Wheel))..row_of(menu::Row::Set(Setting::MaxHr)) {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         app.press(&mut sim, Press::Short(Key::Start)); // edit MAX HR
@@ -1909,7 +1946,7 @@ mod tests {
         app.press(&mut sim, Press::Short(Key::Page)); // the release does not step again
         app.press(&mut sim, Press::Short(Key::Lap)); // 55
         app.press(&mut sim, Press::Short(Key::Back)); // kept, still in the menu
-        assert!(matches!(app.screen, Screen::Menu(Menu::Main, 8)));
+        assert!(matches!(app.screen, Screen::Menu(Menu::Main, r) if r == row_of(menu::Row::Set(Setting::Ftp))));
         assert_consistent(&sim, &app);
         sim.save("zones_menu");
         let again = App::start(&mut sim, None);

@@ -5,7 +5,9 @@
 - **Status strip** (every screen): BLE (green, red if the radio chip did not answer), GPS (blinking grey while
   searching, then 1 to 4 signal bars), the time (green while a ride records, orange while paused), a USB symbol,
   the battery (green while charging, red at 15 % and under).
-- **Main screen:** the time, big, with its seconds, and Ferris the Rust crab.
+- **Overview** (the main screen): the time, big (no seconds: it changes once a minute), the date, four fields chosen
+  in the menu (OVERVIEW; by default distance, timer, heart rate, temperature), and the latest notices (a GPS fix, a
+  sensor paired, the battery low), or Ferris the Rust crab when there are none.
 - **Ride pages:** up to three, each of 1, 2, 3, 4 or 6 fields, chosen in the menu: speed, heart rate, cadence,
   power, time, map, timer, distance, average and top speed, average heart rate and power, lap time and distance,
   ascent, and a zone graph. Page 3 is the map by default.
@@ -50,7 +52,7 @@ Gestures reach the app as the same `Input` events as the keys (src/menu.rs).
 
 ## Menu
 
-Sensors (pair, forget; then the light, temperature and pressure readings), pages 1 to 3 (field count, each field),
+Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
 wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
 up and Page down, held to repeat, Start to keep), GPS (fix, satellites, position, altitude, UTC),
 BLE devices nearby.

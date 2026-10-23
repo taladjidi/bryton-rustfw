@@ -79,7 +79,7 @@ pub fn draw_bitmap(c: &mut impl Canvas, bitmap: &[u16], x: u32, y: u32, scale: u
 
 /// Width of one character cell of the monospaced pixel font, in font pixels.
 const CELL: u32 = 6;
-/// Ferris: scale and top left corner (centred, at the bottom of the first ride page).
+/// Ferris: scale and top left corner (centred, at the bottom of the overview).
 pub const CRAB_SCALE: u32 = 4;
 /// Ferris left edge.
 pub const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
@@ -401,16 +401,18 @@ pub enum Field {
     Ascent,
     /// Bars of the last minutes of power (with a power meter paired), else of heart rate, coloured by zone.
     Graph,
+    /// The barometer's temperature, C.
+    Temp,
 }
 
 impl Field {
-    /// Every field, in the order the page menu cycles through them; the index is kept in 4 bits ([`crate::PageCfg`]),
-    /// so there are 16 at most and new ones go at the end.
-    pub const ALL: [Field; 16] = {
+    /// Every field, in the order the page menu cycles through them; the index is kept in a byte
+    /// ([`crate::PageCfg`]), so new ones go at the end.
+    pub const ALL: [Field; 17] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
-            Ascent, Graph,
+            Ascent, Graph, Temp,
         ]
     };
 
@@ -418,7 +420,7 @@ impl Field {
     pub fn label(self) -> &'static str {
         [
             "TIME", "HR", "KM/H", "RPM", "WATTS", "MAP", "TIMER", "KM", "AVG KM/H", "MAX KM/H", "AVG HR", "AVG W",
-            "LAP TIME", "LAP KM", "ASCENT M", "GRAPH",
+            "LAP TIME", "LAP KM", "ASCENT M", "GRAPH", "TEMP C",
         ][self as usize]
     }
 
@@ -426,7 +428,7 @@ impl Field {
     fn widest(self) -> &'static str {
         [
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
-            "88.88", "8888", "",
+            "88.88", "8888", "", "-88.8",
         ][self as usize]
     }
 
@@ -560,45 +562,68 @@ pub fn draw_graph(c: &mut impl Canvas, area: (u32, u32, u32, u32), bar: &dyn Fn(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The main screen: the time, big, and Ferris
+// The overview (the main screen): the time, the date, four fields of the user's choice, the notices (Ferris when
+// there are none)
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Hours and minutes on the main screen: the pixel font at 7x, white.
+/// Hours and minutes: the pixel font at 7x, white. No seconds: the overview changes once a minute.
 pub const TIME: Style = Style { font: &PIXEL, scale: 7, fg: WHITE, bg: BLACK };
-/// Seconds on the main screen: the pixel font at 5x, orange.
-pub const SECONDS: Style = Style { font: &PIXEL, scale: 5, fg: ACCENT, bg: BLACK };
 /// Top of the hours and minutes.
-pub const TIME_Y: u32 = 70;
-/// Top of the seconds.
-pub const SECONDS_Y: u32 = 160;
+pub const TIME_Y: u32 = PAGE_Y + 6;
+/// Top of the date line.
+pub const DATE_Y: u32 = TIME_Y + PIXEL.height as u32 * TIME.scale; // the text box, not just the ink
+/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes).
+pub const OVERVIEW_Y: u32 = DATE_Y + PIXEL.height as u32 * LABEL.scale + 2;
+/// See [`OVERVIEW_Y`].
+pub const OVERVIEW_H: u32 = NOTICES_Y - 4 - OVERVIEW_Y;
+/// Top of the notices: [`NOTICES`] rows of [`LIST_ROW`].
+pub const NOTICES_Y: u32 = CRAB_Y - 4;
+/// Notices shown at most.
+pub const NOTICES: usize = 2;
 
 /// Left edge of "HH:MM", its ink centred (each cell ends with a blank column, the last one does not count).
 const TIME_X: u32 = (W - (5 * CELL - 1) * TIME.scale) / 2;
-/// Left edge of the seconds, their ink centred.
-const SECONDS_X: u32 = (W - (2 * CELL - 1) * SECONDS.scale) / 2;
 
-/// Main screen digit `i` (0..4: H H M M, 4..6: the seconds) showing `d`, in its fixed cell of the monospaced font:
-/// only the digits that change are drawn, each one a SPI transfer (a 5x digit is 1.5 K pixels).
-pub fn draw_main_digit(c: &mut impl Canvas, i: usize, d: u8) {
-    let s = DIGITS[usize::from(d % 10)];
-    if i < 4 {
-        let col = if i < 2 { i } else { i + 1 } as u32; // the colon is column 2
-        text::draw_in(c, &TIME, TIME_X + col * CELL * TIME.scale, TIME_Y, CELL * TIME.scale, Align::Left, s);
-    } else {
-        let x = SECONDS_X + (i as u32 - 4) * CELL * SECONDS.scale;
-        text::draw_in(c, &SECONDS, x, SECONDS_Y, CELL * SECONDS.scale, Align::Left, s);
-    }
+/// Field box `i` of the overview's four.
+pub fn overview_box(i: usize) -> Option<(u32, u32, u32, u32)> {
+    let (x, y, w, h) = field_box(4, OVERVIEW_H, i)?;
+    Some((x, y - RIDE_Y + OVERVIEW_Y, w, h))
 }
 
-/// The main screen's time: the colon and every digit of HH MM SS.
-pub fn draw_main_time(c: &mut impl Canvas, digits: [u8; 6]) {
+/// Overview digit `i` (H H M M) showing `d`, in its fixed cell of the monospaced font: only the digits that change
+/// are drawn, each one a SPI transfer.
+pub fn draw_main_digit(c: &mut impl Canvas, i: usize, d: u8) {
+    let col = if i < 2 { i } else { i + 1 } as u32; // the colon is column 2
+    let s = DIGITS[usize::from(d % 10)];
+    text::draw_in(c, &TIME, TIME_X + col * CELL * TIME.scale, TIME_Y, CELL * TIME.scale, Align::Left, s);
+}
+
+/// The overview's time: the colon and the digits of HH MM.
+pub fn draw_main_time(c: &mut impl Canvas, digits: [u8; 4]) {
     text::draw(c, &TIME, TIME_X + 2 * CELL * TIME.scale, TIME_Y, Align::Left, ":");
     for (i, d) in digits.into_iter().enumerate() {
         draw_main_digit(c, i, d);
     }
 }
 
-/// Ferris, at the bottom of the main screen.
+/// The date line, centred, grey.
+pub fn draw_date(c: &mut impl Canvas, date: &str) {
+    text::draw_in(c, &Style { fg: GREY, ..LABEL }, 0, DATE_Y, W, Align::Centre, date);
+}
+
+/// The notices, newest first; with none, Ferris.
+pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
+    c.fill(0, NOTICES_Y, W, H - NOTICES_Y, BLACK);
+    if notices.is_empty() {
+        return draw_ferris(c);
+    }
+    for (r, n) in notices.iter().take(NOTICES).enumerate() {
+        let style = Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL };
+        text::draw_in(c, &style, NEARBY.0, NOTICES_Y + 4 + r as u32 * LIST_ROW, W - 2 * NEARBY.0, Align::Left, n);
+    }
+}
+
+/// Ferris, at the bottom of the overview.
 pub fn draw_ferris(c: &mut impl Canvas) {
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
 }
@@ -705,7 +730,10 @@ pub(crate) mod tests {
         assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2);
         let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
-        assert!(SECONDS_Y + SECONDS.height() <= CRAB_Y && TIME_Y + TIME.height() <= SECONDS_Y && TIME_Y > STRIP_H);
+        assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);
+        assert!(
+            NOTICES_Y + 4 + NOTICES as u32 * LIST_ROW <= H && overview_box(3).is_some_and(|b| b.1 + b.3 <= NOTICES_Y)
+        );
     }
 
     /// Updating only the changed characters gives the same pixels as drawing the new value whole, and draws less.

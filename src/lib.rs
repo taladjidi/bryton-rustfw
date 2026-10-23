@@ -281,20 +281,37 @@ pub struct PageCfg {
 }
 
 impl PageCfg {
-    /// As kept in a backup register: tag 0xa in the top nibble, the layout, then 4 bits per field.
+    /// As kept in two backup registers, each behind tag 0xb in its top nibble: the layout in bits 24..27 of the
+    /// first, then a byte per field, three in each word.
     ///
     /// ```
     /// use bryton_rustfw::{PageCfg, ui::Field};
-    /// let p = PageCfg { layout: 3, fields: [Field::Power, Field::Hr, Field::Time, Field::Time, Field::Time, Field::Time] };
-    /// assert_eq!(PageCfg::from_word(p.to_word()), Some(p));
-    /// assert_eq!(PageCfg::from_word(0), None);
+    /// let p = PageCfg { layout: 6, fields: [Field::Power, Field::Hr, Field::Temp, Field::Map, Field::Dist, Field::Time] };
+    /// assert_eq!(PageCfg::from_words(p.to_words()), Some(p));
+    /// assert_eq!(PageCfg::from_words([0, 0]), None);
     /// ```
-    pub fn to_word(self) -> u32 {
-        let fields = self.fields.iter().enumerate().fold(0, |w, (i, f)| w | (*f as u32) << (4 * i));
-        (0xa << 28) | (u32::from(self.layout) << 24) | fields
+    pub fn to_words(self) -> [u32; 2] {
+        let bytes = |f: &[Field]| f.iter().enumerate().fold(0, |w, (i, &f)| w | (f as u32) << (8 * i));
+        let (a, b) = self.fields.split_at(3);
+        [(0xb << 28) | (u32::from(self.layout) << 24) | bytes(a), (0xb << 28) | bytes(b)]
     }
 
-    /// The page kept in `w`, if [`PageCfg::to_word`] wrote it.
+    /// The page kept in `w`, if [`PageCfg::to_words`] wrote it.
+    pub fn from_words(w: [u32; 2]) -> Option<Self> {
+        let layout = (w[0] >> 24 & 0xf) as u8;
+        if w.iter().any(|w| w >> 28 != 0xb) || !ui::LAYOUTS.contains(&layout) {
+            return None;
+        }
+        Some(PageCfg { layout, fields: core::array::from_fn(|i| Field::from_index(w[i / 3] >> (8 * (i % 3)) & 0xff)) })
+    }
+
+    /// A page as earlier builds kept it in one register: tag 0xa, the layout, 4 bits per field.
+    ///
+    /// ```
+    /// use bryton_rustfw::{PageCfg, ui::Field};
+    /// let p = PageCfg::from_word(0xa300_0021).unwrap();
+    /// assert_eq!((p.layout, &p.fields[..3]), (3, &[Field::Hr, Field::Speed, Field::Time][..]));
+    /// ```
     pub fn from_word(w: u32) -> Option<Self> {
         let layout = (w >> 24 & 0xf) as u8;
         if w >> 28 != 0xa || !ui::LAYOUTS.contains(&layout) {
@@ -306,8 +323,13 @@ impl PageCfg {
 
 /// Ride pages at most.
 pub const PAGES: usize = 3;
-/// The backup registers of the ride pages.
-const PAGE_BKP: [usize; PAGES] = [14, 15, 16];
+/// The overview's fields are kept as page [`OVERVIEW`] (four fields, never off), after the ride pages.
+pub const OVERVIEW: usize = PAGES;
+/// The backup registers of the ride pages and the overview, two each ([`PageCfg::to_words`]).
+const PAGE_BKP: [[usize; 2]; PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26]];
+/// Where earlier builds kept the ride pages, one register each ([`PageCfg::from_word`]): read when the new ones
+/// are empty.
+const OLD_PAGE_BKP: [usize; PAGES] = [14, 15, 16];
 /// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Settings`].
 const WHEEL_BKP: usize = 11;
 
@@ -487,12 +509,13 @@ pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
 
 /// The ride pages before any are set: speed big with heart rate and cadence (the time is in the strip), then four
 /// fields, then the map.
-const DEFAULT_PAGES: [PageCfg; PAGES] = {
+const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
     use Field::*;
     [
         PageCfg { layout: 3, fields: [Speed, Hr, Cadence, Time, Time, Time] },
         PageCfg { layout: 4, fields: [Speed, Hr, Cadence, Power, Time, Time] },
         PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] },
+        PageCfg { layout: 4, fields: [Dist, Timer, Hr, Temp, Time, Time] },
     ]
 };
 
@@ -594,9 +617,9 @@ pub enum Screen {
 }
 
 /// The GPS row of the main menu.
-pub const GPS_ROW: usize = 9;
+pub const GPS_ROW: usize = 10;
 /// The nearby BLE devices row of the main menu.
-pub const NEARBY_ROW: usize = 10;
+pub const NEARBY_ROW: usize = 11;
 const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
 const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
 
@@ -610,10 +633,12 @@ struct GraphShown {
 /// What a page box holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Widget {
-    /// The big time with its seconds, each digit in its own cell.
+    /// The big time, each digit in its own cell.
     Clock,
-    /// Ferris the crab (drawn once).
-    Ferris,
+    /// The date line.
+    Date,
+    /// The latest notices, or Ferris when there are none.
+    Notices,
     /// A ride field in its box: a value, the map or the graph.
     Field(Field),
 }
@@ -625,8 +650,10 @@ enum Drawn {
     /// Nothing that changes.
     #[default]
     Fixed,
-    /// The clock's digits: H H M M S S.
-    Digits([u8; 6]),
+    /// The clock's digits: H H M M.
+    Digits([u8; 4]),
+    /// A fingerprint of what the box shows, redrawn whole when it changes (the date, the notices).
+    Print(u32),
     /// A value and its colour.
     Value(Line<8>, u16),
     /// A map.
@@ -635,8 +662,11 @@ enum Drawn {
     Graph(GraphShown),
 }
 
+/// Box `i` of a page with this many fields (the ride pages' and the overview's grids).
+type BoxAt = fn(u8, usize) -> Option<(u32, u32, u32, u32)>;
+
 /// Boxes on a page at most.
-const BOXES: usize = 6;
+const BOXES: usize = 8;
 
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
@@ -704,7 +734,15 @@ pub struct App {
     /// The screens under this one, the latest last: Back returns to them, with their selection.
     under: [Screen; 4],
     depth: usize,
-    pages: [PageCfg; PAGES],
+    /// The ride pages, then the overview's fields ([`OVERVIEW`]).
+    pages: [PageCfg; PAGES + 1],
+    /// Today (RTC), for the overview.
+    date: (u16, u8, u8),
+    /// The latest notices, newest first (empty lines: none).
+    notices: [Line<20>; ui::NOTICES],
+    /// The GPS had a good fix since power-on; the battery was reported low.
+    had_fix: bool,
+    told_low: bool,
     /// The page's boxes as drawn ([`App::widgets`]).
     drawn: [Drawn; BOXES],
     /// The ride: timer, totals, laps.
@@ -805,7 +843,15 @@ impl App {
             repeated: false,
             under: [Screen::Main; 4],
             depth: 0,
-            pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
+            pages: core::array::from_fn(|i| {
+                PageCfg::from_words(PAGE_BKP[i].map(|r| b.backup_read(r)))
+                    .or_else(|| OLD_PAGE_BKP.get(i).and_then(|&r| PageCfg::from_word(b.backup_read(r))))
+                    .unwrap_or(DEFAULT_PAGES[i])
+            }),
+            date: rtc_date_from_dr(b.rtc().1),
+            notices: Default::default(),
+            had_fix: false,
+            told_low: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),
             history: ride::History::default(),
@@ -882,7 +928,7 @@ impl App {
     }
 
     /// The ride page settings.
-    pub fn pages(&self) -> &[PageCfg; PAGES] {
+    pub fn pages(&self) -> &[PageCfg; PAGES + 1] {
         &self.pages
     }
 
@@ -927,6 +973,13 @@ impl App {
                 return l;
             }
             Field::Map | Field::Graph => return l,
+            Field::Temp => {
+                let t = self.baro.map(|(_, t)| i32::from(t) / 10); // C x 100 to tenths
+                if t.is_some_and(|t| t < 0) {
+                    l.push_str("-");
+                }
+                (t.map(i32::unsigned_abs), true)
+            }
             Field::Hr => (live(Metric::Hr), false),
             Field::Speed => (live(Metric::Speed), true),
             Field::Cadence => (live(Metric::Cadence), false),
@@ -989,6 +1042,7 @@ impl App {
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
             Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len()).map(|&r| Row::Read(r)),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
+            Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
                 _ if i <= usize::from(self.pages.get(n)?.layout) => Some(Row::Field(n, i - 1)),
@@ -1007,6 +1061,7 @@ impl App {
         use menu::{Reading, Row};
         let (mut label, mut value, mut color) = (Line::new(), Line::new(), ui::GREY);
         match self.row(menu, i)? {
+            Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
             Row::Open(Menu::Page(n)) => {
                 label.push_str("PAGE ");
                 label.push_u32(n as u32 + 1);
@@ -1124,9 +1179,13 @@ impl App {
             }
             Screen::Menu(menu, sel) => {
                 let mut title = Line::<12>::new();
-                title.push_str(menu_title(menu));
-                if let Menu::Page(n) = menu {
-                    title.push_u32(n as u32 + 1);
+                match menu {
+                    Menu::Page(OVERVIEW) => title.push_str("OVERVIEW"),
+                    Menu::Page(n) => {
+                        title.push_str(menu_title(menu));
+                        title.push_u32(n as u32 + 1);
+                    }
+                    _ => title.push_str(menu_title(menu)),
                 }
                 ui::draw_title(c, title.as_str());
                 self.draw_menu_rows(c, menu, sel);
@@ -1143,24 +1202,23 @@ impl App {
     /// The boxes of the page on screen and what each holds (none on a menu or a list). The clock and Ferris place
     /// themselves.
     fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + use<> {
-        let mut all = [((0, 0, 0, 0), Widget::Ferris); BOXES];
-        let n = match self.screen {
-            Screen::Main => {
-                all[0].1 = Widget::Clock;
-                2
-            }
-            Screen::Ride(n) => {
-                let p = self.pages.get(n).copied().unwrap_or(DEFAULT_PAGES[0]);
-                let mut k = 0;
-                for (slot, (i, &f)) in all.iter_mut().zip(p.fields.iter().enumerate()) {
-                    let Some(bx) = ui::field_box(p.layout, ui::RIDE_H, i) else { break };
-                    *slot = (bx, Widget::Field(f));
-                    k += 1;
-                }
-                k
-            }
-            _ => 0,
+        let mut all = [((0, 0, 0, 0), Widget::Clock); BOXES];
+        let (page, at, fixed): (_, BoxAt, &[Widget]) = match self.screen {
+            Screen::Main => (OVERVIEW, |_, i| ui::overview_box(i), &[Widget::Clock, Widget::Date, Widget::Notices]),
+            Screen::Ride(n) => (n, |layout, i| ui::field_box(layout, ui::RIDE_H, i), &[]),
+            _ => return all.into_iter().take(0),
         };
+        let p = self.pages.get(page).copied().unwrap_or(DEFAULT_PAGES[0]);
+        let mut n = 0;
+        for (slot, &w) in all.iter_mut().zip(fixed) {
+            slot.1 = w;
+            n += 1;
+        }
+        for (i, &f) in p.fields.iter().enumerate() {
+            let (Some(bx), Some(slot)) = (at(p.layout, i), all.get_mut(n)) else { break };
+            *slot = (bx, Widget::Field(f));
+            n += 1;
+        }
         all.into_iter().take(n)
     }
 
@@ -1168,7 +1226,12 @@ impl App {
     fn now_drawn(&self, bx: (u32, u32, u32, u32), w: Widget) -> Drawn {
         match w {
             Widget::Clock => Drawn::Digits(self.main_digits()),
-            Widget::Ferris => Drawn::Fixed,
+            Widget::Date => {
+                Drawn::Print(u32::from(self.date.0) << 16 | u32::from(self.date.1) << 8 | u32::from(self.date.2))
+            }
+            Widget::Notices => {
+                Drawn::Print(self.notices.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
+            }
             Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx))),
             Widget::Field(Field::Graph) => Drawn::Graph(self.graph_now()),
             Widget::Field(f) => Drawn::Value(self.field_text(f), self.field_color(f)),
@@ -1180,7 +1243,14 @@ impl App {
         let d = self.drawn.get(i).copied().unwrap_or_default();
         match (w, d) {
             (Widget::Clock, Drawn::Digits(digits)) => ui::draw_main_time(c, digits),
-            (Widget::Ferris, _) => ui::draw_ferris(c),
+            (Widget::Date, _) => ui::draw_date(c, date_text(self.date).as_str()),
+            (Widget::Notices, _) => {
+                let mut n: [&str; ui::NOTICES] = [""; ui::NOTICES];
+                for (slot, line) in n.iter_mut().zip(&self.notices) {
+                    *slot = line.as_str();
+                }
+                ui::draw_notices(c, &n[..self.notices.iter().take_while(|l| !l.as_str().is_empty()).count()]);
+            }
             (Widget::Field(f), d) => {
                 ui::draw_field_frame(c, bx, f);
                 match d {
@@ -1209,10 +1279,24 @@ impl App {
         }
     }
 
-    /// The main screen's digits: H H M M S S.
-    fn main_digits(&self) -> [u8; 6] {
-        let ((h, m), s) = (self.strip.time, self.seconds);
-        [h / 10, h % 10, m / 10, m % 10, s / 10, s % 10]
+    /// The overview's digits: H H M M.
+    fn main_digits(&self) -> [u8; 4] {
+        let (h, m) = self.strip.time;
+        [h / 10, h % 10, m / 10, m % 10]
+    }
+
+    /// Adds a notice (newest first), stamped with the time: what the unit itself has to say (a fix, a sensor
+    /// paired, the battery low); phone notifications will come here too.
+    fn notice(&mut self, text: &str) {
+        self.notices.rotate_right(1);
+        let (h, m) = self.strip.time;
+        let mut l = Line::new();
+        for d in [h / 10, h % 10, 10, m / 10, m % 10] {
+            l.push_str(if d == 10 { ":" } else { ui::DIGITS[usize::from(d % 10)] });
+        }
+        l.push_str(" ");
+        l.push_str(text);
+        self.notices[0] = l;
     }
 
     fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
@@ -1319,7 +1403,16 @@ impl App {
                     }
                     Drawn::Value(text, fg)
                 }
-                _ => old,
+                _ => {
+                    let now = self.now_drawn(bx, w);
+                    if now != old {
+                        if let Some(d) = self.drawn.get_mut(i) {
+                            *d = now;
+                        }
+                        self.draw_widget(&mut Panel(b), i, bx, w);
+                    }
+                    now
+                }
             };
             if let Some(d) = self.drawn.get_mut(i) {
                 *d = now;
@@ -1433,7 +1526,7 @@ impl App {
                     if n == 0 && page.layout == 0 {
                         page.layout = ui::LAYOUTS[1]; // the first page is never off
                     }
-                    b.backup_write(PAGE_BKP[n], page.to_word());
+                    save_page(b, n, page);
                 }
             }
             Some(Row::Field(n, f)) => {
@@ -1441,7 +1534,7 @@ impl App {
                     && let Some(field) = page.fields.get_mut(f)
                 {
                     *field = field.next();
-                    b.backup_write(PAGE_BKP[n], page.to_word());
+                    save_page(b, n, page);
                 }
             }
             Some(Row::Read(_)) | None => {}
@@ -1701,8 +1794,10 @@ impl App {
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
-        let (h, m, sec) = rtc_time_from_tr(b.rtc().0);
+        let (tr, dr) = b.rtc();
+        let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
+        self.date = rtc_date_from_dr(dr);
         if sec != self.seconds {
             self.second();
         }
@@ -1719,6 +1814,11 @@ impl App {
             }
             self.strip.battery = self.battery.percent();
             self.strip.charging = charging;
+            let low = self.strip.battery.is_some_and(|p| p <= 15) && !charging;
+            if low && !self.told_low {
+                self.notice("BATTERY LOW");
+            }
+            self.told_low = low;
             if self.chips.baro {
                 // the conversion started 10 s ago; the next one now (one-shot: the chip sleeps in between)
                 self.baro = ambient::baro_read(b);
@@ -1730,6 +1830,10 @@ impl App {
             self.poll_nrf(b);
         }
         self.poll_gnss(b);
+        if !self.had_fix && self.pvt.is_some_and(|p| p.good()) {
+            self.had_fix = true;
+            self.notice("GPS FIX");
+        }
         self.strip.rec = match self.ride.state() {
             ride::State::Idle => Rec::Idle,
             _ if self.ride.moving() => Rec::Running,
@@ -1742,6 +1846,10 @@ impl App {
             {
                 self.sensors[kind as usize] = Sensor::Paired(id);
                 b.backup_write(kind.backup(), id.to_word());
+                let mut l = Line::<20>::new();
+                l.push_str(kind.name());
+                l.push_str(" PAIRED");
+                self.notice(l.as_str());
             }
         }
         self.ask = 0;
@@ -1906,6 +2014,33 @@ fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
             d /= 10;
         }
     }
+}
+
+/// Writes ride page (or overview) `n`'s configuration to its backup registers.
+fn save_page(b: &mut impl Board, n: usize, page: &PageCfg) {
+    if let Some(regs) = PAGE_BKP.get(n) {
+        for (r, w) in regs.iter().zip(page.to_words()) {
+            b.backup_write(*r, w);
+        }
+    }
+}
+
+/// One step of FNV-1a over `bytes` (fingerprints of what a box shows).
+fn fnv(h: u32, bytes: &[u8]) -> u32 {
+    bytes.iter().fold(h, |h, &x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
+}
+
+/// "FRI 23 OCT".
+fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
+    const DAYS: [&str; 7] = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"]; // 1970-01-01 was a Thursday
+    const MONTHS: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    let mut l = Line::new();
+    l.push_str(DAYS[days_from_civil(y, m, d).rem_euclid(7) as usize]);
+    l.push_str(" ");
+    l.push_u32(u32::from(d));
+    l.push_str(" ");
+    l.push_str(MONTHS.get(usize::from(m).wrapping_sub(1)).copied().unwrap_or(""));
+    l
 }
 
 /// A menu's title (a page's is followed by its number).
