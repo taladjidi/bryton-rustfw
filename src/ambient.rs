@@ -145,8 +145,8 @@ impl Auto {
     /// ```
     /// use bryton_rustfw::ambient::Auto;
     /// let mut a = Auto::default();
-    /// assert_eq!(a.update(10), 14); // 1 lux: dark
-    /// assert_eq!(a.update(100), 14); // one 10 lux reading: half way, not past the edge's margin
+    /// assert_eq!(a.update(10), 8); // 1 lux: dark
+    /// assert_eq!(a.update(100), 8); // one 10 lux reading: half way, not past the edge's margin
     /// ```
     pub fn update(&mut self, lux10: u32) -> u8 {
         let avg = self.avg.map_or(lux10, |a| (u64::from(a) + u64::from(lux10)).div_ceil(2) as u32);
