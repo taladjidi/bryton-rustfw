@@ -53,14 +53,30 @@ pub fn percent(mv: u16) -> u8 {
 /// Below this, on battery, the unit switches off (stock: at 0 %), before the cell is drawn too low.
 pub const EMPTY_MV: u16 = 3300;
 
+/// Readings a minute (the app reads the battery every 10 s).
+const PER_MINUTE: u32 = 6;
+
 /// Readings below [`EMPTY_MV`] in a row before switching off, so one dip under load does not.
 pub const EMPTY_READINGS: u8 = 3;
 
-/// The battery as the app follows it: a smoothed voltage, and the low readings in a row.
-#[derive(Default)]
+/// Minutes of battery history kept (one smoothed reading a minute): 4 hours.
+pub const LOG: usize = 240;
+
+/// The battery as the app follows it: a smoothed voltage, the low readings in a row, and a history (to measure
+/// the drain on the unit: `dev.py bat`).
 pub struct Battery {
     mv: Option<u16>,
     low: u8,
+    /// Ring of one entry a minute: mV, bit 15 set while charging.
+    log: [u16; LOG],
+    logged: usize,
+    readings: u32,
+}
+
+impl Default for Battery {
+    fn default() -> Self {
+        Battery { mv: None, low: 0, log: [0; LOG], logged: 0, readings: 0 }
+    }
 }
 
 impl Battery {
@@ -70,7 +86,24 @@ impl Battery {
         // a quarter of each new reading: smooths the noise and load dips without lagging minutes behind
         self.mv = Some(self.mv.map_or(mv, |old| ((3 * u32::from(old) + u32::from(mv)) / 4) as u16));
         self.low = if !charging && mv < EMPTY_MV { self.low + 1 } else { 0 };
+        if self.readings.is_multiple_of(PER_MINUTE)
+            && let (Some(mv), Some(slot)) = (self.mv, self.log.get_mut(self.logged % LOG))
+        {
+            *slot = (mv & 0x7fff) | if charging { 0x8000 } else { 0 };
+            self.logged += 1;
+        }
+        self.readings = self.readings.wrapping_add(1);
         self.low >= EMPTY_READINGS
+    }
+
+    /// The history, oldest first: (mV, charging), one a minute, the last one taken at the first reading of the
+    /// current minute.
+    pub fn history(&self) -> impl Iterator<Item = (u16, bool)> + '_ {
+        let n = self.logged.min(LOG);
+        (self.logged - n..self.logged).map(|i| {
+            let e = self.log[i % LOG];
+            (e & 0x7fff, e & 0x8000 != 0)
+        })
     }
 
     /// The smoothed voltage, mV.
@@ -86,6 +119,7 @@ impl Battery {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
 
     #[test]
@@ -98,6 +132,18 @@ mod tests {
         assert!(!b.update(3400, false), "one good reading starts again");
         assert!(!b.update(3200, false) && !b.update(3200, false));
         assert!(b.update(3200, false));
+    }
+
+    #[test]
+    fn history_keeps_the_last_four_hours_a_minute_apart() {
+        let mut b = Battery::default();
+        for i in 0..(LOG as u32 + 10) * PER_MINUTE {
+            b.update(4000 - (i / PER_MINUTE) as u16, i < 30);
+        }
+        let h: std::vec::Vec<_> = b.history().collect();
+        assert_eq!(h.len(), LOG);
+        assert!(h.windows(2).all(|w| w[1].0 <= w[0].0), "oldest first, falling");
+        assert!(!h[0].1 && h[LOG - 1].0 < 3800);
     }
 
     #[test]

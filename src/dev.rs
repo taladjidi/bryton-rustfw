@@ -3,6 +3,7 @@
 //!
 //! Commands, one per line:
 //! - `info`: `bryton-rustfw <version> up <ms>`.
+//! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (pack.py, without its
 //!   trailer) and the firmware stores them in SDRAM; `sum` is their additive sum. Answer `ok` and the firmware
@@ -140,6 +141,14 @@ impl Session {
                 h.send(concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " up ").as_bytes());
                 h.send(decimal(uptime_ms, &mut [0; 10]));
                 h.send(b" ms\n");
+            }
+            Some(b"bat") => {
+                // the battery history: one line a minute, oldest first, "mV" or "mV c" while charging; then "end"
+                for (mv, charging) in app.battery_history() {
+                    h.send(decimal(u32::from(mv), &mut [0; 10]));
+                    h.send(if charging { b" c\n" } else { b"\n" });
+                }
+                h.send(b"end\n");
             }
             Some(b"shot") => {
                 h.send(b"shot 240 320\n");

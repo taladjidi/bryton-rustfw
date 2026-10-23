@@ -3,6 +3,7 @@
 plugged in: the dot at the top right turns green when the link is ready.
 
   dev.py info                     version and uptime
+  dev.py bat                      battery history, one reading a minute (the last 4 hours)
   dev.py shot [-o shot.png]       one screenshot
   dev.py watch [-i 1] [-n 0]      continuous screenshots into target/shots/NNNNN.png (Ctrl-C to stop)
   dev.py run [out/IMG.bin]        load a build into SDRAM and run it (nothing is written to the eMMC;
@@ -122,6 +123,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('info')
+    sub.add_parser('bat', help='battery history: one reading a minute, the last 4 hours')
     sub.add_parser('reset')
     p = sub.add_parser('key', help='press a key (the app acts as if it was pressed): key page [--long]')
     p.add_argument('name', choices=['page', 'lap', 'start', 'back'])
@@ -149,7 +151,15 @@ def main():
         run(a.image)
     else:
         with connect() as s:
-            if a.cmd == 'key':
+            if a.cmd == 'bat':
+                rows = [command(s, 'bat')]
+                while rows[-1] != 'end':
+                    rows.append(line(s))
+                rows = rows[:-1]
+                for i, r in enumerate(rows):
+                    mv, *charging = r.split()
+                    print(f'{i - len(rows) + 1:5d} min  {mv} mV{"  charging" if charging else ""}')
+            elif a.cmd == 'key':
                 print(command(s, f'key {a.name}' + (' long' if a.long else '')))
             elif a.cmd in ('info', 'reset'):
                 print(command(s, a.cmd))

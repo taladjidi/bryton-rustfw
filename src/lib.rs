@@ -474,6 +474,11 @@ impl App {
         &self.pages
     }
 
+    /// The battery history, oldest first: (mV, charging), one a minute.
+    pub fn battery_history(&self) -> impl Iterator<Item = (u16, bool)> + '_ {
+        self.battery.history()
+    }
+
     /// The text of ride field `f` now ("--" without a value).
     fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
