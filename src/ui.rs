@@ -472,7 +472,7 @@ impl Field {
 
     /// Its label, top left of its box.
     pub fn label(self) -> &'static str {
-        [
+        const LABELS: [&str; Field::ALL.len()] = [
             "TIME",
             "HR",
             "KM/H",
@@ -513,18 +513,19 @@ impl Field {
             "W'BAL GRAPH",
             "DFA GRAPH",
             "ELEV GRAPH",
-        ][self as usize]
+        ];
+        LABELS[self as usize]
     }
 
     /// The widest value it shows: the value's scale is chosen so this fits.
     fn widest(self) -> &'static str {
-        [
+        const WIDEST: [&str; Field::ALL.len()] = [
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
-            "88.88", "8888", "", "-88.8", "", "8.88", "888", "88.88", "8888", "", "-88.8",
-            "", // power.rs and the ride's derived metrics:
+            "88.88", "8888", "", "-88.8", "", "8.88", "888", // power.rs and the ride's derived metrics:
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "",
-        ][self as usize]
+        ];
+        WIDEST[self as usize]
     }
 
     /// Its box holds a picture (map, graph), not a value.
@@ -892,6 +893,16 @@ pub(crate) mod tests {
         draw_crab(&mut f, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
         let ones: u32 = CRAB.iter().map(|b| b.count_ones()).sum();
         assert_eq!(f.count(RUST) as u32, ones * CRAB_SCALE * CRAB_SCALE);
+    }
+
+    /// `Field::ALL` lists the fields in their declaration order, so `label` and `widest` (sized by it, indexed by the
+    /// field) line up: a merge that duplicated a row of `widest` once sized the power fields' values five off.
+    #[test]
+    fn field_tables_line_up() {
+        for (i, f) in Field::ALL.iter().enumerate() {
+            assert_eq!(*f as usize, i, "{f:?}");
+        }
+        assert_eq!((Field::Power30s.widest(), Field::If.widest(), Field::Dfa.widest()), ("8888", "8.88", "8.88"));
     }
 
     /// The ride boxes tile the field area exactly, every value fits its box, and Ferris and the top line stay
