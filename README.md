@@ -24,6 +24,7 @@ reads but does not write yet. It shares the storage with Bryton's firmware, so t
 | Read | For |
 |---|---|
 | [docs/features.md](docs/features.md) | what it does, screen by screen |
+| [docs/checklist.md](docs/checklist.md) | every feature of stock, the patches and other bike computers, ticked as it lands |
 | [docs/install.md](docs/install.md) | build, the ANT+ key, install, and the way back to stock |
 | [docs/status.md](docs/status.md) | what is not yet seen on the unit, next steps |
 | [docs/journal.md](docs/journal.md) | what was found on the unit, dated |
