@@ -2371,6 +2371,62 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// Performance budgets: in steady state, each kind of screen sends at most so many pixels and panel windows a
+    /// second (every pixel is a SPI transfer and CPU time, AGENTS.md "redraw only what changes"). A change that
+    /// redraws more than it should fails here before it costs battery on the unit. Measured 2026-10-24, budgets with
+    /// a margin; the numbers are printed (`cargo test-host perf_budgets -- --nocapture`).
+    #[test]
+    fn perf_budgets() {
+        use Field::*;
+        // a ride on the GPS route, with a power meter and a strap, from start-up
+        let ride = |pages: [PageCfg; 3], screen: usize| {
+            let mut sim = Sim::new(9, 0, 0);
+            sim.gnss.route = Some(ride_route);
+            sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+            sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+            sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+            sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+            let mut app = App::start(&mut sim, Some(KEY));
+            app.pages[..3].copy_from_slice(&pages);
+            sim.gnss.fix = Some(8000);
+            if screen < PAGES {
+                app.press(&mut sim, Press::Short(Key::Start));
+                for _ in 0..screen {
+                    app.press(&mut sim, Press::Short(Key::Page));
+                }
+            }
+            run(&mut sim, &mut app, 120_000); // settled: the map fitted, the graph full
+            let (px, win, t0) = (sim.pixels, sim.windows, sim.ms);
+            run(&mut sim, &mut app, 300_000);
+            let s = (sim.ms - t0) / 1000;
+            assert_consistent(&sim, &app);
+            ((sim.pixels - px) / s, (sim.windows - win) / s)
+        };
+        let p = |layout, f: [Field; 6]| PageCfg { layout, fields: f };
+        let values = p(6, [Speed, Hr, Power, Power3s, Dist, Timer]);
+        let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
+        let map = p(1, [Map, Time, Time, Time, Time, Time]);
+        let cases: [(&str, [PageCfg; 3], usize, (u64, u64)); 4] = [
+            // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
+            ("overview", [values, graph, map], PAGES, (150, 5)),
+            // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
+            ("six values", [values, graph, map], 0, (9_000, 20)),
+            // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
+            ("two graphs", [graph, values, map], 0, (1_000, 30)),
+            // 1112, 33: the track's new segments and the arrow, refits included
+            ("map", [map, values, graph], 0, (1_800, 50)),
+        ];
+        let mut over = std::vec::Vec::new();
+        for (name, pages, screen, (px_max, win_max)) in cases {
+            let (px, win) = ride(pages, screen);
+            std::println!("{name}: {px} px/s, {win} windows/s (budget {px_max}, {win_max})");
+            if px > px_max || win > win_max {
+                over.push(std::format!("{name}: {px} px/s, {win} windows/s over {px_max}, {win_max}"));
+            }
+        }
+        assert!(over.is_empty(), "{over:?}");
+    }
+
     /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,
     /// holding a key repeats, Start keeps it; kept in the wheel's register beside the other settings.
     #[test]
