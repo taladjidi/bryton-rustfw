@@ -48,6 +48,8 @@ unsafe extern "C" {
     static _edata: u32;
     static _sbss: u32;
     static _ebss: u32;
+    static _saxi: u32;
+    static _eaxi: u32;
     static _siitcm: u32;
     static _sitcm: u32;
     static _eitcm: u32;
@@ -64,12 +66,18 @@ extern "C" fn reset() -> ! {
     barrier();
     wr(0xe000_ed08, 0xd000_0000); // VTOR: our table (faults land in default_handler)
     // .data and the ITCM code from their load addresses, .bss zeroed. Word copies through rd / wr: link.x keeps
-    // all six bounds 4-aligned, and no Rust code has run yet that could hold a reference into them.
+    // all eight bounds 4-aligned, and no Rust code has run yet that could hold a reference into them.
     let (data, itcm, bss) = (&raw const _sdata, &raw const _sitcm, &raw const _sbss);
     copy_words(&raw const _sidata as u32, data as u32, &raw const _edata as u32);
     copy_words(&raw const _siitcm as u32, itcm as u32, &raw const _eitcm as u32);
     let mut a = bss as u32;
     while a < &raw const _ebss as u32 {
+        wr(a, 0);
+        a += 4;
+    }
+    // the app's cell in AXI SRAM (link.x .axibss), zeroed as .bss: the cell's "taken" flag must start false
+    let mut a = &raw const _saxi as u32;
+    while a < &raw const _eaxi as u32 {
         wr(a, 0);
         a += 4;
     }

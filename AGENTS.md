@@ -60,6 +60,10 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - tables over code (the panel init is data);
   - watch the image size `pack.py` prints: about 48 KB, of which about 20 KB is the USB stack and about 2 KB the
     pixel font (a font costs nothing until something draws with it: the linker drops it).
+- **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
+  since as a local it was held in main's frame several times over (111 KB) and opening a workout overflowed the
+  stack (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
+  buffers in their own non-inlined function, never in main's.
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
   high, and unplugging resets the unit, which brings it up without USB.
 - **Measure before and after** a change that could cost: image size, and on the unit, time awake per loop

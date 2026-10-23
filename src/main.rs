@@ -1118,6 +1118,35 @@ fn checkpoint(n: u32) {
     }
 }
 
+/// The app, kept in `.bss` (a static cell), not on main's stack: as a local, `App` (tens of KB) was held in main's
+/// frame several times over (its construction, the move), which made main's frame 111 KB of the 123 KB of stack, and
+/// opening a workout (a 17 KB frame more) overflowed into `.bss` (2026-10-24). Not inlined, so the one temporary
+/// copy lives in this frame only while the app starts.
+#[inline(never)]
+fn make_app(board: &mut S510) -> &'static mut App {
+    static APP: static_cell::StaticCell<App> = static_cell::StaticCell::new();
+    APP.init_with(|| App::start(board, ANT_KEY))
+}
+
+/// The dev link's `bench`: `count` reads of `n` sectors from `lba`, timed, in microseconds. Its buffer in its own
+/// frame, not main's.
+#[inline(never)]
+fn bench_reads(
+    app: &mut App,
+    board: &mut S510,
+    lba: u32,
+    n: u32,
+    count: u32,
+) -> Result<u32, bryton_rustfw::emmc::Error> {
+    let mut buf = [0u8; 32 * bryton_rustfw::emmc::SECTOR];
+    let len = (n as usize * bryton_rustfw::emmc::SECTOR).min(buf.len());
+    let t = cycles();
+    for k in 0..count {
+        app.emmc().read(board, lba + k * n, &mut buf[..len])?;
+    }
+    Ok(cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000))
+}
+
 fn main() -> ! {
     mpu_init();
     checkpoint(1);
@@ -1133,7 +1162,7 @@ fn main() -> ! {
     i2c_init();
     checkpoint(4);
     let mut board = S510;
-    let mut app = App::start(&mut board, ANT_KEY);
+    let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
         app.set_map_memory(mem); // zeroes 1.5 MB of SDRAM once: about 10 to 30 ms (inferred), before the first map
     }
@@ -1177,7 +1206,7 @@ fn main() -> ! {
             timer_start(slice);
             let (edge, done) = loop {
                 if let Some(l) = &mut link {
-                    match l.poll(&mut session, &app, stats) {
+                    match l.poll(&mut session, app, stats) {
                         Effect::None => {}
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
@@ -1192,18 +1221,7 @@ fn main() -> ! {
                             woke = true;
                         }
                         Effect::Bench(lba, n, count) => {
-                            let mut buf = [0u8; 32 * bryton_rustfw::emmc::SECTOR];
-                            let len = n as usize * bryton_rustfw::emmc::SECTOR;
-                            let t = cycles();
-                            let mut r = Ok(());
-                            for k in 0..count {
-                                r = app.emmc().read(&mut board, lba + k * n, &mut buf[..len]);
-                                if r.is_err() {
-                                    break;
-                                }
-                            }
-                            let us = cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000);
-                            dev::send_bench(l, r.map(|()| us));
+                            dev::send_bench(l, bench_reads(app, &mut board, lba, n, count));
                             l.flush();
                             woke = true;
                         }

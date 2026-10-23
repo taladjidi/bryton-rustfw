@@ -3193,6 +3193,13 @@ mod tests {
     extern crate std;
     use super::*;
 
+    /// The app's size and its biggest parts (printed): it lives in AXI SRAM (main.rs make_app), and its one
+    /// temporary copy at start-up is on the stack.
+    #[test]
+    fn app_size_budget() {
+        assert!(core::mem::size_of::<App>() < 48 * 1024, "App is {} B", core::mem::size_of::<App>());
+    }
+
     #[test]
     fn rtc_decoding() {
         assert_eq!(rtc_time_from_tr(0), (0, 0, 0));

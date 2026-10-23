@@ -14,6 +14,7 @@ cargo clippy --release -- -D warnings
 cargo test-host
 if command -v cargo-deny >/dev/null 2>&1; then cargo deny check -s; else echo "cargo-deny: not installed, skipped"; fi
 cargo build --release
+python3 tools/stack_check.py
 python3 pack.py
 python3 -I dev.py selftest
 # The firmware on Renode's STM32H747 (renode/run.py), when Renode is installed (AGENTS.md, Emulation).
