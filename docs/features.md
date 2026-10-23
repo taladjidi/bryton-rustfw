@@ -34,6 +34,11 @@
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
+- **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
+  goes to the next one (kept with the page), a hold switches every graph between the last minutes and the whole ride.
+  Each has its scale on the left and its time span under it; power and heart rate are coloured by zone, W' balance as
+  it drains, DFA alpha1 against the aerobic threshold (green above 0.75, orange to 0.5, red under).
+
 ## Touch
 
 | Gesture | Main screen and ride pages | Menus | A number being edited |

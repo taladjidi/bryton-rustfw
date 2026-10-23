@@ -694,12 +694,16 @@ pub const NEARBY_ROW: usize = 13;
 const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
 const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
 
-/// What a graph field shows on screen: the bars up to `n` ([`ride::History::len`]), of power ([`Field::Graph`]) or
-/// heart rate ([`Field::HrGraph`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What a graph field shows on screen: its plot, over the last minutes or the whole ride, the bars up to `n`
+/// ([`ride::History::len`] or [`ride::History::whole_len`]), the whole ride's halvings and the scale (low, high, in
+/// the plot's units). A change of anything but `n` redraws the graph whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GraphShown {
+    plot: ride::Plot,
+    whole: bool,
     n: u32,
-    power: bool,
+    halved: u32,
+    scale: (u32, u32),
 }
 
 /// What a page box holds.
@@ -823,6 +827,8 @@ pub struct App {
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
     told_low: bool,
+    /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
+    graph_whole: bool,
     /// The page's boxes as drawn ([`App::widgets`]).
     drawn: [Drawn; BOXES],
     /// The ride: timer, totals, laps.
@@ -939,6 +945,7 @@ impl App {
             banner_drawn: false,
             had_fix: false,
             told_low: false,
+            graph_whole: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),
             history: ride::History::default(),
@@ -1069,7 +1076,9 @@ impl App {
                 }
                 return l;
             }
-            Field::Map | Field::Graph | Field::HrGraph => return l,
+            Field::Map | Field::Graph | Field::HrGraph | Field::WbalGraph | Field::DfaGraph | Field::AltGraph => {
+                return l;
+            }
             Field::Temp => {
                 let t = self.baro.map(|(_, t)| i32::from(t) / 10); // C x 100 to tenths
                 if t.is_some_and(|t| t < 0) {
@@ -1184,37 +1193,119 @@ impl App {
         }
     }
 
-    /// The graph shows power when a power meter is paired, else heart rate.
-    fn graph_now(&self, power: bool) -> GraphShown {
-        GraphShown { n: self.history.len(), power }
+    /// What a graph of `plot` with `cols` columns shows now.
+    fn graph_now(&self, plot: ride::Plot, cols: u32) -> GraphShown {
+        let h = &self.history;
+        let (n, halved) = if self.graph_whole { (h.whole_len(), h.whole_halved()) } else { (h.len(), 0) };
+        let mut g = GraphShown { plot, whole: self.graph_whole, n, halved, scale: (0, 1) };
+        g.scale = self.graph_scale(g, cols);
+        g
     }
 
-    /// Column `i` of a graph of `cols` columns `h` high showing `g`: the bar's height and colour. Power is drawn
-    /// up to twice the FTP, heart rate from half the maximum to the maximum (a bar of a reading is at least 1 high).
+    /// Column `i` of `cols` of a graph showing `g`: its value (0: none). Over the whole ride, a column is the mean of
+    /// the bars it covers when there are more bars than columns; over the last minutes, the newest bar is the
+    /// rightmost column.
+    fn graph_value(&self, g: GraphShown, cols: u32, i: u32) -> u16 {
+        let h = &self.history;
+        if !g.whole {
+            return (g.n + i).checked_sub(cols).map_or(0, |k| h.bar(k, g.plot));
+        }
+        let per = g.n.div_ceil(cols.max(1)).max(1);
+        let (sum, count) = (i * per..((i + 1) * per).min(g.n))
+            .map(|k| u32::from(h.whole_bar(k, g.plot)))
+            .filter(|&v| v != 0)
+            .fold((0, 0), |(s, n), v| (s + v, n + 1));
+        if count == 0 { 0 } else { (sum / count) as u16 }
+    }
+
+    /// Column `i` of a graph of `cols` columns `h` high showing `g`: the bar's height and colour (a bar of a reading
+    /// is at least 1 high).
     fn graph_bar(&self, g: GraphShown, cols: u32, h: u32, i: u32) -> (u32, u16) {
-        let Some(k) = (g.n + i).checked_sub(cols) else { return (0, ui::BLACK) };
-        let v = self.history.bar(k, g.power);
+        use ride::Plot;
+        let v = self.graph_value(g, cols, i);
         if v == 0 {
             return (0, ui::BLACK);
         }
-        let (max, ftp) = (self.settings.max_hr, self.settings.ftp);
-        let (low, high) = self.graph_scale(g.power);
-        let color =
-            if g.power { ride::power_color(ride::power_zone(v, ftp)) } else { ride::hr_color(ride::hr_zone(v, max)) };
-        let height = u32::from(v).saturating_sub(low) * h / (high - low).max(1);
+        let color = match g.plot {
+            Plot::Power => ride::power_color(ride::power_zone(v, self.settings.ftp)),
+            Plot::Hr => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
+            Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.settings.wprime_j),
+            // above the aerobic threshold's 0.75, between it and 0.5, below (Rogers et al.)
+            Plot::Dfa if v >= 75 => ui::GREEN,
+            Plot::Dfa if v >= 50 => ui::ACCENT,
+            Plot::Dfa => ui::RED,
+            Plot::Alt => ui::GREY,
+        };
+        let (low, high) = g.scale;
+        let height = u32::from(v).saturating_sub(low) * h / high.saturating_sub(low).max(1);
         (height.clamp(1, h), color)
     }
 
-    /// A graph's scale, bottom and top: power from 0 to twice the FTP, heart rate from half the maximum to it.
-    fn graph_scale(&self, power: bool) -> (u32, u32) {
+    /// A graph's scale, bottom and top, in its plot's units: power from 0 to twice the FTP, heart rate from half the
+    /// maximum to it, W' balance from 0 to W', DFA alpha1 from 0 to 1.5; altitude around what the graph shows (in
+    /// 20 m steps, 60 m at least, so it is not redrawn for every metre).
+    fn graph_scale(&self, g: GraphShown, cols: u32) -> (u32, u32) {
+        use ride::Plot;
         let (max, ftp) = (u32::from(self.settings.max_hr), u32::from(self.settings.ftp));
-        if power { (0, 2 * ftp) } else { (max / 2, max) }
+        match g.plot {
+            Plot::Power => (0, 2 * ftp),
+            Plot::Hr => (max / 2, max),
+            Plot::Wbal => (0, u32::from(self.settings.wprime_j) / 10),
+            Plot::Dfa => (0, 150),
+            Plot::Alt => {
+                let seen = (0..cols).map(|i| u32::from(self.graph_value(g, cols, i))).filter(|&v| v != 0);
+                let (lo, hi) = seen.fold((u32::MAX, 0), |(lo, hi), v| (lo.min(v), hi.max(v)));
+                if hi == 0 {
+                    return (ride::ALT_OFFSET as u32, ride::ALT_OFFSET as u32 + 60);
+                }
+                let lo = lo / 20 * 20;
+                (lo, (hi.div_ceil(20) * 20).max(lo + 60))
+            }
+        }
     }
 
     /// A graph's label, scale and time span (its axes) in box `bx`.
-    fn draw_graph_axes(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), power: bool) {
-        let minutes = ui::graph_area(bx).2 * ride::BAR_S / 60;
-        ui::draw_graph_axes(c, bx, if power { "POWER W" } else { "HR" }, self.graph_scale(power), minutes);
+    fn draw_graph_axes(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), g: GraphShown) {
+        use ride::Plot;
+        let (low, high) = g.scale;
+        let label = |v: u32| {
+            let mut l = Line::<8>::new();
+            match g.plot {
+                Plot::Wbal => l.push_u32(v / 100), // kJ
+                Plot::Dfa => push_fixed_u(&mut l, v, 2),
+                Plot::Alt => l.push_u32(v.saturating_sub(ride::ALT_OFFSET as u32)),
+                _ => l.push_u32(v),
+            }
+            l
+        };
+        let (lo, mid, hi) = (label(low), label(low.midpoint(high)), label(high));
+        let title = match g.plot {
+            Plot::Power => "POWER W",
+            Plot::Hr => "HR",
+            Plot::Wbal => "W'BAL KJ",
+            Plot::Dfa => "DFA A1",
+            Plot::Alt => "ELEV M",
+        };
+        let mut from = Line::<12>::new();
+        if g.whole {
+            from.push_str("START");
+        } else {
+            from.push_str("-");
+            from.push_u32(ui::graph_area(bx).2 * ride::BAR_S / 60);
+            from.push_str(" MIN");
+        }
+        ui::draw_graph_axes(c, bx, title, [lo.as_str(), mid.as_str(), hi.as_str()], from.as_str());
+    }
+
+    /// The graph field at (`x`, `y`) on the page shown, if there is one: its box index and field.
+    fn graph_at(&self, x: u16, y: u16) -> Option<(usize, Field)> {
+        let (x, y) = (u32::from(x), u32::from(y));
+        self.widgets().enumerate().find_map(|(i, ((bx, by, bw, bh), w))| match w {
+            Widget::Field(f) if graph_plot(f).is_some() && (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) => {
+                Some((i, f))
+            }
+            _ => None,
+        })
     }
 
     /// Row `i` of `menu`; None past its last.
@@ -1419,8 +1510,10 @@ impl App {
                 Drawn::Print(self.notices.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
             }
             Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx))),
-            Widget::Field(f @ (Field::Graph | Field::HrGraph)) => Drawn::Graph(self.graph_now(f == Field::Graph)),
-            Widget::Field(f) => Drawn::Value(self.field_text(f), self.field_color(f)),
+            Widget::Field(f) => match graph_plot(f) {
+                Some(plot) => Drawn::Graph(self.graph_now(plot, ui::graph_area(bx).2)),
+                None => Drawn::Value(self.field_text(f), self.field_color(f)),
+            },
         }
     }
 
@@ -1445,7 +1538,7 @@ impl App {
                         map::draw(c, map::area(bx), &self.track, m.view, base);
                     }
                     Drawn::Graph(g) => {
-                        self.draw_graph_axes(c, bx, g.power);
+                        self.draw_graph_axes(c, bx, g);
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
                     }
@@ -1650,16 +1743,24 @@ impl App {
     fn update_graph(&mut self, b: &mut impl Board, old: GraphShown, bx: (u32, u32, u32, u32)) -> Drawn {
         // Bars scroll in this many at a time (10 s): nearly every column changes on a scroll, so this sends a fifth
         // of the panel windows of a scroll per bar, and fewer pixels (sim graph_field: 1812 px/s in 33 windows/s,
-        // against 1987 in 113).
+        // against 1987 in 113). The whole ride grows to the right instead: a new bar changes one column.
         const STEP: u32 = 5;
-        let now = self.graph_now(old.power);
-        if now.n.wrapping_sub(old.n) < STEP {
+        let a = ui::graph_area(bx);
+        let now = self.graph_now(old.plot, a.2);
+        let step = if now.whole { 1 } else { STEP };
+        if now == old || (GraphShown { n: old.n, ..now } == old && now.n.wrapping_sub(old.n) < step) {
             return Drawn::Graph(old);
         }
-        let a = ui::graph_area(bx);
-        for k in 0..a.2 {
-            let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
-            ui::draw_graph_column(&mut Panel(b, (0, self.bottom())), a, k, was, is);
+        let mut p = Panel(b, (0, self.bottom()));
+        if (GraphShown { n: old.n, ..now }) != old {
+            // another scale, a halved whole ride, or another plot or span: all of it
+            self.draw_graph_axes(&mut p, bx, now);
+            ui::draw_graph(&mut p, a, &|k| self.graph_bar(now, a.2, a.3, k));
+        } else {
+            for k in 0..a.2 {
+                let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
+                ui::draw_graph_column(&mut p, a, k, was, is);
+            }
         }
         Drawn::Graph(now)
     }
@@ -1794,6 +1895,12 @@ impl App {
         if self.banner_ms.take().is_some() {
             self.unbanner(b); // and the input acts
         }
+        let graph_hit = match (self.screen, i) {
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y) | Gesture::Hold(x, y))) => {
+                self.graph_at(x, y)
+            }
+            _ => None,
+        };
         match (self.screen, i) {
             (_, Input::Off) => return self.power_off(b),
             (Screen::Menu(menu, sel), _) if self.editing => {
@@ -1820,6 +1927,28 @@ impl App {
             (Screen::Ride(n), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
                 let next = (n + 1..PAGES).find(|&i| self.pages[i].layout > 0);
                 self.screen = next.map_or(Screen::Main, Screen::Ride);
+            }
+            // a tap on a graph shows the next plot (kept with the page), a hold switches between the last minutes and
+            // the whole ride
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..)))
+                if graph_hit.is_some() =>
+            {
+                let Some((k, f)) = graph_hit else { return };
+                if matches!(i, Input::Touch(Gesture::Hold(..))) {
+                    self.graph_whole = !self.graph_whole;
+                } else if let Some(plot) = graph_plot(f) {
+                    let all = ride::Plot::ALL;
+                    let next = all[(all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len()];
+                    let n = if let Screen::Ride(n) = self.screen { n } else { OVERVIEW };
+                    let fixed = self.widgets().take_while(|(_, w)| !matches!(w, Widget::Field(_))).count();
+                    if let Some(page) = self.pages.get_mut(n)
+                        && let Some(slot) = page.fields.get_mut(k.saturating_sub(fixed))
+                    {
+                        *slot = graph_field(next);
+                        save_page(b, n, page);
+                    }
+                }
+                return self.show(b);
             }
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => {
                 let n = if let Screen::Ride(n) = self.screen { n } else { PAGES };
@@ -2208,8 +2337,11 @@ impl App {
         if let Some(ev) = self.ride.second(&input) {
             self.recorder(ev);
         }
-        self.history.second(input.hr, input.power);
         self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
+        let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
+        let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
+        let alt = input.alt_mm.map(|mm| (mm / 1000 + ride::ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);
+        self.history.second([input.power, input.hr, wbal, dfa, alt]);
     }
 
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released
@@ -2270,6 +2402,45 @@ fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
         let mut d = digits;
         while d > 0 {
             l.push_str(ui::DIGITS[(frac / d % 10) as usize]);
+            d /= 10;
+        }
+    }
+}
+
+/// The plot a graph field shows, None for a field that is no graph.
+fn graph_plot(f: Field) -> Option<ride::Plot> {
+    use ride::Plot;
+    Some(match f {
+        Field::Graph => Plot::Power,
+        Field::HrGraph => Plot::Hr,
+        Field::WbalGraph => Plot::Wbal,
+        Field::DfaGraph => Plot::Dfa,
+        Field::AltGraph => Plot::Alt,
+        _ => return None,
+    })
+}
+
+/// The graph field showing `plot`.
+fn graph_field(plot: ride::Plot) -> Field {
+    use ride::Plot;
+    match plot {
+        Plot::Power => Field::Graph,
+        Plot::Hr => Field::HrGraph,
+        Plot::Wbal => Field::WbalGraph,
+        Plot::Dfa => Field::DfaGraph,
+        Plot::Alt => Field::AltGraph,
+    }
+}
+
+/// `v / 10^decimals` with its decimals ("0.75").
+fn push_fixed_u(l: &mut Line<8>, v: u32, decimals: u32) {
+    let unit = 10u32.pow(decimals);
+    l.push_u32(v / unit);
+    if !v.is_multiple_of(unit) {
+        l.push_str(".");
+        let mut d = unit / 10;
+        while d > 0 {
+            l.push_str(ui::DIGITS[(v / d % 10) as usize]);
             d /= 10;
         }
     }

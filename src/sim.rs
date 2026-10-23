@@ -2222,6 +2222,47 @@ mod tests {
         sim.save("graph");
     }
 
+    /// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation), kept with the page;
+    /// a hold switches every graph between the last minutes and the whole ride.
+    #[test]
+    fn graph_plots_by_tap_and_span_by_hold() {
+        let taps = [400_000u64, 401_000, 402_000, 403_000];
+        let hold = 405_000u64;
+        let mut sim = Sim::new(9, 0, 0).finger(move |ms| {
+            let tap = taps.iter().any(|&t| (t..t + 80).contains(&ms));
+            let held = (hold..hold + 900).contains(&ms);
+            (tap || held).then_some((120, 100))
+        });
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        app.pages[0] = PageCfg { layout: 2, fields: [Graph, HrGraph, Timer, Timer, Timer, Timer] };
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start)); // a ride: W' balance runs
+        sim.gnss.fix = Some(7000);
+        let mut shots = std::vec::Vec::new();
+        for (k, want) in [HrGraph, WbalGraph, DfaGraph, AltGraph].into_iter().enumerate() {
+            let until = taps[k] + 500 - sim.ms;
+            run(&mut sim, &mut app, until);
+            assert_eq!(app.pages()[0].fields[0], want, "tap {k}");
+            assert_consistent(&sim, &app);
+            shots.push(std::format!("graph_{k}"));
+            sim.save(&shots[k]);
+        }
+        assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]).unwrap().fields[0], AltGraph, "kept");
+        let until = hold + 1500 - sim.ms;
+        run(&mut sim, &mut app, until);
+        assert!(app.graph_whole, "the hold");
+        assert_eq!(app.screen(), Screen::Ride(0), "on a graph, a hold is not the menu");
+        assert_consistent(&sim, &app);
+        sim.save("graph_whole");
+        run(&mut sim, &mut app, 60_000);
+        assert_consistent(&sim, &app);
+    }
+
     /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,
     /// holding a key repeats, Start keeps it; kept in the wheel's register beside the other settings.
     #[test]

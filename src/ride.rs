@@ -421,65 +421,148 @@ pub const BARS: usize = 256;
 /// about 7.5 s), so the noise from one second to the next does not make the graph jitter.
 const EMA_SHIFT: u32 = 3;
 
-/// Heart rate and power, smoothed (an exponential moving average) and sampled every [`BAR_S`] seconds, the last
-/// [`BARS`] bars (0: no reading in that bar's seconds).
+/// What a graph can plot: one series each in [`History`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plot {
+    /// Power, W (smoothed).
+    Power,
+    /// Heart rate, bpm (smoothed).
+    Hr,
+    /// W' balance, in 10 J (0 when drained or below).
+    Wbal,
+    /// DFA alpha1 x 100.
+    Dfa,
+    /// Altitude, m + [`ALT_OFFSET`] (so a reading is never 0).
+    Alt,
+}
+
+impl Plot {
+    /// Every plot, in the order a tap on a graph goes through them.
+    pub const ALL: [Plot; 5] = [Plot::Power, Plot::Hr, Plot::Wbal, Plot::Dfa, Plot::Alt];
+}
+
+/// Added to altitudes kept by [`History`] (the Dead Sea is at -430 m).
+pub const ALT_OFFSET: i32 = 1000;
+/// Plots kept.
+pub const PLOTS: usize = Plot::ALL.len();
+/// Bars of the whole ride kept: when full, neighbouring bars are merged and each bar covers twice the time.
+pub const WHOLE: usize = 512;
+
+/// The series a graph can show, sampled every [`BAR_S`] seconds: the last [`BARS`] bars, and the whole ride at a
+/// resolution that halves each time [`WHOLE`] bars are filled (0: no reading in that bar). Power and heart rate are
+/// smoothed (an exponential moving average); W' balance, DFA alpha1 and altitude are smooth already and are taken
+/// as they are at the end of each bar.
 ///
 /// Stock's graph field draws 216 one-second samples per metric, one pixel column each in its zone's colour, side
 /// by side (Ghidra: `Ride_PushHistorySample` 0xd0194b50, `MeterBarChartP` refresh 0xd017574a, Embedded Wizard
 /// `ChartsBarChart_Draw` 0xd01c3270 with a bar width of 1). This one smooths them first, and keeps 2 s a column.
 pub struct History {
-    hr: [u8; BARS],
-    power: [u16; BARS],
+    bars: [[u16; BARS]; PLOTS],
     /// Bars pushed so far.
     n: u32,
-    /// The averages, x16 (0: none yet).
-    avg: [u32; 2],
+    /// The averages of power and heart rate, x16 (0: none yet), and the last value of the others.
+    avg: [u32; PLOTS],
     /// A reading came in during this bar's seconds.
-    seen: [bool; 2],
+    seen: [bool; PLOTS],
     secs: u32,
+    whole: [[u16; WHOLE]; PLOTS],
+    /// Whole-ride bars filled, bars of [`BAR_S`] each one covers, how many of those are in the one being filled
+    /// with their sums and counts, and how many times the whole ride was halved.
+    whole_n: u32,
+    per: u32,
+    acc_n: u32,
+    acc: [(u32, u32); PLOTS],
+    halved: u32,
 }
 
 impl Default for History {
     fn default() -> Self {
-        History { hr: [0; BARS], power: [0; BARS], n: 0, avg: [0; 2], seen: [false; 2], secs: 0 }
+        History {
+            bars: [[0; BARS]; PLOTS],
+            n: 0,
+            avg: [0; PLOTS],
+            seen: [false; PLOTS],
+            secs: 0,
+            whole: [[0; WHOLE]; PLOTS],
+            whole_n: 0,
+            per: 1,
+            acc_n: 0,
+            acc: [(0, 0); PLOTS],
+            halved: 0,
+        }
     }
 }
 
 impl History {
-    /// One second of readings; true when a bar was pushed.
+    /// One second of readings, in [`Plot::ALL`]'s order; true when a bar was pushed.
     ///
     /// ```
-    /// let mut h = bryton_rustfw::ride::History::default();
-    /// h.second(None, Some(100));
-    /// h.second(None, Some(300)); // one second at 300 W moves the bar an eighth of the way
-    /// assert_eq!(h.bar(0, true), 125);
+    /// use bryton_rustfw::ride::{History, Plot};
+    /// let mut h = History::default();
+    /// h.second([Some(100), None, None, None, None]);
+    /// h.second([Some(300), None, None, None, None]); // one second at 300 W moves the bar an eighth of the way
+    /// assert_eq!(h.bar(0, Plot::Power), 125);
     /// ```
-    pub fn second(&mut self, hr: Option<u16>, power: Option<u16>) -> bool {
-        for (k, v) in [hr, power].into_iter().enumerate() {
-            if let Some(v) = v {
-                let (a, v) = (self.avg[k], u32::from(v) << 4);
+    pub fn second(&mut self, v: [Option<u16>; PLOTS]) -> bool {
+        for (k, v) in v.into_iter().enumerate() {
+            let (Some(v), Some(a)) = (v, self.avg.get_mut(k)) else { continue };
+            *a = if k >= 2 {
+                u32::from(v) << 4
+            } else {
                 // the first reading, or the first after a bar without any, starts the average
-                self.avg[k] = if a == 0 { v } else { a - (a >> EMA_SHIFT) + (v >> EMA_SHIFT) };
-                self.seen[k] = true;
+                let v = u32::from(v) << 4;
+                if *a == 0 { v } else { *a - (*a >> EMA_SHIFT) + (v >> EMA_SHIFT) }
+            };
+            if let Some(s) = self.seen.get_mut(k) {
+                *s = true;
             }
         }
         self.secs += 1;
         if self.secs < BAR_S {
             return false;
         }
-        for (a, seen) in self.avg.iter_mut().zip(&mut self.seen) {
-            if !*seen {
-                *a = 0;
-            }
-            *seen = false;
-        }
-        let avg = |k: usize| (self.avg[k] + 8) >> 4;
         let i = self.n as usize % BARS;
-        self.hr[i] = avg(0).min(255) as u8;
-        self.power[i] = avg(1).min(u32::from(u16::MAX)) as u16;
+        for k in 0..PLOTS {
+            if !self.seen[k] {
+                self.avg[k] = 0;
+            }
+            self.seen[k] = false;
+            let bar = ((self.avg[k] + 8) >> 4).min(u32::from(u16::MAX)) as u16;
+            self.bars[k][i] = bar;
+            if bar != 0 {
+                self.acc[k] = (self.acc[k].0 + u32::from(bar), self.acc[k].1 + 1);
+            }
+        }
         self.n = self.n.wrapping_add(1);
         self.secs = 0;
+        self.acc_n += 1;
+        if self.acc_n >= self.per {
+            self.push_whole();
+        }
         true
+    }
+
+    /// The bar of the whole ride being filled is complete: kept (the whole ride halved first when full).
+    fn push_whole(&mut self) {
+        if self.whole_n as usize >= WHOLE {
+            for series in &mut self.whole {
+                for j in 0..WHOLE / 2 {
+                    series[j] = mean(series[2 * j], series[2 * j + 1]);
+                }
+            }
+            self.whole_n = (WHOLE / 2) as u32;
+            self.per *= 2;
+            self.halved += 1;
+        }
+        let i = self.whole_n as usize;
+        for (series, acc) in self.whole.iter_mut().zip(&mut self.acc) {
+            if let Some(b) = series.get_mut(i) {
+                *b = if acc.1 == 0 { 0 } else { (acc.0 / acc.1) as u16 };
+            }
+            *acc = (0, 0);
+        }
+        self.whole_n += 1;
+        self.acc_n = 0;
     }
 
     /// Bars pushed so far.
@@ -492,13 +575,40 @@ impl History {
         self.n == 0
     }
 
-    /// Bar `k` (counted from the first one ever), power or heart rate; 0 if it is not kept (or never was).
-    pub fn bar(&self, k: u32, power: bool) -> u16 {
+    /// Bar `k` (counted from the first one ever) of `plot`; 0 if it is not kept (or never was).
+    pub fn bar(&self, k: u32, plot: Plot) -> u16 {
         if k >= self.n || self.n - k > BARS as u32 {
             return 0;
         }
-        let i = k as usize % BARS;
-        if power { self.power[i] } else { u16::from(self.hr[i]) }
+        self.bars[plot as usize][k as usize % BARS]
+    }
+
+    /// The whole ride: bars kept, how many times it was halved (each time, every bar changes), and bar `k`.
+    pub fn whole_len(&self) -> u32 {
+        self.whole_n
+    }
+
+    /// See [`History::whole_len`].
+    pub fn whole_halved(&self) -> u32 {
+        self.halved
+    }
+
+    /// See [`History::whole_len`]: seconds one whole-ride bar covers.
+    pub fn whole_bar_s(&self) -> u32 {
+        self.per * BAR_S
+    }
+
+    /// See [`History::whole_len`].
+    pub fn whole_bar(&self, k: u32, plot: Plot) -> u16 {
+        self.whole[plot as usize].get(k as usize).copied().unwrap_or(0)
+    }
+}
+
+/// The mean of two bars, a missing one (0) left out.
+fn mean(a: u16, b: u16) -> u16 {
+    match (a, b) {
+        (0, x) | (x, 0) => x,
+        _ => ((u32::from(a) + u32::from(b)) / 2) as u16,
     }
 }
 
@@ -560,29 +670,49 @@ mod tests {
     #[test]
     fn history_bars() {
         let mut h = History::default();
-        let bars = |h: &History, power| (0..h.len()).map(|k| h.bar(k, power)).collect::<std::vec::Vec<_>>();
+        let bars = |h: &History, plot| (0..h.len()).map(|k| h.bar(k, plot)).collect::<std::vec::Vec<_>>();
+        let hp = |hr: Option<u16>, p: Option<u16>| [p, hr, None, None, None];
         // power steady at 200 W but for one second at 400 W; heart rate only from the third second
         for s in 0..12 {
-            h.second((s >= 2).then_some(150), Some(if s == 5 { 400 } else { 200 }));
+            h.second(hp((s >= 2).then_some(150), Some(if s == 5 { 400 } else { 200 })));
         }
-        assert_eq!(bars(&h, true), [200, 200, 225, 219, 215, 211], "the spike smoothed, then fading");
-        assert_eq!(bars(&h, false), [0, 150, 150, 150, 150, 150], "no reading, then from the first one");
-        assert_eq!(h.bar(6, false), 0, "not yet");
+        assert_eq!(bars(&h, Plot::Power), [200, 200, 225, 219, 215, 211], "the spike smoothed, then fading");
+        assert_eq!(bars(&h, Plot::Hr), [0, 150, 150, 150, 150, 150], "no reading, then from the first one");
+        assert_eq!(h.bar(6, Plot::Hr), 0, "not yet");
         // a ramp: the bars follow it a few seconds late, without a step
         for s in 0..20 {
-            h.second(None, Some(200 + 10 * s));
+            h.second(hp(None, Some(200 + 10 * s)));
         }
-        let ramp = &bars(&h, true)[6..];
+        let ramp = &bars(&h, Plot::Power)[6..];
         assert!(ramp.windows(2).all(|w| w[1] > w[0] && w[1] - w[0] <= 20), "{ramp:?}");
         assert_eq!(ramp[9], 327, "about 6 s (63 W) behind the ramp, at 390 W");
-        assert_eq!(h.bar(6, false), 0, "a bar without readings");
+        assert_eq!(h.bar(6, Plot::Hr), 0, "a bar without readings");
         for p in [None, None, None, Some(100)] {
-            h.second(None, p);
+            h.second(hp(None, p));
         }
-        assert_eq!((h.bar(16, true), h.bar(17, true)), (0, 100), "after a gap, from the reading, not the old average");
+        assert_eq!(
+            (h.bar(16, Plot::Power), h.bar(17, Plot::Power)),
+            (0, 100),
+            "after a gap, from the reading, not the old average"
+        );
         for _ in 0..BAR_S * BARS as u32 {
-            h.second(Some(1), None);
+            h.second(hp(Some(1), None));
         }
-        assert_eq!(h.bar(1, false), 0, "dropped");
+        assert_eq!(h.bar(1, Plot::Hr), 0, "dropped");
+    }
+
+    /// The whole ride: one bar per fine bar until full, then halved (neighbours merged, a missing one left out).
+    #[test]
+    fn whole_ride_halves() {
+        let mut h = History::default();
+        for s in 0..(WHOLE as u32 + 2) * BAR_S {
+            let alt = (ALT_OFFSET as u32 + s / BAR_S) as u16; // one metre a bar
+            h.second([None, None, None, None, Some(alt)]);
+        }
+        assert_eq!((h.whole_len(), h.whole_halved(), h.whole_bar_s()), (WHOLE as u32 / 2 + 1, 1, 2 * BAR_S));
+        let alt = |k| i32::from(h.whole_bar(k, Plot::Alt)) - ALT_OFFSET;
+        assert_eq!((alt(0), alt(1), alt(255)), (0, 2, 510), "pairs merged (0, 1 -> 0; 2, 3 -> 2)");
+        assert_eq!(alt(256), 512, "then a bar per two");
+        assert_eq!(mean(0, 7), 7);
     }
 }

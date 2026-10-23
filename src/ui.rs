@@ -448,18 +448,25 @@ pub enum Field {
     Vam,
     /// Grade, %.
     Grade,
+    // the graphs of the other plots (ride::Plot): a tap on a graph goes to the next one
+    /// The last minutes (or the ride) of W' balance.
+    WbalGraph,
+    /// Of DFA alpha1.
+    DfaGraph,
+    /// Of altitude: the elevation profile.
+    AltGraph,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 36] = {
+    pub const ALL: [Field; 39] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
             Ascent, Graph, Temp, HrGraph, Dfa, Rmssd, // power.rs and the ride's derived metrics:
             Power3s, Power10s, Power30s, Np, If, Tss, Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr, AvgCadence, Balance, Vam,
-            Grade,
+            Grade, WbalGraph, DfaGraph, AltGraph,
         ]
     };
 
@@ -503,6 +510,9 @@ impl Field {
             "L/R",
             "VAM M/H",
             "GRADE %",
+            "W'BAL GRAPH",
+            "DFA GRAPH",
+            "ELEV GRAPH",
         ][self as usize]
     }
 
@@ -513,13 +523,16 @@ impl Field {
             "88.88", "8888", "", "-88.8", "", "8.88", "888", "88.88", "8888", "", "-88.8",
             "", // power.rs and the ride's derived metrics:
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
-            "88/88", "-8888", "-88.8",
+            "88/88", "-8888", "-88.8", "", "", "",
         ][self as usize]
     }
 
     /// Its box holds a picture (map, graph), not a value.
     pub fn is_picture(self) -> bool {
-        matches!(self, Field::Map | Field::Graph | Field::HrGraph)
+        matches!(
+            self,
+            Field::Map | Field::Graph | Field::HrGraph | Field::WbalGraph | Field::DfaGraph | Field::AltGraph
+        )
     }
 
     /// The next one in [`Field::ALL`].
@@ -658,8 +671,8 @@ pub fn draw_field_value_changes(
 
 /// A graph's axis text: the pixel font at 1x, grey.
 const AXIS: Style = Style { scale: 1, fg: GREY, ..LABEL };
-/// Room left of the plot for its scale (three digits), and under it for the time.
-const AXIS_W: u32 = 3 * CELL + 3;
+/// Room left of the plot for its scale (four characters: "0.75", "2400"), and under it for the time.
+const AXIS_W: u32 = 4 * CELL + 3;
 const AXIS_H: u32 = 10;
 
 /// A graph box this big has its axes drawn (smaller ones show the bars alone).
@@ -676,37 +689,23 @@ pub fn graph_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
 }
 
 /// What a graph plots, in its label line (`title`: "POWER W", "HR"), and, when the box has room, its axes: the
-/// values at the top, the middle and the bottom of the plot (`high`, `low`) on its left, and the time it spans under it, from
-/// "-`minutes` MIN" on the left to "NOW" on the right. Drawn with the box; nothing here changes as the bars move.
-pub fn draw_graph_axes(
-    c: &mut impl Canvas,
-    bx: (u32, u32, u32, u32),
-    title: &str,
-    (low, high): (u32, u32),
-    minutes: u32,
-) {
+/// values at the bottom, the middle and the top of the plot (`labels`) on its left, and the time it spans under it,
+/// from `from` ("-7 MIN", "START") on the left to "NOW" on the right. Drawn with the box; nothing here changes as the
+/// bars move.
+pub fn draw_graph_axes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), title: &str, labels: [&str; 3], from: &str) {
     let (x, y, w, h) = bx;
     text::draw_in(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, w - 12, Align::Left, title);
     if !has_axes(w, h) {
         return;
     }
     let a = graph_area(bx);
-    let number = |v: u32| {
-        let mut l = text::Line::<8>::new();
-        l.push_u32(v);
-        l
-    };
     let yw = AXIS_W - 3;
-    text::draw_in(c, &AXIS, x + 2, a.1, yw, Align::Right, number(high).as_str());
-    text::draw_in(c, &AXIS, x + 2, a.1 + a.3 - AXIS.height(), yw, Align::Right, number(low).as_str());
-    let mid = a.1 + a.3 / 2 - AXIS.height() / 2; // the middle: the FTP for power
-    text::draw_in(c, &AXIS, x + 2, mid, yw, Align::Right, number(low.midpoint(high)).as_str());
-    let mut span = text::Line::<12>::new();
-    span.push_str("-");
-    span.push_u32(minutes);
-    span.push_str(" MIN");
+    let [low, mid, high] = labels;
+    text::draw_in(c, &AXIS, x + 2, a.1, yw, Align::Right, high);
+    text::draw_in(c, &AXIS, x + 2, a.1 + a.3 / 2 - AXIS.height() / 2, yw, Align::Right, mid);
+    text::draw_in(c, &AXIS, x + 2, a.1 + a.3 - AXIS.height(), yw, Align::Right, low);
     let ty = a.1 + a.3 + 2;
-    text::draw_in(c, &AXIS, a.0, ty, a.2 / 2, Align::Left, span.as_str());
+    text::draw_in(c, &AXIS, a.0, ty, a.2 / 2, Align::Left, from);
     text::draw_in(c, &AXIS, a.0 + a.2 / 2, ty, a.2 - a.2 / 2, Align::Right, "NOW");
 }
 
