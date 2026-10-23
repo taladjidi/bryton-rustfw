@@ -157,6 +157,9 @@ holds local time; power off reaches standby (D1 / D2 reset flags) and the power 
 input. Still to see:
 - A GPS fix (the receiver answers and reports, indoors without satellites), and how much the aiding at power-up
   shortens the next one.
+- The panel with pixels sent two per 32-bit SPI write (checked in Renode; on the glass, to see), and the
+  backlight PWM levels and time-out (LPTIM1, as stock).
+- The I-cache (branch `icache`, not merged): a core change, tried first as a RAM run with the owner present.
 - Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
 - Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12). The low-battery switch-off (3.3 V) has not been reached on the unit.
