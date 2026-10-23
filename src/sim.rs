@@ -1335,7 +1335,7 @@ mod tests {
             fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time],
         };
         assert_eq!(app.pages()[0], want);
-        assert_eq!(PageCfg::from_words([sim.backup[19], sim.backup[20]]), Some(want));
+        assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(want));
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Page));
@@ -1408,6 +1408,22 @@ mod tests {
         assert_eq!((text(&app, Dfa), text(&app, Rmssd)), ("--".into(), "--".into()), "no heart rate");
     }
 
+    /// Pages kept by the builds of 2026-10-23 (from register 19, which stock reads at boot) move to 20..27, and 19 is
+    /// given back (stock's first-boot value, 0).
+    #[test]
+    fn pages_leave_stocks_register() {
+        let mut sim = Sim::new(9, 0, 0);
+        let p =
+            PageCfg { layout: 5, fields: [Field::Map, Field::Hr, Field::Power, Field::Np, Field::Wbal, Field::Dfa] };
+        let w = p.to_words().map(|w| w & 0x0fff_ffff | 0xb << 28); // as those builds wrote it
+        (sim.backup[19], sim.backup[20]) = (w[0], w[1]);
+        let app = App::start(&mut sim, None);
+        assert_eq!(app.pages()[0], p);
+        assert_eq!(sim.backup[19], 0, "given back to stock");
+        assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(p));
+        assert_eq!(App::start(&mut sim, None).pages()[0], p, "read from the new place after a restart");
+    }
+
     /// Every layout draws on the unit as in the screenshot (layout_<id>.bmp, to look at).
     #[test]
     fn every_layout_draws() {
@@ -1416,7 +1432,7 @@ mod tests {
         for id in 1..ui::LAYOUTS.len() as u8 {
             let mut sim = Sim::new(9, 0, 0);
             let words = PageCfg { layout: id, fields }.to_words();
-            (sim.backup[19], sim.backup[20]) = (words[0], words[1]);
+            (sim.backup[20], sim.backup[21]) = (words[0], words[1]);
             let mut app = App::start(&mut sim, None);
             app.press(&mut sim, Press::Short(Key::Page));
             run(&mut sim, &mut app, 1000);

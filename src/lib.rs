@@ -275,8 +275,9 @@ pub struct PageCfg {
 }
 
 impl PageCfg {
-    /// As kept in two backup registers, each behind tag 0xb in its top nibble: the layout in bits 24..27 of the
-    /// first, then a byte per field, three in each word.
+    /// As kept in two backup registers, behind tags 0xd and 0xe in their top nibbles: the layout in bits 24..27 of
+    /// the first, then a byte per field, three in each word. (Builds of 2026-10-23 used tag 0xb in both, from register
+    /// 19: [`PageCfg::from_words_b`].)
     ///
     /// ```
     /// use bryton_rustfw::{PageCfg, ui::Field};
@@ -287,13 +288,22 @@ impl PageCfg {
     pub fn to_words(self) -> [u32; 2] {
         let bytes = |f: &[Field]| f.iter().enumerate().fold(0, |w, (i, &f)| w | (f as u32) << (8 * i));
         let (a, b) = self.fields.split_at(3);
-        [(0xb << 28) | (u32::from(self.layout) << 24) | bytes(a), (0xb << 28) | bytes(b)]
+        [(0xd << 28) | (u32::from(self.layout) << 24) | bytes(a), (0xe << 28) | bytes(b)]
     }
 
     /// The page kept in `w`, if [`PageCfg::to_words`] wrote it.
     pub fn from_words(w: [u32; 2]) -> Option<Self> {
+        Self::tagged(w, [0xd, 0xe])
+    }
+
+    /// A page as builds of 2026-10-23 kept it (tag 0xb in both words).
+    pub fn from_words_b(w: [u32; 2]) -> Option<Self> {
+        Self::tagged(w, [0xb, 0xb])
+    }
+
+    fn tagged(w: [u32; 2], tags: [u32; 2]) -> Option<Self> {
         let layout = (w[0] >> 24 & 0xf) as u8;
-        if w.iter().any(|w| w >> 28 != 0xb) || ui::layout(layout).is_none() {
+        if w[0] >> 28 != tags[0] || w[1] >> 28 != tags[1] || ui::layout(layout).is_none() {
             return None;
         }
         Some(PageCfg { layout, fields: core::array::from_fn(|i| Field::from_index(w[i / 3] >> (8 * (i % 3)) & 0xff)) })
@@ -320,7 +330,14 @@ pub const PAGES: usize = 3;
 /// The overview's fields are kept as page [`OVERVIEW`] (four fields, never off), after the ride pages.
 pub const OVERVIEW: usize = PAGES;
 /// The backup registers of the ride pages and the overview, two each ([`PageCfg::to_words`]).
-const PAGE_BKP: [[usize; 2]; PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26]];
+/// Registers 20 to 31 are not referenced by stock (R039; ghidra/HARDWARE.md, RTC and backup registers), 19 is: its
+/// boot reads it (AGENTS.md, "Share the storage with stock").
+const PAGE_BKP: [[usize; 2]; PAGES + 1] = [[20, 21], [22, 23], [24, 25], [26, 27]];
+/// Where builds of 2026-10-23 kept them (from 19, which stock reads: moved, and 19 given back).
+const PAGE_BKP_B: [[usize; 2]; PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26]];
+/// The backup register stock reads at boot (with 15: whether to keep its last battery voltage); stock's own first
+/// boot writes 0 there.
+const STOCK_BKP19: usize = 19;
 /// Where earlier builds kept the ride pages, one register each ([`PageCfg::from_word`]): read when the new ones
 /// are empty.
 const OLD_PAGE_BKP: [usize; PAGES] = [14, 15, 16];
@@ -909,6 +926,7 @@ impl App {
             depth: 0,
             pages: core::array::from_fn(|i| {
                 PageCfg::from_words(PAGE_BKP[i].map(|r| b.backup_read(r)))
+                    .or_else(|| PageCfg::from_words_b(PAGE_BKP_B[i].map(|r| b.backup_read(r))))
                     .or_else(|| OLD_PAGE_BKP.get(i).and_then(|&r| PageCfg::from_word(b.backup_read(r))))
                     .unwrap_or(DEFAULT_PAGES[i])
             }),
@@ -934,6 +952,13 @@ impl App {
         }
         if let Some((lat, lon)) = app.aid.pos {
             app.track.seed(lat, lon); // the map shows where the unit last was until the first fix
+        }
+        if b.backup_read(STOCK_BKP19) >> 28 == 0xb {
+            // pages kept from register 19 by builds of 2026-10-23: kept where stock does not look, 19 given back
+            for (n, page) in app.pages.iter().enumerate() {
+                save_page(b, n, page);
+            }
+            b.backup_write(STOCK_BKP19, 0);
         }
         app.strip_shown = app.strip;
         ui::draw_strip(&mut Panel(b, (0, ui::H)), &app.strip);

@@ -267,13 +267,19 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 
 - RTC (0x58004000) on the LSE, 24 h format, prescalers 31 / 1023 (1 Hz). It keeps running in standby.
 - The stock firmware sets it from GPS. It holds **local time** (seen on the unit, 2026-10-23).
-- Backup registers used by stock: 1, 2, 3, 19 (clock), 4 (USB mode), 9, 12, 13 (last battery voltage, mV: 4178
-  on the unit). Registers 20 to 31 also hold values after stock (0x22, then 0x35a..0x3c5: not traced), so they
-  are not free either. The bootloader has no RTC address in it.
+- Backup registers and stock (R039, from its 27 calls of the HAL read / write, ghidra/HARDWARE.md "RTC and backup
+  registers"): 1 (clock set, 0xa5a5), 2, 3 (clock), 4 (USB mode), 9, 12 (Nordic image version), 13 (last battery
+  voltage, mV: 4178 on the unit) are its own; 15 and 19 are read at boot (13 is kept only if 19 = 0xa5a5 and 15 !=
+  0x4649; stock's first boot writes 19 = 0); 0, 5..8, 10, 11, 14, 16..18 and 20..31 are not referenced by its code
+  (20..31 hold values after stock, 0x22 then 0x35a..0x3c5, from something not traced). The bootloader has no RTC
+  address in it.
 - This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
-  power), 11 (wheel size), 14, 15 (ride page layouts of earlier builds), 16 (weight and W', tag 0xc1; page 3 of
-  earlier builds before), 19 to 26 (ride pages, two each) and 17, 18 (GNSS aiding: the RTC's offset from UTC and
-  the last position), each behind a tag so an empty register reads as unset. That leaves none free. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
+  power), 11 (wheel, backlight, max HR, FTP), 16 (weight and W', tag 0xc1), 17, 18 (GNSS aiding: the RTC's offset
+  from UTC and the last position) and 20..27 (ride pages and the overview, two each, tags 0xd / 0xe), each behind a
+  tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
+  the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0). Free for this firmware: 0, 28..31.
+  Settings move to a file in this firmware's own folder once the eMMC is written (AGENTS.md, "Share the storage with
+  stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
 
