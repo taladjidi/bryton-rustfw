@@ -123,6 +123,19 @@ pub struct Strip {
     pub battery: Option<u8>,
     /// USB power present: the battery is charging (shown in green).
     pub charging: bool,
+    /// The ride: the time is white with no ride, green while it records, orange while paused or auto-paused.
+    pub rec: Rec,
+}
+
+/// The ride's state as the strip shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rec {
+    /// No ride running.
+    Idle,
+    /// Recording.
+    Running,
+    /// Paused, or auto-paused (stopped).
+    Paused,
 }
 
 /// The strip's boxes (x, width): BLE on the left, the time centred, then USB and the battery on the right.
@@ -173,11 +186,16 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
         }
         l
     };
-    let style = Style { fg: WHITE, ..LABEL };
+    let fg = match s.rec {
+        Rec::Idle => WHITE,
+        Rec::Running => GREEN,
+        Rec::Paused => ACCENT,
+    };
+    let style = Style { fg, ..LABEL };
     let top = STRIP_H - LABEL.height();
     match old {
-        Some(o) => draw_changed_chars(c, &style, STRIP_TIME.0, top, hm(o).as_str(), hm(s).as_str()),
-        None => at(c, STRIP_TIME, WHITE, Align::Left, hm(s).as_str()),
+        Some(o) if o.rec == s.rec => draw_changed_chars(c, &style, STRIP_TIME.0, top, hm(o).as_str(), hm(s).as_str()),
+        _ => at(c, STRIP_TIME, fg, Align::Left, hm(s).as_str()),
     }
     if changed(|s| u32::from(s.radio)) {
         at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
@@ -363,20 +381,58 @@ pub enum Field {
     Power,
     /// The map of the ride (map.rs): its box holds the map instead of a value.
     Map,
+    /// The ride's moving time, h:mm:ss.
+    Timer,
+    /// The ride's distance, km (2 decimals under 100 km, then 1).
+    Dist,
+    /// Average moving speed, km/h.
+    AvgSpeed,
+    /// Top speed, km/h.
+    MaxSpeed,
+    /// Average heart rate.
+    AvgHr,
+    /// Average power.
+    AvgPower,
+    /// This lap's moving time.
+    LapTime,
+    /// This lap's distance, km.
+    LapDist,
+    /// Altitude gained, m (GPS).
+    Ascent,
+    /// Bars of the last minutes of power (with a power meter paired), else of heart rate, coloured by zone.
+    Graph,
 }
 
 impl Field {
-    /// Every field, in the order the page menu cycles through them.
-    pub const ALL: [Field; 6] = [Field::Time, Field::Hr, Field::Speed, Field::Cadence, Field::Power, Field::Map];
+    /// Every field, in the order the page menu cycles through them; the index is kept in 4 bits ([`crate::PageCfg`]),
+    /// so there are 16 at most and new ones go at the end.
+    pub const ALL: [Field; 16] = {
+        use Field::*;
+        [
+            Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
+            Ascent, Graph,
+        ]
+    };
 
     /// Its label, top left of its box.
     pub fn label(self) -> &'static str {
-        ["TIME", "HR", "KM/H", "RPM", "WATTS", "MAP"][self as usize]
+        [
+            "TIME", "HR", "KM/H", "RPM", "WATTS", "MAP", "TIMER", "KM", "AVG KM/H", "MAX KM/H", "AVG HR", "AVG W",
+            "LAP TIME", "LAP KM", "ASCENT M", "GRAPH",
+        ][self as usize]
     }
 
     /// The widest value it shows: the value's scale is chosen so this fits.
     fn widest(self) -> &'static str {
-        ["88:88", "888", "88.8", "888", "8888", ""][self as usize]
+        [
+            "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
+            "88.88", "8888", "",
+        ][self as usize]
+    }
+
+    /// Its box holds a picture (map, graph), not a value.
+    pub fn is_picture(self) -> bool {
+        matches!(self, Field::Map | Field::Graph)
     }
 
     /// The next one in [`Field::ALL`].
@@ -443,23 +499,64 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     }
 }
 
-/// A field's value, centred under its label, in a fixed box (what was there before is cleared).
-pub fn draw_field_value(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, value: &str) {
-    let style = value_style(field, w, h);
+/// A field's value in `fg`, centred under its label, in a fixed box (what was there before is cleared).
+pub fn draw_field_value(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, value: &str, fg: u16) {
+    let style = Style { fg, ..value_style(field, w, h) };
     let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H - style.height()) / 2;
     text::draw_in(c, &style, x + 1, top, w - 2, Align::Centre, value);
 }
 
 /// A field's value that was `old`: only the characters that changed when the length is the same (they keep their
 /// cells), else the whole value box.
-pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field, old: &str, new: &str) {
+pub fn draw_field_value_changes(
+    c: &mut impl Canvas,
+    bx: (u32, u32, u32, u32),
+    field: Field,
+    old: &str,
+    new: &str,
+    fg: u16,
+) {
     let (x, y, w, h) = bx;
-    let style = value_style(field, w, h);
+    let style = Style { fg, ..value_style(field, w, h) };
     if old.len() != new.len() || style.width(new) + 2 > w {
-        return draw_field_value(c, bx, field, new);
+        return draw_field_value(c, bx, field, new, fg);
     }
     let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H - style.height()) / 2;
     draw_changed_chars(c, &style, x + 1 + (w - 2 - style.width(new)) / 2, top, old, new);
+}
+
+/// Graph bars: one every this many pixels, this wide (the rest is a gap).
+const BAR_PITCH: u32 = 4;
+const BAR_W: u32 = 3;
+
+/// The graph's plot in field box `bx`: left, top, columns, height. The newest bar is the rightmost column.
+pub fn graph_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    let cols = (w - 8) / BAR_PITCH;
+    (x + (w - cols * BAR_PITCH) / 2, y + FIELD_LABEL_H, cols, h - FIELD_LABEL_H - 4)
+}
+
+/// Graph column `i` that showed a bar `old` (height, colour) now showing `new`: only the band between the two
+/// tops when the colour stays (most bars as the chart scrolls: a steady effort), else the new bar whole.
+pub fn draw_graph_column(c: &mut impl Canvas, area: (u32, u32, u32, u32), i: u32, old: (u32, u16), new: (u32, u16)) {
+    let (x, bottom) = (area.0 + i * BAR_PITCH, area.1 + area.3);
+    let ((h0, c0), (h1, c1)) = ((old.0.min(area.3), old.1), (new.0.min(area.3), new.1));
+    if c0 == c1 || h0 == 0 {
+        if h1 > h0 {
+            c.fill(x, bottom - h1, BAR_W, h1 - h0, c1);
+        }
+    } else {
+        c.fill(x, bottom - h1, BAR_W, h1, c1);
+    }
+    if h0 > h1 {
+        c.fill(x, bottom - h0, BAR_W, h0 - h1, BLACK);
+    }
+}
+
+/// The whole graph: column `i` gets `bar(i)` (height, colour), the rest of the column black.
+pub fn draw_graph(c: &mut impl Canvas, area: (u32, u32, u32, u32), bar: &dyn Fn(u32) -> (u32, u16)) {
+    for i in 0..area.2 {
+        draw_graph_column(c, area, i, (area.3, BLACK), bar(i));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -600,7 +697,7 @@ pub(crate) mod tests {
                 let mut f = Frame::new();
                 for (&bx, field) in b.iter().zip(Field::ALL.iter().cycle()) {
                     draw_field_frame(&mut f, bx, *field);
-                    draw_field_value(&mut f, bx, *field, field.widest());
+                    draw_field_value(&mut f, bx, *field, field.widest(), WHITE);
                     assert!(value_style(*field, bx.2, bx.3).scale >= 2, "{n} fields: {field:?} readable");
                 }
             }
@@ -617,10 +714,10 @@ pub(crate) mod tests {
         let bx = field_box(4, RIDE_H, 1).unwrap();
         for (old, new) in [("22.7", "22.8"), ("22.7", "9.8"), ("--", "135"), ("99", "00")] {
             let (mut a, mut b) = (Frame::new(), Frame::new());
-            draw_field_value(&mut a, bx, Field::Speed, old);
+            draw_field_value(&mut a, bx, Field::Speed, old, WHITE);
             let before = a.fills;
-            draw_field_value_changes(&mut a, bx, Field::Speed, old, new);
-            draw_field_value(&mut b, bx, Field::Speed, new);
+            draw_field_value_changes(&mut a, bx, Field::Speed, old, new, WHITE);
+            draw_field_value(&mut b, bx, Field::Speed, new, WHITE);
             assert!(a.px == b.px, "{old} -> {new}");
             if old.len() == new.len() && old != "99" {
                 assert!(a.fills - before < 4, "{old} -> {new}: {} fills", a.fills - before);
@@ -634,8 +731,9 @@ pub(crate) mod tests {
             usb: UsbDot::Off,
             battery: Some(80),
             charging: false,
+            rec: Rec::Idle,
         };
-        let next = Strip { time: (10, 0), blink: false, ..strip };
+        let next = Strip { time: (10, 0), blink: false, rec: Rec::Running, ..strip };
         let (mut a, mut b) = (Frame::new(), Frame::new());
         draw_strip(&mut a, &strip);
         draw_strip_changes(&mut a, &next, Some(&strip));
@@ -653,6 +751,7 @@ pub(crate) mod tests {
             usb: UsbDot::Ready,
             battery: Some(87),
             charging: true,
+            rec: Rec::Paused,
         };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);

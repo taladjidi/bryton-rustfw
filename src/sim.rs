@@ -68,6 +68,8 @@ pub struct Gnss {
     /// Where a fix is, as a function of the simulated time in ms: latitude, longitude (degrees x 1e-7) and heading
     /// (degrees x 1e-5); None: [`FIX_LAT`], [`FIX_LON`], heading north.
     pub route: Option<fn(u64) -> (i32, i32, i32)>,
+    /// Altitude of a fix in mm as a function of the simulated time in ms; None: 0.
+    pub alt: Option<fn(u64) -> i32>,
     /// Every byte received, in order (0xff included).
     pub got: Vec<u8>,
     /// UTC of the next report, seconds since 1970 (set by the board: its RTC minus 2 h).
@@ -94,6 +96,7 @@ impl Gnss {
             let (lat, lon, heading) = self.route.map_or((FIX_LAT, FIX_LON, 0), |f| f(now));
             p[24..28].copy_from_slice(&lon.to_le_bytes());
             p[28..32].copy_from_slice(&lat.to_le_bytes());
+            p[36..40].copy_from_slice(&self.alt.map_or(0, |f| f(now)).to_le_bytes());
             p[60..64].copy_from_slice(&speed.to_le_bytes());
             p[64..68].copy_from_slice(&heading.to_le_bytes());
         }
@@ -511,7 +514,7 @@ impl Board for Sim {
 mod tests {
     use super::*;
     use crate::ui::tests::Frame;
-    use crate::ui::{Field, Strip, UsbDot};
+    use crate::ui::{Field, Rec, Strip, UsbDot};
     /// A stand-in for the ANT+ network key (the real one is never in the repository).
     const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
     /// The owner's strap, as the unit paired it.
@@ -571,15 +574,25 @@ mod tests {
                 usb: UsbDot::Off,
                 battery: Some(63),
                 charging: false,
+                rec: app.strip.rec,
             },
         );
         let page = app.pages()[n];
         for (i, v) in values.iter().enumerate() {
             let bx = crate::ui::field_box(page.layout, crate::ui::RIDE_H, i).unwrap();
             crate::ui::draw_field_frame(&mut f, bx, page.fields[i]);
-            crate::ui::draw_field_value(&mut f, bx, page.fields[i], v);
+            crate::ui::draw_field_value(&mut f, bx, page.fields[i], v, zone_fg(page.fields[i], v));
         }
         f.px
+    }
+
+    /// Heart rate and power in their zone's colour (default max HR and FTP), the rest white.
+    fn zone_fg(f: Field, v: &str) -> u16 {
+        match (f, v.parse::<u16>()) {
+            (Field::Hr, Ok(v)) => crate::ride::hr_color(crate::ride::hr_zone(v, crate::ride::MAX_HR)),
+            (Field::Power, Ok(v)) => crate::ride::power_color(crate::ride::power_zone(v, crate::ride::FTP)),
+            _ => crate::ui::WHITE,
+        }
     }
 
     fn hm(sim: &mut Sim) -> std::string::String {
@@ -601,6 +614,7 @@ mod tests {
                 usb,
                 battery: Some(63),
                 charging: false,
+                rec: app.strip.rec,
             },
         );
         crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10, s / 10, s % 10]);
@@ -684,7 +698,7 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 8), "Lap from the top wraps to NEARBY BLE");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, MAIN_ROWS - 1), "Lap from the top wraps to NEARBY BLE");
         assert_consistent(&sim, &app);
         sim.save("menu");
         app.press(&mut sim, Press::Short(Key::Start));
@@ -700,7 +714,7 @@ mod tests {
         assert!(!app.scanning);
         assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 8));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, MAIN_ROWS - 1));
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(app.screen(), Screen::Main);
         assert_consistent(&sim, &app);
@@ -872,12 +886,13 @@ mod tests {
             usb: UsbDot::Off,
             battery: Some(63),
             charging: false,
+            rec: Rec::Idle,
         };
         crate::ui::draw_strip(&mut want, &strip);
         assert!(want.px == sim.screen, "GPS speed, green GPS");
         sim.save("gps");
         app.press(&mut sim, Press::Long(Key::Page));
-        for _ in 0..7 {
+        for _ in 0..GPS_ROW {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         app.press(&mut sim, Press::Short(Key::Start));
@@ -1060,6 +1075,153 @@ mod tests {
         run(&mut sim, &mut app, 10_000);
         assert_consistent(&sim, &app);
         sim.save("map_field");
+    }
+
+    /// Heart rate rising from 90 to 209 over two minutes, then again: every zone at the default max of 190.
+    fn hr_ramp(ms: u64) -> [u8; 8] {
+        [4, 0, 0, 0, 0, 0, 0, 90 + (ms / 1000 % 120) as u8]
+    }
+    /// Power rising from 100 to 395 W over a minute, then again: every zone at the default FTP of 200 W.
+    fn power_ramp(ms: u64) -> [u8; 8] {
+        let [p0, p1] = (100 + (ms / 1000 % 60) as u16 * 5).to_le_bytes();
+        [0x10, 1, 0xff, 85, 0, 0, p0, p1]
+    }
+    /// Climbing 0.2 m/s from 100 m.
+    fn climb(ms: u64) -> i32 {
+        100_000 + (ms / 5) as i32
+    }
+
+    /// The ride keys and fields: a ride on the GPS route (28.8 km/h) with a strap and a power meter. Start, a lap,
+    /// a stop (auto-pause), Start to pause and resume, a long Start to end. The fields' values follow, heart rate and
+    /// power in their zone colours, the graph's bars too; the strip's time is green while recording, orange when
+    /// paused. Few pixels a second while riding.
+    #[test]
+    fn a_ride_with_laps_and_pauses() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        sim.gnss.alt = Some(climb);
+        sim.gnss.fix = Some(8000);
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_ramp });
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        app.pages[0] = PageCfg { layout: 6, fields: [Timer, Dist, AvgSpeed, AvgHr, AvgPower, Graph] };
+        app.pages[1] = PageCfg { layout: 6, fields: [Hr, Power, MaxSpeed, LapTime, LapDist, Ascent] };
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 5000);
+        let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+        assert_eq!((text(&app, Timer), text(&app, Dist), app.strip.rec), ("0:00:00".into(), "0.00".into(), Rec::Idle));
+        app.press(&mut sim, Press::Short(Key::Start));
+        let (t0, mut px0) = (sim.ms, sim.pixels);
+        let mut seconds = 0;
+        while sim.ms < t0 + 720_000 {
+            run(&mut sim, &mut app, 1000);
+            seconds += 1;
+            if seconds % 30 == 0 {
+                assert_consistent(&sim, &app);
+            }
+            if seconds == 60 {
+                let px_s = (sim.pixels - px0) / 60;
+                std::println!("ride page (timer, km, avg km/h, avg HR, avg W, graph), first minute: {px_s} px/s");
+            }
+            if seconds == 600 {
+                px0 = sim.pixels; // the averages have settled
+            }
+        }
+        // the averages of ramps settle as a long ride's do: from then on, mostly the timer, the distance, the graph
+        let px_s = (sim.pixels - px0) / 120;
+        std::println!("ride page (timer, km, avg km/h, avg HR, avg W, graph), minutes 10 to 12: {px_s} px/s");
+        assert!(px_s < 1500, "{px_s} px/s while riding");
+        assert_eq!(app.strip.rec, Rec::Running);
+        let timer = app.ride.timer_s();
+        assert!((719..=721).contains(&timer), "timer {timer}");
+        assert_eq!(text(&app, Dist), "5.76", "8 m/s for 720 s");
+        assert_eq!(text(&app, AvgSpeed), "28.8");
+        let bx = |i| crate::ui::field_box(6, crate::ui::RIDE_H, i).unwrap();
+        let colors_in = |sim: &Sim, (x, y, w, h): (u32, u32, u32, u32)| {
+            let mut c: Vec<u16> = (y..y + h)
+                .flat_map(|y| (x..x + w).map(move |x| (x, y)))
+                .map(|(x, y)| sim.screen[(y * W + x) as usize])
+                .collect();
+            c.sort();
+            c.dedup();
+            c
+        };
+        let graph = colors_in(&sim, bx(5));
+        let zones = crate::ride::ZONE_COLORS.iter().filter(|c| graph.contains(c)).count();
+        assert!(zones >= 5, "the power bars in their zones' colours: {zones} colours");
+        sim.save("ride_page");
+        app.press(&mut sim, Press::Short(Key::Lap));
+        app.press(&mut sim, Press::Short(Key::Page));
+        let (t0, px0) = (sim.ms, sim.pixels);
+        run(&mut sim, &mut app, 60_000);
+        let px_s = (sim.pixels - px0) * 1000 / (sim.ms - t0);
+        std::println!("ride page (HR, power changing every second, max km/h, lap time, lap km, ascent): {px_s} px/s");
+        // the value colours: the zone of the heart rate and power on screen
+        let (hr, w) = (app.live.get(Metric::Hr).unwrap(), app.live.get(Metric::Power).unwrap());
+        let hr_fg = crate::ride::hr_color(crate::ride::hr_zone(hr, 190));
+        let w_fg = crate::ride::power_color(crate::ride::power_zone(w, 200));
+        assert!(colors_in(&sim, bx(0)).contains(&hr_fg) && colors_in(&sim, bx(1)).contains(&w_fg), "zone colours");
+        assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("0:01:00".into(), "0.48".into()));
+        assert_eq!(text(&app, MaxSpeed), "28.8");
+        let ascent = app.ride.ascent_m();
+        assert!((150..=157).contains(&ascent), "0.2 m/s for 780 s: {ascent} m");
+        assert_consistent(&sim, &app);
+        sim.save("ride_page2");
+        // stopped: auto-pause, the timer stops
+        sim.gnss.fix = Some(0);
+        run(&mut sim, &mut app, 3000);
+        let timer = app.ride.timer_s();
+        run(&mut sim, &mut app, 30_000);
+        assert_eq!((app.ride.timer_s(), app.strip.rec), (timer, Rec::Paused), "auto-paused");
+        assert_consistent(&sim, &app);
+        sim.save("ride_autopause");
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 10_000);
+        assert!(app.ride.timer_s() >= timer + 8 && app.strip.rec == Rec::Running, "moving again");
+        app.press(&mut sim, Press::Short(Key::Start));
+        let (timer, dist) = (app.ride.timer_s(), app.ride.dist_m());
+        run(&mut sim, &mut app, 10_000);
+        assert_eq!((app.ride.timer_s(), app.ride.dist_m(), app.strip.rec), (timer, dist, Rec::Paused), "paused");
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 5000);
+        assert!(app.ride.timer_s() > timer, "resumed");
+        app.press(&mut sim, Press::Long(Key::Start));
+        assert_eq!(app.ride.state(), crate::ride::State::Running, "a long Start does not end a running ride");
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Long(Key::Start));
+        run(&mut sim, &mut app, 2000);
+        assert_eq!((app.ride.state(), app.strip.rec), (crate::ride::State::Idle, Rec::Idle), "ended");
+        assert!(app.ride.dist_m() > 2000, "the totals stay on screen");
+        assert_consistent(&sim, &app);
+        sim.save("ride_ended");
+    }
+
+    /// Max HR and FTP from the menu: cycled with Start, kept in the wheel's register beside the other settings.
+    #[test]
+    fn max_hr_and_ftp_from_the_menu() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        for _ in 0..4 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start)); // wheel: next size
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start)); // MAX HR 190 -> 195
+        app.press(&mut sim, Press::Short(Key::Page));
+        for _ in 0..12 {
+            app.press(&mut sim, Press::Short(Key::Start)); // FTP 200 -> 400 -> 100 -> 120
+        }
+        assert_consistent(&sim, &app);
+        sim.save("zones_menu");
+        let again = App::start(&mut sim, None);
+        assert_eq!((max_hr_of(again.max_hr_bits), ftp_of(again.ftp_bits), again.wheel_mm), (195, 120, WHEELS[2]));
+        assert_eq!((again.light_level, again.light_timeout), (0, 0), "the backlight settings untouched");
     }
 
     /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

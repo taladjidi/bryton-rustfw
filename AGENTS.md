@@ -98,6 +98,9 @@ The point of this project is a firmware in safe Rust.
 - `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
 - `src/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
+- `src/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
+  colours, the history behind the graph field. Pure logic, one tick a second; each change comes out as an `Event`
+  for the recorder (`App::recorder`, the one place the FIT writer will plug in).
 - `src/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
   and drawing in runs per row clipped to `Canvas::clip`, so a dirty box and a screenshot row use the same code.
 - `src/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
