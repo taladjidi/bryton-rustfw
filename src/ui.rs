@@ -151,41 +151,81 @@ const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 /// symbol in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
 /// under); then the orange line.
 pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
+    draw_strip_changes(c, s, None);
+    c.fill(0, STRIP_H, W, 2, ACCENT);
+}
+
+/// Redraws only the parts of the strip that differ from `old` (all of them, without it): each part has its own
+/// box, the time its own character cells.
+pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
+    let changed = |f: fn(&Strip) -> u32| old.is_none_or(|o| f(o) != f(s));
     let at = |c: &mut _, (x, w): (u32, u32), fg, align, t: &str| {
         text::draw_in(c, &Style { fg, ..LABEL }, x, STRIP_H - LABEL.height(), w, align, t); // ends at the line
     };
-    let mut l = text::Line::<8>::new();
-    for d in [s.time.0 / 10, s.time.0 % 10, 10, s.time.1 / 10, s.time.1 % 10] {
-        l.push_str(if d == 10 { ":" } else { DIGITS[usize::from(d % 10)] });
-    }
-    at(c, STRIP_TIME, WHITE, Align::Left, l.as_str());
-    at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
-    match s.gps {
-        Some(bars @ 1..) => draw_bars(c, bars),
-        Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
-        _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
-    }
-    let usb = match s.usb {
-        UsbDot::Off => BLACK,
-        UsbDot::Failed => RED,
-        UsbDot::Powered => ACCENT,
-        UsbDot::Ready => GREEN,
+    let hm = |s: &Strip| {
+        let mut l = text::Line::<8>::new();
+        for d in [s.time.0 / 10, s.time.0 % 10, 10, s.time.1 / 10, s.time.1 % 10] {
+            l.push_str(if d == 10 { ":" } else { DIGITS[usize::from(d % 10)] });
+        }
+        l
     };
-    // level with the capitals next to it: 7 font rows at 2x = 14 px, the symbol's height, from the text's top
-    draw_bitmap(c, &USB_ICON, STRIP_USB.0, STRIP_H - LABEL.height(), 1, usb);
-    let mut l = text::Line::<8>::new();
-    match s.battery {
-        Some(p) => l.push_u32(u32::from(p)),
-        None => l.push_str("--"),
+    let style = Style { fg: WHITE, ..LABEL };
+    let top = STRIP_H - LABEL.height();
+    match old {
+        Some(o) => draw_changed_chars(c, &style, STRIP_TIME.0, top, hm(o).as_str(), hm(s).as_str()),
+        None => at(c, STRIP_TIME, WHITE, Align::Left, hm(s).as_str()),
     }
-    l.push_str("%");
-    let color = match s.battery {
-        _ if s.charging => GREEN,
-        Some(p) if p <= 15 => RED,
-        _ => WHITE,
-    };
-    at(c, STRIP_BATTERY, color, Align::Right, l.as_str());
-    c.fill(0, STRIP_H, W, 2, ACCENT);
+    if changed(|s| u32::from(s.radio)) {
+        at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
+    }
+    if changed(|s| s.gps.map_or(0x100, u32::from) | u32::from(s.blink) << 9) {
+        match s.gps {
+            Some(bars @ 1..) => draw_bars(c, bars),
+            Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
+            _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
+        }
+    }
+    if changed(|s| s.usb as u32) {
+        let usb = match s.usb {
+            UsbDot::Off => BLACK,
+            UsbDot::Failed => RED,
+            UsbDot::Powered => ACCENT,
+            UsbDot::Ready => GREEN,
+        };
+        // level with the capitals next to it: 7 font rows at 2x = 14 px, the symbol's height, from the text's top
+        draw_bitmap(c, &USB_ICON, STRIP_USB.0, top, 1, usb);
+    }
+    if changed(|s| s.battery.map_or(0x100, u32::from) | u32::from(s.charging) << 9) {
+        let mut l = text::Line::<8>::new();
+        match s.battery {
+            Some(p) => l.push_u32(u32::from(p)),
+            None => l.push_str("--"),
+        }
+        l.push_str("%");
+        let color = match s.battery {
+            _ if s.charging => GREEN,
+            Some(p) if p <= 15 => RED,
+            _ => WHITE,
+        };
+        at(c, STRIP_BATTERY, color, Align::Right, l.as_str());
+    }
+}
+
+/// Redraws, of monospaced text at (`x`, `y`) that was `old` and is now `new`, only the characters that differ, each
+/// in its own cell; the whole text when the lengths differ (its cells move). Callers clear what a shorter text
+/// leaves, or keep lengths equal.
+pub fn draw_changed_chars(c: &mut impl Canvas, style: &Style, x: u32, y: u32, old: &str, new: &str) {
+    let cell = CELL * style.scale;
+    if old.len() != new.len() {
+        text::draw(c, style, x, y, Align::Left, new);
+        return;
+    }
+    for (i, (a, b)) in old.bytes().zip(new.bytes()).enumerate() {
+        if a != b {
+            let ch = new.get(i..i + 1).unwrap_or(" ");
+            text::draw_in(c, style, x + i as u32 * cell, y, cell, Align::Left, ch);
+        }
+    }
 }
 
 /// GNSS signal bars in the "GPS" box, level with the text: four bars rising left to right, the first `n` green,
@@ -398,6 +438,18 @@ pub fn draw_field_value(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     text::draw_in(c, &style, x + 1, top, w - 2, Align::Centre, value);
 }
 
+/// A field's value that was `old`: only the characters that changed when the length is the same (they keep their
+/// cells), else the whole value box.
+pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field, old: &str, new: &str) {
+    let (x, y, w, h) = bx;
+    let style = value_style(field, w, h);
+    if old.len() != new.len() || style.width(new) + 2 > w {
+        return draw_field_value(c, bx, field, new);
+    }
+    let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H - style.height()) / 2;
+    draw_changed_chars(c, &style, x + 1 + (w - 2 - style.width(new)) / 2, top, old, new);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The main screen: the time, big, and Ferris
 // ---------------------------------------------------------------------------------------------------------------
@@ -545,6 +597,38 @@ pub(crate) mod tests {
         let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(SECONDS_Y + SECONDS.height() <= CRAB_Y && TIME_Y + TIME.height() <= SECONDS_Y && TIME_Y > STRIP_H);
+    }
+
+    /// Updating only the changed characters gives the same pixels as drawing the new value whole, and draws less.
+    #[test]
+    fn changed_characters_equal_a_full_redraw() {
+        let bx = field_box(4, RIDE_H, 1).unwrap();
+        for (old, new) in [("22.7", "22.8"), ("22.7", "9.8"), ("--", "135"), ("99", "00")] {
+            let (mut a, mut b) = (Frame::new(), Frame::new());
+            draw_field_value(&mut a, bx, Field::Speed, old);
+            let before = a.fills;
+            draw_field_value_changes(&mut a, bx, Field::Speed, old, new);
+            draw_field_value(&mut b, bx, Field::Speed, new);
+            assert!(a.px == b.px, "{old} -> {new}");
+            if old.len() == new.len() && old != "99" {
+                assert!(a.fills - before < 4, "{old} -> {new}: {} fills", a.fills - before);
+            }
+        }
+        let strip = Strip {
+            time: (9, 59),
+            radio: true,
+            gps: Some(0),
+            blink: true,
+            usb: UsbDot::Off,
+            battery: Some(80),
+            charging: false,
+        };
+        let next = Strip { time: (10, 0), blink: false, ..strip };
+        let (mut a, mut b) = (Frame::new(), Frame::new());
+        draw_strip(&mut a, &strip);
+        draw_strip_changes(&mut a, &next, Some(&strip));
+        draw_strip(&mut b, &next);
+        assert!(a.px == b.px, "strip");
     }
 
     #[test]

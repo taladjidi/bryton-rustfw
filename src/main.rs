@@ -1,7 +1,7 @@
 //! bryton-rustfw: a minimal firmware for the Bryton Rider S510 bike computer, written from scratch. It shows the time
 //! kept by the RTC, big, on the panel, the heart rate from an ANT+ strap, and on a second page the BLE devices
 //! nearby. Keys: Page turns the ride pages, hold Page for the menu (sensors, pages, wheel, nearby devices), Back
-//! toggles the backlight, hold Back (power) 3 s to switch off (standby; the power button starts it again).
+//! toggles the backlight (level and time-out in the menu), hold Back (power) 3 s to switch off (standby; the power button starts it again).
 //!
 //! Every register access below is traced to BOARD.md (the board as the stock firmware sets it up) or
 //! to the STM32H747 reference manual (RM0399). No interrupts, no RTOS: one loop. The only crates are the USB
@@ -175,7 +175,7 @@ fn pin_low(p: Port, pin: u32) -> bool {
 
 // Display pins (BOARD.md 6): PG3 display + touch power (inferred), PI3 panel reset release (inferred),
 // PG9 D/C (0 command, 1 parameter), PG10 SPI1 NSS (driven by hand here), PG11 SPI1 SCK AF5, PD7 SPI1 MOSI AF5,
-// PG13 backlight (LPTIM1 PWM in stock; a plain output here, high = on as derived from the inverted PWM).
+// PG13 backlight: LPTIM1_OUT (AF1), a PWM as in stock (BOARD.md 6); a plain output, low, when off.
 const LCD_POWER: (Port, u32) = (Port::G, 3);
 const LCD_RESET: (Port, u32) = (Port::I, 3);
 const LCD_DC: (Port, u32) = (Port::G, 9);
@@ -469,6 +469,44 @@ fn nrf_recv(buf: &mut [u8]) -> usize {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Backlight PWM: LPTIM1 (0x40002400, RM0399 LPTIM) on the LSE (32.768 kHz), as stock's Pwr_BacklightPwmInit
+// (BOARD.md 6): ARR 99, output polarity inverted (WAVPOL), CMP = level - 1, so PG13 is high for level % of each
+// 3.05 ms period (327.68 Hz). The LSE keeps running in stop mode, and so does this PWM.
+// ---------------------------------------------------------------------------------------------------------------
+const LPTIM1: u32 = 0x4000_2400;
+const LPTIM_ISR: u32 = LPTIM1;
+const LPTIM_ICR: u32 = LPTIM1 + 0x04;
+const LPTIM_CFGR: u32 = LPTIM1 + 0x0c;
+const LPTIM_CR: u32 = LPTIM1 + 0x10;
+const LPTIM_CMP: u32 = LPTIM1 + 0x14;
+const LPTIM_ARR: u32 = LPTIM1 + 0x18;
+
+fn backlight_init() {
+    modify(RCC_D2CCIP2R, 7 << 28, 3 << 28); // LPTIM1SEL = LSE
+    modify(RCC_APB1LENR, 0, 1 << 9); // LPTIM1EN
+    wr(LPTIM_CR, 0);
+    wr(LPTIM_CFGR, 1 << 21); // WAVPOL: inverted; internal clock, no prescaler, registers written at once
+    wr(LPTIM_CR, 1); // ENABLE: ARR and CMP can only be written enabled
+    wr(LPTIM_ICR, (1 << 4) | (1 << 3));
+    wr(LPTIM_ARR, 99);
+    let _ = wait_us(1000, || rd(LPTIM_ISR) & (1 << 4) != 0); // ARROK: the write crosses into the LSE domain
+    wr(LPTIM_CR, (1 << 2) | 1); // CNTSTRT: continuous
+}
+
+/// Backlight at `level` % (0: off, the pin a plain low output).
+fn backlight(level: u8) {
+    if level == 0 {
+        pin_set(BACKLIGHT.0, BACKLIGHT.1, false);
+        gpio(BACKLIGHT.0, BACKLIGHT.1, OUT, 0);
+        return;
+    }
+    wr(LPTIM_ICR, 1 << 3);
+    wr(LPTIM_CMP, u32::from(level.min(100)) - 1);
+    let _ = wait_us(1000, || rd(LPTIM_ISR) & (1 << 3) != 0); // CMPOK
+    gpio(BACKLIGHT.0, BACKLIGHT.1, AF, 1); // LPTIM1_OUT
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Battery: ADC3 (0x58026000, RM0399 ADC; BOARD.md 12), as stock reads it: VREFINT (channel 19) to know VDDA, then
 // the battery through a divider on PC3_C (channel 1), both with the longest sampling time. Kernel clock per_ck (HSI
 // 64 MHz) / 16 = 4 MHz, under every BOOST limit, so BOOST stays 0. 16-bit (the reset resolution).
@@ -601,8 +639,8 @@ impl Board for S510 {
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
         lcd_ram_write(count, next);
     }
-    fn backlight(&mut self, on: bool) {
-        pin_set(BACKLIGHT.0, BACKLIGHT.1, on);
+    fn backlight(&mut self, level: u8) {
+        backlight(level);
     }
     fn keys_down(&mut self) -> u8 {
         KEYS.iter().enumerate().fold(0, |m, (i, &(port, pin))| m | (u8::from(pin_low(port, pin)) << i))
@@ -684,6 +722,7 @@ fn main() -> ! {
     board_init();
     checkpoint(3);
     spi_init();
+    backlight_init();
     let _ = adc_init(); // a failure leaves the battery unknown ("--%")
     gnss_init();
     checkpoint(4);

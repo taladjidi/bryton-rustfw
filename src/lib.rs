@@ -36,8 +36,8 @@ pub trait Board {
     /// RAMWR (0x2c) then `count` pixels, each from `next` (called once per pixel, in order), into the window set by
     /// CASET / RASET.
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16);
-    /// Backlight on or off.
-    fn backlight(&mut self, on: bool);
+    /// Backlight at `level` percent (0: off).
+    fn backlight(&mut self, level: u8);
     /// The keys held down, as a mask of [`Key`] codes.
     fn keys_down(&mut self) -> u8;
     /// RTC_TR and RTC_DR, read once the shadow registers are in sync (RSF): the time of day and the date, BCD.
@@ -259,8 +259,13 @@ impl PageCfg {
 pub const PAGES: usize = 3;
 /// The backup registers of the ride pages.
 const PAGE_BKP: [usize; PAGES] = [14, 15, 16];
-/// The backup register of the wheel size.
+/// The backup register of the wheel size (bits 0..15) and the backlight settings (16..19 level, 20..23 time-out:
+/// indexes into [`LIGHT_LEVELS`] and [`LIGHT_TIMEOUTS_S`]), behind the tag 0xa5.
 const WHEEL_BKP: usize = 11;
+/// Backlight levels offered, percent (stock: 1 to 100).
+pub const LIGHT_LEVELS: [u8; 4] = [100, 60, 30, 10];
+/// Backlight time-outs offered, seconds without a key press (0: never off).
+pub const LIGHT_TIMEOUTS_S: [u32; 4] = [0, 10, 30, 60];
 /// Wheel circumferences offered (mm): 700 x 23, 25, 28, 32, 35, 38 C and 650B x 47 (ANT+ / tyre makers' tables).
 pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
 
@@ -347,12 +352,22 @@ pub enum Screen {
 }
 
 /// Main menu rows.
-const MAIN_ROWS: usize = 7;
+const MAIN_ROWS: usize = 9;
+/// The GPS row of the main menu.
+const GPS_ROW: usize = 7;
 
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
+    /// The backlight is wanted on (Back toggles it); it is on unless timed out.
     backlight: bool,
+    /// The level the backlight is at (0: off).
+    light_shown: u8,
+    /// Indexes into [`LIGHT_LEVELS`] and [`LIGHT_TIMEOUTS_S`].
+    light_level: usize,
+    light_timeout: usize,
+    /// Since the last key press.
+    idle_ms: u32,
     /// The RTC's seconds (the main screen shows them).
     seconds: u8,
     /// What the status strip shows, and what it showed when last drawn.
@@ -394,6 +409,8 @@ pub struct App {
     shown: [Line<8>; 6],
     /// The main screen's digits on screen.
     main_shown: [u8; 6],
+    /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
+    menu_shown: [u32; ui::MENU_ROWS],
 }
 
 impl App {
@@ -401,7 +418,6 @@ impl App {
     /// settings read, the first ride page drawn.
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
-        b.backlight(true);
         let mut rx = nrf::Rx::new();
         let ble = nrf::start(b).ok();
         let ant = match (ble, ant_key) {
@@ -418,9 +434,14 @@ impl App {
             }
         }
         let wheel = b.backup_read(WHEEL_BKP);
+        let wheel = if wheel >> 24 == 0xa5 { wheel } else { 0 };
         let mut app = App {
             keys: Keys::default(),
             backlight: true,
+            light_shown: 0,
+            light_level: (wheel >> 16 & 0xf) as usize % LIGHT_LEVELS.len(),
+            light_timeout: (wheel >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
+            idle_ms: 0,
             seconds: 0,
             strip: Strip {
                 time: rtc_hm(b),
@@ -461,15 +482,34 @@ impl App {
             gnss_ms: 0,
             gnss_sent: 0,
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
-            wheel_mm: if wheel >> 24 == 0xa5 { wheel as u16 } else { WHEELS[1] },
+            wheel_mm: if wheel != 0 { wheel as u16 } else { WHEELS[1] },
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
             main_shown: [0; 6],
+            menu_shown: [0; ui::MENU_ROWS],
         };
         app.strip_shown = app.strip;
         ui::draw_strip(&mut Panel(b), &app.strip);
         app.show(b);
+        app.update_light(b);
         app
+    }
+
+    /// Sets the backlight to what it should be now: the chosen level, unless switched off (Back) or timed out.
+    fn update_light(&mut self, b: &mut impl Board) {
+        let timeout_ms = LIGHT_TIMEOUTS_S[self.light_timeout] * 1000;
+        let on = self.backlight && (timeout_ms == 0 || self.idle_ms < timeout_ms);
+        let level = if on { LIGHT_LEVELS[self.light_level] } else { 0 };
+        if level != self.light_shown {
+            self.light_shown = level;
+            b.backlight(level);
+        }
+    }
+
+    /// Writes the wheel size and the backlight settings to their backup register.
+    fn save_misc(&self, b: &mut impl Board) {
+        let w = (0xa5 << 24) | ((self.light_timeout as u32) << 20) | ((self.light_level as u32) << 16);
+        b.backup_write(WHEEL_BKP, w | u32::from(self.wheel_mm));
     }
 
     /// What is on screen.
@@ -530,8 +570,22 @@ impl App {
                     label.push_str("WHEEL MM");
                     value.push_u32(u32::from(self.wheel_mm));
                 }
-                5 => label.push_str("GPS"),
-                6 => label.push_str("NEARBY BLE"),
+                5 => {
+                    label.push_str("LIGHT %");
+                    value.push_u32(u32::from(LIGHT_LEVELS[self.light_level]));
+                }
+                6 => {
+                    label.push_str("LIGHT OFF");
+                    match LIGHT_TIMEOUTS_S[self.light_timeout] {
+                        0 => value.push_str("NEVER"),
+                        t => {
+                            value.push_u32(t);
+                            value.push_str(" S");
+                        }
+                    }
+                }
+                7 => label.push_str("GPS"),
+                8 => label.push_str("NEARBY BLE"),
                 _ => return None,
             },
             Menu::Sensors => {
@@ -666,11 +720,45 @@ impl App {
 
     fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
         for i in 0..ui::MENU_ROWS {
-            match self.menu_row(menu, i) {
-                Some((label, value, color)) => {
-                    ui::draw_menu_row(c, i, label.as_str(), value.as_str(), color, i == sel);
-                }
-                None => c.fill(0, ui::LIST_Y + i as u32 * ui::LIST_ROW, ui::W, ui::LIST_ROW, ui::BLACK),
+            self.draw_menu_row(c, menu, sel, i);
+        }
+    }
+
+    fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, i: usize) {
+        match self.menu_row(menu, i) {
+            Some((label, value, color)) => ui::draw_menu_row(c, i, label.as_str(), value.as_str(), color, i == sel),
+            None => c.fill(0, ui::LIST_Y + i as u32 * ui::LIST_ROW, ui::W, ui::LIST_ROW, ui::BLACK),
+        }
+    }
+
+    /// A fingerprint of menu row `i` as it would be drawn (FNV-1a over its text, colour and selection).
+    fn menu_row_print(&self, menu: Menu, sel: usize, i: usize) -> u32 {
+        let mut h = 0x811c_9dc5u32;
+        let mut eat = |bytes: &[u8]| {
+            for &x in bytes {
+                h = (h ^ u32::from(x)).wrapping_mul(0x0100_0193);
+            }
+        };
+        match self.menu_row(menu, i) {
+            Some((label, value, color)) => {
+                eat(label.as_str().as_bytes());
+                eat(&[0]);
+                eat(value.as_str().as_bytes());
+                eat(&color.to_le_bytes());
+                eat(&[u8::from(i == sel)]);
+            }
+            None => eat(&[1]),
+        }
+        h
+    }
+
+    /// Redraws the menu rows that changed since they were drawn (the selection, a value).
+    fn update_menu_rows(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
+        for i in 0..ui::MENU_ROWS {
+            let print = self.menu_row_print(menu, sel, i);
+            if self.menu_shown[i] != print {
+                self.draw_menu_row(&mut Panel(b), menu, sel, i);
+                self.menu_shown[i] = print;
             }
         }
     }
@@ -683,7 +771,8 @@ impl App {
         match self.screen {
             Screen::Ride(n) => self.shown = self.pages[n].fields.map(|f| self.field_text(f)),
             Screen::Main => self.main_shown = self.main_digits(),
-            _ => {}
+            Screen::Menu(menu, sel) => self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i)),
+            Screen::Nearby => {}
         }
     }
 
@@ -692,7 +781,7 @@ impl App {
         for (i, (bx, f)) in self.boxes(n).enumerate() {
             let text = self.field_text(f);
             if self.shown[i].as_str() != text.as_str() {
-                ui::draw_field_value(&mut Panel(b), bx, f, text.as_str());
+                ui::draw_field_value_changes(&mut Panel(b), bx, f, self.shown[i].as_str(), text.as_str());
                 self.shown[i] = text;
             }
         }
@@ -727,10 +816,20 @@ impl App {
             (Menu::Main, 4) => {
                 let i = WHEELS.iter().position(|&w| w == self.wheel_mm).map_or(0, |i| (i + 1) % WHEELS.len());
                 self.wheel_mm = WHEELS[i];
-                b.backup_write(WHEEL_BKP, 0xa5 << 24 | u32::from(self.wheel_mm));
+                self.save_misc(b);
                 Screen::Menu(menu, sel)
             }
-            (Menu::Main, 5) => Screen::Menu(Menu::Gps, 0),
+            (Menu::Main, 5 | 6) => {
+                if sel == 5 {
+                    self.light_level = (self.light_level + 1) % LIGHT_LEVELS.len();
+                } else {
+                    self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len();
+                }
+                self.save_misc(b);
+                self.update_light(b);
+                Screen::Menu(menu, sel)
+            }
+            (Menu::Main, GPS_ROW) => Screen::Menu(Menu::Gps, 0),
             (Menu::Gps, _) => Screen::Menu(menu, sel),
             (Menu::Main, _) => {
                 if self.ble.is_some() && !self.scanning {
@@ -768,6 +867,14 @@ impl App {
     /// switches off anywhere.
     pub fn press(&mut self, b: &mut impl Board, p: Press) {
         let before = self.screen;
+        let woke = self.light_shown == 0 && self.backlight;
+        self.idle_ms = 0;
+        if woke {
+            self.update_light(b); // a key press after the time-out: the light comes back (and the key acts)
+            if p == Press::Short(Key::Back) {
+                return; // Back's own job is the light: done
+            }
+        }
         match (self.screen, p) {
             (_, Press::Long(Key::Back)) => return self.power_off(b),
             (Screen::Main, Press::Short(Key::Page)) => self.screen = Screen::Ride(0),
@@ -778,23 +885,23 @@ impl App {
             (Screen::Main | Screen::Ride(_), Press::Long(Key::Page)) => self.screen = Screen::Menu(Menu::Main, 0),
             (Screen::Main | Screen::Ride(_), Press::Short(Key::Back)) => {
                 self.backlight = !self.backlight;
-                b.backlight(self.backlight);
+                self.update_light(b);
             }
             (Screen::Menu(menu, sel), Press::Short(k @ (Key::Page | Key::Lap))) => {
                 let rows = (0..ui::MENU_ROWS).take_while(|&i| self.menu_row(menu, i).is_some()).count().max(1);
                 let sel = if k == Key::Page { (sel + 1) % rows } else { (sel + rows - 1) % rows };
                 self.screen = Screen::Menu(menu, sel);
-                return self.draw_menu_rows(&mut Panel(b), menu, sel);
+                return self.update_menu_rows(b, menu, sel);
             }
             (Screen::Menu(menu, sel), Press::Short(Key::Start)) => {
                 self.activate(b, menu, sel);
                 if self.screen == before {
-                    return self.draw_menu_rows(&mut Panel(b), menu, sel);
+                    return self.update_menu_rows(b, menu, sel);
                 }
             }
             (Screen::Menu(Menu::Main, _), Press::Short(Key::Back)) => self.screen = Screen::Main,
             (Screen::Menu(Menu::Sensors, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, 0),
-            (Screen::Menu(Menu::Gps, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, 5),
+            (Screen::Menu(Menu::Gps, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, GPS_ROW),
             (Screen::Menu(Menu::Page(n), _), Press::Short(Key::Back)) => {
                 self.screen = Screen::Menu(Menu::Main, n + 1);
             }
@@ -979,15 +1086,17 @@ impl App {
                 self.redraw_ms = 0;
             }
             Screen::Menu(menu @ (Menu::Sensors | Menu::Gps), sel) if self.redraw_ms >= LIST_REDRAW_MS => {
-                self.draw_menu_rows(&mut Panel(b), menu, sel);
+                self.update_menu_rows(b, menu, sel);
                 self.redraw_ms = 0;
             }
             _ => {}
         }
         let mask = b.keys_down();
+        self.idle_ms = if mask != 0 { 0 } else { self.idle_ms.saturating_add(POLL_MS) };
         if let Some(p) = self.keys.poll(mask, POLL_MS) {
             self.press(b, p);
         }
+        self.update_light(b);
     }
 
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released
@@ -997,7 +1106,7 @@ impl App {
             nrf::system_off(b);
         }
         b.gnss_power(false);
-        b.backlight(false);
+        b.backlight(0);
         panel::off(b);
         while b.keys_down() & Key::Back as u8 != 0 {
             b.delay_ms(POLL_MS);
@@ -1009,8 +1118,8 @@ impl App {
     /// Redraws the status strip if what it shows changed.
     fn update_strip(&mut self, b: &mut impl Board) {
         if self.strip != self.strip_shown {
+            ui::draw_strip_changes(&mut Panel(b), &self.strip, Some(&self.strip_shown));
             self.strip_shown = self.strip;
-            ui::draw_strip(&mut Panel(b), &self.strip);
         }
     }
 

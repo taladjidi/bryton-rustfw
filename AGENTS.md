@@ -29,7 +29,11 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - waits sleep (`delay_ms` is SysTick + WFI);
   - a busy loop needs a reason, and a timeout.
 - **Do less:**
-  - redraw only what changed (`Clock` redraws changed digits only);
+  - **redraw only what changes, in the smallest box that holds it**: a value in its own fixed box, a digit in its
+    own cell; never a whole line, a whole screen or a wide clearing box for one changed character. Every pixel is a
+    SPI transfer and CPU time, uncached from SDRAM: redrawing the main screen's two seconds digits over the full
+    width each second kept the CPU awake 17.5 % of the time; one 30 x 50 digit cell, 2.4 % (measured, `dev.py
+    info`). Full redraws only when a screen opens;
   - send the panel the smallest window;
   - no work in the loop that could be done once.
 - **Light code:**

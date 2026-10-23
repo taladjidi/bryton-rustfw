@@ -32,6 +32,8 @@ pub struct Sim {
     colmod: u8,
     ramctrl: [u8; 2],
     pub backlight: bool,
+    /// Backlight level, percent.
+    pub light_level: u8,
     pub standby: bool,
     /// Simulated time since reset.
     pub ms: u64,
@@ -257,6 +259,7 @@ impl Sim {
             colmod: 0x06,
             ramctrl: [0x10, 0xf0],
             backlight: false,
+            light_level: 0,
             standby: false,
             ms: 0,
             start_s: h * 3600 + m * 60 + s,
@@ -363,8 +366,9 @@ impl Board for Sim {
         self.dirty = true;
     }
 
-    fn backlight(&mut self, on: bool) {
-        self.backlight = on;
+    fn backlight(&mut self, level: u8) {
+        self.backlight = level > 0;
+        self.light_level = level;
     }
 
     fn keys_down(&mut self) -> u8 {
@@ -648,7 +652,7 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 6), "Lap from the top wraps to NEARBY BLE");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 8), "Lap from the top wraps to NEARBY BLE");
         assert_consistent(&sim, &app);
         sim.save("menu");
         app.press(&mut sim, Press::Short(Key::Start));
@@ -664,7 +668,7 @@ mod tests {
         assert!(!app.scanning);
         assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 6));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 8));
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(app.screen(), Screen::Main);
         assert_consistent(&sim, &app);
@@ -818,7 +822,7 @@ mod tests {
         assert!(want.px == sim.screen, "GPS speed, green GPS");
         sim.save("gps");
         app.press(&mut sim, Press::Long(Key::Page));
-        for _ in 0..5 {
+        for _ in 0..7 {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         app.press(&mut sim, Press::Short(Key::Start));
@@ -852,6 +856,38 @@ mod tests {
         assert_eq!(app.strip.gps, None);
         app.press(&mut sim, Press::Long(Key::Back));
         assert!(!sim.gnss.powered, "off with the unit");
+    }
+
+    /// The backlight: level and time-out from the menu (kept with the wheel size); after the time-out any key
+    /// brings it back (and acts), Back only brings it back.
+    #[test]
+    fn backlight_level_and_timeout() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        assert_eq!(sim.light_level, 100, "100 % and never off by default");
+        app.press(&mut sim, Press::Long(Key::Page));
+        for _ in 0..5 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start)); // LIGHT %: 60
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start)); // LIGHT OFF: 10 s
+        assert_eq!(sim.light_level, 60);
+        assert_consistent(&sim, &app);
+        sim.save("light_menu");
+        app.press(&mut sim, Press::Short(Key::Back));
+        run(&mut sim, &mut app, 11_000);
+        assert_eq!(sim.light_level, 0, "timed out");
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!((sim.light_level, app.screen()), (60, Screen::Ride(0)), "a key brings it back and acts");
+        run(&mut sim, &mut app, 11_000);
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(sim.light_level, 60, "Back after the time-out: on, not toggled off");
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(sim.light_level, 0, "then Back toggles");
+        let again = App::start(&mut sim, None);
+        assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
+        drop(again);
     }
 
     #[test]
