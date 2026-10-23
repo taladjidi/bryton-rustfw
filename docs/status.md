@@ -20,6 +20,9 @@ The dated findings are in [journal.md](journal.md).
   backups, so about 35 MB for 200 rides; the eMMC read speed and the parsing time per byte from SDRAM code are
   not measured: estimated 10 to 20 s at 256 KB a pass), the menu's response meanwhile, and IMPORT against the
   unit's own `\System` files (checked on the host against two backups).
+- **Workouts on the unit:** WORKOUTS over the card's own `\Workout\calendar` (read on the host from one unit's
+  backup: Bryton's files decode, names cut at 15 characters), a workout ridden through (the beeps' loudness and
+  pitch, 2 kHz and 2.5 kHz, by ear; the banners), and the time a list takes to read (one 8 KB read a workout).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

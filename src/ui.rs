@@ -464,18 +464,28 @@ pub enum Field {
     DfaGraph,
     /// Of altitude: the elevation profile.
     AltGraph,
+    // the workout player (workout.rs)
+    /// During a workout, the step running of all ("3/14"); otherwise today's planned workout, h:mm.
+    Workout,
+    /// The step's target range, green in it, orange under, red over (3 s power, heart rate, cadence).
+    StepTarget,
+    /// What is left of the step: time, km, or LAP.
+    StepTime,
+    /// The next step's target range (END on the last step).
+    NextStep,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 39] = {
+    pub const ALL: [Field; 43] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
             Ascent, Graph, Temp, HrGraph, Dfa, Rmssd, // power.rs and the ride's derived metrics:
             Power3s, Power10s, Power30s, Np, If, Tss, Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr, AvgCadence, Balance, Vam,
-            Grade, WbalGraph, DfaGraph, AltGraph,
+            Grade, WbalGraph, DfaGraph, AltGraph, // the workout player:
+            Workout, StepTarget, StepTime, NextStep,
         ]
     };
 
@@ -522,6 +532,11 @@ impl Field {
             "W'BAL GRAPH",
             "DFA GRAPH",
             "ELEV GRAPH",
+            // the workout player
+            "WORKOUT",
+            "TARGET",
+            "STEP LEFT",
+            "NEXT",
         ];
         LABELS[self as usize]
     }
@@ -532,7 +547,8 @@ impl Field {
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
             "88.88", "8888", "", "-88.8", "", "8.88", "888", // power.rs and the ride's derived metrics:
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
-            "88/88", "-8888", "-88.8", "", "", "",
+            "88/88", "-8888", "-88.8", "", "", "", // the workout player:
+            "88/88", "888-888", "8:88:88", "888-888",
         ];
         WIDEST[self as usize]
     }

@@ -74,7 +74,24 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
 wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
 up and Page down, held to repeat, Start to keep), weight (1 kg) and W' (0.5 kJ), GPS (fix, satellites, position,
-altitude, UTC), BLE devices nearby, STOCK DATA.
+altitude, UTC), BLE devices nearby, STOCK DATA, WORKOUTS.
+
+## Workouts
+
+The workouts Bryton's app syncs to the card (`\Workout\calendar\YYYYMMDD\*.fit`, often from intervals.icu or
+TrainingPeaks), read only:
+- **WORKOUTS** lists today's and the next days' (eight at most), a row each: the day and the planned time. Select
+  shows the workout's steps, its name as the title: what ends each step (a time, a distance, or LAP) and its target
+  (power in W from % FTP, heart rate in bpm from % max HR, cadence), coloured by zone; repeats are written out.
+- **START** (or Select on a step: from that step) starts the workout, and the ride if none runs, on page 1. The
+  step's clock follows the ride's timer (a pause or an auto-pause stops both); three short beeps in its last 3
+  seconds, then a longer one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
+  step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
+- **Fields** to place on a page: TARGET (the step's range: green in it, orange under, red over, from the 3 s power,
+  the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
+  WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
+- Any FIT workout file is read (Garmin's profile: time, distance and open steps, repeats, % FTP or watts, % max HR
+  or bpm, zones), and Bryton's own encoding of power targets.
 
 ## Stock data
 
@@ -102,7 +119,7 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
-- **Beeps** at power-on and power-off.
+- **Beeps** at power-on and power-off, and for a workout's steps.
 
 ## USB
 

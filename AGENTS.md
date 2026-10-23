@@ -159,6 +159,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
   over the main loop's passes) and the import of its settings. `src/power_curve.rs`: best powers per duration in
   one pass, merged across rides, and the 2-parameter CP / W' fit. Pure logic.
+- `src/storage/workout.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
+  whole (name, steps, targets, repeats written out), the calendar from today on. `src/workout.rs`: the player, pure
+  logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
   restores from under the arrow and the track.

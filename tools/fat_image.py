@@ -12,7 +12,8 @@ An empty tile is a 0 count and one 0 byte (stock's Map_WriteEmptyTileCache).
 
 It also holds a made-up `\Activities` (FIT rides with known power, a stop, compressed timestamps, a bad CRC, a
 cut file, stock's `tmp.fit`, a GNSS log) and `\System\*.ini` in stock's layout, for stock.rs (the values the
-tests expect are worked out next to each ride).
+tests expect are worked out next to each ride), and a made-up `\Workout\calendar` of planned workouts in stock's
+layout, for storage/workout.rs.
 
 The 1.1 GB image is mostly zeros, so it is stored sparse: records of u32 LE first sector, u32 LE sector count,
 then the sectors (fat.rs tests expand it).
@@ -100,6 +101,7 @@ def fill(m):
         f.write(b''.join(struct.pack('<I', i) for i in range(50000)))  # 200 KB over 13 clusters
     subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
     rides(m)
+    workouts(m)
     shutil.rmtree(os.path.join(m, '.fseventsd'), ignore_errors=True)
 
 
@@ -186,6 +188,63 @@ def rides(m):
     for name, text in ini.items():
         with open(os.path.join(s, name), 'wb') as f:
             f.write(text.encode())
+    subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
+
+
+def fit_workout(name, steps):
+    """A FIT workout file laid out as Bryton's app writes them (storage/workout.rs): file_id (type 5), workout
+    (16-byte name, step count, sport cycling), then a workout_step per step: (duration type, value, target type,
+    target value, custom low, custom high, intensity)."""
+    U8, U16, U32, STR = 0x00, 0x84, 0x86, 0x07
+    d = bytearray([0x40, 0, 0, 0, 0, 3, 0, 1, U8, 1, 2, U16, 4, 4, U32])  # file_id
+    d += bytes([0x00, 5]) + struct.pack('<HI', 255, 1_100_000_000)
+    d += bytes([0x40, 0, 0, 26, 0, 3, 8, 16, STR, 6, 2, U16, 4, 1, U8])  # workout
+    d += bytes([0x00]) + name.encode()[:15].ljust(16, b'\0') + struct.pack('<HB', len(steps), 2)
+    d += bytes([0x42, 0, 0, 27, 0, 9, 0, 10, STR, 2, 4, U32, 4, 4, U32, 5, 4, U32, 6, 4, U32, 254, 2, U16,
+                1, 1, U8, 3, 1, U8, 7, 1, U8])  # workout_step, local 2
+    for i, (dt, dv, tt, tv, lo, hi, intensity) in enumerate(steps):
+        d += bytes([0x02]) + b'Step Name\0' + struct.pack('<IIIIHBBB', dv, tv, lo, hi, i, dt, tt, intensity)
+    h = bytearray(struct.pack('<BBHI4s', 14, 0x10, 2140, len(d), b'.FIT'))
+    h += struct.pack('<H', fit_crc(h))
+    f = bytes(h + d)
+    return f + struct.pack('<H', fit_crc(f))
+
+
+def workouts(m):
+    """\\Workout as stock leaves it, with made-up workouts (sim.rs tests: today is 2026-10-23): a folder per
+    planned day, a .fit and a .json per workout, stock's temporary copies beside."""
+    S = 1000  # ms
+
+    def bryton(lo, hi):  # Bryton's power target: 100000 + % FTP
+        return (245, 0, 100000 + lo, 100000 + hi)
+    # warm-up 20 s at 50-60 % (Bryton's), 2 x (30 s at 100-110 %, 15 s at 150 W) as a repeat, an open cool-down
+    today = [
+        (0, 20 * S, *bryton(50, 60), 2),
+        (0, 30 * S, 4, 0, 100, 110, 0),
+        (0, 15 * S, 4, 0, 1150, 1150, 1),
+        (6, 1, 2, 2, 0, 0, 0),
+        (5, 0, 2, 0, 0, 0, 3),
+    ]
+    long_name = 'Long Ride \u2014 Easy'  # a non-ASCII long name, as the app's
+    days = {
+        '20261020': {'Old Ride': fit_workout('Old Ride', [(0, 3600 * S, *bryton(60, 70), 0)])},  # past: not listed
+        '20261023': {'Short Intervals': fit_workout('Short Intervals', today)},
+        '20261024': {'Broken': fit_workout('Broken', today)[:-1] + b'\0'},  # a bad CRC: left out
+        '20261025': {long_name: fit_workout(long_name, [(0, 5400 * S, *bryton(65, 75), 0)])},
+    }
+    w = os.path.join(m, 'Workout')
+    for day, files in days.items():
+        d = os.path.join(w, 'calendar', day)
+        os.makedirs(d)
+        for name, data in files.items():
+            with open(os.path.join(d, name + '.fit'), 'wb') as f:
+                f.write(data)
+            with open(os.path.join(d, name + '.json'), 'wb') as f:
+                f.write(b'{"name":"made up","plan":["%s"],"provider":"bryton","interval":[],"ver":5}' % day.encode())
+    for sub in ('calendar_temp', 'saved_temp', 'Workout_temp'):
+        os.makedirs(os.path.join(w, sub))
+    with open(os.path.join(w, 'calendar_temp', 'temp0.fit'), 'wb') as f:
+        f.write(days['20261023']['Short Intervals'])
     subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
 
 

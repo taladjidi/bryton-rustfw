@@ -1161,7 +1161,7 @@ mod tests {
         sim.emmc.image = crate::fat::tests::image();
         let mut app = App::start(&mut sim, None);
         app.press(&mut sim, Press::Long(Key::Page));
-        app.press(&mut sim, Press::Short(Key::Lap)); // the last row
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Stock));
         app.press(&mut sim, Press::Short(Key::Start));
         assert_eq!(app.screen(), Screen::Menu(Menu::Stock, 0));
         let value = |app: &App, i| std::string::String::from(app.menu_row(Menu::Stock, i).unwrap().1.as_str());
@@ -1196,6 +1196,115 @@ mod tests {
         assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
     }
 
+    fn power210(_: u64) -> [u8; 8] {
+        [0x10, 1, 0xff, 85, 0, 0, 210, 0]
+    }
+
+    /// The synthetic card's planned workouts (tools/fat_image.py, today 2026-10-23): WORKOUTS lists today's and the
+    /// next days' (not the past one, not the broken one), Select shows the steps (repeats written out), Start
+    /// starts the ride and the workout. The step clock follows the ride timer: 3-2-1 beeps and a banner per step,
+    /// the target coloured from the 3 s power, a pause stops it, Lap skips a step (and ends the open cool-down),
+    /// the last step ends the workout.
+    #[test]
+    fn workout_from_the_calendar() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210 });
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+        // the overview's field: today's planned time, the card read when the field is first shown
+        app.pages[OVERVIEW].fields[3] = Workout;
+        app.show(&mut sim);
+        assert_eq!(text(&app, Workout), "0:01", "20 s + 2 x 45 s, the open cool-down not counted");
+        app.pages[0] = PageCfg { layout: 6, fields: [StepTarget, StepTime, NextStep, Workout, Power3s, Timer] };
+
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
+        let row = |app: &App, m, i| {
+            app.menu_row(m, i).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str())).unwrap_or_default()
+        };
+        assert_eq!([0, 1, 2].map(|i| row(&app, Menu::Workouts, i)), ["FRI 23 OCT 0:01", "SUN 25 OCT 1:30", ""]);
+        run(&mut sim, &mut app, 1000);
+        assert_consistent(&sim, &app);
+        sim.save("workout_list");
+
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.screen(), app.plan.name()), (Screen::Menu(Menu::Steps, 0), "SHORT INTERVALS"));
+        let steps: Vec<_> = (0..8).map(|i| row(&app, Menu::Steps, i)).collect();
+        let want = ["START 0:01", "0:20 100-120W", "0:30 200-220W", "0:15 150W", "0:30 200-220W", "0:15 150W"];
+        assert_eq!(steps[..6], want, "FTP 200: Bryton's 50-60 %, then % FTP, then W");
+        assert_eq!(steps[6..], ["LAP OPEN", ""]);
+        run(&mut sim, &mut app, 1000);
+        assert_consistent(&sim, &app);
+        sim.save("workout_steps");
+
+        let tones = sim.tones.len();
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running));
+        let fields = |app: &App| [StepTarget, StepTime, NextStep, Workout].map(|f| text(app, f));
+        assert_eq!(fields(&app), ["100-120", "0:20", "200-220", "1/6"]);
+        run(&mut sim, &mut app, 5000);
+        assert_eq!(app.field_color(StepTarget), ui::RED, "210 W over 100-120");
+        let (mut ms, start) = (0, sim.ms);
+        while app.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
+            run(&mut sim, &mut app, 50);
+            ms += 50;
+            assert!(ms < 30_000, "the warm-up ends");
+        }
+        assert!((14_000..16_500).contains(&(sim.ms - start)), "20 s from the start: {} ms after 5 s", sim.ms - start);
+        assert_eq!(sim.tones[tones..], [2500, 0, 2000, 0, 2000, 0, 2000, 0, 2500], "start, 3-2-1, the next step");
+        assert_eq!(app.banner.as_str(), "2/6 200-220W");
+        run(&mut sim, &mut app, 5000);
+        assert_eq!(fields(&app), ["200-220", "0:25", "150", "2/6"]);
+        assert_eq!(app.field_color(StepTarget), ui::GREEN, "210 W in 200-220");
+        assert_consistent(&sim, &app);
+        sim.save("workout_ride");
+
+        // a pause stops the step clock with the ride's timer
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 5000);
+        assert_eq!(text(&app, StepTime), "0:25");
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(text(&app, StepTime), "0:23");
+
+        // Lap: the next step; the open cool-down waits for Lap; then done
+        app.press(&mut sim, Press::Short(Key::Lap));
+        assert_eq!((text(&app, Workout), app.banner.as_str()), ("3/6".into(), "3/6 150W"));
+        assert_eq!(app.field_color(StepTarget), ui::RED, "210 W over 150 W");
+
+        // one workout at a time: while it runs, another one's steps do not open, its own do
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.screen(), app.banner.as_str()), (Screen::Menu(Menu::Workouts, 1), "WORKOUT RUNNING"));
+        app.press(&mut sim, Press::Short(Key::Lap));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.screen(), text(&app, Workout)), (Screen::Menu(Menu::Steps, 0), "3/6".into()));
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Back));
+        }
+        assert_eq!(app.screen(), Screen::Ride(0));
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Lap));
+        }
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(fields(&app), ["OPEN", "LAP", "END", "6/6"]);
+        assert_eq!(app.banner.as_str(), "6/6 OPEN LAP");
+        app.press(&mut sim, Press::Short(Key::Lap));
+        assert_eq!((text(&app, Workout), app.banner.as_str()), ("DONE".into(), "WORKOUT DONE"));
+        assert_eq!(fields(&app)[..3], ["--", "--", "--"]);
+        run(&mut sim, &mut app, 1000);
+        assert_consistent(&sim, &app);
+        assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");
+    }
+
     /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
     /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
     #[test]
@@ -1205,9 +1314,12 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW + 1), "Lap from the top wraps to STOCK DATA");
-        app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW), "then NEARBY BLE");
+        let last = menu::MAIN.len() - 1;
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, last), "Lap from the top wraps to the last row");
+        for _ in NEARBY_ROW..last {
+            app.press(&mut sim, Press::Short(Key::Lap));
+        }
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW), "then up to NEARBY BLE");
         assert_consistent(&sim, &app);
         sim.save("menu");
         app.press(&mut sim, Press::Short(Key::Start));
@@ -2817,6 +2929,50 @@ mod fuzz {
                 bad[at] = noise.next().unwrap_or(0);
             }
             feed(&mut bad.into_iter());
+        }
+    }
+
+    /// Workout files (storage/workout.rs): a good file with bytes changed, and random messages, each behind a good
+    /// header and with its CRC made right, so the decoder (not the CRC check) gets them.
+    #[test]
+    fn workout_files() {
+        use crate::storage::workout::{STEPS, parse, tests::intervals};
+        let crc = |f: &mut Vec<u8>| {
+            let n = f.len() - 2;
+            let c = crate::fit::crc(0, &f[..n]);
+            f[n..].copy_from_slice(&c.to_le_bytes());
+        };
+        let (mut ok, mut noise) = (0, bytes(11, 1 << 20));
+        let good = intervals();
+        for _ in 0..20_000 {
+            let mut bad = good.clone();
+            for _ in 0..1 + noise.next().unwrap_or(0) % 6 {
+                let at = 14 + usize::from(noise.next().unwrap_or(0)) % (bad.len() - 16);
+                bad[at] = noise.next().unwrap_or(0);
+            }
+            crc(&mut bad);
+            if let Ok(w) = parse(&bad) {
+                assert!(w.steps().len() <= STEPS);
+                ok += 1;
+            }
+        }
+        assert!(ok > 1000, "{ok} still workouts");
+        for seed in 1..=4u32 {
+            for len in [8usize, 64, 600, 4000] {
+                let body: Vec<u8> = bytes(seed + len as u32, len)
+                    .enumerate()
+                    .map(|(i, b)| if i % 9 == 0 { 0x40 | (b & 0x2f) } else { b })
+                    .collect();
+                let mut f = good[..14].to_vec();
+                f[4..8].copy_from_slice(&(len as u32).to_le_bytes());
+                let head = crate::fit::crc(0, &f[..12]);
+                f[12..14].copy_from_slice(&head.to_le_bytes());
+                f.extend(body);
+                f.extend([0, 0]);
+                crc(&mut f);
+                let _ = parse(&f);
+                let _ = parse(&f[..f.len() / 2]);
+            }
         }
     }
 

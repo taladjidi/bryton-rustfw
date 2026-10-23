@@ -110,7 +110,7 @@ Others
 - [ ] Heading, compass (stock, Garmin)
 - [ ] Gears, gear ratio, gear combo, Di2 battery (stock, Garmin, Wahoo, Karoo)
 - [ ] E-bike: battery, range, assist mode and level (stock, Garmin, Wahoo, Karoo)
-- [ ] Workout fields: target power, cadence, heart rate, step and workout time left, interval count (stock, all)
+- [~] Workout fields: target power, cadence, heart rate, step and workout time left, interval count (stock, all): sim; the step's target, time left, the next step, the step count; no workout time left
 - [ ] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all)
 - [ ] Road surface type (Garmin)
 - [ ] Battery of the unit and of each sensor as fields (Garmin, Wahoo)
@@ -202,13 +202,13 @@ Others
 - [ ] Power zones edited one by one (stock, Garmin)
 - [x] Weight and W' settings (Garmin, ours): sim
 - [ ] Rider profile: sex, birthday, height (stock, Garmin)
-- [ ] Structured workouts from FIT files, step targets (stock, all)
-- [ ] 3-2-1 countdown beeps before a step ends (patch P1, Garmin, Wahoo)
+- [x] Structured workouts from FIT files, step targets (stock, all): sim, from stock's \Workout\calendar
+- [x] 3-2-1 countdown beeps before a step ends (patch P1, Garmin, Wahoo): sim
 - [ ] Next-step strip instead of a full-screen popup (patch P3)
 - [ ] Multiple targets per step (power and cadence) (Garmin)
 - [ ] ZWO / ERG / MRC workouts, converted on the computer (Wahoo, Karoo)
-- [ ] Workouts synced from TrainingPeaks, intervals.icu (stock app, all)
-- [ ] Workout calendar: today and this week (stock, Garmin, Wahoo)
+- [x] Workouts synced from TrainingPeaks, intervals.icu (stock app, all): sim, read from what stock's app synced
+- [x] Workout calendar: today and this week (stock, Garmin, Wahoo): sim, today and the next days (eight)
 - [ ] ERG mode to the workout target (stock Smart Workout, all)
 - [ ] Trainer resistance and power modes, by hand (stock)
 - [ ] Trainer slope from the course grade (Garmin, Wahoo, Karoo)
