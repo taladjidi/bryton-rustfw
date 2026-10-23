@@ -3,3 +3,4 @@ out/
 __pycache__/
 firmware/R039/
 ant_key.bin
+.claude/
