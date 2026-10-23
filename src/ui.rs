@@ -168,6 +168,11 @@ pub const USB_ICON: [u16; 14] = [
 ];
 /// The USB symbol's left edge and width, between the time and the battery.
 const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
+/// The ride's state, right of the time: a red dot while it records, orange bars while paused, nothing otherwise.
+const STRIP_REC: (u32, u32) = (STRIP_TIME.0 + STRIP_TIME.1 + 3, 10);
+/// A dot 10 px wide (bit 15 leftmost), and two bars.
+const REC_DOT: [u16; 10] = [0x1e00, 0x7f80, 0x7f80, 0xffc0, 0xffc0, 0xffc0, 0xffc0, 0x7f80, 0x7f80, 0x1e00];
+const PAUSE_BARS: [u16; 10] = [0xe1c0; 10];
 
 /// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" blinking grey while
 /// the receiver searches, signal bars once it has a fix (nothing if it is silent), the time in the middle; on the right the USB
@@ -192,16 +197,19 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
         }
         l
     };
-    let fg = match s.rec {
-        Rec::Idle => WHITE,
-        Rec::Running => GREEN,
-        Rec::Paused => ACCENT,
-    };
-    let style = Style { fg, ..LABEL };
     let top = STRIP_H - LABEL.height();
     match old {
-        Some(o) if o.rec == s.rec => draw_changed_chars(c, &style, STRIP_TIME.0, top, hm(o).as_str(), hm(s).as_str()),
-        _ => at(c, STRIP_TIME, fg, Align::Left, hm(s).as_str()),
+        Some(o) => draw_changed_chars(c, &LABEL, STRIP_TIME.0, top, hm(o).as_str(), hm(s).as_str()),
+        None => at(c, STRIP_TIME, WHITE, Align::Left, hm(s).as_str()),
+    }
+    if changed(|s| s.rec as u32) {
+        // level with the capitals: 10 rows in their 14
+        c.fill(STRIP_REC.0, top, STRIP_REC.1, 14, BLACK);
+        match s.rec {
+            Rec::Idle => {}
+            Rec::Running => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, RED),
+            Rec::Paused => draw_bitmap(c, &PAUSE_BARS, STRIP_REC.0, top + 2, 1, ACCENT),
+        }
     }
     if changed(|s| u32::from(s.radio)) {
         at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
@@ -925,7 +933,7 @@ pub(crate) mod tests {
             }
         }
         assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2);
-        let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_USB, STRIP_BATTERY];
+        let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);
         assert!(

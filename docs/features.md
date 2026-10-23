@@ -3,7 +3,7 @@
 ## Screens
 
 - **Status strip** (every screen): BLE (green, red if the radio chip did not answer), GPS (blinking grey while
-  searching, then 1 to 4 signal bars), the time (green while a ride records, orange while paused), a USB symbol,
+  searching, then 1 to 4 signal bars), the time, the ride's state (a red dot while it records, orange bars while paused), a USB symbol,
   the battery (green while charging, red at 15 % and under).
 - **Overview** (the main screen): the time, big (no seconds: it changes once a minute), the date, four fields chosen
   in the menu (OVERVIEW; by default distance, timer, heart rate, temperature), and the latest notices (a GPS fix, a
