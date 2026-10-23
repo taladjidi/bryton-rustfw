@@ -650,9 +650,10 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
   DFRobot's LTR-308 driver: resolution in bits 6..4, rate in 2..0), so 0.1 lux per count at gain 6. The sensor
   measures continuously while the backlight is AUTO and on (or the sensors menu shows the light), read every 250 ms
   (MAIN_STATUS, ALS_DATA), and is in standby (MAIN_CTRL = 0) otherwise. (Until 2026-10-23: one 400 ms measurement
-  every 3 s, which the owner found too slow to follow the light.) The level rises with the light (src/ambient.rs
-  `AUTO_BANDS`: stock's setting 3 up to 20 lux, then
-  on up to 100 % instead of stock's drop to 1 % above 120 lux), with a running average (half per reading) and
+  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve (src/ambient.rs
+  `AUTO_BANDS`: its setting 3, with 8 % instead of 14 % below 5 lux, and the 1 % minimum above 120 lux, where the
+  panel reads by reflected light; for a while this firmware rose to 100 % instead, until the owner chose stock's
+  logic), with a running average (half per reading) and
   a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
   480 lux (raw 19304) and dimmed the screen to 1 %, which the owner found wrong; the room read 0.3 to 0.6 lux, a hand
   over the sensor 0.05. Stock's calibration on this unit is 932 (its debug log, `Light sensor cali value 932`, from

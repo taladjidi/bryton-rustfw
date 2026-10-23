@@ -1562,11 +1562,11 @@ mod tests {
         assert_consistent(&sim, &app);
         sim.save("sensor_rows");
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(sim.light_level, 85, "300 lux: a bright room");
+        assert_eq!(sim.light_level, 1, "300 lux: past 120 lux, the minimum (stock)");
 
         sim.bus.lux10 = Some(5); // 0.5 lux: dark
         run(&mut sim, &mut app, 60_000);
-        assert_eq!(sim.light_level, 14);
+        assert_eq!(sim.light_level, 8);
         sim.bus.lux10 = Some(300); // 30 lux
         run(&mut sim, &mut app, 1000);
         assert_eq!(sim.light_level, 50, "within a second");

@@ -121,13 +121,13 @@ pub fn baro_read(b: &mut impl Board) -> Option<(u32, i16)> {
     Some((((p.max(0) as u32) * 10 + 2048) / 4096, i16::from_le_bytes([d[3], d[4]])))
 }
 
-/// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each. More
-/// light, more backlight. The low bands are stock's (its setting 3: 14 % below 5 lux, 40 % to 20 lux); stock drops to
-/// the 1 % minimum above 120 lux, which on the unit dimmed the screen under a desk lamp (about 480 lux, 2026-10-23:
-/// the owner found it wrong), so here the level keeps rising instead. Whether the panel reads well in sunlight at a
-/// low level (it may be transflective) is still to see outdoors; that would be a lower last band.
+/// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each:
+/// stock's curve (its setting 3, BOARD.md 16), its bands of 5, 20, 50 and 120 lux, rising with the light indoors and
+/// down to the 1 % minimum above 120 lux, where the panel ("high reflectance" TFT, as Bryton sells it) is read by the
+/// light it reflects and the backlight adds little but drain. The darkest band is dimmer than stock's 14 % (8 %, its
+/// setting 1): in the dark the eye needs little (the owner, 2026-10-23).
 // ponytail: one curve; stock offers five (a setting) if someone wants another
-pub const AUTO_BANDS: [(u32, u8); 6] = [(50, 14), (200, 40), (500, 50), (1200, 70), (10_000, 85), (u32::MAX, 100)];
+pub const AUTO_BANDS: [(u32, u8); 5] = [(50, 8), (200, 40), (500, 50), (1200, 70), (u32::MAX, 1)];
 
 /// Smoothing and hysteresis for [`AUTO_BANDS`].
 #[derive(Clone, Copy, Debug, Default)]
@@ -174,9 +174,11 @@ mod tests {
 
     #[test]
     fn bands_and_hysteresis() {
-        assert!(AUTO_BANDS.windows(2).all(|w| w[0].0 < w[1].0 && w[0].1 <= w[1].1), "more light, more backlight");
+        assert!(AUTO_BANDS.windows(2).all(|w| w[0].0 < w[1].0), "edges in order");
+        let indoors = &AUTO_BANDS[..AUTO_BANDS.len() - 1];
+        assert!(indoors.windows(2).all(|w| w[0].1 <= w[1].1), "indoors: more light, more backlight");
         let mut a = Auto::default();
-        assert_eq!(a.update(0), 14);
+        assert_eq!(a.update(0), 8);
         for _ in 0..20 {
             a.update(300); // 30 lux
         }
@@ -188,10 +190,10 @@ mod tests {
         for _ in 0..20 {
             a.update(10_000);
         }
-        assert_eq!(a.update(10_000), 85, "a bright room");
+        assert_eq!(a.update(10_000), 1, "daylight: the minimum, the panel reflects it");
         for _ in 0..30 {
             a.update(0);
         }
-        assert_eq!(a.update(0), 14, "dark again");
+        assert_eq!(a.update(0), 8, "dark again");
     }
 }

@@ -9,8 +9,8 @@ The dated findings are in [journal.md](journal.md).
 
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
   checked against openant).
-- **The automatic backlight by eye** with its new curve: dark, indoors, daylight (the light sensor reads; the
-  stock curve dimmed in bright light, so the curve was changed).
+- **The automatic backlight by eye:** stock's curve (8 % in the dark, the 1 % minimum above 120 lux): is the panel
+  readable in full sun at 1 % (compare LIGHT % 100 and 10 outdoors)?
 - **Backlight levels** (60 / 30 / 10 %) and the time-out, each by eye.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
 - **The basemap** (roads and water from stock's cached tiles, `\Map\Data\Temp`): the FAT volume mounted by our
