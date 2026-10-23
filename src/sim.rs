@@ -1493,18 +1493,18 @@ mod tests {
         std::println!("basemap at the last known position: {:?}", app.basemap_stats());
         let reads = |sim: &Sim| sim.emmc.cmds.iter().filter(|c| c.0 == 17 || c.0 == 18).count();
         sim.gnss.fix = Some(8000);
-        let view = app.map_shown[2].view;
+        let view = app.map_view(2);
         run(&mut sim, &mut app, 3000);
-        assert_eq!(app.map_shown[2].view, view, "the first fix, inside the view: the same view, no new basemap");
+        assert_eq!(app.map_view(2), view, "the first fix, inside the view: the same view, no new basemap");
         assert_consistent(&sim, &app);
         let t0 = sim.ms;
         let (mut refits, mut refit_px, mut small_px, mut small_reads, mut drawn) = (0, 0, 0, 0, 0);
         let mut seconds = 0;
         while sim.ms < t0 + 840_000 {
-            let (view, px, r) = (app.map_shown[0].view, sim.pixels, reads(&sim));
+            let (view, px, r) = (app.map_view(0), sim.pixels, reads(&sim));
             app.step(&mut sim);
             sim.delay_ms(POLL_MS);
-            if app.map_shown[0].view != view {
+            if app.map_view(0) != view {
                 refits += 1;
                 refit_px += sim.pixels - px;
                 drawn += u64::from(app.basemap_stats().px);
@@ -1590,11 +1590,11 @@ mod tests {
         let (mut refits, mut refit_px, mut small_px, mut late_refits) = (0, 0, 0, 0);
         let mut seconds = 0;
         while sim.ms < t0 + 840_000 {
-            let (view, px) = (app.map_shown[0].view, sim.pixels);
+            let (view, px) = (app.map_view(0), sim.pixels);
             app.step(&mut sim);
             sim.delay_ms(POLL_MS);
             let cost = sim.pixels - px;
-            if app.map_shown[0].view != view {
+            if app.map_view(0) != view {
                 refits += 1;
                 refit_px += cost;
                 late_refits += u32::from(sim.ms > t0 + 720_000);
@@ -1625,7 +1625,7 @@ mod tests {
         assert!((2..=12).contains(&refits), "fitted again as the ride grows: {refits}");
         assert_eq!(late_refits, 0, "the loop closed: the view stays");
         assert!(small_px / s < 2000, "{} px/s between full redraws", small_px / s);
-        let v = app.map_shown[0].view.unwrap();
+        let v = app.map_view(0).unwrap();
         let (x, y) = v.px(area, app.track.pos().unwrap());
         assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], crate::ui::WHITE, "the arrow at the position");
         let track = sim.screen.iter().filter(|&&p| p == crate::ui::ACCENT).count();

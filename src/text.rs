@@ -164,10 +164,20 @@ pub fn draw_in(c: &mut impl Canvas, style: &Style, x: u32, y: u32, w: u32, align
 /// write!(l, "{:.1} km/h", 25.44).unwrap();
 /// assert_eq!(l.as_str(), "25.4 km/h");
 /// ```
+#[derive(Clone, Copy, Debug)]
 pub struct Line<const N: usize> {
     buf: [u8; N],
     len: usize,
 }
+
+/// Equal text (the bytes past it do not count).
+impl<const N: usize> PartialEq for Line<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl<const N: usize> Eq for Line<N> {}
 
 impl<const N: usize> Default for Line<N> {
     fn default() -> Self {

@@ -598,6 +598,37 @@ struct GraphShown {
     power: bool,
 }
 
+/// What a page box holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Widget {
+    /// The big time with its seconds, each digit in its own cell.
+    Clock,
+    /// Ferris the crab (drawn once).
+    Ferris,
+    /// A ride field in its box: a value, the map or the graph.
+    Field(Field),
+}
+
+/// A page box as drawn: each pass compares it with what the box would show now and redraws only the difference
+/// (the digits, the characters, the map's new points, the graph's columns that changed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Drawn {
+    /// Nothing that changes.
+    #[default]
+    Fixed,
+    /// The clock's digits: H H M M S S.
+    Digits([u8; 6]),
+    /// A value and its colour.
+    Value(Line<8>, u16),
+    /// A map.
+    Map(map::Shown),
+    /// A graph.
+    Graph(GraphShown),
+}
+
+/// Boxes on a page at most.
+const BOXES: usize = 6;
+
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
@@ -665,22 +696,16 @@ pub struct App {
     under: [Screen; 4],
     depth: usize,
     pages: [PageCfg; PAGES],
-    /// The ride field values on screen and their colours, to redraw only what changed.
-    shown: [Line<8>; 6],
-    shown_fg: [u16; 6],
+    /// The page's boxes as drawn ([`App::widgets`]).
+    drawn: [Drawn; BOXES],
     /// The ride: timer, totals, laps.
     ride: ride::Ride,
     /// Heart rate and power over the last minutes, and the graphs on screen by ride field.
     history: ride::History,
-    graph_shown: [GraphShown; 6],
-    /// The main screen's digits on screen.
-    main_shown: [u8; 6],
     /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
     menu_shown: [u32; ui::MENU_ROWS],
     /// The ride's track, from the good fixes.
     track: map::Track,
-    /// The maps on screen, by ride field.
-    map_shown: [map::Shown; 6],
     /// The eMMC, for the basemap and the dev link (identified at first use, never at boot).
     emmc: emmc::Emmc,
     /// Roads and water under the first map field of a page, drawn once per view.
@@ -769,15 +794,11 @@ impl App {
             under: [Screen::Main; 4],
             depth: 0,
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
-            shown: Default::default(),
-            shown_fg: [ui::WHITE; 6],
+            drawn: Default::default(),
             ride: ride::Ride::new(),
             history: ride::History::default(),
-            graph_shown: Default::default(),
-            main_shown: [0; 6],
             menu_shown: [0; ui::MENU_ROWS],
             track: map::Track::new(),
-            map_shown: Default::default(),
             emmc: emmc::Emmc::new(),
             basemap: tiles::Basemap::new(),
         };
@@ -830,8 +851,8 @@ impl App {
     }
 
     /// Ride page `n`'s first map field: the one with the basemap.
-    fn first_map(&self, n: usize) -> Option<usize> {
-        self.boxes(n).position(|(_, f)| f == Field::Map)
+    fn first_map(&self) -> Option<usize> {
+        self.widgets().position(|(_, w)| w == Widget::Field(Field::Map))
     }
 
     /// Draws the basemap of `view` in `area` into its buffer, unless it holds it already.
@@ -1082,23 +1103,9 @@ impl App {
     /// Draws the whole screen below the bar from the state (the panel was cleared, or a screenshot row).
     fn draw_screen(&self, c: &mut impl Canvas) {
         match self.screen {
-            Screen::Main => {
-                ui::draw_main_time(c, self.main_digits());
-                ui::draw_ferris(c);
-            }
-            Screen::Ride(n) => {
-                let first = self.first_map(n);
-                for (i, (bx, f)) in self.boxes(n).enumerate() {
-                    ui::draw_field_frame(c, bx, f);
-                    let base = (first == Some(i)).then_some(&self.basemap);
-                    match (f, self.map_shown.get(i), self.graph_shown.get(i)) {
-                        (Field::Map, Some(m), _) => map::draw(c, map::area(bx), &self.track, m.view, base),
-                        (Field::Graph, _, Some(&g)) => {
-                            let a = ui::graph_area(bx);
-                            ui::draw_graph(c, a, &|i| self.graph_bar(g, a.2, a.3, i));
-                        }
-                        _ => ui::draw_field_value(c, bx, f, self.field_text(f).as_str(), self.field_color(f)),
-                    }
+            Screen::Main | Screen::Ride(_) => {
+                for (i, (bx, w)) in self.widgets().enumerate() {
+                    self.draw_widget(c, i, bx, w);
                 }
             }
             Screen::Menu(menu, sel) => {
@@ -1119,10 +1126,73 @@ impl App {
         }
     }
 
-    /// Ride page `n`'s field boxes and fields.
-    fn boxes(&self, n: usize) -> impl Iterator<Item = ((u32, u32, u32, u32), Field)> + use<> {
-        let page = self.pages[n];
-        (0..page.fields.len()).map_while(move |i| Some((ui::field_box(page.layout, ui::RIDE_H, i)?, page.fields[i])))
+    /// The boxes of the page on screen and what each holds (none on a menu or a list). The clock and Ferris place
+    /// themselves.
+    fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + use<> {
+        let mut all = [((0, 0, 0, 0), Widget::Ferris); BOXES];
+        let n = match self.screen {
+            Screen::Main => {
+                all[0].1 = Widget::Clock;
+                2
+            }
+            Screen::Ride(n) => {
+                let p = self.pages.get(n).copied().unwrap_or(DEFAULT_PAGES[0]);
+                let mut k = 0;
+                for (slot, (i, &f)) in all.iter_mut().zip(p.fields.iter().enumerate()) {
+                    let Some(bx) = ui::field_box(p.layout, ui::RIDE_H, i) else { break };
+                    *slot = (bx, Widget::Field(f));
+                    k += 1;
+                }
+                k
+            }
+            _ => 0,
+        };
+        all.into_iter().take(n)
+    }
+
+    /// What box `bx` holding `w` would show now.
+    fn now_drawn(&self, bx: (u32, u32, u32, u32), w: Widget) -> Drawn {
+        match w {
+            Widget::Clock => Drawn::Digits(self.main_digits()),
+            Widget::Ferris => Drawn::Fixed,
+            Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx))),
+            Widget::Field(Field::Graph) => Drawn::Graph(self.graph_now()),
+            Widget::Field(f) => Drawn::Value(self.field_text(f), self.field_color(f)),
+        }
+    }
+
+    /// Box `i` (`bx`, holding `w`) whole, as drawn ([`App::drawn`]): after the page was cleared, or a screenshot row.
+    fn draw_widget(&self, c: &mut impl Canvas, i: usize, bx: (u32, u32, u32, u32), w: Widget) {
+        let d = self.drawn.get(i).copied().unwrap_or_default();
+        match (w, d) {
+            (Widget::Clock, Drawn::Digits(digits)) => ui::draw_main_time(c, digits),
+            (Widget::Ferris, _) => ui::draw_ferris(c),
+            (Widget::Field(f), d) => {
+                ui::draw_field_frame(c, bx, f);
+                match d {
+                    Drawn::Map(m) => {
+                        let base = (self.first_map() == Some(i)).then_some(&self.basemap);
+                        map::draw(c, map::area(bx), &self.track, m.view, base);
+                    }
+                    Drawn::Graph(g) => {
+                        let a = ui::graph_area(bx);
+                        ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
+                    }
+                    Drawn::Value(text, fg) => ui::draw_field_value(c, bx, f, text.as_str(), fg),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The map in box `i` as drawn (tests).
+    #[cfg(test)]
+    fn map_view(&self, i: usize) -> Option<map::View> {
+        match self.drawn.get(i) {
+            Some(Drawn::Map(m)) => m.view,
+            _ => None,
+        }
     }
 
     /// The main screen's digits: H H M M S S.
@@ -1181,69 +1251,74 @@ impl App {
 
     /// Clears the page area and draws the current screen.
     fn show(&mut self, b: &mut impl Board) {
-        if let Screen::Ride(n) = self.screen {
-            for ((bx, f), m) in self.boxes(n).zip(&mut self.map_shown) {
-                if f == Field::Map {
-                    *m = map::Shown::of(&self.track, map::area(bx));
-                }
+        for (i, (bx, w)) in self.widgets().enumerate() {
+            let now = self.now_drawn(bx, w);
+            if let Some(d) = self.drawn.get_mut(i) {
+                *d = now;
             }
-            if let Some(i) = self.first_map(n)
-                && let Some(bx) = self.boxes(n).nth(i).map(|(bx, _)| bx)
-            {
-                let view = self.map_shown[i].view;
-                self.render_basemap(b, map::area(bx), view);
-            }
-            self.graph_shown = [self.graph_now(); 6];
+        }
+        if let Some(i) = self.first_map()
+            && let (Some((bx, _)), Some(Drawn::Map(m))) = (self.widgets().nth(i), self.drawn.get(i))
+        {
+            let view = m.view;
+            self.render_basemap(b, map::area(bx), view);
         }
         let mut p = Panel(b);
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
-        match self.screen {
-            Screen::Ride(n) => {
-                self.shown = self.pages[n].fields.map(|f| self.field_text(f));
-                self.shown_fg = self.pages[n].fields.map(|f| self.field_color(f));
-            }
-            Screen::Main => self.main_shown = self.main_digits(),
-            Screen::Menu(menu, sel) => self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i)),
-            Screen::Nearby => {}
+        if let Screen::Menu(menu, sel) = self.screen {
+            self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
         }
     }
 
-    /// Redraws the ride field values that changed, what changed on a map, and a graph's new bar.
-    fn update_ride(&mut self, b: &mut impl Board, n: usize) {
-        let first = self.first_map(n);
-        for (i, (bx, f)) in self.boxes(n).enumerate() {
-            if f == Field::Map {
-                let area = map::area(bx);
-                if first == Some(i) && self.map_shown.get(i).is_some_and(|m| map::refit(area, &self.track, m)) {
-                    let view = map::Shown::of(&self.track, area).view;
-                    self.render_basemap(b, area, view);
+    /// Redraws what changed in the page's boxes since they were drawn.
+    fn update_page(&mut self, b: &mut impl Board) {
+        let first = self.first_map();
+        for (i, (bx, w)) in self.widgets().enumerate() {
+            let Some(&old) = self.drawn.get(i) else { break };
+            let now = match (w, old) {
+                (_, Drawn::Map(mut m)) => {
+                    let area = map::area(bx);
+                    if first == Some(i) && map::refit(area, &self.track, &m) {
+                        let view = map::Shown::of(&self.track, area).view;
+                        self.render_basemap(b, area, view);
+                    }
+                    let base = (first == Some(i)).then_some(&self.basemap);
+                    map::update(&mut Panel(b), area, &self.track, &mut m, base);
+                    Drawn::Map(m)
                 }
-                let base = (first == Some(i)).then_some(&self.basemap);
-                if let Some(m) = self.map_shown.get_mut(i) {
-                    map::update(&mut Panel(b), area, &self.track, m, base);
+                (_, Drawn::Graph(g)) => self.update_graph(b, g, bx),
+                (Widget::Clock, Drawn::Digits(was)) => {
+                    let now = self.main_digits();
+                    for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
+                        if d != was {
+                            ui::draw_main_digit(&mut Panel(b), k, d);
+                        }
+                    }
+                    Drawn::Digits(now)
                 }
-                continue;
-            }
-            if f == Field::Graph {
-                self.update_graph(b, i, bx);
-                continue;
-            }
-            let (text, fg) = (self.field_text(f), self.field_color(f));
-            if self.shown[i].as_str() != text.as_str() || self.shown_fg[i] != fg {
-                let old = if self.shown_fg[i] == fg { self.shown[i].as_str() } else { "" }; // a new colour: all of it
-                ui::draw_field_value_changes(&mut Panel(b), bx, f, old, text.as_str(), fg);
-                (self.shown[i], self.shown_fg[i]) = (text, fg);
+                (Widget::Field(f), Drawn::Value(was, was_fg)) => {
+                    let (text, fg) = (self.field_text(f), self.field_color(f));
+                    if (was, was_fg) != (text, fg) {
+                        let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
+                        ui::draw_field_value_changes(&mut Panel(b), bx, f, old, text.as_str(), fg);
+                    }
+                    Drawn::Value(text, fg)
+                }
+                _ => old,
+            };
+            if let Some(d) = self.drawn.get_mut(i) {
+                *d = now;
             }
         }
     }
 
-    /// Graph field `i` in box `bx` after a new bar: each column changes by the difference between its old bar and
-    /// its new one (the chart scrolls left by one), all of it if the graph changed metric.
-    fn update_graph(&mut self, b: &mut impl Board, i: usize, bx: (u32, u32, u32, u32)) {
-        let (Some(&old), now) = (self.graph_shown.get(i), self.graph_now()) else { return };
+    /// A graph in box `bx`, drawn as `old`, after a new bar: each column changes by the difference between its old
+    /// bar and its new one (the chart scrolls left by one), all of it if the graph changed metric.
+    fn update_graph(&mut self, b: &mut impl Board, old: GraphShown, bx: (u32, u32, u32, u32)) -> Drawn {
+        let now = self.graph_now();
         if old == now {
-            return;
+            return Drawn::Graph(old);
         }
         let a = ui::graph_area(bx);
         if old.power != now.power {
@@ -1254,9 +1329,7 @@ impl App {
                 ui::draw_graph_column(&mut Panel(b), a, k, was, is);
             }
         }
-        if let Some(g) = self.graph_shown.get_mut(i) {
-            *g = now;
-        }
+        Drawn::Graph(now)
     }
 
     /// The ride recorder's one entry point: every [`ride::Event`] goes through here, in order.
@@ -1651,16 +1724,7 @@ impl App {
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         match self.screen {
-            Screen::Main => {
-                let now = self.main_digits();
-                for (i, (&d, shown)) in now.iter().zip(&mut self.main_shown).enumerate() {
-                    if d != *shown {
-                        ui::draw_main_digit(&mut Panel(b), i, d);
-                        *shown = d;
-                    }
-                }
-            }
-            Screen::Ride(n) => self.update_ride(b, n),
+            Screen::Main | Screen::Ride(_) => self.update_page(b),
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
                 ui::draw_list(&mut Panel(b), &self.nearby);
                 self.list_dirty = false;
