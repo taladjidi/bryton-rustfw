@@ -374,11 +374,11 @@ fn named<'a>(buf: &'a mut [u8; 16], prefix: &str, suffix: &str, n: u32) -> &'a s
 impl Imported {
     /// From UserProfile.ini.
     pub fn user(&mut self, t: &[u8]) {
-        let ftp = number(t, "FTP", "BaseVale", 0).filter(|v| crate::menu::FTP_RANGE.contains(&(*v as u16)));
-        self.ftp = ftp.map(|v| (v as u16 + 2) / 5 * 5); // the menu steps by 5
-        self.max_hr = number(t, "MHR", "BaseVale", 0)
-            .filter(|v| crate::menu::MAX_HR_RANGE.contains(&(*v as u16)))
-            .map(|v| v as u16);
+        // to u16 only once in range: `as` first would turn 65736 into 200 (the review, 2026-10-24)
+        let in_range = |v: u32, r: core::ops::RangeInclusive<u16>| u16::try_from(v).ok().filter(|v| r.contains(v));
+        let ftp = number(t, "FTP", "BaseVale", 0).and_then(|v| in_range(v, crate::menu::FTP_RANGE));
+        self.ftp = ftp.map(|v| (v + 2) / 5 * 5); // the menu steps by 5
+        self.max_hr = number(t, "MHR", "BaseVale", 0).and_then(|v| in_range(v, crate::menu::MAX_HR_RANGE));
         self.weight_dg =
             number(t, "UserProfile", "Weight_kg", 1).filter(|v| (200..=2500).contains(v)).map(|v| v as u16);
         self.cp = number(t, "UserProfile", "CP", 0).filter(|v| (50..=1000).contains(v)).map(|v| v as u16);

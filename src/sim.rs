@@ -2564,6 +2564,18 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// A speed sensor paired but silent (a dead battery) does not leave the ride without speed: the GPS's is used.
+    #[test]
+    fn silent_speed_sensor_falls_back_to_gps() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[Kind::Speed.backup()] = SensorId { device: 99, trans: 1 }.to_word(); // paired, never heard
+        sim.gnss.route = Some(ride_route);
+        let mut app = App::start(&mut sim, Some(KEY));
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 5000);
+        assert_eq!(app.live.get(Metric::Speed), Some(288), "8 m/s from the GPS");
+    }
+
     /// During a ride, holding Back once only warns (switching off would lose it); a second hold within 10 s
     /// switches off. With no ride, the first hold does.
     #[test]
@@ -3090,6 +3102,25 @@ mod fuzz {
                 }
                 hrv.push(u16::from_le_bytes([d[0], d[1]]));
                 let _ = (hrv.alpha1(), hrv.rmssd());
+            }
+        }
+    }
+
+    /// Random broadcasts into every ANT+ decoder (speed, cadence, both, power, heart rate), with restarts: no panic
+    /// (a u32 overflow did panic here), speeds and cadences within what a bike does.
+    #[test]
+    fn ant_decoders() {
+        use crate::sensors::{Decoders, Kind, Live, Metric};
+        for seed in 5..=8u32 {
+            let (mut dec, mut live) = (Decoders::default(), Live::default());
+            let v: std::vec::Vec<u8> = bytes(seed, 1 << 18).collect();
+            for (n, c) in v.chunks_exact(9).enumerate() {
+                let kind = Kind::ALL[usize::from(c[8]) % Kind::ALL.len()];
+                if n % 97 == 0 {
+                    dec.restart(kind);
+                }
+                dec.decode(kind, core::array::from_fn(|i| c[i]), 2105, &mut live);
+                assert!(live.get(Metric::Speed).is_none_or(|s| s <= 2_700), "{:?}", live.get(Metric::Speed));
             }
         }
     }

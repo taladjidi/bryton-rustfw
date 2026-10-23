@@ -237,7 +237,7 @@ impl Reader {
             return None;
         }
         self.pos = self.pos.saturating_add(1);
-        self.crc = crc(self.crc, &[b]);
+        self.crc = (self.crc >> 8) ^ self.table[usize::from((self.crc as u8) ^ b)];
         match self.state {
             State::Header => return self.header(b),
             State::Crc(n) => {

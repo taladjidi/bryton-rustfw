@@ -2657,10 +2657,13 @@ impl App {
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {
-                    if kind == Kind::Hr && self.heard_ms[kind as usize] >= sensors::STALE_MS {
-                        // back after a drop-out: the beats before it are not part of this series (and the beat
-                        // time may have wrapped meanwhile, which would make one false interval)
-                        (self.hrv, self.decoders.beats) = Default::default();
+                    if self.heard_ms[kind as usize] >= sensors::STALE_MS {
+                        // back after a drop-out: its counters may have moved on by any amount; the beats before it
+                        // are not part of this series (and the beat time may have wrapped, a false interval)
+                        self.decoders.restart(kind);
+                        if kind == Kind::Hr {
+                            self.hrv = Default::default();
+                        }
                     }
                     self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
                     for &rr in self.decoders.beats.rr() {
@@ -2706,8 +2709,11 @@ impl App {
                     self.pvt = Some(pvt);
                     self.pvt_ms = 0;
                     self.learn_aid(b, pvt);
-                    let sensor =
-                        [Kind::Speed, Kind::SpeedCadence].iter().any(|&k| self.sensors[k as usize] != Sensor::Off);
+                    // a speed sensor heard lately gives the speed; a paired one that is silent (a dead battery, a
+                    // magnet knocked off) must not leave the ride without one: then the GPS's
+                    let sensor = [Kind::Speed, Kind::SpeedCadence]
+                        .iter()
+                        .any(|&k| self.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS));
                     if pvt.good() {
                         self.track.add(pvt.lat, pvt.lon, pvt.heading);
                     }
@@ -3006,7 +3012,11 @@ impl App {
         }
         b.backlight(0);
         panel::off(b);
-        while b.keys_down() & Key::Back as u8 != 0 {
+        // at most 10 s: a key stuck down must not keep the unit (and the battery) on
+        for _ in 0..10_000 / POLL_MS {
+            if b.keys_down() & Key::Back as u8 == 0 {
+                break;
+            }
             b.delay_ms(POLL_MS);
         }
         b.delay_ms(50);

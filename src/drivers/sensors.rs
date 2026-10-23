@@ -141,8 +141,14 @@ impl Revs {
             return (self.idle == Self::IDLE).then_some(0);
         }
         self.idle = 0;
-        Some(u32::from(dn) * 1024 * 60 * 100 / u32::from(dt))
+        // in u64: dn x 6 144 000 passes u32 above 699 revolutions (a counter that jumped: a battery change, a
+        // sensor back after a drop-out); a rate past MAX_RPM_X100 is such a jump, not a reading
+        let r = u64::from(dn) * 1024 * 60 * 100 / u64::from(dt);
+        u32::try_from(r).ok().filter(|&r| r <= Self::MAX_RPM_X100)
     }
+
+    /// Faster than this (rpm x 100) is a counter that jumped: a wheel at 2000 rpm is 250 km/h.
+    pub const MAX_RPM_X100: u32 = 200_000;
 }
 
 /// RR intervals from a heart-rate strap's beat time and count.
@@ -225,6 +231,18 @@ pub fn speed_x10(rpm100: u32, wheel_mm: u16) -> u16 {
 }
 
 impl Decoders {
+    /// `kind`'s sensor was silent (stale): its next broadcast starts a new series (its counters may have moved on
+    /// by any amount meanwhile).
+    pub fn restart(&mut self, kind: Kind) {
+        match kind {
+            Kind::Hr => self.beats = Beats::default(),
+            Kind::Speed => self.speed = Revs::default(),
+            Kind::Cadence => self.cadence = Revs::default(),
+            Kind::SpeedCadence => (self.sc_speed, self.sc_cadence) = (Revs::default(), Revs::default()),
+            Kind::Power => {}
+        }
+    }
+
     /// Takes the 8 data bytes of a broadcast from `kind` into `live`.
     pub fn decode(&mut self, kind: Kind, d: [u8; 8], wheel_mm: u16, live: &mut Live) {
         let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
@@ -276,6 +294,16 @@ impl Decoders {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A counter that jumped (a battery change, a sensor back after minutes) gives no reading, not an overflow
+    /// or a huge speed.
+    #[test]
+    fn jumped_counter_is_no_reading() {
+        let mut r = Revs::default();
+        r.update(0, 0);
+        assert_eq!(r.update(1024, 60_000), None, "60000 turns in 1 s");
+        assert_eq!(r.update(2048, 60_001), Some(6000), "then readings again");
+    }
 
     #[test]
     fn counters_wrap_and_stop() {
