@@ -411,16 +411,20 @@ pub enum Field {
     Temp,
     /// The last minutes of heart rate, coloured by zone.
     HrGraph,
+    /// DFA alpha1 of the last 2 minutes of beats (hrv.rs): about 0.75 at the aerobic threshold.
+    Dfa,
+    /// RMSSD of the last minute of beats, ms (hrv.rs).
+    Rmssd,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 18] = {
+    pub const ALL: [Field; 20] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
-            Ascent, Graph, Temp, HrGraph,
+            Ascent, Graph, Temp, HrGraph, Dfa, Rmssd,
         ]
     };
 
@@ -445,6 +449,8 @@ impl Field {
             "POWER GRAPH",
             "TEMP C",
             "HR GRAPH",
+            "DFA A1",
+            "RMSSD",
         ][self as usize]
     }
 
@@ -452,7 +458,7 @@ impl Field {
     fn widest(self) -> &'static str {
         [
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
-            "88.88", "8888", "", "-88.8", "",
+            "88.88", "8888", "", "-88.8", "", "8.88", "888",
         ][self as usize]
     }
 

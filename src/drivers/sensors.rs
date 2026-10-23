@@ -6,6 +6,12 @@
 //! `devices/bike_speed_cadence.py` and `devices/power_meter.py`, 2026-10-23): speed or cadence alone, event time in
 //! bytes 4-5 and count in 6-7; combined, cadence in 0-3 and speed in 4-7; power page 0x10, cadence in byte 3
 //! (0xff: none) and instantaneous power in 6-7, all little endian, times in 1/1024 s.
+//!
+//! Heart rate (openant `devices/heart_rate.py`, the ANT+ heart rate monitor profile): every page carries the last
+//! beat's event time in bytes 4-5 (1/1024 s), a beat count in byte 6 and the computed rate in byte 7; page 4 (byte 0,
+//! bit 7 is a toggle) also carries the beat before it in bytes 2-3. The RR intervals ([`Beats`]) follow the patch
+//! project's P8 (bryton-S510-mods `patches/P8-hrv-recording.c`): one new beat gives one interval; after missed
+//! broadcasts, page 4's previous beat still gives the last one, and with two new beats the first one too.
 
 /// A kind of ANT+ sensor, one ANT channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,9 +141,70 @@ impl Revs {
     }
 }
 
+/// RR intervals from a heart-rate strap's beat time and count.
+#[derive(Default)]
+pub struct Beats {
+    /// The last broadcast's beat time and count.
+    last: Option<(u16, u8)>,
+    /// The intervals from the last broadcast, in ms (at most two).
+    rr: [u16; 2],
+    n: usize,
+}
+
+impl Beats {
+    /// Intervals outside this, in ms, are glitches (30 to 240 bpm).
+    pub const RANGE: core::ops::RangeInclusive<u16> = 250..=2000;
+
+    /// Takes one broadcast's 8 bytes; the intervals it adds are then in [`Beats::rr`].
+    ///
+    /// ```
+    /// let mut b = bryton_rustfw::sensors::Beats::default();
+    /// b.update([0, 0, 0, 0, 0x00, 0x04, 7, 60]);
+    /// b.update([0, 0, 0, 0, 0x00, 0x08, 8, 60]);
+    /// assert_eq!(b.rr(), &[1000], "one beat 1024/1024 s later");
+    /// ```
+    pub fn update(&mut self, d: [u8; 8]) {
+        self.n = 0;
+        let (t1, c1) = (u16::from_le_bytes([d[4], d[5]]), d[6]);
+        let Some((t0, c0)) = self.last.replace((t1, c1)) else { return };
+        let span = t1.wrapping_sub(t0);
+        match c1.wrapping_sub(c0) {
+            1 => self.push(span),
+            beats @ 2.. if d[0] & 0x7f == 4 => {
+                // page 4: the beat before the last; fresh only if it falls after the last one we saw
+                let p = u16::from_le_bytes([d[2], d[3]]);
+                let first = p.wrapping_sub(t0);
+                if first > 0 && first < span {
+                    if beats == 2 {
+                        self.push(first); // 3 and more: that first span holds several beats
+                    }
+                    self.push(t1.wrapping_sub(p));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// An interval in 1/1024 s, kept in ms when in [`Beats::RANGE`].
+    fn push(&mut self, t: u16) {
+        let ms = ((u32::from(t) * 1000 + 512) >> 10) as u16;
+        if let (true, Some(slot)) = (Self::RANGE.contains(&ms), self.rr.get_mut(self.n)) {
+            *slot = ms;
+            self.n += 1;
+        }
+    }
+
+    /// The intervals the last broadcast added, oldest first, in ms.
+    pub fn rr(&self) -> &[u16] {
+        self.rr.get(..self.n).unwrap_or(&[])
+    }
+}
+
 /// Decoding state across broadcasts.
 #[derive(Default)]
 pub struct Decoders {
+    /// The heart-rate strap's beats.
+    pub beats: Beats,
     speed: Revs,
     cadence: Revs,
     sc_speed: Revs,
@@ -160,8 +227,12 @@ impl Decoders {
         let rpm = |r: u32| (r / 100) as u16;
         match kind {
             // computed heart rate in byte 7; 0 means no reading
-            Kind::Hr if d[7] > 0 => live.set(Metric::Hr, u16::from(d[7])),
-            Kind::Hr => {}
+            Kind::Hr => {
+                self.beats.update(d);
+                if d[7] > 0 {
+                    live.set(Metric::Hr, u16::from(d[7]));
+                }
+            }
             // every page: event time in bytes 4-5, cumulative count in 6-7
             Kind::Speed => {
                 if let Some(r) = self.speed.update(u16_at(4), u16_at(6)) {
@@ -208,6 +279,37 @@ mod tests {
             assert_eq!(r.update(376, 0), None);
         }
         assert_eq!(r.update(376, 0), Some(0), "no event for about 3 s: stopped");
+    }
+
+    /// One interval per new beat (the time wrapping), two from page 4 after one missed broadcast, none after
+    /// more beats without page 4, glitches dropped.
+    #[test]
+    fn rr_intervals() {
+        // page, previous beat time (page 4), beat time, count
+        let page = |p: u8, prev: u16, t: u16, n: u8| {
+            let ([p0, p1], [t0, t1]) = (prev.to_le_bytes(), t.to_le_bytes());
+            [p, 0, p0, p1, t0, t1, n, 70]
+        };
+        let mut b = Beats::default();
+        let none: &[u16] = &[];
+        b.update(page(0x84, 0, 65000, 255));
+        assert_eq!(b.rr(), none, "first broadcast: nothing to compare");
+        b.update(page(0x84, 65000, 65000, 255));
+        assert_eq!(b.rr(), none, "no new beat");
+        b.update(page(0x04, 65000, 488, 0));
+        assert_eq!(b.rr(), &[1000], "time and count both wrap");
+        b.update(page(0x84, 1300, 2124, 2));
+        assert_eq!(b.rr(), &[793, 805], "one missed: page 4 gives both");
+        b.update(page(0x00, 0, 4000, 4));
+        assert_eq!(b.rr(), none, "two beats, no previous time: none");
+        b.update(page(0x04, 4000, 5000, 6));
+        assert_eq!(b.rr(), none, "two beats, page 4's previous time not after the last seen: stale, none");
+        b.update(page(0x04, 5800, 6800, 9));
+        assert_eq!(b.rr(), &[977], "three beats: only the last, from page 4");
+        b.update(page(0x04, 6800, 6900, 10));
+        assert_eq!(b.rr(), none, "98 ms: a glitch");
+        b.update(page(0x04, 6900, 9200, 11));
+        assert_eq!(b.rr(), none, "2246 ms: out of range");
     }
 
     #[test]

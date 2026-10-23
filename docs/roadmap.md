@@ -77,7 +77,9 @@ The golden rule (AGENTS.md) depends on this whole phase.
 - Alerts on the buzzer and a banner: HR and power limits, eat and drink reminders by time, distance or kJ (stock
   has six kinds).
 - Auto lap; a ride summary at the end; ride history and totals for the overview.
-- From the patch project: HRV recording (P8), live DFA a1 (P9), W' balance (planned P10), power smoothing (P5).
+- From the patch project: HRV recording (P8: the RR intervals as FIT hrv messages, and DFA a1 as the `Alpha1`
+  developer field, as P9 does), W' balance (planned P10), power smoothing (P5). Done: the live DFA a1 and RMSSD
+  fields (P9's algorithm, hrv.rs).
 
 ## 4b. History and training load
 

@@ -637,7 +637,7 @@ fn cos(x: f64) -> f64 {
 }
 
 /// Natural logarithm: the exponent from the bits, then 2 atanh((m - 1) / (m + 1)) for the mantissa.
-fn ln(x: f64) -> f64 {
+pub(crate) fn ln(x: f64) -> f64 {
     let bits = x.to_bits();
     let mut e = ((bits >> 52) & 0x7ff) as i64 - 1023;
     let mut m = f64::from_bits((bits & ((1 << 52) - 1)) | (1023 << 52));

@@ -10,6 +10,7 @@
 
 pub mod dev;
 pub mod drivers;
+pub mod hrv;
 pub mod ride;
 #[cfg(test)]
 mod sim;
@@ -707,6 +708,8 @@ pub struct App {
     ask: u8,
     live: Live,
     decoders: Decoders,
+    /// RMSSD and DFA alpha1 from the strap's beats.
+    hrv: hrv::Hrv,
     battery: battery::Battery,
     /// Since the last battery reading.
     battery_ms: u32,
@@ -831,6 +834,7 @@ impl App {
             ask: 0,
             live: Live::default(),
             decoders: Decoders::default(),
+            hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),
             battery_ms: BATTERY_MS, // read at the first step
             gnss: gnss::Parser::new(),
@@ -992,6 +996,19 @@ impl App {
             Field::AvgHr => (r.avg_hr().map(u32::from), false),
             Field::AvgPower => (r.avg_power().map(u32::from), false),
             Field::Ascent => (Some(r.ascent_m()), false),
+            // "--" once the strap is silent, else 2 decimals
+            Field::Dfa => match self.hrv.alpha1().filter(|_| self.live.get(Metric::Hr).is_some()) {
+                Some(a) => {
+                    let v = (a * 100.0 + 0.5).clamp(0.0, 999.0) as u32;
+                    l.push_u32(v / 100);
+                    l.push_str(".");
+                    l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
+                    l.push_str(ui::DIGITS[(v % 10) as usize]);
+                    return l;
+                }
+                None => (None, false),
+            },
+            Field::Rmssd => (self.hrv.rmssd().map(u32::from).filter(|_| self.live.get(Metric::Hr).is_some()), false),
         };
         match v {
             None => l.push_str("--"),
@@ -1718,6 +1735,9 @@ impl App {
                     && let Some(kind) = Kind::from_channel(ch)
                 {
                     self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
+                    for &rr in self.decoders.beats.rr() {
+                        self.hrv.push(rr);
+                    }
                     self.heard_ms[kind as usize] = 0;
                     if self.sensors[kind as usize] == Sensor::Search {
                         self.ask |= 1 << ch;
