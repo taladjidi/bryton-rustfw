@@ -1408,6 +1408,27 @@ mod tests {
         assert_eq!((text(&app, Dfa), text(&app, Rmssd)), ("--".into(), "--".into()), "no heart rate");
     }
 
+    /// Start on the overview starts the ride and shows the first ride page; each key's effect on the ride is said in
+    /// the banner.
+    #[test]
+    fn start_from_the_overview() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Ride(0));
+        assert_eq!(app.ride.state(), ride::State::Running);
+        run(&mut sim, &mut app, 200);
+        assert_eq!(app.banner.as_str(), "RIDE STARTED");
+        assert_consistent(&sim, &app);
+        sim.save("ride_started");
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.banner.as_str(), "PAUSED: HOLD = END");
+        app.press(&mut sim, Press::Long(Key::Start));
+        assert_eq!((app.banner.as_str(), app.ride.state()), ("RIDE ENDED", ride::State::Idle));
+        run(&mut sim, &mut app, 200);
+        assert_consistent(&sim, &app);
+    }
+
     /// Pages kept by the builds of 2026-10-23 (from register 19, which stock reads at boot) move to 20..27, and 19 is
     /// given back (stock's first-boot value, 0).
     #[test]

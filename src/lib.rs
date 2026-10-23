@@ -817,6 +817,8 @@ pub struct App {
     /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
     /// redrawn meanwhile; when it goes, the screen is drawn again.
     banner_ms: Option<u32>,
+    /// What the banner says.
+    banner: Line<20>,
     banner_drawn: bool,
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
@@ -933,6 +935,7 @@ impl App {
             date: rtc_date_from_dr(b.rtc().1),
             notices: Default::default(),
             banner_ms: None,
+            banner: Line::new(),
             banner_drawn: false,
             had_fix: false,
             told_low: false,
@@ -1378,7 +1381,7 @@ impl App {
             }
         }
         if self.banner_ms.is_some() && self.banner_drawn {
-            ui::draw_banner(c, self.notices[0].as_str());
+            ui::draw_banner(c, self.banner.as_str());
         }
     }
 
@@ -1496,8 +1499,29 @@ impl App {
         self.notices[0] = l;
         // over the overview the notice is in its own box already
         if self.screen != Screen::Main {
-            (self.banner_ms, self.banner_drawn) = (Some(0), false);
+            self.say(l.as_str());
         }
+    }
+
+    /// Shows `text` in the banner for [`BANNER_MS`] (what a key just did, a notice).
+    fn say(&mut self, text: &str) {
+        self.banner.clear();
+        self.banner.push_str(text);
+        (self.banner_ms, self.banner_drawn) = (Some(0), false);
+    }
+
+    /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
+    fn start_pause(&mut self) {
+        let ev = self.ride.start_pause();
+        self.say(match ev {
+            ride::Event::Start => "RIDE STARTED",
+            ride::Event::Pause => "PAUSED: HOLD = END",
+            _ => "RESUMED",
+        });
+        if ev == ride::Event::Start {
+            self.power.new_ride();
+        }
+        self.recorder(ev);
     }
 
     fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
@@ -1805,21 +1829,22 @@ impl App {
                 self.open(Screen::Menu(Menu::Main, 0))
             }
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
-            (Screen::Ride(_), Input::Select) => {
-                let ev = self.ride.start_pause();
-                if ev == ride::Event::Start {
-                    self.power.new_ride();
-                }
-                return self.recorder(ev);
+            (Screen::Ride(_), Input::Select) => return self.start_pause(),
+            // Start on the overview too, which then shows the first ride page
+            (Screen::Main, Input::Select) => {
+                self.start_pause();
+                self.screen = Screen::Ride(0);
             }
-            (Screen::Ride(_), Input::End) => {
+            (Screen::Main | Screen::Ride(_), Input::End) => {
                 if let Some(ev) = self.ride.end() {
+                    self.say("RIDE ENDED");
                     self.recorder(ev);
                 }
                 return;
             }
             (Screen::Ride(_), Input::Prev) => {
                 if let Some(ev) = self.ride.lap() {
+                    self.say("LAP");
                     self.recorder(ev);
                 }
                 return;
@@ -2091,7 +2116,7 @@ impl App {
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         if let Some(ms) = self.banner_ms {
             if !core::mem::replace(&mut self.banner_drawn, true) {
-                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.notices[0].as_str());
+                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str());
             }
             self.banner_ms = Some(ms + POLL_MS).filter(|&ms| ms < BANNER_MS);
             if self.banner_ms.is_none() {

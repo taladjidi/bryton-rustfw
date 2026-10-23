@@ -27,7 +27,7 @@
 | Page | next page (main, ride pages, main) | down |
 | hold Page | the menu | |
 | Lap | a lap (while riding) | up |
-| Start | start, pause, resume the ride | select, or change the value |
+| Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | end a paused ride | |
 | Back | backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
