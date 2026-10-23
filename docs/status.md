@@ -26,6 +26,13 @@ The dated findings are in [journal.md](journal.md).
   row), the backlight waking on a touch, and the swipe thresholds by feel (stock's: 37 px across, 48 px up).
 - **"Rebooting with just the power button does not work"** (the owner, after the GPS test): to clarify and fix.
 
+- **New since the installed build, seen only from RAM or in the simulator (2026-10-24):** touch gestures by feel and
+  their axes; the overview and its notices; banners (ride start, pause, lap, end); eleven page layouts; graphs (five
+  plots by tap, the whole ride by hold); derived power fields and W' balance on a ride with a power meter; DFA a1 and
+  RMSSD from the owner's strap (needs a few minutes of real beats); the AUTO backlight on stock's curve, outdoors.
+- **Pages moved off backup register 19** (stock reads it at boot): the first start of a new build moves them; then
+  stock, reinstalled, should keep its last battery voltage as before.
+
 ## Next steps
 
 1. **Stop mode** between seconds (woken by the RTC, the keys, the radio chip's UART, USB): the largest battery
