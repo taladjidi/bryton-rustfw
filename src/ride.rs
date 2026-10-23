@@ -1,6 +1,11 @@
 //! The ride: Start / pause / laps / end, auto-pause, the totals the ride fields show, heart-rate and power zones,
 //! and the history behind the graph field. Pure logic, fed once a second by the app.
 //!
+//! **Climbing** ([`Climb`]): VAM is the metres climbed per hour (Ferrari's *velocità ascensionale media*, as
+//! Garmin and Wahoo show it), here over the last minute of moving time; grade is rise over run, x 100, over the
+//! last 30 s of moving time and at least 20 m (shorter, GPS altitude noise of a metre or two would swing it by
+//! several percent). Both from GPS altitude; the barometer (ambient.rs, a reading every 10 s) would be steadier.
+//!
 //! **Recorder hook.** Nothing here is stored: every change of state and every second of ride comes out as an
 //! [`Event`], and the app hands each one to one place (`App::recorder` in lib.rs), where the FIT writer (fit.rs)
 //! plugs in once the eMMC has a driver.
@@ -89,6 +94,8 @@ pub struct Ride {
     alt_low: Option<i32>,
     lap_timer_s: u32,
     lap_dist9: u64,
+    max_hr: u16,
+    climb: Climb,
 }
 
 impl Default for Ride {
@@ -113,6 +120,8 @@ impl Ride {
             alt_low: None,
             lap_timer_s: 0,
             lap_dist9: 0,
+            max_hr: 0,
+            climb: Climb::new(),
         }
     }
 
@@ -163,6 +172,8 @@ impl Ride {
             self.dist9 = self.dist9.saturating_add(u64::from(v) * 250);
             self.max_speed = self.max_speed.max(v);
             self.hr.add(i.hr);
+            self.max_hr = self.max_hr.max(i.hr.unwrap_or(0));
+            self.climb.second(i.alt_mm, self.dist9);
             self.power.add(i.power); // zeros count: coasting is part of the average power
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
             if let Some(alt) = i.alt_mm {
@@ -214,6 +225,21 @@ impl Ride {
         self.hr.get()
     }
 
+    /// Max heart rate while moving (None before a reading).
+    pub fn max_hr(&self) -> Option<u16> {
+        (self.max_hr > 0).then_some(self.max_hr)
+    }
+
+    /// VAM, m/h over the last minute of moving time.
+    pub fn vam(&self) -> Option<i32> {
+        self.climb.vam()
+    }
+
+    /// Grade, % x 10, over the last 30 s of moving time.
+    pub fn grade_x10(&self) -> Option<i32> {
+        self.climb.grade_x10()
+    }
+
     /// Average power while moving (zeros included).
     pub fn avg_power(&self) -> Option<u16> {
         self.power.get()
@@ -237,6 +263,102 @@ impl Ride {
     /// This lap's distance, metres.
     pub fn lap_dist_m(&self) -> u32 {
         ((self.dist9 - self.lap_dist9) / 9000).min(u64::from(u32::MAX)) as u32
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Climbing
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Seconds between climbing samples.
+const CLIMB_STEP_S: u32 = 5;
+/// Samples kept: a minute, plus the one it starts from.
+const CLIMB_N: usize = 13;
+/// Samples back for the grade: 30 s.
+const GRADE_BACK: usize = 6;
+/// The grade wants this much distance (1/9 mm: 20 m).
+const GRADE_MIN_DIST9: u64 = 20 * 9000;
+
+/// Altitude and distance every [`CLIMB_STEP_S`] moving seconds, the last minute: VAM and grade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Climb {
+    alt_mm: [i32; CLIMB_N],
+    dist9: [u64; CLIMB_N],
+    /// Samples since the altitude was last missing, up to [`CLIMB_N`]; the next slot; seconds to the next sample.
+    n: usize,
+    i: usize,
+    secs: u32,
+}
+
+impl Climb {
+    const fn new() -> Self {
+        Climb { alt_mm: [0; CLIMB_N], dist9: [0; CLIMB_N], n: 0, i: 0, secs: 0 }
+    }
+
+    /// One moving second: the altitude (None: no fix, which starts again) and the ride's distance.
+    fn second(&mut self, alt_mm: Option<i32>, dist9: u64) {
+        let Some(alt) = alt_mm else {
+            (self.n, self.secs) = (0, 0);
+            return;
+        };
+        if self.secs > 0 {
+            self.secs -= 1;
+            return;
+        }
+        self.secs = CLIMB_STEP_S - 1;
+        if let (Some(a), Some(d)) = (self.alt_mm.get_mut(self.i), self.dist9.get_mut(self.i)) {
+            (*a, *d) = (alt, dist9);
+        }
+        self.i = (self.i + 1) % CLIMB_N;
+        self.n = (self.n + 1).min(CLIMB_N);
+    }
+
+    /// The sample `back` samples before the latest, and the latest.
+    fn span(&self, back: usize) -> Option<((i32, u64), (i32, u64))> {
+        if back >= self.n {
+            return None;
+        }
+        let at = |k: usize| {
+            let j = (self.i + 2 * CLIMB_N - 1 - k) % CLIMB_N;
+            Some((*self.alt_mm.get(j)?, *self.dist9.get(j)?))
+        };
+        Some((at(back)?, at(0)?))
+    }
+
+    /// Metres climbed per hour over the last minute (a descent is negative).
+    ///
+    /// ```
+    /// use bryton_rustfw::ride::{Input, Ride};
+    /// let mut r = Ride::new();
+    /// r.start_pause();
+    /// for s in 0..61 {
+    ///     r.second(&Input { speed_x10: Some(100), alt_mm: Some(s * 250), ..Input::default() });
+    /// }
+    /// assert_eq!(r.vam(), Some(900), "0.25 m/s: 900 m/h");
+    /// ```
+    fn vam(&self) -> Option<i32> {
+        let ((a0, _), (a1, _)) = self.span(CLIMB_N - 1)?;
+        let s = (CLIMB_N as i64 - 1) * i64::from(CLIMB_STEP_S);
+        Some((i64::from(a1 - a0) * 3600 / 1000 / s) as i32)
+    }
+
+    /// Rise over run over the last 30 s, % x 10 (None under 20 m).
+    ///
+    /// ```
+    /// use bryton_rustfw::ride::{Input, Ride};
+    /// let mut r = Ride::new();
+    /// r.start_pause();
+    /// for s in 0..31 {
+    ///     // 5 m/s (18 km/h), climbing 0.4 m/s: 8 %
+    ///     r.second(&Input { speed_x10: Some(180), alt_mm: Some(s * 400), ..Input::default() });
+    /// }
+    /// assert_eq!(r.grade_x10(), Some(80));
+    /// ```
+    fn grade_x10(&self) -> Option<i32> {
+        let ((a0, d0), (a1, d1)) = self.span(GRADE_BACK)?;
+        let run = d1.saturating_sub(d0);
+        // alt mm x 1000 / (dist9 / 9) mm = per mille: x 9000 / dist9
+        (run >= GRADE_MIN_DIST9).then(|| (i64::from(a1 - a0) * 9000 / run as i64) as i32)
     }
 }
 

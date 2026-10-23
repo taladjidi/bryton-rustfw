@@ -10,6 +10,7 @@
 
 pub mod dev;
 pub mod drivers;
+pub mod power;
 pub mod ride;
 #[cfg(test)]
 mod sim;
@@ -324,6 +325,10 @@ const PAGE_BKP: [[usize; 2]; PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26
 const OLD_PAGE_BKP: [usize; PAGES] = [14, 15, 16];
 /// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Settings`].
 const WHEEL_BKP: usize = 11;
+/// The backup register of the rider's weight and W': see [`Settings::power_word`]. Not 12, which looks unused but
+/// holds stock's Nordic image number (BOARD.md 8, 11): 16 is ours (page 3 of earlier builds, read only to carry it
+/// over; a tagged word here is not a page, [`PageCfg::from_word`] wants tag 0xa).
+const POWER_BKP: usize = 16;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
 /// - tag 0xa7 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
@@ -345,6 +350,10 @@ pub struct Settings {
     pub light_level: usize,
     /// Backlight time-out: an index in [`LIGHT_TIMEOUTS_S`].
     pub light_timeout: usize,
+    /// Rider weight, kg (in [`menu::WEIGHT_RANGE`]); kept in register 16 ([`Settings::power_word`]).
+    pub weight_kg: u16,
+    /// W', J (in [`menu::WPRIME_RANGE`], a multiple of 500); kept in register 16.
+    pub wprime_j: u16,
 }
 
 impl Settings {
@@ -352,7 +361,7 @@ impl Settings {
     ///
     /// ```
     /// use bryton_rustfw::{Settings, WHEELS};
-    /// let m = Settings { wheel_mm: WHEELS[3], max_hr: 187, ftp: 265, light_level: 4, light_timeout: 3 };
+    /// let m = Settings { wheel_mm: WHEELS[3], max_hr: 187, ftp: 265, light_level: 4, light_timeout: 3, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(m.to_word()), m);
     /// // words from earlier builds: 2136 mm, AUTO, 60 s; then max HR code 7 (225), FTP code 11 (100)
     /// let old = Settings::from_word(0xa5 << 24 | 3 << 20 | 4 << 16 | 2136);
@@ -361,6 +370,7 @@ impl Settings {
     /// assert_eq!((old.wheel_mm, old.max_hr, old.ftp), (WHEELS[3], 225, 100));
     /// ```
     pub fn from_word(w: u32) -> Settings {
+        let (weight_kg, wprime_j) = (power::WEIGHT_KG, power::WPRIME_J);
         let wheel = |mm: u16| if WHEELS.contains(&mm) { mm } else { WHEELS[1] };
         let level = |l: u32| (l as usize) % (LIGHT_LEVELS.len() + 1);
         let index = |i: u32| WHEELS.get(i as usize).copied().unwrap_or(WHEELS[1]);
@@ -371,6 +381,8 @@ impl Settings {
                 ftp: (5 * (w >> 16 & 0xff) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
                 light_level: level(w >> 3 & 7),
                 light_timeout: (w >> 6 & 3) as usize,
+                weight_kg,
+                wprime_j,
             },
             0xa6 => Settings {
                 wheel_mm: index(w & 7),
@@ -378,6 +390,8 @@ impl Settings {
                 ftp: code_ftp(w >> 8 & 0xf),
                 light_level: level(w >> 16 & 7),
                 light_timeout: (w >> 20 & 3) as usize,
+                weight_kg,
+                wprime_j,
             },
             0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
@@ -385,11 +399,46 @@ impl Settings {
                 ftp: ride::FTP,
                 light_level: level(w >> 16 & 0xf),
                 light_timeout: (w >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
+                weight_kg,
+                wprime_j,
             },
-            _ => {
-                Settings { wheel_mm: WHEELS[1], max_hr: ride::MAX_HR, ftp: ride::FTP, light_level: 0, light_timeout: 0 }
-            }
+            _ => Settings {
+                wheel_mm: WHEELS[1],
+                max_hr: ride::MAX_HR,
+                ftp: ride::FTP,
+                light_level: 0,
+                light_timeout: 0,
+                weight_kg,
+                wprime_j,
+            },
         }
+    }
+
+    /// These settings with the weight and W' kept in `w` (RTC backup register 16): tag 0xc1 in bits 24..31, the
+    /// weight in kg in 0..7, W' in 0.5 kJ in 8..15. Without the tag, the defaults ([`power::WEIGHT_KG`],
+    /// [`power::WPRIME_J`]).
+    ///
+    /// ```
+    /// use bryton_rustfw::Settings;
+    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, ..Settings::from_word(0) };
+    /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
+    /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
+    /// ```
+    pub fn with_power_word(self, w: u32) -> Settings {
+        if w >> 24 != 0xc1 {
+            return Settings { weight_kg: power::WEIGHT_KG, wprime_j: power::WPRIME_J, ..self };
+        }
+        let (kg, wp) = (menu::WEIGHT_RANGE, menu::WPRIME_RANGE);
+        Settings {
+            weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
+            wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
+            ..self
+        }
+    }
+
+    /// The weight and W' as kept in register 16 ([`Settings::with_power_word`]).
+    pub fn power_word(self) -> u32 {
+        (0xc1 << 24) | (u32::from(self.wprime_j / 500) & 0xff) << 8 | u32::from(self.weight_kg) & 0xff
     }
 
     /// As kept (tag 0xa7).
@@ -422,6 +471,12 @@ impl Settings {
             },
             Setting::MaxHr => l.push_u32(u32::from(self.max_hr)),
             Setting::Ftp => l.push_u32(u32::from(self.ftp)),
+            Setting::Weight => l.push_u32(u32::from(self.weight_kg)),
+            Setting::WPrime => {
+                l.push_u32(u32::from(self.wprime_j / 1000));
+                l.push_str(".");
+                l.push_u32(u32::from(self.wprime_j % 1000 / 100));
+            }
         }
     }
 
@@ -443,7 +498,7 @@ impl Settings {
             }
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
-            Setting::MaxHr | Setting::Ftp => {}
+            Setting::MaxHr | Setting::Ftp | Setting::Weight | Setting::WPrime => {}
         }
     }
 
@@ -465,6 +520,8 @@ impl Settings {
         match s {
             Setting::MaxHr => Some(&mut self.max_hr),
             Setting::Ftp => Some(&mut self.ftp),
+            Setting::Weight => Some(&mut self.weight_kg),
+            Setting::WPrime => Some(&mut self.wprime_j),
             _ => None,
         }
     }
@@ -613,9 +670,9 @@ pub enum Screen {
 pub const BANNER_MS: u32 = 4000;
 
 /// The GPS row of the main menu.
-pub const GPS_ROW: usize = 10;
+pub const GPS_ROW: usize = 12;
 /// The nearby BLE devices row of the main menu.
-pub const NEARBY_ROW: usize = 11;
+pub const NEARBY_ROW: usize = 13;
 const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
 const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
 
@@ -750,6 +807,8 @@ pub struct App {
     ride: ride::Ride,
     /// Heart rate and power over the last minutes, and the graphs on screen by ride field.
     history: ride::History,
+    /// Rolling power, NP, TSS, work, W' balance.
+    power: power::Power,
     /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
     menu_shown: [u32; ui::MENU_ROWS],
     /// The ride's track, from the good fixes.
@@ -784,7 +843,7 @@ impl App {
                 *s = Sensor::Paired(id);
             }
         }
-        let misc = Settings::from_word(b.backup_read(WHEEL_BKP));
+        let misc = Settings::from_word(b.backup_read(WHEEL_BKP)).with_power_word(b.backup_read(POWER_BKP));
         let mut app = App {
             keys: Keys::default(),
             backlight: true,
@@ -858,6 +917,7 @@ impl App {
             drawn: Default::default(),
             ride: ride::Ride::new(),
             history: ride::History::default(),
+            power: power::Power::default(),
             menu_shown: [0; ui::MENU_ROWS],
             track: map::Track::new(),
             emmc: emmc::Emmc::new(),
@@ -893,9 +953,10 @@ impl App {
         }
     }
 
-    /// Writes the wheel size and the backlight settings to their backup register.
+    /// Writes the settings to their backup registers.
     fn save_misc(&self, b: &mut impl Board) {
         b.backup_write(WHEEL_BKP, self.settings.to_word());
+        b.backup_write(POWER_BKP, self.settings.power_word());
     }
 
     /// Memory for the basemap (at least [`tiles::MEM_WORDS`] words); without it the map has no basemap.
@@ -944,6 +1005,7 @@ impl App {
     fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
         let (r, live) = (&self.ride, |m| self.live.get(m).map(u32::from));
+        let (p, ftp) = (&self.power, self.settings.ftp);
         // the value, and whether it is in tenths
         let (v, tenths) = match f {
             Field::Time => {
@@ -992,6 +1054,52 @@ impl App {
             Field::AvgHr => (r.avg_hr().map(u32::from), false),
             Field::AvgPower => (r.avg_power().map(u32::from), false),
             Field::Ascent => (Some(r.ascent_m()), false),
+            // power.rs and the ride's derived metrics
+            Field::Power3s => (p.rolling(0).map(u32::from), false),
+            Field::Power10s => (p.rolling(1).map(u32::from), false),
+            Field::Power30s => (p.rolling(2).map(u32::from), false),
+            Field::Np => (p.np().map(u32::from), false),
+            Field::If => {
+                match p.if_x100(ftp) {
+                    Some(v) => {
+                        l.push_u32(v / 100);
+                        l.push_str(".");
+                        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
+                        l.push_str(ui::DIGITS[(v % 10) as usize]);
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::Tss => (p.tss(ftp), false),
+            Field::Kj => (Some(p.kj()), false),
+            Field::Kcal => (Some(p.kcal()), false),
+            Field::Wkg => (p.rolling(0).map(|w| power::wkg_x10(w, self.settings.weight_kg)), true),
+            Field::MaxPower => (p.max().map(u32::from), false),
+            Field::MaxHr => (r.max_hr().map(u32::from), false),
+            Field::AvgCadence => (r.avg_cadence().map(u32::from), false),
+            Field::Balance => {
+                match self.live.get(Metric::Balance) {
+                    Some(right) => {
+                        l.push_u32(u32::from(100u16.saturating_sub(right)));
+                        l.push_str("/");
+                        l.push_u32(u32::from(right));
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::Wbal | Field::Vam | Field::Grade => {
+                let v = match f {
+                    Field::Wbal => p.wbal_j().map(|j| j / 100), // kJ x 10
+                    Field::Vam => r.vam(),
+                    _ => r.grade_x10(),
+                };
+                if v.is_some_and(|v| v < 0) {
+                    l.push_str("-");
+                }
+                (v.map(i32::unsigned_abs), f != Field::Vam)
+            }
         };
         match v {
             None => l.push_str("--"),
@@ -1005,11 +1113,28 @@ impl App {
         l
     }
 
-    /// The colour of ride field `f`'s value: heart rate and power in their zone's colour, the rest white.
+    /// The colour of ride field `f`'s value: heart rate and power (live, rolling, NP, max) in their zone's colour,
+    /// W' balance as it drains ([`power::wbal_color`]), the rest white.
     fn field_color(&self, f: Field) -> u16 {
-        match (f, self.live.get(Metric::Hr), self.live.get(Metric::Power)) {
-            (Field::Hr, Some(v), _) => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
-            (Field::Power, _, Some(v)) => ride::power_color(ride::power_zone(v, self.settings.ftp)),
+        let p = &self.power;
+        let power = match f {
+            Field::Power => self.live.get(Metric::Power),
+            Field::Power3s => p.rolling(0),
+            Field::Power10s => p.rolling(1),
+            Field::Power30s => p.rolling(2),
+            Field::Np => p.np(),
+            Field::MaxPower => p.max(),
+            _ => None,
+        };
+        let hr = match f {
+            Field::Hr => self.live.get(Metric::Hr),
+            Field::MaxHr => self.ride.max_hr(),
+            _ => None,
+        };
+        match (power, hr, p.wbal_j()) {
+            (Some(w), _, _) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
+            (_, Some(v), _) => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
+            (_, _, Some(j)) if f == Field::Wbal => power::wbal_color(j, self.settings.wprime_j),
             _ => ui::WHITE,
         }
     }
@@ -1640,6 +1765,9 @@ impl App {
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
             (Screen::Ride(_), Input::Select) => {
                 let ev = self.ride.start_pause();
+                if ev == ride::Event::Start {
+                    self.power.new_ride();
+                }
                 return self.recorder(ev);
             }
             (Screen::Ride(_), Input::End) => {
@@ -2006,6 +2134,7 @@ impl App {
             self.recorder(ev);
         }
         self.history.second(input.hr, input.power);
+        self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
     }
 
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released

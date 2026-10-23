@@ -271,7 +271,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   on the unit). Registers 20 to 31 also hold values after stock (0x22, then 0x35a..0x3c5: not traced), so they
   are not free either. The bootloader has no RTC address in it.
 - This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
-  power), 11 (wheel size), 14, 15, 16 (ride page layouts) and 17, 18 (GNSS aiding: the RTC's offset from UTC and
+  power), 11 (wheel size), 14, 15 (ride page layouts of earlier builds), 16 (weight and W', tag 0xc1; page 3 of
+  earlier builds before), 19 to 26 (ride pages, two each) and 17, 18 (GNSS aiding: the RTC's offset from UTC and
   the last position), each behind a tag so an empty register reads as unset. That leaves none free. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
