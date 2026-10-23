@@ -84,6 +84,8 @@ The point of this project is a firmware in safe Rust.
 - `src/ui.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
 - `src/text.rs`: anti-aliased proportional text (`text::draw`, a `Style`, `Align`), one panel window per glyph.
+  For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
+  `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.
 - `src/fonts.rs`: glyph data, **generated** by `tools/font.py` (DejaVu Sans, 4 bits per pixel). To add a size or a
   font, add a line to `FONTS` there and run `python3 tools/font.py` (needs PIL); never edit fonts.rs by hand.
 - `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).

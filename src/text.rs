@@ -117,6 +117,81 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     width
 }
 
+/// Draws `s` in a box `w` wide from `x` (aligned inside it) and paints the rest of the box with the background, so a
+/// shorter value leaves nothing of the previous one. Text wider than the box is cut at the box's last whole
+/// character. Returns the width of the text drawn.
+pub fn draw_in(c: &mut impl Canvas, style: &Style, x: u32, y: u32, w: u32, align: Align, s: &str) -> u32 {
+    let font = style.font;
+    let mut end = s.len();
+    while font.width(&s[..end]) > w {
+        end = s[..end].char_indices().next_back().map_or(0, |(i, _)| i);
+    }
+    let s = &s[..end];
+    let tw = font.width(s);
+    let left = match align {
+        Align::Left => 0,
+        Align::Centre => (w - tw) / 2,
+        Align::Right => w - tw,
+    };
+    let h = u32::from(font.height);
+    c.fill(x, y, left, h, style.bg);
+    draw(c, style, x + left, y, Align::Left, s);
+    c.fill(x + left + tw, y, w - left - tw, h, style.bg);
+    tw
+}
+
+/// A line of text built with `write!` into a fixed buffer (no heap): `N` bytes, the rest is dropped.
+///
+/// ```
+/// use core::fmt::Write;
+/// let mut l = bryton_rustfw::text::Line::<16>::new();
+/// write!(l, "{:.1} km/h", 25.44).unwrap();
+/// assert_eq!(l.as_str(), "25.4 km/h");
+/// ```
+pub struct Line<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> Default for Line<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize> Line<N> {
+    /// An empty line.
+    pub const fn new() -> Self {
+        Line { buf: [0; N], len: 0 }
+    }
+
+    /// The text so far.
+    pub fn as_str(&self) -> &str {
+        // Only whole characters are ever stored (write_str), so this never fails.
+        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+
+    /// Empties it.
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+}
+
+impl<const N: usize> core::fmt::Write for Line<N> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for c in s.chars() {
+            let mut tmp = [0; 4];
+            let bytes = c.encode_utf8(&mut tmp).as_bytes();
+            let Some(dst) = self.buf.get_mut(self.len..self.len + bytes.len()) else {
+                return Ok(()); // full: the rest is dropped, which is fine for a screen line
+            };
+            dst.copy_from_slice(bytes);
+            self.len += bytes.len();
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,6 +252,31 @@ mod tests {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/sim");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("fonts.bmp"), crate::sim::bmp(&f.px)).unwrap();
+    }
+
+    /// A shorter value in the same box leaves nothing of the longer one; the box is the only thing touched.
+    #[test]
+    fn draw_in_clears_the_rest_of_its_box() {
+        for align in [Align::Left, Align::Centre, Align::Right] {
+            let (mut a, mut b) = (Frame::new(), Frame::new());
+            draw_in(&mut a, &BIG, 20, 50, 200, align, "188.8");
+            draw_in(&mut a, &BIG, 20, 50, 200, align, "7");
+            draw_in(&mut b, &BIG, 20, 50, 200, align, "7");
+            assert!(a.px == b.px, "{align:?}");
+        }
+        let mut f = Frame::new();
+        assert_eq!(draw_in(&mut f, &BIG, 0, 0, 30, Align::Left, "12345"), BIG.font.width("1"), "cut to the box");
+    }
+
+    #[test]
+    fn line_drops_what_does_not_fit() {
+        use core::fmt::Write;
+        let mut l = Line::<4>::new();
+        write!(l, "a\u{e9}cd").unwrap(); // the e acute takes 2 bytes
+        assert_eq!(l.as_str(), "a\u{e9}c");
+        l.clear();
+        write!(l, "{}", 12).unwrap();
+        assert_eq!(l.as_str(), "12");
     }
 
     #[test]
