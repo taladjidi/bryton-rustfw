@@ -1153,7 +1153,8 @@ fn main() -> ! {
             usb_tried = true;
             link = usb::start();
             app.set_usb(&mut board, if link.is_some() { UsbDot::Powered } else { UsbDot::Failed });
-        } else if !vbus && usb_tried {
+        } else if !vbus && usb_tried && !app.busy() {
+            // not during a ride or on its card (a loose cable or a power bank unplugged must not lose it): after it
             // ponytail: unplugged = reset, the simplest way to power the PHY and the USB core down again
             system_reset();
         }

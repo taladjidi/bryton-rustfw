@@ -2371,6 +2371,43 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// During a ride, holding Back once only warns (switching off would lose it); a second hold within 10 s
+    /// switches off. With no ride, the first hold does.
+    #[test]
+    fn off_during_a_ride_asks_twice() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Long(Key::Back));
+        assert!(!sim.standby && app.banner.as_str() == "HOLD AGAIN: OFF", "warned");
+        run(&mut sim, &mut app, 12_000);
+        app.press(&mut sim, Press::Long(Key::Back));
+        assert!(!sim.standby, "the warning ran out: warned again");
+        app.press(&mut sim, Press::Long(Key::Back));
+        assert!(sim.standby, "the second hold");
+        assert!(app.busy() || app.ride.state() != crate::ride::State::Idle);
+    }
+
+    /// A pass that takes longer than a second (an eMMC or radio wait) loses no ride time: the ride counts every
+    /// second gone, up to MAX_CATCH_UP (more is the clock being set).
+    #[test]
+    fn long_pass_loses_no_ride_time() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        sim.gnss.fix = Some(8000);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 3000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 10_000);
+        let t = app.ride.timer_s();
+        sim.delay_ms(3000); // a 3 s pass
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(app.ride.timer_s(), t + 4, "the 3 s of the long pass and the next second");
+        sim.delay_ms(30_000); // the clock jumps (set from the GPS): counted up to MAX_CATCH_UP only
+        run(&mut sim, &mut app, 100);
+        assert!(app.ride.timer_s() <= t + 4 + u32::from(MAX_CATCH_UP) + 1);
+    }
+
     /// Reminders: EAT after 5 minutes of riding, said in a banner with three beeps that do not stop the loop;
     /// nothing while paused; set from the ALERTS menu and kept.
     #[test]

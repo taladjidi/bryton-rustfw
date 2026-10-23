@@ -755,6 +755,12 @@ pub enum Screen {
 /// Stock's rides are read by themselves this long after start-up (for the totals), unless a ride runs.
 pub const STOCK_SCAN_MS: u32 = 30_000;
 
+/// During a ride, holding Back a second time within this long switches off (the first hold only warns).
+pub const OFF_CONFIRM_MS: u32 = 10_000;
+
+/// The ride catches up at most this many seconds after a long pass ([`App::step`]).
+pub const MAX_CATCH_UP: u8 = 10;
+
 /// How long a banner stays up, unless an input dismisses it first.
 pub const BANNER_MS: u32 = 4000;
 
@@ -907,6 +913,8 @@ pub struct App {
     alerts: alerts::Alerts,
     alert: Option<alerts::Alert>,
     tones: (&'static [(u32, u32)], u32, bool),
+    /// A first hold of Back during a ride armed switching off for this long ([`OFF_CONFIRM_MS`]).
+    off_armed_ms: u32,
     /// When the ride started: date, hours and minutes (its card's title).
     ride_started: ((u16, u8, u8), (u8, u8)),
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
@@ -969,7 +977,7 @@ impl App {
             light_ms: LIGHT_MS,          // a measurement at the first step
             measuring: false,
             baro: None,
-            seconds: 0,
+            seconds: rtc_time_from_tr(b.rtc().0).2,
             strip: Strip {
                 time: rtc_hm(b),
                 radio: ble.is_some(),
@@ -1034,6 +1042,7 @@ impl App {
             graph_whole: false,
             ride_started: ((2000, 1, 1), (0, 0)),
             alerts: alerts::Alerts::new(),
+            off_armed_ms: 0,
             alert: None,
             tones: (&[], 0, false),
             summary: None,
@@ -1418,6 +1427,12 @@ impl App {
         let on = |i: usize| self.pages.get(i % PAGES).is_some_and(|p| p.layout > 0);
         let n = (0..PAGES).map(|k| (from + k * step) % PAGES).find(|&i| on(i)).unwrap_or(0);
         Screen::Ride(n)
+    }
+
+    /// A ride runs (or its card is on screen): what a reset or switching off would lose (main.rs does not reset on a
+    /// USB unplug then).
+    pub fn busy(&self) -> bool {
+        self.ride.state() != ride::State::Idle || self.screen == Screen::Summary
     }
 
     /// The card of the ride (the one running, or the last one): its numbers and title.
@@ -2247,6 +2262,11 @@ impl App {
             _ => None,
         };
         match (self.screen, i) {
+            // during a ride (or on its card), a first hold only warns: switching off loses it (nothing is saved yet)
+            (_, Input::Off) if self.busy() && self.off_armed_ms == 0 => {
+                self.off_armed_ms = OFF_CONFIRM_MS;
+                return self.say("HOLD AGAIN: OFF");
+            }
             (_, Input::Off) => return self.power_off(b),
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
@@ -2521,13 +2541,19 @@ impl App {
         self.strip.time = (h, m);
         self.date = rtc_date_from_dr(dr);
         if sec != self.seconds {
-            self.second();
+            // every second gone, not one a pass: a pass that took longer (an eMMC or radio wait) loses no ride time;
+            // more than MAX_CATCH_UP is the clock set, not riding
+            let gone = (sec + 60 - self.seconds) % 60;
+            for _ in 0..gone.clamp(1, MAX_CATCH_UP) {
+                self.second();
+            }
         }
         if let Some(a) = self.alert.take() {
             self.say(a.text());
             self.tones = (&BEEP_ALERT, 0, false);
         }
         self.play_tones(b);
+        self.off_armed_ms = self.off_armed_ms.saturating_sub(POLL_MS);
         self.seconds = sec;
         self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
         if self.battery_ms >= BATTERY_MS {
