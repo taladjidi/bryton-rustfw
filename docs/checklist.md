@@ -18,7 +18,7 @@ the code; [features.md](features.md) says how each one works.
 ## Screens and pages
 
 - [x] Status strip on every screen: BLE, GPS bars, time, ride state, USB, battery (stock): unit
-- [x] Home screen with time, date and chosen fields (stock, Garmin): sim, overview with four fields and notices
+- [x] Home screen with time, date and chosen fields (stock, Garmin): unit, overview with four fields (default: week, year and total km, week hours) and notices; apart from the ride pages as on stock
 - [x] Up to three data pages per profile (stock): unit
 - [x] Layouts of one to six fields, uneven ones too (stock has 12 grids) (stock, Garmin): sim, eleven layouts
 - [~] Edit a page's fields on the unit (stock, Garmin, Wahoo): from the menu; no long press on a field
@@ -48,7 +48,7 @@ Speed and distance
 - [x] Speed, average, maximum (stock, all): unit (speed); sim (from a wheel sensor)
 - [x] Distance (stock, all): unit
 - [ ] Trip 1 / Trip 2 counters, reset by hand (stock)
-- [ ] Odometer: recorded or all distance (stock ODO, Garmin)
+- [x] Odometer: recorded or all distance (stock ODO, Garmin): unit, TOTAL KM on the overview from every ride on the card (stock's)
 
 Time
 
@@ -164,7 +164,7 @@ Others
 - [ ] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all)
 - [ ] Settings in a file, two copies (stock .ini files, all): in RTC backup registers for now
 - [ ] Screenshots saved to the volume (stock \Screenshot): over USB only (`dev.py shot`)
-- [ ] Debug log file after a fault (stock \Debug, patch D1)
+- [~] Debug log file after a fault (stock \Debug, patch D1): sim, a fault resets the unit and is said at start (FAULT RESET n, backup register 29); no log file yet
 
 ## Navigation and maps
 
@@ -344,7 +344,7 @@ Storage, USB and updates
 
 - [~] Ride list on the unit with summary and details (stock Results, all): sim, HISTORY: stock's rides newest first, each with its card (track, profile, ten numbers); no laps or graphs per ride
 - [ ] Delete rides on the unit (stock)
-- [~] Totals: week, month, year, odometer (stock Overview, Garmin): sim, week, year and all rides from stock's files in STOCK DATA; no month, no odometer
+- [~] Totals: week, month, year, odometer (stock Overview, Garmin): unit, week, year and total km and week hours on the overview (read by themselves 30 s after start); no month
 - [ ] Personal records and best efforts (Garmin, Karoo)
 - [~] Power curve over 90 days, season, all time (stock app Rider's Insight, Garmin): sim, 90-day bests (1 s to 60 min) for CP and W'; no screen, no season
 - [ ] Training load chart on the unit (stock app PMC, Garmin)
