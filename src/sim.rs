@@ -32,6 +32,8 @@ pub struct Sim {
     colmod: u8,
     ramctrl: [u8; 2],
     pub backlight: bool,
+    /// Every buzzer frequency set, in order (0: silence).
+    pub tones: Vec<u32>,
     /// Backlight level, percent.
     pub light_level: u8,
     pub standby: bool,
@@ -279,6 +281,7 @@ impl Sim {
             colmod: 0x06,
             ramctrl: [0x10, 0xf0],
             backlight: false,
+            tones: Vec::new(),
             light_level: 0,
             standby: false,
             ms: 0,
@@ -386,6 +389,10 @@ impl Board for Sim {
             }
         }
         self.dirty = true;
+    }
+
+    fn beep(&mut self, hz: u32) {
+        self.tones.push(hz);
     }
 
     fn backlight(&mut self, level: u8) {
@@ -961,6 +968,7 @@ mod tests {
         assert!(sim.ms >= 6000, "standby while the key is still down would wake the unit at once");
         assert!(sim.asleep && !sim.display_on && !sim.backlight);
         assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
+        assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
     }
 
     /// A synthetic ride at 8 m/s (28.8 km/h): 240 s east with a gentle wiggle, then a loop of 600 m radius

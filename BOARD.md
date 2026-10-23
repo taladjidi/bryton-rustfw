@@ -485,3 +485,20 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   receiver's NAV-PVT carried the right UTC date and time, flagged valid, instead of 2021-03-07. How much faster a
   fix comes: to measure outside.
 
+## 14. Buzzer
+
+From stock (Ghidra: `Buzzer_PwmInit` 0xd018b3f0, `Buzzer_PlayTone` 0xd018b54a, `Buzzer_On` 0xd018b4cc,
+`Buzzer_Off` 0xd018b614).
+
+- **TIM1** (0x40010000) channel 3, PWM mode 1, on **PA10** (AF1, no pull); **PH2** = amplifier enable (high = on).
+  The tone is the timer's period; stock sets the pulse to half the period (a square wave). Stock's default:
+  prescaler 41, period 99 (5.95 kHz if TIM1 runs at 25 MHz, inferred).
+- TIM1 is an advanced timer: its outputs stay off until BDTR.MOE is set.
+- This firmware computes TIM1's input clock from the prescalers the bootloader left (RCC_D1CFGR.HPRE,
+  RCC_D2CFGR.D2PPRE2; doubled when APB2 is divided, RM0399) and picks prescaler and period for each tone. Between
+  tones PA10 is a plain low output and PH2 low. Rising tones at power-on, falling at power-off (stock's own
+  melodies are not traced). To hear on the unit.
+
+    PH2 amp     ____/~~~~~~~~~~~~~~~~~~~~~~\_____
+    PA10 TIM1   ____|_|~|_|~|_ ... _|~|_|~|_|_____   square wave, pulse = period / 2
+                    |<- 80 ms 1500 Hz ->|<- 120 ms 2500 Hz ->|   (power-on: rising)

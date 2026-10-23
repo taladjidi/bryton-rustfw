@@ -44,6 +44,8 @@ pub trait Board {
     }
     /// Backlight at `level` percent (0: off).
     fn backlight(&mut self, level: u8);
+    /// The buzzer sounding a tone at `hz` (0: silence).
+    fn beep(&mut self, hz: u32);
     /// The keys held down, as a mask of [`Key`] codes.
     fn keys_down(&mut self) -> u8;
     /// RTC_TR and RTC_DR, read once the shadow registers are in sync (RSF): the time of day and the date, BCD.
@@ -290,6 +292,20 @@ const DEFAULT_PAGES: [PageCfg; PAGES] = {
 // The app
 // ---------------------------------------------------------------------------------------------------------------
 
+/// Tones played at power-on and power-off: (Hz, ms). Rising, then falling (stock's own melodies are not traced).
+pub const BEEP_ON: [(u32, u32); 2] = [(1500, 80), (2500, 120)];
+/// The power-off tones.
+pub const BEEP_OFF: [(u32, u32); 2] = [(2500, 80), (1500, 120)];
+
+/// Plays `tones` (blocking: a few hundred ms, only at power-on and power-off).
+fn play(b: &mut impl Board, tones: &[(u32, u32)]) {
+    for &(hz, ms) in tones {
+        b.beep(hz);
+        b.delay_ms(ms);
+    }
+    b.beep(0);
+}
+
 /// Main loop period: the time and the keys are read this often.
 pub const POLL_MS: u32 = 50;
 
@@ -436,6 +452,7 @@ impl App {
     /// settings read, the first ride page drawn.
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
+        play(b, &BEEP_ON);
         let mut rx = nrf::Rx::new();
         let ble = nrf::start(b).ok();
         let ant = match (ble, ant_key) {
@@ -1098,11 +1115,11 @@ impl App {
             self.strip.battery = self.battery.percent();
             self.strip.charging = charging;
         }
-        self.update_strip(b);
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
         self.poll_gnss(b);
+        self.update_strip(b); // after everything that changes it (time, battery, GPS)
         for kind in Kind::ALL {
             if self.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
@@ -1169,6 +1186,7 @@ impl App {
             nrf::system_off(b);
         }
         b.gnss_power(false);
+        play(b, &BEEP_OFF);
         b.backlight(0);
         panel::off(b);
         while b.keys_down() & Key::Back as u8 != 0 {

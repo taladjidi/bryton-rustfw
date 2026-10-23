@@ -536,6 +536,56 @@ fn backlight(level: u8) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Buzzer: TIM1 channel 3 PWM on PA10 (AF1), amplifier enable on PH2, as stock (Buzzer_PwmInit 0xd018b3f0, BOARD.md 14):
+// a square wave (pulse = half the period) at the tone's frequency.
+// ---------------------------------------------------------------------------------------------------------------
+const TIM1: u32 = 0x4001_0000;
+const BUZZER_AMP: (Port, u32) = (Port::H, 2);
+const RCC_D1CFGR: u32 = RCC + 0x018;
+const RCC_D2CFGR: u32 = RCC + 0x01c;
+
+/// TIM1's input clock: the core clock through the AHB (D1CFGR.HPRE) and APB2 (D2CFGR.D2PPRE2) prescalers, doubled
+/// when APB2 is divided (RM0399, timer clocks), read from the registers the bootloader left rather than assumed.
+fn tim1_hz() -> u32 {
+    let hpre = rd(RCC_D1CFGR) & 0xf;
+    let ahb = if hpre < 8 { CPU_HZ } else { CPU_HZ >> (hpre - 7).min(9) };
+    let ppre2 = (rd(RCC_D2CFGR) >> 8) & 7;
+    if ppre2 < 4 { ahb } else { (ahb >> (ppre2 - 3)) * 2 }
+}
+
+fn buzzer_init() {
+    modify(RCC_APB2ENR, 0, 1); // TIM1EN
+    pin_set(BUZZER_AMP.0, BUZZER_AMP.1, false);
+    gpio(BUZZER_AMP.0, BUZZER_AMP.1, OUT, 0);
+    pin_set(Port::A, 10, false);
+    gpio(Port::A, 10, OUT, 0); // quiet until a tone: a plain low output
+}
+
+/// A tone at `hz` (0: silence).
+fn beep(hz: u32) {
+    if hz == 0 {
+        wr(TIM1, 0); // CR1: stop
+        gpio(Port::A, 10, OUT, 0);
+        pin_set(BUZZER_AMP.0, BUZZER_AMP.1, false);
+        return;
+    }
+    let clk = tim1_hz();
+    let psc = clk / (hz * 65_536); // smallest prescaler that keeps the period in 16 bits
+    let arr = (clk / (psc + 1) / hz).clamp(2, 65_536) - 1;
+    wr(TIM1, 0);
+    wr(TIM1 + 0x28, psc); // PSC
+    wr(TIM1 + 0x2c, arr); // ARR
+    wr(TIM1 + 0x3c, (arr + 1) / 2); // CCR3: half the period
+    wr(TIM1 + 0x1c, (6 << 4) | (1 << 3)); // CCMR2: OC3M = PWM mode 1, preload
+    wr(TIM1 + 0x20, 1 << 8); // CCER: CC3E
+    wr(TIM1 + 0x44, 1 << 15); // BDTR: MOE (an advanced timer's outputs stay off without it)
+    wr(TIM1 + 0x14, 1); // EGR: UG, load the registers
+    wr(TIM1, (1 << 7) | 1); // CR1: ARPE, CEN
+    gpio(Port::A, 10, AF, 1); // TIM1_CH3
+    pin_set(BUZZER_AMP.0, BUZZER_AMP.1, true);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Battery: ADC3 (0x58026000, RM0399 ADC; BOARD.md 12), as stock reads it: VREFINT (channel 19) to know VDDA, then
 // the battery through a divider on PC3_C (channel 1), both with the longest sampling time. Kernel clock per_ck (HSI
 // 64 MHz) / 16 = 4 MHz, under every BOOST limit, so BOOST stays 0. 16-bit (the reset resolution).
@@ -675,6 +725,9 @@ impl Board for S510 {
     fn backlight(&mut self, level: u8) {
         backlight(level);
     }
+    fn beep(&mut self, hz: u32) {
+        beep(hz);
+    }
     fn keys_down(&mut self) -> u8 {
         KEYS.iter().enumerate().fold(0, |m, (i, &(port, pin))| m | (u8::from(pin_low(port, pin)) << i))
     }
@@ -756,6 +809,7 @@ fn main() -> ! {
     checkpoint(3);
     spi_init();
     backlight_init();
+    buzzer_init();
     let _ = adc_init(); // a failure leaves the battery unknown ("--%")
     gnss_init();
     checkpoint(4);

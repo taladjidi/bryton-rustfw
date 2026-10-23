@@ -163,6 +163,7 @@ holds local time; power off reaches standby (D1 / D2 reset flags) and the power 
 input. Still to see:
 - A GPS fix (the receiver answers and reports, indoors without satellites), and how much the aiding at power-up
   shortens the next one.
+- The start and stop beeps (TIM1 on PA10, BOARD.md 14): to hear.
 - The backlight PWM levels and time-out (LPTIM1, as stock), each level by eye.
 - The I-cache from a cold boot (seen from RAM: stable, ride page 0.5 % -> 0.2 % awake, GPS menu 2.2 % -> 1.3 %).
 - The map on a real ride (simulated: 8 full redraws in a 14 min ride out and round a loop, 660 pixels/s between
