@@ -265,8 +265,29 @@ impl SensorId {
     }
 }
 
-/// ANT event code: the channel is closed (after [`ant_close`]).
+/// ANT event code: the channel is closed (after [`ant_close`], or a search that timed out).
 const EVENT_CHANNEL_CLOSED: u8 = 0x07;
+
+/// Low-priority search time-out, in 2.5 s units: 12 = 30 s. Then the chip closes the channel and the app reopens it
+/// later ([`crate::SEARCH_REST_MS`]), so a sensor that is not sending (a strap not worn) does not keep the radio
+/// listening all the time. Stock uses 0xff (searching for ever).
+pub const SEARCH_TIMEOUT: u8 = 12;
+
+/// The channel of ANT event `p` if it reports a channel closed.
+///
+/// ```
+/// let mut p = [0u8; 44];
+/// p[0] = 8;
+/// (p[42], p[43]) = (7, 3);
+/// assert_eq!(bryton_rustfw::nrf::ant_closed(&p), Some(3));
+/// assert_eq!(bryton_rustfw::nrf::ant_closed(&[2, 0x1b, 0]), None, "any other packet, short ones included");
+/// ```
+pub fn ant_closed(p: &[u8]) -> Option<u8> {
+    match p {
+        [ANT_EVT, .., EVENT_CHANNEL_CLOSED, ch] if p.len() == 44 => Some(*ch),
+        _ => None,
+    }
+}
 
 /// Enables ANT, sets the ANT+ network key (licensed: build.rs reads it from a private file, never from this
 /// repository) and assigns channels `0..channels` as receivers on that network, as stock does at start.
@@ -297,9 +318,8 @@ pub fn ant_open(
     let [p0, p1] = period.to_le_bytes();
     let cmds: [&[u8]; 5] = [
         &[ANT_CMD, 0xd3, ch, d0, d1, device_type, trans], // channel id
-        // ponytail: searches until the sensor answers (stock's 0xff), so the radio stays on; a timeout if it costs
-        &[ANT_CMD, 0xda, ch, 0xff], // low-priority search timeout
-        &[ANT_CMD, 0xcd, ch, 0x39], // 2457 MHz, ANT+
+        &[ANT_CMD, 0xda, ch, SEARCH_TIMEOUT],             // low-priority search time-out
+        &[ANT_CMD, 0xcd, ch, 0x39],                       // 2457 MHz, ANT+
         &[ANT_CMD, 0xd1, ch, p0, p1],
         &[ANT_CMD, 0xc4, ch, 0, 0], // open
     ];
@@ -312,8 +332,7 @@ pub fn ant_open(
 /// Closes channel `ch` and waits for the chip to report it closed, so it can be opened again with another ID.
 pub fn ant_close(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<(), Error> {
     call(b, rx, &[ANT_CMD, 0xc5, ch], &mut [])?;
-    let closed =
-        |p: &[u8]| (p.len() == 44 && p[0] == ANT_EVT && p[42] == EVENT_CHANNEL_CLOSED && p[43] == ch).then_some(());
+    let closed = |p: &[u8]| (ant_closed(p) == Some(ch)).then_some(());
     wait(b, rx, closed).ok_or(Error::Timeout)
 }
 

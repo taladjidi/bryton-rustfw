@@ -319,6 +319,11 @@ pub const PVT_STALE_MS: u32 = 3000;
 /// the first 32 bytes of idle fill between frames, so most passes read 32.
 const GNSS_READ: usize = 128;
 
+/// How long a sensor's channel rests, closed, after its search timed out ([`nrf::SEARCH_TIMEOUT`]) before it
+/// searches again: so a strap not worn costs the radio 30 s of listening in 90 instead of all the time.
+// ponytail: fixed; during a ride a lost sensor should come back sooner (search again at once on the first drop-out)
+pub const SEARCH_REST_MS: u32 = 60_000;
+
 /// A sensor's channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sensor {
@@ -390,6 +395,8 @@ pub struct App {
     sensors: [Sensor; 5],
     /// Since each sensor's last broadcast.
     heard_ms: [u32; 5],
+    /// Since each sensor's channel was closed by its search time-out (`u32::MAX`: not resting).
+    resting_ms: [u32; 5],
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
     live: Live,
@@ -476,6 +483,7 @@ impl App {
             ant,
             sensors,
             heard_ms: [u32::MAX; 5],
+            resting_ms: [u32::MAX; 5],
             ask: 0,
             live: Live::default(),
             decoders: Decoders::default(),
@@ -795,9 +803,11 @@ impl App {
     /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing.
     fn set_sensor(&mut self, b: &mut impl Board, kind: Kind, want: Sensor) {
         let i = kind as usize;
-        if self.sensors[i] != Sensor::Off && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err() {
+        let resting = self.resting_ms[i] != u32::MAX;
+        if self.sensors[i] != Sensor::Off && !resting && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err() {
             return; // still open: leave it as it was
         }
+        self.resting_ms[i] = u32::MAX;
         self.sensors[i] = Sensor::Off;
         self.heard_ms[i] = u32::MAX;
         let id = match want {
@@ -937,6 +947,8 @@ impl App {
                     if self.sensors[kind as usize] == Sensor::Search {
                         self.ask |= 1 << ch;
                     }
+                } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
+                    self.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) {
                     self.scanning = false;
                     title = true;
@@ -1075,6 +1087,21 @@ impl App {
         self.live.tick(POLL_MS);
         for h in &mut self.heard_ms {
             *h = h.saturating_add(POLL_MS);
+        }
+        for kind in Kind::ALL {
+            let i = kind as usize;
+            if self.resting_ms[i] == u32::MAX {
+                continue;
+            }
+            self.resting_ms[i] += POLL_MS;
+            if self.resting_ms[i] >= SEARCH_REST_MS {
+                let id = match self.sensors[i] {
+                    Sensor::Paired(id) => Some(id),
+                    _ => None, // still pairing: search for any
+                };
+                let ok = nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok();
+                self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
+            }
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         match self.screen {

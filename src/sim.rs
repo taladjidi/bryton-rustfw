@@ -113,7 +113,7 @@ pub struct Nordic {
     scan_end: Option<u64>,
     /// ANT+ sensors in range.
     pub sensors: Vec<AntSensor>,
-    channels: [Channel; 8],
+    pub channels: [Channel; 8],
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
@@ -127,14 +127,17 @@ pub struct AntSensor {
     pub data: fn(u64) -> [u8; 8],
 }
 
-/// An ANT channel: the ID it was set to, open or not, the sensor it found, its next broadcast.
+/// An ANT channel: the ID it was set to, open or not, the sensor it found, its next broadcast, when it opened and
+/// its low-priority search time-out (2.5 s units).
 #[derive(Default, Clone, Copy)]
-struct Channel {
+pub struct Channel {
     device_type: u8,
     device: u16,
-    open: bool,
+    pub open: bool,
     found: Option<usize>,
     next: u64,
+    opened: u64,
+    search_timeout: u8,
 }
 
 /// The advertisers the simulated chip hears: two devices, one of them named, one report repeated.
@@ -172,7 +175,15 @@ impl Nordic {
             }
             self.channels[ch].next = c.next + 250;
             let hit = |s: &AntSensor| s.device_type == c.device_type && (c.device == 0 || c.device == s.id);
-            let Some(i) = c.found.or_else(|| self.sensors.iter().position(hit)) else { continue };
+            let Some(i) = c.found.or_else(|| self.sensors.iter().position(hit)) else {
+                if c.search_timeout != 0xff && now >= c.opened + 2500 * u64::from(c.search_timeout) {
+                    // nothing found: EVENT_RX_SEARCH_TIMEOUT, then the channel closes
+                    self.channels[ch].open = false;
+                    self.ant_event(&[1, 0x40, ch as u8, 1, 1], 1, ch as u8);
+                    self.ant_event(&[1, 0x40, ch as u8, 1, 7], 7, ch as u8);
+                }
+                continue;
+            };
             self.channels[ch].found = Some(i);
             let data = (self.sensors[i].data)(now);
             self.ant_event(&[&[9, 0x4e, ch as u8][..], &data].concat(), 0x80, ch as u8); // EVENT_RX
@@ -208,8 +219,10 @@ impl Nordic {
                 }
                 (0xc4, _) => {
                     assert!(!self.channels[ch].open, "channel {ch} opened twice");
-                    self.channels[ch] = Channel { open: true, found: None, next: now, ..self.channels[ch] };
+                    self.channels[ch] =
+                        Channel { open: true, found: None, next: now, opened: now, ..self.channels[ch] };
                 }
+                (0xda, [t]) => self.channels[ch].search_timeout = *t,
                 (0xc5, _) => {
                     self.channels[ch].open = false;
                     self.queue(&[1, 0xc5, 0, 0, 0, 0]);
@@ -732,6 +745,29 @@ mod tests {
         assert_eq!(sim.backup[Kind::Hr.backup()], SensorId { device: 999, trans: 0xf1 }.to_word(), "paired anew");
     }
 
+    /// A paired strap that is not sending: its channel searches 30 s, closes, rests a minute, searches again; the
+    /// strap is found when it comes back.
+    #[test]
+    fn a_silent_sensor_searches_then_rests() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        let mut app = App::start(&mut sim, Some(KEY));
+        let opens = |sim: &Sim| sim.nordic.got.iter().filter(|p| p.starts_with(&[6, 0xc4, 0])).count();
+        assert_eq!(opens(&sim), 1);
+        assert!(sim.nordic.got.contains(&vec![6, 0xda, 0, crate::nrf::SEARCH_TIMEOUT]));
+        run(&mut sim, &mut app, 30_000 + 1000);
+        assert!(!sim.nordic.channels[0].open, "closed by its search time-out");
+        run(&mut sim, &mut app, u64::from(SEARCH_REST_MS) - 2000);
+        assert_eq!(opens(&sim), 1, "resting");
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(opens(&sim), 2, "searching again");
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(app.live.get(Metric::Hr), Some(72), "found");
+        run(&mut sim, &mut app, 60_000);
+        assert!(sim.nordic.channels[0].open, "a sensor that sends keeps its channel");
+    }
+
     /// The page menu: Start cycles the layout and the fields; kept in a backup register, read back at the next
     /// start. A power meter's value shows in the new field.
     #[test]
@@ -1059,5 +1095,83 @@ mod dev_tests {
         assert_eq!(s.feed(b"load 99999999 0\nreset\n", &app, Stats::default(), &mut pc), Effect::Reset);
         assert!(pc.got.starts_with(b"err usage"));
         assert!(pc.got.ends_with(b"ok\n"));
+    }
+}
+
+/// Layer 4 of the testing strategy (AGENTS.md): random bytes through every parser and decoder that takes bytes
+/// from outside (the Nordic chip, the GNSS receiver). A panic there would freeze the unit.
+#[cfg(test)]
+mod fuzz {
+    extern crate std;
+    /// xorshift32: deterministic, so a failure reproduces.
+    fn bytes(seed: u32, n: usize) -> impl Iterator<Item = u8> {
+        let mut x = seed;
+        (0..n).map(move |_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            // lengths and markers more often than chance, so the parsers get past their headers
+            match x % 16 {
+                0 => 0xb5,
+                1 => 0x62,
+                2 => 44,
+                3 => 0,
+                _ => (x >> 8) as u8,
+            }
+        })
+    }
+
+    #[test]
+    fn nordic_packets() {
+        let mut rx = crate::nrf::Rx::new();
+        for seed in 1..=4u32 {
+            for b in bytes(seed, 1 << 20) {
+                if let Some(p) = rx.push(b) {
+                    let _ = crate::nrf::event_id(p);
+                    let _ = crate::nrf::ant_broadcast(p);
+                    let _ = crate::nrf::ant_closed(p);
+                    if let Some(r) = crate::nrf::adv_report(p) {
+                        let _ = (crate::nrf::ad_name(r.data), crate::nrf::ad_maker(r.data));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Random bytes from the computer, with command words mixed in, into the dev link protocol.
+    #[test]
+    fn dev_link_input() {
+        use crate::dev::{Session, Stats};
+        let mut sim = super::Sim::new(9, 0, 0);
+        let app = crate::App::start(&mut sim, None);
+        let words: [&[u8]; 8] = [b"peek ", b"poke ", b"load ", b"key ", b"0x4", b"\n", b"shot\n", b"bat\n"];
+        for seed in 1..=4u32 {
+            let (mut session, mut pc) = (Session::new(), super::Pc::default());
+            let mut buf = std::vec::Vec::new();
+            for (k, b) in bytes(seed, 1 << 16).enumerate() {
+                if b % 5 == 0 {
+                    buf.extend_from_slice(words[usize::from(b) % words.len()]);
+                } else {
+                    buf.push(b);
+                }
+                if k % 64 == 63 {
+                    let _ = session.feed(&buf, &app, Stats::default(), &mut pc);
+                    buf.clear();
+                    pc.got.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ubx_frames() {
+        let mut parser = crate::gnss::Parser::new();
+        for seed in 1..=4u32 {
+            for b in bytes(seed, 1 << 20) {
+                if let Some((c, i, p)) = parser.push(b) {
+                    let _ = crate::gnss::pvt(c, i, p);
+                }
+            }
+        }
     }
 }
