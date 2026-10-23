@@ -225,12 +225,13 @@ const SR_TXC: u32 = 1 << 12;
 const SPI_TIMEOUT: u32 = CPU_HZ / 100; // 10 ms: a stuck SPI must not hang the loop
 
 fn spi_init() {
-    wr(SPI_CR1, 0);
+    // SSI first: with SSM, MASTER set while SSI is 0 is a mode fault, which clears MASTER (seen on the unit,
+    // diag v17: CFG2 read back without MASTER, so SPI1 took 16 bytes and never clocked; RM0399 SPI mode fault).
+    wr(SPI_CR1, 1 << 12); // SSI = 1
     wr(SPI_CFG1, (2 << 28) | 7); // MBR = /8, DSIZE = 8 bits
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
     wr(SPI_CFG2, (1 << 31) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 22) | (1 << 17));
     wr(SPI_CR2, 0); // TSIZE 0: endless transfer, bytes go out as they are written
-    wr(SPI_CR1, 1 << 12); // SSI = 1 (with SSM: no mode fault)
     wr(SPI_CR1, (1 << 12) | 1); // SPE
     wr(SPI_CR1, (1 << 12) | (1 << 9) | 1); // CSTART
 }

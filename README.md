@@ -17,9 +17,9 @@ Bryton.
   the STM32H747 reference manual (RM0399).
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
 
-**Status: installed on the unit once (2026-10-22): it does not start yet.** Dark screen, keys ignored, no USB
-device. Diagnostic builds (branch `diag-boot`) show that our code does run (reset handler, I-cache, GPIO, system
-reset); where the full firmware stops is not known yet. See "First run on the unit" below.
+**Status: runs on the unit (2026-10-23).** The clock shows on the screen, and the USB dev link works (`info`,
+`shot`, `peek`, and `run` from RAM). The first install had stopped at the panel: SPI1 lost master mode to a mode
+fault (see "First run on the unit" below).
 
 ## Build
 
@@ -75,25 +75,26 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
     write (2000 bytes) after the panel power-on does not complete, with SPI1 in endless mode (TSIZE 0) or per
     transfer (TSIZE + EOT, as stock). Renode runs the same images to the end. So every byte of the first frame
     waits out its timeout: the firmware looks hung. Stock never sends long SPI writes (pixels go over the LTDC).
-  - Next (v16, built): the same probe with the panel off and on, the result coded in the delay before the reset.
+  - v16 coded the result in the delay before the reset: SPI1 took exactly 16 bytes (its FIFO) and never clocked,
+    with the panel off or on.
+  - **The cause (2026-10-23, found over the dev link):** v17 skips a stuck panel and starts USB; `dev.py peek`
+    showed SPI1 CFG2 without MASTER. `spi_init` wrote CFG2 (MASTER, SSM) while CR1.SSI was still 0: a mode fault,
+    which clears MASTER. Clocks and pins were right. With SSI written first, the firmware runs on the unit:
+    the screen shows the clock, the dev link works, and `dev.py run` starts a new build from RAM.
 - **The bootloader jumps with both caches off** (BOARD.md 2): the firmware runs uncached from SDRAM until it
   turns the I-cache on.
-- **Renode passed all of these:** it does not model the MPU and caches (BOARD.md 2).
+- **Renode passed all of these:** it does not model the MPU, the caches or the SPI mode fault (BOARD.md 2, 6).
 - **The four-button restart works with this firmware stuck**, so Engineer Mode stays reachable (cable in first).
 
+## Not yet seen on the unit
 
-- Pixels written over SPI with RAMCTRL `B0 00 F0` (standard for this panel class).
+Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (PHY enable on PA7, the ULPI pins)
+with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep. Still to see:
 - How to drive the backlight: PG13 as a plain output lit nothing on the unit (diag v5 to v8); stock uses an
   LPTIM1 PWM (BOARD.md).
 - Whether the RTC holds local time or UTC.
 - Whether power off reaches standby or a lighter sleep.
-- The SysTick + WFI sleep in `delay_ms` (a pending SysTick wakes WFI with interrupts masked).
-- **USB:**
-  - PHY enable on PA7;
-  - the ULPI pins;
-  - enumeration at high speed with 512-byte bulk packets;
-  - the OTG_HS IRQ waking WFI.
-- `dev.py run`: the trampoline and the image starting again from RAM, including its USB coming back.
+- The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 
 ## How it starts (verified)
 

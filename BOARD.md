@@ -97,6 +97,9 @@ battery on ADC3): not used yet.
 
 - 240 x 320 panel, **ST7789-class controller** (inferred from the command set), RGB565.
 - Commands over **SPI1** (0x40013000): 8 bit, transmit only, CPOL 1, CPHA 1 (mode 3), MSB first, D/C on PG9.
+- SPI1 with software NSS (SSM): CR1.SSI must be 1 **before** CFG2.MASTER is set. Otherwise the internal NSS is
+  low, the mode fault clears MASTER, and the SPI takes 16 bytes into its FIFO and never clocks (seen on the unit,
+  2026-10-23; RM0399, SPI mode fault). Renode does not model it.
 - Stock pushes pixels over the LTDC RGB interface (framebuffer in AXI SRAM). This firmware does not use the LTDC.
 - Power-up: PG3 high, PI3 high, 10 ms, then the stock init sequence (commands, parameters, waits in ms):
 
