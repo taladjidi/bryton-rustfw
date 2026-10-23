@@ -221,7 +221,7 @@ Others
 - [ ] Training status, training readiness, recovery time (Garmin)
 - [ ] Load focus, aerobic / anaerobic split (Garmin, Coros)
 - [ ] Power curve and rider profile (stock app Rider's Insight, Garmin cycling ability, Karoo)
-- [ ] VO2max and FTP estimates from rides (Garmin)
+- [~] VO2max and FTP estimates from rides (Garmin): sim, CP and W' fitted from stock's rides; no VO2max
 - [ ] Heat and altitude acclimation (Garmin)
 - [ ] hrTSS when there is no power meter (ours, intervals.icu)
 - [ ] DFA a1 against the aerobic threshold during a ride (patch P9): field done, no alert
@@ -332,6 +332,7 @@ Storage, USB and updates
 - [ ] Units: metric or imperial, temperature (stock, all)
 - [ ] Language (stock, all)
 - [ ] First start setup (stock, all)
+- [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired ANT+ sensors, data pages (ours): sim (STOCK DATA, IMPORT)
 - [ ] Auto features per profile: smart pause, climb page switch, climb approach, map view (stock)
 - [ ] Data reset: trips, odometer, factory settings (stock)
 - [ ] About: firmware version, UUID, position (stock): over USB (`dev.py info`) only
@@ -343,12 +344,12 @@ Storage, USB and updates
 
 - [ ] Ride list on the unit with summary and details (stock Results, all)
 - [ ] Delete rides on the unit (stock)
-- [ ] Totals: week, month, year, odometer (stock Overview, Garmin)
+- [~] Totals: week, month, year, odometer (stock Overview, Garmin): sim, week, year and all rides from stock's files in STOCK DATA; no month, no odometer
 - [ ] Personal records and best efforts (Garmin, Karoo)
-- [ ] Power curve over 90 days, season, all time (stock app Rider's Insight, Garmin)
+- [~] Power curve over 90 days, season, all time (stock app Rider's Insight, Garmin): sim, 90-day bests (1 s to 60 min) for CP and W'; no screen, no season
 - [ ] Training load chart on the unit (stock app PMC, Garmin)
 - [ ] Each ride matched to the planned workout (ours, roadmap 4b)
-- [ ] Rides read from stock's \Activities too (ours)
+- [x] Rides read from stock's \Activities too (ours): sim (STOCK DATA, READ RIDES), checked on two backups
 - [ ] Ride upload to intervals.icu or Strava from a computer tool (ours)
 
 ## Sources
