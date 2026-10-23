@@ -18,6 +18,14 @@
 //!   answers `bench <microseconds>` (the time the reads took, to measure the eMMC path), or `err <why>`.
 //! - `bench scan <kb>`: runs the scan of stock's rides over about `kb` KB ([`Effect::BenchScan`]) and answers
 //!   `bench <microseconds>` (the bytes read are about `kb` KB).
+//! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
+//!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
+//!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
+//!   only, through the firmware's own FAT reader (storage/fat.rs): `dev.py get` copies a file off the unit.
+//! - `find <lba> <count> <lo> <hi>`: reads `count` sectors (at most 65536) from `lba` ([`Effect::Find`]) and answers a
+//!   line `<lba hex> <hits hex>` for each sector holding 8 or more little-endian u32 values in `lo..=hi` at any byte
+//!   offset (FIT timestamps of a time window: carving a lost ride's records from free space), at most 512 lines,
+//!   then `end`. Read only.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -77,6 +85,12 @@ pub enum Effect {
     Emmc,
     /// Time eMMC reads: from a sector, sectors a read (1 to 32), reads; answer with [`send_bench`].
     Bench(u32, u32, u32),
+    /// Find sectors with many u32 values in a range ([`find_sectors`]): from, count, low, high.
+    Find(u32, u32, u32, u32),
+    /// List the folder whose path [`Session::path`] holds ([`send_ls`]).
+    Ls,
+    /// Send this many bytes from this offset of the file whose path [`Session::path`] holds ([`send_get`]).
+    Get(u32, u32),
     /// Time the scan of stock's rides over about this many bytes ([`App::bench_scan`]); answer with
     /// [`send_bench`].
     BenchScan(u32),
@@ -98,6 +112,8 @@ pub struct Session {
     line: [u8; 64],
     len: usize,
     load: Option<Load>,
+    path: [u8; 64],
+    path_len: usize,
 }
 
 impl Default for Session {
@@ -109,7 +125,12 @@ impl Default for Session {
 impl Session {
     /// Waiting for a command.
     pub const fn new() -> Self {
-        Session { line: [0; 64], len: 0, load: None }
+        Session { line: [0; 64], len: 0, load: None, path: [0; 64], path_len: 0 }
+    }
+
+    /// The path of the last `ls` or `get`.
+    pub fn path(&self) -> &str {
+        core::str::from_utf8(self.path.get(..self.path_len).unwrap_or(&[])).unwrap_or("")
     }
 
     /// Takes bytes from the computer; `stats` is for `info`.
@@ -233,6 +254,32 @@ impl Session {
                 _ => h.send(b"err usage: sector <n>\n"),
             },
             Some(b"emmc") => return Effect::Emmc,
+            Some(b"find") => {
+                let mut n = [0u32; 4];
+                for v in &mut n {
+                    *v = words.next().and_then(parse).unwrap_or(u32::MAX);
+                }
+                match n {
+                    [lba, count @ 1..=65_536, lo, hi] if lo <= hi && hi != u32::MAX => {
+                        return Effect::Find(lba, count, lo, hi);
+                    }
+                    _ => h.send(b"err usage: find <lba> <count 1..65536> <lo> <hi>\n"),
+                }
+            }
+            Some(cmd @ (b"ls" | b"get")) => {
+                let get = cmd == b"get";
+                let path = words.next().unwrap_or(b"/");
+                let n = path.len().min(self.path.len());
+                self.path[..n].copy_from_slice(&path[..n]);
+                self.path_len = n;
+                if !get {
+                    return Effect::Ls;
+                }
+                match (words.next().and_then(parse), words.next().and_then(parse)) {
+                    (Some(off), Some(len @ 1..=4096)) => return Effect::Get(off, len),
+                    _ => h.send(b"err usage: get <path> <offset> <len 1..4096>\n"),
+                }
+            }
             Some(b"bench") if line.starts_with(b"bench scan") => match words.nth(1).and_then(parse) {
                 Some(kb @ 1..=65_536) => return Effect::BenchScan(kb * 1024),
                 _ => h.send(b"err usage: bench scan <kb>\n"),
@@ -289,7 +336,88 @@ pub fn send_sector(h: &mut impl Host, r: Result<&[u8; emmc::SECTOR], emmc::Error
     }
 }
 
-/// The answer to `emmc`: `emmc <SEC_COUNT> <B> <OS start>` in hex, or the error.
+/// The answer to `find`: reads `count` sectors from `lba` with `read` (16 at a time) and sends each sector holding
+/// at least 8 little-endian u32 values in `lo..=hi`, at any byte offset, as `<lba> <hits>`; then `end`.
+pub fn find_sectors(
+    h: &mut impl Host,
+    read: &mut impl FnMut(u32, &mut [u8]) -> Result<(), emmc::Error>,
+    lba: u32,
+    count: u32,
+    (lo, hi): (u32, u32),
+) {
+    let mut buf = [0u8; 16 * emmc::SECTOR];
+    let (mut at, mut lines) = (lba, 0);
+    let end = lba.saturating_add(count);
+    while at < end && lines < 512 {
+        let n = (end - at).min(16);
+        let chunk = &mut buf[..n as usize * emmc::SECTOR];
+        if let Err(e) = read(at, chunk) {
+            return send_error(h, e);
+        }
+        for (k, sector) in chunk.chunks_exact(emmc::SECTOR).enumerate() {
+            let hits =
+                sector.windows(4).filter(|w| (lo..=hi).contains(&u32::from_le_bytes([w[0], w[1], w[2], w[3]]))).count()
+                    as u32;
+            if hits >= 8 && lines < 512 {
+                h.send(&hex(at + k as u32)[..8]);
+                h.send(b" ");
+                h.send(&hex(hits));
+                lines += 1;
+            }
+        }
+        at += n;
+    }
+    h.send(b"end\n");
+}
+
+/// The answer to `ls`: each entry of folder `path` on the FAT volume `d` as `<size> <d|f> <name>`, then `end`.
+pub fn send_ls(h: &mut impl Host, d: &mut impl crate::fat::Disk, path: &str) {
+    use crate::fat;
+    let mut fat = match fat::Fat::mount(d) {
+        Ok(f) => f,
+        Err(_) => return h.send(b"err no volume\n"),
+    };
+    let Ok(mut c) = fat.open(d, path).and_then(|dir| fat.cursor(dir)) else {
+        return h.send(b"err not found\n");
+    };
+    for _ in 0..4096 {
+        match fat.list(d, &mut c) {
+            Ok(Some(e)) => {
+                h.send(&hex(e.file.size)[..8]);
+                h.send(if e.file.dir { b" d " } else { b" f " });
+                h.send(e.name());
+                h.send(b"\n");
+            }
+            Ok(None) => break,
+            Err(_) => return h.send(b"err read\n"),
+        }
+    }
+    h.send(b"end\n");
+}
+
+/// The answer to `get`: up to `len` bytes of file `path` from `offset`, as hex.
+pub fn send_get(h: &mut impl Host, d: &mut impl crate::fat::Disk, path: &str, offset: u32, len: u32) {
+    use crate::fat;
+    let mut buf = [0u8; 4096];
+    let n = match fat::Fat::mount(d).and_then(|mut fat| {
+        let f = fat.open(d, path)?;
+        fat.read_at(d, &f, offset, buf.get_mut(..len as usize).unwrap_or(&mut []))
+    }) {
+        Ok(n) => n,
+        Err(_) => return h.send(b"err not found or unreadable\n"),
+    };
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for chunk in buf.get(..n).unwrap_or(&[]).chunks(64) {
+        let mut line = [0u8; 128];
+        for (i, &b) in chunk.iter().enumerate() {
+            line[2 * i] = DIGITS[usize::from(b >> 4)];
+            line[2 * i + 1] = DIGITS[usize::from(b & 15)];
+        }
+        h.send(&line[..2 * chunk.len()]);
+    }
+    h.send(b"\n");
+}
+
 /// The answer to `bench`: how long the reads took, or why they failed.
 pub fn send_bench(h: &mut impl Host, r: Result<u32, emmc::Error>) {
     match r {

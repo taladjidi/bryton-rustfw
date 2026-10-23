@@ -159,6 +159,14 @@ def main():
     p.add_argument('addr')
     p.add_argument('value')
     sub.add_parser('emmc', help='identify the eMMC and print its layout (BOARD.md 15)')
+    p = sub.add_parser('ls', help='list a folder of the eMMC FAT volume (read only): ls [PATH]')
+    p.add_argument('path', nargs='?', default='/')
+    p = sub.add_parser('get', help='copy a file off the eMMC FAT volume (read only): get PATH -o FILE')
+    p.add_argument('path')
+    p.add_argument('-o', required=True, help='where to write it')
+    p = sub.add_parser('find', help='find sectors with many u32 in [LO, HI] (read only): find LBA COUNT LO HI')
+    for k in ('lba', 'count', 'lo', 'hi'):
+        p.add_argument(k, type=lambda x: int(x, 0))
     p = sub.add_parser('bench', help='time eMMC reads (read only): bench [LBA] [SECTORS a read] [COUNT], or bench scan KB')
     p.add_argument('lba', nargs='?', default='0x10000')
     p.add_argument('n', nargs='?', type=int, default=16)
@@ -196,6 +204,43 @@ def main():
                 base = int(a.addr, 0)
                 for i, v in enumerate([first] + [line(s) for _ in range(a.n - 1)]):
                     print(f'{base + 4 * i:08x}: {v}')
+            elif a.cmd == 'find':
+                at, end = a.lba, a.lba + a.count
+                while at < end:
+                    n = min(8192, end - at)  # about 4 MB: an answer within the 5 s wait
+                    rows = [command(s, f'find {at} {n} {a.lo} {a.hi}')]
+                    while rows[-1] != 'end' and not rows[-1].startswith('err'):
+                        rows.append(line(s))
+                    if rows[-1].startswith('err'):
+                        sys.exit(f'dev.py: {rows[-1]}')
+                    for r in rows[:-1]:
+                        lba, hits = (int(x, 16) for x in r.split())
+                        print(f'{lba:#x} {hits}', flush=True)
+                    at += n
+            elif a.cmd == 'ls':
+                first = command(s, f'ls {a.path}')
+                rows = [first]
+                while rows[-1] != 'end' and not rows[-1].startswith('err'):
+                    rows.append(line(s))
+                if rows[-1].startswith('err'):
+                    sys.exit(f'dev.py: {rows[-1]}')
+                for r in rows[:-1]:
+                    size, kind, name = r.split(' ', 2)
+                    print(f'{int(size, 16):>12}  {"<dir>" if kind == "d" else "     "}  {name}')
+            elif a.cmd == 'get':
+                data = bytearray()
+                while True:
+                    answer = command(s, f'get {a.path} {len(data)} 4096')
+                    if answer.startswith('err'):
+                        sys.exit(f'dev.py: {answer}')
+                    chunk = bytes.fromhex(answer)
+                    data += chunk
+                    if len(chunk) < 4096:
+                        break
+                    if len(data) % (256 * 1024) == 0:
+                        print(f'{len(data) // 1024} KB...', file=sys.stderr)
+                pathlib.Path(a.o).write_bytes(data)
+                print(f'{len(data)} bytes -> {a.o}')
             elif a.cmd == 'bench' and a.lba == 'scan':
                 answer = command(s, f'bench scan {a.n}')
                 us = int(answer.split()[1], 16)

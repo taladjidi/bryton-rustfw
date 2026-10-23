@@ -1216,6 +1216,23 @@ fn main() -> ! {
                             l.flush();
                             woke = true;
                         }
+                        Effect::Find(lba, count, lo, hi) => {
+                            let emmc = app.emmc();
+                            dev::find_sectors(l, &mut |at, buf| emmc.read(&mut board, at, buf), lba, count, (lo, hi));
+                            l.flush();
+                            woke = true;
+                        }
+                        Effect::Ls => {
+                            dev::send_ls(l, &mut bryton_rustfw::emmc::Volume(app.emmc(), &mut board), session.path());
+                            l.flush();
+                            woke = true;
+                        }
+                        Effect::Get(off, len) => {
+                            let path = session.path();
+                            dev::send_get(l, &mut bryton_rustfw::emmc::Volume(app.emmc(), &mut board), path, off, len);
+                            l.flush();
+                            woke = true;
+                        }
                         Effect::Emmc => {
                             dev::send_layout(l, app.emmc().layout(&mut board));
                             l.flush();
