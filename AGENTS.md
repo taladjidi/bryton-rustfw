@@ -100,6 +100,9 @@ The point of this project is a firmware in safe Rust.
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
 - `src/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
   and drawing in runs per row clipped to `Canvas::clip`, so a dirty box and a screenshot row use the same code.
+- `src/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the
+  ambient light sensor, the barometer, the accelerometer (switched off), and the automatic backlight (smoothing,
+  hysteresis). `sim.rs` has a model of the bus (`Bus`); `tools/i2c.py` reaches it through `peek` / `poke`.
 - `src/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
 - `src/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
