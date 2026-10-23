@@ -20,7 +20,7 @@ import argparse, os, struct, sys, time, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-VID, PID = 0x1209, 0x0001          # src/usb.rs
+VID, PID = 0x1209, 0x0001          # src/board/usb.rs
 W, H = 240, 320
 
 

@@ -80,7 +80,7 @@ The golden rule (AGENTS.md) depends on this whole phase.
 - **Now:** stock's cached tiles (`\Map\Data\Temp`), read only. They exist only where stock has drawn. The full
   region maps stock downloads (`\MAP\MapData\<region>`) were empty on the unit.
 - **Next:** our own packs, made on the computer from **OpenStreetMap** with planetiler's OpenMapTiles profile, written
-  in the same record format `src/tiles.rs` already draws (stock's maps use the same schema). One file per zoom 10
+  in the same record format `src/ui/tiles.rs` already draws (stock's maps use the same schema). One file per zoom 10
   tile holding zooms 10 to 14 (341 tiles: a 32-byte header, an index of offset and length, 4-byte aligned records),
   copied over USB mass storage. A tool, `tools/map_pack.py`, with no new dependency (sqlite3 is in Python's
   standard library).

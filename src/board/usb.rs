@@ -3,7 +3,7 @@
 //! lib dev.rs. High speed, so bulk packets are 512 bytes. Polled from the main loop; the OTG_HS interrupt is
 //! enabled in the NVIC only so that USB activity wakes WFI (interrupts stay masked, no handler runs).
 
-use crate::hw::{rd, stage_write, wr};
+use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
 use bryton_rustfw::App;
 use bryton_rustfw::dev::{Effect, Host, Session, Stats};

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rasterizes TrueType fonts into src/fonts.rs: anti-aliased glyphs, 4 bits of coverage per pixel, cropped to
+"""Rasterizes TrueType fonts into src/ui/fonts.rs: anti-aliased glyphs, 4 bits of coverage per pixel, cropped to
 their ink. The output is committed, so a build needs neither this script nor PIL. Run it again after changing
 FONTS (adding a font or a size is one line there):
 
@@ -106,10 +106,10 @@ def main():
         for i in range(0, len(data), 24):
             lines.append('    ' + ' '.join(f'0x{b:02x},' for b in data[i:i + 24]))
         lines += ['];', '']
-    out = ROOT / 'src' / 'fonts.rs'
+    out = ROOT / 'src' / 'ui' / 'fonts.rs'
     out.write_text('\n'.join(lines))
     subprocess.run(['rustfmt', '--edition', '2024', '--config-path', str(ROOT / 'rustfmt.toml'), str(out)], check=True)
-    print(f'src/fonts.rs: {len(FONTS)} fonts, about {total} B in the image')
+    print(f'src/ui/fonts.rs: {len(FONTS)} fonts, about {total} B in the image')
 
 
 if __name__ == '__main__':

@@ -8,26 +8,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod ambient;
-pub mod battery;
 pub mod dev;
-pub mod emmc;
-pub mod fat;
-pub mod fit;
-pub mod fonts;
-pub mod gnss;
-pub mod map;
-pub mod menu;
-pub mod nrf;
-pub mod panel;
+pub mod drivers;
 pub mod ride;
-pub mod sensors;
 #[cfg(test)]
 mod sim;
-pub mod text;
-pub mod tiles;
-pub mod touch;
+pub mod storage;
 pub mod ui;
+
+// the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
+pub use drivers::{ambient, battery, emmc, gnss, nrf, panel, sensors, touch};
+pub use storage::{fat, fit};
+pub use ui::{fonts, map, menu, text, tiles};
 
 use menu::{Input, Setting};
 use nrf::SensorId;

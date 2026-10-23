@@ -15,9 +15,9 @@
 #![no_main]
 #![deny(unsafe_code)] // only hw.rs may use unsafe
 
-mod hw;
-mod usb;
+mod board;
 
+use board::{hw, usb};
 use bryton_rustfw::dev::{self, Effect, Session, Stats};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::ui::UsbDot;

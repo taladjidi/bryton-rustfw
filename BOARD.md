@@ -237,7 +237,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
       2A 00 00 00 EF ; 2B 00 00 01 3F ; B1 41 04 0A ; B2 0C 0C 00 33 33 ; B0 10 F0
 
   Display on (29) comes later. The final RAMCTRL `B0 10 F0` makes the panel take pixels from the RGB interface.
-- This firmware (`src/panel.rs`) sends the same sequence without that final RAMCTRL, so `B0 00 F0` stays in force
+- This firmware (`src/drivers/panel.rs`) sends the same sequence without that final RAMCTRL, so `B0 00 F0` stays in force
   and pixels are written over SPI (RAMWR). It waits 120 ms after the software reset, sets the window before
   each write, and switches the display on after clearing the screen.
 - Backlight: stock drives PG13 with an LPTIM1 PWM on the LSE, output polarity inverted, 1..100 levels. This
@@ -347,7 +347,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - `sd_ble_version_get` again: result 0, then `04 | 01 00 | 32 00`. Bryton fills these fields with its own
     versions, logged by stock as "Image 4, Bootloader 1, SD 50"; stock keeps the image number in RTC backup
     register 12, which reads 4 on this unit.
-- **This firmware (src/nrf.rs, seen on the unit 2026-10-23):** the same reset sequence, with USART2 on the HSI
+- **This firmware (src/drivers/nrf.rs, seen on the unit 2026-10-23):** the same reset sequence, with USART2 on the HSI
   kernel clock (64 MHz, BRR 64) rather than the bootloader's PLL3; then `sd_ble_enable` and `sd_ble_version_get`
   without any `sd_ble_cfg_set`, both answered (result 0, version 4 / 1 / 50).
 - **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
@@ -358,7 +358,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   timeout. Reports: event 0x1d, `[2][1d 00][conn u16][peer addr: type byte, 6 bytes LSB first][direct addr 7]
   [rssi i8][flags][dlen][present][data]`; the name is AD type 0x09 / 0x08, often only in the scan response. Scan
   timeout: event 0x1b `[2][1b 00][conn u16][source]`. No `sd_ble_cfg_set` is needed before scanning.
-- **ANT+ heart rate (seen on the unit 2026-10-23, `tools/nrf.py ant` and src/nrf.rs):** ANT commands are type 6,
+- **ANT+ heart rate (seen on the unit 2026-10-23, `tools/nrf.py ant` and src/drivers/nrf.rs):** ANT commands are type 6,
   `[6][op][arguments]`, and **their responses come back as type 1** (`[1][op][result u32]`), like BLE ones. Stock's
   sequence for a heart-rate channel (Ghidra: ANT enable 0xd029dce0, `Ant_SetNetworkKeys` 0xd027d6d4,
   `Ant_ConfigureChannel` 0xd027d3c0, `Ant_OpenChannel` 0xd027d480), each answered 0 on the unit, after
@@ -539,7 +539,7 @@ From stock (Ghidra: `Buzzer_PwmInit` 0xd018b3f0, `Buzzer_PlayTone` 0xd018b54a, `
 From stock (Ghidra, OS R039 and bootloader R002; the addresses are those of the report
 `ghidra/STORAGE_AND_MAPS.md`, sections 1 and 2), register meanings from RM0399 (SDMMC) and the card side from
 the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: this firmware's driver
-(`src/emmc.rs`, read only) runs only on the dev link's `emmc` and `sector` commands.
+(`src/drivers/emmc.rs`, read only) runs only on the dev link's `emmc` and `sector` commands.
 
 - **Card:** a soldered eMMC (stock's log calls it "iNAND"), about 31 GB (SEC_COUNT about 0x3a3_e000, inferred
   from the ~31 GB USB drive; to see with `dev.py emmc`).
@@ -646,11 +646,11 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
 
   Level 0 is the PWM's minimum, 1 % (`Pwr_BacklightSetPwmDuty` clamps to 1..100): in daylight the transflective
   panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
-- **This firmware** (src/ambient.rs): MEAS_RATE 0x22 (18 bits in 100 ms, a reading every 100 ms; the fields from
+- **This firmware** (src/drivers/ambient.rs): MEAS_RATE 0x22 (18 bits in 100 ms, a reading every 100 ms; the fields from
   DFRobot's LTR-308 driver: resolution in bits 6..4, rate in 2..0), so 0.1 lux per count at gain 6. The sensor
   measures continuously while the backlight is AUTO and on (or the sensors menu shows the light), read every 250 ms
   (MAIN_STATUS, ALS_DATA), and is in standby (MAIN_CTRL = 0) otherwise. (Until 2026-10-23: one 400 ms measurement
-  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve (src/ambient.rs
+  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve (src/drivers/ambient.rs
   `AUTO_BANDS`: its setting 3, with 8 % instead of 14 % below 5 lux, and the 1 % minimum above 120 lux, where the
   panel reads by reflected light; for a while this firmware rose to 100 % instead, until the owner chose stock's
   logic), with a running average (half per reading) and

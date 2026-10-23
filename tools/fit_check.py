@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Decodes the FIT files src/fit.rs writes with fitdecode (an independent decoder) and checks them: CRCs,
-no warnings, and the sample ride's values (the synthetic ride of fit.rs's tests). Usage (src/fit.rs, module doc):
+"""Decodes the FIT files src/storage/fit.rs writes with fitdecode (an independent decoder) and checks them: CRCs,
+no warnings, and the sample ride's values (the synthetic ride of fit.rs's tests). Usage (src/storage/fit.rs, module doc):
     fit_check.py target/fit/sample.fit target/fit/cut.fit
 """
 import sys

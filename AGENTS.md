@@ -57,7 +57,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
 The point of this project is a firmware in safe Rust.
 
 - `src/lib.rs` has `#![forbid(unsafe_code)]`: no `unsafe` there, ever.
-- The binary has `#![deny(unsafe_code)]`. The exception is `src/hw.rs`, which holds the unavoidable unsafe
+- The binary has `#![deny(unsafe_code)]`. The exception is `src/board/hw.rs`, which holds the unavoidable unsafe
   primitives:
   - the vector table and the reset entry (section copies);
   - `rd` / `wr` / `wr8` (volatile register access);
@@ -81,54 +81,61 @@ The point of this project is a firmware in safe Rust.
 
 ## Layout: logic in the library, transport in the board
 
+Folders sort the files; the modules keep their own names (`crate::ambient`, re-exported from lib.rs):
+- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `dev.rs`, `sim.rs` (tests);
+- `src/drivers/`: each chip's or radio's protocol against `Board`;
+- `src/ui/`: what is drawn and the menus;
+- `src/storage/`: FAT and FIT;
+- `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
+
 - `src/lib.rs`: the `Board` trait, the app (`App::start`, `App::step`), RTC decoding, keys.
   - `Board` is the only way to reach hardware. Each method is a primitive: send a panel command, read RTC_TR,
     read the keys, sleep.
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
 - `src/ui.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
-- `src/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
+- `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
   `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
   `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,
   and its arms in `Settings::text` / `cycle` / `step`: never a row number. Back pops a screen stack (`App::open` /
   `close`), so no screen knows where Back goes.
-- `src/text.rs`: anti-aliased proportional text (`text::draw`, a `Style`, `Align`), one panel window per glyph.
+- `src/ui/text.rs`: anti-aliased proportional text (`text::draw`, a `Style`, `Align`), one panel window per glyph.
   For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
   `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.
-- `src/fonts.rs`: glyph data, **generated** by `tools/font.py` (4 bits per pixel); never edit it by hand.
+- `src/ui/fonts.rs`: glyph data, **generated** by `tools/font.py` (4 bits per pixel); never edit it by hand.
   - `PIXEL`, the UI font: this project's own 5 x 7 dot matrix (`tools/pixel_font.py`, one text grid per glyph),
     drawn at 2x or 4x (`Style::scale`) so it matches Ferris.
   - `SANS_16`, `SANS_BOLD_32`: DejaVu Sans, anti-aliased, if smooth text is ever wanted.
   - To change a glyph or add a font, edit those files and run `python3 tools/font.py` (needs PIL).
-- `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
-- `src/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
+- `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
+- `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
 - `src/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
   colours, the history behind the graph field. Pure logic, one tick a second; each change comes out as an `Event`
   for the recorder (`App::recorder`, the one place the FIT writer will plug in).
-- `src/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
+- `src/ui/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
   and drawing in runs per row clipped to `Canvas::clip`, so a dirty box and a screenshot row use the same code.
-- `src/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the
+- `src/drivers/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the
   ambient light sensor, the barometer, the accelerometer (switched off), and the automatic backlight (smoothing,
   hysteresis). `sim.rs` has a model of the bus (`Bus`); `tools/i2c.py` reaches it through `peek` / `poke`.
-- `src/touch.rs`: the touch controller (Sitronix, I2C1) against the `Board` primitives `touch_read` / `touch_reset` /
+- `src/drivers/touch.rs`: the touch controller (Sitronix, I2C1) against the `Board` primitives `touch_read` / `touch_reset` /
   `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `sim.rs`
   has a model of the chip (`TouchChip`) with a scripted finger. `tools/i2c.py --touch` reads it from the computer.
-- `src/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
-- `src/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
+- `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
+- `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
-- `src/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
+- `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
   `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`).
-- `src/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
+- `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
-- `src/emmc.rs`: the eMMC (SDMMC1) protocol, read only: identification, EXT_CSD SEC_COUNT, block reads, stock's
+- `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol, read only: identification, EXT_CSD SEC_COUNT, block reads, stock's
   layout; against the `Board` primitives `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read`; `sim.rs` has a
   model of the card (`EmmcCard`, which serves a FAT image when given one). Used by the basemap and by the dev
   link's `emmc` and `sector` commands; identified at first use, never at boot.
-- `src/fat.rs`: a FAT32 reader, read only (no write path at all): boot sector, chains, 8.3 and long names, files at
+- `src/storage/fat.rs`: a FAT32 reader, read only (no write path at all): boot sector, chains, 8.3 and long names, files at
   an offset; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`).
-- `src/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
+- `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
   restores from under the arrow and the track.
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
@@ -136,8 +143,8 @@ The point of this project is a firmware in safe Rust.
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
   RTC read, standby, SysTick sleep. No app logic.
-- `src/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and the CDC serial port. It implements `Host`.
-- `src/hw.rs`: the unsafe primitives (above).
+- `src/board/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and the CDC serial port. It implements `Host`.
+- `src/board/hw.rs`: the unsafe primitives (above).
 - `dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or

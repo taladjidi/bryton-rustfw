@@ -1,6 +1,6 @@
 """The pixel font: printable ASCII on a 5 x 7 grid (2 more rows for descenders), drawn here as text, one string
 per glyph with its rows separated by spaces ('#' = ink). Designed for this project, in the dot-matrix style of
-Ferris (ui.rs); tools/font.py turns it into src/fonts.rs. Edit a glyph here, run tools/font.py, look at
+Ferris (ui.rs); tools/font.py turns it into src/ui/fonts.rs. Edit a glyph here, run tools/font.py, look at
 target/sim/fonts.bmp.
 """
 

@@ -5,7 +5,7 @@ From the bootloader's hand-off to the first screen (details and evidence: BOARD.
 1. **The bootloader** (internal flash, never touched by this project) copies 6 MB of the eMMC's OS area to SDRAM
    at 0xd0000000, sets MSP from word 0 of the image and jumps to word 1. It never checks the image. It sets the
    MPU up but turns both caches off just before the jump. No watchdog runs.
-2. **The reset handler** (`src/hw.rs`) copies the data and zeroes the bss in DTCM, where data and stack live; code
+2. **The reset handler** (`src/board/hw.rs`) copies the data and zeroes the bss in DTCM, where data and stack live; code
    and constants run from SDRAM, as the stock OS does at first.
 3. **MPU and I-cache:** one MPU region over the SDRAM (normal, write-through cacheable, executable, highest
    number so it wins), then the I-cache on. The D-cache stays off. The MPU is never switched off: under the

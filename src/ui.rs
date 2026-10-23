@@ -1,8 +1,14 @@
 //! What is on screen: colours, text styles, Ferris, the layout and the clock. Draws
 //! through [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
 
+pub mod fonts;
+pub mod map;
+pub mod menu;
+pub mod text;
+pub mod tiles;
+
 use crate::fonts::PIXEL;
-use crate::text::{self, Align, Style};
+use text::{Align, Style};
 
 /// Panel width in pixels (portrait).
 pub const W: u32 = 240;

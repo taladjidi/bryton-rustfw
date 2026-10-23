@@ -6,8 +6,8 @@ cd "$(dirname "$0")"
 # The split (AGENTS.md, Layout): the library cannot reach hardware, since it forbids unsafe; unsafe lives in hw.rs,
 # plus usb.rs's one marker-trait line.
 grep -q '^#!\[forbid(unsafe_code)\]' src/lib.rs || { echo "layout: src/lib.rs lost #![forbid(unsafe_code)]"; exit 1; }
-n=$(grep -l 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src/*.rs | grep -v '^src/hw.rs$' | tr '\n' ' ')
-[ "$n" = "src/usb.rs " ] && [ "$(grep -c 'unsafe impl\|allow(unsafe_code)' src/usb.rs)" = 2 ] \
+n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort | grep -v '^src/board/hw.rs$' | tr '\n' ' ')
+[ "$n" = "src/board/usb.rs " ] && [ "$(grep -c 'unsafe impl\|allow(unsafe_code)' src/board/usb.rs)" = 2 ] \
     || { echo "layout: unsafe outside hw.rs: $n"; exit 1; }
 cargo fmt --check
 cargo clippy --release -- -D warnings

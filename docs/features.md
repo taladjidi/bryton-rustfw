@@ -41,7 +41,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
-Gestures reach the app as the same `Input` events as the keys (src/menu.rs).
+Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 
 ## Ride
 
@@ -49,7 +49,7 @@ Gestures reach the app as the same `Input` events as the keys (src/menu.rs).
 - Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
-- Not saved yet (the FIT writer, `src/fit.rs`, plugs in at `App::recorder`).
+- Not saved yet (the FIT writer, `src/storage/fit.rs`, plugs in at `App::recorder`).
 
 ## Menu
 
