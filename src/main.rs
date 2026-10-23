@@ -438,14 +438,20 @@ fn nrf_send(data: &[u8]) {
     }
 }
 
+/// Reads what has arrived, and while bytes keep coming waits up to 200 us for the next one: reading frees the FIFO,
+/// RTS lets the chip go on (16 bytes take 160 us at 1 Mbaud), so a burst of events comes in one call instead of 16
+/// bytes per main loop pass. The wait is bounded by `buf.len()` bytes; an idle link returns at once.
 fn nrf_recv(buf: &mut [u8]) -> usize {
     let mut n = 0;
-    for slot in buf.iter_mut() {
-        if rd(U_ISR) & ISR_RXFNE == 0 {
+    let mut last = cycles();
+    while n < buf.len() {
+        if rd(U_ISR) & ISR_RXFNE != 0 {
+            buf[n] = rd(U_RDR) as u8;
+            n += 1;
+            last = cycles();
+        } else if n == 0 || cycles().wrapping_sub(last) > CPU_HZ / 5000 {
             break;
         }
-        *slot = rd(U_RDR) as u8;
-        n += 1;
     }
     wr(U_ICR, 0xf); // an overrun cannot happen with RTS, but never let an error flag stop reception
     n

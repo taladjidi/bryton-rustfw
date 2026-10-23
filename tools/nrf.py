@@ -5,6 +5,7 @@ For exploring the protocol before the firmware has a driver; nothing is written 
 chip's flash.
 
     tools/nrf.py version            reset, sd_ble_enable, sd_ble_version_get
+    tools/nrf.py scan [seconds]     reset, enable, active BLE scan; lists advertisers (address, RSSI, name)
     tools/nrf.py send 0300006501    one raw packet (length header included), print the reply
 
 Never send DFU or flash commands: the Nordic firmware is not ours to replace (PI4 low at reset is its bootloader).
@@ -39,6 +40,7 @@ class Nrf:
 
     def reset(self):
         """Stock's sequence: PI4 high (kept), PA6 low while USART2 comes up, release, 800 ms."""
+        self.poke(0x58024454, self.peek(0x58024454) & ~7 | 3)                  # USART2 kernel clock: HSI 64 MHz
         self.poke(0x580244e8, self.peek(0x580244e8) | 1 << 17)                # RCC_APB1LENR.USART2EN
         for pin in (3, 4, 5, 6):                                               # PD3 CTS, PD4 RTS, PD5 TX, PD6 RX
             self.field(GPIOD, PUPDR, pin, 2, 1)
@@ -51,7 +53,7 @@ class Nrf:
         self.field(GPIOA, PUPDR, 6, 2, 1)
         self.field(GPIOA, MODER, 6, 2, 1)
         self.poke(USART2 + CR1, 0)
-        self.poke(USART2 + BRR, 48)                                            # PLL3Q 48 MHz / 1 Mbaud
+        self.poke(USART2 + BRR, 64)                                            # 64 MHz / 1 Mbaud, as main.rs
         self.poke(USART2 + CR3, 0x300)                                         # RTSE, CTSE
         self.poke(USART2 + CR1, 1 << 29 | 0xd)                                 # FIFOEN, TE, RE, UE
         time.sleep(0.15)
@@ -78,8 +80,32 @@ class Nrf:
         return self.send(len(payload).to_bytes(2, 'little') + payload, wait)
 
 
+def packets(data):
+    """Splits received bytes into payloads (2-byte LE length + payload)."""
+    out, i = [], 0
+    while i + 2 <= len(data):
+        n = int.from_bytes(data[i:i + 2], 'little')
+        out.append(data[i + 2:i + 2 + n])
+        i += 2 + n
+    return out
+
+
+def adv_report(p):
+    """BLE_GAP_EVT_ADV_REPORT (API v5): (address, rssi, scan_rsp, name or None) or None."""
+    if len(p) < 23 or p[0] != 2 or p[1:3] != b'\x1d\x00':
+        return None
+    addr = ':'.join(f'{b:02x}' for b in reversed(p[6:12]))
+    rssi = p[19] - 256 if p[19] > 127 else p[19]
+    data, name, i = p[23:23 + p[21]], None, 0
+    while i + 1 < len(data) and data[i]:
+        if data[i + 1] in (8, 9):
+            name = data[i + 2:i + 1 + data[i]].decode(errors='replace')
+        i += 1 + data[i]
+    return addr, rssi, p[20] & 1, name
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ('version', 'send'):
+    if len(sys.argv) < 2 or sys.argv[1] not in ('version', 'send', 'scan'):
         sys.exit(__doc__)
     with dev.connect() as s:
         n = Nrf(s)
@@ -92,6 +118,25 @@ def main():
             if len(ver) == 13 and ver[2:8] == bytes([0x01, 0x65, 0, 0, 0, 0]):
                 image, boot, sd = ver[8], int.from_bytes(ver[9:11], 'little'), int.from_bytes(ver[11:13], 'little')
                 print(f'Nordic image {image}, bootloader {boot}, SD {sd} (the fields as Bryton fills them)')
+        elif sys.argv[1] == 'scan':
+            secs = float(sys.argv[2]) if len(sys.argv) > 2 else 5
+            n.reset()
+            print('sd_ble_enable:', n.command(bytes([0x00, 0x60])).hex(' '))
+            # sd_ble_gap_scan_start, params present: active, interval = window = 60 ms (0x60 x 0.625), no timeout
+            got = n.command(bytes([0x00, 0x8a, 1, 1, 0x60, 0, 0x60, 0, 0, 0]), wait=secs)
+            got += n.command(bytes([0x00, 0x8b]), wait=0.3)                    # scan_stop
+            replies = [p.hex(' ') for p in packets(got) if p[:1] == b'\x01']
+            print('scan_start, scan_stop replies:', replies)
+            seen = {}
+            for p in packets(got):
+                r = adv_report(p)
+                if r:
+                    addr, rssi, _, name = r
+                    old = seen.get(addr, (rssi, None, 0))
+                    seen[addr] = (max(rssi, old[0]), name or old[1], old[2] + 1)
+            print(f'{len(got)} bytes, {len(seen)} advertisers in {secs:g} s:')
+            for addr, (rssi, name, count) in sorted(seen.items(), key=lambda kv: -kv[1][0]):
+                print(f'  {addr}  {rssi:4d} dBm  {count:3d} reports  {name or ""}')
         else:
             print(n.send(bytes.fromhex(sys.argv[2])).hex(' '))
 

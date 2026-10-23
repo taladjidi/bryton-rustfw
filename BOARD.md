@@ -186,7 +186,13 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
 - **This firmware (src/nrf.rs, seen on the unit 2026-10-23):** the same reset sequence, with USART2 on the HSI
   kernel clock (64 MHz, BRR 64) rather than the bootloader's PLL3; then `sd_ble_enable` and `sd_ble_version_get`
   without any `sd_ble_cfg_set`, both answered (result 0, version 4 / 1 / 50).
-- **Not done yet:** switching the chip off at power-off (stock sends it a "system off"); left running, it draws
-  current while the STM32 is in standby.
+- **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
+  PI4 as they are. The next start's reset pulse wakes the chip (nRF52 pin reset; inferred, to see on the unit).
+- **Scanning (API v5 layout, seen on the unit 2026-10-23):** `sd_ble_gap_scan_start` `00 8a 01 [flags]
+  [interval u16] [window u16] [timeout u16]`, flags bit 0 = active, times in 0.625 ms units, timeout in s (0 =
+  until `sd_ble_gap_scan_stop`, `00 8b`). Stock: active, interval 0x60, window 0x60 (or 0x30 to save power), no
+  timeout. Reports: event 0x1d, `[2][1d 00][conn u16][peer addr: type byte, 6 bytes LSB first][direct addr 7]
+  [rssi i8][flags][dlen][present][data]`; the name is AD type 0x09 / 0x08, often only in the scan response. Scan
+  timeout: event 0x1b `[2][1b 00][conn u16][source]`. No `sd_ble_cfg_set` is needed before scanning.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

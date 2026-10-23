@@ -50,15 +50,48 @@ pub struct Nordic {
     /// Reset since power-up: before that, commands would go nowhere.
     pub reset: bool,
     pub enabled: bool,
+    /// Simulated time (ms) at which the running scan times out.
+    scan_end: Option<u64>,
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
     out: std::collections::VecDeque<u8>,
 }
 
+/// The advertisers the simulated chip hears: two devices, one of them named, one report repeated.
+pub const ADVERTISERS: [(u8, i8, &[u8]); 3] =
+    [(0xa1, -40, &[2, 0x01, 0x06, 5, 0x09, b'B', b'i', b'k', b'e']), (0xb2, -70, &[2, 0x01, 0x06]), (0xa1, -42, &[])];
+
+/// A BLE_GAP_EVT_ADV_REPORT payload as the chip encodes it (BOARD.md 11).
+fn adv_report(addr: u8, rssi: i8, data: &[u8]) -> Vec<u8> {
+    let mut p = vec![2, 0x1d, 0, 0xff, 0xff, 0, addr, 1, 2, 3, 4, 5];
+    p.extend([0; 7]);
+    p.extend([rssi as u8, 0, data.len() as u8, 1]);
+    p.extend(data);
+    p
+}
+
 impl Nordic {
-    fn take(&mut self, p: &[u8]) {
+    fn queue(&mut self, payload: &[u8]) {
+        if !self.dead {
+            self.out.extend((payload.len() as u16).to_le_bytes());
+            self.out.extend(payload);
+        }
+    }
+
+    fn take(&mut self, p: &[u8], now: u64) {
         self.got.push(p.to_vec());
+        if p == [0, 0x32] {
+            return; // sd_power_system_off: no response
+        }
+        if let [0, 0x8a, 1, _, _, _, _, _, t0, t1] = *p {
+            self.queue(&[1, 0x8a, 0, 0, 0, 0]);
+            for (addr, rssi, data) in ADVERTISERS {
+                self.queue(&adv_report(addr, rssi, data));
+            }
+            self.scan_end = Some(now + 1000 * u64::from(u16::from_le_bytes([t0, t1])));
+            return;
+        }
         let reply: Vec<u8> = match p {
             [0, 0x60] => {
                 self.enabled = true;
@@ -69,10 +102,7 @@ impl Nordic {
             [0, op, ..] => vec![1, *op, 6, 0, 0, 0], // NRF_ERROR_NOT_SUPPORTED
             _ => return,
         };
-        if !self.dead {
-            self.out.extend((reply.len() as u16).to_le_bytes());
-            self.out.extend(reply);
-        }
+        self.queue(&reply);
     }
 }
 
@@ -229,17 +259,21 @@ impl Board for Sim {
     }
 
     fn nrf_send(&mut self, data: &[u8]) {
-        let n = &mut self.nordic;
+        let (n, now) = (&mut self.nordic, self.ms);
         assert!(n.reset, "bytes to the Nordic chip before its reset");
         for &b in data {
             if let Some(p) = n.rx.push(b) {
                 let p = p.to_vec();
-                n.take(&p);
+                n.take(&p, now);
             }
         }
     }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
+        if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
+            self.nordic.scan_end = None;
+            self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
+        }
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
             *slot = b;
@@ -263,6 +297,7 @@ mod tests {
         draw_static(&mut f);
         Clock::new().show(&mut f, h, m, s);
         crate::ui::draw_ble(&mut f, Some(V4));
+        crate::ui::draw_nearby(&mut f, Some((2, true)));
         f.px
     }
 
@@ -296,7 +331,8 @@ mod tests {
     fn starts_the_nordic_chip() {
         let mut sim = Sim::new(12, 0, 0);
         let app = App::start(&mut sim);
-        assert_eq!(sim.nordic.got, [vec![0, 0x60], vec![0, 0x65, 1]]);
+        assert_eq!(sim.nordic.got[..2], [vec![0, 0x60], vec![0, 0x65, 1]]);
+        assert_eq!(sim.nordic.got[2][..2], [0, 0x8a], "then the scan");
         assert_eq!(
             app.render_row(crate::ui::BLE_LABEL.1 + 4).px,
             {
@@ -324,6 +360,27 @@ mod tests {
         Clock::new().show(&mut f, h, m, s);
         assert!(sim.screen == f.px);
         assert!((0..W).any(|x| f.at(x, crate::ui::BLE_LABEL.1 + 4) == crate::ui::RED));
+    }
+
+    /// Two distinct devices in three reports; the scan's timeout turns "2 NEARBY..." into "2 NEARBY".
+    #[test]
+    fn counts_the_devices_nearby() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim);
+        let line = |sim: &Sim| {
+            let y = crate::ui::NEARBY.1;
+            sim.screen[(y * W) as usize..((y + 20) * W) as usize].to_vec()
+        };
+        let want = |shown| {
+            let mut f = Frame::new();
+            crate::ui::draw_nearby(&mut f, Some(shown));
+            let y = crate::ui::NEARBY.1;
+            f.px[(y * W) as usize..((y + 20) * W) as usize].to_vec()
+        };
+        run(&mut sim, &mut app, 1000);
+        assert!(line(&sim) == want((2, true)), "2 NEARBY... while scanning");
+        run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
+        assert!(line(&sim) == want((2, false)), "2 NEARBY once the scan timed out");
     }
 
     #[test]
@@ -357,6 +414,7 @@ mod tests {
         assert!(sim.standby);
         assert!(sim.ms >= 6000, "standby while the key is still down would wake the unit at once");
         assert!(sim.asleep && !sim.display_on && !sim.backlight);
+        assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
     }
 
     /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

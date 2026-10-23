@@ -18,7 +18,7 @@ pub mod text;
 pub mod ui;
 
 use panel::Panel;
-use ui::{Clock, Row, UsbDot, draw_ble, draw_static, draw_usb_dot};
+use ui::{Clock, Row, UsbDot, draw_ble, draw_nearby, draw_static, draw_usb_dot};
 
 /// The hardware the app needs, as primitive operations. Each one is a few register writes on the unit.
 // ponytail: one trait while the board is small; split per peripheral (Panel, Rtc, Keys...) when it grows.
@@ -119,6 +119,10 @@ impl Keys {
 /// Main loop period: the time and the keys are read this often.
 pub const POLL_MS: u32 = 50;
 
+/// How long the BLE scan at start runs. Scanning keeps the Nordic radio on, so it is short.
+// ponytail: one scan at start; on demand (a key) or periodic when something uses the result.
+pub const SCAN_S: u16 = 10;
+
 /// The clock app: what is on screen and the key state.
 pub struct App {
     clock: Clock,
@@ -126,6 +130,9 @@ pub struct App {
     backlight: bool,
     usb: UsbDot,
     ble: Option<nrf::Version>,
+    rx: nrf::Rx,
+    nearby: nrf::Nearby,
+    scanning: bool,
 }
 
 impl App {
@@ -136,7 +143,50 @@ impl App {
         b.backlight(true);
         let ble = nrf::start(b).ok();
         draw_ble(&mut Panel(b), ble);
-        App { clock: Clock::new(), keys: Keys::default(), backlight: true, usb: UsbDot::Off, ble }
+        let mut app = App {
+            clock: Clock::new(),
+            keys: Keys::default(),
+            backlight: true,
+            usb: UsbDot::Off,
+            ble,
+            rx: nrf::Rx::new(),
+            nearby: nrf::Nearby::new(),
+            scanning: false,
+        };
+        if ble.is_some() {
+            app.scanning = nrf::scan_start(b, &mut app.rx, SCAN_S).is_ok();
+            draw_nearby(&mut Panel(b), app.nearby_shown());
+        }
+        app
+    }
+
+    /// What the nearby line shows: the count and whether the scan still runs (None: no line).
+    fn nearby_shown(&self) -> Option<(usize, bool)> {
+        self.ble.map(|_| (self.nearby.count(), self.scanning))
+    }
+
+    /// Takes what the Nordic chip sent since the last pass: counts the advertisers, notices the scan's end.
+    fn poll_nrf(&mut self, b: &mut impl Board) {
+        let mut changed = false;
+        let mut buf = [0; 64];
+        for _ in 0..64 {
+            let n = b.nrf_recv(&mut buf);
+            for &byte in buf.get(..n).unwrap_or(&[]) {
+                let Some(p) = self.rx.push(byte) else { continue };
+                if let Some(r) = nrf::adv_report(p) {
+                    changed |= self.nearby.add(r.addr);
+                } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) {
+                    self.scanning = false;
+                    changed = true;
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+        if changed {
+            draw_nearby(&mut Panel(b), self.nearby_shown());
+        }
     }
 
     /// One pass of the main loop: read the time and the keys, redraw what changed. The caller sleeps
@@ -144,13 +194,21 @@ impl App {
     pub fn step(&mut self, b: &mut impl Board) {
         let (h, m, s) = rtc_time_from_tr(b.rtc_tr());
         self.clock.show(&mut Panel(b), h, m, s);
+        if self.ble.is_some() {
+            self.poll_nrf(b);
+        }
         let (page, back) = b.keys_down();
         match self.keys.poll(page, back, POLL_MS) {
             Action::ToggleBacklight => {
                 self.backlight = !self.backlight;
                 b.backlight(self.backlight);
             }
-            Action::PowerOff => power_off(b),
+            Action::PowerOff => {
+                if self.ble.is_some() {
+                    nrf::system_off(b); // as stock: the radio chip off too, or it drains the battery
+                }
+                power_off(b)
+            }
             Action::None => {}
         }
     }
@@ -170,6 +228,7 @@ impl App {
         self.clock.redraw(&mut row);
         draw_usb_dot(&mut row, self.usb);
         draw_ble(&mut row, self.ble);
+        draw_nearby(&mut row, self.nearby_shown());
         row
     }
 }

@@ -139,6 +139,18 @@ pub fn draw_ble(c: &mut impl Canvas, v: Option<crate::nrf::Version>) {
     text::draw_in(c, &Style { fg: color, ..LABEL }, BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, Align::Left, line.as_str());
 }
 
+/// Devices heard by the BLE scan, under the bar: "3 NEARBY", with "..." while the scan runs. Nothing without BLE.
+pub fn draw_nearby(c: &mut impl Canvas, shown: Option<(usize, bool)>) {
+    let Some((count, scanning)) = shown else { return };
+    let mut line = text::Line::<16>::new();
+    line.push_u32(count as u32);
+    line.push_str(if scanning { " NEARBY..." } else { " NEARBY" });
+    text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, line.as_str());
+}
+
+/// The nearby line's box: left, top, width (between the bar and the time).
+pub const NEARBY: (u32, u32, u32) = (20, 58, W - 40);
+
 /// The BLE label's box: left, top (level with the USB label), width.
 pub const BLE_LABEL: (u32, u32, u32) = (20, USB_LABEL.1, 7 * CELL * LABEL.scale);
 
@@ -292,6 +304,7 @@ pub(crate) mod tests {
         let usb = LABEL.width("USB");
         boxes.push((USB_LABEL.0 - usb, USB_LABEL.1, usb, LABEL.height()));
         boxes.push((BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, LABEL.height()));
+        boxes.push((NEARBY.0, NEARBY.1, NEARBY.2, LABEL.height()));
         for (i, a) in boxes.iter().enumerate() {
             assert!(a.0 + a.2 <= W && a.1 + a.3 <= H, "box {i} off screen");
             for b in &boxes[i + 1..] {

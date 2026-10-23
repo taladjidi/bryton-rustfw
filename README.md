@@ -9,6 +9,8 @@ Bryton.
 - **Page key:** toggles the backlight.
 - **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
 - **Top left:** "BLE" and the Nordic chip's firmware number once it has answered (red "BLE ?" if not).
+- **Under the bar:** a 10 s BLE scan at start counts the devices around ("12 NEARBY", with "..." while it runs).
+  Power off also switches the radio chip off.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
   build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
   red if the PHY did not come up). Unplugging resets the unit.
@@ -99,8 +101,10 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 
 - **The Nordic BLE / ANT chip answers (2026-10-23):** first driven from the computer through the dev link
   (`tools/nrf.py version`), then by the firmware itself (`src/nrf.rs`): at start it resets the chip as stock
-  does, enables BLE and reads the version, shown as "BLE 4" at the top left (BOARD.md 11). Next: a BLE scan or an
-  ANT+ heart-rate channel, and switching the chip off at power-off.
+  does, enables BLE and reads the version, shown as "BLE 4" at the top left (BOARD.md 11). A 10 s scan at start
+  counts the advertisers around (6 during the scan, 12 at its end on the first run), and power off sends
+  `sd_power_system_off`. `tools/nrf.py scan` lists them with RSSI and names from the computer. To see: that the
+  chip comes back after a power off and on (the reset pulse should wake it from System OFF; inferred so far).
 
 ## Not yet seen on the unit
 

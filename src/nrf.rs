@@ -19,6 +19,16 @@ pub const ANT_EVT: u8 = 8;
 pub const SD_BLE_ENABLE: u8 = 0x60;
 /// `sd_ble_version_get`: the version fields (Bryton fills them with its own numbers, BOARD.md 11).
 pub const SD_BLE_VERSION_GET: u8 = 0x65;
+/// `sd_power_system_off`: the chip powers down until its next reset. No response.
+pub const SD_POWER_SYSTEM_OFF: u8 = 0x32;
+/// `sd_ble_gap_scan_start` (API v5: flags, interval, window, timeout).
+pub const SD_BLE_GAP_SCAN_START: u8 = 0x8a;
+/// `sd_ble_gap_scan_stop`.
+pub const SD_BLE_GAP_SCAN_STOP: u8 = 0x8b;
+/// BLE event id: an advertising report.
+pub const EVT_ADV_REPORT: u16 = 0x1d;
+/// BLE event id: a timeout (the scan's, here).
+pub const EVT_TIMEOUT: u16 = 0x1b;
 
 /// Largest payload kept; a longer one is read through and dropped.
 pub const MAX: usize = 256;
@@ -83,7 +93,7 @@ impl Rx {
 /// Why a command did not succeed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// No response within [`TIMEOUT_MS`]: the chip is not running, or the link is out of step.
+    /// No response within [`TIMEOUT_MS`] of silence: the chip is not running, or the link is out of step.
     Timeout,
     /// The chip answered with this error code (NRF_ERROR_*, BLE_ERROR_*).
     Code(u32),
@@ -101,9 +111,13 @@ pub fn send(b: &mut impl Board, payload: &[u8]) {
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     send(b, payload);
     let op = payload.get(1).copied();
-    let mut buf = [0; 16];
-    for _ in 0..TIMEOUT_MS {
+    // One byte at a time: what follows the response (events) must stay in the chip's stream for the caller.
+    let mut buf = [0; 1];
+    // Bounded both ways: TIMEOUT_MS of silence, or 64 KB of other packets (a scan's events) without the response.
+    let (mut idle_ms, mut bytes) = (0, 0u32);
+    while idle_ms < TIMEOUT_MS && bytes < 0x1_0000 {
         let n = b.nrf_recv(&mut buf);
+        bytes += n as u32;
         for &byte in &buf[..n] {
             let Some(p) = rx.push(byte) else { continue };
             if p.len() < 6 || p[0] != RESP || Some(p[1]) != op {
@@ -118,7 +132,10 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
             out[..len].copy_from_slice(&outputs[..len]);
             return Ok(len);
         }
-        b.delay_ms(1);
+        if n == 0 {
+            b.delay_ms(1);
+            idle_ms += 1;
+        }
     }
     Err(Error::Timeout)
 }
@@ -146,5 +163,103 @@ pub fn start(b: &mut impl Board) -> Result<Version, Error> {
             Ok(Version { image, bootloader: u16::from_le_bytes([b0, b1]), sd: u16::from_le_bytes([s0, s1]) })
         }
         _ => Err(Error::Code(u32::MAX)),
+    }
+}
+
+/// Powers the chip down until its next reset (stock's power-off; the next start's reset pulse wakes it).
+pub fn system_off(b: &mut impl Board) {
+    send(b, &[CMD, SD_POWER_SYSTEM_OFF]);
+}
+
+/// Starts an active scan for `seconds` (0: until stopped), with stock's low-power timing: a 30 ms window every
+/// 60 ms. Reports then arrive as events ([`adv_report`]); a [`EVT_TIMEOUT`] event ends it.
+pub fn scan_start(b: &mut impl Board, rx: &mut Rx, seconds: u16) -> Result<(), Error> {
+    let [t0, t1] = seconds.to_le_bytes();
+    // params present, flags = active, interval 0x60 and window 0x30 in 0.625 ms units, timeout in s
+    call(b, rx, &[CMD, SD_BLE_GAP_SCAN_START, 1, 1, 0x60, 0, 0x30, 0, t0, t1], &mut []).map(|_| ())
+}
+
+/// The id of BLE event packet `p` (`[BLE_EVT][id u16][fields]`).
+pub fn event_id(p: &[u8]) -> Option<u16> {
+    match p {
+        [BLE_EVT, a, b, ..] => Some(u16::from_le_bytes([*a, *b])),
+        _ => None,
+    }
+}
+
+/// One advertising report: who, how loud, and the advertised data.
+pub struct AdvReport<'a> {
+    /// Address, least significant byte first.
+    pub addr: [u8; 6],
+    /// Received signal strength, dBm.
+    pub rssi: i8,
+    /// Advertising data: `[len][type][len - 1 bytes]` structures.
+    pub data: &'a [u8],
+}
+
+/// Decodes `p` if it is a BLE_GAP_EVT_ADV_REPORT (API v5 layout, BOARD.md 11): `[2][1d 00][conn u16][peer addr 7]
+/// [direct addr 7][rssi][flags][dlen][present][data]`.
+pub fn adv_report(p: &[u8]) -> Option<AdvReport<'_>> {
+    if event_id(p)? != EVT_ADV_REPORT || p.len() < 23 {
+        return None;
+    }
+    let mut addr = [0; 6];
+    addr.copy_from_slice(&p[6..12]);
+    let data = p.get(23..23 + usize::from(p[21]))?;
+    Some(AdvReport { addr, rssi: p[19] as i8, data })
+}
+
+/// The advertised name in `data` (complete or shortened), if any.
+///
+/// ```
+/// let data = [2, 0x01, 0x06, 5, 0x09, b'B', b'i', b'k', b'e'];
+/// assert_eq!(bryton_rustfw::nrf::ad_name(&data), Some(&b"Bike"[..]));
+/// ```
+pub fn ad_name(data: &[u8]) -> Option<&[u8]> {
+    let mut rest = data;
+    while let [len, kind, ..] = *rest {
+        let field = rest.get(2..1 + usize::from(len))?;
+        if kind == 0x09 || kind == 0x08 {
+            return Some(field);
+        }
+        rest = rest.get(1 + usize::from(len)..)?;
+    }
+    None
+}
+
+/// The distinct devices heard while scanning (up to [`Nearby::MAX`] remembered; the count stops there).
+pub struct Nearby {
+    addrs: [[u8; 6]; Nearby::MAX],
+    count: usize,
+}
+
+impl Default for Nearby {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Nearby {
+    /// How many distinct addresses are remembered.
+    pub const MAX: usize = 32;
+
+    /// Nobody heard yet.
+    pub const fn new() -> Self {
+        Nearby { addrs: [[0; 6]; Self::MAX], count: 0 }
+    }
+
+    /// Notes `addr`; true if it is new.
+    pub fn add(&mut self, addr: [u8; 6]) -> bool {
+        if self.addrs[..self.count].contains(&addr) || self.count == Self::MAX {
+            return false;
+        }
+        self.addrs[self.count] = addr;
+        self.count += 1;
+        true
+    }
+
+    /// Distinct devices heard.
+    pub fn count(&self) -> usize {
+        self.count
     }
 }
