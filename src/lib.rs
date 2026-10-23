@@ -10,6 +10,7 @@
 
 pub mod battery;
 pub mod dev;
+pub mod emmc;
 pub mod fit;
 pub mod fonts;
 pub mod gnss;
@@ -74,6 +75,17 @@ pub trait Board {
     fn backup_read(&mut self, n: usize) -> u32;
     /// Writes RTC backup register `n`.
     fn backup_write(&mut self, n: usize, v: u32);
+    /// eMMC controller (SDMMC1, BOARD.md 15) from reset: pins, kernel clock, powered, bus 1 bit at 400 kHz, and the
+    /// wait the card needs before its first command. The card keeps the state it was in.
+    fn emmc_power_on(&mut self);
+    /// eMMC bus clock: 400 kHz (identification) or 25 MHz (`fast`); width 1 or 4 bits (`wide`).
+    fn emmc_bus(&mut self, fast: bool, wide: bool);
+    /// Sends eMMC command `index` with `arg` and waits for the response `resp` names: its words (R2: bits 127..96
+    /// first; others: word 0), all zero for [`emmc::Resp::None`].
+    fn emmc_cmd(&mut self, index: u8, arg: u32, resp: emmc::Resp) -> Result<[u32; 4], emmc::BusError>;
+    /// Sends eMMC command `index` with `arg`, a read of `buf.len()` bytes (whole 512-byte blocks) whose R1 answer
+    /// it returns, and reads the data into `buf`, every wait bounded.
+    fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, emmc::BusError>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------

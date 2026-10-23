@@ -11,6 +11,8 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py peek ADDR [N]            read N registers (peripheral space, aligned; ADDR decimal or 0x hex)
   dev.py poke ADDR VALUE          write one register
   dev.py key page|lap|start|back [--long]   press (or hold) a key: scripted tests on the unit
+  dev.py emmc                     identify the eMMC: SEC_COUNT, B (end of the FAT volume), OS area start
+  dev.py sector N [COUNT] [-o F]  read eMMC sectors N.. (read only): a hex dump, or the raw bytes into F
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
@@ -107,6 +109,20 @@ def run(path):
         print(command(s, 'info'))
 
 
+def sector_bytes(answer):
+    """The answer to `sector N`: 1024 hex digits -> 512 bytes (or exit with the firmware's error)."""
+    if answer.startswith('err') or len(answer) != 1024:
+        sys.exit(f'dev.py: {answer[:80]}')
+    return bytes.fromhex(answer)
+
+
+def hexdump(data, base):
+    for i in range(0, len(data), 16):
+        row = data[i:i + 16]
+        text = ''.join(chr(b) if 32 <= b < 127 else '.' for b in row)
+        print(f'{base + i:08x}  {row.hex(" ")}  {text}')
+
+
 def selftest():
     p = png(bytes(range(256)) * 600)                    # 2 * 240 * 320 bytes
     assert p.startswith(b'\x89PNG') and p[12:16] == b'IHDR'
@@ -116,6 +132,7 @@ def selftest():
     if packed.exists():
         data, total = image_payload(packed)
         assert struct.unpack_from('<I', data, 0x98)[0] == len(data) and total == sum(data) & 0xffffffff
+    assert sector_bytes('00ff' * 256) == b'\x00\xff' * 256
     print('dev.py selftest ok')
 
 
@@ -141,6 +158,11 @@ def main():
     p = sub.add_parser('poke', help='write a register: poke 0x40013000 0x1001')
     p.add_argument('addr')
     p.add_argument('value')
+    sub.add_parser('emmc', help='identify the eMMC and print its layout (BOARD.md 15)')
+    p = sub.add_parser('sector', help='read eMMC sectors (read only): sector N [COUNT] [-o file]')
+    p.add_argument('n', type=lambda x: int(x, 0))
+    p.add_argument('count', nargs='?', type=lambda x: int(x, 0), default=1)
+    p.add_argument('-o', help='write the raw bytes here instead of a hex dump')
     p = sub.add_parser('run')
     p.add_argument('image', nargs='?', default=str(ROOT / 'out' / 'IMG.bin'))
     a = ap.parse_args()
@@ -170,6 +192,20 @@ def main():
                 base = int(a.addr, 0)
                 for i, v in enumerate([first] + [line(s) for _ in range(a.n - 1)]):
                     print(f'{base + 4 * i:08x}: {v}')
+            elif a.cmd == 'emmc':
+                answer = command(s, 'emmc')
+                if not answer.startswith('emmc '):
+                    sys.exit(f'dev.py: {answer}')
+                n, b, os_start = (int(x, 16) for x in answer.split()[1:])
+                print(f'SEC_COUNT {n:#x} ({n * 512 / 1e9:.1f} GB); FAT volume 0..{b - 1:#x} (B = {b:#x}); '
+                      f'OS area {os_start:#x}..{n - 1:#x}')
+            elif a.cmd == 'sector':
+                data = b''.join(sector_bytes(command(s, f'sector {a.n + i}')) for i in range(a.count))
+                if a.o:
+                    Path(a.o).write_bytes(data)
+                    print(f'{len(data)} B -> {a.o}')
+                else:
+                    hexdump(data, a.n * 512)
             elif a.cmd == 'poke':
                 print(command(s, f'poke {a.addr} {a.value}'))
             elif a.cmd == 'shot':

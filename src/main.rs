@@ -18,7 +18,8 @@
 mod hw;
 mod usb;
 
-use bryton_rustfw::dev::{Effect, Session, Stats};
+use bryton_rustfw::dev::{self, Effect, Session, Stats};
+use bryton_rustfw::emmc::{BusError, Emmc};
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -705,6 +706,136 @@ fn gnss_transfer(buf: &mut [u8]) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// eMMC: SDMMC1 (0x52007000, RM0399 SDMMC; BOARD.md 15), polled through the FIFO as stock does (no IDMA). Kernel
+// clock PLL1Q, 100 MHz (BOARD.md 1), as stock; bus clock 100 MHz / (2 x CLKDIV): 400 kHz for identification, 25 MHz
+// after. Falling-edge output and hardware flow control as stock (flow control stops the bus clock while the FIFO
+// is full, so a slow FIFO loop cannot overrun). Only the transport is here; the command sequence is emmc.rs.
+// ---------------------------------------------------------------------------------------------------------------
+const SDMMC1: u32 = 0x5200_7000;
+const SD_POWER: u32 = SDMMC1;
+const SD_CLKCR: u32 = SDMMC1 + 0x04;
+const SD_ARG: u32 = SDMMC1 + 0x08;
+const SD_CMD: u32 = SDMMC1 + 0x0c;
+const SD_RESP1: u32 = SDMMC1 + 0x14;
+const SD_DTIMER: u32 = SDMMC1 + 0x24;
+const SD_DLEN: u32 = SDMMC1 + 0x28;
+const SD_DCTRL: u32 = SDMMC1 + 0x2c;
+const SD_STA: u32 = SDMMC1 + 0x34;
+const SD_ICR: u32 = SDMMC1 + 0x38;
+const SD_FIFO: u32 = SDMMC1 + 0x80;
+const RCC_AHB3RSTR: u32 = RCC + 0x07c;
+const RCC_AHB3ENR: u32 = RCC + 0x0d4;
+// STA flags (RM0399)
+const STA_CCRCFAIL: u32 = 1 << 0;
+const STA_DCRCFAIL: u32 = 1 << 1;
+const STA_CTIMEOUT: u32 = 1 << 2;
+const STA_DTIMEOUT: u32 = 1 << 3;
+const STA_RXOVERR: u32 = 1 << 5;
+const STA_CMDREND: u32 = 1 << 6;
+const STA_CMDSENT: u32 = 1 << 7;
+const STA_DATAEND: u32 = 1 << 8;
+const STA_RXFIFOE: u32 = 1 << 19;
+/// Every static flag (stock's clear value).
+const ICR_ALL: u32 = 0x1fe0_0fff;
+
+fn emmc_clkcr(fast: bool, wide: bool) -> u32 {
+    let div = if fast { 2 } else { 125 };
+    // PWRSAV (clock only while the bus is busy) at 25 MHz only: the card needs a running clock to identify
+    let pwrsav = if fast { 1 << 12 } else { 0 };
+    div | pwrsav | (u32::from(wide) << 14) | (1 << 16) | (1 << 17) // WIDBUS, NEGEDGE, HWFC_EN
+}
+
+fn emmc_power_on() {
+    modify(RCC_D1CCIPR, 1 << 16, 0); // SDMMCSEL = pll1_q_ck, as stock
+    modify(RCC_AHB3ENR, 0, 1 << 16); // SDMMC1EN
+    // from reset: a RAM run, or an earlier failed init, may have left the controller mid-transfer
+    modify(RCC_AHB3RSTR, 0, 1 << 16);
+    modify(RCC_AHB3RSTR, 1 << 16, 0);
+    for pin in 8..=12 {
+        gpio(Port::C, pin, AF, 12); // D0..D3, CK
+    }
+    gpio(Port::D, 2, AF, 12); // CMD
+    wr(SD_CLKCR, emmc_clkcr(false, false));
+    wr(SD_POWER, 3); // PWRCTRL: on
+    delay_ms(2); // the card wants 1 ms and 74 clocks (185 us at 400 kHz) before CMD0 (JEDEC)
+}
+
+fn emmc_cmd(index: u8, arg: u32, resp: bryton_rustfw::emmc::Resp, data: bool) -> Result<[u32; 4], BusError> {
+    use bryton_rustfw::emmc::Resp;
+    wr(SD_ICR, ICR_ALL);
+    wr(SD_ARG, arg);
+    let waitresp = match resp {
+        Resp::None => 0,
+        Resp::R1 | Resp::R3 => 1,
+        Resp::R2 => 3,
+    };
+    // CMDTRANS: this command starts the data path; CMDSTOP for CMD12 (RM0399: the stop command of a transfer)
+    let flags = (u32::from(data) << 6) | (u32::from(index == 12) << 7);
+    wr(SD_CMD, u32::from(index & 0x3f) | flags | (waitresp << 8) | (1 << 12)); // CPSMEN
+    let done = if resp == Resp::None { STA_CMDSENT } else { STA_CMDREND | STA_CCRCFAIL | STA_CTIMEOUT };
+    // the card answers within 64 bus clocks (CTIMEOUT: 160 us at 400 kHz); 10 ms covers a missing kernel clock
+    if !wait_us(10_000, || rd(SD_STA) & done != 0) {
+        return Err(BusError::Timeout);
+    }
+    let sta = rd(SD_STA);
+    if sta & STA_CTIMEOUT != 0 {
+        return Err(BusError::Timeout);
+    }
+    if sta & STA_CCRCFAIL != 0 && resp != Resp::R3 {
+        return Err(BusError::Crc); // R3 has no CRC: the flag is expected there
+    }
+    Ok([rd(SD_RESP1), rd(SD_RESP1 + 4), rd(SD_RESP1 + 8), rd(SD_RESP1 + 12)])
+}
+
+fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
+    let len = buf.len() as u32;
+    if len == 0 || !len.is_multiple_of(512) || len >= 1 << 25 {
+        return Err(BusError::Overrun); // not whole blocks (emmc.rs never asks that)
+    }
+    wr(SD_DCTRL, 0);
+    wr(SD_DTIMER, 2_500_000); // 100 ms at 25 MHz for each block to start
+    wr(SD_DLEN, len);
+    wr(SD_DCTRL, (9 << 4) | (1 << 1)); // 512-byte blocks, card to host, block mode; CMDTRANS starts it
+    let r1 = match emmc_cmd(index, arg, bryton_rustfw::emmc::Resp::R1, true) {
+        Ok(r) => r[0],
+        Err(e) => {
+            wr(SD_DCTRL, 0);
+            return Err(e);
+        }
+    };
+    let limit = (100 + len / 512).min(10_000) * (CPU_HZ / 1000); // 100 ms + 1 ms a block
+    let t0 = cycles();
+    let mut words = buf.chunks_exact_mut(4);
+    let mut next = words.next();
+    let result = loop {
+        let sta = rd(SD_STA);
+        if sta & STA_DCRCFAIL != 0 {
+            break Err(BusError::Crc);
+        } else if sta & STA_DTIMEOUT != 0 {
+            break Err(BusError::Timeout);
+        } else if sta & STA_RXOVERR != 0 {
+            break Err(BusError::Overrun);
+        }
+        if sta & STA_RXFIFOE == 0
+            && let Some(w) = next
+        {
+            w.copy_from_slice(&rd(SD_FIFO).to_le_bytes()); // the first byte received is the word's lowest
+            next = words.next();
+            continue;
+        }
+        if sta & STA_DATAEND != 0 && next.is_none() {
+            break Ok(r1);
+        }
+        if cycles().wrapping_sub(t0) > limit {
+            break Err(BusError::Timeout);
+        }
+    };
+    wr(SD_DCTRL, 0);
+    wr(SD_ICR, ICR_ALL);
+    result
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The board for the app in lib.rs: each method is the transport only.
 // ---------------------------------------------------------------------------------------------------------------
 struct S510;
@@ -770,6 +901,18 @@ impl Board for S510 {
         modify(PWR_CR1, 0, 1 << 8); // DBP: backup domain writable (the bootloader leaves it set; seen on the unit)
         wr(RTC_BKP0R + 4 * (n as u32 % 32), v);
     }
+    fn emmc_power_on(&mut self) {
+        emmc_power_on();
+    }
+    fn emmc_bus(&mut self, fast: bool, wide: bool) {
+        wr(SD_CLKCR, emmc_clkcr(fast, wide));
+    }
+    fn emmc_cmd(&mut self, index: u8, arg: u32, resp: bryton_rustfw::emmc::Resp) -> Result<[u32; 4], BusError> {
+        emmc_cmd(index, arg, resp, false)
+    }
+    fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
+        emmc_read(index, arg, buf)
+    }
 }
 
 /// Boot stage at which a diagnostic build stops: `DIAG_STOP=n cargo build --release` (0: never; AGENTS.md layer 6).
@@ -820,6 +963,7 @@ fn main() -> ! {
     let mut usb_tried = false;
     let mut session = Session::new();
     let mut stats = Stats::default();
+    let mut emmc = Emmc::new(); // identified at the first `sector` or `emmc` command, never at boot
     let (mut awake, mut passes) = (0u32, 0u32);
     loop {
         let t0 = cycles();
@@ -847,6 +991,16 @@ fn main() -> ! {
                     Effect::Reset => {
                         l.linger(50);
                         system_reset();
+                    }
+                    Effect::Sector(lba) => {
+                        let mut buf = [0u8; bryton_rustfw::emmc::SECTOR];
+                        let r = emmc.read(&mut board, lba, &mut buf).map(|()| &buf);
+                        dev::send_sector(l, r);
+                        l.flush();
+                    }
+                    Effect::Emmc => {
+                        dev::send_layout(l, emmc.layout(&mut board));
+                        l.flush();
                     }
                     Effect::Run(size) => {
                         l.linger(50);

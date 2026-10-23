@@ -108,6 +108,9 @@ The point of this project is a firmware in safe Rust.
 - `src/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
+- `src/emmc.rs`: the eMMC (SDMMC1) protocol, read only: identification, EXT_CSD SEC_COUNT, block reads, stock's
+  layout; against the `Board` primitives `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read`; `sim.rs` has a
+  model of the card (`EmmcCard`). Used only by the dev link's `emmc` and `sector` commands so far.
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests.
@@ -247,6 +250,7 @@ Install the firmware once, as an update (README). From then on, with the cable i
     ./check.sh && ./dev.py run    # run the new build from RAM: nothing written to the eMMC
     ./dev.py peek 0x40013014 2    # read registers, or DTCM / SDRAM (read only); poke ADDR VALUE writes a register
     ./dev.py key page [--long]    # press or hold a key (page, lap, start, back): scripted tests
+    ./dev.py emmc                 # eMMC layout; sector N [COUNT] [-o F] reads sectors (read only)
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
@@ -262,7 +266,7 @@ Install the firmware once, as an update (README). From then on, with the cable i
   Engineer Mode (`tools/iaprecover.py --write out/IMG.bin`). `run` covers day-to-day iteration.
 - **Still to build:**
   - `log` lines from the firmware over the link;
-  - an eMMC `reflash` command, once an SDMMC driver exists.
+  - an eMMC `reflash` command (the driver is read only so far).
 - **No watchdog, on purpose.** The IWDG keeps counting in standby unless an option byte (FZ_IWDG_SDBY) says
   otherwise, so it would wake the unit from power-off. Option bytes are flash configuration, and we never
   touch them.
