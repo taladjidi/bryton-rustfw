@@ -159,6 +159,10 @@ def main():
     p.add_argument('addr')
     p.add_argument('value')
     sub.add_parser('emmc', help='identify the eMMC and print its layout (BOARD.md 15)')
+    p = sub.add_parser('bench', help='time eMMC reads (read only): bench [LBA] [SECTORS a read] [COUNT], or bench scan KB')
+    p.add_argument('lba', nargs='?', default='0x10000')
+    p.add_argument('n', nargs='?', type=int, default=16)
+    p.add_argument('count', nargs='?', type=int, default=128)
     p = sub.add_parser('sector', help='read eMMC sectors (read only): sector N [COUNT] [-o file]')
     p.add_argument('n', type=lambda x: int(x, 0))
     p.add_argument('count', nargs='?', type=lambda x: int(x, 0), default=1)
@@ -192,6 +196,18 @@ def main():
                 base = int(a.addr, 0)
                 for i, v in enumerate([first] + [line(s) for _ in range(a.n - 1)]):
                     print(f'{base + 4 * i:08x}: {v}')
+            elif a.cmd == 'bench' and a.lba == 'scan':
+                answer = command(s, f'bench scan {a.n}')
+                us = int(answer.split()[1], 16)
+                print(f'scan of {a.n} KB in {us / 1000:.1f} ms: {a.n / 1024 / (us / 1e6):.2f} MB/s')
+            elif a.cmd == 'bench':
+                a.lba = int(a.lba, 0)
+                answer = command(s, f'bench {a.lba} {a.n} {a.count}')
+                if not answer.startswith('bench '):
+                    sys.exit(f'dev.py: {answer}')
+                us = int(answer.split()[1], 16)
+                kb = a.n * a.count / 2
+                print(f'{a.count} reads of {a.n} sectors ({kb:.0f} KB) in {us / 1000:.1f} ms: {kb / 1024 / (us / 1e6):.2f} MB/s')
             elif a.cmd == 'emmc':
                 answer = command(s, 'emmc')
                 if not answer.startswith('emmc '):

@@ -154,6 +154,9 @@ pub struct Reader {
     last_ts: u32,
     pos: u32,
     result: Option<Result<(), Error>>,
+    /// [`crate::fit::CRC_TABLE`], copied: with the reader, in DTCM (seen on the unit: reading the table from the
+    /// image, in uncached SDRAM, costs most of the scan's time).
+    table: [u16; 256],
 }
 
 impl Default for Reader {
@@ -184,6 +187,7 @@ impl Reader {
             last_ts: 0,
             pos: 0,
             result: None,
+            table: crate::fit::CRC_TABLE,
         }
     }
 
@@ -399,27 +403,82 @@ impl Reader {
     }
 
     fn data(&mut self, b: u8) -> Option<Msg> {
-        let def = self.defs.get(self.local).copied().unwrap_or_default();
-        for &(off, size, s) in def.picked.iter().take(usize::from(def.n)) {
-            let off = u32::from(off);
-            if (off..off + u32::from(size)).contains(&self.at)
-                && let Some(v) = self.vals.get_mut(usize::from(s))
-            {
-                *v = if def.big { *v << 8 | u32::from(b) } else { *v | u32::from(b) << (8 * (self.at - off)) };
-                if self.at == off + u32::from(size) - 1 {
-                    let invalid = if size == 4 { u32::MAX } else { (1 << (8 * size)) - 1 };
-                    if *v != invalid {
-                        self.present |= 1 << s;
-                    }
-                }
-            }
-        }
+        let Some(def) = self.defs.get(self.local) else { return self.fail(Error::Undefined) };
+        let (n, size) = (usize::from(def.n), def.size);
+        self.take(self.local, self.at, &[b], n);
         self.at += 1;
-        if self.at < def.size {
+        if self.at < size {
             return None;
         }
         self.state = State::Next;
         self.data_end()
+    }
+
+    /// Bytes `bytes` of the data message on local type `local`, from its byte `at`: into the picked fields they
+    /// belong to (the definition's first `n`).
+    fn take(&mut self, local: usize, at: u32, bytes: &[u8], n: usize) {
+        let Some(def) = self.defs.get(local) else { return };
+        let end = at + bytes.len() as u32;
+        for &(off, size, s) in def.picked.iter().take(n) {
+            let (off, size) = (u32::from(off), u32::from(size));
+            let (from, to) = (off.max(at), (off + size).min(end));
+            let Some(v) = self.vals.get_mut(usize::from(s)) else { continue };
+            for k in from..to {
+                let b = u32::from(bytes.get((k - at) as usize).copied().unwrap_or(0));
+                *v = if def.big { *v << 8 | b } else { *v | b << (8 * (k - off)) };
+            }
+            if from < to && to == off + size {
+                let invalid = if size == 4 { u32::MAX } else { (1 << (8 * size)) - 1 };
+                if *v != invalid {
+                    self.present |= 1 << s;
+                }
+            }
+        }
+    }
+
+    /// Bytes of the file, as many as `push` would take one by one, each message the reader keeps given to `f`;
+    /// returns how many were taken (fewer than `buf.len()` once the file has ended, or an error was found). The
+    /// bytes of a data message are taken together: its picked fields decoded straight from the buffer, its CRC
+    /// over the run, so most of a file costs a table step a byte (what the scan of stock's rides runs on).
+    ///
+    /// ```
+    /// use bryton_rustfw::fitread::Reader;
+    /// let (mut a, mut b) = (Reader::new(), Reader::new());
+    /// let file = [14, 0x20, 0, 0, 0, 0, 0, 0, b'.', b'F', b'I', b'T', 0, 0, 0, 0];
+    /// let n = a.push_slice(&file, |_| {});
+    /// file.iter().for_each(|&x| drop(b.push(x)));
+    /// assert_eq!((n, a.result()), (file.len(), b.result()));
+    /// ```
+    pub fn push_slice(&mut self, buf: &[u8], mut f: impl FnMut(Msg)) -> usize {
+        let mut i = 0;
+        while let Some(rest) = buf.get(i..).filter(|r| !r.is_empty()) {
+            if self.state == State::Done {
+                break;
+            }
+            if self.state == State::Data
+                && let Some(&Def { size, n, .. }) = self.defs.get(self.local)
+            {
+                let left = size.saturating_sub(self.at);
+                let k = (left.min(self.data_left) as usize).min(rest.len());
+                if k > 1 {
+                    // all of the message the buffer has but its last byte, which `push` takes (it ends it)
+                    let run = rest.get(..k - 1).unwrap_or(&[]);
+                    self.take(self.local, self.at, run, usize::from(n));
+                    for &b in run {
+                        self.crc = (self.crc >> 8) ^ self.table[usize::from((self.crc as u8) ^ b)];
+                    }
+                    let len = run.len() as u32;
+                    (self.at, self.pos, self.data_left) = (self.at + len, self.pos + len, self.data_left - len);
+                    i += run.len();
+                    continue;
+                }
+            }
+            if let Some(m) = rest.first().and_then(|&b| self.push(b)) {
+                f(m);
+            }
+            i += 1;
+        }
+        i
     }
 
     /// A data message is whole: the timestamp kept, and the message given if it is one the reader keeps.
@@ -480,6 +539,71 @@ mod tests {
         }
         w.finish(&mut f, T0 + 121).unwrap();
         f
+    }
+
+    /// `push_slice` gives what `push` gives, byte by byte, on whole and damaged files cut into any chunks.
+    #[test]
+    fn push_slice_equals_push() {
+        let good = written();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for round in 0..300 {
+            let mut f = good.clone();
+            for _ in 0..(round % 4) {
+                let i = rnd() as usize % f.len();
+                f[i] = rnd() as u8;
+            }
+            let (want, want_r) = read(&f);
+            let mut r = Reader::new();
+            let mut got = Vec::new();
+            let mut at = 0;
+            while at < f.len() {
+                let n = 1 + rnd() as usize % 700;
+                let chunk = &f[at..(at + n).min(f.len())];
+                let took = r.push_slice(chunk, |m| got.push(m));
+                at += chunk.len();
+                if took < chunk.len() {
+                    break;
+                }
+            }
+            assert_eq!((got, r.result()), (want, want_r), "round {round}");
+        }
+    }
+
+    /// Speed on a real ride (outside the repository; prints only the cost): `cargo test-host --release -- --ignored
+    /// parse_speed --nocapture`.
+    #[test]
+    #[ignore]
+    fn parse_speed() {
+        let dir = "/Users/tangui/Documents/bryton/rides";
+        let Some(f) = std::fs::read_dir(dir).ok().and_then(|d| {
+            d.filter_map(|e| e.ok().map(|e| e.path())).find(|p| p.extension().is_some_and(|e| e == "fit"))
+        }) else {
+            return;
+        };
+        let data = std::fs::read(f).unwrap();
+        for slices in [false, true] {
+            let t = std::time::Instant::now();
+            let mut n = 0;
+            for _ in 0..20 {
+                if slices {
+                    let mut r = Reader::new();
+                    for chunk in data.chunks(8192) {
+                        r.push_slice(chunk, |_| n += 1);
+                    }
+                } else {
+                    n += read(&data).0.len();
+                }
+            }
+            let ns = t.elapsed().as_nanos() as f64 / (20.0 * data.len() as f64);
+            let how = if slices { "push_slice" } else { "push" };
+            std::println!("{} bytes, {} messages, {how}: {ns:.2} ns a byte on the host", data.len(), n / 20);
+        }
     }
 
     #[test]

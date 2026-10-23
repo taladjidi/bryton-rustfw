@@ -1977,9 +1977,9 @@ impl App {
     // -----------------------------------------------------------------------------------------------------------
 
     /// Bytes of stock's rides read per pass: more while no ride runs, little during a ride. Seen on the unit
-    /// (2026-10-24): about 450 KB/s read and parsed, so 256 KB made each pass over half a second and the screen and
-    /// keys sluggish; 32 KB keeps a pass near 70 ms (70 rides, 12 MB: about a minute).
-    const SCAN_IDLE: u32 = 32 * 1024;
+    /// (2026-10-24, `dev.py bench scan`): 2.1 to 2.5 MB/s read and parsed (the eMMC alone 10.5 MB/s), so 96 KB keeps
+    /// a pass near 40 ms and the menu answering (70 rides, 12 MB: about 15 s).
+    const SCAN_IDLE: u32 = 96 * 1024;
     const SCAN_RIDING: u32 = 16 * 1024;
 
     /// A stock data row's value.
@@ -2011,6 +2011,17 @@ impl App {
             (S::AllKm, _) => v.push_u32(o.all.dist_m / 1000),
             (S::AllH, _) => push_fixed(v, (o.all.time_s / 360) as i32, 1, 1),
         }
+    }
+
+    /// For the dev link's `bench scan`: the scan of stock's rides (started if it is not running) goes on for about
+    /// `bytes`; how many it read.
+    pub fn bench_scan(&mut self, b: &mut impl Board, bytes: u32) -> u32 {
+        if self.stock.status() != stock::Status::Running {
+            self.stock.start(self.date);
+        }
+        let before = self.stock.read_bytes();
+        self.stock.step(&mut emmc::Volume(&mut self.emmc, b), bytes);
+        self.stock.read_bytes().wrapping_sub(before)
     }
 
     /// The scan of stock's rides goes on, if it runs.

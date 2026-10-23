@@ -147,6 +147,11 @@ impl Scan {
         }
     }
 
+    /// Bytes of rides read since the scan started.
+    pub fn read_bytes(&self) -> u32 {
+        self.out.bytes
+    }
+
     /// Where it is.
     pub fn status(&self) -> Status {
         self.status
@@ -216,16 +221,12 @@ impl Scan {
         *spent += n as u32;
         self.out.bytes = self.out.bytes.saturating_add(n as u32);
         let in_window = self.today.saturating_sub(day) < WINDOW_DAYS;
-        for &b in io.get(..n).unwrap_or(&[]) {
-            match self.reader.push(b) {
-                Some(Msg::Record(r)) if in_window => self.rolling.sample(r.time, r.power),
-                Some(Msg::Session(s)) => self.session = self.session.or(Some(s)),
-                _ => {}
-            }
-            if self.reader.result().is_some() {
-                break;
-            }
-        }
+        let (rolling, session) = (&mut self.rolling, &mut self.session);
+        self.reader.push_slice(io.get(..n).unwrap_or(&[]), |m| match m {
+            Msg::Record(r) if in_window => rolling.sample(r.time, r.power),
+            Msg::Session(s) => *session = session.or(Some(s)),
+            Msg::Record(_) => {}
+        });
         match self.reader.result() {
             Some(r) => self.end_file(r.is_ok()),
             None if n == 0 => self.end_file(false), // the file ended before the FIT data did

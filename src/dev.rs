@@ -14,6 +14,10 @@
 //!   hex numbers (BOARD.md 15), or `err <why>`.
 //! - `sector <n>`: reads eMMC sector `n` ([`Effect::Sector`]) and answers its 512 bytes as one line of 1024 hex
 //!   digits, or `err <why>`. Read only; the eMMC is touched by nothing else, and only from the first of these two.
+//! - `bench <lba> <sectors> <count>`: reads `count` times `sectors` eMMC sectors from `lba` on ([`Effect::Bench`]) and
+//!   answers `bench <microseconds>` (the time the reads took, to measure the eMMC path), or `err <why>`.
+//! - `bench scan <kb>`: runs the scan of stock's rides over about `kb` KB ([`Effect::BenchScan`]) and answers
+//!   `bench <microseconds>` (the bytes read are about `kb` KB).
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -71,6 +75,11 @@ pub enum Effect {
     Sector(u32),
     /// Answer the eMMC layout with [`send_layout`].
     Emmc,
+    /// Time eMMC reads: from a sector, sectors a read (1 to 32), reads; answer with [`send_bench`].
+    Bench(u32, u32, u32),
+    /// Time the scan of stock's rides over about this many bytes ([`App::bench_scan`]); answer with
+    /// [`send_bench`].
+    BenchScan(u32),
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -224,6 +233,16 @@ impl Session {
                 _ => h.send(b"err usage: sector <n>\n"),
             },
             Some(b"emmc") => return Effect::Emmc,
+            Some(b"bench") if line.starts_with(b"bench scan") => match words.nth(1).and_then(parse) {
+                Some(kb @ 1..=65_536) => return Effect::BenchScan(kb * 1024),
+                _ => h.send(b"err usage: bench scan <kb>\n"),
+            },
+            Some(b"bench") => {
+                match (words.next().and_then(parse), words.next().and_then(parse), words.next().and_then(parse)) {
+                    (Some(lba), Some(n @ 1..=32), Some(count @ 1..=100_000)) => return Effect::Bench(lba, n, count),
+                    _ => h.send(b"err usage: bench <lba> <sectors 1..32> <count>\n"),
+                }
+            }
             Some(b"reset") => {
                 h.send(b"ok\n");
                 return Effect::Reset;
@@ -271,6 +290,19 @@ pub fn send_sector(h: &mut impl Host, r: Result<&[u8; emmc::SECTOR], emmc::Error
 }
 
 /// The answer to `emmc`: `emmc <SEC_COUNT> <B> <OS start>` in hex, or the error.
+/// The answer to `bench`: how long the reads took, or why they failed.
+pub fn send_bench(h: &mut impl Host, r: Result<u32, emmc::Error>) {
+    match r {
+        Ok(us) => {
+            h.send(b"bench ");
+            h.send(&hex(us)[..8]);
+            h.send(b"\n");
+        }
+        Err(e) => send_error(h, e),
+    }
+}
+
+/// The answer to `emmc`: the layout, or why it could not be read.
 pub fn send_layout(h: &mut impl Host, r: Result<emmc::Layout, emmc::Error>) {
     match r {
         Ok(l) => {

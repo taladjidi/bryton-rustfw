@@ -404,24 +404,36 @@ fn semicircles(deg_e7: i32) -> u32 {
     (i64::from(deg_e7) * (1 << 31) / 1_800_000_000) as i32 as u32
 }
 
-/// FIT's CRC-16 (the SDK's 4-bit table), continued from `crc` over `data`.
+/// FIT's CRC-16 (CRC-16/ARC: reflected polynomial 0xa001), continued from `crc` over `data`, a byte a step from a
+/// 256-entry table (512 bytes of flash; the SDK's 4-bit table takes two steps a byte).
 ///
 /// ```
 /// assert_eq!(bryton_rustfw::fit::crc(0, b"123456789"), 0xbb3d); // CRC-16/ARC
 /// ```
 pub fn crc(mut crc: u16, data: &[u8]) -> u16 {
-    const T: [u16; 16] = [
-        0x0000, 0xcc01, 0xd801, 0x1400, 0xf001, 0x3c00, 0x2800, 0xe401, 0xa001, 0x6c00, 0x7800, 0xb401, 0x5000, 0x9c01,
-        0x8801, 0x4400,
-    ];
     for &b in data {
-        for nib in [b & 0xf, b >> 4] {
-            let t = T[usize::from(crc & 0xf)];
-            crc = (crc >> 4) ^ t ^ T[usize::from(nib)];
-        }
+        crc = (crc >> 8) ^ CRC_TABLE[usize::from((crc as u8) ^ b)];
     }
     crc
 }
+
+/// [`crc`]'s table: the CRC of each byte from 0. In the image, so in the SDRAM, which is read uncached (the D-cache is
+/// off): a reader that runs it over megabytes keeps a copy where it lives ([`crate::fitread::Reader`]).
+pub const CRC_TABLE: [u16; 256] = {
+    let mut t = [0u16; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i as u16;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 { (c >> 1) ^ 0xa001 } else { c >> 1 };
+            k += 1;
+        }
+        t[i] = c;
+        i += 1;
+    }
+    t
+};
 
 /// The CRC of A then B from the CRC of A, the CRC of B and B's length (zlib's crc32_combine, for this CRC):
 /// shifts `a` through `len_b` zero bytes with squared GF(2) matrices.
@@ -461,6 +473,27 @@ pub fn crc_combine(a: u16, b: u16, mut len_b: u32) -> u16 {
 mod tests {
     extern crate std;
     use super::*;
+
+    /// The byte table gives the SDK's 4-bit table's CRC.
+    #[test]
+    fn crc_table_is_the_sdks() {
+        const T: [u16; 16] = [
+            0x0000, 0xcc01, 0xd801, 0x1400, 0xf001, 0x3c00, 0x2800, 0xe401, 0xa001, 0x6c00, 0x7800, 0xb401, 0x5000,
+            0x9c01, 0x8801, 0x4400,
+        ];
+        let sdk = |mut c: u16, d: &[u8]| {
+            for &b in d {
+                for nib in [b & 0xf, b >> 4] {
+                    c = (c >> 4) ^ T[usize::from(c & 0xf)] ^ T[usize::from(nib)];
+                }
+            }
+            c
+        };
+        let data: std::vec::Vec<u8> = (0..4096u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        for start in [0, 1, 0xbeef] {
+            assert_eq!(crc(start, &data), sdk(start, &data));
+        }
+    }
     use std::vec::Vec;
 
     impl Sink for Vec<u8> {

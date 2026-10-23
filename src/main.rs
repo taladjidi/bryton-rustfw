@@ -1190,6 +1190,31 @@ fn main() -> ! {
                             l.flush();
                             woke = true;
                         }
+                        Effect::Bench(lba, n, count) => {
+                            let mut buf = [0u8; 32 * bryton_rustfw::emmc::SECTOR];
+                            let len = n as usize * bryton_rustfw::emmc::SECTOR;
+                            let t = cycles();
+                            let mut r = Ok(());
+                            for k in 0..count {
+                                r = app.emmc().read(&mut board, lba + k * n, &mut buf[..len]);
+                                if r.is_err() {
+                                    break;
+                                }
+                            }
+                            let us = cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000);
+                            dev::send_bench(l, r.map(|()| us));
+                            l.flush();
+                            woke = true;
+                        }
+                        Effect::BenchScan(bytes) => {
+                            let t = cycles();
+                            let got = app.bench_scan(&mut board, bytes);
+                            let us = cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000);
+                            dev::send_bench(l, Ok(us));
+                            let _ = got;
+                            l.flush();
+                            woke = true;
+                        }
                         Effect::Emmc => {
                             dev::send_layout(l, app.emmc().layout(&mut board));
                             l.flush();
