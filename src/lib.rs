@@ -10,6 +10,7 @@
 
 pub mod battery;
 pub mod dev;
+pub mod fit;
 pub mod fonts;
 pub mod gnss;
 pub mod nrf;
