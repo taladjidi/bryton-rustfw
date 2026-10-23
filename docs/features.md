@@ -72,7 +72,13 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
   recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (GPS altitude).
-- Not saved yet (the FIT writer, `src/storage/fit.rs`, plugs in at `App::recorder`).
+- **Saved as a FIT file** (`src/storage/recorder.rs`; simulator only so far, docs/status.md): the ride goes to
+  `\Rustfw\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
+  rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
+  at a checkpoint at least every minute and at each pause. A reset or a power cut loses at most the last minute:
+  at the next start the ride comes back paused ("RIDE RESUMED"). At the end it is read back whole, then moved to
+  `\Activities\YYMMDDhhmmss.fit` (stock's name and place: stock, its app, a computer and the history see it;
+  "RIDE SAVED"). A card that fails shows "RECORDING ERROR" and is tried again; the ride goes on in RAM.
 
 ## Menu
 

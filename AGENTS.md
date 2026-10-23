@@ -155,13 +155,21 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
-- `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol, read only: identification, EXT_CSD SEC_COUNT, block reads, stock's
-  layout; against the `Board` primitives `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read`; `sim.rs` has a
-  model of the card (`EmmcCard`, which serves a FAT image when given one). Used by the basemap and by the dev
-  link's `emmc` and `sector` commands; identified at first use, never at boot.
-- `src/storage/fat.rs`: a FAT32 reader, read only (no write path at all): boot sector, chains, 8.3 and long names, files at
-  an offset, directory listings; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made
-  (`tools/fat_image.py`, which also puts made-up stock rides and settings files on it).
+- `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol: identification, EXT_CSD SEC_COUNT, block reads and writes
+  (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
+  `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `sim.rs` has a model of the card
+  (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
+  basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at boot only
+  when a ride is open).
+- `src/storage/fat.rs`: a FAT32 reader: boot sector, chains, 8.3 and long names, files at an offset, directory
+  listings; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`,
+  which also puts made-up stock rides and settings files on it). `src/storage/fat/write.rs`: the write path, only
+  what the recorder needs (create with a long name, write sectors, set the size, move by delete + link, mark
+  deleted with 0xe5 only, sync the FATs and FSInfo), each write ordered so a power cut leaves a volume stock and a
+  computer accept; `fsck` in its tests checks that.
+- `src/storage/recorder.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw` from RAM to the card at
+  each checkpoint (a minute at most), two recovery records in `\Rustfw\ride.rec`, resume at boot, the save to
+  `\Activities\YYMMDDhhmmss.fit`. Its tests cut the power after every sector of a whole ride and of the reboot.
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread

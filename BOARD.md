@@ -278,7 +278,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   from UTC and the last position) and 20..27 (ride pages and the overview, two each, tags 0xd / 0xe), each behind a
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
-  (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets). Free for this firmware: 0, 30, 31.
+  (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
+  0x52430001, lib.rs `RIDE_BKP`). Free for this firmware: 0, 31.
   Settings move to a file in this firmware's own folder once the eMMC is written (AGENTS.md, "Share the storage with
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
@@ -578,6 +579,19 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
   bits) and CMD13 until ready; CMD8 SEND_EXT_CSD (FSDev_SD_Card_ParseEXT_CSD 0xd03960a0). Wait-ready (0xd0395830):
   CMD13 until state 4 (tran) and READY_FOR_DATA, CMD12 first if the card is in state 5 or 6. Reads: CMD17, or CMD18
   then CMD12 (FSDev_SD_Card_Rd 0xd0394a8c); the argument is the sector number for a high-capacity card.
+- **Writes, this firmware (not yet seen on the unit; simulator only):** `Card::write` in emmc.rs refuses any
+  sector at or past B before a command goes out; then CMD13 until tran, CMD24 (one sector) or CMD25 then CMD12
+  (more), and CMD13 until the card is back in tran with READY_FOR_DATA (programming done, 1 s at most), its status
+  checked. main.rs `emmc_write` mirrors the read: DCTRL 0, DTIMER 2,500,000, DLEN, DCTRL 512-byte blocks host to card
+  (DTDIR 0), the command with CMDTRANS, then a word into the FIFO whenever TXFIFOF (STA bit 16) is clear, until every
+  word is in and DATAEND; DCRCFAIL (the card's CRC status token), DTIMEOUT and TXUNDERR (bit 4) are errors (RM0399
+  SDMMC; ST's HAL_MMC_WriteBlocks feeds the FIFO on TXFIFOHE and checks the same flags). No reliable write (CMD23
+  bit 31), no erase, no CMD6 other than the bus width. What is written and in which order: `src/storage/fat/write.rs`
+  and `src/storage/recorder.rs`.
+
+      CMD   [CMD13]..[R1 tran] [CMD25 lba]..[R1]                          [CMD12]..[R1b] [CMD13]..[prg]..[CMD13]..[tran]
+      D0..3                                 [start][512 B][CRC16][end]..[CRC status][busy]..[next block]..
+      STA                            TXFIFOF clear: write FIFO                DATAEND
 - **Bring-up, this firmware** (emmc.rs), the same without the SD probes and CMD9 (emmc.rs says why), and with the
   EXT_CSD read again on the 4-bit bus as a check. CMD0 first whatever the card's state: the bootloader leaves it
   selected, in the transfer state, 4-bit (bootloader 0x08008aa4), and CMD0 clears all of that.
@@ -607,8 +621,9 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
 
 - The USB drive of the stock OS is exactly sectors 0 .. B-1, so a read-only `dd` of it on a computer gives the
   same bytes as `dev.py sector` there. The OS area starts with the installed image (section 10).
-- Read only, and only on request: the driver never writes; the one CMD6 is the bus width, a volatile byte the
-  card clears at CMD0 and power-off. The card is identified on the first `emmc` or `sector` command, never at boot.
+- Writes only from the ride recorder, inside the FAT volume; the one CMD6 is the bus width, a volatile byte the
+  card clears at CMD0 and power-off. The card is identified at first use (the basemap, the dev link, a ride's
+  start), and at boot only when backup register 30 says a ride is open.
 
 ## 16. Sensor bus (I2C4): light sensor, barometer, accelerometer
 

@@ -68,10 +68,15 @@ The golden rule (AGENTS.md) depends on this whole phase.
    the scan's result kept (a cache file in our own folder, once there is a write path) so it is not read again
    at each start; stock's summaries (`.sum` / `.csum`) instead of whole rides for the totals, once their format
    is known.
-1. eMMC writes (SDMMC single and multiple block writes, bounded busy waits).
-2. FAT32 writes: create, append, truncate, rename, both FAT copies, in an order a power cut can stop at any point.
-   Host tests cut the write at every step.
-3. Ride recording: `fit.rs` (done) into a file, a checkpoint every minute, resume on boot.
+1. eMMC writes (done in the simulator, 2026-10-24): CMD24 / CMD25 + CMD12, CMD13 busy bounded, refused at or
+   past sector B. Not yet run on the unit.
+2. FAT32 writes (done in the simulator): create with a long name, append, cut back, move, delete by 0xe5 only,
+   both FAT copies, FSInfo, in an order a power cut can stop at any point (`fat/write.rs` module doc). Host tests
+   cut the power after every sector.
+3. Ride recording (done in the simulator): `recorder.rs`, the ride in `\Rustfw`, a checkpoint at least every
+   minute, two recovery records, resume at boot, the save to `\Activities`. Next: on the unit with the owner
+   (docs/journal.md 2026-10-24); a reliable write (CMD23 bit 31) for the sectors rewritten in place; the track,
+   graphs and power totals of a resumed ride (only the ride's totals come back); HRV messages.
 4. Settings file (phase 1's store moves here).
 5. USB mass storage: rides off and courses, workouts and maps on, with no phone app. The recorder and the FAT
    writer stop while the computer owns the volume.

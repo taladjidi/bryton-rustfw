@@ -1,6 +1,7 @@
 //! A minimal FAT32 reader over a "read sectors" function ([`Disk`]): the boot sector, cluster chains, directories
-//! with 8.3 and long names (matched without regard to ASCII case), files read at an offset. **Read only:** there is
-//! no write path at all.
+//! with 8.3 and long names (matched without regard to ASCII case), files read at an offset. The write path (the ride
+//! recorder's: create, append, size, move, sync the FATs) is in [`write`], over [`DiskWrite`]; a [`Disk`] that is
+//! only that cannot be written.
 //!
 //! The volume is the eMMC's from sector 0 (BOARD.md 15: no MBR, the FAT32 boot sector is sector 0). Every loop is
 //! bounded (a chain by the volume's cluster count, a directory by FAT's 65536 entries), and a damaged volume gives
@@ -27,16 +28,24 @@ const DIR_ENTRIES: u32 = 65_536;
 /// Characters of a long name (20 entries of 13).
 const LFN: usize = 260;
 
+pub mod write;
+
 /// Sectors of a volume, read whole.
 pub trait Disk {
     /// Reads `buf.len() / 512` sectors from `lba` on.
     fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error>;
 }
 
+/// Sectors of a volume that can also be written ([`write`]).
+pub trait DiskWrite: Disk {
+    /// Writes `buf.len() / 512` sectors from `lba` on; Ok once they are on the medium.
+    fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error>;
+}
+
 /// Why a volume, a path or a file could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// The disk failed to read.
+    /// The disk failed to read or write.
     Io,
     /// Sector 0 is not a FAT32 boot sector this reader takes.
     NotFat32,
@@ -45,6 +54,8 @@ pub enum Error {
     /// A cluster chain or a directory entry that cannot be right (a loop, a cluster out of range, a file longer
     /// than its chain).
     Corrupt,
+    /// A write that cannot be done: a name already there or not allowed, no free cluster.
+    Refused,
 }
 
 /// A file or directory: its first cluster (0: empty file) and size (directories: 0).
@@ -95,6 +106,11 @@ impl Entry {
 /// A mounted FAT32 volume: its geometry and the FAT sector read last.
 pub struct Fat {
     fat_start: u32,
+    /// Sectors per FAT, and how many FATs (1 or 2): the writer keeps every copy the same.
+    fat_size: u32,
+    fats: u32,
+    /// The FSInfo sector (0: none).
+    fsinfo: u32,
     data_start: u32,
     spc: u32,
     clusters: u32,
@@ -134,8 +150,20 @@ impl Fat {
         }
         // the FAT must hold an entry for every cluster
         let clusters = ((total - data_start) / spc).min(fat_size.saturating_mul(SECTOR as u32 / 4).saturating_sub(2));
-        let fat =
-            Fat { fat_start: reserved, data_start, spc, clusters, root, total, cached: None, sector: [0; SECTOR] };
+        let fsinfo = u32::from(u16_at(&s, 48)).min(reserved.saturating_sub(1));
+        let fat = Fat {
+            fat_start: reserved,
+            fat_size,
+            fats,
+            fsinfo,
+            data_start,
+            spc,
+            clusters,
+            root,
+            total,
+            cached: None,
+            sector: [0; SECTOR],
+        };
         if !fat.valid(root) {
             return Err(Error::NotFat32);
         }
@@ -161,6 +189,15 @@ impl Fat {
 
     /// The cluster after `cluster` in its chain; None at the end of the chain.
     fn next(&mut self, d: &mut impl Disk, cluster: u32) -> Result<Option<u32>, Error> {
+        match self.entry(d, cluster)? {
+            0x0fff_fff8.. => Ok(None),
+            n if self.valid(n) => Ok(Some(n)),
+            _ => Err(Error::Corrupt), // free, bad or out of range inside a chain
+        }
+    }
+
+    /// The FAT entry of `cluster` (28 bits), from the first FAT, through the one sector kept.
+    fn entry(&mut self, d: &mut impl Disk, cluster: u32) -> Result<u32, Error> {
         let lba = self.fat_start + cluster / (SECTOR as u32 / 4);
         if self.cached != Some(lba) {
             self.cached = None;
@@ -168,12 +205,7 @@ impl Fat {
             self.read(d, lba, &mut s)?;
             (self.sector, self.cached) = (s, Some(lba));
         }
-        let next = u32_at(&self.sector, (cluster as usize % (SECTOR / 4)) * 4) & 0x0fff_ffff;
-        match next {
-            0x0fff_fff8.. => Ok(None),
-            n if self.valid(n) => Ok(Some(n)),
-            _ => Err(Error::Corrupt), // free, bad or out of range inside a chain
-        }
+        Ok(u32_at(&self.sector, (cluster as usize % (SECTOR / 4)) * 4) & 0x0fff_ffff)
     }
 
     /// The `index`th cluster of the chain from `first`.

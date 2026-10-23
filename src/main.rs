@@ -737,10 +737,12 @@ const STA_CCRCFAIL: u32 = 1 << 0;
 const STA_DCRCFAIL: u32 = 1 << 1;
 const STA_CTIMEOUT: u32 = 1 << 2;
 const STA_DTIMEOUT: u32 = 1 << 3;
+const STA_TXUNDERR: u32 = 1 << 4;
 const STA_RXOVERR: u32 = 1 << 5;
 const STA_CMDREND: u32 = 1 << 6;
 const STA_CMDSENT: u32 = 1 << 7;
 const STA_DATAEND: u32 = 1 << 8;
+const STA_TXFIFOF: u32 = 1 << 16;
 const STA_RXFIFOE: u32 = 1 << 19;
 /// Every static flag (stock's clear value).
 const ICR_ALL: u32 = 0x1fe0_0fff;
@@ -827,6 +829,60 @@ fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
             && let Some(w) = next
         {
             w.copy_from_slice(&rd(SD_FIFO).to_le_bytes()); // the first byte received is the word's lowest
+            next = words.next();
+            continue;
+        }
+        if sta & STA_DATAEND != 0 && next.is_none() {
+            break Ok(r1);
+        }
+        if cycles().wrapping_sub(t0) > limit {
+            break Err(BusError::Timeout);
+        }
+    };
+    wr(SD_DCTRL, 0);
+    wr(SD_ICR, ICR_ALL);
+    result
+}
+
+/// A write (CMD24 / CMD25), mirroring [`emmc_read`]: the data path set card-bound (DCTRL DTDIR 0), the command
+/// with CMDTRANS, then the FIFO fed a word at a time while TXFIFOF is clear until every word is in and DATAEND
+/// (RM0399 SDMMC data path; ST's HAL_MMC_WriteBlocks feeds it on TXFIFOHE and stops on TXUNDERR, DCRCFAIL, DTIMEOUT
+/// or DATAEND, the same flags). Hardware flow control holds the bus clock while the FIFO is empty, so a slow loop
+/// cannot underrun. DCRCFAIL here is the card's CRC status token saying the block came in damaged. The card's
+/// programming busy after DATAEND is emmc.rs's (CMD13). **Not yet seen on the unit** (docs/status.md).
+fn emmc_write(index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
+    let len = buf.len() as u32;
+    if len == 0 || !len.is_multiple_of(512) || len >= 1 << 25 {
+        return Err(BusError::Overrun); // not whole blocks (emmc.rs never asks that)
+    }
+    wr(SD_DCTRL, 0);
+    wr(SD_DTIMER, 2_500_000); // 100 ms at 25 MHz: the card's CRC status and busy between blocks
+    wr(SD_DLEN, len);
+    wr(SD_DCTRL, 9 << 4); // 512-byte blocks, host to card, block mode; CMDTRANS starts it
+    let r1 = match emmc_cmd(index, arg, bryton_rustfw::emmc::Resp::R1, true) {
+        Ok(r) => r[0],
+        Err(e) => {
+            wr(SD_DCTRL, 0);
+            return Err(e);
+        }
+    };
+    let limit = (100 + len / 512).min(10_000) * (CPU_HZ / 1000); // 100 ms + 1 ms a block
+    let t0 = cycles();
+    let mut words = buf.chunks_exact(4);
+    let mut next = words.next();
+    let result = loop {
+        let sta = rd(SD_STA);
+        if sta & STA_DCRCFAIL != 0 {
+            break Err(BusError::Crc);
+        } else if sta & STA_DTIMEOUT != 0 {
+            break Err(BusError::Timeout);
+        } else if sta & STA_TXUNDERR != 0 {
+            break Err(BusError::Overrun);
+        }
+        if sta & STA_TXFIFOF == 0
+            && let Some(w) = next
+        {
+            wr(SD_FIFO, u32::from_le_bytes([w[0], w[1], w[2], w[3]])); // the word's lowest byte goes out first
             next = words.next();
             continue;
         }
@@ -1072,6 +1128,9 @@ impl Board for S510 {
     }
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
         emmc_read(index, arg, buf)
+    }
+    fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
+        emmc_write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
         i2c_read(I2C4, addr, reg, buf)

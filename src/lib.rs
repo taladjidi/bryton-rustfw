@@ -23,7 +23,7 @@ pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, emmc, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit, fitread, history, ini, stock};
+pub use storage::{fat, fit, fitread, history, ini, recorder, stock};
 pub use ui::{fonts, map, menu, text, tiles};
 
 use menu::{Input, Setting};
@@ -91,6 +91,9 @@ pub trait Board {
     /// Sends eMMC command `index` with `arg`, a read of `buf.len()` bytes (whole 512-byte blocks) whose R1 answer
     /// it returns, and reads the data into `buf`, every wait bounded.
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, emmc::BusError>;
+    /// Sends eMMC command `index` with `arg`, a write of `buf` (whole 512-byte blocks) whose R1 answer it returns,
+    /// and sends the data, every wait bounded. The card's programming busy is left to the caller (CMD13).
+    fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, emmc::BusError>;
     /// Reads `buf.len()` bytes from register `reg` on, of the chip at 7-bit address `addr` on the sensor bus (I2C4,
     /// BOARD.md 16); false if it did not answer (no acknowledge, or a time-out: it never hangs).
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool;
@@ -358,6 +361,13 @@ pub const FAULT_CLEAR_MS: u32 = 60_000;
 
 /// The backup register of the alerts ([`Settings::alerts_word`]); not referenced by stock (BOARD.md 8).
 const ALERTS_BKP: usize = 28;
+
+/// The backup register that says a ride is open on the card (recorder.rs): [`RIDE_OPEN`] from its start until it
+/// is saved, so the boot looks for it; not referenced by stock (BOARD.md 8). Lost with the backup domain (a flat
+/// battery): the next Start then finds the ride from its record.
+const RIDE_BKP: usize = 30;
+/// See [`RIDE_BKP`].
+const RIDE_OPEN: u32 = 0x5243_0001;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
 /// - tag 0xa7 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
@@ -965,6 +975,9 @@ pub struct App {
     plan_file: Option<fat::File>,
     player: Option<workout::Player>,
     tone: (u32, u32),
+    /// The ride recorder (FIT file, checkpoints, save), and a ride to look for on the card at the first step.
+    recorder: recorder::Recorder,
+    resume_pending: bool,
 }
 
 impl App {
@@ -1090,7 +1103,11 @@ impl App {
             plan: storage::workout::Workout::new(),
             player: None,
             tone: (0, 0),
+            recorder: recorder::Recorder::new(),
+            resume_pending: false,
         };
+        // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
+        app.resume_pending = b.backup_read(RIDE_BKP) == RIDE_OPEN;
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
         }
@@ -2044,14 +2061,99 @@ impl App {
         Drawn::Graph(now)
     }
 
-    /// The ride recorder's one entry point: every [`ride::Event`] goes through here, in order.
-    // ponytail: nothing is stored yet (no eMMC driver). The FIT writer plugs in here and nowhere else:
-    // Start: fit::Writer::start (a new file); Second: Writer::record with a fit::Sample built from self.live,
-    // self.pvt and the RTC (fit::fit_time), then every 60 s Writer::checkpoint, its record kept in two copies
-    // (AGENTS.md, golden rule); Pause / Resume: timer events; Lap: a lap message; End: Writer::finish. Resume on
-    // boot reads the newer valid record back and puts the ride back to Paused.
+    // -----------------------------------------------------------------------------------------------------------
+    // The recorder (recorder.rs): events into its RAM buffer here, its card work in step_recorder
+    // -----------------------------------------------------------------------------------------------------------
+
+    /// The ride recorder's one entry point: every [`ride::Event`] goes through here, in order. RAM only: the card
+    /// work is [`App::step_recorder`]'s, at the end of the pass.
     fn recorder(&mut self, ev: ride::Event) {
-        let _ = ev;
+        let (local, t) = self.rec_time();
+        let words = self.ride.to_words();
+        match ev {
+            ride::Event::Start => {
+                self.recorder.start(t, recorder::ride_name(local));
+                if self.recorder.phase() != recorder::Phase::Starting {
+                    self.notice("NOT RECORDING"); // the last ride's save is still failing
+                }
+            }
+            ride::Event::Second => {
+                let s = self.sample(t);
+                self.recorder.second(&s, words);
+            }
+            ride::Event::Pause => self.recorder.pause(t, words),
+            ride::Event::Resume => self.recorder.resume(t),
+            ride::Event::Lap => self.recorder.lap(t),
+            ride::Event::End => self.recorder.end(t, words),
+        }
+    }
+
+    /// Local time now (the RTC as last read) and its FIT time (UTC from the offset learnt at a fix; the RTC as is
+    /// before one).
+    fn rec_time(&self) -> (recorder::Local, u32) {
+        let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
+        let local = (y, mo, d, h, mi, self.seconds);
+        let offset = i64::from(self.aid.offset_15min.unwrap_or(0)) * 900;
+        (local, fit::fit_time(from_epoch_s(epoch_s(local) - offset)))
+    }
+
+    /// This second's record: the fix, the sensors, the barometer's temperature.
+    fn sample(&self, time: u32) -> fit::Sample {
+        let fix = self.pvt.filter(|p| p.good());
+        let byte = |m| self.live.get(m).map(|v| v.min(254) as u8);
+        fit::Sample {
+            time,
+            pos: fix.map(|p| (p.lat, p.lon)),
+            alt_mm: fix.map(|p| p.alt_mm),
+            speed_mm_s: self.live.get(Metric::Speed).map(|v| u32::from(v) * 1000 / 36), // km/h x 10 to mm/s
+            hr: byte(Metric::Hr),
+            cadence: byte(Metric::Cadence),
+            power: self.live.get(Metric::Power),
+            temp_c: self.baro.map(|(_, c)| (c / 100).clamp(-100, 100) as i8),
+        }
+    }
+
+    /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
+    /// backup register that marks a ride open.
+    fn step_recorder(&mut self, b: &mut impl Board) {
+        let (local, _) = self.rec_time();
+        let o = if self.resume_pending {
+            let o = self.recorder.recover(&mut emmc::Volume(&mut self.emmc, b), local);
+            // a card that failed at boot is tried again (the marker stays until the ride is found)
+            self.resume_pending = matches!(o, recorder::Outcome::Failed(_)) || self.recorder.waiting();
+            o
+        } else if self.recorder.due() {
+            self.recorder.io(&mut emmc::Volume(&mut self.emmc, b), local)
+        } else {
+            recorder::Outcome::Nothing
+        };
+        match o {
+            recorder::Outcome::Nothing => {}
+            recorder::Outcome::Resumed(words, name) => {
+                // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
+                self.ride = ride::Ride::resumed(&words);
+                let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
+                self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
+                self.history = ride::History::default();
+                self.power.new_ride();
+                self.notice("RIDE RESUMED");
+            }
+            recorder::Outcome::Saved(_) => {
+                self.notice("RIDE SAVED");
+                if self.stock.status() != stock::Status::Idle {
+                    self.stock.start(self.date); // the history again, with this ride
+                }
+            }
+            recorder::Outcome::Failed(_) => {
+                if self.recorder.errors > 1 && self.recorder.errors.is_power_of_two() {
+                    self.notice("RECORDING ERROR"); // the retry failed too; then the 4th, 8th...: not every retry
+                }
+            }
+        }
+        let open = self.recorder.phase() != recorder::Phase::Done;
+        if !self.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
+            b.backup_write(RIDE_BKP, if open { RIDE_OPEN } else { 0 });
+        }
     }
 
     /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing.
@@ -2808,6 +2910,7 @@ impl App {
             // every second gone, not one a pass: a pass that took longer (an eMMC or radio wait) loses no ride time;
             // more than MAX_CATCH_UP is the clock set, not riding
             let gone = (sec + 60 - self.seconds) % 60;
+            self.seconds = sec; // the time the recorder reads goes with the minute already read
             for _ in 0..gone.clamp(1, MAX_CATCH_UP) {
                 self.second();
             }
@@ -2934,6 +3037,7 @@ impl App {
         if mask == 0 {
             self.repeated = false;
         }
+        self.step_recorder(b);
         self.update_light(b);
     }
 
