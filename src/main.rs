@@ -240,7 +240,9 @@ fn spi_init() {
     // SSI first: with SSM, MASTER set while SSI is 0 is a mode fault, which clears MASTER (seen on the unit,
     // diag v17: CFG2 read back without MASTER, so SPI1 took 16 bytes and never clocked; RM0399 SPI mode fault).
     wr(SPI_CR1, CR1_SSI);
-    wr(SPI_CFG1, (2 << 28) | 7); // MBR = /8, DSIZE = 8 bits
+    // MBR = /8, FTHLV = 4 frames (TXP then means room for a 32-bit write of 4 bytes: pixels go 2 per access),
+    // DSIZE = 8 bits
+    wr(SPI_CFG1, (2 << 28) | (3 << 5) | 7);
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
     wr(SPI_CFG2, (1 << 31) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 22) | (1 << 17));
 }
@@ -321,7 +323,10 @@ fn lcd_power_on() {
 }
 
 /// RAMWR then `count` pixels from `next`.
-fn lcd_ram_write(count: u32, next: &mut dyn FnMut() -> u16) {
+/// RAMWR then `count` pixels from `next`, two per 32-bit FIFO write. Generic, so a fill gets its own copy in which
+/// the colour is a constant. Transfers of at most 0x7ffe pixels (TSIZE is 16 bits, 2 bytes per pixel).
+#[inline(always)]
+fn lcd_ram(count: u32, mut next: impl FnMut() -> u16) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
     spi_begin(1);
@@ -330,17 +335,34 @@ fn lcd_ram_write(count: u32, next: &mut dyn FnMut() -> u16) {
     pin_set(LCD_DC.0, LCD_DC.1, true);
     let mut left = count;
     while left > 0 {
-        let n = left.min(0x7fff); // TSIZE is 16 bits: at most 0x7fff pixels (2 bytes each) per transfer
+        let n = left.min(0x7ffe);
         left -= n;
         spi_begin(2 * n);
-        for _ in 0..n {
-            let color = next();
-            spi_byte((color >> 8) as u8);
-            spi_byte(color as u8);
+        for _ in 0..n / 2 {
+            let (a, b) = (next(), next());
+            // the SPI sends the word's bytes from the lowest; the panel wants each pixel high byte first
+            let word = u32::from(a.swap_bytes()) | (u32::from(b.swap_bytes()) << 16);
+            if spi_wait(SR_TXP) {
+                wr(SPI_TXDR, word); // 4 bytes: FTHLV is 4 frames, so TXP means room for them
+            }
+        }
+        if n % 2 == 1 {
+            let c = next();
+            spi_byte((c >> 8) as u8);
+            spi_byte(c as u8);
         }
         spi_end();
     }
     pin_set(LCD_CS.0, LCD_CS.1, true);
+}
+
+fn lcd_ram_write(count: u32, next: &mut dyn FnMut() -> u16) {
+    lcd_ram(count, next);
+}
+
+/// `count` pixels of one colour (most panel writes: clearing boxes, backgrounds): no per-pixel callback.
+fn lcd_fill(count: u32, color: u16) {
+    lcd_ram(count, || color);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -580,7 +602,8 @@ fn adc_read(ch: u32) -> Option<u16> {
 
 // ---------------------------------------------------------------------------------------------------------------
 // GNSS: a u-blox M10 on SPI4 (0x40013400, BOARD.md 13), power on PI6. SPI4 as SPI1 (RM0399 SPI): master, mode 0,
-// software chip select (PE4 by hand), kernel clock HSI 64 MHz / 64 = 1 MHz (stock's rate). Transfers move 4 bytes
+// software chip select (PE4 by hand), kernel clock HSI 64 MHz / 16 = 4 MHz (stock: 1 MHz; u-blox receivers take
+// up to 5.5 MHz, inferred from their datasheets, and this one answers at 4: seen on the unit). Transfers move 4 bytes
 // per FIFO access (32-bit writes and reads pack four 8-bit frames).
 // ---------------------------------------------------------------------------------------------------------------
 const SPI4: u32 = 0x4001_3400;
@@ -601,7 +624,7 @@ fn gnss_init() {
     gpio(GNSS_CS.0, GNSS_CS.1, OUT, 0);
     pin_set(GNSS_POWER.0, GNSS_POWER.1, false);
     gpio(GNSS_POWER.0, GNSS_POWER.1, OUT, 0);
-    wr(SPI4 + 0x08, (5 << 28) | (3 << 5) | 7); // CFG1: /64, FIFO threshold 4 frames, 8-bit
+    wr(SPI4 + 0x08, (3 << 28) | (3 << 5) | 7); // CFG1: /16 = 4 MHz, FIFO threshold 4 frames, 8-bit
     wr(SPI4, 1 << 12); // CR1.SSI before CFG2.MASTER, or a mode fault clears MASTER (BOARD.md 6)
     wr(SPI4 + 0x0c, (1 << 31) | (1 << 26) | (1 << 22)); // CFG2: AFCNTR, SSM, MASTER; mode 0
     wr(SPI4 + 0x04, 0); // CR2: TSIZE 0, endless
@@ -616,7 +639,7 @@ fn gnss_transfer(buf: &mut [u8]) {
         let out = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         let ok = wait_us(100, || rd(SPI4 + 0x14) & (1 << 1) != 0) && {
             wr(SPI4 + 0x20, out); // TXDR
-            wait_us(100, || rd(SPI4 + 0x14) & 1 != 0) // RXP: 32 bits at 1 MHz take 32 us
+            wait_us(100, || rd(SPI4 + 0x14) & 1 != 0) // RXP: 32 bits at 4 MHz take 8 us
         };
         let got = if ok { rd(SPI4 + 0x30) } else { u32::MAX }; // RXDR
         chunk.copy_from_slice(&got.to_le_bytes());
@@ -638,6 +661,9 @@ impl Board for S510 {
     }
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
         lcd_ram_write(count, next);
+    }
+    fn panel_fill(&mut self, count: u32, color: u16) {
+        lcd_fill(count, color);
     }
     fn backlight(&mut self, level: u8) {
         backlight(level);

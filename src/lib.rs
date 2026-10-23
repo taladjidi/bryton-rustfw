@@ -36,6 +36,10 @@ pub trait Board {
     /// RAMWR (0x2c) then `count` pixels, each from `next` (called once per pixel, in order), into the window set by
     /// CASET / RASET.
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16);
+    /// RAMWR then `count` pixels of one colour (a fill: no per-pixel callback on the unit).
+    fn panel_fill(&mut self, count: u32, color: u16) {
+        self.panel_ram_write(count, &mut || color);
+    }
     /// Backlight at `level` percent (0: off).
     fn backlight(&mut self, level: u8);
     /// The keys held down, as a mask of [`Key`] codes.
@@ -311,8 +315,9 @@ const AID_BKP: [usize; 2] = [17, 18];
 /// A fix older than this is dropped (the receiver stopped answering).
 pub const PVT_STALE_MS: u32 = 3000;
 
-/// GNSS bytes read per pass: 64 per 50 ms is 1280 bytes/s, ten times NAV-PVT at 1 Hz.
-const GNSS_READ: usize = 64;
+/// GNSS bytes read per pass at most: 128 per 50 ms is 2560 bytes/s, twenty times NAV-PVT at 1 Hz. A pass stops at
+/// the first 32 bytes of idle fill between frames, so most passes read 32.
+const GNSS_READ: usize = 128;
 
 /// A sensor's channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -958,6 +963,9 @@ impl App {
         for _ in 0..GNSS_READ / 32 {
             let mut buf = send.take().unwrap_or([0xff; 32]);
             b.gnss_transfer(&mut buf);
+            if buf == [0xff; 32] && self.gnss.idle() {
+                break; // nothing waiting in the receiver
+            }
             for &byte in &buf {
                 if let Some(pvt) = self.gnss.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
                     self.pvt = Some(pvt);

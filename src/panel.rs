@@ -71,18 +71,29 @@ pub fn off(b: &mut impl Board) {
 /// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels.
 pub struct Panel<'a, B: Board>(pub &'a mut B);
 
+impl<B: Board> Panel<'_, B> {
+    /// CASET / RASET: the window the next RAMWR fills.
+    fn window(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        let (x1, y1) = (x + w - 1, y + h - 1);
+        self.0.panel_cmd(CASET, &[(x >> 8) as u8, x as u8, (x1 >> 8) as u8, x1 as u8]);
+        self.0.panel_cmd(RASET, &[(y >> 8) as u8, y as u8, (y1 >> 8) as u8, y1 as u8]);
+    }
+}
+
 impl<B: Board> Canvas for Panel<'_, B> {
     fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
-        self.blit(x, y, w, h, &mut |_, _| color);
+        if w == 0 || h == 0 {
+            return;
+        }
+        self.window(x, y, w, h);
+        self.0.panel_fill(w * h, color);
     }
 
     fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
         if w == 0 || h == 0 {
             return;
         }
-        let (x1, y1) = (x + w - 1, y + h - 1);
-        self.0.panel_cmd(CASET, &[(x >> 8) as u8, x as u8, (x1 >> 8) as u8, x1 as u8]);
-        self.0.panel_cmd(RASET, &[(y >> 8) as u8, y as u8, (y1 >> 8) as u8, y1 as u8]);
+        self.window(x, y, w, h);
         let (mut dx, mut dy) = (0, 0);
         self.0.panel_ram_write(w * h, &mut || {
             let p = px(dx, dy);

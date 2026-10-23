@@ -184,7 +184,9 @@ Not used yet: I2C sensors (barometer, accelerometer, light), touch, eMMC on SDMM
   2026-10-23; RM0399, SPI mode fault). Renode does not model it.
 - Stock pushes pixels over the LTDC RGB interface (framebuffer in AXI SRAM). This firmware does not use the LTDC.
 - One command on SPI1 (`lcd_cmd`): chip select low, D/C low for the command byte, high for its parameters (or
-  the pixels of a RAMWR), chip select high. Mode 3, 8 MHz, MSB first.
+  the pixels of a RAMWR), chip select high. Mode 3, 8 MHz, MSB first. Pixels go two per 32-bit FIFO write (FTHLV
+  4 frames; the SPI sends the word's bytes from the lowest, so each RGB565 pixel is byte-swapped into it); a fill
+  writes the same word over and over. Checked in Renode against the simulator; on the panel itself: to see.
 
      PG10 CS    ~~~~\______________________________________________/~~~~
      PG9  D/C   ~~~~\________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -438,8 +440,10 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
                                   |<-- driven low >= 1 s -->|<- 1 s ->| configuration, aiding
                                   boot (gnss_init)          first step + 1 s
 - **SPI4** (0x40013400): PE2 SCK (pull-down), PE4 NSS, PE5 MISO, PE6 MOSI, AF5; mode 0. Stock: 1 MHz from the
-  CSI, hardware NSS, DMA1 streams 6 / 7. This firmware: 1 MHz from the HSI (SPI45SEL = 3, /64), PE4 driven by
-  hand, 32-bit FIFO accesses (four 8-bit frames each), polled. SPI4 is reset through RCC_APB2RSTR (bit 13) first:
+  CSI, hardware NSS, DMA1 streams 6 / 7. This firmware: **4 MHz** from the HSI (SPI45SEL = 3, /16; the receiver
+  answers and acknowledges at that rate, seen), PE4 driven by hand, 32-bit FIFO accesses (four 8-bit frames
+  each), polled: 32 bytes a pass, more only while the receiver has data (it stops at 32 bytes of idle fill
+  between frames). SPI4 is reset through RCC_APB2RSTR (bit 13) first:
   re-initialised while enabled it latched a mode fault (MODF) and would not start (seen).
 - **Protocol:** UBX. The receiver idles with 0xff on MISO and ignores 0xff on MOSI. After stock it already
   sends **UBX-NAV-PVT** (class 0x01, id 0x07, 92 bytes) once a second on SPI, and no NMEA, straight from power-on:
@@ -475,5 +479,7 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   with a valid time, in 15-minute steps; 2 s accuracy) and UBX-MGA-INI-POS_LLH (the last good fix, kept to 1e-4
   degrees, 10 km accuracy), and turns AssistNow Autonomous on (CFG-ANA-USE_ANA, key 0x10230001, RAM). Seen on the
   unit: CFG-VALSET answered ACK-ACK, ANA reads back 1, and with CFG-NAVSPG-ACKAIDING on both MGA messages are
-  answered MGA-ACK "used". How much faster a fix comes: to measure outside.
+  answered MGA-ACK "used". **The time aiding works** (seen 2026-10-23, indoors, no fix): after power-up the
+  receiver's NAV-PVT carried the right UTC date and time, flagged valid, instead of 2021-03-07. How much faster a
+  fix comes: to measure outside.
 

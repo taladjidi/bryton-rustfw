@@ -77,6 +77,11 @@ impl Parser {
         None
     }
 
+    /// Between frames (not inside one).
+    pub fn idle(&self) -> bool {
+        self.pos == 0
+    }
+
     fn sum(&mut self, b: u8) {
         self.ck.0 = self.ck.0.wrapping_add(b);
         self.ck.1 = self.ck.1.wrapping_add(self.ck.0);

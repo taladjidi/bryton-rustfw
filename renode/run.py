@@ -20,7 +20,7 @@ from dev import png, W, H  # noqa: E402
 ELF = ROOT / 'target/thumbv7em-none-eabihf/release/bryton-rustfw'
 OUT = ROOT / 'target/renode'
 RENODE = os.environ.get('RENODE', '/Applications/Renode.app/Contents/MacOS/renode')
-SPI = re.compile(r'spi1: .*WriteByte to 0x20 .*value 0x([0-9A-Fa-f]+)')
+SPI = re.compile(r'spi1: .*Write(Byte|UInt32) to 0x20 .*value 0x([0-9A-Fa-f]+)')
 BSRR_G = re.compile(r'gpioPortG: .*Write\w* to 0x18 .*value 0x([0-9A-Fa-f]+)')
 OTG = re.compile(r'usb1: ')
 DC = 1 << 9                                             # PG9: 0 command, 1 parameter / pixel data
@@ -124,7 +124,10 @@ def main():
             v = int(m[1], 16)
             dc = 1 if v & DC else 0 if v & (DC << 16) else dc
         elif m := SPI.search(line):
-            stream.append((dc, int(m[1], 16)))
+            v = int(m[2], 16)
+            # a 32-bit write packs 4 frames, sent from the lowest byte (RM0399 SPI data packing)
+            for b in ([v] if m[1] == 'Byte' else list(v.to_bytes(4, 'little'))):
+                stream.append((dc, b))
             after_usb += usb > 0
         elif OTG.search(line):
             usb += 1
