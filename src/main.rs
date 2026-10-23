@@ -982,6 +982,7 @@ fn main() -> ! {
         // too (delay_ms), which would take over this timer.
         let mut press = None;
         let sleep_start = cycles();
+        let mut woke = false;
         timer_start(POLL_MS);
         loop {
             if let Some(l) = &mut link {
@@ -997,10 +998,12 @@ fn main() -> ! {
                         let r = emmc.read(&mut board, lba, &mut buf).map(|()| &buf);
                         dev::send_sector(l, r);
                         l.flush();
+                        woke = true;
                     }
                     Effect::Emmc => {
                         dev::send_layout(l, emmc.layout(&mut board));
                         l.flush();
+                        woke = true;
                     }
                     Effect::Run(size) => {
                         l.linger(50);
@@ -1011,8 +1014,10 @@ fn main() -> ! {
                 let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
                 app.set_usb(&mut board, dot);
             }
-            if timer_done() || press.is_some() {
-                break; // a key from the link acts now, so the next command cannot replace it
+            if timer_done() || press.is_some() || woke {
+                // a key from the link acts now, so the next command cannot replace it; board work done for the
+                // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
+                break;
             }
             wfi();
         }

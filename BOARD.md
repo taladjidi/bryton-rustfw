@@ -515,6 +515,16 @@ From stock (Ghidra: `Buzzer_PwmInit` 0xd018b3f0, `Buzzer_PlayTone` 0xd018b54a, `
 
 ## 15. eMMC
 
+**Seen on the unit (2026-10-23, `dev.py emmc` / `sector`, read only, from RAM):**
+- SEC_COUNT 0x3a40000 (31.3 GB); B = 0x3a2dfe6; OS area from 0x3a3d000.
+- The first 8 KB of the OS area equal the installed image as the bootloader copied it to SDRAM (`peek`).
+- **No MBR:** sector 0 is the FAT32 boot sector itself: OEM "MSWIN4.1", 512 bytes per sector, 32 sectors per
+  cluster (16 KB), 32 reserved sectors, 2 FATs, total sectors 0x3a2dfe6 (= B exactly), FAT size 0x3a28 sectors,
+  root directory at cluster 2, FSInfo at sector 1, signature 55 aa.
+- B + 0x4404 holds the light sensor calibration `55 aa a4 03 55 aa`: 0x3a4 = 932 (as in stock's log).
+- Handling a link command that uses the driver inside the main loop's sleep froze the loop (the driver's waits take
+  over SysTick); such commands now end that pass's sleep, as a key from the link does.
+
 From stock (Ghidra, OS R039 and bootloader R002; the addresses are those of the report
 `ghidra/STORAGE_AND_MAPS.md`, sections 1 and 2), register meanings from RM0399 (SDMMC) and the card side from
 the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: this firmware's driver
