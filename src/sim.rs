@@ -1336,6 +1336,30 @@ mod tests {
         assert!(sim.standby && !sim.display_on, "empty: switched off");
     }
 
+    /// Away from the overview, a notice is a banner for a while: the page above it keeps updating; when it goes,
+    /// what it covered is drawn again. A key dismisses it and acts (Start on a ride must start it).
+    #[test]
+    fn notice_banner_over_a_ride_page() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 3000);
+        sim.gnss.fix = Some(7000);
+        run(&mut sim, &mut app, 1500);
+        assert!(app.banner_ms.is_some());
+        assert_consistent(&sim, &app);
+        sim.save("banner");
+        run(&mut sim, &mut app, u64::from(BANNER_MS));
+        assert!(app.banner_ms.is_none(), "gone by itself");
+        assert_consistent(&sim, &app);
+        app.notice("TEST");
+        run(&mut sim, &mut app, 100);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(1), "the key dismissed it and acted");
+        assert!(app.banner_ms.is_none());
+        assert_consistent(&sim, &app);
+    }
+
     /// The overview: the first GPS fix becomes a notice in place of Ferris; its fields are chosen in the menu
     /// (OVERVIEW: four rows, no field count) and kept.
     #[test]

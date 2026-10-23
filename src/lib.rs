@@ -616,6 +616,9 @@ pub enum Screen {
     Nearby,
 }
 
+/// How long a banner stays up, unless an input dismisses it first.
+pub const BANNER_MS: u32 = 4000;
+
 /// The GPS row of the main menu.
 pub const GPS_ROW: usize = 10;
 /// The nearby BLE devices row of the main menu.
@@ -740,6 +743,10 @@ pub struct App {
     date: (u16, u8, u8),
     /// The latest notices, newest first (empty lines: none).
     notices: [Line<20>; ui::NOTICES],
+    /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
+    /// redrawn meanwhile; when it goes, the screen is drawn again.
+    banner_ms: Option<u32>,
+    banner_drawn: bool,
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
     told_low: bool,
@@ -850,6 +857,8 @@ impl App {
             }),
             date: rtc_date_from_dr(b.rtc().1),
             notices: Default::default(),
+            banner_ms: None,
+            banner_drawn: false,
             had_fix: false,
             told_low: false,
             drawn: Default::default(),
@@ -869,7 +878,7 @@ impl App {
             app.track.seed(lat, lon); // the map shows where the unit last was until the first fix
         }
         app.strip_shown = app.strip;
-        ui::draw_strip(&mut Panel(b), &app.strip);
+        ui::draw_strip(&mut Panel(b, (0, ui::H)), &app.strip);
         app.show(b);
         app.update_light(b);
         app
@@ -1197,6 +1206,9 @@ impl App {
                 ui::draw_list(c, &self.nearby);
             }
         }
+        if self.banner_ms.is_some() && self.banner_drawn {
+            ui::draw_banner(c, self.notices[0].as_str());
+        }
     }
 
     /// The boxes of the page on screen and what each holds (none on a menu or a list). The clock and Ferris place
@@ -1285,6 +1297,19 @@ impl App {
         [h / 10, h % 10, m / 10, m % 10]
     }
 
+    /// How far down the page may be drawn: above the banner while one is up.
+    fn bottom(&self) -> u32 {
+        if self.banner_ms.is_some() { ui::BANNER_Y } else { ui::H }
+    }
+
+    /// The banner is gone: what is under it drawn again, from what the screen shows.
+    fn unbanner(&mut self, b: &mut impl Board) {
+        self.banner_ms = None;
+        let mut p = Panel(b, (ui::BANNER_Y, ui::H));
+        p.fill(0, ui::BANNER_Y, ui::W, ui::H - ui::BANNER_Y, ui::BLACK);
+        self.draw_screen(&mut p);
+    }
+
     /// Adds a notice (newest first), stamped with the time: what the unit itself has to say (a fix, a sensor
     /// paired, the battery low); phone notifications will come here too.
     fn notice(&mut self, text: &str) {
@@ -1297,6 +1322,10 @@ impl App {
         l.push_str(" ");
         l.push_str(text);
         self.notices[0] = l;
+        // over the overview the notice is in its own box already
+        if self.screen != Screen::Main {
+            (self.banner_ms, self.banner_drawn) = (Some(0), false);
+        }
     }
 
     fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
@@ -1341,7 +1370,7 @@ impl App {
         for i in 0..ui::MENU_ROWS {
             let print = self.menu_row_print(menu, sel, i);
             if self.menu_shown[i] != print {
-                self.draw_menu_row(&mut Panel(b), menu, sel, i);
+                self.draw_menu_row(&mut Panel(b, (0, self.bottom())), menu, sel, i);
                 self.menu_shown[i] = print;
             }
         }
@@ -1361,7 +1390,7 @@ impl App {
             let view = m.view;
             self.render_basemap(b, map::area(bx), view);
         }
-        let mut p = Panel(b);
+        let mut p = Panel(b, (0, self.bottom()));
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
         if let Screen::Menu(menu, sel) = self.screen {
@@ -1382,7 +1411,7 @@ impl App {
                         self.render_basemap(b, area, view);
                     }
                     let base = (first == Some(i)).then_some(&self.basemap);
-                    map::update(&mut Panel(b), area, &self.track, &mut m, base);
+                    map::update(&mut Panel(b, (0, self.bottom())), area, &self.track, &mut m, base);
                     Drawn::Map(m)
                 }
                 (_, Drawn::Graph(g)) => self.update_graph(b, g, bx),
@@ -1390,7 +1419,7 @@ impl App {
                     let now = self.main_digits();
                     for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
                         if d != was {
-                            ui::draw_main_digit(&mut Panel(b), k, d);
+                            ui::draw_main_digit(&mut Panel(b, (0, self.bottom())), k, d);
                         }
                     }
                     Drawn::Digits(now)
@@ -1399,7 +1428,7 @@ impl App {
                     let (text, fg) = (self.field_text(f), self.field_color(f));
                     if (was, was_fg) != (text, fg) {
                         let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
-                        ui::draw_field_value_changes(&mut Panel(b), bx, f, old, text.as_str(), fg);
+                        ui::draw_field_value_changes(&mut Panel(b, (0, self.bottom())), bx, f, old, text.as_str(), fg);
                     }
                     Drawn::Value(text, fg)
                 }
@@ -1409,7 +1438,7 @@ impl App {
                         if let Some(d) = self.drawn.get_mut(i) {
                             *d = now;
                         }
-                        self.draw_widget(&mut Panel(b), i, bx, w);
+                        self.draw_widget(&mut Panel(b, (0, self.bottom())), i, bx, w);
                     }
                     now
                 }
@@ -1429,11 +1458,11 @@ impl App {
         }
         let a = ui::graph_area(bx);
         if old.power != now.power {
-            ui::draw_graph(&mut Panel(b), a, &|k| self.graph_bar(now, a.2, a.3, k));
+            ui::draw_graph(&mut Panel(b, (0, self.bottom())), a, &|k| self.graph_bar(now, a.2, a.3, k));
         } else {
             for k in 0..a.2 {
                 let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
-                ui::draw_graph_column(&mut Panel(b), a, k, was, is);
+                ui::draw_graph_column(&mut Panel(b, (0, self.bottom())), a, k, was, is);
             }
         }
         Drawn::Graph(now)
@@ -1564,6 +1593,9 @@ impl App {
             if i == Input::Back {
                 return; // Back's own job is the light: done
             }
+        }
+        if self.banner_ms.take().is_some() {
+            self.unbanner(b); // and the input acts
         }
         match (self.screen, i) {
             (_, Input::Off) => return self.power_off(b),
@@ -1696,7 +1728,7 @@ impl App {
             }
         }
         if title && self.screen == Screen::Nearby {
-            ui::draw_nearby(&mut Panel(b), self.nearby.count(), self.scanning);
+            ui::draw_nearby(&mut Panel(b, (0, self.bottom())), self.nearby.count(), self.scanning);
         }
     }
 
@@ -1873,10 +1905,19 @@ impl App {
             }
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
+        if let Some(ms) = self.banner_ms {
+            if !core::mem::replace(&mut self.banner_drawn, true) {
+                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.notices[0].as_str());
+            }
+            self.banner_ms = Some(ms + POLL_MS).filter(|&ms| ms < BANNER_MS);
+            if self.banner_ms.is_none() {
+                self.unbanner(b);
+            }
+        }
         match self.screen {
             Screen::Main | Screen::Ride(_) => self.update_page(b),
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b), &self.nearby);
+                ui::draw_list(&mut Panel(b, (0, self.bottom())), &self.nearby);
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
@@ -1976,7 +2017,7 @@ impl App {
     /// Redraws the status strip if what it shows changed.
     fn update_strip(&mut self, b: &mut impl Board) {
         if self.strip != self.strip_shown {
-            ui::draw_strip_changes(&mut Panel(b), &self.strip, Some(&self.strip_shown));
+            ui::draw_strip_changes(&mut Panel(b, (0, ui::H)), &self.strip, Some(&self.strip_shown));
             self.strip_shown = self.strip;
         }
     }

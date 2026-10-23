@@ -623,6 +623,18 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
     }
 }
 
+/// Top of a banner: a notice over the bottom of any screen other than the overview.
+pub const BANNER_Y: u32 = H - 40;
+
+/// A banner: `text` in black on orange over the bottom of the screen.
+pub fn draw_banner(c: &mut impl Canvas, text: &str) {
+    c.fill(0, BANNER_Y, W, 4, BLACK);
+    let style = Style { fg: BLACK, bg: ACCENT, ..LABEL };
+    c.fill(0, BANNER_Y + 4, W, 8, ACCENT);
+    text::draw_in(c, &style, 0, BANNER_Y + 12, W, Align::Centre, text);
+    c.fill(0, BANNER_Y + 12 + style.height(), W, H - BANNER_Y - 12 - style.height(), ACCENT);
+}
+
 /// Ferris, at the bottom of the overview.
 pub fn draw_ferris(c: &mut impl Canvas) {
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);

@@ -58,7 +58,7 @@ pub fn init(b: &mut impl Board) {
             b.delay_ms(wait);
         }
     }
-    Panel(b).fill(0, 0, W, H, BLACK);
+    Panel(b, (0, H)).fill(0, 0, W, H, BLACK);
     b.panel_cmd(DISPON, &[]);
 }
 
@@ -68,8 +68,10 @@ pub fn off(b: &mut impl Board) {
     b.panel_cmd(SLPIN, &[]);
 }
 
-/// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels.
-pub struct Panel<'a, B: Board>(pub &'a mut B);
+/// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels. Only
+/// rows from the second field's first to before its second are drawn (not what a banner covers, or only what it
+/// covered): `(0, H)` for the whole screen.
+pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32));
 
 impl<B: Board> Panel<'_, B> {
     /// CASET / RASET: the window the next RAMWR fills.
@@ -82,19 +84,22 @@ impl<B: Board> Panel<'_, B> {
 
 impl<B: Board> Canvas for Panel<'_, B> {
     fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
-        if w == 0 || h == 0 {
+        let (top, bottom) = (y.max(self.1.0), (y + h).min(self.1.1));
+        if w == 0 || top >= bottom {
             return;
         }
-        self.window(x, y, w, h);
-        self.0.panel_fill(w * h, color);
+        self.window(x, top, w, bottom - top);
+        self.0.panel_fill(w * (bottom - top), color);
     }
 
     fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
-        if w == 0 || h == 0 {
+        let (top, bottom) = (y.max(self.1.0), (y + h).min(self.1.1));
+        if w == 0 || top >= bottom {
             return;
         }
-        self.window(x, y, w, h);
-        let (mut dx, mut dy) = (0, 0);
+        let h = bottom - top;
+        self.window(x, top, w, h);
+        let (mut dx, mut dy) = (0, top - y);
         self.0.panel_ram_write(w * h, &mut || {
             let p = px(dx, dy);
             dx += 1;
@@ -103,5 +108,9 @@ impl<B: Board> Canvas for Panel<'_, B> {
             }
             p
         });
+    }
+
+    fn clip(&self) -> (u32, u32, u32, u32) {
+        (0, self.1.0, crate::ui::W, self.1.1 - self.1.0)
     }
 }
