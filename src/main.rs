@@ -33,8 +33,8 @@ fn modify(a: u32, clear: u32, set: u32) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// MPU: one region over the 64 MB SDRAM, normal memory, not cached, executable, full access; everything else the
-// default map (PRIVDEFENA). The MPU is only switched ON, never off: with it off, 0xc0000000..0xdfffffff would be
+// MPU: one region over the 64 MB SDRAM, normal memory, write-through cacheable (for the I-cache), executable, full
+// access; everything else the default map (PRIVDEFENA). The MPU is only switched ON, never off: with it off, 0xc0000000..0xdfffffff would be
 // device memory (execute-never under the default map), and this code runs there. Highest region number so it
 // wins over anything the bootloader could have left.
 // ---------------------------------------------------------------------------------------------------------------
@@ -50,9 +50,16 @@ fn mpu_init() {
     barrier();
     wr(MPU_RNR, regions - 1);
     wr(MPU_RBAR, 0xd000_0000);
-    // ENABLE, SIZE 25 (2^26 = 64 MB), TEX 001 C 0 B 0 (normal, not cacheable), AP 011 (full), XN 0
-    wr(MPU_RASR, 1 | (25 << 1) | (1 << 19) | (3 << 24));
+    // ENABLE, SIZE 25 (2^26 = 64 MB), TEX 000 C 1 B 0 (normal, write-through: the I-cache may hold its code; the
+    // D-cache stays off, so data accesses remain uncached), AP 011 (full), XN 0
+    wr(MPU_RASR, 1 | (25 << 1) | (1 << 17) | (3 << 24));
     wr(MPU_CTRL, rd(MPU_CTRL) | 0b101); // ENABLE + PRIVDEFENA
+    barrier();
+    // I-cache on (ARMv7-M: invalidate all, then CCR.IC). The bootloader leaves it off (BOARD.md 2); the RAM-run
+    // trampoline invalidates it before jumping to a new image (hw.rs).
+    wr(0xe000_ef50, 0); // ICIALLU
+    barrier();
+    modify(0xe000_ed14, 0, 1 << 17); // SCB_CCR.IC
     barrier();
 }
 
