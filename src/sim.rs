@@ -2627,6 +2627,50 @@ mod tests {
         assert!(app.ride.timer_s() <= t + 4 + u32::from(MAX_CATCH_UP) + 1);
     }
 
+    /// Idle is free, and no pass stalls the loop: on the overview with nothing changing, nearly every pass sends
+    /// nothing to the panel (the clock's minute aside), and on a ride page while riding no pass costs the panel more
+    /// than PASS_BUS_MS at the panel's speed (about 2 us a pixel, 20 us a window at 8 MHz: a model, measured on the
+    /// unit as one full map of 72 K pixels in about 146 ms).
+    #[test]
+    fn idle_is_free_and_no_pass_stalls() {
+        const PASS_BUS_MS: u64 = 60;
+        let bus_us = |px: u64, win: u64| px * 2 + win * 20;
+        // the overview, idle
+        let mut sim = Sim::new(9, 0, 30);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 5000);
+        let (mut busy, mut passes) = (0, 0);
+        for _ in 0..1200 {
+            let (px, win) = (sim.pixels, sim.windows);
+            run(&mut sim, &mut app, u64::from(POLL_MS));
+            passes += 1;
+            busy += u32::from(sim.pixels != px || sim.windows != win);
+        }
+        // the strip's GPS label blinks while it searches (once a second), nothing else: a pass in 20 at most, plus
+        // a few for the minute's digits and the temperature
+        assert!(busy <= passes / 20 + 3, "{busy} of {passes} passes drew on an idle overview");
+        // a ride page while riding (values change every second): no pass over PASS_BUS_MS of panel time
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+        let mut app = App::start(&mut sim, Some(KEY));
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 10_000);
+        let mut worst = 0;
+        for _ in 0..1200 {
+            let (px, win) = (sim.pixels, sim.windows);
+            run(&mut sim, &mut app, u64::from(POLL_MS));
+            worst = worst.max(bus_us(sim.pixels - px, sim.windows - win));
+        }
+        std::println!(
+            "idle overview: {busy} of {passes} passes drew; ride page: worst pass {} ms of panel",
+            worst / 1000
+        );
+        assert!(worst / 1000 <= PASS_BUS_MS, "a pass took {} ms of panel time", worst / 1000);
+    }
+
     /// Reminders: EAT after 5 minutes of riding, said in a banner with three beeps that do not stop the loop;
     /// nothing while paused; set from the ALERTS menu and kept.
     #[test]
