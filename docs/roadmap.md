@@ -106,6 +106,18 @@ The golden rule (AGENTS.md) depends on this whole phase.
 ## 8. Radios and the phone
 
 - BLE sensors (heart rate, speed and cadence, power), then ANT+ radar (Varia) and lights.
-- With no phone app: iOS notifications through ANCS, the phone's media remote (patch P7), Di2 hood buttons as keys
-  (patch P12). Android notifications, live tracking and automatic upload need a companion app, so they come last,
-  if at all; a computer tool over USB can upload rides.
+- **Shifting and hood buttons** (small, ANT only): Shimano Di2 is not ANT+ but a private ANT channel on its own
+  network key (stock: channel 6, device type 1, period 8198, 2457 MHz; the key sits next to the ANT+ key in the stock
+  image and is copied the same way, never committed): gears and battery on page 0, the hood buttons (single, long)
+  on page 4, sent as acknowledged messages, which `nrf::ant_broadcast` must accept too. SRAM AXS and Campagnolo use
+  the ANT+ Shifting profile (device type 0x22: gears, up to 8 buttons, batteries). The buttons become `Input`s (patch
+  P12 mapped ten actions), the gears a field.
+- **Phone, no app needed** (one bonded BLE link carries all of these; Just Works bonding, one bond kept in backup
+  registers until the eMMC is written):
+  - media keys as a BLE HID consumer-control device (patch P7: play / pause, next, previous, volume), plus the camera
+    shutter (volume up) and mute for free;
+  - iOS notifications through ANCS on the banner, with accept / decline for a call;
+  - iOS now playing (title, artist, elapsed) and its remote commands through AMS;
+  - the time zone from the phone's Current Time Service (inferred).
+- With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
+  computer tool over USB can upload rides.
