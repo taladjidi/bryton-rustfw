@@ -158,13 +158,15 @@ pub fn draw_nearby(c: &mut impl Canvas, count: usize, scanning: bool) {
 /// device count on the list page.
 pub const NEARBY: (u32, u32, u32) = (20, 58, W - 40);
 
-/// Heart rate from the ANT+ strap, under the bar: "HR 72", "HR --" while there is no reading.
-pub fn draw_hr(c: &mut impl Canvas, bpm: Option<u8>) {
-    let mut line = text::Line::<8>::new();
+/// Heart rate from the ANT+ strap, under the bar: "HR 72"; without a reading "HR --" (a strap is paired) or
+/// "HR PAIRING" (the channel takes the first strap it hears).
+pub fn draw_hr(c: &mut impl Canvas, bpm: Option<u8>, paired: bool) {
+    let mut line = text::Line::<12>::new();
     line.push_str("HR ");
     match bpm {
         Some(v) if v > 0 => line.push_u32(u32::from(v)),
-        _ => line.push_str("--"),
+        _ if paired => line.push_str("--"),
+        _ => line.push_str("PAIRING"),
     }
     text::draw_in(c, &Style { fg: RED, ..LABEL }, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, line.as_str());
 }

@@ -10,6 +10,7 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py peek ADDR [N]            read N registers (peripheral space, aligned; ADDR decimal or 0x hex)
   dev.py poke ADDR VALUE          write one register
   dev.py page                     press Page (scripted tests: the app acts as if the key was pressed)
+  dev.py repair                   hold Page: forget the heart-rate strap and pair with the next one heard
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
@@ -120,6 +121,7 @@ def main():
     sub.add_parser('info')
     sub.add_parser('reset')
     sub.add_parser('page', help='press Page (the app acts as if the key was pressed)')
+    sub.add_parser('repair', help='hold Page: forget the heart-rate strap and pair again')
     sub.add_parser('selftest')
     p = sub.add_parser('shot')
     p.add_argument('-o', default='shot.png')
@@ -143,7 +145,7 @@ def main():
         run(a.image)
     else:
         with connect() as s:
-            if a.cmd in ('info', 'reset', 'page'):
+            if a.cmd in ('info', 'reset', 'page', 'repair'):
                 print(command(s, a.cmd))
             elif a.cmd == 'peek':
                 first = command(s, f'peek {a.addr} {a.n}')

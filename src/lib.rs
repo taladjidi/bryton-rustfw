@@ -48,6 +48,10 @@ pub trait Board {
     fn nrf_send(&mut self, data: &[u8]);
     /// Bytes received from the Nordic chip, at most `buf.len()`; never waits.
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
+    /// RTC backup register `n` (0..32): kept through resets and power off (BOARD.md 8).
+    fn backup_read(&mut self, n: usize) -> u32;
+    /// Writes RTC backup register `n`.
+    fn backup_write(&mut self, n: usize, v: u32);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -82,35 +86,42 @@ pub fn rtc_time_from_tr(tr: u32) -> (u8, u8, u8) {
 pub enum Action {
     /// Nothing.
     None,
-    /// Page was just pressed: the next page.
+    /// Page was pressed and released before [`Keys::PAIR_MS`]: the next page.
     NextPage,
+    /// Page has been held for [`Keys::PAIR_MS`]: forget the heart-rate strap and pair again.
+    Repair,
     /// Back was pressed and released before [`Keys::POWER_OFF_MS`].
     ToggleBacklight,
     /// Back has been held for [`Keys::POWER_OFF_MS`].
     PowerOff,
 }
 
-/// Key state between polls: Page acts on the press (not while held), Back on its release (short) or after a long
-/// hold.
+/// Key state between polls: each key acts on its release (short press), or once held long enough.
 #[derive(Default)]
 pub struct Keys {
-    page_was_down: bool,
+    page_held_ms: u32,
     back_held_ms: u32,
 }
 
 impl Keys {
     /// How long Back must be held to switch off.
     pub const POWER_OFF_MS: u32 = 3000;
+    /// How long Page must be held to pair a new strap.
+    pub const PAIR_MS: u32 = 2000;
 
     /// One poll, `dt_ms` after the previous one, with the current key levels (true = pressed).
     pub fn poll(&mut self, page_down: bool, back_down: bool, dt_ms: u32) -> Action {
-        let page_pressed = page_down && !self.page_was_down;
-        self.page_was_down = page_down;
+        let held = self.page_held_ms;
+        let page_short = !page_down && (1..Self::PAIR_MS).contains(&held);
+        let page_long = page_down && held < Self::PAIR_MS && held + dt_ms >= Self::PAIR_MS;
+        self.page_held_ms = if page_down { held + dt_ms } else { 0 };
         let back_released = !back_down && self.back_held_ms > 0;
         self.back_held_ms = if back_down { self.back_held_ms + dt_ms } else { 0 };
         if self.back_held_ms >= Self::POWER_OFF_MS {
             Action::PowerOff
-        } else if page_pressed {
+        } else if page_long {
+            Action::Repair
+        } else if page_short {
             Action::NextPage
         } else if back_released {
             Action::ToggleBacklight
@@ -136,6 +147,9 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// A heart rate older than this is shown as "--" (the strap is off or out of range).
 pub const HR_STALE_MS: u32 = 5000;
 
+/// The RTC backup register that keeps the paired strap ([`nrf::Strap::to_word`]); stock does not use it (BOARD.md 8).
+pub const STRAP_BKP: usize = 5;
+
 /// What the screen shows under the bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -155,8 +169,14 @@ pub struct App {
     rx: nrf::Rx,
     nearby: nrf::Nearby,
     scanning: bool,
+    /// The ANT+ network key, if built in.
+    ant_key: Option<[u8; 8]>,
     /// The ANT+ heart-rate channel is open.
     ant: bool,
+    /// The strap the channel is for; None: pairing with the first one heard.
+    strap: Option<nrf::Strap>,
+    /// A heart rate came in while pairing: ask the chip which strap sent it.
+    ask_strap: bool,
     hr: Option<u8>,
     hr_age_ms: u32,
     page: Page,
@@ -182,18 +202,39 @@ impl App {
             rx: nrf::Rx::new(),
             nearby: nrf::Nearby::new(),
             scanning: false,
+            ant_key,
             ant: false,
+            strap: nrf::Strap::from_word(b.backup_read(STRAP_BKP)),
+            ask_strap: false,
             hr: None,
             hr_age_ms: 0,
             page: Page::Clock,
             list_dirty: false,
             list_ms: 0,
         };
-        if let (Some(_), Some(key)) = (ble, ant_key) {
-            app.ant = nrf::ant_hr_open(b, &mut app.rx, key).is_ok();
-        }
-        app.draw_line(&mut Panel(b));
+        app.open_hr(b);
         app
+    }
+
+    /// Opens the heart-rate channel for the paired strap (or to pair) when BLE runs and a key is built in.
+    fn open_hr(&mut self, b: &mut impl Board) {
+        if let (Some(_), Some(key)) = (self.ble, self.ant_key) {
+            self.ant = nrf::ant_hr_open(b, &mut self.rx, key, self.strap).is_ok();
+        }
+        self.draw_line(&mut Panel(b));
+    }
+
+    /// Forgets the paired strap and pairs with the next one heard. The chip is restarted: a channel's ID can only
+    /// change while it is closed, and a restart is the simplest way to a known state.
+    pub fn repair(&mut self, b: &mut impl Board) {
+        b.backup_write(STRAP_BKP, 0);
+        self.strap = None;
+        self.hr = None;
+        self.scanning = false;
+        self.rx = nrf::Rx::new();
+        self.ble = nrf::start(b).ok();
+        draw_ble(&mut Panel(b), self.ble);
+        self.open_hr(b);
     }
 
     /// The page shown.
@@ -204,7 +245,7 @@ impl App {
     /// The line under the bar: the heart rate on the clock page, the device count on the list.
     fn draw_line(&self, c: &mut impl ui::Canvas) {
         match self.page {
-            Page::Clock if self.ant => draw_hr(c, self.hr),
+            Page::Clock if self.ant => draw_hr(c, self.hr, self.strap.is_some()),
             Page::Nearby if self.ble.is_some() => draw_nearby(c, self.nearby.count(), self.scanning),
             _ => {}
         }
@@ -252,6 +293,7 @@ impl App {
                     line |= self.hr != Some(bpm);
                     self.hr = Some(bpm);
                     self.hr_age_ms = 0;
+                    self.ask_strap |= self.strap.is_none();
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) {
                     self.scanning = false;
                     line = true;
@@ -276,6 +318,13 @@ impl App {
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
+        if core::mem::take(&mut self.ask_strap)
+            && let Ok(Some(strap)) = nrf::ant_hr_strap(b, &mut self.rx)
+        {
+            self.strap = Some(strap);
+            b.backup_write(STRAP_BKP, strap.to_word());
+            self.draw_line(&mut Panel(b));
+        }
         self.hr_age_ms = self.hr_age_ms.saturating_add(POLL_MS);
         if self.hr.is_some() && self.hr_age_ms > HR_STALE_MS {
             self.hr = None;
@@ -290,6 +339,7 @@ impl App {
         let (page, back) = b.keys_down();
         match self.keys.poll(page, back, POLL_MS) {
             Action::NextPage => self.next_page(b),
+            Action::Repair => self.repair(b),
             Action::ToggleBacklight => {
                 self.backlight = !self.backlight;
                 b.backlight(self.backlight);
@@ -346,12 +396,17 @@ mod tests {
     }
 
     #[test]
-    fn page_acts_once_per_press() {
+    fn page_short_press_on_release_long_hold_once() {
         let mut k = Keys::default();
-        assert_eq!(k.poll(true, false, 50), Action::NextPage);
         assert_eq!(k.poll(true, false, 50), Action::None);
+        assert_eq!(k.poll(false, false, 50), Action::NextPage);
         assert_eq!(k.poll(false, false, 50), Action::None);
-        assert_eq!(k.poll(true, false, 50), Action::NextPage);
+        for _ in 0..39 {
+            assert_eq!(k.poll(true, false, 50), Action::None);
+        }
+        assert_eq!(k.poll(true, false, 50), Action::Repair, "at 2 s");
+        assert_eq!(k.poll(true, false, 50), Action::None, "once");
+        assert_eq!(k.poll(false, false, 50), Action::None, "no page change after a long hold");
     }
 
     #[test]

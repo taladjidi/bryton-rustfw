@@ -127,6 +127,11 @@ def ant_hr(n, secs):
         if len(p) == 44 and p[0] == 8 and p[2] == 0x4e:
             print(f'  ch {p[3]} data {p[4:12].hex(" ")}  HR {p[11]}  event {p[42]:#x}')
     print(f'{len(got)} bytes; packets by first 3 bytes: {kinds}')
+    r = packets(n.command(bytes.fromhex('06d400'), wait=0.3))                 # channel id get: the paired strap
+    print('channel id get:', [p.hex(' ') for p in r])
+    for p in r:
+        if len(p) >= 10 and p[:2] == b'\x01\xd4':
+            print(f'  strap device number {int.from_bytes(p[6:8], "little")}, type {p[8]:#x}, transmission {p[9]:#x}')
 
 
 def main():

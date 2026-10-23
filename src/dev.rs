@@ -8,6 +8,7 @@
 //!   trailer) and the firmware stores them in SDRAM; `sum` is their additive sum. Answer `ok` and the firmware
 //!   runs the image ([`Effect::Run`]), or `err <reason>`.
 //! - `page`: `ok`, then the app acts as if Page was pressed ([`Effect::Page`]), to script tests on the unit.
+//!   `repair`: the same for a long Page hold ([`Effect::Repair`]: forget the strap, pair again).
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line. `poke <addr>
 //!   <value>`: writes the word, `ok`. Numbers in decimal or `0x` hex; `addr` must be word aligned and in the
@@ -46,6 +47,8 @@ pub enum Effect {
     Run(u32),
     /// A Page press, from the computer.
     Page,
+    /// A long Page hold, from the computer.
+    Repair,
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -171,6 +174,10 @@ impl Session {
             Some(b"page") => {
                 h.send(b"ok\n");
                 return Effect::Page;
+            }
+            Some(b"repair") => {
+                h.send(b"ok\n");
+                return Effect::Repair;
             }
             Some(b"reset") => {
                 h.send(b"ok\n");

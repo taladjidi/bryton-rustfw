@@ -6,12 +6,14 @@ Bryton.
 
 - **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, all in the
   same dot-matrix style, so it is obviously not the stock firmware.
-- **Page key:** switches between the clock and the list of BLE devices nearby.
+- **Page key:** switches between the clock and the list of BLE devices nearby. Held 2 s: forgets the heart-rate
+  strap and pairs with the next one heard.
 - **Back key:** a short press toggles the backlight; held 3 s it switches off (standby). The power button starts it
   again. Power off also switches the radio chip off.
 - **Top left:** "BLE" and the Nordic chip's firmware number once it has answered (red "BLE ?" if not).
-- **Heart rate:** under the bar on the clock page, from any ANT+ strap in range ("HR 72", "HR --" without one).
-  Needs the ANT+ network key, which you copy from your own stock firmware (see "ANT+ key" below).
+- **Heart rate:** under the bar on the clock page, from an ANT+ strap ("HR 72"). The first strap heard is paired
+  ("HR PAIRING" until then) and kept through power off, so a friend's strap is never taken; "HR --" while the
+  paired one is quiet. Needs the ANT+ network key, which you copy from your own stock firmware (see "ANT+ key" below).
 - **Devices nearby:** opening the list starts a 10 s BLE scan; one row per device, strongest first: its name, or
   in grey what kind of device it is ("iPhone/Mac", "AirPods", "Find My", "Windows PC"...: phones and laptops
   advertise no name, only manufacturer data and an address that changes every few
@@ -128,6 +130,10 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   sent over the dev link (`dev.py page`) first froze the main loop: the app's own `delay_ms` inside the sleep
   had taken over its SysTick period, so the loop never woke (only USB was still served). App work now runs after
   the sleep.
+- **Heart rate and pairing (2026-10-23, from RAM, the owner's strap):** "HR 58" to "HR 70" from the strap
+  (once wetted). The first strap heard is paired: its ANT channel ID (device 25126, transmission type 0xf1, read
+  with op 0xd4) goes into RTC backup register 5, which kept it through a reset; the next start opened the channel
+  for that strap only. `dev.py repair` (a long Page hold) cleared it and paired again.
 
 ## Not yet seen on the unit
 
@@ -135,8 +141,6 @@ Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (
 with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13; the RTC
 holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
 input. Still to see:
-- A heart rate from a real ANT+ strap (the channel opens, no strap was in range; the data offset is inferred from
-  the ANT+ profile and stock's decoder).
 - The Nordic chip coming back after a power off and on (`sd_power_system_off`, then the reset pulse).
 - The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 

@@ -40,6 +40,8 @@ pub struct Sim {
     record: Option<(PathBuf, u32)>,
     dirty: bool,
     pub nordic: Nordic,
+    /// RTC backup registers (they survive an app restart, as on the unit).
+    pub backup: [u32; 32],
 }
 
 /// The Nordic chip as seen over its link: replies to `sd_ble_enable` and `sd_ble_version_get` as the unit did.
@@ -52,8 +54,12 @@ pub struct Nordic {
     pub enabled: bool,
     /// Simulated time (ms) at which the running scan times out.
     scan_end: Option<u64>,
-    /// A heart-rate strap in range sending this rate; it is heard once the HR channel is open.
+    /// A heart-rate strap in range sending this rate; it is heard once the HR channel is open for it.
     pub strap: Option<u8>,
+    /// That strap's device number (the unit's strap: 25126, transmission type 0xf1).
+    pub strap_id: u16,
+    /// The device number the HR channel was opened for (0: any).
+    channel_dev: u16,
     /// Simulated time of the strap's next broadcast, once the HR channel is open.
     next_hr: Option<u64>,
     /// Every payload received, in order.
@@ -79,6 +85,11 @@ fn adv_report(addr: u8, rssi: i8, data: &[u8]) -> Vec<u8> {
 }
 
 impl Nordic {
+    /// The strap is in range and the channel is open for it.
+    fn heard(&self) -> bool {
+        self.strap.is_some() && (self.channel_dev == 0 || self.channel_dev == self.strap_id)
+    }
+
     fn queue(&mut self, payload: &[u8]) {
         if !self.dead {
             self.out.extend((payload.len() as u16).to_le_bytes());
@@ -100,8 +111,16 @@ impl Nordic {
             return;
         }
         if let [6, op, rest @ ..] = p {
-            if *op == 0xc4 && rest.first() == Some(&0) {
-                self.next_hr = Some(now); // channel 0 open
+            match (*op, rest) {
+                (0xc4, [0, ..]) => self.next_hr = Some(now), // channel 0 open
+                (0xd3, [0, d0, d1, ..]) => self.channel_dev = u16::from_le_bytes([*d0, *d1]),
+                (0xd4, [0]) => {
+                    let found = self.heard() && self.next_hr.is_some_and(|t| t > now.saturating_sub(1000));
+                    let [d0, d1] = if found { self.strap_id } else { self.channel_dev }.to_le_bytes();
+                    self.queue(&[1, 0xd4, 0, 0, 0, 0, d0, d1, 0x78, if found { 0xf1 } else { 0 }]);
+                    return;
+                }
+                _ => {}
             }
             self.queue(&[1, *op, 0, 0, 0, 0]); // ANT commands answer as RESP (seen on the unit)
             return;
@@ -143,7 +162,8 @@ impl Sim {
             keys: Box::new(|_| (false, false)),
             record: None,
             dirty: false,
-            nordic: Nordic::default(),
+            nordic: Nordic { strap_id: 25126, ..Nordic::default() },
+            backup: [0; 32],
         }
     }
 
@@ -269,7 +289,7 @@ impl Board for Sim {
 
     fn nrf_reset(&mut self) {
         let n = &self.nordic;
-        self.nordic = Nordic { dead: n.dead, strap: n.strap, reset: true, ..Nordic::default() };
+        self.nordic = Nordic { dead: n.dead, strap: n.strap, strap_id: n.strap_id, reset: true, ..Nordic::default() };
         self.ms += 950;
     }
 
@@ -284,13 +304,21 @@ impl Board for Sim {
         }
     }
 
+    fn backup_read(&mut self, n: usize) -> u32 {
+        self.backup[n]
+    }
+
+    fn backup_write(&mut self, n: usize, v: u32) {
+        self.backup[n] = v;
+    }
+
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
             self.nordic.scan_end = None;
             self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
         }
         let n = &mut self.nordic;
-        if let (Some(bpm), Some(t)) = (n.strap, n.next_hr)
+        if let (true, Some(bpm), Some(t)) = (n.heard(), n.strap, n.next_hr)
             && self.ms >= t
         {
             n.next_hr = Some(t + 246); // 8070 / 32768 s
@@ -422,31 +450,59 @@ mod tests {
         assert!(sim.screen == expected(h, m, s), "back to the clock");
     }
 
-    /// With a key: ANT enabled and the HR channel opened as stock does; a strap's rate shows under the bar, and
-    /// "HR --" once it stops.
+    /// The line under the bar, rows NEARBY.1 .. +20.
+    fn line(px: &[u16]) -> Vec<u16> {
+        let y = crate::ui::NEARBY.1;
+        px[(y * W) as usize..((y + 20) * W) as usize].to_vec()
+    }
+
+    fn hr_line(bpm: Option<u8>, paired: bool) -> Vec<u16> {
+        let mut f = Frame::new();
+        crate::ui::draw_hr(&mut f, bpm, paired);
+        line(&f.px)
+    }
+
+    /// With a key: ANT enabled and the HR channel opened as stock does, for any strap; the first rate pairs it
+    /// (kept in a backup register), "HR --" once it stops.
     #[test]
-    fn shows_the_heart_rate() {
+    fn pairs_a_strap_and_shows_the_heart_rate() {
         let mut sim = Sim::new(9, 0, 0);
-        sim.nordic.strap = Some(72);
         let mut app = App::start(&mut sim, Some(KEY));
         let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
         assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xd3, 0xda, 0xcd, 0xd1, 0xc4]);
         assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
-        let line = |sim: &Sim| {
-            let y = crate::ui::NEARBY.1;
-            sim.screen[(y * W) as usize..((y + 20) * W) as usize].to_vec()
-        };
-        let want = |bpm| {
-            let mut f = Frame::new();
-            crate::ui::draw_hr(&mut f, bpm);
-            let y = crate::ui::NEARBY.1;
-            f.px[(y * W) as usize..((y + 20) * W) as usize].to_vec()
-        };
+        assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0, 0, 0x78, 0]), "any strap");
+        assert!(line(&sim.screen) == hr_line(None, false), "HR PAIRING");
         run(&mut sim, &mut app, 1000);
-        assert!(line(&sim) == want(Some(72)), "HR 72");
+        assert!(line(&sim.screen) == hr_line(None, false), "no strap in range: still pairing");
+        sim.nordic.strap = Some(72);
+        run(&mut sim, &mut app, 1000);
+        assert!(line(&sim.screen) == hr_line(Some(72), true), "HR 72");
+        let strap = crate::nrf::Strap { device: 25126, trans: 0xf1 };
+        assert_eq!(sim.backup[STRAP_BKP], strap.to_word(), "paired and kept");
         sim.nordic.strap = None;
         run(&mut sim, &mut app, u64::from(HR_STALE_MS) + 500);
-        assert!(line(&sim) == want(None), "HR -- once the strap is quiet");
+        assert!(line(&sim.screen) == hr_line(None, true), "HR -- once the strap is quiet");
+    }
+
+    /// After a restart the channel opens for the paired strap only: another strap is not taken. Holding Page
+    /// forgets it and pairs with the one in range.
+    #[test]
+    fn keeps_the_paired_strap_until_page_is_held() {
+        let strap = crate::nrf::Strap { device: 25126, trans: 0xf1 };
+        let mut sim = Sim::new(9, 0, 0).keys(|ms| ((5000..7500).contains(&ms), false));
+        sim.backup[STRAP_BKP] = strap.to_word();
+        sim.nordic.strap = Some(80);
+        sim.nordic.strap_id = 999; // a friend's strap
+        let mut app = App::start(&mut sim, Some(KEY));
+        assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0x26, 0x62, 0x78, 0xf1]), "the paired strap only");
+        let t = 4000 - sim.ms;
+        run(&mut sim, &mut app, t);
+        assert!(line(&sim.screen) == hr_line(None, true), "the friend's strap is not shown");
+        run(&mut sim, &mut app, 4000);
+        assert_eq!(app.page(), Page::Clock, "a long hold does not change page");
+        assert_eq!(sim.backup[STRAP_BKP], crate::nrf::Strap { device: 999, trans: 0xf1 }.to_word(), "paired again");
+        assert!(line(&sim.screen) == hr_line(Some(80), true), "HR 80");
     }
 
     #[test]

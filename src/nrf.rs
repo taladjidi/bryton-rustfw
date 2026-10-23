@@ -236,18 +236,49 @@ pub fn ad_name(data: &[u8]) -> Option<&[u8]> {
 /// The ANT channel used for heart rate (stock's choice).
 pub const HR_CHANNEL: u8 = 0;
 
-/// Enables ANT and opens a heart-rate channel that pairs with the first strap it hears, with stock's settings:
-/// `key` is the ANT+ network key (licensed: build.rs reads it from a private file, never from this repository).
-pub fn ant_hr_open(b: &mut impl Board, rx: &mut Rx, key: [u8; 8]) -> Result<(), Error> {
+/// A paired strap: its ANT channel ID, so the channel finds that strap and no other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Strap {
+    /// Device number (the strap's own, printed on some straps).
+    pub device: u16,
+    /// Transmission type (its upper nibble extends the device number to 20 bits).
+    pub trans: u8,
+}
+
+impl Strap {
+    /// As kept in a 32-bit backup register, behind a tag byte so an empty or foreign value reads as no strap.
+    ///
+    /// ```
+    /// use bryton_rustfw::nrf::Strap;
+    /// let s = Strap { device: 25126, trans: 0xf1 };
+    /// assert_eq!(Strap::from_word(s.to_word()), Some(s));
+    /// assert_eq!(Strap::from_word(0), None);
+    /// ```
+    pub fn to_word(self) -> u32 {
+        (0xa5 << 24) | (u32::from(self.trans) << 16) | u32::from(self.device)
+    }
+
+    /// The strap kept in `w`, if [`Strap::to_word`] wrote it.
+    pub fn from_word(w: u32) -> Option<Self> {
+        (w >> 24 == 0xa5).then_some(Strap { device: w as u16, trans: (w >> 16) as u8 })
+    }
+}
+
+/// Enables ANT and opens a heart-rate channel with stock's settings, for `strap` only, or for the first strap
+/// heard (pairing) when None. `key` is the ANT+ network key (licensed: build.rs reads it from a private file,
+/// never from this repository).
+pub fn ant_hr_open(b: &mut impl Board, rx: &mut Rx, key: [u8; 8], strap: Option<Strap>) -> Result<(), Error> {
     let [k0, k1, k2, k3, k4, k5, k6, k7] = key;
     let ch = HR_CHANNEL;
+    let Strap { device, trans } = strap.unwrap_or(Strap { device: 0, trans: 0 }); // 0, 0: any strap
+    let [d0, d1] = device.to_le_bytes();
     let cmds: [&[u8]; 8] = [
         // enable: 15 channels, 0 encrypted, event queue 32, then stock's buffer pointer and size (sent as stock
         // sends them; the chip allocates its own, inferred)
         &[ANT_CMD, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05],
         &[ANT_CMD, 0xcc, 0, k0, k1, k2, k3, k4, k5, k6, k7], // network 0 key
         &[ANT_CMD, 0xc2, ch, 0, 0, 0],                       // assign: slave, network 0, no extended
-        &[ANT_CMD, 0xd3, ch, 0, 0, 0x78, 0],                 // channel id: any device number, type 0x78 (HR)
+        &[ANT_CMD, 0xd3, ch, d0, d1, 0x78, trans],           // channel id, device type 0x78 (heart rate)
         // ponytail: searches until a strap answers (stock's 0xff), so the radio stays on; a timeout when it costs
         &[ANT_CMD, 0xda, ch, 0xff],       // low-priority search timeout
         &[ANT_CMD, 0xcd, ch, 0x39],       // 2457 MHz, ANT+
@@ -258,6 +289,18 @@ pub fn ant_hr_open(b: &mut impl Board, rx: &mut Rx, key: [u8; 8]) -> Result<(), 
         call(b, rx, cmd, &mut [])?;
     }
     Ok(())
+}
+
+/// The strap the heart-rate channel found (`sd_ant_channel_id_get`, op 0xd4, seen on the unit): the reply's outputs
+/// are the device number, the device type and the transmission type. None while it still searches (number 0).
+pub fn ant_hr_strap(b: &mut impl Board, rx: &mut Rx) -> Result<Option<Strap>, Error> {
+    let mut out = [0; 4];
+    match (call(b, rx, &[ANT_CMD, 0xd4, HR_CHANNEL], &mut out)?, out) {
+        (4, [d0, d1, _, trans]) if [d0, d1] != [0, 0] => {
+            Ok(Some(Strap { device: u16::from_le_bytes([d0, d1]), trans }))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// The heart rate (bpm) in ANT event `p`, if it is a broadcast on [`HR_CHANNEL`]: `[ANT_EVT][size][0x4e][channel]

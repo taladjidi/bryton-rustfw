@@ -135,7 +135,10 @@ battery on ADC3): not used yet.
 
 - RTC (0x58004000) on the LSE, 24 h format, prescalers 31 / 1023 (1 Hz). It keeps running in standby.
 - The stock firmware sets it from GPS. It holds **local time** (seen on the unit, 2026-10-23).
-- Backup registers used by stock: 1, 2, 3, 19 (clock), 4 (USB mode), 9, 12, 13. Others are free.
+- Backup registers used by stock: 1, 2, 3, 19 (clock), 4 (USB mode), 9, 12, 13. Others are free; the bootloader
+  has no RTC address in it. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
+  need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
+  system reset (seen), and should through standby (backup domain, RM0399; to see).
 
 ## 9. Standby (power off)
 
@@ -208,7 +211,12 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     `06 d1 [ch] 86 1f` (8070 / 32768 s), open `06 c4 [ch] 00 00`. Stock uses channel 0 for heart rate.
   - ANT event: `[8][41-byte ANT message][event][channel]`, 44 bytes; the message is `[size][id][channel][8 data
     bytes]...`. A broadcast is id 0x4e and the ANT+ heart rate is data byte 7, payload byte 11 (inferred from the
-    ANT+ profile and stock's decoder 0xd029f91c; no strap was in range yet).
+    ANT+ profile and stock's decoder 0xd029f91c; **seen on the unit** with the owner's strap: 58 to 70 bpm).
+  - Channel ID get (stock's encoder 0xd02bf562): `06 d4 [ch]`, answered `01 d4 [result u32] [device u16] [type]
+    [transmission type]`. With the wildcard channel ID, it gives the strap the channel locked onto (seen:
+    `01 d4 00 00 00 00 26 62 78 f1`, device 25126). Opening with that ID (`06 d3 00 26 62 78 f1`) takes only that
+    strap (seen). Other ANT ops in stock's encoders: 0xc5 close, 0xc7 / 0xc8 broadcast / acknowledged data,
+    0xd5, 0xd7, 0xdd, 0xdf, 0xe7 (not traced).
   - A BLE scan with the channel open (searching) still works: fewer reports, as the radio is shared.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

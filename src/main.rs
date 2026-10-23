@@ -1,7 +1,7 @@
 //! bryton-rustfw: a minimal firmware for the Bryton Rider S510 bike computer, written from scratch. It shows the time
 //! kept by the RTC, big, on the panel, the heart rate from an ANT+ strap, and on a second page the BLE devices
-//! nearby. Keys: Page switches pages, Back toggles the backlight, hold Back (power) 3 s to switch off (standby; the
-//! power button starts it again).
+//! nearby. Keys: Page switches pages, hold Page 2 s to pair another heart-rate strap, Back toggles the backlight,
+//! hold Back (power) 3 s to switch off (standby; the power button starts it again).
 //!
 //! Every register access below is traced to BOARD.md (the board as the stock firmware sets it up) or
 //! to the STM32H747 reference manual (RM0399). No interrupts, no RTOS: one loop. The only crates are the USB
@@ -347,6 +347,8 @@ fn lcd_ram_write(count: u32, next: &mut dyn FnMut() -> u16) {
 const RTC_TR: u32 = 0x5800_4000;
 const RTC_DR: u32 = 0x5800_4004;
 const RTC_ICSR: u32 = 0x5800_400c;
+/// Backup registers 0..31 (RM0399 RTC_BKPxR; BOARD.md 8 lists those stock uses).
+const RTC_BKP0R: u32 = 0x5800_4050;
 
 fn rtc_tr() -> u32 {
     let t0 = cycles();
@@ -362,6 +364,7 @@ fn rtc_tr() -> u32 {
 // bootloader, then this firmware again.
 // ---------------------------------------------------------------------------------------------------------------
 const PWR: u32 = 0x5802_4800;
+const PWR_CR1: u32 = PWR;
 const PWR_CPUCR: u32 = PWR + 0x10;
 const PWR_WKUPCR: u32 = PWR + 0x20;
 const PWR_WKUPEPR: u32 = PWR + 0x28;
@@ -500,6 +503,13 @@ impl Board for S510 {
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         nrf_recv(buf)
     }
+    fn backup_read(&mut self, n: usize) -> u32 {
+        rd(RTC_BKP0R + 4 * (n as u32 % 32))
+    }
+    fn backup_write(&mut self, n: usize, v: u32) {
+        modify(PWR_CR1, 0, 1 << 8); // DBP: backup domain writable (the bootloader leaves it set; seen on the unit)
+        wr(RTC_BKP0R + 4 * (n as u32 % 32), v);
+    }
 }
 
 /// Boot stage at which a diagnostic build stops: `DIAG_STOP=n cargo build --release` (0: never; AGENTS.md layer 6).
@@ -561,12 +571,14 @@ fn main() -> ! {
         // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
         // too (delay_ms), which would take over this timer.
         let mut page = false;
+        let mut repair = false;
         timer_start(POLL_MS);
         loop {
             if let Some(l) = &mut link {
                 match l.poll(&mut session, &app, uptime_ms) {
                     Effect::None => {}
                     Effect::Page => page = true,
+                    Effect::Repair => repair = true,
                     Effect::Reset => {
                         l.linger(50);
                         system_reset();
@@ -588,6 +600,9 @@ fn main() -> ! {
         timer_stop();
         if page {
             app.next_page(&mut board);
+        }
+        if repair {
+            app.repair(&mut board);
         }
         checkpoint(7);
         uptime_ms = uptime_ms.wrapping_add(POLL_MS);
