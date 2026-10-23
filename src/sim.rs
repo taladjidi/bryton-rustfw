@@ -782,7 +782,8 @@ mod tests {
         run(&mut sim, &mut app, 2000);
         let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
         assert!(sent(&sim, crate::gnss::config()), "configuration");
-        assert_eq!(sim.gnss.got.iter().filter(|&&b| b == 0xb5).count(), 1, "nothing else: no time or position yet");
+        let frames = sim.gnss.got.iter().filter(|&&b| b == 0xb5).count();
+        assert_eq!(frames, 2, "the RTC time (14 h accuracy, no offset learnt yet), no position yet");
         assert_eq!(app.strip.gps, Some(0), "searching");
         sim.gnss.fix = Some(7000); // 25.2 km/h
         run(&mut sim, &mut app, 2000);

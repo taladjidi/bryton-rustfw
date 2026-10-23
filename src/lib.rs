@@ -557,6 +557,10 @@ impl App {
                     (2, Some(p)) => (label.push_str("LAT"), push_fixed(&mut value, p.lat, 7, 5)).1,
                     (3, Some(p)) => (label.push_str("LON"), push_fixed(&mut value, p.lon, 7, 5)).1,
                     (4, Some(p)) => (label.push_str("ALT M"), push_fixed(&mut value, p.alt_mm, 3, 0)).1,
+                    (5 | 6, Some(p)) if !p.time_ok => {
+                        label.push_str(if i == 5 { "UTC" } else { "DATE" });
+                        value.push_str("--"); // the receiver's placeholder until it knows the time
+                    }
                     (5, Some(p)) => {
                         label.push_str("UTC");
                         let (_, _, _, h, m, sec) = p.utc;
@@ -857,19 +861,22 @@ impl App {
         self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
     }
 
-    /// The next message for the receiver after power-up, one per pass: the configuration, then the time (UTC from
-    /// the RTC and its learnt offset) and the last position, when known. Then None.
+    /// The next message for the receiver after power-up, one per pass: the configuration, the time (UTC from the
+    /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known. Then
+    /// None.
     fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
         loop {
             self.gnss_sent = self.gnss_sent.saturating_add(1);
             match self.gnss_sent {
                 1 => return Some(gnss::config()),
                 2 => {
-                    let Some(offset) = self.aid.offset_15min else { continue };
+                    // the RTC holds local time: with the offset learnt at a fix, UTC within a couple of seconds;
+                    // without it, the RTC as is, within 14 h (any time zone): the date still helps
+                    let (offset, acc_s) = self.aid.offset_15min.map_or((0, 14 * 3600), |o| (o, 2));
                     let (tr, dr) = b.rtc();
                     let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
                     let utc = epoch_s((y, mo, d, h, m, s)) - i64::from(offset) * 900;
-                    return Some(gnss::mga_time(from_epoch_s(utc), 2)); // the RTC: within a couple of seconds
+                    return Some(gnss::mga_time(from_epoch_s(utc), acc_s));
                 }
                 3 => {
                     let Some((lat, lon)) = self.aid.pos else { continue };
