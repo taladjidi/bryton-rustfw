@@ -1027,13 +1027,23 @@ impl App {
             return (0, ui::BLACK);
         }
         let (max, ftp) = (self.settings.max_hr, self.settings.ftp);
-        let (low, high, color) = if g.power {
-            (0, 2 * u32::from(ftp), ride::power_color(ride::power_zone(v, ftp)))
-        } else {
-            (u32::from(max / 2), u32::from(max), ride::hr_color(ride::hr_zone(v, max)))
-        };
+        let (low, high) = self.graph_scale(g.power);
+        let color =
+            if g.power { ride::power_color(ride::power_zone(v, ftp)) } else { ride::hr_color(ride::hr_zone(v, max)) };
         let height = u32::from(v).saturating_sub(low) * h / (high - low).max(1);
         (height.clamp(1, h), color)
+    }
+
+    /// A graph's scale, bottom and top: power from 0 to twice the FTP, heart rate from half the maximum to it.
+    fn graph_scale(&self, power: bool) -> (u32, u32) {
+        let (max, ftp) = (u32::from(self.settings.max_hr), u32::from(self.settings.ftp));
+        if power { (0, 2 * ftp) } else { (max / 2, max) }
+    }
+
+    /// A graph's label, scale and time span (its axes) in box `bx`.
+    fn draw_graph_axes(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), power: bool) {
+        let minutes = ui::graph_area(bx).2 * ride::BAR_S / 60;
+        ui::draw_graph_axes(c, bx, if power { "POWER W" } else { "HR" }, self.graph_scale(power), minutes);
     }
 
     /// Row `i` of `menu`; None past its last.
@@ -1264,6 +1274,7 @@ impl App {
                         map::draw(c, map::area(bx), &self.track, m.view, base);
                     }
                     Drawn::Graph(g) => {
+                        self.draw_graph_axes(c, bx, g.power);
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
                     }
@@ -1455,6 +1466,7 @@ impl App {
         }
         let a = ui::graph_area(bx);
         if old.power != now.power {
+            self.draw_graph_axes(&mut Panel(b, (0, self.bottom())), bx, now.power);
             ui::draw_graph(&mut Panel(b, (0, self.bottom())), a, &|k| self.graph_bar(now, a.2, a.3, k));
         } else {
             for k in 0..a.2 {

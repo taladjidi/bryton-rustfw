@@ -546,7 +546,7 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     if y + h < H - 2 {
         c.fill(x, y + h - 1, w, 1, GREY);
     }
-    if field != Field::Map {
+    if !field.is_picture() {
         text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
     }
 }
@@ -577,10 +577,58 @@ pub fn draw_field_value_changes(
     draw_changed_chars(c, &style, x + 1 + (w - 2 - style.width(new)) / 2, top, old, new);
 }
 
+/// A graph's axis text: the pixel font at 1x, grey.
+const AXIS: Style = Style { scale: 1, fg: GREY, ..LABEL };
+/// Room left of the plot for its scale (three digits), and under it for the time.
+const AXIS_W: u32 = 3 * CELL + 3;
+const AXIS_H: u32 = 10;
+
+/// A graph box this big has its axes drawn (smaller ones show the bars alone).
+fn has_axes(w: u32, h: u32) -> bool {
+    w >= 110 && h >= 80
+}
+
 /// The graph's plot in field box `bx`: left, top, columns, height. One bar per pixel column, side by side, so the
-/// bars make a filled area as stock's graph does; the newest bar is the rightmost column.
+/// bars make a filled area as stock's graph does; the newest bar is the rightmost column. Room is left for the
+/// axes ([`draw_graph_axes`]) when the box has it.
 pub fn graph_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
-    (x + 4, y + FIELD_LABEL_H, w - 8, h - FIELD_LABEL_H - 4)
+    let (left, below) = if has_axes(w, h) { (AXIS_W, AXIS_H) } else { (0, 0) };
+    (x + 4 + left, y + FIELD_LABEL_H, w - 8 - left, h - FIELD_LABEL_H - 4 - below)
+}
+
+/// What a graph plots, in its label line (`title`: "POWER W", "HR"), and, when the box has room, its axes: the
+/// values at the top, the middle and the bottom of the plot (`high`, `low`) on its left, and the time it spans under it, from
+/// "-`minutes` MIN" on the left to "NOW" on the right. Drawn with the box; nothing here changes as the bars move.
+pub fn draw_graph_axes(
+    c: &mut impl Canvas,
+    bx: (u32, u32, u32, u32),
+    title: &str,
+    (low, high): (u32, u32),
+    minutes: u32,
+) {
+    let (x, y, w, h) = bx;
+    text::draw_in(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, w - 12, Align::Left, title);
+    if !has_axes(w, h) {
+        return;
+    }
+    let a = graph_area(bx);
+    let number = |v: u32| {
+        let mut l = text::Line::<8>::new();
+        l.push_u32(v);
+        l
+    };
+    let yw = AXIS_W - 3;
+    text::draw_in(c, &AXIS, x + 2, a.1, yw, Align::Right, number(high).as_str());
+    text::draw_in(c, &AXIS, x + 2, a.1 + a.3 - AXIS.height(), yw, Align::Right, number(low).as_str());
+    let mid = a.1 + a.3 / 2 - AXIS.height() / 2; // the middle: the FTP for power
+    text::draw_in(c, &AXIS, x + 2, mid, yw, Align::Right, number(low.midpoint(high)).as_str());
+    let mut span = text::Line::<12>::new();
+    span.push_str("-");
+    span.push_u32(minutes);
+    span.push_str(" MIN");
+    let ty = a.1 + a.3 + 2;
+    text::draw_in(c, &AXIS, a.0, ty, a.2 / 2, Align::Left, span.as_str());
+    text::draw_in(c, &AXIS, a.0 + a.2 / 2, ty, a.2 - a.2 / 2, Align::Right, "NOW");
 }
 
 /// Graph column `i` that showed a bar `old` (height, colour) now showing `new`: only the band between the two
