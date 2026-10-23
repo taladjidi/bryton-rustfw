@@ -56,6 +56,10 @@ lower awake time (`dev.py info`).
 
 ## 3. Storage and ride saving
 
+The volume is shared with Bryton's firmware, so the owner can switch back and forth (AGENTS.md, "Share the storage
+with stock"): read stock's rides and settings first (read only, possible now), then write ours in the same places
+and formats.
+
 The golden rule (AGENTS.md) depends on this whole phase.
 
 1. eMMC writes (SDMMC single and multiple block writes, bounded busy waits).

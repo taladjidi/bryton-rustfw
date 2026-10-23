@@ -21,6 +21,20 @@ saved"):
 - **Tested before any ride build:** host tests that cut the write at every point and check the resume, and on
   the unit a start, a restart mid-ride, then a save.
 
+## Share the storage with stock
+
+The owner switches between this firmware and Bryton's (stock or patched), so both must live on one eMMC volume
+(the FAT32 "BRYTON" drive; layout in the bryton repo's ghidra/STORAGE_AND_MAPS.md, section 3):
+- **Same places, same formats:** rides are FIT files in `\Activities\` with stock's names (`YYMMDDhhmmss.fit`), and
+  with stock's summaries (`\System\History\Summary\<name>.sum / .csum`) once their format is known, so either
+  firmware, the Bryton app and anything reading the drive sees every ride.
+- **Read what stock left:** its rides (power curve, totals, CP and W'), its settings (`\System\*.ini`: profile,
+  paired sensors, pages), so a switch loses nothing.
+- **Never break it for stock:** never touch stock's ride in progress or its recovery files (`\Activities\tmp.fit`,
+  `\System\tmp*.fit`), never format, keep both FAT copies, FSInfo and the volume label consistent; this firmware's
+  own state (its ride in progress, its settings file) goes in its own folder, so neither firmware resumes or reads
+  the other's half-written data.
+
 ## Performance first
 
 This is a battery device: every cycle the CPU is awake costs ride time.
