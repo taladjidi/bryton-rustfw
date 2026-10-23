@@ -20,6 +20,10 @@
   scale bar. Before a fix, a grey dot at the last known position. No basemap yet.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
 
+- **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track,
+  the elevation profile, time, distance, average speed, ascent, NP, average power, average and max heart rate, TSS,
+  kJ. Any key goes on to the overview.
+
 ## Keys
 
 | Key | Main screen and ride pages | Menus |

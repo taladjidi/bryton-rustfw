@@ -682,6 +682,8 @@ pub enum Screen {
     Menu(Menu, usize),
     /// The BLE devices heard.
     Nearby,
+    /// The card of the ride just ended: its map, elevation profile and numbers.
+    Summary,
 }
 
 /// How long a banner stays up, unless an input dismisses it first.
@@ -827,6 +829,12 @@ pub struct App {
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
     told_low: bool,
+    /// A ride was just started from a key: the page is drawn again (its map and graphs start over).
+    new_ride: bool,
+    /// The card's map and elevation profile as drawn (set when the card is shown).
+    summary: Option<(map::Shown, GraphShown)>,
+    /// When the ride started: date, hours and minutes (its card's title).
+    ride_started: ((u16, u8, u8), (u8, u8)),
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
     graph_whole: bool,
     /// The page's boxes as drawn ([`App::widgets`]).
@@ -946,6 +954,9 @@ impl App {
             had_fix: false,
             told_low: false,
             graph_whole: false,
+            ride_started: ((2000, 1, 1), (0, 0)),
+            summary: None,
+            new_ride: false,
             drawn: Default::default(),
             ride: ride::Ride::new(),
             history: ride::History::default(),
@@ -1195,9 +1206,14 @@ impl App {
 
     /// What a graph of `plot` with `cols` columns shows now.
     fn graph_now(&self, plot: ride::Plot, cols: u32) -> GraphShown {
+        self.graph_shown(plot, self.graph_whole, cols)
+    }
+
+    /// What a graph of `plot` over the last minutes or the `whole` ride, `cols` wide, shows now.
+    fn graph_shown(&self, plot: ride::Plot, whole: bool, cols: u32) -> GraphShown {
         let h = &self.history;
-        let (n, halved) = if self.graph_whole { (h.whole_len(), h.whole_halved()) } else { (h.len(), 0) };
-        let mut g = GraphShown { plot, whole: self.graph_whole, n, halved, scale: (0, 1) };
+        let (n, halved) = if whole { (h.whole_len(), h.whole_halved()) } else { (h.len(), 0) };
+        let mut g = GraphShown { plot, whole, n, halved, scale: (0, 1) };
         g.scale = self.graph_scale(g, cols);
         g
     }
@@ -1295,6 +1311,62 @@ impl App {
             from.push_str(" MIN");
         }
         ui::draw_graph_axes(c, bx, title, [lo.as_str(), mid.as_str(), hi.as_str()], from.as_str());
+    }
+
+    /// The card of the ride (the one running, or the last one): its numbers and title.
+    fn ride_card(&self) -> ui::card::Card {
+        let (r, p) = (&self.ride, &self.power);
+        let mut card = ui::card::Card::default();
+        let ((_, mo, d), (h, mi)) = self.ride_started;
+        card.title.push_u32(u32::from(d));
+        card.title.push_str(" ");
+        card.title.push_str(MONTHS.get(usize::from(mo).wrapping_sub(1)).copied().unwrap_or(""));
+        card.title.push_str(" ");
+        for k in [h / 10, h % 10, 10, mi / 10, mi % 10] {
+            card.title.push_str(if k == 10 { ":" } else { ui::DIGITS[usize::from(k % 10)] });
+        }
+        let field = |f: Field| {
+            let t = self.field_text(f);
+            let mut l = Line::<10>::new();
+            l.push_str(t.as_str());
+            l
+        };
+        let mut time = Line::<10>::new();
+        let s = r.timer_s();
+        time.push_u32(s / 3600);
+        time.push_str(":");
+        time.push_str(ui::DIGITS[(s / 600 % 6) as usize]);
+        time.push_str(ui::DIGITS[(s / 60 % 10) as usize]);
+        let num = |v: Option<u32>| {
+            let mut l = Line::<10>::new();
+            match v {
+                Some(v) => l.push_u32(v),
+                None => l.push_str("--"),
+            }
+            l
+        };
+        card.stats = [
+            ("TIME", time),
+            ("KM", field(Field::Dist)),
+            ("AVG KM/H", field(Field::AvgSpeed)),
+            ("ASCENT M", num(Some(r.ascent_m()))),
+            ("NP", num(p.np().map(u32::from))),
+            ("AVG W", num(r.avg_power().map(u32::from))),
+            ("AVG HR", num(r.avg_hr().map(u32::from))),
+            ("MAX HR", num(r.max_hr().map(u32::from))),
+            ("TSS", num(p.tss(self.settings.ftp))),
+            ("KJ", num(Some(p.kj()))),
+        ];
+        card
+    }
+
+    /// The card screen: the track in [`ui::card::MAP`], the whole ride's elevation, the numbers, as they were when
+    /// the card was shown ([`App::summary`]).
+    fn draw_summary(&self, c: &mut impl Canvas) {
+        let Some((m, g)) = self.summary else { return };
+        map::draw(c, map::area(ui::card::MAP), &self.track, m.view, None);
+        let (_, _, cols, h) = ui::card::ELEV;
+        ui::card::draw(c, &self.ride_card(), &|i| self.graph_bar(g, cols, h, i));
     }
 
     /// The graph field at (`x`, `y`) on the page shown, if there is one: its box index and field.
@@ -1464,6 +1536,7 @@ impl App {
                 ui::draw_title(c, title.as_str());
                 self.draw_menu_rows(c, menu, sel);
             }
+            Screen::Summary => self.draw_summary(c),
             Screen::Nearby => {
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.nearby.count(), self.scanning);
@@ -1606,6 +1679,17 @@ impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
     fn start_pause(&mut self) {
         let ev = self.ride.start_pause();
+        if ev == ride::Event::Start {
+            // the ride's own track and graphs, from here (the last position kept, so the map is not empty)
+            self.ride_started = (self.date, self.strip.time);
+            self.history = ride::History::default();
+            let mut track = map::Track::new();
+            if let Some(p) = self.pvt.filter(|p| p.good()) {
+                track.seed(p.lat, p.lon);
+            }
+            self.track = track;
+            self.new_ride = true;
+        }
         self.say(match ev {
             ride::Event::Start => "RIDE STARTED",
             ride::Event::Pause => "PAUSED: HOLD = END",
@@ -1672,6 +1756,11 @@ impl App {
             if let Some(d) = self.drawn.get_mut(i) {
                 *d = now;
             }
+        }
+        if self.screen == Screen::Summary {
+            let (_, _, cols, _) = ui::card::ELEV;
+            let m = map::Shown::of(&self.track, map::area(ui::card::MAP));
+            self.summary = Some((m, self.graph_shown(ride::Plot::Alt, true, cols)));
         }
         if let Some(i) = self.first_map()
             && let (Some((bx, _)), Some(Drawn::Map(m))) = (self.widgets().nth(i), self.drawn.get(i))
@@ -1958,19 +2047,25 @@ impl App {
                 self.open(Screen::Menu(Menu::Main, 0))
             }
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
-            (Screen::Ride(_), Input::Select) => return self.start_pause(),
+            (Screen::Ride(_), Input::Select) => {
+                self.start_pause();
+                if !core::mem::take(&mut self.new_ride) {
+                    return;
+                }
+                return self.show(b); // the page again, with the new ride's map and graphs
+            }
             // Start on the overview too, which then shows the first ride page
             (Screen::Main, Input::Select) => {
                 self.start_pause();
+                self.new_ride = false; // the page is drawn anew anyway
                 self.screen = Screen::Ride(0);
             }
             (Screen::Main | Screen::Ride(_), Input::End) => {
-                if let Some(ev) = self.ride.end() {
-                    self.say("RIDE ENDED");
-                    self.recorder(ev);
-                }
-                return;
+                let Some(ev) = self.ride.end() else { return };
+                self.recorder(ev);
+                self.screen = Screen::Summary; // the ride's card; any key goes on to the overview
             }
+            (Screen::Summary, _) => self.screen = Screen::Main,
             (Screen::Ride(_), Input::Prev) => {
                 if let Some(ev) = self.ride.lap() {
                     self.say("LAP");
@@ -2254,6 +2349,13 @@ impl App {
         }
         match self.screen {
             Screen::Main | Screen::Ride(_) => self.update_page(b),
+            Screen::Summary => {
+                // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
+                let bottom = self.bottom();
+                if let Some((m, _)) = &mut self.summary {
+                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, None);
+                }
+            }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
                 ui::draw_list(&mut Panel(b, (0, self.bottom())), &self.nearby);
                 self.list_dirty = false;
@@ -2460,10 +2562,12 @@ fn fnv(h: u32, bytes: &[u8]) -> u32 {
     bytes.iter().fold(h, |h, &x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
 }
 
+/// Months as the screens write them.
+const MONTHS: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
 /// "FRI 23 OCT".
 fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
     const DAYS: [&str; 7] = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"]; // 1970-01-01 was a Thursday
-    const MONTHS: [&str; 12] = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
     let mut l = Line::new();
     l.push_str(DAYS[days_from_civil(y, m, d).rem_euclid(7) as usize]);
     l.push_str(" ");

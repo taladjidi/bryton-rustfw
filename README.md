@@ -9,8 +9,8 @@ entirely. Not affiliated with Bryton.
 | Overview: time, date, four fields, notices (sim) | Start: the ride, said in a banner (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot (sim) |
 | ![Power and HR graphs](docs/img/graphs.png) | ![HRV](docs/img/hrv.png) | ![Layout](docs/img/layout.png) | ![Settings](docs/img/settings.png) |
 | Power graph with its axes, over the HR graph (sim) | DFA a1 and RMSSD from the strap's beats (sim) | An uneven layout: a big box over 2 x 2 (sim) | Menu: settings edited in place (sim) |
-| ![Zones](docs/img/zones.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |
-| HR / power in zone colours (sim) | Map with the track (sim) | Sensors and built-in readings (unit) | GPS (sim) |
+| ![Ride card](docs/img/card.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |
+| The ride's card when it ends: map, profile, numbers (sim) | Map with the track (sim) | Sensors and built-in readings (unit) | GPS (sim) |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*

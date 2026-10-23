@@ -1424,9 +1424,38 @@ mod tests {
         app.press(&mut sim, Press::Short(Key::Start));
         assert_eq!(app.banner.as_str(), "PAUSED: HOLD = END");
         app.press(&mut sim, Press::Long(Key::Start));
-        assert_eq!((app.banner.as_str(), app.ride.state()), ("RIDE ENDED", ride::State::Idle));
+        assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
         run(&mut sim, &mut app, 200);
         assert_consistent(&sim, &app);
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Main, "any key: the overview");
+    }
+
+    /// The card at the end of a ride: its track, its elevation profile, its numbers.
+    #[test]
+    fn ride_card_at_the_end() {
+        fn hills(ms: u64) -> i32 {
+            let t = (ms / 1000) as i32 % 1200;
+            200_000 + if t < 600 { t * 200 } else { (1200 - t) * 200 } // up 120 m and down, in mm
+        }
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        sim.gnss.alt = Some(hills);
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+        let mut app = App::start(&mut sim, Some(KEY));
+        run(&mut sim, &mut app, 2000);
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 40 * 60_000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Long(Key::Start));
+        assert_eq!(app.screen(), Screen::Summary);
+        let card = app.ride_card();
+        assert_eq!((card.stats[0].0, card.stats[0].1.as_str()), ("TIME", "0:40"));
+        assert_eq!(card.title.as_str(), "23 OCT 09:00");
+        assert_consistent(&sim, &app);
+        sim.save("ride_card");
     }
 
     /// Pages kept by the builds of 2026-10-23 (from register 19, which stock reads at boot) move to 20..27, and 19 is
@@ -2154,6 +2183,7 @@ mod tests {
         // a new ride: the totals and W' start again
         app.press(&mut sim, Press::Short(Key::Start));
         app.press(&mut sim, Press::Long(Key::Start));
+        app.press(&mut sim, Press::Short(Key::Back)); // the card, then the overview
         app.press(&mut sim, Press::Short(Key::Start));
         run(&mut sim, &mut app, 1000);
         assert!(app.power.wbal_j().unwrap() > 19_000 && app.power.kj() < 2, "a new ride");
