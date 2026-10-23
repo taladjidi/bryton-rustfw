@@ -183,8 +183,8 @@ pub fn clear_page(c: &mut impl Canvas) {
     c.fill(0, PAGE_Y, W, H - PAGE_Y, BLACK);
 }
 
-/// The devices heard, strongest first, one per row: the name (white), or the address (grey) for one that sent
-/// none, and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
+/// The devices heard, strongest first, one per row: the name (white); for one that sent none (phones, laptops),
+/// its maker from the manufacturer data, else its address (grey); and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
 pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
     let rows = (H - LIST_Y) / LIST_ROW;
     let mut devices = nearby.strongest();
@@ -196,16 +196,20 @@ pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
             continue;
         };
         let mut name = text::Line::<16>::new();
-        let color = if d.name().is_empty() {
+        let maker = d.company.and_then(crate::nrf::company_name);
+        let color = if !d.name().is_empty() {
+            name.push_str(d.name());
+            WHITE
+        } else if let Some(maker) = maker {
+            name.push_str(maker);
+            GREY
+        } else {
             for b in d.addr.iter().rev() {
                 for n in [usize::from(b >> 4), usize::from(b & 0xf)] {
                     name.push_str("0123456789ABCDEF".get(n..n + 1).unwrap_or("?"));
                 }
             }
             GREY
-        } else {
-            name.push_str(d.name());
-            WHITE
         };
         text::draw_in(c, &Style { fg: color, ..LABEL }, NEARBY.0, y, name_w, Align::Left, name.as_str());
         let mut rssi = text::Line::<8>::new();

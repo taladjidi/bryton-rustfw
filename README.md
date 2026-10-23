@@ -13,7 +13,8 @@ Bryton.
 - **Heart rate:** under the bar on the clock page, from any ANT+ strap in range ("HR 72", "HR --" without one).
   Needs the ANT+ network key, which you copy from your own stock firmware (see "ANT+ key" below).
 - **Devices nearby:** opening the list starts a 10 s BLE scan; one row per device, strongest first: its name, or
-  its address in grey if it advertises none, and its signal strength in dBm.
+  in grey its maker (phones and laptops advertise no name, only a maker ID and an address that changes every few
+  minutes), else its address; and its signal strength in dBm.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
   build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
   red if the PHY did not come up). Unplugging resets the unit.

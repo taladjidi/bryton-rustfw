@@ -63,8 +63,11 @@ pub struct Nordic {
 }
 
 /// The advertisers the simulated chip hears: two devices, one of them named, one report repeated.
-pub const ADVERTISERS: [(u8, i8, &[u8]); 3] =
-    [(0xa1, -40, &[2, 0x01, 0x06, 5, 0x09, b'B', b'i', b'k', b'e']), (0xb2, -70, &[2, 0x01, 0x06]), (0xa1, -42, &[])];
+pub const ADVERTISERS: [(u8, i8, &[u8]); 3] = [
+    (0xa1, -40, &[2, 0x01, 0x06, 5, 0x09, b'B', b'i', b'k', b'e']),
+    (0xb2, -70, &[2, 0x01, 0x06, 5, 0xff, 0x4c, 0, 0x10, 6]),
+    (0xa1, -42, &[]),
+];
 
 /// A BLE_GAP_EVT_ADV_REPORT payload as the chip encodes it (BOARD.md 11).
 fn adv_report(addr: u8, rssi: i8, data: &[u8]) -> Vec<u8> {

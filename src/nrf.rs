@@ -288,6 +288,8 @@ pub struct Device {
     pub rssi: i8,
     name: [u8; Device::NAME],
     name_len: u8,
+    /// Bluetooth SIG company ID of its manufacturer data, if it sent any.
+    pub company: Option<u16>,
 }
 
 impl Device {
@@ -298,6 +300,39 @@ impl Device {
     pub fn name(&self) -> &str {
         core::str::from_utf8(self.name.get(..usize::from(self.name_len)).unwrap_or(&[])).unwrap_or("")
     }
+}
+
+/// The company ID of the manufacturer data in `data` (AD type 0xff, its first two bytes), if any.
+///
+/// ```
+/// assert_eq!(bryton_rustfw::nrf::ad_company(&[2, 0x01, 0x1a, 5, 0xff, 0x4c, 0, 0x10, 6]), Some(0x004c));
+/// ```
+pub fn ad_company(data: &[u8]) -> Option<u16> {
+    let mut rest = data;
+    while let [len, kind, ..] = *rest {
+        if let (0xff, Some(&[a, b])) = (kind, rest.get(2..4).filter(|_| len >= 3)) {
+            return Some(u16::from_le_bytes([a, b]));
+        }
+        rest = rest.get(1 + usize::from(len)..)?;
+    }
+    None
+}
+
+/// The maker for a Bluetooth SIG company ID, for the makers likely around a bike: phones, laptops, sports sensors.
+/// Phones and laptops advertise no name, only this and a random address that changes every few minutes.
+// ponytail: a handful of IDs; the full SIG list (thousands) is not worth the image size.
+pub fn company_name(id: u16) -> Option<&'static str> {
+    Some(match id {
+        0x0006 => "Microsoft",
+        0x004c => "Apple",
+        0x0059 => "Nordic",
+        0x006b => "Polar",
+        0x0075 => "Samsung",
+        0x0087 => "Garmin",
+        0x00e0 => "Google",
+        0x0171 => "Amazon",
+        _ => return None,
+    })
 }
 
 /// The distinct devices heard while scanning (up to [`Nearby::MAX`] remembered; the count stops there).
@@ -318,7 +353,7 @@ impl Nearby {
 
     /// Nobody heard yet.
     pub const fn new() -> Self {
-        const NONE: Device = Device { addr: [0; 6], rssi: 0, name: [0; Device::NAME], name_len: 0 };
+        const NONE: Device = Device { addr: [0; 6], rssi: 0, name: [0; Device::NAME], name_len: 0, company: None };
         Nearby { devices: [NONE; Self::MAX], count: 0 }
     }
 
@@ -338,6 +373,9 @@ impl Nearby {
         };
         d.addr = r.addr;
         d.rssi = r.rssi;
+        if let Some(id) = ad_company(r.data) {
+            d.company = Some(id);
+        }
         if let Some(name) = ad_name(r.data) {
             let n = name.len().min(Device::NAME);
             for (slot, &c) in d.name.iter_mut().zip(&name[..n]) {
@@ -373,7 +411,8 @@ mod tests {
     #[test]
     fn nearby_keeps_names_and_the_last_rssi_strongest_first() {
         let mut n = Nearby::new();
-        assert!(n.add(&report(1, -80, &[])));
+        assert!(n.add(&report(1, -80, &[5, 0xff, 0x4c, 0, 0x10, 6])));
+        assert_eq!(n.strongest().next().unwrap().company, Some(0x004c));
         assert!(n.add(&report(2, -50, &[4, 0x09, b'H', b'R', 0xff])));
         assert!(!n.add(&report(1, -40, &[3, 0x08, b'P', b'C'])), "same address: not new");
         let list: std::vec::Vec<_> =
