@@ -2006,9 +2006,11 @@ mod tests {
         let mut sim = Sim::new(9, 0, 0);
         sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
         sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
         let mut app = App::start(&mut sim, Some(KEY));
         use Field::*;
-        app.pages[0] = PageCfg { layout: 3, fields: [Graph, MaxSpeed, Ascent, Timer, Timer, Timer] };
+        app.pages[0] = PageCfg { layout: 3, fields: [Graph, MaxSpeed, HrGraph, Timer, Timer, Timer] };
         app.press(&mut sim, Press::Short(Key::Page));
         run(&mut sim, &mut app, 600_000);
         assert_consistent(&sim, &app);

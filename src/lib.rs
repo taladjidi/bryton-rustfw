@@ -619,7 +619,8 @@ pub const NEARBY_ROW: usize = 11;
 const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
 const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
 
-/// What a graph field shows on screen: the bars up to `n` ([`ride::History::len`]), of power or heart rate.
+/// What a graph field shows on screen: the bars up to `n` ([`ride::History::len`]), of power ([`Field::Graph`]) or
+/// heart rate ([`Field::HrGraph`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct GraphShown {
     n: u32,
@@ -974,7 +975,7 @@ impl App {
                 }
                 return l;
             }
-            Field::Map | Field::Graph => return l,
+            Field::Map | Field::Graph | Field::HrGraph => return l,
             Field::Temp => {
                 let t = self.baro.map(|(_, t)| i32::from(t) / 10); // C x 100 to tenths
                 if t.is_some_and(|t| t < 0) {
@@ -1014,8 +1015,8 @@ impl App {
     }
 
     /// The graph shows power when a power meter is paired, else heart rate.
-    fn graph_now(&self) -> GraphShown {
-        GraphShown { n: self.history.len(), power: self.sensors[Kind::Power as usize] != Sensor::Off }
+    fn graph_now(&self, power: bool) -> GraphShown {
+        GraphShown { n: self.history.len(), power }
     }
 
     /// Column `i` of a graph of `cols` columns `h` high showing `g`: the bar's height and colour. Power is drawn
@@ -1248,7 +1249,7 @@ impl App {
                 Drawn::Print(self.notices.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
             }
             Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx))),
-            Widget::Field(Field::Graph) => Drawn::Graph(self.graph_now()),
+            Widget::Field(f @ (Field::Graph | Field::HrGraph)) => Drawn::Graph(self.graph_now(f == Field::Graph)),
             Widget::Field(f) => Drawn::Value(self.field_text(f), self.field_color(f)),
         }
     }
@@ -1460,19 +1461,14 @@ impl App {
         // of the panel windows of a scroll per bar, and fewer pixels (sim graph_field: 1812 px/s in 33 windows/s,
         // against 1987 in 113).
         const STEP: u32 = 5;
-        let now = self.graph_now();
-        if old.power == now.power && now.n.wrapping_sub(old.n) < STEP {
+        let now = self.graph_now(old.power);
+        if now.n.wrapping_sub(old.n) < STEP {
             return Drawn::Graph(old);
         }
         let a = ui::graph_area(bx);
-        if old.power != now.power {
-            self.draw_graph_axes(&mut Panel(b, (0, self.bottom())), bx, now.power);
-            ui::draw_graph(&mut Panel(b, (0, self.bottom())), a, &|k| self.graph_bar(now, a.2, a.3, k));
-        } else {
-            for k in 0..a.2 {
-                let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
-                ui::draw_graph_column(&mut Panel(b, (0, self.bottom())), a, k, was, is);
-            }
+        for k in 0..a.2 {
+            let (was, is) = (self.graph_bar(old, a.2, a.3, k), self.graph_bar(now, a.2, a.3, k));
+            ui::draw_graph_column(&mut Panel(b, (0, self.bottom())), a, k, was, is);
         }
         Drawn::Graph(now)
     }

@@ -405,28 +405,46 @@ pub enum Field {
     LapDist,
     /// Altitude gained, m (GPS).
     Ascent,
-    /// Bars of the last minutes of power (with a power meter paired), else of heart rate, coloured by zone.
+    /// The last minutes of power, coloured by zone.
     Graph,
     /// The barometer's temperature, C.
     Temp,
+    /// The last minutes of heart rate, coloured by zone.
+    HrGraph,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 17] = {
+    pub const ALL: [Field; 18] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
-            Ascent, Graph, Temp,
+            Ascent, Graph, Temp, HrGraph,
         ]
     };
 
     /// Its label, top left of its box.
     pub fn label(self) -> &'static str {
         [
-            "TIME", "HR", "KM/H", "RPM", "WATTS", "MAP", "TIMER", "KM", "AVG KM/H", "MAX KM/H", "AVG HR", "AVG W",
-            "LAP TIME", "LAP KM", "ASCENT M", "GRAPH", "TEMP C",
+            "TIME",
+            "HR",
+            "KM/H",
+            "RPM",
+            "WATTS",
+            "MAP",
+            "TIMER",
+            "KM",
+            "AVG KM/H",
+            "MAX KM/H",
+            "AVG HR",
+            "AVG W",
+            "LAP TIME",
+            "LAP KM",
+            "ASCENT M",
+            "POWER GRAPH",
+            "TEMP C",
+            "HR GRAPH",
         ][self as usize]
     }
 
@@ -434,13 +452,13 @@ impl Field {
     fn widest(self) -> &'static str {
         [
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
-            "88.88", "8888", "", "-88.8",
+            "88.88", "8888", "", "-88.8", "",
         ][self as usize]
     }
 
     /// Its box holds a picture (map, graph), not a value.
     pub fn is_picture(self) -> bool {
-        matches!(self, Field::Map | Field::Graph)
+        matches!(self, Field::Map | Field::Graph | Field::HrGraph)
     }
 
     /// The next one in [`Field::ALL`].
