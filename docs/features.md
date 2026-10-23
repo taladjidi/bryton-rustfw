@@ -11,7 +11,9 @@
 - **Ride pages:** up to three, each in one of eleven layouts (one to six fields: even grids, and uneven ones such as
   a big box over two or over a 2 x 2 grid, two over a big one, three rows), chosen in the menu: speed, heart rate, cadence,
   power, time, map, timer, distance, average and top speed, average heart rate and power, lap time and distance,
-  ascent, and a zone graph. Page 3 is the map by default.
+  ascent, a zone graph, and heart rate variability from a strap's beats: DFA a1 (the aerobic threshold marker, about
+  0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute). Page 3
+  is the map by default.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. No basemap yet.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
@@ -61,7 +63,8 @@ BLE devices nearby.
 
 ## Sensors and radios
 
-- **ANT+:** heart rate, speed, cadence, speed and cadence, power, on stock's channels. A paired sensor is kept
+- **ANT+:** heart rate (and the beat-to-beat intervals, for DFA a1 and RMSSD), speed, cadence, speed and cadence,
+  power, on stock's channels. A paired sensor is kept
   through power off, so a friend's is never taken. A silent sensor searches 30 s, then rests a minute. Needs the
   ANT+ key from your own stock firmware ([install.md](install.md)).
 - **GPS** (u-blox M10): speed when no wheel sensor is paired; at power-up it gets the time and the last position,

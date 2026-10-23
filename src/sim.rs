@@ -1347,6 +1347,67 @@ mod tests {
         assert_eq!(app.pages()[0], want, "read back after a restart");
     }
 
+    /// When the simulated strap starts beating, ms.
+    const BEAT_START: u64 = 10_000;
+    /// The strap's interval before beat `k`, 1/1024 s: 820 plus or minus 16 (about 800 ms), scrambled (murmur3's
+    /// finaliser).
+    fn beat_ticks(k: u32) -> u64 {
+        let mut x = k.wrapping_mul(0x9e37_79b9);
+        x ^= x >> 16;
+        x = x.wrapping_mul(0x85eb_ca6b);
+        x ^= x >> 13;
+        804 + u64::from(x >> 27)
+    }
+    /// A strap beating from [`BEAT_START`]: page 4, the last beat's time, the one before, the count.
+    fn strap_beats(ms: u64) -> [u8; 8] {
+        let now = ms * 1024 / 1000;
+        let (mut t, mut prev, mut k) = (BEAT_START * 1024 / 1000, 0, 0u32);
+        while t + beat_ticks(k + 1) <= now {
+            (prev, k) = (t, k + 1);
+            t += beat_ticks(k);
+        }
+        let ([p0, p1], [t0, t1]) = ((prev as u16).to_le_bytes(), (t as u16).to_le_bytes());
+        [4, 0, p0, p1, t0, t1, k as u8, 70]
+    }
+
+    /// A strap sends a known series of beats: the HRV fields show "--" until there are enough, then the RMSSD and
+    /// DFA alpha1 of the series, and "--" again once the strap has no heart rate.
+    #[test]
+    fn hrv_fields_from_the_strap() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: strap_beats });
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        app.pages[0] = PageCfg { layout: 4, fields: [Dfa, Rmssd, Hr, Time, Time, Time] };
+        app.press(&mut sim, Press::Short(Key::Page));
+        let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+        run(&mut sim, &mut app, 20_000);
+        assert_eq!((text(&app, Dfa), text(&app, Rmssd)), ("--".into(), "--".into()), "about 12 beats");
+        run(&mut sim, &mut app, 20_000);
+        assert!(text(&app, Dfa) == "--" && text(&app, Rmssd) != "--", "about 37 beats: RMSSD, not yet DFA");
+        run(&mut sim, &mut app, 140_000);
+        // stop where the app has the last beat or the one before: the same 5-beat update either way
+        while strap_beats(sim.ms)[6] % hrv::EVERY != 2 {
+            run(&mut sim, &mut app, 100);
+        }
+        let mut want = hrv::Hrv::default();
+        for k in 1..=u32::from(strap_beats(sim.ms)[6]) {
+            want.push(((beat_ticks(k) * 1000 + 512) >> 10) as u16);
+        }
+        let (a, ms) = (want.alpha1().unwrap(), want.rmssd().unwrap());
+        assert!((0.3..0.7).contains(&a), "scrambled beats are close to white noise: {a}");
+        let (a, ms) = (std::format!("{a:.2}"), std::format!("{ms}"));
+        assert_eq!((text(&app, Dfa), text(&app, Rmssd)), (a.clone(), ms.clone()));
+        let t = hm(&mut sim);
+        assert!(ride(&mut sim, &app, 0, &[&a, &ms, "70", &t], true) == sim.screen);
+        assert_consistent(&sim, &app);
+        sim.save("hrv_fields");
+        sim.nordic.sensors[0].data = |_| [4, 0, 0, 0, 0, 0, 0, 0]; // off the chest: no rate, no new beat
+        run(&mut sim, &mut app, 7000);
+        assert_eq!((text(&app, Dfa), text(&app, Rmssd)), ("--".into(), "--".into()), "no heart rate");
+    }
+
     /// Every layout draws on the unit as in the screenshot (layout_<id>.bmp, to look at).
     #[test]
     fn every_layout_draws() {
@@ -2398,6 +2459,27 @@ mod fuzz {
                         let _ = (crate::nrf::ad_name(r.data), crate::nrf::ad_maker(r.data));
                     }
                 }
+            }
+        }
+    }
+
+    /// Random heart-rate broadcasts into the beat decoder, and its intervals and random ones into the HRV: no panic,
+    /// every interval in range.
+    #[test]
+    fn heart_rate_beats() {
+        use crate::sensors::{Beats, Decoders, Kind, Live};
+        for seed in 1..=4u32 {
+            let (mut dec, mut live, mut hrv) = (Decoders::default(), Live::default(), crate::hrv::Hrv::default());
+            let v: std::vec::Vec<u8> = bytes(seed, 1 << 18).collect();
+            for c in v.chunks_exact(8) {
+                let d = core::array::from_fn(|i| c[i]);
+                dec.decode(Kind::Hr, d, 2105, &mut live);
+                for &rr in dec.beats.rr() {
+                    assert!(Beats::RANGE.contains(&rr));
+                    hrv.push(rr);
+                }
+                hrv.push(u16::from_le_bytes([d[0], d[1]]));
+                let _ = (hrv.alpha1(), hrv.rmssd());
             }
         }
     }
