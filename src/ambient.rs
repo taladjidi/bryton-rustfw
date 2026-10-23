@@ -3,8 +3,14 @@
 //! (only switched off: stock leaves it running). Plus the automatic backlight: a level from the ambient light, smoothed
 //! and with hysteresis so it does not flicker between two levels.
 //!
-//! Power first: the light sensor is in standby except for one measurement every [`crate::LIGHT_MS`] (it is
-//! started, read about half a second later, and stopped), and the barometer only converts when asked (one-shot).
+//! Power first: the light sensor measures only while the automatic backlight (or the sensors menu) needs it, then
+//! continuously (100 ms conversions, read every [`crate::LIGHT_MS`], so the backlight follows the light within about
+//! a second; the sensor draws about a tenth of a milliamp, nothing beside the backlight it steers), and is in
+//! standby otherwise; the barometer only converts when asked (one-shot).
+//!
+//! The LTR-308ALS register fields (MEAS_RATE: resolution in bits 6..4, 0 = 20 bits / 400 ms, 2 = 18 bits / 100 ms;
+//! rate in bits 2..0, 2 = every 100 ms; lux = count x 0.6 / gain / (integration time / 100 ms)) are from DFRobot's
+//! driver (https://github.com/DFRobot/DFRobot_LTR308, DFRobot_LTR308.h / .cpp), which follows the datasheet.
 
 use crate::Board;
 
@@ -53,21 +59,20 @@ fn reg(b: &mut impl Board, addr: u8, r: u8) -> Option<u8> {
     b.i2c_read(addr, r, &mut v).then_some(v[0])
 }
 
-/// Finds the chips and puts each in its lowest-power state: the light sensor in standby with stock's measurement
-/// settings (gain 6, 20 bits in 400 ms), the barometer powered down with block data update (one-shot conversions
+/// Finds the chips and puts each in its lowest-power state: the light sensor in standby, set for 18 bits in 100 ms
+/// every 100 ms at gain 6, the barometer powered down with block data update (one-shot conversions
 /// only), the accelerometer powered down (CTRL_REG1 0x07: output rate 0, axes enabled, as stock's "off").
 pub fn init(b: &mut impl Board) -> Chips {
     let _ = b.i2c_write(ACCEL_ADDR, 0x20, &[0x07]);
     let light = reg(b, LIGHT_ADDR, PART_ID) == Some(LIGHT_ID)
         && b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[0])
-        && b.i2c_write(LIGHT_ADDR, MEAS_RATE, &[0x05]) // 20 bits / 400 ms, every 1000 ms while enabled
+        && b.i2c_write(LIGHT_ADDR, MEAS_RATE, &[0x22]) // 18 bits / 100 ms, every 100 ms while enabled
         && b.i2c_write(LIGHT_ADDR, GAIN, &[0x02]); // gain 6
     let baro = reg(b, BARO_ADDR, WHO_AM_I) == Some(BARO_ID) && b.i2c_write(BARO_ADDR, CTRL_REG1, &[0x02]); // ODR 0, BDU
     Chips { light, baro }
 }
 
-/// Starts one light measurement (the sensor leaves standby); read it with [`light_read`] after
-/// [`crate::LIGHT_WAIT_MS`].
+/// Starts measuring (the sensor leaves standby): a new reading every 100 ms, the first 100 ms on ([`light_read`]).
 pub fn light_start(b: &mut impl Board) -> bool {
     b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[ALS_EN])
 }
@@ -87,16 +92,15 @@ pub fn light_stop(b: &mut impl Board) {
     let _ = b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[0]);
 }
 
-/// A light reading (20 bits, gain 6, 400 ms) in tenths of a lux: the datasheet's 0.6 / (gain x integration time
-/// in 100 ms) = 0.025 lux per count, stock's factor too. Stock masks the reading to 18 bits, which would wrap above
-/// 6553 lux; all 20 are used here (full scale 26214 lux, the top of stock's last band).
+/// A light reading (18 bits, gain 6, 100 ms) in tenths of a lux: 0.6 / (gain 6 x 1) = 0.1 lux per count, so the
+/// count itself. Full scale 26214 lux, the top of stock's last band, as stock's 20-bit setting.
 ///
 /// ```
-/// assert_eq!(bryton_rustfw::ambient::lux10(400), 100); // 10.0 lux
+/// assert_eq!(bryton_rustfw::ambient::lux10(100), 100); // 10.0 lux
 /// assert_eq!(bryton_rustfw::ambient::lux10(0xff_ffff), 262_143); // full scale
 /// ```
 pub fn lux10(raw: u32) -> u32 {
-    (raw & 0xf_ffff) / 4
+    raw & 0x3_ffff
 }
 
 /// Starts one barometer conversion (one-shot); [`baro_read`] gets it once done (tens of ms).
@@ -134,18 +138,18 @@ pub struct Auto {
 }
 
 impl Auto {
-    /// Takes one reading (tenths of a lux) and returns the level: the average moves a quarter of the way to each
-    /// reading, and the band changes only once the average is a quarter past its edge, so a light that hovers on
+    /// Takes one reading (tenths of a lux) and returns the level: the average moves half way to each reading (four a
+    /// second: a change of light shows within a second), and the band changes only once the average is a quarter past its edge, so a light that hovers on
     /// an edge keeps one level.
     ///
     /// ```
     /// use bryton_rustfw::ambient::Auto;
     /// let mut a = Auto::default();
     /// assert_eq!(a.update(10), 14); // 1 lux: dark
-    /// assert_eq!(a.update(100), 14); // one 10 lux reading moves the average only a quarter of the way
+    /// assert_eq!(a.update(100), 14); // one 10 lux reading: half way, not past the edge's margin
     /// ```
     pub fn update(&mut self, lux10: u32) -> u8 {
-        let avg = self.avg.map_or(lux10, |a| (3 * u64::from(a) + u64::from(lux10)).div_ceil(4) as u32);
+        let avg = self.avg.map_or(lux10, |a| (u64::from(a) + u64::from(lux10)).div_ceil(2) as u32);
         let band = AUTO_BANDS.iter().position(|&(top, _)| avg <= top).unwrap_or(AUTO_BANDS.len() - 1);
         let top = |i: usize| AUTO_BANDS.get(i).map_or(u32::MAX, |&(t, _)| t);
         if self.avg.is_none()

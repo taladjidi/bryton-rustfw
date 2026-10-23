@@ -289,15 +289,15 @@ impl Bus {
         match addr {
             LIGHT_ADDR => {
                 let Some(lux10) = self.lux10 else { return false };
-                let ready = self.light_on_since.is_some_and(|t| now >= t + 400);
-                let raw = (lux10 * 4).min(0xf_ffff);
+                let ready = self.light_on_since.is_some_and(|t| now >= t + 100);
+                let raw = lux10.min(0x3_ffff);
                 let mut regs = self.light;
                 regs[0x06] = LIGHT_ID;
                 regs[0x07] = if ready { 0x08 } else { 0 };
                 regs[0x0d..0x10].copy_from_slice(&raw.to_le_bytes()[..3]);
                 if reg == 0x0d {
                     assert!(ready, "light read before its conversion");
-                    assert_eq!((regs[0x04], regs[0x05]), (0x05, 0x02), "the lux scale assumes 20 bits, gain 6");
+                    assert_eq!((regs[0x04], regs[0x05]), (0x22, 0x02), "the lux scale assumes 18 bits, gain 6");
                     self.light_reads += 1;
                 }
                 for (i, b) in buf.iter_mut().enumerate() {
@@ -902,11 +902,18 @@ mod tests {
         [0x10, 1, 0xff, 85, 0, 0, 0x2c, 0x01]
     }
 
+    /// Passes of the main loop for `ms`: a step, then the sleep, in which (as on the unit) the touch panel is read
+    /// when INT falls (here: seen within a [`TOUCH_MS`] slice) and every [`TOUCH_MS`] while a finger is down.
     fn run(sim: &mut Sim, app: &mut App, ms: u64) {
         let end = sim.ms + ms;
         while sim.ms < end && !sim.standby {
             app.step(sim);
-            sim.delay_ms(POLL_MS);
+            for _ in 0..POLL_MS / TOUCH_MS {
+                sim.delay_ms(TOUCH_MS);
+                if let Some(i) = app.touch(sim, TOUCH_MS) {
+                    app.input(sim, i);
+                }
+            }
         }
     }
 
@@ -1090,6 +1097,23 @@ mod tests {
         run(&mut sim, &mut app, left_ms);
         assert_eq!(app.screen(), Screen::Menu(Menu::Page(OVERVIEW), 0), "row 1: the overview's fields");
         assert_consistent(&sim, &app);
+    }
+
+    /// Quick touches count: a 60 ms tap and a 120 ms swipe (the panel is read on INT and every 10 ms while a finger
+    /// is down, not once per 50 ms pass when INT happens to be low).
+    #[test]
+    fn quick_taps_and_swipes() {
+        let swipe = |ms: u64| (5000..5120).contains(&ms).then(|| ((200 - (ms - 5000) as i64 * 120 / 120) as u16, 160));
+        let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
+        let tap = move |ms: u64| (7003..7063).contains(&ms).then_some((120, row1));
+        let mut sim = Sim::new(9, 0, 0).finger(move |ms| swipe(ms).or(tap(ms)));
+        let mut app = App::start(&mut sim, None);
+        let left = 5500 - sim.ms;
+        run(&mut sim, &mut app, left);
+        assert_eq!(app.screen(), Screen::Ride(0), "the fast swipe left");
+        app.press(&mut sim, Press::Long(Key::Page));
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(app.screen(), Screen::Menu(Menu::Page(OVERVIEW), 0), "the short tap on row 1");
     }
 
     /// Touch in a menu: a tap on MAX HR edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
@@ -1540,8 +1564,8 @@ mod tests {
         run(&mut sim, &mut app, 60_000);
         assert_eq!(sim.light_level, 14);
         sim.bus.lux10 = Some(300); // 30 lux
-        run(&mut sim, &mut app, 40_000);
-        assert_eq!(sim.light_level, 50);
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(sim.light_level, 50, "within a second");
 
         // a light hovering on the 50 lux edge: one level throughout
         let mut levels = std::collections::BTreeSet::new();
@@ -1552,12 +1576,11 @@ mod tests {
         }
         assert_eq!(levels.into_iter().collect::<Vec<_>>(), [50]);
 
-        // power: one reading per LIGHT_MS, the sensor measuring a fifth of the time at most
-        let (on0, reads0, t0) = (sim.bus.light_on_ms, sim.bus.light_reads, sim.ms);
+        // one reading per LIGHT_MS
+        let reads0 = sim.bus.light_reads;
         run(&mut sim, &mut app, 60_000);
-        let (on, reads) = (sim.bus.light_on_ms - on0, sim.bus.light_reads - reads0);
-        assert!((19..=21).contains(&reads), "{reads} readings in 60 s");
-        assert!(on * 5 <= sim.ms - t0, "measuring {on} ms in 60 s");
+        let reads = sim.bus.light_reads - reads0;
+        assert!((230..=245).contains(&reads), "{reads} readings in 60 s");
 
         app.press(&mut sim, Press::Short(Key::Back)); // backlight off: no readings
         let reads = sim.bus.light_reads;

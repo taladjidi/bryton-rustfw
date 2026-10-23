@@ -549,11 +549,12 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
 
-/// How often the ambient light is measured while the backlight follows it (and while the menu shows it).
-pub const LIGHT_MS: u32 = 3000;
+/// How often the touch panel is read while a finger is on it: a swipe of 100 ms gives ten points.
+pub const TOUCH_MS: u32 = 10;
 
-/// From the start of a light measurement to its reading: one 400 ms conversion and a margin.
-pub const LIGHT_WAIT_MS: u32 = 600;
+/// How often the ambient light is read while the backlight follows it (and while the menu shows it): with the
+/// smoothing ([`ambient::Auto`]), a change of light reaches the backlight in about a second.
+pub const LIGHT_MS: u32 = 250;
 
 /// When the GNSS receiver is powered, counted from the app's first step: its power line (PI6) has then been
 /// driven low for over a second (the board does it at boot). After a reset the line is left undriven, and powered
@@ -1935,29 +1936,32 @@ impl App {
         if mask == 0 {
             self.repeated = false;
         }
-        self.touch(b);
         self.update_light(b);
     }
 
-    /// The touch panel: read only while INT is low or a finger was down (the release makes the gesture), so a pass
-    /// without a touch costs one pin read. A touch keeps the backlight on like a key; a gesture is an
-    /// [`Input::Touch`].
-    fn touch(&mut self, b: &mut impl Board) {
+    /// The touch panel, called by the main loop as soon as INT falls and then every [`TOUCH_MS`] while a finger is
+    /// down ([`App::touching`]); `dt_ms` since the previous call. Reads the point only if INT is low or a finger was
+    /// down (the release makes the gesture). A touch keeps the backlight on like a key. The gesture, if one ended
+    /// here, comes back as an input for the caller to act on once it has stopped sleeping ([`App::input`]).
+    pub fn touch(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
         if !self.touch_ok || !(self.touch.down() || b.touch_int()) {
-            return;
+            return None;
         }
         let mut buf = [0; 3];
         let p = if b.touch_read(touch::REG_POINT, &mut buf) { touch::point(buf) } else { None };
         if p.is_some() {
             self.idle_ms = 0;
         }
-        if let Some(g) = self.touch.feed(p, POLL_MS) {
-            self.input(b, Input::Touch(g));
-        }
+        self.touch.feed(p, dt_ms).map(Input::Touch)
     }
 
-    /// One light measurement every [`LIGHT_MS`] while the backlight follows the ambient light (and is on), or the
-    /// sensors menu shows it: the sensor is started, read [`LIGHT_WAIT_MS`] later, and put back in standby.
+    /// A finger is on the panel: sample it every [`TOUCH_MS`].
+    pub fn touching(&self) -> bool {
+        self.touch.down()
+    }
+
+    /// The light sensor measures while the backlight follows the ambient light (and is on), or the sensors menu
+    /// shows it, and is read every [`LIGHT_MS`]; in standby otherwise.
     fn poll_light(&mut self, b: &mut impl Board) {
         if !self.chips.light {
             return;
@@ -1965,17 +1969,22 @@ impl App {
         self.light_ms = self.light_ms.saturating_add(POLL_MS);
         let wanted = (self.settings.light_level == LIGHT_AUTO && self.light_shown != 0)
             || matches!(self.screen, Screen::Menu(Menu::Sensors, _));
-        if self.measuring && self.light_ms >= LIGHT_WAIT_MS {
-            match ambient::light_read(b) {
-                Some(lux10) => self.auto_level = self.auto.update(lux10),
-                None if self.light_ms < LIGHT_MS => return, // not ready yet: again at the next pass
-                None => {}
+        match (wanted, self.measuring) {
+            (true, false) => {
+                self.measuring = ambient::light_start(b);
+                self.light_ms = 0;
             }
-            ambient::light_stop(b);
-            self.measuring = false;
-        } else if !self.measuring && wanted && self.light_ms >= LIGHT_MS {
-            self.measuring = ambient::light_start(b);
-            self.light_ms = 0;
+            (true, true) if self.light_ms >= LIGHT_MS => {
+                if let Some(lux10) = ambient::light_read(b) {
+                    self.auto_level = self.auto.update(lux10);
+                    self.light_ms = 0;
+                }
+            }
+            (false, true) => {
+                ambient::light_stop(b);
+                self.measuring = false;
+            }
+            _ => {}
         }
     }
 

@@ -646,10 +646,13 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
 
   Level 0 is the PWM's minimum, 1 % (`Pwr_BacklightSetPwmDuty` clamps to 1..100): in daylight the transflective
   panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
-- **This firmware** (src/ambient.rs): the light sensor in standby but for one measurement every 3 s while the
-  backlight is AUTO and on (or the sensors menu shows the light): MAIN_CTRL = 2, 600 ms, MAIN_STATUS, ALS_DATA,
-  MAIN_CTRL = 0. The level rises with the light (src/ambient.rs `AUTO_BANDS`: stock's setting 3 up to 20 lux, then
-  on up to 100 % instead of stock's drop to 1 % above 120 lux), with a running average (a quarter per reading) and
+- **This firmware** (src/ambient.rs): MEAS_RATE 0x22 (18 bits in 100 ms, a reading every 100 ms; the fields from
+  DFRobot's LTR-308 driver: resolution in bits 6..4, rate in 2..0), so 0.1 lux per count at gain 6. The sensor
+  measures continuously while the backlight is AUTO and on (or the sensors menu shows the light), read every 250 ms
+  (MAIN_STATUS, ALS_DATA), and is in standby (MAIN_CTRL = 0) otherwise. (Until 2026-10-23: one 400 ms measurement
+  every 3 s, which the owner found too slow to follow the light.) The level rises with the light (src/ambient.rs
+  `AUTO_BANDS`: stock's setting 3 up to 20 lux, then
+  on up to 100 % instead of stock's drop to 1 % above 120 lux), with a running average (half per reading) and
   a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
   480 lux (raw 19304) and dimmed the screen to 1 %, which the owner found wrong; the room read 0.3 to 0.6 lux, a hand
   over the sensor 0.05. Stock's calibration on this unit is 932 (its debug log, `Light sensor cali value 932`, from
@@ -686,7 +689,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 |---|---|
 | bus | **I2C1** (0x40005400), PB6 SCL, PB7 SDA, AF4, open drain, no internal pull; RCC_APB1LENR bit 21, reset APB1LRSTR bit 21 |
 | stock's timing | kernel clock D2PCLK1 12.5 MHz, TIMINGR 0x00100414 (about 400 kHz, inferred); HAL analog filter call with 0 (on, inferred from HAL's encoding), digital filter off |
-| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line) |
+| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6 and the NVIC pending bit |
 | power | PG3 high, shared with the panel (already high in this firmware) |
 | reset | **PH3**, high to run (active-low RESET: the chip answers on I2C1 once PH3 is high, seen on the unit) |
 

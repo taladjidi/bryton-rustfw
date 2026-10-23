@@ -21,7 +21,7 @@ mod usb;
 use bryton_rustfw::dev::{self, Effect, Session, Stats};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::ui::UsbDot;
-use bryton_rustfw::{App, Board, POLL_MS};
+use bryton_rustfw::{App, Board, POLL_MS, TOUCH_MS};
 use core::sync::atomic::{AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
@@ -860,10 +860,31 @@ const CR2_START: u32 = 1 << 13;
 const CR2_AUTOEND: u32 = 1 << 25;
 const RCC_APB4RSTR: u32 = RCC + 0x09c;
 const RCC_APB1LRSTR: u32 = RCC + 0x090;
-// Touch controller pins (BOARD.md 17): reset PH3 (high: run), INT PC6 (low: a point to read; polled, no EXTI).
+// Touch controller pins (BOARD.md 17): reset PH3 (high: run), INT PC6 (low: a point to read). Its falling edge
+// (EXTI6) wakes WFI: interrupts stay masked, so no handler runs; the main loop reads the pending flag and clears it.
+// Addresses from ST's CMSIS header stm32h747xx.h: EXTI at 0x58000000 (FTSR1 +0x04, the CPU's IMR1 +0x80, PR1
+// +0x88), SYSCFG EXTICR[1] (lines 4..7) at 0x5800040c, RCC_APB4ENR SYSCFGEN bit 1, EXTI9_5 IRQ 23.
 const TOUCH_RESET: (Port, u32) = (Port::H, 3);
 const TOUCH_INT: (Port, u32) = (Port::C, 6);
 const TOUCH_ADDR: u8 = 0x55;
+const EXTI_FTSR1: u32 = 0x5800_0004;
+const EXTI_CPUIMR1: u32 = 0x5800_0080;
+const EXTI_CPUPR1: u32 = 0x5800_0088;
+const SYSCFG_EXTICR2: u32 = 0x5800_040c;
+const NVIC_ISER0: u32 = 0xe000_e100;
+const NVIC_ICPR0: u32 = 0xe000_e280;
+const EXTI9_5_IRQ: u32 = 1 << 23;
+const TOUCH_LINE: u32 = 1 << 6;
+
+/// The touch INT line fell since the last call (and the wake-up it caused is cleared).
+fn touch_edge() -> bool {
+    if rd(EXTI_CPUPR1) & TOUCH_LINE == 0 {
+        return false;
+    }
+    wr(EXTI_CPUPR1, TOUCH_LINE); // write 1 to clear
+    wr(NVIC_ICPR0, EXTI9_5_IRQ); // else WFI would return at once from now on
+    true
+}
 
 /// SCL and SDA of an I2C bus: AF4, open drain, not driven while being set up.
 fn i2c_pins(port: Port, pins: [u32; 2]) {
@@ -894,6 +915,13 @@ fn i2c_init() {
     pin_set(TOUCH_RESET.0, TOUCH_RESET.1, false);
     gpio(TOUCH_RESET.0, TOUCH_RESET.1, OUT, 0);
     gpio(TOUCH_INT.0, TOUCH_INT.1, IN, 0);
+    modify(RCC_APB4ENR, 0, 1 << 1); // SYSCFGEN
+    modify(SYSCFG_EXTICR2, 0xf << 8, 2 << 8); // EXTI6 from port C
+    modify(EXTI_FTSR1, 0, TOUCH_LINE);
+    modify(EXTI_CPUIMR1, 0, TOUCH_LINE);
+    wr(EXTI_CPUPR1, TOUCH_LINE);
+    wr(NVIC_ICPR0, EXTI9_5_IRQ);
+    wr(NVIC_ISER0, EXTI9_5_IRQ); // pending wakes WFI (interrupts masked: no handler)
     modify(RCC_D2CCIP2R, 3 << 12, 2 << 12); // I2C123SEL = hsi_ker_ck
     modify(RCC_APB1LENR, 0, 1 << 21); // I2C1EN
     modify(RCC_APB1LRSTR, 0, 1 << 21);
@@ -1108,6 +1136,7 @@ fn main() -> ! {
     let mut session = Session::new();
     let mut stats = Stats::default();
     let (mut awake, mut passes) = (0u32, 0u32);
+    let mut last_touch = cycles();
     loop {
         let t0 = cycles();
         app.step(&mut board);
@@ -1124,51 +1153,78 @@ fn main() -> ! {
         // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
         // too (delay_ms), which would take over this timer.
         let mut press = None;
+        let mut touched = None;
         let sleep_start = cycles();
         let mut woke = false;
-        timer_start(POLL_MS);
-        loop {
-            if let Some(l) = &mut link {
-                match l.poll(&mut session, &app, stats) {
-                    Effect::None => {}
-                    Effect::Key(p) => press = Some(p),
-                    Effect::Reset => {
-                        l.linger(50);
-                        system_reset();
-                    }
-                    Effect::Sector(lba) => {
-                        let mut buf = [0u8; bryton_rustfw::emmc::SECTOR];
-                        let r = app.emmc().read(&mut board, lba, &mut buf).map(|()| &buf);
-                        dev::send_sector(l, r);
-                        l.flush();
-                        woke = true;
-                    }
-                    Effect::Emmc => {
-                        dev::send_layout(l, app.emmc().layout(&mut board));
-                        l.flush();
-                        woke = true;
-                    }
-                    Effect::Run(size) => {
-                        l.linger(50);
-                        l.disconnect();
-                        hw::run_staged(size);
-                    }
-                }
-                let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
-                app.set_usb(&mut board, dot);
-            }
-            if timer_done() || press.is_some() || woke {
-                // a key from the link acts now, so the next command cannot replace it; board work done for the
-                // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
+        // the pass's sleep, in slices: TOUCH_MS ones while a finger is on the panel, and one ends early when the
+        // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
+        // while the finger is down)
+        'sleep: loop {
+            let left = (POLL_MS * (CPU_HZ / 1000)).saturating_sub(cycles().wrapping_sub(sleep_start)) / (CPU_HZ / 1000);
+            if left == 0 {
                 break;
             }
-            wfi();
+            timer_start(if app.touching() { left.min(TOUCH_MS) } else { left });
+            let edge = loop {
+                if let Some(l) = &mut link {
+                    match l.poll(&mut session, &app, stats) {
+                        Effect::None => {}
+                        Effect::Key(p) => press = Some(p),
+                        Effect::Reset => {
+                            l.linger(50);
+                            system_reset();
+                        }
+                        Effect::Sector(lba) => {
+                            let mut buf = [0u8; bryton_rustfw::emmc::SECTOR];
+                            let r = app.emmc().read(&mut board, lba, &mut buf).map(|()| &buf);
+                            dev::send_sector(l, r);
+                            l.flush();
+                            woke = true;
+                        }
+                        Effect::Emmc => {
+                            dev::send_layout(l, app.emmc().layout(&mut board));
+                            l.flush();
+                            woke = true;
+                        }
+                        Effect::Run(size) => {
+                            l.linger(50);
+                            l.disconnect();
+                            hw::run_staged(size);
+                        }
+                    }
+                    let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
+                    app.set_usb(&mut board, dot);
+                }
+                let edge = touch_edge();
+                if edge || timer_done() || press.is_some() || woke {
+                    // a key from the link acts now, so the next command cannot replace it; board work done for the
+                    // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
+                    break edge;
+                }
+                wfi();
+            };
+            timer_stop();
+            if press.is_some() || woke {
+                break;
+            }
+            if edge || app.touching() {
+                let now = cycles();
+                let dt = now.wrapping_sub(last_touch) / (CPU_HZ / 1000);
+                last_touch = now;
+                // a gesture acts after the sleep: acting may sleep too (delay_ms), which takes over SysTick
+                touched = app.touch(&mut board, dt);
+                if touched.is_some() {
+                    break 'sleep;
+                }
+            }
         }
-        timer_stop();
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
         let t1 = cycles();
         if let Some(p) = press {
             app.press(&mut board, p);
+        }
+        if let Some(i) = touched {
+            app.input(&mut board, i);
         }
         checkpoint(7);
         // the app's work (step and keys), not the USB polls: those happen only while a cable is in
