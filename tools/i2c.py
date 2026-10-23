@@ -9,6 +9,7 @@ Only volatile registers: none of these chips has non-volatile memory a register 
     tools/i2c.py write ADDR REG BYTE...     bytes to REG on
     tools/i2c.py lux                        one light measurement (standby again after it)
     tools/i2c.py baro                       one barometer conversion: pressure and temperature
+    tools/i2c.py --touch read 0x55 REG [N]  the same on I2C1, the touch bus (BOARD.md 17), as the firmware set it up
 
 The firmware may use the bus between two of these transfers: run with a build that leaves I2C4 alone, or accept a
 rare failed transfer. Each bus wait is a USB round trip; the bus holds SCL low meanwhile (clock stretching).
@@ -113,9 +114,14 @@ def main():
     if not args:
         raise SystemExit(__doc__)
     num = lambda v: int(v, 0)
+    global I2C4
+    touch = args[0] == '--touch'
+    if touch:
+        args, I2C4 = args[1:], 0x40005400  # I2C1, up already: a firmware with the touch driver
     with dev.connect() as s:
         bus = Bus(s)
-        bus.up()
+        if not touch:
+            bus.up()
         cmd = args[0]
         if cmd == 'scan':
             print(' '.join(f'{a:#04x}' for a in range(0x08, 0x78) if bus.acks(a)))

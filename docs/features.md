@@ -27,6 +27,19 @@
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
+## Touch
+
+| Gesture | Main screen and ride pages | Menus |
+|---|---|---|
+| swipe left | next page (as Page) | down (as Page) |
+| swipe right | previous page | back (as Back) |
+| hold (600 ms, still) | the menu (as holding Page) | |
+| tap | | selects the row touched and acts on it (as Start) |
+
+A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
+10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
+Swipes up and down are recognised but do nothing yet.
+
 ## Ride
 
 - Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from GPS altitude.

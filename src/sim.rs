@@ -5,7 +5,8 @@
 //! - keys scripted as a function of time;
 //! - a Nordic chip ([`Nordic`]) that answers the commands the way the real one did on the unit (BOARD.md 11);
 //! - an eMMC ([`EmmcCard`]) that answers the commands as JEDEC says, and fails the test on any write command.
-//! - the sensor bus ([`Bus`]): the light sensor, the barometer and the accelerometer (BOARD.md 16).
+//! - the sensor bus ([`Bus`]): the light sensor, the barometer and the accelerometer (BOARD.md 16);
+//! - the touch controller ([`TouchChip`]), with a finger scripted as a function of time like the keys.
 //!
 //! Screenshots: [`Sim::save`] writes the screen as a BMP. [`Sim::record`] saves one frame after every step that
 //! changed the screen (target/sim/<name>/NNNNN.bmp), which gives a continuous capture for debugging.
@@ -22,6 +23,7 @@ use std::vec;
 use std::vec::Vec;
 
 type KeyScript = Box<dyn Fn(u64) -> u8>;
+type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
 pub struct Sim {
     pub screen: Vec<u16>,
@@ -56,6 +58,43 @@ pub struct Sim {
     pub pixels: u64,
     pub emmc: EmmcCard,
     pub bus: Bus,
+    pub touch: TouchChip,
+}
+
+/// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
+/// is released, then Normal; INT low while a finger is down; the registers the driver reads.
+pub struct TouchChip {
+    /// When the reset was released (None: held in reset, or never released).
+    run_since: Option<u64>,
+    finger: FingerScript,
+    /// Point reads so far (the app reads only while a finger is down).
+    pub reads: u32,
+}
+
+impl TouchChip {
+    fn ready(&self, ms: u64) -> bool {
+        self.run_since.is_some_and(|t| ms >= t + 50)
+    }
+
+    fn read(&mut self, ms: u64, reg: u8, buf: &mut [u8]) -> bool {
+        let Some(t) = self.run_since else { return false }; // in reset: no acknowledge
+        let mut regs = [0u8; 0x40];
+        regs[0x00] = 0x05; // version
+        regs[0x01] = if ms >= t + 50 { 0x00 } else { 0x01 }; // Normal, else Init
+        regs[0x04..0x07].copy_from_slice(&[0x01, 0xf0, 0x40]); // 240 x 320
+        regs[0x0c..0x10].copy_from_slice(&[0, 0, 1, 2]);
+        regs[0x3f] = 2;
+        if let Some((x, y)) = (self.finger)(ms).filter(|_| self.ready(ms)) {
+            regs[0x12..0x15].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
+        }
+        if reg == 0x12 {
+            self.reads += 1;
+        }
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = regs.get(usize::from(reg) + i).copied().unwrap_or(0);
+        }
+        true
+    }
 }
 
 /// SEC_COUNT of the simulated eMMC: about 31 GB, as the unit's.
@@ -580,7 +619,14 @@ impl Sim {
                 baro_conversions: 0,
                 accel_ctrl1: 0x77,
             },
+            touch: TouchChip { run_since: None, finger: Box::new(|_| None), reads: 0 },
         }
+    }
+
+    /// The finger on the touch panel as a function of the simulated time in ms (None: lifted).
+    pub fn finger(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
+        self.touch.finger = Box::new(f);
+        self
     }
 
     /// Keys held as a function of the simulated time in ms: a mask of [`Key`] codes.
@@ -803,6 +849,18 @@ impl Board for Sim {
         self.bus.write(self.ms, addr, reg, data)
     }
 
+    fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {
+        self.touch.read(self.ms, reg, buf)
+    }
+
+    fn touch_reset(&mut self, run: bool) {
+        self.touch.run_since = if run { self.touch.run_since.or(Some(self.ms)) } else { None };
+    }
+
+    fn touch_int(&mut self) -> bool {
+        self.touch.ready(self.ms) && (self.touch.finger)(self.ms).is_some()
+    }
+
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
             self.nordic.scan_end = None;
@@ -993,6 +1051,36 @@ mod tests {
         assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Page));
         assert_eq!(app.screen(), Screen::Main);
+        assert_consistent(&sim, &app);
+    }
+
+    /// A finger swiping left on the main screen opens the first ride page, swiping right comes back; touching wakes
+    /// the backlight; without a finger, the chip is never read. Then a tap on the menu's second row opens page 1's
+    /// settings, as Start on that row does.
+    #[test]
+    fn touch_swipes_pages_and_taps_menu_rows() {
+        let swipe = |t0: u64, x0: i64, dx: i64| {
+            move |ms: u64| (t0..t0 + 250).contains(&ms).then(|| ((x0 + dx * (ms - t0) as i64 / 250) as u16, 160))
+        };
+        let (left, right) = (swipe(5000, 200, -120), swipe(6000, 40, 120)); // after the start (a few seconds)
+        let mut sim = Sim::new(9, 0, 0).finger(move |ms| left(ms).or(right(ms)));
+        let mut app = App::start(&mut sim, None);
+        let left_ms = 4900 - sim.ms;
+        run(&mut sim, &mut app, left_ms);
+        assert_eq!(sim.touch.reads, 0, "no finger, no read");
+        run(&mut sim, &mut app, 500);
+        assert_eq!(app.screen(), Screen::Ride(0));
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(app.screen(), Screen::Main);
+        assert_consistent(&sim, &app);
+
+        let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
+        let mut sim = Sim::new(9, 0, 0).finger(move |ms| (5000..5100).contains(&ms).then_some((120, row1)));
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        let left_ms = 5500 - sim.ms;
+        run(&mut sim, &mut app, left_ms);
+        assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 0));
         assert_consistent(&sim, &app);
     }
 

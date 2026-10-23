@@ -21,6 +21,9 @@ The dated findings are in [journal.md](journal.md).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
 - **The OTG_HS IRQ waking WFI** (the link may run on the 50 ms SysTick wake-ups alone).
+- **The touch panel with a finger** (the chip itself answered: BOARD.md 17): INT low while touched, the axes
+  (x 0 left, y 0 top expected), the gestures (swipe left / right between pages, hold for the menu, a tap on a menu
+  row), the backlight waking on a touch, and the swipe thresholds by feel (stock's: 37 px across, 48 px up).
 - **"Rebooting with just the power button does not work"** (the owner, after the GPS test): to clarify and fix.
 
 ## Next steps

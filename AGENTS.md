@@ -106,6 +106,9 @@ The point of this project is a firmware in safe Rust.
 - `src/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the
   ambient light sensor, the barometer, the accelerometer (switched off), and the automatic backlight (smoothing,
   hysteresis). `sim.rs` has a model of the bus (`Bus`); `tools/i2c.py` reaches it through `peek` / `poke`.
+- `src/touch.rs`: the touch controller (Sitronix, I2C1) against the `Board` primitives `touch_read` / `touch_reset` /
+  `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `sim.rs`
+  has a model of the chip (`TouchChip`) with a scripted finger. `tools/i2c.py --touch` reads it from the computer.
 - `src/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
 - `src/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
