@@ -2564,6 +2564,20 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// After a fault (hw.rs marks it in backup register 29 and resets): a notice at start, and the count cleared after
+    /// a minute of running.
+    #[test]
+    fn restart_after_a_fault() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[FAULT_BKP] = 0xfa00_0001;
+        let mut app = App::start(&mut sim, None);
+        assert_eq!(app.notices[0].as_str(), "09:00 FAULT RESET 1");
+        run(&mut sim, &mut app, u64::from(FAULT_CLEAR_MS) - 2000);
+        assert_eq!(sim.backup[FAULT_BKP], 0xfa00_0001, "kept a while");
+        run(&mut sim, &mut app, 4000);
+        assert_eq!(sim.backup[FAULT_BKP], 0, "a minute of running: cleared");
+    }
+
     /// A speed sensor paired but silent (a dead battery) does not leave the ride without speed: the GPS's is used.
     #[test]
     fn silent_speed_sensor_falls_back_to_gps() {

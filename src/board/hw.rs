@@ -29,9 +29,24 @@ __vectors:
     "#
 );
 
+/// RTC backup register 29: a fault's marker, 0xfa in the top byte and the faults in a row in the low byte (lib.rs
+/// `FAULT_BKP`: the app says it restarted, and clears the count after a minute of running).
+const FAULT_REG: u32 = 0x5800_4050 + 4 * 29;
+
+/// A fault or a panic: marked in the RTC backup domain, then a system reset (the firmware starts again, and a ride
+/// will resume from its checkpoint: AGENTS.md, the golden rule). Parked instead after 3 in a row without a minute of
+/// running between, so a fault at start-up does not loop for ever. Interrupts are masked, so this runs only for a
+/// fault (HardFault and the others escalate) or the panic handler; it uses no stack beyond rd / wr.
 // SAFETY: the vector table refers to this symbol by name; nothing else is called default_handler.
 #[unsafe(no_mangle)]
 extern "C" fn default_handler() -> ! {
+    let v = rd(FAULT_REG);
+    let n = if v >> 24 == 0xfa { (v & 0xff) + 1 } else { 1 };
+    wr(FAULT_REG, 0xfa00_0000 | n.min(0xff)); // PWR_CR1.DBP is left set by the bootloader (BOARD.md 8)
+    if n <= 3 {
+        barrier();
+        wr(0xe000_ed0c, 0x05fa_0004); // AIRCR: SYSRESETREQ
+    }
     loop {
         wfi();
     }

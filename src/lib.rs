@@ -350,6 +350,12 @@ const WHEEL_BKP: usize = 11;
 /// holds stock's Nordic image number (BOARD.md 8, 11): 16 is ours (page 3 of earlier builds, read only to carry it
 /// over; a tagged word here is not a page, [`PageCfg::from_word`] wants tag 0xa).
 const POWER_BKP: usize = 16;
+/// The backup register of the fault marker (hw.rs default_handler): 0xfa in the top byte, the faults in a row in
+/// the low byte; said at start, cleared after [`FAULT_CLEAR_MS`] of running.
+pub const FAULT_BKP: usize = 29;
+/// Running this long after a fault clears its count (a fault after it is the first in a row again).
+pub const FAULT_CLEAR_MS: u32 = 60_000;
+
 /// The backup register of the alerts ([`Settings::alerts_word`]); not referenced by stock (BOARD.md 8).
 const ALERTS_BKP: usize = 28;
 
@@ -1090,6 +1096,14 @@ impl App {
         }
         if let Some((lat, lon)) = app.aid.pos {
             app.track.seed(lat, lon); // the map shows where the unit last was until the first fix
+        }
+        let fault = b.backup_read(FAULT_BKP);
+        if fault >> 24 == 0xfa {
+            // the last run ended in a fault or a panic, and hw.rs restarted the unit
+            let mut l = Line::<20>::new();
+            l.push_str("FAULT RESET ");
+            l.push_u32(fault & 0xff);
+            app.notice(l.as_str());
         }
         if b.backup_read(STOCK_BKP19) >> 28 == 0xb {
             // pages kept from register 19 by builds of 2026-10-23: kept where stock does not look, 19 given back
@@ -2834,6 +2848,9 @@ impl App {
             self.poll_nrf(b);
         }
         self.poll_gnss(b);
+        if self.gnss_ms == FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
+            b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
+        }
         if !self.had_fix && self.pvt.is_some_and(|p| p.good()) {
             self.had_fix = true;
             self.notice("GPS FIX");

@@ -277,7 +277,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   power), 11 (wheel, backlight, max HR, FTP), 16 (weight and W', tag 0xc1), 17, 18 (GNSS aiding: the RTC's offset
   from UTC and the last position) and 20..27 (ride pages and the overview, two each, tags 0xd / 0xe), each behind a
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
-  the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0). Free for this firmware: 0, 28..31.
+  the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
+  (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets). Free for this firmware: 0, 30, 31.
   Settings move to a file in this firmware's own folder once the eMMC is written (AGENTS.md, "Share the storage with
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
