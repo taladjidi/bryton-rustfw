@@ -96,6 +96,11 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 - **Renode passed all of these:** it does not model the MPU, the caches or the SPI mode fault (BOARD.md 2, 6).
 - **The four-button restart works with this firmware stuck**, so Engineer Mode stays reachable (cable in first).
 
+- **The Nordic BLE / ANT chip answers (2026-10-23):** driven from the computer through the dev link
+  (`tools/nrf.py version`), after stock's reset sequence. `sd_ble_enable` succeeds and `sd_ble_version_get`
+  returns the versions stock records (BOARD.md 11). Next: a driver in the firmware, then a BLE scan or an ANT+
+  heart-rate channel.
+
 ## Not yet seen on the unit
 
 Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (PHY enable on PA7, the ULPI pins)

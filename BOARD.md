@@ -158,3 +158,30 @@ The stock OS installs `IMG.bin` from the root of its USB drive at start-up, with
   the rest of the area keeps the previous image (Engineer Mode readback after installing this firmware).
 - In Engineer Mode the bootloader writes the OS area 2 KB at a time (`tools/iaprecover.py`); its write status is
   not trustworthy, so every chunk is read back.
+
+## 11. Nordic BLE / ANT chip
+
+A Nordic chip runs the radios (BLE and ANT+) with its own firmware; the STM32 drives it over USART2 with Nordic's
+nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_init 0xd024edac, Ble_NrfResetPin*
+0xd02ba190 / 0xd02ba1a0, ser_phy_tx_pkt_send 0xd02c9328) and **seen on the unit (2026-10-23, `tools/nrf.py`)**.
+
+- **Pins:** USART2 TX PD5, RX PD6, CTS PD3, RTS PD4 (AF7, pull-up). Reset PA6 (low = reset, output, pull-up).
+  PI4 high at boot and kept high: the application. PI4 low through a reset starts the chip's DFU bootloader
+  (stock does that only to update the Nordic firmware from `\Nordic.bin`; inferred from that path, not tried on
+  purpose). PH8: the chip's request line, an EXTI wake-up only.
+- **UART:** 1,000,000 baud, 8N1, RTS / CTS flow control. The kernel clock left by the bootloader is PLL3Q 48 MHz
+  (RCC_D2CCIP2R USART234578SEL = 2), so BRR = 48.
+- **Start-up, as stock:** PI4 high; PA6 low; USART2 up (so our RTS is low); PA6 high; wait 800 ms. The chip sends
+  nothing on its own: the STM32 speaks first.
+- **Framing:** a 2-byte little-endian length, then the payload. No delimiter, no checksum, no handshake and no
+  resync: after a bad frame, reset the chip. (SLIP is only the DFU bootloader's, at 115200 baud.)
+- **Payload:** `[type][op][arguments, little endian]`. Types: 0 command, 1 response, 2 BLE event, 5 reset
+  command, 6 ANT command, 7 ANT response, 8 ANT event. A response is `[1][op][result u32][outputs]`.
+- **Seen on the unit:**
+  - `sd_ble_version_get` (`00 65 01`) before enabling: result 0x3001 (BLE_ERROR_NOT_ENABLED);
+  - `sd_ble_enable` (`00 60`): result 0;
+  - `sd_ble_version_get` again: result 0, then `04 | 01 00 | 32 00`. Bryton fills these fields with its own
+    versions, logged by stock as "Image 4, Bootloader 1, SD 50"; stock keeps the image number in RTC backup
+    register 12, which reads 4 on this unit.
+- **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
+  configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

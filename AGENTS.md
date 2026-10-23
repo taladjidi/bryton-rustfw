@@ -100,6 +100,8 @@ The point of this project is a firmware in safe Rust.
 - `src/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and the CDC serial port. It implements `Host`.
 - `src/hw.rs`: the unsafe primitives (above).
 - `dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
+- `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
+  protocol before the firmware has a driver. `tools/font.py`, `tools/pixel_font.py`: the fonts.
 - `link.x`, `pack.py`: memory map and the update file. `pack.py` re-checks what the stock updater checks.
 
 ## Before every commit
