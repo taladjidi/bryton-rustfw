@@ -118,7 +118,8 @@ battery on ADC3): not used yet.
 - Backlight: stock drives PG13 with an LPTIM1 PWM on the LSE, output polarity inverted, 1..100 levels. This
   firmware drives PG13 as a plain output, high = on (derived from the inverted PWM). **Seen on the unit
   (2026-10-22): no visible effect** (diag v5 to v8: toggled, held high, held low, code proven to run by v9). The
-  backlight likely needs more than PG13 (a supply enable, or the panel on); inferred, to find in the stock OS.
+  backlight needs the panel on as well: **seen on the unit (2026-10-23)**, with the panel running, toggling PG13
+  (the Page key) switches the backlight; which level is on is not checked yet.
 
 ## 7. USB
 
@@ -133,12 +134,15 @@ battery on ADC3): not used yet.
 ## 8. RTC
 
 - RTC (0x58004000) on the LSE, 24 h format, prescalers 31 / 1023 (1 Hz). It keeps running in standby.
-- The stock firmware sets it from GPS. Whether it holds UTC or local time is not traced.
+- The stock firmware sets it from GPS. It holds **local time** (seen on the unit, 2026-10-23).
 - Backup registers used by stock: 1, 2, 3, 19 (clock), 4 (USB mode), 9, 12, 13. Others are free.
 
 ## 9. Standby (power off)
 
 - Wake-up pins **WKUP1 (PA0, power button)** and **WKUP4 (PC13, USB)**, rising, no pull.
+- The power button drives both PA0 (high when pressed) and PA1 (low when pressed): seen on the unit (2026-10-23).
+- PA0 must be a GPIO input before standby (stock does it at boot): left in its reset analog mode, the press does
+  not wake the unit (seen on the unit, 2026-10-23); only the four-button restart brings it back.
 - Entry as stock: PWR_CPUCR PDDS_D1 and PDDS_D2 set, SLEEPDEEP, WFI. Waking resets the unit.
 - Stock waits for the back key to be released first (otherwise it wakes at once).
 

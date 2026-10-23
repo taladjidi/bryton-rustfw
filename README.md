@@ -6,7 +6,7 @@ Bryton.
 
 - **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, so it is
   obviously not the stock firmware.
-- **Page key:** toggles the backlight (in case its polarity guess is wrong).
+- **Page key:** toggles the backlight.
 - **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
   build from RAM, reset. A dot at the top right shows its state (orange, then green when ready; red if the PHY
@@ -89,11 +89,9 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 ## Not yet seen on the unit
 
 Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (PHY enable on PA7, the ULPI pins)
-with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep. Still to see:
-- How to drive the backlight: PG13 as a plain output lit nothing on the unit (diag v5 to v8); stock uses an
-  LPTIM1 PWM (BOARD.md).
-- Whether the RTC holds local time or UTC.
-- Whether power off reaches standby or a lighter sleep.
+with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13 (Page toggles it); the RTC
+holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
+input. Still to see:
 - The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 
 ## How it starts (verified)

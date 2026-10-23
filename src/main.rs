@@ -205,6 +205,9 @@ fn board_init() {
     gpio(Port::G, 11, AF, 5); // SPI1_SCK
     gpio(Port::D, 7, AF, 5); // SPI1_MOSI
     gpio(KEY_BACK.0, KEY_BACK.1, IN, 0);
+    // PA0 (WKUP1, power button) as an input, as stock: left in its reset analog mode, the press never woke the unit
+    // from standby (seen on the unit, 2026-10-23; inferred: the wake-up logic reads after the input buffer).
+    gpio(Port::A, 0, IN, 0);
     gpio(KEY_PAGE.0, KEY_PAGE.1, IN, 0);
     gpio(VBUS.0, VBUS.1, IN, 0);
 }
