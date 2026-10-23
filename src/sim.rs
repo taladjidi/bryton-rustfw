@@ -42,6 +42,9 @@ pub struct Sim {
     pub nordic: Nordic,
     /// RTC backup registers (they survive an app restart, as on the unit).
     pub backup: [u32; 32],
+    /// The battery voltage the ADC sees, mV (None: the ADC did not come up), and USB power.
+    pub battery_mv: Option<u16>,
+    pub charger: bool,
 }
 
 /// The Nordic chip as seen over its link: replies to the commands as the unit did, scans, and has ANT channels that
@@ -211,6 +214,8 @@ impl Sim {
             dirty: false,
             nordic: Nordic::default(),
             backup: [0; 32],
+            battery_mv: Some(3900),
+            charger: false,
         }
     }
 
@@ -351,6 +356,17 @@ impl Board for Sim {
         }
     }
 
+    fn battery_adc(&mut self) -> Option<(u16, u16, u16)> {
+        // VDDA 3.3 V: VREFINT reads its calibration value; the pin sees the battery through the divider by 1.5
+        const CAL: u16 = 24_000;
+        let mv = self.battery_mv?;
+        Some(((u32::from(mv) * 2 * 65535).div_ceil(3 * 3300) as u16, CAL, CAL))
+    }
+
+    fn charger_present(&mut self) -> bool {
+        self.charger
+    }
+
     fn backup_read(&mut self, n: usize) -> u32 {
         self.backup[n]
     }
@@ -411,7 +427,14 @@ mod tests {
     /// The screen drawn step by step on the panel equals the screen drawn at once from the state (the screenshot).
     fn assert_consistent(sim: &Sim, app: &App) {
         for y in 0..H {
-            assert!(app.render_row(y).px[..] == sim.screen[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
+            let (drawn, panel) = (app.render_row(y).px, &sim.screen[(y * W) as usize..((y + 1) * W) as usize]);
+            let bad: Vec<_> = (0..W as usize).filter(|&x| drawn[x] != panel[x]).collect();
+            assert!(
+                bad.is_empty(),
+                "row {y}, x {bad:?}: screenshot {:04x}, panel {:04x}",
+                drawn[bad[0]],
+                panel[bad[0]]
+            );
         }
     }
 
@@ -420,16 +443,15 @@ mod tests {
     fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec<u16> {
         let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
         let mut f = Frame::new();
-        crate::ui::draw_strip(&mut f, &Strip { time: (h, m), radio, usb: UsbDot::Off, battery: None });
+        crate::ui::draw_strip(
+            &mut f,
+            &Strip { time: (h, m), radio, usb: UsbDot::Off, battery: Some(63), charging: false },
+        );
         let page = app.pages()[n];
-        let height = crate::ui::RIDE_H[usize::from(n > 0)];
         for (i, v) in values.iter().enumerate() {
-            let bx = crate::ui::field_box(page.layout, height, i).unwrap();
+            let bx = crate::ui::field_box(page.layout, crate::ui::RIDE_H, i).unwrap();
             crate::ui::draw_field_frame(&mut f, bx, page.fields[i]);
             crate::ui::draw_field_value(&mut f, bx, page.fields[i], v);
-        }
-        if n == 0 {
-            crate::ui::draw_ferris(&mut f);
         }
         f.px
     }
@@ -439,8 +461,19 @@ mod tests {
         format!("{h:02}:{m:02}")
     }
 
+    /// The main screen as the drawing code means it, at the sim's time, under a strip with `usb`.
+    fn main_screen(sim: &mut Sim, usb: UsbDot) -> Vec<u16> {
+        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
+        let mut f = Frame::new();
+        crate::ui::draw_strip(&mut f, &Strip { time: (h, m), radio: true, usb, battery: Some(63), charging: false });
+        crate::ui::draw_main_time(&mut f, &format!("{h:02}:{m:02}"), &format!("{s:02}"));
+        crate::ui::draw_ferris(&mut f);
+        f.px
+    }
+
+    /// The main screen: the strip, the time big with its seconds, Ferris.
     #[test]
-    fn boots_into_the_first_ride_page() {
+    fn boots_into_the_main_screen() {
         let mut sim = Sim::new(12, 34, 56);
         let mut app = App::start(&mut sim, None);
         app.step(&mut sim);
@@ -448,11 +481,7 @@ mod tests {
         assert!(sim.visible());
         let pos = |c| sim.cmds.iter().position(|&x| x == c).unwrap();
         assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
-        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
-        let mut want = Frame::new();
-        want.px = ride(&mut sim, &app, 0, &["--", "--", "--"], true);
-        crate::ui::draw_strip(&mut want, &Strip { time: (h, m), radio: true, usb: UsbDot::Ready, battery: None });
-        assert!(sim.screen == want.px, "speed, HR, cadence");
+        assert!(main_screen(&mut sim, UsbDot::Ready) == sim.screen);
         assert_consistent(&sim, &app);
         sim.save("preview");
     }
@@ -475,7 +504,7 @@ mod tests {
         assert!(sim.ms - t0 < 3000, "start took {} ms", sim.ms - t0);
         assert_eq!(sim.nordic.got, [vec![0, 0x60]], "gave up after the first timeout");
         run(&mut sim, &mut app, 2000);
-
+        app.press(&mut sim, Press::Short(Key::Page));
         assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], false) == sim.screen, "BLE in red");
     }
 
@@ -485,20 +514,25 @@ mod tests {
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 3000);
         assert_eq!(hm(&mut sim), "00:00");
-        assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen);
+        assert!(main_screen(&mut sim, UsbDot::Off) == sim.screen);
     }
 
-    /// Page turns the pages that are on (page 3 is off by default), and wraps.
+    /// Page goes from the main screen through the ride pages that are on (page 3 is off by default), and back.
     #[test]
     fn page_turns_the_ride_pages() {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, None);
+        app.step(&mut sim);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(0));
+        assert!(ride(&mut sim, &app, 0, &["--"; 3], true) == sim.screen, "full height, no Ferris");
         app.press(&mut sim, Press::Short(Key::Page));
         assert_eq!(app.screen(), Screen::Ride(1));
         assert_eq!(app.pages()[1].fields[..4], [Field::Speed, Field::Hr, Field::Cadence, Field::Power]);
-        assert!(ride(&mut sim, &app, 1, &["--"; 4], true) == sim.screen, "no Ferris past the first page");
+        assert!(ride(&mut sim, &app, 1, &["--"; 4], true) == sim.screen);
         app.press(&mut sim, Press::Short(Key::Page));
-        assert_eq!(app.screen(), Screen::Ride(0));
+        assert_eq!(app.screen(), Screen::Main);
+        assert_consistent(&sim, &app);
     }
 
     /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
@@ -528,7 +562,7 @@ mod tests {
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 5));
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(app.screen(), Screen::Ride(0));
+        assert_eq!(app.screen(), Screen::Main);
         assert_consistent(&sim, &app);
     }
 
@@ -559,6 +593,7 @@ mod tests {
         sim.save("sensors");
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Page));
         run(&mut sim, &mut app, 200);
         assert!(ride(&mut sim, &app, 0, &["22.7", "72", "60"], true) == sim.screen, "22.7 km/h, HR 72, 60 rpm");
         app.press(&mut sim, Press::Short(Key::Page));
@@ -577,7 +612,7 @@ mod tests {
         let mut app = App::start(&mut sim, Some(KEY));
         assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0x26, 0x62, 0x78, 0xf1]), "the paired strap only");
         run(&mut sim, &mut app, 2000);
-
+        app.press(&mut sim, Press::Short(Key::Page));
         assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen, "the friend's strap is not shown");
         app.press(&mut sim, Press::Long(Key::Page));
         app.press(&mut sim, Press::Short(Key::Start));
@@ -616,11 +651,32 @@ mod tests {
         assert_eq!(PageCfg::from_word(sim.backup[14]), Some(want));
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Page));
         run(&mut sim, &mut app, 1000);
         let t = hm(&mut sim);
+        assert_consistent(&sim, &app);
         assert!(ride(&mut sim, &app, 0, &["300", "--", "85", &t], true) == sim.screen);
         let app = App::start(&mut sim, Some(KEY));
         assert_eq!(app.pages()[0], want, "read back after a restart");
+    }
+
+    /// The battery level in the strip (green while charging); an empty battery switches the unit off, but not
+    /// while charging.
+    #[test]
+    fn battery_in_the_strip_and_off_when_empty() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.step(&mut sim);
+        assert_eq!(app.strip.battery, Some(63), "3.9 V");
+        sim.charger = true;
+        sim.battery_mv = Some(3100);
+        run(&mut sim, &mut app, 3 * u64::from(BATTERY_MS) + 1000);
+        assert!(!sim.standby && app.strip.charging, "charging: stays on");
+        sim.charger = false;
+        run(&mut sim, &mut app, 2 * u64::from(BATTERY_MS));
+        assert!(!sim.standby, "two low readings: not yet");
+        run(&mut sim, &mut app, u64::from(BATTERY_MS));
+        assert!(sim.standby && !sim.display_on, "empty: switched off");
     }
 
     #[test]

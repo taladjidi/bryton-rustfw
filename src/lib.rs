@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod battery;
 pub mod dev;
 pub mod fonts;
 pub mod nrf;
@@ -50,6 +51,11 @@ pub trait Board {
     fn nrf_send(&mut self, data: &[u8]);
     /// Bytes received from the Nordic chip, at most `buf.len()`; never waits.
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize;
+    /// The battery as ADC3 reads it (BOARD.md 12): the battery channel, VREFINT, and VREFINT_CAL (VREFINT at
+    /// VDDA = 3.3 V), all 16-bit; None if the ADC did not come up. Takes about half a millisecond.
+    fn battery_adc(&mut self) -> Option<(u16, u16, u16)>;
+    /// USB power (charger) present.
+    fn charger_present(&mut self) -> bool;
     /// RTC backup register `n` (0..32): kept through resets and power off (BOARD.md 8).
     fn backup_read(&mut self, n: usize) -> u32;
     /// Writes RTC backup register `n`.
@@ -221,6 +227,9 @@ pub const SCAN_S: u16 = 10;
 /// The device list and the sensors menu are redrawn at most this often while reports come in.
 pub const LIST_REDRAW_MS: u32 = 1000;
 
+/// How often the battery is read.
+pub const BATTERY_MS: u32 = 10_000;
+
 /// A sensor's channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sensor {
@@ -246,6 +255,8 @@ pub enum Menu {
 /// What is on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
+    /// The main screen: the time, big, and Ferris.
+    Main,
     /// Ride page `n`.
     Ride(usize),
     /// A menu, with the selected row.
@@ -261,6 +272,8 @@ const MAIN_ROWS: usize = 6;
 pub struct App {
     keys: Keys,
     backlight: bool,
+    /// The RTC's seconds (the main screen shows them).
+    seconds: u8,
     /// What the status strip shows, and what it showed when last drawn.
     strip: Strip,
     strip_shown: Strip,
@@ -280,6 +293,9 @@ pub struct App {
     ask: u8,
     live: Live,
     decoders: Decoders,
+    battery: battery::Battery,
+    /// Since the last battery reading.
+    battery_ms: u32,
     wheel_mm: u16,
     pages: [PageCfg; PAGES],
     /// The ride field values on screen, to redraw only what changed.
@@ -311,9 +327,10 @@ impl App {
         let mut app = App {
             keys: Keys::default(),
             backlight: true,
-            strip: Strip { time: rtc_hm(b), radio: ble.is_some(), usb: UsbDot::Off, battery: None },
-            strip_shown: Strip { time: (0, 0), radio: false, usb: UsbDot::Off, battery: None },
-            screen: Screen::Ride(0),
+            seconds: 0,
+            strip: Strip { time: rtc_hm(b), radio: ble.is_some(), usb: UsbDot::Off, battery: None, charging: false },
+            strip_shown: Strip { time: (0, 0), radio: false, usb: UsbDot::Off, battery: None, charging: false },
+            screen: Screen::Main,
             ble,
             rx,
             nearby: nrf::Nearby::new(),
@@ -326,6 +343,8 @@ impl App {
             ask: 0,
             live: Live::default(),
             decoders: Decoders::default(),
+            battery: battery::Battery::default(),
+            battery_ms: BATTERY_MS, // read at the first step
             wheel_mm: if wheel >> 24 == 0xa5 { wheel as u16 } else { WHEELS[1] },
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
@@ -425,13 +444,15 @@ impl App {
     /// Draws the whole screen below the bar from the state (the panel was cleared, or a screenshot row).
     fn draw_screen(&self, c: &mut impl Canvas) {
         match self.screen {
+            Screen::Main => {
+                let (hm, s) = self.main_time();
+                ui::draw_main_time(c, hm.as_str(), s.as_str());
+                ui::draw_ferris(c);
+            }
             Screen::Ride(n) => {
                 for (bx, f) in self.boxes(n) {
                     ui::draw_field_frame(c, bx, f);
                     ui::draw_field_value(c, bx, f, self.field_text(f).as_str());
-                }
-                if n == 0 {
-                    ui::draw_ferris(c);
                 }
             }
             Screen::Menu(menu, sel) => {
@@ -456,11 +477,19 @@ impl App {
         }
     }
 
-    /// Ride page `n`'s field boxes and fields; the first page leaves room for Ferris.
+    /// Ride page `n`'s field boxes and fields.
     fn boxes(&self, n: usize) -> impl Iterator<Item = ((u32, u32, u32, u32), Field)> + use<> {
         let page = self.pages[n];
-        let h = ui::RIDE_H[usize::from(n > 0)];
-        (0..page.fields.len()).map_while(move |i| Some((ui::field_box(page.layout, h, i)?, page.fields[i])))
+        (0..page.fields.len()).map_while(move |i| Some((ui::field_box(page.layout, ui::RIDE_H, i)?, page.fields[i])))
+    }
+
+    /// The main screen's "HH:MM" and seconds.
+    fn main_time(&self) -> (Line<8>, Line<8>) {
+        let (hm, mut s) = (self.field_text(Field::Time), Line::new());
+        for d in [self.seconds / 10, self.seconds % 10] {
+            s.push_str(ui::DIGITS[usize::from(d % 10)]);
+        }
+        (hm, s)
     }
 
     fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
@@ -479,9 +508,10 @@ impl App {
         let mut p = Panel(b);
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
-        if let Screen::Ride(n) = self.screen {
-            let page = self.pages[n];
-            self.shown = page.fields.map(|f| self.field_text(f));
+        match self.screen {
+            Screen::Ride(n) => self.shown = self.pages[n].fields.map(|f| self.field_text(f)),
+            Screen::Main => (self.shown[0], self.shown[1]) = self.main_time(),
+            _ => {}
         }
     }
 
@@ -559,19 +589,20 @@ impl App {
         };
     }
 
-    /// Acts on a key press: on the ride pages Page turns the page, holding it opens the menu, Back toggles the
-    /// backlight; in the menus Page / Lap move down / up, Start selects or changes, Back goes out. Holding Back
+    /// Acts on a key press: Page goes from the main screen through the ride pages and back, holding it opens the
+    /// menu, Back toggles the backlight; in the menus Page / Lap move down / up, Start selects or changes, Back goes out. Holding Back
     /// switches off anywhere.
     pub fn press(&mut self, b: &mut impl Board, p: Press) {
         let before = self.screen;
         match (self.screen, p) {
             (_, Press::Long(Key::Back)) => return self.power_off(b),
+            (Screen::Main, Press::Short(Key::Page)) => self.screen = Screen::Ride(0),
             (Screen::Ride(n), Press::Short(Key::Page)) => {
-                let next = (1..=PAGES).map(|d| (n + d) % PAGES).find(|&i| self.pages[i].layout > 0);
-                self.screen = Screen::Ride(next.unwrap_or(0));
+                let next = (n + 1..PAGES).find(|&i| self.pages[i].layout > 0);
+                self.screen = next.map_or(Screen::Main, Screen::Ride);
             }
-            (Screen::Ride(_), Press::Long(Key::Page)) => self.screen = Screen::Menu(Menu::Main, 0),
-            (Screen::Ride(_), Press::Short(Key::Back)) => {
+            (Screen::Main | Screen::Ride(_), Press::Long(Key::Page)) => self.screen = Screen::Menu(Menu::Main, 0),
+            (Screen::Main | Screen::Ride(_), Press::Short(Key::Back)) => {
                 self.backlight = !self.backlight;
                 b.backlight(self.backlight);
             }
@@ -587,7 +618,7 @@ impl App {
                     return self.draw_menu_rows(&mut Panel(b), menu, sel);
                 }
             }
-            (Screen::Menu(Menu::Main, _), Press::Short(Key::Back)) => self.screen = Screen::Ride(0),
+            (Screen::Menu(Menu::Main, _), Press::Short(Key::Back)) => self.screen = Screen::Main,
             (Screen::Menu(Menu::Sensors, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, 0),
             (Screen::Menu(Menu::Page(n), _), Press::Short(Key::Back)) => {
                 self.screen = Screen::Menu(Menu::Main, n + 1);
@@ -636,7 +667,22 @@ impl App {
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
-        self.strip.time = rtc_hm(b);
+        let (h, m, sec) = rtc_time_from_tr(b.rtc_tr());
+        self.strip.time = (h, m);
+        self.seconds = sec;
+        self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
+        if self.battery_ms >= BATTERY_MS {
+            self.battery_ms = 0;
+            let charging = b.charger_present();
+            let reading = b.battery_adc().and_then(|(raw, vref, cal)| battery::millivolts(raw, vref, cal));
+            if let Some(mv) = reading
+                && self.battery.update(mv, charging)
+            {
+                return self.power_off(b); // empty: off before the cell is drawn too low
+            }
+            self.strip.battery = self.battery.percent();
+            self.strip.charging = charging;
+        }
         self.update_strip(b);
         if self.ble.is_some() {
             self.poll_nrf(b);
@@ -656,6 +702,13 @@ impl App {
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         match self.screen {
+            Screen::Main => {
+                let now = self.main_time();
+                if (now.0.as_str(), now.1.as_str()) != (self.shown[0].as_str(), self.shown[1].as_str()) {
+                    ui::draw_main_time(&mut Panel(b), now.0.as_str(), now.1.as_str());
+                    (self.shown[0], self.shown[1]) = now;
+                }
+            }
             Screen::Ride(n) => self.update_ride(b, n),
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
                 ui::draw_list(&mut Panel(b), &self.nearby);

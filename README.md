@@ -4,10 +4,10 @@ An open, from-scratch Rust firmware for Bryton bike computers. It currently targ
 as a proof of concept: it replaces Bryton's OS entirely, with ride pages fed by ANT+ sensors. Not affiliated with
 Bryton.
 
-- **Screen:** a thin status strip at the top (time, BLE, USB, battery), then up to three ride pages of 1, 2, 3, 4
-  or 6 fields (speed, heart rate, cadence, power, time), set from the menu. Ferris the Rust crab sits under the
-  first page. Everything is in the project's own dot-matrix font.
-- **Keys:** Page turns the ride pages; hold Page for the menu (in menus: Page / Lap move, Start selects or
+- **Screen:** a thin status strip at the top (BLE, the time, a USB dot, the battery), then the main screen (the
+  time, big, and Ferris the Rust crab) and up to three ride pages of 1, 2, 3, 4 or 6 fields (speed, heart rate,
+  cadence, power, time), set from the menu. Everything is in the project's own dot-matrix font.
+- **Keys:** Page goes from the main screen through the ride pages and back; hold Page for the menu (in menus: Page / Lap move, Start selects or
   changes a value, Back goes back). Back toggles the backlight; held 3 s it switches off (standby). The power
   button starts it again, and power off also switches the radio chip off.
 - **Menu:** sensors (Start searches and pairs the first one heard, Start again forgets it), the three pages
@@ -133,6 +133,8 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 - **Unaligned reads from the SDRAM are wrong (2026-10-23):** page 2's default fields showed garbled. Reading the
   app's state in DTCM with `dev.py peek` showed a 7-byte constant copied wrong from SDRAM; the image itself was
   right. Built with `+strict-align` since (BOARD.md 2).
+- **Battery (2026-10-23):** ADC3 reads the battery against VREFINT as stock does; 99 % while charging, in line with
+  stock's last stored reading. Three quirks found with `peek` / `poke` (BOARD.md 12).
 - **Heart rate and pairing (2026-10-23, from RAM, the owner's strap):** "HR 58" to "HR 70" from the strap
   (once wetted). The first strap heard is paired: its ANT channel ID (device 25126, transmission type 0xf1, read
   with op 0xd4) goes into RTC backup register 5, which kept it through a reset; the next start opened the channel
@@ -145,7 +147,8 @@ with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight
 holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
 input. Still to see:
 - Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
-- The battery level (ADC3) and charging: this firmware does not drive the charger enable (PG14) yet.
+- Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
+  window yet (BOARD.md 12). The low-battery switch-off (3.3 V) has not been reached on the unit.
 - The Nordic chip coming back after a power off and on (`sd_power_system_off`, then the reset pulse).
 - The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 

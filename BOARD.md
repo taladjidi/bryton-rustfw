@@ -258,3 +258,30 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     cadence); it has no BLE power client (power is ANT+ only on stock).
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
+
+## 12. Battery and charging
+
+From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt_ChargeTempCheck` 0xd018b63c) and
+**seen on the unit (2026-10-23)**.
+
+- **Voltage:** ADC3 (0x58026000). Channel 19 is VREFINT (VDDA = 3.3 V x VREFINT_CAL / reading; VREFINT_CAL is the
+  16-bit word at 0x1ff1e860), channel 1 is PC3_C, the battery through a divider: battery = pin x 1.5 (stock's
+  factor 3/2). PC3_C reaches the ADC through the analog switch SYSCFG_PMCR.PC3SO (bit 27, 0 = connected), which
+  reads 0 after stock. Stock samples both with 810.5 cycles.
+- **This firmware:** kernel clock per_ck (HSI 64 MHz) / 16 = 4 MHz (BOOST 0), 16-bit, linearity and offset
+  calibration. Seen on the unit:
+  - the calibration takes 82 ms;
+  - PCSEL and SMPR must be written before the calibration (written after it they stayed 0);
+  - ADEN does not stick when set at once after ADCAL clears: set it until ADRDY;
+  - a RAM run inherits an enabled ADC whose configuration can't be written: the driver resets ADC3 (RCC_AHB4RSTR
+    bit 24) first.
+  - Reading on USB: 99 %, in line with stock's last stored value (RTC backup register 13: 4178 mV).
+- **Charge estimate:** a typical lithium-ion curve, 3.3 V = 0 % to 4.2 V = 100 % (inferred; stock's table is
+  not traced). Below 3.3 V three readings in a row (10 s apart) on battery, the firmware switches off, as stock
+  does at 0 %.
+- **Charging:** PG14 is the charge enable, active low. The bootloader leaves it an output, low: **charging is on
+  whenever USB power is present** (seen: MODER output, ODR bit 14 = 0). Stock switches it with a temperature
+  window from the barometer: charge only if 0 < T < 50 C (5 < T after "too cold", T < 45 after "too hot"). This
+  firmware does not drive PG14 yet: no temperature check, so charging below 0 C is possible. PF6: charger status
+  input (reads high; meaning not traced).
+

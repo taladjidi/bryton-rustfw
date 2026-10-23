@@ -66,14 +66,18 @@ def png(pixels565, w=W, h=H):
             + chunk(b'IDAT', zlib.compress(bytes(raw), 6)) + chunk(b'IEND', b''))
 
 
-def shot(s):
-    head = command(s, 'shot')
-    if head != f'shot {W} {H}':
-        sys.exit(f'dev.py: unexpected answer {head!r}')
-    data = s.read(2 * W * H)
-    if len(data) != 2 * W * H:
-        sys.exit(f'dev.py: screenshot cut short ({len(data)} of {2 * W * H} bytes)')
-    return png(data)
+def shot(s, tries=3):
+    """A screenshot as PNG. Retried when cut short: right after another connection (a `key` command), a few
+    packets sometimes never reach the computer although the firmware sent them all (seen 2026-10-23, 2 in 30;
+    cause not found), and a screenshot can simply be asked again."""
+    for _ in range(tries):
+        head = command(s, 'shot')
+        if head != f'shot {W} {H}':
+            sys.exit(f'dev.py: unexpected answer {head!r}')
+        data = s.read(2 * W * H)
+        if len(data) == 2 * W * H:
+            return png(data)
+    sys.exit(f'dev.py: screenshot cut short ({len(data)} of {2 * W * H} bytes), {tries} times')
 
 
 def image_payload(path):

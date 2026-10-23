@@ -79,7 +79,7 @@ pub const CRAB_Y: u32 = 272;
 // ---------------------------------------------------------------------------------------------------------------
 
 /// Height of the status strip; an orange line follows it.
-pub const STRIP_H: u32 = 20;
+pub const STRIP_H: u32 = 22;
 
 /// USB dev link state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,19 +105,23 @@ pub struct Strip {
     pub usb: UsbDot,
     /// Battery charge in percent, if known.
     pub battery: Option<u8>,
+    /// USB power present: the battery is charging (shown in green).
+    pub charging: bool,
 }
 
-/// The strip's boxes (x, width): time, BLE, USB, battery.
-const STRIP_TIME: (u32, u32) = (4, 5 * CELL * 2);
-const STRIP_BLE: (u32, u32) = (76, 3 * CELL * 2);
-const STRIP_USB: (u32, u32) = (W - 4 - 4 * CELL * 2 - 8 - 3 * CELL * 2, 3 * CELL * 2);
+/// The strip's boxes (x, width): BLE on the left, the time centred, then USB and the battery on the right.
+const STRIP_BLE: (u32, u32) = (4, 3 * CELL * 2);
+const STRIP_TIME: (u32, u32) = ((W - 5 * CELL * 2) / 2, 5 * CELL * 2);
 const STRIP_BATTERY: (u32, u32) = (W - 4 - 4 * CELL * 2, 4 * CELL * 2);
+/// The USB dot: x, size (it sits between the time and the battery, centred on the text's capitals).
+const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 16, 8);
 
-/// Draws the status strip: the time on the left, "BLE" (green, red if the chip did not answer); on the right
-/// "USB" in its state's colour (nothing when unplugged) and the battery; then the orange line.
+/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), the time in the middle; on
+/// the right a dot in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
+/// under); then the orange line.
 pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
     let at = |c: &mut _, (x, w): (u32, u32), fg, align, t: &str| {
-        text::draw_in(c, &Style { fg, ..LABEL }, x, 3, w, align, t);
+        text::draw_in(c, &Style { fg, ..LABEL }, x, STRIP_H - LABEL.height(), w, align, t); // ends at the line
     };
     let mut l = text::Line::<8>::new();
     for d in [s.time.0 / 10, s.time.0 % 10, 10, s.time.1 / 10, s.time.1 % 10] {
@@ -131,14 +135,19 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
         UsbDot::Powered => ACCENT,
         UsbDot::Ready => GREEN,
     };
-    at(c, STRIP_USB, usb, Align::Left, "USB");
+    c.fill(STRIP_USB.0, STRIP_H - LABEL.height() + 3, STRIP_USB.1, STRIP_USB.1, usb);
     let mut l = text::Line::<8>::new();
     match s.battery {
         Some(p) => l.push_u32(u32::from(p)),
         None => l.push_str("--"),
     }
     l.push_str("%");
-    at(c, STRIP_BATTERY, WHITE, Align::Right, l.as_str());
+    let color = match s.battery {
+        _ if s.charging => GREEN,
+        Some(p) if p <= 15 => RED,
+        _ => WHITE,
+    };
+    at(c, STRIP_BATTERY, color, Align::Right, l.as_str());
     c.fill(0, STRIP_H, W, 2, ACCENT);
 }
 
@@ -287,8 +296,8 @@ pub const LAYOUTS: [u8; 6] = [0, 1, 2, 3, 4, 6];
 
 /// Top of the ride fields.
 pub const RIDE_Y: u32 = PAGE_Y;
-/// Height of the ride fields with Ferris under them (the first page), and without (the others).
-pub const RIDE_H: [u32; 2] = [CRAB_Y - 6 - RIDE_Y, H - RIDE_Y];
+/// Height of the ride fields: everything under the strip.
+pub const RIDE_H: u32 = H - RIDE_Y;
 
 /// Field box `i` (x, y, w, h) of a page with `n` fields in a field area `h` high: one, two stacked, one big over
 /// two, 2 x 2, 2 x 3. None past the last.
@@ -340,7 +349,26 @@ pub fn draw_field_value(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     text::draw_in(c, &style, x + 1, top, w - 2, Align::Centre, value);
 }
 
-/// Ferris, under the fields of the first ride page.
+// ---------------------------------------------------------------------------------------------------------------
+// The main screen: the time, big, and Ferris
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Hours and minutes on the main screen: the pixel font at 7x, white.
+pub const TIME: Style = Style { font: &PIXEL, scale: 7, fg: WHITE, bg: BLACK };
+/// Seconds on the main screen: the pixel font at 5x, orange.
+pub const SECONDS: Style = Style { font: &PIXEL, scale: 5, fg: ACCENT, bg: BLACK };
+/// Top of the hours and minutes.
+pub const TIME_Y: u32 = 70;
+/// Top of the seconds.
+pub const SECONDS_Y: u32 = 160;
+
+/// The main screen's time: "HH:MM" centred, the seconds under it.
+pub fn draw_main_time(c: &mut impl Canvas, hm: &str, s: &str) {
+    text::draw_in(c, &TIME, 0, TIME_Y, W, Align::Centre, hm);
+    text::draw_in(c, &SECONDS, 0, SECONDS_Y, W, Align::Centre, s);
+}
+
+/// Ferris, at the bottom of the main screen.
 pub fn draw_ferris(c: &mut impl Canvas) {
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
 }
@@ -429,7 +457,7 @@ pub(crate) mod tests {
     /// clear (Frame panics on anything off screen).
     #[test]
     fn ride_layouts_tile_and_fit() {
-        for h in RIDE_H {
+        for h in [RIDE_H] {
             for &n in &LAYOUTS[1..] {
                 let b: Vec<_> = (0..8).map_while(|i| field_box(n, h, i)).collect();
                 assert_eq!(b.len(), usize::from(n));
@@ -443,12 +471,15 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert!(RIDE_Y + RIDE_H[0] <= CRAB_Y && RIDE_Y >= STRIP_H + 2);
+        assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2);
+        let strip = [STRIP_BLE, STRIP_TIME, (STRIP_USB.0 - 8, STRIP_USB.1 + 8), STRIP_BATTERY];
+        assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
+        assert!(SECONDS_Y + SECONDS.height() <= CRAB_Y && TIME_Y + TIME.height() <= SECONDS_Y && TIME_Y > STRIP_H);
     }
 
     #[test]
     fn rows_match_the_framebuffer() {
-        let strip = Strip { time: (12, 34), radio: true, usb: UsbDot::Ready, battery: Some(87) };
+        let strip = Strip { time: (12, 34), radio: true, usb: UsbDot::Ready, battery: Some(87), charging: true };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);
         draw_ferris(&mut f);

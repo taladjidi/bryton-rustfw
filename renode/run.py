@@ -149,7 +149,7 @@ def main():
     preview = ROOT / 'target/sim/preview.bmp'
     if preview.exists():
         sim = bmp_rgb(preview)
-        for y in list(range(20, 22)) + list(range(272, 316)):          # the strip's line, Ferris (ui.rs)
+        for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, Ferris (ui.rs)
             bad = [x for x in range(W) if rgb(screen, x, y) != sim[y][x]]
             if bad:
                 fails.append(f'row {y} differs from the simulator at x {bad[0]}..{bad[-1]}')
@@ -159,9 +159,9 @@ def main():
             fails.append('PC13 high but the USB core was never touched')
         if after_usb == 0:
             fails.append('no panel traffic after the USB start: hung')
-        label = {rgb(screen, x, y) for x in range(144, 180) for y in range(3, 17)}   # "USB" in the strip (ui.rs)
-        if not label & {(248, 164, 0), (248, 0, 0)}:                                 # powered (no host) or failed
-            fails.append(f'USB label colours {label}, neither orange nor red')
+        dot = rgb(screen, 172 + 4, 5 + 4)                                    # the USB dot in the strip (ui.rs)
+        if dot not in ((248, 164, 0), (248, 0, 0)):                         # powered (no host) or failed
+            fails.append(f'USB dot is {dot}, neither orange nor red')
     for f in fails:
         print('FAIL', f)
     print('renode check ok' if not fails else f'{len(fails)} failures (log: {log})')

@@ -469,6 +469,78 @@ fn nrf_recv(buf: &mut [u8]) -> usize {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Battery: ADC3 (0x58026000, RM0399 ADC; BOARD.md 12), as stock reads it: VREFINT (channel 19) to know VDDA, then
+// the battery through a divider on PC3_C (channel 1), both with the longest sampling time. Kernel clock per_ck (HSI
+// 64 MHz) / 16 = 4 MHz, under every BOOST limit, so BOOST stays 0. 16-bit (the reset resolution).
+// ---------------------------------------------------------------------------------------------------------------
+const ADC3: u32 = 0x5802_6000;
+const ADC_ISR: u32 = ADC3;
+const ADC_CR: u32 = ADC3 + 0x08;
+const ADC_SMPR1: u32 = ADC3 + 0x14;
+const ADC_SMPR2: u32 = ADC3 + 0x18;
+const ADC_PCSEL: u32 = ADC3 + 0x1c;
+const ADC_SQR1: u32 = ADC3 + 0x30;
+const ADC_DR: u32 = ADC3 + 0x40;
+const ADC3_CCR: u32 = ADC3 + 0x308;
+const RCC_D3CCIPR: u32 = RCC + 0x058;
+const RCC_AHB4RSTR: u32 = RCC + 0x088;
+const SYSCFG_PMCR: u32 = 0x5800_0404;
+/// VREFINT_CAL: the VREFINT reading at VDDA = 3.3 V, 16-bit, written at the factory (RM0399, device signature).
+const VREFINT_CAL: u32 = 0x1ff1_e860;
+
+/// Waits up to `us` microseconds for `done`; false on time-out.
+fn wait_us(us: u32, mut done: impl FnMut() -> bool) -> bool {
+    let t0 = cycles();
+    while !done() {
+        if cycles().wrapping_sub(t0) > us * (CPU_HZ / 1_000_000) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Powers ADC3 up, calibrates and enables it; false if a step timed out (the battery then reads as unknown).
+fn adc_init() -> bool {
+    modify(RCC_D3CCIPR, 3 << 16, 2 << 16); // ADCSEL = per_ck
+    modify(RCC_AHB4ENR, 0, 1 << 24); // ADC3EN
+    // from reset: a RAM run (dev.py run) inherits an enabled ADC, whose configuration can't be written
+    modify(RCC_AHB4RSTR, 0, 1 << 24);
+    modify(RCC_AHB4RSTR, 1 << 24, 0);
+    modify(RCC_APB4ENR, 0, 1 << 1); // SYSCFGEN
+    modify(SYSCFG_PMCR, 1 << 27, 0); // PC3SO = 0: PC3_C connected to the ADC (it reads 0 already after stock)
+    modify(ADC3_CCR, (0xf << 18) | (3 << 16), (7 << 18) | (1 << 22)); // PRESC /16, async clock, VREFEN
+    modify(ADC_CR, 1 << 29, 1 << 28); // DEEPPWD off, ADVREGEN on
+    if !wait_us(100, || rd(ADC_ISR) & (1 << 12) != 0) {
+        return false; // LDORDY
+    }
+    // channels before the calibration (once enabled, the ADC no longer takes them)
+    wr(ADC_PCSEL, (1 << 1) | (1 << 19));
+    modify(ADC_SMPR1, 7 << 3, 7 << 3); // channel 1: 810.5 cycles
+    modify(ADC_SMPR2, 7 << 27, 7 << 27); // channel 19: 810.5 cycles
+    modify(ADC_CR, 1 << 30, (1 << 31) | (1 << 16)); // ADCAL, linearity too (ADCALLIN), single ended
+    if !wait_us(200_000, || rd(ADC_CR) & (1 << 31) == 0) {
+        return false; // it takes 82 ms (seen on the unit), most of it the linearity part
+    }
+    // ADEN: set until the ADC reports ready (RM0399: ignored for a few ADC clock cycles after ADCAL clears)
+    wr(ADC_ISR, 1); // ADRDY cleared
+    wait_us(10_000, || {
+        modify(ADC_CR, 0, 1); // ADEN
+        rd(ADC_ISR) & 1 != 0
+    })
+}
+
+/// One conversion of channel `ch` (about 205 us).
+fn adc_read(ch: u32) -> Option<u16> {
+    if rd(ADC_CR) & 1 == 0 {
+        return None; // not enabled: adc_init failed
+    }
+    wr(ADC_SQR1, ch << 6); // one conversion, SQ1 = ch
+    wr(ADC_ISR, 1 << 2); // EOC cleared
+    modify(ADC_CR, 0, 1 << 2); // ADSTART
+    wait_us(2000, || rd(ADC_ISR) & (1 << 2) != 0).then(|| rd(ADC_DR) as u16)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The board for the app in lib.rs: each method is the transport only.
 // ---------------------------------------------------------------------------------------------------------------
 struct S510;
@@ -506,6 +578,14 @@ impl Board for S510 {
     }
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         nrf_recv(buf)
+    }
+    fn battery_adc(&mut self) -> Option<(u16, u16, u16)> {
+        let vref = adc_read(19)?;
+        let battery = adc_read(1)?;
+        Some((battery, vref, rd(VREFINT_CAL) as u16))
+    }
+    fn charger_present(&mut self) -> bool {
+        !pin_low(VBUS.0, VBUS.1)
     }
     fn backup_read(&mut self, n: usize) -> u32 {
         rd(RTC_BKP0R + 4 * (n as u32 % 32))
@@ -552,6 +632,7 @@ fn main() -> ! {
     board_init();
     checkpoint(3);
     spi_init();
+    let _ = adc_init(); // a failure leaves the battery unknown ("--%")
     checkpoint(4);
     let mut board = S510;
     let mut app = App::start(&mut board, ANT_KEY);

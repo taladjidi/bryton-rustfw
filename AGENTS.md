@@ -92,6 +92,7 @@ The point of this project is a firmware in safe Rust.
   - `SANS_16`, `SANS_BOLD_32`: DejaVu Sans, anti-aliased, if smooth text is ever wanted.
   - To change a glyph or add a font, edit those files and run `python3 tools/font.py` (needs PIL).
 - `src/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
+- `src/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
 - `src/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
