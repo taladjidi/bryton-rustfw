@@ -9,6 +9,7 @@
 #![warn(missing_docs)]
 
 pub mod alerts;
+pub mod course;
 pub mod dev;
 pub mod drivers;
 pub mod hrv;
@@ -748,6 +749,8 @@ pub enum Menu {
     Workouts,
     /// The steps of the workout opened from [`Menu::Workouts`].
     Steps,
+    /// The course files on the card ([`storage::course`]).
+    Courses,
 }
 
 /// What is on screen.
@@ -798,6 +801,16 @@ struct GraphShown {
     scale: (u32, u32),
 }
 
+/// What the course profile field shows: the course (its id, 0: none), from `start` m over `span` m, the rider's
+/// column. A change of anything but the column redraws it whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProfileShown {
+    id: u32,
+    start: u32,
+    span: u32,
+    rider: Option<u32>,
+}
+
 /// What a page box holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Widget {
@@ -828,6 +841,8 @@ enum Drawn {
     Map(map::Shown),
     /// A graph.
     Graph(GraphShown),
+    /// The course profile.
+    Profile(ProfileShown),
 }
 
 /// Box `i` of a page with this many fields (the ride pages' and the overview's grids).
@@ -965,6 +980,9 @@ pub struct App {
     plan_file: Option<fat::File>,
     player: Option<workout::Player>,
     tone: (u32, u32),
+    /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
+    /// [`App::set_course_memory`]).
+    courses: Option<&'static mut storage::course::Courses>,
 }
 
 impl App {
@@ -1090,6 +1108,7 @@ impl App {
             plan: storage::workout::Workout::new(),
             player: None,
             tone: (0, 0),
+            courses: None,
         };
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -1219,7 +1238,13 @@ impl App {
                 }
                 return l;
             }
-            Field::Map | Field::Graph | Field::HrGraph | Field::WbalGraph | Field::DfaGraph | Field::AltGraph => {
+            Field::Map
+            | Field::Graph
+            | Field::HrGraph
+            | Field::WbalGraph
+            | Field::DfaGraph
+            | Field::AltGraph
+            | Field::Profile => {
                 return l;
             }
             Field::WeekKm | Field::WeekH | Field::YearKm | Field::TotalKm => {
@@ -1239,6 +1264,9 @@ impl App {
                 return l;
             }
             Field::Workout | Field::StepTarget | Field::StepTime | Field::NextStep => return self.workout_text(f),
+            Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo => {
+                return self.course_text(f);
+            }
             Field::Temp => {
                 let t = self.baro.map(|(_, t)| i32::from(t) / 10); // C x 100 to tenths
                 if t.is_some_and(|t| t < 0) {
@@ -1332,6 +1360,9 @@ impl App {
     fn field_color(&self, f: Field) -> u16 {
         if f == Field::StepTarget {
             return self.target_color();
+        }
+        if let Some(c) = self.course_color(f) {
+            return c;
         }
         let p = &self.power;
         let power = match f {
@@ -1525,6 +1556,7 @@ impl App {
             Menu::Workouts => self.calendar.get(i).map(|_| Row::Workout(i)),
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
+            Menu::Courses => self.courses.as_deref()?.list.get(i).map(|_| Row::Course(i)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
@@ -1670,6 +1702,7 @@ impl App {
                 color = ui::GREEN;
             }
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
+            Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,
         }
         Some((label, value, color))
     }
@@ -1747,7 +1780,8 @@ impl App {
             Widget::Notices => {
                 Drawn::Print(self.notices.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
             }
-            Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx))),
+            Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx), self.route().as_ref())),
+            Widget::Field(Field::Profile) => Drawn::Profile(self.profile_now(ui::plot_area(bx).2)),
             Widget::Field(f) => match graph_plot(f) {
                 Some(plot) => Drawn::Graph(self.graph_now(plot, ui::graph_area(bx).2)),
                 None => Drawn::Value(self.field_text(f), self.field_color(f)),
@@ -1773,8 +1807,9 @@ impl App {
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
-                        map::draw(c, map::area(bx), &self.track, m.view, base);
+                        map::draw(c, map::area(bx), &self.track, m.view, base, self.route().as_ref());
                     }
+                    Drawn::Profile(p) => self.draw_profile(c, bx, p),
                     Drawn::Graph(g) => {
                         self.draw_graph_axes(c, bx, g);
                         let a = ui::graph_area(bx);
@@ -1949,7 +1984,7 @@ impl App {
         }
         if self.screen == Screen::Summary {
             let (_, _, cols, _) = ui::card::ELEV;
-            let m = map::Shown::of(&self.track, map::area(ui::card::MAP));
+            let m = map::Shown::of(&self.track, map::area(ui::card::MAP), None);
             self.summary = Some((m, self.graph_shown(ride::Plot::Alt, true, cols)));
         }
         if let Some(i) = self.first_map()
@@ -1974,15 +2009,16 @@ impl App {
             let now = match (w, old) {
                 (_, Drawn::Map(mut m)) => {
                     let area = map::area(bx);
-                    if first == Some(i) && map::refit(area, &self.track, &m) {
-                        let view = map::Shown::of(&self.track, area).view;
+                    if first == Some(i) && map::refit(area, &self.track, &m, self.route().as_ref()) {
+                        let view = map::Shown::of(&self.track, area, self.route().as_ref()).view;
                         self.render_basemap(b, area, view);
                     }
-                    let base = (first == Some(i)).then_some(&self.basemap);
-                    map::update(&mut Panel(b, (0, self.bottom())), area, &self.track, &mut m, base);
+                    let (base, route) = ((first == Some(i)).then_some(&self.basemap), self.route());
+                    map::update(&mut Panel(b, (0, self.bottom())), area, &self.track, &mut m, base, route.as_ref());
                     Drawn::Map(m)
                 }
                 (_, Drawn::Graph(g)) => self.update_graph(b, g, bx),
+                (_, Drawn::Profile(p)) => self.update_profile(b, p, bx),
                 (Widget::Clock, Drawn::Digits(was)) => {
                     let now = self.main_digits();
                     for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
@@ -2107,6 +2143,7 @@ impl App {
                 }
                 self.open(Screen::Menu(Menu::Workouts, 0));
             }
+            Some(Row::Open(Menu::Courses)) => self.open_courses(b),
             Some(Row::Open(m)) => {
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
@@ -2121,6 +2158,7 @@ impl App {
                 }
             }
             Some(Row::Workout(k)) => self.open_workout(b, k),
+            Some(Row::Course(k)) => self.follow_course(b, k),
             Some(Row::WorkoutStart) => self.start_workout(0),
             Some(Row::Step(k)) => self.start_workout(k),
             Some(Row::Nearby) => {
@@ -2473,6 +2511,216 @@ impl App {
             (Some(_), Some(_)) => ui::GREEN,
             _ => ui::WHITE,
         }
+    }
+
+    // -----------------------------------------------------------------------------------------------------------
+    // Courses (storage/course.rs: the files; course.rs: the model, where the rider is, the climbs)
+    // -----------------------------------------------------------------------------------------------------------
+
+    /// Memory for the courses (main.rs keeps it in AXI SRAM: about 70 KB); without it there are none.
+    pub fn set_course_memory(&mut self, mem: &'static mut storage::course::Courses) {
+        self.courses = Some(mem);
+    }
+
+    /// The course followed, as the map draws it (once the map has a plane: a fix, or the last position known).
+    fn route(&self) -> Option<map::Route<'_>> {
+        let c = self.courses.as_deref().filter(|c| c.on.is_some())?;
+        c.course.route(self.track.origin()?)
+    }
+
+    /// The course followed and where the rider is on it (placed by a fix at least once).
+    fn on_course(&self) -> Option<(&course::Course, &course::Tracker)> {
+        let c = self.courses.as_deref().filter(|c| c.on.is_some() && c.at.off_m.is_some())?;
+        Some((&c.course, &c.at))
+    }
+
+    /// COURSES: the course files on the card, each read once for its length.
+    #[inline(never)]
+    fn open_courses(&mut self, b: &mut impl Board) {
+        let Some(c) = self.courses.as_deref_mut() else { return self.say("NO COURSE") };
+        if c.list.read(&mut emmc::Volume(&mut self.emmc, b)).is_err() || c.list.is_empty() {
+            self.say("NO COURSE");
+        }
+        self.open(Screen::Menu(Menu::Courses, 0));
+    }
+
+    /// Select on course `k`: follows it (the first ride page then), or stops following it.
+    #[inline(never)]
+    fn follow_course(&mut self, b: &mut impl Board, k: usize) {
+        let Some(c) = self.courses.as_deref_mut() else { return };
+        if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) {
+            c.on = None;
+            return self.say("COURSE OFF");
+        }
+        match c.load(&mut emmc::Volume(&mut self.emmc, b), k) {
+            Ok(true) => {
+                self.say("COURSE ON");
+                (self.depth, self.screen) = (0, Screen::Ride(0));
+            }
+            _ => self.say("NOT A COURSE"),
+        }
+    }
+
+    /// The beeps of a climb starting.
+    const CLIMB_TONES: [(u32, u32); 1] = [(2000, 300)];
+
+    /// Shows and sounds what following the course said: off course (banner and the alert's beeps), back on it, a
+    /// climb starting ("CLIMB 3.4 KM 7%", a beep).
+    fn course_event(&mut self, ev: course::Event) {
+        match ev {
+            course::Event::Off => {
+                self.say("OFF COURSE");
+                self.tones = (&BEEP_ALERT, 0, false);
+            }
+            course::Event::Back => self.say("BACK ON COURSE"),
+            course::Event::Climb(k) => {
+                let mut l = Line::<20>::new();
+                l.push_str("CLIMB ");
+                ui::card::push_km(&mut l, k.len_m);
+                l.push_str(" KM ");
+                l.push_u32(k.grade_x10().div_ceil(10).max(1));
+                l.push_str("%");
+                self.say(l.as_str());
+                self.tones = (&Self::CLIMB_TONES, 0, false);
+            }
+        }
+    }
+
+    /// The course fields' text: "--" without a course followed and a fix on it.
+    fn course_text(&self, f: Field) -> Line<8> {
+        let mut l = Line::new();
+        let Some((c, at)) = self.on_course() else {
+            l.push_str("--");
+            return l;
+        };
+        let d = at.along_m;
+        let climb = c.climb_at(d).and_then(|(k, on)| Some((*c.climbs().get(k)?, on)));
+        match (f, climb) {
+            (Field::ToGo, _) => ui::card::push_km(&mut l, c.len_m().saturating_sub(d)),
+            (Field::OffCourse, _) => l.push_u32(at.off_m.unwrap_or(0).min(9999)),
+            (Field::UpToGo, _) => l.push_u32(c.ascent_left(at)),
+            // on a climb: what is left of it and the grade ahead; before it: its length and grade
+            (Field::Climb, Some((k, on))) => {
+                let (m, g) = match on {
+                    true => (k.end_m().saturating_sub(d), c.grade_ahead(d).unwrap_or(0)),
+                    false => (k.len_m, k.grade_x10() as i32),
+                };
+                if m < 10_000 {
+                    ui::card::push_km(&mut l, m);
+                } else {
+                    l.push_u32(m / 1000);
+                }
+                l.push_str("K ");
+                if g < 0 {
+                    l.push_str("-");
+                }
+                l.push_u32((g.unsigned_abs() + 5) / 10);
+                l.push_str("%");
+            }
+            (Field::ClimbGain, Some((k, true))) => {
+                let top = c.alt_at(k.end_m()).zip(c.alt_at(d)).map_or(0, |(t, h)| (t - h).max(0) / 10);
+                l.push_u32(top as u32);
+            }
+            (Field::ClimbGain, Some((k, false))) => l.push_u32(k.gain_m),
+            _ => l.push_str("--"),
+        }
+        l
+    }
+
+    /// A course field's colour: OFF COURSE red once off course was said, CLIMB by its grade; None for the others.
+    fn course_color(&self, f: Field) -> Option<u16> {
+        let (c, at) = self.on_course()?;
+        match f {
+            Field::OffCourse if at.off_course() => Some(ui::RED),
+            Field::Climb => {
+                let (k, on) = c.climb_at(at.along_m)?;
+                let g = match on {
+                    true => c.grade_ahead(at.along_m)?,
+                    false => c.climbs().get(k)?.grade_x10() as i32,
+                };
+                Some(ui::grade_color(g))
+            }
+            _ => None,
+        }
+    }
+
+    /// A course's menu row: its name, its length; green when followed.
+    fn course_row(&self, k: usize, label: &mut Line<16>, value: &mut Line<12>) -> Option<u16> {
+        let c = self.courses.as_deref()?;
+        let e = c.list.get(k)?;
+        label.push_str(e.name());
+        match e.dist_m {
+            Some(m) => {
+                ui::card::push_km(value, m.saturating_add(50)); // to the nearest 100 m
+                value.push_str(" KM");
+            }
+            None => value.push_str("--"),
+        }
+        Some(if c.on == Some(e.file) { ui::GREEN } else { ui::GREY })
+    }
+
+    /// What a profile `cols` wide shows now: from the eighth of the course the rider is in to the end (so it is
+    /// redrawn whole eight times over a course, and otherwise moves by a column now and then).
+    fn profile_now(&self, cols: u32) -> ProfileShown {
+        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None };
+        let Some(c) = self.courses.as_deref().filter(|c| c.on.is_some() && c.course.has_alt()) else { return none };
+        let len = c.course.len_m();
+        let at = c.at.off_m.map(|_| c.at.along_m.min(len));
+        let step = (len / 8).max(1);
+        let start = at.map_or(0, |d| (d / step * step).min(len.saturating_sub(1)));
+        let span = (len - start).max(1);
+        let rider =
+            at.map(|d| ((u64::from(d - start) * u64::from(cols) / u64::from(span)) as u32).min(cols.max(1) - 1));
+        ProfileShown { id: c.course.id(), start, span, rider }
+    }
+
+    /// Profile column `k` of `p` in a plot `a`: its bar's height and colour (the rider's column white, the ridden
+    /// part dark, the climbs by grade, the rest grey).
+    fn profile_bar(&self, p: ProfileShown, a: (u32, u32, u32, u32), k: u32) -> (u32, u16) {
+        let Some(c) = self.courses.as_deref().filter(|_| p.id != 0) else { return (0, ui::BLACK) };
+        if p.rider == Some(k) {
+            return (a.3, ui::WHITE);
+        }
+        let Some((alt, grade, climb)) = c.course.column(p.start, p.span, a.2, k) else { return (0, ui::BLACK) };
+        // the whole course's range, 30 m at least, so a flat course stays flat
+        let (lo, hi) = c.course.range_dm();
+        let hi = hi.max(lo + 300);
+        let h = ((i64::from(alt - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
+        let color = match (p.rider.is_some_and(|r| k < r), climb) {
+            (true, _) => ui::DARK,
+            (false, true) => ui::grade_color(grade),
+            (false, false) => ui::GREY,
+        };
+        (h, color)
+    }
+
+    /// The profile field in box `bx`, whole.
+    fn draw_profile(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), p: ProfileShown) {
+        ui::draw_plot_title(c, bx, if p.id == 0 { "NO COURSE" } else { "PROFILE" });
+        let a = ui::plot_area(bx);
+        ui::draw_graph(c, a, &|k| self.profile_bar(p, a, k));
+    }
+
+    /// The profile field drawn as `old`: whole when it shows another part of the course, else only the columns
+    /// between the rider's old place and the new one.
+    fn update_profile(&mut self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
+        let a = ui::plot_area(bx);
+        let now = self.profile_now(a.2);
+        let mut p = Panel(b, (0, self.bottom()));
+        if (ProfileShown { rider: old.rider, ..now }) != old {
+            p.fill(bx.0, bx.1, bx.2.saturating_sub(1), ui::plot_area(bx).1 - bx.1, ui::BLACK);
+            self.draw_profile(&mut p, bx, now);
+        } else if now.rider != old.rider {
+            let (from, to) = match (old.rider, now.rider) {
+                (Some(x), Some(y)) => (x.min(y), x.max(y)),
+                (Some(x), None) | (None, Some(x)) => (x, x),
+                (None, None) => (1, 0),
+            };
+            for k in from..=to.min(a.2.saturating_sub(1)) {
+                ui::draw_graph_column(&mut p, a, k, self.profile_bar(old, a, k), self.profile_bar(now, a, k));
+            }
+        }
+        Drawn::Profile(now)
     }
 
     /// Acts on a key press ([`Input::of`]). A key held to repeat that acted (a list scrolled, a value stepped) is
@@ -2910,7 +3158,7 @@ impl App {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
                 let bottom = self.bottom();
                 if let Some((m, _)) = &mut self.summary {
-                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, None);
+                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, None, None);
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
@@ -3014,6 +3262,15 @@ impl App {
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
         let alt = input.alt_mm.map(|mm| (mm / 1000 + ride::ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);
         self.history.second([input.power, input.hr, wbal, dfa, alt]);
+        // the course followed: where the rider is on it, and what to say
+        let fix = self.pvt.filter(|p| p.good());
+        let ev = match (self.courses.as_deref_mut(), fix) {
+            (Some(c), Some(p)) if c.on.is_some() => c.course.follow(&mut c.at, p.lat, p.lon),
+            _ => None,
+        };
+        if let Some(ev) = ev {
+            self.course_event(ev);
+        }
     }
 
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released
@@ -3201,6 +3458,7 @@ fn menu_title(m: Menu) -> &'static str {
         Menu::History => "HISTORY",
         Menu::Workouts => "WORKOUTS",
         Menu::Steps => "WORKOUT",
+        Menu::Courses => "COURSES",
     }
 }
 

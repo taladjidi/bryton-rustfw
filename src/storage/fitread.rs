@@ -26,6 +26,9 @@
 //!   record 0 position_lat and 1 position_long (sint32 semicircles, 2^31 per 180 degrees; invalid 0x7fffffff),
 //!   2 altitude (uint16) and 78 enhanced_altitude (uint32), both (m + 500) x 5 (the same profile); when both are
 //!   there, 78, the wider one, is taken.
+//! - **Bryton's routes** (`\PlanTrip\*.fit`, see storage/course.rs): with the position, message 249 (a route point)
+//!   is read as a `record`: 1 latitude and 2 longitude (sint32, degrees x 1e6, inferred), 3 altitude (uint16,
+//!   (m + 500) x 5 as FIT's, inferred).
 //!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
 //! small state machine one step (fuzzed in sim.rs `fuzz`).
@@ -107,6 +110,9 @@ fn slot(global: u16, num: u8, position: bool) -> Option<u8> {
         (20, 1) if position => 5,  // position_long
         (20, 2) if position => 6,  // altitude
         (20, 78) if position => 7, // enhanced_altitude
+        (249, 1) if position => 4, // Bryton's route point: latitude, degrees x 1e6
+        (249, 2) if position => 5, // longitude
+        (249, 3) if position => 6, // altitude
         (18, 2) => 1,              // start_time
         (18, 8) => 2,              // total_timer_time
         (18, 9) => 3,              // total_distance
@@ -452,7 +458,8 @@ impl Reader {
                 *v = if def.big { *v << 8 | b } else { *v | b << (8 * (k - off)) };
             }
             if from < to && to == off + size {
-                let signed = def.global == 20 && (s == 4 || s == 5); // sint32: invalid is the largest value
+                // sint32: invalid is the largest value
+                let signed = (def.global == 20 || def.global == 249) && (s == 4 || s == 5);
                 let invalid = if signed {
                     0x7fff_ffff
                 } else if size == 4 {
@@ -524,8 +531,11 @@ impl Reader {
         let u8_ = |s| get(s).map(|v| v.min(0xfe) as u8);
         let u16_ = |s| get(s).map(|v| v.min(0xfffe) as u16);
         match global {
-            20 => {
+            20 | 249 => {
                 let pos = get(4).zip(get(5)).map(|(lat, lon)| (lat as i32, lon as i32));
+                // Bryton's degrees x 1e6 to semicircles (2^31 per 180 degrees)
+                let semi = |v: i32| (i64::from(v) * (1 << 31) / 180_000_000).clamp(-(1 << 31), (1 << 31) - 1) as i32;
+                let pos = if global == 249 { pos.map(|(a, b)| (semi(a), semi(b))) } else { pos };
                 // (m + 500) x 5 to decimetres; a uint16 altitude given in 4 bytes still reads as its value
                 let alt_dm = get(7).or(get(6)).map(|v| (i64::from(v) * 2 - 5000) as i32);
                 Some(Msg::Record(Record { time, hr: u8_(1), dist_cm: get(2), power: u16_(3), pos, alt_dm }))

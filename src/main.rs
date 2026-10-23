@@ -1128,6 +1128,14 @@ fn make_app(board: &mut S510) -> &'static mut App {
     APP.init_with(|| App::start(board, ANT_KEY))
 }
 
+/// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).
+/// All zeros, so it is cleared in place, not built on the stack.
+#[inline(never)]
+fn make_courses() -> &'static mut bryton_rustfw::storage::course::Courses {
+    static COURSES: static_cell::StaticCell<bryton_rustfw::storage::course::Courses> = static_cell::StaticCell::new();
+    COURSES.init_with(bryton_rustfw::storage::course::Courses::new)
+}
+
 /// The dev link's `bench`: `count` reads of `n` sectors from `lba`, timed, in microseconds. Its buffer in its own
 /// frame, not main's.
 #[inline(never)]
@@ -1166,6 +1174,7 @@ fn main() -> ! {
     if let Some(mem) = hw::map_memory() {
         app.set_map_memory(mem); // zeroes 1.5 MB of SDRAM once: about 10 to 30 ms (inferred), before the first map
     }
+    app.set_course_memory(make_courses());
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;

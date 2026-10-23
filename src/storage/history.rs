@@ -208,7 +208,7 @@ impl Index {
 }
 
 /// FIT semicircles to degrees x 1e-7 (2^31 semicircles are 180 degrees).
-fn degrees_e7(sc: i32) -> i32 {
+pub(crate) fn degrees_e7(sc: i32) -> i32 {
     ((i64::from(sc) * 1_800_000_000) >> 31) as i32
 }
 

@@ -13,6 +13,8 @@ entirely. Not affiliated with Bryton.
 | The ride's card when it ends: map, profile, numbers (sim) | Map with the track (sim) | Sensors and built-in readings (unit) | GPS (sim) |
 | ![History](docs/img/history_list.png) | ![A past ride](docs/img/history.png) | ![Workout steps](docs/img/workout-steps.png) | ![Workout](docs/img/workout.png) |
 | History: stock's rides, newest first (sim) | A past ride's card, read from its file (sim) | A planned workout's steps, from stock's calendar (sim) | A workout running: target, step left, next (sim) |
+| ![Course](docs/img/course.png) | ![Course profile](docs/img/course-profile.png) | ![Course fields](docs/img/course-fields.png) | ![Courses](docs/img/courses.png) |
+| A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead (sim) | Courses on the card: stock's routes, FIT, GPX (sim) |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
@@ -20,7 +22,7 @@ entirely. Not affiliated with Bryton.
 **Status (2026-10-24):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in eleven
 layouts, touch and keys, menus, ANT+ sensors (heart rate tried), derived power metrics (NP, TSS, W' balance...) and
 heart rate variability (DFA a1), graphs, GPS with fast aided starts, a track map with a basemap, battery, backlight
-with an automatic mode, beeps, the workouts stock's app synced (steps, targets, 3-2-1 beeps), and a USB dev link. Rides are not saved yet: the FIT writer is ready, the eMMC driver
+with an automatic mode, beeps, the workouts stock's app synced (steps, targets, 3-2-1 beeps), courses with climbs (stock's routes, FIT, GPX), and a USB dev link. Rides are not saved yet: the FIT writer is ready, the eMMC driver
 reads but does not write yet. It shares the storage with Bryton's firmware, so the two can be swapped.
 
 | Read | For |

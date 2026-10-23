@@ -32,6 +32,25 @@ pub const GREEN: u16 = 0x07e0;
 pub const GREY: u16 = 0x8410;
 /// RGB565 dark grey.
 pub const DARK: u16 = 0x39e7;
+/// RGB565 yellow.
+pub const YELLOW: u16 = 0xffe0;
+
+/// A climb's colour by its grade (% x 10), in the bands climbing apps use: green under 6 %, yellow under 9 %,
+/// orange under 12 %, red above (Garmin's ClimbPro colours its climbs green to red the same way; the bands here are
+/// this firmware's).
+///
+/// ```
+/// use bryton_rustfw::ui::{grade_color, GREEN, RED};
+/// assert_eq!([grade_color(45), grade_color(150)], [GREEN, RED]);
+/// ```
+pub fn grade_color(x10: i32) -> u16 {
+    match x10 {
+        ..60 => GREEN,
+        60..90 => YELLOW,
+        90..120 => ACCENT,
+        _ => RED,
+    }
+}
 
 /// Small text: labels. The pixel font at 2x, so its dots match Ferris' look (fonts.rs also has smooth fonts).
 pub const LABEL: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
@@ -482,19 +501,35 @@ pub enum Field {
     StepTime,
     /// The next step's target range (END on the last step).
     NextStep,
+    // the course followed (course.rs)
+    /// What is left of the course, km.
+    ToGo,
+    /// How far the course is, m (red once off course was said).
+    OffCourse,
+    /// The climb the rider is on (what is left, and the grade of the next 200 m: "0.8K 9%") or the next one (its
+    /// length and average grade: "1.2K 6%"), coloured by grade.
+    Climb,
+    /// The climb's gain left, m (on it), or the next climb's gain.
+    ClimbGain,
+    /// The course's ascent left, m.
+    UpToGo,
+    /// The course's profile from about where the rider is to its end: the rider's place, the ridden part dark, the
+    /// climbs coloured by grade.
+    Profile,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 47] = {
+    pub const ALL: [Field; 53] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
             Ascent, Graph, Temp, HrGraph, Dfa, Rmssd, // power.rs and the ride's derived metrics:
             Power3s, Power10s, Power30s, Np, If, Tss, Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr, AvgCadence, Balance, Vam,
             Grade, WbalGraph, DfaGraph, AltGraph, WeekKm, WeekH, YearKm, TotalKm, // the workout player:
-            Workout, StepTarget, StepTime, NextStep,
+            Workout, StepTarget, StepTime, NextStep, // the course followed:
+            ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile,
         ]
     };
 
@@ -550,6 +585,13 @@ impl Field {
             "TARGET",
             "STEP LEFT",
             "NEXT",
+            // the course followed
+            "TO GO KM",
+            "OFF CRS M",
+            "CLIMB",
+            "CLIMB M",
+            "UP LEFT M",
+            "PROFILE",
         ];
         LABELS[self as usize]
     }
@@ -561,7 +603,8 @@ impl Field {
             "88.88", "8888", "", "-88.8", "", "8.88", "888", // power.rs and the ride's derived metrics:
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
-            "88/88", "888-888", "8:88:88", "888-888",
+            "88/88", "888-888", "8:88:88", "888-888", // the course followed:
+            "888.8", "8888", "8.8K 88%", "8888", "8888", "",
         ];
         WIDEST[self as usize]
     }
@@ -570,7 +613,13 @@ impl Field {
     pub fn is_picture(self) -> bool {
         matches!(
             self,
-            Field::Map | Field::Graph | Field::HrGraph | Field::WbalGraph | Field::DfaGraph | Field::AltGraph
+            Field::Map
+                | Field::Graph
+                | Field::HrGraph
+                | Field::WbalGraph
+                | Field::DfaGraph
+                | Field::AltGraph
+                | Field::Profile
         )
     }
 
@@ -746,6 +795,16 @@ pub fn draw_graph_axes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), title: &st
     let ty = a.1 + a.3 + 2;
     text::draw_in(c, &AXIS, a.0, ty, a.2 / 2, Align::Left, from);
     text::draw_in(c, &AXIS, a.0 + a.2 / 2, ty, a.2 - a.2 / 2, Align::Right, "NOW");
+}
+
+/// A plot without axes (the course profile) in field box `bx`: left, top, columns, height.
+pub fn plot_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    (x + 4, y + FIELD_LABEL_H, w.saturating_sub(8), h.saturating_sub(FIELD_LABEL_H + 4))
+}
+
+/// A plot's title in its label line.
+pub fn draw_plot_title(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), title: &str) {
+    text::draw_in(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, w.saturating_sub(12), Align::Left, title);
 }
 
 /// Graph column `i` that showed a bar `old` (height, colour) now showing `new`: only the band between the two

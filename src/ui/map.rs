@@ -54,6 +54,51 @@ pub fn cos_q16(lat: i32) -> i64 {
     ((32_400_000_000 - 4 * t2) << 16) / (32_400_000_000 + t2)
 }
 
+/// Where (`lat`, `lon`) (degrees x 1e-7) is on the plane of `origin` (its latitude, longitude and [`cos_q16`] of its
+/// latitude): metres east and north.
+///
+/// ```
+/// use bryton_rustfw::map::{cos_q16, project};
+/// assert_eq!(project((0, 0, cos_q16(0)), 8983, 0), (0, 99)); // 8983e-7 degrees of latitude: 100 m
+/// ```
+pub fn project((lat0, lon0, cos): (i32, i32, i64), lat: i32, lon: i32) -> (i32, i32) {
+    // 1e-7 degrees of a great circle is 0.011132 m (WGS84 equator; inferred close enough for a drawing)
+    let x = (i64::from(lon) - i64::from(lon0)) * 11_132 * cos / 65_536 / 1_000_000;
+    let y = (i64::from(lat) - i64::from(lat0)) * 11_132 / 1_000_000;
+    (x as i32, y as i32)
+}
+
+/// A course drawn under the track ([`crate::course`]): its points in its own plane, the bounding box of each
+/// [`Route::CHUNK`] of them (so a dirty box draws only the chunks it touches), where its plane's origin is on the
+/// track's plane, and its id (a new course fits the map again).
+#[derive(Clone, Copy)]
+pub struct Route<'a> {
+    /// Points, metres east and north of the course's first point.
+    pub pts: &'a [(i32, i32)],
+    /// Per chunk of points: min x, min y, max x, max y.
+    pub boxes: &'a [(i32, i32, i32, i32)],
+    /// The course's origin on the track's plane, metres.
+    pub off: (i32, i32),
+    /// Changes with the course.
+    pub id: u32,
+}
+
+impl Route<'_> {
+    /// Points per box.
+    pub const CHUNK: usize = 64;
+
+    /// South-west and north-east corners on the track's plane.
+    fn bounds(&self) -> Option<((i32, i32), (i32, i32))> {
+        let (o, b) = (self.off, self.boxes);
+        let min = (b.iter().map(|b| b.0).min()?, b.iter().map(|b| b.1).min()?);
+        let max = (b.iter().map(|b| b.2).max()?, b.iter().map(|b| b.3).max()?);
+        Some(((min.0 + o.0, min.1 + o.1), (max.0 + o.0, max.1 + o.1)))
+    }
+}
+
+/// The colour of a course on the map: magenta, apart from the track's orange and the basemap's roads and water.
+pub const COURSE: u16 = 0xc81f;
+
 /// The ride's track, in metres from its first fix.
 pub struct Track {
     /// The first fix (degrees x 1e-7) and cos of its latitude x 65536.
@@ -117,11 +162,8 @@ impl Track {
 
     /// A good fix: latitude and longitude in degrees x 1e-7, heading of motion in degrees x 1e-5.
     pub fn add(&mut self, lat: i32, lon: i32, heading: i32) {
-        let (lat0, lon0, cos) = *self.origin.get_or_insert((lat, lon, cos_q16(lat)));
-        // 1e-7 degrees of a great circle is 0.011132 m (WGS84 equator; inferred close enough for a drawing)
-        let x = (i64::from(lon) - i64::from(lon0)) * 11_132 * cos / 65_536 / 1_000_000;
-        let y = (i64::from(lat) - i64::from(lat0)) * 11_132 / 1_000_000;
-        let p = (x as i32, y as i32);
+        let o = *self.origin.get_or_insert((lat, lon, cos_q16(lat)));
+        let p = project(o, lat, lon);
         if self.pos.is_none() || self.stale {
             (self.min, self.max, self.stale) = (p, p, false); // the first fix: the last known position goes
         }
@@ -184,10 +226,17 @@ pub struct View {
 }
 
 impl View {
-    /// The view of `track` in `area`: the whole track in the middle two thirds, at the smallest scale; None before a
-    /// fix.
-    pub fn fit(track: &Track, area: Rect) -> Option<View> {
-        Self::fit_in(track, i64::from(area.2 - 2 * MARGIN) * 2 / 3, i64::from(area.3 - 2 * MARGIN) * 2 / 3)
+    /// The view of `track` (and of `route`, when there is one) in `area`: all of them in the middle two thirds, at
+    /// the smallest scale; None before a fix.
+    pub fn fit(track: &Track, area: Rect, route: Option<&Route>) -> Option<View> {
+        let (fw, fh) = (i64::from(area.2 - 2 * MARGIN) * 2 / 3, i64::from(area.3 - 2 * MARGIN) * 2 / 3);
+        let (min, max) = match route.and_then(Route::bounds) {
+            Some((a, b)) => {
+                ((a.0.min(track.min.0), a.1.min(track.min.1)), (b.0.max(track.max.0), b.1.max(track.max.1)))
+            }
+            None => (track.min, track.max),
+        };
+        Self::fit_box(track, min, max, fw, fh)
     }
 
     /// The view of a whole ride's `track` in `area` (it will not grow): all of the map but a few pixels at the
@@ -198,11 +247,16 @@ impl View {
 
     /// The track in `fw` x `fh` pixels at the smallest scale.
     fn fit_in(track: &Track, fw: i64, fh: i64) -> Option<View> {
+        Self::fit_box(track, track.min, track.max, fw, fh)
+    }
+
+    /// The box from `min` to `max` in `fw` x `fh` pixels at the smallest scale; None while `track` has no position.
+    fn fit_box(track: &Track, min: (i32, i32), max: (i32, i32), fw: i64, fh: i64) -> Option<View> {
         track.pos?;
-        let (sx, sy) = (track.max.0 - track.min.0, track.max.1 - track.min.1);
-        let fits = |m: i64| i64::from(sx) * 16 / m <= fw && i64::from(sy) * 16 / m <= fh;
+        let (sx, sy) = (i64::from(max.0) - i64::from(min.0), i64::from(max.1) - i64::from(min.1));
+        let fits = |m: i64| sx * 16 / m <= fw && sy * 16 / m <= fh;
         let mpp16 = (MIN_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
-        Some(View { cx: track.min.0 + sx / 2, cy: track.min.1 + sy / 2, mpp16 })
+        Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16 })
     }
 
     /// Where point `p` (metres) falls on screen.
@@ -261,14 +315,16 @@ pub struct Shown {
     points: usize,
     thinned: u32,
     arrow: Option<Arrow>,
+    /// The course drawn ([`Route::id`]).
+    route: Option<u32>,
 }
 
 impl Shown {
-    /// The map of `track` in `area` as [`draw`] will show it when drawn whole now.
-    pub fn of(track: &Track, area: Rect) -> Shown {
-        let view = View::fit(track, area);
+    /// The map of `track` (and `route`) in `area` as [`draw`] will show it when drawn whole now.
+    pub fn of(track: &Track, area: Rect, route: Option<&Route>) -> Shown {
+        let view = View::fit(track, area, route);
         let arrow = view.and_then(|v| Arrow::of(&v, area, track));
-        Shown { view, points: track.len, thinned: track.thinned, arrow }
+        Shown { view, points: track.len, thinned: track.thinned, arrow, route: route.map(|r| r.id) }
     }
 }
 
@@ -403,9 +459,16 @@ fn scale_bar(c: &mut impl Canvas, k: Rect, area: Rect, view: &View) {
 }
 
 /// Draws the map of `track` in `area` as `view` shows it (None: "NO FIX"): the background (the basemap from
-/// `base`'s buffer, else black), the track, the scale bar and the arrow, in that order. Only the part `c` keeps
-/// ([`Canvas::clip`]) costs anything.
-pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>, base: Option<&Basemap>) {
+/// `base`'s buffer, else black), the course (`route`), the track, the scale bar and the arrow, in that order. Only
+/// the part `c` keeps ([`Canvas::clip`]) costs anything: of the course, only the chunks whose box it touches.
+pub fn draw(
+    c: &mut dyn Canvas,
+    area: Rect,
+    track: &Track,
+    view: Option<View>,
+    base: Option<&Basemap>,
+    route: Option<&Route>,
+) {
     let mut c = Clip::new(c, area);
     let k = cut(area, c.clip());
     if k.2 == 0 || k.3 == 0 {
@@ -438,6 +501,24 @@ pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>, b
         }
         return;
     };
+    if let Some(r) = route {
+        let o = r.off;
+        for (i, b) in r.boxes.iter().enumerate() {
+            let ((x0, y0), (x1, y1)) = (v.px(area, (b.0 + o.0, b.3 + o.1)), v.px(area, (b.2 + o.0, b.1 + o.1)));
+            if x1 + 2 < k.0 || x0 >= k.0 + k.2 || y1 + 2 < k.1 || y0 >= k.1 + k.3 {
+                continue;
+            }
+            // the chunk's points and the first of the next (the segment between them)
+            let from = i * Route::CHUNK;
+            let pts = r.pts.get(from..(from + Route::CHUNK + 1).min(r.pts.len())).unwrap_or(&[]);
+            for w in pts.windows(2) {
+                if let [a, b] = *w {
+                    let (a, b) = ((a.0 + o.0, a.1 + o.1), (b.0 + o.0, b.1 + o.1));
+                    segment(&mut c, k, v.px(area, a), v.px(area, b), COURSE);
+                }
+            }
+        }
+    }
     for w in track.points().windows(2) {
         if let [a, b] = *w {
             segment(&mut c, k, v.px(area, a), v.px(area, b), ui::ACCENT);
@@ -458,24 +539,31 @@ pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>, b
     }
 }
 
-/// The view must change: the first position, the position near the edge, the track thinned. The first fix after
-/// the last known position keeps the view when it falls inside it (no new basemap).
-pub fn refit(area: Rect, track: &Track, shown: &Shown) -> bool {
+/// The view must change: the first position, the position near the edge, the track thinned, another course. The
+/// first fix after the last known position keeps the view when it falls inside it (no new basemap).
+pub fn refit(area: Rect, track: &Track, shown: &Shown, route: Option<&Route>) -> bool {
     match shown.view {
         None => track.pos.is_some(),
-        Some(v) => shown.thinned != track.thinned || !v.keeps(area, track),
+        Some(v) => shown.thinned != track.thinned || !v.keeps(area, track) || shown.route != route.map(|r| r.id),
     }
 }
 
 /// Brings the map in `area` on the panel `c` from `shown` to the track now: the whole map when the view must
 /// change ([`refit`]; the caller draws the basemap for [`Shown::of`] first), else only the box holding the new
 /// segments and the arrow's old and new places, its background copied from `base`.
-pub fn update(c: &mut dyn Canvas, area: Rect, track: &Track, shown: &mut Shown, base: Option<&Basemap>) {
-    let refit = refit(area, track, shown);
+pub fn update(
+    c: &mut dyn Canvas,
+    area: Rect,
+    track: &Track,
+    shown: &mut Shown,
+    base: Option<&Basemap>,
+    route: Option<&Route>,
+) {
+    let refit = refit(area, track, shown, route);
     let Some(v) = shown.view.filter(|_| !refit) else {
         if refit {
-            *shown = Shown::of(track, area);
-            draw(c, area, track, shown.view, base);
+            *shown = Shown::of(track, area, route);
+            draw(c, area, track, shown.view, base, route);
         }
         return;
     };
@@ -493,7 +581,7 @@ pub fn update(c: &mut dyn Canvas, area: Rect, track: &Track, shown: &mut Shown, 
         }
     }
     if let Some(d) = dirty {
-        draw(&mut Clip::new(c, d), area, track, shown.view, base);
+        draw(&mut Clip::new(c, d), area, track, shown.view, base, route);
     }
     shown.points = track.len;
     shown.arrow = arrow;
@@ -538,12 +626,12 @@ mod tests {
             t.add(450_000_000 + i * 900, 60_000_000 + i * 600, 0);
         }
         let area = (0, 24, 240, 296);
-        let v = View::fit(&t, area).unwrap();
+        let v = View::fit(&t, area, None).unwrap();
         for &p in t.points() {
             let (x, y) = v.px(area, p);
             assert!(x >= MARGIN && x < 240 - MARGIN && y >= 24 + MARGIN && y < 320 - MARGIN, "{p:?} at {x},{y}");
         }
         assert!(v.keeps(area, &t));
-        assert_eq!(View::fit(&Track::new(), area), None);
+        assert_eq!(View::fit(&Track::new(), area, None), None);
     }
 }

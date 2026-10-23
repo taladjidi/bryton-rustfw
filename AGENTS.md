@@ -172,6 +172,11 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/workout.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
   whole (name, steps, targets, repeats written out), the calendar from today on. `src/workout.rs`: the player, pure
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
+- `src/storage/course.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
+  module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
+  memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/course.rs`: the course model,
+  pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
+  off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns.
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
   restores from under the arrow and the track.

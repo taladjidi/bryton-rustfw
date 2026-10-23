@@ -445,7 +445,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn read_all(fat: &mut Fat, d: &mut Ram, path: &str) -> Result<Vec<u8>, Error> {
+    pub fn read_all(fat: &mut Fat, d: &mut Ram, path: &str) -> Result<Vec<u8>, Error> {
         let f = fat.open(d, path)?;
         let mut v = std::vec![0u8; f.size as usize];
         assert_eq!(fat.read_at(d, &f, 0, &mut v)?, v.len());

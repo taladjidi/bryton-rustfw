@@ -111,7 +111,7 @@ Others
 - [ ] Gears, gear ratio, gear combo, Di2 battery (stock, Garmin, Wahoo, Karoo)
 - [ ] E-bike: battery, range, assist mode and level (stock, Garmin, Wahoo, Karoo)
 - [~] Workout fields: target power, cadence, heart rate, step and workout time left, interval count (stock, all): sim; the step's target, time left, the next step, the step count; no workout time left
-- [ ] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all)
+- [~] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all): sim, distance to go, off course, the climb, ascent left; no turns or POIs
 - [ ] Road surface type (Garmin)
 - [ ] Battery of the unit and of each sensor as fields (Garmin, Wahoo)
 
@@ -175,8 +175,8 @@ Others
 - [ ] North up, heading up (stock Compass / Heading Mode, all)
 - [ ] Our own OpenStreetMap packs over USB (all have region maps)
 - [ ] Contour lines, POIs, street names on the map (Garmin, Wahoo, Karoo)
-- [ ] Follow a course (FIT or GPX): line on the map, distance to go (stock, all)
-- [ ] Off-course alert, back on track to the nearest point (stock, Wahoo Back on Track, all)
+- [x] Follow a course (FIT or GPX): line on the map, distance to go (stock, all): sim, from stock's \PlanTrip (Bryton's own layout), Garmin FIT courses and GPX in \Courses
+- [~] Off-course alert, back on track to the nearest point (stock, Wahoo Back on Track, all): sim, the alert and the distance off; no way back drawn
 - [ ] Navigate to the start of a course first (stock)
 - [ ] Reverse a course (stock, Garmin)
 - [ ] Turn-by-turn cues (stock, all)
@@ -191,7 +191,7 @@ Others
 - [ ] Course creator on the unit (Garmin 1050)
 - [ ] POIs and peaks along a course (stock, Garmin)
 - [ ] Live segments (Strava) (stock LiveSegments, Garmin, Wahoo, Karoo)
-- [ ] Course sync from Strava, Komoot, RideWithGPS (stock app, all): without an app, copied over USB
+- [~] Course sync from Strava, Komoot, RideWithGPS (stock app, all): without an app, copied over USB: sim, the routes stock's app synced and GPX or FIT copied over USB
 - [ ] Virtual ride: a course on a smart trainer (stock, Wahoo)
 
 ## Training: zones, workouts, plans, metrics
@@ -229,11 +229,11 @@ Others
 ## Climbing
 
 - [x] Elevation profile graph of the ride (Garmin, Karoo): sim
-- [ ] Climb detection on a course: each climb's length, grade, what is left (stock Climb Challenge 2.0, Garmin ClimbPro, Wahoo Summit, Karoo Climber)
+- [x] Climb detection on a course: each climb's length, grade, what is left (stock Climb Challenge 2.0, Garmin ClimbPro, Wahoo Summit, Karoo Climber): sim, Garmin's definition (500 m, 3 %), a banner and a beep at each start
 - [ ] Climb page that opens by itself near a climb, can be turned off (stock Climb Page Switch, Garmin)
 - [ ] Climbs without a course, predicted from the road ahead (stock Climb Challenge 2.0, Karoo Climber, Garmin 1050)
 - [ ] Climb filter: all or medium and above (stock)
-- [ ] Gradient-coloured climb profile in sections (stock, all)
+- [x] Gradient-coloured climb profile in sections (stock, all): sim, the PROFILE field
 - [ ] Pacing on a climb from FTP and W' balance (ours, Garmin Power Guide)
 - [ ] Summit segments / climb challenges with others (Wahoo, Garmin 1050)
 
@@ -246,7 +246,7 @@ Others
 - [~] Heart rate, power, cadence, speed high / low alerts (stock Alert, Garmin, Wahoo): sim, heart rate high; not power, cadence, speed or low limits yet
 - [ ] Custom alerts with text (Wahoo, Karoo)
 - [~] Notices: GPS fix, sensor paired, battery low (stock, all): sim, on the overview
-- [ ] Turn and off-course beeps (stock, all)
+- [~] Turn and off-course beeps (stock, all): sim, off course; no turns
 - [ ] Bike bell on the speaker or buzzer (Garmin 1050, Wahoo Roam 3)
 - [ ] Radar alerts (stock, all)
 - [ ] Incident detection with the accelerometer (Garmin, Karoo, Wahoo)

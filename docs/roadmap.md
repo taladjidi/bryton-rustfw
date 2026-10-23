@@ -129,11 +129,15 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
 
 ## 6. Navigation and climbs
 
-- Courses from FIT and GPX files: the line on the map, off-course alert, distance to go, back to start.
-- The course's elevation profile; **climb detection** on a course (as Garmin's ClimbPro: each climb's length,
-  grade, what is left), and without a course from the barometer and the map's contours; pacing on a climb from
-  FTP and W' balance.
-- Turn-by-turn cues; rerouting on the unit later.
+- **Done (sim):** courses from stock's `\PlanTrip` (Bryton's own route layout), Garmin FIT courses and GPX copied to
+  `\Courses`: the line on the map, where the rider is on it (a moving window, a bounded search when lost),
+  off-course alert, distance to go, ascent left; the course's elevation profile coloured by grade; **climb
+  detection** (Garmin ClimbPro's definition: each climb's length, grade, what is left, a banner at its start).
+- **Next:** the way back to the course drawn, navigate to the start, reverse a course; a climb page that opens by
+  itself; climbs without a course from the barometer and the map's contours; pacing on a climb from FTP and W'
+  balance.
+- Turn-by-turn cues (stock's `voiceTrip.fit` holds them: message 250 with street names); rerouting on the unit
+  later.
 
 ## 7. Training
 
