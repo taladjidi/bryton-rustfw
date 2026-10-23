@@ -464,18 +464,27 @@ pub enum Field {
     DfaGraph,
     /// Of altitude: the elevation profile.
     AltGraph,
+    // totals of the rides on the card (stock's and, once saved, this firmware's) and the ride running
+    /// This week's distance, km (from Monday).
+    WeekKm,
+    /// This week's riding time, h.
+    WeekH,
+    /// This year's distance, km.
+    YearKm,
+    /// Every ride's distance, km (the odometer).
+    TotalKm,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 39] = {
+    pub const ALL: [Field; 43] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
             Ascent, Graph, Temp, HrGraph, Dfa, Rmssd, // power.rs and the ride's derived metrics:
             Power3s, Power10s, Power30s, Np, If, Tss, Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr, AvgCadence, Balance, Vam,
-            Grade, WbalGraph, DfaGraph, AltGraph,
+            Grade, WbalGraph, DfaGraph, AltGraph, WeekKm, WeekH, YearKm, TotalKm,
         ]
     };
 
@@ -522,6 +531,10 @@ impl Field {
             "W'BAL GRAPH",
             "DFA GRAPH",
             "ELEV GRAPH",
+            "WEEK KM",
+            "WEEK H",
+            "YEAR KM",
+            "TOTAL KM",
         ];
         LABELS[self as usize]
     }
@@ -532,7 +545,7 @@ impl Field {
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
             "88.88", "8888", "", "-88.8", "", "8.88", "888", // power.rs and the ride's derived metrics:
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
-            "88/88", "-8888", "-88.8", "", "", "",
+            "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888",
         ];
         WIDEST[self as usize]
     }

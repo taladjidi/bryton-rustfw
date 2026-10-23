@@ -6,7 +6,8 @@
   searching, then 1 to 4 signal bars), the time, the ride's state (a red dot while it records, orange bars while paused), a USB symbol,
   the battery (green while charging, red at 15 % and under).
 - **Overview** (the main screen): the time, big (no seconds: it changes once a minute), the date, four fields chosen
-  in the menu (OVERVIEW; by default distance, timer, heart rate, temperature), and the latest notices (a GPS fix, a
+  in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
+  rides on the card, read by themselves 30 s after start-up), and the latest notices (a GPS fix, a
   sensor paired, the battery low), or Ferris the Rust crab when there are none.
 - **Ride pages:** up to three, each in one of eleven layouts (one to six fields: even grids, and uneven ones such as
   a big box over two or over a 2 x 2 grid, two over a big one, three rows), chosen in the menu: speed, heart rate, cadence,

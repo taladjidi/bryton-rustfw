@@ -996,7 +996,7 @@ mod tests {
         let _ = s;
         crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10]);
         crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
-        let values = [(Field::Dist, "0.00"), (Field::Timer, "0:00:00"), (Field::Hr, "--"), (Field::Temp, "--")];
+        let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, "--")];
         for (i, (field, v)) in values.into_iter().enumerate() {
             let bx = crate::ui::overview_box(i).unwrap();
             crate::ui::draw_field_frame(&mut f, bx, field);
@@ -1149,6 +1149,29 @@ mod tests {
         run(&mut sim, &mut app, 1000);
         assert_eq!(app.screen(), Screen::Main, "swipe right: back");
         assert_consistent(&sim, &app);
+    }
+
+    /// The overview's totals: stock's rides are read by themselves a while after start-up, then the week, year and
+    /// all-time distance show (with the ride running added).
+    #[test]
+    fn overview_totals_from_stocks_rides() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let w = PageCfg {
+            layout: 4,
+            fields: [Field::WeekKm, Field::WeekH, Field::YearKm, Field::TotalKm, Field::Time, Field::Time],
+        }
+        .to_words();
+        (sim.backup[26], sim.backup[27]) = (w[0], w[1]);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 5000);
+        assert_eq!(app.field_text(Field::TotalKm).as_str(), "--", "not read yet");
+        run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 20_000);
+        assert_eq!(app.stock.status(), crate::stock::Status::Done, "read by itself");
+        assert_eq!(app.field_text(Field::WeekKm).as_str(), "19");
+        assert_eq!(app.field_text(Field::TotalKm).as_str(), "37");
+        assert_consistent(&sim, &app);
+        sim.save("overview_totals");
     }
 
     /// The stock data menu over the synthetic volume (tools/fat_image.py) through the eMMC model: READ RIDES
@@ -1600,13 +1623,13 @@ mod tests {
         to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(OVERVIEW)));
         app.press(&mut sim, Press::Short(Key::Start));
         assert_eq!(app.rows(Menu::Page(OVERVIEW)), 4);
-        app.press(&mut sim, Press::Short(Key::Start)); // KM -> AVG KM/H
+        app.press(&mut sim, Press::Short(Key::Start)); // WEEK KM -> WEEK H
         assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(app.screen(), Screen::Main);
         assert_consistent(&sim, &app);
-        assert_eq!(App::start(&mut sim, None).pages()[OVERVIEW].fields[0], Field::AvgSpeed, "kept");
+        assert_eq!(App::start(&mut sim, None).pages()[OVERVIEW].fields[0], Field::WeekH, "kept");
     }
 
     /// The receiver is powered at start and gets its configuration (RAM layer) once; with a fix, "GPS" turns green
@@ -1895,6 +1918,12 @@ mod tests {
         assert!(bg(&sim) > 30_000, "the basemap: {}", bg(&sim));
         assert_consistent(&sim, &app);
         std::println!("basemap at the last known position: {:?}", app.basemap_stats());
+        // stock's rides are read by themselves after STOCK_SCAN_MS: read first, so the reads counted below are the
+        // basemap's
+        app.stock.start(app.date);
+        while app.stock.status() == crate::stock::Status::Running {
+            run(&mut sim, &mut app, u64::from(POLL_MS));
+        }
         let reads = |sim: &Sim| sim.emmc.cmds.iter().filter(|c| c.0 == 17 || c.0 == 18).count();
         sim.gnss.fix = Some(8000);
         let view = app.map_view(2);

@@ -583,7 +583,7 @@ const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
         PageCfg { layout: 3, fields: [Speed, Hr, Cadence, Time, Time, Time] },
         PageCfg { layout: 4, fields: [Speed, Hr, Cadence, Power, Time, Time] },
         PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] },
-        PageCfg { layout: 4, fields: [Dist, Timer, Hr, Temp, Time, Time] },
+        PageCfg { layout: 4, fields: [WeekKm, WeekH, TotalKm, Temp, Time, Time] },
     ]
 };
 
@@ -688,6 +688,9 @@ pub enum Screen {
     /// The card of the ride just ended: its map, elevation profile and numbers.
     Summary,
 }
+
+/// Stock's rides are read by themselves this long after start-up (for the totals), unless a ride runs.
+pub const STOCK_SCAN_MS: u32 = 30_000;
 
 /// How long a banner stays up, unless an input dismisses it first.
 pub const BANNER_MS: u32 = 4000;
@@ -1094,6 +1097,22 @@ impl App {
                 return l;
             }
             Field::Map | Field::Graph | Field::HrGraph | Field::WbalGraph | Field::DfaGraph | Field::AltGraph => {
+                return l;
+            }
+            Field::WeekKm | Field::WeekH | Field::YearKm | Field::TotalKm => {
+                // the rides on the card (once read: see step_stock) and the one running
+                if self.stock.status() != stock::Status::Done {
+                    l.push_str("--");
+                    return l;
+                }
+                let o = &self.stock.out;
+                let (live_m, live_s) = if r.state() == ride::State::Idle { (0, 0) } else { (r.dist_m(), r.timer_s()) };
+                match f {
+                    Field::WeekH => push_fixed_u(&mut l, (o.week.time_s + live_s) / 360, 1),
+                    Field::WeekKm => l.push_u32((o.week.dist_m + live_m) / 1000),
+                    Field::YearKm => l.push_u32((o.year.dist_m + live_m) / 1000),
+                    _ => l.push_u32((o.all.dist_m + live_m) / 1000),
+                }
                 return l;
             }
             Field::Temp => {
@@ -2034,6 +2053,13 @@ impl App {
 
     /// The scan of stock's rides goes on, if it runs.
     fn step_stock(&mut self, b: &mut impl Board) {
+        // read once by itself, a while after start-up and not during a ride, for the totals on the overview
+        if self.stock.status() == stock::Status::Idle
+            && self.gnss_ms >= STOCK_SCAN_MS
+            && self.ride.state() == ride::State::Idle
+        {
+            self.stock.start(self.date);
+        }
         if self.stock.status() == stock::Status::Running {
             let budget = if self.ride.state() == ride::State::Idle { Self::SCAN_IDLE } else { Self::SCAN_RIDING };
             self.stock.step(&mut emmc::Volume(&mut self.emmc, b), budget);
