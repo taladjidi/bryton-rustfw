@@ -272,7 +272,7 @@ static SPI_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 /// After a first timeout the SPI is taken as dead: later waits give up at once (still counted), so a stuck panel
 /// costs nothing and the loop and the USB dev link keep running, so `dev.py peek` can find out why (that is how
-/// the SPI1 mode fault was found: README, "First run on the unit").
+/// the SPI1 mode fault was found: docs/journal.md).
 // ponytail: dead until reset, even after a one-off timeout; retry later if one ever happens on a working panel.
 fn spi_wait(flag: u32) -> bool {
     let t0 = cycles();

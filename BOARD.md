@@ -34,8 +34,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   - An earlier reading, "our firmware stops in its first MPU writes" (diag v1 / v2), relied on the backlight as
     a readout, which later proved not to work (section on the backlight below). Unproven.
   - **Seen on the unit (2026-10-22, diag v9):** an image that turns the I-cache on, reads PC13 and requests a
-    system reset (AIRCR) runs as expected: the reset brings the bootloader up again (README "First run on the
-    unit").
+    system reset (AIRCR) runs as expected: the reset brings the bootloader up again (docs/journal.md, 2026-10-22).
   - **This firmware turns the I-cache on** (MPU region write-through cacheable, ICIALLU, CCR.IC; D-cache off):
     seen stable on the unit from RAM (2026-10-23).
   - Switching the MPU off is not an option: the default memory map makes 0xc0000000..0xdfffffff execute-never.

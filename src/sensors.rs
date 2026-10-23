@@ -2,7 +2,10 @@
 //! the ride pages show. Pure logic: the radio side is in nrf.rs.
 //!
 //! Channel, device type and period are stock's (`Ant_OpenSensorChannel` 0xd025e7f0, BOARD.md 11); the data layouts
-//! are the public ANT+ device profiles.
+//! are the public ANT+ device profiles, checked against openant's decoders (github.com/Tigge/openant,
+//! `devices/bike_speed_cadence.py` and `devices/power_meter.py`, 2026-10-23): speed or cadence alone, event time in
+//! bytes 4-5 and count in 6-7; combined, cadence in 0-3 and speed in 4-7; power page 0x10, cadence in byte 3
+//! (0xff: none) and instantaneous power in 6-7, all little endian, times in 1/1024 s.
 
 /// A kind of ANT+ sensor, one ANT channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

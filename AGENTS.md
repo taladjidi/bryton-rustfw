@@ -175,7 +175,7 @@ the `font_sheet` test) when choosing a text size.
   - With a diagram where it helps: the pin map (BOARD.md 4) gets every new pin, and a sequence where order or
     timing matters (power-up, reset, a bus transfer, a key) gets a timing diagram in plain text, signal names on
     the left, `~` high, `_` low, times between `|<-` and `->|`. Plain text renders anywhere and diffs well.
-  - What still needs the unit is listed in README.md, "Not yet seen on the unit"; update that list after
+  - What still needs the unit is listed in docs/status.md, "Not yet seen on the unit"; update that list after
     each run on the unit.
 - **When a driver is added** (GNSS, Nordic, eMMC), do it the same way:
   - its protocol goes in the library, against a `Board` primitive;
@@ -197,7 +197,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, and into `dev::Session` with command words mixed in; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver and the cable (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
-| 7. On the unit, features | README "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
+| 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
 
 - **A new boot step that touches the core (MPU, caches, clocks, VTOR)** gets a `DIAG_STOP` stage on the unit
   before it is trusted: Renode does not model it.
@@ -211,6 +211,13 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 - `///` on every public item (`#![warn(missing_docs)]` in lib.rs).
 - Comments say why, and where a value comes from; the code says what.
 - `cargo doc --target aarch64-apple-darwin --open` renders the library docs.
+
+## Look it up, don't recall it
+
+Before writing a protocol, a format, an algorithm or a driver from memory, check primary sources online
+(datasheets, reference manuals, the official spec, the reference implementation) and well-known crates or
+libraries that already do it; use or adapt them when they fit (no_std, no heap, small, safe). Cite what was used
+(URL and what was taken) in the module doc. Something that could not be checked is marked "inferred".
 
 ## Toolchain and dependencies
 
@@ -234,7 +241,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
   - Never flash without the owner present.
   - Never touch IAP.bin or the bootloader.
   - The way back is Engineer Mode (cable in **before** the four-button restart) + `tools/iaprecover.py
-    --write-vanilla` (README). `--write out/IMG.bin` writes one of our builds the same way, checked first.
+    --write-vanilla` (docs/install.md). `--write out/IMG.bin` writes one of our builds the same way, checked first.
   - Record every write to the unit in bryton-S510-mods' FLASHLOG.
   - **The USB link to the unit can drop** (2026-10-22, see that repo's `docs/recovery.md`): copy, then verify
     by reading back; never trust a copy that was not compared.
@@ -248,7 +255,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 
 ## Development loop on the unit
 
-Install the firmware once, as an update (README). From then on, with the cable in and the green dot at the top right:
+Install the firmware once (docs/install.md). From then on, with the cable in and the green dot at the top right:
 
     ./dev.py info                 # version, uptime
     ./dev.py shot -o shot.png     # screenshot (what the app drew, rendered row by row: no framebuffer)
@@ -262,7 +269,7 @@ Install the firmware once, as an update (README). From then on, with the cable i
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
   through a trampoline in ITCM, which copies the image over 0xd0000000 and jumps as the bootloader does.
 - **Status: works on the unit (2026-10-23):** `info`, `shot`, `peek` / `poke` and `run` (the build runs from RAM
-  and the link comes back). `peek` / `poke` found both first-run bugs (README, "First run on the unit").
+  and the link comes back). `peek` / `poke` found both first-run bugs (docs/journal.md).
 - **The dot:**
   - orange: USB powered, not configured yet;
   - green: the dev link is ready;
