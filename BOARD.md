@@ -36,6 +36,8 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   - **Seen on the unit (2026-10-22, diag v9):** an image that turns the I-cache on, reads PC13 and requests a
     system reset (AIRCR) runs as expected: the reset brings the bootloader up again (README "First run on the
     unit").
+  - **This firmware turns the I-cache on** (MPU region write-through cacheable, ICIALLU, CCR.IC; D-cache off):
+    seen stable on the unit from RAM (2026-10-23).
   - Switching the MPU off is not an option: the default memory map makes 0xc0000000..0xdfffffff execute-never.
   - **Unaligned reads from the SDRAM return wrong bytes** (seen on the unit, 2026-10-23, this firmware's region:
     normal, not cached). A 7-byte constant at 0xd000a0c3 copied with unaligned loads came out as `03 01 03 00`
