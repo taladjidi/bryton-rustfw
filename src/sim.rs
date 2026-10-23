@@ -72,6 +72,8 @@ pub struct EmmcCard {
     pub busy_polls: u32,
     /// Every command, in order: (index, argument).
     pub cmds: Vec<(u8, u32)>,
+    /// What the card holds from sector 0 on, zeros after it; empty: [`emmc_sector`] everywhere.
+    pub image: Vec<u8>,
     state: u32,
     busy_left: u32,
     card_wide: bool,
@@ -86,6 +88,7 @@ impl Default for EmmcCard {
             dead: false,
             busy_polls: 3,
             cmds: Vec::new(),
+            image: Vec::new(),
             state: 4,
             busy_left: 0,
             card_wide: true,
@@ -96,7 +99,7 @@ impl Default for EmmcCard {
     }
 }
 
-/// What the simulated eMMC holds in sector `lba`: the sector number, then a pattern that depends on it.
+/// What the simulated eMMC holds in sector `lba` when it has no image: the sector number, then a pattern that depends on it.
 pub fn emmc_sector(lba: u32) -> [u8; 512] {
     let mut s = [0u8; 512];
     for (i, b) in s.iter_mut().enumerate() {
@@ -191,7 +194,16 @@ impl EmmcCard {
             return Err(Timeout); // out of range: no data
         }
         for (i, chunk) in buf.chunks_exact_mut(512).enumerate() {
-            chunk.copy_from_slice(&emmc_sector(arg + i as u32));
+            let lba = arg + i as u32;
+            match self.image.len() {
+                0 => chunk.copy_from_slice(&emmc_sector(lba)),
+                len => {
+                    let at = (lba as usize * 512).min(len);
+                    let have = &self.image[at..(at + 512).min(len)];
+                    chunk[..have.len()].copy_from_slice(have);
+                    chunk[have.len()..].fill(0);
+                }
+            }
         }
         if index == 18 {
             self.state = 5; // sending until CMD12
@@ -1381,6 +1393,11 @@ mod tests {
     /// A synthetic ride at 8 m/s (28.8 km/h): 240 s east with a gentle wiggle, then a loop of 600 m radius
     /// counterclockwise, starting heading east. Latitude, longitude (1e-7 degrees) and heading (1e-5 degrees).
     fn ride_route(ms: u64) -> (i32, i32, i32) {
+        route_from(ms, (FIX_LAT, FIX_LON), 1.0)
+    }
+
+    /// The same ride turned half a circle (west, then a loop south), from `origin`: `sign` -1.
+    fn route_from(ms: u64, (lat0, lon0): (i32, i32), sign: f64) -> (i32, i32, i32) {
         let at = |t: f64| {
             if t < 240.0 {
                 (8.0 * t, 30.0 * (t * core::f64::consts::TAU / 60.0).sin())
@@ -1391,10 +1408,83 @@ mod tests {
         };
         let t = ms as f64 / 1000.0;
         let ((x, y), (x1, y1)) = (at(t), at(t + 0.5));
+        let (x, y, x1, y1) = (sign * x, sign * y, sign * x1, sign * y1);
         let heading = (x1 - x).atan2(y1 - y).to_degrees().rem_euclid(360.0);
         let m_per_unit = 0.011_132; // metres per 1e-7 degree of latitude, as map.rs
-        let cos = (f64::from(FIX_LAT) * 1e-7).to_radians().cos();
-        (FIX_LAT + (y / m_per_unit) as i32, FIX_LON + (x / m_per_unit / cos) as i32, (heading * 1e5) as i32)
+        let cos = (f64::from(lat0) * 1e-7).to_radians().cos();
+        (lat0 + (y / m_per_unit) as i32, lon0 + (x / m_per_unit / cos) as i32, (heading * 1e5) as i32)
+    }
+
+    /// The ride west and south of 0 N 0 E, where the synthetic tiles are (tools/fat_image.py).
+    fn tiles_route(ms: u64) -> (i32, i32, i32) {
+        route_from(ms, crate::tiles::tests::ORIGIN, -1.0)
+    }
+
+    /// The basemap from the synthetic tiles (on the FAT volume macOS made, through the eMMC driver): drawn at
+    /// the last known position before a fix, kept at the first fix, then under the ride. Between view changes the
+    /// arrow and the track restore it in small boxes and the eMMC is not read; the screenshot equals the panel.
+    #[test]
+    fn basemap_under_the_map() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some(crate::tiles::tests::ORIGIN) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        sim.gnss.route = Some(tiles_route);
+        let mut app = App::start(&mut sim, None);
+        app.set_map_memory(crate::tiles::tests::memory());
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        run(&mut sim, &mut app, 500);
+        let bg = |sim: &Sim| sim.screen.iter().filter(|&&p| p == crate::tiles::BACKGROUND).count();
+        sim.save("basemap_last_known");
+        assert!(bg(&sim) > 30_000, "the basemap: {}", bg(&sim));
+        assert_consistent(&sim, &app);
+        std::println!("basemap at the last known position: {:?}", app.basemap_stats());
+        let reads = |sim: &Sim| sim.emmc.cmds.iter().filter(|c| c.0 == 17 || c.0 == 18).count();
+        sim.gnss.fix = Some(8000);
+        let view = app.map_shown[2].view;
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(app.map_shown[2].view, view, "the first fix, inside the view: the same view, no new basemap");
+        assert_consistent(&sim, &app);
+        let t0 = sim.ms;
+        let (mut refits, mut refit_px, mut small_px, mut small_reads, mut drawn) = (0, 0, 0, 0, 0);
+        let mut seconds = 0;
+        while sim.ms < t0 + 840_000 {
+            let (view, px, r) = (app.map_shown[0].view, sim.pixels, reads(&sim));
+            app.step(&mut sim);
+            sim.delay_ms(POLL_MS);
+            if app.map_shown[0].view != view {
+                refits += 1;
+                refit_px += sim.pixels - px;
+                drawn += u64::from(app.basemap_stats().px);
+                std::println!("view change at {} s: {:?}", (sim.ms - t0) / 1000, app.basemap_stats());
+            } else {
+                small_px += sim.pixels - px;
+                small_reads += reads(&sim) - r;
+            }
+            if (sim.ms - t0) / 1000 > seconds {
+                seconds = (sim.ms - t0) / 1000;
+                if seconds % 60 == 0 {
+                    assert_consistent(&sim, &app);
+                }
+                if seconds == 120 {
+                    sim.save("basemap_ride");
+                }
+            }
+        }
+        assert_consistent(&sim, &app);
+        sim.save("basemap_loop");
+        let s = (sim.ms - t0) / 1000;
+        std::println!(
+            "basemap ride: {refits} view changes ({} panel px, {} buffer px each), {} panel px/s between them",
+            refit_px / refits.max(1),
+            drawn / refits.max(1),
+            small_px / s
+        );
+        assert_eq!(small_reads, 0, "the eMMC is read on view changes only");
+        assert!(small_px / s < 2000, "{} px/s between view changes", small_px / s);
+        assert!(bg(&sim) > 20_000, "the basemap under the loop");
     }
 
     /// The map page (page 3 by default) through a ride: "NO FIX" until the first fix, then the track and the arrow;
@@ -1801,6 +1891,34 @@ mod emmc_tests {
     use super::*;
     use crate::dev::{Effect, Session, Stats, send_layout, send_sector};
     use crate::emmc::{BusError, Card, Emmc, Error, Layout, SECTOR};
+
+    /// The FAT32 volume macOS made (fat.rs tests), read through the driver and the card model: files equal the
+    /// tiles, and the reads of a file are multi-block (CMD18) where whole sectors go to the buffer.
+    #[test]
+    fn reads_files_from_the_fat_volume() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut emmc = Emmc::new();
+        let mut d = crate::emmc::Volume(&mut emmc, &mut sim);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Map/Data/Temp/Zoom14/P/8192_8192_0.bin").unwrap();
+        let mut buf = vec![0u8; f.size as usize];
+        assert_eq!(fat.read_at(&mut d, &f, 0, &mut buf), Ok(buf.len()));
+        let h = fat.open(&mut d, "map/data/temp/zoom14/h/8192_8192_0.bin").unwrap();
+        let mut n = [0u8; 4];
+        fat.read_at(&mut d, &h, 0, &mut n).unwrap();
+        assert_eq!(u32::from_le_bytes(n) * 10 + 4, h.size, "an H file: count, then 10 bytes a feature");
+        // the same bytes as the image read directly
+        let mut ram = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut direct = vec![0u8; f.size as usize];
+        crate::fat::Fat::mount(&mut ram).unwrap().read_at(&mut ram, &f, 0, &mut direct).unwrap();
+        assert_eq!(buf, direct);
+        let frag = fat.open(&mut d, "frag.bin").unwrap(); // 200 KB: whole clusters
+        let mut big = vec![0u8; frag.size as usize];
+        assert_eq!(fat.read_at(&mut d, &frag, 0, &mut big), Ok(big.len()));
+        assert!(sim.emmc.cmds.iter().any(|c| c.0 == 18), "multi-block reads");
+        assert!(sim.emmc.cmds.iter().all(|c| [0, 1, 2, 3, 6, 7, 8, 12, 13, 16, 17, 18].contains(&c.0)));
+    }
 
     /// Identification from the state the bootloader leaves (selected, 4-bit), without stock's SD probes, then the
     /// layout from SEC_COUNT.

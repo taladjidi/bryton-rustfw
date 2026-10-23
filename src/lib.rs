@@ -12,6 +12,7 @@ pub mod ambient;
 pub mod battery;
 pub mod dev;
 pub mod emmc;
+pub mod fat;
 pub mod fit;
 pub mod fonts;
 pub mod gnss;
@@ -23,6 +24,7 @@ pub mod sensors;
 #[cfg(test)]
 mod sim;
 pub mod text;
+pub mod tiles;
 pub mod ui;
 
 use nrf::SensorId;
@@ -583,6 +585,10 @@ pub struct App {
     track: map::Track,
     /// The maps on screen, by ride field.
     map_shown: [map::Shown; 6],
+    /// The eMMC, for the basemap and the dev link (identified at first use, never at boot).
+    emmc: emmc::Emmc,
+    /// Roads and water under the first map field of a page, drawn once per view.
+    basemap: tiles::Basemap,
 }
 
 impl App {
@@ -676,6 +682,8 @@ impl App {
             menu_shown: [0; ui::MENU_ROWS],
             track: map::Track::new(),
             map_shown: Default::default(),
+            emmc: emmc::Emmc::new(),
+            basemap: tiles::Basemap::new(),
         };
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -715,6 +723,33 @@ impl App {
             light_timeout: self.light_timeout,
         };
         b.backup_write(WHEEL_BKP, misc.to_word());
+    }
+
+    /// Memory for the basemap (at least [`tiles::MEM_WORDS`] words); without it the map has no basemap.
+    pub fn set_map_memory(&mut self, mem: &'static mut [u16]) {
+        self.basemap.set_memory(mem);
+    }
+
+    /// The eMMC, shared with the dev link so there is one view of the card's state.
+    pub fn emmc(&mut self) -> &mut emmc::Emmc {
+        &mut self.emmc
+    }
+
+    /// The last basemap view change's cost.
+    pub fn basemap_stats(&self) -> tiles::Stats {
+        self.basemap.stats
+    }
+
+    /// Ride page `n`'s first map field: the one with the basemap.
+    fn first_map(&self, n: usize) -> Option<usize> {
+        self.boxes(n).position(|(_, f)| f == Field::Map)
+    }
+
+    /// Draws the basemap of `view` in `area` into its buffer, unless it holds it already.
+    fn render_basemap(&mut self, b: &mut impl Board, area: map::Rect, view: Option<map::View>) {
+        if let (Some(v), Some(o)) = (view, self.track.origin()) {
+            self.basemap.render(&mut emmc::Volume(&mut self.emmc, b), area, v, o);
+        }
     }
 
     /// What is on screen.
@@ -977,10 +1012,12 @@ impl App {
                 ui::draw_ferris(c);
             }
             Screen::Ride(n) => {
+                let first = self.first_map(n);
                 for (i, (bx, f)) in self.boxes(n).enumerate() {
                     ui::draw_field_frame(c, bx, f);
+                    let base = (first == Some(i)).then_some(&self.basemap);
                     match (f, self.map_shown.get(i), self.graph_shown.get(i)) {
-                        (Field::Map, Some(m), _) => map::draw(c, map::area(bx), &self.track, m.view),
+                        (Field::Map, Some(m), _) => map::draw(c, map::area(bx), &self.track, m.view, base),
                         (Field::Graph, _, Some(&g)) => {
                             let a = ui::graph_area(bx);
                             ui::draw_graph(c, a, &|i| self.graph_bar(g, a.2, a.3, i));
@@ -1077,6 +1114,12 @@ impl App {
                     *m = map::Shown::of(&self.track, map::area(bx));
                 }
             }
+            if let Some(i) = self.first_map(n)
+                && let Some(bx) = self.boxes(n).nth(i).map(|(bx, _)| bx)
+            {
+                let view = self.map_shown[i].view;
+                self.render_basemap(b, map::area(bx), view);
+            }
             self.graph_shown = [self.graph_now(); 6];
         }
         let mut p = Panel(b);
@@ -1095,10 +1138,17 @@ impl App {
 
     /// Redraws the ride field values that changed, what changed on a map, and a graph's new bar.
     fn update_ride(&mut self, b: &mut impl Board, n: usize) {
+        let first = self.first_map(n);
         for (i, (bx, f)) in self.boxes(n).enumerate() {
             if f == Field::Map {
+                let area = map::area(bx);
+                if first == Some(i) && self.map_shown.get(i).is_some_and(|m| map::refit(area, &self.track, m)) {
+                    let view = map::Shown::of(&self.track, area).view;
+                    self.render_basemap(b, area, view);
+                }
+                let base = (first == Some(i)).then_some(&self.basemap);
                 if let Some(m) = self.map_shown.get_mut(i) {
-                    map::update(&mut Panel(b), map::area(bx), &self.track, m);
+                    map::update(&mut Panel(b), area, &self.track, m, base);
                 }
                 continue;
             }

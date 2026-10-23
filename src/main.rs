@@ -19,7 +19,7 @@ mod hw;
 mod usb;
 
 use bryton_rustfw::dev::{self, Effect, Session, Stats};
-use bryton_rustfw::emmc::{BusError, Emmc};
+use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -1068,7 +1068,6 @@ fn main() -> ! {
     let mut usb_tried = false;
     let mut session = Session::new();
     let mut stats = Stats::default();
-    let mut emmc = Emmc::new(); // identified at the first `sector` or `emmc` command, never at boot
     let (mut awake, mut passes) = (0u32, 0u32);
     loop {
         let t0 = cycles();
@@ -1100,13 +1099,13 @@ fn main() -> ! {
                     }
                     Effect::Sector(lba) => {
                         let mut buf = [0u8; bryton_rustfw::emmc::SECTOR];
-                        let r = emmc.read(&mut board, lba, &mut buf).map(|()| &buf);
+                        let r = app.emmc().read(&mut board, lba, &mut buf).map(|()| &buf);
                         dev::send_sector(l, r);
                         l.flush();
                         woke = true;
                     }
                     Effect::Emmc => {
-                        dev::send_layout(l, emmc.layout(&mut board));
+                        dev::send_layout(l, app.emmc().layout(&mut board));
                         l.flush();
                         woke = true;
                     }

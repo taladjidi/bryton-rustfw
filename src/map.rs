@@ -12,9 +12,12 @@
 //! - **Redraw:** otherwise only the box around the new segment and the arrow's old and new places is drawn, from
 //!   the state, through [`Clip`]: the same [`draw`] paints the whole map, a dirty box, or one screenshot row (each
 //!   segment is a run per row, clipped to [`Canvas::clip`]), so they agree by construction.
-//! - **Basemap (later):** [`draw`] paints the background first; map tiles would go there, under the track.
+//! - **Basemap:** [`draw`] copies the background from the basemap's buffer ([`crate::tiles`]), drawn once per view,
+//!   so a dirty box restores the roads under the arrow without drawing them again. "NO MAP" (top left) when no
+//!   cached tiles cover the view; black as before when the basemap has no memory.
 
 use crate::text::{self, Align, Line, Style};
+use crate::tiles::{Basemap, Layer};
 use crate::ui::{self, Canvas, H, LABEL, W};
 
 /// Track points kept at most (8 bytes each).
@@ -102,6 +105,11 @@ impl Track {
         }
     }
 
+    /// The first fix or the last known position (degrees x 1e-7): the plane's origin.
+    pub fn origin(&self) -> Option<(i32, i32)> {
+        self.origin.map(|(lat, lon, _)| (lat, lon))
+    }
+
     /// The position shown is the last one known, not a fix.
     pub fn stale(&self) -> bool {
         self.stale
@@ -165,9 +173,9 @@ pub fn mpp16(i: u32) -> i64 {
 /// What part of the plane the map shows: its centre (metres) and its scale, `mpp16` / 16 metres per pixel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct View {
-    cx: i32,
-    cy: i32,
-    mpp16: i64,
+    pub(crate) cx: i32,
+    pub(crate) cy: i32,
+    pub(crate) mpp16: i64,
 }
 
 impl View {
@@ -238,8 +246,6 @@ pub struct Shown {
     points: usize,
     thinned: u32,
     arrow: Option<Arrow>,
-    /// Drawn from the last known position, before a fix.
-    stale: bool,
 }
 
 impl Shown {
@@ -247,7 +253,7 @@ impl Shown {
     pub fn of(track: &Track, area: Rect) -> Shown {
         let view = View::fit(track, area);
         let arrow = view.and_then(|v| Arrow::of(&v, area, track));
-        Shown { view, points: track.len, thinned: track.thinned, arrow, stale: track.stale }
+        Shown { view, points: track.len, thinned: track.thinned, arrow }
     }
 }
 
@@ -381,16 +387,35 @@ fn scale_bar(c: &mut impl Canvas, k: Rect, area: Rect, view: &View) {
     }
 }
 
-/// Draws the map of `track` in `area` as `view` shows it (None: "NO FIX"): the background, the track, the scale
-/// bar and the arrow, in that order. Only the part `c` keeps ([`Canvas::clip`]) costs anything.
-pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>) {
+/// Draws the map of `track` in `area` as `view` shows it (None: "NO FIX"): the background (the basemap from
+/// `base`'s buffer, else black), the track, the scale bar and the arrow, in that order. Only the part `c` keeps
+/// ([`Canvas::clip`]) costs anything.
+pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>, base: Option<&Basemap>) {
     let mut c = Clip::new(c, area);
     let k = cut(area, c.clip());
     if k.2 == 0 || k.3 == 0 {
         return;
     }
-    // the background: a basemap layer would be drawn here, under the track
-    run(&mut c, k, area.0, area.1, area.2, area.3, ui::BLACK);
+    let layer = match (base, view, track.origin()) {
+        (Some(b), Some(v), Some(o)) => b.layer(area, v, o),
+        _ => Layer::None,
+    };
+    match layer {
+        Layer::Map(px) => {
+            let w = area.2 as u32;
+            c.blit(area.0 as u32, area.1 as u32, w, area.3 as u32, &mut |x, y| {
+                px.get((y * w + x) as usize).copied().unwrap_or(ui::BLACK)
+            });
+        }
+        Layer::NoMap => {
+            run(&mut c, k, area.0, area.1, area.2, area.3, ui::BLACK);
+            if area.0 >= 0 && area.1 >= 0 {
+                let grey = Style { fg: ui::GREY, ..LABEL };
+                text::draw(&mut c, &grey, area.0 as u32 + 8, area.1 as u32 + 8, Align::Left, "NO MAP");
+            }
+        }
+        Layer::None => run(&mut c, k, area.0, area.1, area.2, area.3, ui::BLACK),
+    }
     let Some(v) = view else {
         let (x, y) = (area.0 + area.2 / 2, area.1 + area.3 / 2 - LABEL.height() as i32 / 2);
         if x >= 0 && y >= 0 {
@@ -418,19 +443,24 @@ pub fn draw(c: &mut dyn Canvas, area: Rect, track: &Track, view: Option<View>) {
     }
 }
 
-/// Brings the map in `area` on the panel `c` from `shown` to the track now: the whole map when the view must
-/// change (first fix, the position near the edge, the track thinned), else only the box holding the new segments
-/// and the arrow's old and new places.
-pub fn update(c: &mut dyn Canvas, area: Rect, track: &Track, shown: &mut Shown) {
-    let refit = match shown.view {
+/// The view must change: the first position, the position near the edge, the track thinned. The first fix after
+/// the last known position keeps the view when it falls inside it (no new basemap).
+pub fn refit(area: Rect, track: &Track, shown: &Shown) -> bool {
+    match shown.view {
         None => track.pos.is_some(),
-        // the first fix after the last known position: fitted again around the fix
-        Some(v) => shown.thinned != track.thinned || shown.stale != track.stale || !v.keeps(area, track),
-    };
+        Some(v) => shown.thinned != track.thinned || !v.keeps(area, track),
+    }
+}
+
+/// Brings the map in `area` on the panel `c` from `shown` to the track now: the whole map when the view must
+/// change ([`refit`]; the caller draws the basemap for [`Shown::of`] first), else only the box holding the new
+/// segments and the arrow's old and new places, its background copied from `base`.
+pub fn update(c: &mut dyn Canvas, area: Rect, track: &Track, shown: &mut Shown, base: Option<&Basemap>) {
+    let refit = refit(area, track, shown);
     let Some(v) = shown.view.filter(|_| !refit) else {
         if refit {
             *shown = Shown::of(track, area);
-            draw(c, area, track, shown.view);
+            draw(c, area, track, shown.view, base);
         }
         return;
     };
@@ -448,7 +478,7 @@ pub fn update(c: &mut dyn Canvas, area: Rect, track: &Track, shown: &mut Shown) 
         }
     }
     if let Some(d) = dirty {
-        draw(&mut Clip::new(c, d), area, track, shown.view);
+        draw(&mut Clip::new(c, d), area, track, shown.view, base);
     }
     shown.points = track.len;
     shown.arrow = arrow;

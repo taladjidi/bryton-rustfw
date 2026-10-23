@@ -19,7 +19,7 @@
 //!   26 MHz at default speed, and this driver never goes above 25 MHz.
 //! - **The EXT_CSD read twice**, at 1 bit then at 4 bits, as a check of the 4-bit bus before any other read.
 
-use crate::Board;
+use crate::{Board, fat};
 
 /// Bytes per sector (block).
 pub const SECTOR: usize = 512;
@@ -247,5 +247,14 @@ impl Emmc {
             self.card = None;
         }
         r
+    }
+}
+
+/// The card as a [`fat::Disk`]: the FAT volume starts at sector 0 (BOARD.md 15, no MBR). Read only, as the driver.
+pub struct Volume<'a, B: Board>(pub &'a mut Emmc, pub &'a mut B);
+
+impl<B: Board> fat::Disk for Volume<'_, B> {
+    fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), fat::Error> {
+        self.0.read(self.1, lba, buf).map_err(|_| fat::Error::Io)
     }
 }

@@ -13,6 +13,9 @@ The dated findings are in [journal.md](journal.md).
   stock curve dimmed in bright light, so the curve was changed).
 - **Backlight levels** (60 / 30 / 10 %) and the time-out, each by eye.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
+- **The basemap** (roads and water from stock's cached tiles, `\Map\Data\Temp`): the FAT volume mounted by our
+  reader, the tiles at the last known position, the time a view change takes (simulated with real tiles: about
+  140 KB read, 84 K buffer pixels, 73 K panel pixels), the 1.5 MB SDRAM zeroing at boot (`hw::map_memory`).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

@@ -116,7 +116,13 @@ The point of this project is a firmware in safe Rust.
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
 - `src/emmc.rs`: the eMMC (SDMMC1) protocol, read only: identification, EXT_CSD SEC_COUNT, block reads, stock's
   layout; against the `Board` primitives `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read`; `sim.rs` has a
-  model of the card (`EmmcCard`). Used only by the dev link's `emmc` and `sector` commands so far.
+  model of the card (`EmmcCard`, which serves a FAT image when given one). Used by the basemap and by the dev
+  link's `emmc` and `sector` commands; identified at first use, never at boot.
+- `src/fat.rs`: a FAT32 reader, read only (no write path at all): boot sector, chains, 8.3 and long names, files at
+  an offset; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`).
+- `src/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
+  drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
+  restores from under the arrow and the track.
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests.
