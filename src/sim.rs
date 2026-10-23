@@ -1069,7 +1069,9 @@ mod tests {
         assert_eq!(app.screen(), Screen::Ride(2), "the map");
         assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Page));
-        assert_eq!(app.screen(), Screen::Main);
+        assert_eq!(app.screen(), Screen::Ride(0), "round the ride pages, not back to the overview");
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Main, "Back: the overview");
         assert_consistent(&sim, &app);
     }
 
@@ -1090,7 +1092,7 @@ mod tests {
         run(&mut sim, &mut app, 500);
         assert_eq!(app.screen(), Screen::Ride(0));
         run(&mut sim, &mut app, 1000);
-        assert_eq!(app.screen(), Screen::Main);
+        assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the previous ride page, round");
         assert_consistent(&sim, &app);
 
         let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
@@ -1699,11 +1701,12 @@ mod tests {
         assert_eq!(sim.light_level, 0, "timed out");
         app.press(&mut sim, Press::Short(Key::Page));
         assert_eq!((sim.light_level, app.screen()), (60, Screen::Ride(0)), "a key brings it back and acts");
+        app.press(&mut sim, Press::Short(Key::Back)); // a ride page's Back: the overview
         run(&mut sim, &mut app, 11_000);
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(sim.light_level, 60, "Back after the time-out: on, not toggled off");
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(sim.light_level, 0, "then Back toggles");
+        assert_eq!(sim.light_level, 0, "then Back on the overview toggles");
         let again = App::start(&mut sim, None);
         assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
         drop(again);
@@ -2035,8 +2038,7 @@ mod tests {
         app.pages[0] =
             PageCfg { layout: 3, fields: [Field::Map, Field::Speed, Field::Hr, Field::Time, Field::Time, Field::Time] };
         app.press(&mut sim, Press::Short(Key::Page));
-        app.press(&mut sim, Press::Short(Key::Page));
-        assert_eq!(app.screen(), Screen::Ride(0));
+        assert_eq!(app.screen(), Screen::Ride(0), "from the map, round to the first page");
         run(&mut sim, &mut app, 10_000);
         assert_consistent(&sim, &app);
         sim.save("map_field");

@@ -26,14 +26,14 @@
 
 ## Keys
 
-| Key | Main screen and ride pages | Menus |
+| Key | Overview and ride pages | Menus |
 |---|---|---|
-| Page | next page (main, ride pages, main) | down |
+| Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down |
 | hold Page | the menu | |
 | Lap | a lap (while riding) | up |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | end a paused ride | |
-| Back | backlight on / off | back |
+| Back | on a ride page, the overview; on the overview, backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
@@ -45,10 +45,10 @@ The power button starts it again. After the backlight's time-out, any key brings
 
 ## Touch
 
-| Gesture | Main screen and ride pages | Menus | A number being edited |
+| Gesture | Overview and ride pages | Menus | A number being edited |
 |---|---|---|---|
 | swipe left | next page (as Page) | | |
-| swipe right | previous page | back (as Back) | keep it |
+| swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
 | hold (600 ms, still) | the menu (as holding Page) | | |
 | tap | | selects the row touched and acts on it (as Start) | keep it |

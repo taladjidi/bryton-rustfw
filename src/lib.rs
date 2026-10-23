@@ -1319,6 +1319,14 @@ impl App {
         ui::draw_graph_axes(c, bx, title, [lo.as_str(), mid.as_str(), hi.as_str()], from.as_str());
     }
 
+    /// The first ride page that is on from page `from` (taken round), going forward by `step` (1, or PAGES - 1 for
+    /// backward): the ride pages go round among themselves; page 1 is never off.
+    fn ride_page(&self, from: usize, step: usize) -> Screen {
+        let on = |i: usize| self.pages.get(i % PAGES).is_some_and(|p| p.layout > 0);
+        let n = (0..PAGES).map(|k| (from + k * step) % PAGES).find(|&i| on(i)).unwrap_or(0);
+        Screen::Ride(n)
+    }
+
     /// The card of the ride (the one running, or the last one): its numbers and title.
     fn ride_card(&self) -> ui::card::Card {
         let (r, p) = (&self.ride, &self.power);
@@ -2137,10 +2145,11 @@ impl App {
                 }
                 return self.update_menu_rows(b, menu, sel);
             }
-            (Screen::Main, Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => self.screen = Screen::Ride(0),
+            // the overview is apart from the ride pages, as on stock: Page goes to them, then round them; Back
+            // comes back
+            (Screen::Main, Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => self.screen = self.ride_page(0, 1),
             (Screen::Ride(n), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
-                let next = (n + 1..PAGES).find(|&i| self.pages[i].layout > 0);
-                self.screen = next.map_or(Screen::Main, Screen::Ride);
+                self.screen = self.ride_page(n + 1, 1)
             }
             // a tap on a graph shows the next plot (kept with the page), a hold switches between the last minutes and
             // the whole ride
@@ -2164,10 +2173,10 @@ impl App {
                 }
                 return self.show(b);
             }
-            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => {
-                let n = if let Screen::Ride(n) = self.screen { n } else { PAGES };
-                self.screen = (0..n).rev().find(|&i| self.pages[i].layout > 0).map_or(Screen::Main, Screen::Ride);
+            (Screen::Ride(n), Input::Touch(Gesture::Swipe(Dir::Right))) => {
+                self.screen = self.ride_page(n + PAGES - 1, PAGES - 1)
             }
+            (Screen::Ride(_), Input::Back) => self.screen = Screen::Main,
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(Menu::Main, 0))
             }
@@ -2198,7 +2207,7 @@ impl App {
                 }
                 return;
             }
-            (Screen::Main | Screen::Ride(_), Input::Back) => {
+            (Screen::Main, Input::Back) => {
                 self.backlight = !self.backlight;
                 self.update_light(b);
             }
