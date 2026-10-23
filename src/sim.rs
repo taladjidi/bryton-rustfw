@@ -48,6 +48,8 @@ pub struct Sim {
     pub battery_mv: Option<u16>,
     pub charger: bool,
     pub gnss: Gnss,
+    /// Pixels written to the panel so far (the drawing cost: each one is 16 bits over SPI).
+    pub pixels: u64,
 }
 
 /// Where the simulated fix is (degrees x 1e-7).
@@ -61,6 +63,9 @@ pub struct Gnss {
     pub powered: bool,
     /// Ground speed of a 3D fix in mm/s; None: no fix.
     pub fix: Option<i32>,
+    /// Where a fix is, as a function of the simulated time in ms: latitude, longitude (degrees x 1e-7) and heading
+    /// (degrees x 1e-5); None: [`FIX_LAT`], [`FIX_LON`], heading north.
+    pub route: Option<fn(u64) -> (i32, i32, i32)>,
     /// Every byte received, in order (0xff included).
     pub got: Vec<u8>,
     /// UTC of the next report, seconds since 1970 (set by the board: its RTC minus 2 h).
@@ -84,9 +89,11 @@ impl Gnss {
             p[4..6].copy_from_slice(&y.to_le_bytes());
             p[6..12].copy_from_slice(&[mo, d, h, mi, sec, 0x07]); // date and time valid
             (p[20], p[21], p[23]) = (3, 1, 9);
-            p[24..28].copy_from_slice(&FIX_LON.to_le_bytes());
-            p[28..32].copy_from_slice(&FIX_LAT.to_le_bytes());
+            let (lat, lon, heading) = self.route.map_or((FIX_LAT, FIX_LON, 0), |f| f(now));
+            p[24..28].copy_from_slice(&lon.to_le_bytes());
+            p[28..32].copy_from_slice(&lat.to_le_bytes());
             p[60..64].copy_from_slice(&speed.to_le_bytes());
+            p[64..68].copy_from_slice(&heading.to_le_bytes());
         }
         let body: Vec<u8> = [0x01, 0x07, 92, 0].iter().chain(&p).copied().collect();
         let (mut a, mut b) = (0u8, 0u8);
@@ -284,6 +291,7 @@ impl Sim {
             battery_mv: Some(3900),
             charger: false,
             gnss: Gnss::default(),
+            pixels: 0,
         }
     }
 
@@ -371,6 +379,7 @@ impl Board for Sim {
         assert_eq!(self.colmod & 0x07, 0x05, "pixel format is not 16-bit");
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
+        self.pixels += u64::from(count);
         for y in y0..=y1 {
             for x in x0..=x1 {
                 self.screen[(y * W + x) as usize] = next();
@@ -638,7 +647,7 @@ mod tests {
         assert!(main_screen(&mut sim, &app, UsbDot::Off) == sim.screen);
     }
 
-    /// Page goes from the main screen through the ride pages that are on (page 3 is off by default), and back.
+    /// Page goes from the main screen through the ride pages that are on (page 3 is the map by default), and back.
     #[test]
     fn page_turns_the_ride_pages() {
         let mut sim = Sim::new(9, 0, 0);
@@ -651,6 +660,9 @@ mod tests {
         assert_eq!(app.screen(), Screen::Ride(1));
         assert_eq!(app.pages()[1].fields[..4], [Field::Speed, Field::Hr, Field::Cadence, Field::Power]);
         assert!(ride(&mut sim, &app, 1, &["--"; 4], true) == sim.screen);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(2), "the map");
+        assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Page));
         assert_eq!(app.screen(), Screen::Main);
         assert_consistent(&sim, &app);
@@ -949,6 +961,97 @@ mod tests {
         assert!(sim.ms >= 6000, "standby while the key is still down would wake the unit at once");
         assert!(sim.asleep && !sim.display_on && !sim.backlight);
         assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
+    }
+
+    /// A synthetic ride at 8 m/s (28.8 km/h): 240 s east with a gentle wiggle, then a loop of 600 m radius
+    /// counterclockwise, starting heading east. Latitude, longitude (1e-7 degrees) and heading (1e-5 degrees).
+    fn ride_route(ms: u64) -> (i32, i32, i32) {
+        let at = |t: f64| {
+            if t < 240.0 {
+                (8.0 * t, 30.0 * (t * core::f64::consts::TAU / 60.0).sin())
+            } else {
+                let a = (t - 240.0) * 8.0 / 600.0;
+                (1920.0 + 600.0 * a.sin(), 600.0 - 600.0 * a.cos())
+            }
+        };
+        let t = ms as f64 / 1000.0;
+        let ((x, y), (x1, y1)) = (at(t), at(t + 0.5));
+        let heading = (x1 - x).atan2(y1 - y).to_degrees().rem_euclid(360.0);
+        let m_per_unit = 0.011_132; // metres per 1e-7 degree of latitude, as map.rs
+        let cos = (f64::from(FIX_LAT) * 1e-7).to_radians().cos();
+        (FIX_LAT + (y / m_per_unit) as i32, FIX_LON + (x / m_per_unit / cos) as i32, (heading * 1e5) as i32)
+    }
+
+    /// The map page (page 3 by default) through a ride: "NO FIX" until the first fix, then the track and the arrow;
+    /// fitted again a few times while the ride goes out, never once the loop is closed; between those, only small
+    /// boxes are redrawn. The panel always equals the screenshot rendered row by row.
+    #[test]
+    fn map_page_follows_a_ride() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        let mut app = App::start(&mut sim, None);
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        assert_eq!(app.screen(), Screen::Ride(2));
+        run(&mut sim, &mut app, 3000);
+        assert_consistent(&sim, &app);
+        sim.save("map_nofix");
+        sim.gnss.fix = Some(8000);
+        let area = crate::map::area(crate::ui::field_box(1, crate::ui::RIDE_H, 0).unwrap());
+        let t0 = sim.ms;
+        let (mut refits, mut refit_px, mut small_px, mut late_refits) = (0, 0, 0, 0);
+        let mut seconds = 0;
+        while sim.ms < t0 + 840_000 {
+            let (view, px) = (app.map_shown[0].view, sim.pixels);
+            app.step(&mut sim);
+            sim.delay_ms(POLL_MS);
+            let cost = sim.pixels - px;
+            if app.map_shown[0].view != view {
+                refits += 1;
+                refit_px += cost;
+                late_refits += u32::from(sim.ms > t0 + 720_000);
+            } else {
+                small_px += cost;
+            }
+            if (sim.ms - t0) / 1000 > seconds {
+                seconds = (sim.ms - t0) / 1000;
+                if seconds % 60 == 0 {
+                    assert_consistent(&sim, &app);
+                }
+                match seconds {
+                    30 => sim.save("map_start"),
+                    240 => sim.save("map_out"),
+                    _ => {}
+                }
+            }
+        }
+        assert_consistent(&sim, &app);
+        sim.save("map_loop");
+        let s = (sim.ms - t0) / 1000;
+        std::println!(
+            "map: {refits} full redraws ({} px each), {} px/s otherwise, {} px/s in all, over {s} s",
+            refit_px / refits.max(1),
+            small_px / s,
+            (refit_px + small_px) / s
+        );
+        assert!((2..=12).contains(&refits), "fitted again as the ride grows: {refits}");
+        assert_eq!(late_refits, 0, "the loop closed: the view stays");
+        assert!(small_px / s < 2000, "{} px/s between full redraws", small_px / s);
+        let v = app.map_shown[0].view.unwrap();
+        let (x, y) = v.px(area, app.track.pos().unwrap());
+        assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], crate::ui::WHITE, "the arrow at the position");
+        let track = sim.screen.iter().filter(|&&p| p == crate::ui::ACCENT).count();
+        assert!(track > 500, "the track drawn: {track} px");
+        // the map as one field of three, over speed and heart rate
+        app.pages[0] =
+            PageCfg { layout: 3, fields: [Field::Map, Field::Speed, Field::Hr, Field::Time, Field::Time, Field::Time] };
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_eq!(app.screen(), Screen::Ride(0));
+        run(&mut sim, &mut app, 10_000);
+        assert_consistent(&sim, &app);
+        sim.save("map_field");
     }
 
     /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

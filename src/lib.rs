@@ -12,6 +12,7 @@ pub mod battery;
 pub mod dev;
 pub mod fonts;
 pub mod gnss;
+pub mod map;
 pub mod nrf;
 pub mod panel;
 pub mod sensors;
@@ -274,13 +275,13 @@ pub const LIGHT_TIMEOUTS_S: [u32; 4] = [0, 10, 30, 60];
 pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
 
 /// The ride pages before any are set: speed big with heart rate and cadence (the time is in the strip), then four
-/// fields.
+/// fields, then the map.
 const DEFAULT_PAGES: [PageCfg; PAGES] = {
     use Field::*;
     [
         PageCfg { layout: 3, fields: [Speed, Hr, Cadence, Time, Time, Time] },
         PageCfg { layout: 4, fields: [Speed, Hr, Cadence, Power, Time, Time] },
-        PageCfg { layout: 0, fields: [Time; 6] },
+        PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] },
     ]
 };
 
@@ -423,6 +424,10 @@ pub struct App {
     main_shown: [u8; 6],
     /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
     menu_shown: [u32; ui::MENU_ROWS],
+    /// The ride's track, from the good fixes.
+    track: map::Track,
+    /// The maps on screen, by ride field.
+    map_shown: [map::Shown; 6],
 }
 
 impl App {
@@ -500,6 +505,8 @@ impl App {
             shown: Default::default(),
             main_shown: [0; 6],
             menu_shown: [0; ui::MENU_ROWS],
+            track: map::Track::new(),
+            map_shown: Default::default(),
         };
         app.strip_shown = app.strip;
         ui::draw_strip(&mut Panel(b), &app.strip);
@@ -555,6 +562,7 @@ impl App {
             Field::Speed => Metric::Speed,
             Field::Cadence => Metric::Cadence,
             Field::Power => Metric::Power,
+            Field::Map => return l,
         };
         match (self.live.get(metric), metric) {
             (None, _) => l.push_str("--"),
@@ -691,9 +699,12 @@ impl App {
                 ui::draw_ferris(c);
             }
             Screen::Ride(n) => {
-                for (bx, f) in self.boxes(n) {
+                for (i, (bx, f)) in self.boxes(n).enumerate() {
                     ui::draw_field_frame(c, bx, f);
-                    ui::draw_field_value(c, bx, f, self.field_text(f).as_str());
+                    match (f, self.map_shown.get(i)) {
+                        (Field::Map, Some(m)) => map::draw(c, map::area(bx), &self.track, m.view),
+                        _ => ui::draw_field_value(c, bx, f, self.field_text(f).as_str()),
+                    }
                 }
             }
             Screen::Menu(menu, sel) => {
@@ -778,6 +789,13 @@ impl App {
 
     /// Clears the page area and draws the current screen.
     fn show(&mut self, b: &mut impl Board) {
+        if let Screen::Ride(n) = self.screen {
+            for ((bx, f), m) in self.boxes(n).zip(&mut self.map_shown) {
+                if f == Field::Map {
+                    *m = map::Shown::of(&self.track, map::area(bx));
+                }
+            }
+        }
         let mut p = Panel(b);
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
@@ -789,9 +807,15 @@ impl App {
         }
     }
 
-    /// Redraws the ride field values that changed.
+    /// Redraws the ride field values that changed, and what changed on a map.
     fn update_ride(&mut self, b: &mut impl Board, n: usize) {
         for (i, (bx, f)) in self.boxes(n).enumerate() {
+            if f == Field::Map {
+                if let Some(m) = self.map_shown.get_mut(i) {
+                    map::update(&mut Panel(b), map::area(bx), &self.track, m);
+                }
+                continue;
+            }
             let text = self.field_text(f);
             if self.shown[i].as_str() != text.as_str() {
                 ui::draw_field_value_changes(&mut Panel(b), bx, f, self.shown[i].as_str(), text.as_str());
@@ -985,6 +1009,9 @@ impl App {
                     self.learn_aid(b, pvt);
                     let sensor =
                         [Kind::Speed, Kind::SpeedCadence].iter().any(|&k| self.sensors[k as usize] != Sensor::Off);
+                    if pvt.good() {
+                        self.track.add(pvt.lat, pvt.lon, pvt.heading);
+                    }
                     if pvt.good() && !sensor {
                         // mm/s to km/h x 10
                         self.live.set(Metric::Speed, (pvt.speed_mm_s * 36 / 1000).min(u32::from(u16::MAX)) as u16);

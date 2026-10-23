@@ -6,7 +6,11 @@ Bryton.
 
 - **Screen:** a thin status strip at the top (BLE, GPS, the time, a USB dot, the battery), then the main screen (the
   time, big, and Ferris the Rust crab) and up to three ride pages of 1, 2, 3, 4 or 6 fields (speed, heart rate,
-  cadence, power, time), set from the menu. Everything is in the project's own dot-matrix font.
+  cadence, power, time, map), set from the menu; page 3 is the map by default. Everything is in the project's own
+  dot-matrix font.
+- **Map:** the ride's track from the GPS fixes (since power-on), north up, scaled to fit the whole track, an arrow
+  for the position and heading, a scale bar. It is fitted again (one full redraw) only when the position nears the
+  edge; otherwise only the box around the new segment and the arrow is redrawn (src/map.rs). No basemap yet.
 - **Keys:** Page goes from the main screen through the ride pages and back; hold Page for the menu (in menus: Page / Lap move, Start selects or
   changes a value, Back goes back). Back toggles the backlight; held 3 s it switches off (standby). The power
   button starts it again, and power off also switches the radio chip off.
@@ -161,6 +165,8 @@ input. Still to see:
   shortens the next one.
 - The backlight PWM levels and time-out (LPTIM1, as stock), each level by eye.
 - The I-cache from a cold boot (seen from RAM: stable, ride page 0.5 % -> 0.2 % awake, GPS menu 2.2 % -> 1.3 %).
+- The map on a real ride (simulated: 8 full redraws in a 14 min ride out and round a loop, 660 pixels/s between
+  them), and the awake time it costs on the map page.
 - Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
 - Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12). The low-battery switch-off (3.3 V) has not been reached on the unit.
