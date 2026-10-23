@@ -1063,6 +1063,9 @@ fn main() -> ! {
     checkpoint(4);
     let mut board = S510;
     let mut app = App::start(&mut board, ANT_KEY);
+    if let Some(mem) = hw::map_memory() {
+        app.set_map_memory(mem); // zeroes 1.5 MB of SDRAM once: about 10 to 30 ms (inferred), before the first map
+    }
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;

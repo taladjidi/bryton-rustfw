@@ -2,16 +2,21 @@
    word 0 and jumps to word 1 (BOARD.md 2). Code and constants run in place from SDRAM;
    data and the stack live in DTCM (128 KB at 0x20000000, always on, not cached). The RAM-run trampoline (hw.rs)
    lives in ITCM, so it can overwrite the image it came from. SDRAM from 0xd0800000 is the staging area for
-   images loaded over USB (hw.rs STAGE): nothing is linked there. */
+   images loaded over USB (hw.rs STAGE): nothing is linked there. MAP (16 MB in, past the 6 MB the bootloader
+   copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
+   either. */
 MEMORY
 {
   SDRAM (rx) : ORIGIN = 0xd0000000, LENGTH = 1M
   DTCM (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
   ITCM (rwx) : ORIGIN = 0x00001000, LENGTH = 4K
+  MAP (rw)   : ORIGIN = 0xd1000000, LENGTH = 1536K
 }
 
 ENTRY(reset)
 _stack_top = ORIGIN(DTCM) + LENGTH(DTCM);
+_smap = ORIGIN(MAP);
+_emap = ORIGIN(MAP) + LENGTH(MAP);
 
 SECTIONS
 {

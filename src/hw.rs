@@ -1,12 +1,13 @@
 //! The only module with `unsafe`: the vector table, the reset entry, register access, three CPU instructions,
-//! the staging area for images loaded over USB and the jump into them, and the critical-section implementation
-//! the USB crates need. Everything else in the firmware is safe Rust built on these (AGENTS.md, "Safe Rust only").
+//! the staging area for images loaded over USB and the jump into them, the map's memory in SDRAM, and the
+//! critical-section implementation the USB crates need. Everything else in the firmware is safe Rust built on these (AGENTS.md, "Safe Rust only").
 
 #![allow(unsafe_code)]
 
 use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Vector table. Word 0x94 (vector 37) must hold "R039": the stock updater (BOARD.md 10) takes an IMG.bin with
@@ -153,6 +154,35 @@ pub fn stage_write(offset: u32, data: &[u8]) {
             // SAFETY: inside the staging area, which no Rust object occupies (see STAGE).
             unsafe { write_volatile((STAGE as usize + o) as *mut u8, b) };
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The map's memory (tiles.rs: the basemap's pixels and the decoded tiles, 1.3 MB): link.x reserves MAP in SDRAM
+// for it and links nothing there. Handed out once, zeroed, as a plain slice: the rest of the firmware stays safe.
+// ---------------------------------------------------------------------------------------------------------------
+
+unsafe extern "C" {
+    static _smap: u16;
+    static _emap: u16;
+}
+
+/// The map's memory, zeroed: Some the first time, None after (so there is only ever one reference to it).
+pub fn map_memory() -> Option<&'static mut [u16]> {
+    static TAKEN: AtomicBool = AtomicBool::new(false);
+    if TAKEN.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+    let (start, end) = (&raw const _smap as usize, &raw const _emap as usize);
+    let (p, len) = (start as *mut u16, (end - start) / 2);
+    // SAFETY: [_smap, _emap) is SDRAM that link.x reserves for this alone (MAP: 2-byte aligned, mapped by the
+    // FMC as the bootloader set it up, normal memory in main.rs's MPU region) and links nothing into; the only
+    // other users of SDRAM are the image below 0xd0600000 and the staging area below 0xd0900000. TAKEN makes this
+    // the only reference ever made to it, for the life of the program. Every word is written (zeroed) through the
+    // raw pointer before the reference exists, so the slice is initialised u16s.
+    unsafe {
+        core::ptr::write_bytes(p, 0, len);
+        Some(core::slice::from_raw_parts_mut(p, len))
     }
 }
 
