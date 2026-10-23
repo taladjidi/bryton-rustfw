@@ -88,7 +88,7 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
     the screen shows the clock, the dev link works, and `dev.py run` starts a new build from RAM.
   - **Power on from standby (2026-10-23):** the power button drives PA0 (WKUP1) and PA1; PA0 was left in its
     reset analog mode, so the press never woke the unit (only the four-button restart did). Found with `peek` /
-    `poke` (BOARD.md 9); with PA0 configured as an input, power off and on work, with or without the cable.
+    `poke` (BOARD.md 9); with PA0 configured as an input (57ab570, installed), power off and on work.
 - **The bootloader jumps with both caches off** (BOARD.md 2): the firmware runs uncached from SDRAM until it
   turns the I-cache on.
 - **Renode passed all of these:** it does not model the MPU, the caches or the SPI mode fault (BOARD.md 2, 6).
