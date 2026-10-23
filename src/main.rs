@@ -541,6 +541,52 @@ fn adc_read(ch: u32) -> Option<u16> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// GNSS: a u-blox M10 on SPI4 (0x40013400, BOARD.md 13), power on PI6. SPI4 as SPI1 (RM0399 SPI): master, mode 0,
+// software chip select (PE4 by hand), kernel clock HSI 64 MHz / 64 = 1 MHz (stock's rate). Transfers move 4 bytes
+// per FIFO access (32-bit writes and reads pack four 8-bit frames).
+// ---------------------------------------------------------------------------------------------------------------
+const SPI4: u32 = 0x4001_3400;
+const RCC_APB2RSTR: u32 = RCC + 0x098;
+const GNSS_POWER: (Port, u32) = (Port::I, 6);
+const GNSS_CS: (Port, u32) = (Port::E, 4);
+
+fn gnss_init() {
+    modify(RCC_APB2ENR, 0, 1 << 13); // SPI4EN
+    modify(RCC_APB2RSTR, 0, 1 << 13); // from reset: a RAM run finds it as the last image left it
+    modify(RCC_APB2RSTR, 1 << 13, 0);
+    modify(RCC_D2CCIP1R, 7 << 16, 3 << 16); // SPI45SEL = hsi_ker_ck
+    for pin in [2, 5, 6] {
+        gpio(Port::E, pin, AF, 5); // SCK, MISO, MOSI
+    }
+    modify(gpio_base(Port::E) + 0x0c, 3 << 4, 2 << 4); // PE2 (SCK) pull-down, as stock
+    pin_set(GNSS_CS.0, GNSS_CS.1, true);
+    gpio(GNSS_CS.0, GNSS_CS.1, OUT, 0);
+    pin_set(GNSS_POWER.0, GNSS_POWER.1, false);
+    gpio(GNSS_POWER.0, GNSS_POWER.1, OUT, 0);
+    wr(SPI4 + 0x08, (5 << 28) | (3 << 5) | 7); // CFG1: /64, FIFO threshold 4 frames, 8-bit
+    wr(SPI4, 1 << 12); // CR1.SSI before CFG2.MASTER, or a mode fault clears MASTER (BOARD.md 6)
+    wr(SPI4 + 0x0c, (1 << 31) | (1 << 26) | (1 << 22)); // CFG2: AFCNTR, SSM, MASTER; mode 0
+    wr(SPI4 + 0x04, 0); // CR2: TSIZE 0, endless
+    wr(SPI4, (1 << 12) | 1); // SPE
+    wr(SPI4, (1 << 12) | (1 << 9) | 1); // CSTART
+}
+
+/// Exchanges `buf` with the receiver in place (its length a multiple of 4); gives up on a stuck SPI (0xff back).
+fn gnss_transfer(buf: &mut [u8]) {
+    pin_set(GNSS_CS.0, GNSS_CS.1, false);
+    for chunk in buf.chunks_exact_mut(4) {
+        let out = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let ok = wait_us(100, || rd(SPI4 + 0x14) & (1 << 1) != 0) && {
+            wr(SPI4 + 0x20, out); // TXDR
+            wait_us(100, || rd(SPI4 + 0x14) & 1 != 0) // RXP: 32 bits at 1 MHz take 32 us
+        };
+        let got = if ok { rd(SPI4 + 0x30) } else { u32::MAX }; // RXDR
+        chunk.copy_from_slice(&got.to_le_bytes());
+    }
+    pin_set(GNSS_CS.0, GNSS_CS.1, true);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The board for the app in lib.rs: each method is the transport only.
 // ---------------------------------------------------------------------------------------------------------------
 struct S510;
@@ -583,6 +629,12 @@ impl Board for S510 {
         let vref = adc_read(19)?;
         let battery = adc_read(1)?;
         Some((battery, vref, rd(VREFINT_CAL) as u16))
+    }
+    fn gnss_power(&mut self, on: bool) {
+        pin_set(GNSS_POWER.0, GNSS_POWER.1, on);
+    }
+    fn gnss_transfer(&mut self, buf: &mut [u8]) {
+        gnss_transfer(buf);
     }
     fn charger_present(&mut self) -> bool {
         !pin_low(VBUS.0, VBUS.1)
@@ -633,6 +685,7 @@ fn main() -> ! {
     checkpoint(3);
     spi_init();
     let _ = adc_init(); // a failure leaves the battery unknown ("--%")
+    gnss_init();
     checkpoint(4);
     let mut board = S510;
     let mut app = App::start(&mut board, ANT_KEY);

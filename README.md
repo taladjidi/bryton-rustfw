@@ -4,14 +4,17 @@ An open, from-scratch Rust firmware for Bryton bike computers. It currently targ
 as a proof of concept: it replaces Bryton's OS entirely, with ride pages fed by ANT+ sensors. Not affiliated with
 Bryton.
 
-- **Screen:** a thin status strip at the top (BLE, the time, a USB dot, the battery), then the main screen (the
+- **Screen:** a thin status strip at the top (BLE, GPS, the time, a USB dot, the battery), then the main screen (the
   time, big, and Ferris the Rust crab) and up to three ride pages of 1, 2, 3, 4 or 6 fields (speed, heart rate,
   cadence, power, time), set from the menu. Everything is in the project's own dot-matrix font.
 - **Keys:** Page goes from the main screen through the ride pages and back; hold Page for the menu (in menus: Page / Lap move, Start selects or
   changes a value, Back goes back). Back toggles the backlight; held 3 s it switches off (standby). The power
   button starts it again, and power off also switches the radio chip off.
 - **Menu:** sensors (Start searches and pairs the first one heard, Start again forgets it), the three pages
-  (field count and each field), the wheel size, and the BLE devices nearby.
+  (field count and each field), the wheel size, GPS (fix, satellites, position, altitude, UTC) and the BLE
+  devices nearby.
+- **GPS:** the u-blox M10 is on while the unit is; "GPS" in the strip is grey while it searches, green with a
+  fix. Without a paired speed sensor, the speed comes from it.
 - **ANT+ sensors:** heart rate, speed, cadence, speed and cadence, power, on stock's channels. A paired sensor is
   kept through power off, so a friend's is never taken. Needs the ANT+ network key, which you copy from your own
   stock firmware (see "ANT+ key" below).
@@ -133,6 +136,8 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
 - **Unaligned reads from the SDRAM are wrong (2026-10-23):** page 2's default fields showed garbled. Reading the
   app's state in DTCM with `dev.py peek` showed a 7-byte constant copied wrong from SDRAM; the image itself was
   right. Built with `+strict-align` since (BOARD.md 2).
+- **GPS (2026-10-23):** the receiver is a u-blox M10 on SPI4 and already sends NAV-PVT after stock (BOARD.md 13);
+  explored with `tools/gnss.py` (peek / poke), then the firmware's driver.
 - **Battery (2026-10-23):** ADC3 reads the battery against VREFINT as stock does; 99 % while charging, in line with
   stock's last stored reading. Three quirks found with `peek` / `poke` (BOARD.md 12).
 - **Heart rate and pairing (2026-10-23, from RAM, the owner's strap):** "HR 58" to "HR 70" from the strap
@@ -146,6 +151,7 @@ Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (
 with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13; the RTC
 holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
 input. Still to see:
+- A GPS fix (the receiver answers and reports, indoors without satellites).
 - Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
 - Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12). The low-battery switch-off (3.3 V) has not been reached on the unit.

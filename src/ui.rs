@@ -101,6 +101,8 @@ pub struct Strip {
     pub time: (u8, u8),
     /// The Nordic chip answered (BLE / ANT usable).
     pub radio: bool,
+    /// GNSS: None when the receiver is not answering, else whether it has a fix.
+    pub gps: Option<bool>,
     /// USB state.
     pub usb: UsbDot,
     /// Battery charge in percent, if known.
@@ -111,12 +113,14 @@ pub struct Strip {
 
 /// The strip's boxes (x, width): BLE on the left, the time centred, then USB and the battery on the right.
 const STRIP_BLE: (u32, u32) = (4, 3 * CELL * 2);
+const STRIP_GPS: (u32, u32) = (STRIP_BLE.0 + STRIP_BLE.1 + 6, 3 * CELL * 2);
 const STRIP_TIME: (u32, u32) = ((W - 5 * CELL * 2) / 2, 5 * CELL * 2);
 const STRIP_BATTERY: (u32, u32) = (W - 4 - 4 * CELL * 2, 4 * CELL * 2);
 /// The USB dot: x, size (it sits between the time and the battery, centred on the text's capitals).
 const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 16, 8);
 
-/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), the time in the middle; on
+/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" (grey while
+/// searching, green with a fix, nothing if the receiver is silent), the time in the middle; on
 /// the right a dot in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
 /// under); then the orange line.
 pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
@@ -129,6 +133,12 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
     }
     at(c, STRIP_TIME, WHITE, Align::Left, l.as_str());
     at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
+    let gps = match s.gps {
+        None => BLACK,
+        Some(false) => GREY,
+        Some(true) => GREEN,
+    };
+    at(c, STRIP_GPS, gps, Align::Left, "GPS");
     let usb = match s.usb {
         UsbDot::Off => BLACK,
         UsbDot::Failed => RED,
@@ -389,7 +399,8 @@ pub fn draw_title(c: &mut impl Canvas, title: &str) {
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
     let y = LIST_Y + i as u32 * LIST_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
-    let name_w = 10 * CELL * LABEL.scale;
+    // the label's own length (at most 10 characters), the value takes the rest of the row
+    let name_w = (label.len().min(9) as u32 + 1) * CELL * LABEL.scale;
     c.fill(0, y, NEARBY.0, LIST_ROW, bg);
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, y, name_w, Align::Left, label);
     let fg = if selected { BLACK } else { value_color };
@@ -472,14 +483,21 @@ pub(crate) mod tests {
             }
         }
         assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2);
-        let strip = [STRIP_BLE, STRIP_TIME, (STRIP_USB.0 - 8, STRIP_USB.1 + 8), STRIP_BATTERY];
+        let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, (STRIP_USB.0 - 8, STRIP_USB.1 + 8), STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(SECONDS_Y + SECONDS.height() <= CRAB_Y && TIME_Y + TIME.height() <= SECONDS_Y && TIME_Y > STRIP_H);
     }
 
     #[test]
     fn rows_match_the_framebuffer() {
-        let strip = Strip { time: (12, 34), radio: true, usb: UsbDot::Ready, battery: Some(87), charging: true };
+        let strip = Strip {
+            time: (12, 34),
+            radio: true,
+            gps: Some(true),
+            usb: UsbDot::Ready,
+            battery: Some(87),
+            charging: true,
+        };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);
         draw_ferris(&mut f);

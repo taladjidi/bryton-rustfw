@@ -11,6 +11,7 @@
 pub mod battery;
 pub mod dev;
 pub mod fonts;
+pub mod gnss;
 pub mod nrf;
 pub mod panel;
 pub mod sensors;
@@ -54,6 +55,11 @@ pub trait Board {
     /// The battery as ADC3 reads it (BOARD.md 12): the battery channel, VREFINT, and VREFINT_CAL (VREFINT at
     /// VDDA = 3.3 V), all 16-bit; None if the ADC did not come up. Takes about half a millisecond.
     fn battery_adc(&mut self) -> Option<(u16, u16, u16)>;
+    /// GNSS receiver power (PI6, BOARD.md 13).
+    fn gnss_power(&mut self, on: bool);
+    /// Exchanges `buf` with the GNSS receiver over SPI, in place; `buf.len()` is a multiple of 4. The receiver
+    /// sends 0xff when it has nothing.
+    fn gnss_transfer(&mut self, buf: &mut [u8]);
     /// USB power (charger) present.
     fn charger_present(&mut self) -> bool;
     /// RTC backup register `n` (0..32): kept through resets and power off (BOARD.md 8).
@@ -230,6 +236,16 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
 
+/// When the GNSS receiver gets its configuration after power-up (it boots in well under a second; stock waits 3 s
+/// before reading it at all).
+pub const GNSS_CONFIG_MS: u32 = 1000;
+
+/// A fix older than this is dropped (the receiver stopped answering).
+pub const PVT_STALE_MS: u32 = 3000;
+
+/// GNSS bytes read per pass: 64 per 50 ms is 1280 bytes/s, ten times NAV-PVT at 1 Hz.
+const GNSS_READ: usize = 64;
+
 /// A sensor's channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sensor {
@@ -250,6 +266,8 @@ pub enum Menu {
     Sensors,
     /// Ride page `n`'s layout and fields.
     Page(usize),
+    /// What the GNSS receiver reports.
+    Gps,
 }
 
 /// What is on screen.
@@ -266,7 +284,7 @@ pub enum Screen {
 }
 
 /// Main menu rows.
-const MAIN_ROWS: usize = 6;
+const MAIN_ROWS: usize = 7;
 
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
@@ -296,6 +314,12 @@ pub struct App {
     battery: battery::Battery,
     /// Since the last battery reading.
     battery_ms: u32,
+    gnss: gnss::Parser,
+    /// The last fix, and its age.
+    pvt: Option<gnss::Pvt>,
+    pvt_ms: u32,
+    /// Since the receiver was powered (its configuration is sent once, after [`GNSS_CONFIG_MS`]).
+    gnss_ms: u32,
     wheel_mm: u16,
     pages: [PageCfg; PAGES],
     /// The ride field values on screen, to redraw only what changed.
@@ -308,6 +332,7 @@ impl App {
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
         b.backlight(true);
+        b.gnss_power(true);
         let mut rx = nrf::Rx::new();
         let ble = nrf::start(b).ok();
         let ant = match (ble, ant_key) {
@@ -328,8 +353,22 @@ impl App {
             keys: Keys::default(),
             backlight: true,
             seconds: 0,
-            strip: Strip { time: rtc_hm(b), radio: ble.is_some(), usb: UsbDot::Off, battery: None, charging: false },
-            strip_shown: Strip { time: (0, 0), radio: false, usb: UsbDot::Off, battery: None, charging: false },
+            strip: Strip {
+                time: rtc_hm(b),
+                radio: ble.is_some(),
+                gps: None,
+                usb: UsbDot::Off,
+                battery: None,
+                charging: false,
+            },
+            strip_shown: Strip {
+                time: (0, 0),
+                radio: false,
+                gps: None,
+                usb: UsbDot::Off,
+                battery: None,
+                charging: false,
+            },
             screen: Screen::Main,
             ble,
             rx,
@@ -345,6 +384,10 @@ impl App {
             decoders: Decoders::default(),
             battery: battery::Battery::default(),
             battery_ms: BATTERY_MS, // read at the first step
+            gnss: gnss::Parser::new(),
+            pvt: None,
+            pvt_ms: 0,
+            gnss_ms: 0,
             wheel_mm: if wheel >> 24 == 0xa5 { wheel as u16 } else { WHEELS[1] },
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
@@ -408,7 +451,8 @@ impl App {
                     label.push_str("WHEEL MM");
                     value.push_u32(u32::from(self.wheel_mm));
                 }
-                5 => label.push_str("NEARBY BLE"),
+                5 => label.push_str("GPS"),
+                6 => label.push_str("NEARBY BLE"),
                 _ => return None,
             },
             Menu::Sensors => {
@@ -421,6 +465,54 @@ impl App {
                     (true, Sensor::Paired(id)) => value.push_u32(u32::from(id.device)),
                 }
                 if self.heard_ms[i] < sensors::STALE_MS {
+                    color = ui::GREEN;
+                }
+            }
+            Menu::Gps => {
+                let p = self.pvt;
+                let two = |l: &mut Line<12>, v: u8| {
+                    for d in [v / 10, v % 10] {
+                        l.push_str(ui::DIGITS[usize::from(d)]);
+                    }
+                };
+                match (i, p) {
+                    (0, None) => (label.push_str("FIX"), value.push_str("NO GPS")).1,
+                    (0, Some(p)) => {
+                        label.push_str("FIX");
+                        value.push_str(match p.fix {
+                            _ if !p.fix_ok => "NONE",
+                            2 => "2D",
+                            3 => "3D",
+                            _ => "OTHER",
+                        });
+                    }
+                    (_, None) => return None,
+                    (1, Some(p)) => (label.push_str("SATS"), value.push_u32(u32::from(p.sats))).1,
+                    (2, Some(p)) => (label.push_str("LAT"), push_fixed(&mut value, p.lat, 7, 5)).1,
+                    (3, Some(p)) => (label.push_str("LON"), push_fixed(&mut value, p.lon, 7, 5)).1,
+                    (4, Some(p)) => (label.push_str("ALT M"), push_fixed(&mut value, p.alt_mm, 3, 0)).1,
+                    (5, Some(p)) => {
+                        label.push_str("UTC");
+                        let (_, _, _, h, m, sec) = p.utc;
+                        for (k, v) in [h, m, sec].into_iter().enumerate() {
+                            if k > 0 {
+                                value.push_str(":");
+                            }
+                            two(&mut value, v % 100);
+                        }
+                    }
+                    (6, Some(p)) => {
+                        label.push_str("DATE");
+                        let (y, mo, d, ..) = p.utc;
+                        value.push_u32(u32::from(y));
+                        value.push_str("-");
+                        two(&mut value, mo % 100);
+                        value.push_str("-");
+                        two(&mut value, d % 100);
+                    }
+                    _ => return None,
+                }
+                if p.is_some_and(|p| p.good()) {
                     color = ui::GREEN;
                 }
             }
@@ -459,6 +551,7 @@ impl App {
                 let mut title = Line::<12>::new();
                 match menu {
                     Menu::Main => title.push_str("MENU"),
+                    Menu::Gps => title.push_str("GPS"),
                     Menu::Sensors => title.push_str("SENSORS"),
                     Menu::Page(n) => {
                         title.push_str("PAGE ");
@@ -558,6 +651,8 @@ impl App {
                 b.backup_write(WHEEL_BKP, 0xa5 << 24 | u32::from(self.wheel_mm));
                 Screen::Menu(menu, sel)
             }
+            (Menu::Main, 5) => Screen::Menu(Menu::Gps, 0),
+            (Menu::Gps, _) => Screen::Menu(menu, sel),
             (Menu::Main, _) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
@@ -620,6 +715,7 @@ impl App {
             }
             (Screen::Menu(Menu::Main, _), Press::Short(Key::Back)) => self.screen = Screen::Main,
             (Screen::Menu(Menu::Sensors, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, 0),
+            (Screen::Menu(Menu::Gps, _), Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, 5),
             (Screen::Menu(Menu::Page(n), _), Press::Short(Key::Back)) => {
                 self.screen = Screen::Menu(Menu::Main, n + 1);
             }
@@ -664,6 +760,39 @@ impl App {
         }
     }
 
+    /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
+    /// and the speed when no speed sensor is paired.
+    fn poll_gnss(&mut self, b: &mut impl Board) {
+        let mut buf = [0xff; 32];
+        let mut send = self.gnss_ms < GNSS_CONFIG_MS && self.gnss_ms + POLL_MS >= GNSS_CONFIG_MS;
+        self.gnss_ms = self.gnss_ms.saturating_add(POLL_MS);
+        self.pvt_ms = self.pvt_ms.saturating_add(POLL_MS);
+        for _ in 0..GNSS_READ / buf.len() {
+            if core::mem::take(&mut send) {
+                buf = gnss::config();
+            } else {
+                buf = [0xff; 32];
+            }
+            b.gnss_transfer(&mut buf);
+            for &byte in &buf {
+                if let Some(pvt) = self.gnss.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
+                    self.pvt = Some(pvt);
+                    self.pvt_ms = 0;
+                    let sensor =
+                        [Kind::Speed, Kind::SpeedCadence].iter().any(|&k| self.sensors[k as usize] != Sensor::Off);
+                    if pvt.good() && !sensor {
+                        // mm/s to km/h x 10
+                        self.live.set(Metric::Speed, (pvt.speed_mm_s * 36 / 1000).min(u32::from(u16::MAX)) as u16);
+                    }
+                }
+            }
+        }
+        if self.pvt_ms > PVT_STALE_MS {
+            self.pvt = None;
+        }
+        self.strip.gps = self.pvt.map(|p| p.good());
+    }
+
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
@@ -687,6 +816,7 @@ impl App {
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
+        self.poll_gnss(b);
         for kind in Kind::ALL {
             if self.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
@@ -715,8 +845,8 @@ impl App {
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
-            Screen::Menu(Menu::Sensors, sel) if self.redraw_ms >= LIST_REDRAW_MS => {
-                self.draw_menu_rows(&mut Panel(b), Menu::Sensors, sel);
+            Screen::Menu(menu @ (Menu::Sensors | Menu::Gps), sel) if self.redraw_ms >= LIST_REDRAW_MS => {
+                self.draw_menu_rows(&mut Panel(b), menu, sel);
                 self.redraw_ms = 0;
             }
             _ => {}
@@ -733,6 +863,7 @@ impl App {
         if self.ble.is_some() {
             nrf::system_off(b);
         }
+        b.gnss_power(false);
         b.backlight(false);
         panel::off(b);
         while b.keys_down() & Key::Back as u8 != 0 {
@@ -765,6 +896,26 @@ impl App {
     }
 }
 
+/// `v / 10^shift` with `decimals` decimals (truncated): `push_fixed(l, 488566100, 7, 5)` gives "48.85661".
+fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
+    if v < 0 {
+        l.push_str("-");
+    }
+    let v = v.unsigned_abs();
+    let unit = 10u32.pow(shift);
+    l.push_u32(v / unit);
+    if decimals > 0 {
+        l.push_str(".");
+        let frac = v % unit / 10u32.pow(shift - decimals);
+        let digits = 10u32.pow(decimals - 1);
+        let mut d = digits;
+        while d > 0 {
+            l.push_str(ui::DIGITS[(frac / d % 10) as usize]);
+            d /= 10;
+        }
+    }
+}
+
 /// A page's field count, "OFF" for none.
 fn layout_text(l: &mut Line<12>, layout: u8) {
     match layout {
@@ -781,6 +932,7 @@ fn rtc_hm(b: &mut impl Board) -> (u8, u8) {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
 
     #[test]
@@ -788,6 +940,19 @@ mod tests {
         assert_eq!(rtc_time_from_tr(0), (0, 0, 0));
         assert_eq!(rtc_time_from_tr(0x0012_3456), (12, 34, 56));
         assert_eq!(rtc_time_from_tr(0x0040_0000 | 0x0009_0000), (9, 0, 0)); // PM bit ignored
+    }
+
+    #[test]
+    fn fixed_point() {
+        let s = |v, shift, dec| {
+            let mut l = Line::<12>::new();
+            push_fixed(&mut l, v, shift, dec);
+            std::string::String::from(l.as_str())
+        };
+        assert_eq!(s(488_566_100, 7, 5), "48.85661");
+        assert_eq!(s(-1_224_194_200, 7, 5), "-122.41942");
+        assert_eq!(s(23_500, 3, 0), "23");
+        assert_eq!(s(1_000_500, 7, 5), "0.10005");
     }
 
     #[test]

@@ -285,3 +285,22 @@ From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt
   firmware does not drive PG14 yet: no temperature check, so charging below 0 C is possible. PF6: charger status
   input (reads high; meaning not traced).
 
+## 13. GNSS receiver
+
+From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **seen on the unit (2026-10-23,
+`tools/gnss.py`)**.
+
+- **Receiver:** u-blox M10: UBX-MON-VER answers "ROM SPG 5.10 (7b202e)", hardware 000A0000, PROTVER 34.10,
+  GPS, GLONASS, Galileo, BeiDou, SBAS, QZSS.
+- **Power:** PI6, high = on (stock: then 3 s before reading). PI6 is analog (off) after the bootloader.
+- **SPI4** (0x40013400): PE2 SCK (pull-down), PE4 NSS, PE5 MISO, PE6 MOSI, AF5; mode 0. Stock: 1 MHz from the
+  CSI, hardware NSS, DMA1 streams 6 / 7. This firmware: 1 MHz from the HSI (SPI45SEL = 3, /64), PE4 driven by
+  hand, 32-bit FIFO accesses (four 8-bit frames each), polled. SPI4 is reset through RCC_APB2RSTR (bit 13) first:
+  re-initialised while enabled it latched a mode fault (MODF) and would not start (seen).
+- **Protocol:** UBX. The receiver idles with 0xff on MISO and ignores 0xff on MOSI. After stock it already
+  sends **UBX-NAV-PVT** (class 0x01, id 0x07, 92 bytes) once a second on SPI, and no NMEA, straight from power-on:
+  stock's configuration survives in the receiver. Its time does not: after power-on it reports 2021-03-07 and a
+  clock from 00:00:00 until it has a fix. This firmware also sends, once, a CFG-VALSET to the RAM layer only
+  (NAV-PVT on SPI, no NMEA on SPI; never flash or battery-backed RAM), in case the receiver ever loses that.
+- **Indoors:** no fix, 0 satellites (seen). A fix: to see.
+

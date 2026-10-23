@@ -45,6 +45,44 @@ pub struct Sim {
     /// The battery voltage the ADC sees, mV (None: the ADC did not come up), and USB power.
     pub battery_mv: Option<u16>,
     pub charger: bool,
+    pub gnss: Gnss,
+}
+
+/// The GNSS receiver as seen over SPI: once powered, a NAV-PVT frame every second (with `fix`: 3D at that speed,
+/// else no fix, as indoors on the unit); 0xff when it has nothing.
+#[derive(Default)]
+pub struct Gnss {
+    pub powered: bool,
+    /// Ground speed of a 3D fix in mm/s; None: no fix.
+    pub fix: Option<i32>,
+    /// Bytes received (not 0xff), in order.
+    pub got: Vec<u8>,
+    out: std::collections::VecDeque<u8>,
+    next_ms: u64,
+}
+
+impl Gnss {
+    fn tick(&mut self, now: u64) {
+        if !self.powered || now < self.next_ms {
+            return;
+        }
+        self.next_ms = now + 1000;
+        let mut p = [0u8; 92];
+        p[4..12].copy_from_slice(&[0xe5, 0x07, 3, 7, 0, 0, 0, 0xf0]);
+        if let Some(speed) = self.fix {
+            (p[20], p[21], p[23]) = (3, 1, 9);
+            p[60..64].copy_from_slice(&speed.to_le_bytes());
+        }
+        let body: Vec<u8> = [0x01, 0x07, 92, 0].iter().chain(&p).copied().collect();
+        let (mut a, mut b) = (0u8, 0u8);
+        for &x in &body {
+            a = a.wrapping_add(x);
+            b = b.wrapping_add(a);
+        }
+        self.out.extend([0xb5, 0x62]);
+        self.out.extend(body);
+        self.out.extend([a, b]);
+    }
 }
 
 /// The Nordic chip as seen over its link: replies to the commands as the unit did, scans, and has ANT channels that
@@ -216,6 +254,7 @@ impl Sim {
             backup: [0; 32],
             battery_mv: Some(3900),
             charger: false,
+            gnss: Gnss::default(),
         }
     }
 
@@ -363,6 +402,25 @@ impl Board for Sim {
         Some(((u32::from(mv) * 2 * 65535).div_ceil(3 * 3300) as u16, CAL, CAL))
     }
 
+    fn gnss_power(&mut self, on: bool) {
+        if on && !self.gnss.powered {
+            self.gnss.next_ms = self.ms + 500; // its first fix report
+        }
+        self.gnss.powered = on;
+    }
+
+    fn gnss_transfer(&mut self, buf: &mut [u8]) {
+        assert_eq!(buf.len() % 4, 0, "SPI transfers move 4 bytes at a time");
+        let g = &mut self.gnss;
+        g.tick(self.ms);
+        for b in buf.iter_mut() {
+            if *b != 0xff {
+                g.got.push(*b);
+            }
+            *b = if g.powered { g.out.pop_front().unwrap_or(0xff) } else { 0xff };
+        }
+    }
+
     fn charger_present(&mut self) -> bool {
         self.charger
     }
@@ -445,7 +503,7 @@ mod tests {
         let mut f = Frame::new();
         crate::ui::draw_strip(
             &mut f,
-            &Strip { time: (h, m), radio, usb: UsbDot::Off, battery: Some(63), charging: false },
+            &Strip { time: (h, m), radio, gps: app.strip.gps, usb: UsbDot::Off, battery: Some(63), charging: false },
         );
         let page = app.pages()[n];
         for (i, v) in values.iter().enumerate() {
@@ -462,10 +520,13 @@ mod tests {
     }
 
     /// The main screen as the drawing code means it, at the sim's time, under a strip with `usb`.
-    fn main_screen(sim: &mut Sim, usb: UsbDot) -> Vec<u16> {
+    fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
         let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
         let mut f = Frame::new();
-        crate::ui::draw_strip(&mut f, &Strip { time: (h, m), radio: true, usb, battery: Some(63), charging: false });
+        crate::ui::draw_strip(
+            &mut f,
+            &Strip { time: (h, m), radio: true, gps: app.strip.gps, usb, battery: Some(63), charging: false },
+        );
         crate::ui::draw_main_time(&mut f, &format!("{h:02}:{m:02}"), &format!("{s:02}"));
         crate::ui::draw_ferris(&mut f);
         f.px
@@ -481,7 +542,7 @@ mod tests {
         assert!(sim.visible());
         let pos = |c| sim.cmds.iter().position(|&x| x == c).unwrap();
         assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
-        assert!(main_screen(&mut sim, UsbDot::Ready) == sim.screen);
+        assert!(main_screen(&mut sim, &app, UsbDot::Ready) == sim.screen);
         assert_consistent(&sim, &app);
         sim.save("preview");
     }
@@ -514,7 +575,7 @@ mod tests {
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 3000);
         assert_eq!(hm(&mut sim), "00:00");
-        assert!(main_screen(&mut sim, UsbDot::Off) == sim.screen);
+        assert!(main_screen(&mut sim, &app, UsbDot::Off) == sim.screen);
     }
 
     /// Page goes from the main screen through the ride pages that are on (page 3 is off by default), and back.
@@ -544,7 +605,7 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 5), "Lap from the top wraps to NEARBY BLE");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 6), "Lap from the top wraps to NEARBY BLE");
         assert_consistent(&sim, &app);
         sim.save("menu");
         app.press(&mut sim, Press::Short(Key::Start));
@@ -560,7 +621,7 @@ mod tests {
         assert!(!app.scanning);
         assert_consistent(&sim, &app);
         app.press(&mut sim, Press::Short(Key::Back));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 5));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 6));
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(app.screen(), Screen::Main);
         assert_consistent(&sim, &app);
@@ -677,6 +738,47 @@ mod tests {
         assert!(!sim.standby, "two low readings: not yet");
         run(&mut sim, &mut app, u64::from(BATTERY_MS));
         assert!(sim.standby && !sim.display_on, "empty: switched off");
+    }
+
+    /// The receiver is powered at start and gets its configuration (RAM layer) once; with a fix, "GPS" turns green
+    /// and the speed comes from it when no speed sensor is paired; it is powered off with the unit.
+    #[test]
+    fn gps_fix_and_speed() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        assert!(sim.gnss.powered);
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(sim.gnss.got, crate::gnss::config().iter().copied().filter(|&b| b != 0xff).collect::<Vec<_>>());
+        assert_eq!(app.strip.gps, Some(false), "searching");
+        sim.gnss.fix = Some(7000); // 25.2 km/h
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(app.strip.gps, Some(true));
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 100);
+        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
+        let mut want = Frame::new();
+        want.px = ride(&mut sim, &app, 0, &["25.2", "--", "--"], true);
+        let strip =
+            Strip { time: (h, m), radio: true, gps: Some(true), usb: UsbDot::Off, battery: Some(63), charging: false };
+        crate::ui::draw_strip(&mut want, &strip);
+        assert!(want.px == sim.screen, "GPS speed, green GPS");
+        sim.save("gps");
+        app.press(&mut sim, Press::Long(Key::Page));
+        for _ in 0..5 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Gps, 0));
+        run(&mut sim, &mut app, 1100);
+        assert_consistent(&sim, &app);
+        sim.save("gps_menu");
+        app.press(&mut sim, Press::Short(Key::Back));
+        app.press(&mut sim, Press::Short(Key::Back));
+        sim.gnss.powered = false; // silent receiver: the fix ages out
+        run(&mut sim, &mut app, u64::from(PVT_STALE_MS) + 200);
+        assert_eq!(app.strip.gps, None);
+        app.press(&mut sim, Press::Long(Key::Back));
+        assert!(!sim.gnss.powered, "off with the unit");
     }
 
     #[test]
