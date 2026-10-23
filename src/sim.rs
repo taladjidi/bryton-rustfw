@@ -52,6 +52,10 @@ pub struct Nordic {
     pub enabled: bool,
     /// Simulated time (ms) at which the running scan times out.
     scan_end: Option<u64>,
+    /// A heart-rate strap in range sending this rate; it is heard once the HR channel is open.
+    pub strap: Option<u8>,
+    /// Simulated time of the strap's next broadcast, once the HR channel is open.
+    next_hr: Option<u64>,
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
@@ -90,6 +94,13 @@ impl Nordic {
                 self.queue(&adv_report(addr, rssi, data));
             }
             self.scan_end = Some(now + 1000 * u64::from(u16::from_le_bytes([t0, t1])));
+            return;
+        }
+        if let [6, op, rest @ ..] = p {
+            if *op == 0xc4 && rest.first() == Some(&0) {
+                self.next_hr = Some(now); // channel 0 open
+            }
+            self.queue(&[1, *op, 0, 0, 0, 0]); // ANT commands answer as RESP (seen on the unit)
             return;
         }
         let reply: Vec<u8> = match p {
@@ -254,7 +265,8 @@ impl Board for Sim {
     }
 
     fn nrf_reset(&mut self) {
-        self.nordic = Nordic { dead: self.nordic.dead, reset: true, ..Nordic::default() };
+        let n = &self.nordic;
+        self.nordic = Nordic { dead: n.dead, strap: n.strap, reset: true, ..Nordic::default() };
         self.ms += 950;
     }
 
@@ -273,6 +285,16 @@ impl Board for Sim {
         if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
             self.nordic.scan_end = None;
             self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
+        }
+        let n = &mut self.nordic;
+        if let (Some(bpm), Some(t)) = (n.strap, n.next_hr)
+            && self.ms >= t
+        {
+            n.next_hr = Some(t + 246); // 8070 / 32768 s
+            let mut p = vec![8, 9, 0x4e, 0, 4, 0, 0, 0, 0, 0, 0, bpm]; // HR data page 4, rate in data byte 7
+            p.resize(42, 0);
+            p.extend([0x80, 0]); // EVENT_RX, channel 0
+            n.queue(&p);
         }
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
@@ -297,9 +319,11 @@ mod tests {
         draw_static(&mut f);
         Clock::new().show(&mut f, h, m, s);
         crate::ui::draw_ble(&mut f, Some(V4));
-        crate::ui::draw_nearby(&mut f, Some((2, true)));
         f.px
     }
+
+    /// A stand-in for the ANT+ network key (the real one is never in the repository).
+    const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
     fn run(sim: &mut Sim, app: &mut App, ms: u64) {
         let end = sim.ms + ms;
@@ -312,7 +336,7 @@ mod tests {
     #[test]
     fn boots_into_the_clock() {
         let mut sim = Sim::new(12, 34, 56);
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
         app.step(&mut sim);
         app.set_usb(&mut sim, crate::ui::UsbDot::Ready);
         assert!(sim.visible());
@@ -330,9 +354,8 @@ mod tests {
     #[test]
     fn starts_the_nordic_chip() {
         let mut sim = Sim::new(12, 0, 0);
-        let app = App::start(&mut sim);
-        assert_eq!(sim.nordic.got[..2], [vec![0, 0x60], vec![0, 0x65, 1]]);
-        assert_eq!(sim.nordic.got[2][..2], [0, 0x8a], "then the scan");
+        let app = App::start(&mut sim, None);
+        assert_eq!(sim.nordic.got, [vec![0, 0x60], vec![0, 0x65, 1]], "no ANT without a key, no scan before the list");
         assert_eq!(
             app.render_row(crate::ui::BLE_LABEL.1 + 4).px,
             {
@@ -349,7 +372,7 @@ mod tests {
         let mut sim = Sim::new(12, 0, 0);
         sim.nordic.dead = true;
         let t0 = sim.ms;
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
         assert!(sim.ms - t0 < 3000, "start took {} ms", sim.ms - t0);
         assert_eq!(sim.nordic.got, [vec![0, 0x60]], "gave up after the first timeout");
         run(&mut sim, &mut app, 2000);
@@ -362,31 +385,71 @@ mod tests {
         assert!((0..W).any(|x| f.at(x, crate::ui::BLE_LABEL.1 + 4) == crate::ui::RED));
     }
 
-    /// Two distinct devices in three reports; the scan's timeout turns "2 NEARBY..." into "2 NEARBY".
+    /// Page opens the device list and starts a scan: two distinct devices in three reports, strongest first, the
+    /// title "2 NEARBY..." until the scan's timeout; Page again goes back to the clock.
     #[test]
-    fn counts_the_devices_nearby() {
+    fn page_lists_the_devices_nearby() {
         let mut sim = Sim::new(9, 0, 0);
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
+        app.next_page(&mut sim);
+        assert_eq!(sim.nordic.got.last().unwrap()[..2], [0, 0x8a], "the scan starts with the list");
+        let want = |app: &App| {
+            let mut f = Frame::new();
+            crate::ui::draw_static(&mut f);
+            crate::ui::clear_page(&mut f);
+            crate::ui::draw_bar(&mut f);
+            crate::ui::draw_ble(&mut f, Some(V4));
+            crate::ui::draw_list(&mut f, &app.nearby);
+            crate::ui::draw_nearby(&mut f, app.nearby.count(), app.scanning);
+            f.px
+        };
+        run(&mut sim, &mut app, 1500);
+        let names: Vec<_> = app.nearby.strongest().map(|d| (d.rssi, std::string::String::from(d.name()))).collect();
+        assert_eq!(names, [(-42, "Bike".into()), (-70, "".into())], "last RSSI kept, the name from the first report");
+        assert!(app.scanning && sim.screen == want(&app), "the list while scanning");
+        sim.save("nearby");
+        run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
+        assert!(!app.scanning && sim.screen == want(&app), "2 NEARBY once the scan timed out");
+        for y in [0, crate::ui::NEARBY.1 + 5, crate::ui::LIST_Y + 5, H - 1] {
+            assert!(app.render_row(y).px[..] == sim.screen[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
+        }
+        app.next_page(&mut sim);
+        run(&mut sim, &mut app, 200);
+        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
+        assert!(sim.screen == expected(h, m, s), "back to the clock");
+    }
+
+    /// With a key: ANT enabled and the HR channel opened as stock does; a strap's rate shows under the bar, and
+    /// "HR --" once it stops.
+    #[test]
+    fn shows_the_heart_rate() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.nordic.strap = Some(72);
+        let mut app = App::start(&mut sim, Some(KEY));
+        let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
+        assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xd3, 0xda, 0xcd, 0xd1, 0xc4]);
+        assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
         let line = |sim: &Sim| {
             let y = crate::ui::NEARBY.1;
             sim.screen[(y * W) as usize..((y + 20) * W) as usize].to_vec()
         };
-        let want = |shown| {
+        let want = |bpm| {
             let mut f = Frame::new();
-            crate::ui::draw_nearby(&mut f, Some(shown));
+            crate::ui::draw_hr(&mut f, bpm);
             let y = crate::ui::NEARBY.1;
             f.px[(y * W) as usize..((y + 20) * W) as usize].to_vec()
         };
         run(&mut sim, &mut app, 1000);
-        assert!(line(&sim) == want((2, true)), "2 NEARBY... while scanning");
-        run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
-        assert!(line(&sim) == want((2, false)), "2 NEARBY once the scan timed out");
+        assert!(line(&sim) == want(Some(72)), "HR 72");
+        sim.nordic.strap = None;
+        run(&mut sim, &mut app, u64::from(HR_STALE_MS) + 500);
+        assert!(line(&sim) == want(None), "HR -- once the strap is quiet");
     }
 
     #[test]
     fn ticks_through_midnight() {
         let mut sim = Sim::new(23, 59, 58);
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 3000);
         let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
         assert_eq!((h, m), (0, 0), "past midnight");
@@ -394,10 +457,10 @@ mod tests {
     }
 
     #[test]
-    fn page_toggles_the_backlight() {
+    fn back_short_press_toggles_the_backlight() {
         // Presses after the start (which takes about 1 s with the Nordic chip): at 3 s and at 4 s.
-        let mut sim = Sim::new(8, 0, 0).keys(|ms| ((3000..3200).contains(&ms) || (4000..4100).contains(&ms), false));
-        let mut app = App::start(&mut sim);
+        let mut sim = Sim::new(8, 0, 0).keys(|ms| (false, (3000..3200).contains(&ms) || (4000..4100).contains(&ms)));
+        let mut app = App::start(&mut sim, None);
         let t0 = sim.ms;
         assert!(t0 < 3000);
         run(&mut sim, &mut app, 3500 - t0);
@@ -409,7 +472,7 @@ mod tests {
     #[test]
     fn back_held_3s_powers_off_after_release() {
         let mut sim = Sim::new(8, 0, 0).keys(|ms| (false, (1000..6000).contains(&ms)));
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 10_000);
         assert!(sim.standby);
         assert!(sim.ms >= 6000, "standby while the key is still down would wake the unit at once");
@@ -421,7 +484,7 @@ mod tests {
     #[test]
     fn record_a_run() {
         let mut sim = Sim::new(9, 59, 57).keys(|ms| (ms / 100 == 25, false)).record("run");
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 4000);
         let frames = std::fs::read_dir(out_dir().join("run")).unwrap().count();
         assert!(frames >= 4, "one frame per second change at least, got {frames}");
@@ -460,7 +523,7 @@ mod dev_tests {
 
     fn app_at(h: u64, m: u64, s: u64) -> (Sim, App) {
         let mut sim = Sim::new(h, m, s);
-        let mut app = App::start(&mut sim);
+        let mut app = App::start(&mut sim, None);
         app.step(&mut sim);
         (sim, app)
     }

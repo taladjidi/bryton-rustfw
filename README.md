@@ -6,11 +6,14 @@ Bryton.
 
 - **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, all in the
   same dot-matrix style, so it is obviously not the stock firmware.
-- **Page key:** toggles the backlight.
-- **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
+- **Page key:** switches between the clock and the list of BLE devices nearby.
+- **Back key:** a short press toggles the backlight; held 3 s it switches off (standby). The power button starts it
+  again. Power off also switches the radio chip off.
 - **Top left:** "BLE" and the Nordic chip's firmware number once it has answered (red "BLE ?" if not).
-- **Under the bar:** a 10 s BLE scan at start counts the devices around ("12 NEARBY", with "..." while it runs).
-  Power off also switches the radio chip off.
+- **Heart rate:** under the bar on the clock page, from any ANT+ strap in range ("HR 72", "HR --" without one).
+  Needs the ANT+ network key, which you copy from your own stock firmware (see "ANT+ key" below).
+- **Devices nearby:** opening the list starts a 10 s BLE scan; one row per device, strongest first: its name, or
+  its address in grey if it advertises none, and its signal strength in dBm.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
   build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
   red if the PHY did not come up). Unplugging resets the unit.
@@ -21,7 +24,7 @@ Bryton.
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
 
 **Status: runs on the unit (2026-10-23).** Installed on the eMMC, it starts straight into the clock (much faster
-than stock), Page toggles the backlight, holding Back powers off and the power button starts it again. The USB dev
+than stock), the keys work, holding Back powers off and the power button starts it again. The USB dev
 link works (`info`, `shot`, `peek`, and `run` from RAM). The first install had stopped at the panel: SPI1 lost
 master mode to a mode fault (see "First run on the unit" below).
 
@@ -42,6 +45,19 @@ the screen through a simulated panel into `target/sim/preview.bmp`.
 `pack.py` re-checks what the stock updater checks (raw tag "R039" at 0x94, size > 1 MB, additive-sum trailer)
 and that the vector table is sane (SP in DTCM, Thumb reset vector inside the image).
 
+### ANT+ key
+
+ANT+ sensors (heart rate) use a network key that is licensed under the ANT+ adopter terms, so it is not in this
+repository. The stock firmware carries it, and you can copy it from your own copy of the stock image:
+
+    tools/fetch_firmware.py        # once: the stock image into firmware/R039/IMG.raw (gitignored)
+    tools/ant_key.py               # finds the key in it (by its SHA-256) and writes ant_key.bin (gitignored)
+    ./check.sh                     # build.rs builds the key in when ant_key.bin exists
+
+Without `ant_key.bin` the firmware builds without ANT+ (no heart rate; BLE works). A build with the key is for
+your own unit: don't publish its `out/IMG.bin`. `touch ant_key.bin` if you add it back with an old date (cargo
+only rebuilds on a newer file).
+
 ## Try it, and go back
 
 This **replaces the OS**: no USB drive, no rides, no updates from this firmware. The way back is the bootloader's
@@ -50,7 +66,7 @@ recovery mode, which this firmware cannot touch (it lives in the internal flash)
 1. With the stock (or patched) firmware: plug in, copy `out/IMG.bin` and `out/update.ini` to the BRYTON drive,
    eject, unplug. The stock OS installs it while starting up (as for any update), then restarts into it.
 2. Expected: black screen with the orange bar, the time in white, the seconds in orange, ticking. If the screen
-   stays dark, press Page once (backlight polarity).
+   stays dark, press Back once (backlight polarity).
 3. Back to Bryton's firmware (tested on the unit):
    - USB plugged **first**, then press the four buttons to restart, keep holding **Page** until "Engineer Mode"
      (without the cable the bootloader ignores Page).
@@ -105,13 +121,21 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   counts the advertisers around (6 during the scan, 12 at its end on the first run), and power off sends
   `sd_power_system_off`. `tools/nrf.py scan` lists them with RSSI and names from the computer. To see: that the
   chip comes back after a power off and on (the reset pulse should wake it from System OFF; inferred so far).
+- **ANT+ and the device list (2026-10-23, from RAM):** the ANT heart-rate channel opens as stock opens it (every
+  command answered 0) and the list page shows 7 devices after its 10 s scan, with the channel open. A Page press
+  sent over the dev link (`dev.py page`) first froze the main loop: the app's own `delay_ms` inside the sleep
+  had taken over its SysTick period, so the loop never woke (only USB was still served). App work now runs after
+  the sleep.
 
 ## Not yet seen on the unit
 
 Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (PHY enable on PA7, the ULPI pins)
-with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13 (Page toggles it); the RTC
+with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13; the RTC
 holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
 input. Still to see:
+- A heart rate from a real ANT+ strap (the channel opens, no strap was in range; the data offset is inferred from
+  the ANT+ profile and stock's decoder).
+- The Nordic chip coming back after a power off and on (`sd_power_system_off`, then the reset pulse).
 - The OTG_HS IRQ waking WFI (the link may be running on the 50 ms SysTick wake-ups alone).
 
 ## How it starts (verified)
@@ -137,7 +161,7 @@ input. Still to see:
   - SPI mode 3, 8 MHz from HSI (per_ck), so it does not depend on which PLL outputs the bootloader left running;
   - the stock init sequence, except that the last RAMCTRL is `B0 00 F0` instead of `B0 10 F0`, so pixels are
     written over SPI (RAMWR) and the LTDC is not needed.
-- **Backlight** PG13: a plain output, high = on (derived from the stock inverted LPTIM1 PWM; Page toggles it).
+- **Backlight** PG13: a plain output, high = on (derived from the stock inverted LPTIM1 PWM; Back toggles it).
 - **RTC** (8): TR/DR read after RSF. The stock firmware may keep UTC and add the time zone itself (not traced),
   so the hour can be off by the time zone.
 - **Keys** (5): PA1 back/power, PE3 page, active low, polled every 50 ms.

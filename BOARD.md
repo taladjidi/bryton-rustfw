@@ -194,5 +194,21 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   timeout. Reports: event 0x1d, `[2][1d 00][conn u16][peer addr: type byte, 6 bytes LSB first][direct addr 7]
   [rssi i8][flags][dlen][present][data]`; the name is AD type 0x09 / 0x08, often only in the scan response. Scan
   timeout: event 0x1b `[2][1b 00][conn u16][source]`. No `sd_ble_cfg_set` is needed before scanning.
+- **ANT+ heart rate (seen on the unit 2026-10-23, `tools/nrf.py ant` and src/nrf.rs):** ANT commands are type 6,
+  `[6][op][arguments]`, and **their responses come back as type 1** (`[1][op][result u32]`), like BLE ones. Stock's
+  sequence for a heart-rate channel (Ghidra: ANT enable 0xd029dce0, `Ant_SetNetworkKeys` 0xd027d6d4,
+  `Ant_ConfigureChannel` 0xd027d3c0, `Ant_OpenChannel` 0xd027d480), each answered 0 on the unit, after
+  `sd_ble_enable`:
+  - enable `06 fa 01 0f 00 20 00 7c 16 06 24 fc 05` (15 channels, 0 encrypted, event queue 32, stock's buffer
+    pointer and size 0x5fc);
+  - network key `06 cc [net] [8 bytes]`: net 0 is the ANT+ key. It is licensed and is not written here; stock
+    loads it from its initialised data, at 0xd03d68f4 in R039 (`tools/ant_key.py` finds it by SHA-256);
+  - assign `06 c2 [ch] 00 00 00` (slave, net 0), channel id `06 d3 [ch] 00 00 78 00` (any device, type 0x78 heart
+    rate), low-priority search timeout `06 da [ch] ff`, frequency `06 cd [ch] 39` (2457 MHz), period
+    `06 d1 [ch] 86 1f` (8070 / 32768 s), open `06 c4 [ch] 00 00`. Stock uses channel 0 for heart rate.
+  - ANT event: `[8][41-byte ANT message][event][channel]`, 44 bytes; the message is `[size][id][channel][8 data
+    bytes]...`. A broadcast is id 0x4e and the ANT+ heart rate is data byte 7, payload byte 11 (inferred from the
+    ANT+ profile and stock's decoder 0xd029f91c; no strap was in range yet).
+  - A BLE scan with the channel open (searching) still works: fewer reports, as the radio is shared.
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.

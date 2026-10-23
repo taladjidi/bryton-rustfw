@@ -18,7 +18,9 @@ pub mod text;
 pub mod ui;
 
 use panel::Panel;
-use ui::{Clock, Row, UsbDot, draw_ble, draw_nearby, draw_static, draw_usb_dot};
+use ui::{
+    Clock, Row, UsbDot, clear_page, draw_bar, draw_ble, draw_hr, draw_list, draw_nearby, draw_static, draw_usb_dot,
+};
 
 /// The hardware the app needs, as primitive operations. Each one is a few register writes on the unit.
 // ponytail: one trait while the board is small; split per peripheral (Panel, Rtc, Keys...) when it grows.
@@ -80,13 +82,16 @@ pub fn rtc_time_from_tr(tr: u32) -> (u8, u8, u8) {
 pub enum Action {
     /// Nothing.
     None,
-    /// Page was just pressed.
+    /// Page was just pressed: the next page.
+    NextPage,
+    /// Back was pressed and released before [`Keys::POWER_OFF_MS`].
     ToggleBacklight,
     /// Back has been held for [`Keys::POWER_OFF_MS`].
     PowerOff,
 }
 
-/// Key state between polls: Page acts on the press (not while held), Back acts after a long hold.
+/// Key state between polls: Page acts on the press (not while held), Back on its release (short) or after a long
+/// hold.
 #[derive(Default)]
 pub struct Keys {
     page_was_down: bool,
@@ -101,10 +106,13 @@ impl Keys {
     pub fn poll(&mut self, page_down: bool, back_down: bool, dt_ms: u32) -> Action {
         let page_pressed = page_down && !self.page_was_down;
         self.page_was_down = page_down;
+        let back_released = !back_down && self.back_held_ms > 0;
         self.back_held_ms = if back_down { self.back_held_ms + dt_ms } else { 0 };
         if self.back_held_ms >= Self::POWER_OFF_MS {
             Action::PowerOff
         } else if page_pressed {
+            Action::NextPage
+        } else if back_released {
             Action::ToggleBacklight
         } else {
             Action::None
@@ -119,11 +127,25 @@ impl Keys {
 /// Main loop period: the time and the keys are read this often.
 pub const POLL_MS: u32 = 50;
 
-/// How long the BLE scan at start runs. Scanning keeps the Nordic radio on, so it is short.
-// ponytail: one scan at start; on demand (a key) or periodic when something uses the result.
+/// How long a BLE scan runs, started when the device list opens. Scanning keeps the Nordic radio on, so it is short.
 pub const SCAN_S: u16 = 10;
 
-/// The clock app: what is on screen and the key state.
+/// The device list is redrawn at most this often while reports come in (each row costs SPI time).
+pub const LIST_REDRAW_MS: u32 = 1000;
+
+/// A heart rate older than this is shown as "--" (the strap is off or out of range).
+pub const HR_STALE_MS: u32 = 5000;
+
+/// What the screen shows under the bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    /// The time, and the heart rate if an ANT+ key was built in.
+    Clock,
+    /// The BLE devices heard, strongest first, with their RSSI.
+    Nearby,
+}
+
+/// The app: what is on screen, the key state and what the Nordic chip reported.
 pub struct App {
     clock: Clock,
     keys: Keys,
@@ -133,11 +155,19 @@ pub struct App {
     rx: nrf::Rx,
     nearby: nrf::Nearby,
     scanning: bool,
+    /// The ANT+ heart-rate channel is open.
+    ant: bool,
+    hr: Option<u8>,
+    hr_age_ms: u32,
+    page: Page,
+    list_dirty: bool,
+    list_ms: u32,
 }
 
 impl App {
-    /// Panel up, the fixed parts drawn, backlight on; then the Nordic chip started, its state shown.
-    pub fn start(b: &mut impl Board) -> Self {
+    /// Panel up, the clock page drawn, backlight on; then the Nordic chip started, its state shown, and with an
+    /// ANT+ network key (`ant_key`, see build.rs) the heart-rate channel opened.
+    pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
         draw_static(&mut Panel(b));
         b.backlight(true);
@@ -152,53 +182,114 @@ impl App {
             rx: nrf::Rx::new(),
             nearby: nrf::Nearby::new(),
             scanning: false,
+            ant: false,
+            hr: None,
+            hr_age_ms: 0,
+            page: Page::Clock,
+            list_dirty: false,
+            list_ms: 0,
         };
-        if ble.is_some() {
-            app.scanning = nrf::scan_start(b, &mut app.rx, SCAN_S).is_ok();
-            draw_nearby(&mut Panel(b), app.nearby_shown());
+        if let (Some(_), Some(key)) = (ble, ant_key) {
+            app.ant = nrf::ant_hr_open(b, &mut app.rx, key).is_ok();
         }
+        app.draw_line(&mut Panel(b));
         app
     }
 
-    /// What the nearby line shows: the count and whether the scan still runs (None: no line).
-    fn nearby_shown(&self) -> Option<(usize, bool)> {
-        self.ble.map(|_| (self.nearby.count(), self.scanning))
+    /// The page shown.
+    pub fn page(&self) -> Page {
+        self.page
     }
 
-    /// Takes what the Nordic chip sent since the last pass: counts the advertisers, notices the scan's end.
+    /// The line under the bar: the heart rate on the clock page, the device count on the list.
+    fn draw_line(&self, c: &mut impl ui::Canvas) {
+        match self.page {
+            Page::Clock if self.ant => draw_hr(c, self.hr),
+            Page::Nearby if self.ble.is_some() => draw_nearby(c, self.nearby.count(), self.scanning),
+            _ => {}
+        }
+    }
+
+    /// The page area: fixed parts, what is known so far, and the line under the bar.
+    fn draw_page(&self, c: &mut impl ui::Canvas) {
+        match self.page {
+            Page::Clock => {
+                draw_static(c);
+                self.clock.redraw(c);
+            }
+            Page::Nearby => draw_list(c, &self.nearby),
+        }
+        self.draw_line(c);
+    }
+
+    /// Page: the clock and the device list in turn. Opening the list starts a [`SCAN_S`] scan.
+    pub fn next_page(&mut self, b: &mut impl Board) {
+        self.page = match self.page {
+            Page::Clock => Page::Nearby,
+            Page::Nearby => Page::Clock,
+        };
+        if self.page == Page::Nearby && self.ble.is_some() && !self.scanning {
+            self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
+        }
+        self.clock = Clock::new(); // the next step draws every digit
+        let mut p = Panel(b);
+        clear_page(&mut p);
+        self.draw_page(&mut p);
+    }
+
+    /// Takes what the Nordic chip sent since the last pass: advertisers, heart rate, the scan's end.
     fn poll_nrf(&mut self, b: &mut impl Board) {
-        let mut changed = false;
+        let mut line = false;
         let mut buf = [0; 64];
         for _ in 0..64 {
             let n = b.nrf_recv(&mut buf);
             for &byte in buf.get(..n).unwrap_or(&[]) {
                 let Some(p) = self.rx.push(byte) else { continue };
                 if let Some(r) = nrf::adv_report(p) {
-                    changed |= self.nearby.add(r.addr);
+                    line |= self.nearby.add(&r);
+                    self.list_dirty = true;
+                } else if let Some(bpm) = nrf::ant_hr(p) {
+                    line |= self.hr != Some(bpm);
+                    self.hr = Some(bpm);
+                    self.hr_age_ms = 0;
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) {
                     self.scanning = false;
-                    changed = true;
+                    line = true;
                 }
             }
             if n == 0 {
                 break;
             }
         }
-        if changed {
-            draw_nearby(&mut Panel(b), self.nearby_shown());
+        if line {
+            self.draw_line(&mut Panel(b));
         }
     }
 
     /// One pass of the main loop: read the time and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
-        let (h, m, s) = rtc_time_from_tr(b.rtc_tr());
-        self.clock.show(&mut Panel(b), h, m, s);
+        if self.page == Page::Clock {
+            let (h, m, s) = rtc_time_from_tr(b.rtc_tr());
+            self.clock.show(&mut Panel(b), h, m, s);
+        }
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
+        self.hr_age_ms = self.hr_age_ms.saturating_add(POLL_MS);
+        if self.hr.is_some() && self.hr_age_ms > HR_STALE_MS {
+            self.hr = None;
+            self.draw_line(&mut Panel(b));
+        }
+        self.list_ms = self.list_ms.saturating_add(POLL_MS);
+        if self.page == Page::Nearby && self.list_dirty && self.list_ms >= LIST_REDRAW_MS {
+            draw_list(&mut Panel(b), &self.nearby);
+            self.list_dirty = false;
+            self.list_ms = 0;
+        }
         let (page, back) = b.keys_down();
         match self.keys.poll(page, back, POLL_MS) {
+            Action::NextPage => self.next_page(b),
             Action::ToggleBacklight => {
                 self.backlight = !self.backlight;
                 b.backlight(self.backlight);
@@ -224,11 +315,10 @@ impl App {
     /// Row `y` of the screen as the app drew it: the screenshot source.
     pub fn render_row(&self, y: u32) -> Row {
         let mut row = Row::new(y);
-        draw_static(&mut row);
-        self.clock.redraw(&mut row);
+        draw_bar(&mut row);
+        self.draw_page(&mut row);
         draw_usb_dot(&mut row, self.usb);
         draw_ble(&mut row, self.ble);
-        draw_nearby(&mut row, self.nearby_shown());
         row
     }
 }
@@ -256,12 +346,20 @@ mod tests {
     }
 
     #[test]
-    fn page_toggles_once_per_press() {
+    fn page_acts_once_per_press() {
         let mut k = Keys::default();
-        assert_eq!(k.poll(true, false, 50), Action::ToggleBacklight);
+        assert_eq!(k.poll(true, false, 50), Action::NextPage);
         assert_eq!(k.poll(true, false, 50), Action::None);
         assert_eq!(k.poll(false, false, 50), Action::None);
-        assert_eq!(k.poll(true, false, 50), Action::ToggleBacklight);
+        assert_eq!(k.poll(true, false, 50), Action::NextPage);
+    }
+
+    #[test]
+    fn back_short_press_toggles_the_backlight_on_release() {
+        let mut k = Keys::default();
+        assert_eq!(k.poll(false, true, 50), Action::None);
+        assert_eq!(k.poll(false, false, 50), Action::ToggleBacklight);
+        assert_eq!(k.poll(false, false, 50), Action::None);
     }
 
     #[test]
@@ -270,7 +368,7 @@ mod tests {
         for _ in 0..59 {
             assert_eq!(k.poll(false, true, 50), Action::None);
         }
-        assert_eq!(k.poll(false, false, 50), Action::None); // released at 2.95 s: start again
+        assert_eq!(k.poll(false, false, 50), Action::ToggleBacklight); // released at 2.95 s: a short press
         for _ in 0..59 {
             assert_eq!(k.poll(false, true, 50), Action::None);
         }

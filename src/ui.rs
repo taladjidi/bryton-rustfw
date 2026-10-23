@@ -21,6 +21,8 @@ pub const RUST: u16 = 0xf260;
 pub const RED: u16 = 0xf800;
 /// RGB565 green.
 pub const GREEN: u16 = 0x07e0;
+/// RGB565 mid grey.
+pub const GREY: u16 = 0x8410;
 
 /// Small text: labels. The pixel font at 2x, so its dots match Ferris' look (fonts.rs also has smooth fonts).
 pub const LABEL: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
@@ -84,10 +86,15 @@ pub const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
 /// Ferris top edge.
 pub const CRAB_Y: u32 = 266;
 
-/// The parts of the screen that never change: the colon, the bar at the top, Ferris.
+/// The bar at the top, on every page.
+pub fn draw_bar(c: &mut impl Canvas) {
+    c.fill(20, 40, W - 40, 6, ACCENT);
+}
+
+/// The parts of the clock page that never change: the bar, the colon, Ferris.
 pub fn draw_static(c: &mut impl Canvas) {
     text::draw(c, &TIME, TIME_X + 2 * CELL * TIME.scale, TIME_Y, Align::Left, ":");
-    c.fill(20, 40, W - 40, 6, ACCENT);
+    draw_bar(c);
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
 }
 
@@ -139,17 +146,76 @@ pub fn draw_ble(c: &mut impl Canvas, v: Option<crate::nrf::Version>) {
     text::draw_in(c, &Style { fg: color, ..LABEL }, BLE_LABEL.0, BLE_LABEL.1, BLE_LABEL.2, Align::Left, line.as_str());
 }
 
-/// Devices heard by the BLE scan, under the bar: "3 NEARBY", with "..." while the scan runs. Nothing without BLE.
-pub fn draw_nearby(c: &mut impl Canvas, shown: Option<(usize, bool)>) {
-    let Some((count, scanning)) = shown else { return };
+/// The list page's title, under the bar: "3 NEARBY", with "..." while the scan runs.
+pub fn draw_nearby(c: &mut impl Canvas, count: usize, scanning: bool) {
     let mut line = text::Line::<16>::new();
     line.push_u32(count as u32);
     line.push_str(if scanning { " NEARBY..." } else { " NEARBY" });
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, line.as_str());
 }
 
-/// The nearby line's box: left, top, width (between the bar and the time).
+/// The line under the bar: left, top, width (between the bar and the time). The heart rate on the clock page, the
+/// device count on the list page.
 pub const NEARBY: (u32, u32, u32) = (20, 58, W - 40);
+
+/// Heart rate from the ANT+ strap, under the bar: "HR 72", "HR --" while there is no reading.
+pub fn draw_hr(c: &mut impl Canvas, bpm: Option<u8>) {
+    let mut line = text::Line::<8>::new();
+    line.push_str("HR ");
+    match bpm {
+        Some(v) if v > 0 => line.push_u32(u32::from(v)),
+        _ => line.push_str("--"),
+    }
+    text::draw_in(c, &Style { fg: RED, ..LABEL }, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, line.as_str());
+}
+
+/// Top of the page area, under the bar: what changes with Page.
+pub const PAGE_Y: u32 = 50;
+/// First row of the device list.
+pub const LIST_Y: u32 = 84;
+/// Device list row pitch (the font's line height at 2x).
+pub const LIST_ROW: u32 = 20;
+/// Characters of a device's name shown (or its address, 12 hex digits); its RSSI goes on the right.
+const LIST_NAME: u32 = 12;
+
+/// Clears the page area (a page switch).
+pub fn clear_page(c: &mut impl Canvas) {
+    c.fill(0, PAGE_Y, W, H - PAGE_Y, BLACK);
+}
+
+/// The devices heard, strongest first, one per row: the name (white), or the address (grey) for one that sent
+/// none, and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
+pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
+    let rows = (H - LIST_Y) / LIST_ROW;
+    let mut devices = nearby.strongest();
+    let name_w = LIST_NAME * CELL * LABEL.scale;
+    for r in 0..rows {
+        let y = LIST_Y + r * LIST_ROW;
+        let Some(d) = devices.next() else {
+            c.fill(NEARBY.0, y, NEARBY.2, LIST_ROW, BLACK);
+            continue;
+        };
+        let mut name = text::Line::<16>::new();
+        let color = if d.name().is_empty() {
+            for b in d.addr.iter().rev() {
+                for n in [usize::from(b >> 4), usize::from(b & 0xf)] {
+                    name.push_str("0123456789ABCDEF".get(n..n + 1).unwrap_or("?"));
+                }
+            }
+            GREY
+        } else {
+            name.push_str(d.name());
+            WHITE
+        };
+        text::draw_in(c, &Style { fg: color, ..LABEL }, NEARBY.0, y, name_w, Align::Left, name.as_str());
+        let mut rssi = text::Line::<8>::new();
+        if d.rssi < 0 {
+            rssi.push_str("-");
+        }
+        rssi.push_u32(u32::from(d.rssi.unsigned_abs()));
+        text::draw_in(c, &LABEL, NEARBY.0 + name_w, y, NEARBY.2 - name_w, Align::Right, rssi.as_str());
+    }
+}
 
 /// The BLE label's box: left, top (level with the USB label), width.
 pub const BLE_LABEL: (u32, u32, u32) = (20, USB_LABEL.1, 7 * CELL * LABEL.scale);

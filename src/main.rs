@@ -1,6 +1,7 @@
 //! bryton-rustfw: a minimal firmware for the Bryton Rider S510 bike computer, written from scratch. It shows the time
-//! kept by the RTC, big, on the panel. Keys: Page toggles the backlight, hold Back (power) 3 s to switch off
-//! (standby; the power button starts it again).
+//! kept by the RTC, big, on the panel, the heart rate from an ANT+ strap, and on a second page the BLE devices
+//! nearby. Keys: Page switches pages, Back toggles the backlight, hold Back (power) 3 s to switch off (standby; the
+//! power button starts it again).
 //!
 //! Every register access below is traced to BOARD.md (the board as the stock firmware sets it up) or
 //! to the STM32H747 reference manual (RM0399). No interrupts, no RTOS: one loop. The only crates are the USB
@@ -22,6 +23,9 @@ use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS};
 use core::sync::atomic::{AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
+
+// ANT_KEY: the ANT+ network key from the private ant_key.bin, or None (build.rs).
+include!(concat!(env!("OUT_DIR"), "/ant_key.rs"));
 
 #[inline(always)]
 fn modify(a: u32, clear: u32, set: u32) {
@@ -536,7 +540,7 @@ fn main() -> ! {
     spi_init();
     checkpoint(4);
     let mut board = S510;
-    let mut app = App::start(&mut board);
+    let mut app = App::start(&mut board, ANT_KEY);
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;
@@ -554,12 +558,15 @@ fn main() -> ! {
             // ponytail: unplugged = reset, the simplest way to power the PHY and the USB core down again
             system_reset();
         }
-        // Sleep until the next pass, waking for USB activity.
+        // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
+        // too (delay_ms), which would take over this timer.
+        let mut page = false;
         timer_start(POLL_MS);
         loop {
             if let Some(l) = &mut link {
                 match l.poll(&mut session, &app, uptime_ms) {
                     Effect::None => {}
+                    Effect::Page => page = true,
                     Effect::Reset => {
                         l.linger(50);
                         system_reset();
@@ -579,6 +586,9 @@ fn main() -> ! {
             wfi();
         }
         timer_stop();
+        if page {
+            app.next_page(&mut board);
+        }
         checkpoint(7);
         uptime_ms = uptime_ms.wrapping_add(POLL_MS);
     }

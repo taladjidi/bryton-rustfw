@@ -109,7 +109,8 @@ def main():
     log = OUT / ('vbus.log' if a.vbus else 'boot.log')
     script = [f'$elf=@{ELF}', f'include @{ROOT}/renode/s510.resc', 'logLevel 2',
               'logLevel 0 spi1', 'sysbus LogPeripheralAccess spi1', 'logLevel 0 gpioPortG',
-              'sysbus LogPeripheralAccess gpioPortG', 'logLevel 0 usb1', 'sysbus LogPeripheralAccess usb1']
+              'sysbus LogPeripheralAccess gpioPortG', 'logLevel 0 usb1', 'sysbus LogPeripheralAccess usb1',
+              'gpioPortE OnGPIO 3 true', 'gpioPortA OnGPIO 1 true']   # Page and Back released (low = pressed)
     if a.vbus:
         script.append('gpioPortC OnGPIO 13 true')
     script += [f'emulation RunFor "{a.seconds}"', 'cpu PC', 'quit']

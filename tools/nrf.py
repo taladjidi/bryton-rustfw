@@ -6,6 +6,8 @@ chip's flash.
 
     tools/nrf.py version            reset, sd_ble_enable, sd_ble_version_get
     tools/nrf.py scan [seconds]     reset, enable, active BLE scan; lists advertisers (address, RSSI, name)
+    tools/nrf.py ant [seconds]      reset, enable BLE and ANT, open an ANT+ heart-rate channel as stock does
+                                    (key from ant_key.bin, tools/ant_key.py); prints each heart rate received
     tools/nrf.py send 0300006501    one raw packet (length header included), print the reply
 
 Never send DFU or flash commands: the Nordic firmware is not ours to replace (PI4 low at reset is its bootloader).
@@ -104,8 +106,31 @@ def adv_report(p):
     return addr, rssi, p[20] & 1, name
 
 
+def ant_hr(n, secs):
+    key = (Path(__file__).resolve().parent.parent / 'ant_key.bin').read_bytes()
+    print('sd_ble_enable:', n.command(bytes([0x00, 0x60])).hex(' '))
+    # stock's ANT enable: 15 channels, 0 encrypted, queue 32, its buffer pointer and size (BOARD.md 11)
+    steps = [('enable', bytes.fromhex('06fa010f0020007c160624fc05')), ('network key', bytes([6, 0xcc, 0]) + key),
+             ('assign', bytes.fromhex('06c200000000')), ('channel id', bytes.fromhex('06d30000007800')),
+             ('search timeout', bytes.fromhex('06da00ff')), ('frequency', bytes.fromhex('06cd0039')),
+             ('period', bytes.fromhex('06d100861f')), ('open', bytes.fromhex('06c4000000'))]
+    for name, cmd in steps:
+        r = packets(n.command(cmd, wait=0.3))
+        print(f'{name:15}', [p.hex(' ') for p in r])
+    got, t0 = bytearray(), time.monotonic()
+    while time.monotonic() - t0 < secs:
+        if n.peek(USART2 + ISR) & RXFNE:
+            got.append(n.peek(USART2 + RDR) & 0xff)
+    kinds = {}
+    for p in packets(got):
+        kinds[p[:3].hex(' ')] = kinds.get(p[:3].hex(' '), 0) + 1
+        if len(p) == 44 and p[0] == 8 and p[2] == 0x4e:
+            print(f'  ch {p[3]} data {p[4:12].hex(" ")}  HR {p[11]}  event {p[42]:#x}')
+    print(f'{len(got)} bytes; packets by first 3 bytes: {kinds}')
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ('version', 'send', 'scan'):
+    if len(sys.argv) < 2 or sys.argv[1] not in ('version', 'send', 'scan', 'ant'):
         sys.exit(__doc__)
     with dev.connect() as s:
         n = Nrf(s)
@@ -137,6 +162,9 @@ def main():
             print(f'{len(got)} bytes, {len(seen)} advertisers in {secs:g} s:')
             for addr, (rssi, name, count) in sorted(seen.items(), key=lambda kv: -kv[1][0]):
                 print(f'  {addr}  {rssi:4d} dBm  {count:3d} reports  {name or ""}')
+        elif sys.argv[1] == 'ant':
+            n.reset()
+            ant_hr(n, float(sys.argv[2]) if len(sys.argv) > 2 else 10)
         else:
             print(n.send(bytes.fromhex(sys.argv[2])).hex(' '))
 

@@ -103,7 +103,11 @@ The point of this project is a firmware in safe Rust.
 - `src/hw.rs`: the unsafe primitives (above).
 - `dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
-  protocol before the firmware has a driver. `tools/font.py`, `tools/pixel_font.py`: the fonts.
+  protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
+  after `dev.py reset`): a firmware that reads the link takes the bytes first.
+- `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
+  commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
+  `ant_key.bin`, and build.rs passes it to main.rs as `ANT_KEY` (None without the file). Tests use a stand-in key. `tools/font.py`, `tools/pixel_font.py`: the fonts.
 - `link.x`, `pack.py`: memory map and the update file. `pack.py` re-checks what the stock updater checks.
 
 ## Before every commit
@@ -223,6 +227,7 @@ Install the firmware once, as an update (README). From then on, with the cable i
     ./dev.py watch -i 1           # continuous screenshots into target/shots/
     ./check.sh && ./dev.py run    # run the new build from RAM: nothing written to the eMMC
     ./dev.py peek 0x40013014 2    # read registers (peripheral space only); poke ADDR VALUE writes one
+    ./dev.py page                 # press Page (scripted tests)
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
@@ -238,7 +243,7 @@ Install the firmware once, as an update (README). From then on, with the cable i
   Engineer Mode (`tools/iaprecover.py --write out/IMG.bin`). `run` covers day-to-day iteration.
 - **Still to build:**
   - `log` lines from the firmware over the link;
-  - key injection (`press page`), to script tests on the unit;
+  - Back key injection (Page is `dev.py page`);
   - an eMMC `reflash` command, once an SDMMC driver exists.
 - **No watchdog, on purpose.** The IWDG keeps counting in standby unless an option byte (FZ_IWDG_SDBY) says
   otherwise, so it would wake the unit from power-off. Option bytes are flash configuration, and we never

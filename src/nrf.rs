@@ -12,6 +12,8 @@ pub const CMD: u8 = 0;
 pub const RESP: u8 = 1;
 /// Packet type: a BLE event from the chip.
 pub const BLE_EVT: u8 = 2;
+/// Packet type: an ANT command to the chip. Its response comes back as [`RESP`] (seen on the unit).
+pub const ANT_CMD: u8 = 6;
 /// Packet type: an ANT event from the chip.
 pub const ANT_EVT: u8 = 8;
 
@@ -227,9 +229,80 @@ pub fn ad_name(data: &[u8]) -> Option<&[u8]> {
     None
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// ANT+ heart rate (BOARD.md 11)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The ANT channel used for heart rate (stock's choice).
+pub const HR_CHANNEL: u8 = 0;
+
+/// Enables ANT and opens a heart-rate channel that pairs with the first strap it hears, with stock's settings:
+/// `key` is the ANT+ network key (licensed: build.rs reads it from a private file, never from this repository).
+pub fn ant_hr_open(b: &mut impl Board, rx: &mut Rx, key: [u8; 8]) -> Result<(), Error> {
+    let [k0, k1, k2, k3, k4, k5, k6, k7] = key;
+    let ch = HR_CHANNEL;
+    let cmds: [&[u8]; 8] = [
+        // enable: 15 channels, 0 encrypted, event queue 32, then stock's buffer pointer and size (sent as stock
+        // sends them; the chip allocates its own, inferred)
+        &[ANT_CMD, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05],
+        &[ANT_CMD, 0xcc, 0, k0, k1, k2, k3, k4, k5, k6, k7], // network 0 key
+        &[ANT_CMD, 0xc2, ch, 0, 0, 0],                       // assign: slave, network 0, no extended
+        &[ANT_CMD, 0xd3, ch, 0, 0, 0x78, 0],                 // channel id: any device number, type 0x78 (HR)
+        // ponytail: searches until a strap answers (stock's 0xff), so the radio stays on; a timeout when it costs
+        &[ANT_CMD, 0xda, ch, 0xff],       // low-priority search timeout
+        &[ANT_CMD, 0xcd, ch, 0x39],       // 2457 MHz, ANT+
+        &[ANT_CMD, 0xd1, ch, 0x86, 0x1f], // period 8070 / 32768 s (4.06 Hz)
+        &[ANT_CMD, 0xc4, ch, 0, 0],       // open
+    ];
+    for cmd in cmds {
+        call(b, rx, cmd, &mut [])?;
+    }
+    Ok(())
+}
+
+/// The heart rate (bpm) in ANT event `p`, if it is a broadcast on [`HR_CHANNEL`]: `[ANT_EVT][size][0x4e][channel]
+/// [8 data bytes]...`, 44 bytes; ANT+ HR puts the computed heart rate in data byte 7. 0 means no reading.
+///
+/// ```
+/// let mut p = [0u8; 44];
+/// p[..12].copy_from_slice(&[8, 9, 0x4e, 0, 4, 0, 0, 0, 0, 0, 0, 72]);
+/// assert_eq!(bryton_rustfw::nrf::ant_hr(&p), Some(72));
+/// ```
+pub fn ant_hr(p: &[u8]) -> Option<u8> {
+    match p {
+        [ANT_EVT, _, 0x4e, HR_CHANNEL, data @ ..] if p.len() == 44 => data.get(7).copied(),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Devices nearby
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One device heard while scanning.
+#[derive(Clone, Copy)]
+pub struct Device {
+    /// Address, least significant byte first.
+    pub addr: [u8; 6],
+    /// Signal strength of its last report, dBm.
+    pub rssi: i8,
+    name: [u8; Device::NAME],
+    name_len: u8,
+}
+
+impl Device {
+    /// Longest name kept (the screen shows fewer).
+    pub const NAME: usize = 16;
+
+    /// The advertised name, printable ASCII only (other bytes become '?'); empty if it never sent one.
+    pub fn name(&self) -> &str {
+        core::str::from_utf8(self.name.get(..usize::from(self.name_len)).unwrap_or(&[])).unwrap_or("")
+    }
+}
+
 /// The distinct devices heard while scanning (up to [`Nearby::MAX`] remembered; the count stops there).
 pub struct Nearby {
-    addrs: [[u8; 6]; Nearby::MAX],
+    devices: [Device; Nearby::MAX],
     count: usize,
 }
 
@@ -245,21 +318,70 @@ impl Nearby {
 
     /// Nobody heard yet.
     pub const fn new() -> Self {
-        Nearby { addrs: [[0; 6]; Self::MAX], count: 0 }
+        const NONE: Device = Device { addr: [0; 6], rssi: 0, name: [0; Device::NAME], name_len: 0 };
+        Nearby { devices: [NONE; Self::MAX], count: 0 }
     }
 
-    /// Notes `addr`; true if it is new.
-    pub fn add(&mut self, addr: [u8; 6]) -> bool {
-        if self.addrs[..self.count].contains(&addr) || self.count == Self::MAX {
+    /// Notes a report: its signal strength, and its name if it carries one. True if the device is new.
+    pub fn add(&mut self, r: &AdvReport) -> bool {
+        let known = self.devices[..self.count].iter().position(|d| d.addr == r.addr);
+        let new = known.is_none() && self.count < Self::MAX;
+        let Some(d) = (match known {
+            Some(i) => self.devices.get_mut(i),
+            None if new => {
+                self.count += 1;
+                self.devices.get_mut(self.count - 1)
+            }
+            None => None,
+        }) else {
             return false;
+        };
+        d.addr = r.addr;
+        d.rssi = r.rssi;
+        if let Some(name) = ad_name(r.data) {
+            let n = name.len().min(Device::NAME);
+            for (slot, &c) in d.name.iter_mut().zip(&name[..n]) {
+                *slot = if c.is_ascii_graphic() || c == b' ' { c } else { b'?' };
+            }
+            d.name_len = n as u8;
         }
-        self.addrs[self.count] = addr;
-        self.count += 1;
-        true
+        new
     }
 
     /// Distinct devices heard.
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// The devices, strongest signal first (a sorted copy: 32 x 24 bytes of stack).
+    pub fn strongest(&self) -> impl Iterator<Item = Device> {
+        let mut d = self.devices;
+        d[..self.count].sort_unstable_by_key(|d| core::cmp::Reverse(d.rssi));
+        d.into_iter().take(self.count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    fn report(addr: u8, rssi: i8, data: &[u8]) -> AdvReport<'_> {
+        AdvReport { addr: [addr, 0, 0, 0, 0, 0], rssi, data }
+    }
+
+    #[test]
+    fn nearby_keeps_names_and_the_last_rssi_strongest_first() {
+        let mut n = Nearby::new();
+        assert!(n.add(&report(1, -80, &[])));
+        assert!(n.add(&report(2, -50, &[4, 0x09, b'H', b'R', 0xff])));
+        assert!(!n.add(&report(1, -40, &[3, 0x08, b'P', b'C'])), "same address: not new");
+        let list: std::vec::Vec<_> =
+            n.strongest().map(|d| (d.addr[0], d.rssi, std::string::String::from(d.name()))).collect();
+        assert_eq!(list, [(1, -40, "PC".into()), (2, -50, "HR?".into())]);
+        for i in 0..40 {
+            n.add(&report(10 + i, -60, &[]));
+        }
+        assert_eq!(n.count(), Nearby::MAX);
     }
 }
