@@ -96,7 +96,7 @@ The point of this project is a firmware in safe Rust.
 ## Layout: logic in the library, transport in the board
 
 Folders sort the files; the modules keep their own names (`crate::ambient`, re-exported from lib.rs):
-- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `dev.rs`, `sim.rs` (tests);
+- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `power.rs`, `dev.rs`, `sim.rs` (tests);
 - `src/drivers/`: each chip's or radio's protocol against `Board`;
 - `src/ui/`: what is drawn and the menus;
 - `src/storage/`: FAT and FIT;
@@ -127,6 +127,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
   colours, the history behind the graph field. Pure logic, one tick a second; each change comes out as an `Event`
   for the recorder (`App::recorder`, the one place the FIT writer will plug in).
+- `src/power.rs`: power metrics once a second (3 / 10 / 30 s averages, NP, IF, TSS, kJ, kcal, W' balance), running
+  sums over a ring, integers only; ride.rs keeps max heart rate and the climbing (VAM, grade). Pure logic.
 - `src/ui/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
   and drawing in runs per row clipped to `Canvas::clip`, so a dirty box and a screenshot row use the same code.
 - `src/drivers/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the

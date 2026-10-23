@@ -5,7 +5,9 @@
 //! are the public ANT+ device profiles, checked against openant's decoders (github.com/Tigge/openant,
 //! `devices/bike_speed_cadence.py` and `devices/power_meter.py`, 2026-10-23): speed or cadence alone, event time in
 //! bytes 4-5 and count in 6-7; combined, cadence in 0-3 and speed in 4-7; power page 0x10, cadence in byte 3
-//! (0xff: none) and instantaneous power in 6-7, all little endian, times in 1/1024 s.
+//! (0xff: none) and instantaneous power in 6-7, all little endian, times in 1/1024 s. Page 0x10's byte 2 is the
+//! pedal power: bit 7 set means the meter tells the pedals apart and bits 0-6 are the right pedal's percent of the
+//! power (0xff: not used); openant reads it the same way (`right_power = power x (data[2] ^ 0x80) / 100`).
 //!
 //! Heart rate (openant `devices/heart_rate.py`, the ANT+ heart rate monitor profile): every page carries the last
 //! beat's event time in bytes 4-5 (1/1024 s), a beat count in byte 6 and the computed rate in byte 7; page 4 (byte 0,
@@ -74,6 +76,8 @@ pub enum Metric {
     Cadence,
     /// Watts.
     Power,
+    /// The right pedal's share of the power, percent (a dual-sided power meter).
+    Balance,
 }
 
 /// A value older than this is dropped (the sensor stopped or went out of range).
@@ -82,8 +86,8 @@ pub const STALE_MS: u32 = 5000;
 /// The latest value of each [`Metric`], and its age.
 #[derive(Default)]
 pub struct Live {
-    values: [Option<u16>; 4],
-    age_ms: [u32; 4],
+    values: [Option<u16>; 5],
+    age_ms: [u32; 5],
 }
 
 impl Live {
@@ -257,6 +261,9 @@ impl Decoders {
             // (0x11, 0x12) when a meter that needs them shows up
             Kind::Power if d[0] == 0x10 => {
                 live.set(Metric::Power, u16_at(6));
+                if d[2] != 0xff && d[2] & 0x80 != 0 && d[2] & 0x7f <= 100 {
+                    live.set(Metric::Balance, u16::from(d[2] & 0x7f));
+                }
                 if d[3] != 0xff {
                     live.set(Metric::Cadence, u16::from(d[3]));
                 }
@@ -324,6 +331,9 @@ mod tests {
         assert_eq!(live.get(Metric::Speed), Some(227));
         dec.decode(Kind::Power, [0x10, 1, 0xff, 85, 0, 0, 0x2c, 0x01], 2105, &mut live);
         assert_eq!((live.get(Metric::Power), live.get(Metric::Cadence)), (Some(300), Some(85)));
+        assert_eq!(live.get(Metric::Balance), None, "0xff: no pedal power");
+        dec.decode(Kind::Power, [0x10, 2, 0x80 | 52, 85, 0, 0, 0x2c, 0x01], 2105, &mut live);
+        assert_eq!(live.get(Metric::Balance), Some(52), "right pedal 52 %");
         live.tick(STALE_MS + 1);
         assert_eq!(live.get(Metric::Hr), None, "stale");
     }

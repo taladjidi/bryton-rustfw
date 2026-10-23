@@ -2051,6 +2051,105 @@ mod tests {
         sim.save("ride_ended");
     }
 
+    /// A dual-sided power meter: 300 W, 85 rpm, the right pedal 48 % of the power.
+    fn power_lr(_: u64) -> [u8; 8] {
+        [0x10, 1, 0x80 | 48, 85, 0, 0, 0x2c, 0x01]
+    }
+
+    /// The derived fields (power.rs, ride.rs): a ride at 300 W on the GPS route (8 m/s, climbing 0.2 m/s) with a
+    /// strap and a dual-sided power meter, at the default FTP (200 W), weight (75 kg) and W' (20 kJ). After two
+    /// minutes the fields show the values worked out by hand, W' balance in its draining colour, and the screen
+    /// agrees with the screenshot.
+    #[test]
+    fn derived_power_and_climb_fields() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.route = Some(ride_route);
+        sim.gnss.alt = Some(climb);
+        sim.gnss.fix = Some(8000);
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_lr });
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Power10s, Power30s, Np, If, Tss] };
+        app.pages[1] = PageCfg { layout: 6, fields: [Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr] };
+        app.pages[2] = PageCfg { layout: 6, fields: [AvgCadence, Balance, Vam, Grade, Timer, Time] };
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 5000);
+        let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+        assert_eq!((text(&app, Np), text(&app, Wbal), text(&app, Kj)), ("--".into(), "--".into(), "0".into()));
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 120_000);
+        let t = app.ride.timer_s();
+        assert!((119..=121).contains(&t), "timer {t}");
+        // 300 W steady: every average 300, NP 300, IF 300 / 200, TSS t x 300^2 x 100 / (200^2 x 3600) = 7.5 at 120 s
+        for f in [Power3s, Power10s, Power30s, Np, MaxPower] {
+            assert_eq!(text(&app, f), "300", "{f:?}");
+        }
+        assert_eq!((text(&app, If), text(&app, Tss)), ("1.50".into(), "7".into()));
+        // 300 W for t s: 0.3 t kJ, and kcal = kJ / (4.184 x 0.24); 300 / 75 = 4.0 W/kg
+        let kj = 3 * t / 10;
+        assert_eq!((text(&app, Kj), text(&app, Kcal)), (format!("{kj}"), format!("{}", kj * 1000 * 100 / 100_416)));
+        assert_eq!(text(&app, Wkg), "4.0");
+        // 100 W over CP for every second since Start (the first seconds count before the GPS speed moves the timer)
+        let wbal = app.power.wbal_j().unwrap();
+        assert!((7900..=8100).contains(&wbal), "W' bal {wbal} J: 20 kJ - 120 s x 100 W");
+        assert_eq!(text(&app, Wbal), format!("{}.{}", wbal / 1000, wbal % 1000 / 100));
+        assert_eq!(app.field_color(Wbal), crate::ride::ZONE_COLORS[4], "40 %: orange");
+        assert_eq!(app.field_color(Np), crate::ride::power_color(6), "150 % of FTP");
+        assert_eq!((text(&app, AvgCadence), text(&app, Balance)), ("85".into(), "52/48".into()));
+        let max_hr = app.ride.max_hr().unwrap();
+        assert_eq!(text(&app, MaxHr), format!("{max_hr}"));
+        assert!(max_hr >= 200, "the strap's ramp, 90 bpm up");
+        // 0.2 m/s up at 8 m/s: 720 m/h, 2.5 % (GPS altitude in whole fixes: a little either way)
+        let (vam, grade) = (app.ride.vam().unwrap(), app.ride.grade_x10().unwrap());
+        assert!((700..=740).contains(&vam) && (24..=26).contains(&grade), "VAM {vam}, grade {grade}");
+        assert_eq!((text(&app, Vam), text(&app, Grade)), (format!("{vam}"), format!("2.{}", grade % 10)));
+        assert_consistent(&sim, &app);
+        sim.save("power_fields");
+        for name in ["power_fields2", "power_fields3"] {
+            app.press(&mut sim, Press::Short(Key::Page));
+            run(&mut sim, &mut app, 3000);
+            assert_consistent(&sim, &app);
+            sim.save(name);
+        }
+        // a new ride: the totals and W' start again
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Long(Key::Start));
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 1000);
+        assert!(app.power.wbal_j().unwrap() > 19_000 && app.power.kj() < 2, "a new ride");
+    }
+
+    /// Weight and W' from the menu, kept in RTC backup register 16 through a restart; the other settings stay in
+    /// register 11.
+    #[test]
+    fn weight_and_wprime_from_the_menu() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Set(Setting::Weight));
+        app.press(&mut sim, Press::Short(Key::Start));
+        for _ in 0..7 {
+            app.press(&mut sim, Press::Short(Key::Page)); // 75 -> 68 kg
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        app.press(&mut sim, Press::Short(Key::Page)); // W' row
+        app.press(&mut sim, Press::Short(Key::Start));
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Lap)); // 20.0 -> 21.5 kJ
+        }
+        assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::WPrime))), "W' KJ < 21.5 >");
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Weight))), "WEIGHT KG 68");
+        assert_consistent(&sim, &app);
+        sim.save("power_settings");
+        assert_eq!(sim.backup[16] >> 24, 0xc1, "tagged");
+        let again = App::start(&mut sim, None);
+        assert_eq!((again.settings.weight_kg, again.settings.wprime_j, again.settings.ftp), (68, 21_500, 200));
+    }
+
     /// Power as ridden: a two-minute swell from 140 to 320 W, +-30 W of noise from one second to the next.
     fn power_noisy(ms: u64) -> [u8; 8] {
         let s = ms / 1000;

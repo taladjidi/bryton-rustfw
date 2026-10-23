@@ -2,7 +2,7 @@
 //! row is ([`Row`]) and the settings rows change ([`Setting`]). The app draws and acts on a row by its kind, never
 //! by its position, so a menu grows by adding a row to its table.
 
-use crate::{Key, Menu, Press, ride, touch::Gesture};
+use crate::{Key, Menu, Press, power, ride, touch::Gesture};
 
 /// What the user asked for. Screens act on these, never on keys, so a key, a touch gesture or the dev link reach the
 /// same code.
@@ -68,8 +68,13 @@ pub enum Setting {
     LightOff,
     /// Max heart rate (a number).
     MaxHr,
-    /// FTP (a number).
+    /// FTP (a number), also the CP of W' balance.
     Ftp,
+    // power.rs
+    /// Rider weight (a number), for W/kg.
+    Weight,
+    /// W' for W' balance (a number, J, shown in kJ).
+    WPrime,
 }
 
 impl Setting {
@@ -81,6 +86,8 @@ impl Setting {
             Setting::LightOff => "LIGHT OFF",
             Setting::MaxHr => "MAX HR",
             Setting::Ftp => "FTP W",
+            Setting::Weight => "WEIGHT KG",
+            Setting::WPrime => "W' KJ",
         }
     }
 
@@ -90,6 +97,8 @@ impl Setting {
         match self {
             Setting::MaxHr => Some((MAX_HR_RANGE, 1)),
             Setting::Ftp => Some((FTP_RANGE, 5)),
+            Setting::Weight => Some((WEIGHT_RANGE, 1)),
+            Setting::WPrime => Some((WPRIME_RANGE, 500)),
             _ => None,
         }
     }
@@ -100,6 +109,11 @@ pub const MAX_HR_RANGE: core::ops::RangeInclusive<u16> = 100..=230;
 /// FTPs offered, W.
 pub const FTP_RANGE: core::ops::RangeInclusive<u16> = 50..=600;
 const _: () = assert!(ride::MAX_HR >= 100 && ride::MAX_HR <= 230 && ride::FTP.is_multiple_of(5));
+/// Rider weights offered, kg.
+pub const WEIGHT_RANGE: core::ops::RangeInclusive<u16> = 30..=150;
+/// W' offered, J (0.5 kJ steps).
+pub const WPRIME_RANGE: core::ops::RangeInclusive<u16> = 5000..=40_000;
+const _: () = assert!(power::WEIGHT_KG >= 30 && power::WEIGHT_KG <= 150 && power::WPRIME_J.is_multiple_of(500));
 
 /// A reading shown in a menu (nothing to change).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,7 +160,7 @@ pub enum Row {
 }
 
 /// The main menu.
-pub const MAIN: [Row; 12] = [
+pub const MAIN: [Row; 14] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
@@ -157,6 +171,8 @@ pub const MAIN: [Row; 12] = [
     Row::Set(Setting::LightOff),
     Row::Set(Setting::MaxHr),
     Row::Set(Setting::Ftp),
+    Row::Set(Setting::Weight),
+    Row::Set(Setting::WPrime),
     Row::Open(Menu::Gps),
     Row::Nearby,
 ];

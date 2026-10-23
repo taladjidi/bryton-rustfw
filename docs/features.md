@@ -11,9 +11,11 @@
 - **Ride pages:** up to three, each in one of eleven layouts (one to six fields: even grids, and uneven ones such as
   a big box over two or over a 2 x 2 grid, two over a big one, three rows), chosen in the menu: speed, heart rate, cadence,
   power, time, map, timer, distance, average and top speed, average heart rate and power, lap time and distance,
-  ascent, a zone graph, and heart rate variability from a strap's beats: DFA a1 (the aerobic threshold marker, about
-  0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute). Page 3
-  is the map by default.
+  ascent, a zone graph; heart rate variability from a strap's beats: DFA a1 (the aerobic threshold marker, about
+  0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute); and
+  from the power meter and the ride: 3, 10 and 30 s power, NP, IF, TSS, kJ, kcal, W/kg, W' balance (kJ, green,
+  yellow, orange, red as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
+  grade. Page 3 is the map by default.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. No basemap yet.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
@@ -52,13 +54,17 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 - Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
+- Power (src/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
+  FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
+  Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
+  recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (GPS altitude).
 - Not saved yet (the FIT writer, `src/storage/fit.rs`, plugs in at `App::recorder`).
 
 ## Menu
 
 Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
 wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
-up and Page down, held to repeat, Start to keep), GPS (fix, satellites, position, altitude, UTC),
+up and Page down, held to repeat, Start to keep), weight (1 kg) and W' (0.5 kJ), GPS (fix, satellites, position, altitude, UTC),
 BLE devices nearby.
 
 ## Sensors and radios

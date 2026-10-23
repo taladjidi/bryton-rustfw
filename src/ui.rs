@@ -415,16 +415,51 @@ pub enum Field {
     Dfa,
     /// RMSSD of the last minute of beats, ms (hrv.rs).
     Rmssd,
+    // power.rs and the ride's derived metrics
+    /// 3 s average power.
+    Power3s,
+    /// 10 s average power.
+    Power10s,
+    /// 30 s average power.
+    Power30s,
+    /// Normalized power.
+    Np,
+    /// Intensity factor (NP / FTP).
+    If,
+    /// Training stress score.
+    Tss,
+    /// Work, kJ.
+    Kj,
+    /// Energy, kcal.
+    Kcal,
+    /// 3 s power per kg.
+    Wkg,
+    /// W' balance, kJ.
+    Wbal,
+    /// The ride's max power.
+    MaxPower,
+    /// The ride's max heart rate.
+    MaxHr,
+    /// Average cadence (zeros left out).
+    AvgCadence,
+    /// Left / right pedal balance, percent.
+    Balance,
+    /// VAM, m/h.
+    Vam,
+    /// Grade, %.
+    Grade,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 20] = {
+    pub const ALL: [Field; 36] = {
         use Field::*;
         [
             Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
-            Ascent, Graph, Temp, HrGraph, Dfa, Rmssd,
+            Ascent, Graph, Temp, HrGraph, Dfa, Rmssd, // power.rs and the ride's derived metrics:
+            Power3s, Power10s, Power30s, Np, If, Tss, Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr, AvgCadence, Balance, Vam,
+            Grade,
         ]
     };
 
@@ -451,6 +486,23 @@ impl Field {
             "HR GRAPH",
             "DFA A1",
             "RMSSD",
+            // power.rs and the ride's derived metrics
+            "3S W",
+            "10S W",
+            "30S W",
+            "NP",
+            "IF",
+            "TSS",
+            "KJ",
+            "KCAL",
+            "W/KG",
+            "W'BAL KJ",
+            "MAX W",
+            "MAX HR",
+            "AVG RPM",
+            "L/R",
+            "VAM M/H",
+            "GRADE %",
         ][self as usize]
     }
 
@@ -458,7 +510,10 @@ impl Field {
     fn widest(self) -> &'static str {
         [
             "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
-            "88.88", "8888", "", "-88.8", "", "8.88", "888",
+            "88.88", "8888", "", "-88.8", "", "8.88", "888", "88.88", "8888", "", "-88.8",
+            "", // power.rs and the ride's derived metrics:
+            "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
+            "88/88", "-8888", "-88.8",
         ][self as usize]
     }
 
@@ -852,7 +907,7 @@ pub(crate) mod tests {
                 let area: u32 = b.iter().map(|&(_, _, w, h)| w * h).sum();
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
                 let mut f = Frame::new();
-                for (&bx, field) in b.iter().zip(Field::ALL.iter().cycle()) {
+                for (&bx, field) in b.iter().flat_map(|bx| Field::ALL.iter().map(move |f| (bx, f))) {
                     draw_field_frame(&mut f, bx, *field);
                     draw_field_value(&mut f, bx, *field, field.widest(), WHITE);
                     assert!(value_style(*field, bx.2, bx.3).scale >= 2, "{n} fields: {field:?} readable");
