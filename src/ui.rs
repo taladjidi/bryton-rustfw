@@ -1,4 +1,4 @@
-//! What is on screen: colours, text styles, the seven-segment digits, Ferris, the layout and the clock. Draws
+//! What is on screen: colours, text styles, Ferris, the layout and the clock. Draws
 //! through [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
 
 use crate::fonts::PIXEL;
@@ -37,48 +37,6 @@ pub trait Canvas {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Seven-segment digits drawn with rectangles (no font needed)
-// ---------------------------------------------------------------------------------------------------------------
-
-/// Segments lit for 0..9, bit 0 = a .. bit 6 = g.
-pub const SEGMENTS: [u8; 10] = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f];
-
-/// Size of a seven-segment digit: width, height, stroke thickness.
-pub struct Digit {
-    /// Width in pixels.
-    pub w: u32,
-    /// Height in pixels.
-    pub h: u32,
-    /// Stroke thickness in pixels.
-    pub t: u32,
-}
-
-/// Segment `i` (0 = a .. 6 = g) of digit size `d`, as (x, y, w, h) relative to the digit's top left corner.
-fn segment(d: &Digit, i: u32) -> (u32, u32, u32, u32) {
-    let (w, h, t) = (d.w, d.h, d.t);
-    let half = h / 2;
-    match i {
-        0 => (t, 0, w - 2 * t, t),            // a
-        1 => (w - t, t, t, half - t),         // b
-        2 => (w - t, half, t, half - t),      // c
-        3 => (t, h - t, w - 2 * t, t),        // d
-        4 => (0, half, t, half - t),          // e
-        5 => (0, t, t, half - t),             // f
-        _ => (t, half - t / 2, w - 2 * t, t), // g
-    }
-}
-
-/// Draws `value` (mod 10) at (`x`, `y`): lit segments in `color`, the others in black, so it overwrites the
-/// previous digit without clearing first.
-pub fn draw_digit(c: &mut impl Canvas, x: u32, y: u32, d: &Digit, value: u8, color: u16) {
-    let on = SEGMENTS[(value % 10) as usize];
-    for i in 0..7 {
-        let (sx, sy, sw, sh) = segment(d, i);
-        c.fill(x + sx, y + sy, sw, sh, if on & (1 << i) != 0 { color } else { BLACK });
-    }
-}
-
-// ---------------------------------------------------------------------------------------------------------------
 // Ferris
 // ---------------------------------------------------------------------------------------------------------------
 
@@ -105,18 +63,20 @@ pub fn draw_crab(c: &mut impl Canvas, x: u32, y: u32, scale: u32, color: u16) {
 // Screen layout
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Hours and minutes digits.
-pub const BIG: Digit = Digit { w: 44, h: 84, t: 9 };
-/// Seconds digits.
-pub const SMALL: Digit = Digit { w: 24, h: 44, t: 5 };
-/// Left edge of H, H, M, M.
-pub const BIG_X: [u32; 4] = [8, 60, 136, 188];
+/// Hours and minutes: the pixel font at 7x, white.
+pub const TIME: Style = Style { font: &PIXEL, scale: 7, fg: WHITE, bg: BLACK };
+/// Seconds: the pixel font at 5x, orange.
+pub const SECONDS: Style = Style { font: &PIXEL, scale: 5, fg: ACCENT, bg: BLACK };
+/// Width of one character cell of the monospaced pixel font, in font pixels.
+const CELL: u32 = 6;
+/// Left edge of "HH:MM", its ink centred (each cell ends with a blank column, the last one does not count).
+pub const TIME_X: u32 = (W - (5 * CELL - 1) * TIME.scale) / 2;
 /// Top of the hours and minutes.
-pub const BIG_Y: u32 = 96;
-/// Left edge of the two seconds digits.
-pub const SMALL_X: [u32; 2] = [90, 126];
+pub const TIME_Y: u32 = 96;
+/// Left edge of the two seconds digits, their ink centred.
+pub const SECONDS_X: u32 = (W - (2 * CELL - 1) * SECONDS.scale) / 2;
 /// Top of the seconds.
-pub const SMALL_Y: u32 = 210;
+pub const SECONDS_Y: u32 = 196;
 /// Ferris: scale and top left corner (centred, under the seconds).
 pub const CRAB_SCALE: u32 = 4;
 /// Ferris left edge.
@@ -126,8 +86,7 @@ pub const CRAB_Y: u32 = 266;
 
 /// The parts of the screen that never change: the colon, the bar at the top, Ferris.
 pub fn draw_static(c: &mut impl Canvas) {
-    c.fill(116, BIG_Y + 20, 8, 8, WHITE);
-    c.fill(116, BIG_Y + 56, 8, 8, WHITE);
+    text::draw(c, &TIME, TIME_X + 2 * CELL * TIME.scale, TIME_Y, Align::Left, ":");
     c.fill(20, 40, W - 40, 6, ACCENT);
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
 }
@@ -193,7 +152,19 @@ impl Canvas for Row {
     }
 }
 
-/// The time on screen; redraws only the digits that changed, since each fill costs SPI time.
+/// Clock digit `i` (0..4: H H M M, 4..6: the seconds) showing `d`, in its fixed cell of the monospaced font.
+fn draw_clock_digit(c: &mut impl Canvas, i: usize, d: u8) {
+    const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    let s = DIGITS[usize::from(d % 10)];
+    if i < 4 {
+        let col = if i < 2 { i } else { i + 1 } as u32; // the colon is column 2
+        text::draw(c, &TIME, TIME_X + col * CELL * TIME.scale, TIME_Y, Align::Left, s);
+    } else {
+        text::draw(c, &SECONDS, SECONDS_X + (i as u32 - 4) * CELL * SECONDS.scale, SECONDS_Y, Align::Left, s);
+    }
+}
+
+/// The time on screen; redraws only the digits that changed, since each glyph costs SPI time.
 pub struct Clock {
     shown: [u8; 6],
 }
@@ -214,11 +185,7 @@ impl Clock {
     pub fn redraw(&self, c: &mut impl Canvas) {
         for (i, &d) in self.shown.iter().enumerate() {
             if d != 0xff {
-                if i < 4 {
-                    draw_digit(c, BIG_X[i], BIG_Y, &BIG, d, WHITE);
-                } else {
-                    draw_digit(c, SMALL_X[i - 4], SMALL_Y, &SMALL, d, ACCENT);
-                }
+                draw_clock_digit(c, i, d);
             }
         }
     }
@@ -229,11 +196,7 @@ impl Clock {
         for (i, &d) in digits.iter().enumerate() {
             if d != self.shown[i] {
                 self.shown[i] = d;
-                if i < 4 {
-                    draw_digit(c, BIG_X[i], BIG_Y, &BIG, d, WHITE);
-                } else {
-                    draw_digit(c, SMALL_X[i - 4], SMALL_Y, &SMALL, d, ACCENT);
-                }
+                draw_clock_digit(c, i, d);
             }
         }
     }
@@ -281,19 +244,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn digits_light_the_right_segments() {
-        for v in 0..10u8 {
-            let mut f = Frame::new();
-            draw_digit(&mut f, 0, 0, &BIG, v, WHITE);
-            for i in 0..7 {
-                let (x, y, w, h) = segment(&BIG, i);
-                let lit = f.at(x + w / 2, y + h / 2) == WHITE;
-                assert_eq!(lit, SEGMENTS[v as usize] & (1 << i) != 0, "digit {v} segment {i}");
-            }
-        }
-    }
-
-    #[test]
     fn crab_matches_bitmap() {
         let mut f = Frame::new();
         draw_crab(&mut f, 0, 0, 1, RUST);
@@ -308,18 +258,13 @@ pub(crate) mod tests {
         assert_eq!(f.count(RUST) as u32, ones * CRAB_SCALE * CRAB_SCALE);
     }
 
-    /// Every element in its own box: the digits (at their widest, 8), the colon, the bar and Ferris never
+    /// Every element in its own box: the clock cells, the bar, Ferris and the USB dot and label never
     /// overwrite each other, and everything stays on screen (Frame panics otherwise).
     #[test]
     fn layout_does_not_overlap() {
         let mut boxes = Vec::new();
-        for &x in &BIG_X {
-            boxes.push((x, BIG_Y, BIG.w, BIG.h));
-        }
-        for &x in &SMALL_X {
-            boxes.push((x, SMALL_Y, SMALL.w, SMALL.h));
-        }
-        boxes.push((116, BIG_Y + 20, 8, 44)); // colon
+        boxes.push((TIME_X, TIME_Y, TIME.width("88:88"), TIME.height()));
+        boxes.push((SECONDS_X, SECONDS_Y, SECONDS.width("88"), SECONDS.height()));
         boxes.push((20, 40, W - 40, 6)); // bar
         boxes.push((CRAB_X, CRAB_Y, 16 * CRAB_SCALE, CRAB.len() as u32 * CRAB_SCALE));
         boxes.push((USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2));
@@ -355,12 +300,12 @@ pub(crate) mod tests {
         let mut f = Frame::new();
         let mut clock = Clock::new();
         clock.show(&mut f, 12, 34, 56);
-        assert_eq!(f.fills, 6 * 7);
+        assert_eq!(f.fills, 6);
         clock.show(&mut f, 12, 34, 56);
-        assert_eq!(f.fills, 6 * 7);
+        assert_eq!(f.fills, 6);
         clock.show(&mut f, 12, 34, 57);
-        assert_eq!(f.fills, 7 * 7);
+        assert_eq!(f.fills, 7);
         clock.show(&mut f, 12, 35, 0);
-        assert_eq!(f.fills, 10 * 7); // minutes units and both seconds digits
+        assert_eq!(f.fills, 10); // minutes units and both seconds digits
     }
 }

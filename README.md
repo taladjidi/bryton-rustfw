@@ -4,8 +4,8 @@ An open, from-scratch Rust firmware for Bryton bike computers. It currently targ
 as a proof of concept: it replaces Bryton's OS entirely and shows the time kept by the RTC. Not affiliated with
 Bryton.
 
-- **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, so it is
-  obviously not the stock firmware.
+- **Screen:** big HH:MM, seconds below, an orange bar at the top and Ferris the Rust crab at the bottom, all in the
+  same dot-matrix style, so it is obviously not the stock firmware.
 - **Page key:** toggles the backlight.
 - **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
@@ -22,9 +22,11 @@ than stock), Page toggles the backlight, holding Back powers off and the power b
 link works (`info`, `shot`, `peek`, and `run` from RAM). The first install had stopped at the panel: SPI1 lost
 master mode to a mode fault (see "First run on the unit" below).
 
-![The firmware on the unit, screenshot over the dev link](docs/first-frame-2026-10-23.png)
+![The firmware on the unit, screenshot over the dev link](docs/screen.png)
 
-*Screenshot taken from the unit over the dev link (`./dev.py shot`): rendered by the firmware from what it drew.*
+*Screenshot taken from the unit over the dev link (`./dev.py shot`): rendered by the firmware from what it drew.
+Everything is in the project's own pixel font, drawn at 2x to 7x like Ferris. The first frame ever, with the
+earlier seven-segment digits: [docs/first-frame-2026-10-23.png](docs/first-frame-2026-10-23.png).*
 
 ## Build
 
