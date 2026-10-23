@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod ambient;
 pub mod battery;
 pub mod dev;
 pub mod emmc;
@@ -86,6 +87,11 @@ pub trait Board {
     /// Sends eMMC command `index` with `arg`, a read of `buf.len()` bytes (whole 512-byte blocks) whose R1 answer
     /// it returns, and reads the data into `buf`, every wait bounded.
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, emmc::BusError>;
+    /// Reads `buf.len()` bytes from register `reg` on, of the chip at 7-bit address `addr` on the sensor bus (I2C4,
+    /// BOARD.md 16); false if it did not answer (no acknowledge, or a time-out: it never hangs).
+    fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool;
+    /// Writes `data` to register `reg` on, of the chip at `addr`; false if it did not answer.
+    fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -279,11 +285,13 @@ impl PageCfg {
 pub const PAGES: usize = 3;
 /// The backup registers of the ride pages.
 const PAGE_BKP: [usize; PAGES] = [14, 15, 16];
-/// The backup register of the wheel size (bits 0..15) and the backlight settings (16..19 level, 20..23 time-out:
+/// The backup register of the wheel size (bits 0..15) and the backlight settings (16..19 level or [`LIGHT_AUTO`], 20..23 time-out:
 /// indexes into [`LIGHT_LEVELS`] and [`LIGHT_TIMEOUTS_S`]), behind the tag 0xa5.
 const WHEEL_BKP: usize = 11;
-/// Backlight levels offered, percent (stock: 1 to 100).
+/// Backlight levels offered, percent (stock: 1 to 100). One more choice follows them: [`LIGHT_AUTO`].
 pub const LIGHT_LEVELS: [u8; 4] = [100, 60, 30, 10];
+/// The backlight setting that follows the ambient light ([`ambient::Auto`]): the index after [`LIGHT_LEVELS`].
+pub const LIGHT_AUTO: usize = LIGHT_LEVELS.len();
 /// Backlight time-outs offered, seconds without a key press (0: never off).
 pub const LIGHT_TIMEOUTS_S: [u32; 4] = [0, 10, 30, 60];
 /// Wheel circumferences offered (mm): 700 x 23, 25, 28, 32, 35, 38 C and 650B x 47 (ANT+ / tyre makers' tables).
@@ -329,6 +337,12 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
+
+/// How often the ambient light is measured while the backlight follows it (and while the menu shows it).
+pub const LIGHT_MS: u32 = 3000;
+
+/// From the start of a light measurement to its reading: one 400 ms conversion and a margin.
+pub const LIGHT_WAIT_MS: u32 = 600;
 
 /// When the GNSS receiver is powered, counted from the app's first step: its power line (PI6) has then been
 /// driven low for over a second (the board does it at boot). After a reset the line is left undriven, and powered
@@ -391,10 +405,10 @@ pub enum Screen {
     Nearby,
 }
 
-/// Main menu rows.
-const MAIN_ROWS: usize = 9;
 /// The GPS row of the main menu.
 const GPS_ROW: usize = 7;
+/// The nearby BLE devices row of the main menu.
+const NEARBY_ROW: usize = 8;
 
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
@@ -408,6 +422,16 @@ pub struct App {
     light_timeout: usize,
     /// Since the last key press.
     idle_ms: u32,
+    /// The chips found on the sensor bus.
+    chips: ambient::Chips,
+    /// The automatic backlight's state, and the level it asks for.
+    auto: ambient::Auto,
+    auto_level: u8,
+    /// Since the last light measurement started; whether it is still running.
+    light_ms: u32,
+    measuring: bool,
+    /// The barometer's last reading: hPa x 10, C x 100.
+    baro: Option<(u32, i16)>,
     /// The RTC's seconds (the main screen shows them).
     seconds: u8,
     /// What the status strip shows, and what it showed when last drawn.
@@ -486,9 +510,15 @@ impl App {
             keys: Keys::default(),
             backlight: true,
             light_shown: 0,
-            light_level: (wheel >> 16 & 0xf) as usize % LIGHT_LEVELS.len(),
+            light_level: (wheel >> 16 & 0xf) as usize % (LIGHT_LEVELS.len() + 1),
             light_timeout: (wheel >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
             idle_ms: 0,
+            chips: ambient::init(b),
+            auto: ambient::Auto::default(),
+            auto_level: LIGHT_LEVELS[1], // until the first reading
+            light_ms: LIGHT_MS,          // a measurement at the first step
+            measuring: false,
+            baro: None,
             seconds: 0,
             strip: Strip {
                 time: rtc_hm(b),
@@ -538,6 +568,9 @@ impl App {
             track: map::Track::new(),
             map_shown: Default::default(),
         };
+        if app.chips.baro {
+            ambient::baro_start(b); // read at the first step
+        }
         app.strip_shown = app.strip;
         ui::draw_strip(&mut Panel(b), &app.strip);
         app.show(b);
@@ -549,7 +582,11 @@ impl App {
     fn update_light(&mut self, b: &mut impl Board) {
         let timeout_ms = LIGHT_TIMEOUTS_S[self.light_timeout] * 1000;
         let on = self.backlight && (timeout_ms == 0 || self.idle_ms < timeout_ms);
-        let level = if on { LIGHT_LEVELS[self.light_level] } else { 0 };
+        let level = match LIGHT_LEVELS.get(self.light_level) {
+            _ if !on => 0,
+            Some(&l) => l,
+            None => self.auto_level,
+        };
         if level != self.light_shown {
             self.light_shown = level;
             b.backlight(level);
@@ -623,7 +660,10 @@ impl App {
                 }
                 5 => {
                     label.push_str("LIGHT %");
-                    value.push_u32(u32::from(LIGHT_LEVELS[self.light_level]));
+                    match LIGHT_LEVELS.get(self.light_level) {
+                        Some(&l) => value.push_u32(u32::from(l)),
+                        None => value.push_str("AUTO"),
+                    }
                 }
                 6 => {
                     label.push_str("LIGHT OFF");
@@ -637,6 +677,23 @@ impl App {
                 }
                 7 => label.push_str("GPS"),
                 8 => label.push_str("NEARBY BLE"),
+                9 => {
+                    label.push_str("LUX");
+                    match self.auto.lux10() {
+                        _ if !self.chips.light => value.push_str("NONE"),
+                        None => value.push_str("--"),
+                        Some(l) => value.push_u32(l / 10),
+                    }
+                }
+                10 | 11 => {
+                    label.push_str(if i == 10 { "TEMP C" } else { "HPA" });
+                    match self.baro {
+                        _ if !self.chips.baro => value.push_str("NONE"),
+                        None => value.push_str("--"),
+                        Some((_, t)) if i == 10 => push_fixed(&mut value, i32::from(t), 2, 1),
+                        Some((p, _)) => push_fixed(&mut value, p as i32, 1, 0),
+                    }
+                }
                 _ => return None,
             },
             Menu::Sensors => {
@@ -890,7 +947,7 @@ impl App {
             }
             (Menu::Main, 5 | 6) => {
                 if sel == 5 {
-                    self.light_level = (self.light_level + 1) % LIGHT_LEVELS.len();
+                    self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1);
                 } else {
                     self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len();
                 }
@@ -900,12 +957,13 @@ impl App {
             }
             (Menu::Main, GPS_ROW) => Screen::Menu(Menu::Gps, 0),
             (Menu::Gps, _) => Screen::Menu(menu, sel),
-            (Menu::Main, _) => {
+            (Menu::Main, NEARBY_ROW) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
                 }
                 Screen::Nearby
             }
+            (Menu::Main, _) => Screen::Menu(menu, sel), // readings only
             (Menu::Sensors, _) => {
                 if let (true, Some(&kind)) = (self.ant, Kind::ALL.get(sel)) {
                     let want = if self.sensors[sel] == Sensor::Off { Sensor::Search } else { Sensor::Off };
@@ -974,7 +1032,7 @@ impl App {
             (Screen::Menu(Menu::Page(n), _), Press::Short(Key::Back)) => {
                 self.screen = Screen::Menu(Menu::Main, n + 1);
             }
-            (Screen::Nearby, Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, MAIN_ROWS - 1),
+            (Screen::Nearby, Press::Short(Key::Back)) => self.screen = Screen::Menu(Menu::Main, NEARBY_ROW),
             _ => return,
         }
         if self.screen != before {
@@ -1126,7 +1184,13 @@ impl App {
             }
             self.strip.battery = self.battery.percent();
             self.strip.charging = charging;
+            if self.chips.baro {
+                // the conversion started 10 s ago; the next one now (one-shot: the chip sleeps in between)
+                self.baro = ambient::baro_read(b);
+                ambient::baro_start(b);
+            }
         }
+        self.poll_light(b);
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
@@ -1177,7 +1241,7 @@ impl App {
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
-            Screen::Menu(menu @ (Menu::Sensors | Menu::Gps), sel) if self.redraw_ms >= LIST_REDRAW_MS => {
+            Screen::Menu(menu @ (Menu::Main | Menu::Sensors | Menu::Gps), sel) if self.redraw_ms >= LIST_REDRAW_MS => {
                 self.update_menu_rows(b, menu, sel);
                 self.redraw_ms = 0;
             }
@@ -1191,6 +1255,29 @@ impl App {
         self.update_light(b);
     }
 
+    /// One light measurement every [`LIGHT_MS`] while the backlight follows the ambient light (and is on), or the
+    /// main menu shows it: the sensor is started, read [`LIGHT_WAIT_MS`] later, and put back in standby.
+    fn poll_light(&mut self, b: &mut impl Board) {
+        if !self.chips.light {
+            return;
+        }
+        self.light_ms = self.light_ms.saturating_add(POLL_MS);
+        let wanted = (self.light_level == LIGHT_AUTO && self.light_shown != 0)
+            || matches!(self.screen, Screen::Menu(Menu::Main, _));
+        if self.measuring && self.light_ms >= LIGHT_WAIT_MS {
+            match ambient::light_read(b) {
+                Some(lux10) => self.auto_level = self.auto.update(lux10),
+                None if self.light_ms < LIGHT_MS => return, // not ready yet: again at the next pass
+                None => {}
+            }
+            ambient::light_stop(b);
+            self.measuring = false;
+        } else if !self.measuring && wanted && self.light_ms >= LIGHT_MS {
+            self.measuring = ambient::light_start(b);
+            self.light_ms = 0;
+        }
+    }
+
     /// As stock: the radio chip off too (or it drains the battery), screen off, wait for the key to be released
     /// (or it would wake the unit at once), then standby.
     fn power_off(&mut self, b: &mut impl Board) {
@@ -1199,6 +1286,9 @@ impl App {
         }
         b.gnss_power(false);
         play(b, &BEEP_OFF);
+        if self.measuring {
+            ambient::light_stop(b);
+        }
         b.backlight(0);
         panel::off(b);
         while b.keys_down() & Key::Back as u8 != 0 {

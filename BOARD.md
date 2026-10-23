@@ -114,6 +114,13 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
          boot mode <------------------| PI4   high = application   |
          request  ------------------->| PH8   (EXTI only, unused)  |
                                       |                            |
+       sensor bus (I2C4, AF4,         |                            |
+         open drain, no pull)         |                            |
+         SCL   <----------------------| PD12                       |
+         SDA   <--------------------->| PD13                       |
+         light sensor INT ----------->| PF9   (unused here)        |
+         accelerometer INT1 --------->| PD11  (unused here)        |
+                                      |                            |
        u-blox M10 GNSS                |                            |
          SCK   <----------------------| PE2   SPI4 (AF5), pull-down|
          MOSI  <----------------------| PE6   SPI4 (AF5)           |
@@ -141,17 +148,20 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
 | PC0 | USB ULPI STP (AF10) | 7 |
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
-| PC8..PC11 | eMMC D0..D3, SDMMC1 (AF12) | 14 |
-| PC12 | eMMC CLK, SDMMC1 (AF12) | 14 |
+| PC8..PC11 | eMMC D0..D3, SDMMC1 (AF12) | 15 |
+| PC12 | eMMC CLK, SDMMC1 (AF12) | 15 |
 | PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) | 7 |
-| PD2 | eMMC CMD, SDMMC1 (AF12) | 14 |
+| PD2 | eMMC CMD, SDMMC1 (AF12) | 15 |
 | PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
 | PD7 | SPI1 MOSI (panel), AF5 | 6 |
+| PD11 | accelerometer INT1 (EXTI rising in stock; unused here) | 16 |
+| PD12 PD13 | I2C4 SCL, SDA: the sensor bus (AF4, open drain, no pull) | 16 |
 | PE2 PE4 PE5 PE6 | SPI4 SCK (pull-down), chip select, MISO, MOSI to the GNSS (AF5; PE4 by hand here) | 13 |
 | PE3 | key 0x08 page, active low | 5 |
 | PF6 | charger status input (not traced) | 12 |
 | PF7 | GNSS line (EXTI in stock; unused here) | 13 |
-| PF8 | eMMC reset or power (inferred); left as the bootloader leaves it | 14 |
+| PF8 | eMMC reset or power (inferred); left as the bootloader leaves it | 15 |
+| PF9 | ambient light sensor interrupt (EXTI falling, pull-up in stock; unused here) | 16 |
 | PG3 | display and touch power enable (inferred) | 6 |
 | PG9 | panel D/C: 0 command, 1 parameter or pixel data | 6 |
 | PG10 | panel chip select (SPI1 NSS, driven by hand) | 6 |
@@ -166,6 +176,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PI11 | USB ULPI DIR (AF10) | 7 |
 
 Not used yet: I2C sensors (barometer, accelerometer, light), touch, buzzer.
+Not used yet: touch, eMMC on SDMMC1, buzzer.
 
 ## 5. Keys
 
@@ -591,3 +602,69 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
 - Read only, and only on request: the driver never writes; the one CMD6 is the bus width, a volatile byte the
   card clears at CMD0 and power-off. The card is identified on the first `emmc` or `sector` command, never at boot.
 
+## 16. Sensor bus (I2C4): light sensor, barometer, accelerometer
+
+From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite its name; `Sensor_I2cWrite`
+0xd024390c, `Sensor_I2cRead` 0xd0243968; the chip drivers below).
+
+- **I2C4** (0x58001c00, D3 domain), PD12 SCL, PD13 SDA, AF4, open drain, no internal pull (the pull-ups are on the
+  board, inferred). Stock: kernel clock APB4 12.5 MHz, TIMINGR 0x00100414 (about 400 kHz), HAL `Mem_Write` /
+  `Mem_Read` with a 1-byte register address, 1 s time-out. This firmware: kernel clock HSI 64 MHz (RCC_D3CCIPR
+  I2C4SEL = 2), TIMINGR 0xf0420709 (about 200 kHz), polled, every wait 1 ms at most; I2C4 is reset first
+  (RCC_APB4RSTR bit 7), as for the other peripherals a RAM run inherits.
+- **Chips** (7-bit addresses; stock writes them shifted, as 8-bit):
+
+| chip | address | ID | stock's use |
+|---|---|---|---|
+| ambient light, Lite-On **LTR-308ALS** (inferred from the address, the part ID and the register map) | 0x53 | PART_ID 0x06 = 0xb1 | `Sensor_LightSensorCmd` 0xd023e024: MAIN_CTRL 0x00 = 2 on, 0 standby; MEAS_RATE 0x04 = 0x05, GAIN 0x05 = 2; interrupt on thresholds (INT_CFG 0x19, INT_PST 0x1a, thresholds 0x21 / 0x24, 3 bytes each) |
+| barometer, ST **LPS22HH** | 0x5c | WHO_AM_I 0x0f = 0xb3 | `BSP_Baro_Init` 0xd023d234: CTRL_REG2 0x11 = 0x92 (reboot), IF_CTRL 0x0e = 0x02, CTRL_REG1 0x10 = 0x3e (25 Hz) |
+| barometer, Bosch BMP280 (the alternative stock tries first) | 0x76 | 0xd0 = 0x58 | `Baro_DetectModel` 0xd023d3dc |
+| accelerometer, ST LIS2DH12 / LIS3DH class | 0x18 | WHO_AM_I 0x0f = 0x33 | `Sensor_GSensorCmd` 0xd0243b60: off is CTRL_REG1 0x20 = 0x07; on, 400 Hz with an interrupt on INT1 (PD11) |
+
+- **Seen on the unit (2026-10-23, `tools/i2c.py`, with a build that never touched the bus):** exactly three chips
+  answer (0x18, 0x53, 0x5c; no BMP280), with the IDs above (0xb1, 0xb3, 0x33). Stock's settings survive a reset
+  (the chips stay powered): the light sensor in standby (MAIN_CTRL 0) with MEAS_RATE 0x05 and GAIN 0x02, the
+  barometer at CTRL_REG1 0x02 (so stock's power-down value is 0x02: output rate 0, BDU) and CTRL_REG2 0x12, the
+  accelerometer off (CTRL_REG1 0x07). Indoors, dim: a light reading of 3 (0.1 lux); the barometer 994.5 hPa,
+  25.5 C.
+- **Light reading** (`Sensor_LightSensorReadLux` 0xd023e1e8): ALS_DATA 0x0d..0x0f, 20 bits little endian; lux =
+  reading x 0.025 x calibration / 1000 (the calibration word comes from an eMMC raw sector, 1000 by default). 0.025 is
+  the datasheet's 0.6 / (gain 6 x 4), the 4 being the 400 ms of a 20-bit conversion (MEAS_RATE 0x05: 20 bits, one
+  measurement a second). Stock masks the reading to 18 bits before scaling (`ubfx #0, #18`), so above 6553 lux it
+  would wrap; this firmware keeps all 20 (full scale 26214 lux). MAIN_STATUS 0x07 bit 3: a new reading.
+- **Stock's automatic backlight** (`Sensor_LightSensorUpdateBacklight` 0xd023e304, on the sensor's threshold
+  interrupt on PF9; tables in initialised data at 0x2400ea44, read from the image by running its start-up data
+  copy): lux bands 0..5, 5..20, 20..50, 50..120, 120..26214, and the backlight level in each band for each of the
+  user's five settings (byte 0x3003e643):
+
+      setting   0..5  5..20  20..50  50..120  >120 lux
+      0           5     10      0       0       0
+      1           8     20     30       0       0
+      2          11     30     40       0       0
+      3          14     40     50      70       0
+      4          17     50     60      80       0
+
+  Level 0 is the PWM's minimum, 1 % (`Pwr_BacklightSetPwmDuty` clamps to 1..100): in daylight the transflective
+  panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
+- **This firmware** (src/ambient.rs): the light sensor in standby but for one measurement every 3 s while the
+  backlight is AUTO and on (or the main menu shows the light): MAIN_CTRL = 2, 600 ms, MAIN_STATUS, ALS_DATA,
+  MAIN_CTRL = 0. The level rises with the light (src/ambient.rs `AUTO_BANDS`: stock's setting 3 up to 20 lux, then
+  on up to 100 % instead of stock's drop to 1 % above 120 lux), with a running average (a quarter per reading) and
+  a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
+  480 lux (raw 19304) and dimmed the screen to 1 %, which the owner found wrong; the room read 0.3 to 0.6 lux, a hand
+  over the sensor 0.05. Stock's calibration on this unit is 932 (its debug log, `Light sensor cali value 932`, from
+  the eMMC raw sector at base + 0x4404 with 55 aa markers; `0xd018dc10`), so its lux are this firmware's x 0.93. The barometer powered down (CTRL_REG1 0x10 = 0x02: output rate 0, BDU) and one one-shot conversion
+  every 10 s (CTRL_REG2 0x11 = 0x11); STATUS 0x27 bits 0, 1; PRESS_OUT 0x28..0x2a (24 bits, 4096 per hPa) and
+  TEMP_OUT 0x2b..0x2c (C x 100). The accelerometer switched off at start (CTRL_REG1 0x20 = 0x07), as stock does at
+  boot. Seen on the unit (2026-10-23, from RAM): the menu rows read LUX 0, TEMP C 25.5, HPA 994, and AUTO in the
+  dark set the PWM to level 14 (LPTIM1_CMP 13).
+- **A register read** (a write of the register address, a repeated start, the read; AUTOEND sends the stop):
+
+     SCL  ~~~~\_/~\_/~ ... ~\_/~~~~~\_/~\_/~ ... ~\_/~\_/~ ... ~\_/~~~~~~
+     SDA  ~~\_< addr W >A< reg >A~~~\_< addr R >A< data 0 >A ... < data n >N_/~~
+          S                       Sr                                        P
+          |<---- CR2: NBYTES 1, START ---->|<-- CR2: RD_WRN, NBYTES n, AUTOEND, START -->|
+                        TXIS: write reg, TC                 RXNE per byte, STOPF
+
+  S start, Sr repeated start, P stop, A acknowledge (by the chip, or by the STM32 for data bytes), N the last byte
+  not acknowledged. A write is one transfer: address, register, data, with AUTOEND.

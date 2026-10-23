@@ -5,6 +5,7 @@
 //! - keys scripted as a function of time;
 //! - a Nordic chip ([`Nordic`]) that answers the commands the way the real one did on the unit (BOARD.md 11);
 //! - an eMMC ([`EmmcCard`]) that answers the commands as JEDEC says, and fails the test on any write command.
+//! - the sensor bus ([`Bus`]): the light sensor, the barometer and the accelerometer (BOARD.md 16).
 //!
 //! Screenshots: [`Sim::save`] writes the screen as a BMP. [`Sim::record`] saves one frame after every step that
 //! changed the screen (target/sim/<name>/NNNNN.bmp), which gives a continuous capture for debugging.
@@ -54,6 +55,7 @@ pub struct Sim {
     /// Pixels written to the panel so far (the drawing cost: each one is 16 bits over SPI).
     pub pixels: u64,
     pub emmc: EmmcCard,
+    pub bus: Bus,
 }
 
 /// SEC_COUNT of the simulated eMMC: about 31 GB, as the unit's.
@@ -205,6 +207,108 @@ impl EmmcCard {
             return Err(crate::emmc::BusError::Timeout);
         }
         Ok(self.status())
+    }
+}
+
+/// The chips on the sensor bus, as their registers behave (BOARD.md 16).
+pub struct Bus {
+    /// The ambient light, tenths of a lux; None: no light sensor (it never acknowledges).
+    pub lux10: Option<u32>,
+    /// The light sensor's registers (written ones kept).
+    light: [u8; 0x20],
+    /// When the light sensor left standby (None: in standby).
+    light_on_since: Option<u64>,
+    /// Time the light sensor has spent measuring, ms (up to its last standby).
+    pub light_on_ms: u64,
+    /// Light readings taken.
+    pub light_reads: u32,
+    /// The barometer's pressure and temperature (hPa x 10, C x 100); None: no barometer.
+    pub baro: Option<(u32, i16)>,
+    /// When the last one-shot conversion is done (None: none asked since the last read).
+    baro_done: Option<u64>,
+    /// One-shot conversions asked.
+    pub baro_conversions: u32,
+    /// The accelerometer's CTRL_REG1 (0x77, running at 400 Hz, as stock leaves it).
+    pub accel_ctrl1: u8,
+}
+
+impl Bus {
+    fn read(&mut self, now: u64, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
+        use crate::ambient::*;
+        match addr {
+            LIGHT_ADDR => {
+                let Some(lux10) = self.lux10 else { return false };
+                let ready = self.light_on_since.is_some_and(|t| now >= t + 400);
+                let raw = (lux10 * 4).min(0xf_ffff);
+                let mut regs = self.light;
+                regs[0x06] = LIGHT_ID;
+                regs[0x07] = if ready { 0x08 } else { 0 };
+                regs[0x0d..0x10].copy_from_slice(&raw.to_le_bytes()[..3]);
+                if reg == 0x0d {
+                    assert!(ready, "light read before its conversion");
+                    assert_eq!((regs[0x04], regs[0x05]), (0x05, 0x02), "the lux scale assumes 20 bits, gain 6");
+                    self.light_reads += 1;
+                }
+                for (i, b) in buf.iter_mut().enumerate() {
+                    *b = regs[(usize::from(reg) + i) % regs.len()];
+                }
+                true
+            }
+            BARO_ADDR => {
+                let Some((p, t)) = self.baro else { return false };
+                let ready = self.baro_done.is_some_and(|d| now >= d);
+                let mut regs = [0u8; 0x30];
+                regs[0x0f] = BARO_ID;
+                regs[0x27] = if ready { 0x03 } else { 0 };
+                regs[0x28..0x2b].copy_from_slice(&(p * 4096 / 10).to_le_bytes()[..3]);
+                regs[0x2b..0x2d].copy_from_slice(&t.to_le_bytes());
+                if reg == 0x28 {
+                    self.baro_done = None;
+                }
+                for (i, b) in buf.iter_mut().enumerate() {
+                    *b = regs[(usize::from(reg) + i) % regs.len()];
+                }
+                true
+            }
+            ACCEL_ADDR => true,
+            _ => false,
+        }
+    }
+
+    fn write(&mut self, now: u64, addr: u8, reg: u8, data: &[u8]) -> bool {
+        use crate::ambient::*;
+        match addr {
+            LIGHT_ADDR if self.lux10.is_some() => {
+                for (i, &v) in data.iter().enumerate() {
+                    self.light[(usize::from(reg) + i) % 0x20] = v;
+                }
+                if reg == 0 {
+                    match (data[0] & 0x02 != 0, self.light_on_since) {
+                        (true, None) => self.light_on_since = Some(now),
+                        (false, Some(t)) => {
+                            self.light_on_ms += now - t;
+                            self.light_on_since = None;
+                        }
+                        _ => {}
+                    }
+                }
+                true
+            }
+            BARO_ADDR if self.baro.is_some() => {
+                if reg == 0x11 && data[0] & 1 != 0 {
+                    self.baro_done = Some(now + 20);
+                    self.baro_conversions += 1;
+                }
+                true
+            }
+            ACCEL_ADDR => {
+                if reg == 0x20 {
+                    self.accel_ctrl1 = data[0];
+                }
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -450,6 +554,17 @@ impl Sim {
             gnss: Gnss::default(),
             pixels: 0,
             emmc: EmmcCard::default(),
+            bus: Bus {
+                lux10: Some(3000), // 300 lux: indoors
+                light: [0; 0x20],
+                light_on_since: None,
+                light_on_ms: 0,
+                light_reads: 0,
+                baro: Some((10_132, 2150)),
+                baro_done: None,
+                baro_conversions: 0,
+                accel_ctrl1: 0x77,
+            },
         }
     }
 
@@ -665,6 +780,13 @@ impl Board for Sim {
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
         self.emmc.read(index, arg, buf)
     }
+    fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
+        self.bus.read(self.ms, addr, reg, buf)
+    }
+
+    fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool {
+        self.bus.write(self.ms, addr, reg, data)
+    }
 
     fn nrf_recv(&mut self, buf: &mut [u8]) -> usize {
         if self.nordic.scan_end.is_some_and(|end| self.ms >= end) {
@@ -857,7 +979,11 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 8), "Lap from the top wraps to NEARBY BLE");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 11), "Lap from the top wraps to the last row");
+        for _ in 0..3 {
+            app.press(&mut sim, Press::Short(Key::Lap));
+        }
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 8), "NEARBY BLE");
         assert_consistent(&sim, &app);
         sim.save("menu");
         app.press(&mut sim, Press::Short(Key::Start));
@@ -1116,6 +1242,97 @@ mod tests {
         let again = App::start(&mut sim, None);
         assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
         drop(again);
+    }
+
+    /// The text of main menu row `i`: label and value.
+    fn main_row(app: &App, i: usize) -> std::string::String {
+        let (label, value, _) = app.menu_row(Menu::Main, i).unwrap();
+        format!("{} {}", label.as_str(), value.as_str())
+    }
+
+    /// AUTO: the backlight follows the ambient light, smoothed, without flicker on a band edge, and the light
+    /// sensor measures only now and then, and not at all while the backlight is off.
+    #[test]
+    fn auto_backlight_follows_the_ambient_light() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        assert_eq!(sim.bus.accel_ctrl1, 0x07, "the accelerometer switched off");
+        run(&mut sim, &mut app, 30_000);
+        assert_eq!(sim.bus.light_reads, 0, "a fixed level and no menu: the light sensor is never used");
+        app.press(&mut sim, Press::Long(Key::Page));
+        for _ in 0..5 {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        for _ in 0..4 {
+            app.press(&mut sim, Press::Short(Key::Start)); // 60, 30, 10, AUTO
+        }
+        assert_eq!(main_row(&app, 5), "LIGHT % AUTO");
+        assert_eq!(sim.backup[11] >> 16 & 0xf, LIGHT_AUTO as u32, "kept");
+        run(&mut sim, &mut app, 4000);
+        assert_eq!(main_row(&app, 9), "LUX 300");
+        assert_eq!(main_row(&app, 10), "TEMP C 21.5");
+        assert_eq!(main_row(&app, 11), "HPA 1013");
+        assert_consistent(&sim, &app);
+        sim.save("sensor_rows");
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(sim.light_level, 85, "300 lux: a bright room");
+
+        sim.bus.lux10 = Some(5); // 0.5 lux: dark
+        run(&mut sim, &mut app, 60_000);
+        assert_eq!(sim.light_level, 14);
+        sim.bus.lux10 = Some(300); // 30 lux
+        run(&mut sim, &mut app, 40_000);
+        assert_eq!(sim.light_level, 50);
+
+        // a light hovering on the 50 lux edge: one level throughout
+        let mut levels = std::collections::BTreeSet::new();
+        for i in 0..40 {
+            sim.bus.lux10 = Some(if i % 2 == 0 { 450 } else { 550 });
+            run(&mut sim, &mut app, 3000);
+            levels.insert(sim.light_level);
+        }
+        assert_eq!(levels.into_iter().collect::<Vec<_>>(), [50]);
+
+        // power: one reading per LIGHT_MS, the sensor measuring a fifth of the time at most
+        let (on0, reads0, t0) = (sim.bus.light_on_ms, sim.bus.light_reads, sim.ms);
+        run(&mut sim, &mut app, 60_000);
+        let (on, reads) = (sim.bus.light_on_ms - on0, sim.bus.light_reads - reads0);
+        assert!((19..=21).contains(&reads), "{reads} readings in 60 s");
+        assert!(on * 5 <= sim.ms - t0, "measuring {on} ms in 60 s");
+
+        app.press(&mut sim, Press::Short(Key::Back)); // backlight off: no readings
+        let reads = sim.bus.light_reads;
+        run(&mut sim, &mut app, 30_000);
+        assert_eq!(sim.bus.light_reads, reads);
+        assert_eq!(sim.light_level, 0);
+    }
+
+    /// Without the chips the app runs as before: the rows say so, AUTO keeps a fixed level.
+    #[test]
+    fn missing_sensor_chips() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.bus.lux10 = None;
+        sim.bus.baro = None;
+        sim.backup[11] = 0xa5 << 24 | (LIGHT_AUTO as u32) << 16 | 2105;
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 10_000);
+        assert_eq!(sim.light_level, LIGHT_LEVELS[1]);
+        assert_eq!(main_row(&app, 9), "LUX NONE");
+        assert_eq!(main_row(&app, 10), "TEMP C NONE");
+    }
+
+    /// The barometer converts once per reading (one-shot), every 10 s.
+    #[test]
+    fn barometer_one_shot() {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 60_000);
+        assert!((6..=8).contains(&sim.bus.baro_conversions), "{}", sim.bus.baro_conversions);
+        assert_eq!(app.baro, Some((10_132, 2150)));
+        sim.bus.baro = Some((9_500, -512));
+        run(&mut sim, &mut app, 20_000);
+        assert_eq!(main_row(&app, 10), "TEMP C -5.1");
+        assert_eq!(main_row(&app, 11), "HPA 950");
     }
 
     #[test]
