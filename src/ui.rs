@@ -527,30 +527,27 @@ pub fn draw_field_value_changes(
     draw_changed_chars(c, &style, x + 1 + (w - 2 - style.width(new)) / 2, top, old, new);
 }
 
-/// Graph bars: one every this many pixels, this wide (the rest is a gap).
-const BAR_PITCH: u32 = 4;
-const BAR_W: u32 = 3;
-
-/// The graph's plot in field box `bx`: left, top, columns, height. The newest bar is the rightmost column.
+/// The graph's plot in field box `bx`: left, top, columns, height. One bar per pixel column, side by side, so the
+/// bars make a filled area as stock's graph does; the newest bar is the rightmost column.
 pub fn graph_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
-    let cols = (w - 8) / BAR_PITCH;
-    (x + (w - cols * BAR_PITCH) / 2, y + FIELD_LABEL_H, cols, h - FIELD_LABEL_H - 4)
+    (x + 4, y + FIELD_LABEL_H, w - 8, h - FIELD_LABEL_H - 4)
 }
 
 /// Graph column `i` that showed a bar `old` (height, colour) now showing `new`: only the band between the two
-/// tops when the colour stays (most bars as the chart scrolls: a steady effort), else the new bar whole.
+/// tops when the colour stays (most columns as the chart scrolls: neighbouring bars are close once smoothed), else
+/// the new bar whole.
 pub fn draw_graph_column(c: &mut impl Canvas, area: (u32, u32, u32, u32), i: u32, old: (u32, u16), new: (u32, u16)) {
-    let (x, bottom) = (area.0 + i * BAR_PITCH, area.1 + area.3);
+    let (x, bottom) = (area.0 + i, area.1 + area.3);
     let ((h0, c0), (h1, c1)) = ((old.0.min(area.3), old.1), (new.0.min(area.3), new.1));
     if c0 == c1 || h0 == 0 {
         if h1 > h0 {
-            c.fill(x, bottom - h1, BAR_W, h1 - h0, c1);
+            c.fill(x, bottom - h1, 1, h1 - h0, c1);
         }
     } else {
-        c.fill(x, bottom - h1, BAR_W, h1, c1);
+        c.fill(x, bottom - h1, 1, h1, c1);
     }
     if h0 > h1 {
-        c.fill(x, bottom - h0, BAR_W, h0 - h1, BLACK);
+        c.fill(x, bottom - h0, 1, h0 - h1, BLACK);
     }
 }
 

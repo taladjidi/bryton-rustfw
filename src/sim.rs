@@ -56,6 +56,8 @@ pub struct Sim {
     pub gnss: Gnss,
     /// Pixels written to the panel so far (the drawing cost: each one is 16 bits over SPI).
     pub pixels: u64,
+    /// Panel windows written so far (each one also costs CASET, RASET and RAMWR: 11 command bytes).
+    pub windows: u64,
     pub emmc: EmmcCard,
     pub bus: Bus,
     pub touch: TouchChip,
@@ -607,6 +609,7 @@ impl Sim {
             charger: false,
             gnss: Gnss::default(),
             pixels: 0,
+            windows: 0,
             emmc: EmmcCard::default(),
             bus: Bus {
                 lux10: Some(3000), // 300 lux: indoors
@@ -714,6 +717,7 @@ impl Board for Sim {
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
         self.pixels += u64::from(count);
+        self.windows += 1;
         for y in y0..=y1 {
             for x in x0..=x1 {
                 self.screen[(y * W + x) as usize] = next();
@@ -1964,6 +1968,39 @@ mod tests {
         assert!(app.ride.dist_m() > 2000, "the totals stay on screen");
         assert_consistent(&sim, &app);
         sim.save("ride_ended");
+    }
+
+    /// Power as ridden: a two-minute swell from 140 to 320 W, +-30 W of noise from one second to the next.
+    fn power_noisy(ms: u64) -> [u8; 8] {
+        let s = ms / 1000;
+        let swell = (s % 120).min(120 - s % 120) as u16;
+        let noise = (s.wrapping_mul(2_654_435_761) >> 7) % 61;
+        let [p0, p1] = (110 + 3 * swell + noise as u16).to_le_bytes();
+        [0x10, 1, 0xff, 85, 0, 0, p0, p1]
+    }
+
+    /// The graph field: power in its zones' colours, one pixel column per sample, drawn by differences as it
+    /// scrolls (the screenshot agrees). Prints the pixels a second it costs.
+    #[test]
+    fn graph_field() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+        let mut app = App::start(&mut sim, Some(KEY));
+        use Field::*;
+        app.pages[0] = PageCfg { layout: 3, fields: [Graph, MaxSpeed, Ascent, Timer, Timer, Timer] };
+        app.press(&mut sim, Press::Short(Key::Page));
+        run(&mut sim, &mut app, 600_000);
+        assert_consistent(&sim, &app);
+        let (px0, win0) = (sim.pixels, sim.windows);
+        run(&mut sim, &mut app, 120_000);
+        let (px_s, win_s) = ((sim.pixels - px0) / 120, (sim.windows - win0) / 120);
+        std::println!("graph field (240 x 135), noisy power: {px_s} px/s in {win_s} windows/s");
+        assert_consistent(&sim, &app);
+        let (x, y, cols, h) = crate::ui::graph_area(crate::ui::field_box(3, crate::ui::RIDE_H, 0).unwrap());
+        let bottom = &sim.screen[((y + h - 1) * W + x) as usize..][..cols as usize];
+        assert!(bottom.iter().all(|&c| crate::ride::ZONE_COLORS.contains(&c)), "a filled area, no gaps");
+        sim.save("graph");
     }
 
     /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,
