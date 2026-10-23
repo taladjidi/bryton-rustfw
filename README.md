@@ -13,8 +13,8 @@ Bryton.
 - **Menu:** sensors (Start searches and pairs the first one heard, Start again forgets it), the three pages
   (field count and each field), the wheel size, GPS (fix, satellites, position, altitude, UTC) and the BLE
   devices nearby.
-- **GPS:** the u-blox M10 is on while the unit is; "GPS" in the strip is grey while it searches, green with a
-  fix. Without a paired speed sensor, the speed comes from it. At power-up it gets the time (UTC, from the RTC)
+- **GPS:** the u-blox M10 is on while the unit is; "GPS" blinks grey in the strip while it searches; with a fix,
+  signal bars take its place (1 to 4, from the satellites used). Without a paired speed sensor, the speed comes from it. At power-up it gets the time (UTC, from the RTC)
   and the last position, and predicts orbits itself (AssistNow Autonomous), for a faster fix.
 - **ANT+ sensors:** heart rate, speed, cadence, speed and cadence, power, on stock's channels. A paired sensor is
   kept through power off, so a friend's is never taken. Needs the ANT+ network key, which you copy from your own

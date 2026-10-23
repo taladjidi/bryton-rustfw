@@ -214,6 +214,21 @@ impl Pvt {
     }
 }
 
+/// Signal bars (1 to 4) for a fix from `sats` satellites used: under 6, 9, 12, then 12 and more.
+///
+/// ```
+/// use bryton_rustfw::gnss::bars;
+/// assert_eq!([4, 6, 9, 12, 20].map(bars), [1, 2, 3, 4, 4]);
+/// ```
+pub fn bars(sats: u8) -> u8 {
+    match sats {
+        0..6 => 1,
+        6..9 => 2,
+        9..12 => 3,
+        _ => 4,
+    }
+}
+
 /// Decodes a NAV-PVT payload (class 0x01, id 0x07, 92 bytes).
 pub fn pvt(class: u8, id: u8, p: &[u8]) -> Option<Pvt> {
     if (class, id) != (0x01, 0x07) || p.len() < 92 {

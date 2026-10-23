@@ -23,6 +23,8 @@ pub const RED: u16 = 0xf800;
 pub const GREEN: u16 = 0x07e0;
 /// RGB565 mid grey.
 pub const GREY: u16 = 0x8410;
+/// RGB565 dark grey.
+pub const DARK: u16 = 0x39e7;
 
 /// Small text: labels. The pixel font at 2x, so its dots match Ferris' look (fonts.rs also has smooth fonts).
 pub const LABEL: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
@@ -107,8 +109,8 @@ pub struct Strip {
     pub time: (u8, u8),
     /// The Nordic chip answered (BLE / ANT usable).
     pub radio: bool,
-    /// GNSS: None when the receiver is not answering, else whether it has a fix.
-    pub gps: Option<bool>,
+    /// GNSS: None when the receiver is not answering; 0 while it searches; with a fix, signal bars 1 to 4.
+    pub gps: Option<u8>,
     /// The blinking "GPS" while searching is shown (it alternates each second).
     pub blink: bool,
     /// USB state.
@@ -144,8 +146,8 @@ pub const USB_ICON: [u16; 14] = [
 /// The USB symbol's left edge and width, between the time and the battery.
 const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 
-/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" (blinking grey while
-/// searching, green with a fix, nothing if the receiver is silent), the time in the middle; on the right the USB
+/// Draws the status strip: "BLE" on the left (green, red if the chip did not answer), "GPS" blinking grey while
+/// the receiver searches, signal bars once it has a fix (nothing if it is silent), the time in the middle; on the right the USB
 /// symbol in the USB state's colour (nothing when unplugged) and the battery (green while charging, red at 15 % and
 /// under); then the orange line.
 pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
@@ -158,13 +160,11 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
     }
     at(c, STRIP_TIME, WHITE, Align::Left, l.as_str());
     at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
-    let gps = match s.gps {
-        None => BLACK,
-        Some(false) if s.blink => GREY,
-        Some(false) => BLACK,
-        Some(true) => GREEN,
-    };
-    at(c, STRIP_GPS, gps, Align::Left, "GPS");
+    match s.gps {
+        Some(bars @ 1..) => draw_bars(c, bars),
+        Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
+        _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
+    }
     let usb = match s.usb {
         UsbDot::Off => BLACK,
         UsbDot::Failed => RED,
@@ -186,6 +186,18 @@ pub fn draw_strip(c: &mut impl Canvas, s: &Strip) {
     };
     at(c, STRIP_BATTERY, color, Align::Right, l.as_str());
     c.fill(0, STRIP_H, W, 2, ACCENT);
+}
+
+/// GNSS signal bars in the "GPS" box, level with the text: four bars rising left to right, the first `n` green,
+/// the others dark grey.
+fn draw_bars(c: &mut impl Canvas, n: u8) {
+    let top = STRIP_H - LABEL.height(); // the capitals' top row; they are 14 px high
+    c.fill(STRIP_GPS.0, top, STRIP_GPS.1, LABEL.height(), BLACK);
+    for i in 0..4u32 {
+        let h = 5 + 3 * i; // 5, 8, 11, 14 px
+        let color = if i < u32::from(n) { GREEN } else { DARK };
+        c.fill(STRIP_GPS.0 + 2 + 8 * i, top + 14 - h, 6, h, color);
+    }
 }
 
 /// One-digit strings, to build numbers without core::fmt.
@@ -520,7 +532,7 @@ pub(crate) mod tests {
         let strip = Strip {
             time: (12, 34),
             radio: true,
-            gps: Some(true),
+            gps: Some(4),
             blink: true,
             usb: UsbDot::Ready,
             battery: Some(87),

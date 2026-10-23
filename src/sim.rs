@@ -783,10 +783,10 @@ mod tests {
         let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
         assert!(sent(&sim, crate::gnss::config()), "configuration");
         assert_eq!(sim.gnss.got.iter().filter(|&&b| b == 0xb5).count(), 1, "nothing else: no time or position yet");
-        assert_eq!(app.strip.gps, Some(false), "searching");
+        assert_eq!(app.strip.gps, Some(0), "searching");
         sim.gnss.fix = Some(7000); // 25.2 km/h
         run(&mut sim, &mut app, 2000);
-        assert_eq!(app.strip.gps, Some(true));
+        assert_eq!(app.strip.gps, Some(3), "9 satellites: 3 bars");
         app.press(&mut sim, Press::Short(Key::Page));
         run(&mut sim, &mut app, 100);
         let (h, m, _) = rtc_time_from_tr(sim.rtc().0);
@@ -795,7 +795,7 @@ mod tests {
         let strip = Strip {
             time: (h, m),
             radio: true,
-            gps: Some(true),
+            gps: Some(3),
             blink: true,
             usb: UsbDot::Off,
             battery: Some(63),

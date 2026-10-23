@@ -852,9 +852,9 @@ impl App {
         if self.pvt_ms > PVT_STALE_MS {
             self.pvt = None;
         }
-        self.strip.gps = self.pvt.map(|p| p.good());
+        self.strip.gps = self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 });
         // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
-        self.strip.blink = self.strip.gps != Some(false) || self.seconds.is_multiple_of(2);
+        self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
     }
 
     /// The next message for the receiver after power-up, one per pass: the configuration, then the time (UTC from
