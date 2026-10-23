@@ -291,47 +291,72 @@ pub fn power_color(z: u8) -> u16 {
 // History, for the graph field
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Seconds per bar of the graph.
-pub const BAR_S: u32 = 10;
-/// Bars kept: more than the widest graph shows (57), so a graph drawn a few bars ago can still be compared.
-pub const BARS: usize = 64;
+/// Seconds per bar (one pixel column) of the graph.
+pub const BAR_S: u32 = 2;
+/// Bars kept: more than the widest graph shows (232), so a graph drawn a few bars ago can still be compared.
+pub const BARS: usize = 256;
+/// The smoothing: each second moves the average 1 / 2^`EMA_SHIFT` of the way to the reading (a time constant of
+/// about 7.5 s), so the noise from one second to the next does not make the graph jitter.
+const EMA_SHIFT: u32 = 3;
 
-/// Heart rate and power averaged over [`BAR_S`] seconds, the last [`BARS`] bars (0: no reading).
+/// Heart rate and power, smoothed (an exponential moving average) and sampled every [`BAR_S`] seconds, the last
+/// [`BARS`] bars (0: no reading in that bar's seconds).
+///
+/// Stock's graph field draws 216 one-second samples per metric, one pixel column each in its zone's colour, side
+/// by side (Ghidra: `Ride_PushHistorySample` 0xd0194b50, `MeterBarChartP` refresh 0xd017574a, Embedded Wizard
+/// `ChartsBarChart_Draw` 0xd01c3270 with a bar width of 1). This one smooths them first, and keeps 2 s a column.
 pub struct History {
     hr: [u8; BARS],
     power: [u16; BARS],
     /// Bars pushed so far.
     n: u32,
-    sum: [u32; 2],
-    count: [u32; 2],
+    /// The averages, x16 (0: none yet).
+    avg: [u32; 2],
+    /// A reading came in during this bar's seconds.
+    seen: [bool; 2],
     secs: u32,
 }
 
 impl Default for History {
     fn default() -> Self {
-        History { hr: [0; BARS], power: [0; BARS], n: 0, sum: [0; 2], count: [0; 2], secs: 0 }
+        History { hr: [0; BARS], power: [0; BARS], n: 0, avg: [0; 2], seen: [false; 2], secs: 0 }
     }
 }
 
 impl History {
     /// One second of readings; true when a bar was pushed.
+    ///
+    /// ```
+    /// let mut h = bryton_rustfw::ride::History::default();
+    /// h.second(None, Some(100));
+    /// h.second(None, Some(300)); // one second at 300 W moves the bar an eighth of the way
+    /// assert_eq!(h.bar(0, true), 125);
+    /// ```
     pub fn second(&mut self, hr: Option<u16>, power: Option<u16>) -> bool {
         for (k, v) in [hr, power].into_iter().enumerate() {
             if let Some(v) = v {
-                self.sum[k] = self.sum[k].saturating_add(u32::from(v));
-                self.count[k] += 1;
+                let (a, v) = (self.avg[k], u32::from(v) << 4);
+                // the first reading, or the first after a bar without any, starts the average
+                self.avg[k] = if a == 0 { v } else { a - (a >> EMA_SHIFT) + (v >> EMA_SHIFT) };
+                self.seen[k] = true;
             }
         }
         self.secs += 1;
         if self.secs < BAR_S {
             return false;
         }
-        let avg = |k: usize| self.sum[k].checked_div(self.count[k]).unwrap_or(0);
+        for (a, seen) in self.avg.iter_mut().zip(&mut self.seen) {
+            if !*seen {
+                *a = 0;
+            }
+            *seen = false;
+        }
+        let avg = |k: usize| (self.avg[k] + 8) >> 4;
         let i = self.n as usize % BARS;
         self.hr[i] = avg(0).min(255) as u8;
         self.power[i] = avg(1).min(u32::from(u16::MAX)) as u16;
         self.n = self.n.wrapping_add(1);
-        (self.sum, self.count, self.secs) = ([0; 2], [0; 2], 0);
+        self.secs = 0;
         true
     }
 
@@ -357,6 +382,7 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
 
     fn at(speed: u16) -> Input {
@@ -412,12 +438,26 @@ mod tests {
     #[test]
     fn history_bars() {
         let mut h = History::default();
-        for s in 0..25u16 {
-            h.second(Some(100 + s), if s < 10 { None } else { Some(300) });
+        let bars = |h: &History, power| (0..h.len()).map(|k| h.bar(k, power)).collect::<std::vec::Vec<_>>();
+        // power steady at 200 W but for one second at 400 W; heart rate only from the third second
+        for s in 0..12 {
+            h.second((s >= 2).then_some(150), Some(if s == 5 { 400 } else { 200 }));
         }
-        assert_eq!(h.len(), 2);
-        assert_eq!((h.bar(0, false), h.bar(1, false), h.bar(0, true), h.bar(1, true)), (104, 114, 0, 300));
-        assert_eq!(h.bar(2, false), 0, "not yet");
+        assert_eq!(bars(&h, true), [200, 200, 225, 219, 215, 211], "the spike smoothed, then fading");
+        assert_eq!(bars(&h, false), [0, 150, 150, 150, 150, 150], "no reading, then from the first one");
+        assert_eq!(h.bar(6, false), 0, "not yet");
+        // a ramp: the bars follow it a few seconds late, without a step
+        for s in 0..20 {
+            h.second(None, Some(200 + 10 * s));
+        }
+        let ramp = &bars(&h, true)[6..];
+        assert!(ramp.windows(2).all(|w| w[1] > w[0] && w[1] - w[0] <= 20), "{ramp:?}");
+        assert_eq!(ramp[9], 327, "about 6 s (63 W) behind the ramp, at 390 W");
+        assert_eq!(h.bar(6, false), 0, "a bar without readings");
+        for p in [None, None, None, Some(100)] {
+            h.second(None, p);
+        }
+        assert_eq!((h.bar(16, true), h.bar(17, true)), (0, 100), "after a gap, from the reading, not the old average");
         for _ in 0..BAR_S * BARS as u32 {
             h.second(Some(1), None);
         }

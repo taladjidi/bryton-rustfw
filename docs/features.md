@@ -47,7 +47,8 @@ Gestures reach the app as the same `Input` events as the keys (src/menu.rs).
 
 - Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from GPS altitude.
 - Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette. The graph shows the last
-  minutes of power (or heart rate), one bar per 10 s, each in its zone's colour.
+  8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
+  average, about 7 s), each column in its zone's colour, scrolling every 10 s.
 - Not saved yet (the FIT writer, `src/fit.rs`, plugs in at `App::recorder`).
 
 ## Menu

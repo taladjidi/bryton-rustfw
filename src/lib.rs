@@ -1450,10 +1450,14 @@ impl App {
     }
 
     /// A graph in box `bx`, drawn as `old`, after a new bar: each column changes by the difference between its old
-    /// bar and its new one (the chart scrolls left by one), all of it if the graph changed metric.
+    /// bar and its new one (the chart scrolls left by `STEP` bars), all of it if the graph changed metric.
     fn update_graph(&mut self, b: &mut impl Board, old: GraphShown, bx: (u32, u32, u32, u32)) -> Drawn {
+        // Bars scroll in this many at a time (10 s): nearly every column changes on a scroll, so this sends a fifth
+        // of the panel windows of a scroll per bar, and fewer pixels (sim graph_field: 1812 px/s in 33 windows/s,
+        // against 1987 in 113).
+        const STEP: u32 = 5;
         let now = self.graph_now();
-        if old == now {
+        if old.power == now.power && now.n.wrapping_sub(old.n) < STEP {
             return Drawn::Graph(old);
         }
         let a = ui::graph_area(bx);
