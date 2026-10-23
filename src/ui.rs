@@ -38,6 +38,10 @@ pub trait Canvas {
     /// Fills `w` x `h` pixels from (`x`, `y`) with `px(dx, dy)`, `dx` / `dy` relative to (`x`, `y`). Called in row
     /// order on the panel (one window, one RAMWR), so `px` should be cheap. Callers keep the rectangle on screen.
     fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16);
+    /// The part of the screen this canvas keeps (x, y, w, h): drawing code may skip what falls outside it.
+    fn clip(&self) -> (u32, u32, u32, u32) {
+        (0, 0, W, H)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -334,6 +338,10 @@ impl Canvas for Row {
             }
         }
     }
+
+    fn clip(&self) -> (u32, u32, u32, u32) {
+        (0, self.y, W, 1)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -353,20 +361,22 @@ pub enum Field {
     Cadence,
     /// Power.
     Power,
+    /// The map of the ride (map.rs): its box holds the map instead of a value.
+    Map,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them.
-    pub const ALL: [Field; 5] = [Field::Time, Field::Hr, Field::Speed, Field::Cadence, Field::Power];
+    pub const ALL: [Field; 6] = [Field::Time, Field::Hr, Field::Speed, Field::Cadence, Field::Power, Field::Map];
 
     /// Its label, top left of its box.
     pub fn label(self) -> &'static str {
-        ["TIME", "HR", "KM/H", "RPM", "WATTS"][self as usize]
+        ["TIME", "HR", "KM/H", "RPM", "WATTS", "MAP"][self as usize]
     }
 
     /// The widest value it shows: the value's scale is chosen so this fits.
     fn widest(self) -> &'static str {
-        ["88:88", "888", "88.8", "888", "8888"][self as usize]
+        ["88:88", "888", "88.8", "888", "8888", ""][self as usize]
     }
 
     /// The next one in [`Field::ALL`].
@@ -420,7 +430,7 @@ fn value_style(field: Field, w: u32, h: u32) -> Style {
     style
 }
 
-/// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label.
+/// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
 pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field) {
     if x + w < W {
         c.fill(x + w - 1, y, 1, h, GREY);
@@ -428,7 +438,9 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     if y + h < H - 2 {
         c.fill(x, y + h - 1, w, 1, GREY);
     }
-    text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
+    if field != Field::Map {
+        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
+    }
 }
 
 /// A field's value, centred under its label, in a fixed box (what was there before is cleared).
