@@ -70,30 +70,90 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 ## 4. Pins
 
-| pin | use |
-|---|---|
-| PA0 | power button, standby wake-up WKUP1 (rising) |
-| PA1 | key 0x01 back / power, active low |
-| PA3 PA5 | USB ULPI D0, CK (AF10) |
-| PA7 | USB ULPI PHY enable / reset, high = running (inferred) |
-| PB0 PB1 PB5 PB10..PB13 | USB ULPI D1 D2 D7 D3..D6 (AF10) |
-| PB2 | key 0x02 lap, active low |
-| PB4 | key 0x04 start / stop, active low |
-| PC0 | USB ULPI STP (AF10) |
-| PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) |
-| PD7 | SPI1 MOSI (panel), AF5 |
-| PE3 | key 0x08 page, active low |
-| PG3 | display and touch power enable (inferred) |
-| PG9 | panel D/C: 0 command, 1 parameter or pixel data |
-| PG10 | SPI1 NSS (panel chip select) |
-| PG11 | SPI1 SCK (panel), AF5 |
-| PG13 | backlight (LPTIM1_OUT, AF1, in stock) |
-| PH4 | USB ULPI NXT (AF10) |
-| PI3 | panel reset release (inferred) |
-| PI11 | USB ULPI DIR (AF10) |
+Every pin this firmware uses, from the MCU's side (arrows: signal direction). Sections 5 to 13 have the details.
 
-The full board has more (GNSS on SPI4, the Nordic radio on USART2, I2C sensors, touch, eMMC on SDMMC1, buzzer,
-battery on ADC3): not used yet.
+                                      +----------------------------+
+     power button --+---------------->| PA0  WKUP1 (rising)        |
+                    +--(low pressed)->| PA1  key Back              |
+     key Lap ---------(low pressed)-->| PB2                        |
+     key Start -------(low pressed)-->| PB4  NJTRST after reset    |
+     key Page --------(low pressed)-->| PE3                        |
+                                      |                            |
+     USB VBUS (1 = plugged) --------->| PC13 WKUP4                 |
+     battery --[ / 1.5 ]------------->| PC3_C  ADC3 channel 1      |
+     charger enable (low = on) <------| PG14                       |
+     charger status ----------------->| PF6  (meaning not traced)  |
+                                      |                            |
+     USB ULPI PHY (AF10)              |                            |
+       enable  <----------------------| PA7   high = running       |
+       CK      ---------------------->| PA5                        |
+       D0..D7  <--------------------->| PA3 PB0 PB1 PB10..PB13 PB5 |
+       STP     <----------------------| PC0                        |
+       NXT     ---------------------->| PH4                        |
+       DIR     ---------------------->| PI11                       |
+                                      |                            |
+                                      |         STM32H747          |
+                                      |                            |
+       ST7789 panel 240 x 320         |                            |
+         SCK   <----------------------| PG11  SPI1 (AF5)           |
+         MOSI  <----------------------| PD7   SPI1 (AF5)           |
+         CS    <----------------------| PG10                       |
+         D/C   <----------------------| PG9   0 command, 1 data    |
+         RESET <----------------------| PI3   low = reset          |
+         power <----------------------| PG3   (inferred)           |
+         backlight <------------------| PG13  high = on            |
+                                      |                            |
+       Nordic BLE / ANT chip          |                            |
+         UART RX  <-------------------| PD5   USART2 TX (AF7)      |
+         UART TX  ------------------->| PD6   USART2 RX (AF7)      |
+         UART CTS <-------------------| PD4   USART2 RTS (AF7)     |
+         UART RTS ------------------->| PD3   USART2 CTS (AF7)     |
+         reset    <-------------------| PA6   low = reset          |
+         boot mode <------------------| PI4   high = application   |
+         request  ------------------->| PH8   (EXTI only, unused)  |
+                                      |                            |
+       u-blox M10 GNSS                |                            |
+         SCK   <----------------------| PE2   SPI4 (AF5), pull-down|
+         MOSI  <----------------------| PE6   SPI4 (AF5)           |
+         MISO  ---------------------->| PE5   SPI4 (AF5)           |
+         CS    <----------------------| PE4                        |
+         power <----------------------| PI6   high = on            |
+         line  ---------------------->| PF7   (unused here)        |
+                                      +----------------------------+
+
+| pin | use | section |
+|---|---|---|
+| PA0 | power button, standby wake-up WKUP1 (rising); must be a GPIO input | 9 |
+| PA1 | key 0x01 back / power, active low (also low while the power button is pressed) | 5 |
+| PA3 PA5 | USB ULPI D0, CK (AF10) | 7 |
+| PA6 | Nordic chip reset, low = reset | 11 |
+| PA7 | USB ULPI PHY enable / reset, high = running (inferred) | 7 |
+| PB0 PB1 PB5 PB10..PB13 | USB ULPI D1 D2 D7 D3..D6 (AF10) | 7 |
+| PB2 | key 0x02 lap, active low | 5 |
+| PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
+| PC0 | USB ULPI STP (AF10) | 7 |
+| PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
+| PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) | 7 |
+| PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
+| PD7 | SPI1 MOSI (panel), AF5 | 6 |
+| PE2 PE4 PE5 PE6 | SPI4 SCK (pull-down), chip select, MISO, MOSI to the GNSS (AF5; PE4 by hand here) | 13 |
+| PE3 | key 0x08 page, active low | 5 |
+| PF6 | charger status input (not traced) | 12 |
+| PF7 | GNSS line (EXTI in stock; unused here) | 13 |
+| PG3 | display and touch power enable (inferred) | 6 |
+| PG9 | panel D/C: 0 command, 1 parameter or pixel data | 6 |
+| PG10 | panel chip select (SPI1 NSS, driven by hand) | 6 |
+| PG11 | SPI1 SCK (panel), AF5 | 6 |
+| PG13 | backlight, high = on (LPTIM1_OUT, AF1, in stock) | 6 |
+| PG14 | charge enable, active low (left low by the bootloader) | 12 |
+| PH4 | USB ULPI NXT (AF10) | 7 |
+| PH8 | Nordic request line (EXTI wake-up in stock; unused here) | 11 |
+| PI3 | panel reset, low = reset (inferred) | 6 |
+| PI4 | Nordic boot mode: high = application | 11 |
+| PI6 | GNSS power, high = on | 13 |
+| PI11 | USB ULPI DIR (AF10) | 7 |
+
+Not used yet: I2C sensors (barometer, accelerometer, light), touch, eMMC on SDMMC1, buzzer.
 
 ## 5. Keys
 
@@ -102,6 +162,18 @@ battery on ADC3): not used yet.
   field 2, PUPDR pull-up, IDR high at rest). PA1, PB2 and PE3 read high at rest without a pull-up (external
   ones, inferred).
 - Stock reads them by EXTI falling edge and debounces 15 ms later. This firmware polls them every 50 ms.
+- Short and long presses (lib.rs `Keys`): a short press acts at the release; a long one acts once, while the key
+  is still held, and its release does nothing.
+
+                   press        release
+     short   ~~~~~~~~~~\____________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                                    ^ acts at the release (held under 2 s)
+
+                   press                          2 s           release
+     long    ~~~~~~~~~~\__________________________________________/~~~~~~~
+                                                  ^ acts once here (Back: at 3 s);
+                                                    the release does nothing
+     poll    |    |    |    |    |    |    |    |    |    |    |    |    every 50 ms
 
 ## 6. Display
 
@@ -111,7 +183,25 @@ battery on ADC3): not used yet.
   low, the mode fault clears MASTER, and the SPI takes 16 bytes into its FIFO and never clocks (seen on the unit,
   2026-10-23; RM0399, SPI mode fault). Renode does not model it.
 - Stock pushes pixels over the LTDC RGB interface (framebuffer in AXI SRAM). This firmware does not use the LTDC.
-- Power-up: PG3 high, PI3 high, 10 ms, then the stock init sequence (commands, parameters, waits in ms):
+- One command on SPI1 (`lcd_cmd`): chip select low, D/C low for the command byte, high for its parameters (or
+  the pixels of a RAMWR), chip select high. Mode 3, 8 MHz, MSB first.
+
+     PG10 CS    ~~~~\______________________________________________/~~~~
+     PG9  D/C   ~~~~\________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     PD7  MOSI       < cmd  >< param 0 >< param 1 > ... < param n >
+     PG11 SCK   ~~~~~~|_|~|_|~ ... (idle high, data sampled on the rising edge: mode 3)
+- Power-up (this firmware, `lcd_power_on`, as stock's order): PG3 high, 20 ms, PI3 low, 10 ms, PI3 high,
+  120 ms, then the init sequence:
+
+                0      20 ms   30 ms            150 ms   270 ms
+     PG3 power  __/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     PI3 reset  _______________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  (low = reset; low
+                        |<10>|                                                     from board_init)
+     SPI1                                      [01]     [13][21][36].. [11]  ..  clear [29]
+                                               SWRESET  init table     SLPOUT      DISPON
+                                               120 ms wait            120 ms
+
+- Stock's init sequence (commands, parameters, waits in ms):
 
       01 ; 10 ms ; 13 ; 21
       36 00 ; 3A 05 ; 10 ms ; B7 05 ; 10 ms ; BB 29 ; 10 ms ; C0 2C ; 10 ms
@@ -140,6 +230,13 @@ battery on ADC3): not used yet.
 - VBUS sensing is off in the core: VBUS is read on **PC13**, not on the OTG VBUS pin.
 - Interrupt: OTG_HS is IRQ 77.
 - Stock uses it for mass storage only, and a plug-in restarts the unit into that mode (RTC backup register 4).
+- This firmware: the dev link starts when PC13 goes high, and unplugging resets the unit (simplest way to power
+  the PHY and the core down again):
+
+     PC13 VBUS  ______/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\____
+     PA7 PHY    ________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  (next 50 ms poll)
+     OTG_HS              |<- 200 ms ->| core up, enumerated  ...  |
+     strip USB  (none)   orange (powered) ........ green (configured) | system reset at the fall
 
 ## 8. RTC
 
@@ -161,7 +258,17 @@ battery on ADC3): not used yet.
 - PA0 must be a GPIO input before standby (stock does it at boot): left in its reset analog mode, the press does
   not wake the unit (seen on the unit, 2026-10-23); only the four-button restart brings it back.
 - Entry as stock: PWR_CPUCR PDDS_D1 and PDDS_D2 set, SLEEPDEEP, WFI. Waking resets the unit.
-- Stock waits for the back key to be released first (otherwise it wakes at once).
+- Stock waits for the back key to be released first (otherwise it wakes at once). Power off and on with the
+  power button, as this firmware does it:
+
+     button      ____/~~~~~~~~~~~~~~~~~~~~~~~~~\____________________________/~~~~\______
+     PA0 WKUP1   ____/~~~~~~~~~~~~~~~~~~~~~~~~~\____________________________/~~~~\______  high pressed
+     PA1 Back    ~~~~\_________________________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~\____/~~~~~~  low pressed
+                     |<------- 3 s ------->|   |<- 50 ms ->|                |
+                                           |   released    standby          rising edge: reset,
+                             radio off, GNSS off,           (PDDS_D1, D2,   bootloader, firmware
+                             screen off, wait for the       SLEEPDEEP, WFI)
+                             release
 
 ## 10. The update file
 
@@ -190,8 +297,23 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   (RCC_D2CCIP2R USART234578SEL = 2), so BRR = 48.
 - **Start-up, as stock:** PI4 high; PA6 low; USART2 up (so our RTS is low); PA6 high; wait 800 ms. The chip sends
   nothing on its own: the STM32 speaks first.
+
+     PI4 mode    __/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  high = application
+     PA6 reset   ~~~\______________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~  (low through a reset
+     PD4 RTS     ~~~~~~~\__________________________________________________   with PI4 low: DFU)
+     PD5 TX      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\_/ first command
+                    |<- 150 ms -->|<----------- 800 ms ----------->|
+                    USART2 up     released                 drop one glitch byte, clear errors
 - **Framing:** a 2-byte little-endian length, then the payload. No delimiter, no checksum, no handshake and no
   resync: after a bad frame, reset the chip. (SLIP is only the DFU bootloader's, at 115200 baud.)
+- **Frame on the wire:**
+
+     | len lo | len hi | type | op | arguments (little endian) ...                |
+     |<- payload length ->|<------------------- payload --------------------------->|
+     command   00 op args        response  01 op [result u32] [outputs]
+     BLE event 02 [id u16] ...   ANT cmd   06 op args (answered as type 01)
+     ANT event 08 [41-byte ANT message] [event] [channel]   (44 bytes)
+
 - **Payload:** `[type][op][arguments, little endian]`. Types: 0 command, 1 response, 2 BLE event, 5 reset
   command, 6 ANT command, 7 ANT response, 8 ANT event. A response is `[1][op][result u32][outputs]`.
 - **Seen on the unit:**
@@ -276,6 +398,19 @@ From stock (Ghidra: `Batt_AdcInit` 0xd01fac58, `Batt_ReadVbat` 0xd01fadb8, `Batt
   - a RAM run inherits an enabled ADC whose configuration can't be written: the driver resets ADC3 (RCC_AHB4RSTR
     bit 24) first.
   - Reading on USB: 99 %, in line with stock's last stored value (RTC backup register 13: 4178 mV).
+- **Bring-up order that works** (`adc_init`):
+
+                 0   ~10 us                      +82 ms        +<1 ms
+     RCC reset   _/\_                                                    ADC3 from reset (a RAM run inherits it)
+     DEEPPWD     ~~~\_____________________________________________________
+     ADVREGEN    ___/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     LDORDY      _______/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     PCSEL, SMPR        ^ written here, before the calibration
+     ADCAL       ________/~~~~~~~~~~~~~~~~~~~~~~~\_________________________  offset + linearity
+     ADEN        ________________________________..../~~~~~~~~~~~~~~~~~~~  set again until ADRDY
+     ADRDY       _____________________________________/~~~~~~~~~~~~~~~~~~
+     reading     every 10 s: channel 19 (VREFINT), then channel 1 (battery), ~205 us each
+
 - **Charge estimate:** a typical lithium-ion curve, 3.3 V = 0 % to 4.2 V = 100 % (inferred; stock's table is
   not traced). Below 3.3 V three readings in a row (10 s apart) on battery, the firmware switches off, as stock
   does at 0 %.
@@ -302,6 +437,28 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   stock's configuration survives in the receiver. Its time does not: after power-on it reports 2021-03-07 and a
   clock from 00:00:00 until it has a fix. This firmware also sends, once, a CFG-VALSET to the RAM layer only
   (NAV-PVT on SPI, no NMEA on SPI; never flash or battery-backed RAM), in case the receiver ever loses that.
+- **SPI4 transfer** (`gnss_transfer`), mode 0, 1 MHz; what goes out while there is nothing to say is 0xff, what
+  comes back while the receiver has nothing is 0xff:
+
+     PE4 CS    ~~~~\________________________________________________________/~~~~
+     PE2 SCK   ______|~|_|~|_ ... (idle low, sampled on the rising edge: mode 0)
+     PE6 MOSI       | b5 | 62 | 06 | 8a | len | ... | ck_a | ck_b | ff | ff |   (a UBX frame, padded
+     PE5 MISO       | ff | ff | ff | b5 | 62  | 01  | 07   | 5c   | 00 | .. |    to 4-byte words)
+     FIFO           |<- one 32-bit word ->|<- the next ...  (each FIFO write / read moves 4 frames)
+
+- **UBX frame:**
+
+     | b5 | 62 | class | id | length u16 LE | payload ... | ck_a | ck_b |
+               |<--------- checksum over these ---------->|
+
+- **Power-up, this firmware:**
+
+     PI6 power   __/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     MISO (in)      ff ff ...  [NAV-PVT]          [NAV-PVT]          [NAV-PVT]   1 Hz
+     MOSI (out)                      [CFG-VALSET][MGA time][MGA pos]
+                    |<-- 1 s -->|    one per 50 ms pass; time and position only when known
+     polled         64 bytes per 50 ms pass (2 x 32-byte transfers)
+
 - **Indoors:** no fix, 0 satellites (seen). A fix: to see.
 - **Aiding at power-up, as stock's minimum** (stock also feeds AssistNow Offline data from `\System\mgaoffline.ubx`,
   which the phone app downloads; libMga, `GPS_AssistNow_Offline_Host`): after the configuration, this firmware

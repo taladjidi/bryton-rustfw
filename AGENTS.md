@@ -154,6 +154,9 @@ the `font_sheet` test) when choosing a text size.
   [BOARD.md](BOARD.md) section or RM0399. A new hardware fact goes into BOARD.md first, as a fact (no copied
   vendor code).
   - Guesses are marked "inferred".
+  - With a diagram where it helps: the pin map (BOARD.md 4) gets every new pin, and a sequence where order or
+    timing matters (power-up, reset, a bus transfer, a key) gets a timing diagram in plain text, signal names on
+    the left, `~` high, `_` low, times between `|<-` and `->|`. Plain text renders anywhere and diffs well.
   - What still needs the unit is listed in README.md, "Not yet seen on the unit"; update that list after
     each run on the unit.
 - **When a driver is added** (GNSS, Nordic, eMMC), do it the same way:
