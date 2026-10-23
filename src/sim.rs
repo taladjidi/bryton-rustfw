@@ -1149,6 +1149,50 @@ mod tests {
         assert_consistent(&sim, &app);
     }
 
+    /// The stock data menu over the synthetic volume (tools/fat_image.py) through the eMMC model: READ RIDES
+    /// reads stock's rides (a bounded amount per pass), the rows show the totals and CP, IMPORT applies stock's
+    /// settings. Prints what the scan cost: bytes and reads (the model takes no time to read; on the unit the
+    /// read speed decides).
+    #[test]
+    fn stock_data_menu() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Lap)); // the last row
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Stock, 0));
+        let value = |app: &App, i| std::string::String::from(app.menu_row(Menu::Stock, i).unwrap().1.as_str());
+        assert_eq!((value(&app, 0), value(&app, 1)), ("GO".into(), "--".into()));
+        app.press(&mut sim, Press::Short(Key::Start));
+        let (t0, cmds0) = (sim.ms, sim.emmc.cmds.len());
+        while app.stock.status() == crate::stock::Status::Running {
+            run(&mut sim, &mut app, u64::from(POLL_MS));
+            assert!(sim.ms - t0 < 60_000);
+        }
+        let reads = sim.emmc.cmds[cmds0..].iter().filter(|c| c.0 == 17 || c.0 == 18).count();
+        std::println!("scan: {} bytes, {} reads, {} passes", app.stock.out.bytes, reads, (sim.ms - t0) / 50);
+        assert_eq!(app.stock.status(), crate::stock::Status::Done);
+        assert_eq!([0, 4, 8].map(|i| value(&app, i)), ["4", "19", "37"].map(std::string::String::from));
+        let cp = crate::power_curve::fit_cp(&app.stock.out.curve).unwrap();
+        assert_eq!(value(&app, 1), std::format!("{}", cp.cp));
+        run(&mut sim, &mut app, 1000);
+        assert_consistent(&sim, &app);
+        sim.save("stock");
+
+        app.press(&mut sim, Press::Short(Key::Lap)); // IMPORT, the last row
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.settings.ftp, app.settings.max_hr), (265, 188));
+        let hr = crate::nrf::SensorId { device: 1234, trans: 0 };
+        assert_eq!(sim.backup[Kind::Hr.backup()], hr.to_word());
+        use crate::ui::Field::*;
+        let p = app.pages();
+        assert_eq!((ui::field_count(p[0].layout), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
+        assert_eq!((ui::field_count(p[1].layout), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
+        assert!(app.notices[0].as_str().ends_with("IMPORTED 6"), "{}", app.notices[0].as_str());
+        assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
+    }
+
     /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
     /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
     #[test]
@@ -1158,7 +1202,9 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW), "Lap from the top wraps to NEARBY BLE");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW + 1), "Lap from the top wraps to STOCK DATA");
+        app.press(&mut sim, Press::Short(Key::Lap));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW), "then NEARBY BLE");
         assert_consistent(&sim, &app);
         sim.save("menu");
         app.press(&mut sim, Press::Short(Key::Start));
@@ -2367,6 +2413,7 @@ mod emmc_tests {
 #[cfg(test)]
 mod fuzz {
     extern crate std;
+    use std::vec::Vec;
     /// xorshift32: deterministic, so a failure reproduces.
     fn bytes(seed: u32, n: usize) -> impl Iterator<Item = u8> {
         let mut x = seed;
@@ -2424,6 +2471,100 @@ mod fuzz {
                     buf.clear();
                     pc.got.clear();
                 }
+            }
+        }
+    }
+
+    /// FIT files from the card (stock's rides): random bytes behind a valid header, and every kind of damage to a
+    /// valid ride, through the reader and the power curve.
+    #[test]
+    fn fit_files() {
+        use crate::fitread::{Msg, Reader};
+        let feed = |data: &mut dyn Iterator<Item = u8>| {
+            let (mut r, mut roll) = (Reader::new(), crate::power_curve::Rolling::new());
+            for b in data {
+                if let Some(Msg::Record(x)) = r.push(b) {
+                    roll.sample(x.time, x.power);
+                }
+            }
+            let _ = crate::power_curve::fit_cp(&crate::power_curve::Curve { watts: roll.best, day: [0; 13] });
+        };
+        // random messages behind a valid header; a new file each time the reader gives up, so it gets past the
+        // first message (most random bytes are a data message on no definition)
+        let head = [14u8, 0x10, 0, 0, 0xff, 0x0f, 0, 0, b'.', b'F', b'I', b'T', 0, 0];
+        let (mut files, mut deep) = (0, 0);
+        for seed in 1..=4u32 {
+            let mut r = Reader::new();
+            head.iter().for_each(|&b| _ = r.push(b));
+            for (i, b) in bytes(seed, 1 << 20).enumerate() {
+                // definitions more often than chance
+                let _ = r.push(if i % 7 == 0 { 0x40 | (b & 0x2f) } else { b });
+                if r.result().is_some() {
+                    files += 1;
+                    deep += usize::from(r.offset() > 64);
+                    r = Reader::new();
+                    head.iter().for_each(|&b| _ = r.push(b));
+                }
+            }
+        }
+        assert!(files > 1000 && deep > 100, "{files} files, {deep} past 64 bytes");
+        let mut ride = Vec::new();
+        let (mut w, _) = crate::fit::Writer::start(&mut ride, 1_000_000).unwrap();
+        for t in 0..300u32 {
+            let s =
+                crate::fit::Sample { time: 1_000_001 + t, power: Some(t as u16), hr: Some(120), ..Default::default() };
+            w.record(&mut ride, &s).unwrap();
+        }
+        w.finish(&mut ride, 1_000_400).unwrap();
+        let mut noise = bytes(9, 1 << 16);
+        for _ in 0..2000 {
+            let mut bad = ride.clone();
+            for _ in 0..1 + noise.next().unwrap_or(0) % 4 {
+                let at =
+                    (usize::from(noise.next().unwrap_or(0)) << 8 | usize::from(noise.next().unwrap_or(0))) % bad.len();
+                bad[at] = noise.next().unwrap_or(0);
+            }
+            feed(&mut bad.into_iter());
+        }
+    }
+
+    /// Stock's settings files: random text with the INI's own characters mixed in.
+    #[test]
+    fn ini_files() {
+        let words: [&[u8]; 8] = [b"[Page1]\n", b"Grid9=", b"type=", b"[UserProfile]\n", b"CP=", b",", b"\r\n", b"ID="];
+        for seed in 1..=4u32 {
+            let mut t = Vec::new();
+            for b in bytes(seed, 1 << 14) {
+                if b % 3 == 0 {
+                    t.extend_from_slice(words[usize::from(b) % words.len()]);
+                } else {
+                    t.push(if b % 3 == 1 { b'0' + b % 10 } else { b });
+                }
+            }
+            let _ = crate::stock::import(&t, &t, &t);
+        }
+    }
+
+    /// A damaged volume under the scan of stock's rides: it ends (done or failed), never hangs or panics.
+    #[test]
+    fn ride_scan_on_a_damaged_volume() {
+        let img = crate::fat::tests::image();
+        let mut noise = bytes(5, 1 << 20);
+        let mut scan = crate::stock::Scan::new();
+        for _ in 0..40 {
+            let mut bad = img.clone();
+            for _ in 0..64 {
+                let hi = usize::from(noise.next().unwrap_or(0)) << 16;
+                let at = (hi | usize::from(noise.next().unwrap_or(0)) << 8 | usize::from(noise.next().unwrap_or(0)))
+                    % bad.len().min(4 << 20);
+                bad[at] = noise.next().unwrap_or(0);
+            }
+            let mut d = crate::fat::tests::Ram(bad, 0);
+            scan.start((2026, 10, 23));
+            let mut passes = 0;
+            while scan.step(&mut d, 1 << 16) {
+                passes += 1;
+                assert!(passes < 100_000, "the scan does not end");
             }
         }
     }

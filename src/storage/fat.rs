@@ -58,6 +58,40 @@ pub struct File {
     pub dir: bool,
 }
 
+/// Bytes of a name [`Fat::list`] gives (longer long names are cut).
+pub const NAME: usize = 64;
+
+/// Where a directory listing is: the sector read last, and the long name pieces seen since the last entry.
+pub struct Cursor {
+    cluster: u32,
+    /// Sector within the cluster.
+    sector: u32,
+    /// Entry within `buf`.
+    entry: usize,
+    /// Entries read so far (bounds a loop in the chain).
+    seen: u32,
+    done: bool,
+    buf: [u8; SECTOR],
+    lfn: [u16; LFN],
+    lfn_sum: Option<u8>,
+}
+
+/// A directory entry as [`Fat::list`] gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// The file or directory.
+    pub file: File,
+    name: [u8; NAME],
+    len: u8,
+}
+
+impl Entry {
+    /// Its name, ASCII (other characters as '?').
+    pub fn name(&self) -> &[u8] {
+        self.name.get(..usize::from(self.len)).unwrap_or(&[])
+    }
+}
+
 /// A mounted FAT32 volume: its geometry and the FAT sector read last.
 pub struct Fat {
     fat_start: u32,
@@ -158,49 +192,125 @@ impl Fat {
         self.data_start + (cluster - 2) * self.spc
     }
 
-    /// The entry called `name` in directory `dir`: its long name or its 8.3 name, ASCII case ignored.
-    pub fn find(&mut self, d: &mut impl Disk, dir: File, name: &str) -> Result<File, Error> {
+    /// A listing of directory `dir` from its first entry ([`Fat::list`]).
+    pub fn cursor(&self, dir: File) -> Result<Cursor, Error> {
         if !dir.dir {
             return Err(Error::NotFound);
         }
-        let mut lfn = [0u16; LFN];
-        let mut lfn_sum: Option<u8> = None; // the checksum the long name pieces carry, while they are whole
-        let mut cluster = dir.cluster;
-        let mut s = [0u8; SECTOR];
-        let per_cluster = self.spc * (SECTOR as u32 / 32);
-        let mut entries = 0;
-        while entries < DIR_ENTRIES {
-            for k in 0..self.spc {
-                self.read(d, self.lba(cluster) + k, &mut s)?;
-                for e in s.chunks_exact(32) {
-                    match (e[0], e[11]) {
-                        (0, _) => return Err(Error::NotFound), // the end of the directory
-                        (0xe5, _) => lfn_sum = None,           // deleted
-                        (ord, 0x0f) => lfn_sum = lfn_piece(&mut lfn, e, ord, lfn_sum),
-                        (_, attr) if attr & 0x08 != 0 => lfn_sum = None, // the volume label
-                        (_, attr) => {
-                            let long = lfn_sum == Some(short_sum(e)) && lfn_eq(&lfn, name);
-                            lfn_sum = None;
-                            if long || short_eq(e, name) {
-                                let cluster = u32::from(u16_at(e, 20)) << 16 | u32::from(u16_at(e, 26));
-                                let dir = attr & 0x10 != 0;
-                                return match cluster {
-                                    0 if dir => Ok(self.root()), // ".." in a folder of the root
-                                    c if c != 0 && !self.valid(c) => Err(Error::Corrupt),
-                                    _ => Ok(File { cluster, size: if dir { 0 } else { u32_at(e, 28) }, dir }),
-                                };
-                            }
+        if !self.valid(dir.cluster) {
+            return Err(Error::Corrupt);
+        }
+        Ok(Cursor {
+            cluster: dir.cluster,
+            sector: 0,
+            entry: SECTOR / 32, // nothing read yet
+            seen: 0,
+            done: false,
+            buf: [0; SECTOR],
+            lfn: [0; LFN],
+            lfn_sum: None,
+        })
+    }
+
+    /// The next file or directory entry at `c` (the raw 32 bytes) and whether a whole long name ([`Cursor::lfn`])
+    /// goes with it; None at the end of the directory. Deleted entries, long name pieces and the volume label are
+    /// skipped.
+    fn next_raw(&mut self, d: &mut impl Disk, c: &mut Cursor) -> Result<Option<([u8; 32], bool)>, Error> {
+        loop {
+            if c.done {
+                return Ok(None);
+            }
+            if c.seen >= DIR_ENTRIES {
+                return Err(Error::Corrupt); // longer than any directory can be: a loop
+            }
+            if c.entry >= SECTOR / 32 {
+                if c.seen > 0 {
+                    c.sector += 1;
+                }
+                if c.sector >= self.spc {
+                    match self.next(d, c.cluster)? {
+                        Some(n) => (c.cluster, c.sector) = (n, 0),
+                        None => {
+                            c.done = true;
+                            return Ok(None);
                         }
                     }
                 }
+                let mut s = [0u8; SECTOR];
+                self.read(d, self.lba(c.cluster) + c.sector, &mut s)?;
+                (c.buf, c.entry) = (s, 0);
             }
-            entries += per_cluster;
-            match self.next(d, cluster)? {
-                Some(c) => cluster = c,
-                None => return Err(Error::NotFound),
+            let mut e = [0u8; 32];
+            e.copy_from_slice(c.buf.get(c.entry * 32..c.entry * 32 + 32).ok_or(Error::Corrupt)?);
+            c.entry += 1;
+            c.seen += 1;
+            match (e[0], e[11]) {
+                (0, _) => c.done = true,       // the end of the directory
+                (0xe5, _) => c.lfn_sum = None, // deleted
+                (ord, 0x0f) => c.lfn_sum = lfn_piece(&mut c.lfn, &e, ord, c.lfn_sum),
+                (_, attr) if attr & 0x08 != 0 => c.lfn_sum = None, // the volume label
+                _ => {
+                    let long = c.lfn_sum == Some(short_sum(&e));
+                    c.lfn_sum = None;
+                    return Ok(Some((e, long)));
+                }
             }
         }
-        Err(Error::Corrupt) // longer than any directory can be: a loop
+    }
+
+    /// The file or directory a raw directory entry names.
+    fn file_of(&self, e: &[u8; 32]) -> Result<File, Error> {
+        let cluster = u32::from(u16_at(e, 20)) << 16 | u32::from(u16_at(e, 26));
+        let dir = e[11] & 0x10 != 0;
+        match cluster {
+            0 if dir => Ok(self.root()), // ".." in a folder of the root
+            c if c != 0 && !self.valid(c) => Err(Error::Corrupt),
+            _ => Ok(File { cluster, size: if dir { 0 } else { u32_at(e, 28) }, dir }),
+        }
+    }
+
+    /// The next entry of a listing: its name (the long one if it has one, else the 8.3 one) and its file. Entries
+    /// that point outside the volume are skipped. None at the end; one entry per call, so a caller can spread a
+    /// long directory over several passes.
+    pub fn list(&mut self, d: &mut impl Disk, c: &mut Cursor) -> Result<Option<Entry>, Error> {
+        while let Some((e, long)) = self.next_raw(d, c)? {
+            let Ok(file) = self.file_of(&e) else { continue };
+            let mut out = Entry { file, name: [0; NAME], len: 0 };
+            let mut put = |b: u8| {
+                if let Some(slot) = out.name.get_mut(usize::from(out.len)) {
+                    *slot = b;
+                    out.len += 1;
+                }
+            };
+            if long {
+                for &ch in c.lfn.iter().take_while(|&&ch| ch != 0 && ch != 0xffff) {
+                    put(if ch < 0x80 { ch as u8 } else { b'?' });
+                }
+            } else {
+                let trim = |b: &[u8]| b.iter().rposition(|&ch| ch != b' ').map_or(0, |i| i + 1);
+                // byte 12: Windows NT's lower case flags (0x08 the name, 0x10 the extension), which macOS sets too
+                let lower = |b: u8, bit: u8| if e[12] & bit != 0 { b.to_ascii_lowercase() } else { b };
+                let (base, ext) = (&e[..8], &e[8..11]);
+                base[..trim(base)].iter().for_each(|&b| put(lower(b, 0x08)));
+                if trim(ext) > 0 {
+                    put(b'.');
+                    ext[..trim(ext)].iter().for_each(|&b| put(lower(b, 0x10)));
+                }
+            }
+            return Ok(Some(out));
+        }
+        Ok(None)
+    }
+
+    /// The entry called `name` in directory `dir`: its long name or its 8.3 name, ASCII case ignored.
+    pub fn find(&mut self, d: &mut impl Disk, dir: File, name: &str) -> Result<File, Error> {
+        let mut c = self.cursor(dir)?;
+        while let Some((e, long)) = self.next_raw(d, &mut c)? {
+            if (long && lfn_eq(&c.lfn, name)) || short_eq(&e, name) {
+                return self.file_of(&e);
+            }
+        }
+        Err(Error::NotFound)
     }
 
     /// Follows `path` ('/' or '\\' between names) from the root.
@@ -383,6 +493,33 @@ pub(crate) mod tests {
         }
         let h = read_all(&mut fat, &mut d, "MAP/DATA/TEMP/ZOOM14/H/8192_8192_0.BIN").unwrap();
         assert_eq!(u32::from_le_bytes(h[..4].try_into().unwrap()) as usize * 10 + 4, h.len(), "a tile's H file");
+    }
+
+    /// A listing gives every live entry once, by its long name when it has one, across clusters.
+    #[test]
+    fn lists_directories() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let names = |fat: &mut Fat, d: &mut Ram, path: &str| {
+            let dir = fat.open(d, path).unwrap();
+            let mut c = fat.cursor(dir).unwrap();
+            let mut v = Vec::new();
+            while let Some(e) = fat.list(d, &mut c).unwrap() {
+                v.push((std::string::String::from_utf8(e.name().to_vec()).unwrap(), e.file));
+            }
+            v
+        };
+        let many = names(&mut fat, &mut d, "many");
+        let files: Vec<&str> = many.iter().map(|e| e.0.as_str()).filter(|n| n.starts_with("file number")).collect();
+        assert_eq!(files.len(), 600);
+        assert_eq!(files[599], "file number 599.txt");
+        let last = many.iter().find(|e| e.0 == "last.bin").unwrap();
+        assert_eq!(Ok(last.1), fat.open(&mut d, "many/last.bin"));
+        let root = names(&mut fat, &mut d, "/");
+        assert!(root.iter().any(|e| e.0 == "SHORT.TXT" && !e.1.dir));
+        assert!(root.iter().any(|e| e.0 == "Progress Planner" && e.1.dir));
+        let f = fat.open(&mut d, "SHORT.TXT").unwrap();
+        assert_eq!(fat.cursor(f).err(), Some(Error::NotFound), "a file");
     }
 
     #[test]

@@ -10,6 +10,7 @@
 
 pub mod dev;
 pub mod drivers;
+pub mod power_curve;
 pub mod ride;
 #[cfg(test)]
 mod sim;
@@ -18,7 +19,7 @@ pub mod ui;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, emmc, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit};
+pub use storage::{fat, fit, fitread, ini, stock};
 pub use ui::{fonts, map, menu, text, tiles};
 
 use menu::{Input, Setting};
@@ -594,6 +595,8 @@ pub enum Menu {
     Page(usize),
     /// What the GNSS receiver reports.
     Gps,
+    /// What stock's rides and settings give ([`menu::STOCK`]).
+    Stock,
 }
 
 /// What is on screen.
@@ -761,6 +764,8 @@ pub struct App {
     /// The touch controller answered at the start; the gestures from its points.
     touch_ok: bool,
     touch: touch::Recogniser,
+    /// The scan of stock's rides (the stock data menu), and its buffer for reading stock's settings.
+    stock: stock::Scan,
 }
 
 impl App {
@@ -864,6 +869,7 @@ impl App {
             basemap: tiles::Basemap::new(),
             touch_ok: touch::init(b),
             touch: touch::Recogniser::default(),
+            stock: stock::Scan::new(),
         };
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -1055,6 +1061,7 @@ impl App {
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
             Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len()).map(|&r| Row::Read(r)),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
+            Menu::Stock => menu::STOCK.get(i).map(|&r| Row::Stock(r)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
@@ -1177,6 +1184,10 @@ impl App {
                 label.push_str("FIELD ");
                 label.push_u32(f as u32 + 1);
                 value.push_str(self.pages.get(n)?.fields.get(f)?.label());
+            }
+            Row::Stock(r) => {
+                label.push_str(r.label());
+                self.stock_value(r, &mut value);
             }
         }
         Some((label, value, color))
@@ -1572,8 +1583,102 @@ impl App {
                     save_page(b, n, page);
                 }
             }
-            Some(Row::Read(_)) | None => {}
+            Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {
+                self.stock.start(self.date);
+            }
+            Some(Row::Stock(menu::StockRow::Import)) => self.import_stock(b),
+            Some(Row::Read(_) | Row::Stock(_)) | None => {}
         }
+    }
+
+    // -----------------------------------------------------------------------------------------------------------
+    // What stock left on the card (storage/stock.rs): the stock data menu
+    // -----------------------------------------------------------------------------------------------------------
+
+    /// Bytes of stock's rides read per pass: much while no ride runs (the menu answers within ~0.1 s, inferred),
+    /// little during a ride.
+    const SCAN_IDLE: u32 = 256 * 1024;
+    const SCAN_RIDING: u32 = 16 * 1024;
+
+    /// A stock data row's value.
+    fn stock_value(&self, r: menu::StockRow, v: &mut Line<12>) {
+        use menu::StockRow as S;
+        let o = &self.stock.out;
+        let cp = power_curve::fit_cp(&o.curve);
+        match (r, self.stock.status()) {
+            (S::Scan, stock::Status::Idle) => v.push_str("GO"),
+            (S::Scan, stock::Status::Running) => v.push_u32(u32::from(self.stock.listed)),
+            (S::Scan, stock::Status::Done) => v.push_u32(u32::from(o.all.rides)),
+            (S::Scan, stock::Status::Failed(_)) => v.push_str("NONE"),
+            (S::Import, _) => v.push_str("SETTINGS"),
+            (_, s) if s != stock::Status::Done => v.push_str("--"),
+            (S::Cp | S::WPrime | S::Fit, _) if cp.is_none() => v.push_str("--"),
+            (S::Cp, _) => v.push_u32(cp.map_or(0, |c| u32::from(c.cp))),
+            (S::WPrime, _) => push_fixed(v, cp.map_or(0, |c| c.w_prime) as i32, 3, 1),
+            (S::Fit, _) => {
+                let c = cp.map_or((0, 0), |c| (c.points, c.err_pct));
+                v.push_u32(u32::from(c.0));
+                v.push_str(" PTS ");
+                v.push_u32(u32::from(c.1));
+                v.push_str("%");
+            }
+            (S::WeekKm, _) => v.push_u32(o.week.dist_m / 1000),
+            (S::WeekH, _) => push_fixed(v, (o.week.time_s / 360) as i32, 1, 1),
+            (S::YearKm, _) => v.push_u32(o.year.dist_m / 1000),
+            (S::YearH, _) => push_fixed(v, (o.year.time_s / 360) as i32, 1, 1),
+            (S::AllKm, _) => v.push_u32(o.all.dist_m / 1000),
+            (S::AllH, _) => push_fixed(v, (o.all.time_s / 360) as i32, 1, 1),
+        }
+    }
+
+    /// The scan of stock's rides goes on, if it runs.
+    fn step_stock(&mut self, b: &mut impl Board) {
+        if self.stock.status() == stock::Status::Running {
+            let budget = if self.ride.state() == ride::State::Idle { Self::SCAN_IDLE } else { Self::SCAN_RIDING };
+            self.stock.step(&mut emmc::Volume(&mut self.emmc, b), budget);
+        }
+    }
+
+    /// Applies stock's settings ([`stock::import`]) where this firmware has them, and says how many.
+    fn import_stock(&mut self, b: &mut impl Board) {
+        let Ok(i) = self.stock.import(&mut emmc::Volume(&mut self.emmc, b)) else {
+            return self.notice("NO STOCK DATA");
+        };
+        let mut n = 0;
+        let s = &mut self.settings;
+        for (want, have) in [(i.ftp, &mut s.ftp), (i.max_hr, &mut s.max_hr)] {
+            if let Some(v) = want {
+                (*have, n) = (v, n + 1);
+            }
+        }
+        if let Some(mm) = i.wheel_mm {
+            // the nearest wheel offered
+            s.wheel_mm = WHEELS.iter().copied().min_by_key(|w| w.abs_diff(mm)).unwrap_or(s.wheel_mm);
+            n += 1;
+        }
+        // HOOK (weight, CP, W' in RTC backup register 12, another branch): when their Setting variants land, apply
+        // i.weight_dg, i.cp and i.w_prime here as above.
+        self.save_misc(b);
+        for (kind, id) in Kind::ALL.into_iter().zip(i.sensors) {
+            if let Some(id) = id {
+                b.backup_write(kind.backup(), id.to_word()); // paired at the next start if ANT is not up
+                if self.ant {
+                    self.set_sensor(b, kind, Sensor::Paired(id));
+                }
+                n += 1;
+            }
+        }
+        for (k, p) in i.pages.iter().enumerate() {
+            if let (Some(p), Some(page)) = (p, self.pages.get_mut(k)) {
+                *page = *p;
+                save_page(b, k, p);
+                n += 1;
+            }
+        }
+        let mut l = Line::<20>::new();
+        l.push_str("IMPORTED ");
+        l.push_u32(n);
+        self.notice(l.as_str());
     }
 
     /// Acts on a key press ([`Input::of`]). A key held to repeat that acted (a list scrolled, a value stepped) is
@@ -1910,6 +2015,7 @@ impl App {
                 self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
             }
         }
+        self.step_stock(b);
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         if let Some(ms) = self.banner_ms {
             if !core::mem::replace(&mut self.banner_drawn, true) {
@@ -1927,7 +2033,9 @@ impl App {
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
-            Screen::Menu(menu @ (Menu::Main | Menu::Sensors | Menu::Gps), sel) if self.redraw_ms >= LIST_REDRAW_MS => {
+            Screen::Menu(menu @ (Menu::Main | Menu::Sensors | Menu::Gps | Menu::Stock), sel)
+                if self.redraw_ms >= LIST_REDRAW_MS =>
+            {
                 self.update_menu_rows(b, menu, sel);
                 self.redraw_ms = 0;
             }
@@ -2105,6 +2213,7 @@ fn menu_title(m: Menu) -> &'static str {
         Menu::Sensors => "SENSORS",
         Menu::Page(_) => "PAGE ",
         Menu::Gps => "GPS",
+        Menu::Stock => "STOCK DATA",
     }
 }
 

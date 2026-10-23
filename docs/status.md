@@ -16,6 +16,10 @@ The dated findings are in [journal.md](journal.md).
 - **The basemap** (roads and water from stock's cached tiles, `\Map\Data\Temp`): the FAT volume mounted by our
   reader, the tiles at the last known position, the time a view change takes (simulated with real tiles: about
   140 KB read, 84 K buffer pixels, 73 K panel pixels), the 1.5 MB SDRAM zeroing at boot (`hw::map_memory`).
+- **STOCK DATA on the unit:** how long READ RIDES takes over stock's rides (about 175 KB a ride on one unit's
+  backups, so about 35 MB for 200 rides; the eMMC read speed and the parsing time per byte from SDRAM code are
+  not measured: estimated 10 to 20 s at 256 KB a pass), the menu's response meanwhile, and IMPORT against the
+  unit's own `\System` files (checked on the host against two backups).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

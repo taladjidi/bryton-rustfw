@@ -57,7 +57,22 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
 wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
 up and Page down, held to repeat, Start to keep), GPS (fix, satellites, position, altitude, UTC),
-BLE devices nearby.
+BLE devices nearby, STOCK DATA.
+
+## Stock data
+
+What Bryton's firmware left on the card, read only (nothing is ever written), from the STOCK DATA menu:
+- **READ RIDES** reads every ride in `\Activities` (stock's `YYMMDDhhmmss.fit`; its ride in progress `tmp.fit` and
+  files that are not whole rides are left out), a bounded amount per pass of the main loop, more while no ride
+  runs. The menu then shows:
+  - **CP and W'** from the best powers of the last 90 days (1 s to 60 min), fitted with the 2-parameter model
+    on the 2 to 20 minute bests, and **CP FIT**: the points used and the model's largest error. A stop or a
+    power dropout ends an effort (a best never spans a cafe stop);
+  - **distance and riding time** of this week (from Monday), this year and all rides.
+- **IMPORT** applies stock's settings where this firmware has them: FTP and max heart rate (UserProfile.ini),
+  the wheel (a speed sensor's, Sensor.ini), the paired ANT+ sensors (Sensor.ini), and the data pages of the bike
+  in use (its first three enabled pages, with the fields that have an equivalent here). Stock's weight, CP and
+  W' are read too, for when those settings exist here.
 
 ## Sensors and radios
 

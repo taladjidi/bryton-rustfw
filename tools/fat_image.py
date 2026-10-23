@@ -10,6 +10,10 @@ Format (ghidra/STORAGE_AND_MAPS.md 4.5): H = u32 count, then 10-byte records (u8
 into P, u8 class, u8 sub, u8 oneway); P = i16 x, y points (extent 4096), then a name for layer 6 and for points.
 An empty tile is a 0 count and one 0 byte (stock's Map_WriteEmptyTileCache).
 
+It also holds a made-up `\Activities` (FIT rides with known power, a stop, compressed timestamps, a bad CRC, a
+cut file, stock's `tmp.fit`, a GNSS log) and `\System\*.ini` in stock's layout, for stock.rs (the values the
+tests expect are worked out next to each ride).
+
 The 1.1 GB image is mostly zeros, so it is stored sparse: records of u32 LE first sector, u32 LE sector count,
 then the sectors (fat.rs tests expand it).
 
@@ -95,7 +99,94 @@ def fill(m):
     with open(os.path.join(m, 'frag.bin'), 'wb') as f:
         f.write(b''.join(struct.pack('<I', i) for i in range(50000)))  # 200 KB over 13 clusters
     subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
+    rides(m)
     shutil.rmtree(os.path.join(m, '.fseventsd'), ignore_errors=True)
+
+
+def fit_crc(data, crc=0):
+    """FIT's CRC-16 (fit.rs `crc`)."""
+    t = [0x0000, 0xcc01, 0xd801, 0x1400, 0xf001, 0x3c00, 0x2800, 0xe401,
+         0xa001, 0x6c00, 0x7800, 0xb401, 0x5000, 0x9c01, 0x8801, 0x4400]
+    for b in data:
+        for nib in (b & 0xf, b >> 4):
+            crc = (crc >> 4) ^ t[crc & 0xf] ^ t[nib]
+    return crc
+
+
+def fit_ride(start, secs, power, dist_m, compressed=False, gap=None):
+    """A synthetic FIT ride: records (timestamp, heart rate, distance, power) every second from FIT time `start`
+    for `secs` seconds, none during `gap` (first, last second), then a session with `dist_m` and the timer time.
+    With `compressed`, records after the first of a run carry a compressed timestamp header instead."""
+    U8, U16, U32 = 0x02, 0x84, 0x86
+    d = bytearray()
+    d += bytes([0x40, 0, 0, 20, 0, 4, 253, 4, U32, 3, 1, U8, 5, 4, U32, 7, 2, U16])  # record, local 0
+    d += bytes([0x41, 0, 0, 20, 0, 3, 3, 1, U8, 5, 4, U32, 7, 2, U16])  # record without timestamp, local 1
+    prev, timer = None, 0
+    for t in range(secs):
+        if gap and gap[0] <= t < gap[1]:
+            continue
+        timer += 1
+        ts, w = start + t, power(t)
+        fields = struct.pack('<BIH', 140, t * 800, 0xffff if w is None else w)
+        if compressed and prev is not None and ts - prev < 32:
+            d += bytes([0x80 | (1 << 5) | (ts & 0x1f)]) + fields
+        else:
+            d += bytes([0x00]) + struct.pack('<I', ts) + fields
+        prev = ts
+    d += bytes([0x42, 0, 0, 18, 0, 5, 253, 4, U32, 2, 4, U32, 8, 4, U32, 9, 4, U32, 16, 1, U8])  # session, local 2
+    d += bytes([0x02]) + struct.pack('<IIIIB', start + secs, start, timer * 1000, dist_m * 100, 140)
+    h = bytearray(struct.pack('<BBHI4s', 14, 0x10, 2140, len(d), b'.FIT'))
+    h += struct.pack('<H', fit_crc(h))
+    f = bytes(h + d)
+    return f + struct.pack('<H', fit_crc(f))
+
+
+def rides(m):
+    """\\Activities as stock leaves it, with made-up rides (stock.rs tests: today is 2026-10-23, a Friday)."""
+    import calendar
+    a = os.path.join(m, 'Activities')
+    os.makedirs(a)
+    def fit_time(y, mo, d, h):
+        return calendar.timegm((y, mo, d, h, 0, 0)) - 631065600
+    files = {
+        # this week: 2 min at 400 W then 250 W, 30 min
+        '261020080000.fit': fit_ride(fit_time(2026, 10, 20, 8), 1800, lambda t: 400 if t < 120 else 250, 14400),
+        # this year, in the window: 300 W, stopped 5 min after 10 min (compressed timestamps)
+        '261001070000.fit': fit_ride(fit_time(2026, 10, 1, 7), 1500, lambda t: 300, 12000, True, (600, 900)),
+        # last year, out of the window: 600 W
+        '250315090000.fit': fit_ride(fit_time(2025, 3, 15, 9), 600, lambda t: 600, 6000),
+        # this week, no power
+        '261022100000.fit': fit_ride(fit_time(2026, 10, 22, 10), 600, lambda t: None, 5000),
+        # stock's ride in progress: never read (900 W would show)
+        'tmp.fit': fit_ride(fit_time(2026, 10, 23, 7), 600, lambda t: 900, 5000),
+    }
+    bad = bytearray(fit_ride(fit_time(2026, 10, 21, 10), 600, lambda t: 800, 5000))
+    bad[-1] ^= 1
+    files['261021100000.fit'] = bytes(bad)  # a bad CRC: skipped
+    files['261019100000.fit'] = files['261020080000.fit'][:20000]  # cut: skipped
+    files['20261022100000.ubx'] = bytes(range(256)) * 4  # a GNSS log: not a ride
+    for name, data in files.items():
+        with open(os.path.join(a, name), 'wb') as f:
+            f.write(data)
+    os.makedirs(os.path.join(a, 'UploadTemp'))
+    # stock's settings, made up, in its layout (sections and keys as on a unit; LF, a NUL at the end)
+    s = os.path.join(m, 'System')
+    os.makedirs(s)
+    ini = {
+        'DeviceData.ini': '[Info]\nVer=1000\n\n[DeviceSys]\nbrightness=50\nActBike=1\n\0',
+        'UserProfile.ini': '[Info]\nVer=1000\n\n[UserProfile]\nWbalance=21000\nCP=255\nWeight_kg=72.50000\n\n'
+                           '[FTP]\nZone1L=0\nBaseVale=263\n\n[MHR]\nZone7H=65535\nBaseVale=188\n\0',
+        'Sensor.ini': '[Sensor]\nHR_Num=1\nPWR_Num=1\n\n[HRSensor1]\nID=1234\nHWType=0\nSentype=4\nactive=1\n\n'
+                      '[PWRSensor1]\nID=4321\nHWType=0\nSentype=3\nactive=1\n\0',
+        # ActBike=1: the second bike's pages
+        'Bike1Profile.ini': '[Info]\nVer=6001\n[Page1]\nGrid1=2\ntype=1\nisEnabled=1\n\0',
+        'Bike2Profile.ini': '[Info]\nVer=6001\n[Page1]\nGrid4=29,21,24,2\ntype=4\nisEnabled=2\n\n'
+                            '[Page2]\nGrid2=5,8\ntype=2\nisEnabled=1\n\0',
+    }
+    for name, text in ini.items():
+        with open(os.path.join(s, name), 'wb') as f:
+            f.write(text.encode())
+    subprocess.run(['find', m, '-name', '._*', '-delete'], check=True)
 
 
 def run(*cmd):
