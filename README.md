@@ -17,9 +17,14 @@ Bryton.
   the STM32H747 reference manual (RM0399).
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
 
-**Status: runs on the unit (2026-10-23).** The clock shows on the screen, and the USB dev link works (`info`,
-`shot`, `peek`, and `run` from RAM). The first install had stopped at the panel: SPI1 lost master mode to a mode
-fault (see "First run on the unit" below).
+**Status: runs on the unit (2026-10-23).** Installed on the eMMC, it starts straight into the clock (much faster
+than stock), Page toggles the backlight, holding Back powers off and the power button starts it again. The USB dev
+link works (`info`, `shot`, `peek`, and `run` from RAM). The first install had stopped at the panel: SPI1 lost
+master mode to a mode fault (see "First run on the unit" below).
+
+![The firmware on the unit, screenshot over the dev link](docs/first-frame-2026-10-23.png)
+
+*Screenshot taken from the unit over the dev link (`./dev.py shot`): rendered by the firmware from what it drew.*
 
 ## Build
 
@@ -81,6 +86,9 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
     showed SPI1 CFG2 without MASTER. `spi_init` wrote CFG2 (MASTER, SSM) while CR1.SSI was still 0: a mode fault,
     which clears MASTER. Clocks and pins were right. With SSI written first, the firmware runs on the unit:
     the screen shows the clock, the dev link works, and `dev.py run` starts a new build from RAM.
+  - **Power on from standby (2026-10-23):** the power button drives PA0 (WKUP1) and PA1; PA0 was left in its
+    reset analog mode, so the press never woke the unit (only the four-button restart did). Found with `peek` /
+    `poke` (BOARD.md 9); with PA0 configured as an input, power off and on work, with or without the cable.
 - **The bootloader jumps with both caches off** (BOARD.md 2): the firmware runs uncached from SDRAM until it
   turns the I-cache on.
 - **Renode passed all of these:** it does not model the MPU, the caches or the SPI mode fault (BOARD.md 2, 6).
