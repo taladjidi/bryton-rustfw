@@ -1,5 +1,8 @@
-//! What is on screen: colours, the seven-segment digits, Ferris, the layout and the clock. Draws through
-//! [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
+//! What is on screen: colours, text styles, the seven-segment digits, Ferris, the layout and the clock. Draws
+//! through [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
+
+use crate::fonts::{SANS_16, SANS_BOLD_32};
+use crate::text::{self, Align, Style};
 
 /// Panel width in pixels (portrait).
 pub const W: u32 = 240;
@@ -19,10 +22,18 @@ pub const RED: u16 = 0xf800;
 /// RGB565 green.
 pub const GREEN: u16 = 0x07e0;
 
-/// Something that can fill a rectangle with an RGB565 colour: the panel on the unit, a framebuffer in tests.
+/// Small text: labels.
+pub const LABEL: Style = Style { font: &SANS_16, fg: WHITE, bg: BLACK };
+/// Large bold text: values.
+pub const VALUE: Style = Style { font: &SANS_BOLD_32, fg: WHITE, bg: BLACK };
+
+/// Something that can fill a rectangle with RGB565 pixels: the panel on the unit, a framebuffer in tests.
 pub trait Canvas {
-    /// Fills `w` x `h` pixels from (`x`, `y`). Callers keep the rectangle on screen.
+    /// Fills `w` x `h` pixels from (`x`, `y`) with one colour. Callers keep the rectangle on screen.
     fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16);
+    /// Fills `w` x `h` pixels from (`x`, `y`) with `px(dx, dy)`, `dx` / `dy` relative to (`x`, `y`). Called in row
+    /// order on the panel (one window, one RAMWR), so `px` should be cheap. Callers keep the rectangle on screen.
+    fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -136,8 +147,10 @@ pub enum UsbDot {
 
 /// The USB dot's box: (x, y, size).
 pub const USB_DOT: (u32, u32, u32) = (W - 20, 12, 8);
+/// The "USB" label: right edge and top, so its capitals sit level with the dot.
+pub const USB_LABEL: (u32, u32) = (USB_DOT.0 - 6, USB_DOT.1 - 5);
 
-/// Draws the USB state dot.
+/// Draws the USB state dot and the "USB" label beside it, both in the state's colour (black when unplugged).
 pub fn draw_usb_dot(c: &mut impl Canvas, s: UsbDot) {
     let color = match s {
         UsbDot::Off => BLACK,
@@ -146,6 +159,7 @@ pub fn draw_usb_dot(c: &mut impl Canvas, s: UsbDot) {
         UsbDot::Ready => GREEN,
     };
     c.fill(USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2, color);
+    text::draw(c, &Style { fg: color, ..LABEL }, USB_LABEL.0, USB_LABEL.1, Align::Right, "USB");
 }
 
 /// One screen row as a [`Canvas`]: keeps only what falls on row `y`. Rendering the screen row by row takes
@@ -166,10 +180,14 @@ impl Row {
 
 impl Canvas for Row {
     fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
+        self.blit(x, y, w, h, &mut |_, _| color);
+    }
+
+    fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
         if y <= self.y && self.y < y + h {
             let end = (x + w).min(W) as usize;
-            for p in &mut self.px[(x as usize).min(end)..end] {
-                *p = color;
+            for (i, p) in self.px[(x as usize).min(end)..end].iter_mut().enumerate() {
+                *p = px(i as u32, self.y - y);
             }
         }
     }
@@ -248,11 +266,15 @@ pub(crate) mod tests {
 
     impl Canvas for Frame {
         fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
+            self.blit(x, y, w, h, &mut |_, _| color);
+        }
+
+        fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
             assert!(x + w <= W && y + h <= H, "fill ({x},{y}) {w}x{h} off screen");
             self.fills += 1;
-            for yy in y..y + h {
-                for xx in x..x + w {
-                    self.px[(yy * W + xx) as usize] = color;
+            for dy in 0..h {
+                for dx in 0..w {
+                    self.px[((y + dy) * W + x + dx) as usize] = px(dx, dy);
                 }
             }
         }
@@ -301,6 +323,8 @@ pub(crate) mod tests {
         boxes.push((20, 40, W - 40, 6)); // bar
         boxes.push((CRAB_X, CRAB_Y, 16 * CRAB_SCALE, CRAB.len() as u32 * CRAB_SCALE));
         boxes.push((USB_DOT.0, USB_DOT.1, USB_DOT.2, USB_DOT.2));
+        let usb = LABEL.font.width("USB");
+        boxes.push((USB_LABEL.0 - usb, USB_LABEL.1, usb, u32::from(LABEL.font.height)));
         for (i, a) in boxes.iter().enumerate() {
             assert!(a.0 + a.2 <= W && a.1 + a.3 <= H, "box {i} off screen");
             for b in &boxes[i + 1..] {

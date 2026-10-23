@@ -9,9 +9,11 @@
 #![warn(missing_docs)]
 
 pub mod dev;
+pub mod fonts;
 pub mod panel;
 #[cfg(test)]
 mod sim;
+pub mod text;
 pub mod ui;
 
 use panel::Panel;
@@ -24,8 +26,9 @@ pub trait Board {
     fn panel_power_on(&mut self);
     /// One panel command and its parameters (D/C low for the command byte, high for the parameters).
     fn panel_cmd(&mut self, cmd: u8, params: &[u8]);
-    /// RAMWR (0x2c) then `count` pixels of `color`, into the window set by CASET / RASET.
-    fn panel_ram_write(&mut self, color: u16, count: u32);
+    /// RAMWR (0x2c) then `count` pixels, each from `next` (called once per pixel, in order), into the window set by
+    /// CASET / RASET.
+    fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16);
     /// Backlight on or off.
     fn backlight(&mut self, on: bool);
     /// Key levels, true = pressed: (page, back).

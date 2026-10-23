@@ -145,14 +145,14 @@ impl Board for Sim {
         }
     }
 
-    fn panel_ram_write(&mut self, color: u16, count: u32) {
+    fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
         assert_eq!(self.ramctrl[0] & 0x03, 0, "RAMCTRL routes RAM writes to the RGB interface, not SPI");
         assert_eq!(self.colmod & 0x07, 0x05, "pixel format is not 16-bit");
         let (x0, x1, y0, y1) = self.window;
         assert_eq!(count, (x1 - x0 + 1) * (y1 - y0 + 1), "pixel count does not fill the window");
         for y in y0..=y1 {
             for x in x0..=x1 {
-                self.screen[(y * W + x) as usize] = color;
+                self.screen[(y * W + x) as usize] = next();
             }
         }
         self.dirty = true;
@@ -218,14 +218,11 @@ mod tests {
         assert!(sim.visible());
         let pos = |c| sim.cmds.iter().position(|&x| x == c).unwrap();
         assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
-        let mut want = expected(12, 34, 56);
-        let (x, y, n) = crate::ui::USB_DOT;
-        for yy in y..y + n {
-            for xx in x..x + n {
-                want[(yy * W + xx) as usize] = crate::ui::GREEN;
-            }
-        }
-        assert!(sim.screen == want, "screen differs from the drawing code");
+        let mut want = Frame::new();
+        draw_static(&mut want);
+        Clock::new().show(&mut want, 12, 34, 56);
+        crate::ui::draw_usb_dot(&mut want, crate::ui::UsbDot::Ready);
+        assert!(sim.screen == want.px, "screen differs from the drawing code");
         sim.save("preview");
     }
 

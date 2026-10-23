@@ -312,8 +312,8 @@ fn lcd_power_on() {
     delay_ms(120);
 }
 
-/// RAMWR then `count` pixels of `color`.
-fn lcd_ram_write(color: u16, count: u32) {
+/// RAMWR then `count` pixels from `next`.
+fn lcd_ram_write(count: u32, next: &mut dyn FnMut() -> u16) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
     spi_begin(1);
@@ -326,6 +326,7 @@ fn lcd_ram_write(color: u16, count: u32) {
         left -= n;
         spi_begin(2 * n);
         for _ in 0..n {
+            let color = next();
             spi_byte((color >> 8) as u8);
             spi_byte(color as u8);
         }
@@ -386,8 +387,8 @@ impl Board for S510 {
     fn panel_cmd(&mut self, cmd: u8, params: &[u8]) {
         lcd_cmd(cmd, params);
     }
-    fn panel_ram_write(&mut self, color: u16, count: u32) {
-        lcd_ram_write(color, count);
+    fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
+        lcd_ram_write(count, next);
     }
     fn backlight(&mut self, on: bool) {
         pin_set(BACKLIGHT.0, BACKLIGHT.1, on);

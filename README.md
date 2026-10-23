@@ -9,10 +9,10 @@ Bryton.
 - **Page key:** toggles the backlight.
 - **Hold Back (power) 3 s:** switches off (standby). The power button starts it again.
 - **USB cable in:** a dev link starts. It's a serial port carrying `dev.py` commands: info, screenshots, run a
-  build from RAM, reset. A dot at the top right shows its state (orange, then green when ready; red if the PHY
-  did not come up). Unplugging resets the unit.
+  build from RAM, reset. A dot and a "USB" label at the top right show its state (orange, then green when ready;
+  red if the PHY did not come up). Unplugging resets the unit.
 
-- **Code:** about 3 KB of firmware code plus about 20 KB of USB stack, no interrupts.
+- **Code:** about 5 KB of firmware code, about 6 KB of font and about 20 KB of USB stack, no interrupts.
 - **Sources:** every register is traced to [BOARD.md](BOARD.md) (the board, learned from the stock firmware) or
   the STM32H747 reference manual (RM0399).
 - **Safe Rust** except `src/hw.rs` (register access, reset, RAM-run). How to work on it: [AGENTS.md](AGENTS.md).
@@ -66,8 +66,8 @@ unplugging) returns to the installed build. See AGENTS.md, "Development loop on 
   exactly `out/IMG.bin`, trailer included; the rest still holds the old OS image (never read).
 - **Result:** dark screen, keys ignored, no USB device. So it stops before the first frame and before the USB
   start.
-- **Diagnostic builds** (branch `diag-boot`, merged into main on 2026-10-23, written from Engineer Mode with `tools/iaprecover.py --write`; each
-  write is a row in bryton-S510-mods' FLASHLOG):
+- **Diagnostic builds** (branch `diag-boot`, merged into main on 2026-10-23, written from Engineer Mode with
+  `tools/iaprecover.py --write`; each write is a row in bryton-S510-mods' FLASHLOG):
   - v1 to v8 used the backlight (PG13 as a plain output) as the readout. v1 to v4 showed a steady light, v5 to v8
     nothing, whatever the code did with the pin: **PG13 as a plain output is no readout**, and the v1 / v2 "stop in
     the MPU writes" read from it is unproven.
