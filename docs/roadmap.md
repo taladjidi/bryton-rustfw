@@ -79,6 +79,29 @@ The golden rule (AGENTS.md) depends on this whole phase.
 - Auto lap; a ride summary at the end; ride history and totals for the overview.
 - From the patch project: HRV recording (P8), live DFA a1 (P9), W' balance (planned P10), power smoothing (P5).
 
+## 4b. History and training load
+
+From every ride on the shared volume (stock's and ours, AGENTS.md "Share the storage with stock"), as Domestique
+(github.com/platypus45/domestique) and intervals.icu do on a computer, on the unit:
+
+- **A ride index:** per ride its date, time, distance, TSS (from power: NP, IF and FTP; from heart rate when there is
+  no power: hrTSS from the threshold heart rate), time in zones and best efforts. Built by scanning the FIT files on
+  demand (about 64 bytes a ride, all of them in SDRAM), kept in this firmware's own folder once the eMMC is written
+  so it is not scanned at every start, and updated by each saved ride.
+- **Power curve and best efforts:** the mean-maximal power from 1 s to 60 min over the last 90 days, the season and
+  all time, with the date of each best; CP and W' from it (section 4).
+- **Training load:** daily TSS, fitness (CTL: 42-day average), fatigue (ATL: 7-day), form (TSB: CTL - ATL), the ramp
+  rate, weekly TSS against a target.
+- **Fields for the overview and the pages:** this week's load as one bar a day (coloured by intensity), a progress
+  bar of the week (TSS or distance against the target), form as a number with its state (fresh, neutral, tired),
+  fitness as a sparkline of the last weeks.
+- **Screens:** the power curve (log time axis, two curves), best efforts, the fitness / fatigue / form chart, the
+  weeks.
+- **The plan:** today's planned workout and the week's planned TSS from the workout files on the volume (stock's
+  \Workout\ and \Progress Planner\, or FIT workouts from intervals.icu or Domestique copied over USB), each ride
+  matched to the planned session by TSS, duration and intensity, so the overview shows done, missed and what is
+  left this week.
+
 ## 5. Maps
 
 - **Now:** stock's cached tiles (`\Map\Data\Temp`), read only. They exist only where stock has drawn. The full
