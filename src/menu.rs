@@ -2,7 +2,7 @@
 //! row is ([`Row`]) and the settings rows change ([`Setting`]). The app draws and acts on a row by its kind, never
 //! by its position, so a menu grows by adding a row to its table.
 
-use crate::{Key, Menu, Press, ride};
+use crate::{Key, Menu, Press, ride, touch::Gesture};
 
 /// What the user asked for. Screens act on these, never on keys, so a key, a touch gesture or the dev link reach the
 /// same code.
@@ -26,6 +26,10 @@ pub enum Input {
     NextHeld,
     /// See [`Input::NextHeld`].
     PrevHeld,
+    /// A gesture on the touch panel: on a page, swipe left the next page, swipe right the previous one, hold the
+    /// menu; in a menu, a tap selects that row, swipe up or down turns a screen of rows, swipe right is Back; while a
+    /// number is edited, swipe up or down steps it, a tap keeps it.
+    Touch(Gesture),
 }
 
 impl Input {

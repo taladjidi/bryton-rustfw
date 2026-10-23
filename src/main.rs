@@ -836,17 +836,19 @@ fn emmc_read(index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
 }
 
 // Sensor bus: I2C4 (0x58001c00, D3 domain; BOARD.md 16), PD12 SCL / PD13 SDA, AF4, open drain, no pull (the bus has
-// its own pull-ups, inferred: stock sets none). Kernel clock HSI 64 MHz (I2C4SEL = 2), like the other drivers here,
-// so it does not depend on the APB4 divider the bootloader leaves. Polled, every wait bounded.
+// its own pull-ups, inferred: stock sets none). Touch: I2C1 (0x40005400, BOARD.md 17), PB6 SCL / PB7 SDA, the same
+// way. Kernel clock HSI 64 MHz (I2C4SEL = 2, I2C123SEL = 2), like the other drivers here, so it does not depend on the
+// APB dividers the bootloader leaves. Polled, every wait bounded. Registers: RM0399 I2C (the same block at each base).
 // ---------------------------------------------------------------------------------------------------------------
 const I2C4: u32 = 0x5800_1c00;
-const I2C_CR1: u32 = I2C4;
-const I2C_CR2: u32 = I2C4 + 0x04;
-const I2C_TIMINGR: u32 = I2C4 + 0x10;
-const I2C_ISR: u32 = I2C4 + 0x18;
-const I2C_ICR: u32 = I2C4 + 0x1c;
-const I2C_RXDR: u32 = I2C4 + 0x24;
-const I2C_TXDR: u32 = I2C4 + 0x28;
+const I2C1: u32 = 0x4000_5400;
+const I2C_CR1: u32 = 0x00;
+const I2C_CR2: u32 = 0x04;
+const I2C_TIMINGR: u32 = 0x10;
+const I2C_ISR: u32 = 0x18;
+const I2C_ICR: u32 = 0x1c;
+const I2C_RXDR: u32 = 0x24;
+const I2C_TXDR: u32 = 0x28;
 const ISR_TXIS: u32 = 1 << 1;
 const ISR_RXNE: u32 = 1 << 2;
 const ISR_NACKF: u32 = 1 << 4;
@@ -857,80 +859,105 @@ const CR2_RD: u32 = 1 << 10;
 const CR2_START: u32 = 1 << 13;
 const CR2_AUTOEND: u32 = 1 << 25;
 const RCC_APB4RSTR: u32 = RCC + 0x09c;
+const RCC_APB1LRSTR: u32 = RCC + 0x090;
+// Touch controller pins (BOARD.md 17): reset PH3 (high: run), INT PC6 (low: a point to read; polled, no EXTI).
+const TOUCH_RESET: (Port, u32) = (Port::H, 3);
+const TOUCH_INT: (Port, u32) = (Port::C, 6);
+const TOUCH_ADDR: u8 = 0x55;
+
+/// SCL and SDA of an I2C bus: AF4, open drain, not driven while being set up.
+fn i2c_pins(port: Port, pins: [u32; 2]) {
+    for pin in pins {
+        gpio(port, pin, IN, 0);
+        modify(gpio_base(port) + 0x04, 0, 1 << pin); // OTYPER: open drain
+        let (reg, sh) = if pin < 8 { (0x20, 4 * pin) } else { (0x24, 4 * (pin - 8)) }; // AFRL / AFRH
+        modify(gpio_base(port) + reg, 0xf << sh, 4 << sh);
+        modify(gpio_base(port), 3 << (2 * pin), AF << (2 * pin));
+    }
+}
+
+/// 64 MHz: PRESC 15 (250 ns), SCLL 9 (2.5 us), SCLH 7 (2 us), SDADEL 2, SCLDEL 4: about 200 kHz, inside the fast mode
+/// limits (RM0399 I2C timings). Stock runs about 400 kHz; a few bytes per poll need no more.
+fn i2c_enable(i2c: u32) {
+    wr(i2c + I2C_TIMINGR, (15 << 28) | (4 << 20) | (2 << 16) | (7 << 8) | 9);
+    wr(i2c + I2C_CR1, 1); // PE
+}
 
 fn i2c_init() {
     modify(RCC_D3CCIPR, 3 << 8, 2 << 8); // I2C4SEL = hsi_ker_ck
     modify(RCC_APB4ENR, 0, 1 << 7); // I2C4EN
     modify(RCC_APB4RSTR, 0, 1 << 7); // from reset: a RAM run finds it as the last image left it
     modify(RCC_APB4RSTR, 1 << 7, 0);
-    for pin in [12, 13] {
-        gpio(Port::D, pin, IN, 0); // not driven while being set up
-        modify(gpio_base(Port::D) + 0x04, 0, 1 << pin); // OTYPER: open drain
-        modify(gpio_base(Port::D) + 0x24, 0xf << (4 * (pin - 8)), 4 << (4 * (pin - 8))); // AFRH: AF4
-        modify(gpio_base(Port::D), 3 << (2 * pin), AF << (2 * pin));
-    }
-    // 64 MHz: PRESC 15 (250 ns), SCLL 9 (2.5 us), SCLH 7 (2 us), SDADEL 2, SCLDEL 4: about 200 kHz, inside the fast
-    // mode limits (RM0399 I2C timings). Stock runs about 400 kHz; a few bytes every few seconds need no more.
-    wr(I2C_TIMINGR, (15 << 28) | (4 << 20) | (2 << 16) | (7 << 8) | 9);
-    wr(I2C_CR1, 1); // PE
+    i2c_pins(Port::D, [12, 13]);
+    i2c_enable(I2C4);
+    // touch: the chip held in reset (the app releases it), INT an input, then I2C1 as I2C4
+    pin_set(TOUCH_RESET.0, TOUCH_RESET.1, false);
+    gpio(TOUCH_RESET.0, TOUCH_RESET.1, OUT, 0);
+    gpio(TOUCH_INT.0, TOUCH_INT.1, IN, 0);
+    modify(RCC_D2CCIP2R, 3 << 12, 2 << 12); // I2C123SEL = hsi_ker_ck
+    modify(RCC_APB1LENR, 0, 1 << 21); // I2C1EN
+    modify(RCC_APB1LRSTR, 0, 1 << 21);
+    modify(RCC_APB1LRSTR, 1 << 21, 0);
+    i2c_pins(Port::B, [6, 7]);
+    i2c_enable(I2C1);
 }
 
 /// Waits for `flag` in I2C_ISR; false on a NACK, a bus error or 1 ms (a byte takes 45 us). A failed transfer leaves
 /// the peripheral off and on again (PE cleared resets its state machine, RM0399), so the next one starts clean.
-fn i2c_wait(flag: u32) -> bool {
+fn i2c_wait(i2c: u32, flag: u32) -> bool {
     let mut isr = 0;
     let ok = wait_us(1000, || {
-        isr = rd(I2C_ISR);
+        isr = rd(i2c + I2C_ISR);
         isr & (flag | ISR_NACKF | ISR_ERRORS) != 0
     }) && isr & (ISR_NACKF | ISR_ERRORS) == 0;
     if !ok {
-        wr(I2C_CR1, 0);
-        wr(I2C_ICR, 0x3f38); // every flag
-        let _ = wait_us(10, || rd(I2C_CR1) & 1 == 0);
-        wr(I2C_CR1, 1);
+        wr(i2c + I2C_CR1, 0);
+        wr(i2c + I2C_ICR, 0x3f38); // every flag
+        let _ = wait_us(10, || rd(i2c + I2C_CR1) & 1 == 0);
+        wr(i2c + I2C_CR1, 1);
     }
     ok
 }
 
 /// Ends a transfer started with AUTOEND: waits for its STOP.
-fn i2c_stop() -> bool {
-    let ok = i2c_wait(ISR_STOPF);
-    wr(I2C_ICR, ISR_STOPF);
+fn i2c_stop(i2c: u32) -> bool {
+    let ok = i2c_wait(i2c, ISR_STOPF);
+    wr(i2c + I2C_ICR, ISR_STOPF);
     ok
 }
 
 /// The register address, then `data` (at most 254 bytes), in one write transfer.
-fn i2c_write(addr: u8, reg: u8, data: &[u8]) -> bool {
+fn i2c_write(i2c: u32, addr: u8, reg: u8, data: &[u8]) -> bool {
     let n = data.len().min(254) as u32 + 1;
-    wr(I2C_CR2, u32::from(addr) << 1 | n << 16 | CR2_AUTOEND | CR2_START);
+    wr(i2c + I2C_CR2, u32::from(addr) << 1 | n << 16 | CR2_AUTOEND | CR2_START);
     for &b in [reg].iter().chain(data).take(n as usize) {
-        if !i2c_wait(ISR_TXIS) {
+        if !i2c_wait(i2c, ISR_TXIS) {
             return false;
         }
-        wr(I2C_TXDR, u32::from(b));
+        wr(i2c + I2C_TXDR, u32::from(b));
     }
-    i2c_stop()
+    i2c_stop(i2c)
 }
 
 /// The register address written, then a repeated start and `buf.len()` bytes read (at most 255).
-fn i2c_read(addr: u8, reg: u8, buf: &mut [u8]) -> bool {
+fn i2c_read(i2c: u32, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
     let n = buf.len().min(255);
-    wr(I2C_CR2, u32::from(addr) << 1 | 1 << 16 | CR2_START);
-    if !i2c_wait(ISR_TXIS) {
+    wr(i2c + I2C_CR2, u32::from(addr) << 1 | 1 << 16 | CR2_START);
+    if !i2c_wait(i2c, ISR_TXIS) {
         return false;
     }
-    wr(I2C_TXDR, u32::from(reg));
-    if !i2c_wait(ISR_TC) {
+    wr(i2c + I2C_TXDR, u32::from(reg));
+    if !i2c_wait(i2c, ISR_TC) {
         return false;
     }
-    wr(I2C_CR2, u32::from(addr) << 1 | CR2_RD | (n as u32) << 16 | CR2_AUTOEND | CR2_START);
+    wr(i2c + I2C_CR2, u32::from(addr) << 1 | CR2_RD | (n as u32) << 16 | CR2_AUTOEND | CR2_START);
     for b in buf.iter_mut().take(n) {
-        if !i2c_wait(ISR_RXNE) {
+        if !i2c_wait(i2c, ISR_RXNE) {
             return false;
         }
-        *b = rd(I2C_RXDR) as u8;
+        *b = rd(i2c + I2C_RXDR) as u8;
     }
-    i2c_stop()
+    i2c_stop(i2c)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1012,10 +1039,19 @@ impl Board for S510 {
         emmc_read(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
-        i2c_read(addr, reg, buf)
+        i2c_read(I2C4, addr, reg, buf)
     }
     fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool {
-        i2c_write(addr, reg, data)
+        i2c_write(I2C4, addr, reg, data)
+    }
+    fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool {
+        i2c_read(I2C1, TOUCH_ADDR, reg, buf)
+    }
+    fn touch_reset(&mut self, run: bool) {
+        pin_set(TOUCH_RESET.0, TOUCH_RESET.1, run);
+    }
+    fn touch_int(&mut self) -> bool {
+        pin_low(TOUCH_INT.0, TOUCH_INT.1)
     }
 }
 

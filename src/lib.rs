@@ -26,6 +26,7 @@ pub mod sensors;
 mod sim;
 pub mod text;
 pub mod tiles;
+pub mod touch;
 pub mod ui;
 
 use menu::{Input, Setting};
@@ -33,6 +34,7 @@ use nrf::SensorId;
 use panel::Panel;
 use sensors::{Decoders, Kind, Live, Metric};
 use text::Line;
+use touch::{Dir, Gesture};
 use ui::{Canvas, Field, Rec, Row, Strip, UsbDot};
 
 /// The hardware the app needs, as primitive operations. Each one is a few register writes on the unit.
@@ -97,6 +99,13 @@ pub trait Board {
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool;
     /// Writes `data` to register `reg` on, of the chip at `addr`; false if it did not answer.
     fn i2c_write(&mut self, addr: u8, reg: u8, data: &[u8]) -> bool;
+    /// Reads `buf.len()` bytes from register `reg` on, of the touch controller (I2C1 address 0x55, BOARD.md 17);
+    /// false if it did not answer.
+    fn touch_read(&mut self, reg: u8, buf: &mut [u8]) -> bool;
+    /// The touch controller's reset line (PH3): `run` releases it, false holds the chip in reset.
+    fn touch_reset(&mut self, run: bool);
+    /// The touch controller pulls its INT line (PC6) low: it has a point to read.
+    fn touch_int(&mut self) -> bool;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -710,6 +719,9 @@ pub struct App {
     emmc: emmc::Emmc,
     /// Roads and water under the first map field of a page, drawn once per view.
     basemap: tiles::Basemap,
+    /// The touch controller answered at the start; the gestures from its points.
+    touch_ok: bool,
+    touch: touch::Recogniser,
 }
 
 impl App {
@@ -801,6 +813,8 @@ impl App {
             track: map::Track::new(),
             emmc: emmc::Emmc::new(),
             basemap: tiles::Basemap::new(),
+            touch_ok: touch::init(b),
+            touch: touch::Recogniser::default(),
         };
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -1467,11 +1481,12 @@ impl App {
                 };
                 match i {
                     Input::Next | Input::Prev => self.settings.step(s, i == Input::Prev),
+                    Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down))) => self.settings.step(s, d == Dir::Up),
                     Input::NextHeld | Input::PrevHeld => {
                         self.repeated = true;
                         self.settings.step(s, i == Input::PrevHeld);
                     }
-                    Input::Select | Input::Back => {
+                    Input::Select | Input::Back | Input::Touch(Gesture::Tap(..) | Gesture::Swipe(Dir::Right)) => {
                         self.editing = false;
                         self.save_misc(b);
                     }
@@ -1479,12 +1494,18 @@ impl App {
                 }
                 return self.update_menu_rows(b, menu, sel);
             }
-            (Screen::Main, Input::Next) => self.screen = Screen::Ride(0),
-            (Screen::Ride(n), Input::Next) => {
+            (Screen::Main, Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => self.screen = Screen::Ride(0),
+            (Screen::Ride(n), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
                 let next = (n + 1..PAGES).find(|&i| self.pages[i].layout > 0);
                 self.screen = next.map_or(Screen::Main, Screen::Ride);
             }
-            (Screen::Main | Screen::Ride(_), Input::Menu) => self.open(Screen::Menu(Menu::Main, 0)),
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => {
+                let n = if let Screen::Ride(n) = self.screen { n } else { PAGES };
+                self.screen = (0..n).rev().find(|&i| self.pages[i].layout > 0).map_or(Screen::Main, Screen::Ride);
+            }
+            (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
+                self.open(Screen::Menu(Menu::Main, 0))
+            }
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
             (Screen::Ride(_), Input::Select) => {
                 let ev = self.ride.start_pause();
@@ -1516,13 +1537,34 @@ impl App {
                     return self.update_menu_rows(b, menu, next);
                 }
             }
-            (Screen::Menu(menu, sel), Input::Select) => {
+            (Screen::Menu(menu, sel), Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down)))) => {
+                // a screen of rows at a time: up shows the next, down the previous
+                let (first, rows) = (menu::first_shown(sel, ui::MENU_ROWS), self.rows(menu));
+                let next = if d == Dir::Up { first + ui::MENU_ROWS } else { first.saturating_sub(ui::MENU_ROWS) };
+                if next >= rows || next == first {
+                    return;
+                }
+                self.screen = Screen::Menu(menu, next);
+            }
+            (Screen::Menu(menu, sel), Input::Select | Input::Touch(Gesture::Tap(..))) => {
+                let sel = match i {
+                    Input::Touch(Gesture::Tap(_, y)) => {
+                        let slot = (u32::from(y).checked_sub(ui::LIST_Y)).map(|d| (d / ui::LIST_ROW) as usize);
+                        match slot.map(|k| menu::first_shown(sel, ui::MENU_ROWS) + k) {
+                            Some(row) if self.row(menu, row).is_some() => row,
+                            _ => return,
+                        }
+                    }
+                    _ => sel,
+                };
+                self.screen = Screen::Menu(menu, sel);
+                let shown = self.screen;
                 self.activate(b, menu, sel);
-                if self.screen == before {
+                if self.screen == shown {
                     return self.update_menu_rows(b, menu, sel);
                 }
             }
-            (Screen::Menu(..) | Screen::Nearby, Input::Back) => self.close(),
+            (Screen::Menu(..) | Screen::Nearby, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
             _ => return,
         }
         if self.screen != before {
@@ -1744,7 +1786,25 @@ impl App {
         if mask == 0 {
             self.repeated = false;
         }
+        self.touch(b);
         self.update_light(b);
+    }
+
+    /// The touch panel: read only while INT is low or a finger was down (the release makes the gesture), so a pass
+    /// without a touch costs one pin read. A touch keeps the backlight on like a key; a gesture is an
+    /// [`Input::Touch`].
+    fn touch(&mut self, b: &mut impl Board) {
+        if !self.touch_ok || !(self.touch.down() || b.touch_int()) {
+            return;
+        }
+        let mut buf = [0; 3];
+        let p = if b.touch_read(touch::REG_POINT, &mut buf) { touch::point(buf) } else { None };
+        if p.is_some() {
+            self.idle_ms = 0;
+        }
+        if let Some(g) = self.touch.feed(p, POLL_MS) {
+            self.input(b, Input::Touch(g));
+        }
     }
 
     /// One light measurement every [`LIGHT_MS`] while the backlight follows the ambient light (and is on), or the
