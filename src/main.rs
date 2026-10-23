@@ -18,7 +18,7 @@
 mod hw;
 mod usb;
 
-use bryton_rustfw::dev::{Effect, Session};
+use bryton_rustfw::dev::{Effect, Session, Stats};
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -693,8 +693,10 @@ fn main() -> ! {
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;
     let mut session = Session::new();
-    let mut uptime_ms = 0u32;
+    let mut stats = Stats::default();
+    let (mut awake, mut passes) = (0u32, 0u32);
     loop {
+        let t0 = cycles();
         app.step(&mut board);
         checkpoint(6);
         let vbus = !pin_low(VBUS.0, VBUS.1);
@@ -709,10 +711,11 @@ fn main() -> ! {
         // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
         // too (delay_ms), which would take over this timer.
         let mut press = None;
+        let sleep_start = cycles();
         timer_start(POLL_MS);
         loop {
             if let Some(l) = &mut link {
-                match l.poll(&mut session, &app, uptime_ms) {
+                match l.poll(&mut session, &app, stats) {
                     Effect::None => {}
                     Effect::Key(p) => press = Some(p),
                     Effect::Reset => {
@@ -734,10 +737,19 @@ fn main() -> ! {
             wfi();
         }
         timer_stop();
+        let sleep_cycles = cycles().wrapping_sub(sleep_start);
+        let t1 = cycles();
         if let Some(p) = press {
             app.press(&mut board, p);
         }
         checkpoint(7);
-        uptime_ms = uptime_ms.wrapping_add(POLL_MS);
+        // the app's work (step and keys), not the USB polls: those happen only while a cable is in
+        awake = awake.saturating_add(t1.wrapping_sub(t0) - sleep_cycles + cycles().wrapping_sub(t1));
+        passes += 1;
+        if passes * POLL_MS >= 1000 {
+            stats.awake_permille = awake / (CPU_HZ / 1000);
+            (awake, passes) = (0, 0);
+        }
+        stats.uptime_ms = stats.uptime_ms.wrapping_add(POLL_MS);
     }
 }

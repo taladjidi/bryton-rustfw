@@ -2,7 +2,7 @@
 //! [`Session::feed`], answers go out through [`Host::send`]. `dev.py` is the other end.
 //!
 //! Commands, one per line:
-//! - `info`: `bryton-rustfw <version> up <ms>`.
+//! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille` (CPU awake in the app's work, last second).
 //! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
 //! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (pack.py, without its
@@ -42,6 +42,15 @@ pub const MEMORY: [core::ops::RangeInclusive<u32>; 2] = [0x2000_0000..=0x2001_ff
 
 /// Largest image `load` accepts: the 1 MB link region (link.x).
 pub const STAGE_MAX: u32 = 1 << 20;
+
+/// The running figures `info` reports, measured by the main loop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    /// Time since start.
+    pub uptime_ms: u32,
+    /// Share of the last second the CPU spent awake in the app's work, per mille (the rest: WFI).
+    pub awake_permille: u32,
+}
 
 /// What the main loop must do after a [`Session::feed`].
 #[derive(Debug, PartialEq, Eq)]
@@ -86,8 +95,8 @@ impl Session {
         Session { line: [0; 64], len: 0, load: None }
     }
 
-    /// Takes bytes from the computer; `uptime_ms` is for `info`.
-    pub fn feed(&mut self, mut data: &[u8], app: &App, uptime_ms: u32, h: &mut impl Host) -> Effect {
+    /// Takes bytes from the computer; `stats` is for `info`.
+    pub fn feed(&mut self, mut data: &[u8], app: &App, stats: Stats, h: &mut impl Host) -> Effect {
         while !data.is_empty() {
             if let Some(l) = &mut self.load {
                 let n = data.len().min((l.size - l.got) as usize);
@@ -119,7 +128,7 @@ impl Session {
             let b = data[0];
             data = &data[1..];
             if b == b'\n' || b == b'\r' {
-                let effect = self.command(app, uptime_ms, h);
+                let effect = self.command(app, stats, h);
                 self.len = 0;
                 if effect != Effect::None {
                     return effect;
@@ -132,15 +141,17 @@ impl Session {
         Effect::None
     }
 
-    fn command(&mut self, app: &App, uptime_ms: u32, h: &mut impl Host) -> Effect {
+    fn command(&mut self, app: &App, stats: Stats, h: &mut impl Host) -> Effect {
         let line = &self.line[..self.len];
         let mut words = line.split(|&c| c == b' ').filter(|w| !w.is_empty());
         match words.next() {
             None => {}
             Some(b"info") => {
                 h.send(concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " up ").as_bytes());
-                h.send(decimal(uptime_ms, &mut [0; 10]));
-                h.send(b" ms\n");
+                h.send(decimal(stats.uptime_ms, &mut [0; 10]));
+                h.send(b" ms, awake ");
+                h.send(decimal(stats.awake_permille, &mut [0; 10]));
+                h.send(b" permille\n");
             }
             Some(b"bat") => {
                 // the battery history: one line a minute, oldest first, "mV" or "mV c" while charging; then "end"

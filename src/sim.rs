@@ -570,7 +570,7 @@ mod tests {
                 charging: false,
             },
         );
-        crate::ui::draw_main_time(&mut f, &format!("{h:02}:{m:02}"), &format!("{s:02}"));
+        crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10, s / 10, s % 10]);
         crate::ui::draw_ferris(&mut f);
         f.px
     }
@@ -918,7 +918,7 @@ impl crate::dev::Host for Pc {
 #[cfg(test)]
 mod dev_tests {
     use super::*;
-    use crate::dev::{Effect, Session};
+    use crate::dev::{Effect, Session, Stats};
 
     fn app_at(h: u64, m: u64, s: u64) -> (Sim, App) {
         let mut sim = Sim::new(h, m, s);
@@ -939,10 +939,10 @@ mod dev_tests {
 
     fn load(s: &mut Session, app: &App, pc: &mut Pc, img: &[u8], sum: u32) -> Effect {
         let cmd = format!("load {} {}\n", img.len(), sum);
-        assert_eq!(s.feed(cmd.as_bytes(), app, 0, pc), Effect::None);
+        assert_eq!(s.feed(cmd.as_bytes(), app, Stats::default(), pc), Effect::None);
         let mut effect = Effect::None;
         for chunk in img.chunks(512) {
-            effect = s.feed(chunk, app, 0, pc);
+            effect = s.feed(chunk, app, Stats::default(), pc);
         }
         effect
     }
@@ -952,7 +952,7 @@ mod dev_tests {
         let (_, app) = app_at(1, 2, 3);
         let mut pc = Pc::default();
         let mut s = Session::new();
-        s.feed(b"poke 0x40013014 4098\npeek 0x40013010 2\n", &app, 0, &mut pc);
+        s.feed(b"poke 0x40013014 4098\npeek 0x40013010 2\n", &app, Stats::default(), &mut pc);
         assert_eq!(pc.got, b"ok\n00000000\n00001002\n");
         for bad in [
             "peek 0x10000000",
@@ -966,7 +966,7 @@ mod dev_tests {
             "poke 0x40013000",
         ] {
             pc.got.clear();
-            s.feed(format!("{bad}\n").as_bytes(), &app, 0, &mut pc);
+            s.feed(format!("{bad}\n").as_bytes(), &app, Stats::default(), &mut pc);
             assert!(pc.got.starts_with(b"err usage"), "{bad}");
         }
         assert_eq!(pc.regs.len(), 1);
@@ -976,8 +976,11 @@ mod dev_tests {
     fn info_answers() {
         let (_, app) = app_at(1, 2, 3);
         let mut pc = Pc::default();
-        Session::new().feed(b"info\n", &app, 1234, &mut pc);
-        assert_eq!(pc.got, format!("bryton-rustfw {} up 1234 ms\n", env!("CARGO_PKG_VERSION")).as_bytes());
+        Session::new().feed(b"info\n", &app, Stats { uptime_ms: 1234, awake_permille: 0 }, &mut pc);
+        assert_eq!(
+            pc.got,
+            format!("bryton-rustfw {} up 1234 ms, awake 0 permille\n", env!("CARGO_PKG_VERSION")).as_bytes()
+        );
     }
 
     /// The screenshot (rendered row by row from the app's state) must equal what the panel shows.
@@ -985,7 +988,7 @@ mod dev_tests {
     fn shot_equals_the_panel() {
         let (sim, app) = app_at(12, 34, 56);
         let mut pc = Pc::default();
-        Session::new().feed(b"shot\n", &app, 0, &mut pc);
+        Session::new().feed(b"shot\n", &app, Stats::default(), &mut pc);
         let header = b"shot 240 320\n";
         assert_eq!(&pc.got[..header.len()], header);
         let px: Vec<u16> = pc.got[header.len()..].chunks_exact(2).map(|b| u16::from_be_bytes([b[0], b[1]])).collect();
@@ -1017,7 +1020,7 @@ mod dev_tests {
         assert_eq!(load(&mut s, &app, &mut pc, &bad, sum), Effect::None);
         assert!(pc.got.ends_with(b"err no R### tag at 0x94\n"));
         pc = Pc::default();
-        assert_eq!(s.feed(b"load 99999999 0\nreset\n", &app, 0, &mut pc), Effect::Reset);
+        assert_eq!(s.feed(b"load 99999999 0\nreset\n", &app, Stats::default(), &mut pc), Effect::Reset);
         assert!(pc.got.starts_with(b"err usage"));
         assert!(pc.got.ends_with(b"ok\n"));
     }

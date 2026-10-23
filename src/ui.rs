@@ -411,10 +411,30 @@ pub const TIME_Y: u32 = 70;
 /// Top of the seconds.
 pub const SECONDS_Y: u32 = 160;
 
-/// The main screen's time: "HH:MM" centred, the seconds under it.
-pub fn draw_main_time(c: &mut impl Canvas, hm: &str, s: &str) {
-    text::draw_in(c, &TIME, 0, TIME_Y, W, Align::Centre, hm);
-    text::draw_in(c, &SECONDS, 0, SECONDS_Y, W, Align::Centre, s);
+/// Left edge of "HH:MM", its ink centred (each cell ends with a blank column, the last one does not count).
+const TIME_X: u32 = (W - (5 * CELL - 1) * TIME.scale) / 2;
+/// Left edge of the seconds, their ink centred.
+const SECONDS_X: u32 = (W - (2 * CELL - 1) * SECONDS.scale) / 2;
+
+/// Main screen digit `i` (0..4: H H M M, 4..6: the seconds) showing `d`, in its fixed cell of the monospaced font:
+/// only the digits that change are drawn, each one a SPI transfer (a 5x digit is 1.5 K pixels).
+pub fn draw_main_digit(c: &mut impl Canvas, i: usize, d: u8) {
+    let s = DIGITS[usize::from(d % 10)];
+    if i < 4 {
+        let col = if i < 2 { i } else { i + 1 } as u32; // the colon is column 2
+        text::draw_in(c, &TIME, TIME_X + col * CELL * TIME.scale, TIME_Y, CELL * TIME.scale, Align::Left, s);
+    } else {
+        let x = SECONDS_X + (i as u32 - 4) * CELL * SECONDS.scale;
+        text::draw_in(c, &SECONDS, x, SECONDS_Y, CELL * SECONDS.scale, Align::Left, s);
+    }
+}
+
+/// The main screen's time: the colon and every digit of HH MM SS.
+pub fn draw_main_time(c: &mut impl Canvas, digits: [u8; 6]) {
+    text::draw(c, &TIME, TIME_X + 2 * CELL * TIME.scale, TIME_Y, Align::Left, ":");
+    for (i, d) in digits.into_iter().enumerate() {
+        draw_main_digit(c, i, d);
+    }
 }
 
 /// Ferris, at the bottom of the main screen.

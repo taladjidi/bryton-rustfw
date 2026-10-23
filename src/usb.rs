@@ -6,7 +6,7 @@
 use crate::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
 use bryton_rustfw::App;
-use bryton_rustfw::dev::{Effect, Host, Session};
+use bryton_rustfw::dev::{Effect, Host, Session, Stats};
 use static_cell::StaticCell;
 use synopsys_usb_otg::{PhyType, UsbBus, UsbPeripheral};
 use usb_device::bus::UsbBusAllocator;
@@ -153,13 +153,13 @@ impl Link {
     }
 
     /// Services USB and runs any received bytes through the protocol.
-    pub fn poll(&mut self, s: &mut Session, app: &App, uptime_ms: u32) -> Effect {
+    pub fn poll(&mut self, s: &mut Session, app: &App, stats: Stats) -> Effect {
         let mut effect = Effect::None;
         if self.dev.poll(&mut [&mut self.cdc]) {
             let mut buf = [0u8; 512];
             while effect == Effect::None {
                 match self.cdc.read_packet(&mut buf) {
-                    Ok(n) if n > 0 => effect = s.feed(&buf[..n], app, uptime_ms, self),
+                    Ok(n) if n > 0 => effect = s.feed(&buf[..n], app, stats, self),
                     _ => break,
                 }
             }

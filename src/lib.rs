@@ -392,6 +392,8 @@ pub struct App {
     pages: [PageCfg; PAGES],
     /// The ride field values on screen, to redraw only what changed.
     shown: [Line<8>; 6],
+    /// The main screen's digits on screen.
+    main_shown: [u8; 6],
 }
 
 impl App {
@@ -462,6 +464,7 @@ impl App {
             wheel_mm: if wheel >> 24 == 0xa5 { wheel as u16 } else { WHEELS[1] },
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
+            main_shown: [0; 6],
         };
         app.strip_shown = app.strip;
         ui::draw_strip(&mut Panel(b), &app.strip);
@@ -617,8 +620,7 @@ impl App {
     fn draw_screen(&self, c: &mut impl Canvas) {
         match self.screen {
             Screen::Main => {
-                let (hm, s) = self.main_time();
-                ui::draw_main_time(c, hm.as_str(), s.as_str());
+                ui::draw_main_time(c, self.main_digits());
                 ui::draw_ferris(c);
             }
             Screen::Ride(n) => {
@@ -656,13 +658,10 @@ impl App {
         (0..page.fields.len()).map_while(move |i| Some((ui::field_box(page.layout, ui::RIDE_H, i)?, page.fields[i])))
     }
 
-    /// The main screen's "HH:MM" and seconds.
-    fn main_time(&self) -> (Line<8>, Line<8>) {
-        let (hm, mut s) = (self.field_text(Field::Time), Line::new());
-        for d in [self.seconds / 10, self.seconds % 10] {
-            s.push_str(ui::DIGITS[usize::from(d % 10)]);
-        }
-        (hm, s)
+    /// The main screen's digits: H H M M S S.
+    fn main_digits(&self) -> [u8; 6] {
+        let ((h, m), s) = (self.strip.time, self.seconds);
+        [h / 10, h % 10, m / 10, m % 10, s / 10, s % 10]
     }
 
     fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
@@ -683,7 +682,7 @@ impl App {
         self.draw_screen(&mut p);
         match self.screen {
             Screen::Ride(n) => self.shown = self.pages[n].fields.map(|f| self.field_text(f)),
-            Screen::Main => (self.shown[0], self.shown[1]) = self.main_time(),
+            Screen::Main => self.main_shown = self.main_digits(),
             _ => {}
         }
     }
@@ -965,10 +964,12 @@ impl App {
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         match self.screen {
             Screen::Main => {
-                let now = self.main_time();
-                if (now.0.as_str(), now.1.as_str()) != (self.shown[0].as_str(), self.shown[1].as_str()) {
-                    ui::draw_main_time(&mut Panel(b), now.0.as_str(), now.1.as_str());
-                    (self.shown[0], self.shown[1]) = now;
+                let now = self.main_digits();
+                for (i, (&d, shown)) in now.iter().zip(&mut self.main_shown).enumerate() {
+                    if d != *shown {
+                        ui::draw_main_digit(&mut Panel(b), i, d);
+                        *shown = d;
+                    }
                 }
             }
             Screen::Ride(n) => self.update_ride(b, n),
