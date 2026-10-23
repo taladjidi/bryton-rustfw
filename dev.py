@@ -7,6 +7,8 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py watch [-i 1] [-n 0]      continuous screenshots into target/shots/NNNNN.png (Ctrl-C to stop)
   dev.py run [out/IMG.bin]        load a build into SDRAM and run it (nothing is written to the eMMC;
                                   a reset or a power cycle brings back the installed firmware)
+  dev.py peek ADDR [N]            read N registers (peripheral space, aligned; ADDR decimal or 0x hex)
+  dev.py poke ADDR VALUE          write one register
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
@@ -123,6 +125,12 @@ def main():
     p.add_argument('-i', type=float, default=1.0, help='seconds between screenshots')
     p.add_argument('-n', type=int, default=0, help='how many (0 = until Ctrl-C)')
     p.add_argument('-d', default=str(ROOT / 'target' / 'shots'))
+    p = sub.add_parser('peek', help='read registers: peek 0x40013014 [n]')
+    p.add_argument('addr')
+    p.add_argument('n', nargs='?', type=int, default=1)
+    p = sub.add_parser('poke', help='write a register: poke 0x40013000 0x1001')
+    p.add_argument('addr')
+    p.add_argument('value')
     p = sub.add_parser('run')
     p.add_argument('image', nargs='?', default=str(ROOT / 'out' / 'IMG.bin'))
     a = ap.parse_args()
@@ -135,6 +143,15 @@ def main():
         with connect() as s:
             if a.cmd in ('info', 'reset'):
                 print(command(s, a.cmd))
+            elif a.cmd == 'peek':
+                first = command(s, f'peek {a.addr} {a.n}')
+                if first.startswith('err'):
+                    sys.exit(first)
+                base = int(a.addr, 0)
+                for i, v in enumerate([first] + [line(s) for _ in range(a.n - 1)]):
+                    print(f'{base + 4 * i:08x}: {v}')
+            elif a.cmd == 'poke':
+                print(command(s, f'poke {a.addr} {a.value}'))
             elif a.cmd == 'shot':
                 Path(a.o).write_bytes(shot(s))
                 print(a.o)
