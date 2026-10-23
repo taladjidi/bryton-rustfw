@@ -150,6 +150,11 @@ impl Track {
         }
     }
 
+    /// A ride read back from its file is whole: its end is shown as a dot (no heading), as a last known position.
+    pub fn end(&mut self) {
+        self.stale = self.pos.is_some();
+    }
+
     /// The points kept, oldest first (metres east and north of the first fix).
     pub fn points(&self) -> &[(i32, i32)] {
         self.pts.get(..self.len).unwrap_or(&[])
@@ -182,9 +187,19 @@ impl View {
     /// The view of `track` in `area`: the whole track in the middle two thirds, at the smallest scale; None before a
     /// fix.
     pub fn fit(track: &Track, area: Rect) -> Option<View> {
+        Self::fit_in(track, i64::from(area.2 - 2 * MARGIN) * 2 / 3, i64::from(area.3 - 2 * MARGIN) * 2 / 3)
+    }
+
+    /// The view of a whole ride's `track` in `area` (it will not grow): all of the map but a few pixels at the
+    /// edges; None without a position.
+    pub fn fit_whole(track: &Track, area: Rect) -> Option<View> {
+        Self::fit_in(track, i64::from(area.2 - 16), i64::from(area.3 - 16))
+    }
+
+    /// The track in `fw` x `fh` pixels at the smallest scale.
+    fn fit_in(track: &Track, fw: i64, fh: i64) -> Option<View> {
         track.pos?;
         let (sx, sy) = (track.max.0 - track.min.0, track.max.1 - track.min.1);
-        let (fw, fh) = (i64::from(area.2 - 2 * MARGIN) * 2 / 3, i64::from(area.3 - 2 * MARGIN) * 2 / 3);
         let fits = |m: i64| i64::from(sx) * 16 / m <= fw && i64::from(sy) * 16 / m <= fh;
         let mpp16 = (MIN_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
         Some(View { cx: track.min.0 + sx / 2, cy: track.min.1 + sy / 2, mpp16 })

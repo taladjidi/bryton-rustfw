@@ -4,5 +4,6 @@
 pub mod fat;
 pub mod fit;
 pub mod fitread;
+pub mod history;
 pub mod ini;
 pub mod stock;

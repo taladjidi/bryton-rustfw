@@ -22,7 +22,7 @@ pub mod ui;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, emmc, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit, fitread, ini, stock};
+pub use storage::{fat, fit, fitread, history, ini, stock};
 pub use ui::{fonts, map, menu, text, tiles};
 
 use menu::{Input, Setting};
@@ -735,6 +735,8 @@ pub enum Menu {
     Stock,
     /// Reminders and alerts ([`menu::ALERTS`]).
     Alerts,
+    /// Stock's rides, newest first ([`history`]).
+    History,
 }
 
 /// What is on screen.
@@ -750,6 +752,8 @@ pub enum Screen {
     Nearby,
     /// The card of the ride just ended: its map, elevation profile and numbers.
     Summary,
+    /// The card of a past ride ([`App::past`]); Back returns to the history.
+    Past,
 }
 
 /// Stock's rides are read by themselves this long after start-up (for the totals), unless a ride runs.
@@ -940,6 +944,8 @@ pub struct App {
     touch: touch::Recogniser,
     /// The scan of stock's rides (the stock data menu), and its buffer for reading stock's settings.
     stock: stock::Scan,
+    /// The card of the past ride shown ([`Screen::Past`]).
+    past: history::Past,
 }
 
 impl App {
@@ -1058,6 +1064,7 @@ impl App {
             touch_ok: touch::init(b),
             touch: touch::Recogniser::default(),
             stock: stock::Scan::new(),
+            past: history::Past::new(),
         };
         if app.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -1376,15 +1383,7 @@ impl App {
             Plot::Hr => (max / 2, max),
             Plot::Wbal => (0, u32::from(self.settings.wprime_j) / 10),
             Plot::Dfa => (0, 150),
-            Plot::Alt => {
-                let seen = (0..cols).map(|i| u32::from(self.graph_value(g, cols, i))).filter(|&v| v != 0);
-                let (lo, hi) = seen.fold((u32::MAX, 0), |(lo, hi), v| (lo.min(v), hi.max(v)));
-                if hi == 0 {
-                    return (ride::ALT_OFFSET as u32, ride::ALT_OFFSET as u32 + 60);
-                }
-                let lo = lo / 20 * 20;
-                (lo, (hi.div_ceil(20) * 20).max(lo + 60))
-            }
+            Plot::Alt => ride::alt_scale((0..cols).map(|i| u32::from(self.graph_value(g, cols, i)))),
         }
     }
 
@@ -1435,60 +1434,31 @@ impl App {
         self.ride.state() != ride::State::Idle || self.screen == Screen::Summary
     }
 
-    /// The card of the ride (the one running, or the last one): its numbers and title.
+    /// The card of the ride (the one running, or the last one): its numbers and title, as a past ride's
+    /// ([`history::Ride::stats`]).
     fn ride_card(&self) -> ui::card::Card {
         let (r, p) = (&self.ride, &self.power);
-        let mut card = ui::card::Card::default();
-        let ((_, mo, d), (h, mi)) = self.ride_started;
-        card.title.push_u32(u32::from(d));
-        card.title.push_str(" ");
-        card.title.push_str(MONTHS.get(usize::from(mo).wrapping_sub(1)).copied().unwrap_or(""));
-        card.title.push_str(" ");
-        for k in [h / 10, h % 10, 10, mi / 10, mi % 10] {
-            card.title.push_str(if k == 10 { ":" } else { ui::DIGITS[usize::from(k % 10)] });
-        }
-        let field = |f: Field| {
-            let t = self.field_text(f);
-            let mut l = Line::<10>::new();
-            l.push_str(t.as_str());
-            l
-        };
-        let mut time = Line::<10>::new();
-        let s = r.timer_s();
-        time.push_u32(s / 3600);
-        time.push_str(":");
-        time.push_str(ui::DIGITS[(s / 600 % 6) as usize]);
-        time.push_str(ui::DIGITS[(s / 60 % 10) as usize]);
-        let num = |v: Option<u32>| {
-            let mut l = Line::<10>::new();
-            match v {
-                Some(v) => l.push_u32(v),
-                None => l.push_str("--"),
-            }
-            l
-        };
-        card.stats = [
-            ("TIME", time),
-            ("KM", field(Field::Dist)),
-            ("AVG KM/H", field(Field::AvgSpeed)),
-            ("ASCENT M", num(Some(r.ascent_m()))),
-            ("NP", num(p.np().map(u32::from))),
-            ("AVG W", num(r.avg_power().map(u32::from))),
-            ("AVG HR", num(r.avg_hr().map(u32::from))),
-            ("MAX HR", num(r.max_hr().map(u32::from))),
-            ("TSS", num(p.tss(self.settings.ftp))),
-            ("KJ", num(Some(p.kj()))),
-        ];
-        card
+        ui::card::Card::of(&ui::card::Stats {
+            start: self.ride_started,
+            timer_s: r.timer_s(),
+            dist_m: r.dist_m(),
+            avg_speed_x10: r.avg_speed_x10(),
+            ascent_m: Some(r.ascent_m()),
+            np: p.np(),
+            avg_power: r.avg_power(),
+            avg_hr: r.avg_hr(),
+            max_hr: r.max_hr(),
+            tss: p.tss(self.settings.ftp),
+            kj: Some(p.kj()),
+        })
     }
 
     /// The card screen: the track in [`ui::card::MAP`], the whole ride's elevation, the numbers, as they were when
     /// the card was shown ([`App::summary`]).
     fn draw_summary(&self, c: &mut impl Canvas) {
         let Some((m, g)) = self.summary else { return };
-        map::draw(c, map::area(ui::card::MAP), &self.track, m.view, None);
         let (_, _, cols, h) = ui::card::ELEV;
-        ui::card::draw(c, &self.ride_card(), &|i| self.graph_bar(g, cols, h, i));
+        ui::card::draw(c, &self.ride_card(), (&self.track, m.view), &|i| self.graph_bar(g, cols, h, i));
     }
 
     /// The graph field at (`x`, `y`) on the page shown, if there is one: its box index and field.
@@ -1512,6 +1482,9 @@ impl App {
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
             Menu::Stock => menu::STOCK.get(i).map(|&r| Row::Stock(r)),
             Menu::Alerts => menu::ALERTS.get(i).copied(),
+            // no rides yet: the scan's row, which shows how far it is
+            Menu::History if self.stock.index.is_empty() => (i == 0).then_some(Row::Stock(menu::StockRow::Scan)),
+            Menu::History => self.stock.index.get(i).map(|_| Row::Past(i)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
@@ -1639,6 +1612,13 @@ impl App {
                 label.push_str(r.label());
                 self.stock_value(r, &mut value);
             }
+            Row::Past(n) => {
+                // "SAT 24 OCT", "42.1" (km: a unit does not fit beside the date)
+                let r = self.stock.index.get(n)?;
+                let (y, mo, d, ..) = r.start;
+                label.push_str(date_text((y, mo, d)).as_str());
+                ui::card::push_km(&mut value, r.dist_m);
+            }
         }
         Some((label, value, color))
     }
@@ -1665,6 +1645,11 @@ impl App {
                 self.draw_menu_rows(c, menu, sel);
             }
             Screen::Summary => self.draw_summary(c),
+            Screen::Past => {
+                let (p, h) = (&self.past, ui::card::ELEV.3);
+                let view = map::View::fit_whole(&p.track, map::area(ui::card::MAP));
+                ui::card::draw(c, &p.card, (&p.track, view), &|i| p.elev(i, h));
+            }
             Screen::Nearby => {
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.nearby.count(), self.scanning);
@@ -2060,7 +2045,19 @@ impl App {
     fn activate(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         use menu::Row;
         match self.row(menu, sel) {
-            Some(Row::Open(m)) => self.open(Screen::Menu(m, 0)),
+            Some(Row::Open(m)) => {
+                if m == Menu::History && self.stock.status() == stock::Status::Idle {
+                    self.stock.start(self.date); // the history is what the scan of stock's rides finds
+                }
+                self.open(Screen::Menu(m, 0))
+            }
+            Some(Row::Past(n)) => {
+                let Some(&r) = self.stock.index.get(n) else { return };
+                match self.past.read(&mut emmc::Volume(&mut self.emmc, b), &r, self.settings.ftp) {
+                    Ok(()) => self.open(Screen::Past),
+                    Err(_) => self.notice("RIDE UNREADABLE"),
+                }
+            }
             Some(Row::Nearby) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
@@ -2391,7 +2388,10 @@ impl App {
                     return self.update_menu_rows(b, menu, sel);
                 }
             }
-            (Screen::Menu(..) | Screen::Nearby, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            (
+                Screen::Menu(..) | Screen::Nearby | Screen::Past,
+                Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
+            ) => self.close(),
             _ => return,
         }
         if self.screen != before {
@@ -2650,7 +2650,7 @@ impl App {
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
-            Screen::Menu(menu @ (Menu::Main | Menu::Sensors | Menu::Gps | Menu::Stock), sel)
+            Screen::Menu(menu @ (Menu::Main | Menu::Sensors | Menu::Gps | Menu::Stock | Menu::History), sel)
                 if self.redraw_ms >= LIST_REDRAW_MS =>
             {
                 self.update_menu_rows(b, menu, sel);
@@ -2882,6 +2882,7 @@ fn menu_title(m: Menu) -> &'static str {
         Menu::Gps => "GPS",
         Menu::Stock => "STOCK DATA",
         Menu::Alerts => "ALERTS",
+        Menu::History => "HISTORY",
     }
 }
 

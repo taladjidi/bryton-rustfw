@@ -23,7 +23,7 @@
 
 - **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track,
   the elevation profile, time, distance, average speed, ascent, NP, average power, average and max heart rate, TSS,
-  kJ. Any key goes on to the overview.
+  kJ. Any key goes on to the overview. Each past ride has the same card (HISTORY, below).
 
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
@@ -79,7 +79,16 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
 wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
 up and Page down, held to repeat, Start to keep), weight (1 kg) and W' (0.5 kJ), GPS (fix, satellites, position,
-altitude, UTC), BLE devices nearby, STOCK DATA.
+altitude, UTC), BLE devices nearby, HISTORY, STOCK DATA.
+
+## History
+
+HISTORY lists the rides in `\Activities` (stock's, read only), newest first: the day ("TUE 20 OCT") and the
+distance in km, a screen of rows at a time. Opening it reads the rides as READ RIDES does (below), and the rows
+appear as the rides are read; the newest 128 are kept. Start on a ride opens its card, the same as at the end of a
+ride: the date and start time, the track (fitted to the map), the elevation profile, time, distance, average speed,
+ascent, NP (from the ride's records), average power, average and max heart rate, TSS (at the FTP set now) and kJ.
+The ride's file is read once to draw it: about 0.1 s for a 300 KB ride. Back returns to the list.
 
 ## Stock data
 

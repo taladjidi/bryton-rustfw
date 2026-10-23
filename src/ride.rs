@@ -443,6 +443,25 @@ impl Plot {
 
 /// Added to altitudes kept by [`History`] (the Dead Sea is at -430 m).
 pub const ALT_OFFSET: i32 = 1000;
+
+/// An altitude graph's scale (low, high, m + [`ALT_OFFSET`]) around the altitudes it shows (0: none): in 20 m steps,
+/// 60 m at least, so it is not redrawn for every metre.
+///
+/// ```
+/// use bryton_rustfw::ride::{ALT_OFFSET, alt_scale};
+/// let o = ALT_OFFSET as u32;
+/// assert_eq!(alt_scale([0, o + 105, o + 131].into_iter()), (o + 100, o + 160));
+/// assert_eq!(alt_scale([o + 10, o + 250].into_iter()), (o, o + 260));
+/// assert_eq!(alt_scale([0].into_iter()), (o, o + 60));
+/// ```
+pub fn alt_scale(seen: impl Iterator<Item = u32>) -> (u32, u32) {
+    let (lo, hi) = seen.filter(|&v| v != 0).fold((u32::MAX, 0), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    if hi == 0 {
+        return (ALT_OFFSET as u32, ALT_OFFSET as u32 + 60);
+    }
+    let lo = lo / 20 * 20;
+    (lo, (hi.div_ceil(20) * 20).max(lo + 60))
+}
 /// Plots kept.
 pub const PLOTS: usize = Plot::ALL.len();
 /// Bars of the whole ride kept: when full, neighbouring bars are merged and each bar covers twice the time.

@@ -342,7 +342,7 @@ Storage, USB and updates
 
 ## History and analysis
 
-- [ ] Ride list on the unit with summary and details (stock Results, all)
+- [~] Ride list on the unit with summary and details (stock Results, all): sim, HISTORY: stock's rides newest first, each with its card (track, profile, ten numbers); no laps or graphs per ride
 - [ ] Delete rides on the unit (stock)
 - [~] Totals: week, month, year, odometer (stock Overview, Garmin): sim, week, year and all rides from stock's files in STOCK DATA; no month, no odometer
 - [ ] Personal records and best efforts (Garmin, Karoo)

@@ -55,6 +55,13 @@ pub struct Power {
 
 impl Default for Power {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Power {
+    /// No power yet.
+    pub const fn new() -> Self {
         Power {
             ring: [0; RING],
             i: 0,
@@ -68,9 +75,7 @@ impl Default for Power {
             wbal_mj: None,
         }
     }
-}
 
-impl Power {
     /// A new ride: the ride's totals back to zero, W' full (the rolling averages go on).
     pub fn new_ride(&mut self) {
         *self = Power { ring: self.ring, i: self.i, n: self.n, sums: self.sums, ..Power::default() };
@@ -80,11 +85,24 @@ impl Power {
     /// The totals count the ride's moving seconds; W' balance runs while the ride is not idle (a stop recovers),
     /// a second without a reading counting as 0 W.
     pub fn second(&mut self, p: Option<u16>, ride: &Ride, cp: u16, wprime_j: u16) {
+        self.sample(p, ride.moving());
+        if ride.state() != State::Idle {
+            let full = i64::from(wprime_j.max(1)) * 1000;
+            let (cp, p) = (i64::from(cp), i64::from(p.unwrap_or(0)));
+            let w = self.wbal_mj.unwrap_or(full);
+            let w = if p > cp { w - (p - cp) * 1000 } else { w + (full - w) * (cp - p) / i64::from(wprime_j.max(1)) };
+            self.wbal_mj = Some(w.clamp(-full, full));
+        }
+    }
+
+    /// One second's power, counted in the ride's totals if `moving`: [`Power::second`] without W' balance (a ride
+    /// read back from its file, a second a record).
+    pub fn sample(&mut self, p: Option<u16>, moving: bool) {
         match p {
             Some(p) => self.push(p),
             None => (self.n, self.sums) = (0, [0; 3]),
         }
-        if let (Some(p), true) = (p, ride.moving()) {
+        if let (Some(p), true) = (p, moving) {
             self.secs = self.secs.saturating_add(1);
             self.max = self.max.max(p);
             self.work_j = self.work_j.saturating_add(u64::from(p));
@@ -93,13 +111,6 @@ impl Power {
                 self.np_sum = self.np_sum.saturating_add(a * a * a * a);
                 self.np_n = self.np_n.saturating_add(1);
             }
-        }
-        if ride.state() != State::Idle {
-            let full = i64::from(wprime_j.max(1)) * 1000;
-            let (cp, p) = (i64::from(cp), i64::from(p.unwrap_or(0)));
-            let w = self.wbal_mj.unwrap_or(full);
-            let w = if p > cp { w - (p - cp) * 1000 } else { w + (full - w) * (cp - p) / i64::from(wprime_j.max(1)) };
-            self.wbal_mj = Some(w.clamp(-full, full));
         }
     }
 
@@ -151,8 +162,12 @@ impl Power {
 
     /// Training stress score: (s x NP x IF) / (FTP x 3600) x 100 = s x NP^2 x 100 / (FTP^2 x 3600).
     pub fn tss(&self, ftp: u16) -> Option<u32> {
-        let (np, ftp) = (u64::from(self.np()?), u64::from(ftp.max(1)));
-        Some((u64::from(self.secs) * np * np * 100 / (ftp * ftp * 3600)).min(u64::from(u32::MAX)) as u32)
+        Some(tss(self.secs, self.np()?, ftp))
+    }
+
+    /// Average power over the seconds counted, W (None before one).
+    pub fn avg(&self) -> Option<u16> {
+        (self.secs > 0).then(|| (self.work_j / u64::from(self.secs)).min(u64::from(u16::MAX)) as u16)
     }
 
     /// Work, kJ.
@@ -169,6 +184,16 @@ impl Power {
     pub fn wbal_j(&self) -> Option<i32> {
         self.wbal_mj.map(|w| (w / 1000) as i32)
     }
+}
+
+/// Training stress score of `secs` seconds with power at normalized power `np`: s x NP^2 x 100 / (FTP^2 x 3600).
+///
+/// ```
+/// assert_eq!(bryton_rustfw::power::tss(3600, 250, 250), 100); // an hour at FTP
+/// ```
+pub fn tss(secs: u32, np: u16, ftp: u16) -> u32 {
+    let (np, ftp) = (u64::from(np), u64::from(ftp.max(1)));
+    (u64::from(secs) * np * np * 100 / (ftp * ftp * 3600)).min(u64::from(u32::MAX)) as u32
 }
 
 /// 3 s power per kg, x 10.

@@ -113,14 +113,18 @@ def fit_crc(data, crc=0):
     return crc
 
 
-def fit_ride(start, secs, power, dist_m, compressed=False, gap=None):
+def fit_ride(start, secs, power, dist_m, compressed=False, gap=None, track=None, enhanced=False, ascent=None):
     """A synthetic FIT ride: records (timestamp, heart rate, distance, power) every second from FIT time `start`
-    for `secs` seconds, none during `gap` (first, last second), then a session with `dist_m` and the timer time.
-    With `compressed`, records after the first of a run carry a compressed timestamp header instead."""
-    U8, U16, U32 = 0x02, 0x84, 0x86
+    for `secs` seconds, none during `gap` (first, last second), then a session with `dist_m`, the timer time and
+    `ascent` (m). With `compressed`, records after the first of a run carry a compressed timestamp header instead.
+    With `track(t)` giving (latitude, longitude in degrees, altitude in m), the records also carry position_lat and
+    position_long (semicircles) and altitude ((m + 500) x 5; enhanced_altitude with `enhanced`), FIT profile."""
+    U8, U16, S32, U32 = 0x02, 0x84, 0x85, 0x86
+    pos = [0, 4, S32, 1, 4, S32] + ([78, 4, U32] if enhanced else [2, 2, U16]) if track else []
+    n = 4 + len(pos) // 3
     d = bytearray()
-    d += bytes([0x40, 0, 0, 20, 0, 4, 253, 4, U32, 3, 1, U8, 5, 4, U32, 7, 2, U16])  # record, local 0
-    d += bytes([0x41, 0, 0, 20, 0, 3, 3, 1, U8, 5, 4, U32, 7, 2, U16])  # record without timestamp, local 1
+    d += bytes([0x40, 0, 0, 20, 0, n, 253, 4, U32, 3, 1, U8, 5, 4, U32, 7, 2, U16] + pos)  # record, local 0
+    d += bytes([0x41, 0, 0, 20, 0, n - 1, 3, 1, U8, 5, 4, U32, 7, 2, U16] + pos)  # without timestamp, local 1
     prev, timer = None, 0
     for t in range(secs):
         if gap and gap[0] <= t < gap[1]:
@@ -128,13 +132,19 @@ def fit_ride(start, secs, power, dist_m, compressed=False, gap=None):
         timer += 1
         ts, w = start + t, power(t)
         fields = struct.pack('<BIH', 140, t * 800, 0xffff if w is None else w)
+        if track:
+            lat, lon, alt = track(t)
+            semi = lambda deg: round(deg * 2**31 / 180)
+            fields += struct.pack('<ii', semi(lat), semi(lon))
+            fields += struct.pack('<I' if enhanced else '<H', round((alt + 500) * 5))
         if compressed and prev is not None and ts - prev < 32:
             d += bytes([0x80 | (1 << 5) | (ts & 0x1f)]) + fields
         else:
             d += bytes([0x00]) + struct.pack('<I', ts) + fields
         prev = ts
-    d += bytes([0x42, 0, 0, 18, 0, 5, 253, 4, U32, 2, 4, U32, 8, 4, U32, 9, 4, U32, 16, 1, U8])  # session, local 2
-    d += bytes([0x02]) + struct.pack('<IIIIB', start + secs, start, timer * 1000, dist_m * 100, 140)
+    d += bytes([0x42, 0, 0, 18, 0, 6, 253, 4, U32, 2, 4, U32, 8, 4, U32, 9, 4, U32, 16, 1, U8, 22, 2, U16])  # session
+    d += bytes([0x02]) + struct.pack('<IIIIBH', start + secs, start, timer * 1000, dist_m * 100, 140,
+                                     0xffff if ascent is None else ascent)
     h = bytearray(struct.pack('<BBHI4s', 14, 0x10, 2140, len(d), b'.FIT'))
     h += struct.pack('<H', fit_crc(h))
     f = bytes(h + d)
@@ -148,13 +158,25 @@ def rides(m):
     os.makedirs(a)
     def fit_time(y, mo, d, h):
         return calendar.timegm((y, mo, d, h, 0, 0)) - 631065600
+    # tracks (the ride history's cards) in the sea at 0 N 0 E, nowhere real (AGENTS.md, "Public repository")
+    def loop(t):  # 14.4 km round a circle in 30 min, over two 40 m hills: 80 m of ascent
+        a = 2 * math.pi * t / 1800
+        r = 14400 / (2 * math.pi) / 111320
+        return -0.03 + r * math.sin(a), -0.03 + r * math.cos(a) / math.cos(math.radians(0.03)), \
+            100 + 20 * (1 - math.cos(2 * a))
+    def out_back(t):  # east and back, climbing 30 m and down
+        f = t / 1500
+        return -0.01, -0.06 + 0.05 * (1 - abs(1 - 2 * f)), 50 + 30 * (1 - abs(1 - 2 * f))
     files = {
         # this week: 2 min at 400 W then 250 W, 30 min
-        '261020080000.fit': fit_ride(fit_time(2026, 10, 20, 8), 1800, lambda t: 400 if t < 120 else 250, 14400),
+        '261020080000.fit': fit_ride(fit_time(2026, 10, 20, 8), 1800, lambda t: 400 if t < 120 else 250, 14400,
+                                     track=loop, ascent=80),
         # this year, in the window: 300 W, stopped 5 min after 10 min (compressed timestamps)
-        '261001070000.fit': fit_ride(fit_time(2026, 10, 1, 7), 1500, lambda t: 300, 12000, True, (600, 900)),
-        # last year, out of the window: 600 W
-        '250315090000.fit': fit_ride(fit_time(2025, 3, 15, 9), 600, lambda t: 600, 6000),
+        '261001070000.fit': fit_ride(fit_time(2026, 10, 1, 7), 1500, lambda t: 300, 12000, True, (600, 900),
+                                     track=out_back, enhanced=True, ascent=30),
+        # last year, out of the window: 600 W, north on the flat
+        '250315090000.fit': fit_ride(fit_time(2025, 3, 15, 9), 600, lambda t: 600, 6000,
+                                     track=lambda t: (-0.05 + t / 600 * 0.054, -0.07, 20), ascent=0),
         # this week, no power
         '261022100000.fit': fit_ride(fit_time(2026, 10, 22, 10), 600, lambda t: None, 5000),
         # stock's ride in progress: never read (900 W would show)
