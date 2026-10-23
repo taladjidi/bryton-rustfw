@@ -149,8 +149,8 @@ battery on ADC3): not used yet.
   on the unit). Registers 20 to 31 also hold values after stock (0x22, then 0x35a..0x3c5: not traced), so they
   are not free either. The bootloader has no RTC address in it.
 - This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
-  power), 11 (wheel size) and 14, 15, 16 (ride page layouts), each behind a tag so an empty register reads as
-  unset. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
+  power), 11 (wheel size), 14, 15, 16 (ride page layouts) and 17, 18 (GNSS aiding: the RTC's offset from UTC and
+  the last position), each behind a tag so an empty register reads as unset. That leaves none free. This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
   system reset (seen), and should through standby (backup domain, RM0399; to see).
 
@@ -303,4 +303,11 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   clock from 00:00:00 until it has a fix. This firmware also sends, once, a CFG-VALSET to the RAM layer only
   (NAV-PVT on SPI, no NMEA on SPI; never flash or battery-backed RAM), in case the receiver ever loses that.
 - **Indoors:** no fix, 0 satellites (seen). A fix: to see.
+- **Aiding at power-up, as stock's minimum** (stock also feeds AssistNow Offline data from `\System\mgaoffline.ubx`,
+  which the phone app downloads; libMga, `GPS_AssistNow_Offline_Host`): after the configuration, this firmware
+  sends UBX-MGA-INI-TIME_UTC (UTC from the RTC, which holds local time, minus an offset learnt at the first fix
+  with a valid time, in 15-minute steps; 2 s accuracy) and UBX-MGA-INI-POS_LLH (the last good fix, kept to 1e-4
+  degrees, 10 km accuracy), and turns AssistNow Autonomous on (CFG-ANA-USE_ANA, key 0x10230001, RAM). Seen on the
+  unit: CFG-VALSET answered ACK-ACK, ANA reads back 1, and with CFG-NAVSPG-ACKAIDING on both MGA messages are
+  answered MGA-ACK "used". How much faster a fix comes: to measure outside.
 

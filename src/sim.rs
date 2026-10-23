@@ -48,6 +48,10 @@ pub struct Sim {
     pub gnss: Gnss,
 }
 
+/// Where the simulated fix is (degrees x 1e-7).
+pub const FIX_LAT: i32 = 488_566_123;
+pub const FIX_LON: i32 = -22_945_678;
+
 /// The GNSS receiver as seen over SPI: once powered, a NAV-PVT frame every second (with `fix`: 3D at that speed,
 /// else no fix, as indoors on the unit); 0xff when it has nothing.
 #[derive(Default)]
@@ -55,8 +59,10 @@ pub struct Gnss {
     pub powered: bool,
     /// Ground speed of a 3D fix in mm/s; None: no fix.
     pub fix: Option<i32>,
-    /// Bytes received (not 0xff), in order.
+    /// Every byte received, in order (0xff included).
     pub got: Vec<u8>,
+    /// UTC of the next report, seconds since 1970 (set by the board: its RTC minus 2 h).
+    utc: i64,
     out: std::collections::VecDeque<u8>,
     next_ms: u64,
 }
@@ -70,7 +76,12 @@ impl Gnss {
         let mut p = [0u8; 92];
         p[4..12].copy_from_slice(&[0xe5, 0x07, 3, 7, 0, 0, 0, 0xf0]);
         if let Some(speed) = self.fix {
+            let (y, mo, d, h, mi, sec) = crate::from_epoch_s(self.utc);
+            p[4..6].copy_from_slice(&y.to_le_bytes());
+            p[6..12].copy_from_slice(&[mo, d, h, mi, sec, 0x07]); // date and time valid
             (p[20], p[21], p[23]) = (3, 1, 9);
+            p[24..28].copy_from_slice(&FIX_LON.to_le_bytes());
+            p[28..32].copy_from_slice(&FIX_LAT.to_le_bytes());
             p[60..64].copy_from_slice(&speed.to_le_bytes());
         }
         let body: Vec<u8> = [0x01, 0x07, 92, 0].iter().chain(&p).copied().collect();
@@ -358,9 +369,13 @@ impl Board for Sim {
         (self.keys)(self.ms)
     }
 
-    fn rtc_tr(&mut self) -> u32 {
-        let t = (self.start_s + self.ms / 1000) % 86400;
-        to_bcd(t / 3600) << 16 | to_bcd(t / 60 % 60) << 8 | to_bcd(t % 60)
+    fn rtc(&mut self) -> (u32, u32) {
+        // 2026-10-23 at the start; the day rolls over at midnight
+        let t = self.start_s + self.ms / 1000;
+        let (y, mo, d) = crate::civil_from_days(crate::days_from_civil(2026, 10, 23) + (t / 86400) as i32);
+        let t = t % 86400;
+        let tr = to_bcd(t / 3600) << 16 | to_bcd(t / 60 % 60) << 8 | to_bcd(t % 60);
+        (tr, to_bcd(u64::from(y) % 100) << 16 | to_bcd(u64::from(mo)) << 8 | to_bcd(u64::from(d)))
     }
 
     fn delay_ms(&mut self, ms: u32) {
@@ -411,12 +426,13 @@ impl Board for Sim {
 
     fn gnss_transfer(&mut self, buf: &mut [u8]) {
         assert_eq!(buf.len() % 4, 0, "SPI transfers move 4 bytes at a time");
+        let (tr, dr) = self.rtc();
+        let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
         let g = &mut self.gnss;
+        g.utc = crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600; // the RTC runs on UTC + 2 h
         g.tick(self.ms);
         for b in buf.iter_mut() {
-            if *b != 0xff {
-                g.got.push(*b);
-            }
+            g.got.push(*b);
             *b = if g.powered { g.out.pop_front().unwrap_or(0xff) } else { 0xff };
         }
     }
@@ -499,7 +515,7 @@ mod tests {
     /// Ride page `n` of `app` as the drawing code means it, with these values, under a strip at the sim's time
     /// (`radio`: the Nordic chip answered).
     fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec<u16> {
-        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
+        let (h, m, _) = rtc_time_from_tr(sim.rtc().0);
         let mut f = Frame::new();
         crate::ui::draw_strip(
             &mut f,
@@ -523,13 +539,13 @@ mod tests {
     }
 
     fn hm(sim: &mut Sim) -> std::string::String {
-        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
+        let (h, m, _) = rtc_time_from_tr(sim.rtc().0);
         format!("{h:02}:{m:02}")
     }
 
     /// The main screen as the drawing code means it, at the sim's time, under a strip with `usb`.
     fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
-        let (h, m, s) = rtc_time_from_tr(sim.rtc_tr());
+        let (h, m, s) = rtc_time_from_tr(sim.rtc().0);
         let mut f = Frame::new();
         crate::ui::draw_strip(
             &mut f,
@@ -764,14 +780,16 @@ mod tests {
         let mut app = App::start(&mut sim, None);
         assert!(sim.gnss.powered);
         run(&mut sim, &mut app, 2000);
-        assert_eq!(sim.gnss.got, crate::gnss::config().iter().copied().filter(|&b| b != 0xff).collect::<Vec<_>>());
+        let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
+        assert!(sent(&sim, crate::gnss::config()), "configuration");
+        assert_eq!(sim.gnss.got.iter().filter(|&&b| b == 0xb5).count(), 1, "nothing else: no time or position yet");
         assert_eq!(app.strip.gps, Some(false), "searching");
         sim.gnss.fix = Some(7000); // 25.2 km/h
         run(&mut sim, &mut app, 2000);
         assert_eq!(app.strip.gps, Some(true));
         app.press(&mut sim, Press::Short(Key::Page));
         run(&mut sim, &mut app, 100);
-        let (h, m, _) = rtc_time_from_tr(sim.rtc_tr());
+        let (h, m, _) = rtc_time_from_tr(sim.rtc().0);
         let mut want = Frame::new();
         want.px = ride(&mut sim, &app, 0, &["25.2", "--", "--"], true);
         let strip = Strip {
@@ -797,6 +815,23 @@ mod tests {
         sim.save("gps_menu");
         app.press(&mut sim, Press::Short(Key::Back));
         app.press(&mut sim, Press::Short(Key::Back));
+        // the fix taught the RTC's offset (+2 h) and the position (to 1e-4 degrees): kept for the next power-up
+        let aid = crate::gnss::Aid::from_words([sim.backup[17], sim.backup[18]]);
+        assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((488_566_000, -22_945_000)) });
+        let mut again = App::start(&mut sim, None);
+        sim.gnss.got.clear();
+        run(&mut sim, &mut again, 1500);
+        let (tr, dr) = sim.rtc();
+        let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
+        let utc = crate::from_epoch_s(crate::epoch_s((y, mo, d, h, m, s)) - 2 * 3600);
+        let sent_time = (0..3).any(|back| {
+            sim.gnss
+                .got
+                .windows(32)
+                .any(|w| w == crate::gnss::mga_time(crate::from_epoch_s(crate::epoch_s(utc) - back), 2))
+        });
+        assert!(sent_time, "UTC from the RTC at the next power-up");
+        assert!(sent(&sim, crate::gnss::mga_pos(488_566_000, -22_945_000, 10_000)), "and the last position");
         sim.gnss.powered = false; // silent receiver: the fix ages out
         run(&mut sim, &mut app, u64::from(PVT_STALE_MS) + 200);
         assert_eq!(app.strip.gps, None);

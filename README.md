@@ -14,7 +14,8 @@ Bryton.
   (field count and each field), the wheel size, GPS (fix, satellites, position, altitude, UTC) and the BLE
   devices nearby.
 - **GPS:** the u-blox M10 is on while the unit is; "GPS" in the strip is grey while it searches, green with a
-  fix. Without a paired speed sensor, the speed comes from it.
+  fix. Without a paired speed sensor, the speed comes from it. At power-up it gets the time (UTC, from the RTC)
+  and the last position, and predicts orbits itself (AssistNow Autonomous), for a faster fix.
 - **ANT+ sensors:** heart rate, speed, cadence, speed and cadence, power, on stock's channels. A paired sensor is
   kept through power off, so a friend's is never taken. Needs the ANT+ network key, which you copy from your own
   stock firmware (see "ANT+ key" below).
@@ -151,7 +152,8 @@ Seen on 2026-10-23: pixels over SPI with RAMCTRL `B0 00 F0`; USB at high speed (
 with the dev link; `dev.py run` from RAM; the SysTick + WFI sleep; the backlight on PG13; the RTC
 holds local time; power off reaches standby (D1 / D2 reset flags) and the power button wakes it once PA0 is an
 input. Still to see:
-- A GPS fix (the receiver answers and reports, indoors without satellites).
+- A GPS fix (the receiver answers and reports, indoors without satellites), and how much the aiding at power-up
+  shortens the next one.
 - Speed, cadence and power sensors (the decoders follow the ANT+ profiles; only the heart-rate strap was tried).
 - Charging control: the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12). The low-battery switch-off (3.3 V) has not been reached on the unit.

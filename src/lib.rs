@@ -40,8 +40,8 @@ pub trait Board {
     fn backlight(&mut self, on: bool);
     /// The keys held down, as a mask of [`Key`] codes.
     fn keys_down(&mut self) -> u8;
-    /// RTC_TR, read once the shadow registers are in sync (RSF): the time of day as BCD.
-    fn rtc_tr(&mut self) -> u32;
+    /// RTC_TR and RTC_DR, read once the shadow registers are in sync (RSF): the time of day and the date, BCD.
+    fn rtc(&mut self) -> (u32, u32);
     /// Busy wait.
     fn delay_ms(&mut self, ms: u32);
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
@@ -89,6 +89,61 @@ pub fn bcd(v: u32) -> u8 {
 /// ```
 pub fn rtc_time_from_tr(tr: u32) -> (u8, u8, u8) {
     (bcd((tr >> 16) & 0x3f), bcd((tr >> 8) & 0x7f), bcd(tr & 0x7f))
+}
+
+/// RTC_DR (RM0399: BCD year 00-99 in bits 16..23, month 8..12, day 0..5) to (year, month, day), years 2000-2099.
+///
+/// ```
+/// assert_eq!(bryton_rustfw::rtc_date_from_dr(0x0026_5023), (2026, 10, 23)); // weekday bits 13..15 ignored
+/// ```
+pub fn rtc_date_from_dr(dr: u32) -> (u16, u8, u8) {
+    (2000 + u16::from(bcd((dr >> 16) & 0xff)), bcd((dr >> 8) & 0x1f), bcd(dr & 0x3f))
+}
+
+/// Days since 1970-01-01 of a date (proleptic Gregorian; H. Hinnant's days_from_civil).
+pub fn days_from_civil(y: u16, m: u8, d: u8) -> i32 {
+    let y = i32::from(y) - i32::from(m <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (i32::from(m) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i32::from(d) - 1;
+    era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468
+}
+
+/// The date `days` after 1970-01-01 (the inverse of [`days_from_civil`]).
+///
+/// ```
+/// use bryton_rustfw::{civil_from_days, days_from_civil};
+/// assert_eq!(days_from_civil(2026, 10, 23), 20_749);
+/// assert_eq!(civil_from_days(days_from_civil(2024, 2, 29)), (2024, 2, 29));
+/// ```
+pub fn civil_from_days(days: i32) -> (u16, u8, u8) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
+    ((yoe + era * 400 + i32::from(m <= 2)) as u16, m, d)
+}
+
+/// A date and time as seconds since 1970 (no leap seconds).
+pub fn epoch_s((y, mo, d, h, mi, s): (u16, u8, u8, u8, u8, u8)) -> i64 {
+    i64::from(days_from_civil(y, mo, d)) * 86_400 + i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(s)
+}
+
+/// Seconds since 1970 back to a date and time.
+///
+/// ```
+/// let t = (2026, 1, 1, 0, 30, 0);
+/// assert_eq!(bryton_rustfw::from_epoch_s(bryton_rustfw::epoch_s(t) - 3600), (2025, 12, 31, 23, 30, 0));
+/// ```
+pub fn from_epoch_s(t: i64) -> (u16, u8, u8, u8, u8, u8) {
+    let (days, s) = (t.div_euclid(86_400), t.rem_euclid(86_400));
+    let (y, mo, d) = civil_from_days(days as i32);
+    (y, mo, d, (s / 3600) as u8, (s / 60 % 60) as u8, (s % 60) as u8)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -240,6 +295,9 @@ pub const BATTERY_MS: u32 = 10_000;
 /// before reading it at all).
 pub const GNSS_CONFIG_MS: u32 = 1000;
 
+/// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).
+const AID_BKP: [usize; 2] = [17, 18];
+
 /// A fix older than this is dropped (the receiver stopped answering).
 pub const PVT_STALE_MS: u32 = 3000;
 
@@ -318,8 +376,12 @@ pub struct App {
     /// The last fix, and its age.
     pvt: Option<gnss::Pvt>,
     pvt_ms: u32,
-    /// Since the receiver was powered (its configuration is sent once, after [`GNSS_CONFIG_MS`]).
+    /// Since the receiver was powered (its configuration and aiding are sent once, from [`GNSS_CONFIG_MS`]).
     gnss_ms: u32,
+    /// Messages sent to the receiver so far: configuration, time, position.
+    gnss_sent: u8,
+    /// The RTC's offset from UTC and the last position, as kept in backup registers.
+    aid: gnss::Aid,
     wheel_mm: u16,
     pages: [PageCfg; PAGES],
     /// The ride field values on screen, to redraw only what changed.
@@ -390,6 +452,8 @@ impl App {
             pvt: None,
             pvt_ms: 0,
             gnss_ms: 0,
+            gnss_sent: 0,
+            aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
             wheel_mm: if wheel >> 24 == 0xa5 { wheel as u16 } else { WHEELS[1] },
             pages: core::array::from_fn(|i| PageCfg::from_word(b.backup_read(PAGE_BKP[i])).unwrap_or(DEFAULT_PAGES[i])),
             shown: Default::default(),
@@ -765,21 +829,17 @@ impl App {
     /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
     /// and the speed when no speed sensor is paired.
     fn poll_gnss(&mut self, b: &mut impl Board) {
-        let mut buf = [0xff; 32];
-        let mut send = self.gnss_ms < GNSS_CONFIG_MS && self.gnss_ms + POLL_MS >= GNSS_CONFIG_MS;
         self.gnss_ms = self.gnss_ms.saturating_add(POLL_MS);
         self.pvt_ms = self.pvt_ms.saturating_add(POLL_MS);
-        for _ in 0..GNSS_READ / buf.len() {
-            if core::mem::take(&mut send) {
-                buf = gnss::config();
-            } else {
-                buf = [0xff; 32];
-            }
+        let mut send = if self.gnss_ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
+        for _ in 0..GNSS_READ / 32 {
+            let mut buf = send.take().unwrap_or([0xff; 32]);
             b.gnss_transfer(&mut buf);
             for &byte in &buf {
                 if let Some(pvt) = self.gnss.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
                     self.pvt = Some(pvt);
                     self.pvt_ms = 0;
+                    self.learn_aid(b, pvt);
                     let sensor =
                         [Kind::Speed, Kind::SpeedCadence].iter().any(|&k| self.sensors[k as usize] != Sensor::Off);
                     if pvt.good() && !sensor {
@@ -797,10 +857,58 @@ impl App {
         self.strip.blink = self.strip.gps != Some(false) || self.seconds.is_multiple_of(2);
     }
 
+    /// The next message for the receiver after power-up, one per pass: the configuration, then the time (UTC from
+    /// the RTC and its learnt offset) and the last position, when known. Then None.
+    fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
+        loop {
+            self.gnss_sent = self.gnss_sent.saturating_add(1);
+            match self.gnss_sent {
+                1 => return Some(gnss::config()),
+                2 => {
+                    let Some(offset) = self.aid.offset_15min else { continue };
+                    let (tr, dr) = b.rtc();
+                    let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
+                    let utc = epoch_s((y, mo, d, h, m, s)) - i64::from(offset) * 900;
+                    return Some(gnss::mga_time(from_epoch_s(utc), 2)); // the RTC: within a couple of seconds
+                }
+                3 => {
+                    let Some((lat, lon)) = self.aid.pos else { continue };
+                    return Some(gnss::mga_pos(lat, lon, 10_000)); // where it was: within 10 km, most rides
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Keeps what the next power-up needs from a fix: the RTC's offset from UTC (once the receiver's time is
+    /// valid), the position (a good fix); written to the backup registers when it changes.
+    fn learn_aid(&mut self, b: &mut impl Board, pvt: gnss::Pvt) {
+        let mut aid = self.aid;
+        if pvt.time_ok {
+            let (tr, dr) = b.rtc();
+            let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
+            let diff = epoch_s((y, mo, d, h, m, s)) - epoch_s(pvt.utc);
+            let steps = (diff + diff.signum() * 450) / 900; // nearest 15 minutes
+            if steps.abs() <= 14 * 4 {
+                aid.offset_15min = Some(steps as i8);
+            }
+        }
+        if pvt.good() {
+            // to the 1e-4 degrees kept: moving within 11 m does not rewrite the registers each second
+            aid.pos = Some((pvt.lat / 1000 * 1000, pvt.lon / 1000 * 1000));
+        }
+        if aid != self.aid {
+            self.aid = aid;
+            for (r, w) in AID_BKP.into_iter().zip(aid.to_words()) {
+                b.backup_write(r, w);
+            }
+        }
+    }
+
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
-        let (h, m, sec) = rtc_time_from_tr(b.rtc_tr());
+        let (h, m, sec) = rtc_time_from_tr(b.rtc().0);
         self.strip.time = (h, m);
         self.seconds = sec;
         self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
@@ -930,7 +1038,7 @@ fn layout_text(l: &mut Line<12>, layout: u8) {
 
 /// The time of day, hours and minutes.
 fn rtc_hm(b: &mut impl Board) -> (u8, u8) {
-    let (h, m, _) = rtc_time_from_tr(b.rtc_tr());
+    let (h, m, _) = rtc_time_from_tr(b.rtc().0);
     (h, m)
 }
 

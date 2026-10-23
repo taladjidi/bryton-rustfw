@@ -354,12 +354,12 @@ const RTC_ICSR: u32 = 0x5800_400c;
 /// Backup registers 0..31 (RM0399 RTC_BKPxR; BOARD.md 8 lists those stock uses).
 const RTC_BKP0R: u32 = 0x5800_4050;
 
-fn rtc_tr() -> u32 {
+/// RTC_TR then RTC_DR: reading TR locks the shadow DR until DR is read, so the pair is coherent.
+fn rtc() -> (u32, u32) {
     let t0 = cycles();
     while rd(RTC_ICSR) & (1 << 5) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {} // RSF
     let tr = rd(RTC_TR);
-    let _ = rd(RTC_DR); // unlocks the shadow registers
-    tr
+    (tr, rd(RTC_DR))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -607,8 +607,8 @@ impl Board for S510 {
     fn keys_down(&mut self) -> u8 {
         KEYS.iter().enumerate().fold(0, |m, (i, &(port, pin))| m | (u8::from(pin_low(port, pin)) << i))
     }
-    fn rtc_tr(&mut self) -> u32 {
-        rtc_tr()
+    fn rtc(&mut self) -> (u32, u32) {
+        rtc()
     }
     fn delay_ms(&mut self, ms: u32) {
         delay_ms(ms);

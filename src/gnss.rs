@@ -101,18 +101,85 @@ pub fn frame(class: u8, id: u8, payload: &[u8]) -> [u8; 32] {
 }
 
 /// UBX-CFG-VALSET to the RAM layer only (never flash or battery-backed RAM): NAV-PVT once per fix on SPI, no NMEA
-/// on SPI. What the receiver already does after stock (seen on the unit); sent so a receiver that lost its backup
-/// memory does the same. Key IDs from u-blox's M10 interface description.
+/// on SPI (what the receiver already does after stock, seen on the unit; sent so a receiver that lost its backup
+/// memory does the same), and AssistNow Autonomous on (the receiver predicts orbits from the ones it received;
+/// stock enables it too, "Enable_Assist_Auto"). Key IDs from u-blox's M10 interface description.
 pub fn config() -> [u8; 32] {
     const MSGOUT_UBX_NAV_PVT_SPI: u32 = 0x2091_000a;
     const SPIOUTPROT_NMEA: u32 = 0x107a_0002;
-    let mut p = [0u8; 14];
+    const ANA_USE_ANA: u32 = 0x1023_0001;
+    let mut p = [0u8; 19];
     p[..4].copy_from_slice(&[0, 0x01, 0, 0]); // version 0, layers: RAM
-    p[4..8].copy_from_slice(&MSGOUT_UBX_NAV_PVT_SPI.to_le_bytes());
-    p[8] = 1;
-    p[9..13].copy_from_slice(&SPIOUTPROT_NMEA.to_le_bytes());
-    p[13] = 0;
+    for (i, (key, value)) in [(MSGOUT_UBX_NAV_PVT_SPI, 1), (SPIOUTPROT_NMEA, 0), (ANA_USE_ANA, 1)].iter().enumerate() {
+        p[4 + 5 * i..8 + 5 * i].copy_from_slice(&key.to_le_bytes());
+        p[8 + 5 * i] = *value;
+    }
     frame(0x06, 0x8a, &p)
+}
+
+/// UBX-MGA-INI-TIME_UTC: the time, so the receiver can use the orbits it keeps (it loses its own clock when
+/// powered off, seen on the unit). `utc`: year, month, day, hour, minute, second; `acc_s`: its accuracy.
+pub fn mga_time(utc: (u16, u8, u8, u8, u8, u8), acc_s: u16) -> [u8; 32] {
+    let (y, mo, d, h, mi, s) = utc;
+    let mut p = [0u8; 24];
+    p[0] = 0x10; // type: TIME_UTC; version 0; ref 0: none (on receipt)
+    p[3] = 0x80; // leap seconds unknown
+    p[4..6].copy_from_slice(&y.to_le_bytes());
+    p[6..12].copy_from_slice(&[mo, d, h, mi, s, 0]);
+    p[16..18].copy_from_slice(&acc_s.to_le_bytes());
+    frame(0x13, 0x40, &p)
+}
+
+/// UBX-MGA-INI-POS_LLH: an approximate position (degrees x 1e-7), `acc_m` its accuracy.
+pub fn mga_pos(lat: i32, lon: i32, acc_m: u32) -> [u8; 32] {
+    let mut p = [0u8; 20];
+    p[0] = 0x01; // type: POS_LLH; version 0
+    p[4..8].copy_from_slice(&lat.to_le_bytes());
+    p[8..12].copy_from_slice(&lon.to_le_bytes());
+    p[16..20].copy_from_slice(&acc_m.saturating_mul(100).to_le_bytes()); // cm; altitude 0 with that accuracy
+    frame(0x13, 0x40, &p)
+}
+
+/// The last position and the RTC's offset from UTC, as kept in two RTC backup registers between power-offs:
+/// a tag, the offset in 15-minute steps (7 bits, signed) and latitude in 1e-4 degrees (21 bits, signed); a tag
+/// and longitude in 1e-4 degrees (22 bits, signed). 1e-4 degrees is about 11 m, plenty for aiding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Aid {
+    /// Local time (the RTC) minus UTC, in 15-minute steps; None until a fix with a valid time.
+    pub offset_15min: Option<i8>,
+    /// Last position, degrees x 1e-7 (kept to 1e-4 degrees); None until a fix.
+    pub pos: Option<(i32, i32)>,
+}
+
+impl Aid {
+    /// As two backup register words.
+    ///
+    /// ```
+    /// use bryton_rustfw::gnss::Aid;
+    /// let a = Aid { offset_15min: Some(-20), pos: Some((488_566_000, -22_945_000)) };
+    /// assert_eq!(Aid::from_words(a.to_words()), a);
+    /// assert_eq!(Aid::from_words([0, 0]), Aid { offset_15min: None, pos: None });
+    /// ```
+    pub fn to_words(self) -> [u32; 2] {
+        let field = |v: i32, bits: u32| (v as u32) & ((1 << bits) - 1);
+        let (lat, lon) = self.pos.map_or((0, 0), |(a, o)| (a / 1000, o / 1000));
+        let offset = self.offset_15min.map_or(0x40, |o| field(i32::from(o), 7)); // -64: unknown
+        let pos_tag = if self.pos.is_some() { 0xa } else { 0x5 };
+        [(0xa << 28) | (offset << 21) | field(lat, 21), (pos_tag << 28) | field(lon, 22)]
+    }
+
+    /// From the words [`Aid::to_words`] wrote (anything else reads as unknown).
+    pub fn from_words([w0, w1]: [u32; 2]) -> Self {
+        let signed = |v: u32, bits: u32| ((v << (32 - bits)) as i32) >> (32 - bits);
+        if w0 >> 28 != 0xa {
+            return Aid { offset_15min: None, pos: None };
+        }
+        let offset = signed(w0 >> 21, 7) as i8;
+        Aid {
+            offset_15min: (offset != -64).then_some(offset),
+            pos: (w1 >> 28 == 0xa).then(|| (signed(w0, 21) * 1000, signed(w1, 22) * 1000)),
+        }
+    }
 }
 
 /// A fix as UBX-NAV-PVT reports it (the fields this firmware uses).
@@ -217,7 +284,13 @@ mod tests {
         let c = config();
         let mut parser = Parser::new();
         let got: std::vec::Vec<_> = c.iter().filter_map(|&b| parser.push(b).map(|(c, i, p)| (c, i, p.len()))).collect();
-        assert_eq!(got, [(0x06, 0x8a, 14)]);
+        assert_eq!(got, [(0x06, 0x8a, 19)]);
+        for f in [mga_time((2026, 10, 23, 15, 4, 5), 2), mga_pos(488_566_000, 22_945_000, 10_000)] {
+            let mut parser = Parser::new();
+            let got: std::vec::Vec<_> =
+                f.iter().filter_map(|&b| parser.push(b).map(|(c, i, p)| (c, i, p.len()))).collect();
+            assert!(got == [(0x13, 0x40, 24)] || got == [(0x13, 0x40, 20)], "{got:?}");
+        }
         assert_eq!(c.len() % 4, 0);
     }
 }
