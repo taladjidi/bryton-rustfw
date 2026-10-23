@@ -2,7 +2,7 @@
 //! - **its rides** (`\Activities\YYMMDDhhmmss.fit`, ghidra/STORAGE_AND_MAPS.md 2.1): [`Scan`] goes through them
 //!   a bounded number of bytes per call, so the app spreads it over its passes and stays responsive; it gives the
 //!   power curve of the last [`WINDOW_DAYS`] days, CP and W' ([`crate::power_curve`]) and the distance and time
-//!   of this week, this year and all time ([`Summary`]);
+//!   of this week, this year and all time ([`Summary`]), and the ride history's index ([`Scan::index`]);
 //! - **its settings** (`\System\*.ini`): [`import`] maps what has an equivalent here ([`Imported`]).
 //!
 //! A ride counts only if its file is whole (header, CRC) and has its session: `tmp.fit` (stock's ride in
@@ -11,6 +11,7 @@
 
 use crate::fat::{self, Cursor, Disk, Fat, File};
 use crate::fitread::{Msg, Reader, Session};
+use crate::history::{Acc, Index, Start};
 use crate::ini::{get, number};
 use crate::nrf::SensorId;
 use crate::power_curve::{Curve, Rolling};
@@ -82,6 +83,17 @@ pub enum Status {
 /// assert_eq!([ride_day(b"tmp.fit"), ride_day(b"20261023081500.ubx"), ride_day(b"261323081500.fit")], [None; 3]);
 /// ```
 pub fn ride_day(name: &[u8]) -> Option<u16> {
+    let (y, m, d, _, _) = ride_start(name)?;
+    u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).ok()
+}
+
+/// The start of a ride from its file name, `YYMMDDhhmmss.fit` (local time); None for any other name.
+///
+/// ```
+/// use bryton_rustfw::stock::ride_start;
+/// assert_eq!(ride_start(b"261023081500.fit"), Some((2026, 10, 23, 8, 15)));
+/// ```
+pub fn ride_start(name: &[u8]) -> Option<Start> {
     let (digits, ext) = (name.get(..12)?, name.get(12..)?);
     if !ext.eq_ignore_ascii_case(b".fit") || !digits.iter().all(u8::is_ascii_digit) {
         return None;
@@ -91,7 +103,7 @@ pub fn ride_day(name: &[u8]) -> Option<u16> {
     if !(1..=12).contains(&m) || !(1..=31).contains(&d) || two(6) > 23 || two(8) > 59 || two(10) > 59 {
         return None;
     }
-    u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).ok()
+    Some((y, m, d, two(6), two(8)))
 }
 
 /// A scan of stock's rides, a bounded amount per [`Scan::step`].
@@ -99,11 +111,12 @@ pub struct Scan {
     status: Status,
     fat: Option<Fat>,
     dir: Option<Cursor>,
-    /// The ride being read: its file, how far, its day.
-    file: Option<(File, u32, u16)>,
+    /// The ride being read: its file, how far, its day, its start.
+    file: Option<(File, u32, u16, Start)>,
     reader: Reader,
     rolling: Rolling,
-    session: Option<Session>,
+    /// Its session and totals so far.
+    acc: Acc,
     /// Today, the first day of this week and of this year, days since 1970.
     today: u16,
     week: u16,
@@ -112,6 +125,8 @@ pub struct Scan {
     pub listed: u16,
     /// What was found so far.
     pub out: Summary,
+    /// The rides read whole, newest first (the ride history).
+    pub index: Index,
 }
 
 impl Default for Scan {
@@ -130,7 +145,7 @@ impl Scan {
             file: None,
             reader: Reader::new(),
             rolling: Rolling::new(),
-            session: None,
+            acc: Acc::new(),
             today: 0,
             week: 0,
             year: 0,
@@ -144,6 +159,7 @@ impl Scan {
                 skipped: 0,
                 bytes: 0,
             },
+            index: Index::new(),
         }
     }
 
@@ -165,6 +181,7 @@ impl Scan {
         self.year = day(y, 1, 1);
         (self.status, self.fat, self.dir, self.file, self.listed) = (Status::Running, None, None, None, 0);
         self.out = Summary::default();
+        self.index.clear();
     }
 
     /// Goes on for about `budget` bytes read (a directory entry counts 32); false once it is done or failed.
@@ -195,15 +212,15 @@ impl Scan {
                 self.dir.insert(fat.cursor(f)?)
             }
         };
-        let Some((file, offset, day)) = self.file else {
+        let Some((file, offset, day, start)) = self.file else {
             *spent += 32;
             match fat.list(d, dir)? {
                 None => self.status = Status::Done,
                 Some(e) => {
-                    if let (false, Some(day)) = (e.file.dir, ride_day(e.name())) {
+                    if let (false, Some(day), Some(start)) = (e.file.dir, ride_day(e.name()), ride_start(e.name())) {
                         self.listed = self.listed.saturating_add(1);
-                        self.file = Some((e.file, 0, day));
-                        (self.reader, self.session) = (Reader::new(), None);
+                        self.file = Some((e.file, 0, day, start));
+                        (self.reader, self.acc) = (Reader::new(), Acc::new());
                         self.rolling.reset();
                     }
                 }
@@ -221,26 +238,30 @@ impl Scan {
         *spent += n as u32;
         self.out.bytes = self.out.bytes.saturating_add(n as u32);
         let in_window = self.today.saturating_sub(day) < WINDOW_DAYS;
-        let (rolling, session) = (&mut self.rolling, &mut self.session);
-        self.reader.push_slice(io.get(..n).unwrap_or(&[]), |m| match m {
-            Msg::Record(r) if in_window => rolling.sample(r.time, r.power),
-            Msg::Session(s) => *session = session.or(Some(s)),
-            Msg::Record(_) => {}
+        let (rolling, acc) = (&mut self.rolling, &mut self.acc);
+        self.reader.push_slice(io.get(..n).unwrap_or(&[]), |m| {
+            if let (Msg::Record(r), true) = (m, in_window) {
+                rolling.sample(r.time, r.power);
+            }
+            acc.take(&m);
         });
         match self.reader.result() {
             Some(r) => self.end_file(r.is_ok()),
             None if n == 0 => self.end_file(false), // the file ended before the FIT data did
-            None => self.file = Some((file, offset + n as u32, day)),
+            None => self.file = Some((file, offset + n as u32, day, start)),
         }
         Ok(())
     }
 
     /// The ride read: counted if it was whole, with a session.
     fn end_file(&mut self, whole: bool) {
-        let Some((_, _, day)) = self.file.take() else { return };
+        let Some((file, _, day, start)) = self.file.take() else { return };
         let o = &mut self.out;
-        match self.session {
+        match self.acc.session() {
             Some(s) if whole => {
+                if let Some(r) = self.acc.ride(file, start) {
+                    self.index.add(r);
+                }
                 o.all.add(&s);
                 if day >= self.year {
                     o.year.add(&s);

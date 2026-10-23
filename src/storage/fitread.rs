@@ -1,8 +1,9 @@
 //! A FIT reader that takes the file one byte at a time ([`Reader::push`]), so a ride of any length streams through
 //! a small buffer: no heap, no message buffered whole. It gives only what the stock rides are read for: per
 //! `record`, the time, power, heart rate and distance; per `session`, the start, timer time, distance, average and
-//! maximum power, average heart rate. **Never the position:** the fields are picked by number and the position
-//! fields are not among them.
+//! maximum power, average heart rate, ascent. **The position only on request:** the fields are picked by number,
+//! and the position and altitude fields only by a reader made with [`Reader::with_position`] (the card of a past
+//! ride draws its track; the scan of all rides never asks for it).
 //!
 //! Protocol (Garmin's FIT protocol, developer.garmin.com/fit/protocol, as Garmin's Python SDK decodes it,
 //! github.com/garmin/fit-python-sdk `garmin_fit_sdk/decoder.py`, checked 2026-10-23):
@@ -21,7 +22,10 @@
 //! - an invalid value is all ones for an unsigned type (FIT profile base types); such a field reads as None.
 //! - message 20 `record`: 253 timestamp, 3 heart_rate (bpm), 5 distance (1/100 m), 7 power (W). Message 18
 //!   `session`: 2 start_time, 8 total_timer_time (ms), 9 total_distance (1/100 m), 16 avg_heart_rate,
-//!   20 avg_power, 21 max_power (FIT profile, Profile.xlsx of the SDK).
+//!   20 avg_power, 21 max_power, 22 total_ascent (m) (FIT profile, Profile.xlsx of the SDK). With the position:
+//!   record 0 position_lat and 1 position_long (sint32 semicircles, 2^31 per 180 degrees; invalid 0x7fffffff),
+//!   2 altitude (uint16) and 78 enhanced_altitude (uint32), both (m + 500) x 5 (the same profile); when both are
+//!   there, 78, the wider one, is taken.
 //!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
 //! small state machine one step (fuzzed in sim.rs `fuzz`).
@@ -39,6 +43,10 @@ pub struct Record {
     pub hr: Option<u8>,
     /// Distance from the start, 1/100 m.
     pub dist_cm: Option<u32>,
+    /// Latitude and longitude, semicircles (only from a reader [`Reader::with_position`]).
+    pub pos: Option<(i32, i32)>,
+    /// Altitude, decimetres (only from a reader [`Reader::with_position`]).
+    pub alt_dm: Option<i32>,
 }
 
 /// The ride's totals as its `session` message gives them.
@@ -56,6 +64,8 @@ pub struct Session {
     pub max_power: Option<u16>,
     /// Average heart rate, bpm.
     pub avg_hr: Option<u8>,
+    /// Ascent, m.
+    pub ascent_m: Option<u16>,
 }
 
 /// A message the reader gives.
@@ -81,23 +91,29 @@ pub enum Error {
 }
 
 /// Values picked per message, by slot: 0 is always the timestamp.
-const SLOTS: usize = 7;
+const SLOTS: usize = 8;
 /// Picked fields per definition at most.
 const PICKED: usize = 8;
 
-/// The slot of field `num` of global message `global`, if it is one this reader keeps.
-fn slot(global: u16, num: u8) -> Option<u8> {
+/// The slot of field `num` of global message `global`, if it is one this reader keeps (the position and altitude
+/// only with `position`).
+fn slot(global: u16, num: u8, position: bool) -> Option<u8> {
     Some(match (global, num) {
         (_, 253) => 0,
-        (20, 3) => 1,  // heart_rate
-        (20, 5) => 2,  // distance
-        (20, 7) => 3,  // power
-        (18, 2) => 1,  // start_time
-        (18, 8) => 2,  // total_timer_time
-        (18, 9) => 3,  // total_distance
-        (18, 16) => 4, // avg_heart_rate
-        (18, 20) => 5, // avg_power
-        (18, 21) => 6, // max_power
+        (20, 3) => 1,              // heart_rate
+        (20, 5) => 2,              // distance
+        (20, 7) => 3,              // power
+        (20, 0) if position => 4,  // position_lat
+        (20, 1) if position => 5,  // position_long
+        (20, 2) if position => 6,  // altitude
+        (20, 78) if position => 7, // enhanced_altitude
+        (18, 2) => 1,              // start_time
+        (18, 8) => 2,              // total_timer_time
+        (18, 9) => 3,              // total_distance
+        (18, 16) => 4,             // avg_heart_rate
+        (18, 20) => 5,             // avg_power
+        (18, 21) => 6,             // max_power
+        (18, 22) => 7,             // total_ascent
         _ => return None,
     })
 }
@@ -157,6 +173,8 @@ pub struct Reader {
     /// [`crate::fit::CRC_TABLE`], copied: with the reader, in DTCM (seen on the unit: reading the table from the
     /// image, in uncached SDRAM, costs most of the scan's time).
     table: [u16; 256],
+    /// The position and altitude are read too ([`Reader::with_position`]).
+    position: bool,
 }
 
 impl Default for Reader {
@@ -188,7 +206,13 @@ impl Reader {
             pos: 0,
             result: None,
             table: crate::fit::CRC_TABLE,
+            position: false,
         }
+    }
+
+    /// A reader that also gives each record's position and altitude ([`Record::pos`], [`Record::alt_dm`]).
+    pub const fn with_position() -> Self {
+        Reader { position: true, ..Self::new() }
     }
 
     /// Ok once the file ended with a good CRC; an error as soon as one is found; None while it goes on.
@@ -346,7 +370,7 @@ impl Reader {
         self.at = 0;
         let (num, size) = (self.tmp[0], self.tmp[1]);
         let d = &mut self.building;
-        if let Some(s) = slot(d.global, num)
+        if let Some(s) = slot(d.global, num, self.position)
             && matches!(size, 1 | 2 | 4)
             && let Ok(off) = u16::try_from(d.size)
             && let Some(p) = d.picked.get_mut(usize::from(d.n))
@@ -428,7 +452,14 @@ impl Reader {
                 *v = if def.big { *v << 8 | b } else { *v | b << (8 * (k - off)) };
             }
             if from < to && to == off + size {
-                let invalid = if size == 4 { u32::MAX } else { (1 << (8 * size)) - 1 };
+                let signed = def.global == 20 && (s == 4 || s == 5); // sint32: invalid is the largest value
+                let invalid = if signed {
+                    0x7fff_ffff
+                } else if size == 4 {
+                    u32::MAX
+                } else {
+                    (1 << (8 * size)) - 1
+                };
                 if *v != invalid {
                     self.present |= 1 << s;
                 }
@@ -493,7 +524,12 @@ impl Reader {
         let u8_ = |s| get(s).map(|v| v.min(0xfe) as u8);
         let u16_ = |s| get(s).map(|v| v.min(0xfffe) as u16);
         match global {
-            20 => Some(Msg::Record(Record { time, hr: u8_(1), dist_cm: get(2), power: u16_(3) })),
+            20 => {
+                let pos = get(4).zip(get(5)).map(|(lat, lon)| (lat as i32, lon as i32));
+                // (m + 500) x 5 to decimetres; a uint16 altitude given in 4 bytes still reads as its value
+                let alt_dm = get(7).or(get(6)).map(|v| (i64::from(v) * 2 - 5000) as i32);
+                Some(Msg::Record(Record { time, hr: u8_(1), dist_cm: get(2), power: u16_(3), pos, alt_dm }))
+            }
             18 => Some(Msg::Session(Session {
                 start: get(1),
                 timer_ms: get(2),
@@ -501,6 +537,7 @@ impl Reader {
                 avg_hr: u8_(4),
                 avg_power: u16_(5),
                 max_power: u16_(6),
+                ascent_m: u16_(7),
             })),
             _ => None,
         }
@@ -613,12 +650,34 @@ mod tests {
         assert_eq!(r, Some(Ok(())));
         let recs: Vec<Record> = m.iter().filter_map(|m| if let Msg::Record(r) = m { Some(*r) } else { None }).collect();
         assert_eq!(recs.len(), 120);
-        assert_eq!(recs[20], Record { time: T0 + 21, power: Some(220), hr: Some(130), dist_cm: Some(10_500) });
+        let want =
+            Record { time: T0 + 21, power: Some(220), hr: Some(130), dist_cm: Some(10_500), ..Record::default() };
+        assert_eq!(recs[20], want, "no position unless asked");
         assert_eq!(recs[5].power, None);
         assert_eq!(recs[52].power, None, "dropout");
         let Some(Msg::Session(s)) = m.last() else { panic!("no session") };
         assert_eq!((s.start, s.max_power, s.avg_hr), (Some(T0), Some(319), Some(130)));
         assert_eq!(s.timer_ms, Some(121_000));
+    }
+
+    /// With the position asked for: the position in semicircles and the altitude, as fit.rs wrote them.
+    #[test]
+    fn position_on_request() {
+        let mut f = Vec::new();
+        let (mut w, _) = Writer::start(&mut f, T0).unwrap();
+        let s =
+            Sample { time: T0 + 1, pos: Some((450_000_000, -60_000_000)), alt_mm: Some(123_400), ..Sample::default() };
+        w.record(&mut f, &s).unwrap();
+        w.record(&mut f, &Sample { time: T0 + 2, ..Sample::default() }).unwrap();
+        w.finish(&mut f, T0 + 3).unwrap();
+        let mut r = Reader::with_position();
+        let mut recs = Vec::new();
+        r.push_slice(&f, |m| recs.extend(if let Msg::Record(x) = m { Some(x) } else { None }));
+        assert_eq!(r.result(), Some(Ok(())));
+        // 45 degrees: 2^29 semicircles; -6 degrees: -2^31 / 30
+        assert_eq!(recs[0].pos, Some((1 << 29, -(1i64 << 31) as i32 / 30)));
+        assert_eq!(recs[0].alt_dm, Some(1234));
+        assert_eq!((recs[1].pos, recs[1].alt_dm), (None, None), "not in that record");
     }
 
     #[test]

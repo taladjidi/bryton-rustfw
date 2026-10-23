@@ -1196,6 +1196,88 @@ mod tests {
         assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
     }
 
+    /// The ride history over the synthetic volume (tools/fat_image.py): HISTORY starts the scan of stock's rides and
+    /// lists them newest first as they come; Select opens a ride's card (its track, profile and numbers, read from
+    /// its file once), Back returns to the list. Prints what opening a card read.
+    #[test]
+    fn ride_history() {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        app.press(&mut sim, Press::Short(Key::Lap));
+        app.press(&mut sim, Press::Short(Key::Lap)); // HISTORY, over STOCK DATA
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::History, 0));
+        assert_eq!(app.stock.status(), crate::stock::Status::Running, "opening it starts the scan");
+        let row = |app: &App, i| {
+            app.menu_row(Menu::History, i).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()))
+        };
+        while app.stock.status() == crate::stock::Status::Running {
+            run(&mut sim, &mut app, u64::from(POLL_MS));
+            assert!(sim.ms < 60_000);
+        }
+        run(&mut sim, &mut app, 1000);
+        let rows: Vec<_> = (0..5).map(|i| row(&app, i)).collect();
+        let want = ["THU 22 OCT 5.0", "TUE 20 OCT 14.4", "THU 1 OCT 12.0", "SAT 15 MAR 6.0"];
+        assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "newest first");
+        assert_consistent(&sim, &app);
+        sim.save("history_list");
+
+        app.press(&mut sim, Press::Short(Key::Page));
+        let (cmds0, t0) = (sim.emmc.cmds.len(), sim.ms);
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Past);
+        let reads = sim.emmc.cmds[cmds0..].iter().filter(|c| c.0 == 17 || c.0 == 18).count();
+        let file = app.stock.index.get(1).unwrap().file.size;
+        assert_eq!(app.past.bytes, file, "the whole file, once");
+        std::println!(
+            "card: {} bytes of FIT in {reads} reads, {} ms simulated; at 2.5 MB/s on the unit about {} ms",
+            app.past.bytes,
+            sim.ms - t0,
+            app.past.bytes / 2500
+        );
+        // what the records give: 2 min at 400 W then 250 W, a second a record
+        let mut p = crate::power::Power::new();
+        (0..1800).for_each(|t| p.sample(Some(if t < 120 { 400 } else { 250 }), true));
+        let np = p.np().unwrap();
+        let tss = crate::power::tss(1800, np, app.settings.ftp);
+        let card = app.past.card;
+        assert_eq!(card.title.as_str(), "20 OCT 08:00");
+        let stats: Vec<_> = card.stats.iter().map(|(l, v)| std::format!("{l} {}", v.as_str())).collect();
+        let want = [
+            "TIME 0:30".into(),
+            "KM 14.4".into(),
+            "AVG KM/H 28.8".into(),
+            "ASCENT M 80".into(),
+            std::format!("NP {np}"),
+            "AVG W 260".into(),
+            "AVG HR 140".into(),
+            "MAX HR 140".into(),
+            std::format!("TSS {tss}"),
+            "KJ 468".into(),
+        ];
+        assert_eq!(stats, want);
+        assert!(app.past.track.points().len() > 100, "the loop's track");
+        let h = ui::card::ELEV.3;
+        let bars: Vec<u32> = (0..ui::card::ELEV.2).map(|i| app.past.elev(i, h).0).collect();
+        assert!(bars.iter().all(|&b| b >= 1) && bars.iter().any(|&b| b > h / 2), "two hills over the profile");
+        assert!(bars[0] < h / 4 && bars[bars.len() / 4] > h / 2, "low at the start, a top a quarter in");
+        run(&mut sim, &mut app, 500);
+        assert_consistent(&sim, &app);
+        sim.save("history_card");
+
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Menu(Menu::History, 1), "back to the list, on that ride");
+        // the ride without a track: its card all the same, "NO FIX" on the map
+        app.press(&mut sim, Press::Short(Key::Lap));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!((app.screen(), app.past.card.title.as_str()), (Screen::Past, "22 OCT 10:00"));
+        assert!(app.past.track.points().is_empty());
+        run(&mut sim, &mut app, 200);
+        assert_consistent(&sim, &app);
+    }
+
     /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
     /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
     #[test]
@@ -1205,7 +1287,9 @@ mod tests {
         app.press(&mut sim, Press::Long(Key::Page));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
         app.press(&mut sim, Press::Short(Key::Lap));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW + 1), "Lap from the top wraps to STOCK DATA");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW + 2), "Lap from the top wraps to STOCK DATA");
+        app.press(&mut sim, Press::Short(Key::Lap));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW + 1), "then HISTORY");
         app.press(&mut sim, Press::Short(Key::Lap));
         assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW), "then NEARBY BLE");
         assert_consistent(&sim, &app);
@@ -2768,17 +2852,29 @@ mod fuzz {
     }
 
     /// FIT files from the card (stock's rides): random bytes behind a valid header, and every kind of damage to a
-    /// valid ride, through the reader and the power curve.
+    /// valid ride, through the reader (with the position, as a past ride's card reads it), the power curve, the
+    /// history's totals and the track.
     #[test]
     fn fit_files() {
         use crate::fitread::{Msg, Reader};
         let feed = |data: &mut dyn Iterator<Item = u8>| {
-            let (mut r, mut roll) = (Reader::new(), crate::power_curve::Rolling::new());
+            let (mut r, mut roll) = (Reader::with_position(), crate::power_curve::Rolling::new());
+            let (mut acc, mut track) = (crate::history::Acc::new(), crate::map::Track::new());
             for b in data {
-                if let Some(Msg::Record(x)) = r.push(b) {
+                let Some(m) = r.push(b) else { continue };
+                acc.take(&m);
+                if let Msg::Record(x) = m {
                     roll.sample(x.time, x.power);
+                    if let Some((lat, lon)) = x.pos.filter(|p| p.0.unsigned_abs() <= 1 << 30) {
+                        track.add(lat / 2, lon / 2, 0); // about degrees x 1e-7, as the card converts them
+                    }
                 }
             }
+            let file = crate::fat::File { cluster: 0, size: 0, dir: false };
+            if let Some(ride) = acc.ride(file, (2026, 1, 1, 0, 0)) {
+                let _ = crate::ui::card::Card::of(&ride.stats(250));
+            }
+            let _ = crate::map::View::fit_whole(&track, (0, 0, 240, 110));
             let _ = crate::power_curve::fit_cp(&crate::power_curve::Curve { watts: roll.best, day: [0; 13] });
         };
         // random messages behind a valid header; a new file each time the reader gives up, so it gets past the
@@ -2857,6 +2953,12 @@ mod fuzz {
             while scan.step(&mut d, 1 << 16) {
                 passes += 1;
                 assert!(passes < 100_000, "the scan does not end");
+            }
+            // and each ride it found opened as a card (the volume as damaged)
+            let mut past = crate::history::Past::new();
+            for i in 0..scan.index.len() {
+                let r = *scan.index.get(i).unwrap();
+                let _ = past.read(&mut d, &r, 250);
             }
         }
     }

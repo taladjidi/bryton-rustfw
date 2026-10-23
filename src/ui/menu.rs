@@ -159,6 +159,8 @@ pub enum Row {
     Field(usize, usize),
     /// A row of the stock data menu.
     Stock(StockRow),
+    /// Past ride `n` of the history, newest first: Select opens its card.
+    Past(usize),
 }
 
 /// What the stock data menu shows ([`STOCK`]): read from the rides and settings Bryton's firmware left on the
@@ -215,7 +217,7 @@ pub const STOCK: [StockRow; 11] = {
 };
 
 /// The main menu.
-pub const MAIN: [Row; 15] = [
+pub const MAIN: [Row; 16] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
@@ -230,6 +232,7 @@ pub const MAIN: [Row; 15] = [
     Row::Set(Setting::WPrime),
     Row::Open(Menu::Gps),
     Row::Nearby,
+    Row::Open(Menu::History),
     Row::Open(Menu::Stock),
 ];
 
