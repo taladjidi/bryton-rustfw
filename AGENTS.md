@@ -103,6 +103,9 @@ The point of this project is a firmware in safe Rust.
   pages show. Pure logic.
 - `src/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
   `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`).
+- `src/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
+  length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
+  `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests.
