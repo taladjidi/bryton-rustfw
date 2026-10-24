@@ -2408,7 +2408,8 @@ fn course_ride() {
     app.set_course_memory(crate::storage::course::tests::memory());
     app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, Timer] };
     app.pages[1] = PageCfg { layout: 3, fields: [Profile, Climb, ClimbGain, Time, Time, Time] };
-    app.pages[2] = PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] };
+    // the map whole, set by hand (not the default page, which shows the course's fields while one is followed)
+    app.pages[2] = PageCfg { layout: 1, fields: [Map, Speed, Time, Time, Time, Time] };
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
     let fields = |app: &App| [ToGo, OffCourse, Climb, ClimbGain, UpToGo].map(|f| text(app, f));
 

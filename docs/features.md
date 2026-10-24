@@ -18,9 +18,8 @@
   yellow, orange, red as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
   grade. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
-  3, the map large with the ride's elevation, speed, distance, moving time and average speed under it. While a
-  course is followed, page 3 (left as it was) shows the course's profile and the distance to go instead of the
-  elevation and the speed.
+  3, the map, whole. While a course is followed, page 3 (left as it was) shows the map large with the course's
+  profile, the distance to go, distance, moving time and average speed under it.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
