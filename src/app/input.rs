@@ -176,6 +176,8 @@ impl App {
             (_, Input::Off) => return self.power_off(b),
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
+            // a swipe down on a page opens the remote, without the menus
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
             (Screen::Media, Input::Back) => self.close(),
             (Screen::Media, Input::Touch(Gesture::Tap(x, y))) => {
                 use ui::media::Button;

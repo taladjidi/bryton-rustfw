@@ -132,6 +132,19 @@ impl Media {
     }
 }
 
+/// The AMS remote commands the playing app accepts, one bit per RemoteCommandID, from a Remote Command
+/// notification (its value is the list of the IDs; Apple's AMS specification). A music app often has no skip, a
+/// podcast app no next track.
+///
+/// ```
+/// use bryton_rustfw::phone::ams_commands;
+/// assert_eq!(ams_commands(&[0, 1, 2, 3, 4]), 0b1_1111);
+/// assert_eq!(ams_commands(&[9, 10, 200]), 0b110_0000_0000); // 200: no such command, left out
+/// ```
+pub fn ams_commands(list: &[u8]) -> u16 {
+    list.iter().filter(|&&c| c < 16).fold(0, |m, &c| m | 1 << c)
+}
+
 /// HID Information: HID 1.11, no country, normally connectable (bit 1), no remote wake.
 pub const HID_INFO: [u8; 4] = [0x11, 0x01, 0, 0x02];
 /// Report Reference of the input report: id 1, input (1).

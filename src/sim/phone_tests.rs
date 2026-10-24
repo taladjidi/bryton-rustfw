@@ -91,6 +91,9 @@ fn media_keys_and_now_playing() {
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 3000);
     app.input(&mut sim, Input::Media); // Lap held on the overview
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Down))); // from the overview
+    assert_eq!(app.screen, Screen::Media);
+    app.input(&mut sim, Input::Back);
     app.activate(&mut sim, Menu::Phone, 2); // REMOTE
     assert_eq!(app.screen, Screen::Media);
     app.show(&mut sim);
@@ -100,6 +103,8 @@ fn media_keys_and_now_playing() {
     run(&mut sim, &mut app, 200);
     app.input(&mut sim, Input::Touch(Gesture::Hold(120, 160))); // the shutter
     run(&mut sim, &mut app, 3000);
+    app.media(&mut sim, crate::phone::Media::SkipFwd, false);
+    assert_eq!(app.banner.as_str(), "NOT IN THIS APP", "not in the phone's list: not sent");
     let ph = sim.nordic.phone.as_ref().unwrap();
     assert_eq!(ph.commands, [2, 3, 4, 5], "toggle, next, previous, volume up: AMS");
     assert_eq!(ph.reports, [0x08, 0], "volume up pressed and released: HID");

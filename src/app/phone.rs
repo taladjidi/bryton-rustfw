@@ -148,6 +148,8 @@ pub struct Phone {
     pub(crate) ringing: bool,
     /// What plays.
     pub(crate) now: ph::NowPlaying,
+    /// The AMS commands the playing app accepts ([`ph::ams_commands`]; 0: no list yet, all tried).
+    commands: u16,
     /// A media key's report was sent: the release goes at the next pass.
     release: bool,
     /// Passes the release failed in a row.
@@ -190,6 +192,7 @@ impl Default for Phone {
             call: None,
             ringing: false,
             now: ph::NowPlaying::default(),
+            commands: 0,
             release: false,
             release_tries: 0,
             battery_sent: None,
@@ -488,6 +491,9 @@ impl App {
             && p.h[RC] != 0
             && let Some(cmd) = key.ams()
         {
+            if p.commands != 0 && p.commands & 1 << cmd == 0 {
+                return self.say("NOT IN THIS APP"); // a skip in a music app: the phone would refuse it
+            }
             p.queue(Op::Ams(cmd));
             return self.next_op(b, conn);
         }
@@ -848,6 +854,8 @@ impl App {
                     self.say(l.as_str());
                 }
             }
+        } else if handle == h[RC] {
+            self.phone.commands = ph::ams_commands(data);
         } else if handle == h[CT] {
             self.phone_time(b, Some(data), None);
         }

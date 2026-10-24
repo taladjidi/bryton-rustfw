@@ -224,6 +224,7 @@ impl Nordic {
                     self.hvx(0x12, &v);
                 }
                 Act::Track(title, artist) => {
+                    self.hvx(0x22, &[0, 1, 2, 3, 4, 5, 6]); // a music app: no skips (AMS Remote Command)
                     self.hvx(0x25, &[&[2, 2, 0][..], title.as_bytes()].concat());
                     self.hvx(0x25, &[&[2, 0, 0][..], artist.as_bytes()].concat());
                     self.hvx(0x25, &[&[2, 1, 0][..], b"An Album"].concat());
