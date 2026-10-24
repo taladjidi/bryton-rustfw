@@ -93,7 +93,8 @@ fn media_keys_and_now_playing() {
     app.input(&mut sim, Input::Media); // Lap held on the overview
     app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Down))); // from the overview
     assert_eq!(app.screen, Screen::Media);
-    app.input(&mut sim, Input::Back);
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
+    assert_eq!(app.screen, Screen::Main, "a swipe up closes it");
     app.activate(&mut sim, Menu::Phone, 2); // REMOTE
     assert_eq!(app.screen, Screen::Media);
     app.show(&mut sim);

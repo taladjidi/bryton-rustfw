@@ -178,7 +178,8 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
             // a swipe down on a page opens the remote, without the menus
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
-            (Screen::Media, Input::Back) => self.close(),
+            // Back, or a swipe up (the swipe down that opened it, undone)
+            (Screen::Media, Input::Back | Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
             (Screen::Media, Input::Touch(Gesture::Tap(x, y))) => {
                 use ui::media::Button;
                 let (key, photo) = match ui::media::hit(x, y) {
@@ -198,8 +199,8 @@ impl App {
                     Input::Select => Media::PlayPause,
                     Input::Next | Input::Touch(Gesture::Swipe(Dir::Left)) => Media::Next,
                     Input::Prev | Input::Touch(Gesture::Swipe(Dir::Right)) => Media::Prev,
-                    Input::NextHeld | Input::Touch(Gesture::Swipe(Dir::Down)) => Media::VolDown,
-                    Input::PrevHeld | Input::Touch(Gesture::Swipe(Dir::Up)) => Media::VolUp,
+                    Input::NextHeld => Media::VolDown,
+                    Input::PrevHeld => Media::VolUp,
                     Input::Touch(Gesture::Hold(..)) => return self.media(b, Media::VolUp, true),
                     _ => return,
                 };

@@ -217,10 +217,10 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
   as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. PHONE >
-  REMOTE is a player: the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
+  REMOTE is a player, also opened by a swipe down on the overview or a ride page (a swipe up closes it): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
   time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
   the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,
-  Page next, Lap previous, held Page / Lap volume; swipes: left / right track, up / down volume; a hold takes a
+  Page next, Lap previous, held Page / Lap volume; swipes: left / right track; a skip the app does not take says NOT IN THIS APP; a hold takes a
   photo (the camera's shutter is volume up, always sent as HID).
 - **Now playing** (AMS): title, artist, album, duration, playing or paused and the elapsed time; the title in the
   banner when the track changes; the MUSIC field (group PHONE) shows the elapsed time.
