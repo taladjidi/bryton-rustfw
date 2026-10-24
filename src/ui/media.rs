@@ -163,10 +163,10 @@ fn clock(l: &mut Line<8>, s: u32) {
         l.push_u32(s / 3600);
         l.push_str(":");
         l.push_str(super::DIGITS[(s / 600 % 6) as usize]);
+        l.push_str(super::DIGITS[(s / 60 % 10) as usize]);
     } else {
-        l.push_u32(s / 600 % 6);
+        l.push_u32(s / 60); // "1:29", not "01:29"
     }
-    l.push_str(super::DIGITS[(s / 60 % 10) as usize]);
     l.push_str(":");
     l.push_str(super::DIGITS[(s / 10 % 6) as usize]);
     l.push_str(super::DIGITS[(s % 10) as usize]);
@@ -247,6 +247,19 @@ fn triangle(c: &mut impl Canvas, x: u32, y: u32, h: u32, right: bool, color: u16
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clocks() {
+        let c = |s| {
+            let mut l = Line::<8>::new();
+            clock(&mut l, s);
+            l
+        };
+        assert_eq!(
+            [c(5).as_str(), c(89).as_str(), c(600).as_str(), c(3725).as_str()],
+            ["0:05", "1:29", "10:00", "1:02:05"]
+        );
+    }
 
     #[test]
     fn layout_fits_and_hits() {
