@@ -62,6 +62,10 @@ pub const LIGHT_MS: u32 = 250;
 /// in the low 16 bits. Free before (BOARD.md 8: stock never uses it).
 pub const USB_DROPS_BKP: usize = 31;
 
+/// RTC backup register with what the USB drive saw last at a drop ([`App::usb_dropped`]): tag 0xd1. Free before
+/// (BOARD.md 8).
+pub const USB_LAST_BKP: usize = 0;
+
 impl App {
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `dev.py peek`) and
     /// said in a notice.
@@ -69,6 +73,13 @@ impl App {
         let n = b.backup_read(USB_DROPS_BKP);
         let n = if n >> 24 == 0x0b { n & 0xffff } else { 0 };
         b.backup_write(USB_DROPS_BKP, 0x0b00_0000 | (n + 1).min(0xffff));
+        // what the drive saw last, kept through the replug a dead link needs: tag 0xd1, the last command, its
+        // status, the bus resets (low 4 bits) and Bulk-Only resets (high 4) among the last 32 entries
+        let log = self.drive_log();
+        let (op, st) = log.iter().last().map_or((0, 0), |e| (e.0, e.3));
+        let count = |code: u8| log.iter().filter(|e| e.0 == code).count().min(15) as u32;
+        let w = 0xd100_0000 | u32::from(op) << 16 | u32::from(st) << 8 | count(0xfe) << 4 | count(0xff);
+        b.backup_write(USB_LAST_BKP, w);
         self.notice("USB RECONNECT");
     }
 

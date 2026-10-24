@@ -50,7 +50,7 @@ The dated findings are in [journal.md](journal.md).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
-- **The USB drive (mass storage, msc.rs): to do, high speed.** Seen on the unit (2026-10-24): the composite
+- **The USB drive (mass storage, msc.rs): to do, high speed** (all of it in docs/usb.md). Seen on the unit (2026-10-24): the composite
   device keeps the dev link; DEVICE > USB DRIVE (or `dev.py drive`) mounts BRYTON (macOS refuses the mount while its
   screen is locked: "mount approval dissented, 0xF8DA0008"); 40 files equal to the backup; a write (a 48-byte file)
   read back through the firmware's own FAT reader after the eject and restart. **High speed drops** every long read
