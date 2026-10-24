@@ -127,9 +127,15 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
   tile holding zooms 10 to 14 (341 tiles: a 32-byte header, an index of offset and length, 4-byte aligned records),
   copied over USB mass storage. A tool, `tools/map_pack.py`, with no new dependency (sqlite3 is in Python's
   standard library).
-- **IGN:** the Plan IGN vector tiles (data.geopf.fr, Etalab 2.0, no key) can add contour lines and paths for France,
-  merged by the same tool. The SCAN 25 and SCAN 100 rasters are not open data, so they are out.
-- **Notices** on an About page: "© OpenStreetMap contributors (ODbL), © OpenMapTiles", and IGN's when used.
+- **IGN (done, not yet seen on the unit):** Plan IGN v2 raster tiles (data.geopf.fr WMTS, Etalab 2.0, no key) for
+  France, with contour lines and hill shading built in: `tools/ign_pack.py` fetches an area (resumable, 4 requests a
+  second) and packs it (per-tile palette of up to 256 colours, LZ4; about 24 KB a tile, about 3.9 GB for 150 x 150 km
+  at zooms 11 to 16), `src/storage/ign.rs` reads it, `src/ui/tiles.rs` draws it, stock's map under it where it
+  stops. The SCAN 25 and SCAN 100 rasters are not open to private individuals, so they are out.
+- **IGN next:** the scale bar drawn dark on IGN's light map (it is white, made for stock's grey-green); a pack per
+  region with a lower zoom limit so a whole country fits; packs copied by USB mass storage.
+- **Notices** on an About page: "© OpenStreetMap contributors (ODbL), © OpenMapTiles", and IGN's when used (the map
+  already shows "(c) IGN" in its corner whenever IGN tiles are drawn).
 - Vector over raster: about ten times smaller, any zoom, and text that stays upright if the map turns.
 
 ## 6. Navigation and climbs

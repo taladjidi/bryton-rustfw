@@ -359,3 +359,34 @@ fn ubx_frames() {
         }
     }
 }
+
+/// Random bytes, and real LZ4 blocks with random bytes changed, into the LZ4 decoder and the IGN tile decoder: no
+/// panic, never a length past the output.
+#[test]
+fn lz4_blocks() {
+    let mut out = std::vec![0u16; crate::ign::TILE];
+    let mut noise = bytes(31, 1 << 22);
+    for n in [0usize, 1, 7, 64, 1000, 70_000] {
+        for _ in 0..32 {
+            let v: Vec<u8> = noise.by_ref().take(n).collect();
+            let got = crate::ign::lz4(&mut v.iter().copied(), &mut out[..4096], u16::from);
+            assert!(got.is_none_or(|k| k <= 4096));
+            let _ = crate::ign::decode(&mut v.iter().copied(), &mut out);
+        }
+    }
+    let tiles: Vec<Vec<u8>> = crate::ign::tests::fixture().into_iter().map(|(_, p)| p).collect();
+    let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    for good in &tiles {
+        let blob = &good[8208..]; // the first tile (the packer writes it first)
+        for _ in 0..200 {
+            let mut bad = blob.to_vec();
+            for _ in 0..1 + next() % 8 {
+                let at = next() as usize % bad.len();
+                bad[at] = next() as u8;
+            }
+            let cut = next() as usize % (bad.len() + 1);
+            let _ = crate::ign::decode(&mut bad[..cut].iter().copied(), &mut out);
+            let _ = crate::ign::decode(&mut bad.iter().copied(), &mut out);
+        }
+    }
+}

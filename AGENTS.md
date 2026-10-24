@@ -203,7 +203,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns.
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
-  restores from under the arrow and the track.
+  restores from under the arrow and the track; IGN's raster tiles first where the owner's packs have them.
+- `src/storage/ign.rs`: the IGN map packs (`\Rustfw\Maps\IGN<z>_<bx>_<by>.PAK`, the format in its module doc),
+  made on the computer by `tools/ign_pack.py` (fetch, pack, the synthetic `fixture` in `test-data/ign`); the LZ4
+  block decoder. Real IGN tiles never enter the repository.
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:

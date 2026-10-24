@@ -72,6 +72,20 @@ pub struct File {
 /// Bytes of a name [`Fat::list`] gives (longer long names are cut).
 pub const NAME: usize = 64;
 
+/// Where a read of a file ended ([`Fat::read_from`]): the cluster's place in the chain, and the cluster (0: none).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Seek {
+    index: u32,
+    cluster: u32,
+}
+
+impl Seek {
+    /// No read yet: from the first cluster.
+    pub const fn new() -> Seek {
+        Seek { index: 0, cluster: 0 }
+    }
+}
+
 /// Where a directory listing is: the sector read last, and the long name pieces seen since the last entry.
 pub struct Cursor {
     cluster: u32,
@@ -362,15 +376,36 @@ impl Fat {
     /// Reads file `f` from byte `offset` into `buf`: the number of bytes read, less than `buf.len()` only at the end
     /// of the file. Whole sectors go straight into `buf`, as many as one cluster holds in one disk read.
     pub fn read_at(&mut self, d: &mut impl Disk, f: &File, offset: u32, buf: &mut [u8]) -> Result<usize, Error> {
+        self.read_from(d, f, offset, buf, &mut Seek::default())
+    }
+
+    /// [`Fat::read_at`] that starts walking the chain from where the last read of `f` through `seek` ended (when
+    /// that is not past `offset`), and leaves `seek` where this one ends: reading on through a large file then
+    /// costs no FAT reads from its first cluster again. `seek` belongs to `f` alone.
+    pub fn read_from(
+        &mut self,
+        d: &mut impl Disk,
+        f: &File,
+        offset: u32,
+        buf: &mut [u8],
+        seek: &mut Seek,
+    ) -> Result<usize, Error> {
         let n = (f.size.saturating_sub(offset) as usize).min(buf.len());
         let cluster_bytes = self.spc * SECTOR as u32;
         let mut done = 0;
-        let mut cluster = if n == 0 { 0 } else { self.nth(d, f.cluster, offset / cluster_bytes)? };
+        let mut index = offset / cluster_bytes;
+        let mut cluster = match (n, *seek) {
+            (0, _) => 0,
+            (_, Seek { index: at, cluster }) if cluster != 0 && at <= index => self.nth(d, cluster, index - at)?,
+            _ => self.nth(d, f.cluster, index)?,
+        };
         while done < n {
             let pos = offset + done as u32;
             if done > 0 && pos.is_multiple_of(cluster_bytes) {
                 cluster = self.next(d, cluster)?.ok_or(Error::Corrupt)?;
+                index += 1;
             }
+            *seek = Seek { index, cluster };
             let in_cluster = pos % cluster_bytes;
             let lba = self.lba(cluster) + in_cluster / SECTOR as u32;
             let left = n - done;

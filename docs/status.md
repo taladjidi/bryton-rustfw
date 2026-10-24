@@ -20,6 +20,10 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **IGN maps** (`\Rustfw\Maps`): the packs found, a view drawn from them, its time (simulated: one index sector and
+  about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
+  decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the
+  "(c) IGN" corner, the 2.1 MB map memory zeroed at boot.
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
   checked against openant).
 - **The automatic backlight by eye:** stock's curve (8 % in the dark, the 1 % minimum above 120 lux): is the panel

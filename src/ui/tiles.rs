@@ -3,6 +3,14 @@
 //! drawn **once per view** into a pixel buffer in SDRAM. The map copies that buffer to the panel and restores
 //! from it under the arrow and the track, so moving them never draws a road again.
 //!
+//! **IGN first:** where the owner's IGN packs (`\Rustfw\Maps`, [`crate::ign`]) have the tile under the view's
+//! centre, the view is drawn from them: the finest zoom whose 256-pixel tiles are drawn at least 256 pixels wide
+//! (enlarged up to 2x, nearest pixel, never shrunk: no thin line lost), else up to 2 coarser ones.
+//! A view shows at most [`RASTERS`] tiles, each read once (its index entry: one sector; its bytes: about 20 KB),
+//! decoded straight to RGB565 and held in SDRAM; stock's map is drawn under them only when one of them is not in
+//! the packs (the edge of the packed area). "(c) IGN" goes into the buffer's bottom right corner, as the licence
+//! asks. Same rule as stock's: the work is done on a view change only, bounded by the [`RASTERS`] tiles.
+//!
 //! Why it is fast:
 //! - **Nothing is drawn while the view stays.** A view change (first fix, re-centre, zoom) draws once; the arrow
 //!   and new track segments are small boxes copied from the buffer ([`crate::map::update`]).
@@ -38,9 +46,12 @@
 //!   `DrawTarget::draw_iter` (src/primitives/line/thick_points.rs), and it brings 5 crates (az, byteorder,
 //!   float-cmp, micromath, embedded-graphics-core); here a road row is one slice `fill` into the buffer.
 
-use crate::fat::{self, Disk, Fat, File};
+use crate::fat::{self, Disk, Fat, File, Seek};
+use crate::fonts::PIXEL;
+use crate::ign;
 use crate::map::{Rect, View, cos_q16};
-use crate::text::Line;
+use crate::text::{self, Align, Line};
+use crate::ui::{self, Canvas};
 
 /// Pixels of the largest map area (a full ride page, 240 x 296).
 pub const PIXELS: usize = 240 * 296;
@@ -51,8 +62,17 @@ const FEATS: usize = 8192;
 /// Points kept a tile, x and y (the largest seen: about 18,000).
 const PTS: usize = 32_768;
 const SLOT_WORDS: usize = FEATS * 4 + PTS * 2;
-/// The memory the basemap needs, 16-bit words: the pixels, then the tiles (1.3 MB).
-pub const MEM_WORDS: usize = PIXELS + SLOTS * SLOT_WORDS;
+/// IGN tiles kept decoded (RGB565, 128 KB each): as many as a view shows at most, since they are drawn 256 pixels
+/// wide or more (2 columns of the 240-pixel map by 3 rows of its 296).
+pub const RASTERS: usize = 6;
+/// The memory the basemap needs, 16-bit words: the pixels, stock's tiles, then IGN's (2.0 MB).
+pub const MEM_WORDS: usize = PIXELS + SLOTS * SLOT_WORDS + RASTERS * ign::TILE;
+/// IGN tiles are drawn at least this wide (pixels), enlarged up to twice: never shrunk, so no thin line or letter
+/// is lost to the nearest-pixel scaling.
+const RASTER_PX: f64 = 256.0;
+/// The finest zoom asked of the packs (a finer view enlarges a coarser tile), and the coarser ones tried.
+const IGN_MAX_ZOOM: u8 = 18;
+const IGN_FALLBACK: u8 = 2;
 /// Bytes read from a file at a time (on the stack while drawing).
 const IO: usize = 8192;
 /// The finest zoom stock caches.
@@ -123,8 +143,12 @@ pub struct Stats {
     pub points: u32,
     /// Pixels written into the buffer.
     pub px: u32,
-    /// The zoom drawn (0: none).
+    /// The zoom drawn (0: none), IGN's when its tiles are drawn.
     pub zoom: u8,
+    /// IGN tiles decoded from the packs (not already held).
+    pub ign_tiles: u32,
+    /// IGN tiles drawn.
+    pub ign: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -148,8 +172,42 @@ pub struct Basemap {
     /// What the buffer was drawn for (area, view, origin), and whether it holds a map (else "NO MAP").
     drawn: Option<(Rect, View, (i32, i32))>,
     map: bool,
+    /// The IGN packs and the IGN tiles held.
+    ign: Ign,
     /// The last view change's cost.
     pub stats: Stats,
+}
+
+/// An IGN pack looked for: (zoom, block x, block y) (zoom 0: none), its file (None: not on the volume), and where
+/// its last read ended.
+#[derive(Clone, Copy, Default)]
+struct Pack {
+    key: (u8, u32, u32),
+    file: Option<File>,
+    seek: Seek,
+}
+
+/// The IGN packs ([`crate::ign`]): their folder, the packs looked for last, the tiles held decoded.
+struct Ign {
+    /// `\Rustfw\Maps` once looked for (Some(None): none).
+    dir: Option<Option<File>>,
+    packs: [Pack; 4],
+    next: usize,
+    /// The tiles held (Slot::feats unused), and the clock of their use.
+    tiles: [Slot; RASTERS],
+    tick: u32,
+}
+
+/// A tile in the packs: its pack's place in [`Ign::packs`], and its (offset, length) there.
+type Found = (usize, (u32, u32));
+
+/// The IGN tiles of a view: their zoom, the tiles on screen (x, y, projection, slot; None: not drawn), and whether
+/// one of them is not in the packs (then stock's map is drawn under).
+struct IgnView {
+    zoom: u8,
+    tiles: [(u32, u32, Proj, Option<usize>); RASTERS],
+    n: usize,
+    missing: bool,
 }
 
 impl Default for Basemap {
@@ -180,7 +238,23 @@ impl Basemap {
             tick: 0,
             drawn: None,
             map: false,
-            stats: Stats { tiles_read: 0, bytes_read: 0, features: 0, points: 0, px: 0, zoom: 0 },
+            ign: Ign {
+                dir: None,
+                packs: [Pack { key: (0, 0, 0), file: None, seek: Seek::new() }; 4],
+                next: 0,
+                tiles: [Slot { key: (0, 0, 0), feats: 0, used: 0 }; RASTERS],
+                tick: 0,
+            },
+            stats: Stats {
+                tiles_read: 0,
+                bytes_read: 0,
+                features: 0,
+                points: 0,
+                px: 0,
+                zoom: 0,
+                ign_tiles: 0,
+                ign: false,
+            },
         }
     }
 
@@ -227,8 +301,48 @@ impl Basemap {
         if self.fat.is_none() {
             self.fat = Some(Fat::mount(d)?);
         }
-        let Some(fat) = self.fat.as_mut() else { return Ok(false) };
         let frame = Frame::new(view, origin, w, h);
+        // IGN's tiles where the packs have them, stock's under them where they do not
+        let mut io = [0u8; IO];
+        let ign = match (self.fat.as_mut(), self.mem.as_deref_mut()) {
+            (Some(fat), Some(mem)) => {
+                let rasters = mem.get_mut(PIXELS + SLOTS * SLOT_WORDS..).unwrap_or(&mut []);
+                self.ign.view(fat, d, rasters, &frame, (w, h), &mut io, &mut self.stats)?
+            }
+            _ => None,
+        };
+        let stock = match &ign {
+            Some(v) if !v.missing => false,
+            _ => self.draw_stock(d, &frame, w, h, &mut io)?,
+        };
+        let Some(v) = ign.filter(|v| v.tiles.iter().take(v.n).any(|t| t.3.is_some())) else { return Ok(stock) };
+        let Some(mem) = self.mem.as_deref_mut() else { return Ok(stock) };
+        let (px, rest) = mem.split_at_mut(PIXELS);
+        let rasters = rest.get(SLOTS * SLOT_WORDS..).unwrap_or(&[]);
+        let px = px.get_mut(..(w * h) as usize).unwrap_or(&mut []);
+        if !stock {
+            px.fill(BACKGROUND);
+        }
+        for &(_, _, proj, slot) in v.tiles.iter().take(v.n) {
+            if let Some(tile) = slot.and_then(|s| rasters.get(s * ign::TILE..(s + 1) * ign::TILE)) {
+                self.stats.px += raster(px, w, h, &proj, tile);
+            }
+        }
+        attribution(&mut Buf { px, w: w as u32, h: h as u32 });
+        (self.stats.zoom, self.stats.ign) = (v.zoom, true);
+        Ok(true)
+    }
+
+    /// Draws stock's tiles into the buffer; false: none for this view.
+    fn draw_stock(
+        &mut self,
+        d: &mut impl Disk,
+        frame: &Frame,
+        w: i32,
+        h: i32,
+        io: &mut [u8; IO],
+    ) -> Result<bool, fat::Error> {
+        let Some(fat) = self.fat.as_mut() else { return Ok(false) };
         // the zoom: the view's own, else a coarser one whose tile under the centre is cached
         let mut found = None;
         for z in (frame.zoom.saturating_sub(FALLBACK).max(1)..=frame.zoom).rev() {
@@ -286,7 +400,6 @@ impl Basemap {
                 self.slots[s].used = self.tick;
             }
         }
-        let mut io = [0u8; IO];
         for (i, &(x, y, _)) in tiles.iter().take(n).enumerate() {
             if at[i] != usize::MAX {
                 continue;
@@ -299,7 +412,7 @@ impl Basemap {
             self.slots[s] = Slot { key: (0, 0, 0), feats: 0, used: self.tick };
             let name = tile_name(x, y);
             let got = match (fat.find(d, hdir, name.as_str()), fat.find(d, pdir, name.as_str())) {
-                (Ok(h), Ok(p)) => load(&mut OnCard { fat, d, h, p }, feats, pts, &mut io, &mut self.stats),
+                (Ok(h), Ok(p)) => load(&mut OnCard { fat, d, h, p }, feats, pts, io, &mut self.stats),
                 (Err(e), _) | (_, Err(e)) => Err(e),
             };
             let feats = match got {
@@ -348,6 +461,206 @@ fn tile_name(x: u32, y: u32) -> Line<24> {
     l.push_u32(y);
     l.push_str("_0.bin");
     l
+}
+
+impl Ign {
+    /// The pack holding tile (`z`, `x`, `y`): its place in `packs`, opened once (its absence remembered too).
+    fn pack(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        (z, x, y): (u8, u32, u32),
+    ) -> Result<Option<usize>, fat::Error> {
+        let key = (z, x / ign::BLOCK, y / ign::BLOCK);
+        if let Some(i) = self.packs.iter().position(|p| p.key == key) {
+            return Ok(self.packs.get(i).and_then(|p| p.file).map(|_| i));
+        }
+        let Some(Some(dir)) = self.dir else { return Ok(None) };
+        let file = match fat.find(d, dir, ign::name(z, x, y).as_str()) {
+            Ok(f) => {
+                let mut h = [0u8; 16];
+                (fat.read_at(d, &f, 0, &mut h)? == h.len() && ign::header_ok(&h, z, x, y)).then_some(f)
+            }
+            Err(fat::Error::Io) => return Err(fat::Error::Io),
+            Err(_) => None,
+        };
+        let i = self.next % self.packs.len();
+        self.next = i + 1;
+        if let Some(p) = self.packs.get_mut(i) {
+            *p = Pack { key, file, seek: Seek::new() };
+        }
+        Ok(file.map(|_| i))
+    }
+
+    /// Tile (`z`, `x`, `y`): its pack's place in `packs` and its (offset, length) there; None: not in the packs.
+    fn find(&mut self, fat: &mut Fat, d: &mut impl Disk, t: (u8, u32, u32)) -> Result<Option<Found>, fat::Error> {
+        let Some(i) = self.pack(fat, d, t)? else { return Ok(None) };
+        let Some(f) = self.packs.get(i).and_then(|p| p.file) else { return Ok(None) };
+        let mut e = [0u8; 8];
+        let n = fat.read_at(d, &f, ign::entry_at(t.1, t.2), &mut e)?; // in the first cluster: no chain walked
+        Ok(if n == e.len() { ign::entry(e, f.size).map(|at| (i, at)) } else { None })
+    }
+
+    /// The IGN tiles of the view, read and decoded into `mem` (the [`RASTERS`] tiles) unless held; None: no pack
+    /// has the tile under the view's centre at its zoom or the [`IGN_FALLBACK`] coarser ones.
+    #[allow(clippy::too_many_arguments)]
+    fn view(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        mem: &mut [u16],
+        frame: &Frame,
+        (w, h): (i32, i32),
+        io: &mut [u8; IO],
+        stats: &mut Stats,
+    ) -> Result<Option<IgnView>, fat::Error> {
+        if self.dir.is_none() {
+            self.dir = Some(match fat.open(d, ign::DIR) {
+                Ok(f) if f.dir => Some(f),
+                Err(fat::Error::Io) => return Err(fat::Error::Io),
+                _ => None,
+            });
+        }
+        if self.dir == Some(None) {
+            return Ok(None);
+        }
+        let ideal = frame.raster_zoom;
+        let mut zoom = None;
+        for z in (ideal.saturating_sub(IGN_FALLBACK).max(1)..=ideal).rev() {
+            let (x, y) = frame.centre_tile(z);
+            if self.find(fat, d, (z, x, y))?.is_some() {
+                zoom = Some(z);
+                break;
+            }
+        }
+        let Some(z) = zoom else { return Ok(None) };
+        let mut v = IgnView { zoom: z, tiles: [(0, 0, Proj::default(), None); RASTERS], n: 0, missing: false };
+        let (cx, cy) = frame.centre_tile(z);
+        for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (0, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            let (x, y) = (i64::from(cx) + dx, i64::from(cy) + dy);
+            if x < 0 || y < 0 || x >= 1 << z || y >= 1 << z {
+                continue;
+            }
+            let p = frame.proj(z, x as u32, y as u32);
+            if p.on_screen(w, h)
+                && let Some(t) = v.tiles.get_mut(v.n)
+            {
+                *t = (x as u32, y as u32, p, None);
+                v.n += 1;
+            }
+        }
+        // the tiles held, then the others into the slots used longest ago (not one of this view's)
+        self.tick = self.tick.wrapping_add(1);
+        for t in v.tiles.iter_mut().take(v.n) {
+            t.3 = self.tiles.iter().position(|s| s.key == (z, t.0, t.1));
+            if let Some(s) = t.3.and_then(|s| self.tiles.get_mut(s)) {
+                s.used = self.tick;
+            }
+        }
+        for k in 0..v.n {
+            let Some(&(x, y, _, None)) = v.tiles.get(k) else { continue };
+            let Some((i, at)) = self.find(fat, d, (z, x, y))? else {
+                v.missing = true;
+                continue;
+            };
+            let taken = |s: usize| v.tiles.iter().take(v.n).any(|t| t.3 == Some(s));
+            let free = (0..RASTERS).filter(|&s| !taken(s)).min_by_key(|&s| self.tiles.get(s).map_or(0, |t| t.used));
+            let Some(s) = free else { continue };
+            let (Some(out), Some(pack)) = (mem.get_mut(s * ign::TILE..(s + 1) * ign::TILE), self.packs.get_mut(i))
+            else {
+                continue;
+            };
+            let Some(file) = pack.file else { continue };
+            if let Some(slot) = self.tiles.get_mut(s) {
+                slot.key = (0, 0, 0); // overwritten from here on
+            }
+            let mut src = ign::Bytes::new(fat, d, file, &mut pack.seek, at, io);
+            let whole = ign::decode(&mut src, out);
+            stats.bytes_read += src.read;
+            if src.error == Some(fat::Error::Io) {
+                return Err(fat::Error::Io);
+            }
+            if !whole {
+                v.missing = true; // damaged: stock's map shows there
+                continue;
+            }
+            if let (Some(slot), Some(t)) = (self.tiles.get_mut(s), v.tiles.get_mut(k)) {
+                *slot = Slot { key: (z, x, y), feats: 0, used: self.tick };
+                t.3 = Some(s);
+            }
+            stats.ign_tiles += 1;
+        }
+        Ok(Some(v))
+    }
+}
+
+/// Draws IGN tile `tile` (256 x 256 RGB565) at `p` into the area's pixels, each pixel the tile's pixel under its
+/// centre (nearest: tiles are only ever enlarged, [`RASTER_PX`]); the pixels written.
+fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
+    // grid unit u lands at (a u + b) >> 16, so pixel s's centre is at u = ((s + 1/2) 2^16 - b) / a, 16 a pixel
+    let at = |s: i32, a: i64, b: i64| {
+        let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).div_euclid(a * 16) } else { -1 };
+        u16::try_from(t).ok().filter(|&t| usize::from(t) < ign::SIDE)
+    };
+    let mut cols = [0u16; ui::W as usize];
+    let (mut x0, mut x1) = (usize::MAX, 0);
+    for (x, c) in cols.iter_mut().enumerate().take(w.max(0) as usize) {
+        if let Some(t) = at(x as i32, p.ax, p.bx) {
+            (*c, x0, x1) = (t, x0.min(x), x + 1);
+        }
+    }
+    let Some(cols) = cols.get(x0..x1) else { return 0 };
+    let mut written = 0;
+    for y in 0..h {
+        let Some(r) = at(y, p.ay, p.by).map(usize::from) else { continue };
+        let row = (y * w) as usize;
+        let (Some(src), Some(dst)) = (tile.get(r * ign::SIDE..(r + 1) * ign::SIDE), px.get_mut(row + x0..row + x1))
+        else {
+            continue;
+        };
+        for (d, &c) in dst.iter_mut().zip(cols) {
+            *d = src.get(usize::from(c)).copied().unwrap_or(BACKGROUND);
+        }
+        written += cols.len() as u32;
+    }
+    written
+}
+
+/// The copyright sign, 7 x 7 (bit 15 = leftmost), drawn before "IGN": the pixel font is ASCII only.
+const COPYRIGHT: [u16; 7] = [0x3800, 0x4400, 0xba00, 0xa200, 0xba00, 0x4400, 0x3800];
+
+/// The attribution Plan IGN v2's licence (Etalab 2.0) asks for, in the area's bottom right corner, black on white,
+/// in the buffer: the arrow and the track restore it with the map.
+fn attribution(c: &mut Buf) {
+    let style = text::Style { font: &PIXEL, scale: 1, fg: ui::BLACK, bg: ui::WHITE };
+    let (tw, th) = (style.width("IGN"), style.height());
+    let (bw, bh) = (2 + 7 + 2 + tw + 1, th + 2);
+    let (Some(x), Some(y)) = (c.w.checked_sub(bw), c.h.checked_sub(bh)) else { return };
+    c.fill(x, y, bw, bh, ui::WHITE);
+    ui::draw_bitmap(c, &COPYRIGHT, x + 2, y + 1, 1, ui::BLACK);
+    text::draw(c, &style, x + 11, y + 1, Align::Left, "IGN");
+}
+
+/// The area's pixels as a canvas (`w` x `h`, clipped).
+struct Buf<'a> {
+    px: &'a mut [u16],
+    w: u32,
+    h: u32,
+}
+
+impl Canvas for Buf<'_> {
+    fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
+        self.blit(x, y, w, h, &mut |_, _| color);
+    }
+    fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
+        for dy in 0..h.min(self.h.saturating_sub(y)) {
+            for dx in 0..w.min(self.w.saturating_sub(x)) {
+                if let Some(p) = self.px.get_mut(((y + dy) * self.w + x + dx) as usize) {
+                    *p = px(dx, dy);
+                }
+            }
+        }
+    }
 }
 
 /// A tile's two files, H (false) and P (true), read at an offset.
@@ -552,6 +865,8 @@ struct Frame {
     /// The zoom whose tiles are drawn about 512 pixels wide (up to 15), and the finest cached one for it.
     display_zoom: u8,
     zoom: u8,
+    /// The finest zoom whose IGN tiles are drawn at least [`RASTER_PX`] wide (up to [`IGN_MAX_ZOOM`]).
+    raster_zoom: u8,
 }
 
 impl Frame {
@@ -564,6 +879,10 @@ impl Frame {
         let mut display_zoom = 1u8;
         while display_zoom < 15 && world_px / f64::from(1u32 << (display_zoom + 1)) >= TILE_PX {
             display_zoom += 1;
+        }
+        let mut raster_zoom = 1u8;
+        while raster_zoom < IGN_MAX_ZOOM && world_px / f64::from(1u32 << (raster_zoom + 1)) >= RASTER_PX {
+            raster_zoom += 1;
         }
         Frame {
             scale,
@@ -578,6 +897,7 @@ impl Frame {
             half: (f64::from(w / 2), f64::from(h / 2)),
             display_zoom,
             zoom: display_zoom.min(MAX_ZOOM),
+            raster_zoom,
         }
     }
 
@@ -1003,6 +1323,129 @@ pub(crate) mod tests {
                 assert!((x - 120 - i64::from(ex)).abs() <= 1, "x {x} vs {ex}");
                 assert!((148 - y - i64::from(ey)).abs() <= 1, "y {y} vs {ey}");
             }
+        }
+    }
+
+    /// The test volume with the synthetic IGN packs (test-data/ign) copied into `\Rustfw\Maps`, as the owner
+    /// copies real ones.
+    pub fn image_with_packs() -> std::vec::Vec<u8> {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let t = fat::write::dos_time((2026, 10, 24, 12, 0, 0));
+        let rustfw = fat.ensure_dir(&mut d, fat.root(), "Rustfw", t).unwrap();
+        let maps = fat.ensure_dir(&mut d, rustfw, "Maps", t).unwrap();
+        for (name, mut bytes) in crate::ign::tests::fixture() {
+            let len = bytes.len() as u32;
+            bytes.resize(bytes.len().div_ceil(fat::SECTOR) * fat::SECTOR, 0);
+            let mut h = fat.create(&mut d, maps, &name, t).unwrap();
+            fat.write_sectors(&mut d, &mut h, 0, &bytes).unwrap();
+            fat.set_size(&mut d, &mut h, len, t).unwrap();
+        }
+        d.0
+    }
+
+    /// Pixel (`x`, `y`) of the area lies in IGN tile (`z`, `tx`, `ty`) at the tile's pixel (i, j): None outside it.
+    fn tile_px(v: View, z: u8, (tx, ty): (u32, u32), (x, y): (i32, i32)) -> Option<(u32, u32)> {
+        let p = Frame::new(v, ORIGIN, AREA.2, AREA.3).proj(z, tx, ty);
+        let at = |s: i32, a: i64, b: i64| ((i64::from(s) << 16) + 0x8000 - b).div_euclid(a * 16);
+        let (i, j) = (at(x, p.ax, p.bx), at(y, p.ay, p.by));
+        ((0..256).contains(&i) && (0..256).contains(&j)).then_some((i as u32, j as u32))
+    }
+
+    /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m and
+    /// 4 m a pixel (zooms 16 and 15, tiles drawn 305 pixels wide); "(c) IGN" in the corner; held tiles not read
+    /// again; the tile missing from the pack shows stock's map under it.
+    #[test]
+    fn draws_ign_tiles() {
+        let mut d = Ram(image_with_packs(), 0);
+        let mut b = basemap();
+        let h = 1u32 << 15;
+        for (mpp16, z) in [(32, 16u8), (64, 15)] {
+            let v = View { cx: 100, cy: 50, mpp16 };
+            let reads = d.1;
+            b.render(&mut d, AREA, v, ORIGIN);
+            std::println!("ign z{z}: {:?}, {} sector reads", b.stats, d.1 - reads);
+            assert!(b.stats.ign && b.stats.zoom == z, "{:?}", b.stats);
+            assert_eq!(b.stats.ign_tiles, 4, "the 4 tiles around the origin");
+            let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
+            save(px, AREA, &std::format!("ign_z{z}"));
+            let k = 1u32 << (z - 1);
+            let mut checked = 0;
+            for y in 0..AREA.3 - 12 {
+                for x in 0..AREA.2 - 30 {
+                    for t in [(k - 1, k - 1), (k, k - 1), (k - 1, k), (k, k)] {
+                        if let Some((i, j)) = tile_px(v, z, t, (x, y)) {
+                            let want = crate::ign::tests::synthetic(z, t.0, t.1, i, j);
+                            assert_eq!(px[(y * AREA.2 + x) as usize], want, "z{z} {t:?} at {x},{y}");
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert!(checked == 210 * 284, "{checked}");
+            // the attribution: black and white in the bottom right corner, over the map
+            let corner: std::vec::Vec<u16> = (AREA.3 - 11..AREA.3)
+                .flat_map(|y| (AREA.2 - 28..AREA.2).map(move |x| (x, y)))
+                .map(|(x, y)| px[(y * AREA.2 + x) as usize])
+                .collect();
+            assert!(count(&corner, ui::BLACK) > 20 && count(&corner, ui::WHITE) > 100, "(c) IGN");
+            // a view nearby: the tiles held, nothing read
+            b.render(&mut d, AREA, View { cx: 90, ..v }, ORIGIN);
+            assert_eq!((b.stats.ign_tiles, b.stats.bytes_read), (0, 0), "held");
+        }
+        // south, over tile (16, h, h + 1), left out of the pack: stock's tiles there (zoom 14), IGN's elsewhere
+        let v = View { cx: 100, cy: -500, mpp16: 32 };
+        b.render(&mut d, AREA, v, ORIGIN);
+        assert!(b.stats.ign && b.stats.tiles_read > 0, "{:?}", b.stats);
+        let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
+        save(px, AREA, "ign_missing_tile");
+        let (mut stock, mut ign) = (0, 0);
+        for y in 0..AREA.3 - 12 {
+            for x in 0..AREA.2 - 30 {
+                let p = px[(y * AREA.2 + x) as usize];
+                if tile_px(v, 16, (h, h + 1), (x, y)).is_some() {
+                    stock += usize::from(p == BACKGROUND);
+                } else if let Some((i, j)) = tile_px(v, 16, (h, h), (x, y)) {
+                    assert_eq!(p, crate::ign::tests::synthetic(16, h, h, i, j));
+                    ign += 1;
+                }
+            }
+        }
+        assert!(stock > 5000 && ign > 5000, "stock {stock}, ign {ign}");
+        // zoomed out past the packs (IGN's zoom 12, its fall-backs 11 and 10: none packed): stock's alone (none
+        // cached that coarse either: NO MAP)
+        let v = View { cx: 100, cy: 50, mpp16: 512 };
+        b.render(&mut d, AREA, v, ORIGIN);
+        assert!(!b.stats.ign && matches!(b.layer(AREA, v, ORIGIN), Layer::NoMap), "{:?}", b.stats);
+    }
+
+    /// A damaged pack (a tile's bytes, the index, the header): no panic, stock's map where IGN's cannot be drawn.
+    #[test]
+    fn damaged_packs() {
+        let clean = image_with_packs();
+        let mut d = Ram(clean.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Rustfw/Maps/IGN16_1024_1023.PAK").unwrap();
+        let lba = |fat: &mut Fat, d: &mut Ram, off: u32| {
+            // the sector holding byte `off` of the file: find it by content (the file is contiguous here)
+            let mut s = [0u8; 512];
+            fat.read_at(d, &f, off & !511, &mut s).unwrap();
+            (0..d.0.len() / 512).find(|&k| d.0[k * 512..k * 512 + 512] == s).unwrap()
+        };
+        let v = View { cx: 100, cy: 50, mpp16: 32 };
+        for (off, seed) in [(0u32, 1u32), (16, 2), (8208 + 600, 3), (8208 + 2000, 4)] {
+            let k = lba(&mut fat, &mut d, off);
+            let mut img = clean.clone();
+            let mut x = seed;
+            for byte in &mut img[k * 512..k * 512 + 512] {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                *byte = x as u8;
+            }
+            let mut b = basemap();
+            b.render(&mut Ram(img, 0), AREA, v, ORIGIN);
+            assert!(matches!(b.layer(AREA, v, ORIGIN), Layer::Map(_)), "damage at {off}");
         }
     }
 

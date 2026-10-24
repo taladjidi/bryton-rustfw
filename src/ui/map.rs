@@ -14,7 +14,8 @@
 //!   segment is a run per row, clipped to [`Canvas::clip`]), so they agree by construction.
 //! - **Basemap:** [`draw`] copies the background from the basemap's buffer ([`crate::tiles`]), drawn once per view,
 //!   so a dirty box restores the roads under the arrow without drawing them again. "NO MAP" (top left) when no
-//!   cached tiles cover the view; black as before when the basemap has no memory.
+//!   cached tiles cover the view; black as before when the basemap has no memory. IGN's raster tiles, when packs
+//!   cover the view ([`crate::ign`]), come through the same buffer, their "(c) IGN" drawn into it.
 
 use crate::text::{self, Align, Line, Style};
 use crate::tiles::{Basemap, Layer};

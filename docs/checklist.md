@@ -173,8 +173,10 @@ Others
 - [~] Basemap: roads and water from stock's tile cache (stock, all): sim with real tiles; not seen on the unit
 - [ ] Map zoom and pan by touch (stock, all)
 - [ ] North up, heading up (stock Compass / Heading Mode, all)
+- [~] IGN Plan v2 maps from packs made on the computer, "(c) IGN" on the map (ours; Garmin and Karoo have no IGN
+  raster): sim with synthetic packs, real packs decoded on the computer; not seen on the unit
 - [ ] Our own OpenStreetMap packs over USB (all have region maps)
-- [ ] Contour lines, POIs, street names on the map (Garmin, Wahoo, Karoo)
+- [~] Contour lines, POIs, street names on the map (Garmin, Wahoo, Karoo): in IGN's tiles (France only)
 - [x] Follow a course (FIT or GPX): line on the map, distance to go (stock, all): sim, from stock's \PlanTrip (Bryton's own layout), Garmin FIT courses and GPX in \Courses
 - [~] Off-course alert, back on track to the nearest point (stock, Wahoo Back on Track, all): sim, the alert and the distance off; no way back drawn
 - [ ] Navigate to the start of a course first (stock)

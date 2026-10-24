@@ -42,6 +42,31 @@ Engineer Mode as above, then `sudo python3 tools/iaprecover.py --write-vanilla` 
 [bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods), see its `docs/recovery.md`; run
 `tools/fetch_firmware.py` once to get the stock image). Restart, then install any firmware as usual.
 
+## IGN maps
+
+Plan IGN v2 (IGN, Licence Ouverte / Etalab 2.0: the map shows "(c) IGN") for an area, made on the computer and copied
+to the card. Needs Python 3 with Pillow and lz4 (`pip3 install pillow lz4`). SCAN 25 is not open to private
+individuals: the tool only fetches Plan IGN v2.
+
+1. Fetch the tiles into a cache outside the repository (`DIR/{z}/{x}/{y}.png`; resumable: run it again after a cut,
+   it skips what it has; 4 requests a second, so 150 x 150 km at zooms 11 to 16, about 165,000 tiles, takes about
+   12 hours):
+
+       tools/ign_pack.py fetch --bbox LON0,LAT0,LON1,LAT1 --zooms 11-16 --cache ~/ign-cache
+
+   (the bounding box in degrees, west, south, east, north; 150 km is about 1.35 degrees of latitude and, at 45 N,
+   1.9 degrees of longitude).
+2. Pack them (about 20 ms a tile on one core, spread over all of them; about 3.9 GB for that area):
+
+       tools/ign_pack.py pack --cache ~/ign-cache --out ~/ign-packs
+
+   It writes `IGN<z>_<x / 32>_<y / 32>.PAK` (one per zoom and block of 32 x 32 tiles) and `ATTRIB.TXT`.
+   To check them on the computer: `IGN_PACKS=~/ign-packs cargo test-host every_packed_tile -- --ignored --nocapture`.
+3. Copy them to the card: start Bryton's firmware (Back to Bryton's firmware, above), plug the cable in so its USB
+   drive (BRYTON) shows, and copy the files into a folder `Rustfw/Maps` at the drive's top (make it if missing).
+   Compare the copy (`diff -r ~/ign-packs /Volumes/BRYTON/Rustfw/Maps`): the USB link can drop. Then install this
+   firmware again. This firmware reads the folder, never writes it; stock ignores it.
+
 ## Day to day
 
 Once installed, later builds don't need a flash: with the cable in and the USB symbol green, `./dev.py run` runs

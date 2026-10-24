@@ -17,13 +17,15 @@ entirely. Not affiliated with Bryton.
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead (sim) | Courses on the card: stock's routes, FIT, GPX (sim) |
 | ![Workout graph](docs/img/workout-graph.png) | ![Workout gauge](docs/img/workout-gauge.png) | ![Menu](docs/img/menu.png) | ![Field groups](docs/img/field-groups.png) |
 | The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: one screen of groups (sim) | A page's field: its group, then the field (sim) |
+| ![IGN map](docs/img/ign-map.png) | | | |
+| The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | | | |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
 
 **Status (2026-10-24):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in eleven
 layouts, touch and keys, menus, ANT+ sensors (heart rate tried), derived power metrics (NP, TSS, W' balance...) and
-heart rate variability (DFA a1), graphs, GPS with fast aided starts, a track map with a basemap, battery, backlight
+heart rate variability (DFA a1), graphs, GPS with fast aided starts, a track map with a basemap (IGN Plan v2 packs, else stock's cached tiles), battery, backlight
 with an automatic mode, beeps, the workouts stock's app synced (steps, targets, 3-2-1 beeps), courses with climbs (stock's routes, FIT, GPX), and a USB dev link. Rides are not saved yet: the FIT writer is ready, the eMMC driver
 reads but does not write yet. It shares the storage with Bryton's firmware, so the two can be swapped.
 

@@ -1251,7 +1251,7 @@ fn main() -> ! {
     let mut board = S510;
     let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
-        app.set_map_memory(mem); // zeroes 1.5 MB of SDRAM once: about 10 to 30 ms (inferred), before the first map
+        app.set_map_memory(mem); // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map
     }
     app.set_course_memory(make_courses());
     checkpoint(5);

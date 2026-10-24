@@ -181,8 +181,9 @@ pub fn stage_write(offset: u32, data: &[u8]) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The map's memory (tiles.rs: the basemap's pixels and the decoded tiles, 1.3 MB): link.x reserves MAP in SDRAM
-// for it and links nothing there. Handed out once, zeroed, as a plain slice: the rest of the firmware stays safe.
+// The map's memory (tiles.rs: the basemap's pixels, stock's decoded tiles and IGN's, 2.1 MB): link.x reserves MAP
+// in SDRAM for it and links nothing there. Handed out once, zeroed, as a plain slice: the rest of the firmware stays
+// safe.
 // ---------------------------------------------------------------------------------------------------------------
 
 unsafe extern "C" {

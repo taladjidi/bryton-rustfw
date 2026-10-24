@@ -1458,6 +1458,35 @@ fn basemap_under_the_map() {
     assert!(bg(&sim) > 20_000, "the basemap under the loop");
 }
 
+/// IGN map packs on the volume (the synthetic ones of test-data/ign, through the eMMC driver): the map page draws
+/// them under the track, with "(c) IGN" in the map's bottom right corner; between view changes the eMMC is not read.
+#[test]
+fn ign_map_under_the_map() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::tiles::tests::image_with_packs();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some(crate::tiles::tests::ORIGIN) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.gnss.route = Some(tiles_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    sim.gnss.fix = Some(500);
+    run(&mut sim, &mut app, 60_000);
+    let stats = app.basemap_stats();
+    std::println!("IGN map: {stats:?}");
+    assert!(stats.ign, "{stats:?}");
+    sim.save("ign_map");
+    assert_consistent(&sim, &app);
+    // the attribution: the map's bottom right corner (the page's last 28 x 11 pixels) black and white
+    let screen = &sim.screen;
+    let corner = (H - 11..H).flat_map(|y| (W - 28..W).map(move |x| screen[(y * W + x) as usize]));
+    let (black, white) =
+        corner.fold((0, 0), |(b, w), p| (b + usize::from(p == ui::BLACK), w + usize::from(p == ui::WHITE)));
+    assert!(black > 20 && white > 100, "(c) IGN: {black} black, {white} white");
+}
+
 /// The map page (page 3 by default) through a ride: "NO FIX" until the first fix, then the track and the arrow;
 /// fitted again a few times while the ride goes out, never once the loop is closed; between those, only small
 /// boxes are redrawn. The panel always equals the screenshot rendered row by row.

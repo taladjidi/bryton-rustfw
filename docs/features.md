@@ -18,7 +18,15 @@
   yellow, orange, red as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
   grade. Page 3 is the map by default.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
-  scale bar. Before a fix, a grey dot at the last known position. No basemap yet.
+  scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
+  - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
+    packs to `\Rustfw\Maps` (made on the computer by `tools/ign_pack.py`, docs/install.md, "IGN maps"): zooms 11
+    to 16, drawn at 1x to 2x (never shrunk, so no thin line or letter is lost), "(c) IGN" in the map's corner as
+    the licence (Etalab 2.0) asks;
+  - else roads and water from stock's tile cache (`\Map\Data\Temp`), also under IGN at the edge of the packed
+    area.
+  The map is read and drawn once per view change (at most 6 IGN tiles, about 150 KB read); the arrow and the track
+  restore it from SDRAM.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
 
 - **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track,
