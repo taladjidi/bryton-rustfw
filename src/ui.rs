@@ -611,7 +611,7 @@ impl Field {
             "LAP TIME",
             "LAP KM",
             "ASCENT M",
-            "POWER GRAPH",
+            "W GRAPH",
             "TEMP C",
             "HR GRAPH",
             "DFA A1",
@@ -633,9 +633,9 @@ impl Field {
             "L/R",
             "VAM M/H",
             "GRADE %",
-            "W'BAL GRAPH",
+            "W' GRAPH",
             "DFA GRAPH",
-            "ELEV GRAPH",
+            "ALT GRAPH",
             "WEEK KM",
             "WEEK H",
             "YEAR KM",
@@ -1116,12 +1116,17 @@ pub fn draw_title(c: &mut impl Canvas, title: &str) {
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
 }
 
+/// A menu row's label box: its own length (at most 9 characters) and half a character's gap; the value takes the
+/// rest of the row (beside "FIELD 1", 9 characters: every field's name, a test checks).
+fn menu_label_w(label: &str) -> u32 {
+    (label.len().min(9) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
+}
+
 /// Menu row `i`: `label` on the left, `value` on the right in `value_color`; selected, the row is orange.
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
     let y = LIST_Y + i as u32 * LIST_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
-    // the label's own length (at most 10 characters), the value takes the rest of the row
-    let name_w = (label.len().min(9) as u32 + 1) * CELL * LABEL.scale;
+    let name_w = menu_label_w(label);
     c.fill(0, y, NEARBY.0, LIST_ROW, bg);
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, y, name_w, Align::Left, label);
     let fg = if selected { BLACK } else { value_color };
@@ -1143,6 +1148,13 @@ pub(crate) mod tests {
         }
         assert!(FIELD_GROUPS.iter().all(|(_, g)| g.len() <= MENU_ROWS), "a group is one screen");
         assert!(FIELD_GROUPS.len() <= MENU_ROWS);
+    }
+
+    #[test]
+    fn field_names_fit_their_menu_row() {
+        for f in Field::ALL {
+            assert!(LABEL.width(f.label()) <= NEARBY.2 - menu_label_w("FIELD 1"), "{}", f.label());
+        }
     }
 
     #[test]
