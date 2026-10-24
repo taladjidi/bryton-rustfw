@@ -146,7 +146,7 @@ impl Server {
 pub const LTK: [u8; 16] = [0x5a; 16];
 
 impl Nordic {
-    fn evt(&mut self, id: u16, body: &[u8]) {
+    pub(super) fn evt(&mut self, id: u16, body: &[u8]) {
         let mut p = vec![2];
         p.extend(id.to_le_bytes());
         p.extend(body);

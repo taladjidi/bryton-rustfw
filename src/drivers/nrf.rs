@@ -31,6 +31,8 @@ pub const SD_BLE_GAP_SCAN_STOP: u8 = 0x8b;
 pub const EVT_ADV_REPORT: u16 = 0x1d;
 /// BLE event id: a timeout (the scan's, here).
 pub const EVT_TIMEOUT: u16 = 0x1b;
+/// BLE event id: a notification or indication from the peer (BLE_GATTC_EVT_HVX).
+pub const EVT_HVX: u16 = 0x39;
 
 /// Largest payload kept; a longer one is read through and dropped.
 pub const MAX: usize = 256;
@@ -81,12 +83,24 @@ impl Rx {
     }
 
     /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits (eight
-    /// at most; more are dropped). The main loop keeps them too, and acts on them once the bytes read are all
+    /// at most; when full, the oldest notification ([`EVT_HVX`]) makes room for another kind of event, else the new
+    /// one is dropped). The main loop keeps them too, and acts on them once the bytes read are all
     /// framed: a command sent from the middle of a read would take the rest of the stream out of order.
     pub fn keep_last(&mut self) {
         let p = self.buf.get(..self.last).unwrap_or(&[]);
-        if event_id(p).is_none_or(|id| id == EVT_ADV_REPORT) || p.len() > KEPT {
+        let id = event_id(p);
+        if id.is_none_or(|id| id == EVT_ADV_REPORT) || p.len() > KEPT {
             return;
+        }
+        // full: the oldest notification from the phone makes room for any other event (a connection's end, a GATT
+        // answer the discovery waits for), so a flood of ANCS notifications cannot hide them
+        if self.kept_n == self.kept.len()
+            && id != Some(EVT_HVX)
+            && let Some(i) = (0..self.kept_n).find(|&i| event_id(&self.kept[i]) == Some(EVT_HVX))
+        {
+            self.kept[i..].rotate_left(1);
+            self.kept_len[i..].rotate_left(1);
+            self.kept_n -= 1;
         }
         if let (Some(slot), Some(len)) = (self.kept.get_mut(self.kept_n), self.kept_len.get_mut(self.kept_n)) {
             slot[..p.len()].copy_from_slice(p);
@@ -559,6 +573,32 @@ impl Nearby {
 mod tests {
     extern crate std;
     use super::*;
+
+    /// Frames `p` into `rx` and keeps it, as the main loop does.
+    fn keep(rx: &mut Rx, p: &[u8]) {
+        for &byte in (p.len() as u16).to_le_bytes().iter().chain(p) {
+            if rx.push(byte).is_some() {
+                rx.keep_last();
+            }
+        }
+    }
+
+    #[test]
+    fn a_flood_of_notifications_does_not_push_out_a_disconnection() {
+        // an iPhone's notifications after subscribing (ANCS's pre-existing ones), then the link's end
+        let mut rx = Rx::new();
+        for uid in 0..12u8 {
+            keep(&mut rx, &[BLE_EVT, 0x39, 0, 0, 0, 0, 0, 0, 0, 0x12, 0, 1, 1, 0, uid]);
+        }
+        keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
+        let mut out = [0; KEPT];
+        let mut ids = std::vec::Vec::new();
+        while let Some(n) = rx.pop(&mut out) {
+            ids.push(event_id(&out[..n]));
+        }
+        assert_eq!(ids.len(), 8);
+        assert_eq!(ids.last(), Some(&Some(0x11)), "the disconnection kept, an old notification dropped");
+    }
 
     fn report(addr: u8, rssi: i8, data: &[u8]) -> AdvReport<'_> {
         AdvReport { addr: [addr, 0, 0, 0, 0, 0], rssi, data }

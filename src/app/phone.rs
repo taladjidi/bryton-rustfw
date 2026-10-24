@@ -31,6 +31,9 @@ pub const PPCP: ble::ConnParams = (12, 24, 6, 400);
 /// The bond is read from the card this long after the start (the card is not touched at boot); the bonded phone
 /// can come back from then on.
 pub const BOND_LOAD_MS: u32 = 3000;
+/// A link not encrypted after this long, outside a pairing, is dropped: a stranger's phone (which cannot pair
+/// without PAIR) must not hold the one link the owner's phone needs.
+pub const UNSECURED_MS: u32 = 30_000;
 /// The file the bond is kept in, in [`recorder::DIR`].
 pub const BOND_FILE: &str = "ble.bin";
 
@@ -105,7 +108,12 @@ pub struct Phone {
     /// The GATT server was set up.
     ready: bool,
     adv: Adv,
+    /// The PHONE menu's PAIR window: pairing accepted until a bond, the window's end or the link's (the advertising
+    /// stops at a connection, so it cannot tell).
+    pairing: bool,
     conn: Option<u16>,
+    /// How long the link has been up (a link left unencrypted is dropped: [`UNSECURED_MS`]).
+    link_ms: u32,
     secure: bool,
     /// Our attributes: the HID report and its CCCD, the battery level and its CCCD.
     report: (u16, u16),
@@ -151,7 +159,9 @@ impl Default for Phone {
             save: false,
             ready: false,
             adv: Adv::Off,
+            pairing: false,
             conn: None,
+            link_ms: 0,
             secure: false,
             report: (0, 0),
             battery: (0, 0),
@@ -242,7 +252,16 @@ impl Phone {
             })
     }
 
+    /// Queues `op`. A message's fetch takes the first slots only: the last two stay for a call's name, its answer and
+    /// the media keys, so a burst of messages cannot crowd them out.
     fn queue(&mut self, op: Op) {
+        let urgent = match op {
+            Op::Fetch(uid) => self.call.is_some_and(|(c, _)| c == uid),
+            _ => true,
+        };
+        if !urgent && self.n_ops + 2 >= self.ops.len() {
+            return;
+        }
         if let Some(slot) = self.ops.get_mut(self.n_ops) {
             *slot = op;
             self.n_ops += 1;
@@ -254,6 +273,7 @@ impl Phone {
         (self.conn, self.secure, self.disc, self.busy, self.n_ops) = (None, false, Disc::Idle, false, 0);
         (self.h, self.tried, self.call, self.release) = ([0; 12], 0, None, false);
         self.battery_sent = None;
+        (self.link_ms, self.now) = (0, ph::NowPlaying::default()); // what played is not known without the phone
     }
 }
 
@@ -339,6 +359,7 @@ impl App {
             return self.say("CONNECTED ALREADY");
         }
         self.phone.adv = Adv::Off; // restart even if advertising slowly
+        self.phone.pairing = true;
         let _ = ble::adv_stop(b, &mut self.rx);
         self.advertise(b, Adv::Fast);
         self.say(if self.phone.adv == Adv::Fast { "PAIR FROM THE PHONE" } else { "NO BLE" });
@@ -418,7 +439,13 @@ impl App {
         self.phone_storage(b);
         self.phone.now.tick(POLL_MS);
         let Some(conn) = self.phone.conn else { return };
-        self.phone.busy_ms += POLL_MS;
+        self.phone.busy_ms = self.phone.busy_ms.saturating_add(POLL_MS);
+        self.phone.link_ms = self.phone.link_ms.saturating_add(POLL_MS);
+        if !self.phone.secure && !self.phone.pairing && self.phone.link_ms >= UNSECURED_MS {
+            self.phone.link_ms = 0; // once: the disconnection's event unlinks
+            let _ = ble::disconnect(b, &mut self.rx, conn);
+            return;
+        }
         if self.phone.busy && self.phone.busy_ms >= 3000 {
             self.phone.busy = false; // an answer that never came: the queue goes on
         }
@@ -500,13 +527,14 @@ impl App {
                 self.phone.unlink();
                 (self.phone.conn, self.phone.adv) = (Some(conn), Adv::Off); // the stack stopped advertising
                 self.phone.peer = peer;
-                if !self.phone.bonded() {
+                if !self.phone.bonded() || self.phone.pairing {
                     let _ = ble::authenticate(b, rx, conn); // the phone asks the rider to pair
                 }
             }
             Event::Disconnected { conn, .. } if Some(conn) == self.phone.conn => {
                 let had_call = self.phone.call.is_some();
                 self.phone.unlink();
+                self.phone.pairing = false;
                 if had_call && self.screen == Screen::Call {
                     self.close();
                     self.show(b);
@@ -514,8 +542,8 @@ impl App {
                 self.idle_advertising(b);
             }
             Event::SecParamsRequest { conn } => {
-                // pairing: while asked for (PAIR), or with no bond yet
-                let ok = self.phone.adv == Adv::Fast || !self.phone.bonded();
+                // pairing: while asked for (PAIR), or with no bond yet (then the unit advertises only after PAIR)
+                let ok = self.phone.pairing || !self.phone.bonded();
                 let _ = ble::sec_params_reply(b, rx, conn, ok);
             }
             Event::SecInfoRequest { conn, .. } => {
@@ -533,7 +561,7 @@ impl App {
                         bond.attrs_len = n as u8; // CCCDs the phone set before the keys came
                     }
                     self.phone.stored.bond = Some(bond);
-                    self.phone.save = true;
+                    (self.phone.save, self.phone.pairing) = (true, false);
                     self.notice("PHONE PAIRED");
                 }
             }
@@ -554,8 +582,11 @@ impl App {
             }
             Event::Write { conn, uuid: ble::CCCD, .. } => {
                 self.phone.battery_sent = None; // the level again, in case it was its CCCD
-                // the CCCDs kept with the bond, for the next link
-                if let Some(d) = &mut self.phone.stored.bond {
+                // the CCCDs kept with the bond, for the next link: the bonded phone's only (an unencrypted peer is
+                // a stranger, whose writes would switch the owner's notifications off and wear the card)
+                if self.phone.secure
+                    && let Some(d) = &mut self.phone.stored.bond
+                {
                     let mut attrs = [0; ph::ATTRS];
                     if let Ok(n) = ble::sys_attr_get(b, rx, conn, &mut attrs) {
                         (d.attrs, d.attrs_len) = (attrs, n as u8);
@@ -578,12 +609,18 @@ impl App {
             }
             Event::Timeout { src: 0 } => {
                 // the pairing window closed: back to waiting for the bonded phone, or nothing
-                self.phone.adv = Adv::Off;
+                (self.phone.adv, self.phone.pairing) = (Adv::Off, false);
                 if self.phone.conn.is_none() {
                     self.idle_advertising(b);
                 }
             }
-            Event::GattTimeout => self.phone.disc = Disc::Idle,
+            Event::GattTimeout => {
+                // no more ATT on this link (Core spec, ATT transaction time-out): dropped, as Nordic's examples do
+                self.phone.disc = Disc::Idle;
+                if let Some(conn) = self.phone.conn {
+                    let _ = ble::disconnect(b, rx, conn);
+                }
+            }
             Event::Hvx { handle, kind, data } => self.phone_hvx(b, handle, kind, data),
             Event::Services { .. }
             | Event::Chars { .. }

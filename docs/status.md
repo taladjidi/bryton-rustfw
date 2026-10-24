@@ -49,6 +49,9 @@ The dated findings are in [journal.md](journal.md).
      and on: 3 s after the start LINK WAITING, then SECURE without any prompt on the iPhone; media keys work at once
      (the CCCDs given back). Walk away until the link drops: LINK WAITING, and back in range it reconnects.
   9. **FORGET:** LINK OFF, nothing advertised; on the iPhone, forget S510 too.
+  9a. **Re-pair and strangers** (2026-10-24 review): bonded, forget S510 on the iPhone only, then PAIR on the unit:
+     the iPhone pairs again without FORGET on the unit. A second phone (not paired) taps S510 while the unit only
+     waits (no PAIR): pairing refused, and within 30 s the unit drops it (LINK back to WAITING).
   10. **Cost:** `dev.py info` awake time with LINK OFF, WAITING and SECURE (the Nordic chip's own current is not
       measurable here; estimated 10 to 15 uA advertising once a second).
   11. **The RTC set** (`Board::rtc_set`, RM0399 init mode): the time right after the phone set it, and kept through

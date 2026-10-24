@@ -214,6 +214,91 @@ fn ant_alongside_the_phone() {
     assert!(app.notices[0].as_str().ends_with("Mail: Hi"), "{}", app.notices[0].as_str());
 }
 
+/// Paired with one phone, PAIR lets another pair (or the same one after it forgot the unit): the window is the
+/// menu's, not the advertising's, which stops at the connection (review, 2026-10-24).
+#[test]
+fn pair_another_phone_while_bonded() {
+    let (mut sim, mut app) = unit(iphone(std::vec![(4000, Act::Drop)]));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 5000);
+    assert!(app.phone.bonded() && app.phone.link() == Link::Waiting);
+    let mut other = PhoneSim::new(true);
+    other.connect_at = sim.ms + 500;
+    sim.nordic.phone = Some(other);
+    app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(app.phone.link(), Link::Secure, "the new phone paired");
+}
+
+/// A stranger's phone near a bonded unit connects to its slow advertising but cannot pair: its CCCD writes do not
+/// replace the bond's, and it is dropped once [`UNSECURED_MS`] pass without encryption, so it cannot hold the one
+/// link the owner's phone needs.
+#[test]
+fn a_strangers_phone_cannot_hold_the_link() {
+    let (mut sim, mut app) = unit(iphone(std::vec![(4000, Act::Drop)]));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 5000);
+    let bond = app.phone.stored.bond.unwrap();
+    let mut stranger = PhoneSim::new(false);
+    stranger.connect_at = sim.ms;
+    sim.nordic.phone = Some(stranger);
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.phone.link(), Link::Connected);
+    // its view of the table: the HID report off, the battery on; it writes the battery's CCCD
+    let server = &mut sim.nordic.server;
+    let cccds: Vec<u16> = server.attrs.iter().filter(|a| a.2).map(|a| a.0).collect();
+    for a in server.attrs.iter_mut().filter(|a| a.2) {
+        a.3 = if a.0 == cccds[1] { std::vec![1, 0] } else { std::vec![0, 0] };
+    }
+    let mut w = std::vec![0, 0];
+    w.extend(cccds[1].to_le_bytes());
+    w.extend([0x02, 0x29, 1, 1, 0, 0, 0, 2, 0, 1, 0]);
+    sim.nordic.evt(0x50, &w);
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.phone.stored.bond, Some(bond), "the bond's CCCDs kept");
+    run(&mut sim, &mut app, u64::from(UNSECURED_MS));
+    assert_eq!(app.phone.link(), Link::Waiting, "dropped: the owner's phone can come back");
+}
+
+/// A GATT time-out leaves the link unusable (no more ATT on it): the unit drops it, as Nordic's examples do, and
+/// waits for the phone again.
+#[test]
+fn a_gatt_timeout_drops_the_link() {
+    let (mut sim, mut app) = unit(iphone(Vec::new()));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.phone.link(), Link::Secure);
+    sim.nordic.evt(0x3b, &[0, 0, 0, 0, 0, 0, 0]);
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.phone.link(), Link::Waiting);
+}
+
+/// The phone gone, what played is no longer counted on (the MUSIC field would tick on forever).
+#[test]
+fn now_playing_ends_with_the_link() {
+    let (mut sim, mut app) = unit(iphone(std::vec![(4000, Act::Track("Song", "Band")), (9000, Act::Drop)]));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 4500);
+    assert_eq!(app.phone.now.title.as_str(), "Song");
+    run(&mut sim, &mut app, 5000);
+    assert_eq!((app.phone.now.title.as_str(), app.field_text(Field::Music).as_str()), ("", "--"), "the field empty");
+}
+
+/// A burst of messages with a call among them: the call's name is still fetched (the call screen opens) and its
+/// answer still sent; messages only take the queue's first slots.
+#[test]
+fn a_call_in_a_burst_of_messages() {
+    let mut script: Vec<(u64, Act)> = (1..=5).map(|uid| (3000, Act::Notify(4, uid, "Group", "Hi"))).collect();
+    script.push((3000, Act::Notify(1, 9, "Mum", "")));
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.screen, Screen::Call);
+    app.input(&mut sim, Input::Select);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0)]);
+}
+
 /// The same screen drawn step by step and at once (tests.rs has the original).
 fn assert_consistent(sim: &Sim, app: &App) {
     for y in 0..H {
