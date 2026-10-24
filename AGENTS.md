@@ -127,6 +127,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
     formatting. `graphs.rs`: the graph fields and the course profile.
   - `menus.rs`: `Menu`, each menu's rows and their text, `activate` (what a row does).
   - `radio.rs`: the ANT+ channels (`Sensor`), `poll_nrf`, pairing. `gps.rs`: `poll_gnss`, the aiding.
+  - `phone.rs`: the phone link over BLE: the GATT server set up (HID, battery, device information), advertising,
+    bonding and the bond in `\Rustfw\ble.bin`, the BLE events, the GATT client of the phone (ANCS, AMS, CTS
+    discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
   - `riding.rs`: Start / pause, the second tick, the recorder glue. `stock_data.rs`: the scan of stock's rides and
     the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
   - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
@@ -170,7 +173,13 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
-  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`).
+  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`). BLE
+  events that arrive while a command waits are kept (`Rx::pop`); the main loop acts on events only once the bytes
+  read are framed (a command sent mid-read would take the rest of the stream out of order).
+- `src/drivers/ble.rs`: the SoftDevice API v5 calls of the phone link (GAP peripheral, GATT server and client) and
+  its events, serialized as the nRF5 SDK's codecs do (sources in the module doc); `sim/ble_sim.rs` models the chip's
+  side and a scripted phone.
+- `src/phone.rs`: the phone link's formats, pure logic: the HID report map, ANCS, AMS, CTS, the bond's sector.
 - `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
@@ -216,9 +225,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
-  `tests.rs` (the app on the Sim), `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`.
+  `tests.rs` (the app on the Sim), `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`,
+  `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
-  RTC read, standby, SysTick sleep. No app logic.
+  RTC read and set, standby, SysTick sleep. No app logic.
 - `src/board/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and a composite device: the CDC serial
   port (it implements `Host`) and the mass storage interface (its class requests, and `msc::Pipe` over its bulk
   endpoints, each wait 1 s at most).
@@ -295,7 +305,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
 | 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
 | 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit on the unit |
-| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), and a damaged volume under the ride scan; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
+| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), BLE events into the phone link (`ble::event`, `App::phone_event` on the Sim, and the ANCS / AMS / CTS formats), and a damaged volume under the ride scan; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |

@@ -48,6 +48,7 @@
 | hold Start | end a paused ride | |
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
+| hold Lap | the phone's music: play / pause (PHONE below) | |
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
@@ -96,14 +97,16 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 One screen of groups, nothing more than a screen of rows away:
 - **SENSORS:** pair, forget; then the light, temperature and pressure readings.
 - **PAGES:** the overview's four fields, pages 1 to 3 (field count, each field). A field row opens the field groups
-  (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS), the current field's group selected and the field
+  (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
   beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the
-  page. Any of the 55 fields is a few presses away, not up to 54.
+  page. Any of the 56 fields is a few presses away, not up to 55.
 - **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
   keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
 - **DEVICE:** backlight level (or AUTO) and time-out, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
   devices nearby, USB DRIVE (below).
 - **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
+- **PHONE:** LINK (OFF, PAIRING, WAITING, LINKED, SECURE; ERR and a command's code if the radio refused the set-up),
+  PAIR, REMOTE (the media remote), NOTIFY on / off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
 
 ## History
 
@@ -195,6 +198,31 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.
+
+## Phone (BLE, no app)
+
+The unit pairs with a phone as a Bluetooth accessory, with nothing to install on the phone:
+- **Pairing:** PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
+  pair from the phone's Bluetooth settings (Just Works: no code). One phone is kept (its key and the notifications
+  it enabled), in `\Rustfw\ble.bin` on the card, read 3 s after the start; FORGET erases it. A build that may not
+  write the card keeps it until switched off. Not paired, the unit does not advertise at all; paired and not
+  connected, it advertises once a second so the phone comes back by itself.
+- **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
+  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. PHONE >
+  REMOTE: Start play / pause, Page next, Lap previous, held Page / Lap volume down / up; touch: tap play / pause,
+  swipe left / right next / previous, up / down volume, a hold takes a photo (the camera's shutter is volume up,
+  always sent as HID).
+- **Now playing** (AMS): title, artist, playing or paused and the elapsed time on the remote; the title in the
+  banner when the track changes; the MUSIC field (group PHONE) shows the elapsed time.
+- **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as a
+  line holds; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
+  OFF stops them.
+- **Calls:** the CALL screen with the caller; Start answers, Back declines (a tap on the right half answers, on the
+  left declines); a call answered or ended on the phone closes it.
+- **Time:** the clock is set from the phone (Current Time Service) at each connection, and the time zone kept for
+  the GPS and the ride files (it replaces the one learnt at a fix).
+- **Battery** level for the phone (Battery Service), sent when it changes.
+- ANT+ sensors keep working alongside: the Nordic chip runs both radios.
 
 ## USB
 

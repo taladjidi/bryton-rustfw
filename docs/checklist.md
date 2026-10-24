@@ -262,17 +262,18 @@ Others
 
 ## Phone and connectivity
 
-- [ ] Pair with a phone (BLE bonding) (stock, all)
-- [ ] Call, text and e-mail notifications: iOS through ANCS with no app (stock app, all)
+- [x] Pair with a phone (BLE bonding) (stock, all): sim; Just Works, one bond in `\Rustfw\ble.bin`
+- [x] Call, text and e-mail notifications: iOS through ANCS with no app (stock app, all): sim; answer / decline
 - [ ] Android notifications (stock app, all): need a companion app
-- [ ] Media remote: play, pause, next, previous, volume (patch P7, Garmin, Wahoo, Karoo)
+- [x] Media remote: play, pause, next, previous, volume (patch P7, Garmin, Wahoo, Karoo): sim; AMS or HID
+- [x] Now playing: title, artist, elapsed (ours, AMS): sim
 - [ ] Media remote from Di2 buttons (patch P12)
-- [ ] Camera shutter on the phone (ours, BLE HID)
+- [x] Camera shutter on the phone (ours, BLE HID): sim
 - [ ] Live tracking, 24 h link (stock app, all): needs a phone app
 - [ ] Group ride: members on the map, messages, voice input (stock app with the microphone, Garmin, Karoo)
 - [ ] Ride auto-upload to the phone and Strava (stock app, all): needs an app; a computer tool over USB instead
 - [ ] Wi-Fi sync without the phone (Garmin, Wahoo, Karoo, Coros)
-- [ ] Time zone from the phone (ours, BLE Current Time Service, inferred)
+- [x] Time zone from the phone (ours, BLE Current Time Service): sim; the clock set too
 - [ ] Settings edited from the phone (stock app, all)
 - [ ] Contactless payments (Garmin Pay, 1050)
 - [ ] Apps and extensions (Garmin Connect IQ, Karoo extensions)

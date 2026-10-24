@@ -279,6 +279,10 @@ impl Nordic {
     /// Answers a BLE command of the peripheral side; false if it is not one.
     pub(super) fn take_ble(&mut self, p: &[u8], now: u64) -> bool {
         let [0, op, args @ ..] = p else { return false };
+        if self.refuse == Some(*op) {
+            self.queue(&[1, *op, 4, 0, 0, 0]);
+            return true;
+        }
         let ok = |n: &mut Nordic, out: &[u8]| n.queue(&[&[1, *op, 0, 0, 0, 0][..], out].concat());
         let u16_at = |i: usize| u16::from_le_bytes([args[i], args[i + 1]]);
         match *op {

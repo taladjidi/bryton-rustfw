@@ -53,6 +53,9 @@ pub struct Rx {
     kept: [[u8; KEPT]; 8],
     kept_len: [u8; 8],
     kept_n: usize,
+    /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
+    /// PHONE menu shows it when the link could not be set up.
+    pub failed: Option<(u8, u32)>,
 }
 
 impl Default for Rx {
@@ -73,6 +76,7 @@ impl Rx {
             kept: [[0; KEPT]; 8],
             kept_len: [0; 8],
             kept_n: 0,
+            failed: None,
         }
     }
 
@@ -194,7 +198,11 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         }
         _ => None,
     };
-    wait(b, rx, response).unwrap_or(Err(Error::Timeout))
+    let r = wait(b, rx, response).unwrap_or(Err(Error::Timeout));
+    if let (Err(e), Some(op)) = (r, op) {
+        rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
+    }
+    r
 }
 
 /// The version fields as Bryton fills them (stock logs "Image / Bootloader / SD").

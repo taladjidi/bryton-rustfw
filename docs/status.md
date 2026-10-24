@@ -20,6 +20,40 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The phone link (BLE, app/phone.rs)**, in this order, the dev link up (`dev.py run`, then the screenshots), an
+  iPhone at hand. A build run from RAM without EMMC_WRITE=1 keeps the bond only until a reset: after one, forget
+  "S510" on the iPhone before pairing again (the iPhone keeps a key the unit no longer has).
+  1. **Set-up:** MENU > PHONE: LINK reads OFF (the chip took every GATT set-up command: services, characteristics,
+     the advertising data, the 8 vendor UUIDs). ERR xx/yyyy instead names the command refused and its error (for
+     example A2 characteristic add with 0004 NRF_ERROR_NO_MEM: the attribute table is too small without
+     `sd_ble_cfg_set`, inferred). The heart-rate strap still reads (ANT+ unchanged).
+  2. **Advertising:** PAIR: LINK PAIRING; the iPhone's Settings > Bluetooth lists "S510" under Other Devices within a
+     few seconds (the advertising data: HID and battery services, ANCS solicitation; the name in the scan
+     response). The NEARBY BLE scan of a second unit, or nRF Connect, sees the same.
+  3. **Pairing:** tap S510 on the iPhone: "Bluetooth Pairing Request ... S510 would like to pair with your iPhone",
+     Pair (Just Works, no code); then iOS asks whether S510 may receive the iPhone's notifications: Allow. The unit:
+     banner PHONE PAIRED, LINK SECURE, the clock set to the iPhone's time (and the date), Settings > Bluetooth shows
+     S510 connected. Note the order the events came in if pairing fails (the security request at connection: is
+     the iPhone's prompt shown without opening a HID characteristic?).
+  4. **Media:** start music on the iPhone; PHONE > REMOTE shows its title, artist and PLAYING with the time running;
+     Start pauses (AMS), Page next, Lap previous, held Page / Lap the volume (the iPhone's volume HUD). Hold Lap on
+     a ride page: play / pause. The MUSIC field.
+  5. **Camera:** open the iPhone's Camera, hold a finger on the REMOTE screen: a photo (HID volume up). If the banner
+     says KEYS NOT ENABLED, the iPhone did not subscribe to the HID report: note whether it lists S510 as a
+     keyboard.
+  6. **Notifications:** with the iPhone locked, a message from another phone: the banner shows "sender: text" within
+     a second or two; the overview's notices keep it. NOTIFY OFF, then a message: nothing.
+  7. **Calls:** call the iPhone: the CALL screen with the caller's name; Start answers it (on the iPhone too); a
+     second call, Back declines; a third, answered on the iPhone: the screen closes.
+  8. **Reconnection** (an EMMC_WRITE=1 build, the bond written: `dev.py ls Rustfw` lists ble.bin, 512 B): switch off
+     and on: 3 s after the start LINK WAITING, then SECURE without any prompt on the iPhone; media keys work at once
+     (the CCCDs given back). Walk away until the link drops: LINK WAITING, and back in range it reconnects.
+  9. **FORGET:** LINK OFF, nothing advertised; on the iPhone, forget S510 too.
+  10. **Cost:** `dev.py info` awake time with LINK OFF, WAITING and SECURE (the Nordic chip's own current is not
+      measurable here; estimated 10 to 15 uA advertising once a second).
+  11. **The RTC set** (`Board::rtc_set`, RM0399 init mode): the time right after the phone set it, and kept through
+      a power off; stock afterwards still shows the right time.
+
 - **IGN maps** (`\Rustfw\Maps`): the packs found, a view drawn from them, its time (simulated: one index sector and
   about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
   decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the

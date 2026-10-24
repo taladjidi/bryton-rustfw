@@ -176,6 +176,18 @@ fn the_bonded_phone_comes_back() {
     assert_ne!(app.phone.link(), Link::Secure);
 }
 
+/// A chip that refuses a set-up command: the link is off, and the PHONE menu names the command and its error (for
+/// the first runs on the unit, which has no log).
+#[test]
+fn a_refused_setup_is_named() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.nordic.refuse = Some(0xa2); // characteristic add
+    let mut app = App::start(&mut sim, None);
+    app.activate(&mut sim, Menu::Phone, 1);
+    assert_eq!(app.phone.link(), Link::NoBle);
+    assert_eq!(app.menu_row(Menu::Phone, 0).unwrap().1.as_str(), "ERR A2/0004");
+}
+
 /// ANT+ goes on while the phone pairs and talks: the strap's heart rate keeps coming.
 #[test]
 fn ant_alongside_the_phone() {

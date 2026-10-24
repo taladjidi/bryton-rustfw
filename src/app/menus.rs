@@ -264,8 +264,21 @@ impl App {
                 label.push_str(r.label());
                 let on = |v| if v { "ON" } else { "OFF" };
                 let link = self.phone.link();
+                if r == PhoneRow::Status && link == Link::NoBle && self.ble.is_some() {
+                    // the set-up failed: which command, and its error (hex), for the first runs on the unit
+                    let (op, code) = self.rx.failed.unwrap_or((0, 0));
+                    value.push_str("ERR ");
+                    for (v, n) in [(u32::from(op), 2), (code, 4)] {
+                        for k in (0..n).rev() {
+                            let d = (v >> (4 * k) & 0xf) as usize;
+                            value.push_str("0123456789ABCDEF".get(d..d + 1).unwrap_or("?"));
+                        }
+                        value.push_str(if n == 2 { "/" } else { "" });
+                    }
+                }
                 value.push_str(match r {
                     PhoneRow::Status => match link {
+                        Link::NoBle if self.ble.is_some() => "",
                         Link::NoBle => "NO BLE",
                         Link::Off => "OFF",
                         Link::Pairing => "PAIRING",

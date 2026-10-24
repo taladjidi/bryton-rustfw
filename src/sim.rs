@@ -514,6 +514,8 @@ impl Gnss {
 pub struct Nordic {
     /// False: the chip never answers (not running).
     pub dead: bool,
+    /// A BLE command the chip refuses (NRF_ERROR_NO_MEM), as one whose configuration it lacks would.
+    pub refuse: Option<u8>,
     /// Reset since power-up: before that, commands would go nowhere.
     pub reset: bool,
     pub enabled: bool,
@@ -868,7 +870,8 @@ impl Board for Sim {
     fn nrf_reset(&mut self) {
         let sensors = std::mem::take(&mut self.nordic.sensors);
         let phone = self.nordic.phone.take();
-        self.nordic = Nordic { dead: self.nordic.dead, sensors, phone, reset: true, ..Nordic::default() };
+        let (dead, refuse) = (self.nordic.dead, self.nordic.refuse);
+        self.nordic = Nordic { dead, refuse, sensors, phone, reset: true, ..Nordic::default() };
         self.ms += 950;
     }
 

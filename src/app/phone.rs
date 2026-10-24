@@ -766,6 +766,7 @@ impl App {
                     if self.screen != Screen::Call {
                         self.open(Screen::Call);
                     }
+                    self.banner_ms = None; // the call takes the whole screen
                     self.show(b);
                     self.tones.play(&BEEP_ALERT);
                 }
