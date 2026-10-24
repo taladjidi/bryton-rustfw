@@ -55,7 +55,7 @@ def garmin(path, full=False):
         alpha = [r.get("developer_fields", {}).get(0) for r in msgs["record_mesgs"]]
         known = [a for a in alpha if a is not None and a == a]  # invalid (all ones) reads as NaN here
         print(f"  garmin-fit-sdk: Alpha1 in {len(known)} of {len(alpha)} records, e.g. {known[:3]}")
-        assert known and all(0 < a < 3 for a in known)
+        assert all(0 < a < 3 for a in known)  # none without a strap: every value invalid
 
 
 def read_checked(path, full):
@@ -71,9 +71,12 @@ def read_checked(path, full):
     assert names[:4] == ["file_id", "developer_data_id", "field_description", "field_description"], names[:4]
     rec = [values(m) for m in msgs if m.name == "record"]
     with_alpha = [r for r in rec if "Alpha1" in r]
-    assert with_alpha and all("RMSSD" in r for r in with_alpha)
-    print(f"  fitdecode: Alpha1 in {len(with_alpha)} of {len(rec)} records, e.g. {with_alpha[0]['Alpha1']:.3f}, "
-          f"RMSSD {with_alpha[0]['RMSSD']} ms")
+    assert all("RMSSD" in r for r in with_alpha)
+    if with_alpha:
+        print(f"  fitdecode: Alpha1 in {len(with_alpha)} of {len(rec)} records, e.g. {with_alpha[0]['Alpha1']:.3f}, "
+              f"RMSSD {with_alpha[0]['RMSSD']} ms")
+    else:
+        print(f"  fitdecode: no valid Alpha1 in {len(rec)} records (no strap)")
     return msgs
 
 
@@ -114,8 +117,17 @@ def check_pair(clean, full):
     f = read_checked(full, True)
     rec = lambda ms: [{k: v for k, v in values(m).items() if k not in ("Alpha1", "RMSSD")}
                       for m in ms if m.name == "record"]
-    assert rec(c) == rec(f), "the same records"
-    print(f"{clean}, {full}: {len(rec(c))} records each, the same; developer fields only in the full copy")
+    rc, rf = rec(c), rec(f)
+    if rc != rf:
+        # after a resume each copy restarts from its own last checkpoint: the full one can hold seconds the clean
+        # one lost (or the reverse); the records both have must be the same
+        common = {r["timestamp"]: r for r in rc}.keys() & {r["timestamp"]: r for r in rf}.keys()
+        same = all(a == b for a, b in zip([r for r in rc if r["timestamp"] in common], [r for r in rf if r["timestamp"] in common]))
+        assert same and common, "the records both copies have differ"
+        print(f"{clean}, {full}: {len(rc)} and {len(rf)} records (a resume: each from its checkpoint), "
+              f"the {len(common)} in both the same")
+        return
+    print(f"{clean}, {full}: {len(rc)} records each, the same; developer fields only in the full copy")
 
 
 args = sys.argv[1:]
