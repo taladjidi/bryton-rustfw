@@ -1207,7 +1207,8 @@ fn make_app(board: &mut S510) -> &'static mut App {
 }
 
 /// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).
-/// All zeros, so it is cleared in place, not built on the stack.
+/// Built once on the stack and moved in, as the app is: this frame is about 36 KB (tools/stack_check.py budgets it;
+/// review 2 found the old "cleared in place" untrue).
 #[inline(never)]
 fn make_courses() -> &'static mut bryton_rustfw::storage::course::Courses {
     static COURSES: static_cell::StaticCell<bryton_rustfw::storage::course::Courses> = static_cell::StaticCell::new();

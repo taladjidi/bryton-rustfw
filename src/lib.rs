@@ -526,6 +526,8 @@ impl App {
             }
         }
         self.step_stock(b);
+        self.step_courses(b);
+        self.step_past(b);
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         if let Some(ms) = self.banner_ms {
             if !core::mem::replace(&mut self.banner_drawn, true) {
@@ -550,9 +552,10 @@ impl App {
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
-            Screen::Menu(menu @ (Menu::Main | Menu::Sensors | Menu::Gps | Menu::Stock | Menu::History), sel)
-                if self.redraw_ms >= LIST_REDRAW_MS =>
-            {
+            Screen::Menu(
+                menu @ (Menu::Main | Menu::Sensors | Menu::Gps | Menu::Stock | Menu::History | Menu::Courses),
+                sel,
+            ) if self.redraw_ms >= LIST_REDRAW_MS => {
                 self.update_menu_rows(b, menu, sel);
                 self.redraw_ms = 0;
             }

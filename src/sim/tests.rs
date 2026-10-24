@@ -363,7 +363,11 @@ fn ride_history() {
     app.press(&mut sim, Press::Short(Key::Page));
     let (cmds0, t0) = (sim.emmc.cmds.len(), sim.ms);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.screen(), Screen::Past);
+    assert_eq!(app.banner.as_str(), "READING RIDE");
+    while app.screen() != Screen::Past {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms - t0 < 5000, "the card opens");
+    }
     let reads = sim.emmc.cmds[cmds0..].iter().filter(|c| c.0 == 17 || c.0 == 18).count();
     let file = app.stock.index.get(1).unwrap().file.size;
     assert_eq!(app.past.bytes, file, "the whole file, once");
@@ -408,6 +412,7 @@ fn ride_history() {
     // the ride without a track: its card all the same, "NO FIX" on the map
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 500);
     assert_eq!((app.screen(), app.past.card.title.as_str()), (Screen::Past, "22 OCT 10:00"));
     assert!(app.past.track.points().is_empty());
     run(&mut sim, &mut app, 200);
@@ -1814,6 +1819,146 @@ fn eat_reminder_on_a_ride() {
     assert_eq!(sim.tones.len(), n, "paused: no reminder");
 }
 
+/// The synthetic card plus big files: a 2 MB GPX course, a ride of about 1.5 MB, and 120 days of planned workouts
+/// of 9 KB each (too long to be workouts, but a reader that does not look first reads 8 KB of each).
+fn big_card() -> Vec<u8> {
+    use crate::fat::{Fat, tests::Ram, write::dos_time};
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let t = dos_time((2026, 10, 20, 8, 0, 0));
+    let put = |fat: &mut Fat, d: &mut Ram, dir: crate::fat::File, name: &str, bytes: &[u8]| {
+        let mut padded = bytes.to_vec();
+        padded.resize(bytes.len().div_ceil(512) * 512, 0);
+        let mut h = fat.create(d, dir, name, t).unwrap();
+        fat.write_sectors(d, &mut h, 0, &padded).unwrap();
+        fat.set_size(d, &mut h, bytes.len() as u32, t).unwrap();
+    };
+    let mut gpx = b"<gpx><trk><trkseg>\n".to_vec();
+    for k in 0.. {
+        if gpx.len() > 2 << 20 {
+            break;
+        }
+        let line = format!("<trkpt lat=\"{:.6}\" lon=\"0.001\"><ele>{}</ele></trkpt>\n", f64::from(k) * 1e-4, k % 50);
+        gpx.extend_from_slice(line.as_bytes());
+    }
+    gpx.extend_from_slice(b"</trkseg></trk></gpx>\n");
+    let dir = fat.open(&mut d, "Courses").unwrap();
+    put(&mut fat, &mut d, dir, "Big.gpx", &gpx);
+    let t0 = crate::fit::fit_time((2026, 10, 21, 8, 0, 0));
+    let mut ride = Vec::new();
+    let mut w = crate::fit::Writer::begin(&mut ride, t0).unwrap();
+    for k in 0..50_000u32 {
+        let s = crate::fit::Sample {
+            time: t0 + k,
+            pos: Some((k as i32 * 10, 1000)),
+            alt_mm: Some(100_000),
+            speed_mm_s: Some(8000),
+            hr: Some(140),
+            cadence: Some(90),
+            power: Some(200),
+            temp_c: Some(20),
+        };
+        w.record(&mut ride, &s).unwrap();
+    }
+    w.finish(&mut ride, t0 + 50_000).unwrap();
+    let dir = fat.open(&mut d, "Activities").unwrap();
+    put(&mut fat, &mut d, dir, "261021080000.fit", &ride);
+    let cal = fat.open(&mut d, "Workout/calendar").unwrap();
+    for k in 0..120u32 {
+        let name = format!("2027{:02}{:02}", 1 + k / 28, 1 + k % 28);
+        let day = fat.mkdir(&mut d, cal, &name, t).unwrap();
+        put(&mut fat, &mut d, day, "plan.fit", &[0x55; 9 * 1024]);
+    }
+    d.0
+}
+
+/// The bytes read by `f`, the most of a pass so far kept in `worst`.
+fn pass(
+    sim: &mut Sim,
+    app: &mut App,
+    worst: &mut (u64, &'static str),
+    what: &'static str,
+    f: impl FnOnce(&mut Sim, &mut App),
+) {
+    let before = sim.emmc.bytes_read;
+    f(sim, app);
+    let n = sim.emmc.bytes_read - before;
+    if n > worst.0 {
+        *worst = (n, what);
+    }
+}
+
+/// Passes of the main loop for `ms`, each measured as [`pass`].
+fn passes(sim: &mut Sim, app: &mut App, worst: &mut (u64, &'static str), what: &'static str, ms: u64) {
+    for _ in 0..ms / u64::from(POLL_MS) {
+        pass(sim, app, worst, what, |sim, app| app.step(sim));
+        sim.delay_ms(POLL_MS);
+    }
+}
+
+/// Opening COURSES, following a course, a ride's card in HISTORY and WORKOUTS on a card with big files: no pass of
+/// the main loop reads more than 300 ms of the unit's measured 2.5 MB/s (read and parsed, [`App::SCAN_IDLE`]); the
+/// long reads go on over the passes, and their results come (review 2: each was one pass, up to 4 MB).
+#[test]
+fn long_reads_spread_over_passes() {
+    const MAX: u64 = 2_500_000 * 300 / 1000;
+    let card = big_card();
+    let mut worst = (0, "");
+    let w = &mut worst;
+    let fresh = || {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = card.clone();
+        let mut app = App::start(&mut sim, None);
+        app.set_course_memory(crate::storage::course::tests::memory());
+        app.press(&mut sim, Press::Long(Key::Page));
+        (sim, app)
+    };
+    // COURSES: the list at once, the lengths over the passes
+    let (mut sim, mut app) = fresh();
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    pass(&mut sim, &mut app, w, "courses", |sim, app| app.press(sim, Press::Short(Key::Start)));
+    passes(&mut sim, &mut app, w, "course lengths", 5000);
+    let list = &app.courses.as_deref().unwrap().list;
+    let big = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "BIG").unwrap();
+    let (_, value, _) = app.menu_row(Menu::Courses, big).unwrap();
+    let listed = std::string::String::from(value.as_str());
+    // following the big course
+    for _ in 0..big {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    pass(&mut sim, &mut app, w, "course load", |sim, app| app.press(sim, Press::Short(Key::Start)));
+    passes(&mut sim, &mut app, w, "course load", 5000);
+    assert_eq!(app.screen(), Screen::Ride(0), "followed");
+    let len = app.courses.as_deref().unwrap().course.len_m();
+    std::println!("big course: {listed} listed, {len} m followed");
+    let km: f64 = listed.trim_end_matches(" KM").parse().unwrap();
+    assert!(len > 300_000 && (km * 1000.0 - f64::from(len)).abs() < 100.0, "{listed}: {len} m");
+    // HISTORY: the scan, then the big ride's card
+    let (mut sim, mut app) = fresh();
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
+    app.press(&mut sim, Press::Short(Key::Start));
+    while app.stock.status() == crate::stock::Status::Running {
+        passes(&mut sim, &mut app, w, "scan", 1000);
+        assert!(sim.ms < 300_000);
+    }
+    let n = (0..app.stock.index.len()).find(|&i| app.stock.index.get(i).unwrap().start.2 == 21).unwrap();
+    for _ in 0..n {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    pass(&mut sim, &mut app, w, "ride card", |sim, app| app.press(sim, Press::Short(Key::Start)));
+    passes(&mut sim, &mut app, w, "ride card", 5000);
+    assert_eq!((app.screen(), app.past.card.title.as_str()), (Screen::Past, "21 OCT 08:00"));
+    assert!(app.past.bytes > 1 << 20, "{}", app.past.bytes);
+    // WORKOUTS
+    let (mut sim, mut app) = fresh();
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+    pass(&mut sim, &mut app, w, "workouts", |sim, app| app.press(sim, Press::Short(Key::Start)));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
+    assert_eq!(app.menu_row(Menu::Workouts, 0).unwrap().0.as_str(), "FRI 23 OCT", "today's still first");
+    std::println!("the most read in a pass: {} KB ({})", worst.0 / 1024, worst.1);
+    assert!(worst.0 <= MAX, "{} B in one pass ({})", worst.0, worst.1);
+}
+
 /// A workout's step tone and an alert in the same pass: one tone player, so both play whole, one after the other
 /// (review 2: two players cut each other off).
 #[test]
@@ -1852,7 +1997,11 @@ fn perf_budgets() {
         if course {
             app.set_course_memory(crate::storage::course::tests::memory());
             app.open_courses(&mut sim);
-            app.follow_course(&mut sim, hill(&app));
+            app.follow_course(hill(&app));
+            for _ in 0..100 {
+                app.step(&mut sim); // read over a few passes
+            }
+            assert!(app.courses.as_deref().unwrap().on.is_some());
         }
         sim.gnss.fix = Some(8000);
         if screen < PAGES {
@@ -1948,10 +2097,11 @@ fn course_ride() {
     let row = |app: &App, i| {
         app.menu_row(Menu::Courses, i).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str())).unwrap_or_default()
     };
+    assert_eq!(row(&app, 0).split_once(' ').map(|r| r.1), Some("..."), "listed at once, measured next");
+    run(&mut sim, &mut app, 1000);
     let mut rows: Vec<_> = (0..5).map(|i| row(&app, i)).collect();
     rows.sort();
     assert_eq!(rows, ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM"]);
-    run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
     sim.save("courses_menu");
 
@@ -1959,7 +2109,10 @@ fn course_ride() {
         app.press(&mut sim, Press::Short(Key::Page));
     }
     app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "READING COURSE");
+    run(&mut sim, &mut app, 200);
     assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(0), "COURSE ON"));
+    assert_consistent(&sim, &app);
     assert_eq!(fields(&app), ["--", "--", "--", "--", "--"], "no fix yet");
     sim.gnss.fix = Some(8000);
     app.press(&mut sim, Press::Short(Key::Start)); // the ride

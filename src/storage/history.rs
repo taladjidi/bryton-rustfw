@@ -4,7 +4,8 @@
 //! - **The index** ([`Index`]): filled by the scan of stock's rides ([`crate::stock::Scan`]), which reads every
 //!   ride anyway; per ride a [`Ride`] of about 50 bytes (its file, start and totals), the newest [`RIDES`] kept in
 //!   a fixed array, sorted on insertion. No second pass over the card.
-//! - **A past ride's card** ([`Past::read`]): its file read once, in [`IO`]-byte reads, through a FIT reader that
+//! - **A past ride's card** ([`Past::start`], then [`Past::step`] once a main loop pass, a bounded amount each: a
+//!   long ride is about a second of reading, never in one pass): its file read once, in [`IO`]-byte reads, through a FIT reader that
 //!   picks the position and altitude ([`Reader::with_position`]): the track ([`crate::map::Track`], thinned as a
 //!   live one), the elevation profile (the altitudes, decimated to [`SAMPLES`], then one column a share of them),
 //!   and the numbers: the session's (time, distance, ascent, average power and heart rate) and the records' (NP
@@ -24,7 +25,8 @@ use crate::ui::card::{self, Card, Stats};
 pub const RIDES: usize = 128;
 /// Bytes read from the card per disk read (stock.rs's scan reads as much).
 pub const IO: usize = crate::stock::IO;
-/// A file longer than this is read only this far: about 2 s on the unit (a ten-hour ride is about 1.5 MB).
+/// A file longer than this is read only this far: about 2 s on the unit over the passes (a ten-hour ride is about
+/// 1.5 MB).
 pub const MAX_BYTES: u32 = 4 << 20;
 /// Altitudes kept for the profile at most; when full, every other one goes (as the track's points).
 pub const SAMPLES: usize = 512;
@@ -212,7 +214,7 @@ pub(crate) fn degrees_e7(sc: i32) -> i32 {
     ((i64::from(sc) * 1_800_000_000) >> 31) as i32
 }
 
-/// The card of a past ride: its track, its profile, its numbers.
+/// The card of a past ride: its track, its profile, its numbers; and the ride being read for it.
 pub struct Past {
     /// The track (metres from its first point).
     pub track: Track,
@@ -223,6 +225,9 @@ pub struct Past {
     scale: (u32, u32),
     /// Bytes of the file read for it.
     pub bytes: u32,
+    samples: Samples,
+    /// The ride being read ([`Past::step`]): it, the FTP for its TSS, its reader and totals so far.
+    reading: Option<(Ride, u16, Reader, Acc)>,
 }
 
 impl Default for Past {
@@ -234,27 +239,59 @@ impl Default for Past {
 impl Past {
     /// No ride.
     pub const fn new() -> Self {
-        Past { track: Track::new(), card: Card::EMPTY, elev: [0; COLS], scale: (0, 1), bytes: 0 }
+        Past {
+            track: Track::new(),
+            card: Card::EMPTY,
+            elev: [0; COLS],
+            scale: (0, 1),
+            bytes: 0,
+            samples: Samples::new(),
+            reading: None,
+        }
     }
 
-    /// Reads `ride`'s file from the volume on `d` (once: the whole file, or [`MAX_BYTES`] of it) into its card,
-    /// TSS at `ftp`. A file that has changed or gone bad since the index gives what could be read, with the index's
-    /// numbers when it has no session.
+    /// Starts reading `ride`'s file into the card, TSS at `ftp`: over the next [`Past::step`]s.
+    pub fn start(&mut self, ride: &Ride, ftp: u16) {
+        (self.track, self.samples, self.bytes) = (Track::new(), Samples::new(), 0);
+        self.reading = Some((*ride, ftp, Reader::with_position(), Acc::new()));
+    }
+
+    /// A ride is being read.
+    pub fn reading(&self) -> bool {
+        self.reading.is_some()
+    }
+
+    /// Stops reading (the card is not wanted any more).
+    pub fn stop(&mut self) {
+        self.reading = None;
+    }
+
+    /// Reads on for about `budget` bytes (the whole file, or [`MAX_BYTES`] of it, over the calls); Some once the
+    /// card is done or the file could not be read. A file that has changed or gone bad since the index gives what
+    /// could be read, with the index's numbers when it has no session.
     #[inline(never)] // its read buffer lives in its own frame, not in the caller's (the main loop's)
-    pub fn read(&mut self, d: &mut impl Disk, ride: &Ride, ftp: u16) -> Result<(), fat::Error> {
-        let mut fat = Fat::mount(d)?;
-        let (mut reader, mut acc) = (Reader::with_position(), Acc::new());
-        let mut samples = Samples { v: [0; SAMPLES], len: 0, every: 1, k: 0 };
-        self.track = Track::new();
-        let mut io = [0u8; IO];
-        let (mut offset, size) = (0u32, ride.file.size.min(MAX_BYTES));
-        while offset < size {
-            let n = fat.read_at(d, &ride.file, offset, &mut io)?;
-            if n == 0 {
-                break;
+    pub fn step(&mut self, d: &mut impl Disk, budget: u32) -> Option<Result<(), fat::Error>> {
+        let (ride, ftp, reader, acc) = self.reading.as_mut()?;
+        let mut fat = match Fat::mount(d) {
+            Ok(f) => f,
+            Err(e) => {
+                self.reading = None;
+                return Some(Err(e));
             }
-            offset += n as u32;
-            let track = &mut self.track;
+        };
+        let mut io = [0u8; IO];
+        let (size, mut spent) = (ride.file.size.min(MAX_BYTES), 0u32);
+        let mut done = false;
+        while !done && self.bytes < size && spent < budget {
+            let n = match fat.read_at(d, &ride.file, self.bytes, &mut io) {
+                Ok(n) => n,
+                Err(e) => {
+                    self.reading = None;
+                    return Some(Err(e));
+                }
+            };
+            (self.bytes, spent) = (self.bytes.saturating_add(n as u32), spent.saturating_add(n as u32));
+            let (track, samples) = (&mut self.track, &mut self.samples);
             reader.push_slice(io.get(..n).unwrap_or(&[]), |m| {
                 acc.take(&m);
                 let Msg::Record(r) = m else { return };
@@ -265,15 +302,15 @@ impl Past {
                     samples.push((dm / 10 + ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);
                 }
             });
-            if reader.result().is_some() {
-                break;
-            }
+            done = n == 0 || reader.result().is_some();
+        }
+        if !done && self.bytes < size {
+            return None;
         }
         self.track.end();
-        self.bytes = offset;
         let got = acc.ride(ride.file, ride.start).unwrap_or(*ride);
-        self.card = Card::of(&got.stats(ftp));
-        let kept = samples.v.get(..samples.len).unwrap_or(&[]);
+        self.card = Card::of(&got.stats(*ftp));
+        let kept = self.samples.v.get(..self.samples.len).unwrap_or(&[]);
         for (i, col) in self.elev.iter_mut().enumerate() {
             // the samples column i stands for (at least one: a short ride is stretched)
             let (lo, hi) = (i * kept.len() / COLS, (i + 1) * kept.len() / COLS);
@@ -282,7 +319,8 @@ impl Past {
             *col = sum.checked_div(part.len() as u32).unwrap_or(0) as u16;
         }
         self.scale = alt_scale(self.elev.iter().map(|&v| u32::from(v)));
-        Ok(())
+        self.reading = None;
+        Some(Ok(()))
     }
 
     /// Column `i` of the profile `h` high: the bar's height and colour (as the live ride's altitude graph).
@@ -306,6 +344,10 @@ struct Samples {
 }
 
 impl Samples {
+    const fn new() -> Self {
+        Samples { v: [0; SAMPLES], len: 0, every: 1, k: 0 }
+    }
+
     fn push(&mut self, a: u16) {
         let k = self.k;
         self.k = k.wrapping_add(1);
@@ -357,7 +399,7 @@ mod tests {
     /// The altitudes thin evenly, a ride of any length keeps between half and all of [`SAMPLES`].
     #[test]
     fn samples_thin() {
-        let mut s = Samples { v: [0; SAMPLES], len: 0, every: 1, k: 0 };
+        let mut s = Samples::new();
         for a in 0..10_000u16 {
             s.push(a);
         }

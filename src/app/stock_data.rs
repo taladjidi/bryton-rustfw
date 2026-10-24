@@ -75,6 +75,26 @@ impl App {
         }
     }
 
+    /// The past ride asked for in HISTORY goes on being read, [`App::SCAN_IDLE`] a pass (someone waits for it);
+    /// its card opens once read, if the list still shows (leaving it stops the reading).
+    #[inline(never)]
+    pub(crate) fn step_past(&mut self, b: &mut impl Board) {
+        if !self.past.reading() {
+            return;
+        }
+        if !matches!(self.screen, Screen::Menu(Menu::History, _)) {
+            return self.past.stop();
+        }
+        match self.past.step(&mut emmc::Volume(&mut self.emmc, b), Self::SCAN_IDLE) {
+            Some(Ok(())) => {
+                self.open(Screen::Past);
+                self.show(b);
+            }
+            Some(Err(_)) => self.notice("RIDE UNREADABLE"),
+            None => {}
+        }
+    }
+
     /// Applies stock's settings ([`stock::import`]) where this firmware has them, and says how many.
     pub(crate) fn import_stock(&mut self, b: &mut impl Board) {
         let Ok(i) = self.stock.import(&mut emmc::Volume(&mut self.emmc, b)) else {

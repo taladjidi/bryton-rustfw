@@ -25,30 +25,48 @@ impl App {
         Some((&c.course, &c.at))
     }
 
-    /// COURSES: the course files on the card, each read once for its length.
+    /// COURSES: the course files on the card, listed from their folders; each one's length is read while the list
+    /// shows ([`App::step_courses`]).
     #[inline(never)]
     pub(crate) fn open_courses(&mut self, b: &mut impl Board) {
         let Some(c) = self.courses.as_deref_mut() else { return self.say("NO COURSE") };
-        if c.list.read(&mut emmc::Volume(&mut self.emmc, b)).is_err() || c.list.is_empty() {
+        if c.open(&mut emmc::Volume(&mut self.emmc, b)).is_err() || c.list.is_empty() {
             self.say("NO COURSE");
         }
         self.open(Screen::Menu(Menu::Courses, 0));
     }
 
-    /// Select on course `k`: follows it (the first ride page then), or stops following it.
-    #[inline(never)]
-    pub(crate) fn follow_course(&mut self, b: &mut impl Board, k: usize) {
+    /// Select on course `k`: reads it to follow it ([`App::step_courses`]), or stops following it.
+    pub(crate) fn follow_course(&mut self, k: usize) {
         let Some(c) = self.courses.as_deref_mut() else { return };
         if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) {
             c.on = None;
             return self.say("COURSE OFF");
         }
-        match c.load(&mut emmc::Volume(&mut self.emmc, b), k) {
-            Ok(true) => {
+        c.load(k);
+        self.say("READING COURSE");
+    }
+
+    /// Bytes of course files read per pass: as much as the scan of stock's rides while no ride runs (about 40 ms
+    /// on the unit), ride or not, since someone waits for it.
+    const COURSE_BYTES: u32 = Self::SCAN_IDLE;
+
+    /// The course files go on being read, a bounded amount per pass: the course to follow (then COURSE ON and the
+    /// first ride page, or NOT A COURSE), and the lengths of the list while it shows.
+    #[inline(never)]
+    pub(crate) fn step_courses(&mut self, b: &mut impl Board) {
+        let Some(c) = self.courses.as_deref_mut() else { return };
+        if c.measuring() && !matches!(self.screen, Screen::Menu(Menu::Courses, _)) {
+            return; // the lengths only while the list shows
+        }
+        match c.step(&mut emmc::Volume(&mut self.emmc, b), Self::COURSE_BYTES) {
+            storage::course::Progress::Loaded(true) => {
                 self.say("COURSE ON");
                 (self.depth, self.screen) = (0, Screen::Ride(0));
+                self.show(b);
             }
-            _ => self.say("NOT A COURSE"),
+            storage::course::Progress::Loaded(false) => self.say("NOT A COURSE"),
+            _ => {}
         }
     }
 
@@ -141,6 +159,7 @@ impl App {
         let e = c.list.get(k)?;
         label.push_str(e.name());
         match e.dist_m {
+            _ if !e.measured => value.push_str("..."),
             Some(m) => {
                 ui::card::push_km(value, m.saturating_add(50)); // to the nearest 100 m
                 value.push_str(" KM");

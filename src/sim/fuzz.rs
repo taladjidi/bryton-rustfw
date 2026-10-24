@@ -337,7 +337,13 @@ fn ride_scan_on_a_damaged_volume() {
         let mut past = crate::history::Past::new();
         for i in 0..scan.index.len() {
             let r = *scan.index.get(i).unwrap();
-            let _ = past.read(&mut d, &r, 250);
+            past.start(&r, 250);
+            for _ in 0..1000 {
+                if past.step(&mut d, 1 << 16).is_some() {
+                    break;
+                }
+            }
+            assert!(!past.reading(), "a card is read in 64 MB at most");
         }
     }
 }

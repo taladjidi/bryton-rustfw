@@ -302,13 +302,11 @@ impl App {
             }
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };
-                match self.past.read(&mut emmc::Volume(&mut self.emmc, b), &r, self.settings.ftp) {
-                    Ok(()) => self.open(Screen::Past),
-                    Err(_) => self.notice("RIDE UNREADABLE"),
-                }
+                self.past.start(&r, self.settings.ftp); // read over the next passes (App::step_past)
+                self.say("READING RIDE");
             }
             Some(Row::Workout(k)) => self.open_workout(b, k),
-            Some(Row::Course(k)) => self.follow_course(b, k),
+            Some(Row::Course(k)) => self.follow_course(k),
             Some(Row::WorkoutStart) => self.start_workout(0),
             Some(Row::Step(k)) => self.start_workout(k),
             Some(Row::Nearby) => {

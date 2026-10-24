@@ -121,6 +121,8 @@ pub struct EmmcCard {
     /// Sectors written so far; the power goes after this many (the card then never answers again).
     pub sectors_written: u64,
     pub cut_after: Option<u64>,
+    /// Bytes of sectors read so far (the cost of a pass: [`crate::App::SCAN_IDLE`]).
+    pub bytes_read: u64,
     state: u32,
     busy_left: u32,
     card_wide: bool,
@@ -138,6 +140,7 @@ impl Default for EmmcCard {
             image: Vec::new(),
             sectors_written: 0,
             cut_after: None,
+            bytes_read: 0,
             state: 4,
             busy_left: 0,
             card_wide: true,
@@ -257,6 +260,7 @@ impl EmmcCard {
         if index == 18 {
             self.state = 5; // sending until CMD12
         }
+        self.bytes_read += buf.len() as u64;
         Ok(s)
     }
 

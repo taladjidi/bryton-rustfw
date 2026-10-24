@@ -1,10 +1,12 @@
 //! Courses on the card, read only: the routes Bryton's app syncs (`\PlanTrip\*.fit`) and the FIT or GPX files
-//! copied over USB (`\Courses\*.fit`, `*.gpx`). [`List::read`] lists them with their length, [`Courses::load`]
+//! copied over USB (`\Courses\*.fit`, `*.gpx`). [`Courses::open`] lists them from their folders, [`Courses::load`]
 //! reads one into the course model ([`crate::course`]); nothing is written.
 //!
 //! Files are read in [`IO`]-byte reads and streamed: a FIT file through the FIT reader with the position
 //! ([`crate::fitread::Reader::with_position`]), a GPX file through [`Gpx`]; their points go one by one to the
-//! model, which thins them. At most [`MAX_BYTES`] of a file.
+//! model, which thins them. At most [`MAX_BYTES`] of a file. A file is read a bounded amount per main loop pass
+//! ([`Courses::step`]), as stock's rides are scanned: the course to follow, and the lengths of the listed ones (a
+//! file at a time), so no pass reads a whole file (review 2: opening COURSES read up to 32 files of 4 MB in one).
 //!
 //! **FIT courses** (Garmin's FIT SDK, the course encoding cookbook: github.com/garmin/fit-csharp-sdk
 //! `Cookbook/CourseEncode/Program.cs`, read 2026-10-24): `file_id` (type 6, course), `course` (name, sport), a
@@ -71,6 +73,8 @@ pub struct Entry {
     pub gpx: bool,
     /// Its length, m (None: no points read).
     pub dist_m: Option<u32>,
+    /// Its length was measured (else not yet).
+    pub measured: bool,
 }
 
 impl Entry {
@@ -80,6 +84,7 @@ impl Entry {
         name_len: 0,
         gpx: false,
         dist_m: None,
+        measured: false,
     };
 
     /// Its name, without the extension.
@@ -121,8 +126,8 @@ impl List {
         self.len == 0
     }
 
-    /// Lists the course files in `DIRS` (the first [`LIST`]), each read once for its length.
-    #[inline(never)] // the reads' buffer lives in points()'s frame, not in the caller's
+    /// Lists the course files in `DIRS` (the first [`LIST`]) from their folders alone: their names and sizes. Their
+    /// lengths come later, a file at a time ([`Courses::step`]).
     pub fn read(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
         self.len = 0;
         let mut fat = Fat::mount(d)?;
@@ -146,14 +151,6 @@ impl List {
                     };
                     e.name_len += 1;
                 }
-                let (mut last, mut mm, mut count) = (None, 0u64, 0u32);
-                points(&mut fat, d, &f.file, gpx, &mut |lat, lon, _| {
-                    if let Some(q) = last {
-                        mm = mm.saturating_add(step_mm(q, (lat, lon)));
-                    }
-                    (last, count) = (Some((lat, lon)), count.saturating_add(1));
-                })?;
-                e.dist_m = (count >= 2).then_some((mm / 1000).min(u64::from(u32::MAX)) as u32);
                 if let Some(slot) = self.e.get_mut(self.len) {
                     *slot = e;
                     self.len += 1;
@@ -162,47 +159,90 @@ impl List {
         }
         Ok(())
     }
-}
 
-/// The points of `file` (degrees x 1e-7, altitude in dm), to `f` in order.
-#[inline(never)] // its read buffer lives in its own frame
-fn points(
-    fat: &mut Fat,
-    d: &mut impl Disk,
-    file: &File,
-    gpx: bool,
-    f: &mut dyn FnMut(i32, i32, Option<i32>),
-) -> Result<(), fat::Error> {
-    let mut io = [0u8; IO];
-    let (mut fit, mut xml) = (Reader::with_position(), Gpx::new());
-    let (mut offset, size) = (0u32, file.size.min(MAX_BYTES));
-    while offset < size {
-        let n = fat.read_at(d, file, offset, &mut io)?;
-        if n == 0 {
-            break;
-        }
-        offset += n as u32;
-        let buf = io.get(..n).unwrap_or(&[]);
-        if gpx {
-            xml.push_slice(buf, f);
-            continue;
-        }
-        fit.push_slice(buf, |m| {
-            if let Msg::Record(r) = m
-                && let Some((lat, lon)) = r.pos
-            {
-                f(degrees_e7(lat), degrees_e7(lon), r.alt_dm);
-            }
-        });
-        if fit.result().is_some() {
-            break;
-        }
+    /// The first course whose length is not known yet.
+    fn unmeasured(&self) -> Option<usize> {
+        self.e.get(..self.len)?.iter().position(|e| !e.measured)
     }
-    Ok(())
 }
 
-/// The course memory: the list, the course followed and where the rider is on it. About 70 KB: main.rs keeps it
-/// in AXI SRAM and hands it to the app.
+/// A file read a bounded amount at a time ([`Stream::step`]): where it is, and its reader (FIT or GPX).
+struct Stream {
+    file: File,
+    gpx: bool,
+    offset: u32,
+    fit: Reader,
+    xml: Gpx,
+}
+
+impl Stream {
+    fn new(e: &Entry) -> Self {
+        Stream { file: e.file, gpx: e.gpx, offset: 0, fit: Reader::with_position(), xml: Gpx::new() }
+    }
+
+    /// Reads on for about `budget` bytes, each point (degrees x 1e-7, altitude in dm) to `f` in order; true once
+    /// the file is done (its end, [`MAX_BYTES`], or the end of its FIT data).
+    #[inline(never)] // its read buffer lives in its own frame
+    fn step(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        budget: u32,
+        f: &mut dyn FnMut(i32, i32, Option<i32>),
+    ) -> Result<bool, fat::Error> {
+        let mut io = [0u8; IO];
+        let (size, mut spent) = (self.file.size.min(MAX_BYTES), 0u32);
+        while self.offset < size && spent < budget {
+            let n = fat.read_at(d, &self.file, self.offset, &mut io)?;
+            if n == 0 {
+                return Ok(true);
+            }
+            (self.offset, spent) = (self.offset.saturating_add(n as u32), spent.saturating_add(n as u32));
+            let buf = io.get(..n).unwrap_or(&[]);
+            if self.gpx {
+                self.xml.push_slice(buf, f);
+                continue;
+            }
+            self.fit.push_slice(buf, |m| {
+                if let Msg::Record(r) = m
+                    && let Some((lat, lon)) = r.pos
+                {
+                    f(degrees_e7(lat), degrees_e7(lon), r.alt_dm);
+                }
+            });
+            if self.fit.result().is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(self.offset >= size)
+    }
+}
+
+/// The file being read across the main loop's passes.
+enum Job {
+    /// None.
+    Idle,
+    /// Course `k`'s length: the last point, the distance so far (mm), the points.
+    Measure { k: usize, s: Stream, last: Option<(i32, i32)>, mm: u64, count: u32 },
+    /// Course `k` read into the model, to follow it.
+    Load { k: usize, s: Stream },
+}
+
+/// What a [`Courses::step`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Progress {
+    /// Nothing to read.
+    Idle,
+    /// Read on; not done yet.
+    Reading,
+    /// A course's length is known (the list changed).
+    Measured,
+    /// The course asked for ([`Courses::load`]) is read: followed if true (two points at least).
+    Loaded(bool),
+}
+
+/// The course memory: the list, the course followed and where the rider is on it, and the file being read. About
+/// 70 KB: main.rs keeps it in AXI SRAM and hands it to the app.
 pub struct Courses {
     /// The course files found.
     pub list: List,
@@ -212,6 +252,7 @@ pub struct Courses {
     pub at: Tracker,
     /// The course followed (its file); None: none.
     pub on: Option<File>,
+    job: Job,
 }
 
 impl Default for Courses {
@@ -223,23 +264,85 @@ impl Default for Courses {
 impl Courses {
     /// Nothing listed or followed.
     pub const fn new() -> Self {
-        Courses { list: List::new(), course: Course::new(), at: Tracker::new(), on: None }
+        Courses { list: List::new(), course: Course::new(), at: Tracker::new(), on: None, job: Job::Idle }
     }
 
-    /// Reads course `k` of the list and follows it; false if it has fewer than two points (then none is followed).
-    #[inline(never)]
-    pub fn load(&mut self, d: &mut impl Disk, k: usize) -> Result<bool, fat::Error> {
-        let Some(&e) = self.list.get(k) else { return Ok(false) };
-        let mut fat = Fat::mount(d)?;
+    /// Lists the course files (their folders only: quick); their lengths are measured by the next steps.
+    pub fn open(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
+        if matches!(self.job, Job::Measure { .. }) {
+            self.job = Job::Idle;
+        }
+        self.list.read(d)?;
+        self.next_job();
+        Ok(())
+    }
+
+    /// Reads course `k` of the list, over the next steps, to follow it (none is followed meanwhile).
+    pub fn load(&mut self, k: usize) {
+        let Some(e) = self.list.get(k) else { return };
+        self.job = Job::Load { k, s: Stream::new(e) };
         self.on = None;
-        let course = &mut self.course;
-        course.clear();
-        let read = points(&mut fat, d, &e.file, e.gpx, &mut |lat, lon, alt| course.push(lat, lon, alt));
-        course.finish();
-        read?;
-        let ok = course.points().len() >= 2;
-        (self.on, self.at) = (ok.then_some(e.file), Tracker::new());
-        Ok(ok)
+        self.course.clear();
+    }
+
+    /// Lengths are still being measured.
+    pub fn measuring(&self) -> bool {
+        matches!(self.job, Job::Measure { .. })
+    }
+
+    /// The next course to measure, if any.
+    fn next_job(&mut self) {
+        let next = self.list.unmeasured().and_then(|k| Some((k, Stream::new(self.list.get(k)?))));
+        if let (Job::Idle, Some((k, s))) = (&self.job, next) {
+            self.job = Job::Measure { k, s, last: None, mm: 0, count: 0 };
+        }
+    }
+
+    /// Reads on for about `budget` bytes: the course being loaded, else the next length to measure. A file that
+    /// cannot be read ends as it is (no length; not followed): the others go on.
+    #[inline(never)]
+    pub fn step(&mut self, d: &mut impl Disk, budget: u32) -> Progress {
+        if matches!(self.job, Job::Idle) {
+            return Progress::Idle;
+        }
+        let fat = Fat::mount(d);
+        let progress = match &mut self.job {
+            Job::Idle => Progress::Idle,
+            Job::Measure { k, s, last, mm, count } => {
+                let done = fat.and_then(|mut fat| {
+                    s.step(&mut fat, d, budget, &mut |lat, lon, _| {
+                        if let Some(q) = *last {
+                            *mm = mm.saturating_add(step_mm(q, (lat, lon)));
+                        }
+                        (*last, *count) = (Some((lat, lon)), count.saturating_add(1));
+                    })
+                });
+                if done == Ok(false) {
+                    return Progress::Reading;
+                }
+                if let Some(e) = self.list.e.get_mut(..self.list.len).and_then(|e| e.get_mut(*k)) {
+                    e.dist_m = (*count >= 2).then_some((*mm / 1000).min(u64::from(u32::MAX)) as u32);
+                    e.measured = true;
+                }
+                Progress::Measured
+            }
+            Job::Load { k, s } => {
+                let course = &mut self.course;
+                let done =
+                    fat.and_then(|mut fat| s.step(&mut fat, d, budget, &mut |la, lo, alt| course.push(la, lo, alt)));
+                if done == Ok(false) {
+                    return Progress::Reading;
+                }
+                course.finish();
+                let ok = done.is_ok() && course.points().len() >= 2;
+                let file = self.list.get(*k).map(|e| e.file);
+                (self.on, self.at) = (file.filter(|_| ok), Tracker::new());
+                Progress::Loaded(ok && file.is_some())
+            }
+        };
+        self.job = Job::Idle;
+        self.next_job();
+        progress
     }
 }
 
@@ -420,13 +523,31 @@ pub(crate) mod tests {
         assert_eq!(gpx_points(text, 4096), [(10_000_000, 20_000_000, None)]);
     }
 
+    /// Course `k` loaded, a step of 4 KB at a time: how it ended.
+    fn load(c: &mut Courses, d: &mut impl Disk, k: usize) -> Progress {
+        c.load(k);
+        for _ in 0..10_000 {
+            match c.step(d, 4096) {
+                Progress::Reading => {}
+                p => return p,
+            }
+        }
+        panic!("never loaded");
+    }
+
     /// The synthetic card's courses (tools/fat_image.py): stock's route, a Garmin course and a GPX of the same hill,
     /// listed with their lengths; each reads the same.
     #[test]
     fn synthetic_card() {
         let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
         let mut c = Courses::new();
-        c.list.read(&mut d).unwrap();
+        c.open(&mut d).unwrap();
+        assert!(c.list.get(0).is_some_and(|e| !e.measured), "listed from the folders alone");
+        let mut steps = 0;
+        while c.step(&mut d, 4096) != Progress::Idle {
+            steps += 1;
+        }
+        assert!(steps > 4, "the lengths over several steps of 4 KB: {steps}");
         let names: Vec<_> = (0..c.list.len()).map(|i| c.list.get(i).unwrap().name()).collect();
         let mut sorted = names.clone();
         sorted.sort();
@@ -435,13 +556,13 @@ pub(crate) mod tests {
         for i in (0..4).filter(|&i| i != broken) {
             let e = *c.list.get(i).unwrap();
             assert!(e.dist_m.unwrap().abs_diff(5000) <= 10, "{}: {:?}", e.name(), e.dist_m);
-            assert!(c.load(&mut d, i).unwrap(), "{i}");
+            assert_eq!(load(&mut c, &mut d, i), Progress::Loaded(true), "{i}");
             let k = c.course.climbs();
             assert_eq!(k.len(), 1, "{i}: {k:?}");
             assert!(k[0].start_m.abs_diff(2000) <= 50 && k[0].gain_m.abs_diff(120) <= 3, "{i}: {k:?}");
         }
         assert!(c.list.get(broken).unwrap().dist_m.is_none(), "not a FIT file: no points");
-        assert!(!c.load(&mut d, broken).unwrap());
+        assert_eq!(load(&mut c, &mut d, broken), Progress::Loaded(false));
         assert_eq!(c.on, None);
     }
 

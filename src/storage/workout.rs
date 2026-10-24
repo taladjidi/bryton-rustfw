@@ -476,27 +476,48 @@ pub fn folder_day(name: &[u8]) -> Option<(u16, u8, u8)> {
 /// read or is no workout.
 #[inline(never)] // its buffer lives in its own frame, only while it runs
 pub fn load(fat: &mut Fat, d: &mut impl Disk, f: &File) -> Option<Workout> {
+    if f.size as usize > FILE_MAX {
+        return None; // not read at all
+    }
     let mut buf = [0u8; FILE_MAX];
-    let n = fat.read_at(d, f, 0, &mut buf).ok().filter(|_| f.size as usize <= FILE_MAX)?;
+    let n = fat.read_at(d, f, 0, &mut buf).ok()?;
     parse(buf.get(..n)?).ok()
 }
 
+/// Workout files read at most for a calendar: twice [`DAYS`], so a few that are no workout still leave a full one.
+pub const LOADS: usize = 2 * DAYS;
+
 /// The workouts planned from `today` on (`\Workout\calendar\YYYYMMDD\*.fit`), the earliest [`DAYS`]; files that are
-/// no workout are left out.
+/// no workout are left out. Bounded whatever the card holds (review 2: every future file was read): the day
+/// folders are listed first (32 bytes each), then only the earliest [`DAYS`] are looked into, earliest first, and at
+/// most [`LOADS`] files of [`FILE_MAX`] are read: about 130 KB, some 50 ms on the unit.
 pub fn calendar(d: &mut impl Disk, today: (u16, u8, u8)) -> Result<Calendar, fat::Error> {
     let mut fat = Fat::mount(d)?;
     let dir = fat.open(d, "Workout/calendar")?;
     let mut days = fat.cursor(dir)?;
-    let mut cal = Calendar::default();
+    // the earliest DAYS day folders from today on, earliest first
+    type Folder = Option<((u16, u8, u8), File)>;
+    let mut first: [Folder; DAYS] = [None; DAYS];
     while let Some(e) = fat.list(d, &mut days)? {
         let Some(day) = folder_day(e.name()).filter(|&day| e.file.dir && day >= today) else { continue };
-        let mut files = fat.cursor(e.file)?;
+        let at = first.iter().position(|f| f.is_none_or(|(d, _)| d > day)).unwrap_or(DAYS);
+        if let Some(tail) = first.get_mut(at..).filter(|t| !t.is_empty()) {
+            tail.rotate_right(1);
+            if let Some(slot) = tail.first_mut() {
+                *slot = Some((day, e.file));
+            }
+        }
+    }
+    let (mut cal, mut loads) = (Calendar::default(), 0);
+    for (day, folder) in first.into_iter().flatten() {
+        let mut files = fat.cursor(folder)?;
         while let Some(f) = fat.list(d, &mut files)? {
             let name = f.name();
             let fit = name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(b".fit"));
-            if f.file.dir || !fit {
+            if f.file.dir || !fit || f.file.size as usize > FILE_MAX || loads >= LOADS {
                 continue;
             }
+            loads += 1;
             if let Some(w) = load(&mut fat, d, &f.file) {
                 cal.add(Planned { day, file: f.file, total_s: w.total_s(), steps: w.n });
             }
