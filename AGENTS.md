@@ -318,6 +318,10 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 6. On the unit, boot | first the dev link (`dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
 
+- **Every new input path gets its fuzz test** (`src/sim/fuzz.rs`) in the same change: a parser, a file read,
+  a radio or USB message, a sample taken somewhere new. Generate the input's structure (sections and keys, ids,
+  frames), not only random bytes, and assert the fuzz reaches the new code (a count over the seeds), or it can
+  pass without testing anything: random text never made a whole INI section (2026-10-24).
 - **A new boot step that touches the core (MPU, caches, clocks, VTOR)** gets a `DIAG_STOP` stage on the unit
   before it is trusted: Renode does not model it.
 - **Findings go to both repositories:** a hardware, bootloader, updater or recovery fact learned here also goes

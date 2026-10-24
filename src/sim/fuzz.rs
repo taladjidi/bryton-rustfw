@@ -295,20 +295,129 @@ fn course_files() {
     }
 }
 
-/// Stock's settings files: random text with the INI's own characters mixed in.
+/// Stock's settings files: random text with the INI's own sections, keys and characters mixed in, through every
+/// part of the import (the profile, the sensors, DeviceData's bike and backlight, the bike's pages and reminders):
+/// no panic, and what comes out is in range (a page's layout holds its fields, the reminders on the menu's steps).
 #[test]
 fn ini_files() {
-    let words: [&[u8]; 8] = [b"[Page1]\n", b"Grid9=", b"type=", b"[UserProfile]\n", b"CP=", b",", b"\r\n", b"ID="];
-    for seed in 1..=4u32 {
+    const SECTIONS: [&str; 12] = [
+        "Page1",
+        "Page2",
+        "Page3",
+        "Page4",
+        "UserProfile",
+        "DeviceSys",
+        "Reminder1",
+        "Reminder2",
+        "Reminder6",
+        "FTP",
+        "MHR",
+        "Sensor1",
+    ];
+    const KEYS: [&str; 20] = [
+        "type",
+        "isEnabled",
+        "name",
+        "Grid1",
+        "Grid4",
+        "Grid6",
+        "Grid9",
+        "ActBike",
+        "brightnessAuto",
+        "status",
+        "WhichReminder",
+        "ReminderFreq",
+        "ReminderType",
+        "Timer",
+        "HR",
+        "BaseVale",
+        "CP",
+        "Weight_kg",
+        "ID",
+        "Wheel",
+    ];
+    let mut reached = [0usize; 2];
+    for seed in 1..=2000u32 {
+        // many short files (a lookup takes a section's first copy), of sections and key = value lines (an INI's structure), each value one of: a small number, a list of field
+        // ids, a huge number, raw bytes
         let mut t = Vec::new();
-        for b in bytes(seed, 1 << 14) {
-            if b % 3 == 0 {
-                t.extend_from_slice(words[usize::from(b) % words.len()]);
-            } else {
-                t.push(if b % 3 == 1 { b'0' + b % 10 } else { b });
+        let mut v = bytes(seed, 600);
+        while let (Some(a), Some(b), Some(c)) = (v.next(), v.next(), v.next()) {
+            if a % 5 == 0 {
+                t.extend_from_slice(std::format!("[{}]\r\n", SECTIONS[usize::from(b) % SECTIONS.len()]).as_bytes());
+                continue;
             }
+            t.extend_from_slice(KEYS[usize::from(b) % KEYS.len()].as_bytes());
+            t.push(b'=');
+            match a % 4 {
+                0 => t.extend_from_slice(std::format!("{}", c % 8).as_bytes()),
+                1 => {
+                    let ids: Vec<_> = (0..1 + c % 12).map(|_| std::format!("{}", v.next().unwrap_or(0))).collect();
+                    t.extend_from_slice(ids.join(",").as_bytes());
+                }
+                2 => t.extend_from_slice(
+                    std::format!("{}", u32::from(c).wrapping_mul(16_843_009).wrapping_add(1000)).as_bytes(),
+                ),
+                _ => t.extend((0..c % 16).map(|_| v.next().unwrap_or(0))),
+            }
+            t.extend_from_slice(b"\r\n");
         }
-        let _ = crate::stock::import(&t, &t, &t);
+        let mut i = crate::stock::import(&t, &t, &t);
+        assert!(i.device(&t) <= 2, "ActBike: one of stock's three bikes");
+        for p in i.pages.iter().flatten() {
+            assert!(crate::ui::layout(p.layout).is_some() && p.layout != 0);
+        }
+        for m in [i.eat_min, i.drink_min].into_iter().flatten() {
+            assert!((5..=120).contains(&m) && m % 5 == 0, "{m}");
+        }
+        assert!(i.hr_alert.is_none_or(|h| (100..=230).contains(&h)));
+        reached[0] += i.pages.iter().flatten().count();
+        reached[1] += [i.eat_min, i.drink_min, i.hr_alert].iter().flatten().count();
+    }
+    std::println!("ini fuzz reached {} pages, {} reminders", reached[0], reached[1]);
+    assert!(reached[0] > 0 && reached[1] > 0, "the fuzz reaches the pages and the reminders");
+}
+
+/// Touch sampled inside USB drive commands (app/drive.rs `Touching`): random reads and writes from the computer
+/// while a random finger comes and goes, through the app on the simulated board: no panic, and a gesture found
+/// inside a command is handed over once (the next sample finds none waiting).
+#[test]
+fn touch_during_drive_commands() {
+    use super::*;
+    use crate::msc::tests::{Host, cbw, rw10};
+    use crate::ui::UsbDot;
+    use std::{cell::Cell, rc::Rc};
+    for seed in 1..=4u32 {
+        let noise: Rc<Vec<u8>> = Rc::new(bytes(seed, 1 << 12).collect());
+        let k = Rc::new(Cell::new(0usize));
+        let (n, kk) = (noise.clone(), k.clone());
+        let mut sim = Sim::new(9, 0, 0).finger(move |_| {
+            let i = kk.get();
+            kk.set(i + 1);
+            let b = n.get(i % n.len()).copied().unwrap_or(0);
+            (b % 4 != 0).then_some((u16::from(b) % 240, u16::from(b.wrapping_mul(7)) % 320))
+        });
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        let mut app = App::start(&mut sim, None);
+        app.set_usb(&mut sim, UsbDot::Ready);
+        assert!(app.drive_on().is_ok());
+        let mut h = Host::default();
+        let mut gestures = 0;
+        for (tag, c) in noise.chunks_exact(4).take(200).enumerate() {
+            let (lba, count) = (u32::from(c[0]) * 8, u16::from(c[1] % 64) + 1);
+            let read = c[2] % 4 != 0;
+            let op = if read { 0x28 } else { 0x2a };
+            if !read {
+                h.out = (0..count).map(|_| std::vec![c[3]; 512]).collect();
+            }
+            let len = u32::from(count) * 512;
+            app.drive_packet(&mut sim, &cbw(tag as u32, len, read, &rw10(op, lba, count)), &mut h);
+            h.got.clear();
+            gestures += usize::from(app.touch(&mut sim, 8).is_some());
+            assert!(app.touch_pending.is_none(), "handed over at the first sample after the command");
+        }
+        assert!(gestures > 0, "seed {seed}: gestures found inside commands");
     }
 }
 
@@ -459,6 +568,7 @@ fn phone_link_events() {
             let _ = (ds.push(c), crate::phone::Notif::parse(c), crate::phone::current_time(c));
             let _ = crate::phone::local_offset(c);
             now.update(c);
+            let _ = crate::phone::ams_commands(c);
         }
         let mut s = [0u8; 512];
         for (d, x) in s.iter_mut().zip(&v) {
