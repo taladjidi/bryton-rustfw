@@ -685,6 +685,22 @@ impl Sim {
         self.backup[crate::WHEEL_BKP] = crate::Settings::from_word(0).to_word();
     }
 
+    /// The ride pages of builds before 2026-10-24 (speed with heart rate and cadence; four fields; the map whole),
+    /// which the tests of the map, the sensors and the menus were written against.
+    pub fn classic_pages(&mut self) {
+        use crate::ui::Field::*;
+        let pages = [
+            crate::PageCfg { layout: 3, fields: [Speed, Hr, Cadence, Time, Time, Time] },
+            crate::PageCfg { layout: 4, fields: [Speed, Hr, Cadence, Power, Time, Time] },
+            crate::PageCfg { layout: 1, fields: [Map, Time, Time, Time, Time, Time] },
+        ];
+        for (regs, p) in crate::PAGE_BKP.iter().zip(pages) {
+            for (&r, w) in regs.iter().zip(p.to_words()) {
+                self.backup[r] = w;
+            }
+        }
+    }
+
     /// A unit whose RTC reads `h:m:s` at reset, no key pressed.
     pub fn new(h: u64, m: u64, s: u64) -> Self {
         Sim {

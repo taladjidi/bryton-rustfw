@@ -335,10 +335,10 @@ pub struct Imported {
 /// Stock's field ids (`GridN=` in Bike`<n>`Profile.ini) and the field here that shows the same value, or the
 /// closest. The ids are the indexes of stock's field title table (GetDataFieldTitle 0xd0150ef8, English titles
 /// read from its string blocks: ghidra/STORAGE_AND_MAPS.md 3.2; bryton-S510-mods docs/how-it-works.md "Data
-/// fields" confirms 27, 28, 29). A ring or bar of a value maps to the value. 12 and 13 are "Non" in stock: the
-/// patched stock firmware of bryton-S510-mods shows DFA a1 (P9) and W' balance (P10) there, so a page that has
-/// them was made on it. Ids not here (altitude, zones, lap averages, pedal dynamics...) have no equivalent yet.
-pub const STOCK_FIELDS: [(u8, Field); 53] = {
+/// fields" confirms 27, 28, 29). A ring or bar of a value maps to the value. 12 is "Non" in stock: the patched stock
+/// firmware of bryton-S510-mods shows DFA a1 there (P9), so a page that has it was made on it (its W' balance,
+/// P10, was field 180). Ids not here (altitude, zones, lap averages, pedal dynamics...) have no equivalent yet.
+pub const STOCK_FIELDS: [(u8, Field); 52] = {
     use Field::*;
     [
         (0, Kcal),         // "Calories"
@@ -350,7 +350,6 @@ pub const STOCK_FIELDS: [(u8, Field); 53] = {
         (7, Time),         // "Time" (of day, inferred: "Ride Time" and "Trip Time" are the timers)
         (8, Timer),        // "Ride Time"
         (12, Dfa),         // "Non"; P9's DFA a1
-        (13, Wbal),        // "Non"; P10's W' balance
         (16, Ascent),      // "Alt. Gain"
         (18, Grade),       // "Gradient"
         (21, Hr),          // "Heart Rate"

@@ -16,7 +16,11 @@
   0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute); and
   from the power meter and the ride: 3, 10 and 30 s power, NP, IF, TSS, kJ, kcal, W/kg, W' balance (kJ, green,
   yellow, orange, red as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
-  grade. Page 3 is the map by default.
+  grade. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
+  time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
+  3, the map large with the ride's elevation, speed, distance, moving time and average speed under it. While a
+  course is followed, page 3 (left as it was) shows the course's profile and the distance to go instead of the
+  elevation and the speed.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
@@ -194,8 +198,9 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
   reminders and the heart rate alert that are on, and the data pages (its first three enabled pages, each with
   the fields of the grid shown that have an equivalent here, 53 of stock's field ids, at most 6 a page).
 - **The first start does the same by itself:** with no settings of this firmware's own yet (a unit coming from
-  stock), it starts with stock's settings and pages, says IMPORTED n, and never imports again (the menu row
-  does, on demand). Stock's files are only read.
+  stock: no backup register holds its settings, a paired sensor or a page), it starts with stock's settings and
+  pages, says IMPORTED n, and never imports again (the menu row does, on demand); never with a ride to resume.
+  Stock's files are only read.
 
 ## Sensors and radios
 

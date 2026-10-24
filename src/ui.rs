@@ -729,7 +729,7 @@ pub type Layout = (&'static [(u8, u8)], &'static str);
 
 /// The layouts by the id a page keeps ([`crate::PageCfg::layout`]); 0 is a page switched off. Ids 1, 2, 3, 4 and 6
 /// are the layouts of earlier builds, whose id was their field count, so pages kept then read the same.
-pub const LAYOUTS: [Layout; 12] = [
+pub const LAYOUTS: [Layout; 13] = [
     (&[], "OFF"),
     (&[(1, 1)], "1"),
     (&[(1, 1), (1, 1)], "2"),
@@ -742,10 +742,11 @@ pub const LAYOUTS: [Layout; 12] = [
     (&[(2, 1), (1, 1), (1, 1)], "BIG+2"),
     (&[(2, 1), (1, 1), (1, 2)], "BIG+1+2"),
     (&[(1, 2), (1, 1), (1, 2)], "2+1+2"),
+    (&[(2, 1), (1, 1), (1, 2), (1, 2)], "BIG+1+2X2"),
 ];
 
 /// The order the page menu goes through the layouts: by field count.
-pub const LAYOUT_ORDER: [u8; 12] = [0, 1, 2, 8, 3, 7, 9, 4, 10, 5, 11, 6];
+pub const LAYOUT_ORDER: [u8; 13] = [0, 1, 2, 8, 3, 7, 9, 4, 10, 5, 11, 6, 12];
 
 /// Layout `id`, if there is one.
 pub fn layout(id: u8) -> Option<Layout> {
@@ -1337,7 +1338,10 @@ pub(crate) mod tests {
     /// the marker draws the same pixels as drawing the gauge whole.
     #[test]
     fn gauge_fits_and_moves_in_place() {
-        let rides = (1..LAYOUTS.len() as u8).flat_map(|n| (0..6).filter_map(move |i| field_box(n, RIDE_H, i)));
+        // a box under 64 px (the rows of BIG+1+2X2) draws the gauge's number smaller: left out
+        let rides = (1..LAYOUTS.len() as u8)
+            .flat_map(|n| (0..6).filter_map(move |i| field_box(n, RIDE_H, i)))
+            .filter(|b| b.3 >= 64);
         for bx in rides.chain((0..4).filter_map(overview_box)) {
             let cols = gauge_cols(bx);
             let band = (cols / 3, cols * 2 / 3);

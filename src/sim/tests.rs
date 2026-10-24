@@ -153,6 +153,7 @@ fn a_silent_nordic_chip_does_not_stop_the_pages() {
     let mut sim = Sim::new(12, 0, 0);
     sim.nordic.dead = true;
     let t0 = sim.ms;
+    sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     assert!(sim.ms - t0 < 3000, "start took {} ms", sim.ms - t0);
     assert_eq!(sim.nordic.got, [vec![0, 0x60]], "gave up after the first timeout");
@@ -174,6 +175,7 @@ fn ticks_through_midnight() {
 #[test]
 fn page_turns_the_ride_pages() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     app.step(&mut sim);
     app.press(&mut sim, Press::Short(Key::Page));
@@ -402,6 +404,20 @@ fn first_start_imports_stock_settings() {
     assert_eq!((app.settings.ftp, app.pages()[0]), (crate::ride::FTP, crate::DEFAULT_PAGES[0]));
     assert!(app.notices.iter().all(|n| !n.as_str().contains("IMPORTED")));
     assert_eq!(sim.backup[WHEEL_BKP] >> 24, 0xa7, "this firmware's settings from now on");
+
+    // a strap paired and a page set here, no setting ever changed (register 11 never written): not a first start
+    // (review of ecb8b98: stock's sensors and pages replaced the owner's)
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let strap = crate::nrf::SensorId { device: 77, trans: 1 };
+    sim.backup[Kind::Hr.backup()] = strap.to_word();
+    let page = PageCfg { layout: 1, fields: [Wbal; 6] };
+    for (&r, w) in crate::PAGE_BKP[0].iter().zip(page.to_words()) {
+        sim.backup[r] = w;
+    }
+    let app = App::start(&mut sim, None);
+    assert_eq!((sim.backup[Kind::Hr.backup()], app.pages()[0]), (strap.to_word(), page), "kept");
+    assert_eq!(app.settings.ftp, crate::ride::FTP, "nothing imported");
 }
 
 /// The ride history over the synthetic volume (tools/fat_image.py): HISTORY starts the scan of stock's rides and
@@ -825,6 +841,7 @@ fn pairs_sensors_from_the_menu() {
     let mut sim = Sim::new(9, 0, 0);
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
     sim.nordic.sensors.push(AntSensor { device_type: 0x79, id: 555, data: spd_cad });
+    sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
     assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign 5 channels");
@@ -861,6 +878,7 @@ fn keeps_the_paired_sensor_until_forgotten() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 999, data: hr80 }); // a friend's strap
+    sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0x26, 0x62, 0x78, 0xf1]), "the paired strap only");
     run(&mut sim, &mut app, 2000);
@@ -906,6 +924,7 @@ fn pages_are_configured_from_the_menu() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power300 });
+    sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(0)));
@@ -1170,6 +1189,7 @@ fn overview_notices_and_fields() {
 #[test]
 fn gps_fix_and_speed() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     assert!(!sim.gnss.powered, "powered later, after its line has been low long enough");
     run(&mut sim, &mut app, 3000);
@@ -1452,6 +1472,7 @@ fn basemap_under_the_map() {
     let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some(crate::tiles::tests::ORIGIN) };
     [sim.backup[17], sim.backup[18]] = aid.to_words();
     sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     app.set_map_memory(crate::tiles::tests::memory());
     for _ in 0..3 {
@@ -1524,6 +1545,7 @@ fn ign_map_under_the_map() {
     let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some(crate::tiles::tests::ORIGIN) };
     [sim.backup[17], sim.backup[18]] = aid.to_words();
     sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     app.set_map_memory(crate::tiles::tests::memory());
     for _ in 0..3 {
@@ -1554,6 +1576,7 @@ fn map_shows_the_last_known_position_until_a_fix() {
     let mut sim = Sim::new(9, 0, 0);
     let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((FIX_LAT / 1000 * 1000, FIX_LON / 1000 * 1000)) };
     [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Page));
@@ -1583,6 +1606,7 @@ fn map_shows_the_last_known_position_until_a_fix() {
 fn map_page_follows_a_ride() {
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.route = Some(ride_route);
+    sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Page));
@@ -2471,6 +2495,14 @@ fn course_ride() {
     sim.save("course_map");
     let course = sim.screen.iter().filter(|&&p| p == crate::map::COURSE).count();
     assert!(course > 150, "the course on the map (under the track where ridden): {course} px");
+    // the default map page while a course is followed: the course's profile and the distance to go in it
+    let shown = |app: &App| app.widgets().filter_map(|(_, w)| if let Widget::Field(f) = w { Some(f) } else { None });
+    app.pages[2] = crate::DEFAULT_PAGES[2];
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields, "the course variant");
+    assert_consistent(&sim, &app);
+    sim.save("default_map_course");
 
     // the cost: segments and boxes looked at a second, detour included
     let at = app.courses.as_deref().unwrap().at;

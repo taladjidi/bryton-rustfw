@@ -95,14 +95,22 @@ impl App {
         }
     }
 
-    /// At the first start (no settings of this firmware's own in the backup registers: [`WHEEL_BKP`] has none of
-    /// its tags), stock's settings are taken as [`App::import_stock`] does from the menu, so the unit starts as
-    /// stock had it; the settings are then saved, so this happens once, even when the card has no stock data.
-    /// Said only when something was taken. A flat backup battery loses this firmware's settings, so the next start
-    /// is a first start again: stock's are better than the defaults then too.
+    /// At the first start (no backup register holds anything of this firmware's: settings, a paired sensor, a
+    /// page), stock's settings are taken as [`App::import_stock`] does from the menu, so the unit starts as stock had
+    /// it; the settings are then saved, so this happens once, even when the card has no stock data. Said only when
+    /// something was taken. Never with a ride to resume (its sensors and zones stay). A flat backup battery loses
+    /// this firmware's settings, so the next start is a first start again: stock's are better than the defaults then.
     #[inline(never)] // its card reading in its own frame, not begin's
     pub(crate) fn first_start(&mut self, b: &mut impl Board) {
-        if matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xa7) {
+        // [`WHEEL_BKP`] alone is not enough: it is written only when a setting is changed, and a unit can have its
+        // sensors paired and pages set without that (review of ecb8b98: stock's then replaced them)
+        let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xa7)
+            || Kind::ALL.iter().any(|k| SensorId::from_word(b.backup_read(k.backup())).is_some())
+            || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some());
+        if own || self.resume_pending {
+            if !own {
+                self.save_misc(b); // the ride's settings kept as they are: no import at the next start either
+            }
             return;
         }
         self.import_stock(b, true);
