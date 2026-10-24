@@ -10,7 +10,7 @@
 //!
 //! The LTR-308ALS register fields (MEAS_RATE: resolution in bits 6..4, 0 = 20 bits / 400 ms, 2 = 18 bits / 100 ms;
 //! rate in bits 2..0, 2 = every 100 ms; lux = count x 0.6 / gain / (integration time / 100 ms)) are from DFRobot's
-//! driver (https://github.com/DFRobot/DFRobot_LTR308, DFRobot_LTR308.h / .cpp), which follows the datasheet.
+//! driver (<https://github.com/DFRobot/DFRobot_LTR308>, DFRobot_LTR308.h / .cpp), which follows the datasheet.
 
 use crate::Board;
 

@@ -63,7 +63,7 @@ pub struct Keys {
 
 impl Keys {
     /// One poll, `dt_ms` after the previous one, with the keys held down (`mask` of [`Key`] codes). One press at
-    /// most per poll, the first key in [`Key::ALL`] order.
+    /// most per poll, the first key in `Key::ALL` order.
     pub fn poll(&mut self, mask: u8, dt_ms: u32) -> Option<Press> {
         let mut press = None;
         for (key, held) in Key::ALL.into_iter().zip(&mut self.held_ms) {
@@ -95,7 +95,7 @@ pub enum Screen {
     Nearby,
     /// The card of the ride just ended: its map, elevation profile and numbers.
     Summary,
-    /// The card of a past ride ([`App::past`]); Back returns to the history.
+    /// The card of a past ride (`App::past`); Back returns to the history.
     Past,
 }
 

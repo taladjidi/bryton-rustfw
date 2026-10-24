@@ -328,7 +328,7 @@ const GRADE_BACK: usize = 6;
 /// The grade wants this much distance (1/9 mm: 20 m).
 const GRADE_MIN_DIST9: u64 = 20 * 9000;
 
-/// Altitude and distance every [`CLIMB_STEP_S`] moving seconds, the last minute: VAM and grade.
+/// Altitude and distance every `CLIMB_STEP_S` moving seconds, the last minute: VAM and grade.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Climb {
     alt_mm: [i32; CLIMB_N],

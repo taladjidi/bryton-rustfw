@@ -17,7 +17,7 @@
 //! - **Off course:** farther than [`OFF_M`] for [`OFF_S`] seconds, once the course was joined; back within
 //!   [`BACK_M`]. Each said once ([`Event`]).
 //! - **Ascent:** altitude rises counted past a 3 m hysteresis (small wiggles are noise).
-//! - **Climbs ([`climbs`]):** Garmin's ClimbPro definition (www8.garmin.com/manuals/webhelp, "Using ClimbPro", read
+//! - **Climbs (`climbs`):** Garmin's ClimbPro definition (www8.garmin.com/manuals/webhelp, "Using ClimbPro", read
 //!   2026-10-24): at least 500 m long at an average grade of at least 3 %, which is a climb score (length in metres
 //!   x grade in %) of at least 1500. Found on the profile in 50 m steps: a climb starts at a step of 2 % or more and
 //!   goes on while it reaches new tops, across a dip of at most 20 m below its top and 500 m without a new one (the

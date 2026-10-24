@@ -1,5 +1,5 @@
 //! The ride recorder (AGENTS.md, "Golden rule: never lose a ride"): the ride as a FIT file ([`fit::Writer`]) on
-//! stock's FAT volume ([`fat::write`]), a checkpoint at least every minute, two recovery records, a resume after any
+//! stock's FAT volume (`fat::write`), a checkpoint at least every minute, two recovery records, a resume after any
 //! reset or power cut, and a save that cannot lose the ride.
 //!
 //! **Files** (AGENTS.md, "Share the storage with stock"): the ride in progress is `\Rustfw\YYMMDDhhmmss.fit` (local
@@ -16,7 +16,7 @@
 //! checkpoint) and would cost more commands.
 //!
 //! **A checkpoint**, in this order: the FIT trailer and header in the buffer ([`fit::Writer::checkpoint`]); the
-//! new sectors (clusters taken first, [`fat::write`]); sector 0 with the new header; the size in the directory
+//! new sectors (clusters taken first, `fat::write`); sector 0 with the new header; the size in the directory
 //! entry; then the recovery record. A cut before the record leaves the previous record, whose file is the bytes
 //! up to its length, which the writes after it never changed except its 2-byte trailer and the header, which the
 //! resume writes again from the record.
@@ -25,13 +25,13 @@
 //! writing one leaves the other whole): a tag, a sequence number (the larger valid one wins: never the data
 //! length, so a finished ride's record cannot pass for a new ride's), the phase (done, starting, recording, saving),
 //! the file's identity (its name and first cluster: a resume opens only that file and checks both), the FIT
-//! writer's state ([`fit::RECORD_LEN`] bytes, its own CRC) and the app's ride totals ([`ride::Ride::to_words`]);
+//! writer's state ([`fit::RECORD_LEN`] bytes, its own CRC) and the app's ride totals (`ride::Ride::to_words`);
 //! the sector's CRC last.
 //!
 //! **The save** (End), each step done again after a reset by [`Recorder::recover`] from the phase in the record:
 //! 1. the end messages and a checkpoint whose record says "saving";
 //! 2. the file read back whole from the card: its FIT CRC must be right (a bad read keeps everything and retries);
-//! 3. its entry in `\Rustfw` marked deleted (0xe5 only: [`fat::write`]);
+//! 3. its entry in `\Rustfw` marked deleted (0xe5 only: `fat::write`);
 //! 4. a new entry `\Activities\YYMMDDhhmmss.fit` on the same chain (a name taken by another file: a second later);
 //! 5. a record "done".
 //!
@@ -39,7 +39,7 @@
 //! names it, and 4 is done again at the next start. So the ride in progress exists until the saved one does.
 //!
 //! **After a cut** the second FAT may differ from the first in the sector being written and FSInfo's free count
-//! may be a few clusters high: [`fat::Fat::sync_fats`] runs whenever a record is found unfinished, and when the
+//! may be a few clusters high: `fat::Fat::sync_fats` runs whenever a record is found unfinished, and when the
 //! folders are made (a cut there leaves no record).
 //!
 //! Errors: nothing here panics; a failing card leaves the data in RAM and is tried again after [`RETRY`] calls;

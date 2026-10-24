@@ -3,7 +3,7 @@
 //!
 //! Sources:
 //! - Sitronix "Touch IC Protocol A" v2.7
-//!   (https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf): the register map
+//!   (<https://www.crystalfontz.com/products/document/4590/Sitronix_Touch_IC_Protocol_A_V2.7.pdf>): the register map
 //!   (version 0x00, status 0x01 with its device status and error codes, resolution 0x04..0x06, firmware revision
 //!   0x0c..0x0f, the points from 0x12 in 4-byte slots, max contacts 0x3f), the "Init" status to wait out.
 //! - Linux `drivers/input/touchscreen/st1232.c`: the point and resolution decoding, the ready wait (status 0x00

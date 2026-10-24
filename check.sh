@@ -12,6 +12,7 @@ n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort |
 cargo fmt --check
 cargo clippy --release -- -D warnings
 cargo test-host
+RUSTDOCFLAGS="-D warnings" cargo doc --target aarch64-apple-darwin --no-deps -q  # docs: no broken or private links
 if command -v cargo-deny >/dev/null 2>&1; then cargo deny check -s; else echo "cargo-deny: not installed, skipped"; fi
 cargo build --release
 python3 tools/stack_check.py

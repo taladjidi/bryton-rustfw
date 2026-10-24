@@ -121,7 +121,7 @@ impl List {
         self.len == 0
     }
 
-    /// Lists the course files in [`DIRS`] (the first [`LIST`]), each read once for its length.
+    /// Lists the course files in `DIRS` (the first [`LIST`]), each read once for its length.
     #[inline(never)] // the reads' buffer lives in points()'s frame, not in the caller's
     pub fn read(&mut self, d: &mut impl Disk) -> Result<(), fat::Error> {
         self.len = 0;

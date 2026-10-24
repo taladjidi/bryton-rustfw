@@ -1,6 +1,6 @@
 //! A minimal FAT32 reader over a "read sectors" function ([`Disk`]): the boot sector, cluster chains, directories
 //! with 8.3 and long names (matched without regard to ASCII case), files read at an offset. The write path (the ride
-//! recorder's: create, append, size, move, sync the FATs) is in [`write`], over [`DiskWrite`]; a [`Disk`] that is
+//! recorder's: create, append, size, move, sync the FATs) is in `write`, over [`DiskWrite`]; a [`Disk`] that is
 //! only that cannot be written.
 //!
 //! The volume is the eMMC's from sector 0 (BOARD.md 15: no MBR, the FAT32 boot sector is sector 0). Every loop is
@@ -36,7 +36,7 @@ pub trait Disk {
     fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error>;
 }
 
-/// Sectors of a volume that can also be written ([`write`]).
+/// Sectors of a volume that can also be written (`write`).
 pub trait DiskWrite: Disk {
     /// Writes `buf.len() / 512` sectors from `lba` on; Ok once they are on the medium.
     fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error>;

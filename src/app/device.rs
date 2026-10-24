@@ -10,7 +10,7 @@ pub const BEEP_ON: [(u32, u32); 2] = [(1500, 80), (2500, 120)];
 /// The power-off tones.
 pub const BEEP_OFF: [(u32, u32); 2] = [(2500, 80), (1500, 120)];
 
-/// An alert's tones: three short beeps (0 Hz: silence), played without blocking ([`App::tones`]).
+/// An alert's tones: three short beeps (0 Hz: silence), played without blocking (`App::tones`).
 pub const BEEP_ALERT: [(u32, u32); 5] = [(2500, 100), (0, 50), (2500, 100), (0, 50), (2500, 100)];
 
 /// Plays `tones` (blocking: a few hundred ms, only at power-on and power-off).

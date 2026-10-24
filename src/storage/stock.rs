@@ -325,7 +325,7 @@ pub struct Imported {
     pub pages: [Option<PageCfg>; PAGES],
 }
 
-/// Stock's field ids (`GridN=` in Bike<n>Profile.ini) and the field here that shows the same value. The ids are
+/// Stock's field ids (`GridN=` in Bike`<n>`Profile.ini) and the field here that shows the same value. The ids are
 /// the indexes of stock's field title table (GetDataFieldTitle 0xd0150ef8, English titles read from its string
 /// blocks; bryton-S510-mods docs/how-it-works.md "Data fields" confirms 27, 28, 29). A ring or bar of a value
 /// maps to the value. Ids not here (3 s and 30 s power, gradient, zones...) have no equivalent yet.
@@ -408,7 +408,7 @@ impl Imported {
         }
     }
 
-    /// From Bike<n>Profile.ini: `[Page1]` to `[Page4]` (stock's data pages; the others have a `name` and other
+    /// From Bike`<n>`Profile.ini: `[Page1]` to `[Page4]` (stock's data pages; the others have a `name` and other
     /// kinds), the enabled ones (`isEnabled` not 0), each with its `Grid<type>` fields (`type`: the field count,
     /// inferred from every page of one unit). The fields with an equivalent here, at most 6, give a page with a
     /// layout of that many fields.
