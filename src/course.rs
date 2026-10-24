@@ -7,6 +7,8 @@
 //!   over 200 km. Distance thinning, not Douglas-Peucker (Douglas and Peucker 1973; Visvalingam and Whyatt 1993):
 //!   both need the whole line in memory, and a course is streamed from its file. Each point keeps its distance from
 //!   the start (summed over every point of the file, not only the kept ones), its altitude, and the ascent so far.
+//! - **Gaps and length ([`Odometer`]):** a jump of over [`JUMP_M`] where a GPX track segment starts is not ridden,
+//!   counted, drawn or followed; a FIT course's own distance is its length when it agrees with the points'.
 //! - **Plane:** metres east and north of the first point, as the map's ([`crate::map::project`]); a point farther
 //!   than [`FAR_M`] is left out (it keeps the search's arithmetic in i64).
 //! - **Where the rider is ([`Course::follow`], once a second):** the nearest segment in a window around the last one
@@ -102,6 +104,107 @@ pub fn step_mm(a: (i32, i32), b: (i32, i32)) -> u64 {
     let dy = clamp((i64::from(b.0) - i64::from(a.0)) * 11_132 / 1000);
     let dx = clamp((i64::from(b.1) - i64::from(a.1)) * 11_132 * cos / 65_536 / 1000);
     (dx * dx).unsigned_abs().saturating_add((dy * dy).unsigned_abs()).isqrt()
+}
+
+/// Bit `i` of a gap set: no segment into point `i`.
+pub fn is_gap(gaps: &[u32], i: usize) -> bool {
+    gaps.get(i / 32).is_some_and(|w| w & (1 << (i % 32)) != 0)
+}
+
+/// A point of a course file as its reader gives it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pt {
+    /// Latitude, degrees x 1e-7.
+    pub lat: i32,
+    /// Longitude, degrees x 1e-7.
+    pub lon: i32,
+    /// Altitude, dm.
+    pub alt_dm: Option<i32>,
+    /// A new track or route segment starts here (GPX `trkseg`, `trk`, `rte`).
+    pub split: bool,
+    /// The file's own distance from its start at this point, m (a FIT `record`'s distance).
+    pub dist_m: Option<u32>,
+}
+
+/// The length of a course as its points come: the sum of the steps between them, less the gaps; and the file's
+/// own length when it states one. Used by the model and by the list's measure, so both say the same.
+///
+/// - **Gaps:** a GPX file of several tracks or segments (`trk`, `trkseg`) may join rides done apart; a jump of more
+///   than [`JUMP_M`] where a segment starts is not ridden, not counted and not drawn. Inside one segment points
+///   are joined whatever their spacing: a planner's straight road can be one point at each end, and a GPS that
+///   lost its fix in a tunnel still rode the straight line (better counted than lost).
+/// - **Stated length:** a FIT course's records carry their distance along the course (Garmin's course cookbook
+///   writes it, github.com/garmin/fit-csharp-sdk `Cookbook/CourseEncode`), what the planning app showed. It is
+///   taken when it is within [`AGREE_PER_MILLE`] of the summed points: the sum here is on a flat local plane and
+///   misses the corners the thinning cuts, so the app's figure is the better one; farther apart, the file's figure
+///   is not about these points (a truncated read past [`crate::storage::course::MAX_BYTES`], a distance from
+///   another start, a broken field), and the sum, which is what the rider is placed on, stays. Bryton's routes
+///   state a length too (message 254, storage/course.rs) within 0.25 % of the sum: not read, it would change
+///   nothing. GPX 1.1 states none (its schema has no length; extensions differ per app).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Odometer {
+    last: Option<(i32, i32)>,
+    mm: u64,
+    n: u32,
+    /// The file's distance at its first and last point, m.
+    stated: Option<(u32, u32)>,
+}
+
+/// A jump longer than this where a track segment starts is a gap, m.
+pub const JUMP_M: u64 = 1000;
+/// The file's own length is taken within this of the summed points, per mille.
+pub const AGREE_PER_MILLE: u64 = 20;
+
+impl Odometer {
+    /// Nothing yet.
+    pub const fn new() -> Self {
+        Odometer { last: None, mm: 0, n: 0, stated: None }
+    }
+
+    /// The next point: true if a gap comes before it (then not counted).
+    ///
+    /// ```
+    /// use bryton_rustfw::course::{Odometer, Pt};
+    /// let mut o = Odometer::new();
+    /// let north = |m: i32, split| Pt { lat: m * 8983 / 100, split, ..Pt::default() }; // 8983e-7 degrees: 100 m
+    /// assert!(!o.step(north(0, false)) && !o.step(north(500, false)));
+    /// assert!(o.step(north(5000, true)), "4.5 km where a segment starts: a gap");
+    /// assert!(!o.step(north(5100, false)) && !o.step(north(9000, false)), "3.9 km inside a segment: ridden");
+    /// assert!(!o.step(north(9500, true)), "500 m where a segment starts: ridden");
+    /// assert!(o.len_m().unwrap().abs_diff(500 + 100 + 3900 + 500) <= 1);
+    /// ```
+    pub fn step(&mut self, pt: Pt) -> bool {
+        let p = (pt.lat, pt.lon);
+        let mut gap = false;
+        if let Some(q) = self.last {
+            let s = step_mm(q, p);
+            gap = pt.split && s > JUMP_M * 1000;
+            if !gap {
+                self.mm = self.mm.saturating_add(s);
+            }
+        }
+        if let Some(d) = pt.dist_m {
+            self.stated = Some((self.stated.map_or(d, |s| s.0), d));
+        }
+        (self.last, self.n) = (Some(p), self.n.saturating_add(1));
+        gap
+    }
+
+    /// The points' summed length, m.
+    pub fn run_m(&self) -> u32 {
+        (self.mm / 1000).min(u64::from(u32::MAX)) as u32
+    }
+
+    /// The course's length, m: the file's own when it agrees with the points' within [`AGREE_PER_MILLE`], else
+    /// theirs; None under two points.
+    pub fn len_m(&self) -> Option<u32> {
+        let sum = self.run_m();
+        let stated = self
+            .stated
+            .and_then(|(a, b)| b.checked_sub(a))
+            .filter(|&s| u64::from(s.abs_diff(sum)) * 1000 <= u64::from(sum) * AGREE_PER_MILLE && sum > 0);
+        (self.n >= 2).then_some(stated.unwrap_or(sum))
+    }
 }
 
 /// A climb on the course.
@@ -207,9 +310,10 @@ pub struct Course {
     /// Lowest and highest altitude, dm.
     range: (i32, i32),
     id: u32,
-    // while reading: the last point given, the distance so far (mm), the last point not kept yet
-    last: Option<(i32, i32)>,
-    run_mm: u64,
+    /// Bit `i`: no segment from point `i - 1` to point `i` (a gap between two track segments, [`JUMP_M`]).
+    gaps: [u32; POINTS / 32],
+    // while reading: the distance so far, the last point not kept yet
+    odo: Odometer,
     pending: Option<((i32, i32), u32, u16)>,
 }
 
@@ -237,8 +341,8 @@ impl Course {
             has_alt: false,
             range: (0, 0),
             id: 0,
-            last: None,
-            run_mm: 0,
+            gaps: [0; POINTS / 32],
+            odo: Odometer::new(),
             pending: None,
         }
     }
@@ -246,12 +350,19 @@ impl Course {
     /// Empties it for a new course (its id is kept, and changes at [`Course::finish`]).
     pub fn clear(&mut self) {
         (self.origin, self.len, self.step_m, self.n_boxes, self.n_climbs) = (None, 0, FIRST_STEP_M, 0, 0);
-        (self.has_alt, self.last, self.run_mm, self.pending) = (false, None, 0, None);
+        (self.has_alt, self.odo, self.pending, self.gaps) = (false, Odometer::new(), None, [0; POINTS / 32]);
     }
 
     /// The next point of the file: latitude and longitude in degrees x 1e-7, altitude in decimetres. Points off the
     /// globe or farther than [`FAR_M`] from the first are left out.
     pub fn push(&mut self, lat: i32, lon: i32, alt_dm: Option<i32>) {
+        self.add(Pt { lat, lon, alt_dm, split: false, dist_m: None });
+    }
+
+    /// The next point of the file, with what the file says of it besides: a new track segment starts at it, its
+    /// distance from the start (see [`Odometer`]).
+    pub fn add(&mut self, pt: Pt) {
+        let Pt { lat, lon, alt_dm, .. } = pt;
         if lat.unsigned_abs() > 900_000_000 || lon.unsigned_abs() > 1_800_000_000 {
             return;
         }
@@ -260,11 +371,17 @@ impl Course {
         if p.0.abs() > FAR_M || p.1.abs() > FAR_M {
             return;
         }
-        if let Some(q) = self.last {
-            self.run_mm = self.run_mm.saturating_add(step_mm(q, (lat, lon)));
+        let gap = self.odo.step(pt);
+        let (d, a) = (self.odo.run_m(), alt_dm.map_or(NO_ALT, enc));
+        if gap {
+            // both ends of the gap kept: the last point before it, and this one, marked
+            if let Some((q, dq, aq)) = self.pending.take() {
+                self.put(q, dq, aq);
+            }
+            self.put(p, d, a);
+            self.mark_gap(self.len.saturating_sub(1));
+            return;
         }
-        self.last = Some((lat, lon));
-        let (d, a) = ((self.run_mm / 1000).min(u64::from(u32::MAX)) as u32, alt_dm.map_or(NO_ALT, enc));
         let keep = match self.len.checked_sub(1).and_then(|i| self.dist.get(i)) {
             Some(&prev) => d >= prev.saturating_add(self.step_m),
             None => true,
@@ -277,6 +394,17 @@ impl Course {
         }
     }
 
+    fn mark_gap(&mut self, i: usize) {
+        if let Some(w) = self.gaps.get_mut(i / 32) {
+            *w |= 1 << (i % 32);
+        }
+    }
+
+    /// No segment from point `i - 1` to point `i`: a gap.
+    fn gap_at(&self, i: usize) -> bool {
+        is_gap(&self.gaps, i)
+    }
+
     /// Keeps a point; when full, every other point goes first and the step doubles.
     fn put(&mut self, p: (i32, i32), d: u32, a: u16) {
         if self.len >= POINTS {
@@ -284,7 +412,12 @@ impl Course {
                 self.xy[i] = self.xy[2 * i];
                 self.dist[i] = self.dist[2 * i];
                 self.alt[i] = self.alt[2 * i];
+                // a gap into point 2i - 1 or 2i is one into the point kept, 2i (bits read are never below i)
+                let gap = i > 0 && (self.gap_at(2 * i - 1) || self.gap_at(2 * i));
+                let w = &mut self.gaps[i / 32];
+                *w = (*w & !(1 << (i % 32))) | (u32::from(gap) << (i % 32));
             }
+            self.gaps[POINTS / 64..].fill(0);
             self.len = POINTS / 2;
             self.step_m = self.step_m.saturating_mul(2);
         }
@@ -303,6 +436,13 @@ impl Course {
             self.put(p, d, a);
         }
         let n = self.len.min(POINTS);
+        // the file's own length when it agrees with the points' (see Odometer::len_m): every distance scaled to it
+        let (sum, len) = (self.odo.run_m(), self.odo.len_m().unwrap_or(0));
+        if len != sum && sum > 0 {
+            for d in self.dist.iter_mut().take(n) {
+                *d = (u64::from(*d) * u64::from(len) / u64::from(sum)).min(u64::from(u32::MAX)) as u32;
+            }
+        }
         let alts = self.alt.get_mut(..n).unwrap_or(&mut []);
         let first = alts.iter().copied().find(|&a| a != NO_ALT);
         self.has_alt = first.is_some();
@@ -378,7 +518,8 @@ impl Course {
         let (lat, lon, _) = self.origin.filter(|_| self.len >= 2)?;
         let off = project((track.0, track.1, cos_q16(track.0)), lat, lon);
         let boxes = self.boxes.get(..self.n_boxes).unwrap_or(&[]);
-        Some(Route { pts: self.points(), boxes, off, id: self.id })
+        let gaps = &self.gaps;
+        Some(Route { pts: self.points(), boxes, gaps, off, id: self.id })
     }
 
     /// The altitude at `d` m from the start, dm, between the two points around it; None without altitudes.
@@ -435,6 +576,9 @@ impl Course {
 
     /// Segment `i`'s nearest point to `p`: squared distance and distance along the course.
     fn on_segment(&self, i: usize, p: (i32, i32)) -> Option<(i64, u32)> {
+        if self.gap_at(i + 1) {
+            return None; // not ridden
+        }
         let (&a, &b) = (self.xy.get(i)?, self.xy.get(i + 1)?);
         let (&da, &db) = (self.dist.get(i)?, self.dist.get(i + 1)?);
         let (abx, aby) = (i64::from(b.0) - i64::from(a.0), i64::from(b.1) - i64::from(a.1));
@@ -652,6 +796,80 @@ pub(crate) mod tests {
         assert!(c.alt_at(5000).unwrap().abs_diff(1000) <= 2, "halfway up the second leg: 100 m");
         assert!(c.grade_ahead(4000).unwrap().abs_diff(25) <= 1, "2.5 %");
         assert_eq!(c.range_dm(), (500, 1500));
+    }
+
+    /// Points as a file's reader gives them: the first one starting a segment when `split`, the file's own
+    /// distance from `stated` (its first point's, its last's) when given.
+    fn add(c: &mut Course, pts: &[(f64, f64, f64)], split: bool, stated: Option<(f64, f64)>) {
+        for (k, &(x, y, z)) in pts.iter().enumerate() {
+            let dist_m = stated.map(|(a, b)| (a + (b - a) * k as f64 / (pts.len() - 1) as f64).round() as u32);
+            let (lat, lon) = ((y * NORTH).round() as i32, (x * NORTH).round() as i32);
+            c.add(Pt { lat, lon, alt_dm: Some((z * 10.0).round() as i32), split: split && k == 0, dist_m });
+        }
+    }
+
+    /// The segments that are gaps.
+    fn gaps(c: &Course) -> Vec<usize> {
+        (1..c.points().len()).filter(|&i| c.gap_at(i)).collect()
+    }
+
+    /// Two rides 8 km apart in one GPX (two segments): the gap is not ridden, not counted, not drawn, and a rider
+    /// in its middle is not on the course; the same jump inside one segment is ridden. Thinned past POINTS, the gap
+    /// stays between the same two places.
+    #[test]
+    fn gaps_between_segments() {
+        let (a, b) = (
+            lines(&[(0.0, 0.0, 0.0), (2000.0, 0.0, 0.0)], 5.0),
+            lines(&[(10_000.0, 0.0, 0.0), (12_000.0, 0.0, 0.0)], 5.0),
+        );
+        let mut c = Course::new();
+        add(&mut c, &a, true, None);
+        add(&mut c, &b, true, None);
+        c.finish();
+        assert!(c.len_m().abs_diff(4000) <= 2, "the two rides only: {}", c.len_m());
+        let g = gaps(&c);
+        assert_eq!(g.len(), 1, "{g:?}");
+        let (p, q) = (c.points()[g[0] - 1], c.points()[g[0]]);
+        assert!((p.0 - 2000).abs() <= 2 && (q.0 - 10_000).abs() <= 2, "{p:?} to {q:?}");
+        assert!(crate::course::is_gap(c.route((0, 0)).unwrap().gaps, g[0]), "not drawn");
+        let mut t = Tracker::new();
+        let (lat, lon) = fix(6000.0, 0.0);
+        c.follow(&mut t, lat, lon);
+        assert!(t.off_m.unwrap() >= 3990, "the gap's middle is 4 km from the course: {:?}", t.off_m);
+        // the same jump inside one segment: ridden
+        let mut c = Course::new();
+        add(&mut c, &a, true, None);
+        add(&mut c, &b, false, None);
+        c.finish();
+        assert!(c.len_m().abs_diff(12_000) <= 3 && gaps(&c).is_empty(), "{}", c.len_m());
+        // thinned: one gap, between the same places
+        let a = lines(&[(0.0, 0.0, 0.0), (30_000.0, 0.0, 0.0)], 5.0);
+        let b = lines(&[(50_000.0, 0.0, 0.0), (80_000.0, 0.0, 0.0)], 5.0);
+        let mut c = Course::new();
+        add(&mut c, &a, true, None);
+        add(&mut c, &b, true, None);
+        c.finish();
+        assert!(c.step_m >= 20, "thinned: {}", c.step_m);
+        assert!(c.len_m().abs_diff(60_000) <= 10, "{}", c.len_m());
+        let g = gaps(&c);
+        assert_eq!(g.len(), 1, "{g:?}");
+        let (p, q) = (c.points()[g[0] - 1], c.points()[g[0]]);
+        let s = 2 * c.step_m as i32; // a gap's end may go at a thinning, its neighbour kept
+        assert!((30_000 - s..=30_000).contains(&p.0) && (50_000..=50_000 + s).contains(&q.0), "{p:?} {q:?}");
+    }
+
+    /// A FIT course's own distance (its records'): taken within 2 % of the summed points, every distance scaled to
+    /// it (the top at the end still); else the sum. Counted from the file's first point.
+    #[test]
+    fn stated_length() {
+        let pts = lines(&[(0.0, 0.0, 0.0), (0.0, 5000.0, 100.0)], 5.0);
+        for (stated, want) in [(5050.0, 5050), (4920.0, 4920), (6000.0, 5000), (4800.0, 5000)] {
+            let mut c = Course::new();
+            add(&mut c, &pts, false, Some((1000.0, 1000.0 + stated)));
+            c.finish();
+            assert!(c.len_m().abs_diff(want) <= 1, "stated {stated}: {}", c.len_m());
+            assert!(c.alt_at(c.len_m()).unwrap().abs_diff(1000) <= 1, "stated {stated}");
+        }
     }
 
     /// A long course is thinned: never more than POINTS points, evenly spaced, both ends kept.

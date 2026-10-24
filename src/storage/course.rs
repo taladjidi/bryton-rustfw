@@ -11,7 +11,8 @@
 //! **FIT courses** (Garmin's FIT SDK, the course encoding cookbook: github.com/garmin/fit-csharp-sdk
 //! `Cookbook/CourseEncode/Program.cs`, read 2026-10-24): `file_id` (type 6, course), `course` (name, sport), a
 //! `lap`, timer `event`s, then a `record` per point (position_lat, position_long, altitude, distance), with
-//! `course_point`s (turns, summits) among them. Only the records' positions and altitudes are read.
+//! `course_point`s (turns, summits) among them. Only the records' positions, altitudes and distances are read (the
+//! distance: the course's own length, [`crate::course::Odometer`]).
 //!
 //! **Bryton's routes** (`\PlanTrip\<name>.fit`, written by its app; read on the host from one unit's backup,
 //! 2026-10-24: 14 files, every one the same layout; field meanings inferred from how the values relate):
@@ -38,13 +39,14 @@
 //! **GPX** (GPX 1.1 schema, www.topografix.com/GPX/1/1/, read 2026-10-24): `<trkpt lat=".." lon="..">` (in
 //! `<trk><trkseg>`) and `<rtept>` (in `<rte>`) are `wptType`: `lat` and `lon` attributes in decimal degrees (WGS84),
 //! an optional `<ele>` child in metres; the values are `xsd:decimal` (no exponent). [`Gpx`] reads only that: track
-//! and route points in file order, their elevation; anything else (waypoints, names, extensions) is skipped. A tag
+//! and route points in file order, their elevation, and where a `trk`, `trkseg` or `rte` starts (a jump there is a
+//! gap, [`crate::course::Odometer`]); anything else (waypoints, names, extensions) is skipped. A tag
 //! longer than [`TAG`] bytes is cut (its attributes past that are not seen).
 //!
 //! Nothing here panics or loops on any input (fuzzed in sim.rs `fuzz`): every loop is bounded by the file's size,
 //! the list or a buffer.
 
-use crate::course::{Course, Tracker, step_mm};
+use crate::course::{Course, Odometer, Pt, Tracker};
 use crate::fat::{self, Disk, Fat, File};
 use crate::fitread::{Msg, Reader};
 use crate::history::degrees_e7;
@@ -188,7 +190,7 @@ impl Stream {
         fat: &mut Fat,
         d: &mut impl Disk,
         budget: u32,
-        f: &mut dyn FnMut(i32, i32, Option<i32>),
+        f: &mut dyn FnMut(Pt),
     ) -> Result<bool, fat::Error> {
         let mut io = [0u8; IO];
         let (size, mut spent) = (self.file.size.min(MAX_BYTES), 0u32);
@@ -207,7 +209,8 @@ impl Stream {
                 if let Msg::Record(r) = m
                     && let Some((lat, lon)) = r.pos
                 {
-                    f(degrees_e7(lat), degrees_e7(lon), r.alt_dm);
+                    let dist_m = r.dist_cm.map(|cm| cm / 100);
+                    f(Pt { lat: degrees_e7(lat), lon: degrees_e7(lon), alt_dm: r.alt_dm, split: false, dist_m });
                 }
             });
             if self.fit.result().is_some() {
@@ -222,8 +225,8 @@ impl Stream {
 enum Job {
     /// None.
     Idle,
-    /// Course `k`'s length: the last point, the distance so far (mm), the points.
-    Measure { k: usize, s: Stream, last: Option<(i32, i32)>, mm: u64, count: u32 },
+    /// Course `k`'s length so far.
+    Measure { k: usize, s: Stream, odo: Odometer },
     /// Course `k` read into the model, to follow it.
     Load { k: usize, s: Stream },
 }
@@ -294,7 +297,7 @@ impl Courses {
     fn next_job(&mut self) {
         let next = self.list.unmeasured().and_then(|k| Some((k, Stream::new(self.list.get(k)?))));
         if let (Job::Idle, Some((k, s))) = (&self.job, next) {
-            self.job = Job::Measure { k, s, last: None, mm: 0, count: 0 };
+            self.job = Job::Measure { k, s, odo: Odometer::new() };
         }
     }
 
@@ -308,28 +311,24 @@ impl Courses {
         let fat = Fat::mount(d);
         let progress = match &mut self.job {
             Job::Idle => Progress::Idle,
-            Job::Measure { k, s, last, mm, count } => {
+            Job::Measure { k, s, odo } => {
                 let done = fat.and_then(|mut fat| {
-                    s.step(&mut fat, d, budget, &mut |lat, lon, _| {
-                        if let Some(q) = *last {
-                            *mm = mm.saturating_add(step_mm(q, (lat, lon)));
-                        }
-                        (*last, *count) = (Some((lat, lon)), count.saturating_add(1));
+                    s.step(&mut fat, d, budget, &mut |pt| {
+                        odo.step(pt);
                     })
                 });
                 if done == Ok(false) {
                     return Progress::Reading;
                 }
                 if let Some(e) = self.list.e.get_mut(..self.list.len).and_then(|e| e.get_mut(*k)) {
-                    e.dist_m = (*count >= 2).then_some((*mm / 1000).min(u64::from(u32::MAX)) as u32);
+                    e.dist_m = odo.len_m();
                     e.measured = true;
                 }
                 Progress::Measured
             }
             Job::Load { k, s } => {
                 let course = &mut self.course;
-                let done =
-                    fat.and_then(|mut fat| s.step(&mut fat, d, budget, &mut |la, lo, alt| course.push(la, lo, alt)));
+                let done = fat.and_then(|mut fat| s.step(&mut fat, d, budget, &mut |pt| course.add(pt)));
                 if done == Ok(false) {
                     return Progress::Reading;
                 }
@@ -356,6 +355,8 @@ pub struct Gpx {
     ele: Option<([u8; 24], usize)>,
     /// The point open: latitude, longitude (degrees x 1e-7), elevation (dm).
     pt: Option<(i32, i32, Option<i32>)>,
+    /// A track, segment or route has started since the last point: the next one starts a segment.
+    split: bool,
 }
 
 impl Default for Gpx {
@@ -367,11 +368,11 @@ impl Default for Gpx {
 impl Gpx {
     /// At the start of a file.
     pub const fn new() -> Self {
-        Gpx { tag: [0; TAG], tag_len: 0, in_tag: false, ele: None, pt: None }
+        Gpx { tag: [0; TAG], tag_len: 0, in_tag: false, ele: None, pt: None, split: false }
     }
 
     /// The next bytes of the file; each point to `f` as it ends.
-    pub fn push_slice(&mut self, buf: &[u8], f: &mut dyn FnMut(i32, i32, Option<i32>)) {
+    pub fn push_slice(&mut self, buf: &[u8], f: &mut dyn FnMut(Pt)) {
         for &b in buf {
             if self.in_tag {
                 if b == b'>' {
@@ -396,7 +397,7 @@ impl Gpx {
     }
 
     /// A whole tag (between `<` and `>`).
-    fn tag_end(&mut self, f: &mut dyn FnMut(i32, i32, Option<i32>)) {
+    fn tag_end(&mut self, f: &mut dyn FnMut(Pt)) {
         let t = self.tag.get(..self.tag_len).unwrap_or(&[]);
         let name = t.split(|&b| b.is_ascii_whitespace() || b == b'/' && t.first() != Some(&b'/')).next();
         match name.unwrap_or(&[]) {
@@ -412,13 +413,14 @@ impl Gpx {
             }
             b"/trkpt" | b"/rtept" => self.emit(f),
             b"ele" => self.ele = Some(([0; 24], 0)),
+            b"trk" | b"trkseg" | b"rte" => self.split = true,
             _ => {}
         }
     }
 
-    fn emit(&mut self, f: &mut dyn FnMut(i32, i32, Option<i32>)) {
-        if let Some((lat, lon, ele)) = self.pt.take() {
-            f(lat, lon, ele);
+    fn emit(&mut self, f: &mut dyn FnMut(Pt)) {
+        if let Some((lat, lon, alt_dm)) = self.pt.take() {
+            f(Pt { lat, lon, alt_dm, split: core::mem::take(&mut self.split), dist_m: None });
         }
     }
 }
@@ -491,7 +493,7 @@ pub(crate) mod tests {
     fn gpx_points(text: &[u8], chunk: usize) -> Vec<(i32, i32, Option<i32>)> {
         let (mut g, mut v) = (Gpx::new(), Vec::new());
         for part in text.chunks(chunk) {
-            g.push_slice(part, &mut |la, lo, e| v.push((la, lo, e)));
+            g.push_slice(part, &mut |p| v.push((p.lat, p.lon, p.alt_dm)));
         }
         v
     }
@@ -510,6 +512,24 @@ pub(crate) mod tests {
         for chunk in [1, 7, 4096] {
             assert_eq!(gpx_points(text, chunk), want, "chunks of {chunk}");
         }
+    }
+
+    /// Each track, segment and route starts a segment at its first point; the list's length leaves out a jump of
+    /// more than 1 km where one starts (as the model, course.rs `gaps_between_segments`).
+    #[test]
+    fn gpx_segments() {
+        let text = br#"<gpx><trk><trkseg><trkpt lat="0" lon="0"/><trkpt lat="0.01" lon="0"/></trkseg>
+            <trkseg><trkpt lat="0.011" lon="0"/></trkseg></trk>
+            <trk><trkseg><trkpt lat="0.1" lon="0"/><trkpt lat="0.11" lon="0"/></trkseg></trk>
+            <rte><rtept lat="0.2" lon="0"/></rte></gpx>"#;
+        let (mut g, mut v, mut odo) = (Gpx::new(), Vec::new(), Odometer::new());
+        g.push_slice(text, &mut |p| {
+            odo.step(p);
+            v.push(p.split);
+        });
+        assert_eq!(v, [true, false, true, true, false, true]);
+        let m = odo.len_m().unwrap();
+        assert!(m.abs_diff(1112 + 111 + 1112) <= 2, "the 9.9 km and 10 km jumps left out: {m}");
     }
 
     /// Long digit runs (review 2: 12 digits and 7 places overflowed i64): refused, the point with them too.
