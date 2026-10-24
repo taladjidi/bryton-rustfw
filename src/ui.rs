@@ -4,6 +4,7 @@
 pub mod card;
 pub mod fonts;
 pub mod map;
+pub mod media;
 pub mod menu;
 pub mod text;
 pub mod tiles;
@@ -1190,14 +1191,19 @@ pub(crate) mod tests {
     pub struct Frame {
         pub px: Vec<u16>,
         fills: usize,
+        painted: usize,
     }
 
     impl Frame {
         pub fn new() -> Self {
-            Frame { px: vec![BLACK; (W * H) as usize], fills: 0 }
+            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0 }
         }
         pub fn at(&self, x: u32, y: u32) -> u16 {
             self.px[(y * W + x) as usize]
+        }
+        /// Pixels painted so far (a redraw's cost).
+        pub fn filled(&self) -> usize {
+            self.painted
         }
         fn count(&self, color: u16) -> usize {
             self.px.iter().filter(|&&p| p == color).count()
@@ -1212,6 +1218,7 @@ pub(crate) mod tests {
         fn blit(&mut self, x: u32, y: u32, w: u32, h: u32, px: &mut dyn FnMut(u32, u32) -> u16) {
             assert!(x + w <= W && y + h <= H, "fill ({x},{y}) {w}x{h} off screen");
             self.fills += 1;
+            self.painted += (w * h) as usize;
             for dy in 0..h {
                 for dx in 0..w {
                     self.px[((y + dy) * W + x + dx) as usize] = px(dx, dy);

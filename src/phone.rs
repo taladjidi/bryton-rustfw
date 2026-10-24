@@ -105,12 +105,16 @@ pub enum Media {
     VolDown = 4,
     /// Mute.
     Mute = 5,
+    /// Skip forward in the track (AMS only: the app sets how far, often 15 or 30 s; podcasts).
+    SkipFwd = 6,
+    /// Skip backward, the same.
+    SkipBack = 7,
 }
 
 impl Media {
-    /// The report with this key down.
-    pub fn report(self) -> u8 {
-        1 << self as u8
+    /// The HID report with this key down (None: no HID usage, AMS only).
+    pub fn report(self) -> Option<u8> {
+        (self as u8 <= Media::Mute as u8).then(|| 1 << self as u8)
     }
 
     /// The AMS remote command for it, if AMS has one.
@@ -121,6 +125,8 @@ impl Media {
             Media::Prev => 4,
             Media::VolUp => 5,
             Media::VolDown => 6,
+            Media::SkipFwd => 9, // SkipForward (AMS RemoteCommandID)
+            Media::SkipBack => 10,
             Media::Mute => return None,
         })
     }
@@ -309,16 +315,22 @@ impl DataSource {
 // AMS
 // ---------------------------------------------------------------------------------------------------------------
 
-/// What to write to Entity Update after subscribing: the player's playback info, the track's artist and title.
-pub const AMS_REGISTER: [&[u8]; 2] = [&[0, 1], &[2, 0, 2]];
+/// What to write to Entity Update after subscribing: the player's playback info, the track's artist, album, title
+/// and duration (AMS, Apple's specification: entity 2 Track, attributes 0..3; Nordic's AMS client sample writes the
+/// same).
+pub const AMS_REGISTER: [&[u8]; 2] = [&[0, 1], &[2, 0, 1, 2, 3]];
 
 /// What is playing, from AMS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NowPlaying {
-    /// The track.
-    pub title: Line<24>,
+    /// The track (two lines on the media screen).
+    pub title: Line<40>,
     /// Its artist.
     pub artist: Line<24>,
+    /// Its album.
+    pub album: Line<24>,
+    /// Its length, s (0: not told).
+    pub duration_s: u32,
     /// Playing (else paused or stopped).
     pub playing: bool,
     /// Elapsed seconds when last told, and the ms since.
@@ -327,6 +339,12 @@ pub struct NowPlaying {
     pub since_ms: u32,
     /// The title changed (to say in the banner).
     pub new_title: bool,
+}
+
+/// "193.25" -> 193: the integer part of AMS's seconds (at most 7 digits).
+fn seconds(v: &[u8]) -> u32 {
+    let whole = v.split(|&c| c == b'.').next().unwrap_or(b"");
+    whole.iter().take(7).take_while(|c| c.is_ascii_digit()).fold(0, |v, &c| v * 10 + u32::from(c - b'0'))
 }
 
 impl NowPlaying {
@@ -352,18 +370,17 @@ impl NowPlaying {
                 self.artist.clear();
                 fold(&mut self.artist, value);
             }
+            (2, 1) => {
+                self.album.clear();
+                fold(&mut self.album, value);
+            }
+            (2, 3) => self.duration_s = seconds(value),
             (0, 1) => {
                 // "state,rate,elapsed": the integer part of the elapsed seconds is enough here
                 let mut parts = value.split(|&c| c == b',');
                 let state = parts.next().unwrap_or(b"0");
                 self.playing = state == b"1";
-                let elapsed = parts.nth(1).unwrap_or(b"0");
-                let whole = elapsed.split(|&c| c == b'.').next().unwrap_or(b"");
-                self.elapsed_s = whole
-                    .iter()
-                    .take(7)
-                    .take_while(|c| c.is_ascii_digit())
-                    .fold(0, |v, &c| v * 10 + u32::from(c - b'0'));
+                self.elapsed_s = seconds(parts.nth(1).unwrap_or(b"0"));
                 self.since_ms = 0;
             }
             _ => {}

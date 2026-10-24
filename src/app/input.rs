@@ -179,9 +179,23 @@ impl App {
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
             (Screen::Media, Input::Back) => self.close(),
+            (Screen::Media, Input::Touch(Gesture::Tap(x, y))) => {
+                use ui::media::Button;
+                let (key, photo) = match ui::media::hit(x, y) {
+                    Some(Button::Prev) => (Media::Prev, false),
+                    Some(Button::Play) => (Media::PlayPause, false),
+                    Some(Button::Next) => (Media::Next, false),
+                    Some(Button::VolDown) => (Media::VolDown, false),
+                    Some(Button::VolUp) => (Media::VolUp, false),
+                    Some(Button::SkipBack) => (Media::SkipBack, false),
+                    Some(Button::SkipFwd) => (Media::SkipFwd, false),
+                    None => return,
+                };
+                return self.media(b, key, photo);
+            }
             (Screen::Media, _) => {
                 let key = match i {
-                    Input::Select | Input::Touch(Gesture::Tap(..)) => Media::PlayPause,
+                    Input::Select => Media::PlayPause,
                     Input::Next | Input::Touch(Gesture::Swipe(Dir::Left)) => Media::Next,
                     Input::Prev | Input::Touch(Gesture::Swipe(Dir::Right)) => Media::Prev,
                     Input::NextHeld | Input::Touch(Gesture::Swipe(Dir::Down)) => Media::VolDown,

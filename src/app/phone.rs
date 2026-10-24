@@ -140,7 +140,7 @@ pub struct Phone {
     /// The battery level last sent.
     battery_sent: Option<u8>,
     /// The media screen's rows as drawn (fingerprints).
-    pub(crate) shown: [u32; 3],
+    pub(crate) shown: ui::media::Shown,
 }
 
 impl Default for Phone {
@@ -174,7 +174,7 @@ impl Default for Phone {
             now: ph::NowPlaying::default(),
             release: false,
             battery_sent: None,
-            shown: [0; 3],
+            shown: ui::media::Shown { text: 0, playing: None, bar: 0, times: 0 },
         }
     }
 }
@@ -453,7 +453,10 @@ impl App {
             return self.next_op(b, conn);
         }
         let k = if shutter { Media::VolUp } else { key };
-        match ble::notify(b, &mut self.rx, conn, p.report.0, &[k.report()]) {
+        let Some(report) = k.report() else {
+            return self.say("NEEDS AN IPHONE"); // a skip: AMS only
+        };
+        match ble::notify(b, &mut self.rx, conn, p.report.0, &[report]) {
             Ok(()) => p.release = true,
             Err(_) => self.say("KEYS NOT ENABLED"), // the phone did not enable the report: not used as HID
         }
@@ -818,55 +821,30 @@ impl App {
         }
     }
 
-    /// The media screen's rows: the title, the artist, and play state with the elapsed time.
-    pub(crate) fn media_rows(&self) -> [Line<24>; 3] {
+    /// What the media screen shows: the track from AMS, None without a secure link.
+    pub(crate) fn media_now(&self) -> ui::media::Now<'_> {
         let n = &self.phone.now;
-        let mut rows: [Line<24>; 3] = [n.title, n.artist, Line::new()];
-        if self.phone.link() != Link::Secure {
-            rows = [Line::new(), Line::new(), Line::new()];
-            rows[0].push_str("NO PHONE");
-            return rows;
+        ui::media::Now {
+            title: (self.phone.link() == Link::Secure).then(|| n.title.as_str()),
+            artist: n.artist.as_str(),
+            album: n.album.as_str(),
+            playing: n.playing,
+            elapsed: n.elapsed(),
+            duration: n.duration_s,
         }
-        rows[2].push_str(if n.playing { "PLAYING " } else { "PAUSED " });
-        push_clock(&mut rows[2], n.elapsed());
-        rows
     }
 
-    /// Redraws the media screen's rows that changed.
+    /// Redraws what changed on the media screen (the time and the bar's new columns, a second).
     pub(crate) fn update_media(&mut self, b: &mut impl Board) {
-        for (i, row) in self.media_rows().iter().enumerate() {
-            let print = fnv(0x811c_9dc5, row.as_str().as_bytes());
-            if self.phone.shown[i] != print {
-                self.phone.shown[i] = print;
-                draw_media_row(&mut Panel(b, (0, self.bottom())), i, row.as_str());
-            }
-        }
+        let mut shown = self.phone.shown;
+        ui::media::update(&mut Panel(b, (0, self.bottom())), &self.media_now(), &mut shown, false);
+        self.phone.shown = shown;
     }
 }
 
-/// Media screen row `i` (the title white, the others grey), in its own box.
-pub(crate) fn draw_media_row(c: &mut impl Canvas, i: usize, row: &str) {
-    let style = if i == 0 { ui::LABEL } else { text::Style { fg: ui::GREY, ..ui::LABEL } };
-    let y = ui::LIST_Y + i as u32 * ui::LIST_ROW;
-    text::draw_in(c, &style, ui::NEARBY.0, y, ui::NEARBY.2, text::Align::Left, row);
-}
-
-/// The media and call screens' fixed text: a title and the keys' legend (the rows above are [`App::update_media`]'s).
+/// The call screen's fixed text: a title and the keys' legend.
 pub(crate) fn draw_phone_screen(c: &mut impl Canvas, call: Option<&str>) {
-    let (title, legend): (&str, &[&str]) = match call {
-        Some(_) => ("CALL", &["START ANSWER", "BACK  DECLINE", "TAP RIGHT/LEFT"]),
-        None => (
-            "MEDIA",
-            &[
-                "START PLAY/PAUSE",
-                "PAGE  NEXT",
-                "LAP   PREVIOUS",
-                "HELD  VOLUME -/+",
-                "SWIPE TRACK/VOL",
-                "TOUCH HOLD PHOTO",
-            ],
-        ),
-    };
+    let (title, legend): (&str, &[&str]) = ("CALL", &["START ANSWER", "BACK  DECLINE", "TAP RIGHT/LEFT"]);
     ui::draw_title(c, title);
     if let Some(who) = call {
         text::draw_in(c, &ui::LABEL, ui::NEARBY.0, ui::LIST_Y, ui::NEARBY.2, text::Align::Left, who);
