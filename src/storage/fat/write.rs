@@ -747,14 +747,82 @@ pub(crate) mod tests {
                 }
             }
         }
+        // The lost clusters (taken, named by no entry, not bad): each must lead to an end of chain without meeting a
+        // named chain, another lost chain, a free cluster or itself again, or fsck_msdos calls it cross-linked.
+        let val: Vec<u32> = (0..n).map(|c| if c < 2 { 0 } else { fat.entry(&mut d, c).unwrap() }).collect();
+        let is_lost = |c: u32| val[c as usize] != 0 && val[c as usize] != 0x0fff_fff7 && owner[c as usize] == 0;
+        let mut into = std::vec![0u8; n as usize];
         let mut lost = 0;
-        for c in 2..n {
-            let v = fat.entry(&mut d, c).unwrap();
-            if v != 0 && owner[c as usize] == 0 && v != 0x0fff_fff7 {
-                lost += 1;
+        for c in (2..n).filter(|&c| is_lost(c)) {
+            lost += 1;
+            let v = val[c as usize];
+            if v >= 0x0fff_fff8 {
+                continue;
+            }
+            if !fat.valid(v) {
+                return Err(std::format!("lost chain at {c} leaves the volume at {v}"));
+            }
+            if !is_lost(v) {
+                return Err(std::format!("lost chain at {c} runs into {v}, free or named"));
+            }
+            into[v as usize] += 1;
+            if into[v as usize] > 1 {
+                return Err(std::format!("cross-linked lost cluster {v}"));
             }
         }
+        // one way into each: a lost cluster not reached from a head (nothing into it) is in a loop
+        let mut reached = std::vec![false; n as usize];
+        for head in (2..n).filter(|&c| is_lost(c) && into[c as usize] == 0) {
+            let mut k = head;
+            while !reached[k as usize] {
+                reached[k as usize] = true;
+                match val[k as usize] {
+                    v if fat.valid(v) => k = v,
+                    _ => break,
+                }
+            }
+        }
+        if let Some(c) = (2..n).find(|&c| is_lost(c) && !reached[c as usize]) {
+            return Err(std::format!("lost chain in a loop at {c}"));
+        }
         Ok(lost)
+    }
+
+    /// fsck itself: a lost chain (taken, named by no entry: what a cut in a move leaves) is only lost while it ends
+    /// alone; one that runs into a file's chain, another lost chain, a free cluster, out of the volume or round in a
+    /// loop is an error, as fsck_msdos says of it (cross-linked, ...). Before, only the named chains were walked.
+    #[test]
+    fn fsck_follows_the_lost_chains() {
+        let img = image();
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let file = fat.open(&mut d, "frag.bin").unwrap().cluster;
+        let a = fat.find_free(&mut d, 2).unwrap();
+        let b = fat.find_free(&mut d, a + 1).unwrap();
+        let c = fat.find_free(&mut d, b + 1).unwrap();
+        let (start, size, fats, past) = (fat.fat_start, fat.fat_size, fat.fats, fat.clusters + 2);
+        let with = |links: &[(u32, u32)]| {
+            let mut img = img.clone();
+            for &(k, v) in links {
+                for f in 0..fats {
+                    let at = (start + f * size) as usize * SECTOR + k as usize * 4;
+                    img[at..at + 4].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+            fsck(&img)
+        };
+        assert_eq!(with(&[(a, EOC)]), Ok(1), "alone: lost");
+        assert_eq!(with(&[(a, b), (b, EOC)]), Ok(2));
+        for (links, what) in [
+            (&[(a, file)][..], "into a file"),
+            (&[(a, c), (b, c), (c, EOC)], "two into one"),
+            (&[(a, b)], "into a free cluster"),
+            (&[(a, past)], "out of the volume"),
+            (&[(a, b), (b, a)], "a loop"),
+            (&[(a, a)], "onto itself"),
+        ] {
+            assert!(with(links).is_err(), "{what}: {:?}", with(links));
+        }
     }
 
     /// Free clusters as the FAT says, and FSInfo's count.
