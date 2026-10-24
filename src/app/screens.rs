@@ -143,7 +143,6 @@ impl App {
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
             }
-            Screen::Call => draw_phone_screen(c, Some(self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()))),
             Screen::Nearby => {
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.nearby.count(), self.scanning);
@@ -153,6 +152,9 @@ impl App {
         }
         if self.banner_ms.is_some() && self.banner_drawn {
             ui::draw_banner(c, self.banner.as_str());
+        }
+        if self.phone.ringing {
+            ui::draw_call(c, self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()));
         }
     }
 
@@ -253,7 +255,13 @@ impl App {
 
     /// How far down the page may be drawn: above the banner while one is up.
     pub(crate) fn bottom(&self) -> u32 {
-        if self.banner_ms.is_some() { ui::BANNER_Y } else { ui::H }
+        if self.phone.ringing {
+            ui::CALL_Y
+        } else if self.banner_ms.is_some() {
+            ui::BANNER_Y
+        } else {
+            ui::H
+        }
     }
 
     /// The banner is gone: what is under it drawn again, from what the screen shows.

@@ -109,8 +109,8 @@ fn media_keys_and_now_playing() {
     sim.save("phone_media");
 }
 
-/// A call: the call screen with the caller, Start answers it (ANCS positive action); a second one declined with
-/// Back; one ended on the phone closes the screen.
+/// A call: the overlay with the caller over the page, Start answers it (ANCS positive action); a second one declined
+/// with Back; one ended on the phone takes the overlay away and the page is whole again.
 #[test]
 fn incoming_calls() {
     let script = std::vec![
@@ -122,17 +122,24 @@ fn incoming_calls() {
     let (mut sim, mut app) = unit(iphone(script));
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 2500);
-    assert_eq!(app.screen, Screen::Call);
+    assert!(app.phone.ringing);
     assert_consistent(&sim, &app);
     sim.save("phone_call");
     app.input(&mut sim, Input::Select);
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.screen, Screen::Call, "the second call");
-    app.input(&mut sim, Input::Back);
+    assert!(app.phone.ringing, "the second call");
+    assert_consistent(&sim, &app);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, 30))); // above the overlay: not an answer
+    assert!(app.phone.ringing);
+    let (x, y, w, h) = crate::ui::CALL_BUTTONS[0];
+    app.input(&mut sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16))); // red: declined
+    assert!(!app.phone.ringing);
+    assert_consistent(&sim, &app);
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.screen, Screen::Call, "the third");
+    assert!(app.phone.ringing, "the third");
     run(&mut sim, &mut app, 5000);
-    assert_ne!(app.screen, Screen::Call, "ended on the phone: closed");
+    assert!(!app.phone.ringing, "ended on the phone: closed");
+    assert_consistent(&sim, &app);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
 }
 
@@ -293,7 +300,7 @@ fn a_call_in_a_burst_of_messages() {
     let (mut sim, mut app) = unit(iphone(script));
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 4000);
-    assert_eq!(app.screen, Screen::Call);
+    assert!(app.phone.ringing);
     app.input(&mut sim, Input::Select);
     run(&mut sim, &mut app, 2000);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0)]);

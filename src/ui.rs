@@ -1116,6 +1116,30 @@ pub fn draw_banner(c: &mut impl Canvas, text: &str) {
     c.fill(0, BANNER_Y + 12 + style.height(), W, H - BANNER_Y - 12 - style.height(), ACCENT);
 }
 
+/// Top of the incoming call's overlay: the two buttons, then the banner with the caller.
+pub const CALL_Y: u32 = BANNER_Y - CALL_BUTTON_H - 8;
+/// The call buttons' height.
+const CALL_BUTTON_H: u32 = 56;
+/// The decline (red, left) and answer (green, right) buttons: x, y, w, h.
+pub const CALL_BUTTONS: [(u32, u32, u32, u32); 2] =
+    [(8, CALL_Y + 4, W / 2 - 16, CALL_BUTTON_H), (W / 2 + 8, CALL_Y + 4, W / 2 - 16, CALL_BUTTON_H)];
+/// A telephone handset, 16 x 16 (the earpiece top left, the mouthpiece bottom right).
+const HANDSET: [u16; 16] = [
+    0x3000, 0x7800, 0x7c00, 0x7c00, 0x7800, 0x3800, 0x3800, 0x1c00, 0x1c00, 0x0e00, 0x0706, 0x039f, 0x01ff, 0x00fe,
+    0x007c, 0x0000,
+];
+
+/// An incoming call over the bottom of any screen: a red decline and a green answer button, each with a handset,
+/// and the banner with the caller (the page above keeps updating: [`crate::App`]'s bottom is [`CALL_Y`]).
+pub fn draw_call(c: &mut impl Canvas, who: &str) {
+    c.fill(0, CALL_Y, W, BANNER_Y - CALL_Y, BLACK);
+    for (i, &(x, y, w, h)) in CALL_BUTTONS.iter().enumerate() {
+        c.fill(x, y, w, h, if i == 0 { RED } else { GREEN });
+        draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + h / 2 - 16, 2, WHITE);
+    }
+    draw_banner(c, if who.is_empty() { "INCOMING CALL" } else { who });
+}
+
 /// Ferris, at the bottom of the overview.
 pub fn draw_ferris(c: &mut impl Canvas) {
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);

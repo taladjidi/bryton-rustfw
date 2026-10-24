@@ -100,8 +100,6 @@ pub enum Screen {
     Past,
     /// The phone's media remote (app/phone.rs).
     Media,
-    /// An incoming call: answer or decline.
-    Call,
 }
 
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
@@ -206,14 +204,15 @@ impl App {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 return self.media(b, key, false);
             }
-            (Screen::Call, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..))) => {
-                let accept = match i {
-                    Input::Touch(Gesture::Tap(x, _)) => u32::from(x) >= ui::W / 2,
-                    _ => i == Input::Select,
-                };
+            // an incoming call, over any screen: Start or the green button answers, Back or the red one declines
+            (_, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..)))
+                if self.phone.ringing && call_choice(i).is_some() =>
+            {
+                let accept = call_choice(i) == Some(true);
                 self.answer(b, accept);
+                self.end_ring(b);
                 self.say(if accept { "ANSWERED" } else { "DECLINED" });
-                self.close();
+                return;
             }
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
@@ -382,5 +381,28 @@ impl App {
     /// A finger is on the panel: sample it every [`TOUCH_MS`].
     pub fn touching(&self) -> bool {
         self.touch.down()
+    }
+}
+
+/// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,
+/// the red one); None for a tap elsewhere.
+fn call_choice(i: Input) -> Option<bool> {
+    let inside = |(bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16| {
+        (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
+    };
+    match i {
+        Input::Select => Some(true),
+        Input::Back => Some(false),
+        Input::Touch(Gesture::Tap(x, y)) => {
+            let [red, green] = ui::CALL_BUTTONS;
+            if inside(green, x, y) {
+                Some(true)
+            } else if inside(red, x, y) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }

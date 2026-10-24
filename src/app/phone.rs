@@ -144,6 +144,8 @@ pub struct Phone {
     ds: ph::DataSource,
     /// An incoming call: its id and who calls.
     pub(crate) call: Option<(u32, Line<24>)>,
+    /// The call's overlay is up (its caller known): buttons and banner over the bottom of the screen.
+    pub(crate) ringing: bool,
     /// What plays.
     pub(crate) now: ph::NowPlaying,
     /// A media key's report was sent: the release goes at the next pass.
@@ -186,6 +188,7 @@ impl Default for Phone {
             fetching: false,
             ds: ph::DataSource::default(),
             call: None,
+            ringing: false,
             now: ph::NowPlaying::default(),
             release: false,
             release_tries: 0,
@@ -498,6 +501,15 @@ impl App {
         }
     }
 
+    /// The call's overlay goes (answered, declined, missed, the link lost): what was under it drawn again.
+    pub(crate) fn end_ring(&mut self, b: &mut impl Board) {
+        if core::mem::take(&mut self.phone.ringing) {
+            let mut p = Panel(b, (ui::CALL_Y, ui::H));
+            p.fill(0, ui::CALL_Y, ui::W, ui::H - ui::CALL_Y, ui::BLACK);
+            self.draw_screen(&mut p);
+        }
+    }
+
     /// Answers the incoming call (true) or declines it.
     pub(crate) fn answer(&mut self, b: &mut impl Board, accept: bool) {
         if let (Some((uid, _)), Some(conn)) = (self.phone.call.take(), self.phone.conn) {
@@ -544,9 +556,8 @@ impl App {
                 let had_call = self.phone.call.is_some();
                 self.phone.unlink();
                 self.phone.pairing = false;
-                if had_call && self.screen == Screen::Call {
-                    self.close();
-                    self.show(b);
+                if had_call {
+                    self.end_ring(b);
                 }
                 self.idle_advertising(b);
             }
@@ -795,10 +806,7 @@ impl App {
                 }
                 2 if self.phone.call.is_some_and(|(uid, _)| uid == n.uid) => {
                     self.phone.call = None; // answered or declined on the phone, or missed
-                    if self.screen == Screen::Call {
-                        self.close();
-                        self.show(b);
-                    }
+                    self.end_ring(b);
                 }
                 _ => {}
             }
@@ -814,11 +822,11 @@ impl App {
             match &mut self.phone.call {
                 Some((uid, who)) if *uid == a.uid => {
                     *who = a.title;
-                    if self.screen != Screen::Call {
-                        self.open(Screen::Call);
-                    }
-                    self.banner_ms = None; // the call takes the whole screen
-                    self.show(b);
+                    let who = *who;
+                    // over the bottom of whatever screen is up: the page above keeps updating (bottom())
+                    self.banner_ms = None;
+                    self.phone.ringing = true;
+                    ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str());
                     self.tones.play(&BEEP_ALERT);
                 }
                 _ => {
@@ -887,26 +895,5 @@ impl App {
         let mut shown = self.phone.shown;
         ui::media::update(&mut Panel(b, (0, self.bottom())), &self.media_now(), &mut shown, false);
         self.phone.shown = shown;
-    }
-}
-
-/// The call screen's fixed text: a title and the keys' legend.
-pub(crate) fn draw_phone_screen(c: &mut impl Canvas, call: Option<&str>) {
-    let (title, legend): (&str, &[&str]) = ("CALL", &["START ANSWER", "BACK  DECLINE", "TAP RIGHT/LEFT"]);
-    ui::draw_title(c, title);
-    if let Some(who) = call {
-        text::draw_in(c, &ui::LABEL, ui::NEARBY.0, ui::LIST_Y, ui::NEARBY.2, text::Align::Left, who);
-    }
-    for (i, l) in legend.iter().enumerate() {
-        let y = ui::LIST_Y + (4 + i as u32) * ui::LIST_ROW;
-        text::draw_in(
-            c,
-            &text::Style { fg: ui::GREY, ..ui::LABEL },
-            ui::NEARBY.0,
-            y,
-            ui::NEARBY.2,
-            text::Align::Left,
-            l,
-        );
     }
 }
