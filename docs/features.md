@@ -94,13 +94,15 @@ distance in km, a screen of rows at a time. Opening it reads the rides as READ R
 appear as the rides are read; the newest 128 are kept. Start on a ride opens its card, the same as at the end of a
 ride: the date and start time, the track (fitted to the map), the elevation profile, time, distance, average speed,
 ascent, NP (from the ride's records), average power, average and max heart rate, TSS (at the FTP set now) and kJ.
-The ride's file is read once to draw it: about 0.1 s for a 300 KB ride. Back returns to the list.
+The ride's file is read once to draw it, 96 KB a main loop pass ("READING RIDE", about 0.1 s for a 300 KB ride;
+a long ride takes a few passes, the loop never stalls); the card opens when it is read. Back returns to the list.
 
 ## Workouts
 
 The workouts Bryton's app syncs to the card (`\Workout\calendar\YYYYMMDD\*.fit`, often from intervals.icu or
 TrainingPeaks), read only:
-- **WORKOUTS** lists today's and the next days' (eight at most), a row each: the day and the planned time. Select
+- **WORKOUTS** lists today's and the next days' (eight at most; only the earliest eight day folders are looked
+  into, at most 16 files read), a row each: the day and the planned time. Select
   shows the workout's steps, its name as the title: what ends each step (a time, a distance, or LAP) and its target
   (power in W from % FTP, heart rate in bpm from % max HR, cadence), coloured by zone; repeats are written out.
 - **START** (or Select on a step: from that step) starts the workout, and the ride if none runs, on page 1. The
@@ -117,12 +119,17 @@ TrainingPeaks), read only:
 
 The routes Bryton's app syncs to the card (`\PlanTrip\*.fit`, in Bryton's own layout) and FIT courses or GPX files
 copied over USB into `\Courses`, read only:
-- **COURSES** (main menu) lists them with their length; Select follows one (green in the list; the first ride page
-  opens), Select again stops.
+- **COURSES** (main menu) lists them at once, then their lengths come a file at a time ("..." until then, 96 KB a
+  main loop pass while the list shows); Select reads one ("READING COURSE") and follows it (green in the list; the
+  first ride page opens), Select again stops.
+- **On a lap course** (or any that passes a place more than once), a rider found again after losing the course
+  (a gap in the fixes, a detour) is placed on the lap being ridden: the pass nearest along the course to where
+  they were.
 - **The map** draws the course in magenta under the track, and fits the course and the track.
 - **Where the rider is:** the nearest point of the course, looked for around the last one each second; on an
   out-and-back or a loop the leg the rider is on wins. More than 50 m off for 5 s: "OFF COURSE" and the alert's
-  beeps (once the course was joined); "BACK ON COURSE" within 25 m.
+  beeps (once the course was joined); "BACK ON COURSE" within 25 m. A course over 330 km, kept a point every 160 m,
+  has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
 - **Fields:** TO GO KM, OFF CRS M (red while off course), CLIMB (on a climb what is left and the grade of the next
@@ -157,7 +164,8 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
-- **Beeps** at power-on and power-off, and for a workout's steps.
+- **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
+  due together play one after the other.
 
 ## USB
 

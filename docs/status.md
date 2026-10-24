@@ -22,11 +22,13 @@ The dated findings are in [journal.md](journal.md).
   unit's own `\System` files (checked on the host against two backups).
 - **Workouts on the unit:** WORKOUTS over the card's own `\Workout\calendar` (read on the host from one unit's
   backup: Bryton's files decode, names cut at 15 characters), a workout ridden through (the beeps' loudness and
-  pitch, 2 kHz and 2.5 kHz, by ear; the banners), and the time a list takes to read (one 8 KB read a workout).
+  pitch, 2 kHz and 2.5 kHz, by ear; the banners), and the time a list takes to read (16 workout files of 8 KB at
+  most, about 50 ms, inferred from the scan's 2.5 MB/s).
 - **Courses on the unit:** COURSES over the card's own `\PlanTrip` (the 14 routes of one unit's backup read on
   the host: every one decodes, lengths within 0.25 % of the files' own, climbs close to the ones Bryton's app marked),
-  the time the list takes (each file read whole for its length: about 550 KB for those 14), a course ridden (the
-  window keeping up at speed, the off-course alert in a town's parallel streets, the climb banners).
+  the time the lengths take to come (each file read whole, 96 KB a pass: about 550 KB for those 14, some 6
+  passes), a course ridden (the window keeping up at speed, the off-course alert in a town's parallel streets, the
+  climb banners, a lap course rejoined after a detour).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

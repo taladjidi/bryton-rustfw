@@ -98,4 +98,34 @@ owner):
    works.
 7. Only then an install (`iaprecover.py --write`), recorded in FLASHLOG.
 
+## 2026-10-24: review 2, courses, workouts, alerts and the buzzer: fixed
+
+From the second adversarial review (findings numbered as there), each with a test written first that failed:
+- **6, lap courses** (`course.rs` `search`): the lost-rider search kept the first 4 chunk boxes at distance 0, so on
+  a lap course every lap's box held the rider and laps 1 to 4 always won: after a gap or a detour on lap 5 the
+  rider was placed a lap back. Fixed: of the boxes about as near as the nearest, the 4 nearest along the course to
+  where the rider was. Test `lap_course_found_on_the_right_lap` (lap 4 before).
+- **7 and 15, long single passes:** opening COURSES read every file to the end for its length (up to 32 of 4 MB),
+  following a course read it whole, a past ride's card read up to 4 MB, and WORKOUTS read 8 KB of every future
+  file. Now COURSES lists from the folders and measures a file at a time, the course to follow and the card are
+  read 96 KB a pass (`App::SCAN_IDLE`, about 40 ms), and the calendar looks into the earliest 8 day folders, 16
+  files at most. Test `long_reads_spread_over_passes`: the most a pass reads went from 2.3 MB to 108 KB (300 ms at
+  2.5 MB/s is the limit it checks).
+- **11, climbs:** `find_climbs` made a bin per 50 m of whatever length the file claimed (86 million for a crafted
+  30 KB GPX): at most 32768 bins now. Test `climbs_bounded_on_a_crafted_course`.
+- **12, GPX numbers:** `decimal` overflowed an i64 on 12 digits with 7 places (a panic in debug, a wrapped point in
+  release): checked arithmetic, the point refused. Test `decimal_overflow`; the GPX fuzz gets long digit runs.
+- **13, alerts:** a heart-rate alert returned before the timer was noted, so an eat or drink minute in the same
+  second was lost: the reminders due are kept pending first. Test `heart_rate_alert_keeps_the_reminders_due`.
+- **14, the buzzer:** the workout's tones and the alerts had a player each, both driving the buzzer in the same
+  pass and cutting each other off. One player (`App::tones`) with a queue of 3. Test `tones_do_not_cut_each_other`.
+- **Also:** a course thinned past a point every 50 m (over about 330 km) widens its off-course threshold to half
+  the spacing plus 25 m, since its chords cut bends by up to half the spacing (test
+  `thinned_course_no_false_off_course`); make_courses's comment said it was built in place, it is not (35.6 KB,
+  budgeted).
+- **Cost:** image 190.7 KB to 192.2 KB; App 42.9 KB on the host; make_app 43.3 to 44.3 KB, make_courses 34.0 to
+  35.6 KB.
+- **Not done:** GPX gaps (a point far from the previous one is still joined to it), a course's own stated length
+  (FIT total_distance, Bryton's 254) instead of reading it whole.
+
 The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).
