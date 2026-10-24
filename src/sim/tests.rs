@@ -2298,6 +2298,32 @@ fn hill(app: &App) -> usize {
     (0..list.len()).find(|&i| list.get(i).unwrap().name() == "HILL").unwrap()
 }
 
+/// A course is read over several passes: left before it is read (Back), the screen the rider went to stays, with
+/// COURSE ON said and the course followed; it opens the first ride page only from the list (stock's route details
+/// lead to the ride pages too: its manual, "Route Guidance", press to start riding).
+#[test]
+fn course_read_after_leaving_the_list() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Back));
+    let left = app.screen();
+    assert!(!matches!(left, Screen::Menu(Menu::Courses, _) | Screen::Ride(_)), "{left:?}");
+    run(&mut sim, &mut app, 200);
+    assert_eq!((app.screen(), app.banner.as_str()), (left, "COURSE ON"));
+    assert!(app.courses.as_deref().unwrap().on.is_some());
+    assert_consistent(&sim, &app);
+}
+
 /// Following a course (tools/fat_image.py's hill, in stock's \PlanTrip): COURSES lists the card's courses
 /// with their lengths, Select follows one (the first ride page). On the ride the fields say what is left, the
 /// climb ahead and the distance off the course; a detour gives "OFF COURSE" (once, with the alert's beeps) and
