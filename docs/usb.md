@@ -65,6 +65,22 @@ This page has what is known, what was tried, and what to ask or try next. Last u
   - Traffic matters: low throughput at high speed held; 7 MB/s fails within seconds.
   - After the fault, the PHY or the core is in a state only a full reset clears.
 
+## What the unit saw at a drop (2026-10-24)
+
+Backup register 0 after a high-speed drop at the mount, read after the replug: `0xd1280200`.
+- **Last command:** 0x28, READ(10), with status 2: a **phase error**. The data phase could not hand the next 512-byte
+  packet to the IN endpoint for a whole second (`Bulk::send` gave up), so the computer had stopped taking data in
+  the middle of a transfer from the unit.
+- **Resets:** none of either kind (0xff bus reset, 0xfe Bulk-Only reset) among the last 32 entries. The computer did
+  not reset the device first.
+- **Then:** the core left Configured (the dot orange, most likely USB suspend: no more starts of frame), and the
+  watch reconnected (register 31: 2 drops in all).
+- **Reading (inferred):** the computer disabled the port without a reset. That is what a host controller does after
+  transaction errors (babble, a bad CRC) on an IN transfer. Only fast IN traffic fails: a damaged high-speed packet
+  from the device's side is the likeliest. Candidates: the transmit FIFO (sized to one packet, filled word by word
+  by uncached code), the ULPI data timing at 60 MHz, the PHY's transmitter or supply. Next tries 2, 4, 5 and 7 below
+  target exactly that.
+
 ## Ruled out or fixed
 
 - **macOS refusing the mount** ("mount approval dissented, 0xF8DA0008") was its lock screen: it does not mount a newly
