@@ -83,6 +83,7 @@ def save(name, data):
     os.chmod(home(), 0o700)
     tmp = home() / (name + '.tmp')
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)  # a .tmp left by an older run keeps its mode through O_CREAT
     with os.fdopen(fd, 'w') as f:
         json.dump(data, f, indent=1, sort_keys=True)
     os.replace(tmp, home() / name)
@@ -116,6 +117,12 @@ def fit_whole(data):
     return fit_crc(data) == 0
 
 
+def same_ride(clean, full):
+    """Both copies of one ride begin with the same file_id (definition and message: 28 bytes, src/storage/fit.rs),
+    which holds the ride's start: a full copy of another ride under the same name is never sent in its place."""
+    return clean[clean[0]:clean[0] + 28] == full[full[0]:full[0] + 28]
+
+
 def key(name, data):
     return f'{name}:{len(data)}:{zlib.crc32(data):08x}'
 
@@ -142,13 +149,37 @@ class Volume:
         return (self.root / path).read_bytes()
 
     def write(self, path, data):
+        """Whole or not at all: a .tmp beside it (no reader takes it: workout.rs lists *.fit), flushed to the
+        drive itself (F_FULLFSYNC on macOS: fsync alone leaves it in the drive's cache), then renamed."""
         p = self.root / path
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + '.tmp')
-        tmp.write_bytes(data)
-        os.replace(tmp, p)
+        try:
+            with open(tmp, 'wb') as f:
+                f.write(data)
+                f.flush()
+                flush(f.fileno())
+            os.replace(tmp, p)
+        finally:
+            tmp.unlink(missing_ok=True)
+        fd = os.open(p.parent, os.O_RDONLY)
+        try:
+            flush(fd)  # the directory entry too
+        finally:
+            os.close(fd)
         if p.read_bytes() != data:  # the drive can drop (AGENTS.md): read back, compare
             raise OSError(f'{p}: read back differs')
+
+    def exists(self, path):
+        return (self.root / path).is_file()
+
+
+def flush(fd):
+    import fcntl
+    try:
+        fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+    except (AttributeError, OSError):
+        os.fsync(fd)
 
 
 class Link:
@@ -286,31 +317,42 @@ class Strava:
             up = json.loads(body)
         raise OSError(f'Strava upload {name}: still processing, tried {tries} times (run again later)')
 
-    def login(self, port=REDIRECT_PORT, open_browser=True):
-        """Strava's authorization page, its code caught on a local redirect, exchanged for tokens."""
-        redirect = f'http://localhost:{port}/'
-        q = urllib.parse.urlencode({'client_id': self.cfg['client_id'], 'redirect_uri': redirect,
-                                    'response_type': 'code', 'approval_prompt': 'auto', 'scope': 'activity:write'})
-        url = f'{STRAVA}/oauth/authorize?{q}'
+    def login(self, port=REDIRECT_PORT, browser=None):
+        """Strava's authorization page, its code caught on a local redirect, exchanged for tokens. Only the answer
+        that carries this login's random `state` is taken (RFC 6749 10.12: another page or program on the computer
+        cannot slip its own code in); any other request is ignored, for 5 minutes at most."""
+        import secrets
+        state = secrets.token_urlsafe(16)
         got = {}
 
         class Catch(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                got.update(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query))
-                self.send_response(200)
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                ours = q.get('state') == [state]
+                if ours:
+                    got.update(q)
+                self.send_response(200 if ours else 404)
                 self.end_headers()
-                self.wfile.write(b'bryton-rustfw: done, this tab can be closed.')
+                self.wfile.write(b'bryton-rustfw: done, this tab can be closed.' if ours else b'')
 
             def log_message(self, *a):
                 pass
 
         srv = http.server.HTTPServer(('127.0.0.1', port), Catch)
+        # 127.0.0.1, not localhost (which may be ::1 first); Strava allows both as callback domains
+        redirect = f'http://127.0.0.1:{srv.server_port}/'
+        q = urllib.parse.urlencode({'client_id': self.cfg['client_id'], 'redirect_uri': redirect, 'state': state,
+                                    'response_type': 'code', 'approval_prompt': 'auto', 'scope': 'activity:write'})
+        url = f'{STRAVA}/oauth/authorize?{q}'
         print(f'Open this page and allow access:\n  {url}')
-        if open_browser:
+        if browser is None:
             import webbrowser
-            webbrowser.open(url)
-        srv.timeout = 300
-        srv.handle_request()
+            browser = webbrowser.open
+        browser(url)
+        deadline = time.time() + 300
+        while not got and time.time() < deadline:
+            srv.timeout = max(deadline - time.time(), 0.1)
+            srv.handle_request()
         srv.server_close()
         if 'code' not in got:
             raise OSError(f'Strava login: no code ({got.get("error", ["no answer"])[0]})')
@@ -366,6 +408,9 @@ def sync(src, cfg, state, go, days, today=None, log=print):
         if 'full' in files and not fit_whole(files['full']):
             log(f'{name}: its full copy is not whole: the clean one goes to Intervals.icu')
             del files['full']
+        if 'full' in files and not same_ride(files['clean'], files['full']):
+            log(f'{name}: its full copy is of another ride: the clean one goes to Intervals.icu')
+            del files['full']
         for s in todo:
             which = 'full' if s == 'intervals' and 'full' in files else 'clean'
             data = files[which]
@@ -374,7 +419,7 @@ def sync(src, cfg, state, go, days, today=None, log=print):
                 continue
             try:
                 rid = services[s].upload(name, data)
-            except OSError as e:
+            except (OSError, ValueError, KeyError) as e:  # ValueError, KeyError: an answer that is not what we know
                 log(f'{name}: {e}')
                 errors += 1
                 continue
@@ -402,10 +447,10 @@ def workouts(src, icu, state, go, today, days, log):
         day = str(e.get('start_date_local', ''))[:10].replace('-', '')
         if len(day) != 8 or not day.isdigit():
             continue
-        path = f'Workout/calendar/{day}/icu{int(e["id"])}.fit'
         try:
-            data = icu.workout_fit(e['id'])
-        except (OSError, ValueError) as err:
+            path = f'Workout/calendar/{day}/icu{int(e["id"])}.fit'
+            data = icu.workout_fit(int(e['id']))
+        except (OSError, ValueError, KeyError, TypeError) as err:
             log(str(err))
             errors += 1
             continue
@@ -413,7 +458,7 @@ def workouts(src, icu, state, go, today, days, log):
             log(f'{path}: not a whole FIT file of at most {WORKOUT_MAX} B, skipped')
             errors += 1
             continue
-        if written.get(path) == key(path, data):
+        if written.get(path) == key(path, data) and src.exists(path):
             continue
         if not go:
             log(f'{path}: would write "{e.get("name", "")}" ({len(data)} B)')
@@ -484,6 +529,9 @@ def selftest():
             body = self.body()
             if u.path == '/oauth/token':
                 f = urllib.parse.parse_qs(body.decode())
+                if f['grant_type'] == ['authorization_code']:
+                    assert f['code'] == ['good'], f
+                    return self.reply(200, {'access_token': 'at3', 'refresh_token': 'rt3', 'expires_at': time.time() + 9e3})
                 assert f['grant_type'] == ['refresh_token'] and f['refresh_token'] == ['rt1'] and f['client_secret']
                 return self.reply(200, {'access_token': 'at2', 'refresh_token': 'rt2', 'expires_at': time.time() + 9e3})
             if u.path == '/api/v1/athlete/i1/activities':
@@ -512,8 +560,11 @@ def selftest():
         os.environ['BRYTON_SYNC_HOME'] = str(Path(tmp, 'cfg'))
         os.environ.pop('INTERVALS_API_KEY', None)
         vol = Path(tmp, 'vol')
-        clean, full = fake_fit(b'clean ride'), fake_fit(b'full ride', dev=True)
+        fid = lambda t: bytes([0x40, 0, 0, 0, 0, 4]) + bytes(12) + bytes([0, 4, 255, 0, 0, 0]) + t.to_bytes(4, 'little')
+        clean, full = fake_fit(fid(1) + b'clean ride'), fake_fit(fid(1) + b'full ride', dev=True)
+        other, not_its = fake_fit(fid(2) + b'clean'), fake_fit(fid(3) + b'full copy of another ride', dev=True)
         for p, data in [('Activities/261023100000.fit', clean), (f'{FULL_DIR}/261023100000.fit', full),
+                        ('Activities/261022070000.fit', other), (f'{FULL_DIR}/261022070000.fit', not_its),
                         ('Activities/261024090000.fit', fake_fit(b'stock ride')),
                         ('Activities/261020080000.fit', fake_fit(b'on strava already')),
                         ('Activities/261024100000.fit', clean[:-1]),  # cut short: never uploaded
@@ -537,10 +588,11 @@ def selftest():
         errors = sync(Volume(vol), cfg, state, True, 7, today, lines.append)
         assert errors == 1, lines  # the file cut short
         icu = {n: b for s, n, b in got if s == 'intervals'}
-        assert set(icu) == {'261023100000.fit', '261024090000.fit', '261020080000.fit'}, set(icu)
+        assert set(icu) == {'261023100000.fit', '261024090000.fit', '261020080000.fit', '261022070000.fit'}, set(icu)
+        assert other in icu['261022070000.fit'] and not_its not in icu['261022070000.fit'], 'a full copy of another ride'
         assert full in icu['261023100000.fit'] and clean not in icu['261023100000.fit'], 'Intervals: the full copy'
         st = [b for s, n, b in got if s == 'strava']
-        assert len(st) == 3 and any(clean in b for b in st) and not any(full in b for b in st), 'Strava: clean only'
+        assert len(st) == 4 and any(clean in b for b in st) and not any(full in b for b in st), 'Strava: clean only'
         assert state['uploaded']['strava']['261020080000.fit']['id'].startswith('duplicate')
         assert load('strava.json', {})['refresh_token'] == 'rt2', 'refreshed and kept'
         w = Path(vol, 'Workout/calendar/20261025/icu7.fit')
@@ -550,11 +602,36 @@ def selftest():
         n = len(got)
         sync(Volume(vol), cfg, load('state.json', {}), True, 7, today, lines.append)
         assert len(got) == n, got[n:]
+        # a workout deleted on the unit (or a copy the drive dropped) is written again
+        w.unlink()
+        sync(Volume(vol), cfg, load('state.json', {}), True, 7, today, lines.append)
+        assert w.read_bytes() == fake_fit(b'workout') and len(got) == n
+        assert not list(Path(vol, 'Workout/calendar/20261025').glob('*.tmp'))
         # a FIT CRC that is wrong anywhere is refused
         bad = bytearray(clean)
         bad[16] ^= 1
         assert fit_whole(clean) and fit_whole(full) and not fit_whole(bytes(bad)) and not fit_whole(clean[:-1])
         assert ride_date('261023100000.fit') == datetime.date(2026, 10, 23) and ride_date('tmp.fit') is None
+        # Strava's login: a stray request and a forged answer (another state) are ignored, the real one taken
+        def browser(url):
+            state = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)['state'][0]
+            redirect = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)['redirect_uri'][0]
+
+            def answer():
+                for q in ('', '?code=forged&scope=read,activity:write&state=nope',
+                          f'?code=good&scope=read,activity:write&state={state}'):
+                    for _ in range(50):
+                        try:
+                            urllib.request.urlopen(redirect + q, timeout=5).read()
+                            break
+                        except urllib.error.HTTPError:
+                            break
+                        except OSError:
+                            time.sleep(0.05)  # the server not up yet
+            threading.Thread(target=answer, daemon=True).start()
+        Strava(cfg['strava']).login(port=0, browser=browser)
+        assert load('strava.json', {})['access_token'] == 'at3'
+        assert oct(os.stat(home() / 'strava.json').st_mode & 0o777) == '0o600'
     srv.shutdown()
     print('sync.py selftest ok')
 
@@ -572,6 +649,8 @@ def main():
     cfg = load('sync.json', None)
     if cfg is None:
         sys.exit(f'sync.py: no {home() / "sync.json"} (docs/sync.md)')
+    if os.stat(home() / 'sync.json').st_mode & 0o077:
+        print(f'sync.py: {home() / "sync.json"} holds keys and others can read it: chmod 600 it', file=sys.stderr)
     if a.cmd == 'strava-login':
         return Strava(cfg['strava']).login()
     state = load('state.json', {})
