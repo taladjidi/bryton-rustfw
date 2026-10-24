@@ -65,6 +65,7 @@ impl App {
             touch: &mut self.touch,
             ok: self.touch_ok,
             pending: &mut self.touch_pending,
+            sampled: &mut self.touch_sampled,
         };
         let ev = self.drive.packet(cbw, pipe, &mut media);
         if ev == msc::Event::Ejected && self.emmc.lent() {
@@ -106,18 +107,22 @@ struct Touching<'a, B: Board> {
     touch: &'a mut touch::Recogniser,
     ok: bool,
     pending: &'a mut Option<Input>,
+    sampled: &'a mut bool,
 }
 
 impl<B: Board> Touching<'_, B> {
-    fn sample(&mut self) {
-        // ponytail: a chunk counted as the time it takes at full speed (no clock on Board); only a hold's 600 ms
-        // reads it, and comes sooner at high speed
-        const CHUNK_MS: u32 = 8;
+    /// After `bytes` read or written.
+    fn sample(&mut self, bytes: usize) {
+        // ponytail: the time counted is what the bytes take at full speed, about 1 MB/s (no clock on Board); only a
+        // hold's 600 ms reads it, and comes sooner at high speed (7 MB/s), where a read per 8 KB also costs about a
+        // quarter of the throughput (review): sample less often there if high speed comes back
+        let ms = (bytes / 1024).max(1) as u32;
+        *self.sampled = true;
         if self.pending.is_none()
             // the point read after every chunk, finger or not: INT may only pulse (stock takes its falling edge, which
             // the main loop latches), and a swipe's start missed until the command ends is a short drag (seen on the
             // unit, 2026-10-24); one 3-byte I2C read per 8 KB
-            && let (Some(g), _) = sample_touch(self.lent.1, self.touch, self.ok, true, CHUNK_MS)
+            && let (Some(g), _) = sample_touch(self.lent.1, self.touch, self.ok, true, ms)
         {
             *self.pending = Some(Input::Touch(g));
         }
@@ -133,12 +138,12 @@ impl<B: Board> msc::Media for Touching<'_, B> {
     }
     fn read(&mut self, lba: u32, buf: &mut [u8]) -> bool {
         let r = self.lent.read(lba, buf);
-        self.sample();
+        self.sample(buf.len());
         r
     }
     fn write(&mut self, lba: u32, buf: &[u8]) -> bool {
         let r = self.lent.write(lba, buf);
-        self.sample();
+        self.sample(buf.len());
         r
     }
 }

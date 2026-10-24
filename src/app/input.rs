@@ -129,7 +129,12 @@ impl App {
 
     /// Ride page `n` is in the round: a page not off, the course page while a course is followed.
     pub(crate) fn page_on(&self, n: usize) -> bool {
-        if n == COURSE { self.route().is_some() } else { self.pages.get(n).is_some_and(|p| n < PAGES && p.layout > 0) }
+        // a course followed, whether or not the map can draw it yet (no fix, a ride started without one: review)
+        if n == COURSE {
+            self.courses.as_deref().is_some_and(|c| c.on.is_some())
+        } else {
+            self.pages.get(n).is_some_and(|p| n < PAGES && p.layout > 0)
+        }
     }
 
     /// Opens screen `s` over this one: Back returns here.
@@ -392,6 +397,9 @@ impl App {
             self.idle_ms = 0;
             return Some(i);
         }
+        // after a drive command sampled the panel, the sleep since the main loop's last read is time counted already:
+        // charged again, a tap still down at the command's end was a hold (review)
+        let dt_ms = if core::mem::take(&mut self.touch_sampled) { 0 } else { dt_ms };
         let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, false, dt_ms);
         if finger {
             self.idle_ms = 0;

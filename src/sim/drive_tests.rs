@@ -150,3 +150,31 @@ fn a_swipe_during_a_long_read() {
     assert!(app.touching(), "a gesture waits");
     assert_eq!(app.touch(&mut sim, 0), Some(Input::Touch(Gesture::Swipe(Dir::Down))));
 }
+
+/// A tap still down when a drive command ends stays a tap: the main loop's first read after the command does not
+/// charge its sleep again on top of the samples taken in the command (review: it was a hold, the menu opened).
+#[test]
+fn a_tap_across_the_end_of_a_command() {
+    use std::{cell::Cell, rc::Rc};
+    let samples = Rc::new(Cell::new(0u32));
+    let n = samples.clone();
+    // a still finger from the 5th look at the panel, lifted after the command
+    let mut sim = Sim::new(9, 0, 0).finger(move |_| {
+        let k = n.get();
+        n.set(k + 1);
+        (4..10).contains(&k).then_some((120, 150))
+    });
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000);
+    app.drive_on().unwrap();
+    let mut h = Host::default();
+    command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]);
+    samples.set(0);
+    assert_eq!(command(&mut sim, &mut app, &mut h, 2, 128 * 512, true, &rw10(0x28, 0, 128)).1, 0);
+    assert!(app.touching(), "the finger down");
+    assert_eq!(app.touch(&mut sim, 2000), None, "2 s slept since the main loop's last read: not a hold");
+    let g = (0..8).find_map(|_| app.touch(&mut sim, 20));
+    assert!(matches!(g, Some(Input::Touch(Gesture::Tap(..)))), "{g:?}");
+}

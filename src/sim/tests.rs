@@ -2585,3 +2585,38 @@ fn record_a_run() {
     let frames = std::fs::read_dir(out_dir().join("run")).unwrap().count();
     assert!(frames >= 2, "the first page, then the second, got {frames}");
 }
+
+/// The course page stays in the round while a course is followed, even when the map cannot draw it yet: a ride
+/// started before any fix leaves the track without an origin (review: Page skipped the course page then).
+#[test]
+fn course_page_before_a_fix() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.gnss.route = Some(course_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200);
+    assert_eq!(app.screen(), Screen::Ride(crate::COURSE));
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride, no fix yet
+    run(&mut sim, &mut app, 2000);
+    let round: Vec<_> = (0..4)
+        .map(|_| {
+            app.press(&mut sim, Press::Short(Key::Page));
+            app.screen()
+        })
+        .collect();
+    assert_eq!(round[3], Screen::Ride(crate::COURSE), "{round:?}");
+    app.press(&mut sim, Press::Long(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Ride(crate::COURSE), "Back from the menu returns to it");
+}

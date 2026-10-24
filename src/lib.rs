@@ -243,6 +243,9 @@ pub struct App {
     touch: touch::Recogniser,
     /// A gesture that ended during a USB drive command, acted on after it ([`App::touch`]).
     touch_pending: Option<Input>,
+    /// The panel was sampled during a drive command: the main loop's next `dt_ms` (its sleep since its own last
+    /// read) is time those samples already counted.
+    touch_sampled: bool,
     /// The scan of stock's rides (the stock data menu), and its buffer for reading stock's settings.
     stock: stock::Scan,
     /// The card of the past ride shown ([`Screen::Past`]).
@@ -401,6 +404,7 @@ impl App {
             touch_ok: touch::init(b),
             touch: touch::Recogniser::default(),
             touch_pending: None,
+            touch_sampled: false,
             stock: stock::Scan::new(),
             past: history::Past::new(),
             calendar: Default::default(),
@@ -586,8 +590,11 @@ impl App {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
                 let bottom = self.bottom();
                 if let Some((m, _)) = &mut self.summary {
-                    let base = Some(&self.basemap);
+                    let (base, view) = (Some(&self.basemap), m.view);
                     map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, base, None);
+                    if m.view != view {
+                        self.show(b); // refitted: the basemap of the new view under it (else black; review)
+                    }
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {

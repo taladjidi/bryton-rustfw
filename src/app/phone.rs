@@ -286,6 +286,7 @@ impl Phone {
         (self.h, self.tried, self.call, self.release) = ([0; 12], 0, None, false);
         self.battery_sent = None;
         (self.link_ms, self.now) = (0, ph::NowPlaying::default()); // what played is not known without the phone
+        self.commands = 0; // the next link's app sends its own list (review: a podcast app's kept blocked Next)
     }
 }
 
@@ -491,7 +492,9 @@ impl App {
             && p.h[RC] != 0
             && let Some(cmd) = key.ams()
         {
-            if p.commands != 0 && p.commands & 1 << cmd == 0 {
+            // only the skips refused by the list: an app may list Play and Pause and not the toggle, or leave out
+            // the volume, which the phone takes anyway (review)
+            if matches!(key, Media::SkipFwd | Media::SkipBack) && p.commands != 0 && p.commands & 1 << cmd == 0 {
                 return self.say("NOT IN THIS APP"); // a skip in a music app: the phone would refuse it
             }
             p.queue(Op::Ams(cmd));
