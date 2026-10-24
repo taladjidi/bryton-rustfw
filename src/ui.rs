@@ -1093,9 +1093,15 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
         return draw_ferris(c);
     }
     for (r, n) in notices.iter().take(NOTICES).enumerate() {
-        let style = fit(Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL }, n, W - 8);
-        // a 4 px margin: "08:41 RIDE RESUMED" (18 characters) fits, the list's 20 px left only 16
-        text::draw_in(c, &style, 4, NOTICES_Y + 4 + r as u32 * LIST_ROW, W - 8, Align::Left, n);
+        // "19:36 Edwige A...": the time small and grey, the text in the large font for every row (cut, not shrunk:
+        // one row smaller than the other read as inconsistent on the unit)
+        let style = Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL };
+        let small = Style { fg: GREY, scale: 1, ..LABEL };
+        let y = NOTICES_Y + 4 + r as u32 * LIST_ROW;
+        let (time, text) = n.split_at(n.find(' ').map_or(0, |i| i + 1));
+        let tw = small.width("00:00 ");
+        text::draw_in(c, &small, 4, y + style.height() - small.height(), tw, Align::Left, time);
+        text::draw_in(c, &style, 4 + tw, y, W - 8 - tw, Align::Left, text);
     }
 }
 
@@ -1129,15 +1135,34 @@ const HANDSET: [u16; 16] = [
     0x007c, 0x0000,
 ];
 
-/// An incoming call over the bottom of any screen: a red decline and a green answer button, each with a handset,
-/// and the banner with the caller (the page above keeps updating: [`crate::App`]'s bottom is [`CALL_Y`]).
-pub fn draw_call(c: &mut impl Canvas, who: &str) {
+/// The end button of a call answered: the width of both.
+pub const END_BUTTON: (u32, u32, u32, u32) = (8, CALL_Y + 4, W - 16, CALL_BUTTON_H);
+
+/// A call over the bottom of any screen (the page above keeps updating: [`crate::App`]'s bottom is [`CALL_Y`]).
+/// Ringing (`talking` None): a red decline and a green answer button, each with a handset, the banner with the
+/// caller. Answered: one red end button, the banner with the caller and the call's time.
+pub fn draw_call(c: &mut impl Canvas, who: &str, talking: Option<u32>) {
     c.fill(0, CALL_Y, W, BANNER_Y - CALL_Y, BLACK);
-    for (i, &(x, y, w, h)) in CALL_BUTTONS.iter().enumerate() {
+    let buttons: &[(u32, u32, u32, u32)] = if talking.is_some() { &[END_BUTTON] } else { &CALL_BUTTONS };
+    for (i, &(x, y, w, h)) in buttons.iter().enumerate() {
         c.fill(x, y, w, h, if i == 0 { RED } else { GREEN });
         draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + h / 2 - 16, 2, WHITE);
     }
-    draw_banner(c, if who.is_empty() { "INCOMING CALL" } else { who });
+    draw_call_banner(c, who, talking);
+}
+
+/// The call's banner: the caller, and once answered the call's time ("Mum 1:23"), redrawn alone each second.
+pub fn draw_call_banner(c: &mut impl Canvas, who: &str, talking: Option<u32>) {
+    let mut l = text::Line::<32>::new();
+    l.push_str(if who.is_empty() { "INCOMING CALL" } else { who });
+    if let Some(s) = talking {
+        l.push_str(" ");
+        l.push_u32(s / 60);
+        l.push_str(":");
+        l.push_str(DIGITS[(s / 10 % 6) as usize]);
+        l.push_str(DIGITS[(s % 10) as usize]);
+    }
+    draw_banner(c, l.as_str());
 }
 
 /// Ferris, at the bottom of the overview.

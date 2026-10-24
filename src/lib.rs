@@ -507,8 +507,7 @@ impl App {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
         }
         if !self.had_fix && self.pvt.is_some_and(|p| p.good()) {
-            self.had_fix = true;
-            self.notice("GPS FIX");
+            self.had_fix = true; // no notice: the strip's GPS says it, and a notice stayed after the fix was lost
         }
         self.strip.rec = match self.ride.state() {
             ride::State::Idle => Rec::Idle,

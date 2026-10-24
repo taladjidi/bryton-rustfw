@@ -154,7 +154,8 @@ impl App {
             ui::draw_banner(c, self.banner.as_str());
         }
         if self.phone.ringing {
-            ui::draw_call(c, self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()));
+            let who = self.phone.call.as_ref().map_or("", |(_, who)| who.as_str());
+            ui::draw_call(c, who, self.phone.talking.map(|ms| ms / 1000));
         }
     }
 

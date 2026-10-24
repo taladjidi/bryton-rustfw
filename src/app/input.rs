@@ -204,15 +204,13 @@ impl App {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 return self.media(b, key, false);
             }
-            // an incoming call, over any screen: Start or the green button answers, Back or the red one declines
+            // a call, over any screen: ringing, Start or the green button answers, Back or the red one declines; answered,
+            // Back or the end button ends it
             (_, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..)))
-                if self.phone.ringing && call_choice(i).is_some() =>
+                if self.phone.ringing && call_choice(i, self.phone.talking.is_some()).is_some() =>
             {
-                let accept = call_choice(i) == Some(true);
-                self.answer(b, accept);
-                self.end_ring(b);
-                self.say(if accept { "ANSWERED" } else { "DECLINED" });
-                return;
+                let accept = call_choice(i, self.phone.talking.is_some()) == Some(true);
+                return self.answer(b, accept);
             }
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
@@ -384,15 +382,17 @@ impl App {
     }
 }
 
-/// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,
-/// the red one); None for a tap elsewhere.
-fn call_choice(i: Input) -> Option<bool> {
+/// What an input does to a call: ringing, Some(true) answers (Start, the green button), Some(false) declines (Back,
+/// the red one); answered (`talking`), only Back or the end button: Some(false) ends it; None for anything else.
+fn call_choice(i: Input, talking: bool) -> Option<bool> {
     let inside = |(bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16| {
         (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
     };
     match i {
+        Input::Select if talking => None, // Start goes back to pausing the ride
         Input::Select => Some(true),
         Input::Back => Some(false),
+        Input::Touch(Gesture::Tap(x, y)) if talking => inside(ui::END_BUTTON, x, y).then_some(false),
         Input::Touch(Gesture::Tap(x, y)) => {
             let [red, green] = ui::CALL_BUTTONS;
             if inside(green, x, y) {

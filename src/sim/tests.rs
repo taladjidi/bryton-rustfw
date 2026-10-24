@@ -1077,7 +1077,7 @@ fn notice_banner_over_a_ride_page() {
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 3000);
-    sim.gnss.fix = Some(7000);
+    app.notice("STRAP PAIRED");
     run(&mut sim, &mut app, 1500);
     assert!(app.banner_ms.is_some());
     assert_consistent(&sim, &app);
@@ -1093,8 +1093,9 @@ fn notice_banner_over_a_ride_page() {
     assert_consistent(&sim, &app);
 }
 
-/// The overview: the first GPS fix becomes a notice in place of Ferris; its fields are chosen in the menu
-/// (OVERVIEW: four rows, no field count) and kept.
+/// The overview: notices in place of Ferris, every row's text the same size (the time small in front, a long text
+/// cut); its fields are chosen in the menu (OVERVIEW: four rows, no field count) and kept. The first GPS fix is no
+/// notice (the strip says it).
 #[test]
 fn overview_notices_and_fields() {
     let mut sim = Sim::new(9, 0, 0);
@@ -1102,7 +1103,10 @@ fn overview_notices_and_fields() {
     run(&mut sim, &mut app, 3000);
     sim.gnss.fix = Some(7000);
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.notices[0].as_str(), "09:00 GPS FIX");
+    assert_eq!(app.notices[0].as_str(), "", "no notice for the fix");
+    app.notice("RIDE SAVED");
+    app.notice("A Long Caller Name Here");
+    run(&mut sim, &mut app, 100);
     assert_consistent(&sim, &app);
     sim.save("overview_notice");
     app.press(&mut sim, Press::Long(Key::Page));
