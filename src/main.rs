@@ -1129,6 +1129,9 @@ impl Board for S510 {
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
         emmc_read(index, arg, buf)
     }
+    fn emmc_writable(&self) -> bool {
+        EMMC_WRITE
+    }
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
         // the write path has not run on the unit yet: it is enabled only in a build made for that session with the
         // owner (EMMC_WRITE=1 cargo build --release; AGENTS.md, the eMMC is read only until then). Any other build

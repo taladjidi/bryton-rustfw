@@ -101,6 +101,11 @@ pub trait Board {
     /// Sends eMMC command `index` with `arg`, a write of `buf` (whole 512-byte blocks) whose R1 answer it returns,
     /// and sends the data, every wait bounded. The card's programming busy is left to the caller (CMD13).
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, emmc::BusError>;
+    /// eMMC writes are allowed in this build (on the unit, only with EMMC_WRITE=1 until the first writes are done
+    /// with the owner): without, the recorder does not touch the card and says so at a ride's start.
+    fn emmc_writable(&self) -> bool {
+        true
+    }
     /// Reads `buf.len()` bytes from register `reg` on, of the chip at 7-bit address `addr` on the sensor bus (I2C4,
     /// BOARD.md 16); false if it did not answer (no acknowledge, or a time-out: it never hangs).
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool;
@@ -245,6 +250,8 @@ pub struct App {
     player: Option<workout::Player>,
     tone: (u32, u32),
     /// The ride recorder (FIT file, checkpoints, save), and a ride to look for on the card at the first step.
+    /// The card may be written ([`Board::emmc_writable`]); without, the recorder is not used at all.
+    card_writable: bool,
     recorder: recorder::Recorder,
     resume_pending: bool,
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
@@ -385,6 +392,7 @@ impl App {
             player: None,
             tone: (0, 0),
             recorder: recorder::Recorder::new(),
+            card_writable: false,
             resume_pending: false,
             courses: None,
         }
@@ -394,7 +402,8 @@ impl App {
     /// registers acted on, the first screen drawn, the backlight on.
     pub fn begin(&mut self, b: &mut impl Board) {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
-        self.resume_pending = b.backup_read(RIDE_BKP) == RIDE_OPEN;
+        self.card_writable = b.emmc_writable();
+        self.resume_pending = self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
         }

@@ -39,6 +39,8 @@ pub struct Sim {
     pub backlight: bool,
     /// Every buzzer frequency set, in order (0: silence).
     pub tones: Vec<u32>,
+    /// eMMC writes allowed ([`Board::emmc_writable`]): the unit's builds without EMMC_WRITE=1 say no.
+    pub writable: bool,
     /// Backlight level, percent.
     pub light_level: u8,
     pub standby: bool,
@@ -635,6 +637,7 @@ impl Sim {
             ramctrl: [0x10, 0xf0],
             backlight: false,
             tones: Vec::new(),
+            writable: true,
             light_level: 0,
             standby: false,
             ms: 0,
@@ -883,6 +886,10 @@ impl Board for Sim {
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
         self.emmc.read(index, arg, buf)
+    }
+
+    fn emmc_writable(&self) -> bool {
+        self.writable
     }
 
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {

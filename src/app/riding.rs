@@ -41,6 +41,14 @@ impl App {
     /// The ride recorder's one entry point: every [`ride::Event`] goes through here, in order. RAM only: the card
     /// work is [`App::step_recorder`]'s, at the end of the pass.
     pub(crate) fn recorder(&mut self, ev: ride::Event) {
+        if !self.card_writable {
+            // a build that may not write the card: no recorder at all (it would read both FATs at each try only to
+            // fail: about 2 s of a stopped loop every 5 s, the second review found), said once a ride
+            if ev == ride::Event::Start {
+                self.notice("NOT RECORDING");
+            }
+            return;
+        }
         let (local, t) = self.rec_time();
         let words = self.ride.to_words();
         match ev {
@@ -89,6 +97,9 @@ impl App {
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
     /// backup register that marks a ride open.
     pub(crate) fn step_recorder(&mut self, b: &mut impl Board) {
+        if !self.card_writable {
+            return;
+        }
         let (local, _) = self.rec_time();
         let o = if self.resume_pending {
             let o = self.recorder.recover(&mut emmc::Volume(&mut self.emmc, b), local);
