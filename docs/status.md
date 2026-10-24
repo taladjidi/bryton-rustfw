@@ -18,6 +18,18 @@ The dated findings are in [journal.md](journal.md).
 - **A reset mid-ride:** 90 s in, `dev.py reset`; the build again from RAM: RIDE RESUMED, the ride carried on into
   one file (261024083931.fit): a timer stop at the last checkpoint (60 s), a start at the resume, 30 s lost.
 
+## Seen on the unit: the phone (2026-10-24, an iPhone, from RAM with EMMC_WRITE=1)
+
+- **Pairing:** PAIR, then S510 tapped on the iPhone: the normal iOS prompt, Just Works; LINK SECURE, the bond in
+  `\Rustfw\ble.bin` (512 B), the clock set from the phone (CTS, right to the minute).
+- **Reconnect:** after a restart the bond read back and the iPhone reconnected by itself (when in range).
+- **Media (AMS):** title, artist, album, duration and elapsed time from Deezer; play/pause, next, the volume from
+  the keys and the new player screen.
+- **Calls (ANCS):** the overlay over the overview with the caller's name; answered from the green button. iOS
+  removes the call's notification at the answer, so the call's time and a hang-up cannot follow over ANCS.
+- Not yet: messages' banners, skip in a podcast, the camera shutter, a re-pair after forgetting on the iPhone only,
+  a stranger's phone, range loss during a ride.
+
 ## Not yet seen on the unit
 
 - **The phone link (BLE, app/phone.rs)**, in this order, the dev link up (`dev.py run`, then the screenshots), an
