@@ -104,7 +104,7 @@ fn media_keys_and_now_playing() {
     assert_eq!(ph.commands, [2, 3, 4, 5], "toggle, next, previous, volume up: AMS");
     assert_eq!(ph.reports, [0x08, 0], "volume up pressed and released: HID");
     assert_eq!(app.phone.now.title.as_str(), "Song");
-    assert_eq!(app.field_text(Field::Music).as_str(), "0:02");
+    assert_eq!(app.field_text(Field::Music).as_str(), "1:06", "64 s told, 2 s since");
     assert_consistent(&sim, &app);
     sim.save("phone_media");
 }

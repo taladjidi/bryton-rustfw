@@ -41,5 +41,5 @@ reads but does not write yet. It shares the storage with Bryton's firmware, so t
 | [BOARD.md](BOARD.md) | the hardware: pin map, timing diagrams, every chip, with evidence |
 | [AGENTS.md](AGENTS.md) | how to work on it: rules, tests, the dev loop |
 
-It replaces the OS: **no rides are saved yet, and no updates come from this firmware.** The way back is the
+It replaces the OS. Rides are saved to `\\Activities` as stock does (seen on the unit); no updates come from this firmware. The way back is the
 bootloader's recovery mode, which this firmware cannot touch ([docs/install.md](docs/install.md)).

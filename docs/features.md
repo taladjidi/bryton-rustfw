@@ -209,16 +209,20 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
   as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. PHONE >
-  REMOTE: Start play / pause, Page next, Lap previous, held Page / Lap volume down / up; touch: tap play / pause,
-  swipe left / right next / previous, up / down volume, a hold takes a photo (the camera's shutter is volume up,
-  always sent as HID).
-- **Now playing** (AMS): title, artist, playing or paused and the elapsed time on the remote; the title in the
+  REMOTE is a player: the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
+  time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
+  the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,
+  Page next, Lap previous, held Page / Lap volume; swipes: left / right track, up / down volume; a hold takes a
+  photo (the camera's shutter is volume up, always sent as HID).
+- **Now playing** (AMS): title, artist, album, duration, playing or paused and the elapsed time; the title in the
   banner when the track changes; the MUSIC field (group PHONE) shows the elapsed time.
 - **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as a
   line holds; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
   OFF stops them.
-- **Calls:** the CALL screen with the caller; Start answers, Back declines (a tap on the right half answers, on the
-  left declines); a call answered or ended on the phone closes it.
+- **Calls:** over the bottom of any screen (the ride page above keeps going): a red decline and a green answer
+  button with handsets, the caller in the orange banner; Start or the green button answers, Back or the red one
+  declines; a call answered or ended on the phone takes them away. No call time and no hang-up: iOS removes the
+  call's notification at the answer (seen on the unit), so nothing tells the unit when the call ends.
 - **Time:** the clock is set from the phone (Current Time Service) at each connection, and the time zone kept for
   the GPS and the ride files (it replaces the one learnt at a fix); not while a ride is open, so its times never jump.
 - **Battery** level for the phone (Battery Service), sent when it changes.

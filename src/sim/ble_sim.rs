@@ -226,7 +226,9 @@ impl Nordic {
                 Act::Track(title, artist) => {
                     self.hvx(0x25, &[&[2, 2, 0][..], title.as_bytes()].concat());
                     self.hvx(0x25, &[&[2, 0, 0][..], artist.as_bytes()].concat());
-                    self.hvx(0x25, &[0, 1, 0, b'1', b',', b'1', b'.', b'0', b',', b'0', b'.', b'0']);
+                    self.hvx(0x25, &[&[2, 1, 0][..], b"An Album"].concat());
+                    self.hvx(0x25, &[&[2, 3, 0][..], b"215.4"].concat()); // the duration, s
+                    self.hvx(0x25, &[0, 1, 0, b'1', b',', b'1', b'.', b'0', b',', b'6', b'4', b'.', b'0']);
                 }
                 Act::Drop => {
                     (ph.connected, ph.secure) = (false, false);
