@@ -220,7 +220,7 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
 - **Calls:** the CALL screen with the caller; Start answers, Back declines (a tap on the right half answers, on the
   left declines); a call answered or ended on the phone closes it.
 - **Time:** the clock is set from the phone (Current Time Service) at each connection, and the time zone kept for
-  the GPS and the ride files (it replaces the one learnt at a fix).
+  the GPS and the ride files (it replaces the one learnt at a fix); not while a ride is open, so its times never jump.
 - **Battery** level for the phone (Battery Service), sent when it changes.
 - ANT+ sensors keep working alongside: the Nordic chip runs both radios.
 

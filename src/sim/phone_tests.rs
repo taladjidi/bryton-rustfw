@@ -176,6 +176,18 @@ fn the_bonded_phone_comes_back() {
     assert_ne!(app.phone.link(), Link::Secure);
 }
 
+/// During a ride the phone's time is not taken: the ride's record times must not jump.
+#[test]
+fn no_clock_change_during_a_ride() {
+    let (mut sim, mut app) = unit(iphone(Vec::new()));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.phone.link(), Link::Secure);
+    assert_eq!((sim.rtc_sets, app.aid.offset_15min), (0, None));
+}
+
 /// A chip that refuses a set-up command: the link is off, and the PHONE menu names the command and its error (for
 /// the first runs on the unit, which has no log).
 #[test]
