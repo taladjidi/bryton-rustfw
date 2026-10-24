@@ -50,14 +50,18 @@ The dated findings are in [journal.md](journal.md).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
-- **The USB drive (mass storage, msc.rs)**, in this order, reading only first (a build without EMMC_WRITE=1, so
-  the drive is write protected): `dev.py info` still answers with the composite device (the dev link beside the
-  drive); with nothing lent, macOS shows no disk; DEVICE > USB DRIVE (or `dev.py drive`): the BRYTON volume mounts
-  read only, its files equal `dev.py get`'s, a large file copies off at several MB/s (time it: the target is the
-  eMMC's 10 MB/s, less the USB packet loop); Eject in Finder: USB DRIVE goes OFF with no restart. Then, with the
-  owner and an EMMC_WRITE=1 build run from RAM: copy a small file on, eject, the unit restarts, `dev.py ls` sees it,
-  stock still boots and lists the volume. Also: Windows and Linux (TEST UNIT READY polling, which the medium
-  change relies on, is inferred for every host).
+- **The USB drive (mass storage, msc.rs): to do, high speed.** Seen on the unit (2026-10-24): the composite
+  device keeps the dev link; DEVICE > USB DRIVE (or `dev.py drive`) mounts BRYTON (macOS refuses the mount while its
+  screen is locked: "mount approval dissented, 0xF8DA0008"); 40 files equal to the backup; a write (a 48-byte file)
+  read back through the firmware's own FAT reader after the eject and restart. **High speed drops** every long read
+  after 15 to 40 MB at 6.4 to 7.2 MB/s: the Mac resets the device, which then stays unconfigured (orange dot) until a
+  replug; a soft reconnect (`usb::Link::watch`, counted in backup register 31) did not bring it back. Stock's drive
+  dropped the same way on 2026-10-22, on a sound Apple cable straight into the Mac, so the cause is on the unit's
+  side (board, PHY, or a setup both firmwares share; the ULPI pins are already very high speed). **Full speed
+  (`USB_FS=1`) read all 172 MB of world.dat at 1.0 MB/s with no drop.** To try: `dev.py drivelog` right after a
+  drop (the last 32 commands, to rule out a protocol fault), the PHY's own registers over ULPI, the OTG_HS FIFO sizes
+  against ST's MSC example, the D-cache on (FIFO writes from uncached SDRAM code are slow), the 60 MHz ULPI clock.
+  Not yet: Windows, Linux, unplugging while mounted.
 - **The OTG_HS IRQ waking WFI** (the link may run on the 50 ms SysTick wake-ups alone).
 - **The touch panel with a finger** (the chip itself answered: BOARD.md 17): INT low while touched, the axes
   (x 0 left, y 0 top expected), the gestures (swipe left / right between pages, hold for the menu, a tap on a menu

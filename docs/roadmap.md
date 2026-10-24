@@ -132,8 +132,15 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
   second) and packs it (per-tile palette of up to 256 colours, LZ4; about 24 KB a tile, about 3.9 GB for 150 x 150 km
   at zooms 11 to 16), `src/storage/ign.rs` reads it, `src/ui/tiles.rs` draws it, stock's map under it where it
   stops. The SCAN 25 and SCAN 100 rasters are not open to private individuals, so they are out.
-- **IGN next:** the scale bar drawn dark on IGN's light map (it is white, made for stock's grey-green); a pack per
-  region with a lower zoom limit so a whole country fits; packs copied by USB mass storage.
+- **IGN, to do when there is an hour with the unit (2026-10-24, put aside by the owner):** the owner's region is
+  fetched and packed on the computer (zooms 10 to 16, 163,441 tiles, 222 packs, 3.34 GB, every tile decoded by the
+  firmware's own decoder, outside the repository). Left: (1) free space: the card has 0.7 GB free; the owner keeps
+  Europe, so `\MAP\MapData\{Australia,Japan,New_Zealand,South_Korea,Taiwan,israel}` go (4.2 GB, removed from the
+  computer with `rm -rf` on the mounted drive, not the Finder, whose trash stays on the card); (2) copy the packs to
+  `\Rustfw\Maps` with `cp -X` (no `._` files) through this firmware's USB drive at full speed (about 1 MB/s, so
+  about an hour); (3) eject (the unit restarts), mount again and compare with `diff -r` (a compare right after the
+  copy reads the Mac's cache, not the card); (4) the map on the unit: draw time per view, the zoom chosen, "(c) IGN".
+  Then: a pack per region with a lower zoom limit so a whole country fits.
 - **Notices** on an About page: "© OpenStreetMap contributors (ODbL), © OpenMapTiles", and IGN's when used (the map
   already shows "(c) IGN" in its corner whenever IGN tiles are drawn).
 - Vector over raster: about ten times smaller, any zoom, and text that stays upright if the map turns.

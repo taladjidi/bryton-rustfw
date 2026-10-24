@@ -187,3 +187,15 @@ fails without it (the review's probes turned into tests where they fit):
 - **Found:** stock leaves FAT2 out of date (1559 entries) and FSInfo's free count stale; this writer leaves both
   right. The overview's notice box cut "08:41 RIDE RESUMED" to 16 characters: notices and banners now drop to the
   small font when too wide.
+
+## 2026-10-24: the USB drive on the unit; high speed drops, full speed holds
+
+- **Mounted** from this firmware (no stock needed), read only first: 40 files equal to the backup. macOS refuses to
+  mount a new disk while its screen is locked ("dissented, 0xF8DA0008"), which looked like a fault at first.
+- **The main loop stalled** after a drive command: its card access sleeps, which takes over SysTick, and the loop
+  waited for a sleep end that never came while USB was still served (the uptime froze, the dev link answered).
+  Fixed: `Link::worked` tells the loop, as the dev link's own card commands did.
+- **High speed drops** every long transfer after 15 to 40 MB, as stock's drive did on 2026-10-22: the Mac resets the
+  device and it stays unconfigured until a replug. **Full speed** read 172 MB with no drop, at 1.0 MB/s. Cause not
+  found yet (docs/status.md lists what to try); the installed build runs at full speed meanwhile.
+- **The IGN copy is put aside** until there is an hour with the unit (docs/roadmap.md, section 5).
