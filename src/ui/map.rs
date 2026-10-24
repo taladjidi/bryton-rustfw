@@ -634,7 +634,10 @@ mod tests {
         let v = View::fit(&t, area, None).unwrap();
         for &p in t.points() {
             let (x, y) = v.px(area, p);
-            assert!(x >= MARGIN && x < 240 - MARGIN && y >= 24 + MARGIN && y < 320 - MARGIN, "{p:?} at {x},{y}");
+            assert!(
+                (MARGIN..240 - MARGIN).contains(&x) && (24 + MARGIN..320 - MARGIN).contains(&y),
+                "{p:?} at {x},{y}"
+            );
         }
         assert!(v.keeps(area, &t));
         assert_eq!(View::fit(&Track::new(), area, None), None);

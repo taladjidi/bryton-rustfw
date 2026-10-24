@@ -1281,7 +1281,7 @@ pub(crate) mod tests {
 
     #[test]
     fn floating_point_without_libm() {
-        for x in [-1.5, -0.7, 0.0, 0.3, 0.785, 1.2, 1.5707] {
+        for x in [-1.5, -0.7, 0.0, 0.3, 0.785, 1.2, core::f64::consts::FRAC_PI_2] {
             assert!((sin(x) - std::primitive::f64::sin(x)).abs() < 1e-12, "sin {x}");
             assert!((cos(x) - std::primitive::f64::cos(x)).abs() < 1e-12, "cos {x}");
         }

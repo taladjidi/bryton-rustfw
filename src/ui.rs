@@ -1303,7 +1303,7 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2);
+        const { assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2) };
         let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);

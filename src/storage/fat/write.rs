@@ -857,7 +857,7 @@ pub(crate) mod tests {
                 img[at..at + 4].copy_from_slice(&EOC.to_le_bytes());
             }
         };
-        let mut look = |img: &Vec<u8>, from: u32| {
+        let look = |img: &Vec<u8>, from: u32| {
             let mut d = Ram(img.clone(), 0);
             let mut fat = Fat::mount(&mut d).unwrap();
             d.1 = 0;

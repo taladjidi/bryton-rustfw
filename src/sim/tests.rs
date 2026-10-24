@@ -1221,9 +1221,8 @@ fn backlight_level_and_timeout() {
     assert_eq!(sim.light_level, 60, "Back after the time-out: on, not toggled off");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(sim.light_level, 0, "then Back on the overview toggles");
-    let again = App::start(&mut sim, None);
+    let _again = App::start(&mut sim, None);
     assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
-    drop(again);
 }
 
 /// The text of sensors menu row `i`: label and value.
@@ -2253,7 +2252,8 @@ fn perf_budgets() {
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    let cases: [(&str, [PageCfg; 3], usize, (u64, u64)); 5] = [
+    type Case = (&'static str, [PageCfg; 3], usize, (u64, u64));
+    let cases: [Case; 5] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, (150, 5)),
         // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
