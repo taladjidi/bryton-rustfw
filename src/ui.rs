@@ -887,6 +887,26 @@ pub fn draw_graph_axes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), title: &st
     text::draw_in(c, &AXIS, a.0 + a.2 / 2, ty, a.2 - a.2 / 2, Align::Right, "NOW");
 }
 
+/// Room at a graph's top right for two figures ([`draw_graph_stats`]): "AVG 1234".
+const STATS_W: u32 = 8 * CELL;
+
+/// Two figures of the ride (`lines`: "AVG 182", "NP 195") at the right of a graph's label line, one above the other,
+/// each in its own box (None: left as drawn); none in a box too narrow to hold them beside `title`.
+pub fn draw_graph_stats(
+    c: &mut impl Canvas,
+    (x, y, w, _): (u32, u32, u32, u32),
+    title: &str,
+    lines: [Option<&str>; 2],
+) {
+    if LABEL.width(title) + STATS_W + 16 > w {
+        return;
+    }
+    let style = Style { fg: WHITE, ..AXIS };
+    for (k, l) in (0..).zip(lines).filter_map(|(k, l)| Some((k, l?))) {
+        text::draw_in(c, &style, x + w - 6 - STATS_W, y + 3 + k * (AXIS.height() + 2), STATS_W, Align::Right, l);
+    }
+}
+
 /// A plot without axes (the course profile) in field box `bx`: left, top, columns, height.
 pub fn plot_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
     (x + 4, y + FIELD_LABEL_H, w.saturating_sub(8), h.saturating_sub(FIELD_LABEL_H + 4))

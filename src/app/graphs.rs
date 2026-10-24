@@ -6,7 +6,8 @@ use crate::*;
 
 /// What a graph field shows on screen: its plot, over the last minutes or the whole ride, the bars up to `n`
 /// ([`ride::History::len`] or [`ride::History::whole_len`]), the whole ride's halvings and the scale (low, high, in
-/// the plot's units). A change of anything but `n` redraws the graph whole.
+/// the plot's units), and the ride's figures at its top right ([`App::graph_stats`]). A change of anything but `n`
+/// or `stats` redraws the graph whole; of `stats`, only their box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GraphShown {
     plot: ride::Plot,
@@ -14,6 +15,7 @@ pub(crate) struct GraphShown {
     n: u32,
     halved: u32,
     scale: (u32, u32),
+    stats: [Option<u16>; 2],
 }
 
 /// What the course profile field shows: the course (its id, 0: none), from `start` m over `span` m, the rider's
@@ -69,6 +71,18 @@ pub(crate) fn graph_field(plot: ride::Plot) -> Field {
     }
 }
 
+/// A graph's title, in its label line.
+fn graph_title(plot: ride::Plot) -> &'static str {
+    use ride::Plot;
+    match plot {
+        Plot::Power => "POWER W",
+        Plot::Hr => "HR",
+        Plot::Wbal => "W'BAL KJ",
+        Plot::Dfa => "DFA A1",
+        Plot::Alt => "ELEV M",
+    }
+}
+
 impl App {
     /// What a graph of `plot` with `cols` columns shows now.
     pub(crate) fn graph_now(&self, plot: ride::Plot, cols: u32) -> GraphShown {
@@ -79,9 +93,40 @@ impl App {
     pub(crate) fn graph_shown(&self, plot: ride::Plot, whole: bool, cols: u32) -> GraphShown {
         let h = &self.history;
         let (n, halved) = if whole { (h.whole_len(), h.whole_halved()) } else { (h.len(), 0) };
-        let mut g = GraphShown { plot, whole, n, halved, scale: (0, 1) };
+        let mut g = GraphShown { plot, whole, n, halved, scale: (0, 1), stats: self.graph_stats(plot) };
         g.scale = self.graph_scale(g, cols);
         g
+    }
+
+    /// The ride's figures a graph shows at its top right, as stock does: average power and NP over a power graph,
+    /// average and max heart rate over a heart rate graph.
+    pub(crate) fn graph_stats(&self, plot: ride::Plot) -> [Option<u16>; 2] {
+        match plot {
+            ride::Plot::Power => [self.ride.avg_power(), self.power.np()],
+            ride::Plot::Hr => [self.ride.avg_hr(), self.ride.max_hr()],
+            _ => [None; 2],
+        }
+    }
+
+    /// Draws `g`'s figures ([`App::graph_stats`]) in box `bx`, only those that differ from `old`'s (all: None).
+    fn draw_graph_stats(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), g: GraphShown, old: Option<GraphShown>) {
+        let names = match g.plot {
+            ride::Plot::Power => ["AVG", "NP"],
+            ride::Plot::Hr => ["AVG", "MAX"],
+            _ => return,
+        };
+        let lines = core::array::from_fn::<_, 2, _>(|k| {
+            let mut l = Line::<10>::new();
+            l.push_str(names[k]);
+            l.push_str(" ");
+            match g.stats[k] {
+                Some(v) => l.push_u32(u32::from(v)),
+                None => l.push_str("--"),
+            }
+            l
+        });
+        let line = |k: usize| (old.map(|o| o.stats[k]) != Some(g.stats[k])).then(|| lines[k].as_str());
+        ui::draw_graph_stats(c, bx, graph_title(g.plot), [line(0), line(1)]);
     }
 
     /// Column `i` of `cols` of a graph showing `g`: its value (0: none). Over the whole ride, a column is the mean of
@@ -153,13 +198,7 @@ impl App {
             l
         };
         let (lo, mid, hi) = (label(low), label(low.midpoint(high)), label(high));
-        let title = match g.plot {
-            Plot::Power => "POWER W",
-            Plot::Hr => "HR",
-            Plot::Wbal => "W'BAL KJ",
-            Plot::Dfa => "DFA A1",
-            Plot::Alt => "ELEV M",
-        };
+        let title = graph_title(g.plot);
         let mut from = Line::<12>::new();
         if g.whole {
             from.push_str("START");
@@ -169,6 +208,7 @@ impl App {
             from.push_str(" MIN");
         }
         ui::draw_graph_axes(c, bx, title, [lo.as_str(), mid.as_str(), hi.as_str()], from.as_str());
+        self.draw_graph_stats(c, bx, g, None);
     }
 
     /// The graph field at (`x`, `y`) on the page shown, if there is one: its box index and field.
@@ -192,11 +232,15 @@ impl App {
         let a = ui::graph_area(bx);
         let now = self.graph_now(old.plot, a.2);
         let step = if now.whole { 1 } else { STEP };
-        if now == old || (GraphShown { n: old.n, ..now } == old && now.n.wrapping_sub(old.n) < step) {
-            return Drawn::Graph(old);
-        }
         let mut p = Panel(b, (0, self.bottom()));
-        if (GraphShown { n: old.n, ..now }) != old {
+        let same = GraphShown { n: old.n, stats: old.stats, ..now } == old;
+        if same && now.stats != old.stats {
+            self.draw_graph_stats(&mut p, bx, now, Some(old));
+        }
+        if same && now.n.wrapping_sub(old.n) < step {
+            return Drawn::Graph(GraphShown { n: old.n, ..now });
+        }
+        if !same {
             // another scale, a halved whole ride, or another plot or span: all of it
             self.draw_graph_axes(&mut p, bx, now);
             ui::draw_graph(&mut p, a, &|k| self.graph_bar(now, a.2, a.3, k));
