@@ -199,3 +199,27 @@ fails without it (the review's probes turned into tests where they fit):
   device and it stays unconfigured until a replug. **Full speed** read 172 MB with no drop, at 1.0 MB/s. Cause not
   found yet (docs/status.md lists what to try); the installed build runs at full speed meanwhile.
 - **The IGN copy is put aside** until there is an hour with the unit (docs/roadmap.md, section 5).
+
+## 2026-10-24: review backlog closed (simulator only)
+
+Left open by the two reviews above; each fix with a test that fails without it:
+- **R7, the fsck check:** the tests' fsck (fat/write.rs) now follows the lost chains too: one that runs into a
+  file's chain, another lost chain, a free cluster, out of the volume or round a loop is an error, as fsck_msdos
+  says. Every power-cut test and the writer fuzz's clean rounds pass it. Test `fsck_follows_the_lost_chains`.
+- **P3, `find_free`:** the FAT read 8 sectors a command (4 KB in its own frame), not one. On the test volume
+  (550 FAT sectors): 41 to 6 reads past 40 taken sectors, 276 to 36 wrapping from the middle, 551 to 70 on a full
+  volume. Test `find_free_reads_the_fat_in_runs`.
+- **Course gaps:** a jump of over 1 km where a GPX `trk`, `trkseg` or `rte` starts is not ridden: not counted, drawn
+  or followed (a bit per point, kept through the thinning). Inside a segment points stay joined (a planner's
+  straight road, a tunnel). Test `gaps_between_segments` (12 km before, 4 km now).
+- **A course's own length:** a FIT course's record distances, first to last, taken when within 2 % of the summed
+  points (every distance scaled to it), else the sum; Bryton's 254 (within 0.25 % of the sum) not read; GPX has
+  none. Test `stated_length`.
+- **A course read after leaving the list** no longer opens a ride page; from the list it still does, as stock's
+  route details lead to riding. Test `course_read_after_leaving_the_list`.
+- **clippy --tests:** passes again, pedantic included (approx_constant in tiles.rs); left: 5 plain warnings in
+  fit.rs, recorder.rs and sim/recorder_tests.rs, and about 1,500 pedantic ones (casts, must_use, doc wording).
+- **Not done: make_courses's frame** (35.6 KB, budget 40 KB). It is in main.rs; the library alone cannot make the
+  compiler build `Courses` in place: a plain `origin` (no Option) made the frame 69.6 KB, `Courses::new` not
+  inlined 69.6 KB plus 32.8 KB of its own. It needs main.rs to build the cell in place.
+- **Cost:** image 247,176 B to 247,944 B (+768 B); the course memory +512 B.
