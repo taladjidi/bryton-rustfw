@@ -257,7 +257,7 @@ impl EmmcCard {
 
     fn read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
         use crate::emmc::BusError::{Crc, Timeout};
-        assert!(buf.len() % 512 == 0 && !buf.is_empty(), "eMMC read of {} bytes", buf.len());
+        assert!(buf.len().is_multiple_of(512) && !buf.is_empty(), "eMMC read of {} bytes", buf.len());
         let s = self.cmd_data(index, arg)?;
         if self.host_wide != self.card_wide {
             return Err(Crc); // the bus widths differ: the data comes out as garbage
@@ -296,7 +296,7 @@ impl EmmcCard {
     fn write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, crate::emmc::BusError> {
         use crate::emmc::BusError::Timeout;
         assert!(self.powered, "eMMC write before the controller was powered");
-        assert!(buf.len() % 512 == 0 && !buf.is_empty(), "eMMC write of {} bytes", buf.len());
+        assert!(buf.len().is_multiple_of(512) && !buf.is_empty(), "eMMC write of {} bytes", buf.len());
         assert!([24, 25].contains(&index), "eMMC write command {index}");
         let count = self.count.take();
         let blocks = (buf.len() / 512) as u32;
@@ -454,6 +454,9 @@ impl Bus {
 pub const FIX_LAT: i32 = 488_566_123;
 pub const FIX_LON: i32 = -22_945_678;
 
+/// A simulated ride's position over time: ms to latitude, longitude (degrees x 1e-7) and heading (degrees x 1e-5).
+pub type Route = fn(u64) -> (i32, i32, i32);
+
 /// The GNSS receiver as seen over SPI: once powered, a NAV-PVT frame every second (with `fix`: 3D at that speed,
 /// else no fix, as indoors on the unit); 0xff when it has nothing.
 #[derive(Default)]
@@ -463,7 +466,7 @@ pub struct Gnss {
     pub fix: Option<i32>,
     /// Where a fix is, as a function of the simulated time in ms: latitude, longitude (degrees x 1e-7) and heading
     /// (degrees x 1e-5); None: [`FIX_LAT`], [`FIX_LON`], heading north.
-    pub route: Option<fn(u64) -> (i32, i32, i32)>,
+    pub route: Option<Route>,
     /// Altitude of a fix in mm as a function of the simulated time in ms; None: 0.
     pub alt: Option<fn(u64) -> i32>,
     /// Every byte received, in order (0xff included).
@@ -672,7 +675,7 @@ impl Nordic {
 }
 
 fn to_bcd(v: u64) -> u32 {
-    ((v / 10) << 4 | v % 10) as u32
+    (((v / 10) << 4) | (v % 10)) as u32
 }
 
 impl Sim {

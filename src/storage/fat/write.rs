@@ -45,6 +45,8 @@ use super::{DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, lfn_eq
 
 /// End of chain, as written.
 const EOC: u32 = 0x0fff_ffff;
+/// FAT sectors a free cluster search reads per command (4 KB on the stack).
+const FREE_RUN: u32 = 8;
 /// Directory entries in a sector.
 const ENTRIES: usize = SECTOR / 32;
 /// Directory attribute.
@@ -191,13 +193,29 @@ impl Fat {
         Ok(())
     }
 
-    /// A free cluster from `from` on (wrapping), the volume's clusters at most.
+    /// A free cluster from `from` on (wrapping), the volume's clusters at most, the FAT read [`FREE_RUN`] sectors a
+    /// command (the eMMC's multi-block read): on a nearly full volume one per sector was thousands of commands.
+    /// Reads the first FAT, as [`Fat::entry`] does; its cached sector is never dirty here (`set_entries` flushes).
     fn find_free(&mut self, d: &mut impl Disk, from: u32) -> Result<u32, Error> {
-        let start = if self.valid(from) { from - 2 } else { 0 };
-        for i in 0..self.clusters {
-            let c = 2 + (start + i) % self.clusters;
-            if self.entry(d, c)? == 0 {
-                return Ok(c);
+        let per = SECTOR as u32 / 4;
+        let end = self.clusters + 2; // clusters 2..end
+        let mut c = if self.valid(from) { from } else { 2 };
+        let mut left = self.clusters;
+        let mut buf = [0u8; FREE_RUN as usize * SECTOR];
+        while left > 0 {
+            let first = c / per;
+            let n = ((end - 1) / per - first + 1).min(FREE_RUN);
+            let run = buf.get_mut(..n as usize * SECTOR).ok_or(Error::Corrupt)?;
+            self.read(d, self.fat_start + first, run)?;
+            let stop = ((first + n) * per).min(end);
+            while c < stop && left > 0 {
+                if u32_at(run, ((c - first * per) * 4) as usize) & 0x0fff_ffff == 0 {
+                    return Ok(c);
+                }
+                (c, left) = (c + 1, left - 1);
+            }
+            if c >= end {
+                c = 2;
             }
         }
         Err(Error::Refused) // full
@@ -752,14 +770,124 @@ pub(crate) mod tests {
                 }
             }
         }
+        // The lost clusters (taken, named by no entry, not bad): each must lead to an end of chain without meeting a
+        // named chain, another lost chain, a free cluster or itself again, or fsck_msdos calls it cross-linked.
+        let val: Vec<u32> = (0..n).map(|c| if c < 2 { 0 } else { fat.entry(&mut d, c).unwrap() }).collect();
+        let is_lost = |c: u32| val[c as usize] != 0 && val[c as usize] != 0x0fff_fff7 && owner[c as usize] == 0;
+        let mut into = std::vec![0u8; n as usize];
         let mut lost = 0;
-        for c in 2..n {
-            let v = fat.entry(&mut d, c).unwrap();
-            if v != 0 && owner[c as usize] == 0 && v != 0x0fff_fff7 {
-                lost += 1;
+        for c in (2..n).filter(|&c| is_lost(c)) {
+            lost += 1;
+            let v = val[c as usize];
+            if v >= 0x0fff_fff8 {
+                continue;
+            }
+            if !fat.valid(v) {
+                return Err(std::format!("lost chain at {c} leaves the volume at {v}"));
+            }
+            if !is_lost(v) {
+                return Err(std::format!("lost chain at {c} runs into {v}, free or named"));
+            }
+            into[v as usize] += 1;
+            if into[v as usize] > 1 {
+                return Err(std::format!("cross-linked lost cluster {v}"));
             }
         }
+        // one way into each: a lost cluster not reached from a head (nothing into it) is in a loop
+        let mut reached = std::vec![false; n as usize];
+        for head in (2..n).filter(|&c| is_lost(c) && into[c as usize] == 0) {
+            let mut k = head;
+            while !reached[k as usize] {
+                reached[k as usize] = true;
+                match val[k as usize] {
+                    v if fat.valid(v) => k = v,
+                    _ => break,
+                }
+            }
+        }
+        if let Some(c) = (2..n).find(|&c| is_lost(c) && !reached[c as usize]) {
+            return Err(std::format!("lost chain in a loop at {c}"));
+        }
         Ok(lost)
+    }
+
+    /// fsck itself: a lost chain (taken, named by no entry: what a cut in a move leaves) is only lost while it ends
+    /// alone; one that runs into a file's chain, another lost chain, a free cluster, out of the volume or round in a
+    /// loop is an error, as fsck_msdos says of it (cross-linked, ...). Before, only the named chains were walked.
+    #[test]
+    fn fsck_follows_the_lost_chains() {
+        let img = image();
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let file = fat.open(&mut d, "frag.bin").unwrap().cluster;
+        let a = fat.find_free(&mut d, 2).unwrap();
+        let b = fat.find_free(&mut d, a + 1).unwrap();
+        let c = fat.find_free(&mut d, b + 1).unwrap();
+        let (start, size, fats, past) = (fat.fat_start, fat.fat_size, fat.fats, fat.clusters + 2);
+        let with = |links: &[(u32, u32)]| {
+            let mut img = img.clone();
+            for &(k, v) in links {
+                for f in 0..fats {
+                    let at = (start + f * size) as usize * SECTOR + k as usize * 4;
+                    img[at..at + 4].copy_from_slice(&v.to_le_bytes());
+                }
+            }
+            fsck(&img)
+        };
+        assert_eq!(with(&[(a, EOC)]), Ok(1), "alone: lost");
+        assert_eq!(with(&[(a, b), (b, EOC)]), Ok(2));
+        for (links, what) in [
+            (&[(a, file)][..], "into a file"),
+            (&[(a, c), (b, c), (c, EOC)], "two into one"),
+            (&[(a, b)], "into a free cluster"),
+            (&[(a, past)], "out of the volume"),
+            (&[(a, b), (b, a)], "a loop"),
+            (&[(a, a)], "onto itself"),
+        ] {
+            assert!(with(links).is_err(), "{what}: {:?}", with(links));
+        }
+    }
+
+    /// A free cluster past a long taken run, and on a full volume: found (or refused) in a read command per
+    /// `FREE_RUN` FAT sectors, not one per sector (review P3: the unit's volume is nearly full of map tiles).
+    #[test]
+    fn find_free_reads_the_fat_in_runs() {
+        let mut d = Ram(image(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        let per = SECTOR as u32 / 4;
+        let sectors = (fat.clusters + 2).div_ceil(per);
+        let taken = |img: &mut Vec<u8>, from: u32, to: u32| {
+            for c in from..to {
+                let at = fat.fat_start as usize * SECTOR + c as usize * 4;
+                img[at..at + 4].copy_from_slice(&EOC.to_le_bytes());
+            }
+        };
+        let look = |img: &Vec<u8>, from: u32| {
+            let mut d = Ram(img.clone(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            d.1 = 0;
+            (fat.find_free(&mut d, from), d.1)
+        };
+        // 40 FAT sectors taken from cluster 2, the next one free
+        let mut img = d.0.clone();
+        let end = 40 * per;
+        taken(&mut img, 2, end);
+        let at = (end..fat.clusters + 2).find(|&c| u32_at(&img, fat.fat_start as usize * SECTOR + c as usize * 4) == 0);
+        let (found, reads) = look(&img, 2);
+        assert_eq!(found.ok(), at);
+        assert!(reads <= 41u32.div_ceil(FREE_RUN), "{reads} reads for 41 sectors");
+        // from the middle, wrapping to a free cluster at the start
+        let mut full = d.0.clone();
+        taken(&mut full, 2, fat.clusters + 2);
+        let mut one = full.clone();
+        one[fat.fat_start as usize * SECTOR + 5 * 4..][..4].copy_from_slice(&[0; 4]);
+        let (found, reads) = look(&one, 2 + fat.clusters / 2);
+        assert_eq!(found, Ok(5));
+        assert!(reads <= sectors.div_ceil(FREE_RUN) + 2, "{reads} reads, wrapping, for {sectors} sectors");
+        // full: refused, every cluster looked at once
+        let (found, reads) = look(&full, 2 + fat.clusters / 2);
+        assert_eq!(found, Err(Error::Refused));
+        assert!(reads <= sectors.div_ceil(FREE_RUN) + 2, "{reads} reads, full, for {sectors} sectors");
     }
 
     /// Free clusters as the FAT says, and FSInfo's count.

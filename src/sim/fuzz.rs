@@ -228,7 +228,7 @@ fn course_files() {
     let read = |f: &[u8], gpx: bool, c: &mut Course| {
         c.clear();
         if gpx {
-            Gpx::new().push_slice(f, &mut |lat, lon, e| c.push(lat, lon, e));
+            Gpx::new().push_slice(f, &mut |p| c.add(p));
         } else {
             Reader::with_position().push_slice(f, |m| {
                 if let Msg::Record(r) = m

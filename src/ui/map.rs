@@ -78,6 +78,8 @@ pub struct Route<'a> {
     pub pts: &'a [(i32, i32)],
     /// Per chunk of points: min x, min y, max x, max y.
     pub boxes: &'a [(i32, i32, i32, i32)],
+    /// Bit `i`: no segment into point `i` (a gap in the course, [`crate::course::is_gap`]).
+    pub gaps: &'a [u32],
     /// The course's origin on the track's plane, metres.
     pub off: (i32, i32),
     /// Changes with the course.
@@ -516,8 +518,10 @@ pub fn draw(
             // the chunk's points and the first of the next (the segment between them)
             let from = i * Route::CHUNK;
             let pts = r.pts.get(from..(from + Route::CHUNK + 1).min(r.pts.len())).unwrap_or(&[]);
-            for w in pts.windows(2) {
-                if let [a, b] = *w {
+            for (j, w) in pts.windows(2).enumerate() {
+                if let [a, b] = *w
+                    && !crate::course::is_gap(r.gaps, from + j + 1)
+                {
                     let (a, b) = ((a.0 + o.0, a.1 + o.1), (b.0 + o.0, b.1 + o.1));
                     segment(&mut c, k, v.px(area, a), v.px(area, b), COURSE);
                 }
@@ -634,7 +638,10 @@ mod tests {
         let v = View::fit(&t, area, None).unwrap();
         for &p in t.points() {
             let (x, y) = v.px(area, p);
-            assert!(x >= MARGIN && x < 240 - MARGIN && y >= 24 + MARGIN && y < 320 - MARGIN, "{p:?} at {x},{y}");
+            assert!(
+                (MARGIN..240 - MARGIN).contains(&x) && (24 + MARGIN..320 - MARGIN).contains(&y),
+                "{p:?} at {x},{y}"
+            );
         }
         assert!(v.keeps(area, &t));
         assert_eq!(View::fit(&Track::new(), area, None), None);

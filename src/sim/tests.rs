@@ -1221,9 +1221,8 @@ fn backlight_level_and_timeout() {
     assert_eq!(sim.light_level, 60, "Back after the time-out: on, not toggled off");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(sim.light_level, 0, "then Back on the overview toggles");
-    let again = App::start(&mut sim, None);
+    let _again = App::start(&mut sim, None);
     assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
-    drop(again);
 }
 
 /// The text of sensors menu row `i`: label and value.
@@ -2254,7 +2253,8 @@ fn perf_budgets() {
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    let cases: [(&str, [PageCfg; 3], usize, (u64, u64)); 5] = [
+    type Case = (&'static str, [PageCfg; 3], usize, (u64, u64));
+    let cases: [Case; 5] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, (150, 5)),
         // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
@@ -2297,6 +2297,32 @@ fn course_route(ms: u64) -> (i32, i32, i32) {
 fn hill(app: &App) -> usize {
     let list = &app.courses.as_deref().unwrap().list;
     (0..list.len()).find(|&i| list.get(i).unwrap().name() == "HILL").unwrap()
+}
+
+/// A course is read over several passes: left before it is read (Back), the screen the rider went to stays, with
+/// COURSE ON said and the course followed; it opens the first ride page only from the list (stock's route details
+/// lead to the ride pages too: its manual, "Route Guidance", press to start riding).
+#[test]
+fn course_read_after_leaving_the_list() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Back));
+    let left = app.screen();
+    assert!(!matches!(left, Screen::Menu(Menu::Courses, _) | Screen::Ride(_)), "{left:?}");
+    run(&mut sim, &mut app, 200);
+    assert_eq!((app.screen(), app.banner.as_str()), (left, "COURSE ON"));
+    assert!(app.courses.as_deref().unwrap().on.is_some());
+    assert_consistent(&sim, &app);
 }
 
 /// Following a course (tools/fat_image.py's hill, in stock's \PlanTrip): COURSES lists the card's courses
