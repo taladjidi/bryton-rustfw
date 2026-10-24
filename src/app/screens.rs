@@ -168,7 +168,7 @@ impl App {
             _ => return all.into_iter().take(0),
         };
         let p = self.pages.get(page).copied().unwrap_or(DEFAULT_PAGES[0]);
-        let p = if p == DEFAULT_PAGES[2] && self.route().is_some() { COURSE_PAGE } else { p };
+        let p = if p == DEFAULT_PAGES[1] && self.route().is_some() { COURSE_PAGE } else { p };
         let mut n = 0;
         for (slot, &w) in all.iter_mut().zip(fixed) {
             slot.1 = w;

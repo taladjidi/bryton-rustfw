@@ -417,7 +417,7 @@ pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
 /// The ride pages before any are set (or imported from stock), after what Garmin's, Wahoo's and Hammerhead's bike
 /// computers ship (2026-10-24: Wahoo's default stack is a data page, an elevation page and a map page with an
 /// elevation profile and a few fields; Garmin's map page, when navigating, distance and time to the destination):
-/// the ride's essentials, the climbing, the map whole ([`COURSE_PAGE`] while a course is followed); the overview's
+/// the ride's essentials, the climbing ([`COURSE_PAGE`] while a course is followed), the map whole; the overview's
 /// totals last.
 pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
     use Field::*;
@@ -429,11 +429,12 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
     ]
 };
 
-/// The map page while a course is followed, as long as the page is still [`DEFAULT_PAGES`]' own: the map with the
-/// course's profile, the distance to go, distance, moving time and average speed under it.
+/// The climbing page while a course is followed, as long as the page is still [`DEFAULT_PAGES`]' own: the course's
+/// profile large, the next climb, the distance to go, distance, moving time and average speed (the map stays whole on
+/// its own page: under the profile it was too small to use, the owner on the unit, 2026-10-24).
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 12, fields: [Map, Profile, ToGo, Dist, Timer, AvgSpeed] }
+    PageCfg { layout: 12, fields: [Profile, Climb, ToGo, Dist, Timer, AvgSpeed] }
 };
 
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).

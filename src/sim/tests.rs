@@ -2496,14 +2496,15 @@ fn course_ride() {
     sim.save("course_map");
     let course = sim.screen.iter().filter(|&&p| p == crate::map::COURSE).count();
     assert!(course > 150, "the course on the map (under the track where ridden): {course} px");
-    // the default map page while a course is followed: the course's profile and the distance to go in it
+    // the default climbing page while a course is followed: the course's fields in it
     let shown = |app: &App| app.widgets().filter_map(|(_, w)| if let Widget::Field(f) = w { Some(f) } else { None });
-    app.pages[2] = crate::DEFAULT_PAGES[2];
-    app.show(&mut sim);
+    app.pages[1] = crate::DEFAULT_PAGES[1];
+    app.press(&mut sim, Press::Short(Key::Page)); // round to page 2
+    app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 3000);
     assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields, "the course variant");
     assert_consistent(&sim, &app);
-    sim.save("default_map_course");
+    sim.save("default_course_page");
 
     // the cost: segments and boxes looked at a second, detour included
     let at = app.courses.as_deref().unwrap().at;
