@@ -82,6 +82,8 @@ pub enum Setting {
     Drink,
     /// Heart rate alert over this, bpm.
     HrAlert,
+    /// The power the workout gauge shows (a choice of [`crate::WKT_AVGS`]: 3, 10, 30 s or each second).
+    WktAvg,
 }
 
 impl Setting {
@@ -98,6 +100,7 @@ impl Setting {
             Setting::Eat => "EAT MIN",
             Setting::Drink => "DRINK MIN",
             Setting::HrAlert => "HR OVER",
+            Setting::WktAvg => "WKT POWER",
         }
     }
 
@@ -240,7 +243,7 @@ pub const STOCK: [StockRow; 11] = {
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
 /// The main menu.
-pub const MAIN: [Row; 19] = [
+pub const MAIN: [Row; 20] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
@@ -259,6 +262,7 @@ pub const MAIN: [Row; 19] = [
     Row::Open(Menu::History),
     Row::Open(Menu::Stock),
     Row::Open(Menu::Workouts),
+    Row::Set(Setting::WktAvg),
     Row::Open(Menu::Courses),
 ];
 

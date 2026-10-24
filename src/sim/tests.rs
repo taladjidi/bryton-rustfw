@@ -580,6 +580,83 @@ fn workout_graph_field() {
     assert!(px_s < 1200, "{px_s} px/s: only the columns that change");
 }
 
+/// The power the scripted meter sends ([`scripted_power`]); 0, 3, 6 or 9 W are added from one second to the next so
+/// the number changes each second as a real meter's does.
+static SCRIPTED_W: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+fn scripted_power(ms: u64) -> [u8; 8] {
+    let w = SCRIPTED_W.load(core::sync::atomic::Ordering::Relaxed) + (ms / 1000 % 4) as u16 * 3;
+    let [lo, hi] = w.to_le_bytes();
+    [0x10, 1, 0xff, 85, 0, 0, lo, hi]
+}
+
+/// The workout gauge field (WKT POWER) through the synthetic card's SHORT INTERVALS: the 3 s power big, the step's
+/// band under a bar with a marker at the power, coloured by how far it is (red over the warm-up's 100-120 W, blue
+/// under the 200-220 W interval, then green in it); the menu's window in its title; only the number's characters and
+/// the marker's columns sent each second, and what is sent equals the gauge drawn whole.
+#[test]
+fn workout_gauge_field() {
+    use core::sync::atomic::Ordering::Relaxed;
+    let z = crate::ride::ZONE_COLORS;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: scripted_power });
+    SCRIPTED_W.store(210, Relaxed);
+    let mut app = App::start(&mut sim, Some(KEY));
+    let fields = [Field::WktPower, Field::StepTime, Field::NextStep, Field::Time, Field::Time, Field::Time];
+    app.pages[0] = PageCfg { layout: 3, fields }; // the gauge over the step's time left and the next step
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start)); // today's: SHORT INTERVALS
+    app.press(&mut sim, Press::Short(Key::Start)); // START: the ride and the workout
+    let shown = |app: &App| match app.drawn.first() {
+        Some(Drawn::Gauge(g)) => (std::string::String::from(g.value.as_str()), g.color),
+        _ => panic!("the gauge's box first"),
+    };
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(shown(&app).1, z[5], "about 214 W over the warm-up's 100-120 W: red");
+    assert_consistent(&sim, &app);
+    sim.save("workout_gauge_over");
+
+    let mut ms = 0;
+    while app.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
+        run(&mut sim, &mut app, 100);
+        ms += 100;
+        assert!(ms < 30_000, "the warm-up ends");
+    }
+    SCRIPTED_W.store(150, Relaxed);
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(shown(&app).1, z[1], "about 154 W under 200-220 W: blue");
+    assert_consistent(&sim, &app);
+    sim.save("workout_gauge_under");
+
+    SCRIPTED_W.store(206, Relaxed);
+    run(&mut sim, &mut app, 5000);
+    let (w, color) = shown(&app);
+    assert_eq!(color, z[2], "{w} W in 200-220 W: green");
+    assert_consistent(&sim, &app);
+    sim.save("workout_gauge");
+
+    // what a second costs: the strip, the step's time left, the number's changed characters, the marker
+    let (px0, s0) = (sim.pixels, sim.ms);
+    run(&mut sim, &mut app, 10_000);
+    let px_s = (sim.pixels - px0) * 1000 / (sim.ms - s0);
+    assert_consistent(&sim, &app);
+    std::println!("workout gauge: {px_s} panel px/s, the number and the marker moving each second");
+    // measured 6468 px/s: a digit of the number at scale 7 is 42 x 70 px and one or two change a second, the marker
+    // two 3-column strips of 18 px, the strip and the time left the rest; the gauge's box whole would be 35 520 px
+    assert!(px_s < 9000, "{px_s} px/s: only what changes");
+
+    // the menu's window: 30 s, in the title
+    app.settings.wkt_avg = 2;
+    run(&mut sim, &mut app, 1000);
+    let want = app.power.rolling(2).map(u32::from).unwrap_or_default();
+    assert_eq!(app.field_text(Field::WktPower).as_str(), std::format!("{want}"));
+    assert_consistent(&sim, &app);
+}
+
 /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
 /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
 #[test]

@@ -205,6 +205,7 @@ Others
 - [x] Structured workouts from FIT files, step targets (stock, all): sim, from stock's \Workout\calendar
 - [x] 3-2-1 countdown beeps before a step ends (patch P1, Garmin, Wahoo): sim
 - [x] Workout profile graph with the rider's place (Garmin, Wahoo, Karoo): sim, the WKT GRAPH field
+- [x] Target gauge: the power (3 / 10 / 30 s or instant) or heart rate on a bar around the step's band, coloured by how far off (Garmin, Wahoo, Karoo): sim, the WKT POWER field
 - [ ] Next-step strip instead of a full-screen popup (patch P3)
 - [ ] Multiple targets per step (power and cadence) (Garmin)
 - [ ] ZWO / ERG / MRC workouts, converted on the computer (Wahoo, Karoo)

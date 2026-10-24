@@ -153,6 +153,7 @@ impl App {
                 return l;
             }
             Field::Workout | Field::StepTarget | Field::StepTime | Field::NextStep => return self.workout_text(f),
+            Field::WktPower => return self.gauge_now(0).value,
             Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo => {
                 return self.course_text(f);
             }
@@ -249,6 +250,9 @@ impl App {
     pub(crate) fn field_color(&self, f: Field) -> u16 {
         if f == Field::StepTarget {
             return self.target_color();
+        }
+        if f == Field::WktPower {
+            return self.gauge_now(0).color;
         }
         if let Some(c) = self.course_color(f) {
             return c;

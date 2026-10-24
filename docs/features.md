@@ -119,6 +119,13 @@ TrainingPeaks), read only:
   from 0 to 150 % of FTP, heart rate from half the max to it, a quarter for an open target) in its zone colour; a
   white line where the rider is, the part done dark. A distance step is drawn at 30 km/h, an open step as 5 min.
   Only the columns the line leaves and reaches are redrawn (about 300 px/s in a full-page box, sim).
+- **WKT POWER**, a gauge field: the reading the step targets big (power over the window set by the menu's WKT
+  POWER row: 3 s, 10 s, 30 s or each second, "POWER 3S" in its title; heart rate for a heart-rate step, cadence for
+  a cadence one), a bar from 30 % under the target band to 30 % over it with the band as a green box and a marker
+  at the reading, and the band in numbers under it ("200-220"). The number and the marker are coloured by how far
+  the reading is: green in the band, yellow within 5 %, blue further under, red further over (the zone palette's
+  easy and hard colours). With an open step or no workout, the power alone. Only the number's changed characters
+  and the marker's old and new columns are redrawn (about 6 500 px/s for the page with a top half box, sim).
 - Any FIT workout file is read (Garmin's profile: time, distance and open steps, repeats, % FTP or watts, % max HR
   or bpm, zones), and Bryton's own encoding of power targets.
 
