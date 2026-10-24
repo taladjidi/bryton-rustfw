@@ -168,6 +168,7 @@ impl App {
         // a ride open: what is in RAM goes on the card first, one checkpoint (a few ms, one try); the next start
         // resumes it at this second (the second review, R4)
         self.recorder.checkpoint_now();
+        self.full.checkpoint_now();
         self.step_recorder(b);
         if self.ble.is_some() {
             nrf::system_off(b);

@@ -20,6 +20,10 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The full copy of a ride and the sync** (docs/sync.md): `\Rustfw\Activities` written beside `\Activities`
+  on the card, with Alpha1 from a real strap; `tools/sync.py` against the real Intervals.icu and Strava (DFA a1
+  charted from the upload), and the workouts it writes listed in WORKOUTS (and by stock, which may want the `.json`
+  beside them).
 - **IGN maps** (`\Rustfw\Maps`): the packs found, a view drawn from them, its time (simulated: one index sector and
   about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
   decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the

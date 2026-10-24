@@ -143,6 +143,35 @@ fn seconds_caught_up_keep_their_own_time() {
     let times = record_times(&sim.emmc.image, &path);
     assert!(times.windows(2).all(|p| p[1] == p[0] + 1), "one record a second: {times:?}");
     assert_eq!(times.last().copied(), Some(now), "the last record at the clock's time");
+    // the full copy (developer fields): the same records, in \Rustfw\Activities under the same name
+    assert_eq!(record_times(&sim.emmc.image, &std::format!("Rustfw/{path}")), times);
+}
+
+/// A full copy that cannot be made (here a file in the way of its folder) is said once, and the ride is recorded
+/// and saved all the same: the clean copy never waits for the full one.
+#[test]
+fn a_full_copy_that_fails_never_stops_the_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let dir = fat.ensure_dir(&mut d, fat.root(), "Rustfw", (0, 0)).unwrap();
+    fat.create(&mut d, dir, "Full", (0, 0)).unwrap();
+    sim.emmc.image = d.0;
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = crate::recorder::ride_name(app.rec_time().0);
+    run(&mut sim, &mut app, 90_000);
+    assert!(app.notices.iter().any(|n| n.as_str().ends_with("NO FULL COPY")));
+    assert_ne!(app.strip.rec, Rec::NotSaving);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    app.press(&mut sim, Press::Long(Key::Start)); // end
+    run(&mut sim, &mut app, 2000);
+    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert_eq!(sim.backup[RIDE_BKP], 0, "nothing left open");
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    assert!(record_times(&sim.emmc.image, &path).len() >= 89);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
 /// The second review's R9: a recorder that fails looked like one that works (the red dot, and the warning only at

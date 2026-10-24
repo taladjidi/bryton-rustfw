@@ -137,6 +137,35 @@ def hexdump(data, base):
         print(f'{base + i:08x}  {row.hex(" ")}  {text}')
 
 
+def ls(s, path):
+    """A folder of the eMMC FAT volume: [(size, is_dir, name)] (tools/sync.py uses it too)."""
+    rows = [command(s, f'ls {path}')]
+    while rows[-1] != 'end' and not rows[-1].startswith('err'):
+        rows.append(line(s))
+    if rows[-1].startswith('err'):
+        raise OSError(f'ls {path}: {rows[-1]}')
+    out = []
+    for r in rows[:-1]:
+        size, kind, name = r.split(' ', 2)
+        out.append((int(size, 16), kind == 'd', name))
+    return out
+
+
+def get(s, path, progress=False):
+    """A file of the eMMC FAT volume, 4 KB an answer (tools/sync.py uses it too)."""
+    data = bytearray()
+    while True:
+        answer = command(s, f'get {path} {len(data)} 4096')
+        if answer.startswith('err'):
+            raise OSError(f'get {path}: {answer}')
+        chunk = bytes.fromhex(answer)
+        data += chunk
+        if len(chunk) < 4096:
+            return bytes(data)
+        if progress and len(data) % (256 * 1024) == 0:
+            print(f'{len(data) // 1024} KB...', file=sys.stderr)
+
+
 def selftest():
     p = png(bytes(range(256)) * 600)                    # 2 * 240 * 320 bytes
     assert p.startswith(b'\x89PNG') and p[12:16] == b'IHDR'
@@ -246,27 +275,17 @@ def main():
                         print(f'{lba:#x} {hits}', flush=True)
                     at += n
             elif a.cmd == 'ls':
-                first = command(s, f'ls {a.path}')
-                rows = [first]
-                while rows[-1] != 'end' and not rows[-1].startswith('err'):
-                    rows.append(line(s))
-                if rows[-1].startswith('err'):
-                    sys.exit(f'dev.py: {rows[-1]}')
-                for r in rows[:-1]:
-                    size, kind, name = r.split(' ', 2)
-                    print(f'{int(size, 16):>12}  {"<dir>" if kind == "d" else "     "}  {name}')
+                try:
+                    rows = ls(s, a.path)
+                except OSError as e:
+                    sys.exit(f'dev.py: {e}')
+                for size, is_dir, name in rows:
+                    print(f'{size:>12}  {"<dir>" if is_dir else "     "}  {name}')
             elif a.cmd == 'get':
-                data = bytearray()
-                while True:
-                    answer = command(s, f'get {a.path} {len(data)} 4096')
-                    if answer.startswith('err'):
-                        sys.exit(f'dev.py: {answer}')
-                    chunk = bytes.fromhex(answer)
-                    data += chunk
-                    if len(chunk) < 4096:
-                        break
-                    if len(data) % (256 * 1024) == 0:
-                        print(f'{len(data) // 1024} KB...', file=sys.stderr)
+                try:
+                    data = get(s, a.path, progress=True)
+                except OSError as e:
+                    sys.exit(f'dev.py: {e}')
                 Path(a.o).write_bytes(data)
                 print(f'{len(data)} bytes -> {a.o}')
             elif a.cmd == 'bench' and a.lba == 'scan':

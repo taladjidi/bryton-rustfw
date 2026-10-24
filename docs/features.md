@@ -90,6 +90,14 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
   "RIDE SAVED"). A card that fails shows "NOT SAVING" and the strip's dot grey, and is tried again; the ride goes
   on in RAM. A file that does not read back whole is left in `\Rustfw\Rides` ("SAVE FAILED"), never in the way of
   the next ride.
+- **A full copy of each ride** (simulator only so far): `\Rustfw\Activities\YYMMDDhhmmss.fit` has the same records,
+  each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads) and `RMSSD`, from the
+  strap's beats. It is a second file because Bryton's server refuses developer fields, and the `\Activities` file
+  stays exactly as before. It is recorded beside the clean one with its own checkpoints and resume, and it never
+  holds the clean one up: if it fails, the ride is saved all the same and the banner says "NO FULL COPY".
+- **Sync on the computer** (`tools/sync.py`, docs/sync.md): new rides go to Strava (the clean copy) and to
+  Intervals.icu (the full copy), never twice. The next days' planned workouts come from Intervals.icu into
+  `\Workout\calendar`. It works from the mounted drive, or reads rides over the dev link.
 
 ## Menu
 

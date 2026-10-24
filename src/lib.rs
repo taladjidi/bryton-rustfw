@@ -254,6 +254,10 @@ pub struct App {
     card_writable: bool,
     recorder: recorder::Recorder,
     resume_pending: bool,
+    /// The ride's full copy (developer fields: recorder.rs, "Two copies"), driven after `recorder`; a ride of its
+    /// own to look for on the card once the clean one's is found.
+    full: recorder::Recorder,
+    full_pending: bool,
     /// While seconds are caught up after a long pass: how many seconds ago the one being ticked was (its time).
     lag_s: u8,
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
@@ -399,6 +403,8 @@ impl App {
             recorder: recorder::Recorder::new(),
             card_writable: false,
             resume_pending: false,
+            full: recorder::Recorder::of(recorder::Kind::Full),
+            full_pending: false,
             lag_s: 0,
             courses: None,
             drive: msc::Drive::new(),
@@ -412,6 +418,7 @@ impl App {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
         self.resume_pending = self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN;
+        self.full_pending = self.resume_pending;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
         }

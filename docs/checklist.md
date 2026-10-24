@@ -158,7 +158,7 @@ Others
 - [ ] Discard a ride (stock, all)
 - [ ] Recording rate: 1 s or smart (stock, Garmin)
 - [ ] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin)
-- [ ] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ)
+- [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ): sim, in a full copy beside the clean one (`\Rustfw\Activities`, with RMSSD), checked with Garmin's SDK
 - [~] Laps, session and activity messages at the end (stock, all): sim (a lap message per Lap, timer events at pauses)
 - [ ] Power off during a stop, resume at power on (stock Auto Power Off, Garmin)
 - [ ] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all)
@@ -270,7 +270,8 @@ Others
 - [ ] Camera shutter on the phone (ours, BLE HID)
 - [ ] Live tracking, 24 h link (stock app, all): needs a phone app
 - [ ] Group ride: members on the map, messages, voice input (stock app with the microphone, Garmin, Karoo)
-- [ ] Ride auto-upload to the phone and Strava (stock app, all): needs an app; a computer tool over USB instead
+- [~] Ride upload to Strava and Intervals.icu (stock app, all): `tools/sync.py` on the computer, from the drive or the dev link (docs/sync.md); not yet run against the real services; the iOS app next
+- [~] Planned workouts from Intervals.icu onto the unit (Garmin, Wahoo, Karoo): `tools/sync.py` writes them to `\Workout\calendar`
 - [ ] Wi-Fi sync without the phone (Garmin, Wahoo, Karoo, Coros)
 - [ ] Time zone from the phone (ours, BLE Current Time Service, inferred)
 - [ ] Settings edited from the phone (stock app, all)

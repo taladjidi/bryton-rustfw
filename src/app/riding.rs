@@ -61,15 +61,29 @@ impl App {
                 if self.recorder.phase() != recorder::Phase::Starting {
                     self.notice("NOT RECORDING"); // the last ride's save is still failing
                 }
+                self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
             }
             ride::Event::Second => {
                 let s = self.sample(t);
                 self.recorder.second(&s, words);
+                self.full.second(&s, words);
             }
-            ride::Event::Pause => self.recorder.pause(t, words),
-            ride::Event::Resume => self.recorder.resume(t),
-            ride::Event::Lap => self.recorder.lap(t),
-            ride::Event::End => self.recorder.end(t, words),
+            ride::Event::Pause => {
+                self.recorder.pause(t, words);
+                self.full.pause(t, words);
+            }
+            ride::Event::Resume => {
+                self.recorder.resume(t);
+                self.full.resume(t);
+            }
+            ride::Event::Lap => {
+                self.recorder.lap(t);
+                self.full.lap(t);
+            }
+            ride::Event::End => {
+                self.recorder.end(t, words);
+                self.full.end(t, words);
+            }
         }
     }
 
@@ -86,6 +100,7 @@ impl App {
     pub(crate) fn sample(&self, time: u32) -> fit::Sample {
         let fix = self.pvt.filter(|p| p.good());
         let byte = |m| self.live.get(m).map(|v| v.min(254) as u8);
+        let hr = self.live.get(Metric::Hr).is_some();
         fit::Sample {
             time,
             pos: fix.map(|p| (p.lat, p.lon)),
@@ -95,6 +110,9 @@ impl App {
             cadence: byte(Metric::Cadence),
             power: self.live.get(Metric::Power),
             temp_c: self.baro.map(|(_, c)| (c / 100).clamp(-100, 100) as i8),
+            // the strap's beats: only while it is in (hrv.rs keeps its last values)
+            alpha1_milli: self.hrv.alpha1().filter(|_| hr).map(|a| (a * 1000.0 + 0.5).clamp(0.0, 65_534.0) as u16),
+            rmssd_ms: self.hrv.rmssd().filter(|_| hr),
         }
     }
 
@@ -146,9 +164,37 @@ impl App {
                 }
             }
         }
-        let open = self.recorder.phase() != recorder::Phase::Done;
+        self.step_full(b, local);
+        let open = self.recorder.phase() != recorder::Phase::Done || self.full.phase() != recorder::Phase::Done;
         if !self.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
             b.backup_write(RIDE_BKP, if open { RIDE_OPEN } else { 0 });
+        }
+    }
+
+    /// The full copy's card work, after the clean one's (recorder.rs, "Two copies"): its ride left open is looked
+    /// for once the clean one's has been, and whatever it does, it never stops the clean one; a full copy that
+    /// cannot be saved is said.
+    fn step_full(&mut self, b: &mut impl Board, local: recorder::Local) {
+        if self.full.phase() != recorder::Phase::Done {
+            self.full_pending = false;
+        }
+        self.full.follow(self.recorder.name());
+        let o = if self.full_pending && !self.resume_pending {
+            let o = self.full.recover(&mut emmc::Volume(&mut self.emmc, b), local);
+            self.full_pending = matches!(o, recorder::Outcome::Failed(_)) || self.full.waiting();
+            o
+        } else if self.full.due() {
+            self.full.io(&mut emmc::Volume(&mut self.emmc, b), local)
+        } else {
+            recorder::Outcome::Nothing
+        };
+        match o {
+            // no clean ride to go on with (it was saved, or never checkpointed): this one is saved as it is
+            recorder::Outcome::Resumed(..) if self.recorder.phase() != recorder::Phase::Recording => {
+                self.full.end(0, self.ride.to_words());
+            }
+            recorder::Outcome::Kept(_) => self.notice("NO FULL COPY"),
+            _ => {}
         }
     }
 

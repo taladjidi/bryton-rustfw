@@ -13,7 +13,11 @@ impl App {
             Some("CONNECT USB")
         } else if self.ride.state() != ride::State::Idle {
             Some("END THE RIDE FIRST")
-        } else if self.recorder.phase() != recorder::Phase::Done || self.resume_pending {
+        } else if self.recorder.phase() != recorder::Phase::Done
+            || self.full.phase() != recorder::Phase::Done
+            || self.resume_pending
+            || self.full_pending
+        {
             Some("RIDE NOT SAVED YET")
         } else {
             None
