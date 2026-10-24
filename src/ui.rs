@@ -1125,10 +1125,10 @@ pub fn draw_title(c: &mut impl Canvas, title: &str) {
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
 }
 
-/// A menu row's label box: its own length (at most 9 characters) and half a character's gap; the value takes the
-/// rest of the row (beside "FIELD 1", 9 characters: every field's name, a test checks).
+/// A menu row's label box: its own length (at most 10 characters: "NEARBY BLE") and half a character's gap; the
+/// value takes the rest of the row (beside "FIELD 1", 9 characters: every field's name, a test checks).
 fn menu_label_w(label: &str) -> u32 {
-    (label.len().min(9) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
+    (label.len().min(10) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
 }
 
 /// Menu row `i`: `label` on the left, `value` on the right in `value_color`; selected, the row is orange.
@@ -1157,6 +1157,11 @@ pub(crate) mod tests {
         }
         assert!(FIELD_GROUPS.iter().all(|(_, g)| g.len() <= MENU_ROWS), "a group is one screen");
         assert!(FIELD_GROUPS.len() <= MENU_ROWS);
+    }
+
+    #[test]
+    fn menu_labels_are_whole() {
+        assert!(LABEL.width("NEARBY BLE") <= menu_label_w("NEARBY BLE"), "a 10-letter label is not cut");
     }
 
     #[test]

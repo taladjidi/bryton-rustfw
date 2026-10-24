@@ -58,7 +58,20 @@ pub const TOUCH_MS: u32 = 10;
 /// smoothing ([`ambient::Auto`]), a change of light reaches the backlight in about a second.
 pub const LIGHT_MS: u32 = 250;
 
+/// RTC backup register counting the USB drops the link recovered from (the board's SOF watch): tag 0x0b, the count
+/// in the low 16 bits. Free before (BOARD.md 8: stock never uses it).
+pub const USB_DROPS_BKP: usize = 31;
+
 impl App {
+    /// The computer dropped the USB device and the board reconnected it: counted (read it with `dev.py peek`) and
+    /// said in a notice.
+    pub fn usb_dropped(&mut self, b: &mut impl Board) {
+        let n = b.backup_read(USB_DROPS_BKP);
+        let n = if n >> 24 == 0x0b { n & 0xffff } else { 0 };
+        b.backup_write(USB_DROPS_BKP, 0x0b00_0000 | (n + 1).min(0xffff));
+        self.notice("USB RECONNECT");
+    }
+
     /// Sets the backlight to what it should be now: the chosen level, unless switched off (Back) or timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
         let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;

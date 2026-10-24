@@ -29,6 +29,9 @@ const OTG_HS: u32 = 0x4004_0000;
 const GUSBCFG: u32 = OTG_HS + 0x00c;
 const GRSTCTL: u32 = OTG_HS + 0x010;
 const DCTL: u32 = OTG_HS + 0x804;
+const DSTS: u32 = OTG_HS + 0x808;
+/// Configured, but no start of frame for this long: the computer dropped the device (module doc, "Drops").
+const SOF_LOST_MS: u32 = 200;
 const RCC_AHB1RSTR: u32 = RCC + 0x080;
 const RCC_AHB1ENR: u32 = RCC + 0x0d8;
 const RCC_D2CCIP2R: u32 = RCC + 0x054;
@@ -171,6 +174,10 @@ pub struct Link {
     out: [u8; 512],
     len: usize,
     last_full: bool,
+    /// DSTS.FNSOF when last seen changing, and when (cycles).
+    sof: (u32, u32),
+    /// A drive command ran since [`Link::worked`]: its eMMC access may have slept, which takes over SysTick.
+    worked: bool,
 }
 
 fn wait(cond: impl Fn() -> bool, ms: u32) -> bool {
@@ -236,7 +243,7 @@ pub fn start() -> Option<Link> {
         .ok()?
         .build();
     wr(NVIC_ISER2, OTG_HS_IRQ);
-    Some(Link { dev, cdc, msc, out: [0; 512], len: 0, last_full: false })
+    Some(Link { dev, cdc, msc, out: [0; 512], len: 0, last_full: false, sof: (u32::MAX, cycles()), worked: false })
 }
 
 impl Link {
@@ -257,6 +264,7 @@ impl Link {
             if let Ok(n @ 1..) = self.msc.out.read(&mut buf) {
                 let mut pipe = Bulk { dev: &mut self.dev, cdc: &mut self.cdc, msc: &mut self.msc };
                 app.drive_packet(board, &buf[..n], &mut pipe);
+                self.worked = true;
             }
             while effect == Effect::None {
                 match self.cdc.read_packet(&mut buf) {
@@ -276,6 +284,32 @@ impl Link {
         while cycles().wrapping_sub(t0) < ms * (CPU_HZ / 1000) {
             self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
         }
+    }
+
+    /// A drive command ran since the last call (its card access may have slept: the caller's sleep slice is lost).
+    pub fn worked(&mut self) -> bool {
+        core::mem::take(&mut self.worked)
+    }
+
+    /// Watches the frame number the computer's starts of frame advance (every 125 us at high speed): configured and
+    /// still for [`SOF_LOST_MS`], the computer has dropped the device (seen on the unit, 2026-10-24: the Mac lost it
+    /// mid-transfer while the unit still showed a green dot; stock dropped the same way on 2026-10-22). Then a soft
+    /// disconnect and connect, so the computer enumerates it again without an unplug. True when it did.
+    pub fn watch(&mut self) -> bool {
+        let now = cycles();
+        let fnsof = rd(DSTS) >> 8 & 0x3fff;
+        if !self.configured() || fnsof != self.sof.0 {
+            self.sof = (fnsof, now);
+            return false;
+        }
+        if now.wrapping_sub(self.sof.1) < SOF_LOST_MS * (CPU_HZ / 1000) {
+            return false;
+        }
+        modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off, the computer sees a detach
+        wait(|| false, 100);
+        modify(DCTL, 1 << 1, 0); // and an attach: it resets and enumerates the device again
+        self.sof = (u32::MAX, cycles());
+        true
     }
 
     /// Soft disconnect, so the computer sees the device leave before the next image enumerates again.

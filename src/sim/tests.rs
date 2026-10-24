@@ -237,6 +237,18 @@ fn gear_on_the_overview_opens_the_menu() {
     assert_consistent(&sim, &app);
 }
 
+/// A USB drop the board recovered from is counted in its backup register (tag 0x0b, over stock's leftovers) and said.
+#[test]
+fn usb_drops_are_counted() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    sim.backup[USB_DROPS_BKP] = 0x3c5; // a value stock left there
+    app.usb_dropped(&mut sim);
+    app.usb_dropped(&mut sim);
+    assert_eq!(sim.backup[USB_DROPS_BKP], 0x0b00_0002);
+    assert_eq!(app.notices[0].as_str(), "09:00 USB RECONNECT");
+}
+
 /// Quick touches count: a 60 ms tap and a 120 ms swipe (the panel is read on INT and every 10 ms while a finger
 /// is down, not once per 50 ms pass when INT happens to be low).
 #[test]

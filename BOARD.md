@@ -279,7 +279,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
-  0x52430001, lib.rs `RIDE_BKP`). Free for this firmware: 0, 31.
+  0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`). Free for this
+  firmware: 0.
   Settings move to a file in this firmware's own folder once the eMMC is written (AGENTS.md, "Share the storage with
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
