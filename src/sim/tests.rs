@@ -428,6 +428,7 @@ fn ride_history() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -1564,6 +1565,17 @@ fn ign_map_under_the_map() {
     let (black, white) =
         corner.fold((0, 0), |(b, w), p| (b + usize::from(p == ui::BLACK), w + usize::from(p == ui::WHITE)));
     assert!(black > 20 && white > 100, "(c) IGN: {black} black, {white} white");
+
+    // a ride's card (the one just ended; a past ride's goes the same way) has the map under its track too
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 20_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(app.screen(), Screen::Summary);
+    assert!(app.basemap_stats().ign, "the card's basemap: {:?}", app.basemap_stats());
+    sim.save("card_ign");
+    assert_consistent(&sim, &app);
 }
 
 /// The map page (page 3 by default) through a ride: "NO FIX" until the first fix, then the track and the arrow;
@@ -2223,7 +2235,7 @@ fn long_reads_spread_over_passes() {
     }
     pass(&mut sim, &mut app, w, "course load", |sim, app| app.press(sim, Press::Short(Key::Start)));
     passes(&mut sim, &mut app, w, "course load", 5000);
-    assert_eq!(app.screen(), Screen::Ride(0), "followed");
+    assert_eq!(app.screen(), Screen::Ride(crate::COURSE), "followed: the course page");
     let len = app.courses.as_deref().unwrap().course.len_m();
     std::println!("big course: {listed} listed, {len} m followed");
     let km: f64 = listed.trim_end_matches(" KM").parse().unwrap();
@@ -2278,7 +2290,7 @@ fn perf_budgets() {
     let ride = |pages: [PageCfg; 3], screen: usize| {
         let mut sim = Sim::new(9, 0, 0);
         sim.gnss.route = Some(ride_route);
-        let course = pages.iter().any(|p| p.fields.contains(&Profile));
+        let course = screen == crate::COURSE || pages.iter().any(|p| p.fields.contains(&Profile));
         if course {
             sim.emmc.image = crate::fat::tests::image();
             sim.gnss.route = Some(course_route);
@@ -2299,11 +2311,10 @@ fn perf_budgets() {
             assert!(app.courses.as_deref().unwrap().on.is_some());
         }
         sim.gnss.fix = Some(8000);
-        if screen < PAGES {
+        if screen != PAGES {
             app.press(&mut sim, Press::Short(Key::Start));
-            for _ in 0..screen {
-                app.press(&mut sim, Press::Short(Key::Page));
-            }
+            app.screen = Screen::Ride(screen); // the page measured (a course loaded opens the course page)
+            app.show(&mut sim);
         }
         run(&mut sim, &mut app, 120_000); // settled: the map fitted, the graph full
         let (px, win, t0) = (sim.pixels, sim.windows, sim.ms);
@@ -2318,7 +2329,7 @@ fn perf_budgets() {
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
     type Case = (&'static str, [PageCfg; 3], usize, (u64, u64));
-    let cases: [Case; 5] = [
+    let cases: [Case; 6] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, (150, 5)),
         // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
@@ -2329,6 +2340,8 @@ fn perf_budgets() {
         ("map", [map, values, graph], 0, (1_800, 50)),
         // 456, 3: on the course, the profile's rider column (a whole profile at each eighth), two values
         ("course profile", [profile, values, map], 0, (600, 10)),
+        // 1548, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds
+        ("course page", [values, graph, map], crate::COURSE, (2_000, 20)),
     ];
     let mut over = std::vec::Vec::new();
     for (name, pages, screen, (px_max, win_max)) in cases {
@@ -2434,8 +2447,10 @@ fn course_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.banner.as_str(), "READING COURSE");
     run(&mut sim, &mut app, 200);
-    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(0), "COURSE ON"));
+    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(crate::COURSE), "COURSE ON"), "the course page");
     assert_consistent(&sim, &app);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0), "then round to page 1");
     assert_eq!(fields(&app), ["--", "--", "--", "--", "--"], "no fix yet");
     sim.gnss.fix = Some(8000);
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
@@ -2496,15 +2511,16 @@ fn course_ride() {
     sim.save("course_map");
     let course = sim.screen.iter().filter(|&&p| p == crate::map::COURSE).count();
     assert!(course > 150, "the course on the map (under the track where ridden): {course} px");
-    // the default climbing page while a course is followed: the course's fields in it
+    // the course page: in the round after the ride pages while the course is on
     let shown = |app: &App| app.widgets().filter_map(|(_, w)| if let Widget::Field(f) = w { Some(f) } else { None });
-    app.pages[1] = crate::DEFAULT_PAGES[1];
-    app.press(&mut sim, Press::Short(Key::Page)); // round to page 2
     app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(crate::COURSE), "after the map page");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields, "the course variant");
+    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields[..5]);
     assert_consistent(&sim, &app);
-    sim.save("default_course_page");
+    sim.save("course_page");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0), "then round to page 1");
 
     // the cost: segments and boxes looked at a second, detour included
     let at = app.courses.as_deref().unwrap().at;

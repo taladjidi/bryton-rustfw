@@ -104,12 +104,25 @@ impl App {
         })
     }
 
-    /// The card screen: the track in [`ui::card::MAP`], the whole ride's elevation, the numbers, as they were when
-    /// the card was shown ([`App::summary`]).
+    /// The card screen: the track in [`ui::card::MAP`] over the basemap, the whole ride's elevation, the numbers, as
+    /// they were when the card was shown ([`App::summary`]).
     pub(crate) fn draw_summary(&self, c: &mut impl Canvas) {
         let Some((m, g)) = self.summary else { return };
         let (_, _, cols, h) = ui::card::ELEV;
-        ui::card::draw(c, &self.ride_card(), (&self.track, m.view), &|i| self.graph_bar(g, cols, h, i));
+        let base = Some(&self.basemap);
+        ui::card::draw(c, &self.ride_card(), (&self.track, m.view, base), &|i| self.graph_bar(g, cols, h, i));
+    }
+
+    /// The card's map on screen (the ride just ended, a past ride): its view and its track's origin.
+    fn card_view(&self) -> Option<(map::View, (i32, i32))> {
+        match self.screen {
+            Screen::Summary => self.summary.and_then(|(m, _)| m.view).zip(self.track.origin()),
+            Screen::Past => {
+                let p = &self.past.track;
+                map::View::fit_whole(p, map::area(ui::card::MAP)).zip(p.origin())
+            }
+            _ => None,
+        }
     }
 
     /// Draws the whole screen below the bar from the state (the panel was cleared, or a screenshot row).
@@ -138,7 +151,7 @@ impl App {
             Screen::Past => {
                 let (p, h) = (&self.past, ui::card::ELEV.3);
                 let view = map::View::fit_whole(&p.track, map::area(ui::card::MAP));
-                ui::card::draw(c, &p.card, (&p.track, view), &|i| p.elev(i, h));
+                ui::card::draw(c, &p.card, (&p.track, view, Some(&self.basemap)), &|i| p.elev(i, h));
             }
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
@@ -167,8 +180,7 @@ impl App {
             Screen::Ride(n) => (n, |layout, i| ui::field_box(layout, ui::RIDE_H, i), &[]),
             _ => return all.into_iter().take(0),
         };
-        let p = self.pages.get(page).copied().unwrap_or(DEFAULT_PAGES[0]);
-        let p = if p == DEFAULT_PAGES[1] && self.route().is_some() { COURSE_PAGE } else { p };
+        let p = if page == COURSE { COURSE_PAGE } else { self.pages.get(page).copied().unwrap_or(DEFAULT_PAGES[0]) };
         let mut n = 0;
         for (slot, &w) in all.iter_mut().zip(fixed) {
             slot.1 = w;
@@ -313,6 +325,10 @@ impl App {
             let (_, _, cols, _) = ui::card::ELEV;
             let m = map::Shown::of(&self.track, map::area(ui::card::MAP), None);
             self.summary = Some((m, self.graph_shown(ride::Plot::Alt, true, cols)));
+        }
+        if let (Some((v, o)), false) = (self.card_view(), self.emmc.lent()) {
+            // a card's map over the basemap too (the owner, 2026-10-24); the page's is drawn again when it shows
+            self.basemap.render(&mut emmc::Volume(&mut self.emmc, b), map::area(ui::card::MAP), v, o);
         }
         if let Some(i) = self.first_map()
             && let (Some((bx, _)), Some(Drawn::Map(m))) = (self.widgets().nth(i), self.drawn.get(i))

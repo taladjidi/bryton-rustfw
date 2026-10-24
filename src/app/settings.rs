@@ -71,6 +71,10 @@ pub const PAGES: usize = 3;
 /// The overview's fields are kept as page [`OVERVIEW`] (four fields, never off), after the ride pages.
 pub const OVERVIEW: usize = PAGES;
 
+/// [`Screen::Ride`]'s number for the course page (its fields fixed: the profile, the distances, time and speed), after the ride pages in their round while a
+/// course is followed.
+pub const COURSE: usize = PAGES + 1;
+
 /// The backup registers of the ride pages and the overview, two each ([`PageCfg::to_words`]).
 /// Registers 20 to 31 are not referenced by stock (R039; ghidra/HARDWARE.md, RTC and backup registers), 19 is: its
 /// boot reads it (AGENTS.md, "Share the storage with stock").
@@ -417,8 +421,7 @@ pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
 /// The ride pages before any are set (or imported from stock), after what Garmin's, Wahoo's and Hammerhead's bike
 /// computers ship (2026-10-24: Wahoo's default stack is a data page, an elevation page and a map page with an
 /// elevation profile and a few fields; Garmin's map page, when navigating, distance and time to the destination):
-/// the ride's essentials, the climbing ([`COURSE_PAGE`] while a course is followed), the map whole; the overview's
-/// totals last.
+/// the ride's essentials, the climbing, the map whole; the overview's totals last.
 pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
     use Field::*;
     [
@@ -429,12 +432,11 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
     ]
 };
 
-/// The climbing page while a course is followed, as long as the page is still [`DEFAULT_PAGES`]' own: the course's
-/// profile large, the next climb, the distance to go, distance, moving time and average speed (the map stays whole on
-/// its own page: under the profile it was too small to use, the owner on the unit, 2026-10-24).
+/// The course page, an extra page while a course is followed ([`COURSE`]; Garmin and Wahoo add theirs the same
+/// way): the course's profile large, the distance to go, distance, moving time and average speed. Not configurable.
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 12, fields: [Profile, Climb, ToGo, Dist, Timer, AvgSpeed] }
+    PageCfg { layout: 5, fields: [Profile, ToGo, Dist, Timer, AvgSpeed, Time] }
 };
 
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).

@@ -62,10 +62,10 @@ impl App {
         match c.step(&mut emmc::Volume(&mut self.emmc, b), Self::COURSE_BYTES) {
             storage::course::Progress::Loaded(true) => {
                 self.say("COURSE ON");
-                // from the list, the first ride page (as stock's route details lead to riding); a rider who has
-                // gone elsewhere while it was read stays there
+                // from the list, the course page (as stock's route details lead to riding); a rider who has gone
+                // elsewhere while it was read stays there
                 if matches!(self.screen, Screen::Menu(Menu::Courses, _)) {
-                    (self.depth, self.screen) = (0, Screen::Ride(0));
+                    (self.depth, self.screen) = (0, Screen::Ride(COURSE));
                     self.show(b);
                 }
             }

@@ -586,7 +586,8 @@ impl App {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
                 let bottom = self.bottom();
                 if let Some((m, _)) = &mut self.summary {
-                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, None, None);
+                    let base = Some(&self.basemap);
+                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, base, None);
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {

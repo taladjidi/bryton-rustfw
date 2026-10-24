@@ -102,16 +102,34 @@ pub enum Screen {
     Media,
 }
 
+/// Places in the round of the ride pages: the pages, then the course page.
+const ROUND: usize = PAGES + 1;
+
+/// Ride page `n`'s place in the round.
+fn place(n: usize) -> usize {
+    if n == COURSE { PAGES } else { n }
+}
+
+/// The ride page at place `k` in the round.
+fn page_at(k: usize) -> usize {
+    if k == PAGES { COURSE } else { k }
+}
+
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
 pub const OFF_CONFIRM_MS: u32 = 10_000;
 
 impl App {
-    /// The first ride page that is on from page `from` (taken round), going forward by `step` (1, or PAGES - 1 for
-    /// backward): the ride pages go round among themselves; page 1 is never off.
+    /// The first ride page that is on from place `from` in the round (taken round), going forward by `step` (1, or
+    /// [`ROUND`] - 1 for backward): the ride pages, then the course page while a course is followed; page 1 is never
+    /// off.
     pub(crate) fn ride_page(&self, from: usize, step: usize) -> Screen {
-        let on = |i: usize| self.pages.get(i % PAGES).is_some_and(|p| p.layout > 0);
-        let n = (0..PAGES).map(|k| (from + k * step) % PAGES).find(|&i| on(i)).unwrap_or(0);
+        let n = (0..ROUND).map(|k| page_at((from + k * step) % ROUND)).find(|&n| self.page_on(n)).unwrap_or(0);
         Screen::Ride(n)
+    }
+
+    /// Ride page `n` is in the round: a page not off, the course page while a course is followed.
+    pub(crate) fn page_on(&self, n: usize) -> bool {
+        if n == COURSE { self.route().is_some() } else { self.pages.get(n).is_some_and(|p| n < PAGES && p.layout > 0) }
     }
 
     /// Opens screen `s` over this one: Back returns here.
@@ -127,7 +145,7 @@ impl App {
     pub(crate) fn close(&mut self) {
         self.depth = self.depth.saturating_sub(1);
         self.screen = match self.under.get(self.depth) {
-            Some(&Screen::Ride(n)) if self.pages.get(n).is_none_or(|p| p.layout == 0) => Screen::Main,
+            Some(&Screen::Ride(n)) if !self.page_on(n) => Screen::Main,
             Some(&s) if self.depth > 0 || matches!(s, Screen::Main | Screen::Ride(_)) => s,
             _ => Screen::Main,
         };
@@ -241,7 +259,7 @@ impl App {
             // comes back
             (Screen::Main, Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => self.screen = self.ride_page(0, 1),
             (Screen::Ride(n), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
-                self.screen = self.ride_page(n + 1, 1)
+                self.screen = self.ride_page(place(n) + 1, 1)
             }
             // a tap on a graph shows the next plot (kept with the page), a hold switches between the last minutes and
             // the whole ride
@@ -266,7 +284,7 @@ impl App {
                 return self.show(b);
             }
             (Screen::Ride(n), Input::Touch(Gesture::Swipe(Dir::Right))) => {
-                self.screen = self.ride_page(n + PAGES - 1, PAGES - 1)
+                self.screen = self.ride_page(place(n) + ROUND - 1, ROUND - 1)
             }
             (Screen::Ride(_), Input::Back) => self.screen = Screen::Main,
             (Screen::Main, Input::Touch(Gesture::Tap(x, y)))

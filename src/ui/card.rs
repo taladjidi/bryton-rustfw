@@ -6,8 +6,8 @@ use super::{Canvas, LABEL, PAGE_Y, W};
 use crate::map;
 use crate::text::{self, Align, Line, Style};
 
-/// The map of the track: under the title, the full width.
-pub const MAP: (u32, u32, u32, u32) = (0, PAGE_Y + 22, W, 110);
+/// The map of the track: under the title, the full width, as tall as the rest leaves (130).
+pub const MAP: (u32, u32, u32, u32) = (0, PAGE_Y + 22, W, 130);
 /// The elevation profile, under the map.
 pub const ELEV: (u32, u32, u32, u32) = (4, MAP.1 + MAP.3 + 2, W - 8, 34);
 /// The numbers: [`STATS`] in two columns of rows this high, under the profile.
@@ -121,16 +121,16 @@ impl Card {
     }
 }
 
-/// Draws `card` with `track` in [`MAP`] as `view` shows it (no basemap): the title, the map, the profile, the
-/// numbers, a line under the profile. `elev(i)` gives column `i` of the profile ([`ELEV`]'s width) as a height and
+/// Draws `card` with `track` in [`MAP`] as `view` shows it, over `base` when it holds that view: the title, the
+/// map, the profile, the numbers, a line under the profile. `elev(i)` gives column `i` of the profile ([`ELEV`]'s width) as a height and
 /// a colour.
 pub fn draw(
     c: &mut impl Canvas,
     card: &Card,
-    (track, view): (&map::Track, Option<map::View>),
+    (track, view, base): (&map::Track, Option<map::View>, Option<&crate::tiles::Basemap>),
     elev: &dyn Fn(u32) -> (u32, u16),
 ) {
-    map::draw(c, map::area(MAP), track, view, None, None);
+    map::draw(c, map::area(MAP), track, view, base, None);
     let grey = Style { fg: super::GREY, ..LABEL };
     text::draw_in(c, &grey, 0, PAGE_Y + 2, W, Align::Centre, card.title.as_str());
     let (x, y, w, h) = ELEV;
@@ -154,6 +154,7 @@ mod tests {
     #[test]
     fn fits_the_screen() {
         assert!(STATS_Y + (STATS as u32).div_ceil(2) * STAT_H <= H);
+        assert!(STATS_Y + (STATS as u32).div_ceil(2) * STAT_H + STAT_H > H, "no row's room left over");
         let mut f = super::super::tests::Frame::new();
         let mut card = Card::default();
         card.title.push_str("23 OCT 09:12");
@@ -161,6 +162,6 @@ mod tests {
             *label = "AVG KM/H";
             value.push_str("1:32:10");
         }
-        draw(&mut f, &card, (&map::Track::new(), None), &|i| (i % 30, super::super::GREY));
+        draw(&mut f, &card, (&map::Track::new(), None, None), &|i| (i % 30, super::super::GREY));
     }
 }
