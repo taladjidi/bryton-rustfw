@@ -22,6 +22,8 @@ pub enum Input {
     End,
     /// Back held: power off.
     Off,
+    /// Lap held: play or pause the phone's music (app/phone.rs), from any page.
+    Media,
     /// Page or Lap still held: [`Input::Next`] or [`Input::Prev`] again (a list scrolls, a value steps).
     NextHeld,
     /// See [`Input::NextHeld`].
@@ -50,6 +52,7 @@ impl Input {
             Press::Long(Key::Page) => Input::Menu,
             Press::Long(Key::Start) => Input::End,
             Press::Long(Key::Back) => Input::Off,
+            Press::Long(Key::Lap) => Input::Media,
             Press::Repeat(Key::Page) => Input::NextHeld,
             Press::Repeat(Key::Lap) => Input::PrevHeld,
             _ => return None,
@@ -190,7 +193,46 @@ pub enum Row {
     Group(usize),
     /// A field of a group: Select puts it in the page's box and goes back to the page's menu.
     Pick(crate::ui::Field),
+    /// A row of the phone menu.
+    Phone(PhoneRow),
 }
+
+/// What the phone menu shows ([`PHONE`]): the link (app/phone.rs) and its settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PhoneRow {
+    /// The link: no BLE, off, pairing, waiting for the phone, connected, secure.
+    Status,
+    /// Select advertises for a minute so the phone can pair.
+    Pair,
+    /// Select forgets the phone (the bond erased).
+    Forget,
+    /// The phone's notifications in the banner, on or off.
+    Notify,
+    /// Media keys, on or off.
+    Keys,
+    /// Select opens the media remote.
+    Media,
+}
+
+impl PhoneRow {
+    /// The row's label.
+    pub fn label(self) -> &'static str {
+        match self {
+            PhoneRow::Status => "LINK",
+            PhoneRow::Pair => "PAIR",
+            PhoneRow::Forget => "FORGET",
+            PhoneRow::Notify => "NOTIFY",
+            PhoneRow::Keys => "MEDIA KEY",
+            PhoneRow::Media => "REMOTE",
+        }
+    }
+}
+
+/// The phone menu.
+pub const PHONE: [PhoneRow; 6] = {
+    use PhoneRow::*;
+    [Status, Pair, Media, Notify, Keys, Forget]
+};
 
 /// What the stock data menu shows ([`STOCK`]): read from the rides and settings Bryton's firmware left on the
 /// card ([`crate::stock`]); only the scan and the import act, on Select.
@@ -249,7 +291,7 @@ pub const STOCK: [StockRow; 11] = {
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
 /// The main menu: a screen of groups, so nothing is more than one screen of rows away.
-pub const MAIN: [Row; 9] = [
+pub const MAIN: [Row; 10] = [
     Row::Open(Menu::Sensors),
     Row::Open(Menu::Pages),
     Row::Open(Menu::Rider),
@@ -259,6 +301,7 @@ pub const MAIN: [Row; 9] = [
     Row::Open(Menu::Courses),
     Row::Open(Menu::History),
     Row::Open(Menu::Stock),
+    Row::Open(Menu::Phone),
 ];
 
 /// The pages menu: the overview and the ride pages.

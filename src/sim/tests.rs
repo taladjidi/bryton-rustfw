@@ -136,12 +136,15 @@ fn boots_into_the_main_screen() {
     sim.save("preview");
 }
 
-/// Stock's order: reset, sd_ble_enable, then the version; no ANT without a key, no scan before the list.
+/// Stock's order: reset, sd_ble_enable, then the version; no ANT without a key, no scan before the list; then the
+/// phone link's GATT server (app/phone.rs), and no advertising without a bond.
 #[test]
 fn starts_the_nordic_chip() {
     let mut sim = Sim::new(12, 0, 0);
     App::start(&mut sim, None);
-    assert_eq!(sim.nordic.got, [vec![0, 0x60], vec![0, 0x65, 1]]);
+    assert_eq!(sim.nordic.got[..2], [vec![0, 0x60], vec![0, 0x65, 1]]);
+    assert_eq!(sim.nordic.got[2], [&[0, 0x7c, 1, 0, 4, 0, 1][..], b"S510"].concat(), "the name first");
+    assert!(sim.nordic.got.iter().all(|p| p[..2] != [0, 0x73] && p[..2] != [0, 0x8a]));
 }
 
 /// A chip that never answers costs one timeout per command, then the pages run and the label is red.

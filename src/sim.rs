@@ -51,6 +51,8 @@ pub struct Sim {
     record: Option<(PathBuf, u32)>,
     dirty: bool,
     pub nordic: Nordic,
+    /// Times the RTC was set.
+    pub rtc_sets: u32,
     /// RTC backup registers (they survive an app restart, as on the unit).
     pub backup: [u32; 32],
     /// The battery voltage the ADC sees, mV (None: the ADC did not come up), and USB power.
@@ -520,6 +522,9 @@ pub struct Nordic {
     /// ANT+ sensors in range.
     pub sensors: Vec<AntSensor>,
     pub channels: [Channel; 8],
+    /// The BLE peripheral side (ble_sim.rs), and the phone in range.
+    pub server: ble_sim::Server,
+    pub phone: Option<ble_sim::PhoneSim>,
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
@@ -647,6 +652,9 @@ impl Nordic {
             self.queue(&[1, *op, 0, 0, 0, 0]); // ANT commands answer as RESP (seen on the unit)
             return;
         }
+        if self.take_ble(p, now) {
+            return;
+        }
         let reply: Vec<u8> = match p {
             [0, 0x60] => {
                 self.enabled = true;
@@ -688,6 +696,7 @@ impl Sim {
             record: None,
             dirty: false,
             nordic: Nordic::default(),
+            rtc_sets: 0,
             backup: [0; 32],
             battery_mv: Some(3900),
             charger: false,
@@ -832,6 +841,15 @@ impl Board for Sim {
         (tr, to_bcd(u64::from(y) % 100) << 16 | to_bcd(u64::from(mo)) << 8 | to_bcd(u64::from(d)))
     }
 
+    fn rtc_set(&mut self, tr: u32, dr: u32) {
+        let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), crate::rtc_date_from_dr(dr));
+        let days = i64::from(crate::days_from_civil(y, mo, d) - crate::days_from_civil(2026, 10, 23));
+        let t = days * 86400 + i64::from(h) * 3600 + i64::from(m) * 60 + i64::from(s);
+        assert!(t >= (self.ms / 1000) as i64, "the simulated clock starts on 2026-10-23");
+        self.start_s = t as u64 - self.ms / 1000;
+        self.rtc_sets += 1;
+    }
+
     fn delay_ms(&mut self, ms: u32) {
         self.ms += u64::from(ms);
         if let Some((dir, n)) = &mut self.record
@@ -849,7 +867,8 @@ impl Board for Sim {
 
     fn nrf_reset(&mut self) {
         let sensors = std::mem::take(&mut self.nordic.sensors);
-        self.nordic = Nordic { dead: self.nordic.dead, sensors, reset: true, ..Nordic::default() };
+        let phone = self.nordic.phone.take();
+        self.nordic = Nordic { dead: self.nordic.dead, sensors, phone, reset: true, ..Nordic::default() };
         self.ms += 950;
     }
 
@@ -963,6 +982,7 @@ impl Board for Sim {
             self.nordic.queue(&[2, 0x1b, 0, 0xff, 0xff, 1]); // BLE_GAP_EVT_TIMEOUT, source scan
         }
         self.nordic.ant_tick(self.ms);
+        self.nordic.phone_tick(self.ms);
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
             *slot = b;
@@ -973,6 +993,12 @@ impl Board for Sim {
 
 #[cfg(test)]
 mod tests;
+
+mod ble_sim;
+pub use ble_sim::{Act, PhoneSim};
+
+#[cfg(test)]
+mod phone_tests;
 
 /// The computer at the other end of the dev link: what it received, and the staging area.
 #[derive(Default)]

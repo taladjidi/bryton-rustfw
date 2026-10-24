@@ -427,3 +427,44 @@ fn usb_drive_commands() {
         assert_eq!(m.0.len(), 100 * 512, "the disk never grows");
     }
 }
+
+/// Random BLE events from the chip (every id the phone link decodes, random bodies) into the decoder and into the
+/// app's phone link on the simulated board, which answers its commands: no panic, whatever state the link is driven
+/// into (connected, encrypted, discovering on made-up services). And random bytes into the phone formats.
+#[test]
+fn phone_link_events() {
+    use super::*;
+    const IDS: [u16; 22] = [
+        0x10, 0x11, 0x13, 0x14, 0x19, 0x1a, 0x1b, 0x1f, 0x21, 0x23, 0x01, 0x50, 0x52, 0x55, 0x56, 0x30, 0x32, 0x33,
+        0x36, 0x38, 0x39, 0x3b,
+    ];
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    for seed in 1..=4u32 {
+        let v: Vec<u8> = bytes(seed, 1 << 16).collect();
+        for c in v.chunks_exact(48) {
+            let id = IDS[usize::from(c[0]) % IDS.len()];
+            let mut p = std::vec![2];
+            p.extend(id.to_le_bytes());
+            p.extend(&c[2..2 + usize::from(c[1]) % 46]);
+            if c[47] % 4 == 0 {
+                p[3..].iter_mut().take(2).for_each(|b| *b = 0); // connection 0, as the chip's first link
+            }
+            let _ = crate::ble::event(&p);
+            app.phone_event(&mut sim, &p);
+        }
+        let mut ds = crate::phone::DataSource::default();
+        let mut now = crate::phone::NowPlaying::default();
+        for c in v.chunks(20) {
+            let _ = (ds.push(c), crate::phone::Notif::parse(c), crate::phone::current_time(c));
+            let _ = crate::phone::local_offset(c);
+            now.update(c);
+        }
+        let mut s = [0u8; 512];
+        for (d, x) in s.iter_mut().zip(&v) {
+            *d = *x;
+        }
+        s[..4].copy_from_slice(b"RBL1");
+        let _ = crate::phone::Stored::from_sector(&s);
+    }
+}

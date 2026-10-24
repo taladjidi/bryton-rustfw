@@ -77,6 +77,22 @@ pub fn from_epoch_s(t: i64) -> (u16, u8, u8, u8, u8, u8) {
     (y, mo, d, (s / 3600) as u8, (s / 60 % 60) as u8, (s % 60) as u8)
 }
 
+/// RTC_TR and RTC_DR for a date and time (RM0399: BCD as [`rtc_time_from_tr`] and [`rtc_date_from_dr`] read
+/// them, the weekday in DR bits 13..15, Monday 1 to Sunday 7: 0 is forbidden).
+///
+/// ```
+/// use bryton_rustfw::*;
+/// let (tr, dr) = rtc_words((2026, 10, 24, 15, 30, 5));
+/// assert_eq!((rtc_time_from_tr(tr), rtc_date_from_dr(dr)), ((15, 30, 5), (2026, 10, 24)));
+/// assert_eq!(dr >> 13 & 7, 6, "a Saturday");
+/// ```
+pub fn rtc_words((y, mo, d, h, mi, s): (u16, u8, u8, u8, u8, u8)) -> (u32, u32) {
+    let bcd = |v: u8| u32::from(((v / 10) << 4) | (v % 10));
+    let weekday = (days_from_civil(y, mo, d) + 3).rem_euclid(7) as u32 + 1; // 1970-01-01 was a Thursday (4)
+    let tr = bcd(h) << 16 | bcd(mi) << 8 | bcd(s);
+    (tr, bcd((y % 100) as u8) << 16 | weekday << 13 | bcd(mo) << 8 | bcd(d))
+}
+
 /// The time of day, hours and minutes.
 pub(crate) fn rtc_hm(b: &mut impl Board) -> (u8, u8) {
     let (h, m, _) = rtc_time_from_tr(b.rtc().0);

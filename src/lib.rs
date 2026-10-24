@@ -18,6 +18,7 @@ pub mod dev;
 pub mod drivers;
 pub mod hrv;
 pub mod msc;
+pub mod phone;
 pub mod power;
 pub mod power_curve;
 pub mod ride;
@@ -28,7 +29,7 @@ pub mod ui;
 pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
-pub use drivers::{ambient, battery, emmc, gnss, nrf, panel, sensors, touch};
+pub use drivers::{ambient, battery, ble, emmc, gnss, nrf, panel, sensors, touch};
 pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
@@ -64,6 +65,8 @@ pub trait Board {
     fn keys_down(&mut self) -> u8;
     /// RTC_TR and RTC_DR, read once the shadow registers are in sync (RSF): the time of day and the date, BCD.
     fn rtc(&mut self) -> (u32, u32);
+    /// Sets the RTC to RTC_TR / RTC_DR values ([`rtc_words`]): the clock keeps running from there.
+    fn rtc_set(&mut self, tr: u32, dr: u32);
     /// Busy wait.
     fn delay_ms(&mut self, ms: u32);
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
@@ -263,6 +266,8 @@ pub struct App {
     drive: msc::Drive,
     /// A system reset is wanted (after the computer wrote to the volume: app/drive.rs).
     restart: bool,
+    /// The phone link (app/phone.rs).
+    phone: Phone,
 }
 
 impl App {
@@ -403,6 +408,7 @@ impl App {
             courses: None,
             drive: msc::Drive::new(),
             restart: false,
+            phone: Phone::default(),
         }
     }
 
@@ -432,6 +438,9 @@ impl App {
                 save_page(b, n, page);
             }
             b.backup_write(STOCK_BKP19, 0);
+        }
+        if self.ble.is_some() {
+            self.phone_setup(b);
         }
         self.strip_shown = self.strip;
         ui::draw_strip(&mut Panel(b, (0, ui::H)), &self.strip);
@@ -582,7 +591,8 @@ impl App {
                 | Menu::Stock
                 | Menu::History
                 | Menu::Courses
-                | Menu::Device),
+                | Menu::Device
+                | Menu::Phone),
                 sel,
             ) if self.redraw_ms >= LIST_REDRAW_MS => {
                 self.update_menu_rows(b, menu, sel);
@@ -599,6 +609,13 @@ impl App {
             self.repeated = false;
         }
         self.step_recorder(b);
+        if self.ble.is_some() {
+            self.step_phone(b);
+        }
+        if self.screen == Screen::Media && self.redraw_ms >= LIST_REDRAW_MS {
+            self.update_media(b);
+            self.redraw_ms = 0;
+        }
         self.update_light(b);
     }
 }

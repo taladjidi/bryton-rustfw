@@ -44,7 +44,8 @@ impl App {
         }
     }
 
-    /// Takes what the Nordic chip sent since the last pass: advertisers, sensor data, the scan's end.
+    /// Takes what the Nordic chip sent since the last pass: advertisers, sensor data, the scan's end, and the phone
+    /// link's events (app/phone.rs), those kept while a command waited first.
     pub(crate) fn poll_nrf(&mut self, b: &mut impl Board) {
         let mut title = false;
         let mut buf = [0; 64];
@@ -52,6 +53,7 @@ impl App {
             let n = b.nrf_recv(&mut buf);
             for &byte in buf.get(..n).unwrap_or(&[]) {
                 let Some(p) = self.rx.push(byte) else { continue };
+                let mut phone = false;
                 if let Some(r) = nrf::adv_report(p) {
                     title |= self.nearby.add(&r);
                     self.list_dirty = true;
@@ -76,14 +78,26 @@ impl App {
                     }
                 } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
                     self.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
-                } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) {
-                    self.scanning = false;
+                } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {
+                    self.scanning = false; // the scan's (source 1)
                     title = true;
+                } else {
+                    phone = nrf::event_id(p).is_some();
+                }
+                if phone {
+                    self.rx.keep_last(); // acted on below, the stream read
                 }
             }
             if n == 0 {
                 break;
             }
+        }
+        // the phone's events: those kept while a command waited, and those just read; acting on them may send
+        // commands, whose waits keep more
+        let mut ev = [0; nrf::KEPT];
+        for _ in 0..32 {
+            let Some(n) = self.rx.pop(&mut ev) else { break };
+            self.phone_event(b, ev.get(..n).unwrap_or(&[]));
         }
         if title && self.screen == Screen::Nearby {
             ui::draw_nearby(&mut Panel(b, (0, self.bottom())), self.nearby.count(), self.scanning);

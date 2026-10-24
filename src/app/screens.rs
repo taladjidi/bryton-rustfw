@@ -140,6 +140,13 @@ impl App {
                 let view = map::View::fit_whole(&p.track, map::area(ui::card::MAP));
                 ui::card::draw(c, &p.card, (&p.track, view), &|i| p.elev(i, h));
             }
+            Screen::Media => {
+                draw_phone_screen(c, None);
+                for (i, row) in self.media_rows().iter().enumerate() {
+                    draw_media_row(c, i, row.as_str());
+                }
+            }
+            Screen::Call => draw_phone_screen(c, Some(self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()))),
             Screen::Nearby => {
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.nearby.count(), self.scanning);
@@ -312,6 +319,9 @@ impl App {
         self.draw_screen(&mut p);
         if let Screen::Menu(menu, sel) = self.screen {
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
+        }
+        if self.screen == Screen::Media {
+            self.phone.shown = self.media_rows().map(|r| fnv(0x811c_9dc5, r.as_str().as_bytes()));
         }
     }
 
