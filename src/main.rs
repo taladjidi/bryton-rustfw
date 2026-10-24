@@ -1192,11 +1192,15 @@ fn checkpoint(n: u32) {
 /// The app, kept in `.bss` (a static cell), not on main's stack: as a local, `App` (tens of KB) was held in main's
 /// frame several times over (its construction, the move), which made main's frame 111 KB of the 123 KB of stack, and
 /// opening a workout (a 17 KB frame more) overflowed into `.bss` (2026-10-24). Not inlined, so the one temporary
-/// copy lives in this frame only while the app starts.
+/// copy lives in this frame only while the app starts. `App::new` builds the app as one struct expression and
+/// `App::begin` (drawing, the backup registers) runs on it in place: `App::start` doing both and returning a local
+/// made this frame 107 KB, the split 43 KB (2026-10-24, tools/stack_check.py).
 #[inline(never)]
 fn make_app(board: &mut S510) -> &'static mut App {
     static APP: static_cell::StaticCell<App> = static_cell::StaticCell::new();
-    APP.init_with(|| App::start(board, ANT_KEY))
+    let app = APP.init_with(|| App::new(board, ANT_KEY));
+    app.begin(board);
+    app
 }
 
 /// The course memory (about 70 KB: the course followed, its list), beside the app in AXI SRAM (link.x `.axibss`).

@@ -256,6 +256,15 @@ impl App {
     /// Panel up, backlight on, the Nordic chip started (BLE, then ANT with `ant_key` and the paired sensors), the
     /// settings read, the first ride page drawn.
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
+        let mut app = Self::new(b, ant_key);
+        app.begin(b);
+        app
+    }
+
+    /// The first half of [`App::start`]: the panel and the chips started, the state read back. It returns the app
+    /// as one struct expression, which the caller can place where it lives (main.rs `make_app`) before
+    /// [`App::begin`] runs on it there: a named local returned at the end was one more copy of the app on the stack.
+    pub fn new(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
         play(b, &BEEP_ON);
         let mut rx = nrf::Rx::new();
@@ -276,7 +285,7 @@ impl App {
         let misc = Settings::from_word(b.backup_read(WHEEL_BKP))
             .with_power_word(b.backup_read(POWER_BKP))
             .with_alerts_word(b.backup_read(ALERTS_BKP));
-        let mut app = App {
+        App {
             keys: Keys::default(),
             backlight: true,
             light_shown: 0,
@@ -378,14 +387,19 @@ impl App {
             recorder: recorder::Recorder::new(),
             resume_pending: false,
             courses: None,
-        };
+        }
+    }
+
+    /// The second half of [`App::start`], on the app in place: what is left on the card and in the backup
+    /// registers acted on, the first screen drawn, the backlight on.
+    pub fn begin(&mut self, b: &mut impl Board) {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
-        app.resume_pending = b.backup_read(RIDE_BKP) == RIDE_OPEN;
-        if app.chips.baro {
+        self.resume_pending = b.backup_read(RIDE_BKP) == RIDE_OPEN;
+        if self.chips.baro {
             ambient::baro_start(b); // read at the first step
         }
-        if let Some((lat, lon)) = app.aid.pos {
-            app.track.seed(lat, lon); // the map shows where the unit last was until the first fix
+        if let Some((lat, lon)) = self.aid.pos {
+            self.track.seed(lat, lon); // the map shows where the unit last was until the first fix
         }
         let fault = b.backup_read(FAULT_BKP);
         if fault >> 24 == 0xfa {
@@ -393,20 +407,19 @@ impl App {
             let mut l = Line::<20>::new();
             l.push_str("FAULT RESET ");
             l.push_u32(fault & 0xff);
-            app.notice(l.as_str());
+            self.notice(l.as_str());
         }
         if b.backup_read(STOCK_BKP19) >> 28 == 0xb {
             // pages kept from register 19 by builds of 2026-10-23: kept where stock does not look, 19 given back
-            for (n, page) in app.pages.iter().enumerate() {
+            for (n, page) in self.pages.iter().enumerate() {
                 save_page(b, n, page);
             }
             b.backup_write(STOCK_BKP19, 0);
         }
-        app.strip_shown = app.strip;
-        ui::draw_strip(&mut Panel(b, (0, ui::H)), &app.strip);
-        app.show(b);
-        app.update_light(b);
-        app
+        self.strip_shown = self.strip;
+        ui::draw_strip(&mut Panel(b, (0, ui::H)), &self.strip);
+        self.show(b);
+        self.update_light(b);
     }
 
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
