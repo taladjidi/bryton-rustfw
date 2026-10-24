@@ -442,6 +442,10 @@ fn scale_bar(c: &mut impl Canvas, k: Rect, area: Rect, view: &View) {
     let Some(&m) = NICE_M.iter().rev().find(|&&m| len(m) <= area.2 / 3) else { return };
     let len = len(m);
     let (x, y) = (area.0 + 8, area.1 + area.3 - 8);
+    // a black outline first: white alone vanishes on IGN's light map
+    run(c, k, x - 1, y - 3, len + 2, 4, ui::BLACK);
+    run(c, k, x - 1, y - 9, 4, 8, ui::BLACK);
+    run(c, k, x + len - 3, y - 9, 4, 8, ui::BLACK);
     run(c, k, x, y - 2, len, 2, ui::WHITE);
     run(c, k, x, y - 8, 2, 6, ui::WHITE);
     run(c, k, x + len - 2, y - 8, 2, 6, ui::WHITE);
