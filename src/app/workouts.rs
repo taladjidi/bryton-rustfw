@@ -1,5 +1,6 @@
 //! Stock's planned workouts: the calendar read from the card, a workout opened and started, its player fed by the
-//! ride's seconds, the step fields and their target colours, and the tones at a step's start and count-down.
+//! ride's seconds, the step fields and their target colours, the workout gauge field ([`Field::WktPower`]), and the
+//! tones at a step's start and count-down.
 
 use crate::*;
 
@@ -9,6 +10,34 @@ pub(crate) const OPEN: storage::workout::Step = storage::workout::Step {
     target: storage::workout::Target::OPEN,
     intensity: 0,
 };
+
+/// What the workout gauge field shows ([`Field::WktPower`]): what it measures and over which window, the step's
+/// band (None: no gauge) and whether a step runs, which change it whole; then the number, its colour and the marker's
+/// column, which are redrawn alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GaugeShown {
+    kind: storage::workout::Kind,
+    avg: usize,
+    band: Option<(u16, u16)>,
+    step: bool,
+    pub(crate) value: Line<8>,
+    pub(crate) color: u16,
+    marker: Option<u32>,
+}
+
+impl GaugeShown {
+    /// The same field with only the number or the marker moved.
+    fn same_frame(&self, o: &GaugeShown) -> bool {
+        (self.kind, self.avg, self.band, self.step) == (o.kind, o.avg, o.band, o.step)
+    }
+
+    /// Its bar for a gauge `cols` wide: the band's columns, the marker in the number's colour.
+    fn bar(&self, cols: u32) -> Option<ui::GaugeBar> {
+        let band = self.band?;
+        let cols_of = (workout::gauge_x(band.0, band, cols), workout::gauge_x(band.1, band, cols));
+        Some((cols_of, self.marker.map(|m| (m, self.color))))
+    }
+}
 
 impl App {
     // -----------------------------------------------------------------------------------------------------------
@@ -172,5 +201,83 @@ impl App {
             (Some(_), Some(_)) => ui::GREEN,
             _ => ui::WHITE,
         }
+    }
+
+    /// What the workout gauge in a box with `cols` bar columns shows now: the step's reading (power over the window
+    /// set in the menu, heart rate, cadence), coloured by how far it is from the band ([`workout::gauge_color`]); with
+    /// no band (no workout, an open step) the power in its zone's colour.
+    pub(crate) fn gauge_now(&self, cols: u32) -> GaugeShown {
+        use storage::workout::Kind;
+        let steps = self.plan.steps();
+        let step = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i));
+        let (kind, band) = workout::gauge_target(step, self.settings.ftp, self.settings.max_hr);
+        let avg = self.settings.wkt_avg;
+        let reading = match kind {
+            Kind::Hr => self.live.get(Metric::Hr),
+            Kind::Cadence => self.live.get(Metric::Cadence),
+            _ if avg < 3 => self.power.rolling(avg),
+            _ => self.live.get(Metric::Power),
+        };
+        let mut value = Line::new();
+        match reading {
+            Some(v) => value.push_u32(u32::from(v)),
+            None => value.push_str("--"),
+        }
+        let color = match (reading, band) {
+            (Some(v), Some(b)) => workout::gauge_color(v, b),
+            (Some(w), None) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
+            (None, _) => ui::WHITE,
+        };
+        let marker = reading.zip(band).map(|(v, b)| workout::gauge_x(v, b, cols));
+        GaugeShown { kind, avg, band, step: step.is_some(), value, color, marker }
+    }
+
+    /// The workout gauge in box `bx` whole, showing `g`: the title says what and over which window ("POWER 3S",
+    /// "HR"), the target under the bar ("200-220"; OPEN for a step without one).
+    pub(crate) fn draw_gauge(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), g: GaugeShown) {
+        use storage::workout::Kind;
+        let mut title = Line::<12>::new();
+        match g.kind {
+            Kind::Hr => title.push_str("HR"),
+            Kind::Cadence => title.push_str("RPM"),
+            _ => {
+                title.push_str("POWER ");
+                title.push_str(WKT_AVGS.get(g.avg).copied().unwrap_or(""));
+            }
+        }
+        let mut target = Line::<12>::new();
+        match g.band {
+            Some((lo, hi)) => {
+                target.push_u32(u32::from(lo));
+                if hi != lo {
+                    target.push_str("-");
+                    target.push_u32(u32::from(hi));
+                }
+            }
+            None if g.step => target.push_str("OPEN"),
+            None => {}
+        }
+        let bar = g.bar(ui::gauge_cols(bx));
+        ui::draw_gauge(c, bx, (title.as_str(), target.as_str()), g.value.as_str(), g.color, bar);
+    }
+
+    /// The workout gauge drawn as `old`: whole for another step, window or reading kind; else only the number's
+    /// characters that changed (all of it in a new colour) and the marker's old and new columns.
+    pub(crate) fn update_gauge(&mut self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
+        let cols = ui::gauge_cols(bx);
+        let now = self.gauge_now(cols);
+        let mut p = Panel(b, (0, self.bottom()));
+        if !now.same_frame(&old) {
+            self.draw_gauge(&mut p, bx, now);
+            return Drawn::Gauge(now);
+        }
+        if (now.value, now.color) != (old.value, old.color) {
+            let was = if now.color == old.color { old.value.as_str() } else { "" };
+            ui::draw_gauge_value(&mut p, bx, was, now.value.as_str(), now.color);
+        }
+        if let Some(bar) = now.bar(cols).filter(|_| (now.marker, now.color) != (old.marker, old.color)) {
+            ui::draw_gauge_marker(&mut p, bx, old.bar(cols).and_then(|b| b.1), bar);
+        }
+        Drawn::Gauge(now)
     }
 }

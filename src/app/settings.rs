@@ -144,7 +144,13 @@ pub struct Settings {
     pub drink_min: u16,
     /// See `eat_min`.
     pub hr_alert: u16,
+    /// The power the workout gauge shows ([`Field::WktPower`]): an index in [`WKT_AVGS`]; kept in register 16.
+    pub wkt_avg: usize,
 }
+
+/// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
+/// (power.rs [`power::Power::rolling`] 0, 1, 2), then the power each second. 3 s first: the default.
+pub const WKT_AVGS: [&str; 4] = ["3S", "10S", "30S", "NOW"];
 
 impl Settings {
     /// The settings in `w` (defaults for an empty or foreign word).
@@ -176,6 +182,7 @@ impl Settings {
                 eat_min: 0,
                 drink_min: 0,
                 hr_alert: 0,
+                wkt_avg: 0,
             },
             0xa6 => Settings {
                 wheel_mm: index(w & 7),
@@ -188,6 +195,7 @@ impl Settings {
                 eat_min: 0,
                 drink_min: 0,
                 hr_alert: 0,
+                wkt_avg: 0,
             },
             0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
@@ -200,6 +208,7 @@ impl Settings {
                 eat_min: 0,
                 drink_min: 0,
                 hr_alert: 0,
+                wkt_avg: 0,
             },
             _ => Settings {
                 wheel_mm: WHEELS[1],
@@ -212,6 +221,7 @@ impl Settings {
                 eat_min: 0,
                 drink_min: 0,
                 hr_alert: 0,
+                wkt_avg: 0,
             },
         }
     }
@@ -241,31 +251,35 @@ impl Settings {
         Settings { eat_min: min(w), drink_min: min(w >> 8), hr_alert: (w >> 16 & 0xff) as u16, ..self }
     }
 
-    /// These settings with the weight and W' kept in `w` (RTC backup register 16): tag 0xc1 in bits 24..31, the
-    /// weight in kg in 0..7, W' in 0.5 kJ in 8..15. Without the tag, the defaults ([`power::WEIGHT_KG`],
-    /// [`power::WPRIME_J`]).
+    /// These settings with the weight, W' and the workout gauge's window kept in `w` (RTC backup register 16): tag
+    /// 0xc1 in bits 24..31, the weight in kg in 0..7, W' in 0.5 kJ in 8..15, the gauge's window in 16..17 (0 in words
+    /// written before it: 3 s). Without the tag, the defaults ([`power::WEIGHT_KG`], [`power::WPRIME_J`], 3 s).
     ///
     /// ```
     /// use bryton_rustfw::Settings;
-    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, ..Settings::from_word(0) };
+    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
     /// ```
     pub fn with_power_word(self, w: u32) -> Settings {
         if w >> 24 != 0xc1 {
-            return Settings { weight_kg: power::WEIGHT_KG, wprime_j: power::WPRIME_J, ..self };
+            return Settings { weight_kg: power::WEIGHT_KG, wprime_j: power::WPRIME_J, wkt_avg: 0, ..self };
         }
         let (kg, wp) = (menu::WEIGHT_RANGE, menu::WPRIME_RANGE);
         Settings {
             weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
             wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
+            wkt_avg: (w >> 16 & 3) as usize,
             ..self
         }
     }
 
-    /// The weight and W' as kept in register 16 ([`Settings::with_power_word`]).
+    /// The weight, W' and the gauge's window as kept in register 16 ([`Settings::with_power_word`]).
     pub fn power_word(self) -> u32 {
-        (0xc1 << 24) | (u32::from(self.wprime_j / 500) & 0xff) << 8 | u32::from(self.weight_kg) & 0xff
+        (0xc1 << 24)
+            | (self.wkt_avg as u32 & 3) << 16
+            | (u32::from(self.wprime_j / 500) & 0xff) << 8
+            | u32::from(self.weight_kg) & 0xff
     }
 
     /// As kept (tag 0xa7).
@@ -312,6 +326,7 @@ impl Settings {
                 };
                 if v == 0 { l.push_str("OFF") } else { l.push_u32(u32::from(v)) }
             }
+            Setting::WktAvg => l.push_str(WKT_AVGS.get(self.wkt_avg).copied().unwrap_or("")),
         }
     }
 
@@ -333,6 +348,7 @@ impl Settings {
             }
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
+            Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             _ => {} // numbers: Setting::number
         }
     }

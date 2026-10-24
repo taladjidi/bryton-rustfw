@@ -523,12 +523,16 @@ pub enum Field {
     /// The workout's steps over its whole length, each as high as its target and in its zone colour; the rider's
     /// place, the part done dark.
     WorkoutGraph,
+    /// During a workout, the reading the step targets (power over the window chosen in the menu, or heart rate or
+    /// cadence) big, a gauge around the target band with a marker for the reading, and the band in numbers;
+    /// otherwise the power alone.
+    WktPower,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 54] = {
+    pub const ALL: [Field; 55] = {
         use Field::*;
         [
             Time,
@@ -585,6 +589,7 @@ impl Field {
             UpToGo,
             Profile, // the workout player again:
             WorkoutGraph,
+            WktPower,
         ]
     };
 
@@ -648,6 +653,7 @@ impl Field {
             "UP LEFT M",
             "PROFILE",
             "WKT GRAPH",
+            "WKT POWER",
         ];
         LABELS[self as usize]
     }
@@ -660,7 +666,7 @@ impl Field {
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
             "88/88", "888-888", "8:88:88", "888-888", // the course followed:
-            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "",
+            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",
         ];
         WIDEST[self as usize]
     }
@@ -677,6 +683,7 @@ impl Field {
                 | Field::AltGraph
                 | Field::Profile
                 | Field::WorkoutGraph
+                | Field::WktPower
         )
     }
 
@@ -890,6 +897,111 @@ pub fn draw_graph(c: &mut impl Canvas, area: (u32, u32, u32, u32), bar: &dyn Fn(
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The workout gauge field: the reading big, a bar around the step's target band with a marker at the reading, the
+// band in numbers under it
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The marker's width, columns, centred on the reading's column.
+const MARK_W: u32 = 3;
+/// The inside of the target band: a dark green, so a green marker in it still shows.
+const BAND: u16 = 0x0320;
+
+/// A gauge's bar: the band's first and last columns, and the marker's column and colour (None: no reading).
+pub type GaugeBar = ((u32, u32), Option<(u32, u16)>);
+
+/// A gauge bar's place: left, top, columns, height.
+type GaugeArea = (u32, u32, u32, u32);
+
+/// The gauge field's parts in box `bx`: the bar (left, top, columns, height), the number's top and style, the
+/// target line's top and style (the axis text in a box under 100 high, so the number keeps room). Fixed for a box,
+/// so the number and the marker are redrawn in place.
+fn gauge_parts(bx: (u32, u32, u32, u32)) -> (GaugeArea, u32, Style, (u32, Style)) {
+    let (x, y, w, h) = bx;
+    let small = if h < 100 { AXIS } else { Style { fg: GREY, ..LABEL } };
+    let target_y = (y + h).saturating_sub(2 + small.height()).max(y);
+    let gh = (h / 8).clamp(12, 24); // the bar's height: a quarter of it above and below the track is the marker's
+    let bar = (x + 8, target_y.saturating_sub(2 + gh).max(y), w.saturating_sub(16), gh);
+    let top = y + FIELD_LABEL_H;
+    let room = bar.1.saturating_sub(top + 2);
+    let mut style = Style { scale: 1, ..LABEL };
+    for scale in (1..=8).rev() {
+        style.scale = scale;
+        if style.width("8888") + 8 <= w && style.height() <= room {
+            break;
+        }
+    }
+    (bar, top + room.saturating_sub(style.height()) / 2, style, (target_y, small))
+}
+
+/// The columns a gauge in box `bx` has.
+pub fn gauge_cols(bx: (u32, u32, u32, u32)) -> u32 {
+    gauge_parts(bx).0.2
+}
+
+/// Pixel (`i`, `dy`) of a gauge bar `h` high: the marker over all of it; else black in the quarters above and below
+/// the track (so the marker stands out of it), the band's edges in the zone palette's green, its inside dark green, the
+/// rest of the track dark grey.
+fn gauge_px((band, marker): GaugeBar, h: u32, i: u32, dy: u32) -> u16 {
+    match marker {
+        Some((m, color)) if i + MARK_W / 2 >= m && i <= m + MARK_W / 2 => color,
+        _ if dy < h / 4 || dy + h / 4 >= h => BLACK,
+        _ if i == band.0 || i == band.1 => crate::ride::ZONE_COLORS[2],
+        _ if band.0 < i && i < band.1 => BAND,
+        _ => DARK,
+    }
+}
+
+/// Columns `from` to `to` (included) of the gauge bar `bar` showing `g`.
+fn draw_gauge_columns(c: &mut impl Canvas, bar: (u32, u32, u32, u32), g: GaugeBar, from: u32, to: u32) {
+    let to = to.min(bar.2.saturating_sub(1));
+    if from <= to {
+        c.blit(bar.0 + from, bar.1, to - from + 1, bar.3, &mut |i, dy| gauge_px(g, bar.3, from + i, dy));
+    }
+}
+
+/// The gauge field whole in box `bx`: `title` in its label line, `value` big in `fg`, the bar `g` (none: the bar's
+/// place black) and `target` under it.
+pub fn draw_gauge(
+    c: &mut impl Canvas,
+    bx: (u32, u32, u32, u32),
+    (title, target): (&str, &str),
+    value: &str,
+    fg: u16,
+    g: Option<GaugeBar>,
+) {
+    let (x, _, w, _) = bx;
+    let (bar, _, _, (target_y, small)) = gauge_parts(bx);
+    draw_plot_title(c, bx, title);
+    draw_gauge_value(c, bx, "", value, fg);
+    match g {
+        Some(g) => draw_gauge_columns(c, bar, g, 0, bar.2),
+        None => c.fill(bar.0, bar.1, bar.2, bar.3, BLACK),
+    }
+    text::draw_in(c, &small, x + 1, target_y, w.saturating_sub(2), Align::Centre, target);
+}
+
+/// The gauge's number that was `old` ("": not drawn) now `new` in `fg`: only the characters that changed when the
+/// length is the same, else its whole box.
+pub fn draw_gauge_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: &str, new: &str, fg: u16) {
+    let (x, _, w, _) = bx;
+    let (_, top, style, _) = gauge_parts(bx);
+    let style = Style { fg, ..style };
+    if old.len() == new.len() && style.width(new) + 2 <= w {
+        draw_changed_chars(c, &style, x + 1 + (w - 2 - style.width(new)) / 2, top, old, new);
+    } else {
+        text::draw_in(c, &style, x + 1, top, w.saturating_sub(2), Align::Centre, new);
+    }
+}
+
+/// The gauge's marker moved from `old` to where `g` has it: only the old marker's columns and the new one's.
+pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Option<(u32, u16)>, g: GaugeBar) {
+    let bar = gauge_parts(bx).0;
+    for (m, _) in [old, g.1].into_iter().flatten() {
+        draw_gauge_columns(c, bar, g, m.saturating_sub(MARK_W / 2), m + MARK_W / 2);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The overview (the main screen): the time, the date, four fields of the user's choice, the notices (Ferris when
 // there are none)
 // ---------------------------------------------------------------------------------------------------------------
@@ -1085,6 +1197,24 @@ pub(crate) mod tests {
         assert!(
             NOTICES_Y + 4 + NOTICES as u32 * LIST_ROW <= H && overview_box(3).is_some_and(|b| b.1 + b.3 <= NOTICES_Y)
         );
+    }
+
+    /// The workout gauge fits every box of every layout and of the overview (Frame panics off screen), and moving
+    /// the marker draws the same pixels as drawing the gauge whole.
+    #[test]
+    fn gauge_fits_and_moves_in_place() {
+        let rides = (1..LAYOUTS.len() as u8).flat_map(|n| (0..6).filter_map(move |i| field_box(n, RIDE_H, i)));
+        for bx in rides.chain((0..4).filter_map(overview_box)) {
+            let cols = gauge_cols(bx);
+            let band = (cols / 3, cols * 2 / 3);
+            let titles = ("POWER 30S", "200-220");
+            let (mut a, mut b) = (Frame::new(), Frame::new());
+            draw_gauge(&mut a, bx, titles, "195", YELLOW, Some((band, Some((0, YELLOW)))));
+            draw_gauge_marker(&mut a, bx, Some((0, YELLOW)), (band, Some((cols - 1, YELLOW))));
+            draw_gauge(&mut b, bx, titles, "195", YELLOW, Some((band, Some((cols - 1, YELLOW)))));
+            assert!(a.px == b.px, "{bx:?}");
+            assert!(gauge_parts(bx).2.scale >= 2, "{bx:?}: the number readable");
+        }
     }
 
     /// Updating only the changed characters gives the same pixels as drawing the new value whole, and draws less.

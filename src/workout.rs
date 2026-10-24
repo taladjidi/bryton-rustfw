@@ -182,6 +182,59 @@ pub fn column(
     (height, if rider.is_some_and(|r| k < r) { ui::DARK } else { color })
 }
 
+/// What the workout gauge field measures and its target band, during step `s` (None: no workout running), for this
+/// FTP and max heart rate: the step's own kind and range; power without a band for an open step or no workout.
+pub fn gauge_target(s: Option<&Step>, ftp: u16, max_hr: u16) -> (Kind, Option<(u16, u16)>) {
+    match s.map(|s| (s.target.kind, s.target.range(ftp, max_hr))) {
+        Some((kind, Some((lo, hi)))) if kind != Kind::Open => (kind, Some((lo.min(hi), lo.max(hi)))),
+        _ => (Kind::Power, None),
+    }
+}
+
+/// The gauge's scale around a band (`lo`, `hi`): from 30 % under `lo` to 30 % over `hi`, so the band takes about
+/// the middle third (less for a wide one) and a reading far off still shows which way it is.
+pub fn gauge_scale((lo, hi): (u16, u16)) -> (u32, u32) {
+    let (lo, hi) = (u32::from(lo), u32::from(hi));
+    (lo * 7 / 10, (hi * 13 / 10).max(lo * 7 / 10 + 1))
+}
+
+/// The column of reading `v` on a gauge `cols` wide around `band` ([`gauge_scale`]), held at its ends.
+///
+/// ```
+/// use bryton_rustfw::workout::gauge_x;
+/// // 200-220 W: the scale is 140 to 286 W
+/// assert_eq!([0, 140, 200, 220, 286, 999].map(|w| gauge_x(w, (200, 220), 146)), [0, 0, 60, 80, 145, 145]);
+/// ```
+pub fn gauge_x(v: u16, band: (u16, u16), cols: u32) -> u32 {
+    let (a, b) = gauge_scale(band);
+    let x = u64::from(u32::from(v).saturating_sub(a)) * u64::from(cols) / u64::from(b - a);
+    (x.min(u64::from(cols.saturating_sub(1)))) as u32
+}
+
+/// How far a reading `v` is from `band`, as a colour: the zone palette's green in it, its yellow within 5 % of it
+/// (nearly there), its blue further under and its red further over. The same colours the zones give easy and hard
+/// efforts ([`ride::ZONE_COLORS`]), so the gauge reads as the power and heart-rate fields do.
+///
+/// ```
+/// use bryton_rustfw::{ride::ZONE_COLORS as Z, workout::gauge_color};
+/// let c = [180, 195, 200, 220, 230, 240].map(|w| gauge_color(w, (200, 220)));
+/// assert_eq!(c, [Z[1], Z[3], Z[2], Z[2], Z[3], Z[5]]);
+/// ```
+pub fn gauge_color(v: u16, (lo, hi): (u16, u16)) -> u16 {
+    let (v, lo, hi) = (u32::from(v), u32::from(lo), u32::from(hi));
+    if v < lo * 95 / 100 {
+        ride::ZONE_COLORS[1]
+    } else if v < lo {
+        ride::ZONE_COLORS[3]
+    } else if v <= hi {
+        ride::ZONE_COLORS[2]
+    } else if v <= hi * 105 / 100 {
+        ride::ZONE_COLORS[3]
+    } else {
+        ride::ZONE_COLORS[5]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -288,5 +341,28 @@ mod tests {
         assert_eq!(p.graph_at(&steps, 0), 899, "an open step held to its end");
         p.skip(&steps, 0);
         assert_eq!(p.graph_at(&steps, 0), 900, "done");
+    }
+
+    #[test]
+    fn gauge_follows_the_steps_target() {
+        use crate::storage::workout::Kind;
+        let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct };
+        let step = |target| Step { len: Length::Time(60), target, intensity: 0 };
+        let (power, hr) = (step(t(Kind::Power, 100, 110, true)), step(t(Kind::Hr, 150, 160, false)));
+        assert_eq!(gauge_target(Some(&power), 200, 190), (Kind::Power, Some((200, 220))), "% of FTP to W");
+        assert_eq!(gauge_target(Some(&hr), 200, 190), (Kind::Hr, Some((150, 160))), "a heart-rate step: bpm");
+        assert_eq!(gauge_target(Some(&step(Target::OPEN)), 200, 190), (Kind::Power, None), "open: power, no band");
+        assert_eq!(gauge_target(None, 200, 190), (Kind::Power, None), "no workout");
+        let swapped = step(t(Kind::Power, 220, 200, false));
+        assert_eq!(gauge_target(Some(&swapped), 200, 190).1, Some((200, 220)), "a band written high to low");
+
+        // heart rate 150-160: 105 to 208 bpm over 103 columns, a column a bpm
+        assert_eq!(gauge_scale((150, 160)), (105, 208));
+        assert_eq!([100, 150, 160, 250].map(|v| gauge_x(v, (150, 160), 103)), [0, 45, 55, 102], "held at the ends");
+        let c = [140, 145, 155, 167, 170].map(|v| gauge_color(v, (150, 160)));
+        let z = ride::ZONE_COLORS;
+        assert_eq!(c, [z[1], z[3], z[2], z[3], z[5]], "5 % off: 142 and 168 bpm");
+        assert_eq!(gauge_x(5, (0, 0), 50), 49, "a band of 0: no division by zero");
+        assert_eq!(gauge_x(0, (200, 220), 0), 0, "no columns");
     }
 }

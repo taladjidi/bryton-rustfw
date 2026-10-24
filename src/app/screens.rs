@@ -41,6 +41,8 @@ pub(crate) enum Drawn {
     Profile(ProfileShown),
     /// The workout graph.
     Workout(WorkoutShown),
+    /// The workout gauge.
+    Gauge(GaugeShown),
 }
 
 /// Box `i` of a page with this many fields (the ride pages' and the overview's grids).
@@ -186,6 +188,7 @@ impl App {
             Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(&self.track, map::area(bx), self.route().as_ref())),
             Widget::Field(Field::Profile) => Drawn::Profile(self.profile_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WorkoutGraph) => Drawn::Workout(self.workout_now(ui::plot_area(bx).2)),
+            Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
             Widget::Field(f) => match graph_plot(f) {
                 Some(plot) => Drawn::Graph(self.graph_now(plot, ui::graph_area(bx).2)),
                 None => Drawn::Value(self.field_text(f), self.field_color(f)),
@@ -215,6 +218,7 @@ impl App {
                     }
                     Drawn::Profile(p) => self.draw_profile(c, bx, p),
                     Drawn::Workout(w) => self.draw_workout_graph(c, bx, w),
+                    Drawn::Gauge(g) => self.draw_gauge(c, bx, g),
                     Drawn::Graph(g) => {
                         self.draw_graph_axes(c, bx, g);
                         let a = ui::graph_area(bx);
@@ -330,6 +334,7 @@ impl App {
                 (_, Drawn::Graph(g)) => self.update_graph(b, g, bx),
                 (_, Drawn::Profile(p)) => self.update_profile(b, p, bx),
                 (_, Drawn::Workout(w)) => self.update_workout_graph(b, w, bx),
+                (_, Drawn::Gauge(g)) => self.update_gauge(b, g, bx),
                 (Widget::Clock, Drawn::Digits(was)) => {
                     let now = self.main_digits();
                     for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
