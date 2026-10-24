@@ -53,7 +53,8 @@ impl App {
         let words = self.ride.to_words();
         match ev {
             ride::Event::Start => {
-                self.recorder.start(t, recorder::ride_name(local));
+                // a ride the boot has not reopened yet (the card failed then) is resumed in this one's place
+                self.recorder.start(t, recorder::ride_name(local), self.resume_pending);
                 if self.recorder.phase() != recorder::Phase::Starting {
                     self.notice("NOT RECORDING"); // the last ride's save is still failing
                 }
@@ -70,11 +71,11 @@ impl App {
     }
 
     /// Local time now (the RTC as last read) and its FIT time (UTC from the offset learnt at a fix; the RTC as is
-    /// before one).
+    /// before one), less the seconds being caught up ([`App::step`]).
     pub(crate) fn rec_time(&self) -> (recorder::Local, u32) {
         let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
         let local = (y, mo, d, h, mi, self.seconds);
-        let offset = i64::from(self.aid.offset_15min.unwrap_or(0)) * 900;
+        let offset = i64::from(self.aid.offset_15min.unwrap_or(0)) * 900 + i64::from(self.lag_s);
         (local, fit::fit_time(from_epoch_s(epoch_s(local) - offset)))
     }
 
@@ -101,6 +102,9 @@ impl App {
             return;
         }
         let (local, _) = self.rec_time();
+        if self.recorder.phase() != recorder::Phase::Done {
+            self.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
+        }
         let o = if self.resume_pending {
             let o = self.recorder.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             // a card that failed at boot is tried again (the marker stays until the ride is found)
@@ -128,9 +132,14 @@ impl App {
                     self.stock.start(self.date); // the history again, with this ride
                 }
             }
+            recorder::Outcome::Kept(_) => {
+                // not in \Activities: left in \Rustfw\Rides as it was (damaged, or the card kept failing)
+                self.notice("SAVE FAILED");
+            }
             recorder::Outcome::Failed(_) => {
-                if self.recorder.errors > 1 && self.recorder.errors.is_power_of_two() {
-                    self.notice("RECORDING ERROR"); // the retry failed too; then the 4th, 8th...: not every retry
+                // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
+                if self.recorder.fails() % 60 == 1 {
+                    self.notice("NOT SAVING");
                 }
             }
         }

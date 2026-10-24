@@ -73,12 +73,15 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
   recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (GPS altitude).
 - **Saved as a FIT file** (`src/storage/recorder.rs`; simulator only so far, docs/status.md): the ride goes to
-  `\Rustfw\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
+  `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
   rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
-  at a checkpoint at least every minute and at each pause. A reset or a power cut loses at most the last minute:
-  at the next start the ride comes back paused ("RIDE RESUMED"). At the end it is read back whole, then moved to
+  at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
+  the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). At the end it is read back whole,
+  then moved to
   `\Activities\YYMMDDhhmmss.fit` (stock's name and place: stock, its app, a computer and the history see it;
-  "RIDE SAVED"). A card that fails shows "RECORDING ERROR" and is tried again; the ride goes on in RAM.
+  "RIDE SAVED"). A card that fails shows "NOT SAVING" and the strip's dot grey, and is tried again; the ride goes
+  on in RAM. A file that does not read back whole is left in `\Rustfw\Rides` ("SAVE FAILED"), never in the way of
+  the next ride.
 
 ## Menu
 

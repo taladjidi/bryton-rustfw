@@ -790,6 +790,7 @@ fn hrv_fields_from_the_strap() {
 #[test]
 fn start_from_the_overview() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Ride(0));
@@ -1395,6 +1396,7 @@ fn climb(ms: u64) -> i32 {
 #[test]
 fn a_ride_with_laps_and_pauses() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image(); // a volume to record on (else the strip says not saving)
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(climb);
     sim.gnss.fix = Some(8000);
