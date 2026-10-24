@@ -206,7 +206,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   restores from under the arrow and the track.
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
-- `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests.
+- `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
+  `tests.rs` (the app on the Sim), `dev_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
   RTC read, standby, SysTick sleep. No app logic.
 - `src/board/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and the CDC serial port. It implements `Host`.
