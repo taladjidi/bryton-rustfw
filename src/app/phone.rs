@@ -146,9 +146,6 @@ pub struct Phone {
     pub(crate) call: Option<(u32, Line<24>)>,
     /// The call's overlay is up (its caller known): buttons and banner over the bottom of the screen.
     pub(crate) ringing: bool,
-    /// The call was answered from the unit and its notification is still on the phone: ms since (the overlay
-    /// shows an end button and the call's time; it goes when the phone removes the notification).
-    pub(crate) talking: Option<u32>,
     /// What plays.
     pub(crate) now: ph::NowPlaying,
     /// A media key's report was sent: the release goes at the next pass.
@@ -192,7 +189,6 @@ impl Default for Phone {
             ds: ph::DataSource::default(),
             call: None,
             ringing: false,
-            talking: None,
             now: ph::NowPlaying::default(),
             release: false,
             release_tries: 0,
@@ -451,14 +447,6 @@ impl App {
         }
         self.phone_storage(b);
         self.phone.now.tick(POLL_MS);
-        if let Some(ms) = self.phone.talking {
-            let next = ms.saturating_add(POLL_MS);
-            self.phone.talking = Some(next);
-            if next / 1000 != ms / 1000 && self.phone.ringing {
-                let who = self.phone.call.map(|c| c.1).unwrap_or_default();
-                ui::draw_call_banner(&mut Panel(b, (ui::BANNER_Y, ui::H)), who.as_str(), Some(next / 1000));
-            }
-        }
         let Some(conn) = self.phone.conn else { return };
         self.phone.busy_ms = self.phone.busy_ms.saturating_add(POLL_MS);
         self.phone.link_ms = self.phone.link_ms.saturating_add(POLL_MS);
@@ -515,7 +503,6 @@ impl App {
 
     /// The call's overlay goes (answered, declined, missed, the link lost): what was under it drawn again.
     pub(crate) fn end_ring(&mut self, b: &mut impl Board) {
-        self.phone.talking = None;
         if core::mem::take(&mut self.phone.ringing) {
             let mut p = Panel(b, (ui::CALL_Y, ui::H));
             p.fill(0, ui::CALL_Y, ui::W, ui::H - ui::CALL_Y, ui::BLACK);
@@ -524,20 +511,10 @@ impl App {
     }
 
     /// Answers the incoming call (true) or declines it.
-    /// Answering keeps the call and its overlay (an end button, the call's time) for as long as the phone keeps
-    /// its notification; declining, or ending an answered call (ANCS's negative action: whether iOS ends an active
-    /// call with it is to be seen on the unit), takes them away.
     pub(crate) fn answer(&mut self, b: &mut impl Board, accept: bool) {
-        let Some(conn) = self.phone.conn else { return };
-        let Some((uid, who)) = self.phone.call else { return };
-        self.phone.queue(Op::Act(uid, accept));
-        self.next_op(b, conn);
-        if accept && self.phone.talking.is_none() {
-            self.phone.talking = Some(0);
-            ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str(), Some(0));
-        } else {
-            self.phone.call = None;
-            self.end_ring(b);
+        if let (Some((uid, _)), Some(conn)) = (self.phone.call.take(), self.phone.conn) {
+            self.phone.queue(Op::Act(uid, accept));
+            self.next_op(b, conn);
         }
     }
 
@@ -828,8 +805,7 @@ impl App {
                     self.phone.queue(Op::Fetch(n.uid));
                 }
                 2 if self.phone.call.is_some_and(|(uid, _)| uid == n.uid) => {
-                    // answered or declined on the phone, missed, or (answered from the unit) the call over
-                    self.phone.call = None;
+                    self.phone.call = None; // answered or declined on the phone, or missed
                     self.end_ring(b);
                 }
                 _ => {}
@@ -847,12 +823,10 @@ impl App {
                 Some((uid, who)) if *uid == a.uid => {
                     *who = a.title;
                     let who = *who;
-                    // over the bottom of whatever screen is up: the page above keeps updating (bottom()); a new
-                    // call ends the answered one's overlay
+                    // over the bottom of whatever screen is up: the page above keeps updating (bottom())
                     self.banner_ms = None;
                     self.phone.ringing = true;
-                    self.phone.talking = None;
-                    ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str(), None);
+                    ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str());
                     self.tones.play(&BEEP_ALERT);
                 }
                 _ => {
