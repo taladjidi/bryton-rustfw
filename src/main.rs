@@ -1418,15 +1418,17 @@ fn main() -> ! {
             let ms = if done { slice } else { timer_elapsed_ms(slice) };
             timer_stop();
             (slept, since_touch) = (slept + ms, since_touch.saturating_add(ms));
-            if press.is_some() || woke {
-                break;
-            }
+            // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
+            // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
             if edge || app.touching() {
                 // a gesture acts after the sleep: acting may sleep too (delay_ms), which takes over SysTick
                 touched = app.touch(&mut board, core::mem::take(&mut since_touch));
                 if touched.is_some() {
                     break 'sleep;
                 }
+            }
+            if press.is_some() || woke {
+                break;
             }
         }
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
