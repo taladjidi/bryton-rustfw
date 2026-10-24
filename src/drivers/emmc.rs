@@ -14,7 +14,17 @@
 //! the controller side (data path to the card, CMDTRANS, the FIFO fed on TXFIFOHE until DATAEND, CMD12 after a
 //! multi-block write) as ST's HAL_MMC_WriteBlocks (github.com/STMicroelectronics/stm32h7xx-hal-driver,
 //! stm32h7xx_hal_mmc.c, checked 2026-10-24) and RM0399 (SDMMC data transfer). No erase (CMD35 / 36 / 38), no lock,
-//! no CSD or CID programming, no reliable write (CMD23 bit 31: open question, docs/status.md). The one CMD6 SWITCH
+//! no CSD or CID programming.
+//!
+//! **Reliable write** (the recorder rewrites committed sectors in place every minute: a cut during a plain write
+//! may leave the sector being written as garbage, JEDEC): when the card offers it, every write is one, CMD23
+//! SET_BLOCK_COUNT with bit 31 (reliable) and the count, then CMD25, which ends by itself after that count (CMD12
+//! only after an error); a cut then leaves each sector old or new. As Linux's MMC core (block.c, checked
+//! 2026-10-24: `mmc_blk_alloc_req` takes it when EXT_CSD WR_REL_PARAM (byte 166) has EN_REL_WR (bit 2) or
+//! REL_WR_SEC_C (byte 222) is not 0; `mmc_blk_data_prep` uses CMD25 for it even for one block, bit 31 in CMD23's
+//! argument; `mmc_apply_rel_rw`: without EN_REL_WR, the legacy mode, a reliable write is REL_WR_SEC_C sectors
+//! aligned or one sector). Here: EN_REL_WR, the whole write at once; legacy, one sector at a time; neither, plain
+//! writes (what the unit's card offers: not yet read, `dev.py emmc` prints both bytes; docs/status.md). The one CMD6 SWITCH
 //! is the bus width, EXT_CSD byte 183 BUS_WIDTH, a volatile byte the card clears at every CMD0 and power cycle, the
 //! same switch stock and the bootloader make at each start. The simulated card fails any test that sends anything
 //! else.
@@ -154,12 +164,16 @@ fn wait_ready(b: &mut impl Board) -> Result<u32, Error> {
     Err(Error::Busy)
 }
 
-/// Reads the EXT_CSD (CMD8, one 512-byte block) and returns its SEC_COUNT (bytes 212..215, little endian).
-fn sec_count(b: &mut impl Board) -> Result<u32, Error> {
+/// Reads the EXT_CSD (CMD8, one 512-byte block): SEC_COUNT (bytes 212..215, little endian), WR_REL_PARAM (166)
+/// and REL_WR_SEC_C (222).
+fn ext_csd(b: &mut impl Board) -> Result<(u32, u8, u8), Error> {
     let mut ext = [0u8; SECTOR];
     status(8, b.emmc_read(8, 0, &mut ext).map_err(|e| Error::Bus(8, e))?)?;
-    Ok(u32::from_le_bytes([ext[212], ext[213], ext[214], ext[215]]))
+    Ok((u32::from_le_bytes([ext[212], ext[213], ext[214], ext[215]]), ext[166], ext[222]))
 }
+
+/// EXT_CSD WR_REL_PARAM: EN_REL_WR, the enhanced reliable write (any count, each sector old or new after a cut).
+pub const EN_REL_WR: u8 = 1 << 2;
 
 /// An identified card, selected, in the transfer state, on a 4-bit bus at 25 MHz.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -168,6 +182,10 @@ pub struct Card {
     pub layout: Layout,
     /// Sector addressing (OCR bit 30, every card over 2 GB); else byte addresses.
     sector_mode: bool,
+    /// EXT_CSD WR_REL_PARAM and REL_WR_SEC_C: whether writes are reliable writes, and how (module doc).
+    pub rel_param: u8,
+    /// See `rel_param`.
+    pub rel_sectors: u8,
 }
 
 impl Card {
@@ -193,15 +211,16 @@ impl Card {
         r1(b, 7, RCA)?; // SELECT: stby -> tran
         wait_ready(b)?;
         r1(b, 16, SECTOR as u32)?; // SET_BLOCKLEN 512, as stock
-        let sectors = sec_count(b)?;
+        let ext = ext_csd(b)?;
         r1(b, 6, SWITCH_BUS_4BIT)?;
         status(6, wait_ready(b)?)?; // SWITCH_ERROR shows here
         b.emmc_bus(true, true);
-        if sec_count(b)? != sectors {
+        if ext_csd(b)? != ext {
             return Err(Error::ExtCsd);
         }
+        let (sectors, rel_param, rel_sectors) = ext;
         let layout = Layout::new(sectors).ok_or(Error::ExtCsd)?;
-        Ok(Card { layout, sector_mode: ocr & (1 << 30) != 0 })
+        Ok(Card { layout, sector_mode: ocr & (1 << 30) != 0, rel_param, rel_sectors })
     }
 
     /// Reads `buf.len() / 512` sectors from `lba` on: CMD17 for one, CMD18 then CMD12 for more.
@@ -223,20 +242,39 @@ impl Card {
         status(index, got?).map(drop)
     }
 
-    /// Writes `buf.len() / 512` sectors from `lba` on: CMD24 for one, CMD25 then CMD12 for more, then waits for the
-    /// card to program them (CMD13) and checks its status. Refused ([`Error::Range`]) unless every sector is below
-    /// [`Layout::fat_end`]: nothing past stock's FAT volume is ever written.
+    /// Writes `buf.len() / 512` sectors from `lba` on, as reliable writes when the card offers them (module doc);
+    /// else CMD24 for one, CMD25 then CMD12 for more. Then waits for the card to program them (CMD13) and checks its
+    /// status. Refused ([`Error::Range`]) unless every sector is below [`Layout::fat_end`]: nothing past stock's
+    /// FAT volume is ever written.
     pub fn write(&self, b: &mut impl Board, lba: u32, buf: &[u8]) -> Result<(), Error> {
         let n = (buf.len() / SECTOR) as u32;
         let end = lba.checked_add(n).ok_or(Error::Range)?;
         if n == 0 || !buf.len().is_multiple_of(SECTOR) || end > self.layout.fat_end {
             return Err(Error::Range);
         }
+        if self.rel_param & EN_REL_WR != 0 {
+            return self.write_blocks(b, lba, buf, true);
+        }
+        if self.rel_sectors != 0 {
+            // legacy reliable write: one sector at a time is always allowed (Linux's mmc_apply_rel_rw)
+            for (k, s) in buf.chunks_exact(SECTOR).enumerate() {
+                self.write_blocks(b, lba + k as u32, s, true)?;
+            }
+            return Ok(());
+        }
+        self.write_blocks(b, lba, buf, false)
+    }
+
+    fn write_blocks(&self, b: &mut impl Board, lba: u32, buf: &[u8], reliable: bool) -> Result<(), Error> {
+        let n = (buf.len() / SECTOR) as u32;
         let arg = if self.sector_mode { lba } else { lba.checked_mul(SECTOR as u32).ok_or(Error::Range)? };
         wait_ready(b)?;
-        let index = if n == 1 { 24 } else { 25 };
+        if reliable {
+            r1(b, 23, 1 << 31 | n)?; // SET_BLOCK_COUNT, reliable: the CMD25 that follows ends by itself
+        }
+        let index = if n == 1 && !reliable { 24 } else { 25 };
         let got = b.emmc_write(index, arg, buf).map_err(|e| Error::Bus(index, e));
-        if n > 1 {
+        if index == 25 && (!reliable || got.is_err()) {
             let _ = cmd(b, 12, 0, Resp::R1); // stop even after an error
         }
         status(index, got?)?;
@@ -258,18 +296,14 @@ impl Emmc {
         Emmc { card: None }
     }
 
-    fn card(&mut self, b: &mut impl Board) -> Result<Card, Error> {
+    /// The card (identified if needed): its layout and its reliable write parameters.
+    pub fn card(&mut self, b: &mut impl Board) -> Result<Card, Error> {
         let card = match self.card {
             Some(c) => c,
             None => Card::init(b)?,
         };
         self.card = Some(card);
         Ok(card)
-    }
-
-    /// The card's layout (identifies the card if needed).
-    pub fn layout(&mut self, b: &mut impl Board) -> Result<Layout, Error> {
-        self.card(b).map(|c| c.layout)
     }
 
     /// Reads sectors as [`Card::read`] (identifies the card if needed).

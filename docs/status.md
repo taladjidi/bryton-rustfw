@@ -42,6 +42,10 @@ The dated findings are in [journal.md](journal.md).
   `emmc_write`, never run), the folders `\Rustfw` and the ride in `\Activities` as stock and a computer see them, a
   reset mid-ride then the resume, a power cut mid-ride, the save. The plan with the owner is in docs/journal.md
   (2026-10-24, "The recorder: what to check on the unit").
+- **The eMMC's reliable write** (BOARD.md 15): EXT_CSD WR_REL_PARAM and REL_WR_SEC_C, read only, by `dev.py emmc`
+  (its last two numbers), before any write on the unit; then CMD23 with bit 31 before CMD25 on the real card. Without
+  either, a cut can tear a directory sector of `\Activities` or the root (stock's entries in it), which nothing in
+  the recorder can mend.
 - **"Rebooting with just the power button does not work"** (the owner, after the GPS test): to clarify and fix.
 
 - **New since the installed build, seen only from RAM or in the simulator (2026-10-24):** touch gestures by feel and

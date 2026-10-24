@@ -164,7 +164,8 @@ impl App {
             _ => None,
         };
         match (self.screen, i) {
-            // during a ride (or on its card), a first hold only warns: switching off loses it (nothing is saved yet)
+            // during a ride (or on its card), a first hold only warns: switching off ends the riding (the recorder
+            // checkpoints first, and the next start resumes the ride paused)
             (_, Input::Off) if self.busy() && self.off_armed_ms == 0 => {
                 self.off_armed_ms = OFF_CONFIRM_MS;
                 return self.say("HOLD AGAIN: OFF");

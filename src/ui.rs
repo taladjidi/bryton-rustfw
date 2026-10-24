@@ -162,6 +162,9 @@ pub enum Rec {
     Running,
     /// Paused, or auto-paused (stopped).
     Paused,
+    /// A ride, but the recorder is not saving it to the card (failing, refused, or a build that may not write):
+    /// the dot grey.
+    NotSaving,
 }
 
 /// The strip's boxes (x, width): BLE on the left, the time centred, then USB and the battery on the right.
@@ -229,6 +232,7 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             Rec::Idle => {}
             Rec::Running => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, RED),
             Rec::Paused => draw_bitmap(c, &PAUSE_BARS, STRIP_REC.0, top + 2, 1, ACCENT),
+            Rec::NotSaving => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, GREY),
         }
     }
     if changed(|s| u32::from(s.radio)) {

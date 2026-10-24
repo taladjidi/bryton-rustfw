@@ -123,6 +123,14 @@ pub struct EmmcCard {
     pub cut_after: Option<u64>,
     /// Bytes of sectors read so far (the cost of a pass: [`crate::App::SCAN_IDLE`]).
     pub bytes_read: u64,
+    /// A cut tears the sector being written (garbage in it, as JEDEC allows for a plain write); a reliable write's
+    /// sector keeps its old data.
+    pub tear: bool,
+    /// EXT_CSD WR_REL_PARAM and REL_WR_SEC_C (emmc.rs): the reliable write offered; none by default.
+    pub rel_param: u8,
+    pub rel_sectors: u8,
+    /// CMD23's block count and reliable bit, for the CMD25 that follows.
+    count: Option<(u32, bool)>,
     state: u32,
     busy_left: u32,
     card_wide: bool,
@@ -141,6 +149,10 @@ impl Default for EmmcCard {
             sectors_written: 0,
             cut_after: None,
             bytes_read: 0,
+            tear: false,
+            rel_param: 0,
+            rel_sectors: 0,
+            count: None,
             state: 4,
             busy_left: 0,
             card_wide: true,
@@ -220,6 +232,19 @@ impl EmmcCard {
                 self.card_wide = true;
                 r1(before)
             }
+            (23, 4) => {
+                let (n, rel) = (arg & 0xffff, arg & 1 << 31 != 0);
+                assert!(n > 0, "CMD23 of no block");
+                if rel {
+                    assert!(
+                        self.rel_param & 4 != 0 || self.rel_sectors != 0,
+                        "a reliable write the card does not offer"
+                    );
+                    assert!(self.rel_param & 4 != 0 || n == 1, "a legacy reliable write of {n} sectors");
+                }
+                self.count = Some((n, rel));
+                r1(before)
+            }
             (12, 5 | 6) => {
                 self.state = 4;
                 r1(before)
@@ -240,6 +265,7 @@ impl EmmcCard {
             buf[212..216].copy_from_slice(&EMMC_SECTORS.to_le_bytes());
             buf[183] = u8::from(self.card_wide);
             buf[192] = 8; // EXT_CSD_REV
+            (buf[166], buf[222]) = (self.rel_param, self.rel_sectors);
             return Ok(s);
         }
         if arg.saturating_add((buf.len() / 512) as u32) > EMMC_SECTORS {
@@ -270,7 +296,13 @@ impl EmmcCard {
         assert!(self.powered, "eMMC write before the controller was powered");
         assert!(buf.len() % 512 == 0 && !buf.is_empty(), "eMMC write of {} bytes", buf.len());
         assert!([24, 25].contains(&index), "eMMC write command {index}");
-        assert_eq!(index == 24, buf.len() == 512, "CMD24 is one block, CMD25 more");
+        let count = self.count.take();
+        let blocks = (buf.len() / 512) as u32;
+        match count {
+            Some((n, _)) => assert!(index == 25 && n == blocks, "CMD23 for {n} blocks, then CMD{index} of {blocks}"),
+            None => assert_eq!(index == 24, blocks == 1, "CMD24 is one block, CMD25 more"),
+        }
+        let reliable = count.is_some_and(|c| c.1);
         self.cmds.push((index, arg));
         if self.dead || self.state != 4 {
             return Err(Timeout);
@@ -280,19 +312,25 @@ impl EmmcCard {
         assert!(!self.image.is_empty(), "a write to the card without an image");
         let s = self.status();
         for (i, chunk) in buf.chunks_exact(512).enumerate() {
-            if self.cut_after.is_some_and(|c| self.sectors_written >= c) {
-                self.dead = true; // the power is gone: this sector and the rest never land
-                return Err(Timeout);
-            }
             let at = (arg as usize + i) * 512;
             if self.image.len() < at + 512 {
                 self.image.resize(at + 512, 0);
             }
+            if self.cut_after.is_some_and(|c| self.sectors_written >= c) {
+                self.dead = true; // the power is gone: this sector and the rest never land
+                if self.tear && !reliable {
+                    // the sector being programmed is left half old, half new, the rest garbage (inferred model)
+                    let s = &mut self.image[at..at + 512];
+                    s[..128].copy_from_slice(&chunk[..128]);
+                    s[256..].iter_mut().enumerate().for_each(|(k, b)| *b = (k as u8).wrapping_mul(97) ^ 0x5a);
+                }
+                return Err(Timeout);
+            }
             self.image[at..at + 512].copy_from_slice(chunk);
             self.sectors_written += 1;
         }
-        if index == 25 {
-            self.state = 6; // receiving until CMD12
+        if index == 25 && count.is_none() {
+            self.state = 6; // receiving until CMD12 (with CMD23 first, the count ends it)
         }
         Ok(s)
     }

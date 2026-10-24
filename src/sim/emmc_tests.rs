@@ -66,6 +66,39 @@ fn writes_below_b_only() {
     assert!(sim.emmc.image[22 * SECTOR..24 * SECTOR].iter().all(|&b| b == 0));
 }
 
+/// Reliable write when the card offers it (EXT_CSD 166 / 222, emmc.rs): CMD23 with bit 31 and the count, then
+/// CMD25 and no CMD12; legacy, one sector at a time. A cut in a plain write tears the sector being written; in a
+/// reliable one, the sector keeps its old data.
+#[test]
+fn reliable_writes_when_offered() {
+    let w = |rel_param, rel_sectors| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = vec![0; 64 * SECTOR];
+        (sim.emmc.rel_param, sim.emmc.rel_sectors) = (rel_param, rel_sectors);
+        let card = Card::init(&mut sim).unwrap();
+        sim.emmc.cmds.clear();
+        card.write(&mut sim, 3, &[7u8; SECTOR]).unwrap();
+        card.write(&mut sim, 8, &[9u8; 2 * SECTOR]).unwrap();
+        assert!(sim.emmc.image[8 * SECTOR..10 * SECTOR].iter().all(|&b| b == 9));
+        sim.emmc.cmds.into_iter().filter(|c| c.0 != 13).collect::<Vec<_>>()
+    };
+    let rel = 1 << 31;
+    assert_eq!(w(crate::emmc::EN_REL_WR, 1), [(23, rel | 1), (25, 3), (23, rel | 2), (25, 8)]);
+    assert_eq!(w(0, 1), [(23, rel | 1), (25, 3), (23, rel | 1), (25, 8), (23, rel | 1), (25, 9)]);
+    assert_eq!(w(0, 0), [(24, 3), (25, 8), (12, 0)]);
+    for (rel_param, torn) in [(0, true), (crate::emmc::EN_REL_WR, false)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = vec![1; 64 * SECTOR];
+        (sim.emmc.rel_param, sim.emmc.tear) = (rel_param, true);
+        let mut emmc = Emmc::new();
+        sim.emmc.cut_after = Some(sim.emmc.sectors_written + 1);
+        assert!(emmc.write(&mut sim, 20, &[5u8; 2 * SECTOR]).is_err());
+        assert!(sim.emmc.image[20 * SECTOR..21 * SECTOR].iter().all(|&b| b == 5));
+        let second = &sim.emmc.image[21 * SECTOR..22 * SECTOR];
+        assert_eq!(!second.iter().all(|&b| b == 1), torn, "rel_param {rel_param}");
+    }
+}
+
 /// Identification from the state the bootloader leaves (selected, 4-bit), without stock's SD probes, then the
 /// layout from SEC_COUNT.
 #[test]
@@ -156,7 +189,7 @@ fn sector_command_reads_and_survives_a_dead_card() {
                 let r = emmc.read(sim, n, &mut buf).map(|()| &buf);
                 send_sector(pc, r);
             }
-            Effect::Emmc => send_layout(pc, emmc.layout(sim)),
+            Effect::Emmc => send_layout(pc, emmc.card(sim)),
             e => panic!("{e:?}"),
         }
     };
@@ -165,7 +198,7 @@ fn sector_command_reads_and_survives_a_dead_card() {
     assert_eq!(pc.got, b"err cmd 1 timeout\n");
     sim.emmc.dead = false;
     serve(&mut sim, &mut session, &mut pc, b"emmc\n");
-    assert_eq!(pc.got, b"emmc 03a3e000 03a2bfe6 03a3b000\n");
+    assert_eq!(pc.got, b"emmc 03a3e000 03a2bfe6 03a3b000 00000000\n");
     serve(&mut sim, &mut session, &mut pc, b"sector 0x03a3b000\n");
     let hex: std::string::String = emmc_sector(0x03a3_b000).iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(pc.got, format!("{hex}\n").as_bytes());

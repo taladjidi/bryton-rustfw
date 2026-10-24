@@ -11,7 +11,7 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py peek ADDR [N]            read N registers (peripheral space, aligned; ADDR decimal or 0x hex)
   dev.py poke ADDR VALUE          write one register
   dev.py key page|lap|start|back [--long]   press (or hold) a key: scripted tests on the unit
-  dev.py emmc                     identify the eMMC: SEC_COUNT, B (end of the FAT volume), OS area start
+  dev.py emmc                     identify the eMMC: SEC_COUNT, B (end of the FAT volume), OS area start, reliable write
   dev.py sector N [COUNT] [-o F]  read eMMC sectors N.. (read only): a hex dump, or the raw bytes into F
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
@@ -257,9 +257,10 @@ def main():
                 answer = command(s, 'emmc')
                 if not answer.startswith('emmc '):
                     sys.exit(f'dev.py: {answer}')
-                n, b, os_start = (int(x, 16) for x in answer.split()[1:])
+                n, b, os_start, rel = (int(x, 16) for x in answer.split()[1:])
                 print(f'SEC_COUNT {n:#x} ({n * 512 / 1e9:.1f} GB); FAT volume 0..{b - 1:#x} (B = {b:#x}); '
-                      f'OS area {os_start:#x}..{n - 1:#x}')
+                      f'OS area {os_start:#x}..{n - 1:#x}; WR_REL_PARAM {rel >> 8:#04x} REL_WR_SEC_C {rel & 0xff} '
+                      f'(reliable write: {"enhanced" if rel >> 8 & 4 else "legacy" if rel & 0xff else "none"})')
             elif a.cmd == 'sector':
                 data = b''.join(sector_bytes(command(s, f'sector {a.n + i}')) for i in range(a.count))
                 if a.o:

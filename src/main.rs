@@ -1340,7 +1340,7 @@ fn main() -> ! {
                             woke = true;
                         }
                         Effect::Emmc => {
-                            dev::send_layout(l, app.emmc().layout(&mut board));
+                            dev::send_layout(l, app.emmc().card(&mut board));
                             l.flush();
                             woke = true;
                         }

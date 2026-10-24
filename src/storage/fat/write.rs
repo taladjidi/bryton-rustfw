@@ -223,7 +223,19 @@ impl Fat {
         next: u32,
         exact: Option<u32>,
     ) -> Result<(), Error> {
-        let Some((free, _, mut s)) = self.fsinfo_read(d)? else { return Ok(()) };
+        let Some((free, _, mut s)) = self.fsinfo_read(d)? else {
+            if let (Some(n), 1) = (exact, self.fsinfo) {
+                // signatures lost (a cut tore the sector): made again where every formatter puts it, sector 1
+                let mut s = [0u8; SECTOR];
+                s[0..4].copy_from_slice(&0x4161_5252u32.to_le_bytes());
+                s[484..488].copy_from_slice(&0x6141_7272u32.to_le_bytes());
+                s[488..492].copy_from_slice(&n.to_le_bytes());
+                s[492..496].copy_from_slice(&(if self.valid(next) { next } else { 2 }).to_le_bytes());
+                s[508..512].copy_from_slice(&0xaa55_0000u32.to_le_bytes());
+                return d.write(self.fsinfo, &s);
+            }
+            return Ok(());
+        };
         let free = match exact {
             Some(n) => n,
             None if free == u32::MAX => free,
@@ -343,6 +355,13 @@ impl Fat {
         e[28..32].copy_from_slice(&size.to_le_bytes());
         self.write(d, h.entry_lba, &s)?;
         h.size = size;
+        self.trim(d, h, size)
+    }
+
+    /// Cuts `h`'s chain after the clusters `size` bytes need (at least one) and frees the rest: its size already
+    /// that, or no entry at all ([`Fat::chain`]).
+    pub fn trim(&mut self, d: &mut impl DiskWrite, h: &mut Handle, size: u32) -> Result<(), Error> {
+        let need = size.div_ceil(self.spc * SECTOR as u32).max(1);
         if need < h.clusters {
             let keep = self.nth(d, h.first, need - 1)?;
             let mut rest = self.next(d, keep)?;
@@ -360,6 +379,12 @@ impl Fat {
             self.fsinfo_update(d, -freed, keep + 1, None)?;
         }
         Ok(())
+    }
+
+    /// The chain from `first` as a handle without an entry: its sectors can be written in place, never its size.
+    pub fn chain(&mut self, d: &mut impl Disk, first: u32) -> Result<Handle, Error> {
+        let (last, clusters) = self.chain_end(d, first)?;
+        Ok(Handle { first, last, clusters, ..Handle::default() })
     }
 
     /// The entry called `name` in `dir`, opened for writing.
@@ -591,9 +616,21 @@ impl Fat {
         self.write(d, h.entry_lba, &s)
     }
 
+    /// Whether the FAT sector whose first entry is cluster `first`'s holds only what a FAT holds: free, a cluster
+    /// of the volume, bad or end of chain (the reserved entries 0 and 1, and those past the volume, anything). A
+    /// sector torn by a cut mid-write (garbage, which a card without reliable write may leave: emmc.rs) almost
+    /// never is: one entry in 2^28 values is a cluster of a 470 k cluster volume, and 128 entries a sector.
+    fn sane(&self, first: u32, s: &[u8]) -> bool {
+        s.chunks_exact(4).enumerate().all(|(i, e)| {
+            let (c, v) = (first + i as u32, u32::from_le_bytes([e[0], e[1], e[2], e[3]]) & 0x0fff_ffff);
+            !self.valid(c) || v == 0 || self.valid(v) || v >= 0x0fff_fff7
+        })
+    }
+
     /// Makes every FAT copy equal to the first (only the sectors that differ are written), and FSInfo's free count
-    /// the true one: after a cut (module doc). Reads the whole FAT: about 15 MB on the unit's volume, so only
-    /// when a cut may have happened. The free clusters.
+    /// the true one: after a cut (module doc). A sector of the first FAT that is not sane (`Fat::sane`) where the
+    /// second's is (the cut tore it) takes the second's instead. Reads the whole FAT: about 15 MB on the unit's
+    /// volume, so only when a cut may have happened. The free clusters.
     pub fn sync_fats(&mut self, d: &mut impl DiskWrite) -> Result<u32, Error> {
         const RUN: u32 = 8;
         let mut one = [0u8; RUN as usize * SECTOR];
@@ -605,19 +642,28 @@ impl Fat {
             let len = k as usize * SECTOR;
             let (a, b) = (one.get_mut(..len).ok_or(Error::Corrupt)?, other.get_mut(..len).ok_or(Error::Corrupt)?);
             self.read(d, self.fat_start + sector, a)?;
+            for copy in 1..self.fats {
+                let lba = self.fat_start + copy * self.fat_size + sector;
+                self.read(d, lba, b)?;
+                for (j, (x, y)) in a.chunks_exact_mut(SECTOR).zip(b.chunks_exact(SECTOR)).enumerate() {
+                    if x == y {
+                        continue;
+                    }
+                    let first = (sector + j as u32) * (SECTOR as u32 / 4);
+                    if !self.sane(first, x) && self.sane(first, y) {
+                        // the first FAT's sector torn by a cut while it was written: the copy is the one before it
+                        self.write(d, self.fat_start + sector + j as u32, y)?;
+                        x.copy_from_slice(y);
+                        self.cached = None;
+                    } else {
+                        self.write(d, lba + j as u32, x)?;
+                    }
+                }
+            }
             for (i, e) in a.chunks_exact(4).enumerate() {
                 let c = sector * (SECTOR as u32 / 4) + i as u32;
                 if self.valid(c) && u32::from_le_bytes([e[0], e[1], e[2], e[3]]) & 0x0fff_ffff == 0 {
                     free += 1;
-                }
-            }
-            for copy in 1..self.fats {
-                let lba = self.fat_start + copy * self.fat_size + sector;
-                self.read(d, lba, b)?;
-                for (j, (x, y)) in a.chunks_exact(SECTOR).zip(b.chunks_exact(SECTOR)).enumerate() {
-                    if x != y {
-                        self.write(d, lba + j as u32, x)?;
-                    }
                 }
             }
             sector += k;

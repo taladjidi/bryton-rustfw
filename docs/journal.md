@@ -129,3 +129,48 @@ From the second adversarial review (findings numbered as there), each with a tes
   (FIT total_distance, Bryton's 254) instead of reading it whole.
 
 The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).
+
+## 2026-10-24: the second review's recorder findings, fixed (simulator only)
+
+The second adversarial review (read only, on ce3ead8) found these in the recorder; each fix came with a test that
+fails without it (the review's probes turned into tests where they fit):
+- **R1, one bad byte blocked every later ride:** the save's read-back failed its CRC and was tried again forever.
+  Fixed: a file that reads but is not whole is left as it is in `\Rustfw\Rides`, the record "done", said once
+  (SAVE FAILED); only a card error is tried again, and a save or a ride left unfinished only `GIVE_UP` (12, a minute)
+  times in a row. Tests `a_damaged_ride_is_kept_and_the_next_one_recorded`, `a_save_that_keeps_failing_is_given_up`.
+  A failed save also stopped being retried at all (its checkpoint cleared `want`): a save is now due until done.
+- **R2, Start while the boot's recovery was pending took over the new ride's writer:** `recover` does nothing once a
+  ride has started; the new ride's first card work finishes the old one first (resumed in its place when the marker
+  said it was open, else saved). Tests `start_while_the_boot_recovery_is_pending` (the probe's case: both rides
+  saved whole), `start_while_the_card_failed_at_boot` (the app's glue).
+- **R3 (C1), the read-only build's loop:** fixed on main before (1ef21ec).
+- **R3 (torn writes):** reliable write when the card offers it (emmc.rs, BOARD.md 15), the EXT_CSD bytes in
+  `dev.py emmc`. For a card that does not: the ride in progress moved to `\Rustfw\Rides`, so its entry (rewritten every
+  minute) and `ride.rec`'s never share a sector; each record slot carries copies of the two file sectors the next
+  checkpoint rewrites in place (sector 0, the last), which the resume writes back; `sync_fats` takes the second FAT's
+  sector when the first's holds what no FAT holds (torn), and makes FSInfo again when its signatures are gone; a ride
+  whose entry was torn is saved from its record. The card models (sim.rs `EmmcCard`, recorder.rs tests' `Card`) tear
+  the sector a cut falls in. Tests `power_cut_tearing_the_sector_at_every_write` (274 cuts: 155 resumed, 25 saved at
+  boot, the next ride always saved, at most 2 lost clusters; one cut tears the root directory's sector, which loses
+  stock's entries there: the reliable write's job), `every_write_is_reliable_when_the_card_offers_it` (CMD23 bit 31
+  before every CMD25, none of CMD24, and a cut at every sector of a ride's first 75 s on the Sim: clean volume each
+  time; with plain writes the same sweep loses the root's entries), `reliable_writes_when_offered` (the driver).
+- **R4, Off lost up to a minute:** `power_off` checkpoints first (one try). Test `off_mid_ride_keeps_every_second`.
+- **R5, caught-up seconds shared one time:** each has its own (`lag_s`). Test `seconds_caught_up_keep_their_own_time`.
+- **R6, a lost marker resumed a ride from days ago:** a ride left open is resumed at a Start only if the marker said
+  so or it stopped less than an hour (`RESUME_S`) before; else ended at its last record and saved. Test
+  `an_old_ride_left_open_is_saved_and_a_new_one_started`.
+- **R7, the move gap:** narrowed: `\Activities` and a free name are found before the entry is marked deleted, so only
+  the link is left in the gap. The fsck cross-link check before linking is not done.
+- **R8, "done" without a link:** ten names taken is now an error (the ride kept), never "done".
+- **R10, the record's layout:** tag RFR2, the ride words' count in the record (checked), a `const` assert that they fit.
+- **R11, a failing recorder looked like a working one:** the strip's dot is grey while not saving (a failure, a
+  refused start, a build that may not write); NOT SAVING at the first failure in a row, then every 5 minutes of them
+  (the old RECORDING ERROR did not fit its 20-character line and was never shown); the count resets on success. Test
+  `a_failing_recorder_shows`.
+- **Low:** `h.clusters * cluster_bytes` checked.
+- **Not done:** `find_free` one sector at a time on a nearly full volume (review P3), R9 (power totals, workout and
+  course after a resume), R12 (stock reading this firmware's FIT), the fsck check of R7.
+- **Cost:** image 189,796 B to 191,204 B (+1.4 KB); App +8 B; make_app's frame 43.0 KB to 44.5 KB (budget 50 KB);
+  `ride.rec` 1 KB to 3 KB; a checkpoint's record write 1 sector to 3 (one command), and CMD23 before each write on
+  a card with reliable write.

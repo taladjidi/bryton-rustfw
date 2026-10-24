@@ -253,6 +253,8 @@ pub struct App {
     card_writable: bool,
     recorder: recorder::Recorder,
     resume_pending: bool,
+    /// While seconds are caught up after a long pass: how many seconds ago the one being ticked was (its time).
+    lag_s: u8,
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course::Courses>,
@@ -392,6 +394,7 @@ impl App {
             recorder: recorder::Recorder::new(),
             card_writable: false,
             resume_pending: false,
+            lag_s: 0,
             courses: None,
         }
     }
@@ -441,9 +444,13 @@ impl App {
             // more than MAX_CATCH_UP is the clock set, not riding
             let gone = (sec + 60 - self.seconds) % 60;
             self.seconds = sec; // the time the recorder reads goes with the minute already read
-            for _ in 0..gone.clamp(1, MAX_CATCH_UP) {
+            // each with its own time for the recorder: the first was `n - 1` seconds ago (the second review, R5)
+            let n = gone.clamp(1, MAX_CATCH_UP);
+            for k in 0..n {
+                self.lag_s = n - 1 - k;
                 self.second();
             }
+            self.lag_s = 0;
         }
         if let Some(a) = self.alert.take() {
             self.say(a.text());
@@ -489,6 +496,12 @@ impl App {
         }
         self.strip.rec = match self.ride.state() {
             ride::State::Idle => Rec::Idle,
+            _ if !self.card_writable
+                || self.recorder.failing()
+                || !matches!(self.recorder.phase(), recorder::Phase::Starting | recorder::Phase::Recording) =>
+            {
+                Rec::NotSaving
+            }
             _ if self.ride.moving() => Rec::Running,
             _ => Rec::Paused,
         };

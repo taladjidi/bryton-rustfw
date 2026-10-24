@@ -10,8 +10,8 @@
 //!   runs the image ([`Effect::Run`]), or `err <reason>`.
 //! - `key <page|lap|start|back> [long]`: `ok`, then the app acts as if the key was pressed, or held
 //!   ([`Effect::Key`]), to script tests on the unit.
-//! - `emmc`: identifies the eMMC if needed ([`Effect::Emmc`]) and answers `emmc <SEC_COUNT> <B> <OS start>`, three
-//!   hex numbers (BOARD.md 15), or `err <why>`.
+//! - `emmc`: identifies the eMMC if needed ([`Effect::Emmc`]) and answers `emmc <SEC_COUNT> <B> <OS start> <rel>`, four
+//!   hex numbers (BOARD.md 15; `rel`: EXT_CSD WR_REL_PARAM << 8 | REL_WR_SEC_C, emmc.rs), or `err <why>`.
 //! - `sector <n>`: reads eMMC sector `n` ([`Effect::Sector`]) and answers its 512 bytes as one line of 1024 hex
 //!   digits, or `err <why>`. Read only; the eMMC is touched by nothing else, and only from the first of these two.
 //! - `bench <lba> <sectors> <count>`: reads `count` times `sectors` eMMC sectors from `lba` on ([`Effect::Bench`]) and
@@ -430,12 +430,13 @@ pub fn send_bench(h: &mut impl Host, r: Result<u32, emmc::Error>) {
     }
 }
 
-/// The answer to `emmc`: the layout, or why it could not be read.
-pub fn send_layout(h: &mut impl Host, r: Result<emmc::Layout, emmc::Error>) {
+/// The answer to `emmc`: the layout and the reliable write bytes, or why it could not be read.
+pub fn send_layout(h: &mut impl Host, r: Result<emmc::Card, emmc::Error>) {
     match r {
-        Ok(l) => {
+        Ok(c) => {
+            let l = c.layout;
             h.send(b"emmc");
-            for v in [l.sectors, l.fat_end, l.os_start] {
+            for v in [l.sectors, l.fat_end, l.os_start, u32::from(c.rel_param) << 8 | u32::from(c.rel_sectors)] {
                 h.send(b" ");
                 h.send(&hex(v)[..8]);
             }
