@@ -11,11 +11,13 @@
 //!   than [`FAR_M`] is left out (it keeps the search's arithmetic in i64).
 //! - **Where the rider is ([`Course::follow`], once a second):** the nearest segment in a window around the last one
 //!   ([`BEHIND`] back, [`AHEAD`] ahead): a few dozen segments a second, never the whole course. Lost (farther than
-//!   [`LOST_M`], or not placed yet), a wider search every [`SEARCH_S`] seconds, bounded: the [`SEARCH_CHUNKS`]
-//!   chunks of 64 points whose boxes are nearest. Where two passes are about as near (an out-and-back, a loop, a
+//!   [`LOST_M`], or not placed yet), a wider search every [`SEARCH_S`] seconds, bounded: of the chunks of 64 points
+//!   whose boxes are about as near as the nearest, the [`SEARCH_CHUNKS`] nearest along the course to where the rider
+//!   was (on a lap course, the lap being ridden). Where two passes are about as near (an out-and-back, a loop, a
 //!   crossing), the first one not behind the rider wins: the way the cursor goes picks the leg.
 //! - **Off course:** farther than [`OFF_M`] for [`OFF_S`] seconds, once the course was joined; back within
-//!   [`BACK_M`]. Each said once ([`Event`]).
+//!   [`BACK_M`]. On a course thinned past a point every 50 m, the threshold is half the step plus [`BACK_M`]: a chord
+//!   cuts a bend by up to half the step. Each said once ([`Event`]).
 //! - **Ascent:** altitude rises counted past a 3 m hysteresis (small wiggles are noise).
 //! - **Climbs (`climbs`):** Garmin's ClimbPro definition (www8.garmin.com/manuals/webhelp, "Using ClimbPro", read
 //!   2026-10-24): at least 500 m long at an average grade of at least 3 %, which is a climb score (length in metres
@@ -50,6 +52,8 @@ const BIN_M: u32 = 50;
 const UP_X10: i32 = 20;
 const GAP_M: u32 = 500;
 const DIP_DM: i32 = 200;
+/// Climbs: profile steps at most (8 a kept point).
+const BINS: u32 = POINTS as u32 * 8;
 /// A climb is at least this long, m, at this average grade, % x 10 (Garmin's ClimbPro).
 pub const MIN_LEN_M: u32 = 500;
 /// See [`MIN_LEN_M`].
@@ -482,23 +486,33 @@ impl Course {
         pick
     }
 
-    /// The nearest segment among the [`SEARCH_CHUNKS`] chunks whose boxes are nearest to `p`.
+    /// The nearest segment among [`SEARCH_CHUNKS`] chunks: of the chunks whose boxes are about as near to `p` as the
+    /// nearest box (within [`LOST_M`]), the ones nearest along the course to `along`, where the rider was. On a lap
+    /// course every lap's box holds `p`: the nearest box alone would always pick the first laps (review 2).
     fn search(&self, p: (i32, i32), along: u32, n: &mut u32) -> Option<Hit> {
-        let mut pick = [(u64::MAX, 0usize); SEARCH_CHUNKS];
-        for (c, b) in self.boxes.iter().take(self.n_boxes).enumerate() {
-            *n = n.saturating_add(1);
+        let boxes = self.boxes.get(..self.n_boxes).unwrap_or(&[]);
+        let box_m = |b: &(i32, i32, i32, i32)| {
             let dx = (i64::from(b.0) - i64::from(p.0)).max(i64::from(p.0) - i64::from(b.2)).max(0);
             let dy = (i64::from(b.1) - i64::from(p.1)).max(i64::from(p.1) - i64::from(b.3)).max(0);
-            let d2 = (dx * dx + dy * dy).unsigned_abs();
-            if let Some(worst) = pick.iter_mut().max_by_key(|x| x.0).filter(|w| d2 < w.0) {
-                *worst = (d2, c);
+            (dx * dx + dy * dy).unsigned_abs().isqrt()
+        };
+        let near = boxes.iter().map(box_m).min().unwrap_or(u64::MAX).saturating_add(u64::from(LOST_M));
+        let segs = self.len.saturating_sub(1);
+        let span = |c: usize| (c * CHUNK).min(segs)..((c + 1) * CHUNK).min(segs);
+        let at = |i: usize| self.dist.get(i).copied().unwrap_or(0);
+        let mut pick = [(u32::MAX, 0usize); SEARCH_CHUNKS];
+        for (c, b) in boxes.iter().enumerate() {
+            *n = n.saturating_add(1);
+            if box_m(b) > near {
+                continue;
+            }
+            let r = span(c);
+            let gap = at(r.start).saturating_sub(along).max(along.saturating_sub(at(r.end)));
+            if let Some(worst) = pick.iter_mut().max_by_key(|x| x.0).filter(|w| gap < w.0) {
+                *worst = (gap, c);
             }
         }
-        let segs = self.len.saturating_sub(1);
-        let ranges = pick.map(|(d2, c)| match d2 {
-            u64::MAX => 0..0,
-            _ => (c * CHUNK).min(segs)..((c + 1) * CHUNK).min(segs),
-        });
+        let ranges = pick.map(|(gap, c)| if gap == u32::MAX { 0..0 } else { span(c) });
         self.nearest(p, &ranges, along, n)
     }
 
@@ -520,7 +534,10 @@ impl Course {
         let h = hit?;
         (t.seg, t.along_m, t.off_m) = (h.seg, h.along_m, Some(h.off_m));
         t.joined |= h.off_m <= BACK_M;
-        t.off_s = if h.off_m > OFF_M { t.off_s.saturating_add(1) } else { 0 };
+        // a chord between two kept points cuts a bend by up to half the step: thinned past 100 m, that alone would
+        // pass OFF_M
+        let off_limit = OFF_M.max(self.step_m / 2 + BACK_M);
+        t.off_s = if h.off_m > off_limit { t.off_s.saturating_add(1) } else { 0 };
         if t.joined && !t.warned && t.off_s >= OFF_S {
             t.warned = true;
             return Some(Event::Off);
@@ -558,10 +575,12 @@ impl Course {
             }
         };
         let total = self.len_m();
+        // wider steps past BINS of them (over 1600 km): a crafted file's length alone cannot make the loop long
+        let bin = BIN_M.max(total.div_ceil(BINS));
         // the climb being followed: its start, its top (m, dm)
         let mut cur: Option<(u32, u32, i32)> = None;
-        for b in 0..total.div_ceil(BIN_M) {
-            let (d0, d1) = (b * BIN_M, ((b + 1) * BIN_M).min(total));
+        for b in 0..total.div_ceil(bin) {
+            let (d0, d1) = (b.saturating_mul(bin), (b + 1).saturating_mul(bin).min(total));
             let (Some(a0), Some(a1)) = (self.alt_at(d0), self.alt_at(d1)) else { break };
             let up = (a1 - a0) * 100 / (d1 - d0).max(1) as i32 >= UP_X10;
             cur = match cur {
@@ -747,6 +766,40 @@ pub(crate) mod tests {
         assert!(t.along_m >= 3980, "the end, not the start: {t:?}");
     }
 
+    /// A course of 5 laps of 8 km: placed on lap 5, then a gap in the fixes (a tunnel) puts the rider 800 m on, out
+    /// of the window: the search finds lap 5 again, not one of the laps before (review 2: lap 4 won).
+    #[test]
+    fn lap_course_found_on_the_right_lap() {
+        let sq = [(0.0, 0.0, 0.0), (2000.0, 0.0, 0.0), (2000.0, 2000.0, 0.0), (0.0, 2000.0, 0.0)];
+        let mut corners = Vec::new();
+        for _ in 0..5 {
+            corners.extend_from_slice(&sq);
+        }
+        corners.push(sq[0]);
+        let c = course(&lines(&corners, 10.0));
+        assert!((39_990..=40_010).contains(&c.len_m()), "{}", c.len_m());
+        let mut t = Tracker::default();
+        let mut x = 0.0;
+        while x < 8000.0 * 4.0 + 200.0 {
+            let d = x % 8000.0;
+            let (px, py) = match d {
+                d if d < 2000.0 => (d, 0.0),
+                d if d < 4000.0 => (2000.0, d - 2000.0),
+                d if d < 6000.0 => (6000.0 - d, 2000.0),
+                d => (0.0, 8000.0 - d),
+            };
+            let (lat, lon) = fix(px, py);
+            c.follow(&mut t, lat, lon);
+            x += 8.0;
+        }
+        assert!(t.along_m.abs_diff(32_200) <= 15, "on lap 5: {t:?}");
+        let (lat, lon) = fix(1000.0, 0.0);
+        for _ in 0..SEARCH_S {
+            c.follow(&mut t, lat, lon);
+        }
+        assert!(t.along_m.abs_diff(33_000) <= 10, "still on lap 5: {t:?}");
+    }
+
     /// Off course after OFF_S seconds beyond OFF_M, said once; back within BACK_M; a climb said at its start; the
     /// window keeps the cost to a few dozen segments a second.
     #[test]
@@ -771,6 +824,54 @@ pub(crate) mod tests {
         assert_eq!(said[1], (504, Event::Back));
         assert!(matches!(said[2], (1000..=1016, Event::Climb(Climb { gain_m: 55..=60, .. }))), "{said:?}");
         assert!(t.examined / seconds < 120, "{} a second", t.examined / seconds);
+    }
+
+    /// A crafted file (review 2: a 30 KB GPX): points 1900 km apart, back and forth, make a course of millions of
+    /// km; the climbs are still worked out in bounded time (a bin per 50 m would be 86 million).
+    #[test]
+    fn climbs_bounded_on_a_crafted_course() {
+        let mut c = Course::new();
+        for k in 0..3000 {
+            c.push(if k % 2 == 0 { 0 } else { 170_000_000 }, 0, Some(k % 7 * 1000));
+        }
+        let t0 = std::time::Instant::now();
+        c.finish();
+        assert!(c.len_m() > 4_000_000_000, "{}", c.len_m());
+        assert!(t0.elapsed().as_millis() < 300, "{:?}", t0.elapsed());
+    }
+
+    /// A 400 km course is thinned to a point every 160 m, so its chords cut a spur by up to 80 m: riding the spur
+    /// itself is not off course (the threshold grows with the step). Spurs of several depths: the kept points fall
+    /// at different places on each.
+    #[test]
+    fn thinned_course_no_false_off_course() {
+        let mut worst = 0;
+        for depth in (60..=240).step_by(15) {
+            let deep = f64::from(depth);
+            let c = course(&lines(
+                &[
+                    (0.0, 0.0, 0.0),
+                    (0.0, 200_000.0, 0.0),
+                    (deep, 200_000.0, 0.0),
+                    (0.0, 200_010.0, 0.0),
+                    (0.0, 400_000.0, 0.0),
+                ],
+                5.0,
+            ));
+            assert_eq!(c.step_m, 160);
+            let mut t = Tracker::default();
+            let mut way: Vec<(f64, f64)> = (0..250).map(|k| (0.0, 198_000.0 + 8.0 * f64::from(k))).collect();
+            way.extend((0..=depth / 8).map(|k| (8.0 * f64::from(k), 200_000.0)));
+            way.extend((0..=depth / 8).rev().map(|k| (8.0 * f64::from(k), 200_010.0)));
+            way.extend((0..250).map(|k| (0.0, 200_010.0 + 8.0 * f64::from(k))));
+            for (x, y) in way {
+                let (lat, lon) = fix(x, y);
+                assert_ne!(c.follow(&mut t, lat, lon), Some(Event::Off), "{depth} m spur, at ({x}, {y}): {t:?}");
+                worst = worst.max(t.off_m.unwrap());
+            }
+            assert!(t.along_m.abs_diff(202_000 + 2 * depth) <= 200, "{t:?}");
+        }
+        assert!(worst > OFF_M, "the chords cut the spurs: {worst} m at most");
     }
 
     /// Bad input: points off the globe or too far are left out; an empty or one-point course follows nothing.
