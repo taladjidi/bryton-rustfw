@@ -18,6 +18,14 @@ The dated findings are in [journal.md](journal.md).
 - **A reset mid-ride:** 90 s in, `dev.py reset`; the build again from RAM: RIDE RESUMED, the ride carried on into
   one file (261024083931.fit): a timer stop at the last checkpoint (60 s), a start at the resume, 30 s lost.
 
+## Seen on the unit: two copies of a ride (2026-10-24, from RAM)
+
+- A ride, `dev.py reset` 100 s in, the build again, RIDE RESUMED, the save: `\Activities\261024203259.fit` (FIT 1.0,
+  no developer data) and `\Rustfw\Activities\261024203259.fit` (FIT 2.0, Alpha1 and RMSSD described; invalid without
+  a strap), 144 records each and the same (tools/fit_check.py --pair, fitdecode and Garmin's FIT SDK). Before the
+  review's fix the clean copy had resumed 22 s behind the full one.
+- Not yet: a ride with the strap (Alpha1 values), tools/sync.py against the real Intervals.icu and Strava.
+
 ## Seen on the unit: the phone (2026-10-24, an iPhone, from RAM with EMMC_WRITE=1)
 
 - **Pairing:** PAIR, then S510 tapped on the iPhone: the normal iOS prompt, Just Works; LINK SECURE, the bond in
@@ -69,6 +77,10 @@ The dated findings are in [journal.md](journal.md).
   11. **The RTC set** (`Board::rtc_set`, RM0399 init mode): the time right after the phone set it, and kept through
       a power off; stock afterwards still shows the right time.
 
+- **The full copy of a ride and the sync** (docs/sync.md): `\Rustfw\Activities` written beside `\Activities`
+  on the card, with Alpha1 from a real strap; `tools/sync.py` against the real Intervals.icu and Strava (DFA a1
+  charted from the upload), and the workouts it writes listed in WORKOUTS (and by stock, which may want the `.json`
+  beside them).
 - **IGN maps** (`\Rustfw\Maps`): the packs found, a view drawn from them, its time (simulated: one index sector and
   about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
   decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the

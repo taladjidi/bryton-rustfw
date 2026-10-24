@@ -246,6 +246,11 @@ impl Fat {
         d.write(self.fsinfo, &s) // sector 1: below fat_start, so not through Fat::write's check
     }
 
+    /// FSInfo's free cluster count, None when unknown (no FSInfo, or 0xffffffff). A few clusters high after a cut.
+    pub fn free_clusters(&mut self, d: &mut impl Disk) -> Result<Option<u32>, Error> {
+        Ok(self.fsinfo_read(d)?.map(|(free, _, _)| free).filter(|&n| n <= self.clusters))
+    }
+
     /// The hint where to look for a free cluster: FSInfo's, else the start.
     fn hint(&mut self, d: &mut impl Disk) -> Result<u32, Error> {
         Ok(self.fsinfo_read(d)?.map_or(2, |(_, next, _)| next))

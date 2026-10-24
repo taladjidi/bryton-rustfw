@@ -77,6 +77,10 @@ The golden rule (AGENTS.md) depends on this whole phase.
    minute, two recovery records, resume at boot, the save to `\Activities`. Next: on the unit with the owner
    (docs/journal.md 2026-10-24); a reliable write (CMD23 bit 31) for the sectors rewritten in place; the track,
    graphs and power totals of a resumed ride (only the ride's totals come back); HRV messages.
+   Two copies of each ride (done in the simulator): the clean one for stock, Bryton and Strava, and a full one
+   with DFA a1 (`Alpha1`) and RMSSD as developer fields for Intervals.icu (docs/sync.md, "Why two files").
+   `tools/sync.py` uploads them from the computer and brings the planned workouts back. Next: a run against the
+   real services; the iOS app (phase 8).
 4. Settings file (phase 1's store moves here).
 5. USB mass storage: rides off and courses, workouts and maps on, with no phone app. The recorder and the FAT
    writer stop while the computer owns the volume.
@@ -184,3 +188,7 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
     the notification's app shown (its bundle id is fetched and dropped).
 - With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
   computer tool over USB can upload rides.
+- **The iOS app, next:** `tools/sync.py`'s logic (docs/sync.md) over the BLE bond instead of USB. It would list the
+  new rides, fetch both copies with their FIT CRCs checked, upload the full copy to Intervals.icu and the clean one
+  to Strava, remember what went where, and send the planned workouts back to `\Workout\calendar`. It needs a file
+  transfer service on the bond (the Nordic chip's serialization, nrf.rs) and the FAT writer for the workouts.

@@ -2088,6 +2088,7 @@ fn big_card() -> Vec<u8> {
             cadence: Some(90),
             power: Some(200),
             temp_c: Some(20),
+            ..Default::default()
         };
         w.record(&mut ride, &s).unwrap();
     }

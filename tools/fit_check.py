@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Decodes the FIT files src/storage/fit.rs writes with fitdecode (an independent decoder) and checks them: CRCs,
 no warnings, and the sample ride's values (the synthetic ride of fit.rs's tests). Usage (src/storage/fit.rs, module doc):
-    fit_check.py target/fit/sample.fit target/fit/cut.fit
+    fit_check.py target/fit/sample.fit target/fit/cut.fit [target/fit/sample_full.fit]
+The third, the full copy (developer fields, recorder.rs "Two copies"), is the same ride with Alpha1 and RMSSD in
+each record: checked with both decoders, Garmin's SDK naming the developer fields from their descriptions. The
+recorder's saved pair (target/fit/recorded.fit, recorded_full.fit, from `cargo test-host two_copies_cost`):
+    fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
+same records in both, developer fields only in the full one.
 """
 import sys
 import warnings
@@ -9,6 +14,7 @@ import warnings
 import fitdecode
 
 T0 = 1_161_676_800 + 631_065_600  # FIT 0 is 1989-12-31 00:00 UTC; this is 2026-10-23 08:00 UTC
+DEV = ("developer_data_id", "field_description")
 
 
 def read(path):
@@ -26,8 +32,14 @@ def values(m):
     return {f.name: f.value for f in m.fields if f.value is not None}
 
 
-def garmin(path):
-    """Garmin's own FIT SDK for Python (pip install garmin-fit-sdk), when installed: integrity and no errors."""
+def protocol(path):
+    with open(path, "rb") as f:
+        return f.read(2)[1]
+
+
+def garmin(path, full=False):
+    """Garmin's own FIT SDK for Python (pip install garmin-fit-sdk), when installed: integrity and no errors; for
+    a full copy, Alpha1 and RMSSD named by their field_description in the records."""
     try:
         from garmin_fit_sdk import Decoder, Stream
     except ImportError:
@@ -37,11 +49,39 @@ def garmin(path):
     msgs, errors = Decoder(Stream.from_file(path)).read()
     assert errors == [], errors
     print("  garmin-fit-sdk:", {k: len(v) for k, v in msgs.items()})
+    if full:
+        names = {d["field_definition_number"]: d["field_name"] for d in msgs["field_description_mesgs"]}
+        assert names == {0: "Alpha1", 1: "RMSSD"}, names
+        alpha = [r.get("developer_fields", {}).get(0) for r in msgs["record_mesgs"]]
+        known = [a for a in alpha if a is not None and a == a]  # invalid (all ones) reads as NaN here
+        print(f"  garmin-fit-sdk: Alpha1 in {len(known)} of {len(alpha)} records, e.g. {known[:3]}")
+        assert all(0 < a < 3 for a in known)  # none without a strap: every value invalid
 
 
-def check(path, finished):
-    garmin(path)
+def read_checked(path, full):
+    """The messages; the developer data only in a full copy (protocol 2.0), never in a clean one (1.0)."""
+    garmin(path, full)
     msgs = read(path)
+    has_dev = any(m.name in DEV for m in msgs)
+    if not full:
+        assert protocol(path) == 0x10 and not has_dev, "a clean copy: protocol 1.0, no developer data"
+        return msgs
+    assert protocol(path) == 0x20, "a full copy: protocol 2.0"
+    names = [m.name for m in msgs]
+    assert names[:4] == ["file_id", "developer_data_id", "field_description", "field_description"], names[:4]
+    rec = [values(m) for m in msgs if m.name == "record"]
+    with_alpha = [r for r in rec if "Alpha1" in r]
+    assert all("RMSSD" in r for r in with_alpha)
+    if with_alpha:
+        print(f"  fitdecode: Alpha1 in {len(with_alpha)} of {len(rec)} records, e.g. {with_alpha[0]['Alpha1']:.3f}, "
+              f"RMSSD {with_alpha[0]['RMSSD']} ms")
+    else:
+        print(f"  fitdecode: no valid Alpha1 in {len(rec)} records (no strap)")
+    return msgs
+
+
+def check(path, finished, full=False):
+    msgs = [m for m in read_checked(path, full) if m.name not in DEV]
     names = [m.name for m in msgs]
     records = [values(m) for m in msgs if m.name == "record"]
     print(f"{path}: {len(msgs)} messages, {len(records)} records, CRC ok")
@@ -58,6 +98,9 @@ def check(path, finished):
         assert abs(r["altitude"] - (35 + 0.1 * (t % 50))) < 0.2
         assert abs(r["speed"] - (7 + 0.01 * (t % 100))) < 1e-9
         assert ("heart_rate" in r) == (t >= 10) and ("power" in r) == (t >= 30 and not 200 <= t < 215)
+        if full:
+            assert ("Alpha1" in r) == (t >= 60)
+            assert t < 60 or abs(r["Alpha1"] - (500 + t % 700) / 1000) < 1e-6
     if finished:
         assert names[-4:] == ["event", "lap", "session", "activity"], names[-4:]
         for n in ("lap", "session", "activity"):
@@ -68,6 +111,31 @@ def check(path, finished):
         assert abs(s["total_elapsed_time"] - len(records) - 1) < 1e-9
 
 
-check(sys.argv[1], True)
-check(sys.argv[2], False)
+def check_pair(clean, full):
+    """The recorder's two copies of one ride: the same records, the developer fields only in the full one."""
+    c = read_checked(clean, False)
+    f = read_checked(full, True)
+    rec = lambda ms: [{k: v for k, v in values(m).items() if k not in ("Alpha1", "RMSSD")}
+                      for m in ms if m.name == "record"]
+    rc, rf = rec(c), rec(f)
+    if rc != rf:
+        # after a resume each copy restarts from its own last checkpoint: the full one can hold seconds the clean
+        # one lost (or the reverse); the records both have must be the same
+        common = {r["timestamp"]: r for r in rc}.keys() & {r["timestamp"]: r for r in rf}.keys()
+        same = all(a == b for a, b in zip([r for r in rc if r["timestamp"] in common], [r for r in rf if r["timestamp"] in common]))
+        assert same and common, "the records both copies have differ"
+        print(f"{clean}, {full}: {len(rc)} and {len(rf)} records (a resume: each from its checkpoint), "
+              f"the {len(common)} in both the same")
+        return
+    print(f"{clean}, {full}: {len(rc)} records each, the same; developer fields only in the full copy")
+
+
+args = sys.argv[1:]
+if args[:1] == ["--pair"]:
+    check_pair(args[1], args[2])
+else:
+    check(args[0], True)
+    check(args[1], False)
+    if len(args) > 2:
+        check(args[2], True, full=True)
 print("fit_check: all good")
