@@ -24,12 +24,24 @@
 //! The file CRC covers the header too, and the header changes with the size: [`crc_combine`] joins the header's
 //! CRC to the running data CRC in about 400 steps, whatever the file length, so a checkpoint never reads the file.
 //!
+//! **Developer fields** ([`Writer::begin_with`] `dev`): the full copy of a ride (recorder.rs) is protocol 2.0 with,
+//! after file_id, a `developer_data_id` (207: application_id, developer_data_index 0) and two `field_description`s
+//! (206: developer_data_index, field_definition_number, fit_base_type_id, field_name, units, native_mesg_num 20),
+//! `Alpha1` (float32, no units: the name Intervals.icu reads DFA a1 from, as AlphaHRV writes it,
+//! forum.intervals.icu/t/average-dfa-a1-and-wbal-added-to-interval-fields/7528) and `RMSSD` (uint16, ms); every
+//! record then carries both (invalid when not known), its definition with the developer flag (header bit 5) and
+//! (field number, size, developer data index) per field. Message and field numbers: `garmin_fit_sdk/profile.py`
+//! 21.218 (github.com/garmin/fit-python-sdk), the protocol: developer.garmin.com/fit/protocol. Without `dev` the
+//! file is byte for byte what it was: Bryton's server refuses developer fields in records (bryton-S510-mods
+//! docs/how-it-works.md, "Such rides do not sync to Bryton").
+//!
 //! **Independent check** (fitdecode, a Python FIT decoder, and Garmin's FIT SDK for Python): `cargo test-host fit_sample` writes a 20-minute
-//! synthetic ride to `target/fit/sample.fit` and its checkpoint-cut copy to `target/fit/cut.fit`, then
+//! synthetic ride to `target/fit/sample.fit` and its checkpoint-cut copy to `target/fit/cut.fit`, its full copy (developer fields) to
+//! `target/fit/sample_full.fit`, then
 //!
 //! ```text
 //! python3 -m venv /tmp/fitvenv && /tmp/fitvenv/bin/pip install fitdecode garmin-fit-sdk
-//! /tmp/fitvenv/bin/python tools/fit_check.py target/fit/sample.fit target/fit/cut.fit
+//! /tmp/fitvenv/bin/python tools/fit_check.py target/fit/sample.fit target/fit/cut.fit target/fit/sample_full.fit
 //! ```
 
 use crate::epoch_s;
@@ -77,6 +89,10 @@ pub struct Sample {
     pub power: Option<u16>,
     /// Temperature, degrees C.
     pub temp_c: Option<i8>,
+    /// DFA alpha1 x 1000 (hrv.rs): the full copy's `Alpha1` developer field only.
+    pub alpha1_milli: Option<u16>,
+    /// RMSSD, ms (hrv.rs): the full copy's `RMSSD` developer field only.
+    pub rmssd_ms: Option<u16>,
 }
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
@@ -93,6 +109,9 @@ const U8: u8 = 0x02;
 const U16: u8 = 0x84;
 const S32: u8 = 0x85;
 const U32: u8 = 0x86;
+const STRING: u8 = 0x07;
+const BYTE: u8 = 0x0d;
+const F32: u8 = 0x88;
 
 /// (field number, size, base type)
 type Field = (u8, u8, u8);
@@ -104,6 +123,37 @@ const L_RECORD: u8 = 2;
 const L_LAP: u8 = 3;
 const L_SESSION: u8 = 4;
 const L_ACTIVITY: u8 = 5;
+const L_DEV_ID: u8 = 6;
+const L_FIELD_DESC: u8 = 7;
+
+/// The full copy's developer data, after file_id (module doc): developer_data_id, then a field_description each
+/// for `Alpha1` and `RMSSD`, definitions included.
+const DEV_MESSAGES: [u8; 90] = {
+    const APP: &[u8; 16] = b"bryton-rustfw-01"; // application_id: any 16 bytes that name this firmware
+    let mut m = [0u8; 90];
+    let head: [u8; 12] = [0x40 | L_DEV_ID, 0, 0, 207, 0, 2, 1, 16, BYTE, 3, 1, U8];
+    let def: [u8; 24] =
+        [0x40 | L_FIELD_DESC, 0, 0, 206, 0, 6, 0, 1, U8, 1, 1, U8, 2, 1, U8, 3, 8, STRING, 8, 4, STRING, 14, 2, U16];
+    // index, number, base type, name (8), units (4), native_mesg_num record (20)
+    let alpha: [u8; 18] = [L_FIELD_DESC, 0, 0, F32, b'A', b'l', b'p', b'h', b'a', b'1', 0, 0, 0, 0, 0, 0, 20, 0];
+    let rmssd: [u8; 18] = [L_FIELD_DESC, 0, 1, U16, b'R', b'M', b'S', b'S', b'D', 0, 0, 0, b'm', b's', 0, 0, 20, 0];
+    let mut i = 0;
+    while i < 90 {
+        m[i] = match i {
+            0..12 => head[i],
+            12 => L_DEV_ID,
+            13..29 => APP[i - 13],
+            29 => 0, // developer_data_index
+            30..54 => def[i - 30],
+            54..72 => alpha[i - 54],
+            _ => rmssd[i - 72],
+        };
+        i += 1;
+    }
+    m
+};
+/// The developer fields of a full copy's record: (field_definition_number, size, developer_data_index).
+const DEV_RECORD: [Field; 2] = [(0, 4, 0), (1, 2, 0)];
 
 const FILE_ID: [Field; 4] = [(0, 1, ENUM), (1, 2, U16), (2, 2, U16), (4, 4, U32)];
 const EVENT: [Field; 3] = [(253, 4, U32), (0, 1, ENUM), (1, 1, ENUM)];
@@ -210,6 +260,8 @@ pub struct Writer {
     /// Seconds paused (Start key) so far; when the current pause began (0: not paused).
     paused_s: u32,
     paused_at: u32,
+    /// The full copy: protocol 2.0, developer fields in the records (module doc).
+    dev: bool,
 }
 
 impl Writer {
@@ -231,6 +283,7 @@ impl Writer {
             laps: 0,
             paused_s: 0,
             paused_at: 0,
+            dev: false,
         }
     }
 
@@ -245,9 +298,17 @@ impl Writer {
     /// [`Writer::start`] without its checkpoint: file_id and timer start only (the recorder buffers them in RAM
     /// and checkpoints once the file exists).
     pub fn begin(sink: &mut impl Sink, time: u32) -> Result<Writer, Error> {
-        let mut w = Writer { start: time, last: time, lap_start: time, ..Writer::default() };
+        Writer::begin_with(sink, time, false)
+    }
+
+    /// [`Writer::begin`], with developer fields when `dev` (the full copy: module doc).
+    pub fn begin_with(sink: &mut impl Sink, time: u32, dev: bool) -> Result<Writer, Error> {
+        let mut w = Writer { start: time, last: time, lap_start: time, dev, ..Writer::default() };
         // 255: development (not a registered manufacturer: this is not Bryton's firmware)
         w.message(sink, L_FILE_ID, 0, &FILE_ID, &[4, 255, 0, time])?;
+        if dev {
+            w.put(sink, &DEV_MESSAGES)?;
+        }
         w.event(sink, time, 0)?;
         Ok(w)
     }
@@ -347,7 +408,15 @@ impl Writer {
         if mask != self.mask {
             self.defined &= !(1 << L_RECORD);
         }
-        self.message(sink, L_RECORD, 20, fields.get(..n).unwrap_or(&[]), values.get(..n).unwrap_or(&[]))?;
+        let (fields, values) = (fields.get(..n).unwrap_or(&[]), values.get(..n).unwrap_or(&[]));
+        if self.dev {
+            // invalid: float32 all ones, uint16 0xffff
+            let alpha = s.alpha1_milli.map_or(u32::MAX, |a| (f32::from(a) / 1000.0).to_bits());
+            let dev = [alpha, s.rmssd_ms.map_or(0xffff, u32::from)];
+            self.message_dev(sink, L_RECORD, 20, fields, values, &DEV_RECORD, &dev)?;
+        } else {
+            self.message(sink, L_RECORD, 20, fields, values)?;
+        }
         self.mask = mask;
         Ok(())
     }
@@ -390,7 +459,7 @@ impl Writer {
     pub fn checkpoint(&mut self, sink: &mut impl Sink) -> Result<[u8; RECORD_LEN], Error> {
         let mut h = [0u8; HEADER as usize];
         h[0] = HEADER as u8;
-        h[1] = 0x10; // protocol 1.0: no developer fields
+        h[1] = if self.dev { 0x20 } else { 0x10 }; // protocol 2.0 for developer fields, else 1.0
         h[2..4].copy_from_slice(&2140u16.to_le_bytes()); // profile 21.40
         h[4..8].copy_from_slice(&self.len.to_le_bytes());
         h[8..12].copy_from_slice(b".FIT");
@@ -436,6 +505,7 @@ impl Writer {
             crc: w[1] as u16,
             defined: (w[1] >> 16) as u8,
             mask: w[2] as u16,
+            dev: w[2] >> 16 & 1 != 0,
             start: w[3],
             last: w[4],
             dist_mm: w[5],
@@ -455,7 +525,7 @@ impl Writer {
         let w: [u32; WORDS] = [
             self.len,
             u32::from(self.crc) | u32::from(self.defined) << 16,
-            u32::from(self.mask),
+            u32::from(self.mask) | u32::from(self.dev) << 16,
             self.start,
             self.last,
             self.dist_mm,
@@ -492,7 +562,22 @@ impl Writer {
 
     /// Data message `local` (global number `global`), its definition first if the file does not have it yet.
     fn message(&mut self, sink: &mut impl Sink, local: u8, global: u16, f: &[Field], v: &[u32]) -> Result<(), Error> {
-        let mut buf = [0u8; 128]; // the largest, session with its definition: 109
+        self.message_dev(sink, local, global, f, v, &[], &[])
+    }
+
+    /// [`Writer::message`] with developer fields `df` (number, size, developer data index) and their values `dv`.
+    #[allow(clippy::too_many_arguments)]
+    fn message_dev(
+        &mut self,
+        sink: &mut impl Sink,
+        local: u8,
+        global: u16,
+        f: &[Field],
+        v: &[u32],
+        df: &[Field],
+        dv: &[u32],
+    ) -> Result<(), Error> {
+        let mut buf = [0u8; 128]; // the largest, session with its definition: 109; a full record: 87
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             if let Some(s) = buf.get_mut(n..n + bytes.len()) {
@@ -502,20 +587,32 @@ impl Writer {
         };
         if self.defined & (1 << local) == 0 {
             let [g0, g1] = global.to_le_bytes();
-            put(&[0x40 | local, 0, 0, g0, g1, f.len() as u8]);
+            let flag = if df.is_empty() { 0 } else { 0x20 }; // developer fields follow the definition
+            put(&[0x40 | flag | local, 0, 0, g0, g1, f.len() as u8]);
             for &(num, size, ty) in f {
                 put(&[num, size, ty]);
             }
+            if !df.is_empty() {
+                put(&[df.len() as u8]);
+                for &(num, size, index) in df {
+                    put(&[num, size, index]);
+                }
+            }
         }
         put(&[local]);
-        for (&(_, size, _), x) in f.iter().zip(v) {
+        for (&(_, size, _), x) in f.iter().chain(df).zip(v.iter().chain(dv)) {
             put(x.to_le_bytes().get(..usize::from(size)).unwrap_or(&[]));
         }
-        let bytes = buf.get(..n).unwrap_or(&[]);
-        sink.write_at(HEADER + self.len, bytes)?;
-        self.len += n as u32;
-        self.crc = crc(self.crc, bytes);
+        self.put(sink, buf.get(..n).unwrap_or(&[]))?;
         self.defined |= 1 << local;
+        Ok(())
+    }
+
+    /// Appends `bytes` (whole messages) to the data.
+    fn put(&mut self, sink: &mut impl Sink, bytes: &[u8]) -> Result<(), Error> {
+        sink.write_at(HEADER + self.len, bytes)?;
+        self.len += bytes.len() as u32;
+        self.crc = crc(self.crc, bytes);
         Ok(())
     }
 }
@@ -661,7 +758,7 @@ mod tests {
     type Msg = (u16, Vec<(u8, u64)>);
 
     /// A strict FIT reader for what this writer writes: header and its CRC, data size, file CRC, normal headers,
-    /// every data message on a definition.
+    /// every data message on a definition. Developer fields come out as field 230 + their number.
     fn decode(f: &[u8]) -> Result<Vec<Msg>, &'static str> {
         if f.len() < 16 || f[0] != 14 || &f[8..12] != b".FIT" {
             return Err("header");
@@ -688,15 +785,24 @@ mod tests {
             if h & 0x40 != 0 {
                 let g = u16::from_le_bytes([f[i + 2], f[i + 3]]);
                 let n = usize::from(f[i + 4]);
-                let fields = (0..n).map(|k| (f[i + 5 + 3 * k], f[i + 6 + 3 * k])).collect();
-                defs[local] = Some((g, fields));
+                let mut fields: Vec<(u8, u8)> = (0..n).map(|k| (f[i + 5 + 3 * k], f[i + 6 + 3 * k])).collect();
                 i += 5 + 3 * n;
+                if h & 0x20 != 0 {
+                    if f[1] != 0x20 {
+                        return Err("developer fields in protocol 1.0");
+                    }
+                    let n = usize::from(f[i]);
+                    fields.extend((0..n).map(|k| (230 + f[i + 1 + 3 * k], f[i + 2 + 3 * k])));
+                    i += 1 + 3 * n;
+                }
+                defs[local] = Some((g, fields));
             } else {
                 let (g, fields) = defs[local].as_ref().ok_or("no definition")?;
                 let mut m = Vec::new();
                 for &(num, size) in fields {
                     let mut v = [0u8; 8];
-                    v[..usize::from(size)].copy_from_slice(&f[i..i + usize::from(size)]);
+                    let k = usize::from(size).min(8); // a byte array or a string: its first 8 bytes
+                    v[..k].copy_from_slice(&f[i..i + k]);
                     m.push((num, u64::from_le_bytes(v)));
                     i += usize::from(size);
                 }
@@ -724,6 +830,8 @@ mod tests {
                 cadence: (t >= 30).then_some(85 + (t % 10) as u8),
                 power: (t >= 30 && !(200..215).contains(&t)).then_some(200 + (t % 60) as u16),
                 temp_c: Some((t % 30) as i8 - 5),
+                alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
+                rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
             })
             .collect()
     }
@@ -819,10 +927,26 @@ mod tests {
     /// back a valid file (the checkpoint's, byte for byte), and the ride goes on from it to a valid finished file.
     #[test]
     fn power_cut_at_every_byte_resumes_from_the_last_checkpoint() {
+        power_cut_at_every_byte(false);
+    }
+
+    /// The same for the full copy (developer fields).
+    #[test]
+    fn power_cut_at_every_byte_with_developer_fields() {
+        power_cut_at_every_byte(true);
+    }
+
+    fn start(sink: &mut impl Sink, dev: bool) -> Result<(Writer, [u8; RECORD_LEN]), Error> {
+        let mut w = Writer::begin_with(sink, T0, dev)?;
+        let rec = w.checkpoint(sink)?;
+        Ok((w, rec))
+    }
+
+    fn power_cut_at_every_byte(dev: bool) {
         let samples = ride(200);
         // the uncut ride, and the file at each checkpoint, by data length
         let mut full = Vec::new();
-        let (mut w, _) = Writer::start(&mut full, T0).unwrap();
+        let (mut w, _) = start(&mut full, dev).unwrap();
         let mut at_checkpoint = std::collections::HashMap::new();
         at_checkpoint.insert(w.data_len(), full.clone());
         for s in &samples {
@@ -841,7 +965,7 @@ mod tests {
             let mut sink = Cut { disk: Vec::new(), budget };
             let mut rec = None;
             let mut last = [0; RECORD_LEN];
-            if let Ok((mut w, r)) = Writer::start(&mut sink, T0) {
+            if let Ok((mut w, r)) = start(&mut sink, dev) {
                 rec = Some(r);
                 let done = write(&mut sink, &mut w, &samples, &mut last).is_some();
                 if last != [0; RECORD_LEN] {
@@ -870,6 +994,43 @@ mod tests {
         assert!(resumed > 1000);
     }
 
+    /// The clean file ignores the developer values (byte for byte the same without them); the full copy is
+    /// protocol 2.0 and carries them in every record, invalid when not known, after its developer data.
+    #[test]
+    fn developer_fields_only_in_the_full_copy() {
+        let samples = ride(300);
+        let bare: Vec<Sample> = samples.iter().map(|s| Sample { alpha1_milli: None, rmssd_ms: None, ..*s }).collect();
+        let file = |dev: bool, samples: &[Sample]| {
+            let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
+            let (mut w, _) = start(&mut f, dev).unwrap();
+            write(&mut f, &mut w, samples, &mut rec).unwrap();
+            assert_eq!(Writer::from_record(&rec).map(|w| w.dev), Some(dev));
+            f
+        };
+        let clean = file(false, &samples);
+        assert_eq!(clean, file(false, &bare));
+        assert_eq!(clean[1], 0x10);
+        assert!(decode(&clean).unwrap().iter().all(|m| m.1.iter().all(|f| !(230..240).contains(&f.0))));
+        let full = file(true, &samples);
+        assert_eq!(full[1], 0x20);
+        let m = decode(&full).unwrap();
+        let globals: Vec<u16> = m.iter().map(|x| x.0).take(5).collect();
+        assert_eq!(globals, [0, 207, 206, 206, 21], "file_id, developer data, timer start");
+        let records: Vec<&Msg> = m.iter().filter(|x| x.0 == 20).collect();
+        assert_eq!(records.len(), 300);
+        assert_eq!(field(records[10], 230), Some(0xffff_ffff), "no DFA a1 yet: invalid");
+        assert_eq!(field(records[10], 231), Some(0xffff));
+        let a = f32::from_bits(field(records[100], 230).unwrap() as u32);
+        assert!((a - (500 + 100 % 700) as f32 / 1000.0).abs() < 1e-6, "{a}");
+        assert_eq!(field(records[100], 231), Some(20 + 100 % 40));
+        // the same records otherwise: the clean file's fields, in the same order
+        let cm = decode(&clean).unwrap();
+        let cr: Vec<&Msg> = cm.iter().filter(|x| x.0 == 20).collect();
+        for (c, f) in cr.iter().zip(&records) {
+            assert_eq!(c.1[..], f.1[..f.1.len() - 2]);
+        }
+    }
+
     #[test]
     fn a_damaged_record_is_refused() {
         let (_, mut rec) = Writer::start(&mut Vec::new(), T0).unwrap();
@@ -888,6 +1049,10 @@ mod tests {
         let (mut w, _) = Writer::start(&mut f, T0).unwrap();
         write(&mut f, &mut w, &ride(1200), &mut rec).unwrap();
         std::fs::write(dir.join("sample.fit"), &f).unwrap();
+        let mut full = Vec::new();
+        let (mut w, _) = start(&mut full, true).unwrap();
+        write(&mut full, &mut w, &ride(1200), &mut rec).unwrap();
+        std::fs::write(dir.join("sample_full.fit"), &full).unwrap();
 
         let mut sink = Cut { disk: Vec::new(), budget: f.len() / 2 };
         let (mut w, mut rec) = Writer::start(&mut sink, T0).unwrap();

@@ -182,7 +182,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/phone.rs`: the phone link's formats, pure logic: the HID report map, ANCS, AMS, CTS, the bond's sector.
 - `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
-  `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK).
+  `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK), the full copy's
+  developer fields included.
 - `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol: identification, EXT_CSD SEC_COUNT, block reads and writes
   (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
   `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `sim.rs` has a model of the card
@@ -198,6 +199,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/recorder.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw\Rides` from RAM to the card at
   each checkpoint (a minute at most), two recovery records in `\Rustfw\ride.rec` (3 KB), resume at boot, the save to
   `\Activities\YYMMDDhhmmss.fit`. Its tests cut the power after every sector of a whole ride and of the reboot.
+  Two recorders run per ride (`Kind`): the clean copy above, and the full one (`Alpha1` / `RMSSD` developer fields,
+  `\Rustfw\Full`, `\Rustfw\full.rec`, saved to `\Rustfw\Activities`), which never holds the clean one up
+  (`App::step_full`, docs/sync.md).
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
@@ -234,6 +238,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   endpoints, each wait 1 s at most).
 - `src/board/hw.rs`: the unsafe primitives (above).
 - `dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
+- `tools/sync.py`: the computer's sync (docs/sync.md): rides from the mounted drive or the dev link (dev.py `ls` /
+  `get`) to Intervals.icu (full copy) and Strava (clean copy), never twice; planned workouts from Intervals.icu to
+  `\Workout\calendar`. Dry run unless `--go`; keys and tokens only in `~/.config/bryton-rustfw/` (0600), never in
+  the repository. `sync.py selftest` (check.sh) runs against a fake server on 127.0.0.1.
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
   after `dev.py reset`): a firmware that reads the link takes the bytes first.
@@ -254,7 +262,7 @@ It runs, in order:
 - `cargo test-host` (unit tests, simulator tests and doc tests on the Mac; writes `target/sim/preview.bmp`);
 - the firmware build;
 - `pack.py`;
-- `dev.py selftest`;
+- `dev.py selftest`, `tools/sync.py selftest`;
 - if Renode is installed: `renode/run.py` and `renode/run.py --vbus` (Emulation).
 
 Look at `target/sim/preview.bmp` after any drawing change, and at `target/sim/fonts.bmp` (every font, written by
