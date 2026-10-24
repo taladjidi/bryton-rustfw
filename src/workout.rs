@@ -2,13 +2,13 @@
 //! it is left. Pure logic, fed one second at a time: the step's clock moves only when the ride's timer moved (a
 //! pause or an auto-pause stops both), a distance step ends on the ride's distance, an open step on Lap
 //! ([`Player::skip`]). Each change comes out as an [`Event`] for the app to show and sound: a step started, the
-//! last 3 seconds of a timed step (3-2-1 beeps, as bryton-S510-mods' patch P1 does), the workout done.
+//! last 2 seconds of a timed step (beep, beep, then the step's longer beep: the owner's choice), the workout done.
 
 use crate::storage::workout::{Kind, Length, Step};
 use crate::{ride, ui};
 
-/// Seconds before a timed step ends that each beep (3, 2, 1).
-pub const COUNTDOWN_S: u32 = 3;
+/// Seconds before a timed step ends that each beep (2, 1), then the next step's longer beep.
+pub const COUNTDOWN_S: u32 = 2;
 /// An open step's width on the workout graph, s: it lasts until Lap, so its length is unknown.
 // ponytail: a fixed guess; the time actually spent in it would need the graph to grow as it goes
 pub const OPEN_S: u32 = 300;
@@ -20,7 +20,7 @@ const GRAPH_MPS: u32 = 8;
 pub enum Event {
     /// Step `n` (from 0) started.
     Step(usize),
-    /// A timed step has this many seconds left (3, 2, 1).
+    /// A timed step has this many seconds left (2, 1).
     Countdown(u32),
     /// The last step ended.
     Done,
@@ -264,13 +264,10 @@ mod tests {
         assert_eq!(first, Event::Step(0));
         let ev = run(&mut p, &steps, 12, |_| true);
         use Event::*;
-        // 5 s: beeps at 3, 2, 1 left, then the next; a 2 s step only has 1 left to beep; the last one ends the workout
-        let want = [(2, Countdown(3)), (3, Countdown(2)), (4, Countdown(1)), (5, Step(1))];
-        assert_eq!(ev[..4], want);
-        assert_eq!(
-            ev[4..],
-            [(6, Countdown(1)), (7, Step(2)), (8, Countdown(3)), (9, Countdown(2)), (10, Countdown(1)), (11, Done)]
-        );
+        // 5 s: beeps at 2 and 1 left, then the next; a 2 s step only has 1 left to beep; the last one ends the workout
+        let want = [(3, Countdown(2)), (4, Countdown(1)), (5, Step(1))];
+        assert_eq!(ev[..3], want);
+        assert_eq!(ev[3..], [(6, Countdown(1)), (7, Step(2)), (9, Countdown(2)), (10, Countdown(1)), (11, Done)]);
         assert_eq!((p.step(&steps), p.left(&steps, 0)), (None, Left::Done));
         assert_eq!(p.second(&steps, true, 0), None, "done stays done");
     }

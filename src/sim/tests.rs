@@ -443,7 +443,7 @@ fn power210(_: u64) -> [u8; 8] {
 
 /// The synthetic card's planned workouts (tools/fat_image.py, today 2026-10-23): WORKOUTS lists today's and the
 /// next days' (not the past one, not the broken one), Select shows the steps (repeats written out), Start
-/// starts the ride and the workout. The step clock follows the ride timer: 3-2-1 beeps and a banner per step,
+/// starts the ride and the workout. The step clock follows the ride timer: beep, beep, beeeep and a banner per step,
 /// the target coloured from the 3 s power, a pause stops it, Lap skips a step (and ends the open cool-down),
 /// the last step ends the workout.
 #[test]
@@ -497,7 +497,7 @@ fn workout_from_the_calendar() {
         assert!(ms < 30_000, "the warm-up ends");
     }
     assert!((14_000..16_500).contains(&(sim.ms - start)), "20 s from the start: {} ms after 5 s", sim.ms - start);
-    assert_eq!(sim.tones[tones..], [2500, 0, 2000, 0, 2000, 0, 2000, 0, 2500], "start, 3-2-1, the next step");
+    assert_eq!(sim.tones[tones..], [2500, 0, 2000, 0, 2000, 0, 2500], "start, beep at 2 and 1 s left, the next step");
     assert_eq!(app.banner.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
     assert_eq!(fields(&app), ["200-220", "0:25", "150", "2/6"]);

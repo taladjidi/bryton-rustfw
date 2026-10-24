@@ -44,10 +44,12 @@ impl App {
     // Planned workouts (storage/workout.rs) and the player (workout.rs)
     // -----------------------------------------------------------------------------------------------------------
 
-    /// The buzzer for a step start and for the countdown's beeps: (Hz, ms).
-    pub(crate) const STEP_TONE: [(u32, u32); 1] = [(2500, 400)];
+    /// The buzzer for a step start and for the countdown's beeps: (Hz, ms). Beep, beep, beeeep: 500 ms at 2 and 1 s
+    /// left, then 1 s as the target changes (the owner's choice).
+    pub(crate) const STEP_TONE: [(u32, u32); 1] = [(2500, 1000)];
 
-    pub(crate) const COUNT_TONE: [(u32, u32); 1] = [(2000, 100)];
+    /// See [`App::STEP_TONE`].
+    pub(crate) const COUNT_TONE: [(u32, u32); 1] = [(2000, 500)];
 
     /// Reads the workouts planned from today on (none if the card cannot be read).
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
@@ -89,7 +91,7 @@ impl App {
     }
 
     /// Shows and sounds what the player said: a banner and a long tone for a new step ("3/14 210-230W"), a short
-    /// beep for each of the last 3 seconds.
+    /// beep for each of the last 2 seconds.
     pub(crate) fn workout_event(&mut self, ev: workout::Event) {
         let steps = self.plan.steps();
         let mut l = Line::<20>::new();

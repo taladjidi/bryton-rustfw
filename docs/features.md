@@ -124,8 +124,8 @@ TrainingPeaks), read only:
   shows the workout's steps, its name as the title: what ends each step (a time, a distance, or LAP) and its target
   (power in W from % FTP, heart rate in bpm from % max HR, cadence), coloured by zone; repeats are written out.
 - **START** (or Select on a step: from that step) starts the workout, and the ride if none runs, on page 1. The
-  step's clock follows the ride's timer (a pause or an auto-pause stops both); three short beeps in its last 3
-  seconds, then a longer one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
+  step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
+  left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
 - **Fields** to place on a page: TARGET (the step's range: green in it, orange under, red over, from the 3 s power,
   the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
