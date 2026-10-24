@@ -256,7 +256,7 @@ def main():
                         break
                     if len(data) % (256 * 1024) == 0:
                         print(f'{len(data) // 1024} KB...', file=sys.stderr)
-                pathlib.Path(a.o).write_bytes(data)
+                Path(a.o).write_bytes(data)
                 print(f'{len(data)} bytes -> {a.o}')
             elif a.cmd == 'bench' and a.lba == 'scan':
                 answer = command(s, f'bench scan {a.n}')

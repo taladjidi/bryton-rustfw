@@ -90,7 +90,7 @@ impl App {
                 self.open(Screen::Past);
                 self.show(b);
             }
-            Some(Err(_)) => self.notice("RIDE UNREADABLE"),
+            Some(Err(_)) => self.notice("BAD RIDE FILE"),
             None => {}
         }
     }

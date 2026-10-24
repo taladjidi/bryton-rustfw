@@ -946,9 +946,15 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
         return draw_ferris(c);
     }
     for (r, n) in notices.iter().take(NOTICES).enumerate() {
-        let style = Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL };
-        text::draw_in(c, &style, NEARBY.0, NOTICES_Y + 4 + r as u32 * LIST_ROW, W - 2 * NEARBY.0, Align::Left, n);
+        let style = fit(Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL }, n, W - 8);
+        // a 4 px margin: "08:41 RIDE RESUMED" (18 characters) fits, the list's 20 px left only 16
+        text::draw_in(c, &style, 4, NOTICES_Y + 4 + r as u32 * LIST_ROW, W - 8, Align::Left, n);
     }
+}
+
+/// `style`, or at scale 1 if `text` would not fit in `w` ("08:41 HEART RATE PAIRED"): smaller rather than cut.
+fn fit(style: Style, text: &str, w: u32) -> Style {
+    if style.width(text) > w { Style { scale: 1, ..style } } else { style }
 }
 
 /// Top of a banner: a notice over the bottom of any screen other than the overview.
@@ -957,7 +963,7 @@ pub const BANNER_Y: u32 = H - 40;
 /// A banner: `text` in black on orange over the bottom of the screen.
 pub fn draw_banner(c: &mut impl Canvas, text: &str) {
     c.fill(0, BANNER_Y, W, 4, BLACK);
-    let style = Style { fg: BLACK, bg: ACCENT, ..LABEL };
+    let style = fit(Style { fg: BLACK, bg: ACCENT, ..LABEL }, text, W);
     c.fill(0, BANNER_Y + 4, W, 8, ACCENT);
     text::draw_in(c, &style, 0, BANNER_Y + 12, W, Align::Centre, text);
     c.fill(0, BANNER_Y + 12 + style.height(), W, H - BANNER_Y - 12 - style.height(), ACCENT);
@@ -999,6 +1005,14 @@ pub(crate) mod tests {
     use super::*;
     use std::vec;
     use std::vec::Vec;
+
+    #[test]
+    fn long_notices_fit() {
+        for t in ["08:41 RIDE RESUMED", "08:41 HEART RATE PAIRED", "08:41 SPEED+CAD PAIRED", "08:41 FAULT RESET 3"] {
+            assert!(fit(LABEL, t, W - 8).width(t) <= W - 8, "{t}");
+        }
+        assert_eq!(fit(LABEL, "08:41 RIDE RESUMED", W - 8).scale, LABEL.scale, "the usual size when it fits");
+    }
 
     /// A framebuffer that panics on any fill off screen.
     pub struct Frame {
