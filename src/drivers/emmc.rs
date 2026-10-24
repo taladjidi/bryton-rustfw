@@ -105,6 +105,8 @@ pub enum Error {
     Range,
     /// The EXT_CSD's SEC_COUNT is too small for stock's layout, or differs between the 1-bit and the 4-bit read.
     ExtCsd,
+    /// The card is lent to the computer as a USB drive ([`Emmc::lend`]): nothing else may touch it.
+    Lent,
 }
 
 /// Stock's layout of the card, from SEC_COUNT (BOARD.md 15).
@@ -288,16 +290,36 @@ impl Card {
 #[derive(Default)]
 pub struct Emmc {
     card: Option<Card>,
+    lent: bool,
 }
 
 impl Emmc {
     /// Not identified yet.
     pub const fn new() -> Self {
-        Emmc { card: None }
+        Emmc { card: None, lent: false }
+    }
+
+    /// Lends the card to the computer (the USB drive, msc.rs), or takes it back. While lent, every use but
+    /// [`Lent`]'s fails with [`Error::Lent`]: one owner at a time, whoever the caller (the recorder, the scans,
+    /// the basemap, the dev link).
+    pub fn lend(&mut self, on: bool) {
+        self.lent = on;
+    }
+
+    /// The card is lent to the computer.
+    pub fn lent(&self) -> bool {
+        self.lent
     }
 
     /// The card (identified if needed): its layout and its reliable write parameters.
     pub fn card(&mut self, b: &mut impl Board) -> Result<Card, Error> {
+        if self.lent {
+            return Err(Error::Lent);
+        }
+        self.identify(b)
+    }
+
+    fn identify(&mut self, b: &mut impl Board) -> Result<Card, Error> {
         let card = match self.card {
             Some(c) => c,
             None => Card::init(b)?,
@@ -323,6 +345,47 @@ impl Emmc {
             self.card = None;
         }
         r
+    }
+}
+
+/// The card as the computer's drive (msc.rs): the FAT volume only, sectors 0 .. B-1, so a write past it cannot be
+/// asked for (and [`Card::write`] refuses it anyway). Works only while the card is lent ([`Emmc::lend`]).
+pub struct Lent<'a, B: Board>(pub &'a mut Emmc, pub &'a mut B);
+
+impl<B: Board> crate::msc::Media for Lent<'_, B> {
+    fn blocks(&mut self) -> Option<u32> {
+        let e = &mut *self.0;
+        if !e.lent {
+            return None;
+        }
+        let r = e.identify(self.1).map(|c| c.layout.fat_end);
+        if r.is_err() {
+            e.card = None;
+        }
+        r.ok()
+    }
+    fn writable(&self) -> bool {
+        self.1.emmc_writable()
+    }
+    fn read(&mut self, lba: u32, buf: &mut [u8]) -> bool {
+        let e = &mut *self.0;
+        let r = match e.identify(self.1) {
+            Ok(c) if e.lent && lba.saturating_add((buf.len() / SECTOR) as u32) <= c.layout.fat_end => {
+                c.read(self.1, lba, buf)
+            }
+            Ok(_) => Err(Error::Range),
+            Err(x) => Err(x),
+        };
+        e.forget_on_error(r).is_ok()
+    }
+    fn write(&mut self, lba: u32, buf: &[u8]) -> bool {
+        let e = &mut *self.0;
+        let r = match e.identify(self.1) {
+            Ok(c) if e.lent => c.write(self.1, lba, buf),
+            Ok(_) => Err(Error::Lent),
+            Err(x) => Err(x),
+        };
+        e.forget_on_error(r).is_ok()
     }
 }
 

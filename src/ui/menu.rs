@@ -162,6 +162,8 @@ pub enum Row {
     Open(Menu),
     /// Opens the list of BLE devices nearby (and starts a scan).
     Nearby,
+    /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
+    Drive,
     /// A setting.
     Set(Setting),
     /// ANT sensor `n` ([`crate::sensors::Kind::ALL`]): Select pairs or forgets it.
@@ -277,12 +279,13 @@ pub const RIDER: [Row; 5] = [
 ];
 
 /// The device menu: the backlight, the wheel, the GPS readings, the BLE devices nearby.
-pub const DEVICE: [Row; 5] = [
+pub const DEVICE: [Row; 6] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Wheel),
     Row::Open(Menu::Gps),
     Row::Nearby,
+    Row::Drive,
 ];
 
 /// The built-in sensors' readings, under the ANT sensors in the sensors menu.

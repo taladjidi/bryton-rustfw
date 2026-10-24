@@ -17,6 +17,7 @@ pub mod course;
 pub mod dev;
 pub mod drivers;
 pub mod hrv;
+pub mod msc;
 pub mod power;
 pub mod power_curve;
 pub mod ride;
@@ -258,6 +259,10 @@ pub struct App {
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course::Courses>,
+    /// The USB drive (msc.rs): the medium is in while the card is lent ([`emmc::Emmc::lend`], app/drive.rs).
+    drive: msc::Drive,
+    /// A system reset is wanted (after the computer wrote to the volume: app/drive.rs).
+    restart: bool,
 }
 
 impl App {
@@ -396,6 +401,8 @@ impl App {
             resume_pending: false,
             lag_s: 0,
             courses: None,
+            drive: msc::Drive::new(),
+            restart: false,
         }
     }
 
@@ -538,9 +545,12 @@ impl App {
                 self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
             }
         }
-        self.step_stock(b);
-        self.step_courses(b);
-        self.step_past(b);
+        if !self.emmc.lent() {
+            // the card is the computer's (the USB drive): the app's card work waits
+            self.step_stock(b);
+            self.step_courses(b);
+            self.step_past(b);
+        }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         if let Some(ms) = self.banner_ms {
             if !core::mem::replace(&mut self.banner_drawn, true) {
@@ -566,7 +576,13 @@ impl App {
                 self.redraw_ms = 0;
             }
             Screen::Menu(
-                menu @ (Menu::Main | Menu::Sensors | Menu::Gps | Menu::Stock | Menu::History | Menu::Courses),
+                menu @ (Menu::Main
+                | Menu::Sensors
+                | Menu::Gps
+                | Menu::Stock
+                | Menu::History
+                | Menu::Courses
+                | Menu::Device),
                 sel,
             ) if self.redraw_ms >= LIST_REDRAW_MS => {
                 self.update_menu_rows(b, menu, sel);

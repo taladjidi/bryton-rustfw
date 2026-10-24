@@ -121,6 +121,10 @@ impl App {
             }
             Row::Open(m) => label.push_str(menu_title(m)),
             Row::Nearby => label.push_str("NEARBY BLE"),
+            Row::Drive => {
+                label.push_str("USB DRIVE");
+                value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
+            }
             Row::Set(s) => {
                 label.push_str(s.label());
                 let edited = self.editing && self.screen == Screen::Menu(menu, i);
@@ -339,6 +343,10 @@ impl App {
             Some(Row::Course(k)) => self.follow_course(k),
             Some(Row::WorkoutStart) => self.start_workout(0),
             Some(Row::Step(k)) => self.start_workout(k),
+            Some(Row::Drive) if self.emmc.lent() => self.drive_off(),
+            Some(Row::Drive) => {
+                let _ = self.drive_on(); // why not is in the banner
+            }
             Some(Row::Nearby) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();

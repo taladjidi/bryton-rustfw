@@ -42,6 +42,13 @@ Engineer Mode as above, then `sudo python3 tools/iaprecover.py --write-vanilla` 
 [bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods), see its `docs/recovery.md`; run
 `tools/fetch_firmware.py` once to get the stock image). Restart, then install any firmware as usual.
 
+## Copying files without stock
+
+With the cable in and the USB symbol green, DEVICE > USB DRIVE (or `./dev.py drive`) lends the BRYTON volume to the
+computer as a USB drive: copy rides off, or routes and workouts on (a build with EMMC_WRITE=1; others offer it read
+only). No ride may run or wait to be saved. Eject it on the computer to give it back; after a write the unit
+restarts. Unplugging also gives it back (the unit resets). Not yet seen on the unit (docs/status.md).
+
 ## IGN maps
 
 Plan IGN v2 (IGN, Licence Ouverte / Etalab 2.0: the map shows "(c) IGN") for an area, made on the computer and copied
@@ -62,10 +69,9 @@ individuals: the tool only fetches Plan IGN v2.
 
    It writes `IGN<z>_<x / 32>_<y / 32>.PAK` (one per zoom and block of 32 x 32 tiles) and `ATTRIB.TXT`.
    To check them on the computer: `IGN_PACKS=~/ign-packs cargo test-host every_packed_tile -- --ignored --nocapture`.
-3. Copy them to the card: start Bryton's firmware (Back to Bryton's firmware, above), plug the cable in so its USB
-   drive (BRYTON) shows, and copy the files into a folder `Rustfw/Maps` at the drive's top (make it if missing).
-   Compare the copy (`diff -r ~/ign-packs /Volumes/BRYTON/Rustfw/Maps`): the USB link can drop. Then install this
-   firmware again. This firmware reads the folder, never writes it; stock ignores it.
+3. Copy them to the card through this firmware's USB drive (below, "Copying files without stock"), or Bryton's
+   firmware's, into a folder `Rustfw/Maps` at the drive's top (make it if missing).
+   Compare the copy (`diff -r ~/ign-packs /Volumes/BRYTON/Rustfw/Maps`): the USB link can drop. This firmware reads the folder, never writes it; stock ignores it.
 
 ## Day to day
 

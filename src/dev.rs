@@ -29,6 +29,8 @@
 //! - `wtest <lba>`: the first write on the unit, on one sector the computer picked in free space ([`Effect::WriteTest`],
 //!   [`write_test`]): reads it, writes it back changed, reads that back, writes the original back, reads that back;
 //!   `ok`, or `err <step>` (`err read`, `err write`, `err pattern`, `err restore`...). Refused by a read-only build.
+//! - `drive`: lends the eMMC's FAT volume to the computer as a USB drive ([`Effect::Drive`], app/drive.rs): `ok`,
+//!   or `err <why>` (no ride may run or wait to be saved). The computer's eject gives it back.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -99,6 +101,8 @@ pub enum Effect {
     /// Time the scan of stock's rides over about this many bytes ([`App::bench_scan`]); answer with
     /// [`send_bench`].
     BenchScan(u32),
+    /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
+    Drive,
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -259,6 +263,7 @@ impl Session {
                 _ => h.send(b"err usage: sector <n>\n"),
             },
             Some(b"emmc") => return Effect::Emmc,
+            Some(b"drive") => return Effect::Drive,
             Some(b"wtest") => match (words.next().and_then(parse), words.next()) {
                 (Some(n), None) => return Effect::WriteTest(n),
                 _ => h.send(b"err usage: wtest <lba>\n"),
@@ -482,7 +487,7 @@ pub fn send_layout(h: &mut impl Host, r: Result<emmc::Card, emmc::Error>) {
     }
 }
 
-/// `err cmd <n> timeout|crc|overrun`, `err busy`, `err status cmd <n> <status>`, `err range` or `err ext_csd`.
+/// `err cmd <n> timeout|crc|overrun`, `err busy`, `err status cmd <n> <status>`, `err range`, `err ext_csd` or `err lent as usb drive`.
 fn send_error(h: &mut impl Host, e: emmc::Error) {
     use emmc::{BusError, Error};
     match e {
@@ -504,6 +509,7 @@ fn send_error(h: &mut impl Host, e: emmc::Error) {
         }
         Error::Range => h.send(b"err range\n"),
         Error::ExtCsd => h.send(b"err ext_csd\n"),
+        Error::Lent => h.send(b"err lent as usb drive\n"),
     }
 }
 
