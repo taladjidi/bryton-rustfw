@@ -184,6 +184,10 @@ pub enum Row {
     Step(usize),
     /// Course `n` of the list ([`crate::storage::course::List`]): Select follows it, or stops following it.
     Course(usize),
+    /// Group `g` of [`crate::ui::FIELD_GROUPS`]: Select lists its fields.
+    Group(usize),
+    /// A field of a group: Select puts it in the page's box and goes back to the page's menu.
+    Pick(crate::ui::Field),
 }
 
 /// What the stock data menu shows ([`STOCK`]): read from the rides and settings Bryton's firmware left on the
@@ -242,28 +246,43 @@ pub const STOCK: [StockRow; 11] = {
 /// The alerts menu.
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
-/// The main menu.
-pub const MAIN: [Row; 20] = [
+/// The main menu: a screen of groups, so nothing is more than one screen of rows away.
+pub const MAIN: [Row; 9] = [
     Row::Open(Menu::Sensors),
+    Row::Open(Menu::Pages),
+    Row::Open(Menu::Rider),
+    Row::Open(Menu::Device),
+    Row::Open(Menu::Alerts),
+    Row::Open(Menu::Workouts),
+    Row::Open(Menu::Courses),
+    Row::Open(Menu::History),
+    Row::Open(Menu::Stock),
+];
+
+/// The pages menu: the overview and the ride pages.
+pub const PAGES: [Row; 4] = [
     Row::Open(Menu::Page(crate::OVERVIEW)),
     Row::Open(Menu::Page(0)),
     Row::Open(Menu::Page(1)),
     Row::Open(Menu::Page(2)),
-    Row::Set(Setting::Wheel),
-    Row::Set(Setting::Light),
-    Row::Set(Setting::LightOff),
+];
+
+/// The rider menu: the numbers the metrics are computed from, and the workout gauge's power.
+pub const RIDER: [Row; 5] = [
     Row::Set(Setting::MaxHr),
     Row::Set(Setting::Ftp),
     Row::Set(Setting::Weight),
     Row::Set(Setting::WPrime),
-    Row::Open(Menu::Alerts),
+    Row::Set(Setting::WktAvg),
+];
+
+/// The device menu: the backlight, the wheel, the GPS readings, the BLE devices nearby.
+pub const DEVICE: [Row; 5] = [
+    Row::Set(Setting::Light),
+    Row::Set(Setting::LightOff),
+    Row::Set(Setting::Wheel),
     Row::Open(Menu::Gps),
     Row::Nearby,
-    Row::Open(Menu::History),
-    Row::Open(Menu::Stock),
-    Row::Open(Menu::Workouts),
-    Row::Set(Setting::WktAvg),
-    Row::Open(Menu::Courses),
 ];
 
 /// The built-in sensors' readings, under the ANT sensors in the sensors menu.

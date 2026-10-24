@@ -328,6 +328,7 @@ Storage, USB and updates
 - [x] Backlight level and time-out (stock): unit
 - [x] MAX HR, FTP, weight, W' (stock, ours): unit (MAX HR, FTP); sim (weight, W')
 - [x] Overview fields and pages 1 to 3 (stock): sim
+- [x] Menus in groups, one screen each; a field picked by group then field (Garmin, Wahoo: categories): sim
 - [x] GPS status: fix, satellites, position, altitude, UTC (stock About, Garmin): unit
 - [~] Settings kept through power off (stock, all): RTC backup registers, not a file
 - [ ] Time zone, daylight saving, date and time formats (stock, all)

@@ -186,7 +186,7 @@ pub struct App {
     /// when no key is down.
     repeated: bool,
     /// The screens under this one, the latest last: Back returns to them, with their selection.
-    under: [Screen; 4],
+    under: [Screen; 6],
     depth: usize,
     /// The ride pages, then the overview's fields ([`OVERVIEW`]).
     pages: [PageCfg; PAGES + 1],
@@ -351,7 +351,7 @@ impl App {
             settings: misc,
             editing: false,
             repeated: false,
-            under: [Screen::Main; 4],
+            under: [Screen::Main; 6],
             depth: 0,
             pages: core::array::from_fn(|i| {
                 PageCfg::from_words(PAGE_BKP[i].map(|r| b.backup_read(r)))

@@ -17,8 +17,18 @@ pub enum Menu {
     Main,
     /// One row per sensor kind.
     Sensors,
+    /// The overview and the ride pages ([`menu::PAGES`]).
+    Pages,
+    /// The rider's numbers ([`menu::RIDER`]).
+    Rider,
+    /// Backlight, wheel, GPS, BLE ([`menu::DEVICE`]).
+    Device,
     /// Ride page `n`'s layout and fields.
     Page(usize),
+    /// The field groups, for box `i` of page `n` (Select on a field row).
+    Fields(usize, usize),
+    /// Group `g`'s fields, for box `i` of page `n`.
+    Group(usize, usize, usize),
     /// What the GNSS receiver reports.
     Gps,
     /// What stock's rides and settings give ([`menu::STOCK`]).
@@ -35,22 +45,17 @@ pub enum Menu {
     Courses,
 }
 
-/// The GPS row of the main menu.
-pub const GPS_ROW: usize = 13;
-
-/// The nearby BLE devices row of the main menu.
-pub const NEARBY_ROW: usize = 14;
-
-const _: () = assert!(matches!(menu::MAIN[GPS_ROW], menu::Row::Open(Menu::Gps)));
-
-const _: () = assert!(matches!(menu::MAIN[NEARBY_ROW], menu::Row::Nearby));
-
 /// A menu's title (a page's is followed by its number).
 pub(crate) fn menu_title(m: Menu) -> &'static str {
     match m {
         Menu::Main => "MENU",
         Menu::Sensors => "SENSORS",
+        Menu::Pages => "PAGES",
+        Menu::Rider => "RIDER",
+        Menu::Device => "DEVICE",
         Menu::Page(_) => "PAGE ",
+        Menu::Fields(..) => "FIELD",
+        Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g).map_or("", |g| g.0),
         Menu::Gps => "GPS",
         Menu::Stock => "STOCK DATA",
         Menu::Alerts => "ALERTS",
@@ -72,6 +77,11 @@ impl App {
         use menu::Row;
         match menu {
             Menu::Main => menu::MAIN.get(i).copied(),
+            Menu::Pages => menu::PAGES.get(i).copied(),
+            Menu::Rider => menu::RIDER.get(i).copied(),
+            Menu::Device => menu::DEVICE.get(i).copied(),
+            Menu::Fields(..) => (i < ui::FIELD_GROUPS.len()).then_some(Row::Group(i)),
+            Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g)?.1.get(i).map(|&f| Row::Pick(f)),
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
             Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len()).map(|&r| Row::Read(r)),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
@@ -230,6 +240,26 @@ impl App {
             }
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
             Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,
+            Row::Group(g) => {
+                label.push_str(ui::FIELD_GROUPS.get(g)?.0);
+                // the field the box shows now, beside its group
+                if let Menu::Fields(n, f) = menu
+                    && let Some(&now) = self.pages.get(n)?.fields.get(f)
+                    && now.group() == g
+                {
+                    value.push_str(now.label());
+                    color = ui::GREEN;
+                }
+            }
+            Row::Pick(field) => {
+                label.push_str(field.label());
+                if let Menu::Group(n, f, _) = menu
+                    && self.pages.get(n)?.fields.get(f) == Some(&field)
+                {
+                    color = ui::GREEN;
+                    value.push_str("ON");
+                }
+            }
         }
         Some((label, value, color))
     }
@@ -344,11 +374,26 @@ impl App {
                 }
             }
             Some(Row::Field(n, f)) => {
-                if let Some(page) = self.pages.get_mut(n)
-                    && let Some(field) = page.fields.get_mut(f)
+                // the picker opens on the group of the field the box shows
+                let g = self.pages.get(n).and_then(|p| p.fields.get(f)).map_or(0, |x| x.group());
+                self.open(Screen::Menu(Menu::Fields(n, f), g));
+            }
+            Some(Row::Group(g)) => {
+                if let Menu::Fields(n, f) = menu {
+                    let now = self.pages.get(n).and_then(|p| p.fields.get(f));
+                    let at = ui::FIELD_GROUPS.get(g).and_then(|(_, l)| l.iter().position(|x| Some(x) == now));
+                    self.open(Screen::Menu(Menu::Group(n, f, g), at.unwrap_or(0)));
+                }
+            }
+            Some(Row::Pick(field)) => {
+                if let Menu::Group(n, f, _) = menu
+                    && let Some(page) = self.pages.get_mut(n)
+                    && let Some(slot) = page.fields.get_mut(f)
                 {
-                    *field = field.next();
+                    *slot = field;
                     save_page(b, n, page);
+                    self.close(); // the groups
+                    self.close(); // back to the page's menu, its row showing the new field
                 }
             }
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {

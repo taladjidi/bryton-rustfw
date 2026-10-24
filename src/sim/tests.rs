@@ -216,7 +216,7 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     app.press(&mut sim, Press::Long(Key::Page));
     let left_ms = 5500 - sim.ms;
     run(&mut sim, &mut app, left_ms);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Page(OVERVIEW), 0), "row 1: the overview's fields");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "row 1: PAGES");
     assert_consistent(&sim, &app);
 }
 
@@ -234,14 +234,14 @@ fn quick_taps_and_swipes() {
     assert_eq!(app.screen(), Screen::Ride(0), "the fast swipe left");
     app.press(&mut sim, Press::Long(Key::Page));
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Page(OVERVIEW), 0), "the short tap on row 1");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "the short tap on row 1");
 }
 
 /// Touch in a menu: a tap on MAX HR edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
 #[test]
 fn touch_edits_a_number_and_goes_back() {
     let row = |r: u16| ui::LIST_Y as u16 + r * ui::LIST_ROW as u16 + 5;
-    let max_hr = row(menu::MAIN.iter().position(|&r| r == menu::Row::Set(Setting::MaxHr)).unwrap() as u16);
+    let max_hr = row(row_of(menu::Row::Set(Setting::MaxHr)) as u16);
     let tap = move |t0: u64, y: u16| move |ms: u64| (t0..t0 + 100).contains(&ms).then_some((120, y));
     let drag = |t0: u64, (x0, y0): (i64, i64), (dx, dy): (i64, i64)| {
         move |ms: u64| {
@@ -254,6 +254,7 @@ fn touch_edits_a_number_and_goes_back() {
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)).or(c(ms)).or(d(ms)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr)); // in RIDER
     let left = 6900 - sim.ms;
     run(&mut sim, &mut app, left);
     assert!(app.editing, "the tap edits");
@@ -262,7 +263,7 @@ fn touch_edits_a_number_and_goes_back() {
     assert!(!app.editing, "the second tap keeps it");
     assert_eq!(Settings::from_word(sim.backup[11]).max_hr, 191);
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.screen(), Screen::Main, "swipe right: back");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Rider))), "swipe right: back");
     assert_consistent(&sim, &app);
 }
 
@@ -665,13 +666,15 @@ fn menu_lists_the_devices_nearby() {
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
+    assert_consistent(&sim, &app);
+    sim.save("main_menu");
     app.press(&mut sim, Press::Short(Key::Lap));
     let last = menu::MAIN.len() - 1;
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, last), "Lap from the top wraps to the last row");
-    for _ in NEARBY_ROW..last {
-        app.press(&mut sim, Press::Short(Key::Lap));
-    }
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW), "then up to NEARBY BLE");
+    app.press(&mut sim, Press::Short(Key::Page)); // round to the top
+    to_row(&mut sim, &mut app, menu::Row::Nearby);
+    let nearby = row_of(menu::Row::Nearby);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Device, nearby), "NEARBY BLE, in DEVICE");
     assert_consistent(&sim, &app);
     sim.save("menu");
     app.press(&mut sim, Press::Short(Key::Start));
@@ -687,7 +690,9 @@ fn menu_lists_the_devices_nearby() {
     assert!(!app.scanning);
     assert_consistent(&sim, &app);
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, NEARBY_ROW));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Device, nearby));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Device))));
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -702,13 +707,13 @@ fn back_returns_where_it_came_from() {
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(1));
     app.press(&mut sim, Press::Long(Key::Page));
-    for _ in 0..GPS_ROW {
-        app.press(&mut sim, Press::Short(Key::Page));
-    }
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Gps));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Gps, 0));
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, GPS_ROW), "the submenu's row");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Device, row_of(menu::Row::Open(Menu::Gps))), "the submenu's row");
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Device))));
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Ride(1), "the page the menu was opened from");
     assert_consistent(&sim, &app);
@@ -719,8 +724,9 @@ fn back_returns_where_it_came_from() {
     while app.pages()[1].layout != 0 {
         app.press(&mut sim, Press::Short(Key::Start)); // FIELDS round to OFF
     }
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back)); // PAGES, the menu, out
+    }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
 }
@@ -838,17 +844,26 @@ fn pages_are_configured_from_the_menu() {
         app.press(&mut sim, Press::Short(Key::Start)); // layouts round to 2 x 2
     }
     app.press(&mut sim, Press::Short(Key::Page));
-    for _ in 0..2 {
-        app.press(&mut sim, Press::Short(Key::Start)); // field 1: speed -> cadence -> power
-    }
+    app.press(&mut sim, Press::Short(Key::Start)); // field 1 (speed): its group's row selected
+    assert_eq!(app.screen(), Screen::Menu(Menu::Fields(0, 0), Field::Speed.group()));
+    assert_consistent(&sim, &app);
+    sim.save("field_groups");
+    app.press(&mut sim, Press::Short(Key::Page)); // POWER
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Group(0, 0, 1), 0));
+    assert_consistent(&sim, &app);
+    sim.save("field_picker");
+    app.press(&mut sim, Press::Short(Key::Start)); // WATTS: back to the page's menu, on the field's row
+    assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 1));
     assert_consistent(&sim, &app);
     sim.save("page_menu");
     let want =
         PageCfg { layout: 4, fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time] };
     assert_eq!(app.pages()[0], want);
     assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(want));
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back));
+    }
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1000);
     let t = hm(&mut sim);
@@ -1062,10 +1077,14 @@ fn overview_notices_and_fields() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(OVERVIEW)));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.rows(Menu::Page(OVERVIEW)), 4);
-    app.press(&mut sim, Press::Short(Key::Start)); // WEEK KM -> WEEK H
+    app.press(&mut sim, Press::Short(Key::Start)); // WEEK KM: TOTALS
+    app.press(&mut sim, Press::Short(Key::Start)); // on WEEK KM
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start)); // WEEK H
     assert_consistent(&sim, &app);
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back));
+    }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
     assert_eq!(App::start(&mut sim, None).pages()[OVERVIEW].fields[0], Field::WeekH, "kept");
@@ -1107,16 +1126,15 @@ fn gps_fix_and_speed() {
     assert!(want.px == sim.screen, "GPS speed, green GPS");
     sim.save("gps");
     app.press(&mut sim, Press::Long(Key::Page));
-    for _ in 0..GPS_ROW {
-        app.press(&mut sim, Press::Short(Key::Page));
-    }
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Gps));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Gps, 0));
     run(&mut sim, &mut app, 1100);
     assert_consistent(&sim, &app);
     sim.save("gps_menu");
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back));
+    }
     // the fix taught the RTC's offset (+2 h) and the position (to 1e-4 degrees): kept for the next power-up
     let aid = crate::gnss::Aid::from_words([sim.backup[17], sim.backup[18]]);
     assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((488_566_000, -22_945_000)) });
@@ -1156,6 +1174,7 @@ fn backlight_level_and_timeout() {
     assert_consistent(&sim, &app);
     sim.save("light_menu");
     app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
     run(&mut sim, &mut app, 11_000);
     assert_eq!(sim.light_level, 0, "timed out");
     app.press(&mut sim, Press::Short(Key::Page));
@@ -1177,21 +1196,36 @@ fn sensor_row(app: &App, i: usize) -> std::string::String {
     format!("{} {}", label.as_str(), value.as_str())
 }
 
-/// From the main menu's first row, down to `row`.
+/// The submenus of the main menu that hold settings rows: the menu, its table.
+const SUBMENUS: [(Menu, &[menu::Row]); 4] = [
+    (Menu::Pages, &menu::PAGES),
+    (Menu::Rider, &menu::RIDER),
+    (Menu::Device, &menu::DEVICE),
+    (Menu::Alerts, &menu::ALERTS),
+];
+
+/// From the main menu's first row, down to `row`: in the main menu, or in the submenu that holds it (opened).
 fn to_row(sim: &mut Sim, app: &mut App, row: menu::Row) {
-    for _ in 0..menu::MAIN.iter().position(|&r| r == row).unwrap() {
+    let (menu, table) = SUBMENUS.iter().find(|(_, t)| t.contains(&row)).copied().unwrap_or((Menu::Main, &menu::MAIN));
+    if menu != Menu::Main {
+        to_row(sim, app, menu::Row::Open(menu));
+        app.press(sim, Press::Short(Key::Start));
+    }
+    for _ in 0..table.iter().position(|&r| r == row).unwrap() {
         app.press(sim, Press::Short(Key::Page));
     }
 }
 
-/// Main menu row index of `row`.
+/// The row index of `row` in its menu (the main menu or a submenu).
 fn row_of(row: menu::Row) -> usize {
-    menu::MAIN.iter().position(|&r| r == row).unwrap()
+    let table = SUBMENUS.iter().find(|(_, t)| t.contains(&row)).map_or(&menu::MAIN[..], |(_, t)| t);
+    table.iter().position(|&r| r == row).unwrap()
 }
 
-/// The text of main menu row `i`: label and value.
+/// The text of row `i` of the menu shown: label and value.
 fn main_row(app: &App, i: usize) -> std::string::String {
-    let (label, value, _) = app.menu_row(Menu::Main, i).unwrap();
+    let Screen::Menu(m, _) = app.screen() else { panic!("not a menu: {:?}", app.screen()) };
+    let (label, value, _) = app.menu_row(m, i).unwrap();
     format!("{} {}", label.as_str(), value.as_str())
 }
 
@@ -1217,6 +1251,7 @@ fn auto_backlight_follows_the_ambient_light() {
     assert_eq!(sensor_row(&app, 7), "HPA 1013");
     assert_consistent(&sim, &app);
     sim.save("sensor_rows");
+    app.press(&mut sim, Press::Short(Key::Back));
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(sim.light_level, 1, "300 lux: past 120 lux, the minimum (stock)");
 
@@ -2332,9 +2367,10 @@ fn max_hr_and_ftp_from_the_menu() {
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::Wheel));
     app.press(&mut sim, Press::Short(Key::Start)); // wheel: next size
-    for _ in row_of(menu::Row::Set(Setting::Wheel))..row_of(menu::Row::Set(Setting::MaxHr)) {
-        app.press(&mut sim, Press::Short(Key::Page));
-    }
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr));
     app.press(&mut sim, Press::Short(Key::Start)); // edit MAX HR
     for _ in 0..5 {
         app.press(&mut sim, Press::Short(Key::Lap)); // 190 -> 195
@@ -2350,7 +2386,7 @@ fn max_hr_and_ftp_from_the_menu() {
     app.press(&mut sim, Press::Short(Key::Page)); // the release does not step again
     app.press(&mut sim, Press::Short(Key::Lap)); // 55
     app.press(&mut sim, Press::Short(Key::Back)); // kept, still in the menu
-    assert!(matches!(app.screen, Screen::Menu(Menu::Main, r) if r == row_of(menu::Row::Set(Setting::Ftp))));
+    assert!(matches!(app.screen, Screen::Menu(Menu::Rider, r) if r == row_of(menu::Row::Set(Setting::Ftp))));
     assert_consistent(&sim, &app);
     sim.save("zones_menu");
     let again = App::start(&mut sim, None);

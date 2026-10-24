@@ -85,10 +85,17 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 
 ## Menu
 
-Sensors (pair, forget; then the light, temperature and pressure readings), the overview's four fields, pages 1 to 3 (field count, each field),
-wheel size, backlight level (or AUTO) and time-out, MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap
-up and Page down, held to repeat, Start to keep), weight (1 kg) and W' (0.5 kJ), GPS (fix, satellites, position,
-altitude, UTC), BLE devices nearby, HISTORY, STOCK DATA, WORKOUTS, COURSES.
+One screen of groups, nothing more than a screen of rows away:
+- **SENSORS:** pair, forget; then the light, temperature and pressure readings.
+- **PAGES:** the overview's four fields, pages 1 to 3 (field count, each field). A field row opens the field groups
+  (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS), the current field's group selected and the field
+  beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the
+  page. Any of the 55 fields is a few presses away, not up to 54.
+- **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
+  keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
+- **DEVICE:** backlight level (or AUTO) and time-out, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
+  devices nearby.
+- **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
 
 ## History
 

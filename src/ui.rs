@@ -687,9 +687,9 @@ impl Field {
         )
     }
 
-    /// The next one in [`Field::ALL`].
-    pub fn next(self) -> Field {
-        Self::ALL[(self as usize + 1) % Self::ALL.len()]
+    /// Its group in [`FIELD_GROUPS`] (every field is in one: a test checks).
+    pub fn group(self) -> usize {
+        FIELD_GROUPS.iter().position(|(_, g)| g.contains(&self)).unwrap_or(0)
     }
 
     /// From its index in [`Field::ALL`] (anything else: time).
@@ -697,6 +697,24 @@ impl Field {
         Self::ALL.get(i as usize).copied().unwrap_or(Field::Time)
     }
 }
+
+/// The fields by kind, for the picker: a page's box is a group then a field, a few rows each, not 55 in a row.
+pub const FIELD_GROUPS: [(&str, &[Field]); 8] = {
+    use Field::*;
+    [
+        (
+            "RIDE",
+            &[Time, Timer, Speed, Dist, AvgSpeed, MaxSpeed, Cadence, AvgCadence, LapTime, LapDist, Kcal, Temp, Map],
+        ),
+        ("POWER", &[Power, Power3s, Power10s, Power30s, AvgPower, MaxPower, Np, If, Tss, Kj, Wkg, Wbal, Balance]),
+        ("HEART", &[Hr, AvgHr, MaxHr, Dfa, Rmssd]),
+        ("CLIMB", &[Ascent, Vam, Grade]),
+        ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
+        ("WORKOUT", &[Workout, StepTarget, StepTime, NextStep, WorkoutGraph, WktPower]),
+        ("COURSE", &[ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
+        ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
+    ]
+};
 
 /// A page layout: rows top to bottom, each (its share of the height, boxes side by side), and its name in the menu.
 pub type Layout = (&'static [(u8, u8)], &'static str);
@@ -1117,6 +1135,15 @@ pub(crate) mod tests {
     use super::*;
     use std::vec;
     use std::vec::Vec;
+
+    #[test]
+    fn every_field_in_one_group_that_fits_a_screen() {
+        for f in Field::ALL {
+            assert_eq!(FIELD_GROUPS.iter().filter(|(_, g)| g.contains(&f)).count(), 1, "{f:?}");
+        }
+        assert!(FIELD_GROUPS.iter().all(|(_, g)| g.len() <= MENU_ROWS), "a group is one screen");
+        assert!(FIELD_GROUPS.len() <= MENU_ROWS);
+    }
 
     #[test]
     fn long_notices_fit() {
