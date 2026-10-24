@@ -13,6 +13,7 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py key page|lap|start|back [--long]   press (or hold) a key: scripted tests on the unit
   dev.py emmc                     identify the eMMC: SEC_COUNT, B (end of the FAT volume), OS area start, reliable write
   dev.py sector N [COUNT] [-o F]  read eMMC sectors N.. (read only): a hex dump, or the raw bytes into F
+  dev.py drivelog                 the USB drive's last 32 commands, oldest first
   dev.py wtest LBA                write test on one sector (in free space): changed, read back, restored
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
@@ -189,6 +190,7 @@ def main():
     p.add_argument('n', type=lambda x: int(x, 0))
     p.add_argument('count', nargs='?', type=lambda x: int(x, 0), default=1)
     p.add_argument('-o', help='write the raw bytes here instead of a hex dump')
+    sub.add_parser('drivelog', help="the USB drive's last 32 commands (op, lba, count, status, residue)")
     p = sub.add_parser('wtest', help='write test on one eMMC sector (pick one in free space; needs EMMC_WRITE=1)')
     p.add_argument('lba', type=lambda x: int(x, 0))
     p = sub.add_parser('run')
@@ -211,6 +213,14 @@ def main():
                     print(f'{i - len(rows) + 1:5d} min  {mv} mV{"  charging" if charging else ""}')
             elif a.cmd == 'key':
                 print(command(s, f'key {a.name}' + (' long' if a.long else '')))
+            elif a.cmd == 'drivelog':
+                print('op  lba      count    st residue')
+                r = command(s, 'drivelog')
+                while r != 'end' and not r.startswith('err'):
+                    op, lba, n, st, res = (int(v, 16) for v in r.split())
+                    name = {0xff: 'BUS RESET', 0xfe: 'BOT RESET', 0xfd: 'BAD CBW'}.get(op, f'{op:02x}')
+                    print(f'{name:9} {lba:8x} {n:8x} {st} {res:x}')
+                    r = line(s)
             elif a.cmd == 'wtest':
                 print(command(s, f'wtest {a.lba}'))
             elif a.cmd in ('info', 'reset', 'drive'):

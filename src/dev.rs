@@ -31,6 +31,8 @@
 //!   `ok`, or `err <step>` (`err read`, `err write`, `err pattern`, `err restore`...). Refused by a read-only build.
 //! - `drive`: lends the eMMC's FAT volume to the computer as a USB drive ([`Effect::Drive`], app/drive.rs): `ok`,
 //!   or `err <why>` (no ride may run or wait to be saved). The computer's eject gives it back.
+//! - `drivelog`: the USB drive's last 32 commands, oldest first, a line each: `op lba count status residue` in hex
+//!   (op 0xff a bus reset, 0xfe a Bulk-Only reset, 0xfd a CBW not valid); then `end`.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -264,6 +266,17 @@ impl Session {
             },
             Some(b"emmc") => return Effect::Emmc,
             Some(b"drive") => return Effect::Drive,
+            Some(b"drivelog") => {
+                // the drive's last commands, oldest first: op lba count status residue (hex), then end
+                for &(op, lba, count, status, residue) in app.drive_log().iter() {
+                    for (k, v) in [u32::from(op), lba, count, u32::from(status), residue].into_iter().enumerate() {
+                        h.send(if k == 0 { b"" } else { b" " });
+                        h.send(&hex(v)[..8]);
+                    }
+                    h.send(b"\n");
+                }
+                h.send(b"end\n");
+            }
             Some(b"wtest") => match (words.next().and_then(parse), words.next()) {
                 (Some(n), None) => return Effect::WriteTest(n),
                 _ => h.send(b"err usage: wtest <lba>\n"),

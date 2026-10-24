@@ -67,6 +67,16 @@ impl App {
         self.drive.reset();
     }
 
+    /// A USB bus reset: the drive's state too (msc.rs [`msc::Drive::bus_reset`]).
+    pub fn drive_bus_reset(&mut self) {
+        self.drive.bus_reset();
+    }
+
+    /// The drive's last commands (the dev link's `drivelog`).
+    pub fn drive_log(&self) -> &msc::Log {
+        &self.drive.log
+    }
+
     /// The card is lent to the computer.
     pub fn drive_lent(&self) -> bool {
         self.emmc.lent()

@@ -96,6 +96,50 @@ pub struct Drive {
     halted: bool,
     /// The computer wrote since the medium was inserted.
     wrote: bool,
+    /// The last commands, for the dev link's `drivelog` (to find what makes a computer reset the device).
+    pub log: Log,
+}
+
+/// One logged command: its operation code (0xff a bus reset, 0xfe a Bulk-Only reset, 0xfd a CBW not valid), first
+/// block, block count, status, residue.
+pub type Entry = (u8, u32, u32, u8, u32);
+
+/// The last [`LOG`] commands, a ring.
+#[derive(Clone, Copy, Debug)]
+pub struct Log {
+    /// Entries, the oldest overwritten.
+    pub ring: [Entry; LOG],
+    /// Entries ever logged: `ring[n % LOG]` is the next.
+    pub n: u32,
+}
+
+/// Commands kept by [`Log`].
+pub const LOG: usize = 32;
+
+impl Default for Log {
+    fn default() -> Self {
+        Log::new()
+    }
+}
+
+impl Log {
+    const fn new() -> Self {
+        Log { ring: [(0, 0, 0, 0, 0); LOG], n: 0 }
+    }
+
+    /// Logs `e`.
+    pub fn push(&mut self, e: Entry) {
+        if let Some(slot) = self.ring.get_mut(self.n as usize % LOG) {
+            *slot = e;
+        }
+        self.n = self.n.wrapping_add(1);
+    }
+
+    /// The entries, oldest first.
+    pub fn iter(&self) -> impl Iterator<Item = &Entry> {
+        let n = self.n as usize;
+        (n.saturating_sub(LOG)..n).filter_map(|i| self.ring.get(i % LOG))
+    }
 }
 
 /// What a command's data phase is, as the device sees it.
@@ -121,12 +165,20 @@ fn byte(b: &[u8], at: usize) -> u8 {
 impl Drive {
     /// No medium.
     pub const fn new() -> Self {
-        Drive { present: false, attention: false, prevent: false, sense: NO_SENSE, halted: false, wrote: false }
+        Drive {
+            present: false,
+            attention: false,
+            prevent: false,
+            sense: NO_SENSE,
+            halted: false,
+            wrote: false,
+            log: Log::new(),
+        }
     }
 
     /// The medium is in (the card lent): the computer is told at its next command.
     pub fn insert(&mut self) {
-        *self = Drive { present: true, attention: true, ..Drive::new() };
+        *self = Drive { present: true, attention: true, log: self.log, ..Drive::new() };
     }
 
     /// The medium is taken out by the unit (the computer may still hold it: see [`Drive::prevented`]).
@@ -152,6 +204,14 @@ impl Drive {
     /// Bulk-Only Mass Storage Reset (the class request): ready for a CBW again.
     pub fn reset(&mut self) {
         self.halted = false;
+        self.log.push((0xfe, 0, 0, 0, 0));
+    }
+
+    /// A USB bus reset: ready for a CBW again, as after the class reset (a CBW not valid before it must not leave the
+    /// drive deaf after the computer resets the port).
+    pub fn bus_reset(&mut self) {
+        self.halted = false;
+        self.log.push((0xff, 0, 0, 0, 0));
     }
 
     /// A packet from the computer while no command runs: a CBW, run to its CSW (the data phase through `pipe`).
@@ -162,6 +222,7 @@ impl Drive {
         let len = usize::from(byte(cbw, 14));
         if cbw.len() != 31 || cbw.get(..4) != Some(b"USBC") || !(1..=16).contains(&len) {
             self.halted = true;
+            self.log.push((0xfd, cbw.len() as u32, u32::from(byte(cbw, 0)), 0, 0));
             pipe.stall();
             return Event::None;
         }
@@ -172,6 +233,9 @@ impl Drive {
         let mut event = Event::None;
         let (status, data) = self.command(cb, media, &mut event);
         let (status, residue) = self.transfer(status, data, host, host_in, pipe, media);
+        let op = byte(cb, 0);
+        let (lba, count) = if matches!(op, 0x28 | 0x2a | 0x2f) { (be32(cb, 2), be16(cb, 7)) } else { (0, host) };
+        self.log.push((op, lba, count, status, residue));
         let mut csw = [0u8; 13];
         csw[..4].copy_from_slice(b"USBS");
         csw[4..8].copy_from_slice(&tag);
@@ -570,5 +634,9 @@ pub(crate) mod tests {
         d.reset();
         d.packet(&cbw(5, 0, false, &[0; 17][..0]), &mut h, &mut m);
         assert!(d.halted, "a CB length of 0 is not valid");
+        d.bus_reset();
+        assert!(!d.halted, "a bus reset too: the computer resetting the port gets a drive that listens");
+        let ops: Vec<u8> = d.log.iter().map(|e| e.0).collect();
+        assert_eq!(ops, [0xfd, 0xfe, 0x00, 0xfd, 0xfe, 0xfd, 0xff], "logged: bad CBWs, resets, the command");
     }
 }

@@ -30,8 +30,16 @@ const GUSBCFG: u32 = OTG_HS + 0x00c;
 const GRSTCTL: u32 = OTG_HS + 0x010;
 const DCTL: u32 = OTG_HS + 0x804;
 const DSTS: u32 = OTG_HS + 0x808;
+const DCFG: u32 = OTG_HS + 0x800;
+/// A build with USB_FS=1 runs the link at full speed (12 Mbit/s, 64-byte bulk packets) instead of high speed: an
+/// experiment for the drops (2026-10-24: high-speed transfers dropped, and stock's drive dropped on 2026-10-22).
+const FULL_SPEED: bool = option_env!("USB_FS").is_some();
+/// Bulk packet size: 512 at high speed, 64 at full speed (USB 2.0 5.8.3).
+const MPS: usize = if FULL_SPEED { 64 } else { 512 };
 /// Configured, but no start of frame for this long: the computer dropped the device (module doc, "Drops").
 const SOF_LOST_MS: u32 = 200;
+/// Configured once, then not for this long: the computer reset the device and gave up on it.
+const UNCONFIGURED_MS: u32 = 2000;
 const RCC_AHB1RSTR: u32 = RCC + 0x080;
 const RCC_AHB1ENR: u32 = RCC + 0x0d8;
 const RCC_D2CCIP2R: u32 = RCC + 0x054;
@@ -93,9 +101,15 @@ struct Msc {
     inp: EndpointIn<'static, Bus>,
     out: EndpointOut<'static, Bus>,
     reset: bool,
+    /// A USB bus reset was seen.
+    bus_reset: bool,
 }
 
 impl UsbClass<Bus> for Msc {
+    fn reset(&mut self) {
+        self.bus_reset = true;
+    }
+
     fn get_configuration_descriptors(&self, w: &mut DescriptorWriter) -> usb_device::Result<()> {
         w.interface(self.iface, 0x08, 0x06, 0x50)?;
         w.endpoint(&self.inp)?;
@@ -149,16 +163,19 @@ impl msc::Pipe for Bulk<'_> {
     }
 
     fn send(&mut self, data: &[u8]) -> bool {
-        let t0 = cycles();
-        loop {
-            match self.msc.inp.write(data) {
-                Ok(_) => return true,
-                Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
-                    self.dev.poll(&mut [&mut *self.cdc, &mut *self.msc]);
+        // in packets of the bus's size (a full-speed build's 64 bytes): Bulk-Only data is a stream
+        data.chunks(MPS).all(|p| {
+            let t0 = cycles();
+            loop {
+                match self.msc.inp.write(p) {
+                    Ok(_) => return true,
+                    Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
+                        self.dev.poll(&mut [&mut *self.cdc, &mut *self.msc]);
+                    }
+                    Err(_) => return false,
                 }
-                Err(_) => return false,
             }
-        }
+        })
     }
 
     fn stall(&mut self) {
@@ -176,6 +193,8 @@ pub struct Link {
     last_full: bool,
     /// DSTS.FNSOF when last seen changing, and when (cycles).
     sof: (u32, u32),
+    /// Configured at some point, and since when (cycles) not configured any more (None: configured, or never was).
+    lost: (bool, Option<u32>),
     /// A drive command ran since [`Link::worked`]: its eMMC access may have slept, which takes over SysTick.
     worked: bool,
 }
@@ -229,8 +248,14 @@ pub fn start() -> Option<Link> {
         return None;
     }
     let alloc: &'static UsbBusAllocator<Bus> = ALLOC.init(UsbBus::new(OtgHs, EP_MEMORY.init([0; 1024])));
-    let cdc = CdcAcmClass::new(alloc, 512);
-    let msc = Msc { iface: alloc.interface(), inp: alloc.bulk(512), out: alloc.bulk(512), reset: false };
+    let cdc = CdcAcmClass::new(alloc, MPS as u16);
+    let msc = Msc {
+        iface: alloc.interface(),
+        inp: alloc.bulk(MPS as u16),
+        out: alloc.bulk(MPS as u16),
+        reset: false,
+        bus_reset: false,
+    };
     // pid.codes test VID / PID (0x1209 / 0x0001): fine for a device that never leaves the bench
     let dev = UsbDeviceBuilder::new(alloc, UsbVidPid(0x1209, 0x0001))
         .strings(&[StringDescriptors::default()
@@ -242,8 +267,26 @@ pub fn start() -> Option<Link> {
         .max_packet_size_0(64)
         .ok()?
         .build();
+    if FULL_SPEED {
+        // DCFG.DSPD 01: full speed over the ULPI PHY (RM0399 OTG_DCFG); the crate set high speed, so off the bus,
+        // the speed changed, back on
+        modify(DCTL, 0, 1 << 1);
+        modify(DCFG, 3, 1);
+        wait(|| false, 20);
+        modify(DCTL, 1 << 1, 0);
+    }
     wr(NVIC_ISER2, OTG_HS_IRQ);
-    Some(Link { dev, cdc, msc, out: [0; 512], len: 0, last_full: false, sof: (u32::MAX, cycles()), worked: false })
+    Some(Link {
+        dev,
+        cdc,
+        msc,
+        out: [0; 512],
+        len: 0,
+        last_full: false,
+        sof: (u32::MAX, cycles()),
+        lost: (false, None),
+        worked: false,
+    })
 }
 
 impl Link {
@@ -260,6 +303,9 @@ impl Link {
             let mut buf = [0u8; 512];
             if core::mem::take(&mut self.msc.reset) {
                 app.drive_reset();
+            }
+            if core::mem::take(&mut self.msc.bus_reset) {
+                app.drive_bus_reset();
             }
             if let Ok(n @ 1..) = self.msc.out.read(&mut buf) {
                 let mut pipe = Bulk { dev: &mut self.dev, cdc: &mut self.cdc, msc: &mut self.msc };
@@ -295,21 +341,41 @@ impl Link {
     /// still for [`SOF_LOST_MS`], the computer has dropped the device (seen on the unit, 2026-10-24: the Mac lost it
     /// mid-transfer while the unit still showed a green dot; stock dropped the same way on 2026-10-22). Then a soft
     /// disconnect and connect, so the computer enumerates it again without an unplug. True when it did.
+    /// Also: configured once, then not for [`UNCONFIGURED_MS`] (the dot orange: the computer reset the device and
+    /// did not set it up again, seen on the unit 2026-10-24 after a drive transfer), the same reconnect.
     pub fn watch(&mut self) -> bool {
         let now = cycles();
         let fnsof = rd(DSTS) >> 8 & 0x3fff;
-        if !self.configured() || fnsof != self.sof.0 {
+        let configured = self.configured();
+        self.lost = match (configured, self.lost) {
+            (true, _) => (true, None),
+            (false, (true, None)) => (true, Some(now)),
+            (false, l) => l,
+        };
+        if let (true, Some(t)) = self.lost
+            && now.wrapping_sub(t) >= UNCONFIGURED_MS * (CPU_HZ / 1000)
+        {
+            self.reconnect();
+            self.lost = (false, None);
+            return true;
+        }
+        if !configured || fnsof != self.sof.0 {
             self.sof = (fnsof, now);
             return false;
         }
         if now.wrapping_sub(self.sof.1) < SOF_LOST_MS * (CPU_HZ / 1000) {
             return false;
         }
-        modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off, the computer sees a detach
-        wait(|| false, 100);
-        modify(DCTL, 1 << 1, 0); // and an attach: it resets and enumerates the device again
-        self.sof = (u32::MAX, cycles());
+        self.reconnect();
         true
+    }
+
+    /// A soft disconnect and connect: the computer sees a detach, then an attach, and enumerates the device again.
+    fn reconnect(&mut self) {
+        modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off
+        wait(|| false, 100);
+        modify(DCTL, 1 << 1, 0);
+        self.sof = (u32::MAX, cycles());
     }
 
     /// Soft disconnect, so the computer sees the device leave before the next image enumerates again.
@@ -317,18 +383,22 @@ impl Link {
         modify(DCTL, 0, 1 << 1); // SDIS
     }
 
-    /// Writes the buffered packet, servicing USB while the endpoint is busy; gives up after 1 s (nobody reading).
+    /// Writes the buffered bytes in packets of the bus's size (one zero-length packet for none), servicing USB while
+    /// the endpoint is busy; gives up after 1 s a packet (nobody reading).
     fn write(&mut self, len: usize) {
-        let t0 = cycles();
-        loop {
-            match self.cdc.write_packet(&self.out[..len]) {
-                Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
-                    self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
+        let data = self.out.get(..len).unwrap_or(&[]);
+        for p in data.chunks(MPS).chain((len == 0).then_some(&[][..])) {
+            let t0 = cycles();
+            loop {
+                match self.cdc.write_packet(p) {
+                    Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
+                        self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
+                    }
+                    _ => break,
                 }
-                _ => break,
             }
         }
-        self.last_full = len == self.out.len();
+        self.last_full = len > 0 && len.is_multiple_of(MPS);
         self.len = 0;
     }
 
