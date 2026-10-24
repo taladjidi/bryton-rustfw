@@ -337,7 +337,7 @@ fn attr(t: &[u8], name: &[u8]) -> Option<i64> {
 }
 
 /// An `xsd:decimal` ("-12.345") as an integer with `places` decimal places (more are dropped); None if it is not
-/// one or has more than 12 digits before the point.
+/// one, has more than 12 digits before the point, or does not fit an i64.
 ///
 /// ```
 /// use bryton_rustfw::storage::course::decimal;
@@ -359,14 +359,14 @@ pub fn decimal(s: &[u8], places: u32) -> Option<i64> {
     }
     let mut v: i64 = 0;
     for &b in int {
-        v = v * 10 + i64::from(b.checked_sub(b'0').filter(|&d| d <= 9)?);
+        v = v.checked_mul(10)?.checked_add(i64::from(b.checked_sub(b'0').filter(|&d| d <= 9)?))?;
     }
     for k in 0..places as usize {
         let d = match frac.get(k) {
             Some(&b) => i64::from(b.checked_sub(b'0').filter(|&d| d <= 9)?),
             None => 0,
         };
-        v = v * 10 + d;
+        v = v.checked_mul(10)?.checked_add(d)?;
     }
     if !frac.iter().all(u8::is_ascii_digit) {
         return None;
@@ -407,6 +407,17 @@ pub(crate) mod tests {
         for chunk in [1, 7, 4096] {
             assert_eq!(gpx_points(text, chunk), want, "chunks of {chunk}");
         }
+    }
+
+    /// Long digit runs (review 2: 12 digits and 7 places overflowed i64): refused, the point with them too.
+    #[test]
+    fn decimal_overflow() {
+        assert_eq!(decimal(b"999999999999.5", 7), None);
+        assert_eq!(decimal(b"-999999999999", 7), None);
+        assert_eq!(decimal(b"922337203686", 7), None, "just past i64");
+        assert_eq!(decimal(b"45.5", 7), Some(455_000_000));
+        let text = br#"<trkpt lat="999999999999.9" lon="1"/><trkpt lat="1" lon="2"/>"#;
+        assert_eq!(gpx_points(text, 4096), [(10_000_000, 20_000_000, None)]);
     }
 
     /// The synthetic card's courses (tools/fat_image.py): stock's route, a Garmin course and a GPX of the same hill,

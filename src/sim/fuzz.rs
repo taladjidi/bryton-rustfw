@@ -281,9 +281,9 @@ fn course_files() {
             read(&bad[..bad.len() / 3], gpx, &mut c);
         }
     }
-    const MARKS: [&str; 18] = [
+    const MARKS: [&str; 19] = [
         "<trkpt", "<rtept", " lat=\"", " lon='", "\"", "'", ">", "/>", "</trkpt>", "<ele>", "</ele>", "-", ".", "1",
-        "9", " ", "<!--", "=",
+        "9", " ", "<!--", "=", "999999", // long digit runs (decimal's overflow)
     ];
     for _ in 0..8 {
         let mut text = Vec::new();
