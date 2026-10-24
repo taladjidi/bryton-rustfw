@@ -183,8 +183,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   what the recorder needs (create with a long name, write sectors, set the size, move by delete + link, mark
   deleted with 0xe5 only, sync the FATs and FSInfo), each write ordered so a power cut leaves a volume stock and a
   computer accept; `fsck` in its tests checks that.
-- `src/storage/recorder.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw` from RAM to the card at
-  each checkpoint (a minute at most), two recovery records in `\Rustfw\ride.rec`, resume at boot, the save to
+- `src/storage/recorder.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw\Rides` from RAM to the card at
+  each checkpoint (a minute at most), two recovery records in `\Rustfw\ride.rec` (3 KB), resume at boot, the save to
   `\Activities\YYMMDDhhmmss.fit`. Its tests cut the power after every sector of a whole ride and of the reboot.
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
