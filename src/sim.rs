@@ -1010,3 +1010,6 @@ mod fuzz;
 
 #[cfg(test)]
 mod recorder_tests;
+
+#[cfg(test)]
+mod drive_tests;

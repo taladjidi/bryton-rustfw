@@ -18,7 +18,7 @@
 mod board;
 
 use board::{hw, usb};
-use bryton_rustfw::dev::{self, Effect, Session, Stats};
+use bryton_rustfw::dev::{self, Effect, Host, Session, Stats};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS, TOUCH_MS};
@@ -1294,7 +1294,7 @@ fn main() -> ! {
             timer_start(slice);
             let (edge, done) = loop {
                 if let Some(l) = &mut link {
-                    match l.poll(&mut session, app, stats) {
+                    match l.poll(&mut session, app, &mut board, stats) {
                         Effect::None => {}
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
@@ -1344,6 +1344,18 @@ fn main() -> ! {
                             l.flush();
                             woke = true;
                         }
+                        Effect::Drive => {
+                            match app.drive_on() {
+                                Ok(()) => l.send(b"ok\n"),
+                                Err(why) => {
+                                    l.send(b"err ");
+                                    l.send(why.as_bytes());
+                                    l.send(b"\n");
+                                }
+                            }
+                            l.flush();
+                            woke = true;
+                        }
                         Effect::Emmc => {
                             dev::send_layout(l, app.emmc().card(&mut board));
                             l.flush();
@@ -1354,6 +1366,11 @@ fn main() -> ! {
                             l.disconnect();
                             hw::run_staged(size);
                         }
+                    }
+                    if app.restart_wanted() {
+                        // the computer wrote to the volume and ejected it: a restart drops every cache of it
+                        l.linger(50);
+                        system_reset();
                     }
                     let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
                     app.set_usb(&mut board, dot);

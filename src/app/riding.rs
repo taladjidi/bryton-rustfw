@@ -10,6 +10,9 @@ pub const MAX_CATCH_UP: u8 = 10;
 impl App {
     /// Start, pause or resume the ride from a key, saying so; a new ride also resets the power totals.
     pub(crate) fn start_pause(&mut self) {
+        if self.emmc.lent() {
+            return self.say("USB DRIVE ON"); // no ride while the computer has the card (drive_on refuses the reverse)
+        }
         let ev = self.ride.start_pause();
         if ev == ride::Event::Start {
             // the ride's own track and graphs, from here (the last position kept, so the map is not empty)
@@ -98,7 +101,7 @@ impl App {
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
     /// backup register that marks a ride open.
     pub(crate) fn step_recorder(&mut self, b: &mut impl Board) {
-        if !self.card_writable {
+        if !self.card_writable || self.emmc.lent() {
             return;
         }
         let (local, _) = self.rec_time();

@@ -171,6 +171,7 @@ def main():
     p = sub.add_parser('poke', help='write a register: poke 0x40013000 0x1001')
     p.add_argument('addr')
     p.add_argument('value')
+    sub.add_parser('drive', help='offer the eMMC FAT volume to the computer as a USB drive (eject gives it back)')
     sub.add_parser('emmc', help='identify the eMMC and print its layout (BOARD.md 15)')
     p = sub.add_parser('ls', help='list a folder of the eMMC FAT volume (read only): ls [PATH]')
     p.add_argument('path', nargs='?', default='/')
@@ -212,7 +213,7 @@ def main():
                 print(command(s, f'key {a.name}' + (' long' if a.long else '')))
             elif a.cmd == 'wtest':
                 print(command(s, f'wtest {a.lba}'))
-            elif a.cmd in ('info', 'reset'):
+            elif a.cmd in ('info', 'reset', 'drive'):
                 print(command(s, a.cmd))
             elif a.cmd == 'peek':
                 first = command(s, f'peek {a.addr} {a.n}')

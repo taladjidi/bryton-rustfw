@@ -5,6 +5,7 @@
 mod clock;
 mod courses;
 mod device;
+mod drive;
 mod fields;
 mod gps;
 mod graphs;

@@ -94,7 +94,7 @@ One screen of groups, nothing more than a screen of rows away:
 - **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
   keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
 - **DEVICE:** backlight level (or AUTO) and time-out, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
-  devices nearby.
+  devices nearby, USB DRIVE (below).
 - **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
 
 ## History
@@ -192,3 +192,12 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
 
 With a cable in, a dev link starts: screenshots, key presses, register and memory reads, the battery log, eMMC
 sector reads, and running a new build from RAM (`dev.py`, see AGENTS.md). Unplugging resets the unit.
+
+**USB drive:** the computer can mount the eMMC's FAT volume (BRYTON: rides, routes, workouts, map tiles) without
+going back to stock. The unit is a card reader with the card out until DEVICE > USB DRIVE (or `dev.py drive`) lends
+it; refused with a banner while a ride runs (END THE RIDE FIRST), waits to be saved (RIDE NOT SAVED YET) or without
+the dev link up (CONNECT USB). Lent, nothing else touches the card: no ride can start (USB DRIVE ON), the scans, the
+basemap and the dev link's card commands wait. Ejecting on the computer gives it back; so does USB DRIVE again on
+the unit, once the computer has let it go (else EJECT ON COMPUTER). After the computer wrote, the unit restarts so
+that nothing it read before is trusted. Only the FAT volume is offered (sectors 0 .. B-1), never stock's reserved
+area. A build without EMMC_WRITE=1 offers it write protected.

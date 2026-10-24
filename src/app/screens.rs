@@ -69,7 +69,7 @@ impl App {
 
     /// Draws the basemap of `view` in `area` into its buffer, unless it holds it already.
     pub(crate) fn render_basemap(&mut self, b: &mut impl Board, area: map::Rect, view: Option<map::View>) {
-        if let (Some(v), Some(o)) = (view, self.track.origin()) {
+        if let (Some(v), Some(o), false) = (view, self.track.origin(), self.emmc.lent()) {
             self.basemap.render(&mut emmc::Volume(&mut self.emmc, b), area, v, o);
         }
     }

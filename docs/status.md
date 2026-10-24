@@ -46,6 +46,14 @@ The dated findings are in [journal.md](journal.md).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
+- **The USB drive (mass storage, msc.rs)**, in this order, reading only first (a build without EMMC_WRITE=1, so
+  the drive is write protected): `dev.py info` still answers with the composite device (the dev link beside the
+  drive); with nothing lent, macOS shows no disk; DEVICE > USB DRIVE (or `dev.py drive`): the BRYTON volume mounts
+  read only, its files equal `dev.py get`'s, a large file copies off at several MB/s (time it: the target is the
+  eMMC's 10 MB/s, less the USB packet loop); Eject in Finder: USB DRIVE goes OFF with no restart. Then, with the
+  owner and an EMMC_WRITE=1 build run from RAM: copy a small file on, eject, the unit restarts, `dev.py ls` sees it,
+  stock still boots and lists the volume. Also: Windows and Linux (TEST UNIT READY polling, which the medium
+  change relies on, is inferred for every host).
 - **The OTG_HS IRQ waking WFI** (the link may run on the 50 ms SysTick wake-ups alone).
 - **The touch panel with a finger** (the chip itself answered: BOARD.md 17): INT low while touched, the axes
   (x 0 left, y 0 top expected), the gestures (swipe left / right between pages, hold for the menu, a tap on a menu

@@ -1,15 +1,27 @@
 //! The USB dev link, board side: OTG_HS with its external ULPI PHY, brought up as stock does it (HAL_PCD_MspInit
-//! 0xd0298758, BOARD.md 7), and a CDC serial port (usb-device + synopsys-usb-otg) carrying the protocol in
-//! lib dev.rs. High speed, so bulk packets are 512 bytes. Polled from the main loop; the OTG_HS interrupt is
-//! enabled in the NVIC only so that USB activity wakes WFI (interrupts stay masked, no handler runs).
+//! 0xd0298758, BOARD.md 7), and a composite device (usb-device + synopsys-usb-otg): a CDC serial port carrying the
+//! protocol in lib dev.rs, and a mass storage interface (SCSI over Bulk-Only Transport, lib msc.rs) whose medium is
+//! the eMMC's FAT volume while the app lends it (app/drive.rs). High speed, so bulk packets are 512 bytes. Polled
+//! from the main loop; the OTG_HS interrupt is enabled in the NVIC only so that USB activity wakes WFI (interrupts
+//! stay masked, no handler runs).
+//!
+//! The mass storage interface: class 0x08, subclass 0x06 (SCSI transparent), protocol 0x50 (Bulk-Only), a bulk IN and
+//! a bulk OUT endpoint, and the two class requests to the interface, Bulk-Only Mass Storage Reset (0xff, OUT, no
+//! data) and Get Max LUN (0xfe, IN, one byte: 0, one LUN) (usb.org, Bulk-Only Transport 1.0, 3.1, 3.2 and 4.3). The
+//! CDC function carries an interface association descriptor, so the device is 0xef / 0x02 / 0x01 (USB-IF IAD ECN,
+//! usb-device's `composite_with_iads`).
 
 use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
-use bryton_rustfw::App;
 use bryton_rustfw::dev::{Effect, Host, Session, Stats};
+use bryton_rustfw::{App, Board, msc};
 use static_cell::StaticCell;
 use synopsys_usb_otg::{PhyType, UsbBus, UsbPeripheral};
-use usb_device::bus::UsbBusAllocator;
+use usb_device::bus::{InterfaceNumber, UsbBusAllocator};
+use usb_device::class::{ControlIn, ControlOut, UsbClass};
+use usb_device::control::{Recipient, RequestType};
+use usb_device::descriptor::DescriptorWriter;
+use usb_device::endpoint::{EndpointIn, EndpointOut};
 use usb_device::prelude::*;
 use usbd_serial::CdcAcmClass;
 
@@ -72,10 +84,90 @@ type Bus = UsbBus<OtgHs>;
 static EP_MEMORY: StaticCell<[u32; 1024]> = StaticCell::new();
 static ALLOC: StaticCell<UsbBusAllocator<Bus>> = StaticCell::new();
 
+/// The mass storage interface: its endpoints, and a Bulk-Only Mass Storage Reset received.
+struct Msc {
+    iface: InterfaceNumber,
+    inp: EndpointIn<'static, Bus>,
+    out: EndpointOut<'static, Bus>,
+    reset: bool,
+}
+
+impl UsbClass<Bus> for Msc {
+    fn get_configuration_descriptors(&self, w: &mut DescriptorWriter) -> usb_device::Result<()> {
+        w.interface(self.iface, 0x08, 0x06, 0x50)?;
+        w.endpoint(&self.inp)?;
+        w.endpoint(&self.out)
+    }
+
+    fn control_in(&mut self, xfer: ControlIn<Bus>) {
+        let r = xfer.request();
+        if r.request_type == RequestType::Class
+            && r.recipient == Recipient::Interface
+            && r.index == u16::from(u8::from(self.iface))
+            && r.request == 0xfe
+        {
+            let _ = xfer.accept_with(&[0]); // Get Max LUN: one LUN
+        }
+    }
+
+    fn control_out(&mut self, xfer: ControlOut<Bus>) {
+        let r = xfer.request();
+        if r.request_type == RequestType::Class
+            && r.recipient == Recipient::Interface
+            && r.index == u16::from(u8::from(self.iface))
+            && r.request == 0xff
+        {
+            self.reset = true; // Bulk-Only Mass Storage Reset
+            let _ = xfer.accept();
+        }
+    }
+}
+
+/// The drive's bulk endpoints for msc.rs, servicing USB while they wait, each wait 1 s at most (a computer that
+/// stops reading or sending).
+struct Bulk<'a> {
+    dev: &'a mut UsbDevice<'static, Bus>,
+    cdc: &'a mut CdcAcmClass<'static, Bus>,
+    msc: &'a mut Msc,
+}
+
+impl msc::Pipe for Bulk<'_> {
+    fn recv(&mut self, buf: &mut [u8; msc::PACKET]) -> Option<usize> {
+        let t0 = cycles();
+        loop {
+            match self.msc.out.read(buf) {
+                Ok(n) => return Some(n),
+                Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
+                    self.dev.poll(&mut [&mut *self.cdc, &mut *self.msc]);
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    fn send(&mut self, data: &[u8]) -> bool {
+        let t0 = cycles();
+        loop {
+            match self.msc.inp.write(data) {
+                Ok(_) => return true,
+                Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
+                    self.dev.poll(&mut [&mut *self.cdc, &mut *self.msc]);
+                }
+                Err(_) => return false,
+            }
+        }
+    }
+
+    fn stall(&mut self) {
+        self.msc.inp.stall();
+    }
+}
+
 /// The running link.
 pub struct Link {
     dev: UsbDevice<'static, Bus>,
     cdc: CdcAcmClass<'static, Bus>,
+    msc: Msc,
     out: [u8; 512],
     len: usize,
     last_full: bool,
@@ -131,6 +223,7 @@ pub fn start() -> Option<Link> {
     }
     let alloc: &'static UsbBusAllocator<Bus> = ALLOC.init(UsbBus::new(OtgHs, EP_MEMORY.init([0; 1024])));
     let cdc = CdcAcmClass::new(alloc, 512);
+    let msc = Msc { iface: alloc.interface(), inp: alloc.bulk(512), out: alloc.bulk(512), reset: false };
     // pid.codes test VID / PID (0x1209 / 0x0001): fine for a device that never leaves the bench
     let dev = UsbDeviceBuilder::new(alloc, UsbVidPid(0x1209, 0x0001))
         .strings(&[StringDescriptors::default()
@@ -138,12 +231,12 @@ pub fn start() -> Option<Link> {
             .product("bryton-rustfw dev link (S510)")
             .serial_number("s510")])
         .ok()?
-        .device_class(usbd_serial::USB_CLASS_CDC)
+        .composite_with_iads()
         .max_packet_size_0(64)
         .ok()?
         .build();
     wr(NVIC_ISER2, OTG_HS_IRQ);
-    Some(Link { dev, cdc, out: [0; 512], len: 0, last_full: false })
+    Some(Link { dev, cdc, msc, out: [0; 512], len: 0, last_full: false })
 }
 
 impl Link {
@@ -152,11 +245,19 @@ impl Link {
         self.dev.state() == UsbDeviceState::Configured
     }
 
-    /// Services USB and runs any received bytes through the protocol.
-    pub fn poll(&mut self, s: &mut Session, app: &App, stats: Stats) -> Effect {
+    /// Services USB: runs a drive command (msc.rs, through the app) and any bytes received on the dev link through
+    /// its protocol.
+    pub fn poll(&mut self, s: &mut Session, app: &mut App, board: &mut impl Board, stats: Stats) -> Effect {
         let mut effect = Effect::None;
-        if self.dev.poll(&mut [&mut self.cdc]) {
+        if self.dev.poll(&mut [&mut self.cdc, &mut self.msc]) {
             let mut buf = [0u8; 512];
+            if core::mem::take(&mut self.msc.reset) {
+                app.drive_reset();
+            }
+            if let Ok(n @ 1..) = self.msc.out.read(&mut buf) {
+                let mut pipe = Bulk { dev: &mut self.dev, cdc: &mut self.cdc, msc: &mut self.msc };
+                app.drive_packet(board, &buf[..n], &mut pipe);
+            }
             while effect == Effect::None {
                 match self.cdc.read_packet(&mut buf) {
                     Ok(n) if n > 0 => effect = s.feed(&buf[..n], app, stats, self),
@@ -173,7 +274,7 @@ impl Link {
     pub fn linger(&mut self, ms: u32) {
         let t0 = cycles();
         while cycles().wrapping_sub(t0) < ms * (CPU_HZ / 1000) {
-            self.dev.poll(&mut [&mut self.cdc]);
+            self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
         }
     }
 
@@ -188,7 +289,7 @@ impl Link {
         loop {
             match self.cdc.write_packet(&self.out[..len]) {
                 Err(UsbError::WouldBlock) if cycles().wrapping_sub(t0) < CPU_HZ => {
-                    self.dev.poll(&mut [&mut self.cdc]);
+                    self.dev.poll(&mut [&mut self.cdc, &mut self.msc]);
                 }
                 _ => break,
             }

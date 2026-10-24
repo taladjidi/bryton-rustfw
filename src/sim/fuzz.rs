@@ -359,3 +359,40 @@ fn ubx_frames() {
         }
     }
 }
+
+/// The USB drive (msc.rs): random command blocks behind a valid CBW header, and damaged CBWs, with random host
+/// lengths, directions and data packets (sometimes none): no panic, a well-formed CSW for every one answered.
+#[test]
+fn usb_drive_commands() {
+    use crate::msc::tests::{Host, cbw, ram};
+    use crate::msc::{Drive, PACKET};
+    const OPS: [u8; 13] = [0x00, 0x03, 0x12, 0x1a, 0x1b, 0x1e, 0x23, 0x25, 0x28, 0x2a, 0x2f, 0x35, 0x5a];
+    for seed in 1..=4u32 {
+        let v: Vec<u8> = bytes(seed, 1 << 18).collect();
+        let (mut d, mut h, mut m) = (Drive::new(), Host::default(), ram());
+        d.insert();
+        for (k, c) in v.chunks_exact(24).enumerate() {
+            let len = u32::from(u16::from_le_bytes([c[0], c[1]])) % 8192;
+            let mut cb = [0u8; 16];
+            cb.copy_from_slice(&c[2..18]);
+            cb[0] = OPS.get(usize::from(c[2] % 14)).copied().unwrap_or(c[3]);
+            let n = 1 + usize::from(c[18] % 16);
+            let mut packet = cbw(k as u32, len, c[19] & 1 == 0, &cb[..n]);
+            if c[20] % 16 == 0 {
+                packet[usize::from(c[21]) % 31] ^= c[22] | 1; // a damaged CBW
+            }
+            h.out = (0..c[23] % 20).map(|i| std::vec![i; PACKET]).collect();
+            h.stalled = false;
+            d.packet(&packet, &mut h, &mut m);
+            if let Some(csw) = h.got.pop() {
+                assert_eq!((&csw[..4], csw.len()), (&b"USBS"[..], 13));
+                assert!(csw[12] <= 2);
+            }
+            h.got.clear();
+            if h.stalled {
+                d.reset();
+            }
+        }
+        assert_eq!(m.0.len(), 100 * 512, "the disk never grows");
+    }
+}

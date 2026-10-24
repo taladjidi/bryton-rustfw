@@ -42,6 +42,13 @@ Engineer Mode as above, then `sudo python3 tools/iaprecover.py --write-vanilla` 
 [bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods), see its `docs/recovery.md`; run
 `tools/fetch_firmware.py` once to get the stock image). Restart, then install any firmware as usual.
 
+## Copying files without stock
+
+With the cable in and the USB symbol green, DEVICE > USB DRIVE (or `./dev.py drive`) lends the BRYTON volume to the
+computer as a USB drive: copy rides off, or routes and workouts on (a build with EMMC_WRITE=1; others offer it read
+only). No ride may run or wait to be saved. Eject it on the computer to give it back; after a write the unit
+restarts. Unplugging also gives it back (the unit resets). Not yet seen on the unit (docs/status.md).
+
 ## Day to day
 
 Once installed, later builds don't need a flash: with the cable in and the USB symbol green, `./dev.py run` runs

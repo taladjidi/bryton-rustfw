@@ -313,7 +313,7 @@ Storage, USB and updates
 
 - [x] eMMC read: layout, FAT32 volume, files (stock): unit (sector reads); FAT reader in sim
 - [~] eMMC and FAT32 writes, safe through a power cut (stock): sim (power cut after every sector write)
-- [ ] USB mass storage: the BRYTON drive on a computer (stock, all)
+- [~] USB mass storage: the BRYTON drive on a computer (stock, all): sim; not yet seen on a computer
 - [x] USB dev link: screenshots, keys, peek and poke, run from RAM (ours): unit
 - [ ] Update this firmware from a file on the volume (stock IMG.bin + update.ini)
 - [ ] Update over BLE from the phone (stock app, all)
