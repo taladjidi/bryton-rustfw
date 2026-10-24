@@ -174,3 +174,16 @@ fails without it (the review's probes turned into tests where they fit):
 - **Cost:** image 189,796 B to 191,204 B (+1.4 KB); App +8 B; make_app's frame 43.0 KB to 44.5 KB (budget 50 KB);
   `ride.rec` 1 KB to 3 KB; a checkpoint's record write 1 sector to 3 (one command), and CMD23 before each write on
   a card with reliable write.
+
+## 2026-10-24: the first eMMC writes, on the unit (from RAM, owner present)
+
+- **Backup first,** over the dev link (no mass storage in this firmware): the whole FAT region (sectors 0 to 29807,
+  read twice, equal), every directory outside `\Map` (62), and the files of `\Activities`, `\System`, `\Workout`,
+  `\PlanTrip` (99 FIT files, CRCs good). The volume is 31 GB and nearly full of map data (0.7 GB free), so a whole
+  image would take hours at the link's rate; what a write can damage is the FATs and the directories, which this
+  covers. A long `sector` read stopped once on a cut answer: dev.py now asks again.
+- **Steps 1 to 4 of the plan passed** (docs/status.md, "Seen on the unit"): the write test, a ride saved, a reset
+  mid-ride and its resume. Not done: the power cut (step 5) and stock booted afterwards (step 6).
+- **Found:** stock leaves FAT2 out of date (1559 entries) and FSInfo's free count stale; this writer leaves both
+  right. The overview's notice box cut "08:41 RIDE RESUMED" to 16 characters: notices and banners now drop to the
+  small font when too wide.

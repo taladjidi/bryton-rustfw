@@ -5,6 +5,19 @@
 Everything in [features.md](features.md) runs on the unit (2026-10-23), installed or from RAM, unless listed below.
 The dated findings are in [journal.md](journal.md).
 
+## Seen on the unit: eMMC writes and the recorder (2026-10-24, from RAM, owner present)
+
+- **Reliable write:** `dev.py emmc` reads WR_REL_PARAM 0x15, REL_WR_SEC_C 1: enhanced reliable write, so CMD23 with
+  bit 31 before each CMD25.
+- **`dev.py wtest`** on one sector of a cluster free in both FATs: written changed, read back, restored, read back.
+- **A 2-minute ride:** `\Rustfw`, `\Rustfw\Rides`, `ride.rec` made; the save moved the ride to
+  `\Activities\261024083403.fit` (1227 B, 153 records), which Garmin's FIT SDK and fitdecode read, CRC good.
+  Against the backup taken just before: 4 clusters taken in FAT1, root and `\Activities` changed only by appended
+  entries, FSInfo recounted (stock's free count was stale: 43700 for 43767). FAT2 is now equal to FAT1: stock had
+  left 1559 entries of FAT2 out of date, and the writer copies FAT1's sectors over.
+- **A reset mid-ride:** 90 s in, `dev.py reset`; the build again from RAM: RIDE RESUMED, the ride carried on into
+  one file (261024083931.fit): a timer stop at the last checkpoint (60 s), a start at the resume, 30 s lost.
+
 ## Not yet seen on the unit
 
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
@@ -37,15 +50,9 @@ The dated findings are in [journal.md](journal.md).
 - **The touch panel with a finger** (the chip itself answered: BOARD.md 17): INT low while touched, the axes
   (x 0 left, y 0 top expected), the gestures (swipe left / right between pages, hold for the menu, a tap on a menu
   row), the backlight waking on a touch, and the swipe thresholds by feel (stock's: 37 px across, 48 px up).
-- **eMMC writes and the ride recorder** (simulator only, 2026-10-24: `src/drivers/emmc.rs` writes, the FAT writer
-  `src/storage/fat/write.rs`, `src/storage/recorder.rs`): CMD24 / CMD25 through the SDMMC1 FIFO (main.rs
-  `emmc_write`, never run), the folders `\Rustfw` and the ride in `\Activities` as stock and a computer see them, a
-  reset mid-ride then the resume, a power cut mid-ride, the save. The plan with the owner is in docs/journal.md
-  (2026-10-24, "The recorder: what to check on the unit").
-- **The eMMC's reliable write** (BOARD.md 15): EXT_CSD WR_REL_PARAM and REL_WR_SEC_C, read only, by `dev.py emmc`
-  (its last two numbers), before any write on the unit; then CMD23 with bit 31 before CMD25 on the real card. Without
-  either, a cut can tear a directory sector of `\Activities` or the root (stock's entries in it), which nothing in
-  the recorder can mend.
+- **A power cut mid-ride** (the battery connector or a hard power off): the reset mid-ride and the resume are seen
+  (2026-10-24, below); a cut while a sector is written is covered by the host tests and the card's reliable write.
+- **Stock reading this firmware's rides** (\Activities\261024083403.fit, 261024083931.fit) and the Bryton app's sync.
 - **"Rebooting with just the power button does not work"** (the owner, after the GPS test): to clarify and fix.
 
 - **New since the installed build, seen only from RAM or in the simulator (2026-10-24):** touch gestures by feel and
