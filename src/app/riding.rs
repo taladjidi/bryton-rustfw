@@ -60,8 +60,10 @@ impl App {
                 self.recorder.start(t, recorder::ride_name(local), self.resume_pending);
                 if self.recorder.phase() != recorder::Phase::Starting {
                     self.notice("NOT RECORDING"); // the last ride's save is still failing
+                } else {
+                    // no full copy of a ride the clean one does not record
+                    self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
                 }
-                self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
             }
             ride::Event::Second => {
                 let s = self.sample(t);
@@ -126,6 +128,9 @@ impl App {
         if self.recorder.phase() != recorder::Phase::Done {
             self.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
         }
+        // the two copies checkpoint together: the clean one never behind (recorder.rs, "Two copies")
+        self.recorder.keep_up(&self.full);
+        self.full.keep_up(&self.recorder);
         let o = if self.resume_pending {
             let o = self.recorder.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             // a card that failed at boot is tried again (the marker stays until the ride is found)
@@ -178,21 +183,17 @@ impl App {
         if self.full.phase() != recorder::Phase::Done {
             self.full_pending = false;
         }
-        self.full.follow(self.recorder.name());
         let o = if self.full_pending && !self.resume_pending {
             let o = self.full.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             self.full_pending = matches!(o, recorder::Outcome::Failed(_)) || self.full.waiting();
             o
         } else if self.full.due() {
-            self.full.io(&mut emmc::Volume(&mut self.emmc, b), local)
+            self.full.io_after(&self.recorder, &mut emmc::Volume(&mut self.emmc, b), local)
         } else {
             recorder::Outcome::Nothing
         };
         match o {
-            // no clean ride to go on with (it was saved, or never checkpointed): this one is saved as it is
-            recorder::Outcome::Resumed(..) if self.recorder.phase() != recorder::Phase::Recording => {
-                self.full.end(0, self.ride.to_words());
-            }
+            recorder::Outcome::Resumed(..) => self.full.resumed_after(&self.recorder),
             recorder::Outcome::Kept(_) => self.notice("NO FULL COPY"),
             _ => {}
         }

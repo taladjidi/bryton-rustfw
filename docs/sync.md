@@ -18,7 +18,10 @@ rides do not sync to Bryton": tested on 2026-10-24). Intervals.icu reads DFA a1 
 Both are recorded as the ride goes, each by its own recorder with its own checkpoints, recovery records
 (`\Rustfw\ride.rec`, `\Rustfw\full.rec`) and save (src/storage/recorder.rs, "Two copies"). The clean one is
 always handled first and never waits for the full one. When the full copy fails, the clean one is still saved and
-the banner says NO FULL COPY.
+the banner says NO FULL COPY. The two checkpoint together, so after a reset the clean copy never has fewer seconds
+than the full one (seen on the unit before: 22 s fewer, the full copy's bigger records having filled its buffer
+first). A full copy goes on only with the clean copy's ride, and stops when the card has less than 8 MB free: the
+rest is the clean copy's.
 
 **Why not make one file from the other at the save?** The numbers come from `cargo test-host two_copies_cost`, a
 15-minute ride on the synthetic volume, once the folders exist:
@@ -39,6 +42,8 @@ that writes developer fields, and a 3-hour save would read about 390 KB and writ
 - Intervals.icu gets the full copy when there is one, else the clean one (stock's rides, or a ride whose full copy
   failed).
 - Each file's FIT CRCs are checked before it is sent, so a copy that the USB link cut short is never uploaded.
+- A full copy goes only if it begins with the clean copy's `file_id` (the ride's start): a full copy of another
+  ride under the same name is never sent in its place.
 - `\Activities\tmp.fit` (stock's ride in progress), names that are not `YYMMDDhhmmss.fit`, and rides older than
   `since` are left alone.
 - Never twice: `state.json` remembers each upload by ride name, with the file's name, size and CRC-32. Intervals.icu
@@ -47,7 +52,9 @@ that writes developer fields, and a 3-hour save would read about 390 KB and writ
 - Workouts: each Intervals.icu event of category `WORKOUT` from today to N days on is fetched as FIT
   (`/events/{id}/download.fit`) and written to `\Workout\calendar\YYYYMMDD\icu<id>.fit`, where stock's app puts
   them and the WORKOUTS menu lists them (src/storage/workout.rs). A file over 8 KB is skipped, since the unit does
-  not show those. Workouts are written only on a mounted volume, because the dev link is read only.
+  not show those. Workouts are written only on a mounted volume, because the dev link is read only. Each is written
+  to a `.tmp` beside it, flushed to the drive itself (`F_FULLFSYNC`), renamed, then read back; one deleted on the
+  unit is written again at the next run. Workouts deleted or moved on Intervals.icu are not removed from the unit.
 
 ## Setup (once)
 
@@ -74,7 +81,8 @@ that writes developer fields, and a 3-hour save would read about 390 KB and writ
    or the whole history of stock's rides would go to Strava, where the Bryton app may have put them already. Without
    it, the last 14 days are uploaded. `INTERVALS_API_KEY` in the environment overrides `api_key`.
 4. Run `tools/sync.py strava-login`. It opens Strava's authorization page and catches the answer on
-   `http://localhost:8721/`; allow upload access. The tokens go to `~/.config/bryton-rustfw/strava.json` (mode
+   `http://127.0.0.1:8721/` (Strava accepts `localhost` and `127.0.0.1` whatever the callback domain); allow upload
+   access. Only the answer with this login's random `state` is taken. The tokens go to `~/.config/bryton-rustfw/strava.json` (mode
    0600) and are refreshed by themselves.
 
 ## Each time

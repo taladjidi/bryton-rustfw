@@ -64,7 +64,12 @@
 //! full one (`fit::Writer::begin_with` `dev`: `Alpha1` and `RMSSD` in every record) in `\Rustfw\Full`,
 //! `\Rustfw\full.rec` and `\Rustfw\Activities`, same name. The app drives the clean one first in each pass, so the
 //! full one never stands between the clean one and the card, and a failing full one is only said
-//! (`App::step_recorder`). Writing both as the ride goes was chosen over making one from the other at the save:
+//! (`App::step_recorder`). Three rules keep the full one from ever costing the clean one (the review of 2026-10-24):
+//! the two checkpoint together ([`Recorder::keep_up`]: the full copy's bigger records used to run its buffer low
+//! first, and the clean one was 22 s behind it after a reset on the unit); the full one waits for the clean one to
+//! make its file and carries on a ride left open only if it is the clean one's ([`Recorder::io_after`],
+//! [`Recorder::resumed_after`]: never a full copy of one ride carried on with another's seconds); and it stops when
+//! the card has less than [`FULL_RESERVE`] free (FSInfo's count), the rest being the clean one's. Writing both as the ride goes was chosen over making one from the other at the save:
 //! the save, the riskiest moment, stays as short as it was, and the clean file never depends on code that writes
 //! developer fields. Cost (`two_copies_cost` below, a 900 s ride): about twice the sectors written, a few more
 //! a minute; nothing near the eMMC's endurance.
@@ -134,6 +139,9 @@ impl Kind {
 
 /// `\Rustfw\Activities`: the full copies of the saved rides ([`Kind::Full`]).
 pub const FULL_PATH: &str = "Rustfw/Activities";
+/// Free bytes (FSInfo's count) under which the full copy stops: the rest is the clean copy's. A day of riding is
+/// about 3 MB of clean copy (a record about 33 bytes a second).
+pub const FULL_RESERVE: u64 = 8 << 20;
 /// Sectors of `ride.rec`: two slots of three (module doc).
 const REC_SECTORS: u32 = 6;
 /// Card failures in a row after which a save, or a ride left by the last run, is given up (kept where it is): a
@@ -409,11 +417,34 @@ impl Recorder {
         self.name
     }
 
-    /// Takes the other copy's `name` while this one's file is not made yet, so that both copies of a ride keep one
-    /// name (the clean one, recorded first in each pass, may have moved a second on from a name already taken).
-    pub fn follow(&mut self, name: [u8; 12]) {
+    /// A checkpoint here whenever `other` (the ride's other copy) has one due, unless it is waiting after a failure:
+    /// the two copies checkpoint together, so at a cut neither holds seconds the other lost (the full copy's buffer
+    /// runs low first, its records being bigger). Before each pass's card work.
+    pub fn keep_up(&mut self, other: &Recorder) {
+        if other.want && other.fails == 0 && matches!(self.phase, Phase::Starting | Phase::Recording) {
+            self.want = true;
+        }
+    }
+
+    /// The full copy's card work ([`Recorder::io`]), after the clean copy `clean`'s in the same pass (module doc,
+    /// "Two copies"): the clean one's name while this one's file is not made (the clean one may have moved a second
+    /// on, or resumed the ride left open); nothing until the clean one has made its file, so that a ride left open
+    /// is carried on only when it is the clean one's; and a save only once the clean one's has begun.
+    pub fn io_after(&mut self, clean: &Recorder, d: &mut impl DiskWrite, now: Local) -> Outcome {
         if self.phase == Phase::Starting && self.file.is_none() {
-            self.name = name;
+            self.name = clean.name;
+        }
+        if clean.phase == Phase::Starting || (self.ended && clean.phase == Phase::Recording) {
+            return Outcome::Nothing;
+        }
+        self.io(d, now)
+    }
+
+    /// The full copy reopened by [`Recorder::recover`] (`Resumed`) goes on only with the clean copy `clean`'s ride:
+    /// else (the clean one saved, kept, or another ride) it is ended at its last record and saved as it is.
+    pub fn resumed_after(&mut self, clean: &Recorder) {
+        if self.phase == Phase::Recording && (clean.phase != Phase::Recording || clean.name != self.name) {
+            self.end(0, self.ride);
         }
     }
 
@@ -580,6 +611,19 @@ impl Recorder {
     fn io_inner(&mut self, d: &mut impl DiskWrite, now: Local) -> Result<Outcome, Error> {
         let t = dos_time(now);
         let mut fat = Fat::mount(d)?;
+        let low = |fat: &mut Fat, d: &mut _| -> Result<bool, Error> {
+            let free = fat.free_clusters(d)?.map(|n| u64::from(n) * u64::from(fat.cluster_bytes()));
+            Ok(free.is_some_and(|b| b < FULL_RESERVE))
+        };
+        if self.kind == Kind::Full && !self.ended && self.phase != Phase::Saving && low(&mut fat, d)? {
+            // the card nearly full: what is left is the clean copy's. This one stops where it is (its record done:
+            // never resumed nor saved, a part of the ride only), said once
+            if let Some(f) = self.file {
+                self.write_record(&mut fat, d, Phase::Done, f.first)?;
+            }
+            (self.phase, self.want) = (Phase::Done, false);
+            return Ok(Outcome::Kept(self.name));
+        }
         let mut told = Outcome::Nothing;
         if self.phase == Phase::Starting {
             let dir = self.setup(&mut fat, d, t)?;
@@ -589,7 +633,12 @@ impl Recorder {
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
                 // the marker said so or it stopped a moment ago; else it is saved as it is
                 let last = Writer::from_record(&r.fit).map_or(0, |w| w.last_time());
-                let resume = self.resume_old || self.last_rec.wrapping_sub(last) <= RESUME_S;
+                let resume = match self.kind {
+                    Kind::Clean => self.resume_old || self.last_rec.wrapping_sub(last) <= RESUME_S,
+                    // the clean copy decided first ([`Recorder::io_after`]): its name is the ride left open if it
+                    // carries that one on
+                    Kind::Full => r.name == self.name,
+                };
                 fat.sync_fats(d)?; // the cut may have been between the two FATs, or torn one
                 let mut old = Recorder::of(self.kind);
                 (old.rec, old.seq, old.errors) = (self.rec, self.seq, self.errors);
@@ -607,11 +656,7 @@ impl Recorder {
             if self.file.is_none() {
                 // a name free in this copy's folder and in both saved folders, so that the two copies keep one name
                 let acts = fat.open(d, ACTIVITIES)?;
-                let full = match fat.open(d, FULL_PATH) {
-                    Ok(f) => Some(f),
-                    Err(Error::NotFound) => None,
-                    Err(e) => return Err(e),
-                };
+                let full = fat.open(d, FULL_PATH).ok(); // missing or damaged: never a reason to stop this one
                 let mut buf = [0u8; 16];
                 for _ in 0..10 {
                     let n = file_name(&self.name, &mut buf)?;
@@ -1093,17 +1138,7 @@ mod tests {
     fn ride_all(rs: &mut [Recorder], d: &mut Card, from: u32) -> Option<Vec<Outcome>> {
         let mut last = std::vec![Outcome::Nothing; rs.len()];
         let mut io = |rs: &mut [Recorder], d: &mut Card, t: u32| {
-            d.now = t;
-            let mut name = None;
-            for (r, l) in rs.iter_mut().zip(last.iter_mut()) {
-                if let Some(n) = name {
-                    r.follow(n); // as App::step_recorder
-                }
-                if r.due() {
-                    *l = r.io(d, local(t));
-                }
-                name = name.or(Some(r.name()));
-            }
+            pass(rs, d, t, &mut last);
             !d.dead
         };
         for t in from..SECS {
@@ -1136,6 +1171,23 @@ mod tests {
             }
         }
         Some(last)
+    }
+
+    /// One pass of card work as `App::step_recorder` does it: the clean copy's (`rs[0]`), then the full copy's.
+    fn pass(rs: &mut [Recorder], d: &mut Card, t: u32, last: &mut [Outcome]) {
+        d.now = t;
+        if let [clean, full] = rs {
+            clean.keep_up(full);
+            full.keep_up(clean);
+        }
+        if rs[0].due() {
+            last[0] = rs[0].io(d, local(t));
+        }
+        if let ([clean], [full, ..]) = rs.split_at_mut(1)
+            && full.due()
+        {
+            last[1] = full.io_after(clean, d, local(t));
+        }
     }
 
     /// The saved ride's record times and whether it has its session; Err if it is not a whole FIT file.
@@ -1620,8 +1672,9 @@ mod tests {
             let mut d = card(d.img);
             let mut rs = pair();
             let o = [rs[0].recover(&mut d, local(SECS + 5)), rs[1].recover(&mut d, local(SECS + 5))];
-            if !matches!(o[0], Outcome::Resumed(..)) && matches!(o[1], Outcome::Resumed(..)) {
-                rs[1].end(0, words(0)); // App::step_recorder: no clean ride to go on with
+            if matches!(o[1], Outcome::Resumed(..)) {
+                let [clean, full] = &mut rs;
+                full.resumed_after(clean); // as App::step_recorder
             }
             match o[0] {
                 Outcome::Resumed(w, _) => {
@@ -1697,6 +1750,139 @@ mod tests {
         assert!(saved(&d.img, SAVED_FULL).is_err());
         let out = ride_all(&mut pair(), &mut d, 0).unwrap();
         assert_eq!(out, [Outcome::Saved(*b"261023100001"); 2]);
+        assert_eq!(check_clean(&d.img, "after"), 0);
+    }
+
+    /// Every second of ride from `from` to `to` (excluded) to each recorder, a pass of card work after each.
+    fn seconds(rs: &mut [Recorder], d: &mut Card, from: u32, to: u32, last: &mut [Outcome]) {
+        for t in from..to {
+            for r in rs.iter_mut() {
+                r.second(&sample(t), words(t));
+            }
+            pass(rs, d, t, last);
+        }
+    }
+
+    /// Seen on the unit (2026-10-24): after a reset mid-ride the clean copy had 22 s fewer than the full one. The
+    /// full copy's records are bigger, so its buffer ran low ([`LOW`]) and it checkpointed before its minute was up;
+    /// the clean one waited for its minute. The two checkpoint together now: at any cut the clean copy holds every
+    /// second the full one does.
+    #[test]
+    fn the_clean_copy_is_never_behind_the_full_one() {
+        let mut d = card(crate::fat::tests::image());
+        let (mut rs, mut last, mut at) = (pair(), [Outcome::Nothing; 2], [0u32; 2]);
+        for r in rs.iter_mut() {
+            r.start(T0 - 1, NAME, false);
+        }
+        for t in 0..SECS {
+            seconds(&mut rs, &mut d, t, t + 1, &mut last);
+            for (a, r) in at.iter_mut().zip(&rs) {
+                if r.since == 0 {
+                    *a = t; // checkpointed in this pass
+                }
+            }
+            assert!(
+                at[0] >= at[1],
+                "second {t}: the clean copy's checkpoint at {}, the full one's at {}",
+                at[0],
+                at[1]
+            );
+        }
+        assert_eq!((rs[0].dropped, rs[1].dropped), (0, 0));
+    }
+
+    /// The full copy's folder damaged (its entry in `\Rustfw` points out of the volume): the clean copy still
+    /// records and saves the next ride.
+    #[test]
+    fn a_damaged_full_folder_never_stops_the_clean_copy() {
+        let mut d = card(crate::fat::tests::image());
+        ride_all(&mut pair(), &mut d, 0).unwrap();
+        let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+        let c = Fat::mount(&mut ram).unwrap().open(&mut ram, FULL_PATH).unwrap().cluster;
+        let lba = first_lba(&d.img, DIR);
+        let cluster = |e: &[u8]| u32::from_le_bytes([e[26], e[27], e[20], e[21]]);
+        let at = (lba * SECTOR..(lba + 1) * SECTOR)
+            .step_by(32)
+            .find(|&at| d.img[at] != b'.' && d.img[at + 11] & 0x10 != 0 && cluster(&d.img[at..at + 32]) == c)
+            .unwrap();
+        d.img[at + 20..at + 22].copy_from_slice(&[0xff, 0x0f]);
+        d.img[at + 26..at + 28].copy_from_slice(&[0xf0, 0xff]);
+        let out = ride_all(&mut pair(), &mut d, 0).unwrap();
+        assert_eq!(out[0], Outcome::Saved(*b"261023100001"));
+        let (times, session) = saved(&d.img, "Activities/261023100001.fit").unwrap();
+        assert_eq!((times.len(), session), (SECS as usize - 60, true));
+    }
+
+    /// A full copy left open whose clean copy was saved (a cut between the two saves), then a new ride with the
+    /// boot's marker lost: both copies start the new ride; the old full copy is saved as it was, never carried on
+    /// with the new ride's seconds (a full copy goes on only with the clean copy's ride).
+    #[test]
+    fn the_full_copy_goes_on_only_with_the_clean_copys_ride() {
+        let mut d = card(crate::fat::tests::image());
+        let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+        for r in rs.iter_mut() {
+            r.start(T0 - 1, NAME, false);
+        }
+        seconds(&mut rs, &mut d, 0, 200, &mut last);
+        for r in rs.iter_mut() {
+            r.end(T0 + 200, words(200));
+        }
+        assert_eq!(io_all(&mut rs[0], &mut d, 200), [Outcome::Saved(NAME)]);
+        // the cut: the full copy's save never ran. A new ride ten minutes on
+        let new = *b"261023101000";
+        let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+        for r in rs.iter_mut() {
+            r.start(T0 + 599, new, false);
+        }
+        seconds(&mut rs, &mut d, 600, 700, &mut last);
+        for r in rs.iter_mut() {
+            r.end(T0 + 700, words(700));
+        }
+        for _ in 0..3 {
+            pass(&mut rs, &mut d, 700, &mut last);
+        }
+        assert_eq!(last, [Outcome::Saved(new); 2]);
+        let (old, _) = saved(&d.img, SAVED_FULL).unwrap();
+        assert!(old.iter().all(|&t| t < T0 + 200), "the old full copy as it was: {:?}", old.last());
+        let clean = saved(&d.img, "Activities/261023101000.fit").unwrap();
+        assert_eq!(saved(&d.img, "Rustfw/Activities/261023101000.fit"), Ok(clean));
+        assert_eq!(check_clean(&d.img, "after"), 0);
+    }
+
+    /// A card nearly full: what is left is the clean copy's. With room for about one and a half clean rides, the
+    /// full copy is not made and the clean one is recorded whole and saved.
+    #[test]
+    fn a_nearly_full_card_is_left_to_the_clean_copy() {
+        let img = crate::fat::tests::image();
+        let mut one = card(img.clone());
+        ride(&mut Recorder::new(), &mut one, 0).unwrap();
+        let keep = (free_counts(&img).0 - free_counts(&one.img).0) * 3 / 2;
+        // the other free clusters marked bad in both FATs (0x0ffffff7: neither free nor lost), FSInfo told
+        let mut img = img;
+        let u = |img: &[u8], at: usize, n: usize| {
+            img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b))
+        };
+        let (fat0, fat_len, fsinfo) = (u(&img, 14, 2) * SECTOR, u(&img, 36, 4) * SECTOR, u(&img, 48, 2) * SECTOR);
+        let (mut free, mut kept) = (0u32, 0u32);
+        for at in (fat0 + 8..fat0 + fat_len).step_by(4) {
+            if u(&img, at, 4) & 0x0fff_ffff == 0 {
+                free += 1;
+                if free > keep {
+                    for k in [0, fat_len] {
+                        img[at + k..at + k + 4].copy_from_slice(&0x0fff_fff7u32.to_le_bytes());
+                    }
+                } else {
+                    kept += 1;
+                }
+            }
+        }
+        img[fsinfo + 488..fsinfo + 492].copy_from_slice(&kept.to_le_bytes());
+        let mut d = card(img);
+        let out = ride_all(&mut pair(), &mut d, 0).unwrap();
+        assert_eq!(out[0], Outcome::Saved(NAME));
+        let (times, session) = saved(&d.img, SAVED).unwrap();
+        assert_eq!((times.len(), session), (SECS as usize - 60, true), "the clean copy whole");
+        assert!(saved(&d.img, SAVED_FULL).is_err());
         assert_eq!(check_clean(&d.img, "after"), 0);
     }
 
