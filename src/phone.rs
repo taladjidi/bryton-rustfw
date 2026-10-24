@@ -409,12 +409,19 @@ impl NowPlaying {
 /// let t = [0xea, 0x07, 10, 24, 15, 30, 5, 6, 0, 0];
 /// assert_eq!(bryton_rustfw::phone::current_time(&t), Some((2026, 10, 24, 15, 30, 5)));
 /// assert_eq!(bryton_rustfw::phone::current_time(&t[..6]), None);
+/// let feb31 = [0xea, 0x07, 2, 31, 15, 30, 5, 6, 0, 0];
+/// assert_eq!(bryton_rustfw::phone::current_time(&feb31), None);
 /// ```
 pub fn current_time(p: &[u8]) -> Option<(u16, u8, u8, u8, u8, u8)> {
     match *p {
         [y0, y1, mo, d, h, mi, s, ..] if p.len() >= 10 => {
             let y = u16::from_le_bytes([y0, y1]);
-            let ok = (2020..2100).contains(&y) && (1..=12).contains(&mo) && (1..=31).contains(&d);
+            // a real date only (review finding 10: 31 February would go into the RTC)
+            let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+            let days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            let ok = (2020..2100).contains(&y)
+                && (1..=12).contains(&mo)
+                && (1..=days[usize::from(mo.clamp(1, 12)) - 1]).contains(&d);
             (ok && h < 24 && mi < 60 && s < 60).then_some((y, mo, d, h, mi, s))
         }
         _ => None,

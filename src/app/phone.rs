@@ -21,6 +21,9 @@ use crate::ble::{self, Event};
 use crate::phone::{self as ph, Media, Stored};
 use crate::*;
 
+/// How many passes a media key's release is tried (a pass is 50 ms).
+const RELEASE_TRIES: u8 = 10;
+
 /// Advertising while pairing: interval (0.625 ms units) and time-out (s).
 pub const ADV_FAST: (u16, u16) = (244, 60);
 /// Advertising while bonded and not connected: until a connection.
@@ -145,6 +148,8 @@ pub struct Phone {
     pub(crate) now: ph::NowPlaying,
     /// A media key's report was sent: the release goes at the next pass.
     release: bool,
+    /// Passes the release failed in a row.
+    release_tries: u8,
     /// The battery level last sent.
     battery_sent: Option<u8>,
     /// The media screen's rows as drawn (fingerprints).
@@ -183,6 +188,7 @@ impl Default for Phone {
             call: None,
             now: ph::NowPlaying::default(),
             release: false,
+            release_tries: 0,
             battery_sent: None,
             shown: ui::media::Shown { text: 0, playing: None, bar: 0, times: 0 },
         }
@@ -450,8 +456,11 @@ impl App {
             self.phone.busy = false; // an answer that never came: the queue goes on
         }
         if self.phone.release {
-            // the key's release: one notification queued at a time (the stack's default), so a pass after the press
-            self.phone.release = ble::notify(b, &mut self.rx, conn, self.phone.report.0, &[0]).is_err();
+            // the key's release: one notification queued at a time (the stack's default), so a pass after the press;
+            // tried for at most RELEASE_TRIES passes (review finding 9: not every pass until the link drops)
+            let failed = ble::notify(b, &mut self.rx, conn, self.phone.report.0, &[0]).is_err();
+            self.phone.release_tries = if failed { self.phone.release_tries + 1 } else { 0 };
+            self.phone.release = failed && self.phone.release_tries < RELEASE_TRIES;
         }
         let level = self.strip.battery;
         if self.phone.secure && level.is_some() && level != self.phone.battery_sent {
@@ -649,7 +658,7 @@ impl App {
                 }
             }
             (Disc::Service(n), _) => p.disc = Disc::Service(n + 1), // not there
-            (Disc::Chars(n, _), Event::Chars { status: 0, list }) if !list.is_empty() => {
+            (Disc::Chars(n, from), Event::Chars { status: 0, list }) if !list.is_empty() => {
                 let mut last = 0;
                 for (uuid, _, decl, value) in ble::chars(list) {
                     if let Some(slot) = p.slot(uuid) {
@@ -661,7 +670,9 @@ impl App {
                     }
                     last = value;
                 }
-                p.disc = if last < p.svc_end { Disc::Chars(n, last + 1) } else { Disc::Descs(n) };
+                // a phone whose handles do not move forward would be asked forever (review 3, finding 8): on to
+                // the descriptors instead
+                p.disc = if last >= from && last < p.svc_end { Disc::Chars(n, last + 1) } else { Disc::Descs(n) };
             }
             (Disc::Chars(n, _), _) => p.disc = Disc::Descs(n), // the end of the characteristics
             (Disc::Descs(_), Event::Descs { status: 0, list }) => {
