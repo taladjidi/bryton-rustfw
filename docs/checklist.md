@@ -338,8 +338,8 @@ Storage, USB and updates
 - [ ] Time zone, daylight saving, date and time formats (stock, all)
 - [ ] Units: metric or imperial, temperature (stock, all)
 - [ ] Language (stock, all)
-- [ ] First start setup (stock, all)
-- [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired ANT+ sensors, data pages (ours): sim (STOCK DATA, IMPORT)
+- [x] First start setup: stock's settings and pages taken by themselves (ours): sim
+- [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired ANT+ sensors, auto backlight, reminders, data pages (ours): sim (STOCK DATA, IMPORT)
 - [ ] Auto features per profile: smart pause, climb page switch, climb approach, map view (stock)
 - [ ] Data reset: trips, odometer, factory settings (stock)
 - [ ] About: firmware version, UUID, position (stock): over USB (`dev.py info`) only

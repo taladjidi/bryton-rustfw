@@ -448,7 +448,7 @@ impl App {
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {
                 self.stock.start(self.date);
             }
-            Some(Row::Stock(menu::StockRow::Import)) => self.import_stock(b),
+            Some(Row::Stock(menu::StockRow::Import)) => self.import_stock(b, false),
             Some(Row::Phone(r)) => {
                 use menu::PhoneRow;
                 match r {

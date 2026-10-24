@@ -679,6 +679,12 @@ fn to_bcd(v: u64) -> u32 {
 }
 
 impl Sim {
+    /// This firmware's default settings in the backup registers, as after its first start: the next start does not
+    /// import stock's ([`App::first_start`]).
+    pub fn own_settings(&mut self) {
+        self.backup[crate::WHEEL_BKP] = crate::Settings::from_word(0).to_word();
+    }
+
     /// A unit whose RTC reads `h:m:s` at reset, no key pressed.
     pub fn new(h: u64, m: u64, s: u64) -> Self {
         Sim {

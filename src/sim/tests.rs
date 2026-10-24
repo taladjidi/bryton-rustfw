@@ -367,6 +367,43 @@ fn stock_data_menu() {
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
 }
 
+/// The first start over a volume stock used (the synthetic one, tools/fat_image.py) takes stock's settings and
+/// pages by itself; the next start leaves what was set since alone and does not touch the card.
+#[test]
+fn first_start_imports_stock_settings() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let app = App::start(&mut sim, None);
+    assert_eq!((app.settings.ftp, app.settings.max_hr), (265, 188));
+    use crate::ui::Field::*;
+    let p = app.pages();
+    assert_eq!((ui::field_count(p[0].layout), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
+    assert_eq!((ui::field_count(p[1].layout), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
+    assert_eq!(p[2], crate::DEFAULT_PAGES[2], "stock had two data pages: the third as it was");
+    assert!(app.notices[0].as_str().ends_with("IMPORTED 8"), "{}", app.notices[0].as_str());
+    assert_eq!(sim.backup[Kind::Hr.backup()], crate::nrf::SensorId { device: 1234, trans: 0 }.to_word());
+    assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
+    sim.save("first_start");
+
+    // the owner changes FTP and a page here; the next start keeps them and reads nothing from the card
+    let mut app = app;
+    app.settings.ftp = 300;
+    app.save_misc(&mut sim);
+    app.pages[0].fields[0] = Wbal;
+    crate::save_page(&mut sim, 0, &app.pages[0]);
+    sim.emmc.cmds.clear();
+    let app = App::start(&mut sim, None);
+    assert_eq!((app.settings.ftp, app.pages()[0].fields[0]), (300, Wbal), "not imported again");
+    assert!(sim.emmc.cmds.is_empty(), "the card is not read at a later start");
+
+    // no stock data (a card without a volume): the defaults, nothing said, and not tried again
+    let mut sim = Sim::new(9, 0, 0);
+    let app = App::start(&mut sim, None);
+    assert_eq!((app.settings.ftp, app.pages()[0]), (crate::ride::FTP, crate::DEFAULT_PAGES[0]));
+    assert!(app.notices.iter().all(|n| !n.as_str().contains("IMPORTED")));
+    assert_eq!(sim.backup[WHEEL_BKP] >> 24, 0xa7, "this firmware's settings from now on");
+}
+
 /// The ride history over the synthetic volume (tools/fat_image.py): HISTORY starts the scan of stock's rides and
 /// lists them newest first as they come; Select opens a ride's card (its track, profile and numbers, read from
 /// its file once), Back returns to the list. Prints what opening a card read.
@@ -465,6 +502,7 @@ fn power210(_: u64) -> [u8; 8] {
 fn workout_from_the_calendar() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings(); // the defaults, not stock's
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210 });
     let mut app = App::start(&mut sim, Some(KEY));
@@ -632,6 +670,7 @@ fn workout_gauge_field() {
     let z = crate::ride::ZONE_COLORS;
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings(); // the defaults, not stock's
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: scripted_power });
     SCRIPTED_W.store(210, Relaxed);
@@ -1630,6 +1669,7 @@ fn climb(ms: u64) -> i32 {
 fn a_ride_with_laps_and_pauses() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image(); // a volume to record on (else the strip says not saving)
+    sim.own_settings(); // the defaults, not stock's
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(climb);
     sim.gnss.fix = Some(8000);

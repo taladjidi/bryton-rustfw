@@ -188,7 +188,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
   `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `sim.rs` has a model of the card
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
-  basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at boot only
+  basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at boot only at the first start, for stock's settings, or
   when a ride is open).
 - `src/storage/fat.rs`: a FAT32 reader: boot sector, chains, 8.3 and long names, files at an offset, directory
   listings; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`,

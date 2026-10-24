@@ -172,11 +172,12 @@ fn identifies_again_after_an_error() {
     assert_eq!((sim.emmc.cmds[0], buf), ((0, 0), emmc_sector(8)));
 }
 
-/// The eMMC is not touched at boot, only by the dev link; a dead card answers an error, the app runs on, and
-/// the card is identified again once it answers.
+/// The eMMC is not touched at boot (past the first start, which imports stock's settings), only by the dev link; a
+/// dead card answers an error, the app runs on, and the card is identified again once it answers.
 #[test]
 fn sector_command_reads_and_survives_a_dead_card() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
     let mut app = App::start(&mut sim, None);
     app.step(&mut sim);
     assert!(sim.emmc.cmds.is_empty(), "the eMMC was touched at boot");

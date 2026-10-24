@@ -279,7 +279,7 @@ impl Scan {
     }
 
     /// Reads stock's settings files ([`import`]), each into a buffer of [`IO`] bytes on the stack: `\System\DeviceData.ini` for the bike
-    /// in use, then `UserProfile.ini`, `Sensor.ini` and that bike's `Bike<n>Profile.ini`. A missing file gives
+    /// in use and the backlight, then `UserProfile.ini`, `Sensor.ini` and that bike's `Bike<n>Profile.ini`. A missing file gives
     /// nothing from it.
     #[inline(never)] // as `advance`
     pub fn import(&self, d: &mut impl Disk) -> Result<Imported, fat::Error> {
@@ -290,8 +290,7 @@ impl Scan {
             fat.open(d, path).and_then(|f| fat.read_at(d, &f, 0, io)).unwrap_or(0)
         };
         let n = read(&mut fat, d, "System/DeviceData.ini", &mut io);
-        // ActBike: 0 for Bike1Profile.ini (inferred from one unit: ActBike=0 with one bike set up)
-        let bike = number(io.get(..n).unwrap_or(&[]), "DeviceSys", "ActBike", 0).unwrap_or(0).min(2) as u8;
+        let bike = imp.device(io.get(..n).unwrap_or(&[]));
         let n = read(&mut fat, d, "System/UserProfile.ini", &mut io);
         imp.user(io.get(..n).unwrap_or(&[]));
         let n = read(&mut fat, d, "System/Sensor.ini", &mut io);
@@ -323,37 +322,80 @@ pub struct Imported {
     pub sensors: [Option<SensorId>; 5],
     /// Ride pages (the bike's `[Page1]` to `[Page4]`, the enabled ones first).
     pub pages: [Option<PageCfg>; PAGES],
+    /// Eat and drink reminders, minutes of ride time, and the heart rate alert, bpm (the bike's `[Reminder<n>]`).
+    pub eat_min: Option<u16>,
+    /// See `eat_min`.
+    pub drink_min: Option<u16>,
+    /// See `eat_min`.
+    pub hr_alert: Option<u16>,
+    /// The backlight follows the ambient light (DeviceData.ini `[DeviceSys] brightnessAuto=1`).
+    pub light_auto: bool,
 }
 
-/// Stock's field ids (`GridN=` in Bike`<n>`Profile.ini) and the field here that shows the same value. The ids are
-/// the indexes of stock's field title table (GetDataFieldTitle 0xd0150ef8, English titles read from its string
-/// blocks; bryton-S510-mods docs/how-it-works.md "Data fields" confirms 27, 28, 29). A ring or bar of a value
-/// maps to the value. Ids not here (3 s and 30 s power, gradient, zones...) have no equivalent yet.
-pub const STOCK_FIELDS: [(u8, Field); 23] = [
-    (1, Field::Temp),      // "Temp."
-    (2, Field::Speed),     // "Speed"
-    (3, Field::AvgSpeed),  // "Avg Speed"
-    (4, Field::MaxSpeed),  // "Max Speed"
-    (5, Field::Dist),      // "Distance"
-    (7, Field::Time),      // "Time" (of day, inferred: "Ride Time" and "Trip Time" are the timers)
-    (8, Field::Timer),     // "Ride Time"
-    (16, Field::Ascent),   // "Alt. Gain"
-    (21, Field::Hr),       // "Heart Rate"
-    (22, Field::AvgHr),    // "Avg HR"
-    (24, Field::Cadence),  // "Cadence"
-    (29, Field::Power),    // "Power"
-    (31, Field::AvgPower), // "Avg Power"
-    (48, Field::LapDist),  // "LapDistance"
-    (50, Field::LapTime),  // "LapTime"
-    (96, Field::Speed),    // "SPD Ring"
-    (97, Field::Speed),    // "SPD Bar"
-    (98, Field::Cadence),  // "CAD Ring"
-    (99, Field::Cadence),  // "CAD Bar"
-    (100, Field::Hr),      // "HR Ring"
-    (101, Field::Hr),      // "HR Bar"
-    (102, Field::Power),   // "PW Ring"
-    (103, Field::Power),   // "PW Bar"
-];
+/// Stock's field ids (`GridN=` in Bike`<n>`Profile.ini) and the field here that shows the same value, or the
+/// closest. The ids are the indexes of stock's field title table (GetDataFieldTitle 0xd0150ef8, English titles
+/// read from its string blocks: ghidra/STORAGE_AND_MAPS.md 3.2; bryton-S510-mods docs/how-it-works.md "Data
+/// fields" confirms 27, 28, 29). A ring or bar of a value maps to the value. 12 and 13 are "Non" in stock: the
+/// patched stock firmware of bryton-S510-mods shows DFA a1 (P9) and W' balance (P10) there, so a page that has
+/// them was made on it. Ids not here (altitude, zones, lap averages, pedal dynamics...) have no equivalent yet.
+pub const STOCK_FIELDS: [(u8, Field); 53] = {
+    use Field::*;
+    [
+        (0, Kcal),         // "Calories"
+        (1, Temp),         // "Temp."
+        (2, Speed),        // "Speed"
+        (3, AvgSpeed),     // "Avg Speed"
+        (4, MaxSpeed),     // "Max Speed"
+        (5, Dist),         // "Distance"
+        (7, Time),         // "Time" (of day, inferred: "Ride Time" and "Trip Time" are the timers)
+        (8, Timer),        // "Ride Time"
+        (12, Dfa),         // "Non"; P9's DFA a1
+        (13, Wbal),        // "Non"; P10's W' balance
+        (16, Ascent),      // "Alt. Gain"
+        (18, Grade),       // "Gradient"
+        (21, Hr),          // "Heart Rate"
+        (22, AvgHr),       // "Avg HR"
+        (23, MaxHr),       // "Max HR"
+        (24, Cadence),     // "Cadence"
+        (25, AvgCadence),  // "Avg CAD"
+        (27, Power30s),    // "30s PW"
+        (28, Power3s),     // "3s PW"
+        (29, Power),       // "Power"
+        (30, MaxPower),    // "Max Power"
+        (31, AvgPower),    // "Avg Power"
+        (44, Kcal),        // "Calories"
+        (48, LapDist),     // "LapDistance"
+        (50, LapTime),     // "LapTime"
+        (58, TotalKm),     // "ODO"
+        (65, Wkg),         // "w/kg" (3 s power here)
+        (67, If),          // "IF"
+        (68, Np),          // "NP"
+        (69, Tss),         // "TSS"
+        (70, Balance),     // "CurPB-LR" (pedal balance)
+        (78, Power10s),    // "10s Power"
+        (80, Kj),          // "Total Work"
+        (92, ToGo),        // "To Dest."
+        (95, Map),         // "Turn Info": the map in a data page (ghidra recovered_src/ui/page_switch.c)
+        (96, Speed),       // "SPD Ring"
+        (97, Speed),       // "SPD Bar"
+        (98, Cadence),     // "CAD Ring"
+        (99, Cadence),     // "CAD Bar"
+        (100, Hr),         // "HR Ring"
+        (101, Hr),         // "HR Bar"
+        (102, Power),      // "PW Ring"
+        (103, Power),      // "PW Bar"
+        (104, Power3s),    // "3s PW Ring"
+        (105, Power10s),   // "10s PW Ring"
+        (106, Power30s),   // "30s PW Ring"
+        (120, Vam),        // "VAM"
+        (141, StepTarget), // "Target PW"
+        (142, StepTarget), // "Target Cad"
+        (143, StepTarget), // "Target HR"
+        (144, StepTime),   // "Step Rem."
+        (147, StepTime),   // "Step Rem."
+        (180, Wbal),       // "W' Bal" (ghidra recovered_src/ui/data_fields.c)
+    ]
+};
 
 fn stock_field(id: u32) -> Option<Field> {
     STOCK_FIELDS.iter().find(|(i, _)| u32::from(*i) == id).map(|&(_, f)| f)
@@ -408,11 +450,28 @@ impl Imported {
         }
     }
 
-    /// From Bike`<n>`Profile.ini: `[Page1]` to `[Page4]` (stock's data pages; the others have a `name` and other
-    /// kinds), the enabled ones (`isEnabled` not 0), each with its `Grid<type>` fields (`type`: the field count,
-    /// inferred from every page of one unit). The fields with an equivalent here, at most 6, give a page with a
-    /// layout of that many fields.
+    /// From DeviceData.ini: the backlight, and the bike in use (`[DeviceSys] ActBike`, 0 for Bike1Profile.ini:
+    /// Cfg_SetActiveBike writes the 0-based index there, ghidra notes/agent_a1.md), returned.
+    pub fn device(&mut self, t: &[u8]) -> u8 {
+        // brightnessAuto: written with brightness and AutoBrnVal by Cfg_DevDataApplySettingById (agent_a2.md); 1 on,
+        // inferred. The manual `brightness` is not taken: its scale is not checked.
+        self.light_auto = number(t, "DeviceSys", "brightnessAuto", 0) == Some(1);
+        number(t, "DeviceSys", "ActBike", 0).unwrap_or(0).min(2) as u8
+    }
+
+    /// From Bike`<n>`Profile.ini: the pages ([`Imported::pages`]) and the reminders ([`Imported::reminders`]).
     pub fn bike(&mut self, t: &[u8]) {
+        self.pages(t);
+        self.reminders(t);
+    }
+
+    /// `[Page1]` to `[Page4]`, stock's data pages (the others have a `name` and are lap, map, climb... pages),
+    /// the enabled ones in order: `isEnabled` 1 or 2 (stock's FUN_d015f248 turns 2 into 1, and a data page shows
+    /// when it is 1: ApplicationglobalSetting_IsPageAvailable 0xd01535e0), each with the fields of its
+    /// `Grid<type>` line (`type`: the field count; Page_LoadBikeProfilePage reads one list per count, so the others
+    /// are what the page would show with another count). The fields with an equivalent here, in stock's order and
+    /// each once, at most 6, give the layout of that many fields; a page with none is left out.
+    pub fn pages(&mut self, t: &[u8]) {
         let mut out = 0;
         for n in 1..=4u32 {
             let mut buf = [0u8; 16];
@@ -426,7 +485,11 @@ impl Imported {
             let mut page = PageCfg { layout: 0, fields: [Field::Time; 6] };
             let mut k = 0;
             for id in list.split(|&b| b == b',').filter_map(|v| crate::ini::decimal(v, 0)) {
-                if let (Some(f), Some(slot)) = (stock_field(id), page.fields.get_mut(k)) {
+                let Some(f) = stock_field(id) else { continue };
+                if page.fields.get(..k).is_some_and(|had| had.contains(&f)) {
+                    continue; // a ring and the number of one value
+                }
+                if let Some(slot) = page.fields.get_mut(k) {
                     *slot = f;
                     k += 1;
                 }
@@ -435,6 +498,36 @@ impl Imported {
             if let (true, Some(slot)) = (page.layout != 0, self.pages.get_mut(out)) {
                 *slot = Some(page);
                 out += 1;
+            }
+        }
+    }
+
+    /// `[Reminder1]` to `[Reminder6]` (ghidra recovered_src/ride/reminders.c): the ones on (`status=1`) that have
+    /// an equivalent here. Every so many minutes of trip time (`WhichReminder=0`, `ReminderFreq=2` repeats,
+    /// `Timer` in s): `ReminderType` 0 Drink, 1 Eat; heart rate over (`WhichReminder=5`, `HR`). Rounded to the
+    /// menu's steps of 5.
+    pub fn reminders(&mut self, t: &[u8]) {
+        let fives = |v: u32, r: core::ops::RangeInclusive<u16>| {
+            u16::try_from(v.saturating_add(2) / 5 * 5).ok().map(|v| v.clamp(*r.start(), *r.end()))
+        };
+        for n in 1..=6u32 {
+            let mut buf = [0u8; 16];
+            let section = named(&mut buf, "Reminder", "", n);
+            let key = |k| number(t, section, k, 0);
+            if key("status") != Some(1) {
+                continue;
+            }
+            match (key("WhichReminder"), key("ReminderFreq"), key("ReminderType")) {
+                (Some(0), Some(2), Some(ty @ 0..=1)) => {
+                    let min = key("Timer").map(|s| s / 60).filter(|&m| m > 0).and_then(|m| fives(m, 5..=120));
+                    let slot = if ty == 0 { &mut self.drink_min } else { &mut self.eat_min };
+                    *slot = slot.or(min);
+                }
+                (Some(5), _, _) => {
+                    let hr = key("HR").filter(|&h| h > 0).and_then(|h| fives(h, 100..=230));
+                    self.hr_alert = self.hr_alert.or(hr);
+                }
+                _ => {}
             }
         }
     }
@@ -508,9 +601,16 @@ mod tests {
         let sensor = b"[Sensor]\r\nHR_Num=2\r\n[HRSensor1]\r\nID=0\r\nHWType=0\r\nactive=1\r\n[HRSensor2]\r\n\
             ID=1234\r\nHWType=0\r\nactive=1\r\n[SPDSensor1]\r\nWheel=2105.000000\r\nID=70000\r\nHWType=0\r\n\
             active=1\r\n[PWRSensor1]\r\nID=4321\r\nHWType=1\r\nactive=1\r\n";
+        // Page1 shown (isEnabled 2), its Grid3 the one shown; Page2 off; Page3 with more fields than a layout here,
+        // a ring and its value, and ids without an equivalent (14 altitude, 32 zone); Page4 only those; Page5 a lap
+        // page. Reminders: drink every 45 min (on), eat (off), HR over 172, a clock alarm (no equivalent).
         let bike = b"[Info]\nVer=6001\n[Page1]\nGrid2=96,5\nGrid3=2,21,7\ntype=3\nisEnabled=2\n\n[Page2]\n\
-            Grid4=3,18,7,0\ntype=4\nisEnabled=0\n[Page3]\nGrid9=28,2,21,5,8,16,18,0,1\ntype=9\nisEnabled=1\n\
-            [Page4]\nGrid1=18\ntype=1\nisEnabled=1\n[Page5]\nname=1012\ntype=6\nisEnabled=1\nGrid6=2,2,2,2,2,2\n";
+            Grid4=3,18,7,0\ntype=4\nisEnabled=0\n[Page3]\nGrid10=103,29,14,12,180,32,13,68,8,5\ntype=10\n\
+            gridtype=1\nisEnabled=1\n[Page4]\nGrid2=14,32\ntype=2\nisEnabled=1\n[Page5]\nname=1012\ntype=6\n\
+            isEnabled=1\nGrid6=2,2,2,2,2,2\n[Reminder1]\nTimer=2700\nWhichReminder=0\nReminderFreq=2\n\
+            ReminderType=0\nstatus=1\n[Reminder2]\nTimer=3600\nWhichReminder=0\nReminderFreq=2\nReminderType=1\n\
+            status=0\n[Reminder3]\nHR=172\nWhichReminder=5\nReminderFreq=1\nReminderType=5\nstatus=1\n\
+            [Reminder4]\nAlerm_Hour=7\nWhichReminder=1\nReminderFreq=1\nReminderType=3\nstatus=1\n";
         let i = import(user, sensor, bike);
         let got = (i.ftp, i.max_hr, i.weight_dg, i.cp, i.w_prime);
         assert_eq!(got, (Some(265), Some(188), Some(725), Some(255), Some(21_000)));
@@ -522,8 +622,13 @@ mod tests {
         let p0 = i.pages[0].unwrap();
         assert_eq!((ui::field_count(p0.layout), &p0.fields[..3]), (3, &[Speed, Hr, Time][..]));
         let p1 = i.pages[1].unwrap();
-        assert_eq!((ui::field_count(p1.layout), &p1.fields[..]), (6, &[Speed, Hr, Dist, Timer, Ascent, Temp][..]));
+        let want = [Power, Dfa, Wbal, Np, Timer, Dist];
+        assert_eq!((ui::field_count(p1.layout), &p1.fields[..]), (6, &want[..]), "each once, the first 6 mapped");
         assert_eq!(i.pages[2], None, "page 4 has nothing mapped; page 5 is not a data page");
+        assert_eq!((i.drink_min, i.eat_min, i.hr_alert), (Some(45), None, Some(170)), "HR to the menu's 5s");
+        let mut d = Imported::default();
+        assert_eq!((d.device(b"[DeviceSys]\nbrightnessAuto=1\nActBike=2\n"), d.light_auto), (2, true));
+        assert_eq!((d.device(b"[DeviceSys]\nbrightnessAuto=0\n"), d.light_auto), (0, false));
         assert_eq!(import(b"", b"\0\0", b"[Page1"), Imported::default());
     }
 
@@ -568,11 +673,38 @@ mod tests {
             bytes >> 20
         );
         let sys = |f: &str| std::fs::read(std::format!("{root}/System/{f}")).unwrap_or_default();
-        let i = import(&sys("UserProfile.ini"), &sys("Sensor.ini"), &sys("Bike1Profile.ini"));
+        let mut i = Imported::default();
+        let bike = std::format!("Bike{}Profile.ini", 1 + i.device(&sys("DeviceData.ini")));
+        let bike = sys(&bike);
+        i.user(&sys("UserProfile.ini"));
+        i.sensors(&sys("Sensor.ini"));
+        i.bike(&bike);
         let found = [i.ftp.is_some(), i.max_hr.is_some(), i.weight_dg.is_some(), i.cp.is_some(), i.w_prime.is_some()];
         let sensors = i.sensors.iter().filter(|s| s.is_some()).count();
         let pages = i.pages.iter().filter(|p| p.is_some()).count();
         std::println!("settings found (ftp, max hr, weight, cp, w'): {found:?}; {sensors} sensors, {pages} pages");
+        let alerts = [i.eat_min.is_some(), i.drink_min.is_some(), i.hr_alert.is_some(), i.light_auto];
+        std::println!("reminders and backlight found (eat, drink, hr, auto light): {alerts:?}");
+        // how much of the data pages shown maps: counts and stock's generic field ids only, never the owner's values
+        let (mut shown, mut mapped, mut unmapped) = (0, 0, std::collections::BTreeSet::new());
+        for n in 1..=4 {
+            let section = std::format!("Page{n}");
+            let count = number(&bike, &section, "type", 0).unwrap_or(0);
+            if number(&bike, &section, "isEnabled", 0).unwrap_or(0) == 0 || get(&bike, &section, "name").is_some() {
+                continue;
+            }
+            let list = get(&bike, &section, &std::format!("Grid{count}")).unwrap_or(&[]);
+            for id in list.split(|&b| b == b',').filter_map(|v| crate::ini::decimal(v, 0)) {
+                shown += 1;
+                match stock_field(id) {
+                    Some(_) => mapped += 1,
+                    None => _ = unmapped.insert(id),
+                }
+            }
+        }
+        std::println!(
+            "data pages shown: {mapped} of {shown} fields have an equivalent; stock ids without: {unmapped:?}"
+        );
         assert!(rides > 0);
     }
 }

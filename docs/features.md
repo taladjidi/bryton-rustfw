@@ -188,10 +188,14 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
     on the 2 to 20 minute bests, and **CP FIT**: the points used and the model's largest error. A stop or a
     power dropout ends an effort (a best never spans a cafe stop);
   - **distance and riding time** of this week (from Monday), this year and all rides.
-- **IMPORT** applies stock's settings where this firmware has them: FTP and max heart rate (UserProfile.ini),
-  the wheel (a speed sensor's, Sensor.ini), the paired ANT+ sensors (Sensor.ini), and the data pages of the bike
-  in use (its first three enabled pages, with the fields that have an equivalent here). Stock's weight, CP and
-  W' are read too, for when those settings exist here.
+- **IMPORT** applies stock's settings where this firmware has them: FTP, max heart rate, weight and W'
+  (UserProfile.ini), the wheel (a speed sensor's, Sensor.ini), the paired ANT+ sensors (Sensor.ini), the
+  automatic backlight (DeviceData.ini), and from the bike in use (DeviceData.ini `ActBike`): the eat and drink
+  reminders and the heart rate alert that are on, and the data pages (its first three enabled pages, each with
+  the fields of the grid shown that have an equivalent here, 53 of stock's field ids, at most 6 a page).
+- **The first start does the same by itself:** with no settings of this firmware's own yet (a unit coming from
+  stock), it starts with stock's settings and pages, says IMPORTED n, and never imports again (the menu row
+  does, on demand). Stock's files are only read.
 
 ## Sensors and radios
 

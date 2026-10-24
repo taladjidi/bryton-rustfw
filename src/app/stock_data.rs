@@ -95,17 +95,45 @@ impl App {
         }
     }
 
-    /// Applies stock's settings ([`stock::import`]) where this firmware has them, and says how many.
-    pub(crate) fn import_stock(&mut self, b: &mut impl Board) {
+    /// At the first start (no settings of this firmware's own in the backup registers: [`WHEEL_BKP`] has none of
+    /// its tags), stock's settings are taken as [`App::import_stock`] does from the menu, so the unit starts as
+    /// stock had it; the settings are then saved, so this happens once, even when the card has no stock data.
+    /// Said only when something was taken. A flat backup battery loses this firmware's settings, so the next start
+    /// is a first start again: stock's are better than the defaults then too.
+    #[inline(never)] // its card reading in its own frame, not begin's
+    pub(crate) fn first_start(&mut self, b: &mut impl Board) {
+        if matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xa7) {
+            return;
+        }
+        self.import_stock(b, true);
+        self.save_misc(b);
+    }
+
+    /// Applies stock's settings ([`stock::import`]) where this firmware has them, and says how many (`quiet`:
+    /// nothing said when there was nothing).
+    pub(crate) fn import_stock(&mut self, b: &mut impl Board, quiet: bool) {
         let Ok(i) = self.stock.import(&mut emmc::Volume(&mut self.emmc, b)) else {
-            return self.notice("NO STOCK DATA");
+            if !quiet {
+                self.notice("NO STOCK DATA");
+            }
+            return;
         };
         let mut n = 0;
         let s = &mut self.settings;
-        for (want, have) in [(i.ftp, &mut s.ftp), (i.max_hr, &mut s.max_hr)] {
+        let numbers = [
+            (i.ftp, &mut s.ftp),
+            (i.max_hr, &mut s.max_hr),
+            (i.eat_min, &mut s.eat_min),
+            (i.drink_min, &mut s.drink_min),
+            (i.hr_alert, &mut s.hr_alert),
+        ];
+        for (want, have) in numbers {
             if let Some(v) = want {
                 (*have, n) = (v, n + 1);
             }
+        }
+        if i.light_auto {
+            (s.light_level, n) = (LIGHT_AUTO, n + 1);
         }
         if let Some(mm) = i.wheel_mm {
             // the nearest wheel offered
@@ -138,6 +166,9 @@ impl App {
                 save_page(b, k, p);
                 n += 1;
             }
+        }
+        if quiet && n == 0 {
+            return;
         }
         let mut l = Line::<20>::new();
         l.push_str("IMPORTED ");

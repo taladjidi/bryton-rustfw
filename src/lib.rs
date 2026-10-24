@@ -449,6 +449,7 @@ impl App {
             }
             b.backup_write(STOCK_BKP19, 0);
         }
+        self.first_start(b); // before the first page is drawn: stock's pages on it
         if self.ble.is_some() {
             self.phone_setup(b);
         }

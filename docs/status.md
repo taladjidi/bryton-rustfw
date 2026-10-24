@@ -97,7 +97,8 @@ The dated findings are in [journal.md](journal.md).
 - **STOCK DATA on the unit:** how long READ RIDES takes over stock's rides (about 175 KB a ride on one unit's
   backups, so about 35 MB for 200 rides; the eMMC read speed and the parsing time per byte from SDRAM code are
   not measured: estimated 10 to 20 s at 256 KB a pass), the menu's response meanwhile, and IMPORT against the
-  unit's own `\System` files (checked on the host against two backups).
+  unit's own `\System` files (checked on the host against two backups); the first start over stock's volume
+  (its import by itself, the eMMC identified at boot then).
 - **Workouts on the unit:** WORKOUTS over the card's own `\Workout\calendar` (read on the host from one unit's
   backup: Bryton's files decode, names cut at 15 characters), a workout ridden through (the beeps' loudness and
   pitch, 2 kHz and 2.5 kHz, by ear; the banners), and the time a list takes to read (16 workout files of 8 KB at
