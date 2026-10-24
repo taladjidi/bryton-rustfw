@@ -15,6 +15,8 @@ entirely. Not affiliated with Bryton.
 | History: stock's rides, newest first (sim) | A past ride's card, read from its file (sim) | A planned workout's steps, from stock's calendar (sim) | A workout running: target, step left, next (sim) |
 | ![Course](docs/img/course.png) | ![Course profile](docs/img/course-profile.png) | ![Course fields](docs/img/course-fields.png) | ![Courses](docs/img/courses.png) |
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead (sim) | Courses on the card: stock's routes, FIT, GPX (sim) |
+| ![Workout graph](docs/img/workout-graph.png) | | | |
+| The workout graph: steps by target and zone, the rider's place (sim) | | | |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*

@@ -4,10 +4,16 @@
 //! ([`Player::skip`]). Each change comes out as an [`Event`] for the app to show and sound: a step started, the
 //! last 3 seconds of a timed step (3-2-1 beeps, as bryton-S510-mods' patch P1 does), the workout done.
 
-use crate::storage::workout::{Length, Step};
+use crate::storage::workout::{Kind, Length, Step};
+use crate::{ride, ui};
 
 /// Seconds before a timed step ends that each beep (3, 2, 1).
 pub const COUNTDOWN_S: u32 = 3;
+/// An open step's width on the workout graph, s: it lasts until Lap, so its length is unknown.
+// ponytail: a fixed guess; the time actually spent in it would need the graph to grow as it goes
+pub const OPEN_S: u32 = 300;
+/// The speed a distance step is drawn at on the workout graph, m/s (about 30 km/h).
+const GRAPH_MPS: u32 = 8;
 
 /// What changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +84,20 @@ impl Player {
         if self.step < steps.len() { Event::Step(self.step) } else { Event::Done }
     }
 
+    /// Where the rider is on the workout graph, s from its start ([`graph_s`]): the steps done and the part of the
+    /// step running (an open step's no further than its end); the whole graph once done.
+    pub fn graph_at(&self, steps: &[Step], dist_m: u32) -> u32 {
+        let done = steps.get(..self.step).unwrap_or(steps).iter().map(graph_s).fold(0, u32::saturating_add);
+        let part = steps.get(self.step).map_or(0, |s| {
+            let p = match s.len {
+                Length::Distance(_) => dist_m.saturating_sub(self.from_m) / GRAPH_MPS,
+                _ => self.elapsed_s,
+            };
+            p.min(graph_s(s) - 1)
+        });
+        done.saturating_add(part)
+    }
+
     /// What is left of the step, the ride at `dist_m`.
     pub fn left(&self, steps: &[Step], dist_m: u32) -> Left {
         match steps.get(self.step).map(|s| s.len) {
@@ -87,6 +107,79 @@ impl Player {
             Some(Length::Open) => Left::Lap,
         }
     }
+}
+
+/// A step's width on the workout graph, s: its time, a distance at about 30 km/h, an open step [`OPEN_S`]; 1 s at
+/// least.
+pub fn graph_s(s: &Step) -> u32 {
+    match s.len {
+        Length::Time(t) => t,
+        Length::Distance(m) => m / GRAPH_MPS,
+        Length::Open => OPEN_S,
+    }
+    .max(1)
+}
+
+/// The workout graph's span, s.
+pub fn graph_total_s(steps: &[Step]) -> u32 {
+    steps.iter().map(graph_s).fold(0, u32::saturating_add)
+}
+
+/// A step's level on the workout graph (per mille of its height) and its colour, for this FTP and max heart rate:
+/// power from 0 to 150 % of FTP (zone 7 at the top), heart rate from half the max to it, in their zone colours; a
+/// step without a power or heart-rate target a quarter high, grey when open, white for cadence (no zones).
+pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
+    let per_mille = |v: u32, lo: u32, hi: u32| v.saturating_sub(lo) * 1000 / hi.saturating_sub(lo).max(1);
+    let (ftp32, max32) = (u32::from(ftp), u32::from(max_hr));
+    match (s.target.kind, s.target.range(ftp, max_hr)) {
+        (Kind::Power, Some((lo, hi))) => {
+            let mid = lo.midpoint(hi);
+            (per_mille(mid.into(), 0, ftp32 * 3 / 2), ride::power_color(ride::power_zone(mid, ftp)))
+        }
+        (Kind::Hr, Some((lo, hi))) => {
+            let mid = lo.midpoint(hi);
+            (per_mille(mid.into(), max32 / 2, max32), ride::hr_color(ride::hr_zone(mid, max_hr)))
+        }
+        (Kind::Open, _) => (250, ui::GREY),
+        _ => (250, ui::WHITE),
+    }
+}
+
+/// Column `k` of a workout graph `cols` wide and `h` high over the whole of `steps` (zones from `ftp`, `max_hr`):
+/// its bar's height and colour ([`level`]); the rider's column (`rider`) white, the part done dark. `rider` is
+/// `cols` once the workout is done.
+///
+/// ```
+/// use bryton_rustfw::storage::workout::{Kind, Length, Step, Target};
+/// use bryton_rustfw::{ride, ui, workout::column};
+/// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true };
+/// let steps = [50, 160].map(|pct| Step { len: Length::Time(60), target: target(pct), intensity: 0 });
+/// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 3), (100, ride::ZONE_COLORS[6]), "160 %: the top, Z7");
+/// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 1).1, ui::WHITE, "the rider");
+/// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 0), (33, ui::DARK), "done");
+/// ```
+pub fn column(
+    steps: &[Step],
+    (ftp, max_hr): (u16, u16),
+    (cols, h): (u32, u32),
+    rider: Option<u32>,
+    k: u32,
+) -> (u32, u16) {
+    if rider == Some(k) {
+        return (h, ui::WHITE);
+    }
+    let total = graph_total_s(steps);
+    let t = (u64::from(k) * u64::from(total) / u64::from(cols.max(1))) as u32;
+    let mut end = 0u32;
+    let Some(s) = steps.iter().find(|s| {
+        end = end.saturating_add(graph_s(s));
+        t < end
+    }) else {
+        return (0, ui::BLACK);
+    };
+    let (level, color) = level(s, ftp, max_hr);
+    let height = (level * h / 1000).clamp(1, h.max(1));
+    (height, if rider.is_some_and(|r| k < r) { ui::DARK } else { color })
 }
 
 #[cfg(test)]
@@ -161,5 +254,39 @@ mod tests {
         assert_eq!(p.skip(&steps, 0), Event::Done, "and stays so");
         assert_eq!(Player::start(&steps, 5, 0).1, Event::Done);
         assert_eq!(Player::start(&[], 0, 0).1, Event::Done);
+    }
+
+    #[test]
+    fn graph_columns_and_the_riders_place() {
+        use crate::storage::workout::Kind;
+        let t = |kind, lo, hi| Target { kind, lo, hi, pct: true };
+        let steps = [
+            Step { len: Length::Time(300), target: t(Kind::Power, 60, 70), intensity: 2 },
+            Step { len: Length::Distance(2400), target: t(Kind::Hr, 85, 95), intensity: 0 },
+            Step { len: Length::Open, target: Target::OPEN, intensity: 3 },
+        ];
+        // 300 s, 2400 m at 8 m/s: 300 s, open: 300 s; 9 columns of 100 s each
+        assert_eq!(graph_total_s(&steps), 900);
+        let col = |rider, k| column(&steps, (200, 180), (9, 60), rider, k);
+        let bars: Vec<_> = (0..9).map(|k| col(None, k)).collect();
+        let z2 = ride::power_color(2); // 130 W of 200
+        let hr = ride::hr_color(ride::hr_zone(162, 180));
+        assert_eq!(bars[..3], [(25, z2); 3], "130 W of 0 to 300 W: 60 x 0.433");
+        assert_eq!(bars[3..6], [(48, hr); 3], "162 bpm between 90 and 180: 60 x 0.8");
+        assert_eq!(bars[6..], [(15, ui::GREY); 3], "open: a quarter");
+        assert_eq!(col(None, 9), (0, ui::BLACK), "past the end");
+        assert_eq!((col(Some(4), 3), col(Some(4), 4), col(Some(4), 5)), ((48, ui::DARK), (60, ui::WHITE), (48, hr)));
+        assert!((0..9).all(|k| col(Some(9), k).1 == ui::DARK), "done: all of it dark, no marker");
+
+        let (mut p, _) = Player::start(&steps, 0, 1000);
+        run(&mut p, &steps, 150, |_| true);
+        assert_eq!(p.graph_at(&steps, 1000), 150);
+        p.skip(&steps, 1000);
+        assert_eq!(p.graph_at(&steps, 1800), 400, "800 m into the distance step: 100 s");
+        p.skip(&steps, 3400);
+        run(&mut p, &steps, 1000, |_| true);
+        assert_eq!(p.graph_at(&steps, 0), 899, "an open step held to its end");
+        p.skip(&steps, 0);
+        assert_eq!(p.graph_at(&steps, 0), 900, "done");
     }
 }

@@ -107,7 +107,7 @@ impl App {
     /// A step's menu row: what ends it as the label ("10:00", "2.50 KM", "LAP"), its target as the value, in the
     /// zone colour of the target's middle; the colour.
     pub(crate) fn step_row(&self, s: &storage::workout::Step, label: &mut Line<16>, value: &mut Line<12>) -> u16 {
-        use storage::workout::{Kind, Length};
+        use storage::workout::Length;
         match s.len {
             Length::Time(t) => push_clock(label, t),
             Length::Distance(m) => {
@@ -117,13 +117,7 @@ impl App {
             Length::Open => label.push_str("LAP"),
         }
         self.push_target(value, s, true);
-        let (ftp, max) = (self.settings.ftp, self.settings.max_hr);
-        match (s.target.kind, s.target.range(ftp, max)) {
-            (Kind::Power, Some((lo, hi))) => ride::power_color(ride::power_zone(lo.midpoint(hi), ftp)),
-            (Kind::Hr, Some((lo, hi))) => ride::hr_color(ride::hr_zone(lo.midpoint(hi), max)),
-            (Kind::Open, _) => ui::GREY,
-            _ => ui::WHITE,
-        }
+        workout::level(s, self.settings.ftp, self.settings.max_hr).1
     }
 
     /// The workout fields' text ([`Field::Workout`], [`Field::StepTarget`], [`Field::StepTime`],

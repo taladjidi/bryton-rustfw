@@ -115,6 +115,10 @@ TrainingPeaks), read only:
 - **Fields** to place on a page: TARGET (the step's range: green in it, orange under, red over, from the 3 s power,
   the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
+- **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
+  from 0 to 150 % of FTP, heart rate from half the max to it, a quarter for an open target) in its zone colour; a
+  white line where the rider is, the part done dark. A distance step is drawn at 30 km/h, an open step as 5 min.
+  Only the columns the line leaves and reaches are redrawn (about 300 px/s in a full-page box, sim).
 - Any FIT workout file is read (Garmin's profile: time, distance and open steps, repeats, % FTP or watts, % max HR
   or bpm, zones), and Bryton's own encoding of power targets.
 
