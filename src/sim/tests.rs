@@ -1814,6 +1814,19 @@ fn eat_reminder_on_a_ride() {
     assert_eq!(sim.tones.len(), n, "paused: no reminder");
 }
 
+/// A workout's step tone and an alert in the same pass: one tone player, so both play whole, one after the other
+/// (review 2: two players cut each other off).
+#[test]
+fn tones_do_not_cut_each_other() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let t0 = sim.tones.len();
+    app.workout_event(workout::Event::Done);
+    app.alert = Some(alerts::Alert::Eat);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(sim.tones[t0..], [2500, 0, 2500, 0, 2500, 0, 2500, 0], "the step's tone, then the alert's three");
+}
+
 /// Performance budgets: in steady state, each kind of screen sends at most so many pixels and panel windows a
 /// second (every pixel is a SPI transfer and CPU time, AGENTS.md "redraw only what changes"). A change that
 /// redraws more than it should fails here before it costs battery on the unit. Measured 2026-10-24, budgets with

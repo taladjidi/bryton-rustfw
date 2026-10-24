@@ -61,7 +61,7 @@ impl App {
         match ev {
             course::Event::Off => {
                 self.say("OFF COURSE");
-                self.tones = (&BEEP_ALERT, 0, false);
+                self.tones.play(&BEEP_ALERT);
             }
             course::Event::Back => self.say("BACK ON COURSE"),
             course::Event::Climb(k) => {
@@ -72,7 +72,7 @@ impl App {
                 l.push_u32(k.grade_x10().div_ceil(10).max(1));
                 l.push_str("%");
                 self.say(l.as_str());
-                self.tones = (&Self::CLIMB_TONES, 0, false);
+                self.tones.play(&Self::CLIMB_TONES);
             }
         }
     }

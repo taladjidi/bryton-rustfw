@@ -16,9 +16,9 @@ impl App {
     // -----------------------------------------------------------------------------------------------------------
 
     /// The buzzer for a step start and for the countdown's beeps: (Hz, ms).
-    pub(crate) const STEP_TONE: (u32, u32) = (2500, 400);
+    pub(crate) const STEP_TONE: [(u32, u32); 1] = [(2500, 400)];
 
-    pub(crate) const COUNT_TONE: (u32, u32) = (2000, 100);
+    pub(crate) const COUNT_TONE: [(u32, u32); 1] = [(2000, 100)];
 
     /// Reads the workouts planned from today on (none if the card cannot be read).
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
@@ -65,7 +65,7 @@ impl App {
         let steps = self.plan.steps();
         let mut l = Line::<20>::new();
         match ev {
-            workout::Event::Countdown(_) => return self.tone = Self::COUNT_TONE,
+            workout::Event::Countdown(_) => return self.tones.play(&Self::COUNT_TONE),
             workout::Event::Done => l.push_str("WORKOUT DONE"),
             workout::Event::Step(i) => {
                 l.push_u32(i as u32 + 1);
@@ -81,7 +81,7 @@ impl App {
             }
         }
         self.say(l.as_str());
-        self.tone = Self::STEP_TONE;
+        self.tones.play(&Self::STEP_TONE);
     }
 
     /// Step `s`'s target: "210-230", with its unit if `unit` ("W", "BPM", "RPM"); "OPEN" for none.

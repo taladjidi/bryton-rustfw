@@ -13,6 +13,29 @@ pub const BEEP_OFF: [(u32, u32); 2] = [(2500, 80), (1500, 120)];
 /// An alert's tones: three short beeps (0 Hz: silence), played without blocking (`App::tones`).
 pub const BEEP_ALERT: [(u32, u32); 5] = [(2500, 100), (0, 50), (2500, 100), (0, 50), (2500, 100)];
 
+/// Melodies waiting to play after the one playing.
+const TONES_QUEUED: usize = 3;
+
+/// The one tone player (alerts, course events, a workout's steps): the melody playing, what is left of it, how long
+/// the current tone has left, whether the buzzer is on, and the melodies queued after it. One player, so two sounds
+/// asked in the same pass both play whole, one after the other.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Tones {
+    left: &'static [(u32, u32)],
+    ms: u32,
+    on: bool,
+    queue: [&'static [(u32, u32)]; TONES_QUEUED],
+}
+
+impl Tones {
+    /// Queues `melody` (dropped if [`TONES_QUEUED`] are already waiting).
+    pub(crate) fn play(&mut self, melody: &'static [(u32, u32)]) {
+        if let Some(slot) = self.queue.iter_mut().find(|q| q.is_empty()) {
+            *slot = melody;
+        }
+    }
+}
+
 /// Plays `tones` (blocking: a few hundred ms, only at power-on and power-off).
 pub(crate) fn play(b: &mut impl Board, tones: &[(u32, u32)]) {
     for &(hz, ms) in tones {
@@ -62,40 +85,28 @@ impl App {
     }
 
     /// The tones playing go on: each lasts its time, in passes of [`POLL_MS`], then the next; the buzzer stops after
-    /// the last. Nothing waits: the loop goes on meanwhile.
+    /// the last of a melody for a pass, then the next melody queued starts. Nothing waits: the loop goes on meanwhile.
     pub(crate) fn play_tones(&mut self, b: &mut impl Board) {
-        let (left, ms, playing) = self.tones;
-        if ms > 0 {
-            self.tones.1 = ms.saturating_sub(POLL_MS);
+        let t = &mut self.tones;
+        if t.ms > 0 {
+            t.ms = t.ms.saturating_sub(POLL_MS);
             return;
         }
-        match left.split_first() {
+        if t.left.is_empty() && !t.on {
+            t.left = t.queue[0];
+            t.queue.rotate_left(1);
+            t.queue[TONES_QUEUED - 1] = &[];
+        }
+        match t.left.split_first() {
             Some((&(hz, len), rest)) => {
                 b.beep(hz);
-                self.tones = (rest, len.saturating_sub(POLL_MS), true);
+                (t.left, t.ms, t.on) = (rest, len.saturating_sub(POLL_MS), true);
             }
-            None if playing => {
+            None if t.on => {
                 b.beep(0);
-                self.tones.2 = false;
+                t.on = false;
             }
             None => {}
-        }
-    }
-
-    /// Starts the tone asked for, or ends the one sounding once its time is up (one pass of [`POLL_MS`] at least).
-    pub(crate) fn sound(&mut self, b: &mut impl Board) {
-        match self.tone {
-            (0, 0) => {}
-            (0, ms) => {
-                self.tone.1 = ms.saturating_sub(POLL_MS);
-                if self.tone.1 == 0 {
-                    b.beep(0);
-                }
-            }
-            (hz, ms) => {
-                b.beep(hz);
-                self.tone = (0, ms);
-            }
         }
     }
 

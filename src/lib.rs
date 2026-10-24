@@ -207,11 +207,11 @@ pub struct App {
     new_ride: bool,
     /// The card's map and elevation profile as drawn (set when the card is shown).
     summary: Option<(map::Shown, GraphShown)>,
-    /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the tones playing: what
-    /// is left of them, how long the current one has left, and whether the buzzer is on.
+    /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
+    /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
     alert: Option<alerts::Alert>,
-    tones: (&'static [(u32, u32)], u32, bool),
+    tones: Tones,
     /// A first hold of Back during a ride armed switching off for this long ([`OFF_CONFIRM_MS`]).
     off_armed_ms: u32,
     /// When the ride started: date, hours and minutes (its card's title).
@@ -242,13 +242,12 @@ pub struct App {
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
-    /// file; where it is (workout.rs); a tone to start (Hz, 0: none) and how long it sounds, ms.
+    /// file; where it is (workout.rs).
     calendar: storage::workout::Calendar,
     calendar_day: Option<(u16, u8, u8)>,
     plan: storage::workout::Workout,
     plan_file: Option<fat::File>,
     player: Option<workout::Player>,
-    tone: (u32, u32),
     /// The ride recorder (FIT file, checkpoints, save), and a ride to look for on the card at the first step.
     /// The card may be written ([`Board::emmc_writable`]); without, the recorder is not used at all.
     card_writable: bool,
@@ -370,7 +369,7 @@ impl App {
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,
             alert: None,
-            tones: (&[], 0, false),
+            tones: Tones::default(),
             summary: None,
             new_ride: false,
             drawn: Default::default(),
@@ -390,7 +389,6 @@ impl App {
             plan_file: None,
             plan: storage::workout::Workout::new(),
             player: None,
-            tone: (0, 0),
             recorder: recorder::Recorder::new(),
             card_writable: false,
             resume_pending: false,
@@ -449,12 +447,11 @@ impl App {
         }
         if let Some(a) = self.alert.take() {
             self.say(a.text());
-            self.tones = (&BEEP_ALERT, 0, false);
+            self.tones.play(&BEEP_ALERT);
         }
         self.play_tones(b);
         self.off_armed_ms = self.off_armed_ms.saturating_sub(POLL_MS);
         self.seconds = sec;
-        self.sound(b);
         self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
         if self.battery_ms >= BATTERY_MS {
             self.battery_ms = 0;
