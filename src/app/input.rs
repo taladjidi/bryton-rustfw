@@ -370,21 +370,37 @@ impl App {
     /// down (the release makes the gesture). A touch keeps the backlight on like a key. The gesture, if one ended
     /// here, comes back as an input for the caller to act on once it has stopped sleeping ([`App::input`]).
     pub fn touch(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
-        if !self.touch_ok || !(self.touch.down() || b.touch_int()) {
-            return None;
+        if let Some(i) = self.touch_pending.take() {
+            self.idle_ms = 0;
+            return Some(i);
         }
-        let mut buf = [0; 3];
-        let p = if b.touch_read(touch::REG_POINT, &mut buf) { touch::point(buf) } else { None };
-        if p.is_some() {
+        let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, dt_ms);
+        if finger {
             self.idle_ms = 0;
         }
-        self.touch.feed(p, dt_ms).map(Input::Touch)
+        g.map(Input::Touch)
     }
 
-    /// A finger is on the panel: sample it every [`TOUCH_MS`].
+    /// A finger is on the panel (sample it every [`TOUCH_MS`]), or a gesture waits.
     pub fn touching(&self) -> bool {
-        self.touch.down()
+        self.touch.down() || self.touch_pending.is_some()
     }
+}
+
+/// One sample of the touch panel into `r`, `dt_ms` after the previous one, if INT is low or a finger was down: the
+/// gesture that ended, and whether a finger is on the panel.
+pub(crate) fn sample_touch(
+    b: &mut impl Board,
+    r: &mut touch::Recogniser,
+    ok: bool,
+    dt_ms: u32,
+) -> (Option<Gesture>, bool) {
+    if !ok || !(r.down() || b.touch_int()) {
+        return (None, false);
+    }
+    let mut buf = [0; 3];
+    let p = if b.touch_read(touch::REG_POINT, &mut buf) { touch::point(buf) } else { None };
+    (r.feed(p, dt_ms), p.is_some())
 }
 
 /// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,

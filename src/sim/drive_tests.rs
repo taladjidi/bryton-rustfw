@@ -122,3 +122,31 @@ fn the_device_menu_row() {
     app.input(&mut sim, Input::Select);
     assert!(!app.drive_lent());
 }
+
+/// A swipe during a long drive command (a second for 1 MB at full speed, when the main loop reads no gesture):
+/// the panel is read after each chunk, and the swipe acts once the command is done.
+#[test]
+fn a_swipe_during_a_long_read() {
+    use std::{cell::Cell, rc::Rc};
+    let samples = Rc::new(Cell::new(0u32));
+    let n = samples.clone();
+    // the finger moves 16 px down per look at the panel (the simulated card takes no time), then lifts
+    let mut sim = Sim::new(9, 0, 0).finger(move |_| {
+        let k = n.get();
+        n.set(k + 1);
+        (k < 6).then_some((120, 40 + 16 * k as u16))
+    });
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000);
+    samples.set(0);
+    app.drive_on().unwrap();
+    let mut h = Host::default();
+    assert_eq!(command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]).1, 1, "UNIT ATTENTION: medium changed");
+    samples.set(0);
+    let (data, st) = command(&mut sim, &mut app, &mut h, 2, 128 * 512, true, &rw10(0x28, 0, 128));
+    assert_eq!((data.len(), st), (128 * 512, 0), "8 chunks");
+    assert!(app.touching(), "a gesture waits");
+    assert_eq!(app.touch(&mut sim, 0), Some(Input::Touch(Gesture::Swipe(Dir::Down))));
+}

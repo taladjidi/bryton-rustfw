@@ -60,7 +60,13 @@ impl App {
 
     /// A packet from the computer on the drive's Bulk-Out endpoint: a command, run to its end through `pipe`.
     pub fn drive_packet(&mut self, b: &mut impl Board, cbw: &[u8], pipe: &mut impl msc::Pipe) {
-        let ev = self.drive.packet(cbw, pipe, &mut emmc::Lent(&mut self.emmc, b));
+        let mut media = Touching {
+            lent: emmc::Lent(&mut self.emmc, b),
+            touch: &mut self.touch,
+            ok: self.touch_ok,
+            pending: &mut self.touch_pending,
+        };
+        let ev = self.drive.packet(cbw, pipe, &mut media);
         if ev == msc::Event::Ejected && self.emmc.lent() {
             self.take_card_back();
         }
@@ -89,5 +95,47 @@ impl App {
     /// The app asks for a system reset (main.rs makes it): after the computer wrote to the volume.
     pub fn restart_wanted(&self) -> bool {
         self.restart
+    }
+}
+
+/// The card lent, and the touch panel sampled after each chunk the drive reads or writes: a command can take a
+/// second (a 1 MB read at full speed), during which the main loop reads no gesture (seen on the unit, 2026-10-24:
+/// swipes missed during a copy). A gesture that ends waits in `pending` for the main loop.
+struct Touching<'a, B: Board> {
+    lent: emmc::Lent<'a, B>,
+    touch: &'a mut touch::Recogniser,
+    ok: bool,
+    pending: &'a mut Option<Input>,
+}
+
+impl<B: Board> Touching<'_, B> {
+    fn sample(&mut self) {
+        // ponytail: a chunk counted as the time it takes at full speed (no clock on Board); only a hold's 600 ms
+        // reads it, and comes sooner at high speed
+        const CHUNK_MS: u32 = 8;
+        if self.pending.is_none()
+            && let (Some(g), _) = sample_touch(self.lent.1, self.touch, self.ok, CHUNK_MS)
+        {
+            *self.pending = Some(Input::Touch(g));
+        }
+    }
+}
+
+impl<B: Board> msc::Media for Touching<'_, B> {
+    fn blocks(&mut self) -> Option<u32> {
+        self.lent.blocks()
+    }
+    fn writable(&self) -> bool {
+        self.lent.writable()
+    }
+    fn read(&mut self, lba: u32, buf: &mut [u8]) -> bool {
+        let r = self.lent.read(lba, buf);
+        self.sample();
+        r
+    }
+    fn write(&mut self, lba: u32, buf: &[u8]) -> bool {
+        let r = self.lent.write(lba, buf);
+        self.sample();
+        r
     }
 }

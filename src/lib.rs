@@ -241,6 +241,8 @@ pub struct App {
     /// The touch controller answered at the start; the gestures from its points.
     touch_ok: bool,
     touch: touch::Recogniser,
+    /// A gesture that ended during a USB drive command, acted on after it ([`App::touch`]).
+    touch_pending: Option<Input>,
     /// The scan of stock's rides (the stock data menu), and its buffer for reading stock's settings.
     stock: stock::Scan,
     /// The card of the past ride shown ([`Screen::Past`]).
@@ -398,6 +400,7 @@ impl App {
             basemap: tiles::Basemap::new(),
             touch_ok: touch::init(b),
             touch: touch::Recogniser::default(),
+            touch_pending: None,
             stock: stock::Scan::new(),
             past: history::Past::new(),
             calendar: Default::default(),
