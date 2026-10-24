@@ -1308,6 +1308,11 @@ fn main() -> ! {
                             l.flush();
                             woke = true;
                         }
+                        Effect::WriteTest(lba) => {
+                            dev::write_test(l, app.emmc(), &mut board, lba);
+                            l.flush();
+                            woke = true;
+                        }
                         Effect::Bench(lba, n, count) => {
                             dev::send_bench(l, bench_reads(app, &mut board, lba, n, count));
                             l.flush();

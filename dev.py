@@ -13,6 +13,7 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py key page|lap|start|back [--long]   press (or hold) a key: scripted tests on the unit
   dev.py emmc                     identify the eMMC: SEC_COUNT, B (end of the FAT volume), OS area start, reliable write
   dev.py sector N [COUNT] [-o F]  read eMMC sectors N.. (read only): a hex dump, or the raw bytes into F
+  dev.py wtest LBA                write test on one sector (in free space): changed, read back, restored
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
@@ -109,6 +110,18 @@ def run(path):
         print(command(s, 'info'))
 
 
+def read_sector(s, n, tries=5):
+    """Sector n, asked again when an answer comes back cut (the link can drop bytes: AGENTS.md)."""
+    for _ in range(tries - 1):
+        answer = command(s, f'sector {n}')
+        if len(answer) == 1024 and not answer.startswith('err'):
+            break
+        time.sleep(0.05)
+    else:
+        answer = command(s, f'sector {n}')
+    return sector_bytes(answer)
+
+
 def sector_bytes(answer):
     """The answer to `sector N`: 1024 hex digits -> 512 bytes (or exit with the firmware's error)."""
     if answer.startswith('err') or len(answer) != 1024:
@@ -175,6 +188,8 @@ def main():
     p.add_argument('n', type=lambda x: int(x, 0))
     p.add_argument('count', nargs='?', type=lambda x: int(x, 0), default=1)
     p.add_argument('-o', help='write the raw bytes here instead of a hex dump')
+    p = sub.add_parser('wtest', help='write test on one eMMC sector (pick one in free space; needs EMMC_WRITE=1)')
+    p.add_argument('lba', type=lambda x: int(x, 0))
     p = sub.add_parser('run')
     p.add_argument('image', nargs='?', default=str(ROOT / 'out' / 'IMG.bin'))
     a = ap.parse_args()
@@ -195,6 +210,8 @@ def main():
                     print(f'{i - len(rows) + 1:5d} min  {mv} mV{"  charging" if charging else ""}')
             elif a.cmd == 'key':
                 print(command(s, f'key {a.name}' + (' long' if a.long else '')))
+            elif a.cmd == 'wtest':
+                print(command(s, f'wtest {a.lba}'))
             elif a.cmd in ('info', 'reset'):
                 print(command(s, a.cmd))
             elif a.cmd == 'peek':
@@ -262,7 +279,7 @@ def main():
                       f'OS area {os_start:#x}..{n - 1:#x}; WR_REL_PARAM {rel >> 8:#04x} REL_WR_SEC_C {rel & 0xff} '
                       f'(reliable write: {"enhanced" if rel >> 8 & 4 else "legacy" if rel & 0xff else "none"})')
             elif a.cmd == 'sector':
-                data = b''.join(sector_bytes(command(s, f'sector {a.n + i}')) for i in range(a.count))
+                data = b''.join(read_sector(s, a.n + i) for i in range(a.count))
                 if a.o:
                     Path(a.o).write_bytes(data)
                     print(f'{len(data)} B -> {a.o}')

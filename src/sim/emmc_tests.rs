@@ -190,6 +190,7 @@ fn sector_command_reads_and_survives_a_dead_card() {
                 send_sector(pc, r);
             }
             Effect::Emmc => send_layout(pc, emmc.card(sim)),
+            Effect::WriteTest(n) => crate::dev::write_test(pc, &mut emmc, sim, n),
             e => panic!("{e:?}"),
         }
     };
@@ -204,6 +205,15 @@ fn sector_command_reads_and_survives_a_dead_card() {
     assert_eq!(pc.got, format!("{hex}\n").as_bytes());
     serve(&mut sim, &mut session, &mut pc, b"sector 0x03a3e000\n");
     assert_eq!(pc.got, b"err range\n");
+    // the write test leaves the sector as it was; past B it is refused at the first write
+    sim.emmc.image = (0..0x1001 * 512).map(|i| (i * 7 % 251) as u8).collect();
+    let before = sim.emmc.image.clone();
+    serve(&mut sim, &mut session, &mut pc, b"wtest 0x1000\n");
+    assert_eq!(pc.got, b"ok\n");
+    assert!(sim.emmc.image == before, "the sector is restored");
+    assert_eq!(sim.emmc.cmds.iter().filter(|c| matches!(c.0, 24 | 25)).count(), 2, "written twice");
+    serve(&mut sim, &mut session, &mut pc, b"wtest 0x03a2bfe6\n");
+    assert_eq!(pc.got, b"err write\n");
     pc.got.clear();
     assert_eq!(session.feed(b"sector\nsector 1 2\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err usage: sector <n>\nerr usage: sector <n>\n");

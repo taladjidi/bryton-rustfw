@@ -26,6 +26,9 @@
 //!   line `<lba hex> <hits hex>` for each sector holding 8 or more little-endian u32 values in `lo..=hi` at any byte
 //!   offset (FIT timestamps of a time window: carving a lost ride's records from free space), at most 512 lines,
 //!   then `end`. Read only.
+//! - `wtest <lba>`: the first write on the unit, on one sector the computer picked in free space ([`Effect::WriteTest`],
+//!   [`write_test`]): reads it, writes it back changed, reads that back, writes the original back, reads that back;
+//!   `ok`, or `err <step>` (`err read`, `err write`, `err pattern`, `err restore`...). Refused by a read-only build.
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -83,6 +86,8 @@ pub enum Effect {
     Sector(u32),
     /// Answer the eMMC layout with [`send_layout`].
     Emmc,
+    /// Write test on this sector ([`write_test`]).
+    WriteTest(u32),
     /// Time eMMC reads: from a sector, sectors a read (1 to 32), reads; answer with [`send_bench`].
     Bench(u32, u32, u32),
     /// Find sectors with many u32 values in a range ([`find_sectors`]): from, count, low, high.
@@ -254,6 +259,10 @@ impl Session {
                 _ => h.send(b"err usage: sector <n>\n"),
             },
             Some(b"emmc") => return Effect::Emmc,
+            Some(b"wtest") => match (words.next().and_then(parse), words.next()) {
+                (Some(n), None) => return Effect::WriteTest(n),
+                _ => h.send(b"err usage: wtest <lba>\n"),
+            },
             Some(b"find") => {
                 let mut n = [0u32; 4];
                 for v in &mut n {
@@ -333,6 +342,33 @@ pub fn send_sector(h: &mut impl Host, r: Result<&[u8; emmc::SECTOR], emmc::Error
             h.send(b"\n");
         }
         Err(e) => send_error(h, e),
+    }
+}
+
+/// The answer to `wtest`: sector `lba` read, written inverted, read back and compared, then the original written
+/// and read back. Every step on the card's own write path ([`emmc::Emmc::write`]: reliable writes when offered).
+pub fn write_test(h: &mut impl Host, e: &mut emmc::Emmc, b: &mut impl crate::Board, lba: u32) {
+    let (mut orig, mut got) = ([0u8; emmc::SECTOR], [0u8; emmc::SECTOR]);
+    let step = (|| -> Result<(), &str> {
+        e.read(b, lba, &mut orig).map_err(|_| "read")?;
+        let flipped = orig.map(|x| !x);
+        e.write(b, lba, &flipped).map_err(|_| "write")?;
+        e.read(b, lba, &mut got).map_err(|_| "read back")?;
+        let same = got == flipped;
+        e.write(b, lba, &orig).map_err(|_| "restore")?;
+        if !same {
+            return Err("pattern");
+        }
+        e.read(b, lba, &mut got).map_err(|_| "read restored")?;
+        if got == orig { Ok(()) } else { Err("restored differs") }
+    })();
+    match step {
+        Ok(()) => h.send(b"ok\n"),
+        Err(why) => {
+            h.send(b"err ");
+            h.send(why.as_bytes());
+            h.send(b"\n");
+        }
     }
 }
 
