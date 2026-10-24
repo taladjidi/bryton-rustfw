@@ -223,6 +223,12 @@ impl App {
                 self.screen = self.ride_page(n + PAGES - 1, PAGES - 1)
             }
             (Screen::Ride(_), Input::Back) => self.screen = Screen::Main,
+            (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
+                if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
+                    && (ui::GEAR_TAP.1..ui::GEAR_TAP.1 + ui::GEAR_TAP.3).contains(&u32::from(y)) =>
+            {
+                self.open(Screen::Menu(Menu::Main, 0)) // the gear: the menu by a tap, as the hold anywhere
+            }
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(Menu::Main, 0))
             }

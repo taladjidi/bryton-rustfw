@@ -220,6 +220,23 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_consistent(&sim, &app);
 }
 
+/// The gear right of the overview's date: a tap opens the menu; a tap elsewhere on the overview does not.
+#[test]
+fn gear_on_the_overview_opens_the_menu() {
+    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    let tap = move |t0: u64, p: (u16, u16)| move |ms: u64| (t0..t0 + 80).contains(&ms).then_some(p);
+    let (a, b) = (tap(5000, (40, 160)), tap(6000, (gx, gy)));
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)));
+    let mut app = App::start(&mut sim, None);
+    sim.save("overview_gear");
+    let left = 5500 - sim.ms;
+    run(&mut sim, &mut app, left);
+    assert_eq!(app.screen(), Screen::Main, "a tap on a field: nothing");
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "a tap on the gear: the menu");
+    assert_consistent(&sim, &app);
+}
+
 /// Quick touches count: a 60 ms tap and a 120 ms swipe (the panel is read on INT and every 10 ms while a finger
 /// is down, not once per 50 ms pass when INT happens to be low).
 #[test]

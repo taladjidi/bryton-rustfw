@@ -1067,7 +1067,16 @@ pub fn draw_main_time(c: &mut impl Canvas, digits: [u8; 4]) {
 /// The date line, centred, grey.
 pub fn draw_date(c: &mut impl Canvas, date: &str) {
     text::draw_in(c, &Style { fg: GREY, ..LABEL }, 0, DATE_Y, W, Align::Centre, date);
+    draw_bitmap(c, &GEAR, GEAR_AT.0, GEAR_AT.1, 2, GREY); // after the date: its box spans the row
 }
+
+/// The menu button on the overview, right of the date: a gear, 9 x 9 bitmap pixels.
+pub const GEAR: [u16; 9] = [0x1400, 0x7f00, 0x6300, 0x4100, 0xc180, 0x4100, 0x6300, 0x7f00, 0x1400];
+/// Where [`GEAR`] is drawn (at scale 2: 18 x 18 px), in the date's row: under the clock's digit cells, which a
+/// second's redraw paints whole.
+pub const GEAR_AT: (u32, u32) = (W - 30, DATE_Y);
+/// Where a tap opens the menu: around the gear, wider than it, a finger's size (above the overview's fields).
+pub const GEAR_TAP: (u32, u32, u32, u32) = (W - 64, DATE_Y - 24, 64, OVERVIEW_Y - (DATE_Y - 24));
 
 /// The notices, newest first; with none, Ferris.
 pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
@@ -1247,6 +1256,7 @@ pub(crate) mod tests {
         let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);
+        assert!(GEAR_AT.1 >= DATE_Y && GEAR_AT.1 + 18 <= OVERVIEW_Y && GEAR_AT.0 + 18 <= W, "the gear in the date row");
         assert!(
             NOTICES_Y + 4 + NOTICES as u32 * LIST_ROW <= H && overview_box(3).is_some_and(|b| b.1 + b.3 <= NOTICES_Y)
         );

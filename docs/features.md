@@ -56,7 +56,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
 | hold (600 ms, still) | the menu (as holding Page) | | |
-| tap | | selects the row touched and acts on it (as Start) | keep it |
+| tap | the gear right of the overview's date: the menu; a graph: its next plot | selects the row touched and acts on it (as Start) | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
