@@ -1,0 +1,886 @@
+//! The phone link over BLE, with no companion app: this firmware is a peripheral the phone pairs with (Just Works,
+//! one bond kept in `\Rustfw\ble.bin`), a GATT server for media keys (HID over GATT), the battery and the device
+//! information, and a GATT client of the phone's own services: Apple's notifications (ANCS) and media (AMS), and
+//! the Current Time Service. The formats are in phone.rs, the chip's calls in drivers/ble.rs.
+//!
+//! **Order after a link** (the usual one for a bonding peripheral, as in Nordic's SoftDevice message sequence
+//! charts and its peer manager: recalled, inferred): connected; not bonded, a Security Request (the phone asks the rider to pair); the keys at
+//! BLE_GAP_EVT_AUTH_STATUS; bonded, the phone encrypts with the key kept (BLE_GAP_EVT_SEC_INFO_REQUEST); once
+//! encrypted, the CCCDs kept are given back (`sd_ble_gatts_sys_attr_set`) and the phone's services discovered one
+//! GATT procedure at a time: ANCS, AMS, CTS; then their notifications enabled, AMS told what to report, the time read.
+//!
+//! **Power:** advertising only while pairing (the PHONE menu: every 152.5 ms for 60 s) or bonded and not connected
+//! (every 1022.5 ms, so the phone finds the unit again), two of the intervals Apple's Accessory Design Guidelines
+//! recommend (recalled, inferred). An advertising event every second costs the Nordic chip about 10 to 15 uA on
+//! average (Nordic's online power profiler for the nRF52832, 0 dBm, 31-byte payload: inferred, not measured here),
+//! next to the unit's milliamperes; connected, the preferred parameters (15 to 30 ms, slave latency 6: the chip
+//! answers every 7th event when it has nothing to send, about 200 ms) keep the media keys quick without listening
+//! every 15 ms.
+
+use crate::ble::{self, Event};
+use crate::phone::{self as ph, Media, Stored};
+use crate::*;
+
+/// Advertising while pairing: interval (0.625 ms units) and time-out (s).
+pub const ADV_FAST: (u16, u16) = (244, 60);
+/// Advertising while bonded and not connected: until a connection.
+pub const ADV_SLOW: (u16, u16) = (1636, 0);
+/// The preferred connection parameters: 15 to 30 ms, slave latency 6, supervision time-out 4 s (within Apple's
+/// guidelines: max interval x (latency + 1) x 3 under the time-out, recalled, inferred).
+pub const PPCP: ble::ConnParams = (12, 24, 6, 400);
+/// The bond is read from the card this long after the start (the card is not touched at boot); the bonded phone
+/// can come back from then on.
+pub const BOND_LOAD_MS: u32 = 3000;
+/// The file the bond is kept in, in [`recorder::DIR`].
+pub const BOND_FILE: &str = "ble.bin";
+
+/// What the radio advertises.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Adv {
+    /// Nothing.
+    Off,
+    /// Pairing ([`ADV_FAST`]).
+    Fast,
+    /// Bonded, waiting for the phone ([`ADV_SLOW`]).
+    Slow,
+}
+
+// The phone's attributes the client uses (`Phone::h`).
+const NS: usize = 0;
+const NS_CCCD: usize = 1;
+const CP: usize = 2;
+const DS: usize = 3;
+const DS_CCCD: usize = 4;
+const RC: usize = 5;
+const RC_CCCD: usize = 6;
+const EU: usize = 7;
+const EU_CCCD: usize = 8;
+const CT: usize = 9;
+const CT_CCCD: usize = 10;
+const LTI: usize = 11;
+
+/// The services discovered, in order: ANCS, AMS, CTS; and each one's notifying characteristics with their CCCDs.
+const NOTIFYING: [&[(usize, usize)]; 3] =
+    [&[(NS, NS_CCCD), (DS, DS_CCCD)], &[(RC, RC_CCCD), (EU, EU_CCCD)], &[(CT, CT_CCCD)]];
+
+/// The client's progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Disc {
+    /// Nothing yet (not encrypted).
+    Idle,
+    /// Looking for service `n`.
+    Service(u8),
+    /// Its characteristics, from a handle on.
+    Chars(u8, u16),
+    /// The CCCD of one of its notifying characteristics.
+    Descs(u8),
+    /// Notifications on, the `n`th CCCD of [`Phone::subscriptions`].
+    Subscribe(u8),
+    /// AMS told what to report.
+    Register(u8),
+    /// The time read: Current Time, then Local Time Information.
+    Read(u8),
+    /// Ready: operations run from the queue.
+    Done,
+}
+
+/// A GATT write queued until the client is free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Op {
+    /// Get a notification's attributes.
+    Fetch(u32),
+    /// Accept (true) or decline a call.
+    Act(u32, bool),
+    /// An AMS remote command.
+    Ams(u8),
+}
+
+/// The phone link's state.
+pub struct Phone {
+    /// The settings and the bond, as in `ble.bin`.
+    pub(crate) stored: Stored,
+    /// `ble.bin` read (or tried); to be written.
+    loaded: bool,
+    save: bool,
+    /// The GATT server was set up.
+    ready: bool,
+    adv: Adv,
+    conn: Option<u16>,
+    secure: bool,
+    /// Our attributes: the HID report and its CCCD, the battery level and its CCCD.
+    report: (u16, u16),
+    battery: (u16, u16),
+    /// The vendor UUID types the stack gave [`ph::VS`] (0: not registered).
+    types: [u8; 8],
+    disc: Disc,
+    /// The service being discovered: its last handle, its characteristics' declaration handles.
+    svc_end: u16,
+    decls: [u16; 8],
+    n_decls: usize,
+    /// The phone's attributes found ([`NS`]...): 0 none.
+    h: [u16; 12],
+    /// CCCDs looked for already (one bit per slot), and the one being looked for.
+    tried: u16,
+    looking: usize,
+    /// The peer's address at the link.
+    peer: [u8; 7],
+    ops: [Op; 4],
+    n_ops: usize,
+    /// A GATT write is out: its answer awaited (for a fetch, the Data Source's too), for so long at most.
+    busy: bool,
+    busy_ms: u32,
+    fetching: bool,
+    ds: ph::DataSource,
+    /// An incoming call: its id and who calls.
+    pub(crate) call: Option<(u32, Line<24>)>,
+    /// What plays.
+    pub(crate) now: ph::NowPlaying,
+    /// A media key's report was sent: the release goes at the next pass.
+    release: bool,
+    /// The battery level last sent.
+    battery_sent: Option<u8>,
+    /// The media screen's rows as drawn (fingerprints).
+    pub(crate) shown: [u32; 3],
+}
+
+impl Default for Phone {
+    fn default() -> Self {
+        Phone {
+            stored: Stored::default(),
+            loaded: false,
+            save: false,
+            ready: false,
+            adv: Adv::Off,
+            conn: None,
+            secure: false,
+            report: (0, 0),
+            battery: (0, 0),
+            types: [0; 8],
+            disc: Disc::Idle,
+            svc_end: 0,
+            decls: [0; 8],
+            n_decls: 0,
+            h: [0; 12],
+            tried: 0,
+            looking: 0,
+            peer: [0; 7],
+            ops: [Op::Ams(0); 4],
+            n_ops: 0,
+            busy: false,
+            busy_ms: 0,
+            fetching: false,
+            ds: ph::DataSource::default(),
+            call: None,
+            now: ph::NowPlaying::default(),
+            release: false,
+            battery_sent: None,
+            shown: [0; 3],
+        }
+    }
+}
+
+/// What the PHONE menu's status row says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Link {
+    /// No BLE (the chip did not start, or the server could not be set up).
+    NoBle,
+    /// Not paired, not advertising.
+    Off,
+    /// Advertising to pair.
+    Pairing,
+    /// Bonded, waiting for the phone.
+    Waiting,
+    /// Connected, not encrypted yet.
+    Connected,
+    /// Connected and encrypted.
+    Secure,
+}
+
+impl Phone {
+    /// The link as the menu shows it.
+    pub fn link(&self) -> Link {
+        match (self.ready, self.conn, self.secure, self.adv) {
+            (false, ..) => Link::NoBle,
+            (_, Some(_), true, _) => Link::Secure,
+            (_, Some(_), false, _) => Link::Connected,
+            (_, None, _, Adv::Fast) => Link::Pairing,
+            (_, None, _, Adv::Slow) => Link::Waiting,
+            _ => Link::Off,
+        }
+    }
+
+    /// Bonded with a phone.
+    pub fn bonded(&self) -> bool {
+        self.stored.bond.is_some()
+    }
+
+    /// The CCCDs to enable, in order: the Data Source before the Notification Source (so an answer has somewhere
+    /// to go), AMS, the time.
+    fn subscriptions(&self) -> [usize; 5] {
+        [DS_CCCD, NS_CCCD, RC_CCCD, EU_CCCD, CT_CCCD]
+    }
+
+    /// The UUID of service `n` ([`NOTIFYING`]'s order).
+    fn service(&self, n: u8) -> ble::Uuid {
+        match n {
+            0 => (ph::uuid16(&ph::VS[ph::VS_ANCS]), self.types[ph::VS_ANCS]),
+            1 => (ph::uuid16(&ph::VS[ph::VS_AMS]), self.types[ph::VS_AMS]),
+            _ => (0x1805, ble::UUID_BLE),
+        }
+    }
+
+    /// The slot of a characteristic of the phone's, by its UUID.
+    fn slot(&self, uuid: ble::Uuid) -> Option<usize> {
+        let vs = [(1, NS), (2, CP), (3, DS), (5, RC), (6, EU)];
+        vs.into_iter()
+            .find(|&(k, _)| self.types[k] != 0 && uuid == (ph::uuid16(&ph::VS[k]), self.types[k]))
+            .map(|(_, s)| s)
+            .or(match uuid {
+                (0x2a2b, ble::UUID_BLE) => Some(CT),
+                (0x2a0f, ble::UUID_BLE) => Some(LTI),
+                _ => None,
+            })
+    }
+
+    fn queue(&mut self, op: Op) {
+        if let Some(slot) = self.ops.get_mut(self.n_ops) {
+            *slot = op;
+            self.n_ops += 1;
+        }
+    }
+
+    /// The link is gone: what belonged to it.
+    fn unlink(&mut self) {
+        (self.conn, self.secure, self.disc, self.busy, self.n_ops) = (None, false, Disc::Idle, false, 0);
+        (self.h, self.tried, self.call, self.release) = ([0; 12], 0, None, false);
+        self.battery_sent = None;
+    }
+}
+
+impl App {
+    /// Sets up the GATT server (HID, battery, device information), the name and appearance, the advertising
+    /// data, and registers the phone's vendor UUIDs: once, after the chip started.
+    #[inline(never)] // its command buffers in its own frame, once at the start
+    pub(crate) fn phone_setup(&mut self, b: &mut impl Board) {
+        let rx = &mut self.rx;
+        let p = &mut self.phone;
+        let r = (|| -> Result<(), nrf::Error> {
+            use ble::{Char, ENCRYPTED, NO_ACCESS, NOTIFY, OPEN, READ, WRITE_CMD};
+            ble::device_name_set(b, rx, b"S510")?;
+            ble::appearance_set(b, rx, 0x03c0)?; // generic HID
+            ble::ppcp_set(b, rx, PPCP)?;
+            // HID over GATT: encrypted, as the profile asks
+            let hid = ble::service_add(b, rx, 0x1812)?;
+            let info =
+                Char { uuid: 0x2a4a, props: READ, value: &ph::HID_INFO, max: 4, read: ENCRYPTED, write: NO_ACCESS };
+            ble::characteristic_add(b, rx, hid, &info)?;
+            let map = &ph::REPORT_MAP;
+            let map = Char {
+                uuid: 0x2a4b,
+                props: READ,
+                value: map,
+                max: map.len() as u16,
+                read: ENCRYPTED,
+                write: NO_ACCESS,
+            };
+            ble::characteristic_add(b, rx, hid, &map)?;
+            let report =
+                Char { uuid: 0x2a4d, props: READ | NOTIFY, value: &[0], max: 1, read: ENCRYPTED, write: NO_ACCESS };
+            p.report = ble::characteristic_add(b, rx, hid, &report)?;
+            ble::descriptor_add(b, rx, p.report.0, 0x2908, &ph::REPORT_REF, ENCRYPTED)?;
+            let point = Char { uuid: 0x2a4c, props: WRITE_CMD, value: &[0], max: 1, read: NO_ACCESS, write: ENCRYPTED };
+            ble::characteristic_add(b, rx, hid, &point)?;
+            let mode =
+                Char { uuid: 0x2a4e, props: READ | WRITE_CMD, value: &[1], max: 1, read: ENCRYPTED, write: ENCRYPTED };
+            ble::characteristic_add(b, rx, hid, &mode)?;
+            let bas = ble::service_add(b, rx, 0x180f)?;
+            let level =
+                Char { uuid: 0x2a19, props: READ | NOTIFY, value: &[100], max: 1, read: OPEN, write: NO_ACCESS };
+            p.battery = ble::characteristic_add(b, rx, bas, &level)?;
+            let dis = ble::service_add(b, rx, 0x180a)?;
+            let maker = Char { uuid: 0x2a29, props: READ, value: b"rustfw", max: 6, read: OPEN, write: NO_ACCESS };
+            ble::characteristic_add(b, rx, dis, &maker)?;
+            let pnp = Char { uuid: 0x2a50, props: READ, value: &ph::PNP_ID, max: 7, read: OPEN, write: NO_ACCESS };
+            ble::characteristic_add(b, rx, dis, &pnp)?;
+            ble::adv_data_set(b, rx, &ph::ADV, &ph::SCAN_RSP)?;
+            for (t, uuid) in p.types.iter_mut().zip(&ph::VS) {
+                *t = ble::uuid_vs_add(b, rx, uuid)?;
+            }
+            Ok(())
+        })();
+        p.ready = r.is_ok();
+    }
+
+    /// Advertising as `want` (a no-op when it already is).
+    fn advertise(&mut self, b: &mut impl Board, want: Adv) {
+        if self.phone.adv == want || !self.phone.ready || (want != Adv::Off && self.phone.conn.is_some()) {
+            return;
+        }
+        if self.phone.adv != Adv::Off {
+            let _ = ble::adv_stop(b, &mut self.rx); // already stopped by a connection or a time-out: harmless
+        }
+        let (interval, timeout) = match want {
+            Adv::Off => return self.phone.adv = Adv::Off,
+            Adv::Fast => ADV_FAST,
+            Adv::Slow => ADV_SLOW,
+        };
+        self.phone.adv = if ble::adv_start(b, &mut self.rx, interval, timeout).is_ok() { want } else { Adv::Off };
+    }
+
+    /// What advertising should be while not connected: slow when bonded, else none.
+    fn idle_advertising(&mut self, b: &mut impl Board) {
+        let want = if self.phone.bonded() { Adv::Slow } else { Adv::Off };
+        self.advertise(b, want);
+    }
+
+    /// The PHONE menu's PAIR: advertise to be found for [`ADV_FAST`]'s time.
+    pub(crate) fn phone_pair(&mut self, b: &mut impl Board) {
+        if self.phone.conn.is_some() {
+            return self.say("CONNECTED ALREADY");
+        }
+        self.phone.adv = Adv::Off; // restart even if advertising slowly
+        let _ = ble::adv_stop(b, &mut self.rx);
+        self.advertise(b, Adv::Fast);
+        self.say(if self.phone.adv == Adv::Fast { "PAIR FROM THE PHONE" } else { "NO BLE" });
+    }
+
+    /// A phone setting changed: written with the bond.
+    pub(crate) fn phone_changed(&mut self) {
+        self.phone.save = true;
+    }
+
+    /// The PHONE menu's FORGET: the link dropped, the bond erased.
+    pub(crate) fn phone_forget(&mut self, b: &mut impl Board) {
+        if let Some(conn) = self.phone.conn {
+            let _ = ble::disconnect(b, &mut self.rx, conn);
+        }
+        self.phone.stored.bond = None;
+        self.phone.save = true;
+        self.advertise(b, Adv::Off);
+        self.say("PHONE FORGOTTEN");
+    }
+
+    /// The bond read from the card [`BOND_LOAD_MS`] after the start; written back when it changed, between rides
+    /// only (the recorder is the card's one writer while a ride is open). A build that may not write the card
+    /// ([`Board::emmc_writable`]) does not touch it: the bond lasts until the unit is switched off.
+    fn phone_storage(&mut self, b: &mut impl Board) {
+        if !self.card_writable || self.emmc.lent() || !self.phone.ready || self.gnss_ms < BOND_LOAD_MS {
+            return;
+        }
+        if !self.phone.loaded {
+            self.phone.loaded = true;
+            let mut d = emmc::Volume(&mut self.emmc, b);
+            let mut s = [0u8; 512];
+            let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
+                let f = fat.open(&mut d, "Rustfw/ble.bin")?;
+                fat.read_at(&mut d, &f, 0, &mut s)
+            });
+            // a phone paired before the read (its bond not written yet) is the one kept
+            if let Ok(512) = read
+                && let Some(stored) = Stored::from_sector(&s)
+                && !self.phone.save
+            {
+                self.phone.stored = stored;
+            }
+            if self.phone.conn.is_none() && self.phone.adv == Adv::Off {
+                self.idle_advertising(b);
+            }
+        }
+        if self.phone.save && self.card_writable && self.recorder.phase() == recorder::Phase::Done {
+            self.phone.save = false;
+            let (local, _) = self.rec_time();
+            let sector = self.phone.stored.to_sector();
+            let mut d = emmc::Volume(&mut self.emmc, b);
+            let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
+                let t = fat::write::dos_time(local);
+                let dir = fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)?;
+                let mut h = match fat.locate(&mut d, dir, BOND_FILE) {
+                    Err(fat::Error::NotFound) => fat.create(&mut d, dir, BOND_FILE, t)?,
+                    other => other?,
+                };
+                fat.write_sectors(&mut d, &mut h, 0, &sector)?;
+                if h.size != 512 {
+                    fat.set_size(&mut d, &mut h, 512, t)?;
+                }
+                Ok(())
+            });
+            if r.is_err() {
+                self.notice("BOND NOT SAVED");
+            }
+        }
+    }
+
+    /// The phone link's work once a pass: the card, a key's release, the battery level, the queued operations.
+    pub(crate) fn step_phone(&mut self, b: &mut impl Board) {
+        if !self.phone.ready {
+            return;
+        }
+        self.phone_storage(b);
+        self.phone.now.tick(POLL_MS);
+        let Some(conn) = self.phone.conn else { return };
+        self.phone.busy_ms += POLL_MS;
+        if self.phone.busy && self.phone.busy_ms >= 3000 {
+            self.phone.busy = false; // an answer that never came: the queue goes on
+        }
+        if self.phone.release {
+            // the key's release: one notification queued at a time (the stack's default), so a pass after the press
+            self.phone.release = ble::notify(b, &mut self.rx, conn, self.phone.report.0, &[0]).is_err();
+        }
+        let level = self.strip.battery;
+        if self.phone.secure && level.is_some() && level != self.phone.battery_sent {
+            // once per change: refused while the phone has not enabled it, and the value set for its reads
+            let v = level.unwrap_or(0).min(100);
+            if ble::notify(b, &mut self.rx, conn, self.phone.battery.0, &[v]).is_err() {
+                let _ = ble::value_set(b, &mut self.rx, self.phone.battery.0, &[v]);
+            }
+            self.phone.battery_sent = level;
+        }
+        self.next_op(b, conn);
+    }
+
+    /// A media key, from a page (Lap held), the media screen or a touch: AMS when the phone has it (an iPhone),
+    /// else HID; the camera's shutter is HID's volume up.
+    pub(crate) fn media(&mut self, b: &mut impl Board, key: Media, shutter: bool) {
+        let p = &mut self.phone;
+        let Some(conn) = p.conn.filter(|_| p.secure && p.stored.keys) else {
+            return self.say(if self.phone.stored.keys { "NO PHONE" } else { "MEDIA KEYS OFF" });
+        };
+        if !shutter
+            && p.h[RC] != 0
+            && let Some(cmd) = key.ams()
+        {
+            p.queue(Op::Ams(cmd));
+            return self.next_op(b, conn);
+        }
+        let k = if shutter { Media::VolUp } else { key };
+        match ble::notify(b, &mut self.rx, conn, p.report.0, &[k.report()]) {
+            Ok(()) => p.release = true,
+            Err(_) => self.say("KEYS NOT ENABLED"), // the phone did not enable the report: not used as HID
+        }
+    }
+
+    /// Answers the incoming call (true) or declines it.
+    pub(crate) fn answer(&mut self, b: &mut impl Board, accept: bool) {
+        if let (Some((uid, _)), Some(conn)) = (self.phone.call.take(), self.phone.conn) {
+            self.phone.queue(Op::Act(uid, accept));
+            self.next_op(b, conn);
+        }
+    }
+
+    /// Runs the next queued operation when the client is free.
+    fn next_op(&mut self, b: &mut impl Board, conn: u16) {
+        let p = &mut self.phone;
+        if p.busy || p.disc != Disc::Done || p.n_ops == 0 {
+            return;
+        }
+        let op = p.ops[0];
+        p.ops.rotate_left(1);
+        p.n_ops -= 1;
+        let (handle, data): (u16, &[u8]) = match op {
+            Op::Fetch(uid) => {
+                p.ds = Default::default();
+                (p.h[CP], &ph::get_attributes(uid))
+            }
+            Op::Act(uid, yes) => (p.h[CP], &ph::action(uid, yes)),
+            Op::Ams(cmd) => (p.h[RC], &[cmd]),
+        };
+        p.busy = handle != 0 && ble::write(b, &mut self.rx, conn, handle, data).is_ok();
+        (p.busy_ms, p.fetching) = (0, p.busy && matches!(op, Op::Fetch(_)));
+    }
+
+    /// One BLE event from the chip (not an advertising report: radio.rs has those).
+    pub(crate) fn phone_event(&mut self, b: &mut impl Board, p: &[u8]) {
+        let Some(e) = ble::event(p) else { return };
+        let rx = &mut self.rx;
+        match e {
+            Event::Connected { conn, role: 1, peer } => {
+                self.phone.unlink();
+                (self.phone.conn, self.phone.adv) = (Some(conn), Adv::Off); // the stack stopped advertising
+                self.phone.peer = peer;
+                if !self.phone.bonded() {
+                    let _ = ble::authenticate(b, rx, conn); // the phone asks the rider to pair
+                }
+            }
+            Event::Disconnected { conn, .. } if Some(conn) == self.phone.conn => {
+                let had_call = self.phone.call.is_some();
+                self.phone.unlink();
+                if had_call && self.screen == Screen::Call {
+                    self.close();
+                    self.show(b);
+                }
+                self.idle_advertising(b);
+            }
+            Event::SecParamsRequest { conn } => {
+                // pairing: while asked for (PAIR), or with no bond yet
+                let ok = self.phone.adv == Adv::Fast || !self.phone.bonded();
+                let _ = ble::sec_params_reply(b, rx, conn, ok);
+            }
+            Event::SecInfoRequest { conn, .. } => {
+                let key = self.phone.stored.bond.map(|d| (d.key.ltk, d.key.flags));
+                let _ = ble::sec_info_reply(b, rx, conn, key);
+            }
+            Event::AuthStatus { status: 0, bonded: true, own, peer, .. } => {
+                // our LTK (legacy pairing), or with LESC the one key both sides share
+                let key = own.filter(|k| !k.is_empty()).or(peer.filter(|k| !k.is_empty()));
+                if let Some(key) = key {
+                    let mut bond = ph::Bond { key, peer: self.phone.peer, attrs: [0; ph::ATTRS], attrs_len: 0 };
+                    if let Some(conn) = self.phone.conn
+                        && let Ok(n) = ble::sys_attr_get(b, rx, conn, &mut bond.attrs)
+                    {
+                        bond.attrs_len = n as u8; // CCCDs the phone set before the keys came
+                    }
+                    self.phone.stored.bond = Some(bond);
+                    self.phone.save = true;
+                    self.notice("PHONE PAIRED");
+                }
+            }
+            Event::AuthStatus { .. } => self.say("PAIRING FAILED"),
+            Event::ConnSecUpdate { conn, level } if level >= 2 && Some(conn) == self.phone.conn => {
+                self.phone.secure = true;
+                if let Some(d) = self.phone.stored.bond {
+                    let _ = ble::sys_attr_set(b, rx, conn, Some(&d.attrs[..usize::from(d.attrs_len)]));
+                }
+                if self.phone.disc == Disc::Idle {
+                    self.phone.disc = Disc::Service(0);
+                    self.discover(b, conn);
+                }
+            }
+            Event::SysAttrMissing { conn } => {
+                let attrs = self.phone.stored.bond.filter(|_| self.phone.secure);
+                let _ = ble::sys_attr_set(b, rx, conn, attrs.as_ref().map(|d| &d.attrs[..usize::from(d.attrs_len)]));
+            }
+            Event::Write { conn, uuid: ble::CCCD, .. } => {
+                self.phone.battery_sent = None; // the level again, in case it was its CCCD
+                // the CCCDs kept with the bond, for the next link
+                if let Some(d) = &mut self.phone.stored.bond {
+                    let mut attrs = [0; ph::ATTRS];
+                    if let Ok(n) = ble::sys_attr_get(b, rx, conn, &mut attrs) {
+                        (d.attrs, d.attrs_len) = (attrs, n as u8);
+                        self.phone.save = true;
+                    }
+                }
+            }
+            Event::MtuRequest { conn } => {
+                let _ = ble::exchange_mtu_reply(b, rx, conn);
+            }
+            Event::ParamRequest { conn, id } => {
+                let _ = match id {
+                    0x1f => ble::conn_param_update(b, rx, conn),
+                    0x21 => ble::phy_update(b, rx, conn),
+                    _ => ble::data_length_update(b, rx, conn),
+                };
+            }
+            Event::UserMemRequest { conn } => {
+                let _ = ble::user_mem_reply(b, rx, conn);
+            }
+            Event::Timeout { src: 0 } => {
+                // the pairing window closed: back to waiting for the bonded phone, or nothing
+                self.phone.adv = Adv::Off;
+                if self.phone.conn.is_none() {
+                    self.idle_advertising(b);
+                }
+            }
+            Event::GattTimeout => self.phone.disc = Disc::Idle,
+            Event::Hvx { handle, kind, data } => self.phone_hvx(b, handle, kind, data),
+            Event::Services { .. }
+            | Event::Chars { .. }
+            | Event::Descs { .. }
+            | Event::Read { .. }
+            | Event::Written { .. } => {
+                if let Some(conn) = self.phone.conn {
+                    self.client_answer(b, conn, e);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A GATT client answer: the discovery's next step, or a queued operation done.
+    fn client_answer(&mut self, b: &mut impl Board, conn: u16, e: Event) {
+        let p = &mut self.phone;
+        match (p.disc, e) {
+            (Disc::Service(n), Event::Services { status: 0, list }) => {
+                match ble::services(list).find(|(u, ..)| *u == p.service(n)) {
+                    Some((_, start, end)) => {
+                        (p.svc_end, p.n_decls) = (end, 0);
+                        p.disc = Disc::Chars(n, start);
+                    }
+                    None => p.disc = Disc::Service(n + 1),
+                }
+            }
+            (Disc::Service(n), _) => p.disc = Disc::Service(n + 1), // not there
+            (Disc::Chars(n, _), Event::Chars { status: 0, list }) if !list.is_empty() => {
+                let mut last = 0;
+                for (uuid, _, decl, value) in ble::chars(list) {
+                    if let Some(slot) = p.slot(uuid) {
+                        p.h[slot] = value;
+                    }
+                    if let Some(d) = p.decls.get_mut(p.n_decls) {
+                        *d = decl;
+                        p.n_decls += 1;
+                    }
+                    last = value;
+                }
+                p.disc = if last < p.svc_end { Disc::Chars(n, last + 1) } else { Disc::Descs(n) };
+            }
+            (Disc::Chars(n, _), _) => p.disc = Disc::Descs(n), // the end of the characteristics
+            (Disc::Descs(_), Event::Descs { status: 0, list }) => {
+                let cccd = ble::descs(list).find(|(_, u)| *u == (ble::CCCD, ble::UUID_BLE));
+                if let (Some((h, _)), Some(slot)) = (cccd, p.h.get_mut(p.looking)) {
+                    *slot = h;
+                }
+            }
+            (Disc::Descs(_), Event::Descs { .. }) => {}
+            (Disc::Subscribe(i), Event::Written { .. }) => p.disc = Disc::Subscribe(i + 1),
+            (Disc::Register(i), Event::Written { .. }) => p.disc = Disc::Register(i + 1),
+            (Disc::Read(i), Event::Read { status, handle, data }) => {
+                if status == 0 && handle == p.h[CT] {
+                    self.phone_time(b, Some(data), None);
+                } else if status == 0 && handle == p.h[LTI] {
+                    self.phone_time(b, None, Some(data));
+                }
+                self.phone.disc = Disc::Read(i + 1);
+            }
+            (Disc::Done, Event::Written { status, .. }) => {
+                // a fetch waits for its answer on the Data Source as well, which a new one would cut
+                p.busy = p.fetching && status == 0;
+                return self.next_op(b, conn);
+            }
+            _ => return,
+        }
+        self.discover(b, conn);
+    }
+
+    /// Sends the discovery's next request (skipping what is not there), or ends it.
+    fn discover(&mut self, b: &mut impl Board, conn: u16) {
+        for _ in 0..32 {
+            let rx = &mut self.rx;
+            let p = &mut self.phone;
+            let sent = match p.disc {
+                Disc::Service(n) if n < 3 => {
+                    let uuid = p.service(n);
+                    uuid.1 != 0 && ble::discover_service(b, rx, conn, uuid).is_ok()
+                }
+                Disc::Service(_) => {
+                    p.disc = Disc::Subscribe(0);
+                    continue;
+                }
+                Disc::Chars(_, from) => ble::discover_chars(b, rx, conn, from, p.svc_end).is_ok(),
+                Disc::Descs(n) => {
+                    let next = NOTIFYING
+                        .get(usize::from(n))
+                        .and_then(|l| l.iter().find(|&&(v, c)| p.h[v] != 0 && p.tried & 1 << c == 0));
+                    match next {
+                        Some(&(v, c)) => {
+                            (p.tried, p.looking) = (p.tried | 1 << c, c);
+                            // the descriptors lie between the value and the next declaration (or the service's end)
+                            let value = p.h[v];
+                            let next_decl = p.decls[..p.n_decls].iter().filter(|&&d| d > value).min().copied();
+                            let end = next_decl.map_or(p.svc_end, |d| d - 1);
+                            value < end && ble::discover_descs(b, rx, conn, value + 1, end).is_ok()
+                        }
+                        None => {
+                            p.disc = Disc::Service(n + 1);
+                            continue;
+                        }
+                    }
+                }
+                Disc::Subscribe(i) => match p.subscriptions().get(usize::from(i)) {
+                    Some(&c) => {
+                        let wanted = p.stored.notify || !matches!(c, NS_CCCD | DS_CCCD);
+                        wanted && p.h[c] != 0 && ble::write(b, rx, conn, p.h[c], &[1, 0]).is_ok()
+                    }
+                    None => {
+                        p.disc = Disc::Register(0);
+                        continue;
+                    }
+                },
+                Disc::Register(i) => match ph::AMS_REGISTER.get(usize::from(i)) {
+                    Some(cmd) => p.h[EU_CCCD] != 0 && ble::write(b, rx, conn, p.h[EU], cmd).is_ok(),
+                    None => {
+                        p.disc = Disc::Read(0);
+                        continue;
+                    }
+                },
+                Disc::Read(i) => match [CT, LTI].get(usize::from(i)) {
+                    Some(&s) => p.h[s] != 0 && ble::read(b, rx, conn, p.h[s]).is_ok(),
+                    None => {
+                        p.disc = Disc::Done;
+                        return self.next_op(b, conn);
+                    }
+                },
+                Disc::Idle | Disc::Done => return,
+            };
+            if sent {
+                return;
+            }
+            // nothing to ask (or the chip refused): the next step
+            p.disc = match p.disc {
+                Disc::Service(n) => Disc::Service(n + 1),
+                Disc::Chars(n, _) => Disc::Descs(n),
+                Disc::Subscribe(i) => Disc::Subscribe(i + 1),
+                Disc::Register(i) => Disc::Register(i + 1),
+                Disc::Read(i) => Disc::Read(i + 1),
+                d => d, // Descs: its bit is set, the next one is tried
+            };
+        }
+    }
+
+    /// A notification or indication from the phone.
+    fn phone_hvx(&mut self, b: &mut impl Board, handle: u16, kind: u8, data: &[u8]) {
+        if let (2, Some(conn)) = (kind, self.phone.conn) {
+            let _ = ble::hv_confirm(b, &mut self.rx, conn, handle);
+        }
+        let h = self.phone.h;
+        if handle == 0 {
+        } else if handle == h[NS] {
+            let Some(n) = ph::Notif::parse(data) else { return };
+            match n.event {
+                0 if n.fresh() && self.phone.stored.notify => {
+                    if n.category == ph::INCOMING_CALL {
+                        self.phone.call = Some((n.uid, Line::new())); // its caller's name follows
+                    }
+                    self.phone.queue(Op::Fetch(n.uid));
+                }
+                2 if self.phone.call.is_some_and(|(uid, _)| uid == n.uid) => {
+                    self.phone.call = None; // answered or declined on the phone, or missed
+                    if self.screen == Screen::Call {
+                        self.close();
+                        self.show(b);
+                    }
+                }
+                _ => {}
+            }
+            if let Some(conn) = self.phone.conn {
+                self.next_op(b, conn);
+            }
+        } else if handle == h[DS] {
+            let Some(a) = self.phone.ds.push(data) else { return };
+            self.phone.busy = false;
+            if let Some(conn) = self.phone.conn {
+                self.next_op(b, conn);
+            }
+            match &mut self.phone.call {
+                Some((uid, who)) if *uid == a.uid => {
+                    *who = a.title;
+                    if self.screen != Screen::Call {
+                        self.open(Screen::Call);
+                    }
+                    self.banner_ms = None; // the call takes the whole screen
+                    self.show(b);
+                    self.tones.play(&BEEP_ALERT);
+                }
+                _ => {
+                    let mut l = Line::<20>::new();
+                    l.push_str(a.title.as_str());
+                    if !a.message.as_str().is_empty() {
+                        l.push_str(": ");
+                        l.push_str(a.message.as_str());
+                    }
+                    self.notice(l.as_str());
+                }
+            }
+        } else if handle == h[EU] {
+            self.phone.now.update(data);
+            if core::mem::take(&mut self.phone.now.new_title) {
+                let mut l = Line::<20>::new();
+                l.push_str(self.phone.now.title.as_str());
+                if self.screen != Screen::Media {
+                    self.say(l.as_str());
+                }
+            }
+        } else if handle == h[CT] {
+            self.phone_time(b, Some(data), None);
+        }
+    }
+
+    /// The phone's time: the RTC set to its local time, and the offset from UTC kept for the GPS and the FIT times
+    /// (replacing the one learnt at a fix). Not while a ride is open: its record times must not jump (the golden
+    /// rule); the next link after it sets them.
+    fn phone_time(&mut self, b: &mut impl Board, current: Option<&[u8]>, local: Option<&[u8]>) {
+        if self.ride.state() != ride::State::Idle || self.recorder.phase() != recorder::Phase::Done {
+            return;
+        }
+        if let Some(t) = current.and_then(ph::current_time) {
+            let (tr, dr) = rtc_words(t);
+            b.rtc_set(tr, dr);
+            self.date = (t.0, t.1, t.2);
+            self.strip.time = (t.3, t.4);
+            self.seconds = t.5;
+        }
+        if let Some(offset) = local.and_then(ph::local_offset)
+            && self.aid.offset_15min != Some(offset)
+        {
+            self.aid.offset_15min = Some(offset);
+            for (r, w) in AID_BKP.into_iter().zip(self.aid.to_words()) {
+                b.backup_write(r, w);
+            }
+        }
+    }
+
+    /// The media screen's rows: the title, the artist, and play state with the elapsed time.
+    pub(crate) fn media_rows(&self) -> [Line<24>; 3] {
+        let n = &self.phone.now;
+        let mut rows: [Line<24>; 3] = [n.title, n.artist, Line::new()];
+        if self.phone.link() != Link::Secure {
+            rows = [Line::new(), Line::new(), Line::new()];
+            rows[0].push_str("NO PHONE");
+            return rows;
+        }
+        rows[2].push_str(if n.playing { "PLAYING " } else { "PAUSED " });
+        push_clock(&mut rows[2], n.elapsed());
+        rows
+    }
+
+    /// Redraws the media screen's rows that changed.
+    pub(crate) fn update_media(&mut self, b: &mut impl Board) {
+        for (i, row) in self.media_rows().iter().enumerate() {
+            let print = fnv(0x811c_9dc5, row.as_str().as_bytes());
+            if self.phone.shown[i] != print {
+                self.phone.shown[i] = print;
+                draw_media_row(&mut Panel(b, (0, self.bottom())), i, row.as_str());
+            }
+        }
+    }
+}
+
+/// Media screen row `i` (the title white, the others grey), in its own box.
+pub(crate) fn draw_media_row(c: &mut impl Canvas, i: usize, row: &str) {
+    let style = if i == 0 { ui::LABEL } else { text::Style { fg: ui::GREY, ..ui::LABEL } };
+    let y = ui::LIST_Y + i as u32 * ui::LIST_ROW;
+    text::draw_in(c, &style, ui::NEARBY.0, y, ui::NEARBY.2, text::Align::Left, row);
+}
+
+/// The media and call screens' fixed text: a title and the keys' legend (the rows above are [`App::update_media`]'s).
+pub(crate) fn draw_phone_screen(c: &mut impl Canvas, call: Option<&str>) {
+    let (title, legend): (&str, &[&str]) = match call {
+        Some(_) => ("CALL", &["START ANSWER", "BACK  DECLINE", "TAP RIGHT/LEFT"]),
+        None => (
+            "MEDIA",
+            &[
+                "START PLAY/PAUSE",
+                "PAGE  NEXT",
+                "LAP   PREVIOUS",
+                "HELD  VOLUME -/+",
+                "SWIPE TRACK/VOL",
+                "TOUCH HOLD PHOTO",
+            ],
+        ),
+    };
+    ui::draw_title(c, title);
+    if let Some(who) = call {
+        text::draw_in(c, &ui::LABEL, ui::NEARBY.0, ui::LIST_Y, ui::NEARBY.2, text::Align::Left, who);
+    }
+    for (i, l) in legend.iter().enumerate() {
+        let y = ui::LIST_Y + (4 + i as u32) * ui::LIST_ROW;
+        text::draw_in(
+            c,
+            &text::Style { fg: ui::GREY, ..ui::LABEL },
+            ui::NEARBY.0,
+            y,
+            ui::NEARBY.2,
+            text::Align::Left,
+            l,
+        );
+    }
+}

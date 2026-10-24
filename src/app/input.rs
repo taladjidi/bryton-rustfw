@@ -3,6 +3,7 @@
 //! what the screen on top does with it.
 
 use crate::*;
+use phone::Media;
 
 /// The four keys, with stock's key codes (BOARD.md 5) as their bit in [`Board::keys_down`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +98,10 @@ pub enum Screen {
     Summary,
     /// The card of a past ride (`App::past`); Back returns to the history.
     Past,
+    /// The phone's media remote (app/phone.rs).
+    Media,
+    /// An incoming call: answer or decline.
+    Call,
 }
 
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
@@ -171,6 +176,31 @@ impl App {
                 return self.say("HOLD AGAIN: OFF");
             }
             (_, Input::Off) => return self.power_off(b),
+            // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
+            (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
+            (Screen::Media, Input::Back) => self.close(),
+            (Screen::Media, _) => {
+                let key = match i {
+                    Input::Select | Input::Touch(Gesture::Tap(..)) => Media::PlayPause,
+                    Input::Next | Input::Touch(Gesture::Swipe(Dir::Left)) => Media::Next,
+                    Input::Prev | Input::Touch(Gesture::Swipe(Dir::Right)) => Media::Prev,
+                    Input::NextHeld | Input::Touch(Gesture::Swipe(Dir::Down)) => Media::VolDown,
+                    Input::PrevHeld | Input::Touch(Gesture::Swipe(Dir::Up)) => Media::VolUp,
+                    Input::Touch(Gesture::Hold(..)) => return self.media(b, Media::VolUp, true),
+                    _ => return,
+                };
+                self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
+                return self.media(b, key, false);
+            }
+            (Screen::Call, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..))) => {
+                let accept = match i {
+                    Input::Touch(Gesture::Tap(x, _)) => u32::from(x) >= ui::W / 2,
+                    _ => i == Input::Select,
+                };
+                self.answer(b, accept);
+                self.say(if accept { "ANSWERED" } else { "DECLINED" });
+                self.close();
+            }
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
                     self.editing = false;

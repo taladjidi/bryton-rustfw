@@ -43,6 +43,8 @@ pub enum Menu {
     Steps,
     /// The course files on the card ([`storage::course`]).
     Courses,
+    /// The phone link ([`menu::PHONE`]).
+    Phone,
 }
 
 /// A menu's title (a page's is followed by its number).
@@ -63,6 +65,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Workouts => "WORKOUTS",
         Menu::Steps => "WORKOUT",
         Menu::Courses => "COURSES",
+        Menu::Phone => "PHONE",
     }
 }
 
@@ -94,6 +97,7 @@ impl App {
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
             Menu::Courses => self.courses.as_deref()?.list.get(i).map(|_| Row::Course(i)),
+            Menu::Phone => menu::PHONE.get(i).map(|&r| Row::Phone(r)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::Layout(n)),
@@ -255,6 +259,43 @@ impl App {
                     color = ui::GREEN;
                 }
             }
+            Row::Phone(r) => {
+                use menu::PhoneRow;
+                label.push_str(r.label());
+                let on = |v| if v { "ON" } else { "OFF" };
+                let link = self.phone.link();
+                if r == PhoneRow::Status && link == Link::NoBle && self.ble.is_some() {
+                    // the set-up failed: which command, and its error (hex), for the first runs on the unit
+                    let (op, code) = self.rx.failed.unwrap_or((0, 0));
+                    value.push_str("ERR ");
+                    for (v, n) in [(u32::from(op), 2), (code, 4)] {
+                        for k in (0..n).rev() {
+                            let d = (v >> (4 * k) & 0xf) as usize;
+                            value.push_str("0123456789ABCDEF".get(d..d + 1).unwrap_or("?"));
+                        }
+                        value.push_str(if n == 2 { "/" } else { "" });
+                    }
+                }
+                value.push_str(match r {
+                    PhoneRow::Status => match link {
+                        Link::NoBle if self.ble.is_some() => "",
+                        Link::NoBle => "NO BLE",
+                        Link::Off => "OFF",
+                        Link::Pairing => "PAIRING",
+                        Link::Waiting => "WAITING",
+                        Link::Connected => "LINKED",
+                        Link::Secure => "SECURE",
+                    },
+                    PhoneRow::Pair if link == Link::Pairing => "ON",
+                    PhoneRow::Forget if self.phone.bonded() => "BONDED",
+                    PhoneRow::Notify => on(self.phone.stored.notify),
+                    PhoneRow::Keys => on(self.phone.stored.keys),
+                    _ => "",
+                });
+                if matches!(link, Link::Secure) && r == PhoneRow::Status {
+                    color = ui::GREEN;
+                }
+            }
             Row::Pick(field) => {
                 label.push_str(field.label());
                 if let Menu::Group(n, f, _) = menu
@@ -408,6 +449,20 @@ impl App {
                 self.stock.start(self.date);
             }
             Some(Row::Stock(menu::StockRow::Import)) => self.import_stock(b),
+            Some(Row::Phone(r)) => {
+                use menu::PhoneRow;
+                match r {
+                    PhoneRow::Status => {}
+                    PhoneRow::Pair => self.phone_pair(b),
+                    PhoneRow::Forget => self.phone_forget(b),
+                    PhoneRow::Notify => self.phone.stored.notify = !self.phone.stored.notify,
+                    PhoneRow::Keys => self.phone.stored.keys = !self.phone.stored.keys,
+                    PhoneRow::Media => self.open(Screen::Media),
+                }
+                if matches!(r, PhoneRow::Notify | PhoneRow::Keys) {
+                    self.phone_changed();
+                }
+            }
             Some(Row::Read(_) | Row::Stock(_)) | None => {}
         }
     }

@@ -281,6 +281,10 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
   0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`) and 0 (what the USB drive saw last at a
   drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md). None free.
+- **Setting it** (this firmware, from the phone's time; not yet seen on the unit): RM0399's calendar initialisation:
+  PWR_CR1 DBP, RTC_WPR 0xca then 0x53, INIT (RTC_ISR bit 7, RTC_ICSR in main.rs), wait for INITF (bit 6, 10 ms at
+  most), TR and DR (the weekday in DR bits 13..15, 1 Monday to 7 Sunday; 0 is forbidden), INIT cleared, RSF (bit 5)
+  cleared so the next read waits for the shadow registers, RTC_WPR 0xff. The prescalers stay as stock set them.
   Settings move to a file in this firmware's own folder once the eMMC is written (AGENTS.md, "Share the storage with
   stock"). This firmware keeps the paired heart-rate strap in register 5 (0x58004064). Writes
   need PWR_CR1.DBP, which reads set after the bootloader (seen on the unit); a write kept its value through a
@@ -415,6 +419,24 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     cadence); it has no BLE power client (power is ANT+ only on stock).
 - **Stock's order at start:** `sd_ble_cfg_set` (op 0x69) six times, `sd_ble_enable`, ANT enable (`06 fa 01` + its
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
+- **SoftDevice API version 5** (S132 / S332 v5.x, nRF5 SDK 14): stock's GATTS request encoders use 0xa0 service add,
+  0xa2 characteristic add, 0xa6 hvx, 0xa7 service changed, 0xa8 authorize reply, 0xa9 / 0xaa system attributes set /
+  get, 0xab, 0xad MTU reply (Ghidra, ghidra/notes/agent_b2.md, 0xd02ac312..0xd02ac966), and GATTC 0x94 / 0x96 / 0x97 /
+  0x9c (above): GATTS at 0xa0 and GATTC at 0x94 are API v5's ranges (v6: 0xa8 and 0x9b; Nordic's pc-ble-driver
+  `include/sd_api_v5/ble_ranges.h` and `sd_api_v6`), and the scan parameters and advertising report seen on the unit
+  have v5's layouts. The Nordic image itself is not in the stock image (`\Nordic.bin`), so the exact version is not
+  known. Opcodes then follow the v5 headers: GAP from 0x6c (adv data set 0x72, adv start 0x73, stop 0x74, appearance
+  0x78, PPCP 0x7a, name 0x7c, authenticate 0x7e, sec params reply 0x7f, sec info reply 0x86), common 0x60 (UUID vendor
+  add 0x62, user memory reply 0x66); events GAP from 0x10 (connected 0x10, disconnected 0x11, sec params request
+  0x13, sec info request 0x14, auth status 0x19, conn sec update 0x1a, timeout 0x1b), GATTC from 0x30, GATTS from 0x50
+  (write 0x50, system attributes missing 0x52, MTU request 0x55). Layouts: src/drivers/ble.rs, from the nRF5 SDK
+  serialization codecs pc-ble-driver carries.
+- **The peripheral side (this firmware, simulated only; docs/status.md has the test order):** no `sd_ble_cfg_set`,
+  so the defaults: one peripheral link, ATT MTU 23, attribute table 1408 B, 10 vendor UUIDs, connection
+  configuration tag 0 (ble.h, ble_gap.h, ble_gatts.h `*_DEFAULT`). The keyset given with `sd_ble_gap_sec_params_reply`
+  comes back after BLE_GAP_EVT_AUTH_STATUS's own fields (the serialization's extension, ble_gap_evt_app.c). Stock has
+  a peripheral too (ble_advertising, peer manager, its own services 0x7766 for Android notifications and 0x5566
+  'ldc', Ghidra 0xd029c010 / 0xd029c3e0) but no HID, ANCS client or AMS client.
 
 ## 12. Battery and charging
 

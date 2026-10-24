@@ -38,12 +38,24 @@ pub const MAX: usize = 256;
 /// How long a command may take before it is given up (stock waits 5 s; replies take a few ms).
 pub const TIMEOUT_MS: u32 = 500;
 
-/// Reassembles packets from the byte stream.
+/// Longest BLE event kept while a command waits ([`Rx::pop`]).
+pub const KEPT: usize = 128;
+
+/// Reassembles packets from the byte stream, and keeps the BLE events that arrive while a command waits for its
+/// response (a phone's connection or pairing must not be lost to an ANT command's wait; advertising reports are).
 pub struct Rx {
     buf: [u8; MAX],
     header: [u8; 2],
     got: usize,
     want: Option<usize>,
+    /// The last packet's length (in `buf`).
+    last: usize,
+    kept: [[u8; KEPT]; 8],
+    kept_len: [u8; 8],
+    kept_n: usize,
+    /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
+    /// PHONE menu shows it when the link could not be set up.
+    pub failed: Option<(u8, u32)>,
 }
 
 impl Default for Rx {
@@ -55,7 +67,45 @@ impl Default for Rx {
 impl Rx {
     /// Waiting for a length header.
     pub const fn new() -> Self {
-        Rx { buf: [0; MAX], header: [0; 2], got: 0, want: None }
+        Rx {
+            buf: [0; MAX],
+            header: [0; 2],
+            got: 0,
+            want: None,
+            last: 0,
+            kept: [[0; KEPT]; 8],
+            kept_len: [0; 8],
+            kept_n: 0,
+            failed: None,
+        }
+    }
+
+    /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits (eight
+    /// at most; more are dropped). The main loop keeps them too, and acts on them once the bytes read are all
+    /// framed: a command sent from the middle of a read would take the rest of the stream out of order.
+    pub fn keep_last(&mut self) {
+        let p = self.buf.get(..self.last).unwrap_or(&[]);
+        if event_id(p).is_none_or(|id| id == EVT_ADV_REPORT) || p.len() > KEPT {
+            return;
+        }
+        if let (Some(slot), Some(len)) = (self.kept.get_mut(self.kept_n), self.kept_len.get_mut(self.kept_n)) {
+            slot[..p.len()].copy_from_slice(p);
+            *len = p.len() as u8;
+            self.kept_n += 1;
+        }
+    }
+
+    /// The oldest event kept while a command waited, copied into `out`; its length.
+    pub fn pop(&mut self, out: &mut [u8; KEPT]) -> Option<usize> {
+        if self.kept_n == 0 {
+            return None;
+        }
+        let n = usize::from(self.kept_len[0]);
+        out.copy_from_slice(&self.kept[0]);
+        self.kept.rotate_left(1);
+        self.kept_len.rotate_left(1);
+        self.kept_n -= 1;
+        Some(n)
     }
 
     /// Takes one byte; returns the payload when it completes a packet. A payload longer than [`MAX`] is read
@@ -88,6 +138,7 @@ impl Rx {
         }
         self.want = None;
         self.got = 0;
+        self.last = if want <= MAX { want } else { 0 };
         self.buf.get(..want) // None (dropped) when it did not fit
     }
 }
@@ -118,15 +169,19 @@ fn wait<T>(b: &mut impl Board, rx: &mut Rx, mut f: impl FnMut(&[u8]) -> Option<T
         if n == 0 {
             b.delay_ms(1);
             idle_ms += 1;
-        } else if let Some(t) = rx.push(buf[0]).and_then(&mut f) {
-            return Some(t);
+        } else if let Some(p) = rx.push(buf[0]) {
+            if let Some(t) = f(p) {
+                return Some(t);
+            }
+            rx.keep_last();
         }
     }
     None
 }
 
 /// Sends the command `payload` (`[type][op][arguments]`) and waits for its response; copies the outputs into `out`
-/// and returns their length. Packets that arrive meanwhile (events) are dropped.
+/// and returns their length. Packets that arrive meanwhile are dropped, BLE events but advertising reports kept
+/// ([`Rx::pop`]).
 pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     send(b, payload);
     let op = payload.get(1).copied();
@@ -143,7 +198,11 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         }
         _ => None,
     };
-    wait(b, rx, response).unwrap_or(Err(Error::Timeout))
+    let r = wait(b, rx, response).unwrap_or(Err(Error::Timeout));
+    if let (Err(e), Some(op)) = (r, op) {
+        rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
+    }
+    r
 }
 
 /// The version fields as Bryton fills them (stock logs "Image / Bootloader / SD").

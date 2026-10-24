@@ -388,6 +388,8 @@ fn lcd_fill(count: u32, color: u16) {
 const RTC_TR: u32 = 0x5800_4000;
 const RTC_DR: u32 = 0x5800_4004;
 const RTC_ICSR: u32 = 0x5800_400c;
+/// RTC_WPR: the write protection key register (RM0399 RTC registers, offset 0x24).
+const RTC_WPR: u32 = 0x5800_4024;
 /// Backup registers 0..31 (RM0399 RTC_BKPxR; BOARD.md 8 lists those stock uses).
 const RTC_BKP0R: u32 = 0x5800_4050;
 
@@ -397,6 +399,26 @@ fn rtc() -> (u32, u32) {
     while rd(RTC_ICSR) & (1 << 5) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {} // RSF
     let tr = rd(RTC_TR);
     (tr, rd(RTC_DR))
+}
+
+/// Sets the RTC (RM0399, RTC "Calendar initialization and configuration"): backup domain writable (DBP), the
+/// write protection unlocked (0xca then 0x53 into RTC_WPR), INIT set in RTC_ISR (here RTC_ICSR, bit 7) and INITF
+/// (bit 6) awaited, at most 10 ms (the manual gives up to two RTCCLK periods plus the synchronisation), TR and DR
+/// written, INIT cleared, RSF (bit 5) cleared so the next read waits for the shadow registers, locked again. The
+/// prescalers stay as stock set them. Not yet seen on the unit.
+fn rtc_set(tr: u32, dr: u32) {
+    modify(PWR_CR1, 0, 1 << 8);
+    wr(RTC_WPR, 0xca);
+    wr(RTC_WPR, 0x53);
+    modify(RTC_ICSR, 0, 1 << 7);
+    let t0 = cycles();
+    while rd(RTC_ICSR) & (1 << 6) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {}
+    if rd(RTC_ICSR) & (1 << 6) != 0 {
+        wr(RTC_TR, tr & 0x007f_7f7f);
+        wr(RTC_DR, dr & 0x00ff_ff3f);
+    }
+    modify(RTC_ICSR, (1 << 7) | (1 << 5), 0);
+    wr(RTC_WPR, 0xff);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1080,6 +1102,9 @@ impl Board for S510 {
     }
     fn rtc(&mut self) -> (u32, u32) {
         rtc()
+    }
+    fn rtc_set(&mut self, tr: u32, dr: u32) {
+        rtc_set(tr, dr);
     }
     fn delay_ms(&mut self, ms: u32) {
         delay_ms(ms);

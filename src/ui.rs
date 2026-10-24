@@ -527,12 +527,15 @@ pub enum Field {
     /// cadence) big, a gauge around the target band with a marker for the reading, and the band in numbers;
     /// otherwise the power alone.
     WktPower,
+    /// What plays on the phone (AMS): the elapsed time of the track, m:ss (its title is on the media screen and in the
+    /// banner when it changes).
+    Music,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 55] = {
+    pub const ALL: [Field; 56] = {
         use Field::*;
         [
             Time,
@@ -589,7 +592,8 @@ impl Field {
             UpToGo,
             Profile, // the workout player again:
             WorkoutGraph,
-            WktPower,
+            WktPower, // the phone:
+            Music,
         ]
     };
 
@@ -654,6 +658,7 @@ impl Field {
             "PROFILE",
             "WKT GRAPH",
             "WKT POWER",
+            "MUSIC",
         ];
         LABELS[self as usize]
     }
@@ -666,7 +671,8 @@ impl Field {
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
             "88/88", "888-888", "8:88:88", "888-888", // the course followed:
-            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",
+            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888", // the phone:
+            "88:88",
         ];
         WIDEST[self as usize]
     }
@@ -699,7 +705,7 @@ impl Field {
 }
 
 /// The fields by kind, for the picker: a page's box is a group then a field, a few rows each, not 55 in a row.
-pub const FIELD_GROUPS: [(&str, &[Field]); 8] = {
+pub const FIELD_GROUPS: [(&str, &[Field]); 9] = {
     use Field::*;
     [
         (
@@ -713,6 +719,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 8] = {
         ("WORKOUT", &[Workout, StepTarget, StepTime, NextStep, WorkoutGraph, WktPower]),
         ("COURSE", &[ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
+        ("PHONE", &[Music]),
     ]
 };
 
