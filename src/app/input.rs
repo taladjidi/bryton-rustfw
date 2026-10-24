@@ -374,7 +374,7 @@ impl App {
             self.idle_ms = 0;
             return Some(i);
         }
-        let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, dt_ms);
+        let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, false, dt_ms);
         if finger {
             self.idle_ms = 0;
         }
@@ -387,15 +387,16 @@ impl App {
     }
 }
 
-/// One sample of the touch panel into `r`, `dt_ms` after the previous one, if INT is low or a finger was down: the
-/// gesture that ended, and whether a finger is on the panel.
+/// One sample of the touch panel into `r`, `dt_ms` after the previous one, if INT is low, a finger was down or
+/// `always`: the gesture that ended, and whether a finger is on the panel.
 pub(crate) fn sample_touch(
     b: &mut impl Board,
     r: &mut touch::Recogniser,
     ok: bool,
+    always: bool,
     dt_ms: u32,
 ) -> (Option<Gesture>, bool) {
-    if !ok || !(r.down() || b.touch_int()) {
+    if !ok || !(always || r.down() || b.touch_int()) {
         return (None, false);
     }
     let mut buf = [0; 3];
