@@ -42,14 +42,14 @@ pub struct Alerts {
     since_hr_s: u32,
     /// The timer at the last call (a reminder is due when the timer reaches its minute, not while it stands still).
     last_timer_s: u32,
-    /// A reminder due in the same second as another, said the next second.
-    pending: Option<Alert>,
+    /// Reminders due and not said yet (one a second): bit 0 eat, bit 1 drink.
+    pending: u8,
 }
 
 impl Alerts {
     /// A new ride: everything armed.
     pub fn new() -> Self {
-        Alerts { over_s: 0, armed: true, since_hr_s: HR_EVERY_S, last_timer_s: 0, pending: None }
+        Alerts { over_s: 0, armed: true, since_hr_s: HR_EVERY_S, last_timer_s: 0, pending: 0 }
     }
 
     /// One second of a moving ride: `timer_s` the ride's timer after it, `hr` the heart rate; the settings `eat_min`
@@ -76,26 +76,27 @@ impl Alerts {
             Some(h) if h + HR_REARM_BPM <= hr_high => (self.over_s, self.armed) = (0, true),
             _ => self.over_s = 0,
         }
+        // the reminders due are kept first: one said a second, the heart rate's alert ahead of them
+        let moved = timer_s != core::mem::replace(&mut self.last_timer_s, timer_s);
+        let due = |min: u16| moved && min > 0 && timer_s > 0 && timer_s.is_multiple_of(u32::from(min) * 60);
+        self.pending |= u8::from(due(eat_min)) | u8::from(due(drink_min)) << 1;
         if self.armed && self.over_s >= HR_OVER_S && self.since_hr_s >= HR_EVERY_S {
             (self.armed, self.since_hr_s) = (false, 0);
             return Some(Alert::HrHigh);
         }
-        let moved = timer_s != core::mem::replace(&mut self.last_timer_s, timer_s);
-        let due = |min: u16| moved && min > 0 && timer_s > 0 && timer_s.is_multiple_of(u32::from(min) * 60);
-        match (due(eat_min), due(drink_min)) {
-            (true, true) => {
-                self.pending = Some(Alert::Drink);
-                Some(Alert::Eat)
-            }
-            (true, false) => Some(Alert::Eat),
-            (false, true) => Some(Alert::Drink),
-            (false, false) => self.pending.take(),
-        }
+        let (bit, alert) = match self.pending {
+            0 => return None,
+            p if p & 1 != 0 => (1, Alert::Eat),
+            _ => (2, Alert::Drink),
+        };
+        self.pending &= !bit;
+        Some(alert)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
 
     #[test]
@@ -135,5 +136,14 @@ mod tests {
         assert_eq!(a.second(3600, None, 30, 20, 0), Some(Alert::Eat));
         assert_eq!(a.second(3600, None, 30, 20, 0), Some(Alert::Drink), "the next second");
         assert_eq!(a.second(3600, None, 30, 20, 0), None, "paused on the minute: once only");
+    }
+
+    /// The heart-rate alert and an eat minute (and a drink minute) in the same second: none is lost (review 2).
+    #[test]
+    fn heart_rate_alert_keeps_the_reminders_due() {
+        let mut a = Alerts::new();
+        let fired: std::vec::Vec<_> =
+            (1..=20).filter_map(|t| a.second(1190 + t, Some(180), 20, 20, 170).map(|x| (1190 + t, x))).collect();
+        assert_eq!(fired, [(1200, Alert::HrHigh), (1201, Alert::Eat), (1202, Alert::Drink)]);
     }
 }
