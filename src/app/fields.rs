@@ -132,7 +132,8 @@ impl App {
             | Field::WbalGraph
             | Field::DfaGraph
             | Field::AltGraph
-            | Field::Profile => {
+            | Field::Profile
+            | Field::WorkoutGraph => {
                 return l;
             }
             Field::WeekKm | Field::WeekH | Field::YearKm | Field::TotalKm => {

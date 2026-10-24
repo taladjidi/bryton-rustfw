@@ -520,20 +520,71 @@ pub enum Field {
     /// The course's profile from about where the rider is to its end: the rider's place, the ridden part dark, the
     /// climbs coloured by grade.
     Profile,
+    /// The workout's steps over its whole length, each as high as its target and in its zone colour; the rider's
+    /// place, the part done dark.
+    WorkoutGraph,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 53] = {
+    pub const ALL: [Field; 54] = {
         use Field::*;
         [
-            Time, Hr, Speed, Cadence, Power, Map, Timer, Dist, AvgSpeed, MaxSpeed, AvgHr, AvgPower, LapTime, LapDist,
-            Ascent, Graph, Temp, HrGraph, Dfa, Rmssd, // power.rs and the ride's derived metrics:
-            Power3s, Power10s, Power30s, Np, If, Tss, Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr, AvgCadence, Balance, Vam,
-            Grade, WbalGraph, DfaGraph, AltGraph, WeekKm, WeekH, YearKm, TotalKm, // the workout player:
-            Workout, StepTarget, StepTime, NextStep, // the course followed:
-            ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile,
+            Time,
+            Hr,
+            Speed,
+            Cadence,
+            Power,
+            Map,
+            Timer,
+            Dist,
+            AvgSpeed,
+            MaxSpeed,
+            AvgHr,
+            AvgPower,
+            LapTime,
+            LapDist,
+            Ascent,
+            Graph,
+            Temp,
+            HrGraph,
+            Dfa,
+            Rmssd, // power.rs and the ride's derived metrics:
+            Power3s,
+            Power10s,
+            Power30s,
+            Np,
+            If,
+            Tss,
+            Kj,
+            Kcal,
+            Wkg,
+            Wbal,
+            MaxPower,
+            MaxHr,
+            AvgCadence,
+            Balance,
+            Vam,
+            Grade,
+            WbalGraph,
+            DfaGraph,
+            AltGraph,
+            WeekKm,
+            WeekH,
+            YearKm,
+            TotalKm, // the workout player:
+            Workout,
+            StepTarget,
+            StepTime,
+            NextStep, // the course followed:
+            ToGo,
+            OffCourse,
+            Climb,
+            ClimbGain,
+            UpToGo,
+            Profile, // the workout player again:
+            WorkoutGraph,
         ]
     };
 
@@ -596,6 +647,7 @@ impl Field {
             "CLIMB M",
             "UP LEFT M",
             "PROFILE",
+            "WKT GRAPH",
         ];
         LABELS[self as usize]
     }
@@ -608,7 +660,7 @@ impl Field {
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
             "88/88", "888-888", "8:88:88", "888-888", // the course followed:
-            "888.8", "8888", "8.8K 88%", "8888", "8888", "",
+            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "",
         ];
         WIDEST[self as usize]
     }
@@ -624,6 +676,7 @@ impl Field {
                 | Field::DfaGraph
                 | Field::AltGraph
                 | Field::Profile
+                | Field::WorkoutGraph
         )
     }
 

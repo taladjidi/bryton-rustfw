@@ -1,6 +1,6 @@
 //! The graph fields (power, heart rate, W' balance, DFA alpha1, altitude over the last minutes or the whole ride)
-//! and the course profile field: what each shows ([`GraphShown`], [`ProfileShown`]), its bars and scale, and the
-//! update that redraws only the columns that changed.
+//! the course profile field and the workout graph: what each shows ([`GraphShown`], [`ProfileShown`],
+//! [`WorkoutShown`]), its bars and scale, and the update that redraws only the columns that changed.
 
 use crate::*;
 
@@ -24,6 +24,24 @@ pub(crate) struct ProfileShown {
     start: u32,
     span: u32,
     rider: Option<u32>,
+}
+
+/// What the workout graph shows: the workout (its file, None: none), the zones' FTP and max heart rate, the rider's
+/// column ([`workout::column`]). A change of anything but the column redraws it whole.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WorkoutShown {
+    file: Option<fat::File>,
+    zones: (u16, u16),
+    pub(crate) rider: Option<u32>,
+}
+
+/// The columns to redraw when a rider's column moves from `old` to `new` (both, and those between: done or not).
+fn moved(old: Option<u32>, new: Option<u32>) -> core::ops::Range<u32> {
+    match (old, new) {
+        (Some(x), Some(y)) => x.min(y)..x.max(y).saturating_add(1),
+        (Some(x), None) | (None, Some(x)) => x..x.saturating_add(1),
+        (None, None) => 0..0,
+    }
 }
 
 /// The plot a graph field shows, None for a field that is no graph.
@@ -243,15 +261,59 @@ impl App {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), ui::plot_area(bx).1 - bx.1, ui::BLACK);
             self.draw_profile(&mut p, bx, now);
         } else if now.rider != old.rider {
-            let (from, to) = match (old.rider, now.rider) {
-                (Some(x), Some(y)) => (x.min(y), x.max(y)),
-                (Some(x), None) | (None, Some(x)) => (x, x),
-                (None, None) => (1, 0),
-            };
-            for k in from..=to.min(a.2.saturating_sub(1)) {
+            for k in moved(old.rider, now.rider).filter(|&k| k < a.2) {
                 ui::draw_graph_column(&mut p, a, k, self.profile_bar(old, a, k), self.profile_bar(now, a, k));
             }
         }
         Drawn::Profile(now)
+    }
+
+    /// What a workout graph `cols` wide shows now: the workout opened, the rider's column while it is played.
+    pub(crate) fn workout_now(&self, cols: u32) -> WorkoutShown {
+        let steps = self.plan.steps();
+        let total = workout::graph_total_s(steps);
+        let rider = self.player.filter(|_| total > 0).map(|p| match p.graph_at(steps, self.ride.dist_m()) {
+            at if at >= total => cols, // done: all of it dark
+            at => (u64::from(at) * u64::from(cols) / u64::from(total)) as u32,
+        });
+        let zones = (self.settings.ftp, self.settings.max_hr);
+        WorkoutShown { file: self.plan_file.filter(|_| total > 0), zones, rider }
+    }
+
+    /// The workout graph in box `bx`, whole.
+    pub(crate) fn draw_workout_graph(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), w: WorkoutShown) {
+        ui::draw_plot_title(c, bx, if w.file.is_none() { "NO WORKOUT" } else { "WORKOUT" });
+        let a = ui::plot_area(bx);
+        ui::draw_graph(c, a, &|k| self.workout_bar(w, a, k));
+    }
+
+    /// Workout graph column `k` of `w` in a plot `a`.
+    fn workout_bar(&self, w: WorkoutShown, a: (u32, u32, u32, u32), k: u32) -> (u32, u16) {
+        if w.file.is_none() {
+            return (0, ui::BLACK);
+        }
+        workout::column(self.plan.steps(), w.zones, (a.2, a.3), w.rider, k)
+    }
+
+    /// The workout graph drawn as `old`: whole for another workout or other zones, else only the columns between the
+    /// rider's old place and the new one (one or two a step of the plan's width: most seconds, none).
+    pub(crate) fn update_workout_graph(
+        &mut self,
+        b: &mut impl Board,
+        old: WorkoutShown,
+        bx: (u32, u32, u32, u32),
+    ) -> Drawn {
+        let a = ui::plot_area(bx);
+        let now = self.workout_now(a.2);
+        let mut p = Panel(b, (0, self.bottom()));
+        if (WorkoutShown { rider: old.rider, ..now }) != old {
+            p.fill(bx.0, bx.1, bx.2.saturating_sub(1), a.1 - bx.1, ui::BLACK);
+            self.draw_workout_graph(&mut p, bx, now);
+        } else if now.rider != old.rider {
+            for k in moved(old.rider, now.rider).filter(|&k| k < a.2) {
+                ui::draw_graph_column(&mut p, a, k, self.workout_bar(old, a, k), self.workout_bar(now, a, k));
+            }
+        }
+        Drawn::Workout(now)
     }
 }

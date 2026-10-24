@@ -528,6 +528,58 @@ fn workout_from_the_calendar() {
     assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");
 }
 
+/// The workout graph field: the synthetic card's SHORT INTERVALS over the whole box, each step as high as its target
+/// in its zone colour; once started, the rider's column moves right with the step clock, the part done dark, and
+/// only the columns it leaves and reaches are sent (not the whole graph each second).
+#[test]
+fn workout_graph_field() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, Some(KEY));
+    let fields = [Field::WorkoutGraph, Field::StepTarget, Field::StepTime, Field::Time, Field::Time, Field::Time];
+    app.pages[0] = PageCfg { layout: 9, fields }; // with the step's target and time left
+    let rider = |app: &App| match app.drawn.first() {
+        Some(Drawn::Workout(w)) => w.rider,
+        _ => panic!("the graph's box first"),
+    };
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start)); // today's: SHORT INTERVALS
+    app.press(&mut sim, Press::Short(Key::Start)); // START: the ride and the workout
+    assert_eq!(app.screen(), Screen::Ride(0));
+    run(&mut sim, &mut app, 1000);
+    let first = rider(&app).expect("the rider's column");
+    assert_consistent(&sim, &app);
+
+    run(&mut sim, &mut app, 25_000);
+    let now = rider(&app).unwrap();
+    assert!(now > first + 5, "the marker moves: column {first}, then {now}");
+    assert_consistent(&sim, &app);
+    sim.save("workout_graph");
+
+    app.pages[0] = PageCfg { layout: 1, fields }; // the graph alone: what it sends
+    app.show(&mut sim);
+
+    // Lap to the open cool-down (its 300 s, the last 73 % of the graph), the step's banner gone: the cost alone
+    for _ in 0..4 {
+        app.press(&mut sim, Press::Short(Key::Lap));
+    }
+    run(&mut sim, &mut app, 5000);
+    let (at, px0, s0) = (rider(&app).unwrap(), sim.pixels, sim.ms);
+    assert!(at > now + 30, "Lap jumps it: column {now}, then {at}");
+    run(&mut sim, &mut app, 30_000);
+    let px_s = (sim.pixels - px0) * 1000 / (sim.ms - s0);
+    let end = rider(&app).unwrap();
+    assert_consistent(&sim, &app);
+    std::println!("workout graph: rider column {at} to {end} in 30 s, {px_s} panel px/s");
+    // the strip and the rest send about 730 px/s with a still field in this box (measured); the graph adds two
+    // columns of its height a move, about 0.6 moves a second (232 columns over the 410 s drawn): about 300 px/s,
+    // against 60 000 for the whole graph
+    assert!(px_s < 1200, "{px_s} px/s: only the columns that change");
+}
+
 /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
 /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
 #[test]
