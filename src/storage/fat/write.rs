@@ -45,6 +45,8 @@ use super::{DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, lfn_eq
 
 /// End of chain, as written.
 const EOC: u32 = 0x0fff_ffff;
+/// FAT sectors a free cluster search reads per command (4 KB on the stack).
+const FREE_RUN: u32 = 8;
 /// Directory entries in a sector.
 const ENTRIES: usize = SECTOR / 32;
 /// Directory attribute.
@@ -191,13 +193,29 @@ impl Fat {
         Ok(())
     }
 
-    /// A free cluster from `from` on (wrapping), the volume's clusters at most.
+    /// A free cluster from `from` on (wrapping), the volume's clusters at most, the FAT read [`FREE_RUN`] sectors a
+    /// command (the eMMC's multi-block read): on a nearly full volume one per sector was thousands of commands.
+    /// Reads the first FAT, as [`Fat::entry`] does; its cached sector is never dirty here (`set_entries` flushes).
     fn find_free(&mut self, d: &mut impl Disk, from: u32) -> Result<u32, Error> {
-        let start = if self.valid(from) { from - 2 } else { 0 };
-        for i in 0..self.clusters {
-            let c = 2 + (start + i) % self.clusters;
-            if self.entry(d, c)? == 0 {
-                return Ok(c);
+        let per = SECTOR as u32 / 4;
+        let end = self.clusters + 2; // clusters 2..end
+        let mut c = if self.valid(from) { from } else { 2 };
+        let mut left = self.clusters;
+        let mut buf = [0u8; FREE_RUN as usize * SECTOR];
+        while left > 0 {
+            let first = c / per;
+            let n = ((end - 1) / per - first + 1).min(FREE_RUN);
+            let run = buf.get_mut(..n as usize * SECTOR).ok_or(Error::Corrupt)?;
+            self.read(d, self.fat_start + first, run)?;
+            let stop = ((first + n) * per).min(end);
+            while c < stop && left > 0 {
+                if u32_at(run, ((c - first * per) * 4) as usize) & 0x0fff_ffff == 0 {
+                    return Ok(c);
+                }
+                (c, left) = (c + 1, left - 1);
+            }
+            if c >= end {
+                c = 2;
             }
         }
         Err(Error::Refused) // full
@@ -823,6 +841,48 @@ pub(crate) mod tests {
         ] {
             assert!(with(links).is_err(), "{what}: {:?}", with(links));
         }
+    }
+
+    /// A free cluster past a long taken run, and on a full volume: found (or refused) in a read command per
+    /// `FREE_RUN` FAT sectors, not one per sector (review P3: the unit's volume is nearly full of map tiles).
+    #[test]
+    fn find_free_reads_the_fat_in_runs() {
+        let mut d = Ram(image(), 0);
+        let fat = Fat::mount(&mut d).unwrap();
+        let per = SECTOR as u32 / 4;
+        let sectors = (fat.clusters + 2).div_ceil(per);
+        let taken = |img: &mut Vec<u8>, from: u32, to: u32| {
+            for c in from..to {
+                let at = fat.fat_start as usize * SECTOR + c as usize * 4;
+                img[at..at + 4].copy_from_slice(&EOC.to_le_bytes());
+            }
+        };
+        let mut look = |img: &Vec<u8>, from: u32| {
+            let mut d = Ram(img.clone(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            d.1 = 0;
+            (fat.find_free(&mut d, from), d.1)
+        };
+        // 40 FAT sectors taken from cluster 2, the next one free
+        let mut img = d.0.clone();
+        let end = 40 * per;
+        taken(&mut img, 2, end);
+        let at = (end..fat.clusters + 2).find(|&c| u32_at(&img, fat.fat_start as usize * SECTOR + c as usize * 4) == 0);
+        let (found, reads) = look(&img, 2);
+        assert_eq!(found.ok(), at);
+        assert!(reads <= 41u32.div_ceil(FREE_RUN), "{reads} reads for 41 sectors");
+        // from the middle, wrapping to a free cluster at the start
+        let mut full = d.0.clone();
+        taken(&mut full, 2, fat.clusters + 2);
+        let mut one = full.clone();
+        one[fat.fat_start as usize * SECTOR + 5 * 4..][..4].copy_from_slice(&[0; 4]);
+        let (found, reads) = look(&one, 2 + fat.clusters / 2);
+        assert_eq!(found, Ok(5));
+        assert!(reads <= sectors.div_ceil(FREE_RUN) + 2, "{reads} reads, wrapping, for {sectors} sectors");
+        // full: refused, every cluster looked at once
+        let (found, reads) = look(&full, 2 + fat.clusters / 2);
+        assert_eq!(found, Err(Error::Refused));
+        assert!(reads <= sectors.div_ceil(FREE_RUN) + 2, "{reads} reads, full, for {sectors} sectors");
     }
 
     /// Free clusters as the FAT says, and FSInfo's count.
