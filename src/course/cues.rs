@@ -28,11 +28,18 @@
 //!     several points, a roundabout's way in, ring and way out). Its turn is what its points add up to from an
 //!     arm before it to an arm after, not modulo 360; in it, the runs turning one way ([`RUN_DEG`] or more).
 //!   - **A roundabout:** three runs, out one way, round the other, out the first way (whichever side the traffic
-//!     keeps to), the ring [`RING_DEG`] or more, way in and way out within [`RING_M`]: one cue, its exit
+//!     keeps to), way in and way out within [`RING_M`], the middle one a ring: [`RING_DEG`] or more, half again
+//!     as much as the way in and the way out, spread over [`RING_SPAN_M`] or more, no point of it turning more
+//!     than [`RING_PEAK_DEG`] (a junction's corner turns at one point, and more): one cue, its exit
 //!     ([`Turn::Roundabout`], "EXIT 2"), at the way in. The exit counts quarter turns round the ring from the way
 //!     in: right is 1, straight on 2, left 3, back 4 (with the ring's direction). That assumes four roads a quarter
 //!     turn apart (inferred: a map would count them); the arrow and "EXIT" still say it is a roundabout. Straight
-//!     on is said too: at a roundabout the rider must pick an exit, as Garmin says "take the 2nd exit".
+//!     on is said too: at a roundabout the rider must pick an exit, as Garmin says "take the 2nd exit". The
+//!     same three runs without a ring: less back in the middle than either way (a first exit whose ring the
+//!     points barely show, a kink between two corners), the turn they make; back to the heading (under
+//!     [`TURN_DEG`] all told: a chicane, an island, a cycle path's offset), nothing; else, a jog, a turn each.
+//!     The limit: at 10 m a point, a ring of 12 m and a corner cut over two points look alike, so a turn with
+//!     kinks either side whose corner falls between two points may still read as a roundabout.
 //!   - **Else a turn,** one per run if it turns both ways (a junction then another): slight under 60 degrees,
 //!     sharp from 110, a U-turn from 159 (BRouter's classes, `VoiceHint.java` `calcCommand`, where it knows no
 //!     other way at the junction), at its sharpest point; under [`TURN_DEG`] none.
@@ -73,8 +80,16 @@ pub const UTURN_DEG: i32 = 159;
 pub const MERGE_M: u32 = 40;
 /// Computed turns: a run of points turning one way less than this is a wobble, not a turn, degrees.
 pub const RUN_DEG: i32 = 15;
-/// Computed turns: a roundabout's ring turns this much at least, degrees.
-pub const RING_DEG: i32 = 30;
+/// Computed turns: a roundabout's ring turns this much at least, degrees (a straight swerve's middle corner
+/// can turn 35 to 60).
+pub const RING_DEG: i32 = 45;
+/// Computed turns: a roundabout's ring turns over this far at least (two points or more at the course's 10 m
+/// spacing; a junction's corner turns at one), m.
+pub const RING_SPAN_M: u32 = 10;
+/// Computed turns: no point of a roundabout's ring turns more than this, degrees: a 10 m step round the
+/// smallest ring tested (12 m radius) turns 48, 64 with the way in's share; a junction's corner turns more, cut
+/// over two points as well (70 for a right turn with 20 degree kinks).
+pub const RING_PEAK_DEG: i32 = 65;
 /// Computed turns: a roundabout's way in and way out turn this close to each other at most (across a ring of a
 /// radius up to 30 m, and 20 m of approach each side), m.
 pub const RING_M: u32 = 110;
@@ -647,17 +662,30 @@ impl Course {
             (Some(p), Some(q)) => (i64::from(p.0) - i64::from(q.0)).pow(2) + (i64::from(p.1) - i64::from(q.1)).pow(2),
             _ => i64::MAX,
         };
-        if count == 3
+        // one way, the other, the first way again, the outer turns close: a roundabout, or a junction's corners
+        let three_ways = count == 3
             && (r0.sum > 0) == (r2.sum > 0)
             && (r0.sum > 0) != (r1.sum > 0)
-            && r1.sum.abs() >= RING_DEG
-            && apart(r0.peak, r2.peak) <= i64::from(RING_M).pow(2)
-        {
+            && apart(r0.peak, r2.peak) <= i64::from(RING_M).pow(2);
+        let (ring, outer) = (r1.sum.abs(), r0.sum.abs().max(r2.sum.abs()));
+        // a ring: its turn spread over more than one point, none turning as much as a corner, half again as
+        // much as the way in and the way out (2026-10-25 review: corners of a jog, a kinked turn, a swerve)
+        let is_ring = r1.span.1.saturating_sub(r1.span.0) >= RING_SPAN_M
+            && r1.peak_deg.abs() <= RING_PEAK_DEG
+            && ring >= RING_DEG
+            && 2 * ring >= 3 * outer;
+        if three_ways && is_ring {
             // a roundabout: in one way, round the other, out the first way; the exit by how far round it went
             let round = if r1.sum > 0 { total } else { -total };
             let exit = (180 + round + 45).div_euclid(90).clamp(1, 4) as u8;
             let at_m = self.dist.get(r0.peak).copied().unwrap_or(0);
             self.cues.keep(Cue { at_m, turn: Turn::Roundabout(exit), pos: (0, 0), run: false });
+        } else if three_ways && ring < r0.sum.abs().min(r2.sum.abs()) {
+            // less back between two turns one way (a roundabout's first exit, its ring barely shown; a kink
+            // between two corners): the turn they make, at the first
+            self.corner(total, r0, b, f);
+        } else if three_ways && total.abs() < TURN_DEG {
+            // back to its heading (a chicane, an island, a cycle path's offset): a swerve, nothing to say
         } else if count == 1 {
             self.corner(total, r0, b, f);
         } else {
@@ -1144,6 +1172,48 @@ pub(crate) mod tests {
         }
         // its word and its arrow
         assert_eq!((Turn::Roundabout(2).word(), Turn::Roundabout(2).glyph()), ("EXIT 2", "\x0a"));
+    }
+
+    /// Only a ring is a roundabout (2026-10-25 review of main 34ed689: a right-left-right jog of corners 15 to
+    /// 60 m apart said one EXIT 1 and its 2nd and 3rd turns not at all, a right turn with 15 to 30 degree left
+    /// kinks before and after said EXIT 3, a straight swerve EXIT 2): a jog is a turn at each corner, a kinked
+    /// turn is said its way, a swerve under 45 degrees all told says nothing.
+    #[test]
+    fn junctions_are_not_roundabouts() {
+        for gap in [15.0, 20.0, 25.0, 30.0, 40.0, 60.0] {
+            for s in [1.0, -1.0] {
+                let mut r = Road::new();
+                r.straight(500.0).corner(s * 90.0).straight(gap).corner(-s * 90.0).straight(gap).corner(s * 90.0);
+                r.straight(500.0);
+                let c = course(&r.pts);
+                let (a, b) = if s > 0.0 { (Turn::Left, Turn::Right) } else { (Turn::Right, Turn::Left) };
+                let g = gap as u32;
+                // a corner cut between two points is placed up to a point's step away
+                check(&turns(&c), &[(500, a), (500 + g, b), (500 + 2 * g, a)], 10);
+            }
+        }
+        let left = [Turn::SlightLeft, Turn::Left, Turn::SharpLeft];
+        let right = [Turn::SlightRight, Turn::Right, Turn::SharpRight];
+        for kink in [15.0, 20.0, 30.0] {
+            for d in [10.0, 20.0] {
+                for s in [1.0, -1.0] {
+                    // a turn `s` with kinks the other way before and after (a cycle path's offset at the junction)
+                    let mut r = Road::new();
+                    r.straight(500.0).corner(-s * kink).straight(d).corner(s * (90.0 + 2.0 * kink)).straight(d);
+                    r.corner(-s * kink).straight(500.0);
+                    let got = turns(&course(&r.pts));
+                    let way = if s > 0.0 { &left } else { &right };
+                    let ok = got.len() == 1 && way.contains(&got[0].1) && (495..=535).contains(&got[0].0);
+                    assert!(ok, "turn {s} kinks {kink} at {d} m: {got:?}");
+                    // a straight swerve: out, back twice as much, out again
+                    let mut r = Road::new();
+                    r.straight(500.0).corner(-s * kink).straight(d).corner(s * 2.0 * kink).straight(d);
+                    r.corner(-s * kink).straight(500.0);
+                    let got = turns(&course(&r.pts));
+                    assert!(got.is_empty(), "swerve {s} {kink} at {d} m: {got:?}");
+                }
+            }
+        }
     }
 
     /// A turtle drawing a road: a point every 10 m on a straight, every 3 m on a bend.

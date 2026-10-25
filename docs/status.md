@@ -130,7 +130,8 @@ The dated findings are in [journal.md](journal.md).
   climb banners, a lap course rejoined after a detour). Turn by turn: the cue banners and their beeps at speed
   (200 m, or 20 s if farther, then 32 m or 4 s, on 1 s fixes), the turns found on a real route's shape (no cue on a
   winding road or a switchback climb, every junction where the road turns 45 degrees or more at a corner, a real
-  roundabout's exit right, counted in either direction; how many junctions taken in a wide sweep go unsaid), a
+  roundabout's exit right, counted in either direction, and no EXIT at a junction's jog, kinks or a swerve; how
+  many junctions taken in a wide sweep go unsaid), a
   Garmin Connect, Komoot, RideWithGPS or BRouter course's cues (BRouter's roundabouts, its Locus style's cues on
   the track points), the arrows and the ring readable at 2x in the banner and 3x in the field, END at the field
   past the last cue, the time a course's cues take at its read (host: about 1 ms for 4000 points and 256 cues; a
