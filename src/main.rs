@@ -519,14 +519,14 @@ fn standby() -> ! {
 // ---------------------------------------------------------------------------------------------------------------
 // Power while the core sleeps (WFI is CSleep: the CPU clock stops, every peripheral clock whose LPEN bit is set keeps
 // running; RM0399 RCC, "Peripheral clock gating control"). The core is awake under 1 % of the time, so this is where
-// the battery goes. Each step is a bit of POWER_STEPS (build time, default all), so a hang on the unit can be bisected:
-//   POWER_STEPS=0 ./check.sh && ./dev.py run      the build as before these steps
+// the battery goes. Each step is a bit of POWER_STEPS (build time, default none until seen on the unit), so a hang there can be bisected:
+//   POWER_STEPS=15 ./check.sh && ./dev.py run     all four steps
 // ---------------------------------------------------------------------------------------------------------------
 /// Bit 0: idle peripherals and the flash interface clocked off in sleep. Bit 1: the GPIO ports too. Bit 2: PLL2 and
 /// PLL3 off. Bit 3: SPI1 (the panel) at 16 MHz instead of 8.
 const POWER_STEPS: u32 = match option_env!("POWER_STEPS") {
     Some(s) => parse_u32(s),
-    None => 0xf,
+    None => 0, // ponytail: off until each step is seen on the unit (docs/status.md), then the default
 };
 const SLEEP_GATE: u32 = 1;
 const SLEEP_GATE_GPIO: u32 = 2;
