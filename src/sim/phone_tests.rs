@@ -180,7 +180,9 @@ fn the_bonded_phone_comes_back() {
     run(&mut sim2, &mut app, 200);
     assert_eq!(sim2.nordic.phone.as_ref().unwrap().reports, [0x01, 0], "play / pause over HID");
 
-    app.activate(&mut sim2, Menu::Phone, 5); // FORGET
+    app.activate(&mut sim2, Menu::Phone, 5); // FORGET: asked first
+    assert!(app.banner.as_str().starts_with("FORGET THE PHONE?") && app.phone.bonded());
+    app.activate(&mut sim2, Menu::Phone, 5); // confirmed
     run(&mut sim2, &mut app, 500);
     assert_eq!(app.phone.link(), Link::Off);
     assert_eq!(sim2.nordic.server.adv, None);

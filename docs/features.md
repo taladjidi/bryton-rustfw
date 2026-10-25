@@ -138,8 +138,12 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 
 ## Menu
 
-One screen of groups, nothing more than a screen of rows away:
-- **SENSORS:** pair, forget; then the light, temperature and pressure readings.
+The groups, nothing more than a few rows away:
+- **SENSORS:** Start on a row: an off sensor searches; a searching one stops; a paired one heard asks "SURE?" and
+  a second Start forgets it; a paired one silent searches for it again at once (not after its rest), and a second
+  Start forgets it. Then the light, temperature and pressure readings.
+- **Asked first:** forgetting a sensor or the phone and IMPORT show "SURE?" in the row and ask in the banner; a
+  second Start (or a tap on the row) does it, any other key or touch drops it.
 - **PAGES:** the overview's four fields, pages 1 to 3 (field count, each field). A field row opens the field groups
   (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
   beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the

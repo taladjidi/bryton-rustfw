@@ -1399,9 +1399,17 @@ pub(crate) mod tests {
 
     #[test]
     fn banners_fit_two_lines() {
-        for t in
-            ["HEART RATE PAIRED", "PAUSED: HOLD START TO END", "HOLD BACK AGAIN TO SWITCH OFF", "INCOMING CALL\nMum"]
-        {
+        for t in [
+            "HEART RATE PAIRED",
+            "PAUSED: HOLD START TO END",
+            "HOLD BACK AGAIN TO SWITCH OFF",
+            "INCOMING CALL\nMum",
+            "FORGET HEART RATE?\nSTART AGAIN: YES",
+            "FORGET SPEED+CAD?\nSTART AGAIN: YES",
+            "IMPORT SETTINGS?\nSTART AGAIN: YES",
+            "SEARCHING AGAIN\nSTART AGAIN: FORGET",
+            "FORGET THE PHONE?\nSTART AGAIN: YES",
+        ] {
             let (a, b) = lines(&LABEL, t, W - 12);
             assert!(LABEL.width(a) <= W - 12 && LABEL.width(b) <= W - 12, "{t}: {a} / {b}");
             assert_eq!(a.len() + b.len() + usize::from(!b.is_empty()), t.len(), "{t}: nothing lost");

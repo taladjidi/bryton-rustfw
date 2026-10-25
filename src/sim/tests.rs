@@ -884,7 +884,8 @@ fn pairs_sensors_from_the_menu() {
 }
 
 /// After a restart the paired sensor's channel opens for it only: a friend's strap is not taken. Start on it
-/// in the sensors menu forgets it (channel closed, register cleared).
+/// in the sensors menu, while it is silent, searches for it again; Start once more forgets it (channel closed,
+/// register cleared).
 #[test]
 fn keeps_the_paired_sensor_until_forgotten() {
     let mut sim = Sim::new(9, 0, 0);
@@ -898,8 +899,17 @@ fn keeps_the_paired_sensor_until_forgotten() {
     assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen, "the friend's strap is not shown");
     app.press(&mut sim, Press::Long(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count(), 1, "closed");
+    app.press(&mut sim, Press::Short(Key::Start)); // silent: searched for again, not forgotten
+    let closes = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count();
+    assert_eq!(closes(&sim), 1, "closed and opened for it again");
+    assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "still paired");
+    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART AGAIN: FORGET");
+    assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "SURE?");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("sensor_search_again");
+    app.press(&mut sim, Press::Short(Key::Start)); // again: forgotten
+    assert_eq!(closes(&sim), 2, "closed");
     assert_eq!(sim.backup[Kind::Hr.backup()], 0, "forgotten");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
@@ -2575,6 +2585,40 @@ fn banners_wait_their_turn() {
     app.alarm("OFF COURSE");
     assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("OFF COURSE"), "an alarm first");
     assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("< RIGHT 200 M"), "then the cue");
+}
+
+/// IMPORT asks first: Start shows "SURE?" in the row and asks in the banner; any other input drops it (Page and
+/// back); Start twice imports, and a tap on the row asking does too.
+#[test]
+fn import_asks_first() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    let import = menu::STOCK.iter().position(|&r| r == menu::StockRow::Import).unwrap();
+    app.open(Screen::Menu(Menu::Stock, import));
+    app.show(&mut sim);
+    app.settings.ftp = 55; // stock's is another: an import shows
+    app.input(&mut sim, Input::Select);
+    assert_eq!((app.menu_row(Menu::Stock, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
+    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART AGAIN: YES");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("import_sure");
+    app.input(&mut sim, Input::Prev);
+    app.input(&mut sim, Input::Next);
+    assert_eq!(app.menu_row(Menu::Stock, import).unwrap().1.as_str(), "SETTINGS", "dropped by Page");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    app.input(&mut sim, Input::Select);
+    app.input(&mut sim, Input::Select);
+    assert_ne!(app.settings.ftp, 55, "Start twice: imported");
+    app.settings.ftp = 55;
+    let y = (ui::LIST_Y + (import % ui::MENU_ROWS) as u32 * ui::MENU_ROW + 20) as u16;
+    app.input(&mut sim, Input::Select); // asks
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, y))); // the row chosen and asking: a tap confirms
+    assert_ne!(app.settings.ftp, 55, "imported again");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
 }
 
 /// A workout's step tone and an alert in the same pass: one tone player, so both play whole, one after the other

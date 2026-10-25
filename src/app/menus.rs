@@ -312,6 +312,12 @@ impl App {
                 }
             }
         }
+        if self.confirm == Some((menu, i)) {
+            // waiting for a second Start (App::confirmed)
+            value.clear();
+            value.push_str("SURE?");
+            color = ui::RED;
+        }
         Some((label, value, color))
     }
 
@@ -363,6 +369,21 @@ impl App {
         }
     }
 
+    /// Before a row that cannot be undone (`what`: "FORGET HEART RATE"): true when this Select confirms the one just
+    /// before on the same row (no other input between: [`App::input`] clears it); else it asks, in the banner and in
+    /// the row ("SURE?"), and the row waits for a second Start or tap.
+    fn confirmed(&mut self, menu: Menu, sel: usize, what: &str) -> bool {
+        if self.confirm.take() == Some((menu, sel)) {
+            return true;
+        }
+        self.confirm = Some((menu, sel));
+        let mut l = Line::<40>::new();
+        l.push_str(what);
+        l.push_str("?\nSTART AGAIN: YES");
+        self.say(l.as_str());
+        false
+    }
+
     /// Select on row `sel` of `menu`.
     pub(crate) fn activate(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         use menu::Row;
@@ -412,9 +433,27 @@ impl App {
                 self.update_light(b);
             }
             Some(Row::Sensor(k)) => {
-                if let (true, Some(&kind), Some(&now)) = (self.ant, Kind::ALL.get(k), self.sensors.get(k)) {
-                    let want = if now == Sensor::Off { Sensor::Search } else { Sensor::Off };
-                    self.set_sensor(b, kind, want);
+                let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
+                let heard = self.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
+                match self.sensors.get(k).copied() {
+                    Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
+                    Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),
+                    // paired but silent: Select searches for it again now (not after its rest); Select once more
+                    // forgets it
+                    Some(Sensor::Paired(id)) if !heard && self.confirm != Some((menu, sel)) => {
+                        self.set_sensor(b, kind, Sensor::Paired(id));
+                        self.confirm = Some((menu, sel));
+                        self.say("SEARCHING AGAIN\nSTART AGAIN: FORGET");
+                    }
+                    Some(Sensor::Paired(_)) => {
+                        let mut l = Line::<40>::new();
+                        l.push_str("FORGET ");
+                        l.push_str(kind.name());
+                        if self.confirmed(menu, sel, l.as_str()) {
+                            self.set_sensor(b, kind, Sensor::Off);
+                        }
+                    }
+                    None => {}
                 }
             }
             Some(Row::Layout(n)) => {
@@ -454,13 +493,17 @@ impl App {
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {
                 self.stock.start(self.date);
             }
-            Some(Row::Stock(menu::StockRow::Import)) => self.import_stock(b, false),
+            Some(Row::Stock(menu::StockRow::Import)) if self.confirmed(menu, sel, "IMPORT SETTINGS") => {
+                self.import_stock(b, false)
+            }
+            Some(Row::Stock(menu::StockRow::Import)) => {}
             Some(Row::Phone(r)) => {
                 use menu::PhoneRow;
                 match r {
                     PhoneRow::Status => {}
                     PhoneRow::Pair => self.phone_pair(b),
-                    PhoneRow::Forget => self.phone_forget(b),
+                    PhoneRow::Forget if self.confirmed(menu, sel, "FORGET THE PHONE") => self.phone_forget(b),
+                    PhoneRow::Forget => {}
                     PhoneRow::Notify => self.phone.stored.notify = !self.phone.stored.notify,
                     PhoneRow::Keys => self.phone.stored.keys = !self.phone.stored.keys,
                     PhoneRow::Media => self.open(Screen::Media),

@@ -177,6 +177,8 @@ fn ant_plus_shifting() {
     // forgetting it clears its pairing; forgetting the Di2 (which it is not) leaves the register alone
     sim.backup[14] = Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 });
     app.press(&mut sim, Press::Short(Key::Start));
+    assert_ne!(sim.backup[14], 0, "asked first: SURE?");
+    app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(sim.backup[14], 0, "forgotten");
 }
 

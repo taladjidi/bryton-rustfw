@@ -185,6 +185,13 @@ impl App {
         if self.banner_ms.take().is_some() {
             self.unbanner(b); // and the input acts
         }
+        // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
+        let armed = self.confirm.take();
+        if let (Some(_), Screen::Menu(menu, sel)) = (armed, self.screen)
+            && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
+        {
+            self.update_menu_rows(b, menu, sel); // its "SURE?" goes
+        }
         let graph_hit = match (self.screen, i) {
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y) | Gesture::Hold(x, y))) => {
                 self.graph_at(x, y)
@@ -386,16 +393,16 @@ impl App {
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y)).map(|d| (d / ui::MENU_ROW) as usize);
                 let row = match slot.map(|k| menu::first_shown(sel, ui::MENU_ROWS) + k) {
                     Some(row) if self.row(menu, row).is_some() => row,
-                    _ => return,
+                    _ => return self.update_menu_rows(b, menu, sel), // a row's "SURE?" goes
                 };
                 if row != sel || !self.menu_chosen {
                     self.menu_chosen = true;
                     self.screen = Screen::Menu(menu, row);
                     return self.update_menu_rows(b, menu, row);
                 }
-                return self.select_row(b, menu, sel);
+                return self.select_row(b, menu, sel, armed);
             }
-            (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel),
+            (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
             (
                 Screen::Menu(..) | Screen::Nearby | Screen::Past,
                 Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
@@ -444,8 +451,9 @@ impl App {
 
     /// Start (or a tap on the chosen row) on row `sel` of `menu`: it acts, then the rows that changed are drawn, or
     /// the screen it opened.
-    fn select_row(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
+    fn select_row(&mut self, b: &mut impl Board, menu: Menu, sel: usize, armed: Option<(Menu, usize)>) {
         let shown = Screen::Menu(menu, sel);
+        self.confirm = armed; // a second Start on a row waiting to be confirmed confirms it
         self.screen = shown;
         self.activate(b, menu, sel);
         if self.screen == shown {

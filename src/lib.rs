@@ -197,6 +197,9 @@ pub struct App {
     /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
     /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
     menu_chosen: bool,
+    /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
+    /// on it again acts; any other input clears it (App::confirmed).
+    confirm: Option<(Menu, usize)>,
     /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
     /// when no key is down.
     repeated: bool,
@@ -406,6 +409,7 @@ impl App {
             settings: misc,
             editing: false,
             menu_chosen: false,
+            confirm: None,
             repeated: false,
             under: [Screen::Main; 6],
             depth: 0,

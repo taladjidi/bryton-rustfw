@@ -776,15 +776,23 @@ fn phone_link_events() {
 fn menu_touch_and_keys() {
     use super::*;
     use crate::touch::Dir;
-    let (mut selects, mut acts, mut backs) = (0, 0, 0);
+    let (mut selects, mut acts, mut backs, mut asks) = (0, 0, 0, 0);
     for seed in 1..=12u32 {
         let mut sim = Sim::new(9, 0, 0);
-        let mut app = App::start(&mut sim, None);
+        let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
         let mut noise = bytes(seed * 7919, 1 << 13);
         let mut next = || noise.next().unwrap_or(0);
         for k in 0..300 {
             let (a, b) = (next(), next());
             let row_y = |r: u8| (ui::LIST_Y + u32::from(r % ui::MENU_ROWS as u8) * ui::MENU_ROW + 10) as u16;
+            if a % 29 == 0 {
+                // straight to a row that asks first: a sensor, the phone's FORGET, IMPORT
+                let import = menu::STOCK.len() - 1;
+                let at =
+                    [(Menu::Sensors, usize::from(b) % 5), (Menu::Phone, menu::PHONE.len() - 1), (Menu::Stock, import)];
+                app.open(Screen::Menu(at[usize::from(b) % 3].0, at[usize::from(b) % 3].1));
+                app.show(&mut sim);
+            }
             let i = match a % 14 {
                 0 | 1 => Input::Next,
                 2 => Input::Prev,
@@ -819,6 +827,7 @@ fn menu_touch_and_keys() {
             if let Screen::Menu(m, s) = app.screen() {
                 assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
             }
+            asks += u32::from(app.confirm.is_some());
             for _ in 0..usize::from(b % 4) {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
@@ -828,5 +837,6 @@ fn menu_touch_and_keys() {
             }
         }
     }
-    assert!(selects > 50 && acts > 20 && backs > 20, "reached: {selects} selects, {acts} acts, {backs} backs");
+    std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked to confirm");
+    assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
 }
