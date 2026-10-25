@@ -3252,7 +3252,7 @@ fn tones_do_not_cut_each_other() {
 fn perf_budgets() {
     use Field::*;
     // a ride on the GPS route, with a power meter and a strap, from start-up
-    let ride = |pages: [PageCfg; 3], screen: usize, zoom: Option<u32>| {
+    let ride = |pages: [crate::page::Page; 3], screen: usize, zoom: Option<u32>| {
         let mut sim = Sim::new(9, 0, 0);
         sim.gnss.route = Some(ride_route);
         let course = screen == crate::COURSE || pages.iter().any(|p| p.fields.contains(&Profile));
@@ -3265,7 +3265,7 @@ fn perf_budgets() {
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
         sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
-        app.pages[..3].copy_from_slice(&pages.map(crate::page::Page::from));
+        app.pages[..3].copy_from_slice(&pages);
         if course {
             app.set_course_memory(crate::storage::course::tests::memory());
             app.open_courses(&mut sim);
@@ -3289,15 +3289,25 @@ fn perf_budgets() {
         assert_consistent(&sim, &app);
         ((sim.pixels - px) / s, (sim.windows - win) / s)
     };
-    let p = |layout, f: [Field; 6]| PageCfg { layout, fields: f };
+    let p = |layout, f: [Field; 6]| crate::page::Page::from(PageCfg { layout, fields: f });
+    // pages made in the editor: eight values in four rows of two; a graph over two rows of two values
+    let eight = crate::page::Page::preset(14, [Speed, Hr, Power, Cadence, Dist, Timer, Power3s, Np]).unwrap();
+    let mut made = crate::page::Page::preset(1, [Graph, Time, Time, Time, Time, Time, Time, Time]).unwrap();
+    made = made.split_down(0, Power3s).and_then(|p| p.resize(0, true)).and_then(|p| p.split_across(1, Hr)).unwrap();
+    made = made.split_down(1, Cadence).and_then(|p| p.split_across(3, Timer)).and_then(|p| p.resize(3, true)).unwrap();
     let values = p(6, [Speed, Hr, Power, Power3s, Dist, Timer]);
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    type Case = (&'static str, [PageCfg; 3], usize, Option<u32>, (u64, u64));
-    let cases: [Case; 8] = [
+    type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, (u64, u64));
+    let cases: [Case; 10] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, None, (150, 5)),
+        // made in the editor: 8959, 10: eight values at 4x in 120 x 74 boxes, the zone fills of power and heart rate
+        // as on six values
+        ("eight values", [eight, graph, map], 0, None, (12_000, 20)),
+        // 3854, 22: a graph over four values (the second row of values taller)
+        ("graph over four", [made, values, map], 0, None, (5_000, 30)),
         // 9845, 10: the changed digits only, but large (a glyph of a 6-field page is ~960 px), and the power and heart
         // rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
         // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
