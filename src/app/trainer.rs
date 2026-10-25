@@ -363,8 +363,8 @@ impl App {
             self.trainer.cancel_calibration();
         } else if self.ride.state() != ride::State::Idle {
             self.notice("NO CALIBRATION RIDING");
-        } else if !self.trainer_heard() || self.ftms_on() {
-            self.notice("NEEDS AN ANT+ TRAINER"); // the Bluetooth link has no calibration page yet
+        } else if !self.trainer_heard() || (self.ftms_on() && !self.sensors_store.bt_fec) {
+            self.notice("NEEDS AN FE-C TRAINER"); // FTMS has no spin-down here; FE-C over ANT+ or BLE has page 1
         } else {
             self.trainer.start_calibration();
         }
