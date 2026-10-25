@@ -120,7 +120,8 @@ pub(crate) const RIDE_OPEN: u32 = 0x5243_0001;
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
 /// - tag 0xa7 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
 ///   [`LIGHT_LEVELS`], or [`LIGHT_AUTO`]), 6..7 its time-out (an index in [`LIGHT_TIMEOUTS_S`]), 8..15 max heart
-///   rate less 100, 16..23 FTP in 5 W;
+///   rate less 100, 16..22 FTP in 5 W (at most 120), 23 the touch panel off ([`Settings::touch`]: 0 in words written
+///   before it, on);
 /// - tag 0xa6 (earlier builds): the wheel's index in bits 0..2, max heart rate and FTP as 4-bit codes in 4..7 and
 ///   8..11 ([`code_hr`], [`code_ftp`]), the backlight level in 16..18 and its time-out in 20..21; read only;
 /// - tag 0xa5 (written by earlier builds): the wheel in mm in bits 0..11, the backlight level in 16..19 and its
@@ -156,6 +157,9 @@ pub struct Settings {
     // ponytail: split over two words because no backup register is free (BOARD.md 8); one place once settings
     // move to a file on the card
     pub remote: [menu::Remote; 4],
+    /// The touch panel acts (the TOUCH setting); off, it is not read for gestures and only the keys act. Kept in
+    /// register 11, bit 23.
+    pub touch: bool,
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -167,7 +171,7 @@ impl Settings {
     ///
     /// ```
     /// use bryton_rustfw::{Settings, WHEELS};
-    /// let m = Settings { wheel_mm: WHEELS[3], max_hr: 187, ftp: 265, light_level: 4, light_timeout: 3, ..Settings::from_word(0) };
+    /// let m = Settings { wheel_mm: WHEELS[3], max_hr: 187, ftp: 600, light_level: 4, light_timeout: 3, touch: false, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(m.to_word()), m);
     /// // words from earlier builds: 2136 mm, AUTO, 60 s; then max HR code 7 (225), FTP code 11 (100)
     /// let old = Settings::from_word(0xa5 << 24 | 3 << 20 | 4 << 16 | 2136);
@@ -184,7 +188,8 @@ impl Settings {
             0xa7 => Settings {
                 wheel_mm: index(w & 7),
                 max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end()),
-                ftp: (5 * (w >> 16 & 0xff) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
+                ftp: (5 * (w >> 16 & 0x7f) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
+                touch: w >> 23 & 1 == 0,
                 light_level: level(w >> 3 & 7),
                 light_timeout: (w >> 6 & 3) as usize,
                 weight_kg,
@@ -207,6 +212,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                touch: true,
                 remote: [menu::Remote::None; 4],
             },
             0xa5 => Settings {
@@ -221,6 +227,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                touch: true,
                 remote: [menu::Remote::None; 4],
             },
             _ => Settings {
@@ -235,6 +242,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                touch: true,
                 remote: [menu::Remote::None; 4],
             },
         }
@@ -320,7 +328,8 @@ impl Settings {
     pub fn to_word(self) -> u32 {
         let wheel = WHEELS.iter().position(|&w| w == self.wheel_mm).unwrap_or(1) as u32;
         (0xa7 << 24)
-            | (u32::from(self.ftp / 5) & 0xff) << 16
+            | u32::from(!self.touch) << 23 // ponytail: the bit FTP / 5 (120 at most) leaves free in a full word
+            | (u32::from(self.ftp / 5) & 0x7f) << 16
             | (u32::from(self.max_hr.saturating_sub(100)) & 0xff) << 8
             | (self.light_timeout as u32 & 3) << 6
             | (self.light_level as u32 & 7) << 3
@@ -337,6 +346,7 @@ impl Settings {
                 Some(&v) => l.push_u32(u32::from(v)),
                 None => l.push_str("AUTO"),
             },
+            Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::LightOff => match LIGHT_TIMEOUTS_S.get(self.light_timeout) {
                 Some(0) | None => l.push_str("NEVER"),
                 Some(&t) => {
@@ -383,6 +393,7 @@ impl Settings {
             }
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
+            Setting::Touch => self.touch = !self.touch,
             Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             Setting::Remote(n) => {
                 if let Some(a) = self.remote.get_mut(usize::from(n)) {

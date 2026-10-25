@@ -776,7 +776,7 @@ fn phone_link_events() {
 fn menu_touch_and_keys() {
     use super::*;
     use crate::touch::Dir;
-    let (mut selects, mut acts, mut backs, mut asks) = (0, 0, 0, 0);
+    let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
     for seed in 1..=12u32 {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
@@ -793,6 +793,9 @@ fn menu_touch_and_keys() {
                 app.open(Screen::Menu(at[usize::from(b) % 3].0, at[usize::from(b) % 3].1));
                 app.show(&mut sim);
             }
+            if a % 31 == 1 {
+                app.settings.touch = !app.settings.touch; // TOUCH off and on
+            }
             let i = match a % 14 {
                 0 | 1 => Input::Next,
                 2 => Input::Prev,
@@ -807,7 +810,23 @@ fn menu_touch_and_keys() {
                 _ => Input::NextHeld,
             };
             let (before, chosen, editing) = (app.screen(), app.menu_chosen, app.editing);
+            let (pages, whole) = (app.pages, app.graph_whole);
+            let recording = app.ride.state() == crate::ride::State::Running;
             app.input(&mut sim, i);
+            let same = app.screen() == before && app.pages == pages && app.graph_whole == whole;
+            if let Input::Touch(g) = i {
+                if !app.settings.touch {
+                    assert!(same, "TOUCH OFF: {g:?} did something");
+                    off += 1;
+                } else if recording
+                    && matches!(before, Screen::Main | Screen::Ride(_))
+                    && !app.phone.ringing
+                    && matches!(g, Gesture::Tap(..) | Gesture::Hold(..))
+                {
+                    assert!(same, "recording: {g:?} on {before:?} did something");
+                    riding += 1;
+                }
+            }
             match (before, i) {
                 (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y)))
                     if !editing && x < 48 && u32::from(y) < ui::LIST_Y && app.screen() != before =>
@@ -837,6 +856,7 @@ fn menu_touch_and_keys() {
             }
         }
     }
-    std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked to confirm");
+    std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
+    assert!(off > 50 && riding > 10, "touch off {off}, taps and holds while recording {riding}");
 }

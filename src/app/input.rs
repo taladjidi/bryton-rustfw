@@ -173,7 +173,11 @@ impl App {
     /// toggles the backlight; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
     /// number being edited goes up with Prev, down with Next. Off switches off anywhere.
     pub fn input(&mut self, b: &mut impl Board, i: Input) {
+        if matches!(i, Input::Touch(_)) && !self.settings.touch {
+            return; // TOUCH OFF: the keys only
+        }
         let before = self.screen;
+        let recording = self.ride.state() == ride::State::Running;
         let woke = self.light_shown == 0 && self.backlight;
         self.idle_ms = 0;
         if woke {
@@ -290,8 +294,11 @@ impl App {
                 }
                 return;
             }
-            // a tap on a graph shows the next plot (kept with the page), a hold switches between the last minutes and
-            // the whole ride
+            // while recording, touch on a page only turns pages and works the map: no menu by a hold or the gear, no
+            // field changed by a tap (a wet glove, a drop of rain; the keys still do all of it)
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..))) if recording => return,
+            // a tap on a graph shows the next plot, until the unit is switched off (the page as kept is not changed: a
+            // stray touch never edits it for good); a hold switches between the last minutes and the whole ride
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..)))
                 if graph_hit.is_some() =>
             {
@@ -306,8 +313,7 @@ impl App {
                     if let Some(page) = self.pages.get_mut(n)
                         && let Some(slot) = page.fields.get_mut(k.saturating_sub(fixed))
                     {
-                        *slot = graph_field(next);
-                        save_page(b, n, page);
+                        *slot = graph_field(next); // not saved: PAGES in the menu changes a page for good
                     }
                 }
                 return self.show(b);

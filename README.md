@@ -6,7 +6,7 @@ entirely. Not affiliated with Bryton.
 | | | | |
 |:-:|:-:|:-:|:-:|
 | ![Overview](docs/img/overview.png) | ![Ride started](docs/img/ride.png) | ![Power fields](docs/img/power.png) | ![W' balance graph](docs/img/wbal.png) |
-| Overview: time, date, four fields, notices (sim) | Start: the ride, said in a banner at the top (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot (sim) |
+| Overview: time, date, four fields, notices (sim) | Start: the ride, said in a banner at the top (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot, never while recording (sim) |
 | ![Power and HR graphs](docs/img/graphs.png) | ![HRV](docs/img/hrv.png) | ![Layout](docs/img/layout.png) | ![Settings](docs/img/settings.png) |
 | Power graph with its axes, over the HR graph (sim) | DFA a1 and RMSSD from the strap's beats (sim) | An uneven layout: a big box over 2 x 2 (sim) | Menu: settings edited in place (sim) |
 | ![Ride card](docs/img/card.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |

@@ -89,7 +89,8 @@ The power button starts it again. After the backlight's time-out, any key brings
   linked).
 
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
-  goes to the next one (kept with the page), a hold switches every graph between the last minutes and the whole ride.
+  goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
+  graph between the last minutes and the whole ride; neither while a ride records (below).
   Each has its scale on the left and its time span under it; power and heart rate are coloured by zone, W' balance as
   it drains, DFA alpha1 against the aerobic threshold (green above 0.75, orange to 0.5, red under).
 
@@ -100,12 +101,15 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
-| hold (600 ms, still) | the menu (as holding Page) | | |
-| tap | the gear right of the overview's date: the menu; a graph: its next plot | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
+| hold (600 ms, still) | the menu (as holding Page); not while a ride records | | |
+| tap | the gear right of the overview's date: the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
-Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
+Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
+records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
+glove, rain); swipes still turn pages and the keys do everything. TOUCH in DEVICE (ON / OFF) switches gestures off
+altogether, for rain: the keys only, the call's buttons included.
 
 ## Ride
 
@@ -150,7 +154,7 @@ The groups, nothing more than a few rows away:
   page. Any of the 56 fields is a few presses away, not up to 55.
 - **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
   keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
-- **DEVICE:** backlight level (or AUTO) and time-out, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
+- **DEVICE:** backlight level (or AUTO) and time-out, TOUCH on / off, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
   devices nearby, USB DRIVE (below).
 - **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
 - **PHONE:** LINK (OFF, PAIRING, WAITING, LINKED, SECURE; ERR and a command's code if the radio refused the set-up),

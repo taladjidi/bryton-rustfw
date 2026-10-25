@@ -2236,15 +2236,17 @@ fn graph_field() {
     sim.save("graph");
 }
 
-/// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation), kept with the page;
-/// a hold switches every graph between the last minutes and the whole ride.
+/// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation) until the unit is
+/// switched off, the page as kept unchanged; a hold switches every graph between the last minutes and the whole
+/// ride. Only while the ride is paused (or none runs): while it records, a tap or a hold on a page does nothing (UI
+/// review step 7: a wet glove changed the page for good, or opened the menu over the ride).
 #[test]
 fn graph_plots_by_tap_and_span_by_hold() {
     let taps = [400_000u64, 401_000, 402_000, 403_000];
-    let hold = 405_000u64;
+    let (hold, riding) = (405_000u64, [420_000u64, 422_000]);
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| {
-        let tap = taps.iter().any(|&t| (t..t + 80).contains(&ms));
-        let held = (hold..hold + 900).contains(&ms);
+        let tap = taps.iter().chain(&riding[..1]).any(|&t| (t..t + 80).contains(&ms));
+        let held = (hold..hold + 900).contains(&ms) || (riding[1]..riding[1] + 900).contains(&ms);
         (tap || held).then_some((120, 100))
     });
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
@@ -2254,9 +2256,13 @@ fn graph_plots_by_tap_and_span_by_hold() {
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 2, fields: [Graph, HrGraph, Timer, Timer, Timer, Timer] };
+    save_page(&mut sim, 0, &app.pages[0]);
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // a ride: W' balance runs
     sim.gnss.fix = Some(7000);
+    let until = taps[0] - 2000 - sim.ms;
+    run(&mut sim, &mut app, until);
+    app.press(&mut sim, Press::Short(Key::Start)); // paused: the taps act
     let mut shots = std::vec::Vec::new();
     for (k, want) in [HrGraph, WbalGraph, DfaGraph, AltGraph].into_iter().enumerate() {
         let until = taps[k] + 500 - sim.ms;
@@ -2266,13 +2272,18 @@ fn graph_plots_by_tap_and_span_by_hold() {
         shots.push(std::format!("graph_{k}"));
         sim.save(&shots[k]);
     }
-    assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]).unwrap().fields[0], AltGraph, "kept");
+    assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]).unwrap().fields[0], Graph, "not kept");
     let until = hold + 1500 - sim.ms;
     run(&mut sim, &mut app, until);
     assert!(app.graph_whole, "the hold");
     assert_eq!(app.screen(), Screen::Ride(0), "on a graph, a hold is not the menu");
     assert_consistent(&sim, &app);
     sim.save("graph_whole");
+    app.press(&mut sim, Press::Short(Key::Start)); // recording again: touch only turns pages
+    let until = riding[1] + 1500 - sim.ms;
+    run(&mut sim, &mut app, until);
+    assert_eq!((app.pages()[0].fields[0], app.graph_whole), (AltGraph, true), "the tap and the hold ignored");
+    assert_eq!(app.screen(), Screen::Ride(0), "no menu by a hold while recording");
     run(&mut sim, &mut app, 60_000);
     assert_consistent(&sim, &app);
 }
@@ -2585,6 +2596,37 @@ fn banners_wait_their_turn() {
     app.alarm("OFF COURSE");
     assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("OFF COURSE"), "an alarm first");
     assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("< RIGHT 200 M"), "then the cue");
+}
+
+/// TOUCH in DEVICE: Start turns the touch panel off (kept in register 11's bit 23), and then no gesture acts, a tap
+/// on the gear included; the keys turn it on again.
+#[test]
+fn touch_can_be_switched_off() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::Touch));
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Touch))), "TOUCH ON");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Touch))), "TOUCH OFF");
+    assert!(!Settings::from_word(sim.backup[WHEEL_BKP]).touch, "kept");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("touch_off");
+    let shown = app.screen();
+    app.input(&mut sim, Input::Touch(Gesture::Tap(10, (ui::PAGE_Y + 8) as u16))); // the "<"
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(crate::touch::Dir::Right)));
+    assert_eq!(app.screen(), shown, "touch does nothing");
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back));
+    }
+    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(gx, gy)));
+    assert_eq!(app.screen(), Screen::Main, "not the gear either");
+    app.press(&mut sim, Press::Long(Key::Page)); // the keys: back to TOUCH, on again
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::Touch));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(Settings::from_word(sim.backup[WHEEL_BKP]).touch, "on again");
 }
 
 /// IMPORT asks first: Start shows "SURE?" in the row and asks in the banner; any other input drops it (Page and
