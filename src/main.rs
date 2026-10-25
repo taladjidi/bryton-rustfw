@@ -255,9 +255,11 @@ fn spi_init() {
     // SSI first: with SSM, MASTER set while SSI is 0 is a mode fault, which clears MASTER (seen on the unit,
     // diag v17: CFG2 read back without MASTER, so SPI1 took 16 bytes and never clocked; RM0399 SPI mode fault).
     wr(SPI_CR1, CR1_SSI);
-    // MBR = /8, FTHLV = 4 frames (TXP then means room for a 32-bit write of 4 bytes: pixels go 2 per access),
-    // DSIZE = 8 bits
-    wr(SPI_CFG1, (2 << 28) | (3 << 5) | 7);
+    // MBR = /8 (8 MHz) or, with POWER_STEPS bit 3, /4 (16 MHz: a redraw takes half the time awake; the ST7789's
+    // serial write cycle is 16 ns at least, 62.5 MHz, and SPI1's master clock goes to 80 MHz: DS12930 table 119),
+    // FTHLV = 4 frames (TXP then means room for a 32-bit write of 4 bytes: pixels go 2 per access), DSIZE = 8 bits
+    let mbr = if POWER_STEPS & SPI1_FAST != 0 { 1 } else { 2 };
+    wr(SPI_CFG1, (mbr << 28) | (3 << 5) | 7);
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
     wr(SPI_CFG2, (1 << 31) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 22) | (1 << 17));
 }
@@ -511,6 +513,83 @@ fn standby() -> ! {
         if rd(PWR_WKUPFR) & 1 != 0 {
             system_reset(); // WKUPF1: the power button, so start
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Power while the core sleeps (WFI is CSleep: the CPU clock stops, every peripheral clock whose LPEN bit is set keeps
+// running; RM0399 RCC, "Peripheral clock gating control"). The core is awake under 1 % of the time, so this is where
+// the battery goes. Each step is a bit of POWER_STEPS (build time, default all), so a hang on the unit can be bisected:
+//   POWER_STEPS=0 ./check.sh && ./dev.py run      the build as before these steps
+// ---------------------------------------------------------------------------------------------------------------
+/// Bit 0: idle peripherals and the flash interface clocked off in sleep. Bit 1: the GPIO ports too. Bit 2: PLL2 and
+/// PLL3 off. Bit 3: SPI1 (the panel) at 16 MHz instead of 8.
+const POWER_STEPS: u32 = match option_env!("POWER_STEPS") {
+    Some(s) => parse_u32(s),
+    None => 0xf,
+};
+const SLEEP_GATE: u32 = 1;
+const SLEEP_GATE_GPIO: u32 = 2;
+const PLLS_OFF: u32 = 4;
+const SPI1_FAST: u32 = 8;
+
+/// The sleep clock registers RCC_AHB3LPENR..RCC_APB4LPENR (RCC + 0xfc..0x11c: stm32h747xx.h `RCC_TypeDef`, AHB3 AHB1
+/// AHB2 AHB4 APB3 APB1L APB1H APB2 APB4), with the bits kept: every other one is cleared (bit positions:
+/// stm32h747xx.h `RCC_*LPENR_*_Pos`). At these addresses each core reaches its own copy (RM0399 RCC: for the
+/// Cortex-M7, RCC_C1_xxxLPENR at RCC + 0x130 + 0x3c..), as the RCC_xxxENR writes in this file do (seen working on
+/// the unit); Renode 1.17's RCC model overflows its stack on a read of the RCC_C1 copies.
+/// A peripheral not enabled (xxxEN 0) has no clock either
+/// way; clearing all but a keep list also stops whatever the bootloader left enabled and this firmware never uses
+/// (DMA1 / DMA2 alone are 37 uA/MHz each at VOS3 on a 100 MHz AHB, DS12930 table 48). Kept, with why:
+const SLEEP_KEEP: [(u32, u32); 9] = [
+    // FMC 12 (the SDRAM's auto-refresh: the image and its data live there), SDMMC1 16 (an eMMC command may wait in a
+    // sleep), DTCM1 28, DTCM2 29 (stack, .data, .bss), ITCM 30 (the RAM-run trampoline), AXISRAM 31 (the app).
+    // Cleared: MDMA, DMA2D, JPEG, QSPI, and FLASH 8 (the image runs from SDRAM, VTOR points there: hw.rs; 12 uA/MHz,
+    // 1.2 mA at 100 MHz).
+    (0xfc, (1 << 12) | (1 << 16) | (0xf << 28)),
+    // USB1 OTG HS 25 and its ULPI 26: the dev link and the drive are served from WFI wake-ups (BOARD.md 7).
+    (0x100, (1 << 25) | (1 << 26)),
+    // D2 SRAM1..3 29..31: memories, kept (nothing to gain that is worth a doubt).
+    (0x104, 0x7 << 29),
+    // GPIOA..K 0..10 unless SLEEP_GATE_GPIO (below), BKPRAM 28, SRAM4 29. Cleared: CRC, BDMA, ADC3 24 (a conversion
+    // is polled to its end: adc_read).
+    (0x108, (1 << 28) | (1 << 29)),
+    // nothing: LTDC, DSI, WWDG1 (no watchdog runs: AGENTS.md)
+    (0x10c, 0),
+    // LPTIM1 9 (the backlight PWM), USART2 17 (the Nordic chip's bytes arrive while the core sleeps: its FIFO and RTS
+    // hold them, BOARD.md 11). Cleared: I2C1 (touch, polled to its STOP: i2c_read).
+    (0x110, (1 << 9) | (1 << 17)),
+    // nothing
+    (0x114, 0),
+    // TIM1 0 (the buzzer plays through delay_ms). Cleared: SPI1 (spi_end waits for EOT), SPI4 (gnss_transfer
+    // polled).
+    (0x118, 1),
+    // SYSCFG 1 (the EXTI line mux of the touch INT wake, BOARD.md 17), RTCAPB 16. Cleared: I2C4 (polled), the rest.
+    (0x11c, (1 << 1) | (1 << 16)),
+];
+
+/// Applies the sleep steps of POWER_STEPS. Called once at boot, after every kernel clock this firmware uses has been
+/// moved off PLL2 and PLL3 (spi_init, gnss_init, i2c_init, adc_init; nrf_reset and usb::start move theirs before
+/// enabling them).
+fn sleep_power_init() {
+    if POWER_STEPS & SLEEP_GATE != 0 {
+        for (off, keep) in SLEEP_KEEP {
+            // the GPIO ports' clock only latches inputs (IDR) and serves register access; outputs, the alternate
+            // functions and the EXTI lines go through without it (they work in Stop, where it is off: RM0399 GPIO,
+            // EXTI). Its own bit, for a bisect: 0.6 to 1.1 uA/MHz per port at VOS3, 9 ports at 100 MHz: about 0.7 mA
+            let keep = if off == 0x108 && POWER_STEPS & SLEEP_GATE_GPIO == 0 { keep | 0x7ff } else { keep };
+            modify(RCC + off, !keep, 0);
+        }
+    }
+    if POWER_STEPS & PLLS_OFF != 0 {
+        // RM0399 RCC_CR: PLL2ON 26, PLL3ON 28. Nothing here runs from them (BOARD.md 1: SPI1, SPI4, USART2, I2C, the
+        // ADC on the HSI, USB on HSI48, LPTIM1 on the LSE, SDMMC1 on PLL1Q). The FMC could (RCC_D1CCIPR.FMCSEL 2 =
+        // pll2_r_ck, stm32h7xx_hal_rcc_ex.h RCC_FMCCLKSOURCE_PLL2), and the SDRAM must keep its clock: then PLL2 stays.
+        // PLL3 feeds no FMC or SDMMC choice; the LTDC's pixel clock (pll3_r_ck) is not used here. DS12930 table 58:
+        // 180 to 590 uA on VDDA plus 280 to 720 uA on VCORE per PLL, by VCO frequency.
+        let d1 = rd(RCC_D1CCIPR);
+        let pll2_needed = d1 & 3 == 2 || d1 & (1 << 16) != 0; // FMCSEL = PLL2R, or SDMMCSEL = PLL2R
+        modify(RCC_CR, if pll2_needed { 0 } else { 1 << 26 } | (1 << 28), 0);
     }
 }
 
@@ -1291,7 +1370,8 @@ const fn parse_u32(s: &str) -> u32 {
 
 /// At stage STOP, waits for USB power, then resets. Power on, hold Page, plug in: Engineer Mode means the firmware
 /// got there (the signal proven by diag v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
-/// 3 clocks and pins, 4 SPI, 5 panel up and first frame, 6 first app step, 7 first SysTick + WFI wait done.
+/// 3 clocks and pins, 4 SPI and the sleep power steps (POWER_STEPS), 5 panel up and first frame, 6 first app step,
+/// 7 first SysTick + WFI wait done.
 fn checkpoint(n: u32) {
     if n == STOP {
         modify(RCC_AHB4ENR, 0, 1 << 2); // GPIOC, as v9: before board_init nothing else has set it
@@ -1365,6 +1445,7 @@ fn main() -> ! {
     let _ = adc_init(); // a failure leaves the battery unknown ("--%")
     gnss_init();
     i2c_init();
+    sleep_power_init();
     checkpoint(4);
     let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0) };
     let app = make_app(&mut board);
