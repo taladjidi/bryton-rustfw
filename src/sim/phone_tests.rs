@@ -143,8 +143,17 @@ fn incoming_calls() {
     assert_consistent(&sim, &app);
     run(&mut sim, &mut app, 3000);
     assert!(app.phone.ringing, "the third");
-    run(&mut sim, &mut app, 5000);
+    // a turn cue during the call: the caller stays in the banner's place, the cue waits for the call to end
+    app.say_as("< LEFT 200 M", crate::Banner::Ride);
+    run(&mut sim, &mut app, 1000);
+    let mut call = crate::ui::tests::Frame::new();
+    crate::ui::draw_call(&mut call, "Work");
+    let top = (crate::ui::W * crate::ui::BANNER_H) as usize;
+    assert!(sim.screen[..top] == call.px[..top], "the caller, not the cue");
+    assert_consistent(&sim, &app);
+    run(&mut sim, &mut app, 4000);
     assert!(!app.phone.ringing, "ended on the phone: closed");
+    assert!(app.banner.as_str() == "< LEFT 200 M" && app.banner_drawn, "then the cue");
     assert_consistent(&sim, &app);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
 }

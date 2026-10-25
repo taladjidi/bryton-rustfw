@@ -833,8 +833,8 @@ impl App {
                 Some((uid, who)) if *uid == a.uid => {
                     *who = a.title;
                     let who = *who;
-                    // over whatever screen is up: the page between keeps updating (area())
-                    self.banner_ms = None;
+                    // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
+                    self.banner_drawn = false;
                     self.phone.ringing = true;
                     ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str());
                     self.tones.play(&BEEP_ALERT);

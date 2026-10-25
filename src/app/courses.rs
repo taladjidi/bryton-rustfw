@@ -100,7 +100,7 @@ impl App {
                 l.push_str(" KM ");
                 l.push_u32(k.grade_x10().div_ceil(10).max(1));
                 l.push_str("%");
-                self.say(l.as_str());
+                self.say_as(l.as_str(), Banner::Ride);
                 self.tones.play(&Self::CLIMB_TONES);
             }
             course::Event::Cue(c, d) => {
@@ -118,7 +118,7 @@ impl App {
                     l.push_str(" M");
                     self.tones.play(&Self::CUE_TONES);
                 }
-                self.say(l.as_str());
+                self.say_as(l.as_str(), if d == 0 { Banner::Now } else { Banner::Ride });
             }
         }
     }

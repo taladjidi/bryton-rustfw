@@ -63,7 +63,10 @@
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
-  switches off). No time in front: the strip shows it.
+  switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then what
+  the ride says (a turn ahead, a workout step, a reminder, a climb), then the rest. A lower one never covers a
+  higher one; the other waits (one at most, the higher kept) and shows next, so two said in the same second both
+  show. An incoming call is above them all: a banner said during it waits and shows when the call ends.
 
 ## Keys
 

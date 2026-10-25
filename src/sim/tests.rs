@@ -659,7 +659,7 @@ fn workout_graph_field() {
     for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Lap));
     }
-    run(&mut sim, &mut app, 5000);
+    run(&mut sim, &mut app, 10_000); // the step's banner, then the one that waited for it
     let (at, px0, s0) = (rider(&app).unwrap(), sim.pixels, sim.ms);
     assert!(at > now + 30, "Lap jumps it: column {now}, then {at}");
     run(&mut sim, &mut app, 30_000);
@@ -2548,6 +2548,33 @@ fn long_reads_spread_over_passes() {
     assert_eq!(app.menu_row(Menu::Workouts, 0).unwrap().0.as_str(), "FRI 23 OCT", "today's still first");
     std::println!("the most read in a pass: {} KB ({})", worst.0 / 1024, worst.1);
     assert!(worst.0 <= MAX, "{} B in one pass ({})", worst.0, worst.1);
+}
+
+/// Banners said in the same second both show (review of the turn cues: a workout step's banner was lost under a
+/// cue): the higher kind first (a turn now over a step, an alarm over a turn), the other waits and follows; a lower
+/// one said meanwhile does not push out the one waiting; then the page is whole again.
+#[test]
+fn banners_wait_their_turn() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    let shown = |sim: &mut Sim, app: &mut App, ms| {
+        run(sim, app, ms);
+        assert_consistent(sim, app);
+        app.banner_ms.map(|_| std::string::String::from(app.banner.as_str()))
+    };
+    app.say_as("2/6 200-220W", Banner::Ride); // the workout's step and a turn, in one second
+    app.say_as("< LEFT NOW", Banner::Now);
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("< LEFT NOW"), "the turn first");
+    app.say("LAP");
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("< LEFT NOW"), "not covered by LAP");
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("2/6 200-220W"), "then the step");
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()), None, "LAP gave way to the step: nothing after");
+    app.say_as("< RIGHT 200 M", Banner::Ride);
+    app.alarm("OFF COURSE");
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("OFF COURSE"), "an alarm first");
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("< RIGHT 200 M"), "then the cue");
 }
 
 /// A workout's step tone and an alert in the same pass: one tone player, so both play whole, one after the other

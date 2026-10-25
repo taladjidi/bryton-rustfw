@@ -111,7 +111,7 @@ impl App {
                 }
             }
         }
-        self.say(l.as_str());
+        self.say_as(l.as_str(), Banner::Ride);
         self.tones.play(&Self::STEP_TONE);
     }
 

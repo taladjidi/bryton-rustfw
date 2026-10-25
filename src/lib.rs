@@ -212,9 +212,10 @@ pub struct App {
     /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
     /// redrawn meanwhile; when it goes, the screen is drawn again.
     banner_ms: Option<u32>,
-    /// What the banner says (two lines at most), and whether it is an alarm (white on red).
+    /// What the banner says (two lines at most) and its kind (an alarm white on red); the one waiting for it to go.
     banner: Line<40>,
-    banner_alarm: bool,
+    banner_kind: Banner,
+    banner_next: Option<(Line<40>, Banner)>,
     banner_drawn: bool,
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
@@ -418,7 +419,8 @@ impl App {
             notices: Default::default(),
             banner_ms: None,
             banner: Line::new(),
-            banner_alarm: false,
+            banner_kind: Banner::Info,
+            banner_next: None,
             banner_drawn: false,
             had_fix: false,
             told_low: false,
@@ -523,11 +525,7 @@ impl App {
             self.lag_s = 0;
         }
         if let Some(a) = self.alert.take() {
-            if a == alerts::Alert::HrHigh {
-                self.alarm(a.text())
-            } else {
-                self.say(a.text())
-            }
+            self.say_as(a.text(), if a == alerts::Alert::HrHigh { Banner::Alarm } else { Banner::Ride });
             self.tones.play(&BEEP_ALERT);
         }
         self.play_tones(b);
@@ -618,9 +616,10 @@ impl App {
             self.step_past(b);
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
-        if let Some(ms) = self.banner_ms {
+        // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
+        if let Some(ms) = self.banner_ms.filter(|_| !self.phone.ringing) {
             if !core::mem::replace(&mut self.banner_drawn, true) {
-                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str(), self.banner_alarm);
+                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str(), self.banner_kind == Banner::Alarm);
             }
             self.banner_ms = Some(ms + POLL_MS).filter(|&ms| ms < BANNER_MS);
             if self.banner_ms.is_none() {

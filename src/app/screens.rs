@@ -7,6 +7,20 @@ use crate::*;
 /// How long a banner stays up, unless an input dismisses it first.
 pub const BANNER_MS: u32 = 4000;
 
+/// A banner's kind, lowest first: a higher one is not covered by a lower one ([`App::say_as`]). An incoming call is
+/// above them all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Banner {
+    /// What a key just did, a notice.
+    Info,
+    /// What the ride says: a turn ahead, a workout step, a reminder, a climb.
+    Ride,
+    /// A turn now.
+    Now,
+    /// An alarm (heart rate high, off course, the battery low, a ride not saving): white on red.
+    Alarm,
+}
+
 /// What a page box holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Widget {
@@ -164,7 +178,7 @@ impl App {
             }
         }
         if self.banner_ms.is_some() && self.banner_drawn {
-            ui::draw_banner(c, self.banner.as_str(), self.banner_alarm);
+            ui::draw_banner(c, self.banner.as_str(), self.banner_kind == Banner::Alarm);
         }
         if self.phone.ringing {
             ui::draw_call(c, self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()));
@@ -319,6 +333,10 @@ impl App {
     pub(crate) fn unbanner(&mut self, b: &mut impl Board) {
         self.banner_ms = None;
         self.redraw_top(b);
+        if let Some((text, kind)) = self.banner_next.take() {
+            (self.banner, self.banner_kind) = (text, kind); // the one that waited, next
+            (self.banner_ms, self.banner_drawn) = (Some(0), false);
+        }
     }
 
     /// The banner's rows drawn again from what the screen shows: the strip, the page's top, the banner if one is up.
@@ -333,6 +351,16 @@ impl App {
     /// Adds a notice (newest first), stamped with the time: what the unit itself has to say (a fix, a sensor
     /// paired, the battery low); phone notifications will come here too.
     pub(crate) fn notice(&mut self, text: &str) {
+        self.notice_as(text, Banner::Info);
+    }
+
+    /// A notice that is an alarm (the battery low, a ride not saving): its banner white on red.
+    pub(crate) fn alarm_notice(&mut self, text: &str) {
+        self.notice_as(text, Banner::Alarm);
+    }
+
+    /// A notice, its banner of `kind`.
+    fn notice_as(&mut self, text: &str, kind: Banner) {
         self.notices.rotate_right(1);
         let (h, m) = self.strip.time;
         let mut l = Line::new();
@@ -344,27 +372,41 @@ impl App {
         self.notices[0] = l;
         // over the overview the notice is in its own box already; the banner without the time (the strip has it)
         if self.screen != Screen::Main {
-            self.say(text);
+            self.say_as(text, kind);
         }
-    }
-
-    /// A notice that is an alarm (the battery low, a ride not saving): its banner white on red.
-    pub(crate) fn alarm_notice(&mut self, text: &str) {
-        self.notice(text);
-        self.banner_alarm = true;
     }
 
     /// Shows `text` in the banner for [`BANNER_MS`] (what a key just did, a notice).
     pub(crate) fn say(&mut self, text: &str) {
-        self.banner.clear();
-        self.banner.push_str(text);
-        (self.banner_ms, self.banner_drawn, self.banner_alarm) = (Some(0), false, false);
+        self.say_as(text, Banner::Info);
     }
 
     /// Shows `text` in a red banner: an alarm (heart rate high, off course).
     pub(crate) fn alarm(&mut self, text: &str) {
-        self.say(text);
-        self.banner_alarm = true;
+        self.say_as(text, Banner::Alarm);
+    }
+
+    /// Shows `text` as a banner of `kind`. One up of a higher kind stays and this one waits; one of the same or a
+    /// lower kind waits for this one. One waits at most (the higher kind kept, else the newer) and shows when the
+    /// banner up goes ([`App::unbanner`]): two things said in one second (a workout step and a turn cue) both show.
+    /// An incoming call is above them all: a banner waits under it ([`App::area`]).
+    pub(crate) fn say_as(&mut self, text: &str, kind: Banner) {
+        let mut l = Line::<40>::new();
+        l.push_str(text);
+        let up = self.banner_ms.is_some().then_some((self.banner, self.banner_kind));
+        let (show, wait) = match up {
+            Some(up) if up.1 > kind => (up, Some((l, kind))),
+            _ => ((l, kind), up),
+        };
+        if let Some(w) = wait
+            && self.banner_next.is_none_or(|n| n.1 <= w.1)
+        {
+            self.banner_next = Some(w);
+        }
+        if up != Some(show) {
+            (self.banner, self.banner_kind) = show;
+            (self.banner_ms, self.banner_drawn) = (Some(0), false);
+        }
     }
 
     /// Clears the page area and draws the current screen.
