@@ -45,6 +45,15 @@ pub(crate) fn push_hm<const N: usize>(l: &mut Line<N>, s: u32) {
     l.push_str(ui::DIGITS[(s / 60 % 10) as usize]);
 }
 
+/// Hours and minutes as "09:41".
+pub(crate) fn hm_text((h, m): (u8, u8)) -> Line<6> {
+    let mut l = Line::new();
+    for d in [h / 10, h % 10, 10, m / 10, m % 10] {
+        l.push_str(if d == 10 { ":" } else { ui::DIGITS[usize::from(d % 10)] });
+    }
+    l
+}
+
 /// Seconds as "m:ss", or "h:mm:ss" from an hour.
 pub(crate) fn push_clock<const N: usize>(l: &mut Line<N>, s: u32) {
     if s >= 3600 {

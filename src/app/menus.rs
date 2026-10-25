@@ -65,6 +65,8 @@ pub enum Menu {
     Phone,
     /// What the Di2 buttons do ([`menu::REMOTE`]).
     Remote,
+    /// The last notifications from the phone, newest first ([`crate::phone::Inbox`]).
+    Notifs,
 }
 
 /// A menu's title (a page's is followed by its number).
@@ -95,6 +97,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Courses => "COURSES",
         Menu::Phone => "PHONE",
         Menu::Remote => "DI2 KEYS",
+        Menu::Notifs => "NOTIFICATIONS",
     }
 }
 
@@ -159,7 +162,12 @@ impl App {
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
             Menu::Courses => self.courses.as_deref()?.list.get(i).map(|_| Row::Course(i)),
-            Menu::Phone => menu::PHONE.get(i).map(|&r| Row::Phone(r)),
+            Menu::Phone => menu::PHONE
+                .get(i)
+                .map(|&r| Row::Phone(r))
+                .or_else(|| (i == menu::PHONE.len()).then_some(Row::Open(Menu::Notifs))),
+            Menu::Notifs if self.phone.inbox.is_empty() => (i == 0).then_some(Row::Empty("NO NOTIFICATIONS")),
+            Menu::Notifs => self.phone.inbox.get(i).map(|_| Row::Notif(i)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::EditPage(n)),
@@ -346,6 +354,12 @@ impl App {
                 let (y, mo, d, ..) = r.start;
                 label.push_str(date_text((y, mo, d)).as_str());
                 ui::card::push_km(&mut value, r.dist_m);
+            }
+            Row::Notif(k) => {
+                // the sender (the app when it sent no title), and when it came
+                let n = self.phone.inbox.get(k)?;
+                label.push_str(if n.title.as_str().is_empty() { n.app.as_str() } else { n.title.as_str() });
+                value.push_str(hm_text(n.time).as_str());
             }
             Row::Workout(k) => {
                 let p = self.calendar.get(k)?;
@@ -566,6 +580,7 @@ impl App {
                 let _ = self.drive_on(b); // why not is in the banner
             }
             Some(Row::About) => self.open(Screen::About),
+            Some(Row::Notif(k)) => self.open(Screen::Notif(k, 0)),
             Some(Row::Nearby) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();

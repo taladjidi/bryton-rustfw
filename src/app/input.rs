@@ -142,6 +142,8 @@ pub enum Screen {
     Media,
     /// ABOUT: the version, the commit, Ferris.
     About,
+    /// Notification `k` of the inbox in full (app/notifs.rs), its first line shown `top`.
+    Notif(usize, usize),
 }
 
 /// Places in the round of the ride pages: the pages, then the course page.
@@ -353,6 +355,25 @@ impl App {
                 self.answer(b, accept);
                 self.end_ring(b);
                 self.say(if accept { "ANSWERED" } else { "DECLINED" });
+                return;
+            }
+            // a tap on the overview's notices opens their list, even while recording (it only reads)
+            (Screen::Main, Input::Touch(Gesture::Tap(_, y))) if u32::from(y) >= ui::NOTICES_Y => {
+                self.open(Screen::Menu(Menu::Notifs, 0))
+            }
+            (Screen::Notif(k, top), _) => {
+                let top = match i {
+                    Input::Next | Input::Touch(Gesture::Swipe(Dir::Up)) => top + 1,
+                    Input::Prev | Input::Touch(Gesture::Swipe(Dir::Down)) => top.saturating_sub(1),
+                    Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => return self.leave_notif(b),
+                    Input::Touch(Gesture::Tap(x, y)) if inside(ui::BACK_TAP, x, y) => return self.leave_notif(b),
+                    _ => return,
+                };
+                let top = top.min(self.notif_lines(k).saturating_sub(ui::NOTIF_LINES));
+                if self.screen != Screen::Notif(k, top) {
+                    self.screen = Screen::Notif(k, top);
+                    self.show(b);
+                }
                 return;
             }
             (Screen::Edit(..), _) => return self.editor_input(b, i),

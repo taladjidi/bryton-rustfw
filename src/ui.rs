@@ -1336,6 +1336,35 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
     }
 }
 
+/// Text lines the notification detail shows at once.
+pub const NOTIF_LINES: usize = ((H - LIST_Y - LIST_ROW) / LIST_ROW) as usize;
+
+/// Characters of the pixel font that fit a detail line.
+pub fn notif_cols() -> usize {
+    ((W - 8) / LABEL.width("W").max(1)) as usize
+}
+
+/// A notification in full: `app` in the title, `time` and a MORE cue under it, then `lines` (title lines first, in
+/// the accent colour: the flag is true) from the first one shown, at most [`NOTIF_LINES`].
+pub fn draw_notif<'a>(
+    c: &mut impl Canvas,
+    app: &str,
+    time: &str,
+    more: bool,
+    lines: impl Iterator<Item = (&'a str, bool)>,
+) {
+    draw_title(c, app);
+    let grey = Style { fg: GREY, ..LABEL };
+    text::draw_in(c, &grey, 4, LIST_Y, W - 8, Align::Left, time);
+    if more {
+        text::draw_in(c, &grey, 4, LIST_Y, W - 8, Align::Right, "MORE");
+    }
+    for (r, (line, head)) in lines.take(NOTIF_LINES).enumerate() {
+        let style = Style { fg: if head { ACCENT } else { WHITE }, ..LABEL };
+        text::draw_in(c, &style, 4, LIST_Y + LIST_ROW * (r as u32 + 1), W - 8, Align::Left, line);
+    }
+}
+
 /// Height of a banner: a notice over the top of any screen other than the overview (the strip and the page's
 /// first 20 px), two lines of the 2x font.
 pub const BANNER_H: u32 = 44;

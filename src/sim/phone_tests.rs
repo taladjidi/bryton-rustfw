@@ -350,3 +350,95 @@ fn a_call_in_a_burst_of_messages() {
     run(&mut sim, &mut app, 2000);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0)]);
 }
+
+/// Three messages, then the overview's notices tapped: the NOTIFICATIONS list, newest first with the sender and the
+/// time, a row opens the message wrapped over lines, Back returns up the stack; an empty list says so.
+#[test]
+fn notifications_list_and_detail() {
+    const LONG: &str =
+        "Meet at the old bridge by the market at noon, then we ride up to the lake and back along the river";
+    let script = std::vec![
+        (4000, Act::Notify(4, 7, "Ana", "Running late")),
+        (4500, Act::Notify(6, 8, "Club", LONG)),
+        (5000, Act::Notify(4, 9, "Bob", "Lunch at 1?")),
+    ];
+    let (mut sim, mut app) = unit(iphone(script));
+    // nothing yet: the list says so
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::NOTICES_Y + 10) as u16)));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 0));
+    assert_eq!(app.menu_row(Menu::Notifs, 0).unwrap().0.as_str(), "NO NOTIFICATIONS");
+    sim.save("notifs_empty");
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Main);
+
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.phone.inbox.len(), 3);
+
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::NOTICES_Y + 10) as u16)));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 0));
+    let rows: Vec<_> = (0..4).map(|i| app.menu_row(Menu::Notifs, i).map(|r| (r.0, r.1))).collect();
+    use std::string::ToString;
+    let text = |i: usize| rows[i].map(|(a, b)| (a.as_str().to_string(), b.as_str().to_string()));
+    assert_eq!(text(0), Some(("Bob".into(), "09:41".into())), "newest first, at the phone's time");
+    assert_eq!(text(1).map(|r| r.0), Some("Club".into()));
+    assert_eq!(text(2).map(|r| r.0), Some("Ana".into()));
+    assert_eq!(text(3), None);
+    sim.save("notifs_list");
+
+    // a tap selects the row, a second one opens it
+    let y = (ui::LIST_Y + ui::MENU_ROW + 10) as u16;
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, y)));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 1));
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, y)));
+    assert_eq!(app.screen(), Screen::Notif(1, 0));
+    let lines: Vec<_> = app.notif_text(1).collect();
+    assert_eq!(lines[0], ("Club", true));
+    assert!(lines.len() > 3 && lines[1..].iter().all(|l| !l.1 && l.0.len() <= ui::notif_cols()));
+    let joined: Vec<&str> = lines[1..].iter().map(|l| l.0).collect();
+    assert_eq!(joined.join(" "), LONG, "the message whole, wrapped at spaces");
+    sim.save("notifs_detail");
+    // Page / Lap at the end of a short text change nothing
+    app.input(&mut sim, Input::Next);
+    assert_eq!(app.screen(), Screen::Notif(1, 0));
+
+    // Back to the list, Back to the overview
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 1));
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Main);
+}
+
+/// A ride keeps recording while the list and a detail are open, and a message that comes meanwhile does not move the
+/// detail to another one.
+#[test]
+fn notifications_during_a_ride() {
+    let script = std::vec![(4000, Act::Notify(4, 7, "Ana", "First")), (9000, Act::Notify(4, 8, "Bob", "Second"))];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    app.leave_menus();
+    app.input(&mut sim, Input::Select); // Start
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(app.ride.state(), ride::State::Running);
+    app.input(&mut sim, Input::Back); // clears the message's banner
+    app.input(&mut sim, Input::Back); // to the overview
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::NOTICES_Y + 10) as u16)));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 0), "reachable by a tap while recording");
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.screen(), Screen::Notif(0, 0));
+    assert_eq!(app.notif_text(0).next(), Some(("Ana", true)));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.phone.inbox.len(), 2);
+    assert_eq!(app.screen(), Screen::Notif(1, 0));
+    assert_eq!(app.notif_text(1).next(), Some(("Ana", true)), "still the same one");
+    assert_eq!(app.ride.state(), ride::State::Running, "recording all along");
+}
+
+/// The row in the PHONE menu opens the list for the keys.
+#[test]
+fn notifications_row_in_the_phone_menu() {
+    let (mut sim, mut app) = unit(iphone(std::vec![]));
+    app.open(Screen::Menu(Menu::Phone, menu::PHONE.len()));
+    app.activate(&mut sim, Menu::Phone, menu::PHONE.len());
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 0));
+}

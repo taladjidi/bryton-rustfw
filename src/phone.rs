@@ -7,7 +7,8 @@
 //!   CoreBluetooth/Reference/AppleNotificationCenterServiceSpecification): the UUIDs, the Notification Source
 //!   fields (EventID, EventFlags, CategoryID, CategoryCount, NotificationUID; their sizes 1, 1, 1, 1, 4 bytes are
 //!   in the spec's figure 2-1, as Nordic's ble_ancs_c reads them), Get Notification Attributes (command 0, the
-//!   UID, attribute ids, a 2-byte max length after Title (1), Subtitle (2), Message (3)), its answer on the Data
+//!   UID, attribute ids: AppIdentifier (0, no length), Title (1), Subtitle (2), Message (3), the last two with a
+//!   2-byte max length; the spec gives no cap on Message, the app's choice here is [`MESSAGE_MAX`]), its answer on the Data
 //!   Source (command, UID, then id / u16 length / value tuples, fragmented over notifications), Perform Notification
 //!   Action (command 2, UID, ActionID 0 positive, 1 negative), the tables of the appendix.
 //! - AMS: Apple, "Apple Media Service Reference" (same archive): the UUIDs, Remote Command ids (play 0, pause 1,
@@ -247,8 +248,8 @@ impl Notif {
 
 /// Longest title and message asked for.
 pub const TITLE_MAX: u16 = 24;
-/// See [`TITLE_MAX`].
-pub const MESSAGE_MAX: u16 = 48;
+/// Longest message asked for: what the detail screen shows, about six lines of the UI font.
+pub const MESSAGE_MAX: u16 = 120;
 
 /// Get Notification Attributes for `uid`: app id, title and message.
 pub fn get_attributes(uid: u32) -> [u8; 12] {
@@ -269,21 +270,23 @@ pub fn action(uid: u32, positive: bool) -> [u8; 6] {
 pub struct Attributes {
     /// The notification's id.
     pub uid: u32,
+    /// The app's bundle id, cut to what fits ("com.apple.MobileSMS").
+    pub app: Line<24>,
     /// Who or what: the sender, the caller.
     pub title: Line<24>,
     /// The text.
-    pub message: Line<48>,
+    pub message: Line<120>,
 }
 
 /// The Data Source's fragments put back together into one answer.
 pub struct DataSource {
-    buf: [u8; 160],
+    buf: [u8; 320],
     len: usize,
 }
 
 impl Default for DataSource {
     fn default() -> Self {
-        DataSource { buf: [0; 160], len: 0 }
+        DataSource { buf: [0; 320], len: 0 }
     }
 }
 
@@ -313,6 +316,7 @@ impl DataSource {
             let n = usize::from(u16::from_le_bytes([*l0, *l1]));
             let value = more.get(..n)?;
             match id {
+                0 => fold(&mut a.app, value),
                 1 => fold(&mut a.title, value),
                 3 => fold(&mut a.message, value),
                 _ => {}
@@ -322,6 +326,94 @@ impl DataSource {
         self.len = 0;
         Some(a)
     }
+}
+
+/// Notifications kept for the NOTIFICATIONS list.
+pub const INBOX: usize = 8;
+
+/// A notification kept: who sent it, what it says, when it came.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Saved {
+    /// The app, as a short name in capitals ([`app_name`]).
+    pub app: Line<16>,
+    /// The title (the sender).
+    pub title: Line<24>,
+    /// The message.
+    pub message: Line<120>,
+    /// The unit's time (hours, minutes) when it came.
+    pub time: (u8, u8),
+}
+
+/// The last [`INBOX`] notifications, newest first. A notification the phone removes later stays: this is a log of
+/// what came, not a mirror of the phone's centre (no work on a removal).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Inbox {
+    items: [Saved; INBOX],
+    n: usize,
+}
+
+impl Inbox {
+    /// Keeps `a` as the newest, at `time`; the oldest goes when full.
+    pub fn add(&mut self, a: &Attributes, time: (u8, u8)) {
+        self.items.rotate_right(1);
+        let mut app = Line::new();
+        app_name(&mut app, a.app.as_str());
+        self.items[0] = Saved { app, title: a.title, message: a.message, time };
+        self.n = (self.n + 1).min(INBOX);
+    }
+
+    /// How many are kept.
+    pub fn len(&self) -> usize {
+        self.n
+    }
+
+    /// Whether none is.
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
+    }
+
+    /// The `k`th, newest first.
+    pub fn get(&self, k: usize) -> Option<&Saved> {
+        self.items.get(..self.n)?.get(k)
+    }
+}
+
+/// A short name for a bundle id: its last part in capitals ("com.apple.MobileSMS" -> "MOBILESMS").
+///
+/// ```
+/// let mut l = bryton_rustfw::text::Line::<16>::new();
+/// bryton_rustfw::phone::app_name(&mut l, "net.example.Chat");
+/// assert_eq!(l.as_str(), "CHAT");
+/// ```
+pub fn app_name<const N: usize>(l: &mut Line<N>, id: &str) {
+    for c in id.rsplit('.').next().unwrap_or("").chars() {
+        l.push_str(c.to_ascii_uppercase().encode_utf8(&mut [0; 4]));
+    }
+}
+
+/// `text` wrapped at spaces into lines of at most `cols` characters (a word longer than a line is cut). The text is
+/// what [`fold`] made: one byte a character.
+///
+/// ```
+/// let v: Vec<&str> = bryton_rustfw::phone::wrap("see you at the old bridge", 10).collect();
+/// assert_eq!(v, ["see you at", "the old", "bridge"]);
+/// ```
+pub fn wrap(text: &str, cols: usize) -> impl Iterator<Item = &str> {
+    let cols = cols.max(1);
+    let mut rest = text.trim_start();
+    core::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let n = if rest.len() <= cols {
+            rest.len()
+        } else {
+            rest.get(..=cols).and_then(|h| h.rfind(' ')).filter(|&i| i > 0).unwrap_or(cols)
+        };
+        let (line, tail) = rest.split_at_checked(n)?;
+        rest = tail.trim_start();
+        Some(line.trim_end())
+    })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
