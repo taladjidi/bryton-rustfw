@@ -298,9 +298,9 @@ fn scanned(sim: &mut Sim, app: &mut App) -> (usize, crate::stock::Summary) {
     (app.stock.index.len(), crate::stock::Summary { bytes: 0, ..app.stock.out })
 }
 
-/// The end-ride screen by the keys: Page and Lap move (no wrap), Back and the default (RESUME) leave the ride paused as
-/// it was, on its page; SAVE is today's end: both copies saved, the history lists it, and the card stays until Back
-/// or Start. Screenshot: end_ride.
+/// The end-ride screen by the keys: Page and Lap move (no wrap), Back leaves the ride paused on its page, the default
+/// (RESUME) runs it again; SAVE is today's end: both copies saved, the history lists it, and the card stays until Back
+/// or Start. Screenshots: end_ride, summary.
 #[test]
 fn end_ride_screen_by_keys() {
     let mut sim = Sim::new(9, 0, 0);
@@ -334,6 +334,7 @@ fn end_ride_screen_by_keys() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "SAVE: the card");
     run(&mut sim, &mut app, 2000);
+    sim.save("summary");
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
     assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]]);
     assert_eq!(sim.backup[RIDE_BKP], 0);
