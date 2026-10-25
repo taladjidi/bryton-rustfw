@@ -168,8 +168,6 @@ pub struct App {
     gear: Option<u16>,
     /// Gear changes in this ride.
     shifts: u16,
-    /// A shifter button pressed while the chip's bytes were read: acted on once they are (app/radio.rs).
-    remote_press: Option<sensors::Press>,
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
     live: Live,
@@ -385,7 +383,6 @@ impl App {
             resting_ms: [u32::MAX; Kind::ALL.len()],
             gear: None,
             shifts: 0,
-            remote_press: None,
             ask: 0,
             live: Live::default(),
             decoders: Decoders::default(),
@@ -485,6 +482,17 @@ impl App {
                 save_page(b, n, page);
             }
             b.backup_write(STOCK_BKP19, 0);
+        }
+        // pages kept one register each by the first builds (14 to 16), read at each boot but never saved where they
+        // are now: saved there once, before a shifting system's pairing reuses 14 (review of 571e613)
+        let old = PAGE_BKP.iter().zip(OLD_PAGE_BKP).any(|(new, old)| {
+            PageCfg::from_words(new.map(|r| b.backup_read(r))).is_none()
+                && PageCfg::from_word(b.backup_read(old)).is_some()
+        });
+        if old {
+            for (n, page) in self.pages.iter().enumerate() {
+                save_page(b, n, page);
+            }
         }
         self.first_start(b); // before the first page is drawn: stock's pages on it
         if self.ble.is_some() {

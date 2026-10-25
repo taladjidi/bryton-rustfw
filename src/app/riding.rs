@@ -39,6 +39,31 @@ impl App {
         self.recorder(ev);
     }
 
+    /// Start on a ride page or the overview (the key, a shifter's press): [`App::start_pause`]; from the overview
+    /// the first ride page then, on a page that page again for a new ride (its map and graphs).
+    pub(crate) fn start_key(&mut self, b: &mut impl Board) {
+        self.start_pause();
+        let new = core::mem::take(&mut self.new_ride);
+        if self.screen == Screen::Main {
+            self.screen = Screen::Ride(0);
+        } else if !new {
+            return;
+        }
+        self.show(b);
+    }
+
+    /// A lap, if the ride runs (Lap on a ride page, a shifter's press): said, recorded, and a workout goes on to
+    /// its next step (an open step ends here).
+    pub(crate) fn lap(&mut self) {
+        let Some(ev) = self.ride.lap() else { return };
+        self.say("LAP");
+        self.recorder(ev);
+        let (steps, dist) = (self.plan.steps(), self.ride.dist_m());
+        if let Some(e) = self.player.as_mut().filter(|p| p.step(steps).is_some()).map(|p| p.skip(steps, dist)) {
+            self.workout_event(e);
+        }
+    }
+
     // -----------------------------------------------------------------------------------------------------------
     // The recorder (recorder.rs): events into its RAM buffer here, its card work in step_recorder
     // -----------------------------------------------------------------------------------------------------------

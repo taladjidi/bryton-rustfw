@@ -195,3 +195,147 @@ fn silent_shifting_system() {
     assert_eq!(app.field_text(Field::Gear).as_str(), "--");
     assert_eq!(app.field_text(Field::ShiftBattery).as_str(), "--");
 }
+
+/// A Di2 that resends its last press bytes from the start (as it does after a press before the boot): page 4
+/// every fourth message, else gears 2-11.
+fn di2_old_press(ms: u64) -> [u8; 8] {
+    if ms / 250 % 4 == 3 {
+        return [4, 0x11, 0x21, 0, 0, 0, 0, 0];
+    }
+    [0, 0, 2, 11, 60, 0, 0, 0]
+}
+
+/// A Di2 paired in register 14, sending `data`, every press set to `action`.
+fn di2_app(data: fn(u64) -> [u8; 8], action: Remote) -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    sim.classic_pages();
+    sim.backup[14] = Kind::Di2.to_word(SensorId { device: 4321, trans: 0xf1 });
+    sim.nordic.sensors.push(AntSensor { device_type: 1, id: 4321, data, network: 1, ack: &[4] });
+    let mut app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
+    app.settings.remote = [action; 4];
+    (sim, app)
+}
+
+/// Review of 571e613: the Di2's first button page after a boot (or the resume after a fault mid-ride) repeats its
+/// last press; taken as a press it started or paused the ride by itself. It is only the baseline.
+#[test]
+fn no_phantom_press_at_boot() {
+    let (mut sim, mut app) = di2_app(di2_old_press, Remote::Start);
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.field_text(Field::Gear).as_str(), "2-11", "the Di2 heard");
+    assert_eq!(app.ride.state(), ride::State::Idle, "no press");
+}
+
+/// Review of 571e613: the hood buttons were keys on every screen (Start in a menu activated its row, during a call
+/// it answered). They act on the ride pages and the overview only, and never answer a call.
+#[test]
+fn hood_press_outside_the_pages_does_nothing() {
+    let (mut sim, mut app) = di2_app(di2, Remote::Start);
+    app.press(&mut sim, Press::Long(Key::Page));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
+    run_to(&mut sim, &mut app, 9_000);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no row opened");
+    assert_eq!(app.ride.state(), ride::State::Idle);
+    // during a call on the overview, Start is the ride's, never the answer
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main);
+    app.phone.ringing = true;
+    run_to(&mut sim, &mut app, 31_000);
+    assert!(app.phone.ringing, "not answered");
+    assert_eq!(app.ride.state(), ride::State::Running, "the long press started the ride");
+    assert_eq!(app.screen(), Screen::Ride(0));
+}
+
+/// Lap from the hood on the overview marks a lap while riding (decided in the review of 571e613: the overview is
+/// a ride screen).
+#[test]
+fn hood_lap_on_the_overview() {
+    let (mut sim, mut app) = di2_app(di2, Remote::Lap);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Running));
+    let mut lap = false;
+    while sim.ms < 9_000 {
+        run(&mut sim, &mut app, POLL_MS.into());
+        lap |= app.banner.as_str() == "LAP";
+    }
+    assert!(lap, "a lap at the press");
+    assert_eq!(app.screen(), Screen::Main);
+}
+
+/// A 1x ANT+ Shifting system: no front (7), rear 11 of 12, then 10 from 20 s.
+fn one_by(ms: u64) -> [u8; 8] {
+    let rear = if ms < 20_000 { 10 } else { 9 };
+    [1, 7, 0xff, 7 << 5 | rear, 12, 0, 0, 0]
+}
+
+/// Review of 571e613: a 1x system (front invalid) never showed a gear or counted a shift. GEAR shows the rear
+/// alone; a rear shift counts.
+#[test]
+fn one_by_shows_and_counts_the_rear() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    sim.backup[14] = Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x22, id: 77, data: one_by, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.field_text(Field::Gear).as_str(), "11");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run_to(&mut sim, &mut app, 21_000);
+    assert_eq!(app.field_text(Field::Gear).as_str(), "10");
+    assert_eq!(app.field_text(Field::Shifts).as_str(), "1");
+}
+
+/// Review of 571e613: Shimano's key accepted but channel 6 refused took ANT down whole (heart rate, power lost).
+/// Only the Di2 is off then.
+#[test]
+fn di2_channel_refused_leaves_ant_plus() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    sim.nordic.ant_refuse = Some([0xc2, 6]);
+    sim.backup[Kind::Hr.backup()] = Kind::Hr.to_word(SensorId { device: 99, trans: 1 });
+    let app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
+    assert!(sim.nordic.got.iter().any(|p| p.starts_with(&[6, 0xc4, 0])), "the strap's channel opened");
+    assert_eq!(sensor_row(&app, 6), "DI2 NO KEY");
+}
+
+/// Review of 571e613: a Di2 and an ANT+ Shifting system open together shared the gear and register 14 (pairing
+/// one overwrote the other while the menu showed both). One at a time: pairing one closes and forgets the other.
+#[test]
+fn one_shifting_system_at_a_time() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    sim.backup[14] = Kind::Di2.to_word(SensorId { device: 4321, trans: 0xf1 });
+    sim.nordic.sensors.push(AntSensor { device_type: 1, id: 4321, data: di2, network: 1, ack: &[4] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x22, id: 77, data: axs, network: 0, ack: &[] });
+    let mut app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
+    assert_eq!(sensor_row(&app, 6), "DI2 4321");
+    select_sensor(&mut sim, &mut app, Kind::Shifting as usize);
+    assert!(sim.nordic.got.contains(&vec![6, 0xc5, 6]), "the Di2's channel closed");
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(sensor_row(&app, 6), "DI2 OFF");
+    assert_eq!(sensor_row(&app, 5), "SHIFTING 77");
+    assert_eq!(sim.backup[14], Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 }));
+}
+
+/// Review of 571e613: a page layout from the first builds, kept in register 14, was read at each boot but never
+/// saved again, so pairing a shifting system (which reuses 14) wiped it. It is saved at the first boot.
+#[test]
+fn old_page_in_register_14_survives_pairing() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let old = 0xa300_0021; // settings.rs `PageCfg::from_word`'s example
+    sim.backup[14] = old;
+    let page = PageCfg::from_word(old).unwrap();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x22, id: 77, data: axs, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    assert_eq!(app.pages[0], page, "read");
+    select_sensor(&mut sim, &mut app, Kind::Shifting as usize);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(sim.backup[14], Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 }), "14 reused");
+    let mut sim2 = Sim::new(9, 0, 0);
+    sim2.backup = sim.backup;
+    let app2 = App::start(&mut sim2, Some(KEY));
+    assert_eq!(app2.pages[0], page, "kept");
+}

@@ -36,7 +36,12 @@ def main(args):
     print(f'ANT+ key found at image offset {i:#x}, written to ant_key.bin (private: never commit or publish it)')
     di2 = img[i + 8:i + 16]
     if len(di2) != 8 or di2 in (bytes(8), b'\xff' * 8, img[i:i + 8]):
-        print('no Shimano network key after it: di2_key.bin not written (no Di2 channel)')
+        # an older one would build this image's firmware with a key that is not its own
+        try:
+            os.remove(os.path.join(ROOT, 'di2_key.bin'))
+        except FileNotFoundError:
+            pass
+        print('no Shimano network key after it: no di2_key.bin (no Di2 channel)')
         return
     open(os.path.join(ROOT, 'di2_key.bin'), 'wb').write(di2)
     print(f'Shimano network key at image offset {i + 8:#x}, written to di2_key.bin (private: never commit or publish it)')

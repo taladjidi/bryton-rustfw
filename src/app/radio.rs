@@ -23,10 +23,21 @@ pub enum Sensor {
 }
 
 impl App {
-    /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing.
+    /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing. One shifting system at a
+    /// time: opening one closes and forgets the other (review of 571e613: both open shared the gear, so a packet
+    /// of each counted as a shift, and register 14, so pairing one overwrote the other while the menu showed both;
+    /// no register is free for a second one).
     pub(crate) fn set_sensor(&mut self, b: &mut impl Board, kind: Kind, want: Sensor) {
         if kind.network() == 1 && !self.di2 {
             return; // no channel without Shimano's key
+        }
+        let other = match kind {
+            Kind::Shifting => Some(Kind::Di2),
+            Kind::Di2 => Some(Kind::Shifting),
+            _ => None,
+        };
+        if let Some(other) = other.filter(|&o| want != Sensor::Off && self.sensors[o as usize] != Sensor::Off) {
+            self.set_sensor(b, other, Sensor::Off);
         }
         let i = kind as usize;
         let resting = self.resting_ms[i] != u32::MAX;
@@ -81,9 +92,7 @@ impl App {
                         self.hrv.push(rr);
                     }
                     if matches!(kind, Kind::Shifting | Kind::Di2) {
-                        self.shifted();
-                        // acted on once the stream is read (a media key sends a command)
-                        self.remote_press = self.decoders.press.take().or(self.remote_press);
+                        self.shifted(); // its presses wait in the decoders until the stream is read (below)
                     }
                     self.heard_ms[kind as usize] = 0;
                     if self.sensors[kind as usize] == Sensor::Search {
@@ -115,7 +124,8 @@ impl App {
         if title && self.screen == Screen::Nearby {
             ui::draw_nearby(&mut Panel(b, (0, self.bottom())), self.nearby.count(), self.scanning);
         }
-        if let Some(p) = self.remote_press.take() {
+        // a shifter's presses, once the stream is read (a media key sends a command): one per side
+        for p in core::mem::take(&mut self.decoders.press).into_iter().flatten() {
             self.remote(b, p);
         }
     }
@@ -139,24 +149,33 @@ impl App {
         self.full.gear(t, front, front_n, rear_n);
     }
 
-    /// A shifter button pressed: the action the remote menu set for it (menu.rs [`menu::Remote`]). Next and
-    /// previous page act on the ride pages and the overview only (as stock's Di2 page actions), Lap and Start as
-    /// those keys anywhere.
+    /// A shifter button pressed: the action the remote menu set for it (menu.rs [`menu::Remote`]). The ride's
+    /// actions (pages, Lap, Start) act on the ride pages and the overview only, as P12's: never as keys, which
+    /// in a menu would activate a row or step a number, on the media screen change the track, during a call answer
+    /// it (review of 571e613). Lap on the overview marks a lap too, if a ride runs. The media actions only reach
+    /// the phone, so they work everywhere.
     pub(crate) fn remote(&mut self, b: &mut impl Board, p: sensors::Press) {
         let action = self.settings.remote.get(p as usize).copied().unwrap_or(menu::Remote::None);
         let page = matches!(self.screen, Screen::Main | Screen::Ride(_));
         match action {
-            menu::Remote::None => {}
-            menu::Remote::NextPage if page => self.input(b, Input::Next),
-            menu::Remote::PrevPage if matches!(self.screen, Screen::Ride(_)) => {
-                self.input(b, Input::Touch(Gesture::Swipe(Dir::Right)))
-            }
-            menu::Remote::NextPage | menu::Remote::PrevPage => {}
-            menu::Remote::Lap => self.input(b, Input::Prev),
-            menu::Remote::Start => self.input(b, Input::Select),
-            menu::Remote::Play => self.media(b, Media::PlayPause, false),
-            menu::Remote::NextTrack => self.media(b, Media::Next, false),
-            menu::Remote::PrevTrack => self.media(b, Media::Prev, false),
+            menu::Remote::Play => return self.media(b, Media::PlayPause, false),
+            menu::Remote::NextTrack => return self.media(b, Media::Next, false),
+            menu::Remote::PrevTrack => return self.media(b, Media::Prev, false),
+            menu::Remote::None => return,
+            _ if !page => return,
+            _ => {}
+        }
+        // a press is as a key for the light: it comes back after the time-out
+        self.idle_ms = 0;
+        if self.light_shown == 0 && self.backlight {
+            self.update_light(b);
+        }
+        match action {
+            menu::Remote::NextPage => self.page_by(b, true),
+            menu::Remote::PrevPage => self.page_by(b, false),
+            menu::Remote::Lap => self.lap(),
+            menu::Remote::Start => self.start_key(b),
+            _ => {}
         }
     }
 }

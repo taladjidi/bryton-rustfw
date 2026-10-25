@@ -24,7 +24,8 @@
 //!   (`Ant_EssHandleMessage` 0xd02a2a6c: front 7 and rear 31 are "no value", the gears shown one more than sent);
 //!   the common battery page 82 (0x52; byte 2 the battery identifier, its upper nibble the component, 0xff for one
 //!   battery; byte 7 bits 4-6 the status, 1 new to 5 critical, 7 invalid: the ANT+ common pages, read so by stock's
-//!   0xd02a28a8, which shows the worst component's).
+//!   0xd02a28a8, which shows the worst component's). A 1x system sends no front (7): the rear alone is kept, front 0
+//!   (stock's `Ant_EssHandleMessage` keeps the rear when the front is invalid), and GEAR shows only the rear.
 //! - [`Kind::Di2`], Shimano's own ANT channel (device type 1, period 8198, on a private network whose key is
 //!   Shimano's, copied from the owner's stock image like the ANT+ one: build.rs). No public document: the layout is
 //!   stock's decoder (`Ant_Di2_OnAntEvent` 0xd02a2744, `Sensor_Di2ReadData` 0xd0288cc8, `Sensor_Di2UpdateGearRatio`
@@ -32,7 +33,9 @@
 //!   stock takes none while either is 0), byte 4 the battery in percent (inferred from stock's Sensor Details screen,
 //!   which shows it as "60%"); page 4 (sent acknowledged, about every 205 ms), byte 1 the right hood button and
 //!   byte 2 the left one, upper nibble 1 single press or 2 long press, lower nibble a press counter, so a new press
-//!   changes the byte (stock's `Sensor_Di2Poll` 0xd0288d8c acts on a change, as here, from 0 at start). The button
+//!   changes the byte (stock's `Sensor_Di2Poll` 0xd0288d8c acts on a change, as here). Stock (and P12) start from 0,
+//!   so the Di2's first page 4 after a boot, which repeats its last press byte, counts as a press; here the first
+//!   page 4 after the start or a drop-out is only the baseline (review of 571e613). The button
 //!   decoding is the one the patch project's P12 hooks and ran on the unit with the owner's Di2 (bryton-S510-mods
 //!   `patches/P12-di2-button-actions.c`, `docs/how-it-works.md` "Di2 hood buttons (P12)", FLASHLOG #19 to #31); its
 //!   test's press sequence is replayed by the `di2_presses` test. Double presses are not decoded (stock neither).
@@ -307,12 +310,15 @@ pub struct Decoders {
     cadence: Revs,
     sc_speed: Revs,
     sc_cadence: Revs,
-    /// The Di2 button bytes last seen (page 4: right, left), 0 at start as stock's.
-    buttons: [u8; 2],
+    /// The Di2 button bytes last seen (page 4: right, left); None until the first page 4 after the start or a
+    /// drop-out, which is the baseline: the Di2 keeps resending its last press byte, so taking 0 for the bytes
+    /// before it would act on an old press at every boot (review of 571e613).
+    buttons: Option<[u8; 2]>,
     /// The ANT+ shifting system's battery status per component (0: not heard).
     battery: [u8; 16],
-    /// A shifter button pressed, for the app to take.
-    pub press: Option<Press>,
+    /// A shifter button pressed, per side (right, left), for the app to take: the newest of each side since it last
+    /// took them, so both buttons changing in one page, or a press on each side in one pass, are both kept.
+    pub press: [Option<Press>; 2],
 }
 
 /// Wheel revolutions per minute x 100 to km/h x 10, for a wheel of `wheel_mm` circumference.
@@ -334,8 +340,9 @@ impl Decoders {
             Kind::Cadence => self.cadence = Revs::default(),
             Kind::SpeedCadence => (self.sc_speed, self.sc_cadence) = (Revs::default(), Revs::default()),
             Kind::Shifting => self.battery = [0; 16],
-            // the button bytes kept, as stock's (a press missed while silent is not made up later)
-            Kind::Power | Kind::Di2 => {}
+            // the next button page is the baseline (a press missed while silent is not made up later)
+            Kind::Di2 => self.buttons = None,
+            Kind::Power => {}
         }
     }
 
@@ -383,11 +390,13 @@ impl Decoders {
                 }
             }
             Kind::Power => {}
-            // page 1, shift system status: rear gear in bits 0-4, front in 5-7, from 0 (all ones: no value)
+            // page 1, shift system status: rear gear in bits 0-4, front in 5-7, from 0 (all ones: no value); a 1x
+            // system has no front (7): the rear alone, front 0, as stock keeps it (`Ant_EssHandleMessage`)
             Kind::Shifting if d[0] == 1 => {
                 let (front, rear) = (d[3] >> 5, d[3] & 0x1f);
-                if front != 7 && rear != 0x1f {
-                    live.set(Metric::Gear, u16::from(front + 1) << 8 | u16::from(rear + 1));
+                if rear != 0x1f {
+                    let front = if front == 7 { 0 } else { front + 1 };
+                    live.set(Metric::Gear, u16::from(front) << 8 | u16::from(rear + 1));
                 }
                 live.set(Metric::Gears, u16::from(d[4] >> 5) << 8 | u16::from(d[4] & 0x1f));
             }
@@ -411,18 +420,21 @@ impl Decoders {
                     live.set(Metric::ShiftBattery, u16::from(d[4]));
                 }
             }
-            // page 4: a button byte that changed is a press (upper nibble 1 single, 2 long)
+            // page 4: a button byte that changed is a press (upper nibble 1 single, 2 long); the first one after the
+            // start or a drop-out only sets the bytes
             Kind::Di2 if d[0] == 4 => {
-                for (side, (&now, last)) in [d[1], d[2]].iter().zip(&mut self.buttons).enumerate() {
-                    if now == core::mem::replace(last, now) {
+                let now = [d[1], d[2]];
+                let Some(last) = self.buttons.replace(now) else { return };
+                for (side, ((&b, &was), slot)) in now.iter().zip(&last).zip(&mut self.press).enumerate() {
+                    if b == was {
                         continue;
                     }
-                    self.press = match (now >> 4, side) {
+                    *slot = match (b >> 4, side) {
                         (1, 0) => Some(Press::RightShort),
                         (1, _) => Some(Press::LeftShort),
                         (2, 0) => Some(Press::RightLong),
                         (2, _) => Some(Press::LeftLong),
-                        _ => self.press,
+                        _ => *slot,
                     };
                 }
             }
@@ -495,8 +507,10 @@ mod tests {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         let mut press = |right: u8, left: u8| {
             dec.decode(Kind::Di2, [4, right, left, 0, 0, 0, 0, 0], 2105, &mut live);
-            dec.press.take()
+            let [r, l] = core::mem::take(&mut dec.press);
+            r.or(l)
         };
+        assert_eq!(press(0, 0), None, "the first page: the baseline");
         assert_eq!(press(0x11, 0), Some(Press::RightShort));
         assert_eq!(press(0x11, 0), None, "repeated: the same press");
         assert_eq!(press(0x22, 0), Some(Press::RightLong));
@@ -504,6 +518,40 @@ mod tests {
         assert_eq!(press(0x22, 0x24), Some(Press::LeftLong));
         assert_eq!(press(0x35, 0x24), None, "unknown kind");
         assert_eq!(press(0x17, 0x24), Some(Press::RightShort));
+    }
+
+    /// The Di2 resends its last press byte: the first page 4 after the start, or after a drop-out
+    /// ([`Decoders::restart`]), is not a press (it paused or resumed the ride by itself at every boot: review of
+    /// 571e613); a change after it is.
+    #[test]
+    fn di2_first_button_page_is_the_baseline() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Di2, [4, 0x13, 0x24, 0, 0, 0, 0, 0], 2105, &mut live);
+        assert_eq!(dec.press, [None, None], "at the start");
+        dec.decode(Kind::Di2, [4, 0x14, 0x24, 0, 0, 0, 0, 0], 2105, &mut live);
+        assert_eq!(dec.press, [Some(Press::RightShort), None]);
+        dec.press = [None; 2];
+        dec.restart(Kind::Di2);
+        dec.decode(Kind::Di2, [4, 0x15, 0x25, 0, 0, 0, 0, 0], 2105, &mut live);
+        assert_eq!(dec.press, [None, None], "after a drop-out");
+    }
+
+    /// Both buttons changing in one page are two presses, each kept until taken (review of 571e613: the second
+    /// replaced the first).
+    #[test]
+    fn di2_both_buttons_in_one_page() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Di2, [4, 0, 0, 0, 0, 0, 0, 0], 2105, &mut live);
+        dec.decode(Kind::Di2, [4, 0x21, 0x11, 0, 0, 0, 0, 0], 2105, &mut live);
+        assert_eq!(dec.press, [Some(Press::RightLong), Some(Press::LeftShort)]);
+    }
+
+    /// A 1x ANT+ Shifting system (no front, 7): the rear alone, front 0 (review of 571e613: never a gear).
+    #[test]
+    fn shifting_one_by() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Shifting, [1, 0, 0xff, 7 << 5 | 10, 0 << 5 | 12, 0, 0, 0], 2105, &mut live);
+        assert_eq!(live.get(Metric::Gear), Some(11));
     }
 
     /// The shifting systems' gear and battery (sensors.rs module doc): ANT+ page 1 from 0 with all ones for none,

@@ -519,6 +519,8 @@ pub struct Nordic {
     pub dead: bool,
     /// A BLE command the chip refuses (NRF_ERROR_NO_MEM), as one whose configuration it lacks would.
     pub refuse: Option<u8>,
+    /// An ANT command the chip refuses on a channel (op, channel), with an error code.
+    pub ant_refuse: Option<[u8; 2]>,
     /// Reset since power-up: before that, commands would go nowhere.
     pub reset: bool,
     pub enabled: bool,
@@ -643,6 +645,10 @@ impl Nordic {
             return;
         }
         if let [6, op, ch, rest @ ..] = p {
+            if self.ant_refuse == Some([*op, *ch]) {
+                self.queue(&[1, *op, 0x15, 0, 0, 0]);
+                return;
+            }
             let ch = usize::from(*ch);
             match (*op, rest) {
                 (0xcc, [k @ ..]) if k.len() == 8 => {
@@ -917,8 +923,8 @@ impl Board for Sim {
     fn nrf_reset(&mut self) {
         let sensors = std::mem::take(&mut self.nordic.sensors);
         let phone = self.nordic.phone.take();
-        let (dead, refuse) = (self.nordic.dead, self.nordic.refuse);
-        self.nordic = Nordic { dead, refuse, sensors, phone, reset: true, ..Nordic::default() };
+        let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
+        self.nordic = Nordic { dead, refuse, ant_refuse, sensors, phone, reset: true, ..Nordic::default() };
         self.ms += 950;
     }
 

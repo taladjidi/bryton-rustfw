@@ -47,7 +47,8 @@ The dated findings are in [journal.md](journal.md).
   stock's gear ratio code); SHIFT BAT shows the percent stock's Sensor Details showed (60 % on the patch project's
   picture; the byte is inferred to be a percent). DI2 KEYS: set R PRESS to NEXT PAGE, press the right hood button
   once: one page; a long press: its action; the left button too (the sides inferred from stock: byte 1 right,
-  byte 2 left). A ride with shifts: SHIFTS counts them, and the saved file has gear change events (fitdecode, or
+  byte 2 left); START set on a button, restart the unit after a press: the ride must not start by itself (the
+  Di2's first button page is taken as the baseline, inferred: it repeats the last press byte). A ride with shifts: SHIFTS counts them, and the saved file has gear change events (fitdecode, or
   Intervals.icu's gear chart). A Di2 switched off (or out of range): GEAR goes to "--". An ANT+ Shifting system
   (SRAM AXS) if one can be borrowed: SHIFTING row, gear, battery status.
 

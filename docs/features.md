@@ -233,11 +233,15 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
 - **Electronic shifting** (not yet seen on the unit): **DI2** (Shimano's own ANT channel, as stock and the patched
   stock firmware's P12 use it; needs Shimano's network key, copied from your stock image with the ANT+ one by
   `tools/ant_key.py`) and **SHIFTING** (the public ANT+ Shifting profile: SRAM AXS, Campagnolo), paired from the
-  sensors menu; one shifting system is kept per bike. Fields (group SHIFTING): **GEAR** front-rear ("2-11"),
+  sensors menu; one shifting system at a time (pairing one forgets the other). Fields (group SHIFTING): **GEAR**
+  front-rear ("2-11"; a 1x system the rear alone, "11"),
   **SHIFTS** in this ride, **SHIFT BAT** (Di2: percent; ANT+: NEW, GOOD, OK, LOW, CRIT; red when low). Each shift
   while riding goes in the ride file as a FIT gear change event (front or rear, the gears after it), as stock
   writes them. **DI2 KEYS** (sensors menu): what each hood button press does (left / right, single / long): next
-  or previous page, lap, start, play / pause, next or previous track, or nothing. IMPORT takes the Di2 and its
+  or previous page, lap, start, play / pause, next or previous track, or nothing. Page, lap and start act on the
+  ride pages and the overview only (a lap on the overview too while riding), never as keys in a menu or on a call;
+  play and the tracks work everywhere. The Di2 repeats its last press, so its first button page after a start is
+  not a press. IMPORT takes the Di2 and its
   button actions from stock's Sensor.ini (P12's numbers included). Not done: the gear ratio (needs the chainring
   and cassette teeth), the ANT+ Shifting remotes' buttons (no public layout).
 - **GPS** (u-blox M10): speed when no wheel sensor is paired; at power-up it gets the time and the last position,

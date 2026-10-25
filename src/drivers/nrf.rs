@@ -365,7 +365,7 @@ pub fn ant_closed(p: &[u8]) -> Option<u8> {
 /// Enables ANT, sets the network keys (network 0 the ANT+ one, licensed; network 1 Shimano's, if given: build.rs
 /// reads both from private files, never from this repository) and assigns channel `ch` as a receiver on network
 /// `nets[ch]`, as stock does at start. A channel on network 1 without its key is left unassigned (its opening then
-/// fails). Returns whether network 1 is up.
+/// fails). Returns whether network 1 is up: its key and its channels accepted (else only the Di2 is off).
 pub fn ant_start(
     b: &mut impl Board,
     rx: &mut Rx,
@@ -385,11 +385,15 @@ pub fn ant_start(
         call(b, rx, &[ANT_CMD, 0xcc, net, k0, k1, k2, k3, k4, k5, k6, k7], &mut [])
     }
     set_key(b, rx, 0, key)?;
-    // Shimano's network failing leaves the ANT+ sensors as they are
-    let private = private.is_some_and(|k| set_key(b, rx, 1, k).is_ok());
+    // Shimano's network failing, its key or its channel, leaves the ANT+ sensors as they are (review of 571e613: a
+    // refused channel 6 took ANT down whole)
+    let mut private = private.is_some_and(|k| set_key(b, rx, 1, k).is_ok());
     for (ch, &net) in (0..).zip(nets) {
-        if net == 0 || private {
-            call(b, rx, &[ANT_CMD, 0xc2, ch, 0, net, 0], &mut [])?; // assign: slave, network `net`, no extended
+        let assign = [ANT_CMD, 0xc2, ch, 0, net, 0]; // assign: slave, network `net`, no extended
+        if net == 0 {
+            call(b, rx, &assign, &mut [])?;
+        } else if private {
+            private = call(b, rx, &assign, &mut []).is_ok();
         }
     }
     Ok(private)

@@ -83,14 +83,14 @@ fn ant_decoders() {
             dec.decode(kind, d, 2105, &mut live);
             assert!(live.get(Metric::Speed).is_none_or(|s| s <= 2_700), "{:?}", live.get(Metric::Speed));
             if let Some(g) = live.get(Metric::Gear) {
-                assert!(g >> 8 > 0 && g & 0xff > 0, "gears from 1: {g:x}");
+                assert!(g & 0xff > 0, "rear from 1 (the front 0 for a 1x): {g:x}");
                 gears += 1;
             }
             if let Some(b) = live.get(Metric::ShiftBattery) {
                 assert!(b <= 100 || (SHIFT_STATUS + 1..=SHIFT_STATUS + 5).contains(&b), "battery {b:x}");
                 batteries += 1;
             }
-            presses += usize::from(dec.press.take().is_some());
+            presses += core::mem::take(&mut dec.press).iter().flatten().count();
         }
     }
     assert!(gears > 1000 && batteries > 1000 && presses > 100, "reached: {gears} {batteries} {presses}");

@@ -349,11 +349,13 @@ impl Writer {
     }
 
     /// A gear change at `time` (the front one if `front`, else the rear): event front_gear_change (42) or
-    /// rear_gear_change (43), type marker (3), with the gears after it, from 1. The teeth are not known: 0xff
-    /// (invalid). Stock writes the same events (`Fit_WriteGearChangeEvent` 0xd021b9a4).
+    /// rear_gear_change (43), type marker (3), with the gears after it, from 1 (0: none, a 1x system's front). The
+    /// data field's components (FIT profile, gear_change_data): rear_gear_num, rear_gear, front_gear_num, front_gear
+    /// from the low byte up, all uint8z, so the teeth, not known, are 0 (invalid), never 0xff (255 teeth: review of
+    /// 571e613). Stock writes the same events (`Fit_WriteGearChangeEvent` 0xd021b9a4).
     pub fn gear(&mut self, sink: &mut impl Sink, time: u32, front: bool, front_n: u8, rear_n: u8) -> Result<(), Error> {
         self.last = self.last.max(time);
-        let data = 0xff00_ff00 | u32::from(front_n) << 16 | u32::from(rear_n);
+        let data = u32::from(front_n) << 16 | u32::from(rear_n);
         self.message(sink, L_GEAR, 21, &GEAR_EVENT, &[self.last, if front { 42 } else { 43 }, 3, data])
     }
 
@@ -968,7 +970,11 @@ mod tests {
         let m = decode(&f).unwrap();
         let gears: Vec<_> = m.iter().filter(|x| x.0 == 21 && field(x, 1) == Some(3)).collect();
         assert_eq!(gears.len(), 2);
-        assert_eq!((field(gears[0], 0), field(gears[0], 3)), (Some(43), Some(0xff02_ff0a)), "rear: 2-10");
+        assert_eq!(
+            (field(gears[0], 0), field(gears[0], 3)),
+            (Some(43), Some(0x0002_000a)),
+            "rear: 2-10, teeth invalid (0)"
+        );
         assert_eq!((field(gears[1], 0), field(gears[1], 253)), (Some(42), Some(u64::from(T0 + 30))), "front");
         let defs = f.windows(6).filter(|d| d[0] == 0x40 | L_GEAR && d[3..6] == [21, 0, 4]).count();
         assert_eq!(defs, 1, "defined once");

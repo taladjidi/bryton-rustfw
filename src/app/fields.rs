@@ -164,9 +164,12 @@ impl App {
             }
             Field::Gear => {
                 match self.live.get(Metric::Gear) {
+                    // a 1x system (no front, 0): the rear alone, "11" (sensors.rs)
                     Some(g) => {
-                        l.push_u32(u32::from(g >> 8));
-                        l.push_str("-");
+                        if g >> 8 != 0 {
+                            l.push_u32(u32::from(g >> 8));
+                            l.push_str("-");
+                        }
                         l.push_u32(u32::from(g & 0xff));
                     }
                     None => l.push_str("--"),

@@ -127,6 +127,26 @@ impl App {
         Screen::Ride(n)
     }
 
+    /// The screen Page (`next`) or a swipe right (back) goes to from a ride page or the overview: the next or the
+    /// previous ride page in the round, the first one from the overview (none before it); else the screen as is.
+    fn paged(&self, next: bool) -> Screen {
+        match (self.screen, next) {
+            (Screen::Main, true) => self.ride_page(0, 1),
+            (Screen::Ride(n), true) => self.ride_page(place(n) + 1, 1),
+            (Screen::Ride(n), false) => self.ride_page(place(n) + ROUND - 1, ROUND - 1),
+            (s, _) => s,
+        }
+    }
+
+    /// The next or the previous ride page ([`App::paged`]), drawn: a shifter's press ([`App::remote`]).
+    pub(crate) fn page_by(&mut self, b: &mut impl Board, next: bool) {
+        let before = self.screen;
+        self.screen = self.paged(next);
+        if self.screen != before {
+            self.show(b);
+        }
+    }
+
     /// Ride page `n` is in the round: a page not off, the course page while a course is followed.
     pub(crate) fn page_on(&self, n: usize) -> bool {
         // a course followed, whether or not the map can draw it yet (no fix, a ride started without one: review)
@@ -262,9 +282,8 @@ impl App {
             }
             // the overview is apart from the ride pages, as on stock: Page goes to them, then round them; Back
             // comes back
-            (Screen::Main, Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => self.screen = self.ride_page(0, 1),
-            (Screen::Ride(n), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
-                self.screen = self.ride_page(place(n) + 1, 1)
+            (Screen::Main | Screen::Ride(_), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
+                self.screen = self.paged(true)
             }
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
             (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.zoom_at(x, y).is_some() => {
@@ -303,9 +322,7 @@ impl App {
                 }
                 return self.show(b);
             }
-            (Screen::Ride(n), Input::Touch(Gesture::Swipe(Dir::Right))) => {
-                self.screen = self.ride_page(place(n) + ROUND - 1, ROUND - 1)
-            }
+            (Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => self.screen = self.paged(false),
             (Screen::Ride(_), Input::Back) => self.screen = Screen::Main,
             (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
                 if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
@@ -317,19 +334,7 @@ impl App {
                 self.open(Screen::Menu(Menu::Main, 0))
             }
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
-            (Screen::Ride(_), Input::Select) => {
-                self.start_pause();
-                if !core::mem::take(&mut self.new_ride) {
-                    return;
-                }
-                return self.show(b); // the page again, with the new ride's map and graphs
-            }
-            // Start on the overview too, which then shows the first ride page
-            (Screen::Main, Input::Select) => {
-                self.start_pause();
-                self.new_ride = false; // the page is drawn anew anyway
-                self.screen = Screen::Ride(0);
-            }
+            (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
             (Screen::Main | Screen::Ride(_), Input::End) => {
                 let Some(ev) = self.ride.end() else { return };
                 self.recorder(ev);
@@ -337,20 +342,7 @@ impl App {
                 self.screen = Screen::Summary; // the ride's card; any key goes on to the overview
             }
             (Screen::Summary, _) => self.screen = Screen::Main,
-            (Screen::Ride(_), Input::Prev) => {
-                if let Some(ev) = self.ride.lap() {
-                    self.say("LAP");
-                    self.recorder(ev);
-                    // a workout goes on to its next step (an open step ends here)
-                    let (steps, dist) = (self.plan.steps(), self.ride.dist_m());
-                    if let Some(e) =
-                        self.player.as_mut().filter(|p| p.step(steps).is_some()).map(|p| p.skip(steps, dist))
-                    {
-                        self.workout_event(e);
-                    }
-                }
-                return;
-            }
+            (Screen::Ride(_), Input::Prev) => return self.lap(),
             (Screen::Main, Input::Back) => {
                 self.backlight = !self.backlight;
                 self.update_light(b);
