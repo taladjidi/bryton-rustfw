@@ -4,8 +4,10 @@
 //! from it under the arrow and the track, so moving them never draws a road again.
 //!
 //! **IGN first:** where the owner's IGN packs (`\Rustfw\Maps`, [`crate::ign`]) have the tile under the view's
-//! centre, the view is drawn from them: the finest zoom whose 256-pixel tiles are drawn at least 256 pixels wide
-//! (enlarged up to 2x, nearest pixel, never shrunk: no thin line lost), else up to 2 coarser ones.
+//! centre, the view is drawn from them: the finest zoom whose 256-pixel tiles are drawn at least `RASTER_PX`
+//! (200) pixels wide, nearest pixel, so from 0.78x up to 2x, else up to 2 coarser ones. At 2 m a pixel at 45 N
+//! that is zoom 16 at 0.85x, sharper than zoom 15 enlarged 1.7x (the owner's test on the unit, 2026-10-25: "still
+//! pixelated"); a shrink under 1x can drop a row or a column of a one-pixel line, which 0.78x keeps rare.
 //! A view shows at most [`RASTERS`] tiles, each read once (its index entry: one sector; its bytes: about 20 KB),
 //! decoded straight to RGB565 and held in SDRAM; stock's map is drawn under them only when one of them is not in
 //! the packs (the edge of the packed area). "(c) IGN" goes into the buffer's bottom right corner, as the licence
@@ -62,14 +64,14 @@ const FEATS: usize = 8192;
 /// Points kept a tile, x and y (the largest seen: about 18,000).
 const PTS: usize = 32_768;
 const SLOT_WORDS: usize = FEATS * 4 + PTS * 2;
-/// IGN tiles kept decoded (RGB565, 128 KB each): as many as a view shows at most, since they are drawn 256 pixels
-/// wide or more (2 columns of the 240-pixel map by 3 rows of its 296).
-pub const RASTERS: usize = 6;
-/// The memory the basemap needs, 16-bit words: the pixels, stock's tiles, then IGN's (2.0 MB).
+/// IGN tiles kept decoded (RGB565, 128 KB each): as many as a view shows at most, since they are drawn 200 pixels
+/// wide or more (3 columns of the 240-pixel map by 3 rows of its 296).
+pub const RASTERS: usize = 9;
+/// The memory the basemap needs, 16-bit words: the pixels, stock's tiles, then IGN's (2.4 MB, link.x MAP).
 pub const MEM_WORDS: usize = PIXELS + SLOTS * SLOT_WORDS + RASTERS * ign::TILE;
-/// IGN tiles are drawn at least this wide (pixels), enlarged up to twice: never shrunk, so no thin line or letter
-/// is lost to the nearest-pixel scaling.
-const RASTER_PX: f64 = 256.0;
+/// IGN tiles are drawn at least this wide (pixels): shrunk to 0.78x at most (a finer zoom drawn small is sharper
+/// than a coarser one enlarged), enlarged up to twice (the next zoom is then shrunk under 1x instead).
+const RASTER_PX: f64 = 200.0;
 /// The finest zoom asked of the packs (a finer view enlarges a coarser tile), and the coarser ones tried.
 const IGN_MAX_ZOOM: u8 = 18;
 const IGN_FALLBACK: u8 = 2;
@@ -595,7 +597,7 @@ impl Ign {
 }
 
 /// Draws IGN tile `tile` (256 x 256 RGB565) at `p` into the area's pixels, each pixel the tile's pixel under its
-/// centre (nearest: tiles are only ever enlarged, [`RASTER_PX`]); the pixels written.
+/// centre (nearest, 0.78x to 2x: [`RASTER_PX`]); the pixels written.
 fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
     // grid unit u lands at (a u + b) >> 16, so pixel s's centre is at u = ((s + 1/2) 2^16 - b) / a, 16 a pixel
     let at = |s: i32, a: i64, b: i64| {
@@ -1352,23 +1354,42 @@ pub(crate) mod tests {
         ((0..256).contains(&i) && (0..256).contains(&j)).then_some((i as u32, j as u32))
     }
 
-    /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m and
-    /// 4 m a pixel (zooms 16 and 15, tiles drawn 305 pixels wide); "(c) IGN" in the corner; held tiles not read
-    /// again; the tile missing from the pack shows stock's map under it.
+    /// The IGN zoom of a view: the finest whose tiles are drawn at least 200 pixels wide. At 45 N, 2 m a pixel is
+    /// zoom 16 at 0.85x (zoom 15 enlarged 1.7x before: "still pixelated", the owner on the unit), 1.5 m zoom 16 at
+    /// 1.13x, 3 m zoom 15 at 1.13x (zoom 16 would be 0.56x).
+    #[test]
+    fn ign_zoom_by_scale() {
+        let at45 = (450_000_000, 60_000_000);
+        let z = |mpp16| Frame::new(View { cx: 0, cy: 0, mpp16 }, at45, 240, 296).raster_zoom;
+        assert_eq!([24, 32, 48, 64, 96].map(z), [16, 16, 15, 15, 14]);
+    }
+
+    /// The map's memory in link.x (MAP) holds what the basemap needs: less, and it would have no basemap at all.
+    #[test]
+    fn link_map_region_holds_the_basemap() {
+        let link = include_str!("../../link.x");
+        let line = link.lines().find(|l| l.trim_start().starts_with("MAP (rw)")).unwrap();
+        let k: usize = line.rsplit("LENGTH = ").next().unwrap().trim_end_matches('K').trim().parse().unwrap();
+        assert!(k * 1024 >= MEM_WORDS * 2, "MAP {k} KB, the basemap needs {} B", MEM_WORDS * 2);
+    }
+
+    /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m,
+    /// 3 m and 4 m a pixel (zooms 16 at 305 and 204 pixels wide, 15 at 305); "(c) IGN" in the corner; held tiles
+    /// not read again; the tile missing from the pack shows stock's map under it.
     #[test]
     fn draws_ign_tiles() {
         let mut d = Ram(image_with_packs(), 0);
         let mut b = basemap();
         let h = 1u32 << 15;
-        for (mpp16, z) in [(32, 16u8), (64, 15)] {
+        for (mpp16, z, read) in [(32, 16u8, 4), (48, 16, 0), (64, 15, 4)] {
             let v = View { cx: 100, cy: 50, mpp16 };
             let reads = d.1;
             b.render(&mut d, AREA, v, ORIGIN);
             std::println!("ign z{z}: {:?}, {} sector reads", b.stats, d.1 - reads);
             assert!(b.stats.ign && b.stats.zoom == z, "{:?}", b.stats);
-            assert_eq!(b.stats.ign_tiles, 4, "the 4 tiles around the origin");
+            assert_eq!(b.stats.ign_tiles, read, "the 4 tiles around the origin (at 3 m, held from 2 m)");
             let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
-            save(px, AREA, &std::format!("ign_z{z}"));
+            save(px, AREA, &std::format!("ign_z{z}_{mpp16}"));
             let k = 1u32 << (z - 1);
             let mut checked = 0;
             for y in 0..AREA.3 - 12 {

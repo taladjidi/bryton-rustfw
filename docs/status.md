@@ -103,8 +103,11 @@ The dated findings are in [journal.md](journal.md).
   readable in full sun at 1 % (compare LIGHT % 100 and 10 outdoors)?
 - **Backlight levels** (60 / 30 / 10 %) and the time-out, each by eye.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
-- **The map's zoom buttons** ("+" and "-" on the full-page map): hit with a gloved finger, the time of a re-centre
-  over IGN at 2 m a pixel, and whether one every 35 s or so is acceptable awake time.
+- **The map's zoom buttons** ("+" and "-" on the full-page map, now any level, coarser than the fit too, and the
+  crosshair back to the fit): hit with a gloved finger indoors (the fit at 2 m: "-" must zoom out, the drag pan),
+  the time of a re-centre over IGN at 1.5 and 2 m a pixel (`dev.py mapbench`), and whether one every 26 to 35 s
+  is acceptable awake time. IGN zoom 16 drawn at 0.85x at 2 m (before: zoom 15 at 1.7x): sharper, or one-pixel
+  lines broken by the shrink?
 - **Panning the zoomed map** by a drag: the drag read from the panel's points (no swipe taken for a page change while
   zoomed in), the time of the redraw at the release (a basemap render plus the whole map, about 79 K pixels in the
   simulator), the crosshair button.

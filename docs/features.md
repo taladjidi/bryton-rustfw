@@ -24,24 +24,28 @@
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
     packs to `\Rustfw\Maps` (made on the computer by `tools/ign_pack.py`, docs/install.md, "IGN maps"): zooms 11
-    to 16, drawn at 1x to 2x (never shrunk, so no thin line or letter is lost), "(c) IGN" in the map's corner as
+    to 16, the finest zoom whose tiles are drawn at least 200 pixels wide (0.78x to 1.56x: zoom 16 at 2 m a pixel
+    up to 49 N, finer than zoom 15 enlarged; a one-pixel line can lose a pixel here and there when shrunk), "(c)
+    IGN" in the map's corner as
     the licence (Etalab 2.0) asks;
   - else roads and water from stock's tile cache (`\Map\Data\Temp`), also under IGN at the edge of the packed
     area.
   The map is read and drawn once per view change (at most 6 IGN tiles, about 150 KB read); the arrow and the track
   restore it from SDRAM.
   - **Zoom:** on a full-page map, "+" and "-" top right (40 x 40 pixels, for a gloved finger). Each tap is one
-    level (steps of about 1.4), down to 2 m a pixel (IGN's zoom 16 about 1:1). Zoomed in, the map follows the
-    rider: centred a little ahead of them, and centred again only when the arrow leaves the middle of the map (a
-    new basemap each time, about every 35 s at 2 m a pixel and 29 km/h). Zooming out to the fitted level goes back
-    to fitting the whole track (and course). Kept until the unit is switched off. A hold on the map still opens the
+    level (steps of about 1.4) from the one shown, finer or coarser than the fit alike (indoors the fit is already
+    at 2 m a pixel: "-" zooms out by hand), from 1.5 m a pixel (IGN's zoom 16 about 1:1 in France) out. At a
+    level set by hand the map follows the rider: centred a little ahead of them, and centred again only when the
+    arrow leaves the middle of the map (a new basemap each time, about every 26 s at 1.5 m a pixel and 29 km/h,
+    35 s at 2 m). A third button, a crosshair under "-", shown whenever the zoom is set by hand, goes back to
+    fitting the whole track (and course). Kept until the unit is switched off. A hold on the map still opens the
     menu; a map of half a page or less has no buttons. The fitted map keeps the arrow clear of the buttons.
-  - **Pan:** zoomed in, drag the map: it moves with the finger, redrawn once when the finger lifts (one new
-    basemap, no redraw while dragging), at most two map widths past the track and the course. The map then stays
-    put instead of following, and a third button, a crosshair under "-", follows the rider again. "+" and "-" zoom
-    around the centre panned to. While zoomed in, a drag on the map pans instead of changing page or opening the
-    media remote; the keys still change pages. Fitted, swipes keep their meanings. A new ride, or a course followed
-    or dropped, fits the map again.
+  - **Pan:** at a zoom set by hand, drag the map: it moves with the finger, redrawn once when the finger lifts
+    (one new basemap, no redraw while dragging), at most two map widths past the track and the course. The map
+    then stays put instead of following; "+" and "-" zoom around the centre panned to; the crosshair goes back to
+    the fit. While the zoom is set by hand, a drag on the map pans instead of changing page or opening the media
+    remote; the keys still change pages. Fitted, swipes keep their meanings. A new ride, or a course followed or
+    dropped, fits the map again.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
 
 - **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track

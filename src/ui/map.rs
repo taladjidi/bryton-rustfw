@@ -11,14 +11,16 @@
 //!   redraws each time it grows by about half.
 //! - **Manual zoom:** a map box at least [`ZOOM_BOX`] (the full-page map) has "+" and "-" buttons top right
 //!   ([`buttons`], 40 x 40 pixels for a gloved finger), drawn by [`draw`] like the rest of the map. Each tap is one
-//!   level ([`zoom`]), down to level [`MIN_LEVEL`] (2 m a pixel: IGN's zoom 16 drawn about 1:1). Zoomed in, the view
-//!   follows the rider ([`View::follow`]): it is centred a sixth of the map ahead of them, and centred again only
-//!   when the arrow leaves the middle three fifths, so the basemap is drawn once per re-centre, not every second.
-//!   Zooming out to the level the fit would choose, or past it, goes back to the fit.
-//! - **Pan:** zoomed in, a drag on the map moves it with the finger ([`pan`]), once at the release (one basemap per
-//!   view, no redraw while the finger moves), at most [`PAN_SCREENS`] maps' widths past the track and the course.
-//!   The view then stays where it was put ([`Zoom::centre`]) instead of following, until the third button ("re-centre",
-//!   a crosshair, under "-" while panned) is tapped. "+" and "-" zoom around the centre of the view panned to.
+//!   level ([`zoom`]) from the one shown, finer or coarser than the fit alike (indoors the fit is already the
+//!   finest it takes, [`FIT_LEVEL`]: the owner's "+" and "-" did nothing, 2026-10-25), from [`MIN_LEVEL`] (1.5 m a
+//!   pixel: IGN's zoom 16 drawn about 1:1 in France) to [`MAX_LEVEL`]. At a manual level the view follows the rider
+//!   ([`View::follow`]): it is centred a sixth of the map ahead of them, and centred again only when the arrow
+//!   leaves the middle three fifths, so the basemap is drawn once per re-centre, not every second. The third
+//!   button, a crosshair under "-", shown at any manual level, goes back to the automatic fit.
+//! - **Pan:** at a manual level, a drag on the map moves it with the finger ([`pan`]), once at the release (one
+//!   basemap per view, no redraw while the finger moves), at most [`PAN_SCREENS`] maps' widths past the track and
+//!   the course. The view then stays where it was put ([`Zoom::centre`]) instead of following; "+" and "-" zoom
+//!   around the centre of the view panned to; the crosshair goes back to the fit.
 //! - **Redraw:** otherwise only the box around the new segment and the arrow's old and new places is drawn, from
 //!   the state, through [`Clip`]: the same [`draw`] paints the whole map, a dirty box, or one screenshot row (each
 //!   segment is a run per row, clipped to [`Canvas::clip`]), so they agree by construction.
@@ -35,8 +37,12 @@ use crate::ui::{self, Canvas, H, LABEL, W};
 pub const POINTS: usize = 512;
 /// Spacing of the track points until the track first fills, metres.
 const FIRST_STEP_M: i32 = 10;
-/// The finest zoom level: level `i` is [`mpp16`]`(i)` / 16 metres per pixel, so 2 m (IGN's zoom 16 about 1:1).
-pub const MIN_LEVEL: u32 = 2;
+/// The finest zoom level: level `i` is [`mpp16`]`(i)` / 16 metres per pixel, so 1.5 m (IGN's zoom 16 drawn 1.1x
+/// at 45 N, 1.6 m a tile pixel there).
+pub const MIN_LEVEL: u32 = 1;
+/// The finest level the fit takes, 2 m a pixel: finer is the rider's choice ("+"), since a re-centre costs a
+/// basemap.
+pub const FIT_LEVEL: u32 = 2;
 /// The coarsest zoom level, about 1000 km a pixel.
 pub const MAX_LEVEL: u32 = 40;
 /// The smallest map box with the zoom buttons, pixels: the full-page map (layout 1, 240 x 296), not half a page.
@@ -295,7 +301,7 @@ impl View {
         track.pos?;
         let (sx, sy) = (i64::from(max.0) - i64::from(min.0), i64::from(max.1) - i64::from(min.1));
         let fits = |m: i64| sx * 16 / m <= fw && sy * 16 / m <= fh;
-        let mpp16 = (MIN_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
+        let mpp16 = (FIT_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
         Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16 })
     }
 
@@ -385,7 +391,7 @@ pub struct Shown {
     arrow: Option<Arrow>,
     /// The course drawn ([`Route::id`]).
     route: Option<u32>,
-    /// The view follows the rider at a zoom set by hand ([`View::follow`]), not the fit.
+    /// The view is at a zoom set by hand (following the rider, [`View::follow`], or panned), not the fit.
     zoomed: bool,
     /// Zoomed and panned: the view stays at [`Zoom::centre`].
     panned: bool,
@@ -414,16 +420,16 @@ impl Shown {
         self.zoomed && self.view.is_some()
     }
 
-    /// The view is panned (the "re-centre" button is shown).
+    /// The view is panned.
     pub fn panned(&self) -> bool {
         self.panned
     }
 }
 
-/// The scale (`mpp16`) of `zoom` in `area` when it applies: a box with the buttons, finer than the fit's.
+/// The scale (`mpp16`) of `zoom` in `area` when it applies: a box with the buttons, a position to show (`fit`).
 fn zoomed(area: Rect, fit: Option<View>, zoom: Option<Zoom>) -> Option<i64> {
     let m = mpp16(zoom?.level);
-    (buttons(area).is_some() && m < fit?.mpp16).then_some(m)
+    (buttons(area).is_some() && fit.is_some()).then_some(m)
 }
 
 /// The arrow centred at `p` is under the buttons, or within half its size of them: the fit keeps clear of them
@@ -437,7 +443,7 @@ fn under_buttons(area: Rect, p: (i32, i32)) -> bool {
     buttons(area).is_some_and(|b| b.into_iter().any(near))
 }
 
-/// The "re-centre" button under "-" (shown while panned).
+/// The crosshair under "-", back to the fit (shown at a manual zoom).
 fn centre_button(area: Rect) -> Option<Rect> {
     buttons(area).map(|[_, b]| (b.0, b.1 + b.3 + 4, b.2, b.3))
 }
@@ -464,7 +470,7 @@ pub fn button_at(area: Rect, shown: &Shown, x: i32, y: i32) -> Option<Button> {
         Some(Button::In)
     } else if inside(minus) {
         Some(Button::Out)
-    } else if shown.panned && centre_button(area).is_some_and(inside) {
+    } else if shown.zoomed && centre_button(area).is_some_and(inside) {
         Some(Button::Centre)
     } else {
         None
@@ -499,13 +505,12 @@ pub fn pan(
     Some((cx, cy))
 }
 
-/// The zoom after a tap on "+" (`zoom_in`) or "-" on the map in `area` drawn as `shown`: one level from the one
-/// shown, at most [`MIN_LEVEL`]; None (the fit) at the fit's level or coarser.
-pub fn zoom(track: &Track, area: Rect, route: Option<&Route>, shown: &Shown, zoom_in: bool) -> Option<u32> {
-    let (v, fit) = (shown.view?, View::fit(track, area, route)?);
+/// The level after a tap on "+" (`zoom_in`) or "-" on the map drawn as `shown`: one from the one shown, within
+/// [`MIN_LEVEL`] and [`MAX_LEVEL`], finer or coarser than the fit; None while the map shows no view.
+pub fn zoom(shown: &Shown, zoom_in: bool) -> Option<u32> {
+    let v = shown.view?;
     let level = (MIN_LEVEL..MAX_LEVEL).find(|&l| mpp16(l) >= v.mpp16).unwrap_or(MAX_LEVEL);
-    let next = if zoom_in { level.saturating_sub(1).max(MIN_LEVEL) } else { level + 1 };
-    (mpp16(next) < fit.mpp16).then_some(next)
+    Some(if zoom_in { level.saturating_sub(1).max(MIN_LEVEL) } else { (level + 1).min(MAX_LEVEL) })
 }
 
 /// The map area of a ride field box: the box less its frame lines (ui::draw_field_frame).
@@ -653,7 +658,7 @@ pub fn draw(
     view: Option<View>,
     base: Option<&Basemap>,
     route: Option<&Route>,
-    panned: bool,
+    manual: bool,
 ) {
     let mut c = Clip::new(c, area);
     let k = cut(area, c.clip());
@@ -726,7 +731,7 @@ pub fn draw(
         None => {}
     }
     let [plus, minus] = buttons(area).map_or([None, None], |b| b.map(Some));
-    let centre = centre_button(area).filter(|_| panned);
+    let centre = centre_button(area).filter(|_| manual);
     for (i, b) in [plus, minus, centre].into_iter().enumerate() {
         let Some((x, y, s)) = b.map(|b| (b.0, b.1, b.2)) else { continue };
         // a black square, a white frame and a white bar (and its upright for "+"), 4 pixels thick
@@ -797,7 +802,7 @@ pub fn update(
     let Some(v) = shown.view.filter(|_| !refit) else {
         if refit {
             *shown = Shown::of(track, area, route, zoom);
-            draw(c, area, track, shown.view, base, route, shown.panned);
+            draw(c, area, track, shown.view, base, route, shown.zoomed);
         }
         return;
     };
@@ -815,7 +820,7 @@ pub fn update(
         }
     }
     if let Some(d) = dirty {
-        draw(&mut Clip::new(c, d), area, track, shown.view, base, route, shown.panned);
+        draw(&mut Clip::new(c, d), area, track, shown.view, base, route, shown.zoomed);
     }
     shown.points = track.len;
     shown.arrow = arrow;
@@ -870,6 +875,18 @@ mod tests {
         }
         assert!(v.keeps(area, &t));
         assert_eq!(View::fit(&Track::new(), area, None), None);
+    }
+
+    /// "+" and "-" step one level from the one shown, within MIN_LEVEL (1.5 m) and MAX_LEVEL, whatever the fit.
+    #[test]
+    fn zoom_levels() {
+        let at = |mpp16| Shown { view: Some(View { cx: 0, cy: 0, mpp16 }), ..Shown::default() };
+        assert_eq!(mpp16(MIN_LEVEL), 24, "1.5 m a pixel");
+        assert_eq!(zoom(&at(32), true), Some(1), "2 m: 1.5 m");
+        assert_eq!(zoom(&at(32), false), Some(3), "2 m: 3 m");
+        assert_eq!(zoom(&at(24), true), Some(MIN_LEVEL));
+        assert_eq!(zoom(&at(mpp16(MAX_LEVEL)), false), Some(MAX_LEVEL));
+        assert_eq!(zoom(&Shown::default(), true), None);
     }
 
     /// Fitted, the arrow never sits under the zoom buttons (review of the zoom: riding north-east at 10 m/s it was

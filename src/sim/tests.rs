@@ -1718,8 +1718,8 @@ fn map_zoom_buttons() {
     for _ in 0..20 {
         tap(&mut sim, &mut app, plus);
     }
-    assert_eq!(app.map_zoom, Some(MIN_LEVEL), "no finer than 2 m a pixel");
-    assert_eq!(app.map_view(0).unwrap().mpp16, 32);
+    assert_eq!(app.map_zoom, Some(MIN_LEVEL), "no finer than 1.5 m a pixel");
+    assert_eq!(app.map_view(0).unwrap().mpp16, 24);
     sim.save("map_zoom_in");
     // riding on, zoomed in: the view follows, centred again only when the arrow leaves the middle part
     let (t0, px0) = (sim.ms, sim.pixels);
@@ -1729,7 +1729,7 @@ fn map_zoom_buttons() {
         run(&mut sim, &mut app, u64::from(POLL_MS));
         let v = app.map_view(0).unwrap();
         recentres += u32::from(Some(v) != view);
-        assert_eq!(v.mpp16, 32, "the zoom kept");
+        assert_eq!(v.mpp16, 24, "the zoom kept");
         let (x, y) = v.px(area, app.track.pos().unwrap());
         assert!(x >= area.2 / 6 && x < area.2 * 5 / 6, "the arrow on the map: {x}");
         assert!(y >= area.1 + area.3 / 6 && y < area.1 + area.3 * 5 / 6, "the arrow on the map: {y}");
@@ -1738,20 +1738,23 @@ fn map_zoom_buttons() {
         }
     }
     let s = (sim.ms - t0) / 1000;
-    std::println!("map zoomed in at 2 m a pixel: {recentres} re-centres in {s} s, {} px/s", (sim.pixels - px0) / s);
+    std::println!("map zoomed in at 1.5 m a pixel: {recentres} re-centres in {s} s, {} px/s", (sim.pixels - px0) / s);
     assert!((2..=12).contains(&recentres), "followed, not redrawn every second: {recentres}");
     sim.save("map_zoom_follow");
-    // out again, a level at a time, until the fit: then automatic
-    let mut taps = 0;
-    while app.map_zoom.is_some() && taps < 40 {
+    // out again, a level at a time, past the fit: still by hand, coarser than the fit
+    let fit_level = (MIN_LEVEL..map::MAX_LEVEL).find(|&l| mpp16(l) == fit.mpp16).unwrap();
+    for _ in MIN_LEVEL..fit_level + 2 {
         tap(&mut sim, &mut app, minus);
-        taps += 1;
     }
+    assert_eq!(app.map_zoom, Some(fit_level + 2), "coarser than the fit, by hand");
+    assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(fit_level + 2));
+    // the crosshair: back to the fit
+    let centre = (minus.0, minus.1 + minus.3 + 4, minus.2, minus.3);
+    sim.save("map_zoom_out");
+    tap(&mut sim, &mut app, centre);
     assert_eq!(app.map_zoom, None, "back to the fit");
     let shown = map::Shown::of(&app.track, area, None, None);
     assert_eq!(app.map_view(0), shown.view, "the fitted view");
-    tap(&mut sim, &mut app, minus);
-    assert_eq!(app.map_zoom, None, "no coarser than the fit");
     // a hold on the map still opens the menu, even on a button
     app.input(&mut sim, Input::Touch(Gesture::Hold((plus.0 + 4) as u16, (plus.1 + 4) as u16)));
     assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
@@ -1769,6 +1772,62 @@ fn map_zoom_buttons() {
         assert_eq!(app.map_zoom, Some(MIN_LEVEL + 1), "no buttons, no zoom");
     }
     sim.save("map_zoom_half");
+}
+
+/// Indoors (the owner's test on the unit, 2026-10-25: "the map's gestures don't work"): a fix that does not move,
+/// so the fit is already the finest it takes (2 m a pixel). "-" zooms out by hand, a drag pans that view, the
+/// crosshair goes back to the fit, "+" goes finer than the fit (1.5 m); before, "+" and "-" both left the fit and
+/// nothing could pan.
+#[test]
+fn map_zoom_indoors() {
+    use crate::map::{self, FIT_LEVEL, MIN_LEVEL, mpp16};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    sim.gnss.fix = Some(500);
+    run(&mut sim, &mut app, 30_000);
+    let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [plus, minus] = map::buttons(area).unwrap();
+    let centre = (minus.0, minus.1 + minus.3 + 4, minus.2, minus.3);
+    let tap = |sim: &mut Sim, app: &mut App, b: map::Rect| {
+        app.input(sim, Input::Touch(Gesture::Tap((b.0 + b.2 / 2) as u16, (b.1 + b.3 / 2) as u16)));
+        assert_consistent(sim, app);
+    };
+    let fit = app.map_view(0).unwrap();
+    assert_eq!(fit.mpp16, mpp16(FIT_LEVEL), "indoors: the fit at its finest");
+    let count = |sim: &Sim, c: u16| {
+        let r = centre;
+        (r.1..r.1 + r.3)
+            .flat_map(|y| (r.0..r.0 + r.2).map(move |x| (x, y)))
+            .filter(|&(x, y)| sim.screen[(y as u32 * ui::W + x as u32) as usize] == c)
+            .count()
+    };
+    let no_crosshair = count(&sim, ui::WHITE);
+    tap(&mut sim, &mut app, minus);
+    assert_eq!(app.map_zoom, Some(FIT_LEVEL + 1), "out by hand from the fit");
+    assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(FIT_LEVEL + 1));
+    assert!(count(&sim, ui::WHITE) > no_crosshair + 100, "the crosshair drawn");
+    sim.save("map_zoom_indoors_out");
+    // a drag pans it (3 m a pixel: left and down, the view goes east and north)
+    let before = app.map_view(0).unwrap();
+    drag(&mut sim, &mut app, (100, 200), (-60, 30));
+    let v = app.map_view(0).unwrap();
+    assert_eq!((v.cx, v.cy), (before.cx + 180, before.cy + 90), "the view moved with the finger: {v:?}");
+    assert_eq!(app.screen(), Screen::Ride(2));
+    assert_consistent(&sim, &app);
+    // the crosshair: the fit again, the crosshair gone
+    tap(&mut sim, &mut app, centre);
+    assert_eq!((app.map_zoom, app.map_centre), (None, None));
+    assert_eq!(app.map_view(0), Some(fit));
+    assert_eq!(count(&sim, ui::WHITE), no_crosshair, "no crosshair at the fit");
+    // finer than the fit
+    tap(&mut sim, &mut app, plus);
+    assert_eq!(app.map_zoom, Some(MIN_LEVEL));
+    assert_eq!(app.map_view(0).unwrap().mpp16, 24, "1.5 m a pixel");
+    sim.save("map_zoom_indoors_in");
 }
 
 /// A zoom set in one ride is not the next ride's (review: unused while the new fit was finer, it came back by
@@ -2601,7 +2660,7 @@ fn perf_budgets() {
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
     type Case = (&'static str, [PageCfg; 3], usize, Option<u32>, (u64, u64));
-    let cases: [Case; 7] = [
+    let cases: [Case; 8] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, None, (150, 5)),
         // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
@@ -2618,8 +2677,11 @@ fn perf_budgets() {
         // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
         // NEXT TURN's last digit (1548 before it), the turn's two banners
         ("course page", [values, graph, map], crate::COURSE, None, (2_600, 20)),
-        // 3400, 41: zoomed in at 2 m a pixel (map.rs), following the rider: a whole map at each re-centre (~35 s)
-        ("map zoomed", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (4_500, 60)),
+        // 4563, 44: zoomed in at 1.5 m a pixel (map.rs MIN_LEVEL), following the rider: a whole map at each
+        // re-centre (about every 26 s at 8 m/s)
+        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (6_000, 60)),
+        // 3470, 42: at 2 m a pixel, a re-centre about every 35 s
+        ("map zoomed 2 m", [map, values, graph], 0, Some(2), (4_500, 60)),
     ];
     let mut over = std::vec::Vec::new();
     for (name, pages, screen, zoom, (px_max, win_max)) in cases {
