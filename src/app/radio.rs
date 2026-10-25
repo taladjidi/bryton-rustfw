@@ -81,6 +81,7 @@ impl App {
                 if let Some(r) = nrf::adv_report(p) {
                     title |= self.nearby.add(&r);
                     self.list_dirty = true;
+                    self.list_dirty |= self.ftms.found(&r);
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {

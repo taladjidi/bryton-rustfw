@@ -415,7 +415,8 @@ impl App {
             Adv::Fast => ADV_FAST,
             Adv::Slow => ADV_SLOW,
         };
-        self.phone.adv = if ble::adv_start(b, &mut self.rx, interval, timeout).is_ok() { want } else { Adv::Off };
+        let tag = self.conn_tag();
+        self.phone.adv = if ble::adv_start(b, &mut self.rx, interval, timeout, tag).is_ok() { want } else { Adv::Off };
     }
 
     /// What advertising should be while not connected: slow when bonded, else none.
@@ -608,9 +609,19 @@ impl App {
         (p.busy_ms, p.fetching) = (0, p.busy && matches!(op, Op::Fetch(_)));
     }
 
-    /// One BLE event from the chip (not an advertising report: radio.rs has those).
+    /// The connection configuration tag links use: [`ble::TAG`] when the chip took the two links' configuration, else
+    /// the default one.
+    pub(crate) fn conn_tag(&self) -> u8 {
+        if self.ble.is_some_and(|v| v.central) { ble::TAG } else { 0 }
+    }
+
+    /// One BLE event from the chip (not an advertising report: radio.rs has those): the trainer's link's to
+    /// app/ftms.rs, the rest the phone's.
     pub(crate) fn phone_event(&mut self, b: &mut impl Board, p: &[u8]) {
         let Some(e) = ble::event(p) else { return };
+        if self.ftms_owns(&e) {
+            return self.ftms_event(b, e);
+        }
         let rx = &mut self.rx;
         match e {
             Event::Connected { conn, role: 1, peer } => {
@@ -680,10 +691,12 @@ impl App {
             }
             Event::ParamRequest { conn, id } => {
                 let _ = match id {
-                    0x1f => ble::conn_param_update(b, rx, conn),
                     0x21 => ble::phy_update(b, rx, conn),
                     _ => ble::data_length_update(b, rx, conn),
                 };
+            }
+            Event::ConnParamRequest { conn, params } => {
+                let _ = ble::conn_param_update(b, rx, conn, params); // for a central only: not the phone's link
             }
             Event::UserMemRequest { conn } => {
                 let _ = ble::user_mem_reply(b, rx, conn);
@@ -695,22 +708,22 @@ impl App {
                     self.idle_advertising(b);
                 }
             }
-            Event::GattTimeout => {
+            Event::GattTimeout { conn } if Some(conn) == self.phone.conn => {
                 // no more ATT on this link (Core spec, ATT transaction time-out): dropped, as Nordic's examples do
                 self.phone.disc = Disc::Idle;
-                if let Some(conn) = self.phone.conn {
-                    let _ = ble::disconnect(b, rx, conn);
-                }
+                let _ = ble::disconnect(b, rx, conn);
             }
-            Event::Hvx { handle, kind, data } => self.phone_hvx(b, handle, kind, data),
-            Event::Services { .. }
-            | Event::Chars { .. }
-            | Event::Descs { .. }
-            | Event::Read { .. }
-            | Event::Written { .. } => {
-                if let Some(conn) = self.phone.conn {
-                    self.client_answer(b, conn, e);
-                }
+            Event::Hvx { conn, handle, kind, data } if Some(conn) == self.phone.conn => {
+                self.phone_hvx(b, handle, kind, data)
+            }
+            Event::Services { conn, .. }
+            | Event::Chars { conn, .. }
+            | Event::Descs { conn, .. }
+            | Event::Read { conn, .. }
+            | Event::Written { conn, .. }
+                if Some(conn) == self.phone.conn =>
+            {
+                self.client_answer(b, conn, e);
             }
             _ => {}
         }
@@ -720,7 +733,7 @@ impl App {
     fn client_answer(&mut self, b: &mut impl Board, conn: u16, e: Event) {
         let p = &mut self.phone;
         match (p.disc, e) {
-            (Disc::Service(n), Event::Services { status: 0, list }) => {
+            (Disc::Service(n), Event::Services { status: 0, list, .. }) => {
                 match ble::services(list).find(|(u, ..)| *u == p.service(n)) {
                     Some((_, start, end)) => {
                         (p.svc_end, p.n_decls) = (end, 0);
@@ -730,7 +743,7 @@ impl App {
                 }
             }
             (Disc::Service(n), _) => p.disc = Disc::Service(n + 1), // not there
-            (Disc::Chars(n, from), Event::Chars { status: 0, list }) if !list.is_empty() => {
+            (Disc::Chars(n, from), Event::Chars { status: 0, list, .. }) if !list.is_empty() => {
                 let mut last = 0;
                 for (uuid, _, decl, value) in ble::chars(list) {
                     if let Some(slot) = p.slot(uuid) {
@@ -747,7 +760,7 @@ impl App {
                 p.disc = if last >= from && last < p.svc_end { Disc::Chars(n, last + 1) } else { Disc::Descs(n) };
             }
             (Disc::Chars(n, _), _) => p.disc = Disc::Descs(n), // the end of the characteristics
-            (Disc::Descs(_), Event::Descs { status: 0, list }) => {
+            (Disc::Descs(_), Event::Descs { status: 0, list, .. }) => {
                 let cccd = ble::descs(list).find(|(_, u)| *u == (ble::CCCD, ble::UUID_BLE));
                 if let (Some((h, _)), Some(slot)) = (cccd, p.h.get_mut(p.looking)) {
                     *slot = h;
@@ -756,7 +769,7 @@ impl App {
             (Disc::Descs(_), Event::Descs { .. }) => {}
             (Disc::Subscribe(i), Event::Written { .. }) => p.disc = Disc::Subscribe(i + 1),
             (Disc::Register(i), Event::Written { .. }) => p.disc = Disc::Register(i + 1),
-            (Disc::Read(i), Event::Read { status, handle, data }) => {
+            (Disc::Read(i), Event::Read { status, handle, data, .. }) => {
                 if status == 0 && handle == p.h[CT] {
                     self.phone_time(b, Some(data), None);
                 } else if status == 0 && handle == p.h[LTI] {

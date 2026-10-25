@@ -154,14 +154,16 @@ fn boots_into_the_main_screen() {
     sim.save("preview");
 }
 
-/// Stock's order: reset, sd_ble_enable, then the version; no ANT without a key, no scan before the list; then the
-/// phone link's GATT server (app/phone.rs), and no advertising without a bond.
+/// Stock's order: reset, the two links' configuration (`sd_ble_cfg_set`), sd_ble_enable, then the version; no ANT
+/// without a key, no scan before the list; then the phone link's GATT server (app/phone.rs), and no advertising
+/// without a bond.
 #[test]
 fn starts_the_nordic_chip() {
     let mut sim = Sim::new(12, 0, 0);
     App::start(&mut sim, None);
-    assert_eq!(sim.nordic.got[..2], [vec![0, 0x60], vec![0, 0x65, 1]]);
-    assert_eq!(sim.nordic.got[2], [&[0, 0x7c, 1, 0, 4, 0, 1][..], b"S510"].concat(), "the name first");
+    let cfg = crate::nrf::CFG.map(<[u8]>::to_vec);
+    assert_eq!(sim.nordic.got[..4], [cfg[0].clone(), cfg[1].clone(), vec![0, 0x60], vec![0, 0x65, 1]]);
+    assert_eq!(sim.nordic.got[4], [&[0, 0x7c, 1, 0, 4, 0, 1][..], b"S510"].concat(), "the name first");
     assert!(sim.nordic.got.iter().all(|p| p[..2] != [0, 0x73] && p[..2] != [0, 0x8a]));
 }
 
@@ -174,7 +176,7 @@ fn a_silent_nordic_chip_does_not_stop_the_pages() {
     sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     assert!(sim.ms - t0 < 3000, "start took {} ms", sim.ms - t0);
-    assert_eq!(sim.nordic.got, [vec![0, 0x60]], "gave up after the first timeout");
+    assert_eq!(sim.nordic.got, [crate::nrf::CFG[0].to_vec()], "gave up after the first timeout");
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Page));
     assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], false) == sim.screen, "BLE in red");
@@ -1725,6 +1727,7 @@ fn menu_tree_reaches_everything() {
     let mut wanted: Vec<Row> = settings.iter().map(|&s| Row::Set(s)).collect();
     wanted.extend((0..4).map(|n| Row::Set(Setting::Remote(n))));
     wanted.extend((0..Kind::ALL.len()).map(Row::Sensor));
+    wanted.push(Row::BtTrainer);
     wanted.extend(menu::PHONE.map(Row::Phone));
     wanted.extend(menu::FITNESS.map(Row::Stock));
     wanted.extend([Row::Stock(StockRow::Import), Row::Drive, Row::Nearby, Row::About]);

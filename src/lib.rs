@@ -32,7 +32,7 @@ pub mod ui;
 pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
-pub use drivers::{ambient, battery, ble, emmc, fec, gnss, nrf, panel, sensors, touch};
+pub use drivers::{ambient, battery, ble, emmc, fec, ftms, gnss, nrf, panel, sensors, touch};
 pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
@@ -202,6 +202,8 @@ pub struct App {
     ack_gap_ms: u32,
     trainer_second: bool,
     trainer_no_control: bool,
+    /// The Bluetooth trainer's link (app/ftms.rs).
+    ftms: Ftms,
     live: Live,
     /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
     zones: [ride::ZoneHold; 4],
@@ -548,6 +550,7 @@ impl App {
             ack_gap_ms: 0,
             trainer_second: false,
             trainer_no_control: false,
+            ftms: Ftms::default(),
         }
     }
 
@@ -756,7 +759,8 @@ impl App {
                 | Menu::System
                 | Menu::BuiltIn
                 | Menu::Ride(_)
-                | Menu::Phone),
+                | Menu::Phone
+                | Menu::BtTrainers),
                 sel,
             ) if self.redraw_ms >= LIST_REDRAW_MS => {
                 self.update_menu_rows(b, menu, sel);

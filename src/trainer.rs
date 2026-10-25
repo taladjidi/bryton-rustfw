@@ -1,7 +1,7 @@
-//! The home trainer, whatever the link to it (ANT+ FE-C now, `drivers/fec.rs`; BLE FTMS later): what is read from
-//! it ([`Reading`]), what is commanded ([`Command`], [`Mode`]) and when to send it again. Pure logic, fed from the
-//! main loop's passes; the transports only turn a [`Command`] into their bytes and their bytes into a
-//! [`Reading`], so a second transport changes none of this.
+//! The home trainer, whatever the link to it (ANT+ FE-C, `drivers/fec.rs`; Bluetooth FTMS, `drivers/ftms.rs`): what
+//! is read from it ([`Reading`]), what is commanded ([`Command`], [`Mode`]) and when to send it again. Pure logic,
+//! fed from the main loop's passes; the transports only turn a [`Command`] into their bytes and their bytes into a
+//! [`Reading`], so the second transport changed none of this.
 //!
 //! The modes (the trainer profile's control pages, whose names every trainer app uses):
 //! - **ERG**: hold a target power, whatever the cadence. Driven by the workout's power step ([`Drive::erg_w`]) or,
@@ -297,6 +297,11 @@ impl Trainer {
             Sent::User => self.user_sent = false,
             Sent::Nothing => {}
         }
+    }
+
+    /// The command in force is sent again at the next free slot (the trainer took the control back, or gave it).
+    pub fn resend(&mut self) {
+        self.last = None;
     }
 
     /// The trainer went silent (or was never heard): what was sent is not known to stand any more.

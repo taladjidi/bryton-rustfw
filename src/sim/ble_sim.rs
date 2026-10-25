@@ -2,7 +2,11 @@
 //! keeps the GATT table the app builds and answers its calls as the SoftDevice API v5 serialization does
 //! (drivers/ble.rs has the sources); the phone connects to an advertising unit, pairs (Just Works) or encrypts with
 //! the key it kept, enables the HID report, serves ANCS, AMS and CTS from its own table, and posts notifications
-//! and calls at scripted times.
+//! and calls at scripted times. A second peer, an FTMS trainer ([`FtmsSim`]), advertises, takes the unit's
+//! connection as its central on connection 1, serves its table and answers its Control Point; it can be scripted
+//! to fail (a subscription forgotten, the control taken back, the link dropped, records split over notifications).
+//! The chip takes or refuses the two links' configuration (`sd_ble_cfg_set`), and refuses a connection it has no
+//! configuration for.
 
 use super::*;
 
@@ -167,7 +171,11 @@ impl Nordic {
     }
 
     fn gattc(&mut self, id: u16, status: u16, body: &[u8]) {
-        let mut p = vec![0, 0];
+        self.gattc_on(0, id, status, body);
+    }
+
+    fn gattc_on(&mut self, conn: u16, id: u16, status: u16, body: &[u8]) {
+        let mut p = conn.to_le_bytes().to_vec();
         p.extend(status.to_le_bytes());
         p.extend([0, 0]);
         p.extend(body);
@@ -286,9 +294,13 @@ impl Nordic {
         self.server.attrs.iter().any(|a| a.1 == 0x2a4d && a.0 + 1 == h)
     }
 
-    /// The phone's attributes in `start..=end` of `kind`.
-    fn phone_attrs(&self, start: u16, end: u16, f: impl Fn(&Attr) -> bool) -> Vec<Attr> {
-        let db = self.phone.as_ref().map_or(&[][..], |p| &p.db[..]);
+    /// The attributes in `start..=end` of the peer on connection `conn` (1 the trainer's, else the phone's) that `f`
+    /// takes.
+    fn phone_attrs(&self, conn: u16, start: u16, end: u16, f: impl Fn(&Attr) -> bool) -> Vec<Attr> {
+        let db = match conn {
+            1 => self.ftms.as_ref().map_or(&[][..], |t| &t.db[..]),
+            _ => self.phone.as_ref().map_or(&[][..], |p| &p.db[..]),
+        };
         db.iter().filter(|a| (start..=end).contains(&a.handle) && f(a)).cloned().collect()
     }
 
@@ -315,6 +327,7 @@ impl Nordic {
             }
             0x73 => {
                 assert!(self.phone.as_ref().is_none_or(|p| !p.connected), "advertising while connected");
+                assert_eq!(args[9], self.tag(), "advertising on the configured tag");
                 self.server.adv = Some((u16_at(4), u16_at(6), now));
                 ok(self, &[]);
             }
@@ -433,6 +446,13 @@ impl Nordic {
                 }
                 self.phone = Some(ph);
             }
+            0x76 if u16_at(0) == 1 => {
+                ok(self, &[]);
+                if let Some(t) = &mut self.ftms {
+                    t.hang_up();
+                }
+                self.evt(0x11, &[1, 0, 0x16]);
+            }
             0x76 => {
                 ok(self, &[]);
                 if let Some(ph) = &mut self.phone {
@@ -441,9 +461,9 @@ impl Nordic {
                 self.evt(0x11, &[0, 0, 0x16]);
             }
             0x94 => {
-                let want = (u16_at(5), args[7]);
-                let svcs = self.phone_attrs(1, 0xffff, |a| a.kind == Kind::Service);
-                let last = self.phone_attrs(1, 0xffff, |_| true).last().map_or(0, |a| a.handle);
+                let (conn, want) = (u16_at(0), (u16_at(5), args[7]));
+                let svcs = self.phone_attrs(conn, 1, 0xffff, |a| a.kind == Kind::Service);
+                let last = self.phone_attrs(conn, 1, 0xffff, |_| true).last().map_or(0, |a| a.handle);
                 match svcs.iter().find(|s| self.name(s.uuid) == want) {
                     Some(s) => {
                         let next = svcs.iter().map(|t| t.handle).find(|&h| h > s.handle);
@@ -454,21 +474,24 @@ impl Nordic {
                         b.extend(s.handle.to_le_bytes());
                         b.extend(end.to_le_bytes());
                         ok(self, &[]);
-                        self.gattc(0x30, 0, &b);
+                        self.gattc_on(conn, 0x30, 0, &b);
                     }
                     None => {
                         ok(self, &[]);
-                        self.gattc(0x30, 0x010a, &[0, 0]);
+                        self.gattc_on(conn, 0x30, 0x010a, &[0, 0]);
                     }
                 }
             }
             0x96 => {
-                let (start, end) = (u16_at(3), u16_at(5));
-                let decls: Vec<_> =
-                    self.phone_attrs(start, end, |a| matches!(a.kind, Kind::Decl(_))).into_iter().take(3).collect();
+                let (conn, start, end) = (u16_at(0), u16_at(3), u16_at(5));
+                let decls: Vec<_> = self
+                    .phone_attrs(conn, start, end, |a| matches!(a.kind, Kind::Decl(_)))
+                    .into_iter()
+                    .take(3)
+                    .collect();
                 ok(self, &[]);
                 if decls.is_empty() {
-                    self.gattc(0x32, 0x010a, &[0, 0]);
+                    self.gattc_on(conn, 0x32, 0x010a, &[0, 0]);
                 } else {
                     let mut b = (decls.len() as u16).to_le_bytes().to_vec();
                     for d in decls {
@@ -479,33 +502,45 @@ impl Nordic {
                         b.extend(d.handle.to_le_bytes());
                         b.extend((d.handle + 1).to_le_bytes());
                     }
-                    self.gattc(0x32, 0, &b);
+                    self.gattc_on(conn, 0x32, 0, &b);
                 }
             }
             0x97 => {
-                let (start, end) = (u16_at(3), u16_at(5));
-                let descs = self.phone_attrs(start, end, |a| a.kind == Kind::Cccd);
+                let (conn, start, end) = (u16_at(0), u16_at(3), u16_at(5));
+                let descs = self.phone_attrs(conn, start, end, |a| a.kind == Kind::Cccd);
                 ok(self, &[]);
                 if descs.is_empty() {
-                    self.gattc(0x33, 0x010a, &[0, 0]);
+                    self.gattc_on(conn, 0x33, 0x010a, &[0, 0]);
                 } else {
                     let mut b = (descs.len() as u16).to_le_bytes().to_vec();
                     for d in descs {
                         b.extend(d.handle.to_le_bytes());
                         b.extend([0x02, 0x29, 1]);
                     }
-                    self.gattc(0x33, 0, &b);
+                    self.gattc_on(conn, 0x33, 0, &b);
                 }
             }
             0x9a => {
-                let h = u16_at(2);
-                let v = self.phone_attrs(h, h, |_| true).first().map(|a| a.value.clone()).unwrap_or_default();
+                let (conn, h) = (u16_at(0), u16_at(2));
+                let v = self.phone_attrs(conn, h, h, |_| true).first().map(|a| a.value.clone()).unwrap_or_default();
                 ok(self, &[]);
                 let mut b = h.to_le_bytes().to_vec();
                 b.extend([0, 0]);
                 b.extend((v.len() as u16).to_le_bytes());
                 b.extend(v);
-                self.gattc(0x36, 0, &b);
+                self.gattc_on(conn, 0x36, 0, &b);
+            }
+            0x9c if u16_at(0) == 1 => {
+                let (h, len) = (u16_at(5), usize::from(u16_at(9)));
+                let data = args[12..12 + len].to_vec();
+                ok(self, &[]);
+                self.ftms_write(h, &data, now);
+            }
+            0x9d if u16_at(0) == 1 => {
+                ok(self, &[]);
+                if let Some(t) = &mut self.ftms {
+                    t.unconfirmed = false;
+                }
             }
             0x9c => {
                 let (h, len) = (u16_at(5), usize::from(u16_at(9)));
@@ -544,9 +579,278 @@ impl Nordic {
                 }
                 self.phone = Some(ph);
             }
-            0x9d | 0x75 | 0x8f | 0x90 | 0x66 | 0xad | 0x78 | 0x7a | 0x7c | 0xa4 => ok(self, &[]),
+            0x69 => {
+                self.cfg.push(args.to_vec());
+                ok(self, &[]);
+            }
+            0x8b => {
+                self.scan_end = None;
+                ok(self, &[]);
+            }
+            0x8c => {
+                // the address, the scan and the connection parameters, the tag
+                let peer: [u8; 7] = args[1..8].try_into().unwrap();
+                if args[25] != self.tag() || self.tag() == 0 {
+                    self.queue(&[1, 0x8c, 0x12, 0, 0, 0]); // NRF_ERROR_CONN_COUNT: no link configured for it
+                    return true;
+                }
+                self.connects += 1;
+                ok(self, &[]);
+                if let Some(t) = &mut self.ftms
+                    && t.peer() == peer
+                    && t.connectable
+                {
+                    t.connected = true;
+                    t.next_ms = now + 250;
+                    let mut body = vec![1, 0];
+                    body.extend(peer);
+                    body.push(2); // role central
+                    body.extend([6, 0, 12, 0, 0, 0, 0x90, 1]);
+                    self.evt(0x10, &body);
+                }
+            }
+            0x8d => ok(self, &[]),
+            0x75 => {
+                self.param_updates.push(args.to_vec());
+                ok(self, &[]);
+            }
+            0x9d | 0x8f | 0x90 | 0x66 | 0xad | 0x78 | 0x7a | 0x7c | 0xa4 => ok(self, &[]),
             _ => return false,
         }
         true
+    }
+}
+
+/// An FTMS indoor bike trainer (drivers/ftms.rs) in range: it advertises the service, takes a central's connection
+/// on connection 1, serves Feature, Indoor Bike Data, the ranges, the Control Point and the Machine Status from its
+/// table (handles 0x40..), notifies its data every 250 ms once subscribed, and answers each Control Point write
+/// with an indication, which it holds until the last one is confirmed (FTMS: one procedure at a time).
+pub struct FtmsSim {
+    pub addr: u8,
+    pub db: Vec<Attr>,
+    pub connected: bool,
+    /// It takes connections (out of range, or switched off: not).
+    pub connectable: bool,
+    /// The Control Point writes it received, in order.
+    pub got: Vec<Vec<u8>>,
+    /// The control is the unit's; the last target op code (0: none) and its values.
+    pub control: bool,
+    pub mode: u8,
+    pub target_w: i16,
+    pub resistance: u8,
+    pub grade_x100: i16,
+    /// The power the rider makes outside ERG, W; the power and speed (mm/s) now.
+    pub rider_w: u16,
+    pub power: u16,
+    pub speed_mm_s: u32,
+    /// Faults: its Control Point's subscription forgotten once (the next write gets 0xFD); each record split over
+    /// two notifications (More Data); the control taken back (status 0xff) at this time; the link dropped at this
+    /// time; the control refused.
+    pub forget_cccd: bool,
+    pub split: bool,
+    pub lose_control_at: Option<u64>,
+    pub drop_at: Option<u64>,
+    pub refuse_control: bool,
+    /// A write while a procedure was in progress, or an indication sent before the last was confirmed: client
+    /// errors (FTMS 4.16.3), counted.
+    pub violations: u32,
+    /// The response to indicate, and whether the last indication waits for its confirmation.
+    pending: Option<Vec<u8>>,
+    pub(super) unconfirmed: bool,
+    pub(super) next_ms: u64,
+}
+
+/// The trainer's handles: Indoor Bike Data, the Control Point, the Machine Status (values; each CCCD is the next).
+pub const FT_DATA: u16 = 0x44;
+pub const FT_CP: u16 = 0x4b;
+pub const FT_STATUS: u16 = 0x4e;
+
+impl FtmsSim {
+    pub fn new() -> Self {
+        let mut db = Vec::new();
+        let mut add = |handle: u16, uuid: u16, kind: Kind, value: &[u8]| {
+            db.push(Attr { handle, uuid: U::Sig(uuid), kind, value: value.to_vec() })
+        };
+        add(0x40, 0x1826, Kind::Service, &[]);
+        add(0x41, 0x2acc, Kind::Decl(0x02), &[]);
+        // cadence, power; resistance, power and simulation targets
+        add(0x42, 0x2acc, Kind::Value, &[0x02, 0x40, 0, 0, 0x0c, 0x20, 0, 0]);
+        add(0x43, 0x2ad2, Kind::Decl(0x10), &[]);
+        add(FT_DATA, 0x2ad2, Kind::Value, &[]);
+        add(0x45, 0x2902, Kind::Cccd, &[0, 0]);
+        add(0x46, 0x2ad6, Kind::Decl(0x02), &[]);
+        add(0x47, 0x2ad6, Kind::Value, &[0, 0, 200, 0, 10, 0]); // 0 to 20.0
+        add(0x48, 0x2ad8, Kind::Decl(0x02), &[]);
+        add(0x49, 0x2ad8, Kind::Value, &[0, 0, 0xdc, 0x05, 1, 0]); // 0 to 1500 W
+        add(0x4a, 0x2ad9, Kind::Decl(0x28), &[]);
+        add(FT_CP, 0x2ad9, Kind::Value, &[]);
+        add(0x4c, 0x2902, Kind::Cccd, &[0, 0]);
+        add(0x4d, 0x2ada, Kind::Decl(0x10), &[]);
+        add(FT_STATUS, 0x2ada, Kind::Value, &[]);
+        add(0x4f, 0x2902, Kind::Cccd, &[0, 0]);
+        FtmsSim {
+            addr: 0xc4,
+            db,
+            connected: false,
+            connectable: true,
+            got: Vec::new(),
+            control: false,
+            mode: 0,
+            target_w: 0,
+            resistance: 0,
+            grade_x100: 0,
+            rider_w: 150,
+            power: 0,
+            speed_mm_s: 0,
+            forget_cccd: false,
+            split: false,
+            lose_control_at: None,
+            drop_at: None,
+            refuse_control: false,
+            violations: 0,
+            pending: None,
+            unconfirmed: false,
+            next_ms: 0,
+        }
+    }
+
+    /// Its address as the unit's chip reports it (`adv_report` in sim.rs: type byte 0, then the 6 bytes).
+    pub fn peer(&self) -> [u8; 7] {
+        [0, self.addr, 1, 2, 3, 4, 5]
+    }
+
+    /// The link is gone: its subscriptions and the control with it.
+    pub fn hang_up(&mut self) {
+        (self.connected, self.control, self.pending, self.unconfirmed) = (false, false, None, false);
+        for a in self.db.iter_mut().filter(|a| a.kind == Kind::Cccd) {
+            a.value = vec![0, 0];
+        }
+    }
+
+    /// The CCCD after `value` is set to `bits` (1 notifications, 2 indications).
+    pub fn on(&self, value: u16, bits: u8) -> bool {
+        self.db.iter().any(|a| a.handle == value + 1 && a.value.first() == Some(&bits))
+    }
+
+    /// Its advertising: the Service Data (available, an indoor bike), then the scan response with its name.
+    pub fn reports(&self) -> [(u8, i8, &'static [u8]); 2] {
+        [
+            (self.addr, -55, &[2, 0x01, 0x06, 6, 0x16, 0x26, 0x18, 0x01, 0x20, 0x00]),
+            (self.addr, -56, b"\x09\x09SIM BIKE"),
+        ]
+    }
+}
+
+impl Nordic {
+    /// The connection configuration tag the app configured for two links (1), or 0 (the default).
+    pub(super) fn tag(&self) -> u8 {
+        let gap = self.cfg.iter().any(|c| c[..2] == [0x20, 0] && c[5] == 1 && c[6] >= 2);
+        let roles = self.cfg.iter().any(|c| c[..2] == [0x40, 0] && c[6] >= 1);
+        if gap && roles { 1 } else { 0 }
+    }
+
+    /// A write to the trainer's attribute `h`: a CCCD, or its Control Point.
+    fn ftms_write(&mut self, h: u16, data: &[u8], now: u64) {
+        let Some(mut t) = self.ftms.take() else { return };
+        let mut status = 0u16;
+        if h == FT_CP {
+            if !t.on(FT_CP, 2) || core::mem::take(&mut t.forget_cccd) {
+                if let Some(a) = t.db.iter_mut().find(|a| a.handle == FT_CP + 1) {
+                    a.value = vec![0, 0];
+                }
+                status = 0x01fd;
+            } else if t.pending.is_some() || t.unconfirmed {
+                t.violations += 1;
+                status = 0x01fe;
+            } else {
+                t.got.push(data.to_vec());
+                let result = match *data {
+                    [0x00] if t.refuse_control => 4,
+                    [0x00] => {
+                        t.control = true;
+                        1
+                    }
+                    [op, ..] if !t.control && matches!(op, 0x04 | 0x05 | 0x11) => 5,
+                    [0x05, p0, p1] => {
+                        (t.mode, t.target_w) = (5, i16::from_le_bytes([p0, p1]));
+                        1
+                    }
+                    [0x04, r] => {
+                        (t.mode, t.resistance) = (4, r);
+                        1
+                    }
+                    [0x11, _, _, g0, g1, _, _] => {
+                        (t.mode, t.grade_x100) = (0x11, i16::from_le_bytes([g0, g1]));
+                        1
+                    }
+                    _ => 2,
+                };
+                t.pending = Some(vec![0x80, data.first().copied().unwrap_or(0), result]);
+            }
+        } else if let Some(a) = t.db.iter_mut().find(|a| a.handle == h && a.kind == Kind::Cccd) {
+            a.value = data.to_vec();
+        }
+        let mut b = h.to_le_bytes().to_vec();
+        b.extend([1, 0, 0, 0, 0]);
+        self.gattc_on(1, 0x38, status, &b);
+        self.ftms = Some(t);
+        self.ftms_tick(now);
+    }
+
+    fn hvx_on(&mut self, conn: u16, handle: u16, kind: u8, data: &[u8]) {
+        let mut b = handle.to_le_bytes().to_vec();
+        b.push(kind);
+        b.extend((data.len() as u16).to_le_bytes());
+        b.extend(data);
+        self.gattc_on(conn, 0x39, 0, &b);
+    }
+
+    /// The trainer's moves at `now`: its response indicated, its data notified, its scripted faults.
+    pub(super) fn ftms_tick(&mut self, now: u64) {
+        let Some(mut t) = self.ftms.take() else { return };
+        if t.connected {
+            if t.drop_at.is_some_and(|at| now >= at) {
+                t.drop_at = None;
+                t.hang_up();
+                self.evt(0x11, &[1, 0, 0x08]); // supervision time-out
+            } else {
+                if !t.unconfirmed
+                    && t.on(FT_CP, 2)
+                    && let Some(r) = t.pending.take()
+                {
+                    t.unconfirmed = true;
+                    self.hvx_on(1, FT_CP, 2, &r);
+                }
+                if t.lose_control_at.is_some_and(|at| now >= at) {
+                    t.lose_control_at = None;
+                    t.control = false;
+                    if t.on(FT_STATUS, 1) {
+                        self.hvx_on(1, FT_STATUS, 1, &[0xff]);
+                    }
+                }
+                while now >= t.next_ms {
+                    t.next_ms += 250;
+                    t.power = if t.mode == 5 && t.control { t.target_w.max(0) as u16 } else { t.rider_w };
+                    t.speed_mm_s = match t.mode {
+                        0x11 => (10_000 - i32::from(t.grade_x100) * 8).clamp(1000, 20_000) as u32,
+                        4 => 8000 - u32::from(t.resistance) * 20,
+                        _ => u32::from(t.power) * 42,
+                    };
+                    if !t.on(FT_DATA, 1) {
+                        continue;
+                    }
+                    let speed = ((t.speed_mm_s * 36 / 100) as u16).to_le_bytes();
+                    let power = t.power.to_le_bytes();
+                    if t.split {
+                        // More Data, cadence; then the speed and the power
+                        self.hvx_on(1, FT_DATA, 1, &[0x05, 0x00, 180, 0]);
+                        self.hvx_on(1, FT_DATA, 1, &[0x40, 0x00, speed[0], speed[1], power[0], power[1]]);
+                    } else {
+                        self.hvx_on(1, FT_DATA, 1, &[0x44, 0x00, speed[0], speed[1], 180, 0, power[0], power[1]]);
+                    }
+                }
+            }
+        }
+        self.ftms = Some(t);
     }
 }

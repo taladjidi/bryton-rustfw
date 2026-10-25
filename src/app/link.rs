@@ -184,6 +184,7 @@ impl App {
         self.sensors = [Sensor::Off; Kind::ALL.len()];
         let pairing = self.phone.pairing();
         self.phone_down(b);
+        self.ftms_down(); // connected again once the chip is back (app/ftms.rs)
         self.ble = nrf::start(b).ok();
         self.rx.reset();
         self.strip.radio = self.ble.is_some();

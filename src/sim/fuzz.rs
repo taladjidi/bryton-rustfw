@@ -1895,3 +1895,88 @@ fn fec_pages_into_the_app() {
     assert_eq!(seen_bits, 0x3f, "every page reached the app");
     assert!(sim.nordic.trainer.got.iter().any(|p| matches!(p[0], 0x30 | 0x31 | 0x33)), "commands went out");
 }
+
+/// The Bluetooth trainer's link (app/ftms.rs, drivers/ftms.rs): with a trainer connected on connection 1, random BLE
+/// events on connection 0, 1 or any other (every id the link decodes, the trainer's notifications and indications on
+/// its own handles with made-up Indoor Bike Data, Machine Status and Control Point responses, connections as a
+/// central, their time-outs), between passes of the main loop that let it connect again. No panic, and each path
+/// reached: events taken by the trainer's link, its data, status and responses. And random bytes into the FTMS
+/// formats.
+#[test]
+fn ftms_link_events() {
+    use super::ble_sim::{FT_CP, FT_DATA, FT_STATUS};
+    use super::*;
+    const IDS: [u16; 16] =
+        [0x10, 0x11, 0x13, 0x1b, 0x1f, 0x21, 0x23, 0x52, 0x55, 0x56, 0x30, 0x32, 0x33, 0x36, 0x38, 0x39];
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.nordic.ftms = Some(FtmsSim::new());
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 4000);
+    app.sensors_store.bt = sim.nordic.ftms.as_ref().map(FtmsSim::peer); // paired
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ftms.conn, Some(1), "connected before the fuzz");
+    let mut reached = [0usize; 4]; // owned, data, status, responses
+    for seed in 1..=4u32 {
+        let v: Vec<u8> = bytes(seed, 1 << 16).collect();
+        for (k, c) in v.chunks_exact(48).enumerate() {
+            // a third of them the trainer's notifications and indications
+            let id = if c[42] % 3 == 0 { 0x39 } else { IDS[usize::from(c[0]) % IDS.len()] };
+            let mut p = std::vec![2];
+            p.extend(id.to_le_bytes());
+            let conn = match c[47] % 4 {
+                0 => 0,
+                1 | 2 => 1,
+                _ => u16::from_le_bytes([c[45], c[46]]),
+            };
+            p.extend(conn.to_le_bytes());
+            if id == 0x39 && c[44] % 2 == 0 {
+                // a notification or indication on one of the trainer's handles, with an FTMS-shaped value
+                let handle = [FT_DATA, FT_CP, FT_STATUS][usize::from(c[43]) % 3];
+                let value: Vec<u8> = match handle {
+                    FT_CP => std::vec![0x80, [0x00, 0x04, 0x05, 0x11, c[3]][usize::from(c[4]) % 5], c[5] % 7],
+                    FT_STATUS => std::vec![[0xff, 0x01, 0x08, c[3]][usize::from(c[4]) % 4]],
+                    _ => c[3..3 + usize::from(c[2]) % 24].to_vec(),
+                };
+                p.extend([0, 0, 0, 0]); // status, error handle
+                p.extend(handle.to_le_bytes());
+                p.push(1 + c[6] % 2);
+                p.extend((value.len() as u16).to_le_bytes());
+                p.extend(&value);
+            } else {
+                p.extend(&c[2..2 + usize::from(c[1]) % 42]);
+            }
+            if let Some(e) = crate::ble::event(&p)
+                && app.ftms_owns(&e)
+            {
+                reached[0] += 1;
+                if let crate::ble::Event::Hvx { handle, data, .. } = e {
+                    let n = if handle == FT_DATA {
+                        1
+                    } else if handle == FT_STATUS {
+                        2
+                    } else {
+                        usize::from(handle == FT_CP && crate::ftms::response(data).is_some()) * 3
+                    };
+                    reached[n] += usize::from(n > 0);
+                }
+            }
+            app.phone_event(&mut sim, &p);
+            if app.ftms.conn.is_none() {
+                app.ftms_down(); // the link made again at once (not after the backoff), so the fuzz keeps reaching it
+                run(&mut sim, &mut app, 1000);
+            } else if k % 64 == 0 {
+                run(&mut sim, &mut app, 500);
+            }
+        }
+        for c in v.chunks(13) {
+            let mut r = crate::trainer::Reading::default();
+            crate::ftms::bike_data(c, &mut r);
+            let _ = (crate::ftms::modes(c), crate::ftms::range(c), crate::ftms::response(c));
+            let _ = (crate::ftms::advertised(c), crate::ftms::control_lost(c));
+            let _ = crate::ftms::as_fec((c[0], c.get(1).copied().unwrap_or(0)));
+        }
+    }
+    std::println!("ftms fuzz reached {reached:?}");
+    assert!(reached.iter().all(|&n| n > 50), "owned events, data, status, responses: {reached:?}");
+}

@@ -146,26 +146,37 @@ impl Kind {
 
 /// `\Rustfw\sensors.bin`, one sector: the pairings that have no backup register of their own (the trainer's: 14 is
 /// the shifting systems', 15 is stock's). A tag and the sensor's word as [`Kind::to_word`] writes it, 0 for none,
-/// then a CRC; a damaged sector reads as no pairing, which is a pairing to redo, nothing more.
+/// then a CRC; a damaged sector reads as no pairing, which is a pairing to redo, nothing more. Then, from bytes 10
+/// on, the Bluetooth trainer (FTMS, app/ftms.rs): `B`, its address (the type byte and 6 bytes, as
+/// [`crate::ble::connect`] takes it) and a CRC of its own. A build that knows only the first part reads it as before
+/// (it never looked past byte 10), and a file it wrote reads here as no Bluetooth trainer.
 pub const SENSORS_FILE: &str = "sensors.bin";
 
-/// The sector of [`SENSORS_FILE`] holding `trainer`.
+/// The sector of [`SENSORS_FILE`] holding `trainer` and the Bluetooth trainer `bt`.
 ///
 /// ```
 /// use bryton_rustfw::{nrf::SensorId, sensors};
 /// let t = Some(SensorId { device: 5555, trans: 0xf1 });
-/// let mut s = sensors::sector(t);
-/// assert_eq!(sensors::from_sector(&s), Some(t));
-/// assert_eq!(sensors::from_sector(&sensors::sector(None)), Some(None), "a trainer forgotten");
+/// let mut s = sensors::sector(t, None);
+/// assert_eq!((sensors::from_sector(&s), sensors::bt_from_sector(&s)), (Some(t), None));
+/// assert_eq!(sensors::from_sector(&sensors::sector(None, None)), Some(None), "a trainer forgotten");
+/// let bt = sensors::sector(None, Some([1, 6, 5, 4, 3, 2, 0xc1]));
+/// assert_eq!(sensors::bt_from_sector(&bt), Some([1, 6, 5, 4, 3, 2, 0xc1]));
 /// s[5] ^= 1;
 /// assert_eq!(sensors::from_sector(&s), None);
 /// ```
-pub fn sector(trainer: Option<SensorId>) -> [u8; 512] {
+pub fn sector(trainer: Option<SensorId>, bt: Option<[u8; 7]>) -> [u8; 512] {
     let mut s = [0; 512];
     s[..4].copy_from_slice(b"SNS1");
     s[4..8].copy_from_slice(&trainer.map_or(0, |id| Kind::Trainer.to_word(id)).to_le_bytes());
     let crc = crate::fit::crc(0, &s[..8]);
     s[8..10].copy_from_slice(&crc.to_le_bytes());
+    if let Some(addr) = bt {
+        s[10] = b'B';
+        s[11..18].copy_from_slice(&addr);
+        let crc = crate::fit::crc(0, &s[10..18]);
+        s[18..20].copy_from_slice(&crc.to_le_bytes());
+    }
     s
 }
 
@@ -179,6 +190,14 @@ pub fn from_sector(s: &[u8; 512]) -> Option<Option<SensorId>> {
         Some(id) => Some(Some(id)),
         None => (w == 0).then_some(None),
     }
+}
+
+/// The Bluetooth trainer [`sector`] kept, if any (and the sector is whole).
+pub fn bt_from_sector(s: &[u8; 512]) -> Option<[u8; 7]> {
+    from_sector(s)?;
+    let mut addr = [0; 7];
+    addr.copy_from_slice(&s[11..18]);
+    (s[10] == b'B' && s[18..20] == crate::fit::crc(0, &s[10..18]).to_le_bytes()).then_some(addr)
 }
 
 /// What a ride page can show from the sensors.

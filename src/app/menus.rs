@@ -67,6 +67,8 @@ pub enum Menu {
     Remote,
     /// The last notifications from the phone, newest first ([`crate::phone::Inbox`]).
     Notifs,
+    /// The Bluetooth trainers heard by the search (app/ftms.rs): Select pairs one.
+    BtTrainers,
 }
 
 /// A menu's title (a page's is followed by its number).
@@ -98,6 +100,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Phone => "PHONE",
         Menu::Remote => "DI2 KEYS",
         Menu::Notifs => "NOTIFICATIONS",
+        Menu::BtTrainers => "BT TRAINERS",
     }
 }
 
@@ -151,6 +154,7 @@ impl App {
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
             Menu::Sensors => {
                 let rows = [
+                    (Row::BtTrainer, true),
                     (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
                     (Row::Open(Menu::Remote), true),
                     (Row::Open(Menu::Phone), true),
@@ -176,6 +180,10 @@ impl App {
                 .or_else(|| (i == menu::PHONE.len()).then_some(Row::Open(Menu::Notifs))),
             Menu::Notifs if self.phone.inbox.is_empty() => (i == 0).then_some(Row::Empty("NO NOTIFICATIONS")),
             Menu::Notifs => self.phone.inbox.get(i).map(|_| Row::Notif(i)),
+            Menu::BtTrainers if self.ftms.n_found == 0 => {
+                (i == 0).then_some(Row::Empty(if self.scanning { "SEARCHING" } else { "NONE FOUND" }))
+            }
+            Menu::BtTrainers => (i < self.ftms.n_found).then_some(Row::BtFound(i)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
                 0 => Some(Row::EditPage(n)),
@@ -237,6 +245,28 @@ impl App {
             }
             Row::Open(m) => label.push_str(menu_title(m)),
             Row::Nearby => label.push_str("BLE NEARBY"),
+            Row::BtTrainer => {
+                label.push_str("BT TRAINER");
+                let heard = self.ftms_on() && self.trainer_heard();
+                value.push_str(match (self.sensors_store.bt, self.ble) {
+                    (_, Some(v)) if !v.central => "NO LINK",
+                    (_, None) => "NO BLE",
+                    (None, _) => "OFF",
+                    (Some(_), _) if !self.ftms_on() => "ANT FIRST",
+                    (Some(_), _) if heard && self.ftms.control => "LINKED",
+                    (Some(_), _) if heard => "NO CONTROL",
+                    (Some(_), _) => "PAIRED",
+                });
+                if heard {
+                    color = ui::GREEN;
+                }
+            }
+            Row::BtFound(k) => {
+                let d = self.ftms.found.get(k)?;
+                label.push_str(if d.name().is_empty() { "FTMS TRAINER" } else { d.name() });
+                value.push_str(if d.rssi < 0 { "-" } else { "" });
+                value.push_u32(u32::from(d.rssi.unsigned_abs()));
+            }
             Row::About => label.push_str("ABOUT"),
             Row::Drive => {
                 label.push_str("USB DRIVE");
@@ -592,6 +622,14 @@ impl App {
             }
             Some(Row::About) => self.open(Screen::About),
             Some(Row::Notif(k)) => self.open(Screen::Notif(k, 0)),
+            // paired and in use: forgotten; behind an ANT+ trainer (ANT FIRST): searched again, to take its place
+            Some(Row::BtTrainer) if self.ftms_on() => {
+                if self.confirmed(menu, sel, "FORGET BT TRAINER") {
+                    self.ftms_forget(b);
+                }
+            }
+            Some(Row::BtTrainer) => self.ftms_search(b),
+            Some(Row::BtFound(k)) => self.ftms_pair(b, k),
             Some(Row::Nearby) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();

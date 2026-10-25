@@ -116,8 +116,8 @@ fn di2_buttons_do_their_actions() {
     sim.backup[14] = Kind::Di2.to_word(SensorId { device: 4321, trans: 0xf1 });
     sim.nordic.sensors.push(AntSensor { device_type: 1, id: 4321, data: di2, network: 1, ack: &[4] });
     let mut app = App::start_with(&mut sim, Some(KEY), Some(DI2_KEY));
-    // sensors, the DI2 KEYS row (after the kinds), R PRESS: NONE to NEXT PAGE; R HOLD: to LAP
-    select_sensor(&mut sim, &mut app, Kind::ALL.len());
+    // sensors, the DI2 KEYS row (after the kinds and BT TRAINER), R PRESS: NONE to NEXT PAGE; R HOLD: to LAP
+    select_sensor(&mut sim, &mut app, Kind::ALL.len() + 1);
     assert_eq!(app.screen(), Screen::Menu(Menu::Remote, 0));
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));

@@ -586,6 +586,14 @@ pub struct Nordic {
     /// The BLE peripheral side (ble_sim.rs), and the phone in range.
     pub server: ble_sim::Server,
     pub phone: Option<ble_sim::PhoneSim>,
+    /// The FTMS trainer in range (ble_sim.rs), on connection 1 once the unit connects to it.
+    pub ftms: Option<ble_sim::FtmsSim>,
+    /// The `sd_ble_cfg_set` arguments received since the reset; `sd_ble_enable` after them answers NO_MEM (a chip
+    /// whose RAM cannot hold them); connections asked for (`sd_ble_gap_connect`) and the parameter updates sent.
+    pub cfg: Vec<Vec<u8>>,
+    pub no_mem: bool,
+    pub connects: u32,
+    pub param_updates: Vec<Vec<u8>>,
     /// Every payload received, in order.
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
@@ -832,6 +840,10 @@ impl Nordic {
             for (addr, rssi, data) in ADVERTISERS {
                 self.queue(&adv_report(addr, rssi, data));
             }
+            let trainer = self.ftms.as_ref().filter(|t| t.connectable && !t.connected).map(|t| t.reports());
+            for (addr, rssi, data) in trainer.into_iter().flatten() {
+                self.queue(&adv_report(addr, rssi, data));
+            }
             self.scan_end = Some(now + 1000 * u64::from(u16::from_le_bytes([t0, t1])));
             return;
         }
@@ -897,6 +909,7 @@ impl Nordic {
             return;
         }
         let reply: Vec<u8> = match p {
+            [0, 0x60] if self.no_mem && !self.cfg.is_empty() => vec![1, 0x60, 4, 0, 0, 0], // NRF_ERROR_NO_MEM
             [0, 0x60] => {
                 self.enabled = true;
                 vec![1, 0x60, 0, 0, 0, 0]
@@ -1140,6 +1153,11 @@ impl Board for Sim {
         if let Some(p) = &mut phone {
             p.hang_up();
         }
+        let mut ftms = self.nordic.ftms.take();
+        if let Some(t) = &mut ftms {
+            t.hang_up();
+        }
+        let no_mem = self.nordic.no_mem;
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
         let trainer = std::mem::take(&mut self.nordic.trainer);
         let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
@@ -1154,6 +1172,8 @@ impl Board for Sim {
             ack_model,
             ack_silent,
             phone,
+            ftms,
+            no_mem,
             reset: true,
             resets,
             chaos,
@@ -1289,6 +1309,7 @@ impl Board for Sim {
         }
         self.nordic.ant_tick(self.ms);
         self.nordic.phone_tick(self.ms);
+        self.nordic.ftms_tick(self.ms);
         let n = buf.len().min(self.nordic.out.len());
         for (slot, b) in buf.iter_mut().zip(self.nordic.out.drain(..n)) {
             *slot = b;
@@ -1310,7 +1331,7 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 mod tests;
 
 mod ble_sim;
-pub use ble_sim::{Act, PhoneSim};
+pub use ble_sim::{Act, FtmsSim, PhoneSim};
 
 #[cfg(test)]
 mod phone_tests;
@@ -1321,6 +1342,8 @@ mod link_tests;
 #[cfg(test)]
 mod altitude_tests;
 
+#[cfg(test)]
+mod ftms_tests;
 #[cfg(test)]
 mod shift_tests;
 #[cfg(test)]

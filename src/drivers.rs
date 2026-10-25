@@ -7,6 +7,7 @@ pub mod battery;
 pub mod ble;
 pub mod emmc;
 pub mod fec;
+pub mod ftms;
 pub mod gnss;
 pub mod nrf;
 pub mod panel;

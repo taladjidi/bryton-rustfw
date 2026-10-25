@@ -274,18 +274,52 @@ pub struct Version {
     pub bootloader: u16,
     /// SoftDevice number.
     pub sd: u16,
+    /// The two links were configured ([`CFG`]): a trainer as central besides the phone, on tag [`crate::ble::TAG`].
+    /// False: the chip's defaults, one link (the phone's), tag 0.
+    pub central: bool,
 }
 
-/// Resets the chip as stock does, enables BLE and reads the version: proof that the chip runs and the link works.
+/// `sd_ble_cfg_set`.
+pub const SD_BLE_CFG_SET: u8 = 0x69;
+
+/// What [`start`] configures before `sd_ble_enable` (stock does the same with more of everything, BOARD.md 11):
+/// - `BLE_CONN_CFG_GAP` (0x20) for tag 1: 2 links, event length 3 (3.75 ms, the default; stock: 6 links, 5);
+/// - `BLE_GAP_CFG_ROLE_COUNT` (0x40): 1 peripheral, 1 central, 0 central security procedures (stock: 1, 5).
+///
+/// Layout, `ble_cfg_set_req_enc` (pc-ble-driver `src/sd_api_v5/sdk/components/serialization/application/codecs/
+/// ble/serializers/ble_app.c`): the id as a u32, a presence byte, for a connection configuration its tag, then the
+/// structure (`ble_gap_conn_cfg_t_enc`: count u8, event length u16; `ble_gap_cfg_role_count_t_enc` in API v5:
+/// three u8). The rest stays at the defaults (ATT MTU 23, 10 vendor UUIDs, attribute table 1408 B), each no larger
+/// than stock's.
+pub const CFG: [&[u8]; 2] =
+    [&[CMD, SD_BLE_CFG_SET, 0x20, 0, 0, 0, 1, 1, 2, 3, 0], &[CMD, SD_BLE_CFG_SET, 0x40, 0, 0, 0, 1, 1, 1, 0]];
+
+/// Resets the chip as stock does, configures two links ([`CFG`]), enables BLE and reads the version: proof that the
+/// chip runs and the link works. A chip that refuses the configuration (an error code from `sd_ble_cfg_set`, or
+/// NO_MEM from `sd_ble_enable` when its RAM cannot hold it) is reset and started on its defaults, as before: the
+/// phone link works either way, the trainer's needs [`Version::central`]. A chip that does not answer is not tried
+/// twice (the start's time with a dead chip stays one reset and one time-out).
 pub fn start(b: &mut impl Board) -> Result<Version, Error> {
+    match start_as(b, true) {
+        Err(Error::Code(_)) => start_as(b, false),
+        r => r,
+    }
+}
+
+fn start_as(b: &mut impl Board, central: bool) -> Result<Version, Error> {
     b.nrf_reset();
     let mut rx = Rx::new();
     let mut out = [0; 8];
+    if central {
+        for c in CFG {
+            call(b, &mut rx, c, &mut [])?;
+        }
+    }
     call(b, &mut rx, &[CMD, SD_BLE_ENABLE], &mut out)?;
     let n = call(b, &mut rx, &[CMD, SD_BLE_VERSION_GET, 1], &mut out)?;
     match out[..n] {
         [image, b0, b1, s0, s1, ..] => {
-            Ok(Version { image, bootloader: u16::from_le_bytes([b0, b1]), sd: u16::from_le_bytes([s0, s1]) })
+            Ok(Version { image, bootloader: u16::from_le_bytes([b0, b1]), sd: u16::from_le_bytes([s0, s1]), central })
         }
         _ => Err(Error::Code(u32::MAX)),
     }
@@ -314,6 +348,8 @@ pub fn event_id(p: &[u8]) -> Option<u16> {
 
 /// One advertising report: who, how loud, and the advertised data.
 pub struct AdvReport<'a> {
+    /// The address byte as serialized (`addr_id_peer | addr_type << 1`): what [`crate::ble::connect`] takes back.
+    pub addr_type: u8,
     /// Address, least significant byte first.
     pub addr: [u8; 6],
     /// Received signal strength, dBm.
@@ -331,7 +367,7 @@ pub fn adv_report(p: &[u8]) -> Option<AdvReport<'_>> {
     let mut addr = [0; 6];
     addr.copy_from_slice(&p[6..12]);
     let data = p.get(23..23 + usize::from(p[21]))?;
-    Some(AdvReport { addr, rssi: p[19] as i8, data })
+    Some(AdvReport { addr_type: p[5], addr, rssi: p[19] as i8, data })
 }
 
 /// The advertised name in `data` (complete or shortened), if any.
@@ -722,7 +758,7 @@ mod tests {
     }
 
     fn report(addr: u8, rssi: i8, data: &[u8]) -> AdvReport<'_> {
-        AdvReport { addr: [addr, 0, 0, 0, 0, 0], rssi, data }
+        AdvReport { addr_type: 0, addr: [addr, 0, 0, 0, 0, 0], rssi, data }
     }
 
     #[test]

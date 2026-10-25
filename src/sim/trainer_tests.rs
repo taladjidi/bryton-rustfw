@@ -31,7 +31,7 @@ fn unit() -> (Sim, App) {
 }
 
 /// The trainer in `\Rustfw\sensors.bin` on the card: None without a readable file.
-fn sensors_file(sim: &Sim) -> Option<Option<SensorId>> {
+pub(super) fn sensors_file(sim: &Sim) -> Option<Option<SensorId>> {
     let mut d = Ram(sim.emmc.image.clone(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).ok()?;
     let v = read_all(&mut fat, &mut d, "Rustfw/sensors.bin").ok()?;
@@ -55,7 +55,7 @@ fn commands(sim: &Sim) -> Vec<[u8; 8]> {
 }
 
 /// The power and distance of each record of the ride saved under `name`.
-fn records(sim: &Sim, name: [u8; 12]) -> Vec<(Option<u16>, Option<u32>)> {
+pub(super) fn records(sim: &Sim, name: [u8; 12]) -> Vec<(Option<u16>, Option<u32>)> {
     let f = super::recorder_tests::ride_file(sim, "Activities", name).expect("the ride is saved");
     let (mut v, mut rd) = (Vec::new(), crate::fitread::Reader::new());
     rd.push_slice(&f, |m| {

@@ -1,4 +1,5 @@
-//! The home trainer in the app (trainer.rs is the model, drivers/fec.rs the ANT+ FE-C bytes): what the trainer
+//! The home trainer in the app (trainer.rs is the model, drivers/fec.rs the ANT+ FE-C bytes, app/ftms.rs the
+//! Bluetooth link, which feeds the same reading and takes the same commands): what the trainer
 //! reports feeds the live values, what drives it (the workout's power step, the course's grade, the rider's keys on
 //! the trainer screen) becomes the commands sent on its channel, and the trainer screen and fields show it.
 //!
@@ -39,6 +40,8 @@ pub(crate) struct SensorStore {
     pub(crate) dirty: bool,
     /// The paired trainer.
     pub(crate) trainer: Option<SensorId>,
+    /// The paired Bluetooth trainer (app/ftms.rs): its address byte and address.
+    pub(crate) bt: Option<[u8; 7]>,
 }
 
 /// The bike's weight told to the trainer (its SIM mode wants it), kg.
@@ -46,9 +49,9 @@ pub(crate) struct SensorStore {
 const BIKE_KG: u16 = 10;
 
 impl App {
-    /// A trainer is paired or searched for (its menu row and screen are offered).
+    /// A trainer is paired or searched for, over ANT+ or Bluetooth (its menu row and screen are offered).
     pub(crate) fn trainer_on(&self) -> bool {
-        self.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off)
+        self.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off) || self.sensors_store.bt.is_some()
     }
 
     /// The trainer sent something lately.
@@ -116,6 +119,9 @@ impl App {
     /// Once a pass: the pairing file, the trainer's messages, and the screen on the second's tick.
     pub(crate) fn step_trainer(&mut self, b: &mut impl Board) {
         self.sensors_storage(b);
+        if self.ble.is_some() {
+            self.step_ftms(b);
+        }
         self.send_trainer(b);
         if core::mem::take(&mut self.trainer_second) && self.screen == Screen::Trainer {
             self.update_trainer(b); // power and cadence are the second's snapshot: nothing new between two ticks
@@ -125,7 +131,8 @@ impl App {
     /// The trainer's set-up when it is first heard, and the command that is due: one acknowledged message at most
     /// per [`ACK_GAP_MS`]. Nothing here waits on the card or the recorder.
     fn send_trainer(&mut self, b: &mut impl Board) {
-        let heard = self.trainer_heard() && self.ant;
+        let bt = self.ftms_on();
+        let heard = self.trainer_heard() && (self.ant || bt);
         if !heard {
             if core::mem::take(&mut self.trainer_up) {
                 self.trainer.lost();
@@ -133,8 +140,16 @@ impl App {
             return;
         }
         self.trainer_up = true;
-        self.ack_gap_ms = self.ack_gap_ms.saturating_add(self.dt_ms);
         let d = self.trainer_drive();
+        if bt {
+            // FTMS: the set-up is the link's (app/ftms.rs); a command once the last one's response came
+            let ready = self.ftms.ready();
+            if let Some(c) = self.trainer.due(self.dt_ms, ready, &d) {
+                self.ftms_command(b, c);
+            }
+            return;
+        }
+        self.ack_gap_ms = self.ack_gap_ms.saturating_add(self.dt_ms);
         let page = if self.trainer_no_control || self.ack_gap_ms < ACK_GAP_MS {
             self.trainer.due(self.dt_ms, false, &d); // the clocks run, nothing goes out
             None
@@ -176,9 +191,7 @@ impl App {
         }
         if !self.sensors_store.loaded {
             self.sensors_store.loaded = true;
-            if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
-                self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
-            } else if !self.sensors_store.dirty {
+            if !self.sensors_store.dirty {
                 let mut s = [0u8; 512];
                 let mut d = emmc::Volume(&mut self.emmc, b);
                 let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
@@ -187,8 +200,11 @@ impl App {
                     fat.read_at(&mut d, &f, 0, &mut s)
                 });
                 if let (Ok(512), Some(t)) = (read, sensors::from_sector(&s)) {
-                    self.sensors_store.trainer = t;
+                    (self.sensors_store.trainer, self.sensors_store.bt) = (t, sensors::bt_from_sector(&s));
                 }
+            }
+            if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
+                self.keep_pairing(b, Kind::Trainer, id); // moved to the file below
             }
         }
         // opened once ANT is up (it may come later than the file), unless the rider already did something with it
@@ -204,7 +220,7 @@ impl App {
             return;
         }
         let (local, _) = self.rec_time();
-        let sector = sensors::sector(self.sensors_store.trainer);
+        let sector = sensors::sector(self.sensors_store.trainer, self.sensors_store.bt);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
             let t = fat::write::dos_time(local);

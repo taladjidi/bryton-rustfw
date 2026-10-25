@@ -273,6 +273,10 @@ pub enum Row {
     Empty(&'static str),
     /// Opens the list of BLE devices nearby (and starts a scan).
     Nearby,
+    /// The Bluetooth trainer (app/ftms.rs): Select searches for one ([`crate::Menu::BtTrainers`]), or forgets it.
+    BtTrainer,
+    /// Trainer `n` the search heard: Select pairs it.
+    BtFound(usize),
     /// Opens ABOUT: the firmware's version and commit, and Ferris.
     About,
     /// FROM GPS: Select averages the receiver's altitude for 30 s and calibrates the barometer to it.
