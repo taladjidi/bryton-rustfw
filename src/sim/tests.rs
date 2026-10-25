@@ -1429,6 +1429,7 @@ fn back_held_3s_powers_off_after_release() {
     assert!(sim.standby);
     assert!(sim.ms >= 6000, "standby while the key is still down would wake the unit at once");
     assert!(sim.asleep && !sim.display_on && !sim.backlight);
+    assert!(sim.touch.run_since.is_none(), "the touch chip in reset: no INT to keep the core out of standby");
     assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
 }

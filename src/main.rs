@@ -433,6 +433,18 @@ const PWR_WKUPCR: u32 = PWR + 0x20;
 const PWR_WKUPEPR: u32 = PWR + 0x28;
 
 fn standby() -> ! {
+    // nothing pending may wake the WFI below, or it returns, the core spins with the panel off and the power button
+    // has no standby to wake from: the unit looks dead until the four-button restart (seen on the unit, 2026-10-25;
+    // inferred cause: the touch line's EXTI and its NVIC wake-up, added 2026-10-23 after power-on last worked).
+    // The WKUP pins wake through PWR, not through these.
+    modify(EXTI_CPUIMR1, TOUCH_LINE, 0);
+    wr(EXTI_CPUPR1, TOUCH_LINE);
+    timer_stop();
+    wr(SCB_ICSR, 1 << 25); // PENDSTCLR
+    for k in 0..8 {
+        wr(NVIC_ICER0 + 4 * k, u32::MAX);
+        wr(NVIC_ICPR0 + 4 * k, u32::MAX);
+    }
     wr(PWR_WKUPEPR, 0); // all wake-up pins off while changing them
     wr(PWR_WKUPCR, 0x3f); // clear the wake-up flags
     wr(PWR_WKUPEPR, 1); // WKUPEN1, polarity rising (WKUPP1 = 0), no pull
@@ -958,6 +970,7 @@ const EXTI_CPUPR1: u32 = 0x5800_0088;
 const SYSCFG_EXTICR2: u32 = 0x5800_040c;
 const NVIC_ISER0: u32 = 0xe000_e100;
 const NVIC_ICPR0: u32 = 0xe000_e280;
+const NVIC_ICER0: u32 = 0xe000_e180;
 const EXTI9_5_IRQ: u32 = 1 << 23;
 const TOUCH_LINE: u32 = 1 << 6;
 

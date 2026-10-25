@@ -180,6 +180,7 @@ impl App {
         }
         b.backlight(0);
         panel::off(b);
+        b.touch_reset(false); // the touch chip held in reset: no INT to keep the core out of standby
         // at most 10 s: a key stuck down must not keep the unit (and the battery) on
         for _ in 0..10_000 / POLL_MS {
             if b.keys_down() & Key::Back as u8 == 0 {
