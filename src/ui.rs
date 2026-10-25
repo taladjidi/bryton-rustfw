@@ -1192,7 +1192,8 @@ fn menu_label_w(label: &str) -> u32 {
     (label.len().min(10) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
 }
 
-/// Menu row `i`: `label` on the left, `value` on the right in `value_color`; selected, the row is orange.
+/// Menu row `i`: `label` on the left, `value` on the right in `value_color` (white unless it says a state); selected,
+/// the row is orange with black text (10:1 against the orange, where white was 2:1).
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
     let y = LIST_Y + i as u32 * LIST_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };

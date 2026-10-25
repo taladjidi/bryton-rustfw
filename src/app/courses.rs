@@ -173,6 +173,6 @@ impl App {
             }
             None => value.push_str("--"),
         }
-        Some(if c.on == Some(e.file) { ui::GREEN } else { ui::GREY })
+        Some(if c.on == Some(e.file) { ui::GREEN } else { ui::WHITE })
     }
 }

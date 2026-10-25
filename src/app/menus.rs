@@ -115,7 +115,7 @@ impl App {
     /// Menu row `i` of `menu`: label, value, value colour; None past the last row.
     pub(crate) fn menu_row(&self, menu: Menu, i: usize) -> Option<(Line<16>, Line<12>, u16)> {
         use menu::{Reading, Row};
-        let (mut label, mut value, mut color) = (Line::new(), Line::new(), ui::GREY);
+        let (mut label, mut value, mut color) = (Line::new(), Line::new(), ui::WHITE);
         match self.row(menu, i)? {
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
             Row::Open(Menu::Page(n)) => {

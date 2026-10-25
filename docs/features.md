@@ -68,6 +68,9 @@
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
+- **Menus:** the selected row is black on orange (10:1 contrast; white on that orange was 2:1); a row's value is
+  white like its label, green when it says a state that is on (a sensor heard, the phone linked).
+
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
   goes to the next one (kept with the page), a hold switches every graph between the last minutes and the whole ride.
   Each has its scale on the left and its time span under it; power and heart rate are coloured by zone, W' balance as
