@@ -596,7 +596,7 @@ fn map_zoom_taps() {
             assert!((c.0 - p.0).abs() < far && (c.1 - p.1).abs() < far, "{c:?} {v:?}");
         }
         assert!(app.map_zoom.is_none_or(|l| (MIN_LEVEL..MAX_LEVEL).contains(&l)), "{:?}", app.map_zoom);
-        assert!(app.map_view(0).is_none_or(|v| v.mpp16 >= 32), "no finer than 2 m a pixel");
+        assert!(app.map_view(0).is_none_or(|v| v.mpp16 >= 24), "no finer than 1.5 m a pixel");
         for _ in 0..usize::from(next() % 8) {
             app.step(&mut sim);
             sim.delay_ms(POLL_MS);

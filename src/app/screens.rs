@@ -250,7 +250,7 @@ impl App {
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
-                        map::draw(c, map::area(bx), &self.track, m.view, base, self.route().as_ref(), m.panned());
+                        map::draw(c, map::area(bx), &self.track, m.view, base, self.route().as_ref(), m.zoomed());
                     }
                     Drawn::Profile(p) => self.draw_profile(c, bx, p),
                     Drawn::Workout(w) => self.draw_workout_graph(c, bx, w),
@@ -283,12 +283,12 @@ impl App {
     }
 
     /// A tap at (`x`, `y`) on the page's map's buttons: the zoom it asks for (None: the fit); None elsewhere. "+"
-    /// and "-" keep the centre panned to; "re-centre" drops it.
+    /// and "-" keep the centre panned to; the crosshair goes back to the fit.
     pub(crate) fn zoom_at(&self, x: u16, y: u16) -> Option<Option<map::Zoom>> {
         let (area, m) = self.page_map()?;
         let (level, centre) = match map::button_at(area, &m, i32::from(x), i32::from(y))? {
-            map::Button::Centre => (self.map_zoom, None),
-            b => (map::zoom(&self.track, area, self.route().as_ref(), &m, b == map::Button::In), self.map_centre),
+            map::Button::Centre => (None, None),
+            b => (map::zoom(&m, b == map::Button::In), self.map_centre),
         };
         Some(level.map(|level| map::Zoom { level, centre }))
     }
