@@ -5,7 +5,8 @@
    images loaded over USB (hw.rs STAGE): nothing is linked there. MAP (16 MB in, past the 6 MB the bootloader
    copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
    either. AXISRAM (D1, 512 KB, unused by this firmware otherwise) holds the app itself (main.rs make_app's static
-   cell, about 37 KB) and the course memory (make_courses, about 70 KB): in DTCM's .bss the app left too little
+   cell, about 37 KB), the course memory (make_courses, about 70 KB) and the scan's cache of stock's rides
+   (make_scan_cache, 256 KB): in DTCM's .bss the app left too little
    stack (2026-10-24, an overflow on opening a workout). It is
    zeroed at reset as .bss is (hw.rs). */
 MEMORY
@@ -38,9 +39,13 @@ SECTIONS
     _scourses = .;
     *(.bss._ZN13bryton_rustfw12make_courses7COURSES*)
     _ecourses = .;
+    _sscan = .;
+    *(.bss._ZN13bryton_rustfw15make_scan_cache5CACHE*)
+    _escan = .;
     . = ALIGN(4); _eaxi = .;
   } > AXISRAM
   ASSERT(_eaxi > _saxi, "the app's cell is not in AXISRAM: its section name changed (main.rs make_app)")
+  ASSERT(_escan > _sscan, "the scan's cache is not in AXISRAM: its section name changed (main.rs make_scan_cache)")
   ASSERT(_ecourses > _scourses, "the course memory is not in AXISRAM: its section name changed (main.rs make_courses)")
   .bss (NOLOAD) : ALIGN(4) { _sbss = .; *(.bss .bss.*) *(COMMON); . = ALIGN(4); _ebss = .; } > DTCM
   _image_size = LOADADDR(.data) + SIZEOF(.data) - ORIGIN(SDRAM);

@@ -18,6 +18,12 @@ impl App {
 
     pub(crate) const SCAN_RIDING: u32 = 16 * 1024;
 
+    /// Work a pass gives the scan at most, us: a pass then stays near [`POLL_MS`] + 15 ms, so keys, touch and the
+    /// screen keep up while the rides are read (a pass of 96 KB took about 40 ms on the unit).
+    pub(crate) const SCAN_IDLE_US: u32 = 15_000;
+
+    pub(crate) const SCAN_RIDING_US: u32 = 4_000;
+
     /// A stock data row's value.
     pub(crate) fn stock_value(&self, r: menu::StockRow, v: &mut Line<12>) {
         use menu::StockRow as S;
@@ -27,9 +33,10 @@ impl App {
             (S::Scan, stock::Status::Idle) => v.push_str("GO"),
             (S::Scan, stock::Status::Running) => v.push_u32(u32::from(self.stock.listed)),
             (S::Scan, stock::Status::Done) => v.push_u32(u32::from(o.all.rides)),
+            (S::Scan, _) if self.stock.ready() => v.push_u32(u32::from(o.all.rides)),
             (S::Scan, stock::Status::Failed(_)) => v.push_str("NONE"),
             (S::Import, _) => v.push_str("SETTINGS"),
-            (_, s) if s != stock::Status::Done => v.push_str("--"),
+            _ if !self.stock.ready() => v.push_str("--"),
             (S::Cp | S::WPrime | S::Fit, _) if cp.is_none() => v.push_str("--"),
             (S::Cp, _) => v.push_u32(cp.map_or(0, |c| u32::from(c.cp))),
             (S::WPrime, _) => push_fixed(v, cp.map_or(0, |c| c.w_prime) as i32, 3, 1),
@@ -76,8 +83,20 @@ impl App {
         Some(self.basemap.stats)
     }
 
-    /// The scan of stock's rides goes on, if it runs.
+    /// Gives the scan of stock's rides its cache (main.rs: 256 KB in AXI SRAM): read at the first pass, so the
+    /// overview's totals show at once, then only new or changed rides are read.
+    pub fn set_scan_cache(&mut self, c: &'static mut stock::Cache) {
+        self.stock.set_cache(c);
+    }
+
+    /// The scan of stock's rides goes on, if it runs: [`IO`](stock::IO) bytes at a time until the pass has spent
+    /// [`App::SCAN_IDLE_US`] of work ([`Board::awake_us`]) or [`App::SCAN_IDLE`] bytes (less during a ride), so a
+    /// pass stays short whatever the card and the files cost. Its cache is read at the first pass, kept up to date
+    /// on a new day, and written once the scan has changed it, only between rides.
+    #[inline(never)]
     pub(crate) fn step_stock(&mut self, b: &mut impl Board) {
+        self.stock.load(&mut emmc::Volume(&mut self.emmc, b), self.date);
+        self.stock.new_day(self.date);
         // read once by itself, a while after start-up and not during a ride, for the totals on the overview
         if self.stock.status() == stock::Status::Idle
             && self.gnss_ms >= STOCK_SCAN_MS
@@ -86,9 +105,28 @@ impl App {
             self.stock.start(self.date);
         }
         if self.stock.status() == stock::Status::Running {
-            let budget = if self.ride.state() == ride::State::Idle { Self::SCAN_IDLE } else { Self::SCAN_RIDING };
-            self.stock.step(&mut emmc::Volume(&mut self.emmc, b), budget);
+            let idle = self.ride.state() == ride::State::Idle;
+            let (bytes, us) =
+                if idle { (Self::SCAN_IDLE, Self::SCAN_IDLE_US) } else { (Self::SCAN_RIDING, Self::SCAN_RIDING_US) };
+            let (t0, b0) = (b.awake_us(), self.stock.read_bytes());
+            while self.stock.step(&mut emmc::Volume(&mut self.emmc, b), stock::IO as u32)
+                && self.stock.read_bytes().wrapping_sub(b0) < bytes
+                && b.awake_us().wrapping_sub(t0) < us
+            {}
         }
+        if self.stock.unsaved() && self.card_writable && self.ride_settled() {
+            let t = fat::write::dos_time(self.rec_time().0);
+            let _ = self.stock.save(&mut emmc::Volume(&mut self.emmc, b), t); // failed: read again next start
+        }
+    }
+
+    /// No ride running, and none waiting to be resumed or saved: the card may be used for something else.
+    pub(crate) fn ride_settled(&self) -> bool {
+        self.ride.state() == ride::State::Idle
+            && self.recorder.phase() == recorder::Phase::Done
+            && self.full.phase() == recorder::Phase::Done
+            && !self.resume_pending
+            && !self.full_pending
     }
 
     /// The past ride asked for in HISTORY goes on being read, [`App::SCAN_IDLE`] a pass (someone waits for it);
