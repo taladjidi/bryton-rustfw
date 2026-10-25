@@ -207,7 +207,7 @@ Others
 - [x] Structured workouts from FIT files, step targets (stock, all): sim, from stock's \Workout\calendar
 - [x] Countdown beeps before a step ends: 500 ms at 2 and 1 s left, 1 s at the change (patch P1's 3-2-1, Garmin, Wahoo; the owner's choice): sim
 - [x] Workout profile graph with the rider's place (Garmin, Wahoo, Karoo): sim, the WKT GRAPH field
-- [x] Target gauge: the power (3 / 10 / 30 s or instant) or heart rate on a bar around the step's band, coloured by how far off (Garmin, Wahoo, Karoo): sim, the WKT POWER field
+- [x] Target gauge: the power (3 / 10 / 30 s or instant) or heart rate on a bar around the step's band, coloured by how far off (Garmin, Wahoo, Karoo): sim, the WKT POWER field (GAUGE POWER in DISPLAY)
 - [ ] Next-step strip instead of a full-screen popup (patch P3)
 - [ ] Multiple targets per step (power and cadence) (Garmin)
 - [ ] ZWO / ERG / MRC workouts, converted on the computer (Wahoo, Karoo)
@@ -333,13 +333,14 @@ Storage, USB and updates
 - [x] MAX HR, FTP, weight, W' (stock, ours): unit (MAX HR, FTP); sim (weight, W')
 - [x] Overview fields and pages 1 to 3 (stock): sim
 - [x] Menus in groups, one screen each; a field picked by group then field (Garmin, Wahoo: categories): sim
+- [x] The menu tree of the UI review (4.3): WORKOUTS, COURSES, HISTORY, PAGES, SENSORS, SETTINGS (ME, ALERTS, DISPLAY, BIKE, SYSTEM); any setting three levels down at most, units after the values: sim
 - [x] GPS status: fix, satellites, position, altitude, UTC (stock About, Garmin): unit
 - [~] Settings kept through power off (stock, all): RTC backup registers, not a file
 - [ ] Time zone, daylight saving, date and time formats (stock, all)
 - [ ] Units: metric or imperial, temperature (stock, all)
 - [ ] Language (stock, all)
 - [x] First start setup: stock's settings and pages taken by themselves (ours): sim
-- [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired ANT+ sensors, auto backlight, reminders, data pages (ours): sim (STOCK DATA, IMPORT)
+- [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired ANT+ sensors, auto backlight, reminders, data pages (ours): sim (SETTINGS > SYSTEM > IMPORT FROM STOCK)
 - [ ] Auto features per profile: smart pause, climb page switch, climb approach, map view (stock)
 - [ ] Data reset: trips, odometer, factory settings (stock)
 - [ ] About: firmware version, UUID, position (stock): over USB (`dev.py info`) only
@@ -356,7 +357,7 @@ Storage, USB and updates
 - [~] Power curve over 90 days, season, all time (stock app Rider's Insight, Garmin): sim, 90-day bests (1 s to 60 min) for CP and W'; no screen, no season
 - [ ] Training load chart on the unit (stock app PMC, Garmin)
 - [ ] Each ride matched to the planned workout (ours, roadmap 4b)
-- [x] Rides read from stock's \Activities too (ours): sim (STOCK DATA, READ RIDES), checked on two backups
+- [x] Rides read from stock's \Activities too (ours): sim (HISTORY > FITNESS > READ RIDES), checked on two backups
 - [ ] Ride upload to intervals.icu or Strava from a computer tool (ours)
 
 ## Sources

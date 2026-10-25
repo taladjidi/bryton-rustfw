@@ -215,14 +215,14 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the previous ride page, round");
     assert_consistent(&sim, &app);
 
-    let row1 = ui::LIST_Y as u16 + ui::MENU_ROW as u16 + 5;
+    let row3 = ui::LIST_Y as u16 + 3 * ui::MENU_ROW as u16 + 5; // PAGES
     let taps = |ms: u64| (5000..5100).contains(&ms) || (5600..5700).contains(&ms);
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row1)));
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row3)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     let left_ms = 5500 - sim.ms;
     run(&mut sim, &mut app, left_ms);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 1), "the first tap selects row 1");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 3), "the first tap selects row 3");
     assert_consistent(&sim, &app);
     run(&mut sim, &mut app, 500);
     assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "a second tap on it acts: PAGES");
@@ -302,7 +302,7 @@ fn touch_edits_a_number_and_goes_back() {
     assert!(!app.editing, "the second tap keeps it");
     assert_eq!(Settings::from_word(sim.backup[11]).max_hr, 191);
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Rider))), "swipe right: back");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Settings, row_of(menu::Row::Open(Menu::Me))), "swipe right: back");
     assert_consistent(&sim, &app);
 }
 
@@ -343,7 +343,7 @@ fn stock_data_menu() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Stock, 0));
     let value = |app: &App, i| std::string::String::from(app.menu_row(Menu::Stock, i).unwrap().1.as_str());
-    assert_eq!((value(&app, 0), value(&app, 1)), ("GO".into(), "--".into()));
+    assert_eq!(value(&app, 1), "--", "the scan HISTORY started is not done");
     app.press(&mut sim, Press::Short(Key::Start));
     let (t0, cmds0) = (sim.ms, sim.emmc.cmds.len());
     while app.stock.status() == crate::stock::Status::Running {
@@ -355,13 +355,16 @@ fn stock_data_menu() {
     assert_eq!(app.stock.status(), crate::stock::Status::Done);
     assert_eq!([0, 4, 8].map(|i| value(&app, i)), ["4", "19", "37"].map(std::string::String::from));
     let cp = crate::power_curve::fit_cp(&app.stock.out.curve).unwrap();
-    assert_eq!(value(&app, 1), std::format!("{}", cp.cp));
+    assert_eq!(value(&app, 1), std::format!("{} W", cp.cp));
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
     sim.save("stock");
 
-    app.press(&mut sim, Press::Short(Key::Lap)); // IMPORT, the last row
+    app.press(&mut sim, Press::Short(Key::Back)); // HISTORY
+    app.press(&mut sim, Press::Short(Key::Back)); // MENU
+    to_row(&mut sim, &mut app, menu::Row::Stock(menu::StockRow::Import)); // SETTINGS > SYSTEM > IMPORT
     app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // sure
     assert_eq!((app.settings.ftp, app.settings.max_hr), (265, 188));
     let hr = crate::nrf::SensorId { device: 1234, trans: 0 };
     assert_eq!(sim.backup[Kind::Hr.backup()], hr.to_word());
@@ -446,12 +449,14 @@ fn ride_history() {
         assert!(sim.ms < 60_000);
     }
     run(&mut sim, &mut app, 1000);
-    let rows: Vec<_> = (0..5).map(|i| row(&app, i)).collect();
+    let rows: Vec<_> = (1..6).map(|i| row(&app, i)).collect();
+    assert_eq!(row(&app, 0).unwrap(), "FITNESS >", "first, what the rides give");
     let want = ["THU 22 OCT 5.0", "TUE 20 OCT 14.4", "THU 1 OCT 12.0", "SAT 15 MAR 6.0"];
     assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "newest first");
     assert_consistent(&sim, &app);
     sim.save("history_list");
 
+    app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Page));
     let (cmds0, t0) = (sim.emmc.cmds.len(), sim.ms);
     app.press(&mut sim, Press::Short(Key::Start));
@@ -500,7 +505,7 @@ fn ride_history() {
     sim.save("history_card");
 
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::History, 1), "back to the list, on that ride");
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "back to the list, on that ride");
     // the ride without a track: its card all the same, "NO FIX" on the map
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -773,7 +778,7 @@ fn menu_lists_the_devices_nearby() {
     }
     to_row(&mut sim, &mut app, menu::Row::Nearby);
     let nearby = row_of(menu::Row::Nearby);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Device, nearby), "NEARBY BLE, in DEVICE");
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, nearby), "BLE NEARBY, in SYSTEM");
     assert_consistent(&sim, &app);
     sim.save("menu");
     app.press(&mut sim, Press::Short(Key::Start));
@@ -789,9 +794,11 @@ fn menu_lists_the_devices_nearby() {
     assert!(!app.scanning);
     assert_consistent(&sim, &app);
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Device, nearby));
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, nearby));
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Device))));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Settings, row_of(menu::Row::Open(Menu::System))));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Settings))));
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -810,9 +817,11 @@ fn back_returns_where_it_came_from() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Gps, 0));
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Device, row_of(menu::Row::Open(Menu::Gps))), "the submenu's row");
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, row_of(menu::Row::Open(Menu::Gps))), "the submenu's row");
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Device))));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Settings, row_of(menu::Row::Open(Menu::System))));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, row_of(menu::Row::Open(Menu::Settings))));
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Ride(1), "the page the menu was opened from");
     assert_consistent(&sim, &app);
@@ -859,6 +868,7 @@ fn pairs_sensors_from_the_menu() {
     assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign the 6 ANT+ channels");
     assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
     app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0));
     app.press(&mut sim, Press::Short(Key::Start)); // heart rate: search
@@ -898,6 +908,7 @@ fn keeps_the_paired_sensor_until_forgotten() {
     app.press(&mut sim, Press::Short(Key::Page));
     assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen, "the friend's strap is not shown");
     app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Start)); // silent: searched for again, not forgotten
     let closes = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count();
@@ -1290,8 +1301,9 @@ fn backlight_level_and_timeout() {
     assert_eq!(sim.light_level, 60);
     assert_consistent(&sim, &app);
     sim.save("light_menu");
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back)); // SETTINGS, MENU, out
+    }
     run(&mut sim, &mut app, 11_000);
     assert_eq!(sim.light_level, 0, "timed out");
     app.press(&mut sim, Press::Short(Key::Page));
@@ -1306,36 +1318,205 @@ fn backlight_level_and_timeout() {
     assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
 }
 
-/// The text of sensors menu row `i`: label and value.
-fn sensor_row(app: &App, i: usize) -> std::string::String {
-    let (label, value, _) = app.menu_row(Menu::Sensors, i).unwrap();
+/// The text of row `i` of SYSTEM > BUILT IN: label and value.
+fn built_in_row(app: &App, i: usize) -> std::string::String {
+    let (label, value, _) = app.menu_row(Menu::BuiltIn, i).unwrap();
     format!("{} {}", label.as_str(), value.as_str())
 }
 
-/// The submenus of the main menu that hold settings rows: the menu, its table.
-const SUBMENUS: [(Menu, &[menu::Row]); 4] = [
-    (Menu::Pages, &menu::PAGES),
-    (Menu::Rider, &menu::RIDER),
-    (Menu::Device, &menu::DEVICE),
-    (Menu::Alerts, &menu::ALERTS),
-];
-
-/// From the main menu's first row, down to `row`: in the main menu, or in the submenu that holds it (opened).
-fn to_row(sim: &mut Sim, app: &mut App, row: menu::Row) {
-    let (menu, table) = SUBMENUS.iter().find(|(_, t)| t.contains(&row)).copied().unwrap_or((Menu::Main, &menu::MAIN));
-    if menu != Menu::Main {
-        to_row(sim, app, menu::Row::Open(menu));
-        app.press(sim, Press::Short(Key::Start));
+/// The way from menu `from` to `row`, by the rows the app shows (the first found, at most 5 menus down; the full
+/// menu opened from the ride menu is not walked again): each menu on the way and the row chosen in it.
+pub(crate) fn path_to(app: &App, from: Menu, row: menu::Row) -> Option<Vec<(Menu, usize)>> {
+    fn walk(app: &App, from: Menu, row: menu::Row, depth: usize) -> Option<Vec<(Menu, usize)>> {
+        for i in 0..app.rows(from) {
+            let r = app.row(from, i)?;
+            if r == row {
+                return Some(std::vec![(from, i)]);
+            }
+            if let menu::Row::Open(m) = r
+                && m != Menu::Main
+                && depth < 5
+                && let Some(mut p) = walk(app, m, row, depth + 1)
+            {
+                p.insert(0, (from, i));
+                return Some(p);
+            }
+        }
+        None
     }
-    for _ in 0..table.iter().position(|&r| r == row).unwrap() {
-        app.press(sim, Press::Short(Key::Page));
+    walk(app, from, row, 1)
+}
+
+/// From the first row of the menu shown, down to `row`, each menu on the way opened by Page and Start.
+pub(crate) fn to_row(sim: &mut Sim, app: &mut App, row: menu::Row) {
+    let Screen::Menu(from, _) = app.screen() else { panic!("not a menu: {:?}", app.screen()) };
+    let path = path_to(app, from, row).unwrap_or_else(|| panic!("{row:?} not in {from:?}"));
+    for (k, &(_, i)) in path.iter().enumerate() {
+        for _ in 0..i {
+            app.press(sim, Press::Short(Key::Page));
+        }
+        if k + 1 < path.len() {
+            app.press(sim, Press::Short(Key::Start));
+        }
     }
 }
 
-/// The row index of `row` in its menu (the main menu or a submenu).
+/// Every menu below `from` and how deep (the main menu is 1), through the rows the app shows, the full menu not
+/// walked again from the ride menu.
+fn menus_under(app: &App, from: Menu, depth: usize, out: &mut Vec<(Menu, usize)>) {
+    out.push((from, depth));
+    for i in 0..app.rows(from) {
+        if let Some(menu::Row::Open(m)) = app.row(from, i)
+            && m != Menu::Main
+            && out.iter().all(|&(seen, _)| seen != m)
+        {
+            menus_under(app, m, depth + 1, out);
+        }
+    }
+}
+
+/// The menu tree (UI review 4.3): every setting and every row of the old tree is in it, a setting at most three
+/// levels down (MENU > SETTINGS > ME > FTP), the diagnostics under SYSTEM, every row's label and value whole on its
+/// row (a number at the end of its range too, and while edited). Each menu, reached by the keys: Lap on the first
+/// row and Page on the last stay there (no wrap), Back goes up one level at a time to the screen it was opened
+/// from. A screenshot of each (`target/sim/menu_<title>.bmp`).
+#[test]
+fn menu_tree_reaches_everything() {
+    use menu::{PhoneRow, Reading, Row, StockRow};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    assert!(app.pvt.is_some(), "the GPS rows all shown");
+    let mut menus = Vec::new();
+    menus_under(&app, Menu::Main, 1, &mut menus);
+    // every row of every menu, with its level
+    let mut rows = Vec::new();
+    for &(m, depth) in &menus {
+        for i in 0..app.rows(m) {
+            rows.push((app.row(m, i).unwrap(), depth, m, i));
+        }
+    }
+    let level = |row: Row| rows.iter().find(|r| r.0 == row).map(|r| r.1);
+    let settings = [
+        Setting::Wheel,
+        Setting::Light,
+        Setting::LightOff,
+        Setting::Touch,
+        Setting::MaxHr,
+        Setting::Ftp,
+        Setting::Weight,
+        Setting::WPrime,
+        Setting::Eat,
+        Setting::Drink,
+        Setting::HrAlert,
+        Setting::WktAvg,
+    ];
+    let mut wanted: Vec<Row> = settings.iter().map(|&s| Row::Set(s)).collect();
+    wanted.extend((0..4).map(|n| Row::Set(Setting::Remote(n))));
+    wanted.extend((0..Kind::ALL.len()).map(Row::Sensor));
+    wanted.extend(menu::PHONE.map(Row::Phone));
+    wanted.extend(menu::FITNESS.map(Row::Stock));
+    wanted.extend([Row::Stock(StockRow::Import), Row::Drive, Row::Nearby, Row::About]);
+    wanted.extend((0..crate::PAGES).map(Row::Layout));
+    wanted.extend((0..4).map(|f| Row::Field(OVERVIEW, f)));
+    wanted.extend((0..crate::PAGES).map(|n| Row::Field(n, 0)));
+    for &row in &wanted {
+        let d = level(row).unwrap_or_else(|| panic!("{row:?} not in the tree"));
+        assert!(d <= 3, "{row:?}: {d} levels down");
+    }
+    assert_eq!(level(Row::Phone(PhoneRow::Forget)), Some(3), "SENSORS > PHONE");
+    // the readings (diagnostics, nothing to set): under SYSTEM
+    for r in menu::BUILT_IN.iter().chain(&menu::GPS) {
+        assert_eq!(level(Row::Read(*r)), Some(4), "{r:?}: MENU > SETTINGS > SYSTEM > ...");
+    }
+    assert_eq!(level(Row::Read(Reading::Lat)), Some(4));
+    for m in [Menu::Workouts, Menu::Courses, Menu::History, Menu::Stock] {
+        assert!(menus.iter().any(|&(x, _)| x == m), "{m:?} reached");
+    }
+    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS, "the main menu: one screen");
+    // whole on the row: label and value side by side, numbers at the end of their range, and edited
+    let whole = |label: &str, value: &str| {
+        assert!(ui::LABEL.width(label) <= ui::menu_label_w(label, value), "{label} {value}: the label cut");
+    };
+    for &(row, _, m, i) in &rows {
+        let (label, value, _) = app.menu_row(m, i).unwrap();
+        whole(label.as_str(), value.as_str());
+        if let Row::Set(s) = row
+            && s.number().is_some()
+        {
+            for _ in 0..200 {
+                app.settings.step(s, true);
+            }
+            app.screen = Screen::Menu(m, i);
+            for editing in [false, true] {
+                app.editing = editing;
+                let (label, value, _) = app.menu_row(m, i).unwrap();
+                whole(label.as_str(), value.as_str());
+            }
+            (app.editing, app.screen) = (false, Screen::Main);
+        }
+    }
+
+    // by the keys, from the overview: each menu, its ends, Back level by level; a screenshot
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    for &(m, depth) in &menus {
+        app.press(&mut sim, Press::Long(Key::Page));
+        if m != Menu::Main {
+            to_row(&mut sim, &mut app, Row::Open(m));
+            app.press(&mut sim, Press::Short(Key::Start));
+        }
+        if app.screen() != Screen::Menu(m, 0) {
+            // COURSES without a card: said, not opened
+            assert_eq!((m, app.banner.as_str()), (Menu::Courses, "NO COURSE"));
+            while app.screen() != Screen::Main {
+                app.press(&mut sim, Press::Short(Key::Back));
+            }
+            continue;
+        }
+        run(&mut sim, &mut app, u64::from(LIST_REDRAW_MS) + 100); // a list that changes: redrawn once a second
+        assert_consistent(&sim, &app);
+        let mut title = Line::<16>::new();
+        title.push_str(match m {
+            Menu::Page(OVERVIEW) => "OVERVIEW",
+            Menu::Main => "MAIN",
+            _ => menu_title(m),
+        });
+        if let Menu::Page(n @ 0..crate::PAGES) = m {
+            title.push_u32(n as u32 + 1);
+        }
+        let name: std::string::String = title
+            .as_str()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+            .collect();
+        sim.save(&std::format!("menu_{}", name.trim_end_matches('_')));
+        app.press(&mut sim, Press::Short(Key::Lap));
+        assert_eq!(app.screen(), Screen::Menu(m, 0), "{m:?}: no wrap at the top");
+        let last = app.rows(m).max(1) - 1;
+        for _ in 0..=last {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        assert_eq!(app.screen(), Screen::Menu(m, last), "{m:?}: no wrap at the bottom");
+        assert_consistent(&sim, &app);
+        for up in 1..depth {
+            app.press(&mut sim, Press::Short(Key::Back));
+            assert!(matches!(app.screen(), Screen::Menu(..)), "{m:?}: Back {up} of {depth}");
+        }
+        assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)), "{m:?}: up to the main menu");
+        app.press(&mut sim, Press::Short(Key::Back));
+        assert_eq!(app.screen(), Screen::Main, "{m:?}: {depth} Backs to the overview");
+    }
+}
+
+/// The row index of `row` in the menu that holds it (off a ride, from the main menu).
 fn row_of(row: menu::Row) -> usize {
-    let table = SUBMENUS.iter().find(|(_, t)| t.contains(&row)).map_or(&menu::MAIN[..], |(_, t)| t);
-    table.iter().position(|&r| r == row).unwrap()
+    let mut sim = Sim::new(9, 0, 0);
+    let app = App::start(&mut sim, None);
+    path_to(&app, Menu::Main, row).and_then(|p| p.last().copied()).unwrap_or_else(|| panic!("{row:?}")).1
 }
 
 /// The text of row `i` of the menu shown: label and value.
@@ -1359,16 +1540,23 @@ fn auto_backlight_follows_the_ambient_light() {
     for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Start)); // 60, 30, 10, AUTO
     }
-    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Light))), "LIGHT % AUTO");
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Light))), "BRIGHTNESS AUTO");
     assert_eq!(Settings::from_word(sim.backup[11]).light_level, LIGHT_AUTO, "kept");
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back)); // SETTINGS, MENU, out
+    }
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::BuiltIn));
+    app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 4000);
-    assert_eq!(sensor_row(&app, 8), "LUX 300");
-    assert_eq!(sensor_row(&app, 9), "TEMP C 21.5");
-    assert_eq!(sensor_row(&app, 10), "HPA 1013");
+    assert_eq!(built_in_row(&app, 0), "LUX 300");
+    assert_eq!(built_in_row(&app, 1), "TEMP C 21.5");
+    assert_eq!(built_in_row(&app, 2), "HPA 1013");
     assert_consistent(&sim, &app);
     sim.save("sensor_rows");
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..4 {
+        app.press(&mut sim, Press::Short(Key::Back)); // SYSTEM, SETTINGS, MENU, out
+    }
     assert_eq!(sim.light_level, 1, "300 lux: past 120 lux, the minimum (stock)");
 
     sim.bus.lux10 = Some(5); // 0.5 lux: dark
@@ -1410,8 +1598,8 @@ fn missing_sensor_chips() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 10_000);
     assert_eq!(sim.light_level, LIGHT_LEVELS[1]);
-    assert_eq!(sensor_row(&app, 8), "LUX NONE");
-    assert_eq!(sensor_row(&app, 9), "TEMP C NONE");
+    assert_eq!(built_in_row(&app, 0), "LUX NONE");
+    assert_eq!(built_in_row(&app, 1), "TEMP C NONE");
 }
 
 /// The barometer converts once per reading (one-shot), every 10 s.
@@ -1424,8 +1612,8 @@ fn barometer_one_shot() {
     assert_eq!(app.baro, Some((10_132, 2150)));
     sim.bus.baro = Some((9_500, -512));
     run(&mut sim, &mut app, 20_000);
-    assert_eq!(sensor_row(&app, 9), "TEMP C -5.1");
-    assert_eq!(sensor_row(&app, 10), "HPA 950");
+    assert_eq!(built_in_row(&app, 1), "TEMP C -5.1");
+    assert_eq!(built_in_row(&app, 2), "HPA 950");
 }
 
 #[test]
@@ -2252,9 +2440,9 @@ fn weight_and_wprime_from_the_menu() {
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Lap)); // 20.0 -> 21.5 kJ
     }
-    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::WPrime))), "W' KJ < 21.5 >");
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::WPrime))), "W' < 21.5 >");
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Weight))), "WEIGHT KG 68");
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Weight))), "WEIGHT 68 KG");
     assert_consistent(&sim, &app);
     sim.save("power_settings");
     assert_eq!(sim.backup[16] >> 24, 0xc1, "tagged");
@@ -2464,12 +2652,13 @@ fn eat_reminder_on_a_ride() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Alerts));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Alerts, 0));
-    app.press(&mut sim, Press::Short(Key::Start)); // EAT MIN: edit
+    app.press(&mut sim, Press::Short(Key::Start)); // EAT: edit
     app.press(&mut sim, Press::Short(Key::Lap)); // 5
     app.press(&mut sim, Press::Short(Key::Start)); // kept
     assert_eq!(Settings::from_word(0).with_alerts_word(sim.backup[28]).eat_min, 5);
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back)); // SETTINGS, MENU, out
+    }
     sim.gnss.fix = Some(8000);
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
@@ -2615,7 +2804,8 @@ fn long_reads_spread_over_passes() {
         assert!(sim.ms < 300_000);
     }
     let n = (0..app.stock.index.len()).find(|&i| app.stock.index.get(i).unwrap().start.2 == 21).unwrap();
-    for _ in 0..n {
+    for _ in 0..n + 1 {
+        // FITNESS first
         app.press(&mut sim, Press::Short(Key::Page));
     }
     pass(&mut sim, &mut app, w, "ride card", |sim, app| app.press(sim, Press::Short(Key::Start)));
@@ -2697,19 +2887,19 @@ fn import_asks_first() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    let import = menu::STOCK.iter().position(|&r| r == menu::StockRow::Import).unwrap();
-    app.open(Screen::Menu(Menu::Stock, import));
+    let import = row_of(menu::Row::Stock(menu::StockRow::Import));
+    app.open(Screen::Menu(Menu::System, import));
     app.show(&mut sim);
     app.settings.ftp = 55; // stock's is another: an import shows
     app.input(&mut sim, Input::Select);
-    assert_eq!((app.menu_row(Menu::Stock, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
+    assert_eq!((app.menu_row(Menu::System, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
     assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART AGAIN: YES");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
     sim.save("import_sure");
     app.input(&mut sim, Input::Prev);
     app.input(&mut sim, Input::Next);
-    assert_eq!(app.menu_row(Menu::Stock, import).unwrap().1.as_str(), "SETTINGS", "dropped by Page");
+    assert_eq!(app.menu_row(Menu::System, import).unwrap().1.as_str(), "FROM STOCK", "dropped by Page");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
     app.input(&mut sim, Input::Select);
@@ -3138,7 +3328,7 @@ fn max_hr_and_ftp_from_the_menu() {
     app.press(&mut sim, Press::Short(Key::Page)); // the release does not step again
     app.press(&mut sim, Press::Short(Key::Lap)); // 55
     app.press(&mut sim, Press::Short(Key::Back)); // kept, still in the menu
-    assert!(matches!(app.screen, Screen::Menu(Menu::Rider, r) if r == row_of(menu::Row::Set(Setting::Ftp))));
+    assert!(matches!(app.screen, Screen::Menu(Menu::Me, r) if r == row_of(menu::Row::Set(Setting::Ftp))));
     assert_consistent(&sim, &app);
     sim.save("zones_menu");
     let again = App::start(&mut sim, None);
@@ -3300,7 +3490,7 @@ fn about_screen() {
     assert_consistent(&sim, &app);
     sim.save("about");
     app.press(&mut sim, Press::Short(Key::Back));
-    assert!(matches!(app.screen(), Screen::Menu(Menu::Device, _)));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::System, _)));
 }
 
 /// Woken by the power button (Back's line) held on through the start: the hold is not Back held 3 s, so the unit

@@ -663,7 +663,8 @@ impl App {
                 | Menu::Stock
                 | Menu::History
                 | Menu::Courses
-                | Menu::Device
+                | Menu::System
+                | Menu::BuiltIn
                 | Menu::Phone),
                 sel,
             ) if self.redraw_ms >= LIST_REDRAW_MS => {

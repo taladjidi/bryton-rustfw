@@ -787,9 +787,12 @@ fn menu_touch_and_keys() {
             let row_y = |r: u8| (ui::LIST_Y + u32::from(r % ui::MENU_ROWS as u8) * ui::MENU_ROW + 10) as u16;
             if a % 29 == 0 {
                 // straight to a row that asks first: a sensor, the phone's FORGET, IMPORT
-                let import = menu::STOCK.len() - 1;
-                let at =
-                    [(Menu::Sensors, usize::from(b) % 5), (Menu::Phone, menu::PHONE.len() - 1), (Menu::Stock, import)];
+                let import = menu::SYSTEM.iter().position(|&r| r == menu::Row::Stock(menu::StockRow::Import));
+                let at = [
+                    (Menu::Sensors, usize::from(b) % 5),
+                    (Menu::Phone, menu::PHONE.len() - 1),
+                    (Menu::System, import.unwrap_or(0)),
+                ];
                 app.open(Screen::Menu(at[usize::from(b) % 3].0, at[usize::from(b) % 3].1));
                 app.show(&mut sim);
             }
@@ -851,7 +854,8 @@ fn menu_touch_and_keys() {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
             }
-            if k % 60 == 0 {
+            // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
+            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
                 super::tests::assert_consistent(&sim, &app);
             }
         }

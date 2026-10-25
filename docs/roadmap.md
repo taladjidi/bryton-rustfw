@@ -64,7 +64,7 @@ The golden rule (AGENTS.md) depends on this whole phase.
 
 0. Read what stock left (done, 2026-10-24): `fitread.rs` streams a FIT file, `stock.rs` scans `\Activities`
    (power curve of 90 days, CP and W', week / year / all-time totals) and imports `\System\*.ini` (FTP, max HR,
-   wheel, ANT+ sensors, pages); the STOCK DATA menu. Next: weight, CP and W' applied once those settings exist;
+   wheel, ANT+ sensors, pages); the STOCK DATA menu (now HISTORY > FITNESS and SYSTEM > IMPORT FROM STOCK). Next: weight, CP and W' applied once those settings exist;
    the scan's result kept (a cache file in our own folder, once there is a write path) so it is not read again
    at each start; stock's summaries (`.sum` / `.csum`) instead of whole rides for the totals, once their format
    is known.
