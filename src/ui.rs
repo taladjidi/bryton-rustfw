@@ -1308,11 +1308,20 @@ pub fn draw_ferris(c: &mut impl Canvas) {
 // Menus: a title, then rows of a label and a value; the selected row in orange.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Rows a menu shows at most.
-pub const MENU_ROWS: usize = ((H - LIST_Y) / LIST_ROW) as usize;
+/// Menu row pitch: 44 px, about 8 mm on this panel (0.18 mm a pixel), a fingertip's size (Apple's 44 pt, Material's
+/// 48 dp); 20 px rows (3.6 mm) let a gloved finger cover two or three (UI review, 2026-10-25).
+pub const MENU_ROW: u32 = 44;
 
-/// The title line of a menu or list.
+/// Rows a menu shows at most (6); a longer menu turns a screen of rows at a time.
+pub const MENU_ROWS: usize = ((H - LIST_Y) / MENU_ROW) as usize;
+
+/// Where a tap goes back (as Back): the "<" at the left of a menu's title, a finger wide, from the strip's line to
+/// the first row.
+pub const BACK_TAP: (u32, u32, u32, u32) = (0, PAGE_Y, 48, LIST_Y - PAGE_Y);
+
+/// The title line of a menu, with the "<" that goes back ([`BACK_TAP`]).
 pub fn draw_title(c: &mut impl Canvas, title: &str) {
+    text::draw_in(c, &LABEL, 4, NEARBY.1, NEARBY.0 - 4, Align::Left, "<");
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
 }
 
@@ -1322,17 +1331,23 @@ fn menu_label_w(label: &str) -> u32 {
     (label.len().min(10) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
 }
 
-/// Menu row `i`: `label` on the left, `value` on the right in `value_color` (white unless it says a state); selected,
-/// the row is orange with black text (10:1 against the orange, where white was 2:1).
+/// Menu row `i`: `label` on the left, `value` on the right in `value_color` (white unless it says a state), centred
+/// in its [`MENU_ROW`], a dark line under it; selected, the row is orange with black text (10:1 against the orange,
+/// where white was 2:1).
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
-    let y = LIST_Y + i as u32 * LIST_ROW;
+    let y = LIST_Y + i as u32 * MENU_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
     let name_w = menu_label_w(label);
-    c.fill(0, y, NEARBY.0, LIST_ROW, bg);
-    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, y, name_w, Align::Left, label);
+    let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
+    c.fill(0, y, W, ty - y, bg);
+    c.fill(0, ty, NEARBY.0, LABEL.height(), bg);
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty, name_w, Align::Left, label);
     let fg = if selected { BLACK } else { value_color };
-    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, y, NEARBY.2 - name_w, Align::Right, value);
-    c.fill(NEARBY.0 + NEARBY.2, y, W - NEARBY.0 - NEARBY.2, LIST_ROW, bg);
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, ty, NEARBY.2 - name_w, Align::Right, value);
+    c.fill(NEARBY.0 + NEARBY.2, ty, W - NEARBY.0 - NEARBY.2, LABEL.height(), bg);
+    let below = ty + LABEL.height();
+    c.fill(0, below, W, y + MENU_ROW - 1 - below, bg);
+    c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
 }
 
 #[cfg(test)]
@@ -1343,12 +1358,10 @@ pub(crate) mod tests {
     use std::vec::Vec;
 
     #[test]
-    fn every_field_in_one_group_that_fits_a_screen() {
+    fn every_field_in_one_group() {
         for f in Field::ALL {
             assert_eq!(FIELD_GROUPS.iter().filter(|(_, g)| g.contains(&f)).count(), 1, "{f:?}");
         }
-        assert!(FIELD_GROUPS.iter().all(|(_, g)| g.len() <= MENU_ROWS), "a group is one screen");
-        assert!(FIELD_GROUPS.len() <= MENU_ROWS);
     }
 
     #[test]

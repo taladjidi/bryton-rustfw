@@ -69,9 +69,9 @@
 
 | Key | Overview and ride pages | Menus |
 |---|---|---|
-| Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down |
+| Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down (stops at the last row) |
 | hold Page | the menu | |
-| Lap | a lap (while riding) | up |
+| Lap | a lap (while riding) | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | end a paused ride | |
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
@@ -80,8 +80,10 @@
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
-- **Menus:** the selected row is black on orange (10:1 contrast; white on that orange was 2:1); a row's value is
-  white like its label, green when it says a state that is on (a sensor heard, the phone linked).
+- **Menus:** rows 44 px tall (about 8 mm, a fingertip), six a screen, a longer menu turned a screen at a time;
+  a "<" left of the title goes back. The selected row is black on orange (10:1 contrast; white on that orange was
+  2:1); a row's value is white like its label, green when it says a state that is on (a sensor heard, the phone
+  linked).
 
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
   goes to the next one (kept with the page), a hold switches every graph between the last minutes and the whole ride.
@@ -96,7 +98,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
 | hold (600 ms, still) | the menu (as holding Page) | | |
-| tap | the gear right of the overview's date: the menu; a graph: its next plot | selects the row touched and acts on it (as Start) | keep it |
+| tap | the gear right of the overview's date: the menu; a graph: its next plot | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.

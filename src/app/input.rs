@@ -144,6 +144,7 @@ impl App {
             self.depth += 1;
         }
         self.screen = s;
+        self.menu_chosen = false;
     }
 
     /// Back to the screen under this one (a ride page switched off since shows the main screen).
@@ -154,6 +155,7 @@ impl App {
             Some(&s) if self.depth > 0 || matches!(s, Screen::Main | Screen::Ride(_)) => s,
             _ => Screen::Main,
         };
+        self.menu_chosen = false;
     }
 
     /// Acts on a key press ([`Input::of`]). A key held to repeat that acted (a list scrolled, a value stepped) is
@@ -359,7 +361,9 @@ impl App {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 let rows = self.rows(menu).max(1);
                 let down = matches!(i, Input::Next | Input::NextHeld);
-                let next = if down { (sel + 1) % rows } else { (sel + rows - 1) % rows };
+                // no wrap at the ends: a held key stops at the first or the last row
+                let next = if down { (sel + 1).min(rows - 1) } else { sel.saturating_sub(1) };
+                self.menu_chosen = true;
                 self.screen = Screen::Menu(menu, next);
                 if menu::first_shown(next, ui::MENU_ROWS) == menu::first_shown(sel, ui::MENU_ROWS) {
                     return self.update_menu_rows(b, menu, next);
@@ -372,26 +376,26 @@ impl App {
                 if next >= rows || next == first {
                     return;
                 }
+                self.menu_chosen = false; // turned to, not chosen
                 self.screen = Screen::Menu(menu, next);
             }
-            (Screen::Menu(menu, sel), Input::Select | Input::Touch(Gesture::Tap(..))) => {
-                let sel = match i {
-                    Input::Touch(Gesture::Tap(_, y)) => {
-                        let slot = (u32::from(y).checked_sub(ui::LIST_Y)).map(|d| (d / ui::LIST_ROW) as usize);
-                        match slot.map(|k| menu::first_shown(sel, ui::MENU_ROWS) + k) {
-                            Some(row) if self.row(menu, row).is_some() => row,
-                            _ => return,
-                        }
-                    }
-                    _ => sel,
+            // the "<" left of the title: back
+            (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
+            // a tap selects the row; a tap on the row chosen already acts on it (as Start)
+            (Screen::Menu(menu, sel), Input::Touch(Gesture::Tap(_, y))) => {
+                let slot = (u32::from(y).checked_sub(ui::LIST_Y)).map(|d| (d / ui::MENU_ROW) as usize);
+                let row = match slot.map(|k| menu::first_shown(sel, ui::MENU_ROWS) + k) {
+                    Some(row) if self.row(menu, row).is_some() => row,
+                    _ => return,
                 };
-                self.screen = Screen::Menu(menu, sel);
-                let shown = self.screen;
-                self.activate(b, menu, sel);
-                if self.screen == shown {
-                    return self.update_menu_rows(b, menu, sel);
+                if row != sel || !self.menu_chosen {
+                    self.menu_chosen = true;
+                    self.screen = Screen::Menu(menu, row);
+                    return self.update_menu_rows(b, menu, row);
                 }
+                return self.select_row(b, menu, sel);
             }
+            (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel),
             (
                 Screen::Menu(..) | Screen::Nearby | Screen::Past,
                 Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
@@ -438,6 +442,19 @@ impl App {
         g.map(Input::Touch)
     }
 
+    /// Start (or a tap on the chosen row) on row `sel` of `menu`: it acts, then the rows that changed are drawn, or
+    /// the screen it opened.
+    fn select_row(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
+        let shown = Screen::Menu(menu, sel);
+        self.screen = shown;
+        self.activate(b, menu, sel);
+        if self.screen == shown {
+            self.update_menu_rows(b, menu, sel);
+        } else {
+            self.show(b);
+        }
+    }
+
     /// A finger is on the panel (sample it every [`TOUCH_MS`]), or a gesture waits.
     pub fn touching(&self) -> bool {
         self.touch.down() || self.touch_pending.is_some()
@@ -461,12 +478,14 @@ pub(crate) fn sample_touch(
     (r.feed(p, dt_ms), p.is_some())
 }
 
+/// (`x`, `y`) is in box (left, top, width, height).
+fn inside((bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16) -> bool {
+    (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
+}
+
 /// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,
 /// the red one); None for a tap elsewhere.
 fn call_choice(i: Input) -> Option<bool> {
-    let inside = |(bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16| {
-        (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
-    };
     match i {
         Input::Select => Some(true),
         Input::Back => Some(false),

@@ -320,7 +320,7 @@ impl App {
         let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         match self.menu_row(menu, i) {
             Some((label, value, color)) => ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel),
-            None => c.fill(0, ui::LIST_Y + slot as u32 * ui::LIST_ROW, ui::W, ui::LIST_ROW, ui::BLACK),
+            None => c.fill(0, ui::LIST_Y + slot as u32 * ui::MENU_ROW, ui::W, ui::MENU_ROW, ui::BLACK),
         }
     }
 

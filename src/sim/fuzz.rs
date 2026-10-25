@@ -667,3 +667,66 @@ fn phone_link_events() {
         let _ = crate::phone::Stored::from_sector(&s);
     }
 }
+
+/// Keys and gestures in any order through the menus and pages (UI review, steps 4, 5 and 7): taps on the 44 px rows,
+/// on the title's "<", swipes, holds, keys, between passes of the main loop. No panic, the selection inside its
+/// menu (no wrap past the ends), the panel equal to the screenshot, and each new path reached: a tap that only
+/// selects, a tap that acts, the "<" that goes back.
+#[test]
+fn menu_touch_and_keys() {
+    use super::*;
+    use crate::touch::Dir;
+    let (mut selects, mut acts, mut backs) = (0, 0, 0);
+    for seed in 1..=12u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        let mut noise = bytes(seed * 7919, 1 << 13);
+        let mut next = || noise.next().unwrap_or(0);
+        for k in 0..300 {
+            let (a, b) = (next(), next());
+            let row_y = |r: u8| (ui::LIST_Y + u32::from(r % ui::MENU_ROWS as u8) * ui::MENU_ROW + 10) as u16;
+            let i = match a % 14 {
+                0 | 1 => Input::Next,
+                2 => Input::Prev,
+                3 => Input::Select,
+                4 => Input::Back,
+                5 => Input::Menu,
+                6..=8 => Input::Touch(Gesture::Tap(120, row_y(b))),
+                9 => Input::Touch(Gesture::Tap(10 + u16::from(b % 30), (ui::PAGE_Y + 8) as u16)),
+                10 => Input::Touch(Gesture::Swipe([Dir::Left, Dir::Right, Dir::Up, Dir::Down][usize::from(b % 4)])),
+                11 => Input::Touch(Gesture::Hold(u16::from(b) % 240, u16::from(next()) % 320)),
+                12 => Input::Touch(Gesture::Tap(u16::from(b) % 240, u16::from(next()) % 320)),
+                _ => Input::NextHeld,
+            };
+            let (before, chosen, editing) = (app.screen(), app.menu_chosen, app.editing);
+            app.input(&mut sim, i);
+            match (before, i) {
+                (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y)))
+                    if !editing && x < 48 && u32::from(y) < ui::LIST_Y && app.screen() != before =>
+                {
+                    backs += 1
+                }
+                (Screen::Menu(m, s), Input::Touch(Gesture::Tap(_, y))) if !editing && u32::from(y) >= ui::LIST_Y => {
+                    let r = menu::first_shown(s, ui::MENU_ROWS) + ((u32::from(y) - ui::LIST_Y) / ui::MENU_ROW) as usize;
+                    if r == s && chosen {
+                        acts += 1;
+                    } else if r != s && app.screen() == Screen::Menu(m, r) {
+                        selects += 1;
+                    }
+                }
+                _ => {}
+            }
+            if let Screen::Menu(m, s) = app.screen() {
+                assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
+            }
+            for _ in 0..usize::from(b % 4) {
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+            if k % 60 == 0 {
+                super::tests::assert_consistent(&sim, &app);
+            }
+        }
+    }
+    assert!(selects > 50 && acts > 20 && backs > 20, "reached: {selects} selects, {acts} acts, {backs} backs");
+}

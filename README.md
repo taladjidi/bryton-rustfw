@@ -16,7 +16,7 @@ entirely. Not affiliated with Bryton.
 | ![Course](docs/img/course.png) | ![Course profile](docs/img/course-profile.png) | ![Course fields](docs/img/course-fields.png) | ![Courses](docs/img/courses.png) |
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead (sim) | Courses on the card: stock's routes, FIT, GPX (sim) |
 | ![Workout graph](docs/img/workout-graph.png) | ![Workout gauge](docs/img/workout-gauge.png) | ![Menu](docs/img/menu.png) | ![Field groups](docs/img/field-groups.png) |
-| The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: one screen of groups (sim) | A page's field: its group, then the field (sim) |
+| The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: 44 px rows, "<" back, a tap selects then acts (sim) | A page's field: its group, then the field (sim) |
 | ![IGN map](docs/img/ign-map.png) | ![Media remote](docs/img/phone-media.png) | ![A call](docs/img/phone-call.png) | ![Map zoom](docs/img/map-zoom.png) |
 | The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) | The map zoomed in with "+" and "-", panned by a drag, the crosshair to follow again (sim, synthetic tiles) |
 

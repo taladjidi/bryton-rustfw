@@ -215,13 +215,17 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the previous ride page, round");
     assert_consistent(&sim, &app);
 
-    let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| (5000..5100).contains(&ms).then_some((120, row1)));
+    let row1 = ui::LIST_Y as u16 + ui::MENU_ROW as u16 + 5;
+    let taps = |ms: u64| (5000..5100).contains(&ms) || (5600..5700).contains(&ms);
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row1)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     let left_ms = 5500 - sim.ms;
     run(&mut sim, &mut app, left_ms);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "row 1: PAGES");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 1), "the first tap selects row 1");
+    assert_consistent(&sim, &app);
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "a second tap on it acts: PAGES");
     assert_consistent(&sim, &app);
 }
 
@@ -259,7 +263,7 @@ fn usb_drops_are_counted() {
 #[test]
 fn quick_taps_and_swipes() {
     let swipe = |ms: u64| (5000..5120).contains(&ms).then(|| ((200 - (ms - 5000) as i64 * 120 / 120) as u16, 160));
-    let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
+    let row1 = ui::LIST_Y as u16 + ui::MENU_ROW as u16 + 5;
     let tap = move |ms: u64| (7003..7063).contains(&ms).then_some((120, row1));
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| swipe(ms).or(tap(ms)));
     let mut app = App::start(&mut sim, None);
@@ -268,13 +272,13 @@ fn quick_taps_and_swipes() {
     assert_eq!(app.screen(), Screen::Ride(0), "the fast swipe left");
     app.press(&mut sim, Press::Long(Key::Page));
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "the short tap on row 1");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 1), "the short tap selects row 1");
 }
 
-/// Touch in a menu: a tap on MAX HR edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
+/// Touch in a menu: a tap on MAX HR selects it, a second one edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
 #[test]
 fn touch_edits_a_number_and_goes_back() {
-    let row = |r: u16| ui::LIST_Y as u16 + r * ui::LIST_ROW as u16 + 5;
+    let row = |r: u16| ui::LIST_Y as u16 + r * ui::MENU_ROW as u16 + 5;
     let max_hr = row(row_of(menu::Row::Set(Setting::MaxHr)) as u16);
     let tap = move |t0: u64, y: u16| move |ms: u64| (t0..t0 + 100).contains(&ms).then_some((120, y));
     let drag = |t0: u64, (x0, y0): (i64, i64), (dx, dy): (i64, i64)| {
@@ -285,7 +289,8 @@ fn touch_edits_a_number_and_goes_back() {
     };
     let (a, b, c, d) =
         (tap(5000, max_hr), drag(6000, (120, 250), (0, -100)), tap(7000, max_hr), drag(8000, (40, 160), (120, 0)));
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)).or(c(ms)).or(d(ms)));
+    let first = tap(4500, max_hr); // a tap selects the row the menu opened on; the next one acts
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| first(ms).or(a(ms)).or(b(ms)).or(c(ms)).or(d(ms)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr)); // in RIDER
@@ -757,9 +762,15 @@ fn menu_lists_the_devices_nearby() {
     assert_consistent(&sim, &app);
     sim.save("main_menu");
     app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "Lap on the first row stays there: no wrap");
     let last = menu::MAIN.len() - 1;
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, last), "Lap from the top wraps to the last row");
-    app.press(&mut sim, Press::Short(Key::Page)); // round to the top
+    for _ in 0..last + 3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, last), "Page stops at the last row");
+    for _ in 0..last {
+        app.press(&mut sim, Press::Short(Key::Lap));
+    }
     to_row(&mut sim, &mut app, menu::Row::Nearby);
     let nearby = row_of(menu::Row::Nearby);
     assert_eq!(app.screen(), Screen::Menu(Menu::Device, nearby), "NEARBY BLE, in DEVICE");
