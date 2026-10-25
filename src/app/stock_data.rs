@@ -253,6 +253,11 @@ impl App {
                 (*have, n) = (v, n + 1);
             }
         }
+        if let Some(p0) = i.alt_p0_dhpa
+            && self.alt.import_stock(p0)
+        {
+            n += 1; // written to its file between rides (not trusted: its age is unknown)
+        }
         if i.light_auto {
             (s.light_level, n) = (LIGHT_AUTO, n + 1);
         }

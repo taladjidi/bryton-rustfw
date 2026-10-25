@@ -2,6 +2,7 @@
 //! file here adds an `impl App` block for one concern. They are private modules re-exported whole from the crate
 //! root, so paths stay as they were (`bryton_rustfw::POLL_MS`, `crate::Settings`).
 
+mod barometer;
 mod clock;
 mod courses;
 mod device;
@@ -20,6 +21,7 @@ mod settings;
 mod stock_data;
 mod workouts;
 
+pub use barometer::*;
 pub use clock::*;
 pub use device::*;
 pub(crate) use editor::*;

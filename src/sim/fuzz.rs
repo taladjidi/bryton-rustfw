@@ -1385,6 +1385,75 @@ fn page_editor_inputs() {
     assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
 }
 
+/// Random pressures, altitudes and calibrations into the barometric altitude (altitude.rs): no panic, and every
+/// branch reached (a reading, a silence, a calibration by typing and by the receiver, both sources, a sector).
+#[test]
+fn barometric_altitude() {
+    use crate::altitude::{Altimeter, Cal, P_STD};
+    let mut reach = [0usize; 8];
+    for seed in 1..=4u32 {
+        let mut v = bytes(seed, 1 << 20);
+        let mut r = move || {
+            u32::from_le_bytes([
+                v.next().unwrap_or(0),
+                v.next().unwrap_or(0),
+                v.next().unwrap_or(0),
+                v.next().unwrap_or(0),
+            ])
+        };
+        let mut a = Altimeter::new();
+        for now in 0..60_000u32 {
+            let x = r();
+            // pressures: mostly the chip's range, around the standard day, sometimes anything
+            let p = match x >> 29 {
+                0 => r(),
+                1..=2 => 260 * 4096 + r() % (1000 * 4096),
+                _ => P_STD - 40_000 + r() % 80_000,
+            };
+            let alt = match r() % 4 {
+                0 => r() as i32,
+                1 => (r() % 20_000_000) as i32 - 10_000_000,
+                _ => (r() % 3_000_000) as i32,
+            };
+            let gps = (x & 1 == 0).then_some(alt);
+            match x % 12 {
+                0 => a.feed(None),
+                1 => reach[0] += usize::from(a.calibrate(alt, now)),
+                2 => a.from_gps(),
+                3 => a.ride_start(),
+                4 => reach[1] += usize::from(a.import_stock(r() % 20_000)),
+                5 | 6 => a.second(gps, now),
+                _ => a.feed(Some(p)),
+            }
+            if let Some(c) = a.take_dirty() {
+                reach[2] += 1;
+                assert_eq!(Cal::from_sector(&c.to_sector()), Some(c));
+            }
+            match a.source(gps) {
+                (Some(_), 0) => reach[3] += 1,
+                (Some(_), _) => reach[4] += 1,
+                _ => {}
+            }
+            reach[5] += usize::from(a.alt_mm().is_some());
+            reach[6] += usize::from(a.progress().is_some());
+        }
+        // sectors: random bytes, and ones with the magic and a good CRC around random fields
+        for _ in 0..2000 {
+            let mut s = [0u8; 512];
+            s.iter_mut().for_each(|b| *b = r() as u8);
+            let _ = Cal::from_sector(&s);
+            s[..4].copy_from_slice(b"ALT1");
+            s[12] = 1 + (r() % 5) as u8;
+            s[4..8].copy_from_slice(&(P_STD - 100_000 + r() % 200_000).to_le_bytes());
+            let crc = crate::fit::crc(0, &s[..13]);
+            s[13..15].copy_from_slice(&crc.to_le_bytes());
+            reach[7] += usize::from(Cal::from_sector(&s).is_some());
+        }
+    }
+    std::println!("barometric altitude reached: {reach:?}");
+    assert!(reach.iter().all(|&n| n > 1), "{reach:?}"); // [1]: stock's, only before a calibration of ours
+}
+
 /// Passes until the banner is gone (the strip and the page under it drawn again).
 fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
     for _ in 0..100 {

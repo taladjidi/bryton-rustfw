@@ -62,8 +62,8 @@ Time
 
 Altitude and climbing
 
-- [x] Ascent (stock Alt. Gain, all): unit, from GPS altitude, not the barometer yet
-- [ ] Altitude (stock, all)
+- [x] Ascent (stock Alt. Gain, all): sim, from the barometric altitude, GPS as the fallback
+- [x] Altitude (stock, all): sim, barometric, calibrated
 - [ ] Descent, max altitude (stock Alt. Loss, Max Altitude, all)
 - [ ] Lap ascent and descent (stock)
 - [ ] Uphill and downhill distance (stock)
@@ -140,7 +140,7 @@ Others
 - [ ] Dual-frequency GNSS (Garmin 1050, Wahoo Roam 3, Coros; the S510's M10 is single band)
 - [ ] AssistNow offline data from the update tool or the phone (stock)
 - [x] Barometer: pressure and temperature (stock, all): unit
-- [ ] Barometric altitude, calibrated by hand or at saved places (stock, Garmin)
+- [x] Barometric altitude, calibrated by hand, from GPS or at a ride's start (stock, Garmin): sim; not at saved places
 - [x] Ambient light sensor (stock): unit
 - [ ] Accelerometer use (crash, motion start) (stock start remind inferred, Garmin)
 - [ ] Microphone (stock: voice search and group chat input)

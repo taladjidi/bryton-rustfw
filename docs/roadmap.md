@@ -98,7 +98,7 @@ The golden rule (AGENTS.md) depends on this whole phase.
 - Done (src/power.rs, ride.rs): NP, IF, TSS, kJ, kcal, W/kg, 3, 10 and 30 s power (patch P6), W' balance (the
   planned P10, differential model, CP = FTP), max power and heart rate, average cadence, pedal balance, grade, VAM,
   temperature. Weight and W' in the menu (RTC backup register 16).
-- Next: grade, VAM and ascent from the barometer instead of GPS altitude; a CP setting apart from FTP if riders
+- Next: a CP setting apart from FTP if riders
   want one; torque pages (0x11, 0x12) and torque effectiveness / pedal smoothness (page 0x13).
 - Alerts on the buzzer and a banner: HR and power limits, eat and drink reminders by time, distance or kJ (stock
   has six kinds).

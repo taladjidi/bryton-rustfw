@@ -92,6 +92,8 @@ pub enum Setting {
     WktAvg,
     /// What a shifter button press does ([`Remote`]), for press `n` ([`crate::sensors::Press`]).
     Remote(u8),
+    /// The barometric altitude (a number, m): typing it calibrates the barometer to it (altitude.rs).
+    Altitude,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -180,6 +182,7 @@ impl Setting {
             Setting::Drink => "DRINK",
             Setting::HrAlert => "HR ABOVE",
             Setting::WktAvg => "GAUGE POWER",
+            Setting::Altitude => "ALTITUDE",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -199,6 +202,7 @@ impl Setting {
             Setting::Weight => " KG",
             Setting::WPrime => " KJ",
             Setting::Eat | Setting::Drink => " MIN",
+            Setting::Altitude => " M",
             _ => "",
         }
     }
@@ -213,6 +217,8 @@ impl Setting {
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
             Setting::Eat | Setting::Drink => Some((0..=120, 5)),
             Setting::HrAlert => Some((0..=230, 5)),
+            // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 5 m steps
+            Setting::Altitude => Some((0..=9500, 5)),
             _ => None,
         }
     }
@@ -263,6 +269,8 @@ pub enum Row {
     Nearby,
     /// Opens ABOUT: the firmware's version and commit, and Ferris.
     About,
+    /// FROM GPS: Select averages the receiver's altitude for 30 s and calibrates the barometer to it.
+    AltGps,
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
     Drive,
     /// A setting.

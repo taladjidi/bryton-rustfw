@@ -337,6 +337,9 @@ impl App {
                     }
                     Input::Select | Input::Back | Input::Touch(Gesture::Tap(..) | Gesture::Swipe(Dir::Right)) => {
                         self.editing = false;
+                        if s == menu::Setting::Altitude {
+                            self.alt_typed();
+                        }
                         self.save_misc(b);
                     }
                     _ => {}

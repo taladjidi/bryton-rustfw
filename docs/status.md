@@ -40,6 +40,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **Barometric altitude (src/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 2 m
+  ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SYSTEM > BUILT IN against a known
+  height, the ride start's own calibration, `\Rustfw\altcal.bin` kept over a restart, the chip's current at a reading
+  a second (datasheet, not measured), `Alt_P0` of a real DeviceData.ini.
+
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
   DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
   for one of this firmware's rides) has it, `\Activities` not; the next start's totals the same (the cache written

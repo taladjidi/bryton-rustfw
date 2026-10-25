@@ -152,7 +152,8 @@ altogether, for rain: the keys only, the call's buttons included.
 
 ## Ride
 
-- Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from GPS altitude.
+- Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from the barometric altitude (2 m hysteresis, a reading a
+  second while riding), else from GPS altitude (5 m).
 - Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette. The plain power fields
   (POWER, 3S, 10S, 30S W) and HR fill their box with their zone's colour, the number in black or white over it, so
   the zone shows at a glance (POWER's box takes its 3 s average's zone, its number stays live); NP, max and the other
@@ -162,7 +163,7 @@ altogether, for rain: the keys only, the call's buttons included.
 - Power (src/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
-  recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (GPS altitude).
+  recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (barometric altitude, else GPS).
 - **Saved as a FIT file** (`src/storage/recorder.rs`; simulator only so far, docs/status.md): the ride goes to
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
   rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
@@ -386,6 +387,12 @@ STOCK):
   for a faster fix.
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
+- **Barometric altitude** (`src/altitude.rs`, `src/app/barometer.rs`): the international barometric formula on the
+  LPS22HH's pressure, smoothed, calibrated by SETTINGS > SYSTEM > BUILT IN > ALTITUDE (type the altitude, 5 m steps),
+  FROM GPS (30 s of 3D fix, six satellites), or by itself at a ride's start when the last calibration is over 3 hours
+  old; kept in `\Rustfw\altcal.bin` between rides; stock's `Alt_P0` imported (not trusted). The ride, its graphs and the
+  FIT records take the barometer's altitude when it reads, the receiver's otherwise. No drift correction in a ride
+  (module doc: why).
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.

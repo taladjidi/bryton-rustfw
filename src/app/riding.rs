@@ -27,6 +27,7 @@ impl App {
             self.track = track;
             (self.map_zoom, self.map_centre) = (None, None); // a new map: fitted until "+" (review)
             self.new_ride = true;
+            self.alt.ride_start(); // a calibration older than three hours is made again from the receiver
         }
         self.say(match ev {
             ride::Event::Start => "RIDE STARTED",
@@ -148,7 +149,7 @@ impl App {
         fit::Sample {
             time,
             pos: fix.map(|p| (p.lat, p.lon)),
-            alt_mm: fix.map(|p| p.alt_mm),
+            alt_mm: self.alt_now().0,
             speed_mm_s: self.live.get(Metric::Speed).map(|v| u32::from(v) * 1000 / 36), // km/h x 10 to mm/s
             hr: byte(Metric::Hr),
             cadence: byte(Metric::Cadence),
@@ -192,6 +193,7 @@ impl App {
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
                 self.power.new_ride();
+                self.alt.ride_start();
                 self.notice("RIDE RESUMED");
             }
             recorder::Outcome::Saved(_) => {
@@ -247,12 +249,15 @@ impl App {
 
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
+        self.alt_second();
+        let alt = self.alt_now();
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),
             hr: self.live.get(Metric::Hr),
             cadence: self.live.get(Metric::Cadence),
             power: self.live.get(Metric::Power),
-            alt_mm: self.pvt.filter(|p| p.good()).map(|p| p.alt_mm),
+            alt_mm: alt.0,
+            alt_ref: alt.1,
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {

@@ -226,6 +226,9 @@ pub struct Settings {
     /// The touch panel acts (the TOUCH setting); off, it is not read for gestures and only the keys act. Kept in
     /// register 11, bit 23.
     pub touch: bool,
+    /// The altitude being edited (ALTITUDE in SYSTEM > BUILT IN), m + [`ALT_MENU_OFFSET`]. Not kept: the
+    /// calibration is (altitude.rs).
+    pub alt_m: u16,
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -265,6 +268,7 @@ impl Settings {
                 hr_alert: 0,
                 wkt_avg: 0,
                 remote: [menu::Remote::None; 4],
+                alt_m: 500,
             },
             0xa6 => Settings {
                 wheel_mm: index(w & 7),
@@ -280,6 +284,7 @@ impl Settings {
                 wkt_avg: 0,
                 touch: true,
                 remote: [menu::Remote::None; 4],
+                alt_m: 500,
             },
             0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
@@ -295,6 +300,7 @@ impl Settings {
                 wkt_avg: 0,
                 touch: true,
                 remote: [menu::Remote::None; 4],
+                alt_m: 500,
             },
             _ => Settings {
                 wheel_mm: WHEELS[1],
@@ -310,6 +316,7 @@ impl Settings {
                 wkt_avg: 0,
                 touch: true,
                 remote: [menu::Remote::None; 4],
+                alt_m: 500,
             },
         }
     }
@@ -436,6 +443,13 @@ impl Settings {
                 };
                 if v == 0 { l.push_str("OFF") } else { l.push_u32(u32::from(v)) }
             }
+            Setting::Altitude => {
+                let m = i32::from(self.alt_m) - ALT_MENU_OFFSET;
+                if m < 0 {
+                    l.push_str("-");
+                }
+                l.push_u32(m.unsigned_abs());
+            }
             Setting::WktAvg => l.push_str(WKT_AVGS.get(self.wkt_avg).copied().unwrap_or("")),
             Setting::Remote(n) => l.push_str(self.remote.get(usize::from(n)).map_or("", |a| a.name())),
         }
@@ -493,6 +507,7 @@ impl Settings {
             Setting::Eat => Some(&mut self.eat_min),
             Setting::Drink => Some(&mut self.drink_min),
             Setting::HrAlert => Some(&mut self.hr_alert),
+            Setting::Altitude => Some(&mut self.alt_m),
             _ => None,
         }
     }

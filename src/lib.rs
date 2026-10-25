@@ -12,6 +12,7 @@
 #![warn(missing_docs)]
 
 pub mod alerts;
+pub mod altitude;
 mod app;
 pub mod course;
 pub mod dev;
@@ -157,6 +158,10 @@ pub struct App {
     measuring: bool,
     /// The barometer's last reading: hPa x 10, C x 100.
     baro: Option<(u32, i16)>,
+    /// The barometric altitude and its calibration (altitude.rs); since the barometer was last read; the file.
+    alt: altitude::Altimeter,
+    baro_ms: u32,
+    alt_store: AltStore,
     /// The RTC's seconds (the main screen shows them).
     seconds: u8,
     /// What the status strip shows, and what it showed when last drawn.
@@ -391,6 +396,9 @@ impl App {
             light_ms: LIGHT_MS,          // a measurement at the first step
             measuring: false,
             baro: None,
+            alt: altitude::Altimeter::new(),
+            baro_ms: BATTERY_MS - BARO_RIDE_MS, // the first reading a second after the start (the conversion's)
+            alt_store: AltStore::default(),
             seconds: rtc_time_from_tr(b.rtc().0).2,
             strip: Strip {
                 time: rtc_hm(b),
@@ -601,11 +609,6 @@ impl App {
                 self.alarm_notice("BATTERY LOW");
             }
             self.told_low = low;
-            if self.chips.baro {
-                // the conversion started 10 s ago; the next one now (one-shot: the chip sleeps in between)
-                self.baro = ambient::baro_read(b);
-                ambient::baro_start(b);
-            }
         }
         self.poll_light(b);
         if self.ble.is_some() {
@@ -729,6 +732,7 @@ impl App {
             self.repeated = false;
         }
         self.step_recorder(b);
+        self.step_altitude(b);
         if self.ble.is_some() {
             self.step_phone(b);
         }

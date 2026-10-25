@@ -369,6 +369,14 @@ pub struct Bus {
     pub light_reads: u32,
     /// The barometer's pressure and temperature (hPa x 10, C x 100); None: no barometer.
     pub baro: Option<(u32, i16)>,
+    /// The barometer follows this altitude (mm, a function of the time in ms) on the sea-level pressure `baro_p0`
+    /// (1/4096 hPa), instead of `baro`'s pressure: a simulated climb, with `baro_noise` counts of 1/4096 hPa of
+    /// pseudo-random noise on each reading.
+    pub baro_alt: Option<fn(u64) -> i32>,
+    /// See `baro_alt`.
+    pub baro_p0: u32,
+    /// See `baro_alt`.
+    pub baro_noise: u32,
     /// When the last one-shot conversion is done (None: none asked since the last read).
     baro_done: Option<u64>,
     /// One-shot conversions asked.
@@ -405,7 +413,17 @@ impl Bus {
                 let mut regs = [0u8; 0x30];
                 regs[0x0f] = BARO_ID;
                 regs[0x27] = if ready { 0x03 } else { 0 };
-                regs[0x28..0x2b].copy_from_slice(&(p * 4096 / 10).to_le_bytes()[..3]);
+                let raw = match self.baro_alt {
+                    Some(f) => {
+                        let h = f64::from(f(now)) / 44_307_694.0;
+                        let noise = (now.wrapping_mul(2_654_435_761) >> 7) as u32 % (2 * self.baro_noise + 1);
+                        ((f64::from(self.baro_p0) * (1.0 - h).powf(1.0 / 0.190284)) as u32)
+                            .saturating_add(noise)
+                            .saturating_sub(self.baro_noise)
+                    }
+                    None => p * 4096 / 10,
+                };
+                regs[0x28..0x2b].copy_from_slice(&raw.to_le_bytes()[..3]);
                 regs[0x2b..0x2d].copy_from_slice(&t.to_le_bytes());
                 if reg == 0x28 {
                     self.baro_done = None;
@@ -774,6 +792,9 @@ impl Sim {
                 light_on_ms: 0,
                 light_reads: 0,
                 baro: Some((10_132, 2150)),
+                baro_alt: None,
+                baro_p0: crate::altitude::P_STD,
+                baro_noise: 0,
                 baro_done: None,
                 baro_conversions: 0,
                 accel_ctrl1: 0x77,
@@ -1079,6 +1100,9 @@ pub use ble_sim::{Act, PhoneSim};
 
 #[cfg(test)]
 mod phone_tests;
+
+#[cfg(test)]
+mod altitude_tests;
 
 #[cfg(test)]
 mod shift_tests;
