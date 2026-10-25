@@ -269,7 +269,7 @@ impl App {
         if matches!(i, Input::Touch(_)) && (!self.settings.touch || self.strip.locked) {
             return; // TOUCH OFF, or locked: the keys only
         }
-        let before = self.screen;
+        let (before, more_before) = (self.screen, self.more_on);
         self.clamp_menu(); // a row gone while the menu showed (drawn again below if the screen of rows changed)
         let recording = self.ride.state() == ride::State::Running;
         let woke = self.light_shown == 0;
@@ -316,6 +316,13 @@ impl App {
             (_, Input::Off) => return self.power_off(b),
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
+            // MORE: a swipe up on a ride page shows its denser variant, a swipe down or Back the page again
+            (Screen::Ride(n), Input::Touch(Gesture::Swipe(Dir::Up))) if n < PAGES && self.more_shown().is_none() => {
+                self.more_on = Some(n)
+            }
+            (Screen::Ride(_), Input::Back | Input::Touch(Gesture::Swipe(Dir::Down))) if self.more_shown().is_some() => {
+                self.more_on = None
+            }
             // a swipe down on a page opens the remote, without the menus
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
             // Back, or a swipe up (the swipe down that opened it, undone)
@@ -406,7 +413,7 @@ impl App {
             // the overview is apart from the ride pages, as on stock: Page goes to them, then round them; Back
             // comes back
             (Screen::Main | Screen::Ride(_), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
-                self.screen = self.paged(true)
+                (self.screen, self.more_on) = (self.paged(true), None) // the next page's normal variant
             }
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
             (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.zoom_at(x, y).is_some() => {
@@ -437,7 +444,11 @@ impl App {
                 } else if let Some(plot) = graph_plot(f) {
                     let all = ride::Plot::ALL;
                     let next = all[(all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len()];
-                    let n = if let Screen::Ride(n) = self.screen { n } else { OVERVIEW };
+                    let n = match self.screen {
+                        Screen::Ride(_) if self.more_shown().is_some() => EDITED, // no slot: the page's own are by box
+                        Screen::Ride(n) => n,
+                        _ => OVERVIEW,
+                    };
                     let fixed = self.widgets().take_while(|(_, w)| !matches!(w, Widget::Field(_))).count();
                     if let Some(page) = self.plot_taps.get_mut(n)
                         && let Some(slot) = page.get_mut(k.saturating_sub(fixed))
@@ -447,7 +458,9 @@ impl App {
                 }
                 return self.show(b);
             }
-            (Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => self.screen = self.paged(false),
+            (Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => {
+                (self.screen, self.more_on) = (self.paged(false), None)
+            }
             (Screen::Ride(_), Input::Back) => self.screen = Screen::Main,
             (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
                 if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
@@ -526,7 +539,7 @@ impl App {
             ) => self.close(),
             _ => return,
         }
-        if self.screen != before {
+        if self.screen != before || self.more_on != more_before {
             self.show(b);
         }
     }

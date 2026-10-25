@@ -101,6 +101,8 @@ impl PageStore {
 pub(crate) struct Editing {
     /// The ride page edited.
     pub(crate) page: usize,
+    /// It is the page's MORE variant ([`App::more_shown`] when it opened).
+    pub(crate) more: bool,
     /// The page as edited, as it was, and before the last action (UNDO).
     pub(crate) work: Page,
     pub(crate) orig: Page,
@@ -270,13 +272,17 @@ impl App {
             self.save_page_registers_from(b, &s); // cut between the file and the registers: put right
         }
         let mut n = 0;
-        for p in list.into_iter().flatten() {
-            self.pages[n] = p;
-            n += 1;
+        let mut more = [None; PAGES];
+        for (p, m) in list.into_iter().zip(s.more) {
+            if let (Some(p), Some(slot), Some(ms)) = (p, self.pages.get_mut(n), more.get_mut(n)) {
+                (*slot, *ms) = (p, m);
+                n += 1;
+            }
         }
         if n == 0 {
             return;
         }
+        self.more = more;
         self.page_count = n;
         self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if let Screen::Ride(k) = self.screen {
@@ -309,6 +315,7 @@ impl App {
             count: self.page_count,
             words: register_words(&self.pages, self.page_count),
             was,
+            more: self.more,
         };
         let slot = (s.seq % 2) as usize;
         let sector = s.to_sector();
@@ -353,19 +360,17 @@ impl App {
             return;
         }
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
-        self.edit = Some(Editing { page: n, work: p, orig: p, undo: None, asking: false });
+        let more = self.more_shown() == Some(n);
+        let p = if more { self.more_page(n) } else { p };
+        self.edit = Some(Editing { page: n, more, work: p, orig: p, undo: None, asking: false });
         self.open(Screen::Edit(n, k.min(p.cells().saturating_sub(1))));
     }
 
     /// Leaves the editor (and the menus over it), keeping its work or not, back to where it was opened from.
     pub(crate) fn leave_editor(&mut self, b: &mut impl Board, keep: bool) {
-        if let Some(e) = self.edit.take()
-            && keep
-            && e.work != e.orig
-        {
-            if let Some(p) = self.pages.get_mut(e.page) {
-                *p = e.work;
-            }
+        let edit = self.edit.take();
+        if let Some(e) = edit.filter(|e| keep && e.work != e.orig) {
+            self.keep_edit(&e);
             self.pages_changed(b);
         }
         for _ in 0..self.under.len() {
@@ -374,6 +379,9 @@ impl App {
             if was_editor || self.depth == 0 {
                 break;
             }
+        }
+        if let Some(e) = edit.filter(|e| e.more && self.screen == Screen::Ride(e.page)) {
+            self.more_on = Some(e.page); // back on the MORE variant it was opened on
         }
         self.show(b);
     }
@@ -452,7 +460,7 @@ impl App {
     pub(crate) fn draw_top(&self, c: &mut impl Canvas) {
         if self.hint_shown {
             let mut l = Line::<24>::new();
-            l.push_str("PAGE ");
+            l.push_str(if self.edit.is_some_and(|e| e.more) { "MORE " } else { "PAGE " });
             l.push_u32(self.edit.map_or(0, |e| e.page) as u32 + 1);
             l.push_str("  START: MENU");
             ui::draw_edit_hint(c, l.as_str());
@@ -517,8 +525,8 @@ impl App {
             return self.say("6 PAGES AT MOST");
         }
         if let Some(e) = self.edit.take() {
-            if let Some(p) = self.pages.get_mut(e.page) {
-                *p = e.work;
+            if e.work != e.orig {
+                self.keep_edit(&e);
             }
             // out of the actions and the old page's editor, to the screen it was opened from
             while self.depth > 0 && !matches!(self.screen, Screen::Edit(..)) {
@@ -530,7 +538,9 @@ impl App {
         use Field::*;
         let new = Page::preset(4, [Speed, Timer, Dist, Hr, Time, Time, Time, Time]).unwrap_or(BLANK);
         self.pages.copy_within(at..PAGES - 1, at + 1);
+        self.more.copy_within(at..PAGES - 1, at + 1);
         self.pages[at] = new;
+        self.more[at] = None;
         self.page_count += 1;
         self.pages_changed(b);
         let mut l = Line::<20>::new();
@@ -546,6 +556,8 @@ impl App {
         let Some(e) = self.edit.take() else { return };
         if e.page < self.page_count && self.page_count > 1 {
             self.pages.copy_within(e.page + 1..PAGES, e.page);
+            self.more.copy_within(e.page + 1..PAGES, e.page);
+            self.more[PAGES - 1] = None;
             self.page_count -= 1;
             self.pages_changed(b);
         }

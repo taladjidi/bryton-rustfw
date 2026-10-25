@@ -75,6 +75,7 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
             charging: false,
             rec: app.strip.rec,
             locked: app.strip.locked,
+            more: app.strip.more,
         },
     );
     let page = app.pages()[n];
@@ -118,6 +119,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
             charging: false,
             rec: app.strip.rec,
             locked: app.strip.locked,
+            more: app.strip.more,
         },
     );
     let _ = s;
@@ -1542,6 +1544,7 @@ fn gps_fix_and_speed() {
         charging: false,
         rec: Rec::Idle,
         locked: false,
+        more: false,
     };
     crate::ui::draw_strip(&mut want, &strip);
     assert!(want.px == sim.screen, "GPS speed, green GPS");

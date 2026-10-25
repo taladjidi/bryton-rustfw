@@ -232,6 +232,10 @@ pub struct App {
     /// The ride pages (the first `page_count`), then the overview's fields ([`OVERVIEW`]).
     pages: [page::Page; PAGES + 1],
     page_count: usize,
+    /// Each ride page's MORE variant when the rider made one, else [`page::Page::more_of`] (app/more.rs).
+    more: [Option<page::Page>; PAGES],
+    /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
+    more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
     store: PageStore,
     /// The page editor's work, while it is open.
@@ -416,6 +420,7 @@ impl App {
                 charging: false,
                 rec: Rec::Idle,
                 locked: false,
+                more: false,
             },
             strip_shown: Strip {
                 time: (0, 0),
@@ -427,6 +432,7 @@ impl App {
                 charging: false,
                 rec: Rec::Idle,
                 locked: false,
+                more: false,
             },
             screen: Screen::Main,
             ble,
@@ -467,6 +473,8 @@ impl App {
             depth: 0,
             pages,
             page_count,
+            more: [None; PAGES],
+            more_on: None,
             store,
             edit: None,
             hint_shown: false,

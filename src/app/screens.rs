@@ -214,8 +214,10 @@ impl App {
             Screen::Edit(..) => (EDITED, &[]),
             _ => return all.into_iter().take(0),
         };
+        let more = self.more_shown() == Some(page);
         let p = match page {
             COURSE => page::Page::from_cfg(COURSE_PAGE).unwrap_or(BLANK),
+            n if more => self.more_page(n),
             n => self.page_ref(n).copied().unwrap_or(BLANK),
         };
         let mut n = 0;
@@ -223,7 +225,7 @@ impl App {
             slot.1 = w;
             n += 1;
         }
-        let taps = self.plot_taps.get(page);
+        let taps = self.plot_taps.get(page).filter(|_| !more); // a tap's plot is per box of the normal page
         for (i, &f) in p.fields.iter().enumerate() {
             // a plot chosen by a tap, while the box still holds a graph
             let tap = taps.and_then(|t| t.get(i).copied().flatten()).filter(|_| graph_plot(f).is_some());
@@ -444,6 +446,8 @@ impl App {
 
     /// Clears the page area and draws the current screen.
     pub(crate) fn show(&mut self, b: &mut impl Board) {
+        self.more_on = self.more_shown(); // MORE is up only over its own page
+        self.strip.more = self.more_on.is_some();
         if self.calendar_day.is_none() && self.widgets().any(|(_, w)| w == Widget::Field(Field::Workout)) {
             self.load_calendar(b); // the overview's planned workout: the card read at first use
         }
@@ -483,6 +487,9 @@ impl App {
         }
         if self.screen == Screen::Media {
             self.phone.shown = ui::media::shown(&self.media_now());
+        }
+        if self.strip.more != self.strip_shown.more {
+            self.update_strip(b); // the MORE marker
         }
     }
 

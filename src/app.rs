@@ -14,6 +14,7 @@ mod graphs;
 mod input;
 mod link;
 mod menus;
+mod more;
 mod notifs;
 mod phone;
 mod radio;

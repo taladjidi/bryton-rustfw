@@ -131,6 +131,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
     the ride card, the basemap, `render_row` (screenshots). `fields.rs`: a ride field's text and colour, number
     formatting. `graphs.rs`: the graph fields and the course profile.
+  - `more.rs`: MORE, a denser variant of each ride page (swipe up shows it, swipe down or Back returns): the rider's own
+    (the editor edits it, kept in `pages.bin` after the first CRC) or `Page::more_of`; "MORE" in the strip.
   - `menus.rs`: `Menu`, each menu's rows and their text, `activate` (what a row does).
   - `link.rs`: the Nordic link's watchdog: signs of a framing out of step (garbage frames, commands without a response,
     a quiet link that does not answer a probe), drain and resync, else reset the chip and start ANT and the phone

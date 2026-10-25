@@ -7,8 +7,8 @@
 //! never leaves a field in a box too small to read ([`min_size`]). Pure logic, and the format of
 //! `\Rustfw\pages.bin` ([`Saved`]).
 
-use crate::PageCfg;
 use crate::ui::{self, Field};
+use crate::{BLANK, PageCfg};
 
 /// A box: left, top, width, height.
 pub type Rect = (u32, u32, u32, u32);
@@ -314,6 +314,40 @@ impl Page {
         self.checked(p)
     }
 
+    /// The MORE variant a page has until the rider edits it: eight cells, this page's fields that are readable in
+    /// one (a map or a graph is not) first, then the next useful ones it does not show yet.
+    ///
+    /// ```
+    /// use bryton_rustfw::{page::Page, ui::Field::*};
+    /// let p = Page::preset(4, [Speed, Hr, Map, Dist, Time, Time, Time, Time]).unwrap();
+    /// let m = p.more_of();
+    /// assert_eq!((m.cells(), &m.fields[..4]), (8, &[Speed, Hr, Dist, Power3s][..]));
+    /// assert!(m.valid());
+    /// ```
+    pub fn more_of(&self) -> Page {
+        use Field::*;
+        let Some(dense) = preset_of(CELLS).and_then(|id| Page::preset(id, [Time; CELLS])) else { return *self };
+        let room = dense.cell_box(0).unwrap_or((0, 0, 0, 0));
+        let mut fields = [Time; CELLS];
+        let mut n = 0;
+        for f in self.fields.iter().take(self.cells()).copied().filter(|&f| fits(f, room)) {
+            if let Some(slot) = fields.get_mut(n) {
+                *slot = f;
+                n += 1;
+            }
+        }
+        // ponytail: the extras are a fixed list; the rider's own MORE (the editor) is the way to anything else
+        for f in [Power3s, Np, Hr, Cadence, Speed, Dist, Timer, Ascent, AvgSpeed, Kj] {
+            if !fields.get(..n).unwrap_or(&[]).contains(&f)
+                && let Some(slot) = fields.get_mut(n)
+            {
+                *slot = f;
+                n += 1;
+            }
+        }
+        Page { fields, ..dense }
+    }
+
     /// Cell `k` showing `f`, if it is readable there.
     pub fn with_field(&self, k: usize, f: Field) -> Result<Page, &'static str> {
         let b = self.cell_box(k).ok_or("NO BOX")?;
@@ -359,6 +393,12 @@ const PAGE_BYTES: usize = ROWS + CELLS;
 const PAGES_AT: usize = 60;
 const CRC_AT: usize = PAGES_AT + crate::PAGES * PAGE_BYTES;
 
+/// The MORE variants, after the first CRC where earlier builds do not look: a byte of flags (bit k: page k has one;
+/// zero in a file of an earlier build, so every page then has its default), their pages, and their own CRC-16 of
+/// the flags and the pages. A bad one leaves every page its default, the pages above it untouched.
+const MORE_AT: usize = CRC_AT + 2;
+const MORE_CRC_AT: usize = MORE_AT + 1 + crate::PAGES * PAGE_BYTES;
+
 /// The ride pages as the file keeps them: two copies, one a sector, the newer whole one (the larger `seq`) the one
 /// read; a write goes over the older, so a power cut while writing one leaves the other (the recorder's two
 /// records). Each copy also keeps the backup registers' words written with it (`words`) and those they held before
@@ -376,6 +416,33 @@ pub struct Saved {
     pub words: [u32; 6],
     /// What they held before.
     pub was: [u32; 6],
+    /// Each page's MORE variant, if the rider made one (else [`Page::more_of`]).
+    pub more: [Option<Page>; crate::PAGES],
+}
+
+/// `p` as a copy keeps it.
+fn write_page(p: &Page, out: &mut [u8]) {
+    for (o, &(share, n)) in out.iter_mut().zip(&p.rows) {
+        *o = share << 4 | n;
+    }
+    for (o, f) in out.iter_mut().skip(ROWS).zip(&p.fields) {
+        *o = *f as u8;
+    }
+}
+
+/// A page from `b` (a [`PAGE_BYTES`] chunk); None for a field this build does not have.
+fn read_page(b: &[u8]) -> Option<Page> {
+    let mut p = Page { rows: [(0, 0); ROWS], fields: [Field::Time; CELLS] };
+    for (r, &x) in p.rows.iter_mut().zip(b) {
+        *r = (x >> 4, x & 0xf);
+    }
+    for (f, &i) in p.fields.iter_mut().zip(b.get(ROWS..)?) {
+        if usize::from(i) >= Field::ALL.len() {
+            return None;
+        }
+        *f = Field::from_index(u32::from(i));
+    }
+    Some(p)
 }
 
 impl Saved {
@@ -384,7 +451,7 @@ impl Saved {
     /// ```
     /// use bryton_rustfw::{page::*, ui::Field};
     /// let p = Page::preset(4, [Field::Hr; 8]).unwrap();
-    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6] };
+    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6] };
     /// let mut sector = s.to_sector();
     /// assert_eq!(Saved::from_sector(&sector), Some(s));
     /// sector[70] ^= 1;
@@ -399,15 +466,21 @@ impl Saved {
             s[12 + 4 * k..16 + 4 * k].copy_from_slice(&w.to_le_bytes());
         }
         for (p, out) in self.pages.iter().zip(s[PAGES_AT..CRC_AT].chunks_exact_mut(PAGE_BYTES)) {
-            for (o, &(share, n)) in out.iter_mut().zip(&p.rows) {
-                *o = share << 4 | n;
-            }
-            for (o, f) in out[ROWS..].iter_mut().zip(&p.fields) {
-                *o = *f as u8;
-            }
+            write_page(p, out);
         }
         let crc = crate::fit::crc(0, &s[..CRC_AT]);
         s[CRC_AT..CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        let mut flags = 0u8;
+        for (k, (m, out)) in self.more.iter().zip(s[MORE_AT + 1..MORE_CRC_AT].chunks_exact_mut(PAGE_BYTES)).enumerate()
+        {
+            if let Some(p) = m {
+                flags |= 1 << k;
+                write_page(p, out);
+            }
+        }
+        s[MORE_AT] = flags;
+        let crc = crate::fit::crc(0, &s[MORE_AT..MORE_CRC_AT]);
+        s[MORE_CRC_AT..MORE_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
         s
     }
 
@@ -420,19 +493,21 @@ impl Saved {
         }
         let count = usize::from(s[8]);
         let word = |k: usize| u32::from_le_bytes([s[12 + 4 * k], s[13 + 4 * k], s[14 + 4 * k], s[15 + 4 * k]]);
-        let mut pages = [Page { rows: [(0, 0); ROWS], fields: [Field::Time; CELLS] }; crate::PAGES];
+        let mut pages = [BLANK; crate::PAGES];
         for (k, (p, b)) in pages.iter_mut().zip(s.get(PAGES_AT..CRC_AT)?.chunks_exact(PAGE_BYTES)).enumerate() {
-            for (r, &x) in p.rows.iter_mut().zip(b) {
-                *r = (x >> 4, x & 0xf);
-            }
-            for (f, &i) in p.fields.iter_mut().zip(b.get(ROWS..)?) {
-                if usize::from(i) >= Field::ALL.len() {
-                    return None;
-                }
-                *f = Field::from_index(u32::from(i));
-            }
+            *p = read_page(b)?;
             if k < count && !(p.well_formed() && p.roomy()) {
                 return None;
+            }
+        }
+        // the MORE variants: none where the flags or their CRC are not there (a file of an earlier build)
+        let mut more = [None; crate::PAGES];
+        let flags = s[MORE_AT];
+        if flags != 0
+            && s.get(MORE_CRC_AT..MORE_CRC_AT + 2)? == crate::fit::crc(0, s.get(MORE_AT..MORE_CRC_AT)?).to_le_bytes()
+        {
+            for (k, (m, b)) in more.iter_mut().zip(s[MORE_AT + 1..MORE_CRC_AT].chunks_exact(PAGE_BYTES)).enumerate() {
+                *m = read_page(b).filter(|p| flags & 1 << k != 0 && p.well_formed() && p.roomy());
             }
         }
         (1..=crate::PAGES).contains(&count).then(|| Saved {
@@ -441,6 +516,7 @@ impl Saved {
             count,
             words: core::array::from_fn(word),
             was: core::array::from_fn(|k| word(6 + k)),
+            more,
         })
     }
 
@@ -543,7 +619,7 @@ mod tests {
     #[test]
     fn the_newer_whole_copy_wins() {
         let p = |id| Page::preset(id, F).unwrap();
-        let a = Saved { seq: 3, pages: [p(1); crate::PAGES], count: 1, words: [0; 6], was: [0; 6] };
+        let a = Saved { seq: 3, pages: [p(1); crate::PAGES], count: 1, words: [0; 6], was: [0; 6], more: [None; 6] };
         let b = Saved { seq: 4, pages: [p(4); crate::PAGES], count: 3, ..a };
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&b.to_sector());
@@ -552,5 +628,51 @@ mod tests {
         file[100] ^= 0xff;
         assert_eq!(Saved::newest(&file), Some(a), "the newer torn: the older");
         assert_eq!(Saved::newest(&[0; 1024]), None);
+    }
+
+    /// A page's MORE variant: eight readable cells whatever the page holds, the page's own fields first.
+    #[test]
+    fn the_default_more_is_dense_and_readable() {
+        for id in 1..ui::LAYOUTS.len() as u8 {
+            for fields in [F, [Map; CELLS], [Graph, Hr, Map, AltGraph, Power, Cadence, Dist, Timer]] {
+                let m = Page::preset(id, fields).unwrap().more_of();
+                assert!(m.valid() && m.cells() == CELLS, "layout {id}: {m:?}");
+                let shown = &m.fields[..CELLS];
+                assert!(!shown.iter().any(|f| f.is_picture()), "layout {id}: {m:?}");
+            }
+        }
+        let p = Page::preset(4, [Speed, Hr, Power3s, Dist, Time, Time, Time, Time]).unwrap();
+        assert_eq!(p.more_of().fields, [Speed, Hr, Power3s, Dist, Np, Cadence, Timer, Ascent], "no field twice");
+    }
+
+    /// The MORE variants go to the file and back; a file of an earlier build (nothing after the first CRC) and one
+    /// whose MORE part is damaged give every page its default, the pages themselves intact.
+    #[test]
+    fn more_variants_in_the_file() {
+        let p = Page::preset(4, F).unwrap();
+        let m = Page::preset(14, F).unwrap();
+        let s = Saved {
+            seq: 5,
+            pages: [p; crate::PAGES],
+            count: 3,
+            words: [1; 6],
+            was: [2; 6],
+            more: [None, Some(m), None, None, None, Some(p)],
+        };
+        let sector = s.to_sector();
+        assert_eq!(Saved::from_sector(&sector), Some(s));
+        let plain = Saved { more: [None; crate::PAGES], ..s };
+        let mut old = sector;
+        old[MORE_AT..].fill(0); // as an earlier build wrote it
+        assert_eq!(Saved::from_sector(&old), Some(plain));
+        assert_eq!(&plain.to_sector()[..CRC_AT + 2], &sector[..CRC_AT + 2]);
+        let mut bad = sector;
+        bad[MORE_AT + 3] ^= 0x10;
+        assert_eq!(Saved::from_sector(&bad), Some(plain), "the MORE part damaged");
+        let mut bad = sector;
+        bad[MORE_AT + 1 + PAGE_BYTES + ROWS] = 250; // a field this build lacks, CRC made right
+        let crc = crate::fit::crc(0, &bad[MORE_AT..MORE_CRC_AT]);
+        bad[MORE_CRC_AT..MORE_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(Saved::from_sector(&bad), Some(Saved { more: [None, None, None, None, None, Some(p)], ..s }));
     }
 }

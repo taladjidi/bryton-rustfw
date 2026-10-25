@@ -154,6 +154,8 @@ pub struct Strip {
     pub rec: Rec,
     /// The touch is locked (Back and Lap held together): a padlock left of the time.
     pub locked: bool,
+    /// A ride page's MORE variant is up: "MORE" where "BLE" and the GPS bars are.
+    pub more: bool,
 }
 
 /// The ride's state as the strip shows it.
@@ -247,14 +249,26 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             draw_bitmap(c, &PADLOCK, STRIP_LOCK.0, top + 2, 1, WHITE);
         }
     }
-    if changed(|s| u32::from(s.radio)) {
-        at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
-    }
-    if changed(|s| s.gps.map_or(0x100, u32::from) | u32::from(s.blink) << 9) {
-        match s.gps {
-            Some(bars @ 1..) => draw_bars(c, bars),
-            Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
-            _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
+    // MORE takes the place of "BLE" and the GPS bars while a page's denser variant is up
+    let swapped = changed(|s| s.more as u32);
+    let both = (STRIP_BLE.0, STRIP_GPS.0 + STRIP_GPS.1 - STRIP_BLE.0 - 1); // up to the padlock's column
+    if s.more {
+        if swapped {
+            at(c, both, ACCENT, Align::Left, "MORE");
+        }
+    } else {
+        if swapped {
+            c.fill(both.0, top, both.1, LABEL.height(), BLACK);
+        }
+        if swapped || changed(|s| u32::from(s.radio)) {
+            at(c, STRIP_BLE, if s.radio { GREEN } else { RED }, Align::Left, "BLE");
+        }
+        if swapped || changed(|s| s.gps.map_or(0x100, u32::from) | u32::from(s.blink) << 9) {
+            match s.gps {
+                Some(bars @ 1..) => draw_bars(c, bars),
+                Some(0) if s.blink => at(c, STRIP_GPS, GREY, Align::Left, "GPS"),
+                _ => at(c, STRIP_GPS, BLACK, Align::Left, "GPS"),
+            }
         }
     }
     if changed(|s| s.usb as u32) {
@@ -1793,6 +1807,7 @@ pub(crate) mod tests {
             charging: false,
             rec: Rec::Idle,
             locked: false,
+            more: false,
         };
         let next = Strip { time: (10, 0), blink: false, rec: Rec::Running, ..strip };
         let (mut a, mut b) = (Frame::new(), Frame::new());
@@ -1814,6 +1829,7 @@ pub(crate) mod tests {
             charging: true,
             rec: Rec::Paused,
             locked: false,
+            more: false,
         };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);

@@ -570,7 +570,7 @@ fn a_tiny_row_is_refused_and_drawn_safely() {
     let rows = [(1, 2), (3, 1), (3, 1), (3, 1), (3, 1)];
     let tiny = Page { rows, fields: [Speed, Hr, Power, Cadence, Dist, Time, Time, Time] };
     assert!(tiny.well_formed() && !tiny.roomy());
-    let s = Saved { seq: 3, pages: [tiny; PAGES], count: 1, words: [0; 6], was: [0; 6] };
+    let s = Saved { seq: 3, pages: [tiny; PAGES], count: 1, words: [0; 6], was: [0; 6], more: [None; PAGES] };
     assert_eq!(Saved::from_sector(&s.to_sector()), None);
     let (mut sim, mut app) = started();
     app.pages[0] = tiny;
@@ -626,4 +626,188 @@ fn a_page_added_early_goes_last() {
     to_row(&mut sim2, &mut app, menu::Row::AddPage);
     press(&mut sim2, &mut app, Key::Start);
     assert_eq!((app.page_count(), app.screen(), app.pages()[3]), (5, Screen::Edit(4, 0), fourth));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// MORE (app/more.rs)
+// ---------------------------------------------------------------------------------------------------------------
+
+fn swipe(sim: &mut Sim, app: &mut App, d: Dir) {
+    app.input(sim, Input::Touch(Gesture::Swipe(d)));
+    run(sim, app, 100);
+}
+
+/// A unit riding, with a fix and a strap, on its first ride page (the page, then its MORE, are saved for the README).
+fn riding() -> (Sim, App) {
+    let (mut sim, mut app) = started();
+    app.pages[0] = Page::preset(4, [Speed, Timer, Dist, Hr, Time, Time, Time, Time]).unwrap();
+    app.pages_changed(&mut sim);
+    sim.gnss.fix = Some(500);
+    sim.backup[Kind::Hr.backup()] = super::tests::STRAP.to_word();
+    press(&mut sim, &mut app, Key::Start);
+    run(&mut sim, &mut app, 30_000);
+    (sim, app)
+}
+
+/// A swipe up on a ride page shows its denser variant (the page's fields and more, eight boxes), a swipe down or
+/// Back the page again; Page goes to the next page's normal variant; the recording goes on under it all; the touch
+/// lock stops the swipe; only the boxes that changed are drawn, and the panel equals the screenshot throughout.
+#[test]
+fn a_swipe_up_shows_more() {
+    let (mut sim, mut app) = riding();
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert_eq!((app.screen(), app.more_shown(), app.widgets().count()), (Screen::Ride(0), None, 4));
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("page_normal");
+    swipe(&mut sim, &mut app, Dir::Up);
+    assert_eq!((app.screen(), app.more_shown(), app.widgets().count()), (Screen::Ride(0), Some(0), 8));
+    assert!(app.strip.more);
+    let fields: Vec<_> = app.widgets().map(|(_, w)| w).collect();
+    assert_eq!(fields[..4], [Speed, Timer, Dist, Hr].map(Widget::Field), "the page's own first");
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("page_more");
+    swipe(&mut sim, &mut app, Dir::Up);
+    assert_eq!(app.more_shown(), Some(0), "up again changes nothing");
+    run(&mut sim, &mut app, 5000);
+    super::tests::assert_consistent(&sim, &app);
+    assert_eq!(app.ride.state(), ride::State::Running, "recording unaffected");
+    // down: the page, not the remote
+    swipe(&mut sim, &mut app, Dir::Down);
+    assert_eq!((app.screen(), app.more_shown(), app.strip.more), (Screen::Ride(0), None, false));
+    super::tests::assert_consistent(&sim, &app);
+    // Back: the page, then the overview
+    swipe(&mut sim, &mut app, Dir::Up);
+    press(&mut sim, &mut app, Key::Back);
+    assert_eq!((app.screen(), app.more_shown()), (Screen::Ride(0), None));
+    press(&mut sim, &mut app, Key::Back);
+    assert_eq!(app.screen(), Screen::Main);
+    // down on the page with no MORE up still opens the remote
+    press(&mut sim, &mut app, Key::Page);
+    swipe(&mut sim, &mut app, Dir::Down);
+    assert_eq!(app.screen(), Screen::Media);
+    press(&mut sim, &mut app, Key::Back);
+    // Page from MORE: the next page, normal; round to the first, normal
+    swipe(&mut sim, &mut app, Dir::Up);
+    press(&mut sim, &mut app, Key::Page);
+    assert_eq!((app.screen(), app.more_shown()), (Screen::Ride(1), None));
+    for _ in 0..app.page_count() - 1 {
+        press(&mut sim, &mut app, Key::Page);
+    }
+    assert_eq!((app.screen(), app.more_shown()), (Screen::Ride(0), None), "not up again by coming back");
+    // a swipe right does the same
+    swipe(&mut sim, &mut app, Dir::Up);
+    swipe(&mut sim, &mut app, Dir::Right);
+    assert_eq!((app.screen(), app.more_shown()), (Screen::Ride(2), None));
+    press(&mut sim, &mut app, Key::Page);
+    // the touch lock
+    app.input(&mut sim, Input::TouchLock);
+    swipe(&mut sim, &mut app, Dir::Up);
+    assert_eq!(app.more_shown(), None, "locked");
+    app.input(&mut sim, Input::TouchLock);
+    // the menu over MORE: back on the page
+    swipe(&mut sim, &mut app, Dir::Up);
+    press(&mut sim, &mut app, Key::Start); // pause
+    app.input(&mut sim, Input::Menu);
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Ride(0));
+    super::tests::assert_consistent(&sim, &app);
+}
+
+/// Only the changed boxes are drawn on MORE: a second later, the SPI traffic of a pass is about the digits.
+#[test]
+fn more_redraws_only_what_changes() {
+    let (mut sim, mut app) = riding();
+    swipe(&mut sim, &mut app, Dir::Up);
+    let before = sim.pixels;
+    run(&mut sim, &mut app, 2000);
+    let drawn = sim.pixels - before;
+    assert!(drawn < 4 * 240 * 40, "{drawn} pixels in two seconds");
+}
+
+/// A hold on a box of MORE edits MORE (not the page); kept, it is the variant from then on, saved with the pages,
+/// read back at the next start, and the editor returns to MORE; dropped, it is the default again.
+#[test]
+fn the_editor_edits_more() {
+    let (mut sim, mut app) = started();
+    app.screen = Screen::Ride(1);
+    app.show(&mut sim);
+    let page = app.pages()[1];
+    swipe(&mut sim, &mut app, Dir::Up);
+    let (x, y) = centre(&app, 2);
+    app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
+    let e = app.edit.unwrap();
+    assert_eq!((app.screen(), e.page, e.more, e.work), (Screen::Edit(1, 2), 1, true, page.more_of()));
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("more_editor");
+    // dropped
+    let mut w = e.work;
+    w.fields[2] = Wbal;
+    app.edit.as_mut().unwrap().work = w;
+    app.leave_editor(&mut sim, false);
+    assert_eq!((app.more[1], app.more_shown()), (None, Some(1)), "back on MORE, nothing kept");
+    // kept
+    app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
+    app.edit.as_mut().unwrap().work = w;
+    app.leave_editor(&mut sim, true);
+    assert_eq!((app.more[1], app.pages()[1], app.more_shown()), (Some(w), page, Some(1)));
+    assert_eq!(app.widgets().nth(2).unwrap().1, Widget::Field(Wbal));
+    super::tests::assert_consistent(&sim, &app);
+    run(&mut sim, &mut app, 300);
+    let f = file(&sim).unwrap();
+    assert_eq!((f.more[1], f.more[0], f.pages[1]), (Some(w), None, page));
+    let (_, app2) = reboot(&mut sim);
+    assert_eq!((app2.more[1], app2.pages()[1]), (Some(w), page));
+    // the page's own edit leaves MORE alone, and its default follows the page
+    let mut app = app2;
+    let mut sim = sim;
+    app.screen = Screen::Ride(0);
+    app.edit_page(&mut sim, 0, 0);
+    assert!(!app.edit.unwrap().more);
+    // pages added and deleted carry their MORE
+    app.leave_editor(&mut sim, false);
+    app.add_page(&mut sim, 0);
+    app.leave_editor(&mut sim, false);
+    assert_eq!((app.more[0], app.more[2]), (None, Some(w)));
+    app.screen = Screen::Ride(0);
+    app.edit_page(&mut sim, 0, 0);
+    app.open(Screen::Menu(Menu::Edit(0), 8));
+    app.input(&mut sim, Input::Select);
+    app.input(&mut sim, Input::Select);
+    assert_eq!((app.more[1], app.more[2]), (Some(w), None));
+}
+
+/// Pages 2 and 3 with MORE made, a cut after every sector of the write: the next start reads the old pages and
+/// MORE, or the new, never a mix (the cut test of the pages, with the MORE part in the sector).
+#[test]
+fn more_survives_a_cut_with_its_pages() {
+    let w = Page::preset(14, [Wbal, Np, Hr, Power, Cadence, Dist, Timer, Ascent]).unwrap();
+    let (mut sim, mut app) = started();
+    app.more[1] = Some(w);
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    let w2 = Page { fields: [Speed; 8], ..w };
+    let base = sim.emmc.sectors_written;
+    app.more[1] = Some(w2);
+    app.pages[0] = Page::preset(2, [Ascent, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    let total = sim.emmc.sectors_written - base;
+    assert!(total > 0);
+    for cut in 0..total {
+        let (mut sim, mut app) = started();
+        app.more[1] = Some(w);
+        app.pages_changed(&mut sim);
+        run(&mut sim, &mut app, 200);
+        let backup = sim.backup;
+        sim.emmc.cut_after = Some(sim.emmc.sectors_written + cut);
+        app.more[1] = Some(w2);
+        app.pages[0] = Page::preset(2, [Ascent, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
+        app.pages_changed(&mut sim);
+        run(&mut sim, &mut app, 200);
+        sim.backup = backup;
+        let (_, app2) = reboot(&mut sim);
+        let new = app2.more[1] == Some(w2);
+        assert!(new || app2.more[1] == Some(w), "cut {cut}: {:?}", app2.more[1]);
+        assert_eq!(new, app2.pages()[0].fields[0] == Ascent, "cut {cut}: pages and MORE from one copy");
+    }
 }

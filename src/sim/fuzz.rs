@@ -1272,9 +1272,11 @@ fn page_edits() {
 fn pages_file() {
     use crate::page::{Page, Saved};
     use crate::ui::Field;
-    let (mut good, mut bad) = (0u32, 0u32);
+    let (mut good, mut bad, mut more_read) = (0u32, 0u32, 0usize);
     let p = Page::preset(5, [Field::Hr; 8]).unwrap();
-    let whole = Saved { seq: 9, pages: [p; crate::PAGES], count: 3, words: [1; 6], was: [2; 6] }.to_sector();
+    let whole =
+        Saved { seq: 9, pages: [p; crate::PAGES], count: 3, words: [1; 6], was: [2; 6], more: [None; crate::PAGES] }
+            .to_sector();
     let mut sim = super::Sim::new(9, 0, 0);
     let mut app = crate::App::start(&mut sim, None);
     let mut drawn = 0;
@@ -1311,6 +1313,21 @@ fn pages_file() {
             let at = 60 + crate::PAGES * 13;
             let crc = crate::fit::crc(0, &s[..at]);
             s[at..at + 2].copy_from_slice(&crc.to_le_bytes());
+            // and the MORE variants behind it: flags, pages as random as those, their own CRC
+            let more = at + 2;
+            s[more] = if seed % 5 == 0 { 0 } else { s[more] | 1 };
+            for page in s[more + 1..more + 1 + crate::PAGES * 13].chunks_exact_mut(13) {
+                let used = 1 + usize::from(page[12] % 5);
+                for (r, b) in page[..5].iter_mut().enumerate() {
+                    *b = if r < used { (1 + *b % 3) << 4 | (1 + *b / 4 % 2) } else { 0 };
+                }
+                for b in &mut page[5..] {
+                    *b %= Field::ALL.len() as u8 + 2;
+                }
+            }
+            let end = more + 1 + crate::PAGES * 13;
+            let crc = crate::fit::crc(0, &s[more..end]);
+            s[end..end + 2].copy_from_slice(&crc.to_le_bytes());
         }
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&s);
@@ -1318,6 +1335,8 @@ fn pages_file() {
             Some(saved) => {
                 assert!((1..=crate::PAGES).contains(&saved.count));
                 assert!(saved.pages[..saved.count].iter().all(|p| p.well_formed() && p.roomy()));
+                assert!(saved.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
+                more_read += saved.more.iter().flatten().count();
                 good += 1;
                 if seed % 2 == 1 {
                     // random pages: each drawn
@@ -1327,13 +1346,22 @@ fn pages_file() {
                         app.show(&mut sim);
                         drawn += 1;
                     }
+                    // each MORE variant too, over a page, and the default one
+                    for m in saved.more.iter().copied().chain([None]) {
+                        (app.more[0], app.more_on) = (m, Some(0));
+                        app.screen = crate::Screen::Ride(0);
+                        app.show(&mut sim);
+                        assert!(app.more_shown().is_some());
+                        drawn += 1;
+                    }
+                    app.more_on = None;
                 }
             }
             None => bad += 1,
         }
     }
-    std::println!("pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn");
-    assert!(good > 20 && bad > 1000 && drawn > 20, "{good} {bad} {drawn}");
+    std::println!("pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn; {more_read} MORE read");
+    assert!(good > 20 && bad > 1000 && drawn > 20 && more_read > 20, "{good} {bad} {drawn} {more_read}");
 }
 
 /// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at
@@ -1343,6 +1371,7 @@ fn pages_file() {
 fn page_editor_inputs() {
     use super::*;
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
+    let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
     for seed in 1..=24u32 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
@@ -1363,7 +1392,11 @@ fn page_editor_inputs() {
                 app.edit_page(&mut sim, usize::from(b) % app.page_count(), usize::from(next()) % 8);
                 app.show(&mut sim);
             }
-            let i = match a % 12 {
+            let i = match a % 16 {
+                12 | 13 => Input::Touch(Gesture::Swipe(Dir::Up)), // MORE
+                14 => Input::Touch(Gesture::Swipe(Dir::Down)),
+                15 if b % 2 == 0 => Input::Touch(Gesture::Swipe(Dir::Left)),
+                15 => Input::Touch(Gesture::Swipe(Dir::Right)),
                 0..=2 => Input::Next,
                 3 => Input::Prev,
                 4..=6 => Input::Select,
@@ -1377,6 +1410,7 @@ fn page_editor_inputs() {
                 _ => Input::Touch(Gesture::Hold(u16::from(b) % 240, u16::from(next()) % 320)),
             };
             let (count, cells) = (app.page_count(), app.edit.map(|e| e.work.cells()));
+            let was_more = app.edit.is_some_and(|e| e.more);
             app.input(&mut sim, i);
             for _ in 0..1 + usize::from(b % 3) {
                 app.step(&mut sim);
@@ -1390,6 +1424,14 @@ fn page_editor_inputs() {
             }
             assert!((1..=PAGES).contains(&app.page_count()));
             assert!(app.pages()[..app.page_count()].iter().all(|p| p.well_formed()));
+            assert!(app.more.iter().flatten().all(|p| p.well_formed()));
+            assert_eq!(app.strip.more, app.more_shown().is_some(), "{:?}", app.screen());
+            if let Some(n) = app.more_shown() {
+                assert!(n < app.page_count(), "MORE up over page {n}");
+                mores += 1;
+            }
+            more_edits += usize::from(app.edit.is_some_and(|e| e.more));
+            more_kept += usize::from(was_more && app.edit.is_none() && app.more.iter().any(Option::is_some));
             if app.ride.state() == crate::ride::State::Running {
                 assert!(app.edit.is_none() || !matches!(app.screen(), Screen::Edit(..)), "editing while recording");
             }
@@ -1400,7 +1442,9 @@ fn page_editor_inputs() {
         }
     }
     std::println!("editor reached: {splits} splits, {merges} merges, {added} pages added, {deleted} deleted");
+    std::println!("MORE reached: {mores} passes up, {more_edits} in the editor, {more_kept} kept");
     assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
+    assert!(mores > 50 && more_edits > 5 && more_kept > 0, "{mores} {more_edits} {more_kept}");
 }
 
 /// Random pressures, altitudes and calibrations into the barometric altitude (altitude.rs): no panic, and every
