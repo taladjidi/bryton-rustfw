@@ -265,6 +265,12 @@ impl App {
             self.workout_event(e);
         }
         self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let (p, hr) = (&self.power, self.live.shown(Metric::Hr));
+        let zones = [p.rolling(0), p.rolling(1), p.rolling(2)].map(|w| w.map(|w| ride::power_zone(w, ftp)));
+        for (hold, z) in self.zones.iter_mut().zip(zones.into_iter().chain([hr.map(|v| ride::hr_zone(v, max_hr))])) {
+            hold.second(z);
+        }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
         let alt = input.alt_mm.map(|mm| (mm / 1000 + ride::ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);

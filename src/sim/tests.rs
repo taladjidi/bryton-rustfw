@@ -80,23 +80,20 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
     let page = app.pages()[n];
     for (i, v) in values.iter().enumerate() {
         let bx = page.cell_box(i).unwrap();
-        // heart rate and power fill their box with their zone's colour (steady test sensors: the 3 s average the
-        // power's box takes equals the live value)
-        let zone = zone_fg(page.fields[i], v);
-        let (fg, bg) =
-            if zone == crate::ui::WHITE { (zone, crate::ui::BLACK) } else { (crate::ui::ink_on(zone), zone) };
-        crate::ui::draw_field_frame_on(&mut f, bx, page.fields[i], bg);
-        crate::ui::draw_field_value_on(&mut f, bx, v, fg, bg);
+        // heart rate and power show their zone as a bar along the box's top, the number white (steady test
+        // sensors: the 3 s average the power's box takes equals the live value)
+        crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v));
+        crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     f.px
 }
 
-/// Heart rate and power in their zone's colour (default max HR and FTP), the rest white.
-fn zone_fg(f: Field, v: &str) -> u16 {
+/// The zone bar of heart rate and power (default max HR and FTP), none (black) for the rest.
+fn zone_bar(f: Field, v: &str) -> u16 {
     match (f, v.parse::<u16>()) {
         (Field::Hr, Ok(v)) => crate::ride::hr_color(crate::ride::hr_zone(v, crate::ride::MAX_HR)),
         (Field::Power, Ok(v)) => crate::ride::power_color(crate::ride::power_zone(v, crate::ride::FTP)),
-        _ => crate::ui::WHITE,
+        _ => crate::ui::BLACK,
     }
 }
 
@@ -2076,6 +2073,73 @@ fn back_held_3s_powers_off_after_release() {
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
 }
 
+/// No zone colour is near the menu's orange (`ui::ACCENT`: selection, info banners) or the alarm red (`ui::RED`):
+/// a zone must never look like a banner (UI review 2, P3).
+#[test]
+fn zone_colours_are_not_accent_or_alarm() {
+    let rgb = |c: u16| [(c >> 11) as i32 * 255 / 31, (c >> 5 & 63) as i32 * 255 / 63, (c & 31) as i32 * 255 / 31];
+    for (i, z) in crate::ride::ZONE_COLORS.iter().enumerate() {
+        for (name, other) in [("ACCENT", ui::ACCENT), ("RED", ui::RED), ("the banner red", 0xf985)] {
+            let d: i32 = rgb(*z).iter().zip(rgb(other)).map(|(a, b)| (a - b).abs()).sum();
+            assert!(*z != other && d > 80, "zone {} is {z:04x}, near {name}: distance {d}", i + 1);
+        }
+    }
+    let mut all = crate::ride::ZONE_COLORS.to_vec();
+    all.dedup();
+    assert_eq!(all.len(), 7, "seven distinct colours");
+}
+
+/// Heart rate steps over a zone's edge: 125 bpm (zone 2 of 190), 135 (zone 3) for 2 s only, 125 again, then 135 for
+/// good from 20 s.
+fn hr_edge(ms: u64) -> [u8; 8] {
+    let s = ms / 1000;
+    let bpm = if (14..16).contains(&s) || s >= 24 { 135 } else { 125 };
+    [4, 0, 0, 0, 0, 0, 0, bpm]
+}
+
+/// The heart rate's zone bar changes only after three seconds in the new zone (a value on an edge does not flip it
+/// every second), and the bar is all that is redrawn when it does: the number, white, has not changed.
+#[test]
+fn the_zone_bar_holds_three_seconds_and_is_all_that_is_redrawn() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_edge, network: 0, ack: &[] });
+    sim.gnss.fix = Some(8000); // a fix: the strip's "GPS" does not blink (720 px a second) under the count
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.pages[0] = crate::page::Page::preset(
+        1,
+        [Field::Hr, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time],
+    )
+    .unwrap();
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0));
+    let bx = app.pages()[0].cell_box(0).unwrap();
+    let bar_at = |sim: &Sim| sim.screen[((bx.1 + 1) * W + bx.0 + 10) as usize];
+    let (z2, z3) = (crate::ride::hr_color(2), crate::ride::hr_color(3));
+    run(&mut sim, &mut app, 6000);
+    let mut flips = std::vec::Vec::new();
+    let mut last = bar_at(&sim);
+    assert_eq!(last, z2);
+    let t0 = sim.ms;
+    for _ in 0..(30_000 / 250) {
+        let px = sim.pixels;
+        run(&mut sim, &mut app, 250);
+        let now = bar_at(&sim);
+        if now != last {
+            flips.push((sim.ms - t0, now, sim.pixels - px));
+            last = now;
+        }
+        assert_consistent(&sim, &app);
+    }
+    assert_eq!(flips.len(), 1, "one change, the 2 s of 135 bpm did not flip it: {flips:?}");
+    let (at, colour, px) = flips[0];
+    assert_eq!(colour, z3);
+    // 135 bpm from 24 s on the sensor's clock, the run began about 6 s in: shown 3 s later
+    assert!((18_000..22_000).contains(&at), "{at} ms");
+    assert_eq!(px, u64::from(bx.2) * u64::from(ui::ZONE_BAR_H), "only the bar: {px} px");
+    sim.save("zone_bar");
+}
+
 /// The live readings on the pages (power, speed, cadence, heart rate) change once a second, in the second's tick,
 /// though the sensors broadcast at 4 Hz and the value in hand changes at each broadcast (UI review 2).
 #[test]
@@ -2973,11 +3037,13 @@ fn a_ride_with_laps_and_pauses() {
     run(&mut sim, &mut app, 60_000);
     let px_s = (sim.pixels - px0) * 1000 / (sim.ms - t0);
     std::println!("ride page (HR, power changing every second, max km/h, lap time, lap km, ascent): {px_s} px/s");
-    // the value colours: the zone of the heart rate and power on screen
-    let (hr, w) = (app.live.get(Metric::Hr).unwrap(), app.live.get(Metric::Power).unwrap());
-    let hr_fg = crate::ride::hr_color(crate::ride::hr_zone(hr, 190));
-    let w_fg = crate::ride::power_color(crate::ride::power_zone(w, 200));
-    assert!(colors_in(&sim, bx(0)).contains(&hr_fg) && colors_in(&sim, bx(1)).contains(&w_fg), "zone colours");
+    // the zones: a bar along the top of the heart rate and power boxes in the zone shown (held 3 s), the number white
+    let (hr_bar, w_bar) = (crate::ride::hr_color(app.zones[3].shown()), crate::ride::power_color(app.zones[0].shown()));
+    let (hr_box, w_box) = (colors_in(&sim, bx(0)), colors_in(&sim, bx(1)));
+    assert!(hr_box.contains(&hr_bar) && w_box.contains(&w_bar), "zone bars");
+    assert!(hr_box.contains(&crate::ui::WHITE) && w_box.contains(&crate::ui::WHITE), "white numbers");
+    let zone_colors = |c: &[u16]| crate::ride::ZONE_COLORS.iter().filter(|z| c.contains(z)).count();
+    assert!(zone_colors(&hr_box) == 1 && zone_colors(&w_box) == 1, "the bar is the only zone colour in the box");
     assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("01:00".into(), "0.48".into()));
     assert_eq!(text(&app, MaxSpeed), "28.8");
     let ascent = app.ride.ascent_m();
@@ -3700,19 +3766,19 @@ fn perf_budgets() {
     let cases: [Case; 11] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, None, false, (150, 5)),
-        // made in the editor: 7101, 10 (8959 at VALUE_MARGIN 2): eight values at 3x in 120 x 74 boxes, the zone fills of power and heart rate
-        // as on six values
-        ("eight values", [eight, graph, map], 0, None, false, (12_000, 20)),
-        // 3581, 22 (3854 at VALUE_MARGIN 2): a graph over four values (the second row of values taller)
-        ("graph over four", [made, values, map], 0, None, false, (5_000, 30)),
-        // 8070, 10 since values keep 3 px from their rules (9862 before): the changed digits only, but large (a glyph
-        // of a 6-field page is ~960 px), and the power and heart rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
-        // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
-        ("six values", [values, graph, map], 0, None, false, (12_000, 20)),
+        // made in the editor: 2162, 6 (7101, 10 with the zone fills, 8959 at VALUE_MARGIN 2): eight values at 3x in
+        // 120 x 74 boxes, the readings once a second, the zone a bar
+        ("eight values", [eight, graph, map], 0, None, false, (3_500, 12)),
+        // 1537, 20 (3581, 22 with the zone fills): a graph over four values (the second row of values taller)
+        ("graph over four", [made, values, map], 0, None, false, (2_500, 30)),
+        // 2037, 6: the changed digits only, once a second, and a zone bar (about 1,000 px) at a zone change, held
+        // three seconds. 8070, 10 with the zone fills (a box of ~12,000 px at each change, the noisy power's 3 s
+        // average crossing an edge about every 4 s), 6538 before them
+        ("six values", [values, graph, map], 0, None, false, (3_000, 12)),
         // the same page with a power meter and a strap that change at every broadcast (4 Hz, like the real ones):
-        // 8301, 10 with the readings shown once a second (taken in the second's tick); 11339, 20 when each broadcast
-        // was drawn
-        ("six values, 4 Hz sensors", [values, graph, map], 0, None, true, (9_500, 15)),
+        // 2198, 6 with the readings shown once a second (taken in the second's tick); 11339, 20 when each broadcast
+        // was drawn and the zones filled the boxes
+        ("six values, 4 Hz sensors", [values, graph, map], 0, None, true, (3_000, 12)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
         ("two graphs", [graph, values, map], 0, None, false, (1_000, 30)),
         // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow

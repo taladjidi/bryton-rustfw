@@ -161,10 +161,12 @@ quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent o
 ## Ride
 
 - Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from GPS altitude.
-- Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette. The plain power fields
-  (POWER, 3S, 10S, 30S W) and HR fill their box with their zone's colour, the number in black or white over it, so
-  the zone shows at a glance (POWER's box takes its 3 s average's zone, its number stays live); NP, max and the other
-  derived values keep a coloured number on black. The graph shows the last
+- Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette for grey, blue and green,
+  then lemon yellow, magenta, violet and cyan: never the menu's orange (selection, info banners) or the alarms' red.
+  The plain power fields (POWER, 3S, 10S, 30S W) and HR show their zone as a 4 px bar along the top of the box,
+  the number white (POWER's bar takes its 3 s average's zone); the zone changes after three seconds in the new
+  one, so a value on an edge does not flip it, and the bar is all that is redrawn. NP, max and the other derived
+  values keep a coloured number. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
 - Power (src/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
