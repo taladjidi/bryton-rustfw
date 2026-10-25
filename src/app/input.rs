@@ -105,6 +105,8 @@ pub enum Screen {
     Main,
     /// Ride page `n`.
     Ride(usize),
+    /// The page editor on ride page `n` (its copy, [`EDITED`]), cell `k` selected (app/editor.rs).
+    Edit(usize, usize),
     /// A menu, with the selected row.
     Menu(Menu, usize),
     /// The BLE devices heard.
@@ -134,6 +136,9 @@ fn page_at(k: usize) -> usize {
 
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
 pub const OFF_CONFIRM_MS: u32 = 10_000;
+
+/// The value of `App::confirm` while a past ride's DELETE waits for its second Start: no menu row has it.
+pub(crate) const PAST_DELETE: (Menu, usize) = (Menu::History, usize::MAX);
 
 impl App {
     /// The first ride page that is on from place `from` in the round (taken round), going forward by `step` (1, or
@@ -167,11 +172,7 @@ impl App {
     /// Ride page `n` is in the round: a page not off, the course page while a course is followed.
     pub(crate) fn page_on(&self, n: usize) -> bool {
         // a course followed, whether or not the map can draw it yet (no fix, a ride started without one: review)
-        if n == COURSE {
-            self.courses.as_deref().is_some_and(|c| c.on.is_some())
-        } else {
-            self.pages.get(n).is_some_and(|p| n < PAGES && p.layout > 0)
-        }
+        if n == COURSE { self.courses.as_deref().is_some_and(|c| c.on.is_some()) } else { n < self.page_count }
     }
 
     /// Opens screen `s` over this one: Back returns here.
@@ -219,7 +220,7 @@ impl App {
 
     /// The selection on a row the menu still has: rows go when what they act on does (the ride menu's WORKOUT when
     /// the workout ends, COURSE when the course is stopped from COURSES).
-    fn clamp_menu(&mut self) {
+    pub(crate) fn clamp_menu(&mut self) {
         if let Screen::Menu(m, sel) = self.screen {
             self.screen = Screen::Menu(m, sel.min(self.rows(m).max(1) - 1));
         }
@@ -321,6 +322,7 @@ impl App {
                 self.say(if accept { "ANSWERED" } else { "DECLINED" });
                 return;
             }
+            (Screen::Edit(..), _) => return self.editor_input(b, i),
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
                     self.editing = false;
@@ -393,6 +395,12 @@ impl App {
             {
                 self.open(Screen::Menu(self.menu_root(), 0)) // the gear: the menu by a tap, as the hold anywhere
             }
+            // a hold on a ride page's box: the editor on it, that box selected (stock's long press; not while
+            // recording, above)
+            (Screen::Ride(n), Input::Touch(Gesture::Hold(x, y))) if n < PAGES => {
+                let k = self.widgets().position(|(bx, _)| inside(bx, x, y)).unwrap_or(0);
+                self.edit_page(b, n, k)
+            }
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(self.menu_root(), 0))
             }
@@ -446,6 +454,11 @@ impl App {
                 return self.select_row(b, menu, sel, armed);
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
+            // a past ride's card: Start asks to delete it, Start again deletes it (moved, kept: trash.rs)
+            (Screen::Past, Input::Select) => {
+                self.confirm = armed;
+                self.delete_past(b);
+            }
             (
                 Screen::Menu(..) | Screen::Nearby | Screen::Past | Screen::About,
                 Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
@@ -530,7 +543,7 @@ pub(crate) fn sample_touch(
 }
 
 /// (`x`, `y`) is in box (left, top, width, height).
-fn inside((bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16) -> bool {
+pub(crate) fn inside((bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16) -> bool {
     (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
 }
 

@@ -495,7 +495,7 @@ fn ini_files() {
         let mut i = crate::stock::import(&t, &t, &t);
         assert!(i.device(&t) <= 2, "ActBike: one of stock's three bikes");
         for p in i.pages.iter().flatten() {
-            assert!(crate::ui::layout(p.layout).is_some() && p.layout != 0);
+            assert!(p.well_formed());
         }
         for m in [i.eat_min, i.drink_min].into_iter().flatten() {
             assert!((5..=120).contains(&m) && m % 5 == 0, "{m}");
@@ -1032,4 +1032,254 @@ fn menu_tree_by_chance() {
         assert!(reached.contains_key(m), "{m} never reached: {reached:?}");
     }
     assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
+}
+
+/// HISTORY by chance (trash.rs, `App::delete_past`): Page, Lap, Start, Back and taps over the list and the cards of
+/// the synthetic volume with a full copy, a ride started and stopped now and then. No panic, the selection inside
+/// the list, deletes reached (none while riding), and after each the volume whole and no ride lost: every ride
+/// file is in `\Activities` or in `\Rustfw\Deleted`, the list one shorter at once.
+#[test]
+fn history_by_chance() {
+    use super::*;
+    use crate::ui::menu::Input;
+    let rides = |img: &[u8], dir: &str| {
+        let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let Ok(f) = fat.open(&mut d, dir) else { return 0 };
+        let mut c = fat.cursor(f).unwrap();
+        let mut n = 0;
+        while let Some(e) = fat.list(&mut d, &mut c).unwrap() {
+            n += u32::from(!e.file.dir && e.name().get(..12).is_some_and(|s| s.iter().all(u8::is_ascii_digit)));
+        }
+        n
+    };
+    let (mut deletes, mut refused) = (0, 0);
+    for seed in 1..=8u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::storage::trash::tests::volume();
+        let all = rides(&sim.emmc.image, "Activities");
+        let mut app = App::start(&mut sim, None);
+        app.set_scan_cache(crate::stock::tests::cache());
+        app.set_map_memory(crate::tiles::tests::memory());
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for k in 0..600 {
+            if !matches!(app.screen(), Screen::Menu(Menu::History, _) | Screen::Past) {
+                if app.stock.status() == crate::stock::Status::Idle {
+                    app.stock.start(app.date);
+                }
+                app.open(Screen::Menu(Menu::History, 0));
+                app.show(&mut sim);
+            }
+            let r = next();
+            let i = match r % 100 {
+                0..=24 => Input::Next,
+                25..=34 => Input::Prev,
+                35..=79 => Input::Select,
+                80..=89 => Input::Back,
+                _ => Input::Touch(crate::touch::Gesture::Tap(120, (ui::LIST_Y + 10) as u16)),
+            };
+            if r % 97 == 0 {
+                let ev = app.ride.start_pause(); // riding now and then (stopped again below)
+                app.recorder(ev);
+            }
+            let riding = !app.ride_settled();
+            let (before, rows) = (rides(&sim.emmc.image, "Activities"), app.stock.index.len());
+            app.input(&mut sim, i);
+            let after = rides(&sim.emmc.image, "Activities");
+            if after != before {
+                assert!(!riding, "seed {seed} step {k}: deleted during a ride");
+                assert_eq!(after + 1, before, "seed {seed} step {k}: one ride");
+                assert_eq!(after + rides(&sim.emmc.image, "Rustfw/Deleted"), all, "seed {seed} step {k}: none lost");
+                assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "seed {seed} step {k}");
+                assert_eq!(app.stock.index.len() + 1, rows, "seed {seed} step {k}: the list at once");
+                deletes += 1;
+            }
+            refused += u32::from(riding && app.banner.as_str() == "NOT DURING A RIDE");
+            if app.ride.state() != crate::ride::State::Idle && r % 5 == 0 {
+                app.ride = crate::ride::Ride::default();
+            }
+            if let Screen::Menu(m, s) = app.screen() {
+                assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
+            }
+            for _ in 0..1 + r % 3 {
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+        }
+    }
+    std::println!("{deletes} deletes, {refused} refused while riding");
+    assert!(deletes > 5 && refused > 0, "{deletes} deletes, {refused} refused");
+}
+
+/// Random edits of random pages (page.rs): every result well formed, within 5 rows and 8 cells, never more fields
+/// unreadable than before; each edit reached both ways (done and refused).
+#[test]
+fn page_edits() {
+    use crate::page::{CELLS, Page, ROWS};
+    use crate::ui::{Field, LAYOUTS};
+    let mut done = [0u32; 6];
+    let mut refused = [0u32; 6];
+    let mut noise = bytes(2024, 1 << 18);
+    let mut next = || u32::from(noise.next().unwrap_or(0));
+    for _ in 0..2000 {
+        let fields: [Field; CELLS] = core::array::from_fn(|_| Field::from_index(next() % Field::ALL.len() as u32));
+        let Some(mut p) = Page::preset(1 + (next() % (LAYOUTS.len() as u32 - 1)) as u8, fields) else { continue };
+        for _ in 0..20 {
+            let k = next() as usize % (p.cells() + 1); // one past the last too
+            let f = Field::from_index(next() % Field::ALL.len() as u32);
+            let op = next() as usize % 6;
+            let r = match op {
+                0 => p.split_across(k, f).map(|q| (q, k)),
+                1 => p.split_down(k, f).map(|q| (q, k)),
+                2 => p.merge(k),
+                3 => p.resize(k, next() % 2 == 0).map(|q| (q, k)),
+                4 => p.with_field(k, f).map(|q| (q, k)),
+                _ => p.merge(k).and_then(|(q, k)| q.split_down(k, f).map(|q| (q, k))),
+            };
+            match r {
+                Ok((q, at)) => {
+                    assert!(q.well_formed() && q.used().len() <= ROWS && q.cells() <= CELLS, "{op}: {q:?}");
+                    assert!(q.misfits() <= p.misfits(), "{op} made a field unreadable: {p:?} -> {q:?}");
+                    assert!(at < q.cells());
+                    done[op] += 1;
+                    p = q;
+                }
+                Err(_) => refused[op] += 1,
+            }
+        }
+    }
+    std::println!("page edits done {done:?}, refused {refused:?}");
+    assert!(done.iter().chain(&refused).all(|&n| n > 50), "every edit reached both ways: {done:?} {refused:?}");
+}
+
+/// Random and damaged copies of `\Rustfw\pages.bin` (page.rs `Saved`): no panic; random bytes with a good tag and
+/// CRC (so the checks after them run) give only well formed pages, and both kinds are reached.
+#[test]
+fn pages_file() {
+    use crate::page::{Page, Saved};
+    use crate::ui::Field;
+    let (mut good, mut bad) = (0u32, 0u32);
+    let p = Page::preset(5, [Field::Hr; 8]).unwrap();
+    let whole = Saved { seq: 9, pages: [p; crate::PAGES], count: 3, words: [1; 6], was: [2; 6] }.to_sector();
+    for seed in 1..=3000u32 {
+        let mut s = [0u8; 512];
+        for (b, x) in s.iter_mut().zip(bytes(seed, 512)) {
+            *b = x;
+        }
+        if seed % 2 == 0 {
+            // a valid copy with a few bytes changed
+            s = whole;
+            for (i, x) in bytes(seed * 31, 6).enumerate() {
+                let at = usize::from(x) + 256 * (i % 2);
+                s[at] ^= 1 << (i % 8);
+            }
+        } else {
+            // random rows, fields and count behind a good tag, the CRC made to match
+            s[..4].copy_from_slice(b"RPG1");
+            s[8] = (seed % 8) as u8;
+            for b in &mut s[60..60 + crate::PAGES * 13] {
+                *b = match *b % 4 {
+                    0 => (1 + *b % 3) << 4 | (1 + *b / 4 % 2),
+                    1 => 0,
+                    _ => *b % (Field::ALL.len() as u8 + 2),
+                };
+            }
+            let at = 60 + crate::PAGES * 13;
+            let crc = crate::fit::crc(0, &s[..at]);
+            s[at..at + 2].copy_from_slice(&crc.to_le_bytes());
+        }
+        let mut file = [0u8; 1024];
+        file[..512].copy_from_slice(&s);
+        match Saved::newest(&file) {
+            Some(saved) => {
+                assert!((1..=crate::PAGES).contains(&saved.count));
+                assert!(saved.pages[..saved.count].iter().all(Page::well_formed));
+                good += 1;
+            }
+            None => bad += 1,
+        }
+    }
+    std::println!("pages.bin copies: {good} read, {bad} refused");
+    assert!(good > 20 && bad > 1000, "{good} {bad}");
+}
+
+/// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at
+/// times: no panic, 1 to 6 pages all well formed, the panel equal to the screenshot, the editor never open while
+/// recording; splits, merges, pages added and deleted all reached.
+#[test]
+fn page_editor_inputs() {
+    use super::*;
+    let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
+    for seed in 1..=24u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        let mut app = App::start(&mut sim, None);
+        let mut noise = bytes(seed * 104_729, 1 << 14);
+        let mut next = || noise.next().unwrap_or(0);
+        for k in 0..400 {
+            let (a, b) = (next(), next());
+            if !matches!(
+                app.screen(),
+                Screen::Edit(..) | Screen::Menu(Menu::Edit(_) | Menu::Fields(..) | Menu::Group(..), _)
+            ) && a % 3 != 0
+            {
+                // back into the editor, on a page by chance
+                app.leave_menus();
+                app.screen = Screen::Ride(usize::from(b) % app.page_count());
+                app.edit_page(&mut sim, usize::from(b) % app.page_count(), usize::from(next()) % 8);
+                app.show(&mut sim);
+            }
+            let i = match a % 12 {
+                0..=2 => Input::Next,
+                3 => Input::Prev,
+                4..=6 => Input::Select,
+                7 => Input::Back,
+                8 => Input::Touch(Gesture::Tap(u16::from(b) % 240, u16::from(next()) % 320)),
+                9 => Input::Touch(Gesture::Tap(120, (ui::LIST_Y + u32::from(b % 6) * ui::MENU_ROW + 10) as u16)),
+                10 if b % 8 == 0 => {
+                    app.start_pause(); // a ride recording, or paused again
+                    continue;
+                }
+                _ => Input::Touch(Gesture::Hold(u16::from(b) % 240, u16::from(next()) % 320)),
+            };
+            let (count, cells) = (app.page_count(), app.edit.map(|e| e.work.cells()));
+            app.input(&mut sim, i);
+            for _ in 0..1 + usize::from(b % 3) {
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+            added += usize::from(app.page_count() > count);
+            deleted += usize::from(app.page_count() < count);
+            if let (Some(c), Some(e)) = (cells, app.edit) {
+                splits += usize::from(e.work.cells() > c);
+                merges += usize::from(e.work.cells() < c);
+            }
+            assert!((1..=PAGES).contains(&app.page_count()));
+            assert!(app.pages()[..app.page_count()].iter().all(|p| p.well_formed()));
+            if app.ride.state() == crate::ride::State::Running {
+                assert!(app.edit.is_none() || !matches!(app.screen(), Screen::Edit(..)), "editing while recording");
+            }
+            if k % 50 == 0 {
+                run_a_bit(&mut sim, &mut app);
+                super::tests::assert_consistent(&sim, &app);
+            }
+        }
+    }
+    std::println!("editor reached: {splits} splits, {merges} merges, {added} pages added, {deleted} deleted");
+    assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
+}
+
+/// Passes until the banner is gone (the strip and the page under it drawn again).
+fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
+    for _ in 0..100 {
+        app.step(sim);
+        crate::Board::delay_ms(sim, crate::POLL_MS);
+    }
 }

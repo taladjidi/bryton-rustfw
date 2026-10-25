@@ -7,7 +7,7 @@ use crate::ui::{Field, Rec, Strip, UsbDot};
 /// A stand-in for the ANT+ network key (the real one is never in the repository).
 const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 /// The owner's strap, as the unit paired it.
-const STRAP: SensorId = SensorId { device: 25126, trans: 0xf1 };
+pub(super) const STRAP: SensorId = SensorId { device: 25126, trans: 0xf1 };
 
 fn hr72(_: u64) -> [u8; 8] {
     [4, 0, 0, 0, 0, 0, 0, 72]
@@ -70,7 +70,7 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
     );
     let page = app.pages()[n];
     for (i, v) in values.iter().enumerate() {
-        let bx = crate::ui::field_box(page.layout, crate::ui::RIDE_H, i).unwrap();
+        let bx = page.cell_box(i).unwrap();
         // heart rate and power fill their box with their zone's colour (steady test sensors: the 3 s average the
         // power's box takes equals the live value)
         let zone = zone_fg(page.fields[i], v);
@@ -498,8 +498,8 @@ fn stock_data_menu() {
     assert_eq!(sim.backup[Kind::Hr.backup()], hr.to_word());
     use crate::ui::Field::*;
     let p = app.pages();
-    assert_eq!((ui::field_count(p[0].layout), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
-    assert_eq!((ui::field_count(p[1].layout), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
+    assert_eq!((p[0].cells(), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
+    assert_eq!((p[1].cells(), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
     assert_eq!((app.settings.weight_kg, app.settings.wprime_j), (73, 21_000), "72.5 kg rounded, W' in J");
     assert!(app.notices[0].as_str().ends_with("IMPORTED 8"), "{}", app.notices[0].as_str());
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
@@ -515,9 +515,9 @@ fn first_start_imports_stock_settings() {
     assert_eq!((app.settings.ftp, app.settings.max_hr), (265, 188));
     use crate::ui::Field::*;
     let p = app.pages();
-    assert_eq!((ui::field_count(p[0].layout), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
-    assert_eq!((ui::field_count(p[1].layout), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
-    assert_eq!(p[2], crate::DEFAULT_PAGES[2], "stock had two data pages: the third as it was");
+    assert_eq!((p[0].cells(), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
+    assert_eq!((p[1].cells(), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
+    assert_eq!(p[2], crate::DEFAULT_PAGES[2].into(), "stock had two data pages: the third as it was");
     assert!(app.notices[0].as_str().ends_with("IMPORTED 8"), "{}", app.notices[0].as_str());
     assert_eq!(sim.backup[Kind::Hr.backup()], crate::nrf::SensorId { device: 1234, trans: 0 }.to_word());
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
@@ -537,7 +537,7 @@ fn first_start_imports_stock_settings() {
     // no stock data (a card without a volume): the defaults, nothing said, and not tried again
     let mut sim = Sim::new(9, 0, 0);
     let app = App::start(&mut sim, None);
-    assert_eq!((app.settings.ftp, app.pages()[0]), (crate::ride::FTP, crate::DEFAULT_PAGES[0]));
+    assert_eq!((app.settings.ftp, app.pages()[0]), (crate::ride::FTP, crate::DEFAULT_PAGES[0].into()));
     assert!(app.notices.iter().all(|n| !n.as_str().contains("IMPORTED")));
     assert_eq!(sim.backup[WHEEL_BKP] >> 24, 0xa7, "this firmware's settings from now on");
 
@@ -552,7 +552,7 @@ fn first_start_imports_stock_settings() {
         sim.backup[r] = w;
     }
     let app = App::start(&mut sim, None);
-    assert_eq!((sim.backup[Kind::Hr.backup()], app.pages()[0]), (strap.to_word(), page), "kept");
+    assert_eq!((sim.backup[Kind::Hr.backup()], app.pages()[0]), (strap.to_word(), page.into()), "kept");
     assert_eq!(app.settings.ftp, crate::ride::FTP, "nothing imported");
 }
 
@@ -644,6 +644,142 @@ fn ride_history() {
     assert_consistent(&sim, &app);
 }
 
+/// DELETE in the history (trash.rs) over the synthetic volume with a full copy of the 20 Oct ride: on a ride's card,
+/// Start asks (any other key drops it), Start again moves the ride into `\Rustfw\Deleted` and its full copy into
+/// `\Rustfw\Deleted\Full`; the list, the totals and the power curve lose it at once (no ride read again), the list
+/// keeps its place, the scan's cache is written without it, the volume stays whole. A name taken in
+/// `\Rustfw\Deleted` gets a suffix. Refused during a ride and with a ride waiting to be resumed or saved.
+#[test]
+fn delete_rides() {
+    use crate::storage::trash::tests::{file, volume};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = volume();
+    {
+        // a file of the 22 Oct ride's name in \Rustfw\Deleted already
+        let mut d = crate::fat::tests::Ram(core::mem::take(&mut sim.emmc.image), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let mine = fat.open(&mut d, "Rustfw").unwrap();
+        let del = fat.ensure_dir(&mut d, mine, "Deleted", (0, 0)).unwrap();
+        fat.create(&mut d, del, "261022100000.fit", (0, 0)).unwrap();
+        sim.emmc.image = d.0;
+    }
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    app.set_map_memory(crate::tiles::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
+    app.press(&mut sim, Press::Short(Key::Start));
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 60_000);
+    }
+    let row =
+        |app: &App, i| app.menu_row(Menu::History, i).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()));
+    let all0 = app.stock.out.all;
+    let (curve0, read0) = (app.stock.out.curve, app.stock.read);
+    let open_card = |sim: &mut Sim, app: &mut App, n: usize| {
+        for _ in 0..20 {
+            match app.screen() {
+                Screen::Menu(Menu::History, s) if s < n => app.press(sim, Press::Short(Key::Page)),
+                Screen::Menu(Menu::History, s) if s > n => app.press(sim, Press::Short(Key::Lap)),
+                _ => break,
+            }
+        }
+        assert_eq!(app.screen(), Screen::Menu(Menu::History, n));
+        app.press(sim, Press::Short(Key::Start));
+        for _ in 0..100 {
+            run(sim, app, u64::from(POLL_MS));
+            if app.screen() == Screen::Past {
+                break;
+            }
+        }
+        assert_eq!(app.screen(), Screen::Past);
+    };
+    // the 20 Oct ride (row 2): asked, dropped by another key, asked again, deleted
+    open_card(&mut sim, &mut app, 2);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART AGAIN: YES");
+    assert_eq!(app.confirm, Some(PAST_DELETE));
+    app.press(&mut sim, Press::Short(Key::Lap));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped the first");
+    let (clean, full) = (
+        file(&sim.emmc.image, "Activities/261020080000.fit").unwrap(),
+        file(&sim.emmc.image, "Rustfw/Activities/261020080000.fit").unwrap(),
+    );
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "back to the list, in its place");
+    assert_eq!(app.banner.as_str(), "RIDE DELETED");
+    let img = &sim.emmc.image;
+    assert_eq!(file(img, "Activities/261020080000.fit"), None);
+    assert_eq!(file(img, "Rustfw/Activities/261020080000.fit"), None);
+    assert_eq!(file(img, "Rustfw/Deleted/261020080000.fit"), Some(clean), "kept, under its name");
+    assert_eq!(file(img, "Rustfw/Deleted/Full/261020080000.fit"), Some(full), "the full copy too");
+    assert_eq!(crate::fat::write::tests::fsck(img), Ok(0));
+    let rows: Vec<_> = (1..5).map(|i| row(&app, i)).collect();
+    let want = ["THU 22 OCT 5.0", "THU 1 OCT 12.0", "SAT 15 MAR 6.0"];
+    assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "at once");
+    let all = app.stock.out.all;
+    assert_eq!((all.rides, all.dist_m, all.time_s), (all0.rides - 1, all0.dist_m - 14_400, all0.time_s - 1800));
+    assert_ne!(app.stock.out.curve, curve0, "its 400 W bests gone from the curve");
+    assert_eq!((app.stock.read, app.stock.status()), (read0, crate::stock::Status::Done), "no ride read again");
+    // the cache written without it, between rides
+    run(&mut sim, &mut app, 1000);
+    assert!(!app.stock.unsaved());
+    let size = |img: &[u8], p: &str| {
+        let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        fat.open(&mut d, p).map(|f| f.size)
+    };
+    assert_eq!(size(&sim.emmc.image, "Rustfw/scan.bin"), Ok(64 + 64 * u32::from(all.rides + app.stock.out.skipped)));
+    assert_consistent(&sim, &app);
+
+    // the 22 Oct ride: its name taken in \Rustfw\Deleted, a suffix
+    open_card(&mut sim, &mut app, 1);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000-1.fit").is_some_and(|f| !f.is_empty()));
+    assert_eq!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000.fit"), Some(Vec::new()), "the other kept");
+    assert_eq!(row(&app, 1).unwrap(), "THU 1 OCT 12.0");
+
+    // refused during a ride, and with a ride waiting to be resumed or saved
+    open_card(&mut sim, &mut app, 1);
+    let ev = app.ride.start_pause();
+    app.recorder(ev);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "NOT DURING A RIDE");
+    assert_eq!(app.screen(), Screen::Past);
+    app.ride = crate::ride::Ride::default();
+    app.resume_pending = true;
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "NOT DURING A RIDE", "a ride waiting");
+    assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
+/// A delete a power cut left halfway (the ride in neither folder: its chain named by no entry, trash.rs) is finished
+/// when the next start's scan of the rides begins (30 s in; the card is not touched at boot), before it reads them:
+/// the ride in `\Rustfw\Deleted`, the volume whole, the history without it.
+#[test]
+fn a_delete_cut_halfway_is_finished_at_start() {
+    use crate::storage::trash::tests::{cut_midway, file};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    assert!(crate::fat::write::tests::fsck(&sim.emmc.image).is_ok_and(|lost| lost > 0), "a lost chain");
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 2000);
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/Full/261020080000.fit").is_some());
+    assert_eq!(file(&sim.emmc.image, "Activities/261020080000.fit"), None);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    assert_eq!(app.stock.status(), crate::stock::Status::Done);
+    assert!((0..app.stock.index.len()).all(|i| app.stock.index.get(i).unwrap().start.2 != 20), "not listed");
+}
+
 fn power210(_: u64) -> [u8; 8] {
     [0x10, 1, 0xff, 85, 0, 0, 210, 0]
 }
@@ -667,7 +803,7 @@ fn workout_from_the_calendar() {
     app.pages[OVERVIEW].fields[3] = Workout;
     app.show(&mut sim);
     assert_eq!(text(&app, Workout), "0:01", "20 s + 2 x 45 s, the open cool-down not counted");
-    app.pages[0] = PageCfg { layout: 6, fields: [StepTarget, StepTime, NextStep, Workout, Power3s, Timer] };
+    app.pages[0] = PageCfg { layout: 6, fields: [StepTarget, StepTime, NextStep, Workout, Power3s, Timer] }.into();
 
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
@@ -763,7 +899,7 @@ fn workout_graph_field() {
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, Some(KEY));
     let fields = [Field::WorkoutGraph, Field::StepTarget, Field::StepTime, Field::Time, Field::Time, Field::Time];
-    app.pages[0] = PageCfg { layout: 9, fields }; // with the step's target and time left
+    app.pages[0] = PageCfg { layout: 9, fields }.into(); // with the step's target and time left
     let rider = |app: &App| match app.drawn.first() {
         Some(Drawn::Workout(w)) => w.rider,
         _ => panic!("the graph's box first"),
@@ -785,7 +921,7 @@ fn workout_graph_field() {
     assert_consistent(&sim, &app);
     sim.save("workout_graph");
 
-    app.pages[0] = PageCfg { layout: 1, fields }; // the graph alone: what it sends
+    app.pages[0] = PageCfg { layout: 1, fields }.into(); // the graph alone: what it sends
     app.show(&mut sim);
 
     // Lap to the open cool-down (its 300 s, the last 73 % of the graph), the step's banner gone: the cost alone
@@ -831,7 +967,7 @@ fn workout_gauge_field() {
     SCRIPTED_W.store(210, Relaxed);
     let mut app = App::start(&mut sim, Some(KEY));
     let fields = [Field::WktPower, Field::StepTime, Field::NextStep, Field::Time, Field::Time, Field::Time];
-    app.pages[0] = PageCfg { layout: 3, fields }; // the gauge over the step's time left and the next step
+    app.pages[0] = PageCfg { layout: 3, fields }.into(); // the gauge over the step's time left and the next step
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -957,14 +1093,27 @@ fn back_returns_where_it_came_from() {
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(1)));
     app.press(&mut sim, Press::Short(Key::Start)); // PAGE 2
-    while app.pages()[1].layout != 0 {
-        app.press(&mut sim, Press::Short(Key::Start)); // FIELDS round to OFF
-    }
+    delete_page_by_keys(&mut sim, &mut app); // pages 2 and 3 deleted from the editor
+    delete_page_by_keys(&mut sim, &mut app);
+    assert_eq!(app.page_count(), 1);
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Back)); // PAGES, the menu, out
     }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
+}
+
+/// On a page's menu (its first row, EDIT ON PAGE): the editor, its actions, DELETE PAGE, sure; back on the menu.
+fn delete_page_by_keys(sim: &mut Sim, app: &mut App) {
+    let Screen::Menu(Menu::Page(_), 0) = app.screen() else { panic!("{:?}", app.screen()) };
+    app.press(sim, Press::Short(Key::Start)); // EDIT ON PAGE
+    app.press(sim, Press::Short(Key::Start)); // the actions
+    for _ in 0..menu::EDIT_ROWS.len() - 1 {
+        app.press(sim, Press::Short(Key::Page));
+    }
+    app.press(sim, Press::Short(Key::Start)); // DELETE PAGE
+    app.press(sim, Press::Short(Key::Start)); // sure
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Page(_), _)), "{:?}", app.screen());
 }
 
 /// A key held in a menu moves the selection on each repeat, and its release does not move it once more.
@@ -1091,7 +1240,8 @@ fn pages_are_configured_from_the_menu() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(0)));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 0));
-    while app.pages()[0].layout != 4 {
+    app.press(&mut sim, Press::Short(Key::Page)); // LAYOUT
+    while app.pages()[0].preset_id() != Some(4) {
         app.press(&mut sim, Press::Short(Key::Start)); // layouts round to 2 x 2
     }
     app.press(&mut sim, Press::Short(Key::Page));
@@ -1105,12 +1255,13 @@ fn pages_are_configured_from_the_menu() {
     assert_consistent(&sim, &app);
     sim.save("field_picker");
     app.press(&mut sim, Press::Short(Key::Start)); // WATTS: back to the page's menu, on the field's row
-    assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 1));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Page(0), 2));
     assert_consistent(&sim, &app);
     sim.save("page_menu");
+    app.step(&mut sim); // the registers written at the next pass (after the file: no volume here)
     let want =
         PageCfg { layout: 4, fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time] };
-    assert_eq!(app.pages()[0], want);
+    assert_eq!(app.pages()[0], want.into());
     assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(want));
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Back));
@@ -1121,7 +1272,7 @@ fn pages_are_configured_from_the_menu() {
     assert_consistent(&sim, &app);
     assert!(ride(&mut sim, &app, 0, &["300", "--", "85", &t], true) == sim.screen);
     let app = App::start(&mut sim, Some(KEY));
-    assert_eq!(app.pages()[0], want, "read back after a restart");
+    assert_eq!(app.pages()[0], want.into(), "read back after a restart");
 }
 
 /// When the simulated strap starts beating, ms.
@@ -1156,7 +1307,7 @@ fn hrv_fields_from_the_strap() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: strap_beats, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
-    app.pages[0] = PageCfg { layout: 4, fields: [Dfa, Rmssd, Hr, Time, Time, Time] };
+    app.pages[0] = PageCfg { layout: 4, fields: [Dfa, Rmssd, Hr, Time, Time, Time] }.into();
     app.press(&mut sim, Press::Short(Key::Page));
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
     run(&mut sim, &mut app, 20_000);
@@ -1245,10 +1396,10 @@ fn pages_leave_stocks_register() {
     let w = p.to_words().map(|w| w & 0x0fff_ffff | 0xb << 28); // as those builds wrote it
     (sim.backup[19], sim.backup[20]) = (w[0], w[1]);
     let app = App::start(&mut sim, None);
-    assert_eq!(app.pages()[0], p);
+    assert_eq!(app.pages()[0], p.into());
     assert_eq!(sim.backup[19], 0, "given back to stock");
     assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(p));
-    assert_eq!(App::start(&mut sim, None).pages()[0], p, "read from the new place after a restart");
+    assert_eq!(App::start(&mut sim, None).pages()[0], p.into(), "read from the new place after a restart");
 }
 
 /// Every layout draws on the unit as in the screenshot (layout_<id>.bmp, to look at).
@@ -1393,7 +1544,7 @@ fn gps_fix_and_speed() {
     }
     // the fix taught the RTC's offset (+2 h) and the position (to 1e-4 degrees): kept for the next power-up
     let aid = crate::gnss::Aid::from_words([sim.backup[17], sim.backup[18]]);
-    assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((488_566_000, -22_945_000)) });
+    assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((5_123_000, 4_234_000)) });
     sim.gnss.powered = false; // a power cycle: the board drives the line low at boot
     sim.gnss.off_since = sim.ms;
     let mut again = App::start(&mut sim, None);
@@ -1406,7 +1557,7 @@ fn gps_fix_and_speed() {
         sim.gnss.got.windows(32).any(|w| w == crate::gnss::mga_time(crate::from_epoch_s(crate::epoch_s(utc) - back), 2))
     });
     assert!(sent_time, "UTC from the RTC at the next power-up");
-    assert!(sent(&sim, crate::gnss::mga_pos(488_566_000, -22_945_000, 10_000)), "and the last position");
+    assert!(sent(&sim, crate::gnss::mga_pos(5_123_000, 4_234_000, 10_000)), "and the last position");
     sim.gnss.powered = false; // silent receiver: the fix ages out
     run(&mut sim, &mut app, u64::from(PVT_STALE_MS) + 200);
     assert_eq!(app.strip.gps, None);
@@ -1556,9 +1707,11 @@ fn menu_tree_reaches_everything() {
     wanted.extend(menu::PHONE.map(Row::Phone));
     wanted.extend(menu::FITNESS.map(Row::Stock));
     wanted.extend([Row::Stock(StockRow::Import), Row::Drive, Row::Nearby, Row::About]);
-    wanted.extend((0..crate::PAGES).map(Row::Layout));
+    wanted.extend((0..app.page_count()).map(Row::Layout));
+    wanted.extend((0..app.page_count()).map(Row::EditPage));
+    wanted.push(Row::AddPage);
     wanted.extend((0..4).map(|f| Row::Field(OVERVIEW, f)));
-    wanted.extend((0..crate::PAGES).map(|n| Row::Field(n, 0)));
+    wanted.extend((0..app.page_count()).map(|n| Row::Field(n, 0)));
     for &row in &wanted {
         let d = level(row).unwrap_or_else(|| panic!("{row:?} not in the tree"));
         assert!(d <= 3, "{row:?}: {d} levels down");
@@ -1678,8 +1831,8 @@ fn ride_menu() {
     assert_eq!(app.screen(), Screen::Ride(0));
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), 0));
-    let base = ["PAUSE", "END RIDE", "BRIGHTNESS", "SENSORS", "EDIT THIS PAGE", "ALL SETTINGS"];
-    assert_eq!(labels(&app), base, "no workout, no course: their rows not shown");
+    let base = ["PAUSE", "END RIDE", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"];
+    assert_eq!(labels(&app), base, "no workout, no course: their rows not shown; no page edited while recording");
     run(&mut sim, &mut app, 1100);
     assert_consistent(&sim, &app);
     sim.save("ride_menu");
@@ -1689,12 +1842,8 @@ fn ride_menu() {
     to_row(&mut sim, &mut app, Row::Set(Setting::Light));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((sim.light_level, app.screen()), (60, Screen::Menu(Menu::Ride(0), 2)));
-    // SENSORS, EDIT THIS PAGE, ALL SETTINGS: their menus, Back to the ride menu's row, then to the page
-    for (row, m, at) in [
-        (Row::Open(Menu::Sensors), Menu::Sensors, 3),
-        (Row::Open(Menu::Page(0)), Menu::Page(0), 4),
-        (Row::Open(Menu::Main), Menu::Main, 5),
-    ] {
+    // SENSORS, ALL SETTINGS: their menus, Back to the ride menu's row, then to the page
+    for (row, m, at) in [(Row::Open(Menu::Sensors), Menu::Sensors, 3), (Row::Open(Menu::Main), Menu::Main, 4)] {
         back(&mut sim, &mut app, 1);
         hold_page(&mut sim, &mut app);
         to_row(&mut sim, &mut app, row);
@@ -2165,7 +2314,8 @@ fn map_page_follows_a_ride() {
     assert!(track > 500, "the track drawn: {track} px");
     // the map as one field of three, over speed and heart rate
     app.pages[0] =
-        PageCfg { layout: 3, fields: [Field::Map, Field::Speed, Field::Hr, Field::Time, Field::Time, Field::Time] };
+        PageCfg { layout: 3, fields: [Field::Map, Field::Speed, Field::Hr, Field::Time, Field::Time, Field::Time] }
+            .into();
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(0), "from the map, round to the first page");
     run(&mut sim, &mut app, 10_000);
@@ -2244,14 +2394,15 @@ fn map_zoom_buttons() {
     assert_eq!(app.map_zoom, None, "back to the fit");
     let shown = map::Shown::of(&app.track, area, None, None);
     assert_eq!(app.map_view(0), shown.view, "the fitted view");
-    // a hold on the map still opens the menu, even on a button
+    // a hold on the map opens the page editor (no ride recording), even on a button
     app.input(&mut sim, Input::Touch(Gesture::Hold((plus.0 + 4) as u16, (plus.1 + 4) as u16)));
-    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
+    assert_eq!(app.screen(), Screen::Edit(2, 0));
     app.input(&mut sim, Input::Back);
     assert_eq!(app.screen(), Screen::Ride(2));
     // half a page: no buttons, a tap there does not zoom
     app.pages[2] =
-        PageCfg { layout: 2, fields: [Field::Map, Field::Speed, Field::Time, Field::Time, Field::Time, Field::Time] };
+        PageCfg { layout: 2, fields: [Field::Map, Field::Speed, Field::Time, Field::Time, Field::Time, Field::Time] }
+            .into();
     app.show(&mut sim);
     let half = map::area(ui::field_box(2, ui::RIDE_H, 0).unwrap());
     assert_eq!(map::buttons(half), None);
@@ -2473,9 +2624,9 @@ fn map_pan() {
     tap(&mut sim, &mut app, plus);
     let z = app.map_view(0).unwrap();
     assert!(z.mpp16 < v0.mpp16 && (z.cx, z.cy) == (kept.unwrap().cx, kept.unwrap().cy), "{z:?}");
-    // a hold on the zoomed map still opens the menu
+    // a hold on the zoomed map opens the page editor (no ride recording)
     app.input(&mut sim, Input::Touch(Gesture::Hold(100, 200)));
-    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
+    assert!(matches!(app.screen(), Screen::Edit(..)));
     app.input(&mut sim, Input::Back);
     // the pan is kept within PAN_SCREENS map widths of the track
     for _ in 0..30 {
@@ -2534,8 +2685,8 @@ fn a_ride_with_laps_and_pauses() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_ramp, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
-    app.pages[0] = PageCfg { layout: 6, fields: [Timer, Dist, AvgSpeed, AvgHr, AvgPower, Graph] };
-    app.pages[1] = PageCfg { layout: 6, fields: [Hr, Power, MaxSpeed, LapTime, LapDist, Ascent] };
+    app.pages[0] = PageCfg { layout: 6, fields: [Timer, Dist, AvgSpeed, AvgHr, AvgPower, Graph] }.into();
+    app.pages[1] = PageCfg { layout: 6, fields: [Hr, Power, MaxSpeed, LapTime, LapDist, Ascent] }.into();
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 5000);
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
@@ -2649,9 +2800,9 @@ fn derived_power_and_climb_fields() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_lr, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
-    app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Power10s, Power30s, Np, If, Tss] };
-    app.pages[1] = PageCfg { layout: 6, fields: [Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr] };
-    app.pages[2] = PageCfg { layout: 6, fields: [AvgCadence, Balance, Vam, Grade, Timer, Time] };
+    app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Power10s, Power30s, Np, If, Tss] }.into();
+    app.pages[1] = PageCfg { layout: 6, fields: [Kj, Kcal, Wkg, Wbal, MaxPower, MaxHr] }.into();
+    app.pages[2] = PageCfg { layout: 6, fields: [AvgCadence, Balance, Vam, Grade, Timer, Time] }.into();
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 5000);
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
@@ -2748,7 +2899,7 @@ fn graph_field() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
-    app.pages[0] = PageCfg { layout: 3, fields: [Graph, MaxSpeed, HrGraph, Timer, Timer, Timer] };
+    app.pages[0] = PageCfg { layout: 3, fields: [Graph, MaxSpeed, HrGraph, Timer, Timer, Timer] }.into();
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 600_000);
     assert_consistent(&sim, &app);
@@ -2782,7 +2933,7 @@ fn graph_plots_by_tap_and_span_by_hold() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
-    app.pages[0] = PageCfg { layout: 2, fields: [Graph, HrGraph, Timer, Timer, Timer, Timer] };
+    app.pages[0] = PageCfg { layout: 2, fields: [Graph, HrGraph, Timer, Timer, Timer, Timer] }.into();
     save_page(&mut sim, 0, &app.pages[0]);
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // a ride: W' balance runs
@@ -3249,7 +3400,7 @@ fn tones_do_not_cut_each_other() {
 fn perf_budgets() {
     use Field::*;
     // a ride on the GPS route, with a power meter and a strap, from start-up
-    let ride = |pages: [PageCfg; 3], screen: usize, zoom: Option<u32>| {
+    let ride = |pages: [crate::page::Page; 3], screen: usize, zoom: Option<u32>| {
         let mut sim = Sim::new(9, 0, 0);
         sim.gnss.route = Some(ride_route);
         let course = screen == crate::COURSE || pages.iter().any(|p| p.fields.contains(&Profile));
@@ -3286,17 +3437,27 @@ fn perf_budgets() {
         assert_consistent(&sim, &app);
         ((sim.pixels - px) / s, (sim.windows - win) / s)
     };
-    let p = |layout, f: [Field; 6]| PageCfg { layout, fields: f };
+    let p = |layout, f: [Field; 6]| crate::page::Page::from(PageCfg { layout, fields: f });
+    // pages made in the editor: eight values in four rows of two; a graph over two rows of two values
+    let eight = crate::page::Page::preset(14, [Speed, Hr, Power, Cadence, Dist, Timer, Power3s, Np]).unwrap();
+    let mut made = crate::page::Page::preset(1, [Graph, Time, Time, Time, Time, Time, Time, Time]).unwrap();
+    made = made.split_down(0, Power3s).and_then(|p| p.resize(0, true)).and_then(|p| p.split_across(1, Hr)).unwrap();
+    made = made.split_down(1, Cadence).and_then(|p| p.split_across(3, Timer)).and_then(|p| p.resize(3, true)).unwrap();
     let values = p(6, [Speed, Hr, Power, Power3s, Dist, Timer]);
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    type Case = (&'static str, [PageCfg; 3], usize, Option<u32>, (u64, u64));
-    let cases: [Case; 8] = [
+    type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, (u64, u64));
+    let cases: [Case; 10] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, None, (150, 5)),
-        // 9845, 10: the changed digits only, but large (a glyph of a 6-field page is ~960 px), and the power and heart
-        // rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
+        // made in the editor: 7101, 10 (8959 at VALUE_MARGIN 2): eight values at 3x in 120 x 74 boxes, the zone fills of power and heart rate
+        // as on six values
+        ("eight values", [eight, graph, map], 0, None, (12_000, 20)),
+        // 3581, 22 (3854 at VALUE_MARGIN 2): a graph over four values (the second row of values taller)
+        ("graph over four", [made, values, map], 0, None, (5_000, 30)),
+        // 8070, 10 since values keep 3 px from their rules (9862 before): the changed digits only, but large (a glyph
+        // of a 6-field page is ~960 px), and the power and heart rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
         // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
         ("six values", [values, graph, map], 0, None, (12_000, 20)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
@@ -3393,10 +3554,10 @@ fn course_ride() {
     let mut app = App::start(&mut sim, None);
     app.set_map_memory(crate::tiles::tests::memory());
     app.set_course_memory(crate::storage::course::tests::memory());
-    app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, Timer] };
-    app.pages[1] = PageCfg { layout: 3, fields: [Profile, Climb, ClimbGain, Time, Time, Time] };
+    app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, Timer] }.into();
+    app.pages[1] = PageCfg { layout: 3, fields: [Profile, Climb, ClimbGain, Time, Time, Time] }.into();
     // the map whole, set by hand (not the default page, which shows the course's fields while one is followed)
-    app.pages[2] = PageCfg { layout: 1, fields: [Map, Speed, Time, Time, Time, Time] };
+    app.pages[2] = PageCfg { layout: 1, fields: [Map, Speed, Time, Time, Time, Time] }.into();
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
     let fields = |app: &App| [ToGo, OffCourse, Climb, ClimbGain, UpToGo].map(|f| text(app, f));
 

@@ -396,9 +396,10 @@ impl App {
 
     /// The bond read from the card [`BOND_LOAD_MS`] after the start; written back when it changed, between rides
     /// only (the recorder is the card's one writer while a ride is open). A build that may not write the card
-    /// ([`Board::emmc_writable`]) reads it, and its writing fails (said): the bond lasts until the unit is off.
+    /// ([`Board::emmc_writable`]) does not touch it at all (as the rest of the app; its writes would be refused by
+    /// `emmc::Card::write` anyway): the bond lasts until the unit is switched off.
     fn phone_storage(&mut self, b: &mut impl Board) {
-        if self.emmc.lent() || !self.phone.ready || self.gnss_ms < BOND_LOAD_MS {
+        if !self.card_writable || self.emmc.lent() || !self.phone.ready || self.gnss_ms < BOND_LOAD_MS {
             return;
         }
         if !self.phone.loaded {

@@ -17,7 +17,9 @@ that crept in.
   - Plain power and heart rate fields coloured by the zone the rider is in (the value or the box's background), as
     the graphs already are.
   - Pages the rider adds (up to a sensible number) and edits live on the page, splitting and merging cells, instead
-    of fixed layouts picked from a list.
+    of fixed layouts picked from a list. Done (2026-10-25, branch pages-editor): up to six pages of rows of one or
+    two cells, the editor on the page (docs/features.md, "The page editor"). Left: the overview through the same
+    editor, pages switched off and reordered (UI review 2, 5.2 points 11 and 12), a MORE variant per page (5.3).
 
 Today `App` (src/lib.rs) holds menus as hard-coded row numbers (`activate` matching `(Menu::Main, 7 | 8)`), each
 Back has its own destination, and four mechanisms track what is on screen (`shown`, `main_shown`, `menu_shown`,

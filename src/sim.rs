@@ -457,9 +457,10 @@ impl Bus {
     }
 }
 
-/// Where the simulated fix is (degrees x 1e-7).
-pub const FIX_LAT: i32 = 488_566_123;
-pub const FIX_LON: i32 = -22_945_678;
+/// Where the simulated fix is (degrees x 1e-7): in the sea near 0 N 0 E, nowhere real, as the synthetic volume's
+/// rides and tiles (AGENTS.md, "Public repository").
+pub const FIX_LAT: i32 = 5_123_456;
+pub const FIX_LON: i32 = 4_234_567;
 
 /// A simulated ride's position over time: ms to latitude, longitude (degrees x 1e-7) and heading (degrees x 1e-5).
 pub type Route = fn(u64) -> (i32, i32, i32);
@@ -1081,6 +1082,9 @@ mod phone_tests;
 
 #[cfg(test)]
 mod shift_tests;
+
+#[cfg(test)]
+mod page_tests;
 
 /// The computer at the other end of the dev link: what it received, and the staging area.
 #[derive(Default)]

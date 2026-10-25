@@ -188,8 +188,9 @@ impl App {
 
     /// Redraws the status strip if what it shows changed.
     pub(crate) fn update_strip(&mut self, b: &mut impl Board) {
-        if self.strip != self.strip_shown {
-            // under a banner or a call: not drawn, and drawn whole when it goes (unbanner, end_ring)
+        if self.strip != self.strip_shown && !self.hint_shown {
+            // under a banner or a call: not drawn, and drawn whole when it goes (unbanner, end_ring); nor under the
+            // editor's hint, and drawn whole when the editor is left (App::show)
             ui::draw_strip_changes(&mut Panel(b, (self.area().0, ui::H)), &self.strip, Some(&self.strip_shown));
             self.strip_shown = self.strip;
         }

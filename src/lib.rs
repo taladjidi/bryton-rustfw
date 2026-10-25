@@ -18,6 +18,7 @@ pub mod dev;
 pub mod drivers;
 pub mod hrv;
 pub mod msc;
+pub mod page;
 pub mod phone;
 pub mod power;
 pub mod power_curve;
@@ -30,7 +31,7 @@ pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock};
+pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
 pub use app::*;
@@ -209,7 +210,8 @@ pub struct App {
     /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
     menu_chosen: bool,
     /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
-    /// on it again acts; any other input clears it (App::confirmed).
+    /// on it again acts; any other input clears it (App::confirmed). A past ride's DELETE, asked on its card, is
+    /// [`PAST_DELETE`].
     confirm: Option<(Menu, usize)>,
     /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
     /// when no key is down.
@@ -218,8 +220,15 @@ pub struct App {
     /// page, the ride menu, ALL SETTINGS, PAGES, a page, its field groups, under a group), so eight is room to spare.
     under: [Screen; 8],
     depth: usize,
-    /// The ride pages, then the overview's fields ([`OVERVIEW`]).
-    pages: [PageCfg; PAGES + 1],
+    /// The ride pages (the first `page_count`), then the overview's fields ([`OVERVIEW`]).
+    pages: [page::Page; PAGES + 1],
+    page_count: usize,
+    /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
+    store: PageStore,
+    /// The page editor's work, while it is open.
+    edit: Option<Editing>,
+    /// The strip's place shows the editor's hint (app/editor.rs), not the strip.
+    hint_shown: bool,
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
     /// The latest notices, newest first (empty lines: none).
@@ -286,6 +295,9 @@ pub struct App {
     awake_at: u32,
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
+    /// A ride's delete the last run may have left unfinished: looked for when the scan of the rides first runs
+    /// ([`trash::finish`]).
+    trash_check: bool,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
     /// file; where it is (workout.rs).
     calendar: storage::workout::Calendar,
@@ -363,6 +375,8 @@ impl App {
         let misc = Settings::from_word(b.backup_read(WHEEL_BKP))
             .with_power_word(b.backup_read(POWER_BKP))
             .with_alerts_word(b.backup_read(ALERTS_BKP));
+        let (pages, page_count) = pages_from_registers(b);
+        let store = PageStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
             backlight: true,
@@ -428,12 +442,11 @@ impl App {
             repeated: false,
             under: [Screen::Main; 8],
             depth: 0,
-            pages: core::array::from_fn(|i| {
-                PageCfg::from_words(PAGE_BKP[i].map(|r| b.backup_read(r)))
-                    .or_else(|| PageCfg::from_words_b(PAGE_BKP_B[i].map(|r| b.backup_read(r))))
-                    .or_else(|| OLD_PAGE_BKP.get(i).and_then(|&r| PageCfg::from_word(b.backup_read(r))))
-                    .unwrap_or(DEFAULT_PAGES[i])
-            }),
+            pages,
+            page_count,
+            store,
+            edit: None,
+            hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
             notices: Default::default(),
             banner_ms: None,
@@ -468,6 +481,7 @@ impl App {
             stock: stock::Scan::new(),
             awake_at: 0,
             past: history::Past::new(),
+            trash_check: false,
             calendar: Default::default(),
             calendar_day: None,
             plan_file: None,
@@ -494,6 +508,7 @@ impl App {
         self.awake_at = b.awake_us();
         self.resume_pending = self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN;
         self.full_pending = self.resume_pending;
+        self.trash_check = self.card_writable;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
         }
@@ -510,9 +525,7 @@ impl App {
         }
         if b.backup_read(STOCK_BKP19) >> 28 == 0xb {
             // pages kept from register 19 by builds of 2026-10-23: kept where stock does not look, 19 given back
-            for (n, page) in self.pages.iter().enumerate() {
-                save_page(b, n, page);
-            }
+            self.save_page_registers(b);
             b.backup_write(STOCK_BKP19, 0);
         }
         // pages kept one register each by the first builds (14 to 16), read at each boot but never saved where they
@@ -522,9 +535,7 @@ impl App {
                 && PageCfg::from_word(b.backup_read(old)).is_some()
         });
         if old {
-            for (n, page) in self.pages.iter().enumerate() {
-                save_page(b, n, page);
-            }
+            self.save_page_registers(b);
         }
         self.first_start(b); // before the first page is drawn: stock's pages on it
         if self.ble.is_some() {
@@ -652,6 +663,10 @@ impl App {
             self.step_stock(b);
             self.step_courses(b);
             self.step_past(b);
+            self.step_pages(b);
+        }
+        if self.edit.is_some() && self.ride.state() == ride::State::Running {
+            self.leave_editor(b, true); // recording again (by no key of the editor's): its work kept, never lost
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
@@ -665,7 +680,7 @@ impl App {
             }
         }
         match self.screen {
-            Screen::Main | Screen::Ride(_) => self.update_page(b),
+            Screen::Main | Screen::Ride(_) | Screen::Edit(..) => self.update_page(b),
             Screen::Summary => {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
                 let area = self.area();
@@ -747,7 +762,7 @@ mod tests {
             push_fixed(&mut l, v, shift, dec);
             std::string::String::from(l.as_str())
         };
-        assert_eq!(s(488_566_100, 7, 5), "48.85661");
+        assert_eq!(s(51_234_561, 7, 5), "5.12345");
         assert_eq!(s(-1_224_194_200, 7, 5), "-122.41942");
         assert_eq!(s(23_500, 3, 0), "23");
         assert_eq!(s(1_000_500, 7, 5), "0.10005");

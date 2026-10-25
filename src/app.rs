@@ -6,6 +6,7 @@ mod clock;
 mod courses;
 mod device;
 mod drive;
+mod editor;
 mod fields;
 mod gps;
 mod graphs;
@@ -21,6 +22,7 @@ mod workouts;
 
 pub use clock::*;
 pub use device::*;
+pub(crate) use editor::*;
 pub(crate) use fields::*;
 pub use gps::*;
 pub(crate) use graphs::*;
