@@ -75,6 +75,12 @@ pub trait Board {
     fn awake_us(&mut self) -> u32 {
         0
     }
+    /// The main loop's last sleep between passes: how long it lasted, ms (wall time), and the work done in it, us
+    /// (USB served while a cable is in), which [`Board::awake_us`] counts too. A held key counts the sleep by its
+    /// length, not that work again. Default: [`POLL_MS`] and none.
+    fn last_sleep(&mut self) -> (u32, u32) {
+        (POLL_MS, 0)
+    }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
     /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands.
@@ -273,8 +279,8 @@ pub struct App {
     /// The scan of stock's rides (the stock data menu, the overview's totals), over its cache when main.rs gives
     /// it one ([`App::set_scan_cache`]).
     stock: stock::Scan,
-    /// [`Board::awake_us`] at the start of the last pass: the work since, plus [`POLL_MS`] of sleep, is the time a
-    /// held key counts.
+    /// [`Board::awake_us`] at the start of the last pass: the work since, plus the sleep ([`Board::last_sleep`]),
+    /// is the time a held key counts.
     awake_at: u32,
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
@@ -531,9 +537,12 @@ impl App {
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
-        // the time since the last pass: its sleep and the work of that pass (bounded: a first pass, a stall)
+        // the time since the last pass: its sleep and the work of that pass (bounded: a first pass, a stall); the
+        // work done during the sleep (USB) is in the sleep's length already (2026-10-25 review: counted twice)
         let now = b.awake_us();
-        let pass_ms = POLL_MS + (now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)) / 1000).min(MAX_PASS_MS);
+        let (sleep_ms, sleep_work_us) = b.last_sleep();
+        let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
+        let pass_ms = sleep_ms + (work_us / 1000).min(MAX_PASS_MS);
         let (tr, dr) = b.rtc();
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);

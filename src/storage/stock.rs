@@ -139,7 +139,8 @@ pub struct Entry {
     /// The ride as the history lists it.
     pub ride: Ride,
     /// A whole ride with its session, counted; false for a file with a ride's name that is not one (cut, bad CRC,
-    /// no session, unreadable), kept so that it is not read again.
+    /// no session), kept so that it is not read again. A file the card or the FAT failed to give is not kept: read
+    /// again at the next start.
     pub counted: bool,
     /// Its best powers per [`crate::power_curve::DURATIONS`], W (0: none).
     pub best: [u16; crate::power_curve::N],
@@ -229,6 +230,9 @@ pub struct Cache {
     /// The file on the card checked out when read, or was written whole since: no cut to mend. False at first (all
     /// zeros: the cache lands in .bss, link.x).
     whole: bool,
+    /// Not whole: the FAT copies made equal up to this sector ([`Cache::prepare`]), and to the end.
+    sync: u32,
+    synced: bool,
 }
 
 impl Default for Cache {
@@ -240,7 +244,15 @@ impl Default for Cache {
 impl Cache {
     /// Empty.
     pub const fn new() -> Self {
-        Cache { bytes: [0; CACHE_BYTES], len: 0, seen: [0; CACHE_RIDES / 32], hint: 0, whole: false }
+        Cache {
+            bytes: [0; CACHE_BYTES],
+            len: 0,
+            seen: [0; CACHE_RIDES / 32],
+            hint: 0,
+            whole: false,
+            sync: 0,
+            synced: false,
+        }
     }
 
     /// Entries kept.
@@ -381,16 +393,34 @@ impl Cache {
         self.take(size.unwrap_or(0))
     }
 
+    /// Before a write after a cache that did not check out (or none): the FAT copies made equal
+    /// ([`Fat::sync_fats_from`]), `sectors` of each FAT at most a call, so the 15 MB of the unit's FATs (3 to 4 s
+    /// in one go) are spread over passes; true once done (at once when the cache is whole). A cut midway leaves the
+    /// cache as it was (not whole): the next start does it again from the first sector.
+    pub fn prepare(&mut self, d: &mut impl DiskWrite, sectors: u32) -> Result<bool, fat::Error> {
+        if self.whole || self.synced {
+            return Ok(true);
+        }
+        let mut fat = Fat::mount(d)?;
+        let (next, _) = fat.sync_fats_from(d, self.sync, sectors)?;
+        self.sync = next;
+        self.synced = next >= fat.fat_sectors();
+        Ok(self.synced)
+    }
+
     /// Writes it as `\Rustfw\scan.bin` (created if needed) with the FAT writer's order (fat/write.rs): an old file
     /// is first made one that does not check out (its first sector zeroed), then the sectors are written over it,
     /// then its size. A cut anywhere leaves the volume whole for stock and a computer, and a file the next start
     /// ignores (its rides read again); the second FAT may then differ from the first in the sector being written,
-    /// so a write after a cache that did not check out (or none) makes them equal first ([`Fat::sync_fats`]: both
-    /// FATs read, once). `time`: the FAT entry's (DOS date, time).
+    /// so a write after a cache that did not check out (or none) makes them equal first ([`Cache::prepare`] over
+    /// passes, else [`Fat::sync_fats`] here: both FATs read). `time`: the FAT entry's (DOS date, time).
     pub fn write(&mut self, d: &mut impl DiskWrite, time: (u16, u16)) -> Result<(), fat::Error> {
         let size = self.seal();
         let mut fat = Fat::mount(d)?;
-        if !self.whole {
+        // once: a write that fails may leave the copies different again
+        let synced = core::mem::take(&mut self.synced);
+        self.sync = 0;
+        if !self.whole && !synced {
             fat.sync_fats(d)?;
         }
         let dir = fat.ensure_dir(d, fat.root(), CACHE_DIR, time)?;
@@ -570,6 +600,14 @@ impl Scan {
         }
     }
 
+    /// The volume may have been written since the last step (this firmware's rides, settings, the cache): the FAT
+    /// sector kept is read again, so no chain is followed through a stale one.
+    pub fn forget_fat(&mut self) {
+        if let Some(f) = &mut self.fat {
+            f.forget();
+        }
+    }
+
     /// Goes on for about `budget` bytes read (a directory entry counts 32); false once it is done or failed.
     pub fn step(&mut self, d: &mut impl Disk, budget: u32) -> bool {
         let mut spent = 0u32;
@@ -581,16 +619,27 @@ impl Scan {
         self.status == Status::Running
     }
 
-    /// Writes the cache if it changed ([`Cache::write`]); once only on a failure (the next start reads again what
+    /// Writes the cache if it changed ([`Cache::write`]), after [`Cache::prepare`] with `sectors` of each FAT a
+    /// call (still [`Scan::unsaved`] until it is done); once only on a failure (the next start reads again what
     /// was not kept).
-    pub fn save(&mut self, d: &mut impl DiskWrite, time: (u16, u16)) -> Result<(), fat::Error> {
+    pub fn save(&mut self, d: &mut impl DiskWrite, time: (u16, u16), sectors: u32) -> Result<(), fat::Error> {
         if !self.unsaved() {
             return Ok(());
         }
-        self.dirty = false;
-        match &mut self.cache {
-            Some(c) => c.write(d, time),
-            None => Ok(()),
+        let Some(c) = &mut self.cache else {
+            self.dirty = false;
+            return Ok(());
+        };
+        match c.prepare(d, sectors) {
+            Ok(false) => Ok(()),
+            Ok(true) => {
+                self.dirty = false;
+                c.write(d, time)
+            }
+            Err(e) => {
+                self.dirty = false;
+                Err(e)
+            }
         }
     }
 
@@ -640,6 +689,12 @@ impl Scan {
         let mut io = [0u8; IO]; // on the stack for this call only: the scan stays small between passes
         let n = match fat.read_from(d, &file, offset, &mut io, &mut self.seek) {
             Ok(n) => n,
+            Err(_) if self.cache.is_some() => {
+                // the card or the FAT failed (a read error, a chain changed under a FAT sector kept): not kept as
+                // not a ride, or it would stay out for good; read again at the next start (2026-10-25 review)
+                self.file = None;
+                return Ok(());
+            }
             Err(_) => {
                 self.end_file(false); // one bad file: skipped, the scan goes on
                 return Ok(());
@@ -1104,7 +1159,7 @@ pub(crate) mod tests {
             ns / b.max(1)
         );
         assert_eq!((s.out.all.rides, s.read), (4 + 64, 70));
-        s.save(&mut d, (0, 0)).unwrap();
+        s.save(&mut d, (0, 0), u32::MAX).unwrap();
         d.1 = 0;
         let t = std::time::Instant::now();
         let (again, passes) = scan(&mut d, Some(cache()), 96 * 1024);
@@ -1128,7 +1183,7 @@ pub(crate) mod tests {
         let want = Summary { bytes: 0, ..first.out };
         assert_eq!((want.all.rides, want.skipped), (4, 2));
         assert!(first.unsaved());
-        first.save(&mut d, (0, 0)).unwrap();
+        first.save(&mut d, (0, 0), u32::MAX).unwrap();
         assert!(!first.unsaved());
         assert_eq!(crate::fat::write::tests::fsck(&d.0), Ok(0));
         // the next start: the totals before any ride is read
@@ -1156,7 +1211,7 @@ pub(crate) mod tests {
         let all = Totals { rides: 3, dist_m: 37_400 - 6000 - 12_000 + 14_400, time_s: 4200 - 600 - 1200 + 1800 };
         assert_eq!((s.out.all, s.out.skipped), (all, 3), "the cut one counts as not whole");
         assert!(s.unsaved());
-        s.save(&mut d, (0, 0)).unwrap();
+        s.save(&mut d, (0, 0), u32::MAX).unwrap();
         // and once more from the card: the same as a scan without a cache
         let (c, _) = scan(&mut d, Some(cache()), 4096);
         let (none, _) = scan(&mut d, None, 4096);
@@ -1171,7 +1226,7 @@ pub(crate) mod tests {
         let (s, _) = scan(&mut d, Some(cache()), 1 << 20);
         assert_eq!(s.out.week.rides, 2);
         let mut s = s;
-        s.save(&mut d, (0, 0)).unwrap();
+        s.save(&mut d, (0, 0), u32::MAX).unwrap();
         let bytes = s.out.bytes;
         s.new_day((2026, 10, 26)); // the next Monday
         assert_eq!((s.out.week, s.out.year.rides, s.out.bytes), (Totals::default(), 3, bytes));
@@ -1185,7 +1240,7 @@ pub(crate) mod tests {
     fn a_damaged_cache_is_rebuilt() {
         let mut d = Ram(image(), 0);
         let (mut first, _) = scan(&mut d, Some(cache()), 4096);
-        first.save(&mut d, (0, 0)).unwrap();
+        first.save(&mut d, (0, 0), u32::MAX).unwrap();
         let mut fat = Fat::mount(&mut d).unwrap();
         let f = fat.open(&mut d, "Rustfw/scan.bin").unwrap();
         let lba = fat.lba(f.cluster) as usize * fat::SECTOR;
@@ -1198,7 +1253,7 @@ pub(crate) mod tests {
             s.start(TODAY);
             while s.step(&mut d, 4096) {}
             assert_eq!((s.read, s.out.all), (6, first.out.all), "every ride read again");
-            s.save(&mut d, (0, 0)).unwrap();
+            s.save(&mut d, (0, 0), u32::MAX).unwrap();
             let (c, _) = scan(&mut d, Some(cache()), 4096);
             assert_eq!(c.read, 0, "written whole again");
         }
@@ -1235,7 +1290,7 @@ pub(crate) mod tests {
         // a written cache, then a ride more for the second write
         let mut d = Ram(base.clone(), 0);
         let (mut s, _) = scan(&mut d, Some(cache()), 1 << 20);
-        s.save(&mut d, (0, 0)).unwrap();
+        s.save(&mut d, (0, 0), u32::MAX).unwrap();
         add_ride(&mut d, "261022180000.fit");
         let (want2, _) = scan(&mut Ram(d.0.clone(), 0), None, 1 << 20);
         let mut cuts = 0;
@@ -1248,7 +1303,7 @@ pub(crate) mod tests {
                 s.load(&mut cut, TODAY);
                 s.start(TODAY);
                 while s.step(&mut cut, 1 << 20) {}
-                let done = s.save(&mut cut, (0, 0)).is_ok();
+                let done = s.save(&mut cut, (0, 0), u32::MAX).is_ok();
                 // the next start: right once its scan ends (the cache, or the rides read again), and its own write
                 // mends what the cut left (FATs that differ)
                 let mut d = cut.0;
@@ -1258,7 +1313,7 @@ pub(crate) mod tests {
                 next.start(TODAY);
                 while next.step(&mut d, 1 << 20) {}
                 assert_eq!(Summary { bytes: 0, ..next.out }, want, "the next start, cut after {k} sectors");
-                next.save(&mut d, (0, 0)).unwrap();
+                next.save(&mut d, (0, 0), u32::MAX).unwrap();
                 let f = crate::fat::write::tests::fsck(&d.0);
                 assert!(f.is_ok(), "cut after {k} sectors: {f:?}");
                 if done {
@@ -1269,6 +1324,63 @@ pub(crate) mod tests {
             }
         }
         assert!(cuts > 4, "{cuts} cuts");
+    }
+
+    /// A disk whose read of 4 KB or more at sectors `.1` .. `.1 + 64` fails once with `.3`.
+    struct Flaky(Ram, u32, bool, fat::Error);
+
+    impl Disk for Flaky {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), fat::Error> {
+            if self.2 && (self.1..self.1 + 64).contains(&lba) && buf.len() >= 4096 {
+                self.2 = false;
+                return Err(self.3);
+            }
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Flaky {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), fat::Error> {
+            self.0.write(lba, buf)
+        }
+    }
+
+    /// A ride the card or the FAT failed to give once (a read error, a chain changed under a FAT sector kept:
+    /// Corrupt) is not kept in the cache as not a ride: the next start reads it again and counts it (2026-10-25
+    /// review: it stayed out for good).
+    #[test]
+    fn a_read_error_is_not_kept() {
+        let base = image();
+        let (good, _) = scan(&mut Ram(base.clone(), 0), None, 1 << 20);
+        for e in [fat::Error::Io, fat::Error::Corrupt] {
+            let mut d = Ram(base.clone(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let f = fat.open(&mut d, "Activities/261020080000.fit").unwrap();
+            let mut fl = Flaky(d, fat.lba(f.cluster), true, e);
+            let (mut s, _) = scan(&mut fl, Some(cache()), 1 << 20);
+            assert!(!fl.2, "the error happened");
+            assert_eq!(s.out.all.rides, good.out.all.rides - 1, "{e:?}: out this time");
+            s.save(&mut fl, (0, 0), u32::MAX).unwrap();
+            let (next, _) = scan(&mut fl, Some(cache()), 1 << 20);
+            assert_eq!((next.read, next.out.all), (1, good.out.all), "{e:?}: read again at the next start");
+        }
+    }
+
+    /// The scan's FAT sector is read again after [`Scan::forget_fat`]: a ride saved meanwhile (its chain in a FAT
+    /// sector the scan kept from before) is read whole.
+    #[test]
+    fn a_ride_saved_during_the_scan() {
+        let mut d = Ram(image(), 0);
+        let mut s = Scan::new();
+        s.start(TODAY);
+        while s.listed < 2 {
+            assert!(s.step(&mut d, 32));
+        }
+        add_ride(&mut d, "261022180000.fit"); // after the ones listed: the scan comes to it
+        s.forget_fat();
+        while s.step(&mut d, 4096) {}
+        let (want, _) = scan(&mut d, None, 1 << 20);
+        assert_eq!(s.out.all, want.out.all);
     }
 
     #[test]

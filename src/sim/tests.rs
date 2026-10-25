@@ -374,17 +374,33 @@ fn overview_totals_from_the_cache_at_once() {
         run(&mut sim, &mut app, 1);
         (passes, last) = (passes + 1, sim.awake_ns / 1000 - us);
     }
+    longest = longest.max(last);
+    // the cache's first write: both FATs compared first, spread over passes (2026-10-25 review: in one pass, the
+    // unit's 15 MB of FATs froze the loop 3 to 4 s)
+    let (t1, mut writing, mut longest_write) = (sim.ms, 0, 0);
+    while app.stock.unsaved() {
+        let us = sim.awake_ns / 1000;
+        run(&mut sim, &mut app, 1);
+        (writing, longest_write) = (writing + 1, longest_write.max(sim.awake_ns / 1000 - us));
+        assert!(writing < 10_000);
+    }
+    let fat_sectors =
+        crate::fat::Fat::mount(&mut crate::fat::tests::Ram(sim.emmc.image.clone(), 0)).unwrap().fat_sectors();
     std::println!(
-        "first start: {} rides read, {} bytes, {passes} passes, longest {longest} us of work, the last (the cache \
-         written, both FATs read first: once) {last} us, {} ms",
+        "first start: {} rides read, {} bytes, {passes} passes, longest {longest} us of work, {} ms; the cache \
+         written in {writing} passes (FATs of {fat_sectors} sectors), longest {longest_write} us, {} ms",
         app.stock.read,
         app.stock.out.bytes,
-        sim.ms - t0
+        t1 - t0,
+        sim.ms - t1
     );
-    assert!(longest < 20_000, "each pass bounded by time: {longest} us");
+    // the budget, and the step that passed it: a FAT step reads 16 KB (7 ms at the test's 430 ns a byte)
+    let bound = App::SCAN_IDLE_US + 2 * App::SYNC_SECTORS * 512 * 430 / 1000 + 500;
+    assert!(longest < u64::from(bound), "each pass bounded by time: {longest} us");
+    assert!(longest_write < u64::from(bound), "the write's passes too: {longest_write} us");
+    assert!(writing > 1, "spread: {writing} passes");
     assert_eq!(app.stock.read, 70);
     let total = app.field_text(Field::TotalKm);
-    run(&mut sim, &mut app, 100);
     assert!(!app.stock.unsaved(), "written");
     let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
@@ -3440,6 +3456,26 @@ fn about_screen() {
     sim.save("about");
     app.press(&mut sim, Press::Short(Key::Back));
     assert!(matches!(app.screen(), Screen::Menu(Menu::Device, _)));
+}
+
+/// A key held while USB keeps the CPU busy in the sleep (a copy to the drive) counts the time it was held, not the
+/// USB work again (2026-10-25 review: a pass counted its sleep and that work): Back held 2 s does not switch off;
+/// held 3.5 s it does.
+#[test]
+fn a_hold_while_usb_is_busy_counts_real_time() {
+    for (hold, off) in [(2000, false), (3500, true)] {
+        let mut sim =
+            Sim::new(9, 0, 0).keys(move |ms| if (2000..2000 + hold).contains(&ms) { Key::Back as u8 } else { 0 });
+        let mut app = App::start(&mut sim, None);
+        while sim.ms < 8000 && !sim.standby {
+            app.step(&mut sim);
+            // the sleep: 50 ms, 45 of them serving USB
+            sim.delay_ms(POLL_MS);
+            sim.awake_ns += 45_000_000;
+            sim.sleep = (POLL_MS, 45_000);
+        }
+        assert_eq!(sim.standby, off, "Back held {hold} ms");
+    }
 }
 
 /// Woken by the power button (Back's line) held on through the start: the hold is not Back held 3 s, so the unit

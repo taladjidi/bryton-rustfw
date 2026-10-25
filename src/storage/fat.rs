@@ -201,6 +201,11 @@ impl Fat {
         d.read(lba, buf)
     }
 
+    /// Drops the FAT sector kept: the next look-up reads it again (the volume was written by someone else).
+    pub fn forget(&mut self) {
+        self.cached = None;
+    }
+
     /// The cluster after `cluster` in its chain; None at the end of the chain.
     fn next(&mut self, d: &mut impl Disk, cluster: u32) -> Result<Option<u32>, Error> {
         match self.entry(d, cluster)? {

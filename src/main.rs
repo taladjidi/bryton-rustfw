@@ -1095,6 +1095,8 @@ fn i2c_read(i2c: u32, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
 struct S510 {
     cycles_at: u32,
     cycles: u64,
+    /// The last sleep between passes: ms, and the work in it (USB), us ([`Board::last_sleep`]).
+    sleep: (u32, u32),
 }
 
 impl Board for S510 {
@@ -1134,6 +1136,9 @@ impl Board for S510 {
         let now = cycles();
         self.cycles += u64::from(now.wrapping_sub(core::mem::replace(&mut self.cycles_at, now)));
         (self.cycles / u64::from(CPU_HZ / 1_000_000)) as u32
+    }
+    fn last_sleep(&mut self) -> (u32, u32) {
+        self.sleep
     }
     fn standby(&mut self) {
         standby();
@@ -1307,7 +1312,7 @@ fn main() -> ! {
     gnss_init();
     i2c_init();
     checkpoint(4);
-    let mut board = S510 { cycles_at: 0, cycles: 0 };
+    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0) };
     let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
         app.set_map_memory(mem); // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map
@@ -1475,6 +1480,7 @@ fn main() -> ! {
             }
         }
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
+        board.sleep = (slept, sleep_cycles / (CPU_HZ / 1_000_000));
         let t1 = cycles();
         if let Some(p) = press {
             app.press(&mut board, p);

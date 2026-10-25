@@ -301,6 +301,12 @@ impl Fat {
             if h.clusters == 0 {
                 self.set_entries(d, &[(c, EOC)])?;
                 h.first = c;
+                if h.entry_lba != 0 {
+                    // a file with no cluster yet (as a computer leaves an emptied one): its entry gets the chain,
+                    // after the chain ends (a cut before leaves a lost cluster, never a size on cluster 0;
+                    // 2026-10-25 review)
+                    self.set_first(d, h)?;
+                }
             } else {
                 self.set_entries(d, &[(c, EOC), (h.last, c)])?;
             }
@@ -310,6 +316,17 @@ impl Fat {
             self.fsinfo_update(d, taken, h.last + 1, None)?;
         }
         Ok(())
+    }
+
+    /// Writes `h`'s first cluster into its entry.
+    fn set_first(&mut self, d: &mut impl DiskWrite, h: &Handle) -> Result<(), Error> {
+        let mut s = [0u8; SECTOR];
+        self.read(d, h.entry_lba, &mut s)?;
+        let at = usize::from(h.slot) * 32;
+        let e = s.get_mut(at..at + 32).ok_or(Error::Corrupt)?;
+        e[20..22].copy_from_slice(&((h.first >> 16) as u16).to_le_bytes());
+        e[26..28].copy_from_slice(&(h.first as u16).to_le_bytes());
+        self.write(d, h.entry_lba, &s)
     }
 
     /// Writes `buf` (whole sectors) to `h`'s sectors from `sector` on, taking clusters as needed; one disk write
@@ -410,12 +427,16 @@ impl Fat {
         Ok(Handle { first, last, clusters, ..Handle::default() })
     }
 
-    /// The entry called `name` in `dir`, opened for writing.
+    /// The file called `name` in `dir`, opened for writing; [`Error::Refused`] for a folder of that name (written
+    /// as a file, its entries would be lost).
     pub fn locate(&mut self, d: &mut impl Disk, dir: File, name: &str) -> Result<Handle, Error> {
         let mut c = self.cursor(dir)?;
         while let Some((e, long)) = self.next_raw(d, &mut c)? {
             if (long && lfn_eq(&c.lfn, name)) || short_eq(&e, name) {
                 let f = self.file_of(&e)?;
+                if f.dir {
+                    return Err(Error::Refused);
+                }
                 let (last, clusters) = self.chain_end(d, f.cluster)?;
                 let slot = c.entry.checked_sub(1).ok_or(Error::Corrupt)? as u8;
                 let entry_lba = self.lba(c.cluster) + c.sector;
@@ -655,13 +676,33 @@ impl Fat {
     /// second's is (the cut tore it) takes the second's instead. Reads the whole FAT: about 15 MB on the unit's
     /// volume, so only when a cut may have happened. The free clusters.
     pub fn sync_fats(&mut self, d: &mut impl DiskWrite) -> Result<u32, Error> {
+        let (mut sector, mut free) = (0, 0u32);
+        while sector < self.fat_size {
+            let (next, n) = self.sync_fats_from(d, sector, u32::MAX)?;
+            (sector, free) = (next, free + n);
+        }
+        let hint = self.hint(d)?;
+        self.fsinfo_update(d, 0, hint, Some(free))?;
+        Ok(free)
+    }
+
+    /// Sectors in one FAT copy.
+    pub fn fat_sectors(&self) -> u32 {
+        self.fat_size
+    }
+
+    /// [`Fat::sync_fats`]'s copy for the FAT sectors from `sector` on, `max` of them at most, so it can be spread
+    /// over passes (between them the writer keeps the copies equal, as it always does): the next sector and the
+    /// free clusters in those. FSInfo is not touched.
+    pub fn sync_fats_from(&mut self, d: &mut impl DiskWrite, sector: u32, max: u32) -> Result<(u32, u32), Error> {
         const RUN: u32 = 8;
         let mut one = [0u8; RUN as usize * SECTOR];
         let mut other = [0u8; RUN as usize * SECTOR];
         let mut free = 0u32;
-        let mut sector = 0;
-        while sector < self.fat_size {
-            let k = RUN.min(self.fat_size - sector);
+        let mut sector = sector;
+        let end = sector.saturating_add(max).min(self.fat_size);
+        while sector < end {
+            let k = RUN.min(end - sector);
             let len = k as usize * SECTOR;
             let (a, b) = (one.get_mut(..len).ok_or(Error::Corrupt)?, other.get_mut(..len).ok_or(Error::Corrupt)?);
             self.read(d, self.fat_start + sector, a)?;
@@ -691,9 +732,7 @@ impl Fat {
             }
             sector += k;
         }
-        let hint = self.hint(d)?;
-        self.fsinfo_update(d, 0, hint, Some(free))?;
-        Ok(free)
+        Ok((sector, free))
     }
 }
 
@@ -716,7 +755,8 @@ pub(crate) mod tests {
     }
 
     /// What fsck would say of a volume: Err on a chain into a free cluster or out of the volume, a cross-link, a
-    /// size past its chain, FATs that differ; Ok(lost clusters: taken, named by no entry). Walks every directory.
+    /// size past its chain or on cluster 0, FATs that differ; Ok(lost clusters: taken, named by no entry). Walks
+    /// every directory.
     pub fn fsck(img: &[u8]) -> Result<u32, std::string::String> {
         let mut d = Ram(img.to_vec(), 0);
         let mut fat = Fat::mount(&mut d).map_err(|e| std::format!("mount {e:?}"))?;
@@ -739,6 +779,9 @@ pub(crate) mod tests {
                 let f = fat.file_of(&e).map_err(|e| std::format!("entry {e:?}"))?;
                 if f.dir {
                     dirs.push(f);
+                } else if f.cluster == 0 && f.size > 0 {
+                    // fsck_msdos and chkdsk: "size nonzero, start cluster 0"
+                    return Err(std::format!("size {} on cluster 0", f.size));
                 } else if f.cluster != 0 {
                     chains.push((f.cluster, f.size));
                 }
@@ -993,6 +1036,77 @@ pub(crate) mod tests {
 
     /// The writer's inputs, pseudo-random (seeded: a failure reproduces): names, offsets, sizes, on a good volume
     /// and on damaged ones. Errors, never a panic, a hang, or a write outside the volume's data and FATs.
+    /// A disk whose power goes after `.1` more sector writes.
+    struct Cut(Ram, u32);
+
+    impl Disk for Cut {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Cut {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            for (i, s) in buf.chunks(SECTOR).enumerate() {
+                if self.1 == 0 {
+                    return Err(Error::Io);
+                }
+                self.1 -= 1;
+                self.0.write(lba + i as u32, s)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// A file a computer emptied (first cluster 0, size 0, its chain freed) written again: its entry gets its
+    /// first cluster, and a cut after any sector leaves at worst a lost cluster, never a size on cluster 0
+    /// (2026-10-25 review: \Rustfw\scan.bin got its size on cluster 0, a cluster lost each start). A folder is
+    /// not opened for writing as a file.
+    #[test]
+    fn an_emptied_file_written_again() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.ensure_dir(&mut d, fat.root(), "Rustfw", T).unwrap();
+        let mut h = fat.create(&mut d, dir, "scan.bin", T).unwrap();
+        fat.write_sectors(&mut d, &mut h, 0, &[7; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut h, SECTOR as u32, T).unwrap();
+        // emptied as a computer does
+        fat.set_entries(&mut d, &[(h.first, 0)]).unwrap();
+        let mut s = [0u8; SECTOR];
+        d.read(h.entry_lba, &mut s).unwrap();
+        let at = usize::from(h.slot) * 32;
+        s[at + 20..at + 22].fill(0);
+        s[at + 26..at + 32].fill(0);
+        d.write(h.entry_lba, &s).unwrap();
+        assert_eq!(fsck(&d.0), Ok(0));
+        let img = d.0;
+        let data = [9u8; 3 * SECTOR];
+        for k in 0.. {
+            let mut c = Cut(Ram(img.clone(), 0), k);
+            let mut fat = Fat::mount(&mut c).unwrap();
+            let mut h = fat.locate(&mut c, dir, "scan.bin").unwrap();
+            assert_eq!((h.first, h.size), (0, 0));
+            let done = fat.write_sectors(&mut c, &mut h, 0, &data).and_then(|_| fat.set_size(&mut c, &mut h, 1000, T));
+            // a cut may leave the second FAT behind in the sector being written: the next write's sync mends it
+            let mut m = Ram(c.0.0.clone(), 0);
+            Fat::mount(&mut m).unwrap().sync_fats(&mut m).unwrap();
+            let f = fsck(&m.0);
+            assert!(f.as_ref().is_ok_and(|&lost| lost <= 1), "cut after {k} sectors: {f:?}");
+            if done.is_ok() {
+                assert_eq!(f, Ok(0));
+                let mut fat = Fat::mount(&mut c).unwrap();
+                let f = fat.open(&mut c, "Rustfw/scan.bin").unwrap();
+                assert!(f.cluster != 0 && f.size == 1000);
+                break;
+            }
+        }
+        // a folder of that name is refused, not written over
+        let mut d = Ram(img, 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        assert_eq!(fat.locate(&mut d, root, "Rustfw").err(), Some(Error::Refused));
+    }
+
     #[test]
     fn fuzz_writer() {
         let img = image();

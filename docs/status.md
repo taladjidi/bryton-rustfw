@@ -45,9 +45,14 @@ The dated findings are in [journal.md](journal.md).
   lower than the 717 seen; Back held 3 s switches off during it), then `\Rustfw\scan.bin` is there (64 + 64 bytes a
   ride; `dev.py ls Rustfw`). The next start: the overview's totals at the first screen, no 30 s of `--`, and the
   scan 30 s later reads nothing (`dev.py info` stays low). A ride saved: the next scan reads only it. A ride deleted
-  from the computer: gone from the totals. The first write of the cache reads both FATs once (`Fat::sync_fats`):
-  one pass of about 0.5 s, inferred from the FAT's size (also after a cache that did not check out). `dev.py bench
-  scan` now reads only rides not in the cache: measure it with the cache deleted.
+  from the computer: gone from the totals. The first write of the cache (also after a cache that did not check
+  out) first compares both FATs (sectors 0 to 29,807 of each, about 15 MB in all: 3 to 4 s in one go at 10.5 MB/s),
+  16 sectors of each a step, within the pass's 15 ms (`Cache::prepare`): some 10 s over 160 passes, inferred; check
+  the loop stays responsive (`dev.py info` uptime, a key) and the time it takes. A ride saved during the scan is
+  read (its FAT sector read again each pass); a read error leaves a ride out of the totals until the next start,
+  not for good. An emptied `scan.bin` (from the computer) is written again with its first cluster (fsck clean).
+  A key held while the computer copies to the drive counts its real time (Back held 3 s switches off, not 2 s).
+  `dev.py bench scan` now reads only rides not in the cache: measure it with the cache deleted.
 
 - **Electronic shifting (sensors.rs, app/radio.rs)**, all simulated only, the owner's Di2 at hand: with
   `di2_key.bin` built in (`tools/ant_key.py`), SENSORS > DI2 reads OFF (not NO KEY: the chip took network 1's key

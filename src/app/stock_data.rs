@@ -24,6 +24,11 @@ impl App {
 
     pub(crate) const SCAN_RIDING_US: u32 = 4_000;
 
+    /// FAT sectors of each copy compared a step before the scan's first cache write ([`stock::Cache::prepare`]),
+    /// steps taken until the pass has spent [`App::SCAN_IDLE_US`]: 16 KB read a step, about 1.6 ms at the card's
+    /// 10.5 MB/s, so the unit's 29,808 sectors (15 MB with both copies) take some 160 passes (about 10 s, inferred).
+    pub(crate) const SYNC_SECTORS: u32 = 16;
+
     /// A stock data row's value.
     pub(crate) fn stock_value(&self, r: menu::StockRow, v: &mut Line<12>) {
         use menu::StockRow as S;
@@ -92,7 +97,7 @@ impl App {
     /// The scan of stock's rides goes on, if it runs: [`IO`](stock::IO) bytes at a time until the pass has spent
     /// [`App::SCAN_IDLE_US`] of work ([`Board::awake_us`]) or [`App::SCAN_IDLE`] bytes (less during a ride), so a
     /// pass stays short whatever the card and the files cost. Its cache is read at the first pass, kept up to date
-    /// on a new day, and written once the scan has changed it, only between rides.
+    /// on a new day, and written once the scan has changed it, only between rides, in the same time a pass.
     #[inline(never)]
     pub(crate) fn step_stock(&mut self, b: &mut impl Board) {
         self.stock.load(&mut emmc::Volume(&mut self.emmc, b), self.date);
@@ -104,19 +109,29 @@ impl App {
         {
             self.stock.start(self.date);
         }
+        let t0 = b.awake_us();
         if self.stock.status() == stock::Status::Running {
             let idle = self.ride.state() == ride::State::Idle;
             let (bytes, us) =
                 if idle { (Self::SCAN_IDLE, Self::SCAN_IDLE_US) } else { (Self::SCAN_RIDING, Self::SCAN_RIDING_US) };
-            let (t0, b0) = (b.awake_us(), self.stock.read_bytes());
+            // ponytail: one FAT sector read again a pass while the scan runs (about 50 us), rather than tracking
+            // every write of the recorder and the settings
+            self.stock.forget_fat();
+            let b0 = self.stock.read_bytes();
             while self.stock.step(&mut emmc::Volume(&mut self.emmc, b), stock::IO as u32)
                 && self.stock.read_bytes().wrapping_sub(b0) < bytes
                 && b.awake_us().wrapping_sub(t0) < us
             {}
         }
-        if self.stock.unsaved() && self.card_writable && self.ride_settled() {
-            let t = fat::write::dos_time(self.rec_time().0);
-            let _ = self.stock.save(&mut emmc::Volume(&mut self.emmc, b), t); // failed: read again next start
+        // the cache written, its FAT comparison first spread over passes in the same time budget
+        let t = fat::write::dos_time(self.rec_time().0);
+        while self.stock.unsaved()
+            && self.card_writable
+            && self.ride_settled()
+            && b.awake_us().wrapping_sub(t0) < Self::SCAN_IDLE_US
+        {
+            // failed: read again next start (no longer unsaved)
+            let _ = self.stock.save(&mut emmc::Volume(&mut self.emmc, b), t, Self::SYNC_SECTORS);
         }
     }
 
