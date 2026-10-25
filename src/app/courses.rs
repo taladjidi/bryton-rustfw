@@ -182,7 +182,7 @@ impl App {
                 } else {
                     l.push_u32(m / 1000);
                 }
-                l.push_str("K ");
+                l.push_str("K|"); // the grade small after the length: the box's scale for the length
                 if g < 0 {
                     l.push_str("-");
                 }

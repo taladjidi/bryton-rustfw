@@ -26,7 +26,9 @@
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
-  value ("200-220", "1.6K 6%") takes the largest smaller scale it fits. Times: "MM:SS" under an hour (the step left
+  value takes the largest smaller scale it fits. A range and a climb keep the box's scale: the target is its middle
+  big and its half-width small after it ("210" and "+-10" for 200-220), the climb its length big and its grade small
+  ("1.6K" and "6%"). Times: "MM:SS" under an hour (the step left
   "M:SS"), then "H:MM" at the box's size with the seconds small and grey after it ("1:23 45"); the seconds go first
   when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
   across the screen at least 120 px tall (a smaller graph shows its title and bars), and the workout gauge's target
@@ -282,7 +284,7 @@ TrainingPeaks), read only:
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
-- **Fields** to place on a page: TARGET (the step's range: green in it, orange under, red over, from the 3 s power,
+- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: green in it, orange under, red over, from the 3 s power,
   the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power

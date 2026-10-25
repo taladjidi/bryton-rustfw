@@ -831,7 +831,7 @@ fn workout_from_the_calendar() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running));
     let fields = |app: &App| [StepTarget, StepTime, NextStep, Workout].map(|f| text(app, f));
-    assert_eq!(fields(&app), ["100-120", "0:20", "200-220", "1/6"]);
+    assert_eq!(fields(&app), ["110|+-10", "0:20", "210|+-10", "1/6"]);
     run(&mut sim, &mut app, 5000);
     assert_eq!(app.field_color(StepTarget), ui::RED, "210 W over 100-120");
     let (mut ms, start) = (0, sim.ms);
@@ -844,7 +844,7 @@ fn workout_from_the_calendar() {
     assert_eq!(sim.tones[tones..], [2500, 0, 2000, 0, 2000, 0, 2500], "start, beep at 2 and 1 s left, the next step");
     assert_eq!(app.banner.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
-    assert_eq!(fields(&app), ["200-220", "0:25", "150", "2/6"]);
+    assert_eq!(fields(&app), ["210|+-10", "0:25", "150", "2/6"]);
     assert_eq!(app.field_color(StepTarget), ui::GREEN, "210 W in 200-220");
     assert_consistent(&sim, &app);
     sim.save("workout_ride");
@@ -3800,7 +3800,7 @@ fn course_ride() {
     let to_go: f64 = text(&app, ToGo).parse().unwrap();
     assert!((to_go - (5000.0 - s) / 1000.0).abs() <= 0.15, "{to_go} km to go after {s} m");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2, "on the course");
-    assert_eq!(fields(&app)[2..], ["2.0K 6%", "120", "120"], "the climb ahead: 2 km at 6 %, 120 m");
+    assert_eq!(fields(&app)[2..], ["2.0K|6%", "120", "120"], "the climb ahead: 2 km at 6 %, 120 m");
     assert_consistent(&sim, &app);
 
     // the detour: off course after 5 s beyond 50 m, said once; back
@@ -3831,7 +3831,7 @@ fn course_ride() {
     assert_eq!(app.banner.as_str(), "CLIMB 2.0 KM 6%");
     run(&mut sim, &mut app, 47_000); // 400 m up
     let f = fields(&app);
-    assert_eq!(f[2], "1.6K 6%", "1.6 km left: {f:?}");
+    assert_eq!(f[2], "1.6K|6%", "1.6 km left: {f:?}");
     let m = |i: usize| f[i].parse::<u32>().unwrap();
     assert!(m(3).abs_diff(96) <= 2 && m(4).abs_diff(96) <= 6, "96 m left to climb: {f:?}");
     assert_eq!(app.field_color(Climb), ui::YELLOW, "6 %");
