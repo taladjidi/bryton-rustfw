@@ -446,8 +446,10 @@ impl App {
 
     /// Clears the page area and draws the current screen.
     pub(crate) fn show(&mut self, b: &mut impl Board) {
-        self.more_on = self.more_shown(); // MORE is up only over its own page
-        self.strip.more = self.more_on.is_some();
+        if matches!(self.screen, Screen::Ride(_)) {
+            self.more_on = self.more_shown(); // MORE is up only over its own page; a menu over it keeps it
+        }
+        self.strip.more = self.more_shown().is_some();
         if self.calendar_day.is_none() && self.widgets().any(|(_, w)| w == Widget::Field(Field::Workout)) {
             self.load_calendar(b); // the overview's planned workout: the card read at first use
         }

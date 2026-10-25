@@ -1326,7 +1326,7 @@ fn pages_file() {
                 }
             }
             let end = more + 1 + crate::PAGES * 13;
-            let crc = crate::fit::crc(0, &s[more..end]);
+            let crc = crate::fit::crc(crate::fit::crc(0, &s[..at]), &s[more..end]);
             s[end..end + 2].copy_from_slice(&crc.to_le_bytes());
         }
         let mut file = [0u8; 1024];

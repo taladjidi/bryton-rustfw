@@ -445,7 +445,7 @@ impl App {
                     let all = ride::Plot::ALL;
                     let next = all[(all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len()];
                     let n = match self.screen {
-                        Screen::Ride(_) if self.more_shown().is_some() => EDITED, // no slot: the page's own are by box
+                        Screen::Ride(_) if self.more_shown().is_some() => return, // no slot, nothing to redraw
                         Screen::Ride(n) => n,
                         _ => OVERVIEW,
                     };
@@ -461,7 +461,7 @@ impl App {
             (Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Right))) => {
                 (self.screen, self.more_on) = (self.paged(false), None)
             }
-            (Screen::Ride(_), Input::Back) => self.screen = Screen::Main,
+            (Screen::Ride(_), Input::Back) => (self.screen, self.more_on) = (Screen::Main, None),
             (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
                 if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
                     && (ui::GEAR_TAP.1..ui::GEAR_TAP.1 + ui::GEAR_TAP.3).contains(&u32::from(y)) =>
