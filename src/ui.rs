@@ -538,12 +538,14 @@ pub enum Field {
     Shifts,
     /// The shifting system's battery: percent (Di2), or its status (ANT+: NEW, GOOD, OK, LOW, CRIT).
     ShiftBattery,
+    /// The course's next cue: its arrow and how far ("350M", "1.2K"); "--" off course (course/cues.rs).
+    NextTurn,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 59] = {
+    pub const ALL: [Field; 60] = {
         use Field::*;
         [
             Time,
@@ -604,7 +606,8 @@ impl Field {
             Music,    // electronic shifting:
             Gear,
             Shifts,
-            ShiftBattery,
+            ShiftBattery, // the course followed again:
+            NextTurn,
         ]
     };
 
@@ -674,6 +677,7 @@ impl Field {
             "GEAR",
             "SHIFTS",
             "SHIFT BAT",
+            "NEXT TURN",
         ];
         LABELS[self as usize]
     }
@@ -688,7 +692,8 @@ impl Field {
             "88/88", "888-888", "8:88:88", "888-888", // the course followed:
             "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",  // the phone:
             "88:88", // electronic shifting:
-            "8-88", "8888", "GOOD",
+            "8-88", "8888", "GOOD", // the course followed again:
+            "888.8K",
         ];
         WIDEST[self as usize]
     }
@@ -733,7 +738,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 10] = {
         ("CLIMB", &[Ascent, Vam, Grade]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, NextStep, WorkoutGraph, WktPower]),
-        ("COURSE", &[ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
+        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),

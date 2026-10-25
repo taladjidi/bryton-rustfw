@@ -469,10 +469,11 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
 };
 
 /// The course page, an extra page while a course is followed ([`COURSE`]; Garmin and Wahoo add theirs the same
-/// way): the course's profile large, the distance to go, distance, moving time and average speed. Not configurable.
+/// way): the course's profile large, the next turn across the width, then the owner's list: the distance to go, the
+/// distance, the moving time and the average speed. Not configurable.
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 5, fields: [Profile, ToGo, Dist, Timer, AvgSpeed, Time] }
+    PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, Dist, Timer, AvgSpeed] }
 };
 
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).

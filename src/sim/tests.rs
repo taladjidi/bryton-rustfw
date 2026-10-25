@@ -2611,10 +2611,13 @@ fn perf_budgets() {
         // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow
         // clear of the zoom buttons, 1211 without them)
         ("map", [map, values, graph], 0, None, (1_800, 50)),
-        // 456, 3: on the course, the profile's rider column (a whole profile at each eighth), two values
-        ("course profile", [profile, values, map], 0, None, (600, 10)),
-        // 1548, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds
-        ("course page", [values, graph, map], crate::COURSE, None, (2_000, 20)),
+        // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
+        // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
+        // 19 000 px each)
+        ("course profile", [profile, values, map], 0, None, (800, 10)),
+        // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
+        // NEXT TURN's last digit (1548 before it), the turn's two banners
+        ("course page", [values, graph, map], crate::COURSE, None, (2_600, 20)),
         // 3400, 41: zoomed in at 2 m a pixel (map.rs), following the rider: a whole map at each re-centre (~35 s)
         ("map zoomed", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (4_500, 60)),
     ];
@@ -2710,9 +2713,12 @@ fn course_ride() {
     };
     assert_eq!(row(&app, 0).split_once(' ').map(|r| r.1), Some("..."), "listed at once, measured next");
     run(&mut sim, &mut app, 1000);
-    let mut rows: Vec<_> = (0..5).map(|i| row(&app, i)).collect();
+    let mut rows: Vec<_> = (0..7).map(|i| row(&app, i)).collect();
     rows.sort();
-    assert_eq!(rows, ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM"]);
+    assert_eq!(
+        rows,
+        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
+    );
     assert_consistent(&sim, &app);
     sim.save("courses_menu");
 
@@ -2791,7 +2797,7 @@ fn course_ride() {
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(crate::COURSE), "after the map page");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields[..5]);
+    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields);
     assert_consistent(&sim, &app);
     sim.save("course_page");
     app.press(&mut sim, Press::Short(Key::Page));
@@ -2813,6 +2819,103 @@ fn course_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.banner.as_str(), "COURSE OFF");
     assert_eq!(fields(&app), ["--", "--", "--", "--", "--"]);
+}
+
+/// The zigzag (course/cues.rs `zigzag`, tools/fat_image.py's `Zigzag.gpx`) ridden at 8 m/s from its start.
+fn zigzag_route(ms: u64) -> (i32, i32, i32) {
+    let pts = crate::course::cues::tests::zigzag();
+    let mut s = ms as f64 * 0.008;
+    let mut at = (pts[0].0, pts[0].1, 90.0);
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        let heading = (b.0 - a.0).atan2(b.1 - a.1).to_degrees().rem_euclid(360.0);
+        if s <= len {
+            at = (a.0 + (b.0 - a.0) * s / len, a.1 + (b.1 - a.1) * s / len, heading);
+            break;
+        }
+        (s, at) = (s - len, (b.0, b.1, heading));
+    }
+    let m_per_unit = 0.011_132;
+    ((at.1 / m_per_unit) as i32, (at.0 / m_per_unit) as i32, (at.2 * 1e5) as i32)
+}
+
+/// Turn-by-turn on the zigzag's GPX track (its turns found on its shape): each turn said in the banner with its
+/// arrow 200 m before ("LEFT 200 M", a beep) and at it ("LEFT NOW", two beeps), once each, in order; the course
+/// page's NEXT TURN field shows the arrow and the distance, redrawn by its changed characters. The banner costs its
+/// own pixels and no more.
+#[test]
+fn course_cues_ride() {
+    use crate::course::Turn;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(zigzag_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    let list = &app.courses.as_deref().unwrap().list;
+    let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIGZAG").unwrap();
+    app.follow_course(k);
+    run(&mut sim, &mut app, 200);
+    assert_eq!(app.screen(), Screen::Ride(crate::COURSE));
+    let text = |app: &App| std::string::String::from(app.field_text(Field::NextTurn).as_str());
+    assert_eq!(text(&app), "--", "no fix yet");
+    let cues: Vec<_> = app.courses.as_deref().unwrap().course.cues().to_vec();
+    let kinds: Vec<_> = cues.iter().map(|c| c.turn).collect();
+    use Turn::*;
+    assert_eq!(kinds, [Left, Right, SharpRight, SlightLeft, Right, UTurn]);
+
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    // to 400 m: the left turn at 1 km is 600 m ahead
+    while sim.ms < 50_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    let t = text(&app);
+    let m: u32 = t.trim_start_matches('\x01').trim_end_matches('M').parse().unwrap();
+    assert!(t.starts_with('\x01') && (570..=610).contains(&m), "{t:?}");
+    assert_consistent(&sim, &app);
+    sim.save("course_next_turn");
+
+    // the ride to the end: every banner as it shows, where the rider is then (m), the tones
+    let (tones, mut said, mut last) = (sim.tones.len(), Vec::new(), std::string::String::new());
+    let mut banner_px = Vec::new();
+    let end = (app.courses.as_deref().unwrap().course.len_m() as u64 + 40) * 125;
+    while sim.ms < end {
+        let px = sim.pixels;
+        run(&mut sim, &mut app, 500);
+        let b = std::string::String::from(app.banner.as_str());
+        if app.banner_ms.is_some() && b != last {
+            said.push((sim.ms as f64 * 0.008, b.clone()));
+            banner_px.push(sim.pixels - px);
+            if b.ends_with("NOW") && said.len() == 2 {
+                assert_consistent(&sim, &app);
+                sim.save("course_cue_banner");
+            }
+        }
+        last = b;
+    }
+    let mut want = Vec::new();
+    for c in &cues {
+        let words = std::format!("{} {}", c.turn.glyph(), c.turn.word());
+        want.push((f64::from(c.at_m) - 200.0, std::format!("{words} 200 M")));
+        want.push((f64::from(c.at_m) - 32.0, std::format!("{words} NOW")));
+    }
+    let texts: Vec<_> = said.iter().map(|s| s.1.as_str()).collect();
+    assert_eq!(texts, want.iter().map(|w| w.1.as_str()).collect::<Vec<_>>(), "{said:?}");
+    for (s, w) in said.iter().zip(&want) {
+        assert!((s.0 - w.0).abs() <= 24.0, "{s:?} where {w:?}"); // a fix a second, looked at every 500 ms
+    }
+    let beeps = sim.tones[tones..].iter().filter(|&&hz| hz == 1800).count();
+    assert_eq!(beeps, 3 * cues.len(), "a beep at 200 m, two at the turn");
+    // the half second a banner shows: the banner (240 x 40 = 9600 px) and the page's own changes; once in a while
+    // the profile moves on by an eighth then too (a whole profile)
+    banner_px.sort();
+    let median = banner_px[banner_px.len() / 2];
+    std::println!("a cue's banner: {median} px in its half second (median; {banner_px:?})");
+    assert!(median < 9600 + 2000, "{banner_px:?}");
+    assert_consistent(&sim, &app);
 }
 
 /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,

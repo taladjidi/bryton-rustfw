@@ -260,38 +260,70 @@ fn workout_files() {
 }
 
 /// Course files (storage/course.rs into course.rs): the synthetic card's hill as Bryton's route, a Garmin course
-/// and GPX, with bytes changed (the FIT ones with their CRC made right, so the reader gets past it), and random
-/// text of GPX's own marks; each read into a course, which is then followed from random places (near it and
-/// anywhere on the globe), asked for its profile, climbs and ascent, and drawn on a map.
+/// and GPX, the zigzag as a FIT course with course points and as GPX, with bytes changed (the FIT ones with their
+/// CRC made right, so the reader gets past it), and random text of GPX's own marks, cue elements and turn words
+/// among them; each read into a course (its cues placed, or its turns found), which is then followed from random
+/// places (near it and anywhere on the globe) and along its own points (so cues are said), asked for its profile,
+/// climbs, ascent and next cue, and drawn on a map. The fuzz reaches the cues: course points and GPX cues read,
+/// cues kept, cues said (counted over the seeds).
 #[test]
 fn course_files() {
-    use crate::course::{Course, Tracker};
+    use crate::course::{Course, Event, Item, Tracker, Turn};
     use crate::fitread::{Msg, Reader};
     use crate::storage::course::Gpx;
     let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
-    let files = ["PlanTrip/Hill.fit", "Courses/Hill_Garmin.fit", "Courses/Hill.gpx"]
-        .map(|p| crate::fat::tests::read_all(&mut fat, &mut d, p).unwrap());
+    let paths =
+        ["PlanTrip/Hill.fit", "Courses/Hill_Garmin.fit", "Courses/Hill.gpx", "Courses/Turns.fit", "Courses/Zigzag.gpx"];
+    let files = paths.map(|p| crate::fat::tests::read_all(&mut fat, &mut d, p).unwrap());
     let mut c = std::boxed::Box::new(Course::new());
-    let read = |f: &[u8], gpx: bool, c: &mut Course| {
+    // what was reached: cues read from files, cues kept, cues said
+    let (read_cues, mut kept, mut said) = (core::cell::Cell::new(0u32), 0u32, 0u32);
+    // the file's points as read (degrees x 1e-7), to ride along
+    let mut way: Vec<(i32, i32)> = Vec::new();
+    let mut read = |f: &[u8], gpx: bool, c: &mut Course, way: &mut Vec<(i32, i32)>| {
         c.clear();
+        way.clear();
+        let mut take = |it: Item| {
+            match it {
+                Item::Point(p) => way.push((p.lat, p.lon)),
+                Item::Cue(..) => read_cues.set(read_cues.get() + 1),
+            }
+            c.take(it);
+        };
         if gpx {
-            Gpx::new().push_slice(f, &mut |p| c.add(p));
+            Gpx::new().push_slice(f, &mut take);
         } else {
-            Reader::with_position().push_slice(f, |m| {
-                if let Msg::Record(r) = m
-                    && let Some((lat, lon)) = r.pos
-                {
-                    c.push(crate::history::degrees_e7(lat), crate::history::degrees_e7(lon), r.alt_dm);
+            Reader::with_position().push_slice(f, |m| match m {
+                Msg::Record(r) => {
+                    if let Some((lat, lon)) = r.pos {
+                        let (lat, lon) = (crate::history::degrees_e7(lat), crate::history::degrees_e7(lon));
+                        let dist_m = r.dist_cm.map(|cm| cm / 100);
+                        take(Item::Point(crate::course::Pt { lat, lon, alt_dm: r.alt_dm, split: false, dist_m }));
+                    }
                 }
+                Msg::CoursePoint { pos: Some((lat, lon)), kind: Some(k), dist_cm } => {
+                    let (lat, lon) = (crate::history::degrees_e7(lat), crate::history::degrees_e7(lon));
+                    take(Item::Cue(lat, lon, Turn::from_fit(k), dist_cm.map(|cm| cm / 100)));
+                }
+                _ => {}
             });
         }
         c.finish();
+        kept += c.cues().len() as u32;
+        assert!(c.cues().windows(2).all(|w| w[0].at_m <= w[1].at_m), "cues in order");
+        assert!(c.cues().iter().all(|q| q.at_m <= c.len_m()), "cues on the course");
     };
     let mut noise = bytes(21, 1 << 24);
     let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
-    let exercise = |c: &Course, next: &mut dyn FnMut() -> u32| {
+    let mut exercise = |c: &Course, next: &mut dyn FnMut() -> u32, way: &[(i32, i32)]| {
         let mut t = Tracker::new();
+        for &(lat, lon) in way.iter().step_by(2) {
+            if let Some(Event::Cue(..)) = c.follow(&mut t, lat, lon) {
+                said += 1;
+            }
+            let _ = c.next_cue(&t);
+        }
         for k in 0..40 {
             let (lat, lon) = if k % 4 == 3 {
                 (next() as i32, next() as i32) // anywhere, or off the globe
@@ -312,7 +344,7 @@ fn course_files() {
         crate::map::draw(&mut f, (0, 24, 240, 296), &track, view, None, route.as_ref(), false);
     };
     for (i, good) in files.iter().enumerate() {
-        let gpx = i == 2;
+        let gpx = paths[i].ends_with(".gpx");
         for _ in 0..200 {
             let mut bad = good.clone();
             for _ in 0..1 + next() % 8 {
@@ -324,23 +356,73 @@ fn course_files() {
                 let crc = crate::fit::crc(0, &bad[..n]);
                 bad[n..].copy_from_slice(&crc.to_le_bytes());
             }
-            read(&bad, gpx, &mut c);
-            exercise(&c, &mut next);
-            read(&bad[..bad.len() / 3], gpx, &mut c);
+            read(&bad, gpx, &mut c, &mut way);
+            exercise(&c, &mut next, &way);
+            read(&bad[..bad.len() / 3], gpx, &mut c, &mut way);
         }
     }
-    const MARKS: [&str; 19] = [
+    const MARKS: [&str; 33] = [
         "<trkpt", "<rtept", " lat=\"", " lon='", "\"", "'", ">", "/>", "</trkpt>", "<ele>", "</ele>", "-", ".", "1",
         "9", " ", "<!--", "=", "999999", // long digit runs (decimal's overflow)
+        "<wpt", "</wpt>", "<sym>", "</sym>", "<type>", "</type>", "<name>", "</name>", "Left", "TSHR", "u-turn",
+        "Slight", " right", "WATER",
     ];
+    // a whole point or waypoint now and then, often with a cue element, so cues have a course to go on
+    let pt = |next: &mut dyn FnMut() -> u32| {
+        let (lat, lon) = (next() % 20_000, next() % 20_000);
+        let tag = ["trkpt", "rtept", "wpt"][next() as usize % 3];
+        let el = ["sym", "type", "name"][next() as usize % 3];
+        let word = ["Left", "TSHR", "u-turn", "slight right", "Cafe", "WATER"][next() as usize % 6];
+        std::format!("<{tag} lat=\"0.{lat:07}\" lon=\"0.{lon:07}\"><{el}>{word}</{el}></{tag}>")
+    };
+    let from_files = read_cues.get();
     for _ in 0..8 {
         let mut text = Vec::new();
         while text.len() < 64 * 1024 {
+            if next() % 8 == 0 {
+                text.extend_from_slice(pt(&mut next).as_bytes());
+            }
             text.extend_from_slice(MARKS[next() as usize % MARKS.len()].as_bytes());
         }
-        read(&text, true, &mut c);
-        exercise(&c, &mut next);
+        read(&text, true, &mut c, &mut way);
+        exercise(&c, &mut next, &way);
     }
+    let gpx = read_cues.get() - from_files;
+    std::println!("course fuzz: {from_files} cues read from the files, {gpx} from GPX marks, {kept} kept, {said} said");
+    assert!(from_files > 1000 && gpx > 500 && kept > 1000 && said > 100, "{from_files}, {gpx}, {kept}, {said}");
+}
+
+/// Random shapes into the turn finder (course/cues.rs): random walks of random steps (1 to 300 m, and the same
+/// point again), random turns (a little, a lot, back), gaps between segments, long enough to be thinned; the
+/// turns found are in order and on the course, and some are found.
+#[test]
+fn turn_finder_shapes() {
+    use crate::course::{Course, Pt};
+    let mut noise = bytes(33, 1 << 22);
+    let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    let mut c = std::boxed::Box::new(Course::new());
+    let mut found = 0;
+    for _ in 0..60 {
+        c.clear();
+        let (mut x, mut y, mut heading) = (0.0f64, 0.0f64, 0.0f64);
+        for _ in 0..next() % 8000 {
+            heading += match next() % 4 {
+                0 => f64::from(next() % 360).to_radians(),
+                1 => core::f64::consts::PI,
+                _ => (f64::from(next() % 21) - 10.0).to_radians(),
+            };
+            let step = if next() % 50 == 0 { 0.0 } else { f64::from(1 + next() % 300) };
+            (x, y) = (x + step * heading.cos(), y + step * heading.sin());
+            let (lat, lon) = ((y / 0.011_132) as i32, (x / 0.011_132) as i32);
+            c.add(Pt { lat, lon, alt_dm: None, split: next() % 500 == 0, dist_m: None });
+        }
+        c.finish();
+        let cues = c.cues();
+        assert!(cues.len() <= crate::course::CUES && cues.windows(2).all(|w| w[0].at_m <= w[1].at_m));
+        assert!(cues.iter().all(|q| q.at_m <= c.len_m() && q.turn.is_turn()), "{cues:?}");
+        found += cues.len();
+    }
+    assert!(found > 1000, "turns found: {found}");
 }
 
 /// Stock's settings files: random text with the INI's own sections, keys and characters mixed in, through every

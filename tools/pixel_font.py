@@ -100,7 +100,20 @@ GLYPHS = {
     '|': '..#.. ..#.. ..#.. ..#.. ..#.. ..#.. ..#..',
     '}': '##... ..#.. ..#.. ...#. ..#.. ..#.. ##...',
     '~': '..... ..... .#... #.#.# ...#. ..... .....',
+    # the cue arrows (course/cues.rs `Turn::glyph`), on control codes 1 to 9: one byte each in a string, never in
+    # real text; drawn after the printable ones (text.rs `Font::glyph`)
+    '\x01': '..#.. .#... ##### .#..# ..#.# ....# ....#',  # left
+    '\x02': '..#.. ...#. ##### #..#. #.#.. #.... #....',  # right
+    '\x03': '###.. ##... #.#.. ...#. ....# ....# ....#',  # slight left
+    '\x04': '..### ...## ..#.# .#... #.... #.... #....',  # slight right
+    '\x05': '...## #.#.# ##..# ###.# ....# ....# ....#',  # sharp left
+    '\x06': '##... #.#.# #..## #.### #.... #.... #....',  # sharp right
+    '\x07': '..##. .#..# .#..# .#..# ###.# .#..# ....#',  # U-turn
+    '\x08': '..#.. .###. #.#.# ..#.. ..#.. ..#.. ..#..',  # straight on
+    '\x09': '.###. ##### ##### .###. ..#.. ..#.. .....',  # a point (summit, water...)
 }
+# the extra glyphs, after the printable ASCII
+EXTRA = [chr(c) for c in range(1, 10)]
 
 # Cell: 5 columns of ink and 1 of space; 7 rows above the baseline, 2 below, 1 of space between lines.
 ADVANCE, HEIGHT, BASELINE = 6, 10, 7

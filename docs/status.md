@@ -123,7 +123,11 @@ The dated findings are in [journal.md](journal.md).
   the host: every one decodes, lengths within 0.25 % of the files' own, climbs close to the ones Bryton's app marked),
   the time the lengths take to come (each file read whole, 96 KB a pass: about 550 KB for those 14, some 6
   passes), a course ridden (the window keeping up at speed, the off-course alert in a town's parallel streets, the
-  climb banners, a lap course rejoined after a detour).
+  climb banners, a lap course rejoined after a detour). Turn by turn: the cue banners and their beeps at speed
+  (200 m, or 20 s if farther, then 32 m or 4 s, on 1 s fixes), the turns found on a real route's shape (no cue on a
+  winding road, every junction where the road turns 45 degrees or more), a Garmin Connect, Komoot or
+  RideWithGPS course's cues, the arrows readable at 2x in the banner and 3x in the field, the time a course's cues
+  take at its read (host: under 1 ms for 4000 points and 256 cues).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

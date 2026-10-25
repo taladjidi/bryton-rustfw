@@ -1207,6 +1207,7 @@ mod tests {
         rd.push_slice(&v, |m| match m {
             Msg::Record(r) => times.push(r.time),
             Msg::Session(_) => session = true,
+            Msg::CoursePoint { .. } => {}
         });
         match rd.result() {
             Some(Ok(())) => Ok((times, session)),
