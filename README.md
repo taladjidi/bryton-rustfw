@@ -23,6 +23,8 @@ entirely. Not affiliated with Bryton.
 | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS: a menu per subject, any setting three levels down at most (sim) | The page editor: a box held, framed in orange, live values, the hint in the strip's place (sim) | Start in the editor: the box's actions, SPLIT across or down by their icons (sim) |
 | ![A page made in the editor](docs/img/page-made.png) | ![Eight fields](docs/img/page-eight.png) | ![End of a ride](docs/img/end-ride.png) | ![Discard asked](docs/img/end-ride-discard.png) |
 | A page made in the editor: a graph over four values (sim) | Eight fields, four rows of two (sim) | Start held while paused: RESUME, SAVE, DISCARD, big enough for gloves (sim) | DISCARD asks once more; the ride is moved to `\Rustfw\Discarded`, never erased (sim) |
+| ![Touch lock](docs/img/touch-lock.png) | ![Zone bar](docs/img/zone-bar.png) | ![No workout planned](docs/img/workouts-empty.png) | |
+| The touch lock: a padlock in the strip (sim) | A zone as a bar on the box's top edge (sim) | An empty list says so in a row (sim) | |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*

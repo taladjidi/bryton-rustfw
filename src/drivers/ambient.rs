@@ -108,8 +108,9 @@ pub fn baro_start(b: &mut impl Board) -> bool {
     b.i2c_write(BARO_ADDR, CTRL_REG2, &[0x11]) // IF_ADD_INC (its reset value), ONE_SHOT
 }
 
-/// The last conversion: (pressure in hPa x 10, temperature in C x 100); None if not ready or no answer.
-pub fn baro_read(b: &mut impl Board) -> Option<(u32, i16)> {
+/// The last conversion: (pressure in 1/4096 hPa, the chip's own unit; temperature in C x 100); None if not ready or
+/// no answer.
+pub fn baro_read_raw(b: &mut impl Board) -> Option<(u32, i16)> {
     if reg(b, BARO_ADDR, STATUS)? & 0x03 != 0x03 {
         return None; // T_DA and P_DA
     }
@@ -118,7 +119,12 @@ pub fn baro_read(b: &mut impl Board) -> Option<(u32, i16)> {
         return None;
     }
     let p = i32::from_le_bytes([0, d[0], d[1], d[2]]) >> 8; // 24-bit two's complement, 4096 per hPa
-    Some((((p.max(0) as u32) * 10 + 2048) / 4096, i16::from_le_bytes([d[3], d[4]])))
+    Some((p.max(0) as u32, i16::from_le_bytes([d[3], d[4]])))
+}
+
+/// The last conversion: (pressure in hPa x 10, temperature in C x 100); None if not ready or no answer.
+pub fn baro_read(b: &mut impl Board) -> Option<(u32, i16)> {
+    baro_read_raw(b).map(|(p, t)| ((p * 10 + 2048) / 4096, t))
 }
 
 /// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each:

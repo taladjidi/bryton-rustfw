@@ -9,7 +9,11 @@
   in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
   only the rides new or changed since are read), and the latest notices (a GPS fix, a
-  sensor paired, the battery low), or Ferris the Rust crab when there are none.
+  sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT).
+- **Readings at 1 Hz:** the power, speed, cadence and heart rate values on the pages are the readings of the second's
+  tick, not of each 4 Hz broadcast (the digits were unreadable and each change a redraw: 8,301 px/s against 11,339 on
+  six values with a power meter and a strap, windows 10 a second against 20); the recorder and the averages still take
+  each second's reading.
 - **Ride pages:** one to six, each made of rows (up to five, each a share of the height, one or two boxes side by
   side, eight fields at most), made on the page itself in the page editor (below) or from a layout of the menu (one
   to eight fields: even grids, and uneven ones such as a big box over two or over a 2 x 2 grid, two over a big one,
@@ -26,7 +30,9 @@
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
-  value ("200-220", "1.6K 6%") takes the largest smaller scale it fits. Times: "MM:SS" under an hour (the step left
+  value takes the largest smaller scale it fits. A range and a climb keep the box's scale: the target is its middle
+  big and its half-width small after it ("210" and "+-10" for 200-220), the climb its length big and its grade small
+  ("1.6K" and "6%"). Times: "MM:SS" under an hour (the step left
   "M:SS"), then "H:MM" at the box's size with the seconds small and grey after it ("1:23 45"); the seconds go first
   when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
   across the screen at least 120 px tall (a smaller graph shows its title and bars), and the workout gauge's target
@@ -43,7 +49,7 @@
     area.
   The map is read and drawn once per view change (at most 6 IGN tiles, about 150 KB read); the arrow and the track
   restore it from SDRAM.
-  - **Zoom:** on a full-page map, "+" and "-" top right (40 x 40 pixels, for a gloved finger). Each tap is one
+  - **Zoom:** on a full-page map, "+" and "-" top right (48 x 48 pixels, 8 apart, for a gloved finger). Each tap is one
     level (steps of about 1.4) from the one shown, finer or coarser than the fit alike (indoors the fit is already
     at 2 m a pixel: "-" zooms out by hand), from 1.5 m a pixel (IGN's zoom 16 about 1:1 in France) out. At a
     level set by hand the map follows the rider: centred a little ahead of them, and centred again only when the
@@ -61,7 +67,7 @@
 
 - **End of a ride:** Start held while paused (or END RIDE in the ride menu) opens the end-ride screen, which is the
   confirmation: the ride's time and distance, and three large buttons (64 px, gloves): RESUME (selected), SAVE,
-  DISCARD. Page and Lap move, Start acts, a tap acts at once, Back is RESUME. RESUME goes back to the page, the ride
+  DISCARD. Page and Lap move, Start acts, a tap acts at once, Back is RESUME (with a banner up, it clears it first). RESUME goes back to the page, the ride
   still paused as it was; SAVE ends and saves it (below) and shows its card. DISCARD asks once more ("DISCARD
   RIDE?", KEEP selected, the two buttons apart so a second tap cannot hit DISCARD again; Back keeps), then ends the
   ride and moves both copies to `\Rustfw\Discarded` (the full one to `\Rustfw\Discarded\Full`): never erased, a
@@ -69,8 +75,8 @@
   the ride is paused and recorded as ever: a reset brings it back paused.
 - **Ride card:** after SAVE, its card: the date and start time, the map of the track (over the basemap, as the
   history's cards), the elevation profile, time, distance, average speed, ascent, NP, average power, average and max
-  heart rate, TSS, kJ. It stays until Back or Start (then the overview). Each past ride has the same card (HISTORY,
-  below).
+  heart rate, TSS, kJ. It stays until Back or Start (no other key, swipe or tap dismisses it), then the overview.
+  Each past ride has the same card (HISTORY, below).
 
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
@@ -92,12 +98,13 @@
 |---|---|---|
 | Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down (stops at the last row) |
 | hold Page | the menu; during a ride (recording or paused), the ride menu | |
-| Lap | a lap (while riding) | up (stops at the first row) |
+| Lap | a lap (while riding), on the overview too | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | a paused ride: the end-ride screen (RESUME, SAVE, DISCARD; or END RIDE in the ride menu) | |
-| Back | on a ride page, the overview; on the overview, backlight on / off | back |
+| Back | on a ride page, the overview; on the overview, nothing; with a banner up, it only clears the banner | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 | hold Lap | the phone's music: play / pause (PHONE below) | |
+| hold Back and Lap together 1 s | the touch lock on or off, on every screen: all touch is ignored and a padlock shows in the strip (until unlocked or switched off); neither key acts on its own | the same |
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
@@ -156,21 +163,25 @@ A swipe is a drag of at least 37 px across or 48 px up or down, given at the rel
 Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
 records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
 glove, rain); swipes still turn pages and the keys do everything. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
-altogether, for rain: the keys only, the call's buttons included.
+altogether, for rain: the keys only, the call's buttons included; the touch lock (Back and Lap held together 1 s) is the
+quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent one.
 
 ## Ride
 
-- Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from GPS altitude.
-- Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette. The plain power fields
-  (POWER, 3S, 10S, 30S W) and HR fill their box with their zone's colour, the number in black or white over it, so
-  the zone shows at a glance (POWER's box takes its 3 s average's zone, its number stays live); NP, max and the other
-  derived values keep a coloured number on black. The graph shows the last
+- Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from the barometric altitude (2 m hysteresis, a reading a
+  second while riding), else from GPS altitude (5 m).
+- Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette for grey, blue and green,
+  then lemon yellow, magenta, violet and cyan: never the menu's orange (selection, info banners) or the alarms' red.
+  The plain power fields (POWER, 3S, 10S, 30S W) and HR show their zone as a 4 px bar along the top of the box,
+  the number white (POWER's bar takes its 3 s average's zone); the zone changes after three seconds in the new
+  one, so a value on an edge does not flip it, and the bar is all that is redrawn. NP, max and the other derived
+  values keep a coloured number. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
 - Power (src/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
-  recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (GPS altitude).
+  recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (barometric altitude, else GPS).
 - **Saved as a FIT file** (`src/storage/recorder.rs`; simulator only so far, docs/status.md): the ride goes to
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
   rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
@@ -218,7 +229,8 @@ MENU
   SECURE; ERR and a command's code if the radio refused the set-up), PAIR, REMOTE (the media remote), NOTIFY on /
   off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the
-  banner; a second Start (or a tap on the row) does it, any other key or touch drops it.
+  banner ("START: YES BACK: NO"); a second Start (or a tap on the row) does it, Back says no (it only cancels, the
+  menu stays), any other key or touch drops it.
 - **PAGES:** the overview's four fields; the ride pages, each with EDIT ON PAGE (the page editor), LAYOUT (the next
   layout its fields fit) and its fields; ADD PAGE (up to six: a 2 x 2 page, the editor open on it). A field row
   opens the field groups
@@ -264,7 +276,7 @@ ascent, NP (from the ride's records), average power, average and max heart rate,
 The ride's file is read once to draw it, 96 KB a main loop pass ("READING RIDE", about 0.1 s for a 300 KB ride;
 a long ride takes a few passes, the loop never stalls); the card opens when it is read. Back returns to the list.
 
-**Delete** (storage/trash.rs): on a ride's card, Start asks "DELETE RIDE? START AGAIN: YES" (any other key drops
+**Delete** (storage/trash.rs): on a ride's card, Start asks "DELETE RIDE? START: YES BACK: NO" (any other key drops
 it), Start again moves the ride out of sight, never erases it: `\Activities\<name>.fit` into `\Rustfw\Deleted\`,
 and this firmware's full copy of the same ride (`\Rustfw\Activities\<name>.fit`), if any, into
 `\Rustfw\Deleted\Full\`, under the same name (a name already there gets `-1`, `-2`...). A computer sees them
@@ -288,7 +300,7 @@ TrainingPeaks), read only:
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
-- **Fields** to place on a page: TARGET (the step's range: green in it, orange under, red over, from the 3 s power,
+- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: green in it, orange under, red over, from the 3 s power,
   the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
@@ -395,6 +407,12 @@ STOCK):
   for a faster fix.
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
+- **Barometric altitude** (`src/altitude.rs`, `src/app/barometer.rs`): the international barometric formula on the
+  LPS22HH's pressure, smoothed, calibrated by SETTINGS > SYSTEM > BUILT IN > ALTITUDE (type the altitude, 5 m steps),
+  FROM GPS (30 s of 3D fix, six satellites), or by itself at a ride's start when the last calibration is over 3 hours
+  old; kept in `\Rustfw\altcal.bin` between rides; stock's `Alt_P0` imported (not trusted). The ride, its graphs and the
+  FIT records take the barometer's altitude when it reads, the receiver's otherwise. No drift correction in a ride
+  (module doc: why).
 - **Built in:** ambient light (automatic backlight, opt-in), barometer (temperature, pressure), battery.
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.

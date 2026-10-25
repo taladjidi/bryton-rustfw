@@ -434,7 +434,7 @@ fn end_ride_screen_by_touch() {
     assert_eq!(app.screen(), Screen::Summary, "SAVE");
     run(&mut sim, &mut app, 2000);
     assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]]);
-    app.press(&mut sim, Press::Short(Key::Back));
+    super::tests::back(&mut sim, &mut app);
     // a second ride, discarded by two taps
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 5000);

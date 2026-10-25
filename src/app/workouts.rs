@@ -140,6 +140,21 @@ impl App {
         }
     }
 
+    /// A target as a field shows it: the middle big and the half-width as a small tail ("210|+-10" for 200-220), so the
+    /// value keeps the box's scale (a "200-220" dropped to 2x, the smallest text on the page); one number alone ("150"),
+    /// or OPEN, as [`App::push_target`].
+    fn push_target_field(&self, l: &mut Line<8>, s: &storage::workout::Step) {
+        match s.target.range(self.settings.ftp, self.settings.max_hr) {
+            Some((lo, hi)) if hi > lo => {
+                let (lo, hi) = (u32::from(lo), u32::from(hi));
+                l.push_u32((lo + hi) / 2);
+                l.push_str("|+-");
+                l.push_u32((hi - lo).div_ceil(2));
+            }
+            _ => self.push_target(l, s, false),
+        }
+    }
+
     /// A step's menu row: what ends it as the label ("10:00", "2.50 KM", "LAP"), its target as the value, in the
     /// zone colour of the target's middle; the colour.
     pub(crate) fn step_row(&self, s: &storage::workout::Step, label: &mut Line<16>, value: &mut Line<12>) -> u16 {
@@ -174,9 +189,9 @@ impl App {
                 Some(p) => push_hm(&mut l, p.total_s),
                 None => l.push_str("--"),
             },
-            (Field::StepTarget, Some((_, i))) => self.push_target(&mut l, steps.get(i).unwrap_or(&OPEN), false),
+            (Field::StepTarget, Some((_, i))) => self.push_target_field(&mut l, steps.get(i).unwrap_or(&OPEN)),
             (Field::NextStep, Some((_, i))) => match steps.get(i + 1) {
-                Some(s) => self.push_target(&mut l, s, false),
+                Some(s) => self.push_target_field(&mut l, s),
                 None => l.push_str("END"),
             },
             (Field::StepTime, Some((p, _))) => match p.left(steps, self.ride.dist_m()) {

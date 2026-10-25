@@ -27,6 +27,7 @@ impl App {
             self.track = track;
             (self.map_zoom, self.map_centre) = (None, None); // a new map: fitted until "+" (review)
             self.new_ride = true;
+            self.alt.ride_start(); // a calibration older than three hours is made again from the receiver
         }
         self.say(match ev {
             ride::Event::Start => "RIDE STARTED",
@@ -227,7 +228,7 @@ impl App {
         fit::Sample {
             time,
             pos: fix.map(|p| (p.lat, p.lon)),
-            alt_mm: fix.map(|p| p.alt_mm),
+            alt_mm: self.alt_now().0,
             speed_mm_s: self.live.get(Metric::Speed).map(|v| u32::from(v) * 1000 / 36), // km/h x 10 to mm/s
             hr: byte(Metric::Hr),
             cadence: byte(Metric::Cadence),
@@ -271,6 +272,7 @@ impl App {
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
                 self.power.new_ride();
+                self.alt.ride_start();
                 self.notice("RIDE RESUMED");
             }
             recorder::Outcome::Saved(_) => {
@@ -327,12 +329,16 @@ impl App {
 
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
+        self.alt_second();
+        let alt = self.alt_now();
+        self.live.snapshot(); // the pages show this second's readings, not each broadcast's
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),
             hr: self.live.get(Metric::Hr),
             cadence: self.live.get(Metric::Cadence),
             power: self.live.get(Metric::Power),
-            alt_mm: self.pvt.filter(|p| p.good()).map(|p| p.alt_mm),
+            alt_mm: alt.0,
+            alt_ref: alt.1,
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
@@ -349,6 +355,12 @@ impl App {
             self.workout_event(e);
         }
         self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let (p, hr) = (&self.power, self.live.shown(Metric::Hr));
+        let zones = [p.rolling(0), p.rolling(1), p.rolling(2)].map(|w| w.map(|w| ride::power_zone(w, ftp)));
+        for (hold, z) in self.zones.iter_mut().zip(zones.into_iter().chain([hr.map(|v| ride::hr_zone(v, max_hr))])) {
+            hold.second(z);
+        }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
         let alt = input.alt_mm.map(|mm| (mm / 1000 + ride::ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);

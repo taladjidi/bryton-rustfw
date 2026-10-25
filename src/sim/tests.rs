@@ -41,6 +41,14 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
     }
 }
 
+/// Back, after the banner up (if one is) is cleared: a Back with a banner up only clears it.
+pub(super) fn back(sim: &mut Sim, app: &mut App) {
+    if app.banner_ms.is_some() {
+        app.press(sim, Press::Short(Key::Back));
+    }
+    app.press(sim, Press::Short(Key::Back));
+}
+
 /// The screen drawn step by step on the panel equals the screen drawn at once from the state (the screenshot).
 pub(super) fn assert_consistent(sim: &Sim, app: &App) {
     for y in 0..H {
@@ -66,28 +74,26 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
             battery: Some(63),
             charging: false,
             rec: app.strip.rec,
+            locked: app.strip.locked,
         },
     );
     let page = app.pages()[n];
     for (i, v) in values.iter().enumerate() {
         let bx = page.cell_box(i).unwrap();
-        // heart rate and power fill their box with their zone's colour (steady test sensors: the 3 s average the
-        // power's box takes equals the live value)
-        let zone = zone_fg(page.fields[i], v);
-        let (fg, bg) =
-            if zone == crate::ui::WHITE { (zone, crate::ui::BLACK) } else { (crate::ui::ink_on(zone), zone) };
-        crate::ui::draw_field_frame_on(&mut f, bx, page.fields[i], bg);
-        crate::ui::draw_field_value_on(&mut f, bx, v, fg, bg);
+        // heart rate and power show their zone as a bar along the box's top, the number white (steady test
+        // sensors: the 3 s average the power's box takes equals the live value)
+        crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v));
+        crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     f.px
 }
 
-/// Heart rate and power in their zone's colour (default max HR and FTP), the rest white.
-fn zone_fg(f: Field, v: &str) -> u16 {
+/// The zone bar of heart rate and power (default max HR and FTP), none (black) for the rest.
+fn zone_bar(f: Field, v: &str) -> u16 {
     match (f, v.parse::<u16>()) {
         (Field::Hr, Ok(v)) => crate::ride::hr_color(crate::ride::hr_zone(v, crate::ride::MAX_HR)),
         (Field::Power, Ok(v)) => crate::ride::power_color(crate::ride::power_zone(v, crate::ride::FTP)),
-        _ => crate::ui::WHITE,
+        _ => crate::ui::BLACK,
     }
 }
 
@@ -111,22 +117,24 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
             battery: Some(63),
             charging: false,
             rec: app.strip.rec,
+            locked: app.strip.locked,
         },
     );
     let _ = s;
     crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10]);
     crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
-    let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, "--")];
+    // the barometer is read a second after the start: the temperature is there by the time the tests look
+    let temp = app.field_text(Field::Temp);
+    let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, temp.as_str())];
     for (i, (field, v)) in values.into_iter().enumerate() {
         let bx = crate::ui::overview_box(i).unwrap();
         crate::ui::draw_field_frame(&mut f, bx, field);
         crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
-    crate::ui::draw_ferris(&mut f);
     f.px
 }
 
-/// The main screen, the overview: the strip, the time, the date, four fields, Ferris (no notices yet).
+/// The main screen, the overview: the strip, the time, the date, four fields (no notices yet, so nothing under them).
 #[test]
 fn boots_into_the_main_screen() {
     let mut sim = Sim::new(12, 34, 56);
@@ -138,6 +146,9 @@ fn boots_into_the_main_screen() {
     assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
     assert!(main_screen(&mut sim, &app, UsbDot::Ready) == sim.screen);
     assert_consistent(&sim, &app);
+    // no notices: nothing under the fields, Ferris is not on the overview
+    let (top, bottom) = (ui::NOTICES_Y as usize * W as usize, H as usize * W as usize);
+    assert!(sim.screen[top..bottom].iter().all(|&p| p == ui::BLACK), "no Ferris on the overview");
     sim.save("preview");
 }
 
@@ -632,7 +643,7 @@ fn ride_history() {
     assert_consistent(&sim, &app);
     sim.save("history_card");
 
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "back to the list, on that ride");
     // the ride without a track: its card all the same, "NO FIX" on the map
     app.press(&mut sim, Press::Short(Key::Lap));
@@ -698,7 +709,7 @@ fn delete_rides() {
     // the 20 Oct ride (row 2): asked, dropped by another key, asked again, deleted
     open_card(&mut sim, &mut app, 2);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART AGAIN: YES");
+    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
     assert_eq!(app.confirm, Some(PAST_DELETE));
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -831,7 +842,7 @@ fn workout_from_the_calendar() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running));
     let fields = |app: &App| [StepTarget, StepTime, NextStep, Workout].map(|f| text(app, f));
-    assert_eq!(fields(&app), ["100-120", "0:20", "200-220", "1/6"]);
+    assert_eq!(fields(&app), ["110|+-10", "0:20", "210|+-10", "1/6"]);
     run(&mut sim, &mut app, 5000);
     assert_eq!(app.field_color(StepTarget), ui::RED, "210 W over 100-120");
     let (mut ms, start) = (0, sim.ms);
@@ -844,7 +855,7 @@ fn workout_from_the_calendar() {
     assert_eq!(sim.tones[tones..], [2500, 0, 2000, 0, 2000, 0, 2500], "start, beep at 2 and 1 s left, the next step");
     assert_eq!(app.banner.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
-    assert_eq!(fields(&app), ["200-220", "0:25", "150", "2/6"]);
+    assert_eq!(fields(&app), ["210|+-10", "0:25", "150", "2/6"]);
     assert_eq!(app.field_color(StepTarget), ui::GREEN, "210 W in 200-220");
     assert_consistent(&sim, &app);
     sim.save("workout_ride");
@@ -1097,7 +1108,7 @@ fn back_returns_where_it_came_from() {
     delete_page_by_keys(&mut sim, &mut app);
     assert_eq!(app.page_count(), 1);
     for _ in 0..3 {
-        app.press(&mut sim, Press::Short(Key::Back)); // PAGES, the menu, out
+        back(&mut sim, &mut app); // PAGES, the menu, out
     }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -1159,8 +1170,8 @@ fn pairs_sensors_from_the_menu() {
     assert_eq!(sim.backup[Kind::SpeedCadence.backup()], SensorId { device: 555, trans: 0xf1 }.to_word());
     assert_consistent(&sim, &app);
     sim.save("sensors");
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
+    back(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 200);
     assert!(ride(&mut sim, &app, 0, &["22.7", "72", "60"], true) == sim.screen, "22.7 km/h, HR 72, 60 rpm");
@@ -1191,7 +1202,7 @@ fn keeps_the_paired_sensor_until_forgotten() {
     let closes = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count();
     assert_eq!(closes(&sim), 1, "closed and opened for it again");
     assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "still paired");
-    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART AGAIN: FORGET");
+    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART: FORGET");
     assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "SURE?");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
@@ -1356,7 +1367,7 @@ fn start_from_the_overview() {
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Main, "Back: the overview");
 }
 
@@ -1528,6 +1539,7 @@ fn gps_fix_and_speed() {
         battery: Some(63),
         charging: false,
         rec: Rec::Idle,
+        locked: false,
     };
     crate::ui::draw_strip(&mut want, &strip);
     assert!(want.px == sim.screen, "GPS speed, green GPS");
@@ -1600,9 +1612,9 @@ fn backlight_level_and_timeout() {
     app.press(&mut sim, Press::Short(Key::Back)); // a ride page's Back: the overview
     run(&mut sim, &mut app, 11_000);
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(sim.light_level, 60, "Back after the time-out: on, not toggled off");
+    assert_eq!(sim.light_level, 60, "Back after the time-out: on");
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(sim.light_level, 0, "then Back on the overview toggles");
+    assert_eq!((sim.light_level, app.screen()), (60, Screen::Main), "then Back on the overview: nothing");
     let _again = App::start(&mut sim, None);
     assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
 }
@@ -1935,7 +1947,7 @@ fn ride_menu() {
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
-    back(&mut sim, &mut app, 1);
+    back(&mut sim, &mut app, 2); // the banner, then the card
     assert_eq!(app.screen(), Screen::Main, "the card, then the overview");
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no ride: the full menu again");
@@ -2010,7 +2022,8 @@ fn auto_backlight_follows_the_ambient_light() {
     let reads = sim.bus.light_reads - reads0;
     assert!((230..=245).contains(&reads), "{reads} readings in 60 s");
 
-    app.press(&mut sim, Press::Short(Key::Back)); // backlight off: no readings
+    app.settings.light_timeout = 1; // 10 s: the light is off, so no readings
+    run(&mut sim, &mut app, 12_000);
     let reads = sim.bus.light_reads;
     run(&mut sim, &mut app, 30_000);
     assert_eq!(sim.bus.light_reads, reads);
@@ -2045,8 +2058,9 @@ fn barometer_one_shot() {
     assert_eq!(built_in_row(&app, 2), "HPA 950");
 }
 
+/// Back on the overview does nothing (it used to switch the light off, a black screen that looked like a crash).
 #[test]
-fn back_short_press_toggles_the_backlight() {
+fn back_on_the_overview_does_nothing() {
     // Presses after the start (which takes about 1 s with the Nordic chip): at 3 s and at 4 s.
     let back = |ms| (3000..3200).contains(&ms) || (4000..4100).contains(&ms);
     let mut sim = Sim::new(8, 0, 0).keys(move |ms| if back(ms) { Key::Back as u8 } else { 0 });
@@ -2054,9 +2068,10 @@ fn back_short_press_toggles_the_backlight() {
     let t0 = sim.ms;
     assert!(t0 < 3000);
     run(&mut sim, &mut app, 3500 - t0);
-    assert!(!sim.backlight);
+    assert!(sim.backlight && app.screen() == Screen::Main);
     run(&mut sim, &mut app, 1000);
-    assert!(sim.backlight);
+    assert!(sim.backlight && app.screen() == Screen::Main);
+    assert_consistent(&sim, &app);
 }
 
 #[test]
@@ -2072,6 +2087,303 @@ fn back_held_3s_powers_off_after_release() {
     assert!(sim.touch.run_since.is_none(), "the touch chip in reset: no INT to keep the core out of standby");
     assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
+}
+
+/// No zone colour is near the menu's orange (`ui::ACCENT`: selection, info banners) or the alarm red (`ui::RED`):
+/// a zone must never look like a banner (UI review 2, P3).
+#[test]
+fn zone_colours_are_not_accent_or_alarm() {
+    let rgb = |c: u16| [(c >> 11) as i32 * 255 / 31, (c >> 5 & 63) as i32 * 255 / 63, (c & 31) as i32 * 255 / 31];
+    for (i, z) in crate::ride::ZONE_COLORS.iter().enumerate() {
+        for (name, other) in [("ACCENT", ui::ACCENT), ("RED", ui::RED), ("the banner red", 0xf985)] {
+            let d: i32 = rgb(*z).iter().zip(rgb(other)).map(|(a, b)| (a - b).abs()).sum();
+            assert!(*z != other && d > 80, "zone {} is {z:04x}, near {name}: distance {d}", i + 1);
+        }
+    }
+    let mut all = crate::ride::ZONE_COLORS.to_vec();
+    all.dedup();
+    assert_eq!(all.len(), 7, "seven distinct colours");
+}
+
+/// Heart rate steps over a zone's edge: 125 bpm (zone 2 of 190), 135 (zone 3) for 2 s only, 125 again, then 135 for
+/// good from 20 s.
+fn hr_edge(ms: u64) -> [u8; 8] {
+    let s = ms / 1000;
+    let bpm = if (14..16).contains(&s) || s >= 24 { 135 } else { 125 };
+    [4, 0, 0, 0, 0, 0, 0, bpm]
+}
+
+/// The heart rate's zone bar changes only after three seconds in the new zone (a value on an edge does not flip it
+/// every second), and the bar is all that is redrawn when it does: the number, white, has not changed.
+#[test]
+fn the_zone_bar_holds_three_seconds_and_is_all_that_is_redrawn() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_edge, network: 0, ack: &[] });
+    sim.gnss.fix = Some(8000); // a fix: the strip's "GPS" does not blink (720 px a second) under the count
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.pages[0] = crate::page::Page::preset(
+        1,
+        [Field::Hr, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time],
+    )
+    .unwrap();
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0));
+    let bx = app.pages()[0].cell_box(0).unwrap();
+    let bar_at = |sim: &Sim| sim.screen[((bx.1 + 1) * W + bx.0 + 10) as usize];
+    let (z2, z3) = (crate::ride::hr_color(2), crate::ride::hr_color(3));
+    run(&mut sim, &mut app, 6000);
+    let mut flips = std::vec::Vec::new();
+    let mut last = bar_at(&sim);
+    assert_eq!(last, z2);
+    let t0 = sim.ms;
+    for _ in 0..(30_000 / 250) {
+        let px = sim.pixels;
+        run(&mut sim, &mut app, 250);
+        let now = bar_at(&sim);
+        if now != last {
+            flips.push((sim.ms - t0, now, sim.pixels - px));
+            last = now;
+        }
+        assert_consistent(&sim, &app);
+    }
+    assert_eq!(flips.len(), 1, "one change, the 2 s of 135 bpm did not flip it: {flips:?}");
+    let (at, colour, px) = flips[0];
+    assert_eq!(colour, z3);
+    // 135 bpm from 24 s on the sensor's clock, the run began about 6 s in: shown 3 s later
+    assert!((18_000..22_000).contains(&at), "{at} ms");
+    assert_eq!(px, u64::from(bx.2) * u64::from(ui::ZONE_BAR_H), "only the bar: {px} px");
+    sim.save("zone_bar");
+}
+
+/// The live readings on the pages (power, speed, cadence, heart rate) change once a second, in the second's tick,
+/// though the sensors broadcast at 4 Hz and the value in hand changes at each broadcast (UI review 2).
+#[test]
+fn live_readings_show_at_one_hertz() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fast, network: 0, ack: &[] });
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fast, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    let (mut changes, mut raw, mut seconds) = (0, 0, 0);
+    let text = |app: &App| [Field::Power, Field::Hr].map(|f| std::string::String::from(app.field_text(f).as_str()));
+    let (mut last, mut last_raw, mut last_sec) = (text(&app), app.live.get(Metric::Power), app.seconds);
+    for _ in 0..80 {
+        run(&mut sim, &mut app, 250);
+        let (now, now_raw) = (text(&app), app.live.get(Metric::Power));
+        raw += u32::from(now_raw != last_raw);
+        if now != last {
+            changes += 1;
+            assert_ne!(app.seconds, last_sec, "a reading changed between two seconds: {last:?} to {now:?}");
+        }
+        seconds += u32::from(app.seconds != last_sec);
+        (last, last_raw, last_sec) = (now, now_raw, app.seconds);
+    }
+    std::println!("20 s: {changes} changes shown, {raw} in the live value, {seconds} seconds");
+    assert!(changes >= 10 && changes <= seconds, "shown: {changes} of {seconds} seconds");
+    assert!(raw > changes + 15, "the sensors really change at each broadcast: {raw}");
+    assert!(sim.nordic.sensors.len() == 2);
+}
+
+/// An empty list says so in a row, not in a banner that goes after 4 s: WORKOUTS with nothing planned.
+#[test]
+fn empty_workouts_say_so_in_a_row() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
+    assert_eq!(app.rows(Menu::Workouts), 1);
+    let (label, _, color) = app.menu_row(Menu::Workouts, 0).unwrap();
+    assert_eq!((label.as_str(), color), ("NONE PLANNED", ui::GREY));
+    run(&mut sim, &mut app, 6000);
+    assert!(app.banner_ms.is_none(), "no banner");
+    assert_consistent(&sim, &app);
+    sim.save("menu_workouts_empty");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0), "the row does nothing");
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
+}
+
+/// The ride's card stays until Back or Start: another key, a swipe, a tap or a hold does not dismiss it (2026-10-25
+/// review 2, P4: a raindrop threw the summary away).
+#[test]
+fn the_ride_card_stays_until_back_or_start() {
+    use crate::touch::Dir;
+    let ended = |sim: &mut Sim| {
+        let mut app = App::start(sim, None);
+        sim.emmc.image = crate::fat::tests::image();
+        app.press(sim, Press::Short(Key::Start));
+        run(sim, &mut app, 5000);
+        app.press(sim, Press::Short(Key::Start));
+        save_ride(sim, &mut app);
+        run(sim, &mut app, 5000); // the banners go
+        assert_eq!(app.screen(), Screen::Summary);
+        app
+    };
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = ended(&mut sim);
+    for i in [
+        Input::Next,
+        Input::Prev,
+        Input::Menu,
+        Input::Media,
+        Input::Touch(Gesture::Swipe(Dir::Left)),
+        Input::Touch(Gesture::Swipe(Dir::Right)),
+        Input::Touch(Gesture::Tap(120, 160)),
+        Input::Touch(Gesture::Hold(120, 160)),
+    ] {
+        app.input(&mut sim, i);
+        assert_eq!(app.screen(), Screen::Summary, "{i:?}");
+    }
+    assert_consistent(&sim, &app);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main, "Back");
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = ended(&mut sim);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Idle), "Start: no new ride");
+}
+
+/// Back answers a confirmation "no": the asking row goes back to its label, nothing is done, and the menu stays
+/// (the Back only cancels).
+#[test]
+fn back_says_no_to_a_confirmation() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    let import = menu::SYSTEM.iter().position(|&r| r == menu::Row::Stock(menu::StockRow::Import)).unwrap();
+    app.open(Screen::Menu(Menu::System, import));
+    app.show(&mut sim);
+    app.settings.ftp = 55;
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.menu_row(Menu::System, import).unwrap().1.as_str(), "SURE?");
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, import), "the menu stays");
+    assert_eq!(app.menu_row(Menu::System, import).unwrap().1.as_str(), "FROM STOCK");
+    run(&mut sim, &mut app, 200);
+    assert!(app.banner_ms.is_none());
+    assert_consistent(&sim, &app);
+    app.input(&mut sim, Input::Select);
+    app.input(&mut sim, Input::Back);
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.settings.ftp, 55, "Start, Back, Start: asked again, not done");
+    app.input(&mut sim, Input::Back);
+    assert!(matches!(app.screen(), Screen::Menu(Menu::System, _)), "Back cancelled the second asking too");
+}
+
+/// Lap on the overview during a ride marks a lap, as on a ride page (and as a shifter's lap does); off a ride it does
+/// nothing.
+#[test]
+fn lap_on_the_overview_marks_a_lap() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    run(&mut sim, &mut app, 200);
+    assert_ne!(app.banner.as_str(), "LAP", "no ride: no lap");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 5000);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.banner.as_str(), "LAP");
+    run(&mut sim, &mut app, 200);
+    assert_eq!(app.screen(), Screen::Main);
+    assert_consistent(&sim, &app);
+}
+
+/// Back pressed with a banner up only clears it (it used to leave the page as well); Page, Lap and Start still act at
+/// once, and a ringing call's Back still declines.
+#[test]
+fn back_clearing_a_banner_only_clears_it() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0));
+    app.say("EAT REMINDER");
+    run(&mut sim, &mut app, 300);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Ride(0), "the banner cleared, the page kept");
+    run(&mut sim, &mut app, 300);
+    assert!(app.banner_ms.is_none());
+    assert_consistent(&sim, &app);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main, "no banner: Back goes back");
+    app.say("EAT REMINDER");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0), "Page acts at once");
+}
+
+/// Back and Lap held together for 1 s lock the touch: a padlock in the strip, every tap and swipe ignored, the keys
+/// still work; the same hold again unlocks. Neither key acts on its own while they are down together.
+#[test]
+fn back_and_lap_together_lock_the_touch() {
+    let both = |ms: u64| (5000..6300).contains(&ms) || (14_000..15_300).contains(&ms);
+    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    let tap = move |t0: u64| move |ms: u64| (t0..t0 + 80).contains(&ms).then_some((gx, gy));
+    let (a, b) = (tap(8000), tap(17_000));
+    let mut sim = Sim::new(9, 0, 0)
+        .keys(move |ms| if both(ms) { Key::Back as u8 | Key::Lap as u8 } else { 0 })
+        .finger(move |ms| a(ms).or(b(ms)));
+    let mut app = App::start(&mut sim, None);
+    let left = 5500 - sim.ms;
+    run(&mut sim, &mut app, left);
+    assert!(!app.strip.locked, "not yet: held 0.5 s");
+    run(&mut sim, &mut app, 1000);
+    assert!(app.strip.locked && app.banner.as_str() == "TOUCH LOCKED");
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.screen(), Screen::Main, "neither key acted at its release");
+    assert!(sim.backlight, "Back did not toggle the light");
+    // the padlock is in the strip, and the screen equals the panel
+    let lit = |sim: &Sim| (81..88).any(|x| sim.screen[(12 * W + x) as usize] == ui::WHITE);
+    run(&mut sim, &mut app, 4500); // the banner goes, the gear tapped at 8 s
+    assert!(lit(&sim), "padlock");
+    assert_consistent(&sim, &app);
+    sim.save("touch_lock");
+    run(&mut sim, &mut app, 100);
+    assert_eq!(app.screen(), Screen::Main, "a tap on the gear: ignored while locked");
+    // keys still work, on every screen
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0));
+    assert!(app.strip.locked);
+    app.press(&mut sim, Press::Short(Key::Back));
+    let left = 15_800u64.saturating_sub(sim.ms);
+    run(&mut sim, &mut app, left);
+    assert!(!app.strip.locked && app.banner.as_str() == "TOUCH UNLOCKED");
+    run(&mut sim, &mut app, 2500);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "unlocked: the gear's tap at 17 s works");
+    assert_consistent(&sim, &app);
+}
+
+/// Back and Lap pressed one after the other (not together) still act on their own.
+#[test]
+fn chord_keys_alone_still_act() {
+    let mut k = Keys::default();
+    assert_eq!(k.poll(Key::Back as u8, 50), None);
+    assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Back)));
+    assert_eq!(k.poll(Key::Lap as u8, 50), None);
+    assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Lap)));
+    // together: neither acts; the chord fires once, at 1 s
+    let both = Key::Back as u8 | Key::Lap as u8;
+    let held: Vec<_> = (0..24).map(|_| k.poll(both, 50)).collect();
+    assert_eq!(held.iter().filter(|p| **p == Some(Press::Chord)).count(), 1);
+    assert_eq!(held[19], Some(Press::Chord), "at 1 s");
+    assert!(held.iter().all(|p| matches!(p, None | Some(Press::Chord))), "no repeat or long of either: {held:?}");
+    assert_eq!(k.poll(Key::Back as u8, 50), None, "one released, one down");
+    assert_eq!(k.poll(0, 50), None, "and the release of the other: nothing");
+    // a quick overlap (under 1 s) acts as neither
+    for _ in 0..4 {
+        assert_eq!(k.poll(both, 50), None);
+    }
+    assert_eq!(k.poll(0, 50), None);
+    // and keys work again after
+    assert_eq!(k.poll(Key::Lap as u8, 50), None);
+    assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Lap)));
 }
 
 /// A synthetic ride at 8 m/s (28.8 km/h): 240 s east with a gentle wiggle, then a loop of 600 m radius
@@ -2495,7 +2807,7 @@ fn map_zoom_ends_with_the_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.map_zoom, app.map_centre), (None, None), "the new ride's map fitted");
     app.screen = Screen::Ride(2);
@@ -2680,6 +2992,7 @@ fn a_ride_with_laps_and_pauses() {
     sim.own_settings(); // the defaults, not stock's
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(climb);
+    sim.bus.baro_alt = Some(climb); // the barometer climbs with the receiver
     sim.gnss.fix = Some(8000);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
@@ -2741,11 +3054,13 @@ fn a_ride_with_laps_and_pauses() {
     run(&mut sim, &mut app, 60_000);
     let px_s = (sim.pixels - px0) * 1000 / (sim.ms - t0);
     std::println!("ride page (HR, power changing every second, max km/h, lap time, lap km, ascent): {px_s} px/s");
-    // the value colours: the zone of the heart rate and power on screen
-    let (hr, w) = (app.live.get(Metric::Hr).unwrap(), app.live.get(Metric::Power).unwrap());
-    let hr_fg = crate::ride::hr_color(crate::ride::hr_zone(hr, 190));
-    let w_fg = crate::ride::power_color(crate::ride::power_zone(w, 200));
-    assert!(colors_in(&sim, bx(0)).contains(&hr_fg) && colors_in(&sim, bx(1)).contains(&w_fg), "zone colours");
+    // the zones: a bar along the top of the heart rate and power boxes in the zone shown (held 3 s), the number white
+    let (hr_bar, w_bar) = (crate::ride::hr_color(app.zones[3].shown()), crate::ride::power_color(app.zones[0].shown()));
+    let (hr_box, w_box) = (colors_in(&sim, bx(0)), colors_in(&sim, bx(1)));
+    assert!(hr_box.contains(&hr_bar) && w_box.contains(&w_bar), "zone bars");
+    assert!(hr_box.contains(&crate::ui::WHITE) && w_box.contains(&crate::ui::WHITE), "white numbers");
+    let zone_colors = |c: &[u16]| crate::ride::ZONE_COLORS.iter().filter(|z| c.contains(z)).count();
+    assert!(zone_colors(&hr_box) == 1 && zone_colors(&w_box) == 1, "the bar is the only zone colour in the box");
     assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("01:00".into(), "0.48".into()));
     assert_eq!(text(&app, MaxSpeed), "28.8");
     let ascent = app.ride.ascent_m();
@@ -2795,6 +3110,7 @@ fn derived_power_and_climb_fields() {
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(climb);
+    sim.bus.baro_alt = Some(climb); // the barometer climbs with the receiver
     sim.gnss.fix = Some(8000);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
@@ -2888,6 +3204,19 @@ fn power_noisy(ms: u64) -> [u8; 8] {
     let noise = (s.wrapping_mul(2_654_435_761) >> 7) % 61;
     let [p0, p1] = (110 + 3 * swell + noise as u16).to_le_bytes();
     [0x10, 1, 0xff, 85, 0, 0, p0, p1]
+}
+
+/// Power and heart rate that change at every broadcast (4 Hz, the sensors' own rate): a power meter's and a strap's
+/// real readings move all the time, the test sensors above only once a second.
+fn power_fast(ms: u64) -> [u8; 8] {
+    let k = ms / 250;
+    let swell = (k / 4 % 120).min(120 - k / 4 % 120) as u16;
+    let noise = (k.wrapping_mul(2_654_435_761) >> 7) % 61;
+    let [p0, p1] = (110 + 3 * swell + noise as u16).to_le_bytes();
+    [0x10, 1, 0xff, 85, 0, 0, p0, p1]
+}
+fn hr_fast(ms: u64) -> [u8; 8] {
+    [4, 0, 0, 0, 0, 0, 0, 120 + ((ms / 250).wrapping_mul(2_654_435_761) >> 9) as u8 % 9]
 }
 
 /// The graph field: power in its zones' colours, one pixel column per sample, drawn by differences as it
@@ -3361,7 +3690,7 @@ fn import_asks_first() {
     app.settings.ftp = 55; // stock's is another: an import shows
     app.input(&mut sim, Input::Select);
     assert_eq!((app.menu_row(Menu::System, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
-    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART AGAIN: YES");
+    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART: YES BACK: NO");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
     sim.save("import_sure");
@@ -3403,7 +3732,7 @@ fn tones_do_not_cut_each_other() {
 fn perf_budgets() {
     use Field::*;
     // a ride on the GPS route, with a power meter and a strap, from start-up
-    let ride = |pages: [crate::page::Page; 3], screen: usize, zoom: Option<u32>| {
+    let ride = |pages: [crate::page::Page; 3], screen: usize, zoom: Option<u32>, fast: bool| {
         let mut sim = Sim::new(9, 0, 0);
         sim.gnss.route = Some(ride_route);
         let course = screen == crate::COURSE || pages.iter().any(|p| p.fields.contains(&Profile));
@@ -3412,9 +3741,11 @@ fn perf_budgets() {
             sim.gnss.route = Some(course_route);
         }
         sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
+        type Broadcast = fn(u64) -> [u8; 8]; // a sensor's page at a time
+        let (power_fn, hr_fn): (Broadcast, Broadcast) = if fast { (power_fast, hr_fast) } else { (power_noisy, hr72) };
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fn, network: 0, ack: &[] });
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
         app.pages[..3].copy_from_slice(&pages);
         if course {
@@ -3450,40 +3781,44 @@ fn perf_budgets() {
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, (u64, u64));
-    let cases: [Case; 10] = [
+    type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, bool, (u64, u64));
+    let cases: [Case; 11] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
-        ("overview", [values, graph, map], PAGES, None, (150, 5)),
-        // made in the editor: 7101, 10 (8959 at VALUE_MARGIN 2): eight values at 3x in 120 x 74 boxes, the zone fills of power and heart rate
-        // as on six values
-        ("eight values", [eight, graph, map], 0, None, (12_000, 20)),
-        // 3581, 22 (3854 at VALUE_MARGIN 2): a graph over four values (the second row of values taller)
-        ("graph over four", [made, values, map], 0, None, (5_000, 30)),
-        // 8070, 10 since values keep 3 px from their rules (9862 before): the changed digits only, but large (a glyph
-        // of a 6-field page is ~960 px), and the power and heart rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
-        // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
-        ("six values", [values, graph, map], 0, None, (12_000, 20)),
+        ("overview", [values, graph, map], PAGES, None, false, (150, 5)),
+        // made in the editor: 2162, 6 (7101, 10 with the zone fills, 8959 at VALUE_MARGIN 2): eight values at 3x in
+        // 120 x 74 boxes, the readings once a second, the zone a bar
+        ("eight values", [eight, graph, map], 0, None, false, (3_500, 12)),
+        // 1537, 20 (3581, 22 with the zone fills): a graph over four values (the second row of values taller)
+        ("graph over four", [made, values, map], 0, None, false, (2_500, 30)),
+        // 2037, 6: the changed digits only, once a second, and a zone bar (about 1,000 px) at a zone change, held
+        // three seconds. 8070, 10 with the zone fills (a box of ~12,000 px at each change, the noisy power's 3 s
+        // average crossing an edge about every 4 s), 6538 before them
+        ("six values", [values, graph, map], 0, None, false, (3_000, 12)),
+        // the same page with a power meter and a strap that change at every broadcast (4 Hz, like the real ones):
+        // 2198, 6 with the readings shown once a second (taken in the second's tick); 11339, 20 when each broadcast
+        // was drawn and the zones filled the boxes
+        ("six values, 4 Hz sensors", [values, graph, map], 0, None, true, (3_000, 12)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
-        ("two graphs", [graph, values, map], 0, None, (1_000, 30)),
+        ("two graphs", [graph, values, map], 0, None, false, (1_000, 30)),
         // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow
         // clear of the zoom buttons, 1211 without them)
-        ("map", [map, values, graph], 0, None, (1_800, 50)),
+        ("map", [map, values, graph], 0, None, false, (1_800, 50)),
         // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
         // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
         // 19 000 px each)
-        ("course profile", [profile, values, map], 0, None, (800, 10)),
+        ("course profile", [profile, values, map], 0, None, false, (800, 10)),
         // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
         // NEXT TURN's last digit (1548 before it), the turn's two banners
-        ("course page", [values, graph, map], crate::COURSE, None, (2_600, 20)),
+        ("course page", [values, graph, map], crate::COURSE, None, false, (2_600, 20)),
         // 4563, 44: zoomed in at 1.5 m a pixel (map.rs MIN_LEVEL), following the rider: a whole map at each
         // re-centre (about every 26 s at 8 m/s)
-        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (6_000, 60)),
+        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), false, (6_000, 60)),
         // 3470, 42: at 2 m a pixel, a re-centre about every 35 s
-        ("map zoomed 2 m", [map, values, graph], 0, Some(2), (4_500, 60)),
+        ("map zoomed 2 m", [map, values, graph], 0, Some(2), false, (4_500, 60)),
     ];
     let mut over = std::vec::Vec::new();
-    for (name, pages, screen, zoom, (px_max, win_max)) in cases {
-        let (px, win) = ride(pages, screen, zoom);
+    for (name, pages, screen, zoom, fast, (px_max, win_max)) in cases {
+        let (px, win) = ride(pages, screen, zoom, fast);
         std::println!("{name}: {px} px/s, {win} windows/s (budget {px_max}, {win_max})");
         if px > px_max || win > win_max {
             over.push(std::format!("{name}: {px} px/s, {win} windows/s over {px_max}, {win_max}"));
@@ -3531,7 +3866,7 @@ fn course_read_after_leaving_the_list() {
         app.press(&mut sim, Press::Short(Key::Page));
     }
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     let left = app.screen();
     assert!(!matches!(left, Screen::Menu(Menu::Courses, _) | Screen::Ride(_)), "{left:?}");
     run(&mut sim, &mut app, 200);
@@ -3600,7 +3935,7 @@ fn course_ride() {
     let to_go: f64 = text(&app, ToGo).parse().unwrap();
     assert!((to_go - (5000.0 - s) / 1000.0).abs() <= 0.15, "{to_go} km to go after {s} m");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2, "on the course");
-    assert_eq!(fields(&app)[2..], ["2.0K 6%", "120", "120"], "the climb ahead: 2 km at 6 %, 120 m");
+    assert_eq!(fields(&app)[2..], ["2.0K|6%", "120", "120"], "the climb ahead: 2 km at 6 %, 120 m");
     assert_consistent(&sim, &app);
 
     // the detour: off course after 5 s beyond 50 m, said once; back
@@ -3631,7 +3966,7 @@ fn course_ride() {
     assert_eq!(app.banner.as_str(), "CLIMB 2.0 KM 6%");
     run(&mut sim, &mut app, 47_000); // 400 m up
     let f = fields(&app);
-    assert_eq!(f[2], "1.6K 6%", "1.6 km left: {f:?}");
+    assert_eq!(f[2], "1.6K|6%", "1.6 km left: {f:?}");
     let m = |i: usize| f[i].parse::<u32>().unwrap();
     assert!(m(3).abs_diff(96) <= 2 && m(4).abs_diff(96) <= 6, "96 m left to climb: {f:?}");
     assert_eq!(app.field_color(Climb), ui::YELLOW, "6 %");
@@ -3932,8 +4267,8 @@ fn course_cues_over_any_screen() {
                 app.open(s);
                 app.show(&mut sim);
             }
-            None if i == 2 => {}           // the light timed out on its own (10 s, no key)
-            None => app.backlight = false, // the light switched off by the rider (Back on the overview)
+            None if i == 2 => {}          // the light timed out on its own (10 s, no key)
+            None => app.idle_ms = 60_000, // the light timed out (well past the 10 s)
         }
         run(&mut sim, &mut app, 3000);
         if screen.is_none() {

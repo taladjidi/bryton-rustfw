@@ -120,7 +120,11 @@ impl App {
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
             Menu::System => menu::SYSTEM.get(i).copied(),
-            Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
+            Menu::BuiltIn => match menu::BUILT_IN.get(i) {
+                Some(&r) => Some(Row::Read(r)),
+                // the barometer's altitude and its calibration, after its readings
+                None => [Row::Set(menu::Setting::Altitude), Row::AltGps].get(i - menu::BUILT_IN.len()).copied(),
+            },
             Menu::Ride(n) => {
                 use menu::RideRow;
                 let rows = [
@@ -150,6 +154,7 @@ impl App {
             Menu::History if i == 0 => Some(Row::Open(Menu::Stock)),
             Menu::History if self.stock.index.is_empty() => (i == 1).then_some(Row::Stock(menu::StockRow::Scan)),
             Menu::History => self.stock.index.get(i - 1).map(|_| Row::Past(i - 1)),
+            Menu::Workouts if self.calendar.get(0).is_none() => (i == 0).then_some(Row::Empty("NONE PLANNED")),
             Menu::Workouts => self.calendar.get(i).map(|_| Row::Workout(i)),
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
@@ -180,6 +185,10 @@ impl App {
         match row {
             Row::Open(Menu::Page(_)) if matches!(menu, Menu::Ride(_)) => label.push_str("EDIT THIS PAGE"),
             Row::Open(Menu::Main) => label.push_str("ALL SETTINGS"),
+            Row::Empty(text) => {
+                label.push_str(text);
+                color = ui::GREY;
+            }
             Row::Ride(r) => {
                 use menu::RideRow;
                 label.push_str(match r {
@@ -214,6 +223,14 @@ impl App {
             Row::Drive => {
                 label.push_str("USB DRIVE");
                 value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
+            }
+            Row::AltGps => {
+                label.push_str("FROM GPS");
+                self.alt_gps_row(&mut value);
+            }
+            Row::Set(menu::Setting::Altitude) if !(self.editing && self.screen == Screen::Menu(menu, i)) => {
+                label.push_str(menu::Setting::Altitude.label());
+                self.alt_row(&mut value);
             }
             Row::Set(s) => {
                 label.push_str(s.label());
@@ -424,7 +441,8 @@ impl App {
         let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
-                ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel);
+                let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
+                ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
                     self.row(menu, i)
                 {
@@ -478,7 +496,7 @@ impl App {
         self.confirm = Some((menu, sel));
         let mut l = Line::<40>::new();
         l.push_str(what);
-        l.push_str("?\nSTART AGAIN: YES");
+        l.push_str("?\nSTART: YES BACK: NO");
         self.say(l.as_str());
         false
     }
@@ -489,9 +507,6 @@ impl App {
         match self.row(menu, sel) {
             Some(Row::Open(Menu::Workouts)) => {
                 self.load_calendar(b);
-                if self.calendar.get(0).is_none() {
-                    self.say("NO WORKOUT PLANNED");
-                }
                 self.open(Screen::Menu(Menu::Workouts, 0));
             }
             Some(Row::Open(Menu::Courses)) => self.open_courses(b),
@@ -559,10 +574,14 @@ impl App {
             }
             Some(Row::Set(s)) if s.number().is_some() => {
                 self.editing = !self.editing;
+                if self.editing && s == menu::Setting::Altitude {
+                    self.editing = self.alt_edit_start(); // from the altitude the barometer reads
+                }
                 if !self.editing {
                     self.save_misc(b);
                 }
             }
+            Some(Row::AltGps) => self.alt_from_gps(),
             Some(Row::Set(s)) => {
                 self.settings.cycle(s);
                 self.save_misc(b);
@@ -579,7 +598,7 @@ impl App {
                     Some(Sensor::Paired(id)) if !heard && self.confirm != Some((menu, sel)) => {
                         self.set_sensor(b, kind, Sensor::Paired(id));
                         self.confirm = Some((menu, sel));
-                        self.say("SEARCHING AGAIN\nSTART AGAIN: FORGET");
+                        self.say("SEARCHING AGAIN\nSTART: FORGET");
                     }
                     Some(Sensor::Paired(_)) => {
                         let mut l = Line::<40>::new();
@@ -639,7 +658,7 @@ impl App {
                     self.phone_changed();
                 }
             }
-            Some(Row::Read(_) | Row::Stock(_)) | None => {}
+            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_)) | None => {}
         }
     }
 }

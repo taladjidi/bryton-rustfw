@@ -925,6 +925,7 @@ fn menu_touch_and_keys() {
     use super::*;
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
+    let (mut locks, mut locked_touches) = (0, 0);
     for seed in 1..=12u32 {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
@@ -948,6 +949,7 @@ fn menu_touch_and_keys() {
                 app.settings.touch = !app.settings.touch; // TOUCH off and on
             }
             let i = match a % 14 {
+                _ if a % 23 == 3 => Input::TouchLock,
                 0 | 1 => Input::Next,
                 2 => Input::Prev,
                 3 => Input::Select,
@@ -963,9 +965,15 @@ fn menu_touch_and_keys() {
             let (before, chosen, editing) = (app.screen(), app.menu_chosen, app.editing);
             let (pages, whole) = (app.pages, app.graph_whole);
             let recording = app.ride.state() == crate::ride::State::Running;
+            let was_locked = app.strip.locked;
             app.input(&mut sim, i);
+            locks += u32::from(i == Input::TouchLock);
             let same = app.screen() == before && app.pages == pages && app.graph_whole == whole;
             if let Input::Touch(g) = i {
+                if was_locked {
+                    assert!(same, "locked: {g:?} did something");
+                    locked_touches += 1;
+                }
                 if !app.settings.touch {
                     assert!(same, "TOUCH OFF: {g:?} did something");
                     off += 1;
@@ -1003,12 +1011,16 @@ fn menu_touch_and_keys() {
                 sim.delay_ms(POLL_MS);
             }
             // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
-            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
+            // (a banner said by this input is drawn by the next pass: skipped until it is)
+            let waiting = app.banner_ms.is_some() && !app.banner_drawn;
+            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) && !waiting {
                 super::tests::assert_consistent(&sim, &app);
             }
         }
     }
     std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
+    std::println!("touch lock: {locks} toggles, {locked_touches} touches while locked");
+    assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
     assert!(off > 50 && riding > 10, "touch off {off}, taps and holds while recording {riding}");
 }
@@ -1391,6 +1403,75 @@ fn page_editor_inputs() {
     assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
 }
 
+/// Random pressures, altitudes and calibrations into the barometric altitude (altitude.rs): no panic, and every
+/// branch reached (a reading, a silence, a calibration by typing and by the receiver, both sources, a sector).
+#[test]
+fn barometric_altitude() {
+    use crate::altitude::{Altimeter, Cal, P_STD};
+    let mut reach = [0usize; 8];
+    for seed in 1..=4u32 {
+        let mut v = bytes(seed, 1 << 20);
+        let mut r = move || {
+            u32::from_le_bytes([
+                v.next().unwrap_or(0),
+                v.next().unwrap_or(0),
+                v.next().unwrap_or(0),
+                v.next().unwrap_or(0),
+            ])
+        };
+        let mut a = Altimeter::new();
+        for now in 0..60_000u32 {
+            let x = r();
+            // pressures: mostly the chip's range, around the standard day, sometimes anything
+            let p = match x >> 29 {
+                0 => r(),
+                1..=2 => 260 * 4096 + r() % (1000 * 4096),
+                _ => P_STD - 40_000 + r() % 80_000,
+            };
+            let alt = match r() % 4 {
+                0 => r() as i32,
+                1 => (r() % 20_000_000) as i32 - 10_000_000,
+                _ => (r() % 3_000_000) as i32,
+            };
+            let gps = (x & 1 == 0).then_some(alt);
+            match x % 12 {
+                0 => a.feed(None),
+                1 => reach[0] += usize::from(a.calibrate(alt, now)),
+                2 => a.from_gps(),
+                3 => a.ride_start(),
+                4 => reach[1] += usize::from(a.import_stock(r() % 20_000)),
+                5 | 6 => a.second(gps, now),
+                _ => a.feed(Some(p)),
+            }
+            if let Some(c) = a.take_dirty() {
+                reach[2] += 1;
+                assert_eq!(Cal::from_sector(&c.to_sector()), Some(c));
+            }
+            match a.source(gps) {
+                (Some(_), 0) => reach[3] += 1,
+                (Some(_), _) => reach[4] += 1,
+                _ => {}
+            }
+            reach[5] += usize::from(a.alt_mm().is_some());
+            reach[6] += usize::from(a.progress().is_some());
+        }
+        // sectors: random bytes, and ones with the magic and a good CRC around random fields
+        for _ in 0..2000 {
+            let mut s = [0u8; 512];
+            s.iter_mut().for_each(|b| *b = r() as u8);
+            let _ = Cal::from_sector(&s);
+            s[..4].copy_from_slice(b"ALT1");
+            s[12] = 1 + (r() % 5) as u8;
+            s[4..8].copy_from_slice(&(P_STD - 100_000 + r() % 200_000).to_le_bytes());
+            let crc = crate::fit::crc(0, &s[..13]);
+            s[13..15].copy_from_slice(&crc.to_le_bytes());
+            reach[7] += usize::from(Cal::from_sector(&s).is_some());
+        }
+    }
+    std::println!("barometric altitude reached: {reach:?}");
+    assert!(reach.iter().all(|&n| n > 1), "{reach:?}"); // [1]: stock's, only before a calibration of ours
+}
+
 /// Passes until the banner is gone (the strip and the page under it drawn again).
 fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
     for _ in 0..100 {
@@ -1496,10 +1577,56 @@ fn end_ride_screen_by_chance() {
             };
             assert_eq!(places(&sim, name), want, "{what}: in one place, as chosen");
             assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "{what}");
-            app.input(&mut sim, Input::Back); // the card, if it shows
+            super::tests::back(&mut sim, &mut app); // the card, if it shows (a banner up: cleared first)
+            assert_eq!(app.screen(), Screen::Main, "{what}");
             pass(&mut sim, &mut app, 1000);
         }
     }
     std::println!("end-ride screen by chance: {saves} saved, {discards} discarded, {resumes} resumed, {asked} asked");
     assert!(saves > 5 && discards > 5 && resumes > 20 && asked > 10, "{saves} {discards} {resumes} {asked}");
+}
+
+/// Random key masks through `Keys::poll` (the touch lock's chord): no panic, and a chord only when Back and Lap have
+/// both been down for the last second, once per hold; neither of the two acts while the other is down with it.
+#[test]
+fn keys_chord() {
+    use crate::{CHORD_MS, Key, Keys, Press};
+    let pair = Key::Back as u8 | Key::Lap as u8;
+    let (mut chords, mut shorts) = (0u32, 0u32);
+    for seed in 1..=20u32 {
+        let mut k = Keys::default();
+        let mut noise = bytes(seed * 104_729, 1 << 12);
+        let (mut mask, mut both_ms, mut chord_seen, mut run_fired) = (0u8, 0u32, false, false);
+        while let Some(n) = noise.next() {
+            // hold the mask 50 to 450 ms, then change one or two keys, often to both Back and Lap
+            let dt = 50 * (1 + u32::from(n % 9));
+            let p = k.poll(mask, dt);
+            both_ms = if mask & pair == pair { both_ms + dt } else { 0 };
+            if mask & pair == 0 {
+                chord_seen = false;
+            }
+            run_fired &= both_ms != 0;
+            match p {
+                Some(Press::Chord) => {
+                    assert!(both_ms >= CHORD_MS && !run_fired, "chord at {both_ms} ms, again in one run");
+                    (chord_seen, run_fired) = (true, true);
+                    chords += 1;
+                }
+                Some(Press::Short(key) | Press::Long(key) | Press::Repeat(key)) => {
+                    assert!(!(chord_seen && pair & key as u8 != 0), "{p:?} after a chord");
+                    shorts += u32::from(matches!(p, Some(Press::Short(_))));
+                }
+                None => {}
+            }
+            mask = match noise.next().unwrap_or(0) % 6 {
+                0 | 1 => pair,
+                2 => 0,
+                3 => mask ^ Key::Back as u8,
+                4 => mask ^ Key::Lap as u8,
+                _ => mask ^ Key::Page as u8,
+            };
+        }
+    }
+    std::println!("keys: {chords} chords, {shorts} short presses");
+    assert!(chords > 20 && shorts > 50, "reached: {chords} chords, {shorts} shorts");
 }

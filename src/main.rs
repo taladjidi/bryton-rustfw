@@ -1,7 +1,7 @@
 //! bryton-rustfw: a minimal firmware for the Bryton Rider S510 bike computer, written from scratch. It shows the time
 //! kept by the RTC, big, on the panel, the heart rate from an ANT+ strap, and on a second page the BLE devices
 //! nearby. Keys: Page turns the ride pages, hold Page for the menu (sensors, pages, wheel, nearby devices), Back
-//! toggles the backlight (level and time-out in the menu), hold Back (power) 3 s to switch off (standby; the power button starts it again).
+//! goes back (level and time-out of the backlight in the menu), hold Back (power) 3 s to switch off (standby; the power button starts it again).
 //!
 //! Every register access below is traced to BOARD.md (the board as the stock firmware sets it up) or
 //! to the STM32H747 reference manual (RM0399). No interrupts, no RTOS: one loop. The only crates are the USB

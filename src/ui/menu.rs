@@ -14,7 +14,7 @@ pub enum Input {
     Prev,
     /// Start: select a row (on a ride page, start, pause or resume).
     Select,
-    /// Back: out of a menu (on a page, the backlight on or off).
+    /// Back: out of a menu (on a ride page, the overview; on the overview, nothing).
     Back,
     /// Page held: the menu (the ride menu while a ride records or is paused).
     Menu,
@@ -24,6 +24,8 @@ pub enum Input {
     Off,
     /// Lap held: play or pause the phone's music (app/phone.rs), from any page.
     Media,
+    /// Back and Lap held together: the touch lock on or off, on every screen.
+    TouchLock,
     /// Page or Lap still held: [`Input::Next`] or [`Input::Prev`] again (a list scrolls, a value steps).
     NextHeld,
     /// See [`Input::NextHeld`].
@@ -54,6 +56,7 @@ impl Input {
             Press::Long(Key::Start) => Input::End,
             Press::Long(Key::Back) => Input::Off,
             Press::Long(Key::Lap) => Input::Media,
+            Press::Chord => Input::TouchLock,
             Press::Repeat(Key::Page) => Input::NextHeld,
             Press::Repeat(Key::Lap) => Input::PrevHeld,
             _ => return None,
@@ -92,6 +95,8 @@ pub enum Setting {
     WktAvg,
     /// What a shifter button press does ([`Remote`]), for press `n` ([`crate::sensors::Press`]).
     Remote(u8),
+    /// The barometric altitude (a number, m): typing it calibrates the barometer to it (altitude.rs).
+    Altitude,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -180,6 +185,7 @@ impl Setting {
             Setting::Drink => "DRINK",
             Setting::HrAlert => "HR ABOVE",
             Setting::WktAvg => "GAUGE POWER",
+            Setting::Altitude => "ALTITUDE",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -199,6 +205,7 @@ impl Setting {
             Setting::Weight => " KG",
             Setting::WPrime => " KJ",
             Setting::Eat | Setting::Drink => " MIN",
+            Setting::Altitude => " M",
             _ => "",
         }
     }
@@ -213,6 +220,8 @@ impl Setting {
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
             Setting::Eat | Setting::Drink => Some((0..=120, 5)),
             Setting::HrAlert => Some((0..=230, 5)),
+            // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 5 m steps
+            Setting::Altitude => Some((0..=9500, 5)),
             _ => None,
         }
     }
@@ -259,10 +268,15 @@ pub enum Reading {
 pub enum Row {
     /// Opens a menu.
     Open(Menu),
+    /// What an empty list says, as a grey row that does nothing (not a banner that goes after 4 s and leaves a bare
+    /// list): "NONE PLANNED" in WORKOUTS.
+    Empty(&'static str),
     /// Opens the list of BLE devices nearby (and starts a scan).
     Nearby,
     /// Opens ABOUT: the firmware's version and commit, and Ferris.
     About,
+    /// FROM GPS: Select averages the receiver's altitude for 30 s and calibrates the barometer to it.
+    AltGps,
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
     Drive,
     /// A setting.

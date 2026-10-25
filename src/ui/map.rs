@@ -10,7 +10,7 @@
 //!   metres per pixel; it is fitted again (one full redraw) only when the position nears the edge, so a loop is drawn once and a ride out
 //!   redraws each time it grows by about half.
 //! - **Manual zoom:** a map box at least [`ZOOM_BOX`] (the full-page map) has "+" and "-" buttons top right
-//!   ([`buttons`], 40 x 40 pixels for a gloved finger), drawn by [`draw`] like the rest of the map. Each tap is one
+//!   ([`buttons`], 48 x 48 pixels, 8 apart, for a gloved finger), drawn by [`draw`] like the rest of the map. Each tap is one
 //!   level ([`zoom`]) from the one shown, finer or coarser than the fit alike (indoors the fit is already the
 //!   finest it takes, [`FIT_LEVEL`]: the owner's "+" and "-" did nothing, 2026-10-25), from [`MIN_LEVEL`] (1.5 m a
 //!   pixel: IGN's zoom 16 drawn about 1:1 in France) to [`MAX_LEVEL`]. At a manual level the view follows the rider
@@ -48,7 +48,9 @@ pub const MAX_LEVEL: u32 = 40;
 /// The smallest map box with the zoom buttons, pixels: the full-page map (layout 1, 240 x 296), not half a page.
 pub const ZOOM_BOX: (i32, i32) = (200, 200);
 /// A zoom button's side, pixels: a gloved finger's size.
-const BUTTON: i32 = 40;
+const BUTTON: i32 = 48;
+/// The gap between two buttons, pixels (adjacent targets with opposite meanings: a glove must not hit both).
+const GAP: i32 = 8;
 /// A panned view's centre stays within this many map widths (or heights) of the track and the course.
 pub const PAN_SCREENS: i32 = 2;
 
@@ -272,7 +274,11 @@ impl View {
     /// The view of `track` (and of `route`, when there is one) in `area`: all of them in the middle two thirds, at
     /// the smallest scale; None before a fix.
     pub fn fit(track: &Track, area: Rect, route: Option<&Route>) -> Option<View> {
-        let (fw, fh) = (i64::from(area.2 - 2 * MARGIN) * 2 / 3, i64::from(area.3 - 2 * MARGIN) * 2 / 3);
+        let (mut fw, fh) = (i64::from(area.2 - 2 * MARGIN) * 2 / 3, i64::from(area.3 - 2 * MARGIN) * 2 / 3);
+        if let Some([plus, _]) = buttons(area) {
+            // the track's right end stays clear of the buttons ([`under_buttons`]): left of them by half an arrow
+            fw = fw.min(2 * i64::from(plus.0 - ARROW / 2 - 1 - (area.0 + area.2 / 2)));
+        }
         let (min, max) = match route.and_then(Route::bounds) {
             Some((a, b)) => {
                 ((a.0.min(track.min.0), a.1.min(track.min.1)), (b.0.max(track.max.0), b.1.max(track.max.1)))
@@ -430,7 +436,7 @@ fn zoomed(area: Rect, fit: Option<View>, zoom: Option<Zoom>) -> Option<i64> {
 }
 
 /// The arrow centred at `p` is under the buttons, or within half its size of them: the fit keeps clear of them
-/// (its track spans the middle two thirds: at most x 187 in a 240 pixel map, the buttons from 196), so the arrow
+/// (its track spans the middle two thirds, less on the right: at most x 179 in a 240 pixel map, the buttons from 188), so the arrow
 /// and the track's end stay in sight. Zoomed in, following keeps the arrow left of x 192 already.
 fn under_buttons(area: Rect, p: (i32, i32)) -> bool {
     let near = |r: Rect| {
@@ -442,20 +448,20 @@ fn under_buttons(area: Rect, p: (i32, i32)) -> bool {
 
 /// The crosshair under "-", back to the fit (shown at a manual zoom).
 fn centre_button(area: Rect) -> Option<Rect> {
-    buttons(area).map(|[_, b]| (b.0, b.1 + b.3 + 4, b.2, b.3))
+    buttons(area).map(|[_, b]| (b.0, b.1 + b.3 + GAP, b.2, b.3))
 }
 
 /// The zoom buttons of a map in `area`, "+" then "-", top right; None in a box smaller than [`ZOOM_BOX`].
 ///
 /// ```
 /// use bryton_rustfw::map::buttons;
-/// assert_eq!(buttons((0, 24, 240, 296)), Some([(196, 28, 40, 40), (196, 72, 40, 40)]));
+/// assert_eq!(buttons((0, 24, 240, 296)), Some([(188, 28, 48, 48), (188, 84, 48, 48)]));
 /// assert_eq!(buttons((0, 24, 240, 148)), None, "half a page");
 /// ```
 pub fn buttons(area: Rect) -> Option<[Rect; 2]> {
     let x = area.0 + area.2 - BUTTON - 4;
     (area.2 >= ZOOM_BOX.0 && area.3 >= ZOOM_BOX.1)
-        .then_some([(x, area.1 + 4, BUTTON, BUTTON), (x, area.1 + 8 + BUTTON, BUTTON, BUTTON)])
+        .then_some([(x, area.1 + 4, BUTTON, BUTTON), (x, area.1 + 4 + BUTTON + GAP, BUTTON, BUTTON)])
 }
 
 /// The button of the map in `area` (drawn as `shown`) at (`x`, `y`); None elsewhere, or while the map has no view
@@ -937,6 +943,25 @@ mod tests {
         assert_eq!(zoom(&Shown::default(), true), None);
     }
 
+    /// The three buttons are 48 x 48 with 8 pixels or more between them, inside the map (UI review 2, P11: 40 pixels
+    /// with 4 between, two meanings side by side), and a tap in a gap is no button's.
+    #[test]
+    fn buttons_are_big_and_apart() {
+        let area = (0, 24, 240, 296);
+        let [plus, minus] = buttons(area).unwrap();
+        let centre = centre_button(area).unwrap();
+        let all = [plus, minus, centre];
+        assert!(all.iter().all(|r| r.2 == 48 && r.3 == 48 && r.0 + r.2 <= 240 && r.1 + r.3 <= 24 + 296));
+        assert!(all.windows(2).all(|w| w[1].1 - (w[0].1 + w[0].3) >= 8), "{all:?}");
+        let shown = Shown { zoomed: true, view: Some(View { cx: 0, cy: 0, mpp16: 16 }), ..Shown::default() };
+        let at = |r: Rect, dy| button_at(area, &shown, r.0 + 10, r.1 + dy);
+        assert_eq!(
+            [at(plus, 10), at(minus, 10), at(centre, 10)],
+            [Some(Button::In), Some(Button::Out), Some(Button::Centre)]
+        );
+        assert_eq!([at(plus, 48 + 4), at(minus, 48 + 4)], [None, None], "the gaps");
+    }
+
     /// Fitted, the arrow never sits under the zoom buttons (review of the zoom: riding north-east at 10 m/s it was
     /// under one for 8096 of 20000 s), and a fresh fit does not ask for another at once.
     #[test]
@@ -958,8 +983,9 @@ mod tests {
             under += u32::from(inside(plus) || inside(minus));
         }
         assert_eq!(under, 0, "seconds with the arrow under a button");
-        // 56, one every 6 minutes on this worst case (straight towards the buttons); 23 when the arrow could go under
+        // 104, one every 3 minutes on this worst case (straight towards the buttons): the track fits 118 pixels wide,
+        // not 134, to stay clear of the 48 pixel buttons (56 with 40 pixel ones); 23 when the arrow could go under
         // them
-        assert!(refits <= 60, "{refits} fits");
+        assert!(refits <= 110, "{refits} fits");
     }
 }

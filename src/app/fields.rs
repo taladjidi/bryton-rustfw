@@ -116,7 +116,7 @@ impl App {
     /// The text of ride field `f` now ("--" without a value).
     pub(crate) fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
-        let (r, live) = (&self.ride, |m| self.live.get(m).map(u32::from));
+        let (r, live) = (&self.ride, |m| self.live.shown(m).map(u32::from)); // one reading a second
         let (p, ftp) = (&self.power, self.settings.ftp);
         // the value, and whether it is in tenths
         let (v, tenths) = match f {
@@ -296,29 +296,35 @@ impl App {
         l
     }
 
-    /// The colour of field `f`'s value and of its box's background: the plain power fields (live, 3, 10, 30 s) and the
-    /// live heart rate fill their box with their zone's colour, the value in black or white over it (the owner: the
-    /// zone at a glance; zone 1's grey on its own was nearly white); the rest on black ([`App::field_color`]).
-    pub(crate) fn field_ink(&self, f: Field) -> (u16, u16) {
-        let zone = match f {
-            // the live power's box takes the 3 s average's zone: second-to-second power crosses a zone's edge all
-            // the time, and each change fills the whole box again (18,000 px/s on the sim's noisy power, against
-            // 6,500 without the colour); its digits stay live
-            Field::Power if self.live.get(Metric::Power).is_some() => Some(Field::Power3s),
-            Field::Power3s | Field::Power10s | Field::Power30s | Field::Hr => Some(f),
-            _ => None,
+    /// The zone bar of field `f`, BLACK for none: the plain power fields (live, 3, 10 and 30 s) and the live heart rate
+    /// show their zone as a colour bar along the box's top, the number white (the zone at a glance without a filled
+    /// box, which made colour meaningless). POWER takes the 3 s average's zone (live power crosses a zone's edge all
+    /// the time). The zone changes after three seconds in the new one ([`ride::ZoneHold`]).
+    pub(crate) fn field_bar(&self, f: Field) -> u16 {
+        let (i, power) = match f {
+            Field::Power if self.live.shown(Metric::Power).is_some() => (0, true),
+            Field::Power3s => (0, true),
+            Field::Power10s => (1, true),
+            Field::Power30s => (2, true),
+            Field::Hr => (3, false),
+            _ => return ui::BLACK,
         };
-        match zone.map(|z| self.field_color(z)) {
-            Some(bg) if bg != ui::WHITE => (ui::ink_on(bg), bg),
-            _ => (self.field_color(f), ui::BLACK),
+        match (self.zones.get(i).map_or(0, ride::ZoneHold::shown), power) {
+            (0, _) => ui::BLACK,
+            (z, true) => ride::power_color(z),
+            (z, false) => ride::hr_color(z),
         }
     }
 
-    /// The colour of ride field `f`'s value: heart rate and power (live, rolling, NP, max) in their zone's colour,
+    /// The colour of ride field `f`'s value: NP, max power and max heart rate in their zone's colour (the plain power
+    /// and heart rate fields are white, their zone a bar: [`App::field_bar`]),
     /// W' balance as it drains ([`power::wbal_color`]), the rest white.
     pub(crate) fn field_color(&self, f: Field) -> u16 {
         if f == Field::StepTarget {
             return self.target_color();
+        }
+        if matches!(f, Field::Power | Field::Power3s | Field::Power10s | Field::Power30s | Field::Hr) {
+            return ui::WHITE; // the zone is the bar's ([`App::field_bar`])
         }
         if f == Field::WktPower {
             return self.gauge_now(0).color;
@@ -333,7 +339,7 @@ impl App {
         }
         let p = &self.power;
         let power = match f {
-            Field::Power => self.live.get(Metric::Power),
+            Field::Power => self.live.shown(Metric::Power),
             Field::Power3s => p.rolling(0),
             Field::Power10s => p.rolling(1),
             Field::Power30s => p.rolling(2),
@@ -342,7 +348,7 @@ impl App {
             _ => None,
         };
         let hr = match f {
-            Field::Hr => self.live.get(Metric::Hr),
+            Field::Hr => self.live.shown(Metric::Hr),
             Field::MaxHr => self.ride.max_hr(),
             _ => None,
         };

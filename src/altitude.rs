@@ -1,0 +1,514 @@
+//! The barometric altitude: pressure to height, the smoothing, the calibration and the choice between the barometer
+//! and the receiver. Pure logic, one call a second while riding ([`Altimeter::second`]).
+//!
+//! **Formula.** The international barometric formula (the troposphere of the ICAO standard atmosphere, as the US
+//! National Weather Service's pressure altitude uses it): `h = 44307.694 m * (1 - (p / p0)^0.190284)`, with `p0` the
+//! pressure at sea level (1013.25 hPa for the standard day). Here `p0` is the *calibration*: the sea-level pressure
+//! that makes the altitude right where the rider is (it changes with the weather, a hPa being about 8 m). As an
+//! integer table (no `powf` in `core`, no float needed): the formula at `p / p0` in 64ths, from 0.25 to 1.25, linear
+//! in between (65 values; worst error against the formula 1.8 m at 9000 m, 2.6 m at 10 km, under 0.3 m below 2000 m, and the slope
+//! error under 1 %). Checked in the tests against the ISA table (898.746 hPa at 1000 m, 794.952 at 2000 m, 701.085 at
+//! 3000 m, 540.48 at 5000 m: ICAO Doc 7488, as tabulated in the Wikipedia article "International Standard
+//! Atmosphere"). Not re-fetched in this session: the NWS PDF could not be read; the check against the ISA table is
+//! the evidence.
+//!
+//! **Pressure** is the LPS22HH's own unit, 1/4096 hPa (0.24 Pa): [`crate::ambient::baro_read_raw`].
+//!
+//! **Smoothing**: an exponential average of 1/4 per reading (4 s at the ride's 1 Hz). The chip's noise is 0.65 Pa
+//! (5 cm), so this is for the wind and the case's own pressure swings, not the chip.
+//!
+//! **Calibration** ([`Cal`]): found by bisection on `p0` (the altitude rises with `p0`), so no inverse table.
+//! Set by a typed altitude ([`Altimeter::calibrate`]), by the receiver's altitude averaged over [`WINDOW_S`] seconds
+//! of 3D fix with six satellites or more, together with the pressure over the same seconds ([`Altimeter::from_gps`],
+//! and automatically at a ride's start, [`Altimeter::ride_start`]). Stock keeps the same two things in
+//! `\System\DeviceData.ini` `[DeviceSys]`: `Alt_P0` (the sea-level pressure in hPa, default 1020.0) and
+//! `calAltitude_km` / `calAltitude_mi` (the typed altitude, defaults 200 and 218.7: metres and yards, inferred), and
+//! its Baro_CheckAltCalibrationAtLocation sets the altitude from a saved place (ghidra/notes agent_a2.md, agent_b1.md).
+//!
+//! **Which altitude** ([`Altimeter::source`]): the barometer's when it reads and its calibration is *trusted* (made
+//! in the last [`FRESH_S`], or this power-up); the receiver's otherwise, while it has a fix; with no fix the
+//! barometer on whatever calibration it has (the standard day if none): a ride's ascent wants only differences. Each
+//! calibration, and each change of source, is a new *reference* (a number the ride sees): the ride forgets its low
+//! point and its climb window then, so a correction of 10 m never counts as 10 m of climbing.
+//!
+//! **No drift correction during a ride.** Weather moves the pressure about 1 hPa in 3 hours at most on a normal day
+//! (8 m in 3 h, 3 m an hour): over a ride the ascent counts differences over minutes, so it is untouched, and only
+//! the absolute altitude is off by a few metres at the end. A slow pull toward the receiver would bring its noise
+//! (several metres) back in; the owner's remedy is FROM GPS in the menu, and the automatic one at the next start.
+//!
+//! **Kept** in `\Rustfw\altcal.bin` (one sector, a CRC; app/altitude.rs), written between rides only. A damaged or
+//! missing file means "not calibrated", which the next ride's start repairs by itself: nothing is lost with it.
+
+/// The standard sea-level pressure, 1013.25 hPa, in the chip's unit.
+pub const P_STD: u32 = 4_150_272;
+
+/// Pressures the chip measures (260 to 1260 hPa), and the sea-level pressures a calibration may find (850 to 1100 hPa).
+const P_RANGE: core::ops::RangeInclusive<u32> = 260 * 4096..=1260 * 4096;
+const P0_RANGE: core::ops::RangeInclusive<u32> = 850 * 4096..=1100 * 4096;
+
+/// `44307694 mm * (1 - r^0.190284)` for r = 16/64 to 80/64.
+const TABLE: [i32; 65] = [
+    10273399, 9878509, 9502002, 9142068, 8797161, 8465947, 8147267, 7840108, 7543579, 7256892, 6979345, 6710311,
+    6449228, 6195589, 5948936, 5708853, 5474961, 5246915, 5024397, 4807117, 4594807, 4387220, 4184127, 3985316,
+    3790591, 3599769, 3412680, 3229163, 3049069, 2872260, 2698605, 2527980, 2360269, 2195364, 2033162, 1873566,
+    1716484, 1561829, 1409519, 1259477, 1111627, 965900, 822228, 680548, 540800, 402925, 266868, 132576, 0, -130910,
+    -260198, -387910, -514088, -638773, -762002, -883815, -1004246, -1123330, -1241100, -1357589, -1472827, -1586844,
+    -1699667, -1811326, -1921846,
+];
+
+/// Height above the level where the pressure is `p0`, mm, for the pressure `p` (both 1/4096 hPa). None for a ratio
+/// outside 0.25 to 1.25 or a zero `p0`.
+///
+/// ```
+/// use bryton_rustfw::altitude::{alt_mm, P_STD};
+/// assert_eq!(alt_mm(P_STD, P_STD), Some(0));
+/// let h = alt_mm(898_746 * 4096 / 1000, P_STD).unwrap(); // ISA: 898.746 hPa at 1000 m
+/// assert!((h - 1_000_000).abs() < 1000);
+/// ```
+pub fn alt_mm(p: u32, p0: u32) -> Option<i32> {
+    if p0 == 0 {
+        return None;
+    }
+    let r = (u64::from(p) << 24) / u64::from(p0); // Q24: Q16 would be 0.13 m a step
+    let (i, f) = ((r >> 18) as usize, (r & 0x3_ffff) as i64);
+    let (a, b) = (i64::from(*TABLE.get(i.checked_sub(16)?)?), i64::from(*TABLE.get(i.checked_sub(15)?)?));
+    Some((a + (b - a) * f / 0x4_0000) as i32)
+}
+
+/// The sea-level pressure that makes pressure `p` read `alt_mm_target` (bisection: the altitude rises with `p0`).
+/// None if no sea-level pressure of 850 to 1100 hPa does.
+///
+/// ```
+/// use bryton_rustfw::altitude::{alt_mm, p0_for, P_STD};
+/// let p0 = p0_for(P_STD, 0).unwrap();
+/// assert!(p0.abs_diff(P_STD) < 4, "at sea level on the standard day");
+/// assert!(alt_mm(P_STD, p0_for(P_STD, 120_000).unwrap()).unwrap().abs_diff(120_000) < 100);
+/// ```
+pub fn p0_for(p: u32, alt_mm_target: i32) -> Option<u32> {
+    let (mut lo, mut hi) = (*P0_RANGE.start(), *P0_RANGE.end());
+    if alt_mm(p, lo)? > alt_mm_target || alt_mm(p, hi)? < alt_mm_target {
+        return None;
+    }
+    for _ in 0..24 {
+        let mid = lo + (hi - lo) / 2;
+        if alt_mm(p, mid)? < alt_mm_target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(hi)
+}
+
+/// How a calibration was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    /// An altitude typed in.
+    Typed = 1,
+    /// FROM GPS in the menu.
+    Gps = 2,
+    /// At a ride's start.
+    Auto = 3,
+    /// Stock's `Alt_P0` (its age unknown).
+    Stock = 4,
+}
+
+/// A calibration: the sea-level pressure, and when it was made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cal {
+    /// Sea-level pressure, 1/4096 hPa.
+    pub p0: u32,
+    /// Seconds since 1970 on the unit's clock when made; 0: unknown (stock's).
+    pub when_s: u32,
+    /// How.
+    pub by: By,
+}
+
+/// A calibration is trusted for this long (3 h, about 3 hPa of weather at the very most).
+pub const FRESH_S: u32 = 3 * 3600;
+
+/// Seconds of fix (and pressure) averaged for a calibration from the receiver.
+pub const WINDOW_S: u32 = 30;
+
+const MAGIC: &[u8; 4] = b"ALT1";
+
+impl Cal {
+    /// The file's sector.
+    ///
+    /// ```
+    /// use bryton_rustfw::altitude::{By, Cal};
+    /// let c = Cal { p0: 4_150_272, when_s: 1_800_000_000, by: By::Gps };
+    /// let mut s = c.to_sector();
+    /// assert_eq!(Cal::from_sector(&s), Some(c));
+    /// s[5] ^= 1;
+    /// assert_eq!(Cal::from_sector(&s), None);
+    /// ```
+    pub fn to_sector(&self) -> [u8; 512] {
+        let mut s = [0; 512];
+        s[..4].copy_from_slice(MAGIC);
+        s[4..8].copy_from_slice(&self.p0.to_le_bytes());
+        s[8..12].copy_from_slice(&self.when_s.to_le_bytes());
+        s[12] = self.by as u8;
+        let crc = crate::fit::crc(0, &s[..13]);
+        s[13..15].copy_from_slice(&crc.to_le_bytes());
+        s
+    }
+
+    /// From a sector [`Cal::to_sector`] wrote; None if it is not one, or its pressure is out of range.
+    pub fn from_sector(s: &[u8; 512]) -> Option<Cal> {
+        if &s[..4] != MAGIC || s[13..15] != crate::fit::crc(0, &s[..13]).to_le_bytes() {
+            return None;
+        }
+        let by = match s[12] {
+            1 => By::Typed,
+            2 => By::Gps,
+            3 => By::Auto,
+            4 => By::Stock,
+            _ => return None,
+        };
+        let p0 = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
+        P0_RANGE.contains(&p0).then(|| Cal { p0, when_s: u32::from_le_bytes([s[8], s[9], s[10], s[11]]), by })
+    }
+
+    /// Made within [`FRESH_S`] of `now_s` (a clock that went back, or an unknown age, is not fresh).
+    pub fn fresh(&self, now_s: u32) -> bool {
+        self.when_s != 0 && now_s.checked_sub(self.when_s).is_some_and(|age| age < FRESH_S)
+    }
+}
+
+/// What a running average is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Want {
+    None,
+    /// FROM GPS.
+    Manual,
+    /// A ride's start.
+    Auto,
+}
+
+/// Readings missed in a row after which the barometer counts as silent.
+const MISSES: u8 = 3;
+
+/// The barometer's smoothed pressure, the calibration and the average toward a new one.
+#[derive(Clone, Copy, Debug)]
+pub struct Altimeter {
+    /// Smoothed pressure x 16 (1/65536 hPa).
+    smooth: Option<u32>,
+    misses: u8,
+    cal: Option<Cal>,
+    /// The calibration may be used for the ride's altitude.
+    trusted: bool,
+    /// The reference number the ride sees (never 0: that is the receiver's).
+    epoch: u8,
+    want: Want,
+    n: u32,
+    alt_sum: i64,
+    p_sum: u64,
+    /// The calibration changed and is not in the file yet.
+    dirty: bool,
+}
+
+impl Default for Altimeter {
+    fn default() -> Self {
+        Altimeter::new()
+    }
+}
+
+impl Altimeter {
+    /// Nothing read, not calibrated.
+    pub const fn new() -> Self {
+        Altimeter {
+            smooth: None,
+            misses: 0,
+            cal: None,
+            trusted: false,
+            epoch: 1,
+            want: Want::None,
+            n: 0,
+            alt_sum: 0,
+            p_sum: 0,
+            dirty: false,
+        }
+    }
+
+    /// A reading of the chip (1/4096 hPa), or None when it did not answer or was not ready. Out of the chip's range
+    /// counts as no answer.
+    pub fn feed(&mut self, raw: Option<u32>) {
+        let Some(p) = raw.filter(|p| P_RANGE.contains(p)) else {
+            self.misses = self.misses.saturating_add(1);
+            if self.misses >= MISSES {
+                self.smooth = None;
+            }
+            return;
+        };
+        self.misses = 0;
+        let x = p * 16;
+        self.smooth = Some(match self.smooth {
+            // a jump of 5 hPa is not weather (the first reading, a gap): start again from it
+            Some(s) if s.abs_diff(x) < 5 * 4096 * 16 => (i64::from(s) + (i64::from(x) - i64::from(s)) / 4) as u32,
+            _ => x,
+        });
+    }
+
+    /// The smoothed pressure, 1/4096 hPa; None while the barometer is silent.
+    pub fn pressure(&self) -> Option<u32> {
+        self.smooth.map(|s| s / 16)
+    }
+
+    /// The barometric altitude, mm (on the standard day's sea-level pressure when not calibrated).
+    pub fn alt_mm(&self) -> Option<i32> {
+        alt_mm(self.pressure()?, self.cal.map_or(P_STD, |c| c.p0))
+    }
+
+    /// The calibration.
+    pub fn cal(&self) -> Option<Cal> {
+        self.cal
+    }
+
+    /// The calibration read from the file, at start-up; trusted if fresh. Not over one made since.
+    pub fn load(&mut self, cal: Cal, now_s: u32) {
+        if self.cal.is_none_or(|c| c.by == By::Stock) {
+            self.cal = Some(cal);
+            self.trusted = cal.fresh(now_s);
+        }
+    }
+
+    /// Stock's sea-level pressure (hPa x 10), when nothing better is known; marked for writing.
+    pub fn import_stock(&mut self, hpa10: u32) -> bool {
+        let p0 = hpa10 * 4096 / 10;
+        if self.cal.is_some_and(|c| c.by != By::Stock) || !P0_RANGE.contains(&p0) {
+            return false;
+        }
+        self.cal = Some(Cal { p0, when_s: 0, by: By::Stock });
+        self.dirty = true;
+        true
+    }
+
+    fn set(&mut self, p0: u32, now_s: u32, by: By) {
+        self.cal = Some(Cal { p0, when_s: now_s, by });
+        self.trusted = true;
+        self.dirty = true;
+        self.epoch = self.epoch.checked_add(1).unwrap_or(1);
+        self.want = Want::None;
+    }
+
+    /// Calibrates so that the barometer reads `alt_mm` now. False if it is silent or no sea-level pressure fits.
+    pub fn calibrate(&mut self, alt_mm: i32, now_s: u32) -> bool {
+        let Some(p0) = self.pressure().and_then(|p| p0_for(p, alt_mm)) else { return false };
+        self.set(p0, now_s, By::Typed);
+        true
+    }
+
+    /// Starts averaging the receiver's altitude for a calibration (FROM GPS).
+    pub fn from_gps(&mut self) {
+        (self.want, self.n, self.alt_sum, self.p_sum) = (Want::Manual, 0, 0, 0);
+    }
+
+    /// A ride starts: if the calibration is not trusted, average the receiver's altitude for one (module doc).
+    pub fn ride_start(&mut self) {
+        if !self.trusted && self.want == Want::None {
+            (self.want, self.n, self.alt_sum, self.p_sum) = (Want::Auto, 0, 0, 0);
+        }
+    }
+
+    /// Seconds averaged so far for a calibration from the receiver; None when none is wanted.
+    pub fn progress(&self) -> Option<u32> {
+        (self.want != Want::None).then_some(self.n)
+    }
+
+    /// A calibration is being averaged for by hand (FROM GPS), not at a ride's start.
+    pub fn manual(&self) -> bool {
+        self.want == Want::Manual
+    }
+
+    /// The barometer reads (a calibration needs it).
+    pub fn reads(&self) -> bool {
+        self.smooth.is_some()
+    }
+
+    /// One second: `gps` is the receiver's altitude (mm) when it has a 3D fix with six satellites or more. A second
+    /// without either, the average starts again (it wants [`WINDOW_S`] in a row).
+    // ponytail: a plain mean; a median would resist a single wild altitude. Add if the owner sees one.
+    pub fn second(&mut self, gps: Option<i32>, now_s: u32) {
+        if self.want == Want::None {
+            return;
+        }
+        let (Some(alt), Some(p)) = (gps.filter(|a| crate::ride::ALT_RANGE_MM.contains(a)), self.pressure()) else {
+            (self.n, self.alt_sum, self.p_sum) = (0, 0, 0);
+            return;
+        };
+        self.n += 1;
+        self.alt_sum += i64::from(alt);
+        self.p_sum += u64::from(p);
+        if self.n < WINDOW_S {
+            return;
+        }
+        let by = if self.want == Want::Auto { By::Auto } else { By::Gps };
+        let (alt, p) = ((self.alt_sum / i64::from(WINDOW_S)) as i32, (self.p_sum / u64::from(WINDOW_S)) as u32);
+        match p0_for(p, alt) {
+            Some(p0) => self.set(p0, now_s, by),
+            // no sea-level pressure fits: given up
+            None => (self.want, self.n, self.alt_sum, self.p_sum) = (Want::None, 0, 0, 0),
+        }
+    }
+
+    /// The altitude for the ride and its reference number: the barometer's when it reads and the calibration is
+    /// trusted (or the receiver has nothing), else the receiver's (reference 0).
+    pub fn source(&self, gps: Option<i32>) -> (Option<i32>, u8) {
+        match self.alt_mm() {
+            Some(a) if self.trusted || gps.is_none() => (Some(a), self.epoch),
+            _ => (gps, 0),
+        }
+    }
+
+    /// The calibration to write, once (None when the file has it).
+    pub fn take_dirty(&mut self) -> Option<Cal> {
+        let c = self.cal.filter(|_| self.dirty);
+        self.dirty = false;
+        c
+    }
+
+    /// The calibration is to be written again (a write that failed).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = self.cal.is_some();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern crate std;
+
+    fn exact(p: u32, p0: u32) -> f64 {
+        44307.694 * (1.0 - (f64::from(p) / f64::from(p0)).powf(0.190284))
+    }
+
+    #[test]
+    fn table_matches_the_formula() {
+        for (k, &v) in TABLE.iter().enumerate() {
+            let r = (k as f64 + 16.0) / 64.0;
+            assert!((f64::from(v) - 44307694.0 * (1.0 - r.powf(0.190284))).abs() < 1.0, "entry {k}");
+        }
+        for p in (260 * 4096..1260 * 4096).step_by(997) {
+            if let Some(h) = alt_mm(p, P_STD) {
+                let e = (f64::from(h) / 1000.0 - exact(p, P_STD)).abs();
+                let limit = if h < 2_000_000 { 0.35 } else { 3.0 };
+                assert!(e < limit, "{p}: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn isa_reference_values() {
+        // ICAO standard atmosphere: hPa at the altitude (m)
+        for (hpa, m) in [(1013.25, 0.0), (898.746, 1000.0), (794.952, 2000.0), (701.085, 3000.0), (540.48, 5000.0)] {
+            let h = f64::from(alt_mm((hpa * 4096.0) as u32, P_STD).unwrap()) / 1000.0;
+            let tol = if m < 3500.0 { 1.5 } else { 6.0 }; // the formula is a fit of the ISA, a few m apart higher up
+            assert!((h - m).abs() < tol, "{hpa} hPa: {h} m, ISA {m}");
+        }
+    }
+
+    #[test]
+    fn out_of_range_is_none() {
+        assert_eq!(alt_mm(P_STD, 0), None);
+        assert_eq!(alt_mm(100 * 4096, P_STD), None, "ratio 0.1");
+        assert_eq!(alt_mm(2000 * 4096, P_STD), None);
+        assert_eq!(p0_for(P_STD, 20_000_000), None);
+        assert_eq!(p0_for(P_STD, -20_000_000), None);
+    }
+
+    #[test]
+    fn calibration_by_a_typed_altitude() {
+        let mut a = Altimeter::new();
+        assert!(!a.calibrate(100_000, 5), "silent: refused");
+        for _ in 0..4 {
+            a.feed(Some(900 * 4096));
+        }
+        assert!(a.calibrate(1_200_000, 5));
+        assert!(a.alt_mm().unwrap().abs_diff(1_200_000) < 100);
+        a.feed(Some(899 * 4096)); // 1 hPa lower: about 9 m higher, smoothed a quarter of the way
+        let h = a.alt_mm().unwrap();
+        assert!((1_200_000..1_205_000).contains(&h), "{h}");
+        assert_eq!(a.take_dirty().map(|c| c.by), Some(By::Typed));
+        assert_eq!(a.take_dirty(), None, "once");
+        assert!(!a.calibrate(i32::MAX, 5));
+    }
+
+    #[test]
+    fn calibration_from_the_receiver() {
+        let mut a = Altimeter::new();
+        a.feed(Some(950 * 4096));
+        a.from_gps();
+        for s in 0..WINDOW_S {
+            assert_eq!(a.progress(), Some(s));
+            // a receiver 3 m noisy around 540 m
+            a.second(Some(540_000 + [-3000, 2000, 1000, -1000, 3000][s as usize % 5]), 100);
+        }
+        assert_eq!(a.progress(), None, "done");
+        assert!(a.alt_mm().unwrap().abs_diff(540_000) < 700);
+        // a gap restarts it
+        a.from_gps();
+        a.second(Some(540_000), 1);
+        a.second(None, 2);
+        assert_eq!(a.progress(), Some(0));
+    }
+
+    #[test]
+    fn trust_and_the_ride_start() {
+        let mut a = Altimeter::new();
+        a.feed(Some(950 * 4096));
+        let day = 1_800_000_000;
+        a.load(Cal { p0: P_STD, when_s: day - 4 * 3600, by: By::Typed }, day);
+        a.ride_start();
+        assert_eq!(a.progress(), Some(0), "four hours old: a new one");
+        assert_eq!(a.source(Some(500_000)), (Some(500_000), 0), "the receiver's meanwhile");
+        assert!(a.source(None).0.is_some() && a.source(None).1 != 0, "no fix: the barometer, as it is");
+        for _ in 0..WINDOW_S {
+            a.second(Some(500_000), day);
+        }
+        let (alt, r) = a.source(Some(500_000));
+        assert!(alt.is_some() && r > 1, "a new reference");
+        let mut b = Altimeter::new();
+        b.load(Cal { p0: P_STD, when_s: day - 3600, by: By::Gps }, day);
+        b.ride_start();
+        assert_eq!(b.progress(), None, "an hour old: kept");
+        let mut c = Altimeter::new();
+        c.load(Cal { p0: P_STD, when_s: day + 5, by: By::Gps }, day);
+        assert!(!c.cal().unwrap().fresh(day), "a clock gone back");
+        assert!(!Cal { p0: P_STD, when_s: 0, by: By::Stock }.fresh(day));
+    }
+
+    #[test]
+    fn silent_barometer_and_stock_import() {
+        let mut a = Altimeter::new();
+        a.feed(Some(900 * 4096));
+        a.feed(None);
+        a.feed(Some(5)); // out of the chip's range
+        assert!(a.alt_mm().is_some(), "two misses");
+        a.feed(None);
+        assert_eq!((a.alt_mm(), a.source(Some(7)).1), (None, 0));
+        assert!(a.import_stock(10200));
+        assert_eq!(a.cal().map(|c| c.by), Some(By::Stock));
+        assert!(!a.import_stock(5000), "out of range");
+        let mut b = Altimeter::new();
+        b.load(Cal { p0: P_STD, when_s: 9, by: By::Typed }, 9);
+        assert!(!b.import_stock(10200), "not over one made here");
+    }
+
+    #[test]
+    fn a_climb_is_smooth() {
+        // 1 m a second up with a few counts of noise: the smoothed altitude follows within the filter's lag
+        let mut a = Altimeter::new();
+        let mut x = 12345u32;
+        for s in 0..200u32 {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            let noise = (x >> 16) as i32 % 5 - 2;
+            let p = (f64::from(P_STD) * (1.0 - f64::from(s) / 8434.0)) as i32 + noise * 3;
+            a.feed(Some(p as u32));
+            if s > 20 {
+                let h = f64::from(a.alt_mm().unwrap()) / 1000.0;
+                assert!((h - f64::from(s)).abs() < 5.0, "{s}: {h}"); // lag of the filter: 3 s of climb
+            }
+        }
+    }
+}

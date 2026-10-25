@@ -12,6 +12,7 @@
 #![warn(missing_docs)]
 
 pub mod alerts;
+pub mod altitude;
 mod app;
 pub mod course;
 pub mod dev;
@@ -141,8 +142,6 @@ pub trait Board {
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
-    /// The backlight is wanted on (Back toggles it); it is on unless timed out.
-    backlight: bool,
     /// The level the backlight is at (0: off).
     light_shown: u8,
     /// Since the last key press.
@@ -157,6 +156,10 @@ pub struct App {
     measuring: bool,
     /// The barometer's last reading: hPa x 10, C x 100.
     baro: Option<(u32, i16)>,
+    /// The barometric altitude and its calibration (altitude.rs); since the barometer was last read; the file.
+    alt: altitude::Altimeter,
+    baro_ms: u32,
+    alt_store: AltStore,
     /// The RTC's seconds (the main screen shows them).
     seconds: u8,
     /// What the status strip shows, and what it showed when last drawn.
@@ -189,6 +192,8 @@ pub struct App {
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
     live: Live,
+    /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
+    zones: [ride::ZoneHold; 4],
     decoders: Decoders,
     /// RMSSD and DFA alpha1 from the strap's beats.
     hrv: hrv::Hrv,
@@ -386,7 +391,6 @@ impl App {
         let store = PageStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
-            backlight: true,
             light_shown: 0,
             idle_ms: 0,
             chips: ambient::init(b),
@@ -395,6 +399,9 @@ impl App {
             light_ms: LIGHT_MS,          // a measurement at the first step
             measuring: false,
             baro: None,
+            alt: altitude::Altimeter::new(),
+            baro_ms: BATTERY_MS - BARO_RIDE_MS, // the first reading a second after the start (the conversion's)
+            alt_store: AltStore::default(),
             seconds: rtc_time_from_tr(b.rtc().0).2,
             strip: Strip {
                 time: rtc_hm(b),
@@ -405,6 +412,7 @@ impl App {
                 battery: None,
                 charging: false,
                 rec: Rec::Idle,
+                locked: false,
             },
             strip_shown: Strip {
                 time: (0, 0),
@@ -415,6 +423,7 @@ impl App {
                 battery: None,
                 charging: false,
                 rec: Rec::Idle,
+                locked: false,
             },
             screen: Screen::Main,
             ble,
@@ -435,6 +444,7 @@ impl App {
             shifts: 0,
             ask: 0,
             live: Live::default(),
+            zones: [ride::ZoneHold::default(); 4],
             decoders: Decoders::default(),
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),
@@ -608,11 +618,6 @@ impl App {
                 self.alarm_notice("BATTERY LOW");
             }
             self.told_low = low;
-            if self.chips.baro {
-                // the conversion started 10 s ago; the next one now (one-shot: the chip sleeps in between)
-                self.baro = ambient::baro_read(b);
-                ambient::baro_start(b);
-            }
         }
         self.poll_light(b);
         if self.ble.is_some() {
@@ -737,6 +742,7 @@ impl App {
             self.repeated = false;
         }
         self.step_recorder(b);
+        self.step_altitude(b);
         if self.ble.is_some() {
             self.step_phone(b);
         }
