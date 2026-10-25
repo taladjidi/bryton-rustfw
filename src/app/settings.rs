@@ -249,10 +249,26 @@ impl Settings {
     /// assert_eq!((old.wheel_mm, old.max_hr, old.ftp), (WHEELS[3], 225, 100));
     /// ```
     pub fn from_word(w: u32) -> Settings {
-        let (weight_kg, wprime_j) = (power::WEIGHT_KG, power::WPRIME_J);
         let wheel = |mm: u16| if WHEELS.contains(&mm) { mm } else { WHEELS[1] };
         let level = |l: u32| (l as usize) % (LIGHT_LEVELS.len() + 1);
         let index = |i: u32| WHEELS.get(i as usize).copied().unwrap_or(WHEELS[1]);
+        // what a word that carries none of these keeps, and every tag starts from; the tags set what they hold
+        let base = Settings {
+            wheel_mm: WHEELS[1],
+            max_hr: ride::MAX_HR,
+            ftp: ride::FTP,
+            light_level: 0,
+            light_timeout: 0,
+            weight_kg: power::WEIGHT_KG,
+            wprime_j: power::WPRIME_J,
+            eat_min: 0,
+            drink_min: 0,
+            hr_alert: 0,
+            wkt_avg: 0,
+            touch: true,
+            remote: [menu::Remote::None; 4],
+            alt_m: 500,
+        };
         match w >> 24 {
             0xa7 => Settings {
                 wheel_mm: index(w & 7),
@@ -261,14 +277,7 @@ impl Settings {
                 touch: w >> 23 & 1 == 0,
                 light_level: level(w >> 3 & 7),
                 light_timeout: (w >> 6 & 3) as usize,
-                weight_kg,
-                wprime_j,
-                eat_min: 0,
-                drink_min: 0,
-                hr_alert: 0,
-                wkt_avg: 0,
-                remote: [menu::Remote::None; 4],
-                alt_m: 500,
+                ..base
             },
             0xa6 => Settings {
                 wheel_mm: index(w & 7),
@@ -276,48 +285,15 @@ impl Settings {
                 ftp: code_ftp(w >> 8 & 0xf),
                 light_level: level(w >> 16 & 7),
                 light_timeout: (w >> 20 & 3) as usize,
-                weight_kg,
-                wprime_j,
-                eat_min: 0,
-                drink_min: 0,
-                hr_alert: 0,
-                wkt_avg: 0,
-                touch: true,
-                remote: [menu::Remote::None; 4],
-                alt_m: 500,
+                ..base
             },
             0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
-                max_hr: ride::MAX_HR,
-                ftp: ride::FTP,
                 light_level: level(w >> 16 & 0xf),
                 light_timeout: (w >> 20 & 0xf) as usize % LIGHT_TIMEOUTS_S.len(),
-                weight_kg,
-                wprime_j,
-                eat_min: 0,
-                drink_min: 0,
-                hr_alert: 0,
-                wkt_avg: 0,
-                touch: true,
-                remote: [menu::Remote::None; 4],
-                alt_m: 500,
+                ..base
             },
-            _ => Settings {
-                wheel_mm: WHEELS[1],
-                max_hr: ride::MAX_HR,
-                ftp: ride::FTP,
-                light_level: 0,
-                light_timeout: 0,
-                weight_kg,
-                wprime_j,
-                eat_min: 0,
-                drink_min: 0,
-                hr_alert: 0,
-                wkt_avg: 0,
-                touch: true,
-                remote: [menu::Remote::None; 4],
-                alt_m: 500,
-            },
+            _ => base,
         }
     }
 
