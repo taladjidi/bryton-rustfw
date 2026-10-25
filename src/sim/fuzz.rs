@@ -1202,8 +1202,9 @@ fn history_by_chance() {
     assert!(deletes > 5 && refused > 0, "{deletes} deletes, {refused} refused");
 }
 
-/// Random edits of random pages (page.rs): every result well formed, within 5 rows and 8 cells, never more fields
-/// unreadable than before; each edit reached both ways (done and refused).
+/// Random edits of random pages (page.rs): every result well formed, within 5 rows and 8 cells, every box a value's
+/// size at least, no field unreadable in more cells than before (cells move in an edit: matched by field); each edit
+/// reached both ways (done and refused).
 #[test]
 fn page_edits() {
     use crate::page::{CELLS, Page, ROWS};
@@ -1230,7 +1231,10 @@ fn page_edits() {
             match r {
                 Ok((q, at)) => {
                     assert!(q.well_formed() && q.used().len() <= ROWS && q.cells() <= CELLS, "{op}: {q:?}");
-                    assert!(q.misfits() <= p.misfits(), "{op} made a field unreadable: {p:?} -> {q:?}");
+                    assert!(q.roomy(), "{op} left a box under a value's size: {p:?} -> {q:?}");
+                    for f in Field::ALL {
+                        assert!(q.misfits_of(f) <= p.misfits_of(f), "{op} made {f:?} unreadable: {p:?} -> {q:?}");
+                    }
                     assert!(at < q.cells());
                     done[op] += 1;
                     p = q;
@@ -1244,7 +1248,8 @@ fn page_edits() {
 }
 
 /// Random and damaged copies of `\Rustfw\pages.bin` (page.rs `Saved`): no panic; random bytes with a good tag and
-/// CRC (so the checks after them run) give only well formed pages, and both kinds are reached.
+/// CRC (so the checks after them run) give only well formed pages with boxes a value's size at least, which draw
+/// (every page of them, on the Sim, without a panic), and both kinds are reached.
 #[test]
 fn pages_file() {
     use crate::page::{Page, Saved};
@@ -1252,6 +1257,9 @@ fn pages_file() {
     let (mut good, mut bad) = (0u32, 0u32);
     let p = Page::preset(5, [Field::Hr; 8]).unwrap();
     let whole = Saved { seq: 9, pages: [p; crate::PAGES], count: 3, words: [1; 6], was: [2; 6] }.to_sector();
+    let mut sim = super::Sim::new(9, 0, 0);
+    let mut app = crate::App::start(&mut sim, None);
+    let mut drawn = 0;
     for seed in 1..=3000u32 {
         let mut s = [0u8; 512];
         for (b, x) in s.iter_mut().zip(bytes(seed, 512)) {
@@ -1265,15 +1273,22 @@ fn pages_file() {
                 s[at] ^= 1 << (i % 8);
             }
         } else {
-            // random rows, fields and count behind a good tag, the CRC made to match
+            // random rows (1 to 5 in use, now and then a stray byte after them), fields and count behind a good
+            // tag, the CRC made to match
             s[..4].copy_from_slice(b"RPG1");
             s[8] = (seed % 8) as u8;
-            for b in &mut s[60..60 + crate::PAGES * 13] {
-                *b = match *b % 4 {
-                    0 => (1 + *b % 3) << 4 | (1 + *b / 4 % 2),
-                    1 => 0,
-                    _ => *b % (Field::ALL.len() as u8 + 2),
-                };
+            for page in s[60..60 + crate::PAGES * 13].chunks_exact_mut(13) {
+                let used = 1 + usize::from(page[12] % 5);
+                for (r, b) in page[..5].iter_mut().enumerate() {
+                    *b = match (r < used, *b % 16) {
+                        (true, _) => (1 + *b % 3) << 4 | (1 + *b / 4 % 2),
+                        (false, 0) => *b | 1,
+                        (false, _) => 0,
+                    };
+                }
+                for b in &mut page[5..] {
+                    *b %= Field::ALL.len() as u8 + 2;
+                }
             }
             let at = 60 + crate::PAGES * 13;
             let crc = crate::fit::crc(0, &s[..at]);
@@ -1284,14 +1299,23 @@ fn pages_file() {
         match Saved::newest(&file) {
             Some(saved) => {
                 assert!((1..=crate::PAGES).contains(&saved.count));
-                assert!(saved.pages[..saved.count].iter().all(Page::well_formed));
+                assert!(saved.pages[..saved.count].iter().all(|p| p.well_formed() && p.roomy()));
                 good += 1;
+                if seed % 2 == 1 {
+                    // random pages: each drawn
+                    for p in &saved.pages[..saved.count] {
+                        app.pages[0] = *p;
+                        app.screen = crate::Screen::Ride(0);
+                        app.show(&mut sim);
+                        drawn += 1;
+                    }
+                }
             }
             None => bad += 1,
         }
     }
-    std::println!("pages.bin copies: {good} read, {bad} refused");
-    assert!(good > 20 && bad > 1000, "{good} {bad}");
+    std::println!("pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn");
+    assert!(good > 20 && bad > 1000 && drawn > 20, "{good} {bad} {drawn}");
 }
 
 /// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at

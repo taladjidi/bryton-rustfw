@@ -140,6 +140,12 @@ pub const EDITED: usize = PAGES + 2;
 /// boot reads it (AGENTS.md, "Share the storage with stock").
 pub(crate) const PAGE_BKP: [[usize; 2]; REG_PAGES + 1] = [[20, 21], [22, 23], [24, 25], [26, 27]];
 
+/// Set in the first ride page's second word (register 21, bits 24..27, which [`PageCfg::from_words`] and every
+/// earlier build leave alone) while the registers hold page changes `\Rustfw\pages.bin` does not have yet: a
+/// change made during a ride, in the editor or with the drive lent, then a switch-off or a reset before the file
+/// could be written (app/editor.rs).
+pub(crate) const PAGES_NEWER: u32 = 1 << 24;
+
 /// Where builds of 2026-10-23 kept them (from 19, which stock reads: moved, and 19 given back).
 pub(crate) const PAGE_BKP_B: [[usize; 2]; REG_PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26]];
 

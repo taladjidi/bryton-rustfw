@@ -259,6 +259,9 @@ pub struct App {
     ride_started: ((u16, u8, u8), (u8, u8)),
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
     graph_whole: bool,
+    /// A graph's plot chosen by a tap, per page (the overview last) and box: shown instead of the page's until the
+    /// power goes or the pages change, never saved (the owner's decision, UI review step 7).
+    plot_taps: [[Option<Field>; page::CELLS]; PAGES + 1],
     /// The page's boxes as drawn ([`App::widgets`]).
     drawn: [Drawn; BOXES],
     /// The ride: timer, totals, laps.
@@ -457,6 +460,7 @@ impl App {
             had_fix: false,
             told_low: false,
             graph_whole: false,
+            plot_taps: [[None; page::CELLS]; PAGES + 1],
             ride_started: ((2000, 1, 1), (0, 0)),
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,

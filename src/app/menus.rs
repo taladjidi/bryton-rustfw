@@ -592,7 +592,7 @@ impl App {
             }
             Some(Row::Layout(n)) => self.next_layout(b, n),
             Some(Row::EditPage(n)) => self.edit_page(b, n, 0),
-            Some(Row::AddPage) => self.add_page(b, self.page_count),
+            Some(Row::AddPage) => self.add_page(b, PAGES), // after the last, as many as the file has
             Some(Row::Edit(r)) => {
                 if let Menu::Edit(k) = menu {
                     self.edit_action(b, menu, sel, k, r);

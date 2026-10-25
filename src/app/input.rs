@@ -379,10 +379,10 @@ impl App {
                     let next = all[(all.iter().position(|&p| p == plot).unwrap_or(0) + 1) % all.len()];
                     let n = if let Screen::Ride(n) = self.screen { n } else { OVERVIEW };
                     let fixed = self.widgets().take_while(|(_, w)| !matches!(w, Widget::Field(_))).count();
-                    if let Some(page) = self.pages.get_mut(n)
-                        && let Some(slot) = page.fields.get_mut(k.saturating_sub(fixed))
+                    if let Some(page) = self.plot_taps.get_mut(n)
+                        && let Some(slot) = page.get_mut(k.saturating_sub(fixed))
                     {
-                        *slot = graph_field(next); // not saved: PAGES in the menu changes a page for good
+                        *slot = Some(graph_field(next)); // until power-off: the editor changes a page for good
                     }
                 }
                 return self.show(b);

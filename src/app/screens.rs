@@ -218,7 +218,11 @@ impl App {
             slot.1 = w;
             n += 1;
         }
+        let taps = self.plot_taps.get(page);
         for (i, &f) in p.fields.iter().enumerate() {
+            // a plot chosen by a tap, while the box still holds a graph
+            let tap = taps.and_then(|t| t.get(i).copied().flatten()).filter(|_| graph_plot(f).is_some());
+            let f = tap.unwrap_or(f);
             let bx = if page == OVERVIEW { ui::overview_box(i) } else { p.cell_box(i) };
             let (Some(bx), Some(slot)) = (bx, all.get_mut(n)) else { break };
             *slot = (bx, Widget::Field(f));

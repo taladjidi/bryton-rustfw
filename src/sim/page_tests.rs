@@ -433,3 +433,205 @@ fn a_first_start_keeps_the_files_pages() {
     run(&mut sim2, &mut app, 3000);
     assert_eq!(pages(&app), want);
 }
+
+/// The first ride page as the registers keep it.
+fn reg_page(sim: &Sim) -> Option<PageCfg> {
+    PageCfg::from_words([sim.backup[PAGE_BKP[0][0]], sim.backup[PAGE_BKP[0][1]]])
+}
+
+/// A page changed during a paused ride (the file waits for the ride's end), then the unit switched off: the
+/// registers had it at once, marked newer than the file, so the next start shows it, even when it is the page the
+/// file had before (a change undone: the registers then equal the file's previous words); the file is written once
+/// no ride is open.
+#[test]
+fn a_change_in_a_paused_ride_survives_a_switch_off() {
+    let (mut sim, mut app) = started();
+    let a = app.pages()[0];
+    let b = Page::preset(2, [Wbal, Np, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.pages[0] = b;
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    assert_eq!(file(&sim).unwrap().pages[0], b, "written between rides");
+    press(&mut sim, &mut app, Key::Start);
+    run(&mut sim, &mut app, 3000);
+    app.start_pause();
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    app.screen = Screen::Ride(0);
+    app.edit_page(&mut sim, 0, 0);
+    app.edit.as_mut().unwrap().work = a; // back to the first page
+    app.leave_editor(&mut sim, true);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(file(&sim).unwrap().pages[0], b, "not written during the ride");
+    assert_eq!(reg_page(&sim), Some(a.to_cfg()), "the registers at once");
+    app.power_off(&mut sim);
+    let (sim2, app2) = reboot(&mut sim);
+    assert_eq!(app2.pages()[0], a, "the change kept through the switch-off");
+    assert_eq!(app2.pages()[1..3], app.pages()[1..3]);
+    assert!(app2.store.dirty, "the file to be written once the resumed ride is saved");
+    assert_eq!(file(&sim2).unwrap().pages[0], b);
+}
+
+/// A change made between rides and the unit switched off before the next pass wrote the file: the switch-off puts
+/// it in the registers, and the next start writes it to the file.
+#[test]
+fn a_change_just_before_a_switch_off_is_kept() {
+    let (mut sim, mut app) = started();
+    let p = Page::preset(3, [Hr, Power, Cadence, Time, Time, Time, Time, Time]).unwrap();
+    app.pages[0] = p;
+    app.pages_changed(&mut sim);
+    app.power_off(&mut sim);
+    let (sim2, app2) = reboot(&mut sim);
+    assert_eq!(app2.pages()[0], p);
+    let f = file(&sim2).expect("written at the next start");
+    assert_eq!(f.pages[0], p);
+    assert_eq!(reg_page(&sim2), Some(p.to_cfg()));
+    assert_eq!(sim2.backup[PAGE_BKP[0][1]] & PAGES_NEWER, 0, "the mark cleared with the file written");
+}
+
+/// From a page with six undersized graphs, every page the edits reach keeps each box a value's size at least
+/// (values at 3x), and never makes unreadable a field that was readable.
+#[test]
+fn edits_never_squeeze_a_readable_field() {
+    let start = Page::preset(6, [Graph, AltGraph, HrGraph, WbalGraph, Graph, Graph, Time, Time]).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = std::vec![start];
+    while let Some(p) = todo.pop() {
+        if seen.len() > 50_000 || !seen.insert(std::format!("{p:?}")) {
+            continue;
+        }
+        assert!(p.roomy(), "{p:?}");
+        for k in 0..p.cells() {
+            for q in [
+                p.split_across(k, Speed),
+                p.split_down(k, Speed),
+                p.merge(k).map(|x| x.0),
+                p.resize(k, true),
+                p.resize(k, false),
+                p.with_field(k, Hr),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for f in Field::ALL {
+                    assert!(q.misfits_of(f) <= p.misfits_of(f), "{f:?}: {p:?} -> {q:?}");
+                }
+                todo.push(q);
+            }
+        }
+    }
+    assert!(seen.len() > 100, "{} pages", seen.len());
+}
+
+/// The card lent to the computer before the file was read: a page change is refused (the registers' three pages
+/// would otherwise be written over the file's four), and the file keeps its pages.
+#[test]
+fn no_change_before_the_file_is_read() {
+    let (mut sim, mut app) = started();
+    app.add_page(&mut sim, 3);
+    app.leave_editor(&mut sim, true);
+    run(&mut sim, &mut app, 200);
+    let want = pages(&app);
+    let mut sim2 = Sim::new(9, 0, 0);
+    (sim2.emmc.image, sim2.backup) = (sim.emmc.image.clone(), sim.backup);
+    let mut app = App::start(&mut sim2, None);
+    app.step(&mut sim2);
+    app.emmc.lend(true);
+    app.screen = Screen::Ride(0);
+    let before = app.pages()[0];
+    app.next_layout(&mut sim2, 0);
+    assert_eq!((app.banner.as_str(), app.pages()[0]), ("USB DRIVE ON", before), "refused");
+    app.edit_page(&mut sim2, 0, 0);
+    assert_eq!(app.edit, None);
+    run(&mut sim2, &mut app, 500);
+    app.emmc.lend(false);
+    run(&mut sim2, &mut app, 3000);
+    assert_eq!((pages(&app), file(&sim2).unwrap().count), (want, 4));
+}
+
+/// A tap on a graph shows the next plot until the power goes: the page as kept is not changed, so a later change to
+/// another page does not save it, and the next start shows the page's own plot.
+#[test]
+fn a_graph_tap_is_never_saved() {
+    let (mut sim, mut app) = started();
+    app.pages[1] = Page::preset(2, [Graph, Hr, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 300);
+    app.screen = Screen::Ride(1);
+    app.show(&mut sim);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, 100)));
+    let shown = app.widgets().next().unwrap().1;
+    assert!(matches!(shown, Widget::Field(f) if f != Graph && graph_plot(f).is_some()), "{shown:?}");
+    assert_eq!(app.pages()[1].fields[0], Graph, "the page as kept");
+    super::tests::assert_consistent(&sim, &app);
+    app.next_layout(&mut sim, 0); // another page changed for good
+    run(&mut sim, &mut app, 300);
+    assert_eq!(file(&sim).unwrap().pages[1].fields[0], Graph, "the tap not saved");
+    let (_, app2) = reboot(&mut sim);
+    assert_eq!(app2.pages()[1].fields[0], Graph);
+}
+
+/// A copy of the file with a row too short for a value (CRC good, well formed) is refused at read; such a page
+/// drawn anyway (as an earlier build could have saved it) does not panic.
+#[test]
+fn a_tiny_row_is_refused_and_drawn_safely() {
+    let rows = [(1, 2), (3, 1), (3, 1), (3, 1), (3, 1)];
+    let tiny = Page { rows, fields: [Speed, Hr, Power, Cadence, Dist, Time, Time, Time] };
+    assert!(tiny.well_formed() && !tiny.roomy());
+    let s = Saved { seq: 3, pages: [tiny; PAGES], count: 1, words: [0; 6], was: [0; 6] };
+    assert_eq!(Saved::from_sector(&s.to_sector()), None);
+    let (mut sim, mut app) = started();
+    app.pages[0] = tiny;
+    app.pages[1] = Page { fields: [Graph; 8], ..tiny };
+    for n in 0..2 {
+        app.screen = Screen::Ride(n);
+        app.show(&mut sim);
+        run(&mut sim, &mut app, 1100);
+    }
+}
+
+/// The file's first read fails (the card not answering): it is read again before a change, so the change is written
+/// as the newest copy, never under the older one.
+#[test]
+fn a_failed_read_is_tried_again() {
+    let (mut sim, mut app) = started();
+    for f in [Wbal, Np, Hr] {
+        app.pages[2] = Page::preset(1, [f; 8]).unwrap();
+        app.pages_changed(&mut sim);
+        run(&mut sim, &mut app, 200);
+    }
+    assert_eq!(file(&sim).unwrap().seq, 3);
+    let mut sim2 = Sim::new(9, 0, 0);
+    (sim2.emmc.image, sim2.backup) = (core::mem::take(&mut sim.emmc.image), sim.backup);
+    sim2.emmc.dead = true;
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, PAGES_LOAD_MS as u64 + 200);
+    sim2.emmc.dead = false;
+    let p = Page::preset(2, [Speed, Ascent, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.screen = Screen::Ride(0);
+    app.edit_page(&mut sim2, 0, 0);
+    app.edit.as_mut().unwrap().work = p;
+    app.leave_editor(&mut sim2, true);
+    run(&mut sim2, &mut app, 500);
+    let f = file(&sim2).unwrap();
+    assert_eq!((f.seq, f.pages[0]), (4, p), "the newest copy");
+}
+
+/// PAGES > ADD PAGE before the file was read: the page goes after the file's last, not after the registers' third.
+#[test]
+fn a_page_added_early_goes_last() {
+    let (mut sim, mut app) = started();
+    app.add_page(&mut sim, 3);
+    app.leave_editor(&mut sim, true);
+    run(&mut sim, &mut app, 200);
+    let fourth = app.pages()[3];
+    let mut sim2 = Sim::new(9, 0, 0);
+    (sim2.emmc.image, sim2.backup) = (sim.emmc.image.clone(), sim.backup);
+    let mut app = App::start(&mut sim2, None);
+    app.step(&mut sim2);
+    assert_eq!(app.page_count(), 3, "the registers' pages at first");
+    app.press(&mut sim2, Press::Long(Key::Page));
+    to_row(&mut sim2, &mut app, menu::Row::AddPage);
+    press(&mut sim2, &mut app, Key::Start);
+    assert_eq!((app.page_count(), app.screen(), app.pages()[3]), (5, Screen::Edit(4, 0), fourth));
+}
