@@ -287,7 +287,7 @@ fn course_files() {
         let mut take = |it: Item| {
             match it {
                 Item::Point(p) => way.push((p.lat, p.lon)),
-                Item::Cue(..) => read_cues.set(read_cues.get() + 1),
+                Item::Cue(..) | Item::CueHere(_) => read_cues.set(read_cues.get() + 1),
             }
             c.take(it);
         };

@@ -262,6 +262,8 @@ pub enum Item {
     Point(Pt),
     /// A cue (FIT `course_point`, a GPX turn word), with the file's distance of it if stated (m).
     Cue(i32, i32, Turn, Option<u32>),
+    /// A cue on the point given last (a GPX track point's own turn word).
+    CueHere(Turn),
 }
 
 /// Where the rider is on the course.
@@ -287,6 +289,8 @@ pub struct Tracker {
     cue: usize,
     cue_said: u8,
     speed: u32,
+    /// Fixes in a row placed back before the last cue passed ([`cues::BACK_FIXES`]).
+    back_s: u8,
 }
 
 impl Tracker {
@@ -305,6 +309,7 @@ impl Tracker {
             cue: 0,
             cue_said: 0,
             speed: 0,
+            back_s: 0,
         }
     }
 
@@ -392,6 +397,7 @@ impl Course {
         match item {
             Item::Point(pt) => self.add(pt),
             Item::Cue(lat, lon, turn, dist_m) => self.add_cue(lat, lon, turn, dist_m),
+            Item::CueHere(turn) => self.add_cue_here(turn),
         }
     }
 

@@ -46,7 +46,8 @@
 //! and route points in file order, their elevation, and where a `trk`, `trkseg` or `rte` starts (a jump there is a
 //! gap, [`crate::course::Odometer`]); and cues: a `trkpt`, `rtept` or `wpt` (waypoint) whose `type`, `sym` or
 //! `name` (the first, the more specific) is a turn word ([`crate::course::Turn::from_text`]: BRouter's and
-//! RideWithGPS's conventions, in course/cues.rs); anything else (other waypoints, names, extensions) is skipped. A tag
+//! RideWithGPS's conventions, in course/cues.rs), a track or route point's on that point
+//! ([`Item::CueHere`]), a waypoint's by its position; anything else (other waypoints, names, extensions) is skipped. A tag
 //! longer than [`TAG`] bytes is cut (its attributes past that are not seen).
 //!
 //! Nothing here panics or loops on any input (fuzzed in sim.rs `fuzz`): every loop is bounded by the file's size,
@@ -471,7 +472,9 @@ impl Gpx {
             f(Item::Point(Pt { lat: p.lat, lon: p.lon, alt_dm: p.alt, split, dist_m: None }));
         }
         if let Some((_, turn)) = p.cue {
-            f(Item::Cue(p.lat, p.lon, turn, None));
+            // a track point's cue is on that very point: placed on its pass of the course (an out-and-back's way
+            // back, a lollipop's loop), not on the first pass through the same place
+            f(if p.wpt { Item::Cue(p.lat, p.lon, turn, None) } else { Item::CueHere(turn) });
         }
     }
 }
@@ -616,9 +619,9 @@ pub(crate) mod tests {
                     Item::Cue(30_000, 40_000, Turn::Left, None),
                     Item::Cue(50_000, 60_000, Turn::Water, None),
                     pt(0, 0, Some(10), true),
-                    Item::Cue(0, 0, Turn::SharpLeft, None),
+                    Item::CueHere(Turn::SharpLeft),
                     pt(10_000, 0, None, false),
-                    Item::Cue(10_000, 0, Turn::UTurn, None),
+                    Item::CueHere(Turn::UTurn),
                 ],
                 "chunks of {chunk}"
             );

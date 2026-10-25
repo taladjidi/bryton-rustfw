@@ -125,9 +125,12 @@ The dated findings are in [journal.md](journal.md).
   passes), a course ridden (the window keeping up at speed, the off-course alert in a town's parallel streets, the
   climb banners, a lap course rejoined after a detour). Turn by turn: the cue banners and their beeps at speed
   (200 m, or 20 s if farther, then 32 m or 4 s, on 1 s fixes), the turns found on a real route's shape (no cue on a
-  winding road, every junction where the road turns 45 degrees or more), a Garmin Connect, Komoot or
-  RideWithGPS course's cues, the arrows readable at 2x in the banner and 3x in the field, the time a course's cues
-  take at its read (host: under 1 ms for 4000 points and 256 cues).
+  winding road or a switchback climb, every junction where the road turns 45 degrees or more at a corner, a real
+  roundabout's exit right, counted in either direction; how many junctions taken in a wide sweep go unsaid), a
+  Garmin Connect, Komoot, RideWithGPS or BRouter course's cues (BRouter's roundabouts, its Locus style's cues on
+  the track points), the arrows and the ring readable at 2x in the banner and 3x in the field, END at the field
+  past the last cue, the time a course's cues take at its read (host: about 1 ms for 4000 points and 256 cues; a
+  waypoint off a lap course bounded to 8 chunks).
 - **The I-cache from a cold boot** (seen from RAM).
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature

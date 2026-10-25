@@ -2842,8 +2842,8 @@ fn zigzag_route(ms: u64) -> (i32, i32, i32) {
 
 /// Turn-by-turn on the zigzag's GPX track (its turns found on its shape): each turn said in the banner with its
 /// arrow 200 m before ("LEFT 200 M", a beep) and at it ("LEFT NOW", two beeps), once each, in order; the course
-/// page's NEXT TURN field shows the arrow and the distance, redrawn by its changed characters. The banner costs its
-/// own pixels and no more.
+/// page's NEXT TURN field shows the arrow and the distance, redrawn by its changed characters, and END past the last
+/// one. The banner costs its own pixels and no more.
 #[test]
 fn course_cues_ride() {
     use crate::course::Turn;
@@ -2896,6 +2896,8 @@ fn course_cues_ride() {
         }
         last = b;
     }
+    // past the last turn, at the end: no turn left, said as such (not "--" as off course)
+    assert_eq!(text(&app), "END");
     let mut want = Vec::new();
     for c in &cues {
         let words = std::format!("{} {}", c.turn.glyph(), c.turn.word());
