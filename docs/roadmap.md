@@ -13,6 +13,12 @@ that crept in.
 
 ## 1. Pages and menus that the rest can build on
 
+- **The owner's notes, for later (2026-10-25):**
+  - Plain power and heart rate fields coloured by the zone the rider is in (the value or the box's background), as
+    the graphs already are.
+  - Pages the rider adds (up to a sensible number) and edits live on the page, splitting and merging cells, instead
+    of fixed layouts picked from a list.
+
 Today `App` (src/lib.rs) holds menus as hard-coded row numbers (`activate` matching `(Menu::Main, 7 | 8)`), each
 Back has its own destination, and four mechanisms track what is on screen (`shown`, `main_shown`, `menu_shown`,
 `graph_shown`). Each new feature would add another case to all of them.

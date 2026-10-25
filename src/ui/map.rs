@@ -75,9 +75,6 @@ pub enum Button {
 const MARGIN: i32 = 20;
 /// The arrow's length from its centre to its tip (pixels).
 const ARROW: i32 = 9;
-/// Scale bar lengths offered, metres; the longest that fits a third of the map's width is shown.
-const NICE_M: [i32; 15] =
-    [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
 /// sin of the 16 compass directions (22.5 degrees apart, clockwise from north), x 256.
 const SIN16: [i32; 16] = [0, 98, 181, 237, 256, 237, 181, 98, 0, -98, -181, -237, -256, -237, -181, -98];
 
@@ -620,11 +617,15 @@ fn triangle(c: &mut impl Canvas, k: Rect, v: [(i32, i32); 3], color: u16) {
     }
 }
 
-/// The scale bar, bottom left: a bar of a round length and its label above it.
+/// The scale bar, bottom left: a bar of a fixed length and the distance it spans above it. Fixed, so a zoom step
+/// always changes the number the way the zoom went (a round length per view made two steps show the same "200 M" with
+/// bars of other lengths, which read as a zoom the wrong way: the owner, 2026-10-25). The levels' metres a pixel (1,
+/// 1.5, 2, 3, 4, 6...) times 50 px give round enough numbers: 50 M, 75 M, 100 M, 150 M... 1.2 KM, as Garmin's
+/// scale steps go.
 fn scale_bar(c: &mut impl Canvas, k: Rect, area: Rect, view: &View) {
-    let len = |m: i32| (i64::from(m) * 16 / view.mpp16) as i32;
-    let Some(&m) = NICE_M.iter().rev().find(|&&m| len(m) <= area.2 / 3) else { return };
-    let len = len(m);
+    // half as long in a box too narrow (a third of its width at most)
+    let len = if area.2 / 3 >= SCALE_PX { SCALE_PX } else { SCALE_PX / 2 };
+    let m = (i64::from(len) * view.mpp16 / 16).clamp(1, i64::from(i32::MAX)) as u32;
     let (x, y) = (area.0 + 8, area.1 + area.3 - 8);
     // a black outline first: white alone vanishes on IGN's light map
     run(c, k, x - 1, y - 3, len + 2, 4, ui::BLACK);
@@ -634,16 +635,42 @@ fn scale_bar(c: &mut impl Canvas, k: Rect, area: Rect, view: &View) {
     run(c, k, x, y - 8, 2, 6, ui::WHITE);
     run(c, k, x + len - 2, y - 8, 2, 6, ui::WHITE);
     let mut l = Line::<8>::new();
-    if m >= 1000 {
-        l.push_u32(m as u32 / 1000);
-        l.push_str(" KM");
-    } else {
-        l.push_u32(m as u32);
-        l.push_str(" M");
-    }
+    push_distance(&mut l, m);
     let ty = y - 10 - LABEL.height() as i32;
     if x >= 0 && ty >= 0 {
         text::draw(c, &LABEL, x as u32, ty as u32, Align::Left, l.as_str());
+    }
+}
+
+/// The scale bar's length, pixels (half in a narrow box).
+const SCALE_PX: i32 = 50;
+
+/// `m` metres as the scale bar says it: "75 M" under a kilometre, then "1.2 KM" with one decimal under 10 km, then
+/// whole kilometres.
+///
+/// ```
+/// use bryton_rustfw::{map::push_distance, text::Line};
+/// let s = |m| { let mut l = Line::<8>::new(); push_distance(&mut l, m); std::string::String::from(l.as_str()) };
+/// assert_eq!([s(75), s(1200), s(1000), s(12_800)], ["75 M", "1.2 KM", "1 KM", "12 KM"]);
+/// ```
+pub fn push_distance<const N: usize>(l: &mut Line<N>, m: u32) {
+    match m {
+        ..1000 => {
+            l.push_u32(m);
+            l.push_str(" M");
+        }
+        1000..10_000 => {
+            l.push_u32(m / 1000);
+            if m % 1000 >= 100 {
+                l.push_str(".");
+                l.push_u32(m % 1000 / 100);
+            }
+            l.push_str(" KM");
+        }
+        _ => {
+            l.push_u32(m / 1000);
+            l.push_str(" KM");
+        }
     }
 }
 
@@ -829,6 +856,27 @@ pub fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every zoom step changes the scale bar's number the way the zoom went, the bar the same length (the owner: the
+    /// labels changed erratically, a zoom in could read as a zoom out).
+    #[test]
+    fn scale_bar_numbers_follow_the_zoom() {
+        extern crate std;
+        let said = |level: u32| {
+            let mut l = Line::<8>::new();
+            push_distance(&mut l, (i64::from(SCALE_PX) * mpp16(level) / 16) as u32);
+            std::string::String::from(l.as_str())
+        };
+        let m = |level: u32| SCALE_PX as i64 * mpp16(level) / 16;
+        for level in MIN_LEVEL..MAX_LEVEL {
+            assert!(m(level + 1) > m(level), "level {level}");
+            assert_ne!(said(level + 1), said(level), "level {level}: the same label twice");
+        }
+        assert_eq!(
+            (MIN_LEVEL..MIN_LEVEL + 6).map(said).collect::<std::vec::Vec<_>>(),
+            ["75 M", "100 M", "150 M", "200 M", "300 M", "400 M"]
+        );
+    }
 
     #[test]
     fn projects_metres() {

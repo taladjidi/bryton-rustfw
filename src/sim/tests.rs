@@ -283,10 +283,12 @@ fn a_tap_at_the_bottom_stays_on_the_screen() {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, None);
         app.press(&mut sim, Press::Long(Key::Page));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
-        assert!(app.rows(Menu::Main) > ui::MENU_ROWS, "a second screen of rows");
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0));
+        assert!(app.rows(Menu::Sensors) > ui::MENU_ROWS, "a second screen of rows");
         app.input(&mut sim, Input::Touch(Gesture::Tap(120, y as u16)));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Main, ui::MENU_ROWS - 1), "y {y}");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, ui::MENU_ROWS - 1), "y {y}");
         assert_consistent(&sim, &app);
     }
 }
