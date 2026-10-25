@@ -120,8 +120,9 @@ def main():
     if a.off:
         # Back held (low; 10 s: 4 were too short in emulated time), released; the switching off ends with standby:
         # then the count, twice, 2 s apart
-        # lptimer1 warns at every tick once the unit is off and floods the log: an answer can drown in it
-        script += ['logLevel 3 lptimer1', 'gpioPortA OnGPIO 1 false', 'emulation RunFor "10"', 'gpioPortA OnGPIO 1 true',
+        # (lptimer1 used to warn at every tick at 100 % backlight, CMP = ARR, and the counts drowned in the flood:
+        # main.rs caps CMP below ARR now. logLevel 3 on it, short or full path, did not silence it)
+        script += ['gpioPortA OnGPIO 1 false', 'emulation RunFor "10"', 'gpioPortA OnGPIO 1 true',
                    'emulation RunFor "2"', 'echo "instructions"', 'cpu ExecutedInstructions', 'emulation RunFor "2"',
                    'echo "instructions"', 'cpu ExecutedInstructions']
     script += ['cpu PC', 'quit']

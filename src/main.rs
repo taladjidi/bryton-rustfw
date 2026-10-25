@@ -605,7 +605,9 @@ fn backlight(level: u8) {
         return;
     }
     wr(LPTIM_ICR, 1 << 3);
-    wr(LPTIM_CMP, u32::from(level.min(100)) - 1);
+    // CMP below ARR (99): RM0399's LPTIM wants ARR greater than CMP (inferred from its register notes; Renode's model
+    // refuses CMP = ARR and warned at every tick), so 100 % is 99 %: a step no eye sees
+    wr(LPTIM_CMP, u32::from(level.min(99)) - 1);
     let _ = wait_us(1000, || rd(LPTIM_ISR) & (1 << 3) != 0); // CMPOK
     gpio(BACKLIGHT.0, BACKLIGHT.1, AF, 1); // LPTIM1_OUT
 }
