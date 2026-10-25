@@ -436,7 +436,9 @@ impl App {
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap (on the overview too)
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
             (Screen::Main | Screen::Ride(_), Input::End) => self.end_ride(),
-            (Screen::Summary, _) => self.screen = Screen::Main,
+            // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
+            (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,
+            (Screen::Summary, _) => return,
             (Screen::Main | Screen::Ride(_), Input::Prev) => return self.lap(),
             (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);

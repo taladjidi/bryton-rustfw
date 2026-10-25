@@ -70,7 +70,7 @@ impl App {
     }
 
     /// Ends a paused ride (Start held, END RIDE in the ride menu): the recorder saves it, the workout ends with it,
-    /// and its card shows (any key goes on to the overview).
+    /// and its card shows (Back or Start goes on to the overview).
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
         self.recorder(ev);

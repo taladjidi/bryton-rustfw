@@ -62,7 +62,7 @@
 - **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track
   (over the basemap, as the history's cards),
   the elevation profile, time, distance, average speed, ascent, NP, average power, average and max heart rate, TSS,
-  kJ. Any key goes on to the overview. Each past ride has the same card (HISTORY, below).
+  kJ. It stays until Back or Start (no other key, swipe or tap dismisses it) and then the overview shows. Each past ride has the same card (HISTORY, below).
 
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most

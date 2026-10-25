@@ -2076,6 +2076,46 @@ fn back_held_3s_powers_off_after_release() {
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
 }
 
+/// The ride's card stays until Back or Start: another key, a swipe, a tap or a hold does not dismiss it (2026-10-25
+/// review 2, P4: a raindrop threw the summary away).
+#[test]
+fn the_ride_card_stays_until_back_or_start() {
+    use crate::touch::Dir;
+    let ended = |sim: &mut Sim| {
+        let mut app = App::start(sim, None);
+        sim.emmc.image = crate::fat::tests::image();
+        app.press(sim, Press::Short(Key::Start));
+        run(sim, &mut app, 5000);
+        app.press(sim, Press::Short(Key::Start));
+        app.press(sim, Press::Long(Key::Start));
+        run(sim, &mut app, 5000); // the banners go
+        assert_eq!(app.screen(), Screen::Summary);
+        app
+    };
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = ended(&mut sim);
+    for i in [
+        Input::Next,
+        Input::Prev,
+        Input::Menu,
+        Input::Media,
+        Input::Touch(Gesture::Swipe(Dir::Left)),
+        Input::Touch(Gesture::Swipe(Dir::Right)),
+        Input::Touch(Gesture::Tap(120, 160)),
+        Input::Touch(Gesture::Hold(120, 160)),
+    ] {
+        app.input(&mut sim, i);
+        assert_eq!(app.screen(), Screen::Summary, "{i:?}");
+    }
+    assert_consistent(&sim, &app);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main, "Back");
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = ended(&mut sim);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Idle), "Start: no new ride");
+}
+
 /// Back answers a confirmation "no": the asking row goes back to its label, nothing is done, and the menu stays
 /// (the Back only cancels).
 #[test]
