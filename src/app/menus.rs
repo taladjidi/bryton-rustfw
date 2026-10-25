@@ -167,7 +167,9 @@ impl App {
 
     /// How many rows `menu` has.
     pub(crate) fn rows(&self, menu: Menu) -> usize {
-        (0..128).take_while(|&i| self.row(menu, i).is_some()).count() // a workout's steps: up to 97
+        // the longest lists: HISTORY's FITNESS row and its 128 rides (history::RIDES), a workout's steps (up to 97)
+        const MAX_ROWS: usize = crate::history::RIDES + 2;
+        (0..MAX_ROWS).take_while(|&i| self.row(menu, i).is_some()).count()
     }
 
     /// Menu row `i` of `menu`: label, value, value colour; None past the last row.

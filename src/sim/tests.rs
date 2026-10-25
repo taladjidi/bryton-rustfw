@@ -3990,3 +3990,24 @@ fn the_power_button_held_through_the_start_does_not_switch_off() {
     run(&mut sim, &mut app, 6000);
     assert!(sim.standby, "a new 3 s hold switches off");
 }
+
+/// HISTORY lists every ride the index holds, the oldest of a full index included (the row count once stopped at
+/// 128, one short of FITNESS and 128 rides: code review).
+#[test]
+fn history_reaches_the_oldest_of_a_full_index() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.stock.start(app.date);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 120_000, "the scan ends");
+    }
+    let ride = *app.stock.index.get(0).expect("a synthetic ride");
+    for _ in 0..crate::history::RIDES {
+        app.stock.index.add(ride);
+    }
+    assert_eq!(app.stock.index.len(), crate::history::RIDES);
+    assert_eq!(app.rows(Menu::History), crate::history::RIDES + 1, "FITNESS and every ride");
+    assert_eq!(app.row(Menu::History, crate::history::RIDES), Some(menu::Row::Past(crate::history::RIDES - 1)));
+}
