@@ -1548,7 +1548,11 @@ fn end_ride_screen_by_chance() {
                 };
                 let was = app.screen();
                 app.input(&mut sim, i);
-                assert_ne!(app.ride.state(), ride::State::Running, "{what}: {i:?} on {was:?}");
+                if app.ride.state() == ride::State::Running {
+                    // RESUME, the one way to run it from here: paused again, then as Back
+                    assert!(matches!(was, Screen::End(_)), "{what}: {i:?} on {was:?}");
+                    app.start_pause();
+                }
                 asked += u32::from(matches!(app.screen(), Screen::Discard(_)) && !matches!(was, Screen::Discard(_)));
                 match (app.ride.state(), app.screen()) {
                     (ride::State::Paused, Screen::End(_) | Screen::Discard(_)) => {}

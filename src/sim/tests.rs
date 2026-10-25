@@ -1929,7 +1929,7 @@ fn ride_menu() {
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
 
-    // END RIDE: the end-ride screen (the ride paused), RESUME back to the page as it was, then SAVE: the card
+    // END RIDE: the end-ride screen (the ride paused), RESUME back to the page riding, then SAVE: the card
     hold_page(&mut sim, &mut app);
     assert_eq!(labels(&app), base);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
@@ -1937,8 +1937,8 @@ fn ride_menu() {
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::End(0)));
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
-    app.press(&mut sim, Press::Short(Key::Start)); // RESUME: the page, the ride paused
-    assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::Ride(0)));
+    app.press(&mut sim, Press::Short(Key::Start)); // RESUME: the page, the ride running again
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Running, Screen::Ride(0)));
     hold_page(&mut sim, &mut app);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
     app.press(&mut sim, Press::Short(Key::Start));

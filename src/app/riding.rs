@@ -86,11 +86,12 @@ impl App {
     pub(crate) fn discard_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
         self.recorder(ev);
-        self.recorder.discard();
+        // too late once the save has begun (a full card stopped the ride): it is in \Activities, so say so
+        let took = self.recorder.discard() || !self.card_writable;
         self.full.discard();
         self.player = None;
         (self.depth, self.screen) = (0, Screen::Main);
-        self.say("DISCARDING");
+        self.say(if took { "DISCARDING" } else { "ALREADY SAVED" });
     }
 
     /// The end-ride screen's numbers: the timer and the distance.
@@ -105,8 +106,8 @@ impl App {
 
     /// An input on the end-ride screen or its question (ui::draw_end): Page and Lap move between the buttons, no
     /// wrap (only the two that change drawn again), Start acts on the one selected, a tap on a button acts on it,
-    /// Back (or a swipe right) is RESUME, or KEEP. RESUME leaves the ride paused as it was; while the screen is up
-    /// the ride stays paused and its recording as it was (a reset then resumes it paused, as ever).
+    /// Back (or a swipe right) leaves the ride paused ("PAUSED"), or is KEEP. RESUME restarts the timer. While the
+    /// screen is up the ride stays paused and its recording as it was (a reset then resumes it paused, as ever).
     pub(crate) fn end_input(&mut self, b: &mut impl Board, i: Input) {
         let (discard, sel) = match self.screen {
             Screen::End(k) => (false, k),
@@ -118,7 +119,6 @@ impl App {
             return self.show(b);
         }
         let labels = ui::end_labels(discard);
-        let cancel = if discard { 2 } else { 0 };
         let k = match i {
             Input::Next | Input::Prev => {
                 // the next button that way, none past the ends (as the menus: a held key stops there)
@@ -141,7 +141,12 @@ impl App {
                 return;
             }
             Input::Select => sel,
-            Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => cancel,
+            Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) if !discard => {
+                self.leave_menus();
+                self.say("PAUSED"); // a manual pause never resumes by itself: say it stays
+                return self.show(b);
+            }
+            Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => 2, // KEEP
             Input::Touch(Gesture::Tap(x, y)) => match ui::end_hit(&labels, x, y) {
                 Some(k) => k,
                 None => return,
@@ -150,7 +155,10 @@ impl App {
         };
         self.screen = if discard { Screen::Discard(k) } else { Screen::End(k) }; // KEEP comes back to it
         match (discard, k) {
-            (false, 0) => self.leave_menus(), // RESUME: the paused ride, on the page it was ended from
+            (false, 0) => {
+                self.start_pause(); // RESUME: the timer again, on the page the ride was ended from
+                self.leave_menus();
+            }
             (false, 1) => self.end_ride(),
             (false, _) => self.open(Screen::Discard(2)), // asked, KEEP selected
             (true, 0) => self.discard_ride(),

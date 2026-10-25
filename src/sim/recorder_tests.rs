@@ -328,12 +328,13 @@ fn end_ride_screen_by_keys() {
     run(&mut sim, &mut app, 200);
     super::tests::assert_consistent(&sim, &app); // only the two buttons drawn again, the panel as the screen
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "Back: RESUME");
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "Back: paused still");
     run(&mut sim, &mut app, 5000);
     assert_eq!(app.ride.timer_s(), timer, "still paused");
     app.press(&mut sim, Press::Long(Key::Start));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "the default: RESUME");
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running), "the default: RESUME");
+    app.press(&mut sim, Press::Short(Key::Start)); // paused again
     // SAVE
     let name = app.recorder.name();
     app.press(&mut sim, Press::Long(Key::Start));
@@ -419,7 +420,8 @@ fn end_ride_screen_by_touch() {
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::END_BUTTONS[1].1 - 6) as u16)));
     assert_eq!(app.screen(), Screen::End(0), "between two buttons: nothing");
     tap(&mut sim, &mut app, 0);
-    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "RESUME");
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running), "RESUME: the timer again");
+    app.press(&mut sim, Press::Short(Key::Start)); // paused again
     app.press(&mut sim, Press::Long(Key::Start));
     app.input(&mut sim, Input::Touch(Gesture::Swipe(crate::touch::Dir::Right)));
     assert_eq!(app.screen(), Screen::Ride(0), "a swipe right: Back");

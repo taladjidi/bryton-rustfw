@@ -162,8 +162,12 @@ impl Kind {
         fat.ensure_dir(d, parent, ACTIVITIES, t)
     }
 
-    /// The discarded rides' folder, made if missing (by [`Recorder::setup`] as a rule): `\Rustfw\Discarded`, or
-    /// `Full` in it.
+    /// The discarded rides' folder: `\Rustfw\Discarded`, or `Full` in it.
+    fn discarded_path(self) -> &'static str {
+        DISCARDED_PATHS[self as usize]
+    }
+
+    /// Made if missing, at [`Recorder::setup`] only.
     fn discarded_dir(self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<File, Error> {
         let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
         let dir = fat.ensure_dir(d, mine, DISCARDED, t)?;
@@ -640,10 +644,11 @@ impl Recorder {
 
     /// The ride just ended ([`Recorder::end`]) goes to `\Rustfw\Discarded` instead of the saved folder (module
     /// doc). Only before its save has begun: a save under way (a full card stopped the ride) goes on where it goes.
-    pub fn discard(&mut self) {
+    pub fn discard(&mut self) -> bool {
         if self.ended && matches!(self.phase, Phase::Starting | Phase::Recording) {
             self.discard = true;
         }
+        self.discard
     }
 
     /// The card has work to do ([`Recorder::io`]).
@@ -838,7 +843,9 @@ impl Recorder {
         // both discarded folders now, before any record: a discard's save then makes no folder, so it never writes
         // the directory sector `ride.rec`'s entry is in, nor the one its clean copy's entry went to (a cut tearing
         // either there lost the ride, or its clean copy: a_discard_cut_at_every_sector)
-        Kind::Full.discarded_dir(fat, d, t)?;
+        // optional: a damaged or taken name there must not stop the ride's recording (a discard then keeps the ride
+        // in its folder)
+        let _ = Kind::Full.discarded_dir(fat, d, t);
         Ok(rides)
     }
 
@@ -974,7 +981,19 @@ impl Recorder {
         }
         // 3: the folder and a free name, before 4, so that between 4 and 5 only the link is left
         let mut buf = [0u8; 16];
-        let acts = if self.discard { self.kind.discarded_dir(fat, d, t)? } else { self.kind.saved_dir(fat, d, t)? };
+        // a discard never makes a folder (that would write `\Rustfw`'s directory sector, which holds `ride.rec`'s
+        // entry): missing ones (a ride resumed across the update, a folder removed) keep the ride where it is
+        let acts = if self.discard {
+            match fat.open(d, self.kind.discarded_path()) {
+                Ok(f) => f,
+                Err(_) => {
+                    self.write_record(fat, d, Phase::Done, first)?;
+                    return Ok(Outcome::Kept(self.name));
+                }
+            }
+        } else {
+            self.kind.saved_dir(fat, d, t)?
+        };
         let (mut name, mut linked) = (self.name, None);
         for _ in 0..10 {
             match fat.find(d, acts, file_name(&name, &mut buf)?) {
@@ -1906,8 +1925,7 @@ mod tests {
         // a discard asked once the save has begun (a full card stopped the ride) changes nothing: it is saved
         let mut r = Recorder::new();
         (r.phase, r.ended) = (Phase::Saving, true);
-        r.discard();
-        assert!(!r.discard);
+        assert!(!r.discard());
     }
 
     /// The golden rule through the discard: the power cut (the sector left whole, or torn) after every sector of a
@@ -1982,6 +2000,12 @@ mod tests {
                     // cut before the first record: nothing promised (its first second may stay in the ride folder,
                     // as with a save: never resumed, never in \Activities)
                     let promised = o[k] != Outcome::Nothing;
+                    // a torn sector that took the folder's entry: the discard makes no folder, the ride is kept
+                    let folder = Fat::mount(&mut d).and_then(|mut f| f.open(&mut d, DISCARDED_PATHS[k])).is_ok();
+                    if promised && torn && !folder {
+                        assert!(saved(&d.img, RIDING[k]).is_ok() && saved(&d.img, p).is_err(), "{what}: {p}: kept");
+                        continue;
+                    }
                     assert!(!promised || saved(&d.img, RIDING[k]).is_err(), "{what}: {p}: still riding");
                     if let Ok((times, _)) = saved(&d.img, p) {
                         assert!(times.windows(2).all(|p| p[0] < p[1]) && times.iter().all(|t| all.contains(t)));
@@ -2291,5 +2315,125 @@ mod tests {
             bad[at] ^= 0x10;
             assert_eq!(Rec::from_sector(&bad), None, "byte {at}");
         }
+    }
+
+    /// The `Discarded` entry in `\Rustfw`'s first directory sector.
+    fn discarded_entry(img: &[u8]) -> usize {
+        let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+        let c = Fat::mount(&mut ram).unwrap().open(&mut ram, DISCARDED_PATHS[0]).unwrap().cluster;
+        let lba = first_lba(img, DIR);
+        let cluster = |e: &[u8]| u32::from_le_bytes([e[26], e[27], e[20], e[21]]);
+        (lba * SECTOR..(lba + 1) * SECTOR)
+            .step_by(32)
+            .find(|&at| img[at] != b'.' && img[at + 11] & 0x10 != 0 && cluster(&img[at..at + 32]) == c)
+            .unwrap()
+    }
+
+    /// REVIEW: the folder's entry (and its long name pieces) marked deleted.
+    /// Removes `\Rustfw\Discarded` (and its long name) as a computer or an older build might leave it.
+    fn drop_discarded(img: &mut [u8]) {
+        let mut at = discarded_entry(img);
+        img[at] = 0xe5;
+        while at >= 32 && img[at - 32 + 11] == 0x0f {
+            at -= 32;
+            img[at] = 0xe5;
+        }
+    }
+
+    /// REVIEW: a file named Discarded in \Rustfw (or a damaged Discarded folder): does the clean copy still record?
+    /// The discard's folders are optional: damaged, or a file in their name, the next ride is saved all the same.
+    #[test]
+    fn a_bad_discarded_folder_never_stops_a_ride() {
+        for damaged in [true, false] {
+            let mut d = card(crate::fat::tests::image());
+            ride_all(&mut pair(), &mut d, 0).unwrap();
+            if damaged {
+                let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+                let c = Fat::mount(&mut ram).unwrap().open(&mut ram, DISCARDED_PATHS[0]).unwrap().cluster;
+                let lba = first_lba(&d.img, DIR);
+                let cluster = |e: &[u8]| u32::from_le_bytes([e[26], e[27], e[20], e[21]]);
+                let at = (lba * SECTOR..(lba + 1) * SECTOR)
+                    .step_by(32)
+                    .find(|&at| d.img[at] != b'.' && d.img[at + 11] & 0x10 != 0 && cluster(&d.img[at..at + 32]) == c)
+                    .unwrap();
+                d.img[at + 20..at + 22].copy_from_slice(&[0xff, 0x0f]);
+                d.img[at + 26..at + 28].copy_from_slice(&[0xf0, 0xff]);
+            } else {
+                // as a computer might leave it: the folder gone, a file in its name
+                drop_discarded(&mut d.img);
+                let mut fat = Fat::mount(&mut d).unwrap();
+                let dir = fat.open(&mut d, DIR).unwrap();
+                fat.create(&mut d, dir, "Discarded", (0, 0)).unwrap();
+            }
+            let out = ride_all(&mut pair(), &mut d, 0);
+            assert_eq!(out.unwrap()[0], Outcome::Saved(*b"261023100001"), "damaged={damaged}");
+        }
+    }
+
+    /// REVIEW: a ride resumed at boot (setup never ran for it) on a volume without the Discarded folders (a ride open
+    /// at the update), discarded, the power cut (torn) at every sector: is the ride ever lost?
+    /// A discard never makes a folder: a ride resumed with the folders missing, then discarded, is in one place
+    /// whatever the cut.
+    #[test]
+    fn a_resumed_ride_discarded_without_folders_survives_every_cut() {
+        let img = crate::fat::tests::image();
+        // mid-ride cut
+        let mut whole = card(img.clone());
+        ride_all(&mut pair(), &mut whole, 0).unwrap();
+        let mut d = Card { budget: Some(whole.written / 2), ..card(img.clone()) };
+        assert!(ride_all(&mut pair(), &mut d, 0).is_none());
+        let mut d = card(d.img);
+        // the Discarded folder (and Full in it) gone: as an older build left the volume
+        drop_discarded(&mut d.img);
+        assert!(Fat::mount(&mut d).unwrap().open(&mut d, DISCARDED_PATHS[0]).is_err());
+        let base = d.img.clone();
+        let run = |budget: Option<u64>, torn: bool| -> (Card, Vec<Outcome>) {
+            let mut d = Card { budget, torn, ..card(base.clone()) };
+            let mut rs = pair();
+            let o = [rs[0].recover(&mut d, local(SECS)), rs[1].recover(&mut d, local(SECS))];
+            if matches!(o[1], Outcome::Resumed(..)) {
+                let [c, f] = &mut rs;
+                f.resumed_after(c);
+            }
+            let mut out = o.to_vec();
+            if let Outcome::Resumed(w, _) = o[0] {
+                let from = w[0] + 1;
+                let from = if (PAUSE + 1..RESUME).contains(&from) { RESUME } else { from };
+                if let Some(v) = ride_all_with(&mut rs, &mut d, from, true) {
+                    out.extend(v);
+                }
+            }
+            (d, out)
+        };
+        let (d0, _) = run(None, false);
+        let total = d0.written;
+        let mut bad = Vec::new();
+        for torn in [false, true] {
+            for cut in 0..total {
+                let (d, _) = run(Some(cut), torn);
+                let at = d.cut_at;
+                // reboot and finish
+                let mut d = card(d.img);
+                let mut rs = pair();
+                let o = [rs[0].recover(&mut d, local(SECS + 5)), rs[1].recover(&mut d, local(SECS + 5))];
+                if matches!(o[1], Outcome::Resumed(..)) {
+                    let [c, f] = &mut rs;
+                    f.resumed_after(c);
+                }
+                if matches!(o[0], Outcome::Resumed(..)) {
+                    rs[0].end(T0 + SECS, words(SECS));
+                    rs[0].discard();
+                    io_all(&mut rs[0], &mut d, SECS + 10);
+                }
+                io_all(&mut rs[1], &mut d, SECS + 10);
+                for (k, p) in [SAVED, SAVED_FULL].iter().enumerate() {
+                    let n = [RIDING[k], DISCARDED[k], p].iter().filter(|q| saved(&d.img, q).is_ok()).count();
+                    if n != 1 {
+                        bad.push(std::format!("torn {torn} cut {cut} (lba {at}): copy {k} in {n} places, boot {o:?}"));
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{} bad cuts of {}: {bad:?}", bad.len(), 2 * total);
     }
 }
