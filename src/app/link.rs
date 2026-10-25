@@ -146,6 +146,7 @@ impl App {
                 let w = &mut self.watch;
                 (w.quiet_ms, w.wait_ms, w.resyncs) = (0, RESYNC_WAIT_MS, w.resyncs.saturating_add(1));
                 self.phone_recheck(b);
+                self.ftms_recheck(b);
                 return;
             }
         }

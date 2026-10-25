@@ -624,6 +624,7 @@ impl App {
             Some(Row::Notif(k)) => self.open(Screen::Notif(k, 0)),
             // paired and in use: forgotten; behind an ANT+ trainer (ANT FIRST): searched again, to take its place
             Some(Row::BtTrainer) if self.ftms_on() => {
+                self.ftms_retry();
                 if self.confirmed(menu, sel, "FORGET BT TRAINER") {
                     self.ftms_forget(b);
                 }
@@ -632,6 +633,7 @@ impl App {
             Some(Row::BtFound(k)) => self.ftms_pair(b, k),
             Some(Row::Nearby) => {
                 if self.ble.is_some() && !self.scanning {
+                    self.ftms_hold(b);
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
                 }
                 self.open(Screen::Nearby);

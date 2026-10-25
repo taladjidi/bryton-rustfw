@@ -185,9 +185,11 @@ fn a_lost_link_is_made_again() {
     let tries = sim.nordic.connects - 2;
     assert!((3..=8).contains(&tries), "{tries} attempts in 2 min");
     assert!(sim.nordic.got.iter().any(|p| p[..2] == [0, 0x8d]), "a connection not made is cancelled");
+    assert_eq!(tries, 5, "then left alone");
     sim.nordic.ftms.as_mut().unwrap().connectable = true;
-    run(&mut sim, &mut app, 75_000);
-    assert!(trainer(&sim).control, "back once in range");
+    app.open(Screen::Trainer);
+    run(&mut sim, &mut app, 5000);
+    assert!(trainer(&sim).control, "back once in range and asked for");
 }
 
 /// The trainer takes the control back (Machine Status 0xff): Request Control again, then the target again.
@@ -324,4 +326,153 @@ fn a_silent_link_is_made_again() {
     run(&mut sim, &mut app, 6000);
     assert_eq!(sim.nordic.connects, 2);
     assert!(trainer(&sim).control, "back");
+}
+
+/// The BLE event packet of a GATT client answer `id` on `conn`, `body` after the status and the error handle.
+fn gattc(id: u8, conn: u8, status: u16, body: &[u8]) -> Vec<u8> {
+    let mut p = vec![2, id, 0, conn, 0];
+    p.extend(status.to_le_bytes());
+    p.extend([0, 0]);
+    p.extend(body);
+    p
+}
+
+/// Review: the trainer's DISCONNECTED lost (a resync), the phone then connects on the freed handle: the handle is the
+/// phone's, not the trainer's (no discovery on the phone, which would drop it).
+#[test]
+fn a_phone_on_the_trainers_stale_handle_is_the_phone() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ftms.conn, Some(1));
+    // BLE_EVT, id 0x10, conn 1, peer 7 bytes, role 1 (we are the peripheral: the phone)
+    let ev = [2u8, 0x10, 0, 1, 0, 0, 1, 2, 3, 4, 5, 6, 1, 6, 0, 12, 0, 0, 0, 0x90, 1];
+    app.phone_event(&mut sim, &ev);
+    assert_eq!(app.phone.conn, Some(1), "the phone's link");
+    assert_eq!(app.ftms.conn, None, "the trainer's link is over");
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.phone.conn, Some(1), "not dropped by a trainer discovery");
+}
+
+/// A resync that dropped the trainer's DISCONNECTED: the chip is asked about the link and it is over.
+#[test]
+fn a_lost_trainer_disconnection_is_found_after_a_resync() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ftms.conn, Some(1));
+    app.ftms_recheck(&mut sim);
+    assert_eq!(app.ftms.conn, Some(1), "a live link stays");
+    sim.nordic.ftms.as_mut().unwrap().hang_up(); // no event
+    app.ftms_recheck(&mut sim);
+    assert_eq!(app.ftms.conn, None);
+}
+
+/// A trainer out of range is tried five times, then left alone until the rider asks for it (TRAINER CONTROL).
+#[test]
+fn an_absent_trainer_is_not_scanned_for_all_day() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    let t = sim.nordic.ftms.as_mut().unwrap();
+    (t.drop_at, t.connectable) = (Some(sim.ms), false);
+    run(&mut sim, &mut app, 600_000);
+    assert_eq!(sim.nordic.connects, 1 + 5, "the first, then five attempts");
+    app.open(Screen::Trainer);
+    run(&mut sim, &mut app, 600_000);
+    assert_eq!(sim.nordic.connects, 1 + 5 + 5, "five more once asked");
+    app.close();
+    sim.nordic.ftms.as_mut().unwrap().connectable = true;
+    app.open(Screen::Trainer);
+    run(&mut sim, &mut app, 3000);
+    assert!(trainer(&sim).control, "back");
+}
+
+/// The connection is made scanning at half duty, with the slower parameters (30 to 60 ms).
+#[test]
+fn the_connection_is_slow_and_scans_at_half_duty() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    let c = sim.nordic.got.iter().find(|p| p[..2] == [0, 0x8c]).expect("connect");
+    let u16_at = |i: usize| u16::from_le_bytes([c[i], c[i + 1]]);
+    // [0, op], present, peer 7, active, selective, interval, window, time-out; present, min, max, latency, supervision
+    assert_eq!((u16_at(12), u16_at(14)), (0x60, 0x30), "30 ms of every 60: {c:?}");
+    assert_eq!((u16_at(19), u16_at(21), u16_at(23), u16_at(25)), (24, 48, 0, 400));
+}
+
+/// Review: the control lost (Machine Status 0xff) while a target's write is in flight: Request Control waits for the
+/// write's answer (the chip allows one procedure; the answer is not Request Control's), then goes out, and the link stays.
+#[test]
+fn control_lost_with_a_write_in_flight_is_asked_again() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert!(trainer(&sim).control && app.ftms.control);
+    app.ftms_command(&mut sim, crate::trainer::Command::Power(400)); // 100 W, answer not read yet
+    let status = [2u8, 0x39, 0, 1, 0, 0, 0, 0, 0, FT_STATUS as u8, 0, 1, 1, 0, 0xff];
+    app.phone_event(&mut sim, &status);
+    assert!(!app.ftms.control);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ftms.conn, Some(1), "the link stays");
+    assert_eq!(sim.nordic.connects, 1);
+    let t = trainer(&sim);
+    assert_eq!(t.got.iter().filter(|w| w[..] == [0x00]).count(), 2, "control asked again: {:?}", t.got);
+    assert!(app.ftms.control);
+    assert_eq!(t.violations, 0);
+}
+
+/// Review: an answer that is not the discovery's (a late write answer, another procedure's) leaves the request out:
+/// the real answer still advances it.
+#[test]
+fn a_stray_answer_does_not_stall_the_discovery() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    let mut at = 0;
+    while app.ftms.conn.is_none() && at < 20_000 {
+        run(&mut sim, &mut app, 1);
+        at += 1;
+    }
+    assert_eq!(app.ftms.conn, Some(1));
+    app.phone_event(&mut sim, &gattc(0x38, 1, 0, &[0x50, 0, 1, 0, 0, 0, 0])); // Written, any handle
+    app.phone_event(&mut sim, &gattc(0x36, 1, 0, &[0x50, 0, 0, 0, 0, 0])); // Read, empty
+    run(&mut sim, &mut app, 3000);
+    let t = trainer(&sim);
+    assert!(t.control && t.on(FT_DATA, 1) && t.on(FT_STATUS, 1) && t.on(FT_CP, 2));
+    assert_eq!(sim.nordic.connects, 1);
+    assert_eq!(t.violations, 0);
+}
+
+/// Leaving the trainer list without pairing ends the search: the trainer is not listed from a later scan.
+#[test]
+fn leaving_the_list_ends_the_search() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    run(&mut sim, &mut app, 4000);
+    app.ftms_search(&mut sim);
+    run(&mut sim, &mut app, 1100);
+    assert!(app.ftms.n_found > 0 && app.ftms.searching);
+    app.close();
+    run(&mut sim, &mut app, 500);
+    assert!(!app.ftms.searching);
+}
+
+/// BLE NEARBY while the trainer is being connected: the connection is given up first (the chip refuses a scan during
+/// one), the scan runs, and the trainer's attempts go on after it.
+#[test]
+fn a_nearby_scan_gives_up_the_connection_being_made() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    let t = sim.nordic.ftms.as_mut().unwrap();
+    (t.drop_at, t.connectable) = (Some(sim.ms), false);
+    run(&mut sim, &mut app, 4000); // dropped, then connecting to nobody
+    assert!(app.ftms.conn.is_none());
+    let mark = sim.nordic.got.len();
+    app.activate(&mut sim, Menu::System, 3); // BLE NEARBY
+    let ops: Vec<u8> = sim.nordic.got[mark..].iter().map(|p| p[1]).collect();
+    assert_eq!(ops.first(), Some(&0x8d), "connect cancel first: {ops:x?}");
+    assert!(ops.contains(&0x8a) && app.scanning, "the scan runs: {ops:x?}");
+    sim.nordic.ftms.as_mut().unwrap().connectable = true;
+    run(&mut sim, &mut app, 80_000);
+    assert!(trainer(&sim).control, "the trainer's attempts went on after the scan");
 }

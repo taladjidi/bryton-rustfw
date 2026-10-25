@@ -85,6 +85,7 @@ impl App {
 
     /// Starts the workout opened from step `at`, and the ride if none runs; the first ride page.
     pub(crate) fn start_workout(&mut self, at: usize) {
+        self.ftms_retry(); // a Bluetooth trainer given up is tried again
         if self.ride.state() == ride::State::Idle {
             self.start_pause();
             self.new_ride = false; // the page is drawn anew anyway

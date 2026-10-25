@@ -210,6 +210,9 @@ impl App {
         }
         self.screen = s;
         self.menu_chosen = false;
+        if s == Screen::Trainer {
+            self.ftms_retry(); // the rider wants the trainer: a Bluetooth one given up is tried again
+        }
     }
 
     /// The menu Page held opens: the ride menu while a ride records or is paused (over the page it was held on),

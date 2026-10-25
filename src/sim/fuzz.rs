@@ -1917,11 +1917,17 @@ fn ftms_link_events() {
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.ftms.conn, Some(1), "connected before the fuzz");
     let mut reached = [0usize; 4]; // owned, data, status, responses
+    let mut gatt = [0usize; 5]; // Services, Chars, Descs, Read, ConnParamRequest
+    let mut listed = [0usize; 3]; // advertising reports: listed, with a name, past the cap
     for seed in 1..=4u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
         for (k, c) in v.chunks_exact(48).enumerate() {
             // a third of them the trainer's notifications and indications
-            let id = if c[42] % 3 == 0 { 0x39 } else { IDS[usize::from(c[0]) % IDS.len()] };
+            let id = match c[42] % 4 {
+                0 => 0x39,
+                1 => 0x36, // a Read answer, shaped below
+                _ => IDS[usize::from(c[0]) % IDS.len()],
+            };
             let mut p = std::vec![2];
             p.extend(id.to_le_bytes());
             let conn = match c[47] % 4 {
@@ -1943,6 +1949,12 @@ fn ftms_link_events() {
                 p.push(1 + c[6] % 2);
                 p.extend((value.len() as u16).to_le_bytes());
                 p.extend(&value);
+            } else if id == 0x36 && c[44] % 4 != 0 {
+                let value = &c[3..3 + usize::from(c[2]) % 8];
+                p.extend([c[5] % 2 * 3, 0]); // status
+                p.extend([0, 0, c[6] % 100, 0, 0, 0]); // error handle, the handle, offset
+                p.extend((value.len() as u16).to_le_bytes());
+                p.extend(value);
             } else {
                 p.extend(&c[2..2 + usize::from(c[1]) % 42]);
             }
@@ -1950,6 +1962,15 @@ fn ftms_link_events() {
                 && app.ftms_owns(&e)
             {
                 reached[0] += 1;
+                use crate::ble::Event as E;
+                match e {
+                    E::Services { .. } => gatt[0] += 1,
+                    E::Chars { .. } => gatt[1] += 1,
+                    E::Descs { .. } => gatt[2] += 1,
+                    E::Read { .. } => gatt[3] += 1,
+                    E::ConnParamRequest { .. } => gatt[4] += 1,
+                    _ => {}
+                }
                 if let crate::ble::Event::Hvx { handle, data, .. } = e {
                     let n = if handle == FT_DATA {
                         1
@@ -1969,6 +1990,35 @@ fn ftms_link_events() {
                 run(&mut sim, &mut app, 500);
             }
         }
+        // advertising data made of AD structures (flags, FTMS service data, UUID lists, names, junk), cut short now and then
+        app.ftms.searching = true;
+        for c in v.chunks_exact(24) {
+            let mut ad = std::vec::Vec::new();
+            for part in c[..21].chunks_exact(7) {
+                match part[0] % 6 {
+                    0 => ad.extend([2, 0x01, 6]),
+                    1 => ad.extend([6, 0x16, 0x26, 0x18, 1 | part[1], part[2] | 0x20, part[3] & 1]),
+                    2 => ad.extend([6, 0x16, 0x26, 0x18, part[1], part[2], part[3]]), // any flags and machine type
+                    3 => ad.extend([5, 0x03, 0x0d, 0x18, 0x26, 0x18]),
+                    4 => {
+                        let n = usize::from(part[1] % 7);
+                        ad.extend([n as u8 + 1, 0x09]);
+                        ad.extend(&part[2..2 + n.min(5)]);
+                        ad.extend(b"SIM BIKE".iter().take(n.saturating_sub(5))); // up to the length given
+                    }
+                    _ => ad.extend([part[1] % 9, part[2], part[3], part[4]]), // a structure whose length lies
+                }
+            }
+            ad.truncate(usize::from(c[21]) % (ad.len() + 1));
+            let r =
+                crate::nrf::AdvReport { addr_type: c[22] % 2, addr: [c[23] % 7, 1, 2, 3, 4, 5], rssi: -50, data: &ad };
+            if app.ftms.found(&r) {
+                listed[0] += 1;
+                listed[1] += usize::from(app.ftms.found.iter().take(app.ftms.n_found).any(|d| !d.name().is_empty()));
+            }
+            listed[2] += usize::from(app.ftms.n_found == app.ftms.found.len());
+        }
+        app.ftms.searching = false;
         for c in v.chunks(13) {
             let mut r = crate::trainer::Reading::default();
             crate::ftms::bike_data(c, &mut r);
@@ -1977,6 +2027,8 @@ fn ftms_link_events() {
             let _ = crate::ftms::as_fec((c[0], c.get(1).copied().unwrap_or(0)));
         }
     }
-    std::println!("ftms fuzz reached {reached:?}");
+    std::println!("ftms fuzz reached {reached:?} {gatt:?} {listed:?}");
     assert!(reached.iter().all(|&n| n > 50), "owned events, data, status, responses: {reached:?}");
+    assert!(gatt.iter().all(|&n| n > 5), "Services, Chars, Descs, Read, ConnParamRequest: {gatt:?}");
+    assert!(listed.iter().all(|&n| n > 5), "listed, named, past the cap: {listed:?}");
 }

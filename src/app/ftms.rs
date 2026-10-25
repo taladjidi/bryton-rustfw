@@ -3,7 +3,10 @@
 //! kept in `\Rustfw\sensors.bin` with the ANT+ one, and then:
 //! - **connected** whenever it is paired, the chip took the two links' configuration (`nrf::start`) and no ANT+
 //!   trainer is paired (ANT+ first when both are); a connection not made in [`CONNECT_MS`] is cancelled, and a lost
-//!   or failed one is tried again after a wait that doubles from [`FIRST_WAIT_MS`] to [`MAX_WAIT_MS`];
+//!   or failed one is tried again after a wait that doubles from [`FIRST_WAIT_MS`] to [`MAX_WAIT_MS`], at most
+//!   [`MAX_FAILS`] times in a row (a trainer out of range is not scanned for all day) until the rider opens TRAINER
+//!   CONTROL, the BT TRAINER row or starts a workout; a trainer that was connected during the ride is kept looked
+//!   for;
 //! - **discovered** one GATT procedure at a time (the service, its characteristics, the CCCDs of Indoor Bike Data,
 //!   Machine Status and the Control Point), **subscribed** (notifications, the Control Point's indications, before
 //!   anything is written to it, FTMS 4.16.3), its Feature and supported ranges **read**, and **Request Control**
@@ -28,6 +31,9 @@ pub const CONNECT_MS: u32 = 10_000;
 pub const FIRST_WAIT_MS: u32 = 2_000;
 /// The longest wait between two connections, ms.
 pub const MAX_WAIT_MS: u32 = 60_000;
+/// Connections failed in a row after which the unit stops trying (see [`App::ftms_retry`]), unless the trainer was
+/// connected during the ride running.
+pub const MAX_FAILS: u8 = 5;
 /// A GATT request (a discovery, a read, a write, Request Control's response) not answered in this long drops the link.
 pub const GATT_MS: u32 = 5_000;
 /// A command's response not come in this long: the command is due again.
@@ -37,6 +43,8 @@ pub const CP_MS: u32 = 3_000;
 /// Nordic link dropped, app/link.rs).
 // ponytail: a trainer that goes quiet when nobody pedals is reconnected every 30 s; a longer wait if one does
 pub const QUIET_MS: u32 = 30_000;
+/// The chip's `NRF_ERROR_BUSY`: another GATT procedure is out.
+const NRF_ERROR_BUSY: u32 = 17;
 /// Times the subscription or Request Control is tried again on one link (a trainer that refuses for ever is then
 /// read without control).
 const TRIES: u8 = 3;
@@ -104,6 +112,12 @@ pub(crate) struct Ftms {
     /// A GATT request is out, for so long.
     waiting: bool,
     busy_ms: u32,
+    /// A Control Point write of a command is out (its Written answer not come): Request Control waits for it, and the
+    /// answer is not Request Control's.
+    cp_inflight: bool,
+    /// Connections failed in a row; the trainer was connected while a ride ran (kept looked for).
+    fails: u8,
+    kept: bool,
     /// Since its last data (or the connection).
     quiet_ms: u32,
     tries: u8,
@@ -136,6 +150,9 @@ impl Default for Ftms {
             cccd: [0; 3],
             waiting: false,
             busy_ms: 0,
+            cp_inflight: false,
+            fails: 0,
+            kept: false,
             quiet_ms: 0,
             tries: 0,
             control: false,
@@ -160,7 +177,7 @@ impl Ftms {
     /// The link is gone (or given up): what belonged to it, and the wait before the next.
     fn unlink(&mut self) {
         let (found, n_found, searching, backoff_ms) = (self.found, self.n_found, self.searching, self.backoff_ms);
-        *self = Ftms { found, n_found, searching, backoff_ms, ..Ftms::default() };
+        *self = Ftms { found, n_found, searching, backoff_ms, fails: self.fails, kept: self.kept, ..Ftms::default() };
         self.retry_later();
     }
 
@@ -213,15 +230,41 @@ impl App {
     /// A BLE event that belongs to the trainer's link: on its connection, a connection made as a central, or the
     /// time-out of a connection being made (source 2).
     pub(crate) fn ftms_owns(&self, e: &Event) -> bool {
+        // a connection by its role only: a handle freed by a lost DISCONNECTED may be the phone's next
         matches!(e, Event::Connected { role: 2, .. } | Event::Timeout { src: 2 })
-            || (e.conn().is_some() && e.conn() == self.ftms.conn)
+            || (!matches!(e, Event::Connected { .. }) && e.conn().is_some() && e.conn() == self.ftms.conn)
     }
 
     /// The chip is about to be reset: the link is gone with it, tried again at once once it is back.
     pub(crate) fn ftms_down(&mut self) {
+        let fails = self.ftms.fails;
         self.ftms.unlink();
-        self.ftms.wait_ms = 0;
+        (self.ftms.wait_ms, self.ftms.fails) = (0, fails);
         self.heard_ms[Kind::Trainer as usize] = u32::MAX;
+    }
+
+    /// After a resync of the Nordic link, whose dropped bytes may have held the trainer's DISCONNECTED: a link the
+    /// chip knows nothing of is over (a time-out is no answer: the link is left as it is).
+    pub(crate) fn ftms_recheck(&mut self, b: &mut impl Board) {
+        if let Some(conn) = self.ftms.conn
+            && matches!(ble::sys_attr_get(b, &mut self.rx, conn, &mut [0; 8]), Err(nrf::Error::Code(_)))
+        {
+            self.ftms_lost();
+        }
+    }
+
+    /// The rider asks for the trainer (TRAINER CONTROL, the BT TRAINER row, a workout started): the connection is
+    /// tried at once, and [`MAX_FAILS`] more times if it fails.
+    pub(crate) fn ftms_retry(&mut self) {
+        (self.ftms.fails, self.ftms.wait_ms) = (0, 0);
+    }
+
+    /// A scan of the rider's is about to start (BLE NEARBY, the trainer search): the connection being made is given
+    /// up, since the chip refuses a scan during one. The next attempt waits for the scan to end (`step_ftms`).
+    pub(crate) fn ftms_hold(&mut self, b: &mut impl Board) {
+        if self.ftms.connecting.take().is_some() {
+            let _ = ble::connect_cancel(b, &mut self.rx);
+        }
     }
 
     /// SENSORS' BT TRAINER: a scan, and the list of the trainers heard.
@@ -230,6 +273,8 @@ impl App {
             return self.say("NO BT TRAINER\nRADIO: ONE LINK");
         }
         (self.ftms.searching, self.ftms.n_found) = (true, 0);
+        self.ftms_retry();
+        self.ftms_hold(b);
         if !self.scanning {
             self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
         }
@@ -250,7 +295,8 @@ impl App {
             self.scanning = false;
         }
         self.ftms.searching = false;
-        (self.ftms.wait_ms, self.ftms.backoff_ms) = (0, FIRST_WAIT_MS);
+        self.ftms_retry();
+        self.ftms.backoff_ms = FIRST_WAIT_MS;
         self.close();
         self.notice("BT TRAINER PAIRED");
     }
@@ -276,8 +322,9 @@ impl App {
         self.ftms_lost();
     }
 
-    fn ftms_lost(&mut self) {
+    pub(crate) fn ftms_lost(&mut self) {
         let had = self.ftms.conn.is_some();
+        self.ftms.fails = self.ftms.fails.saturating_add(u8::from(!had)); // a connection not made
         self.ftms.unlink();
         if had && self.ftms_on() {
             self.heard_ms[Kind::Trainer as usize] = u32::MAX; // its readings stop now, not 5 s later
@@ -289,7 +336,11 @@ impl App {
     pub(crate) fn step_ftms(&mut self, b: &mut impl Board) {
         let dt = self.dt_ms;
         let want = self.ftms_on() && self.ble.is_some_and(|v| v.central);
+        let riding = self.ride.state() != ride::State::Idle;
+        // the list left without pairing: the reports of a scan still running (BLE NEARBY) are not listed
+        self.ftms.searching &= matches!(self.screen, Screen::Menu(Menu::BtTrainers, _));
         let f = &mut self.ftms;
+        f.kept = riding && (f.kept || f.conn.is_some()); // connected while a ride ran: looked for while it runs
         if f.conn.is_some() || f.connecting.is_some() {
             f.busy_ms = f.busy_ms.saturating_add(dt);
             f.cp_ms = f.cp_ms.saturating_add(dt);
@@ -304,19 +355,22 @@ impl App {
                 f.cp_wait = None;
                 self.trainer.unsent();
             }
-            if !f.waiting && f.step == Step::Control {
+            if !f.waiting && !f.cp_inflight && f.step == Step::Control {
                 self.ftms_next(b); // Request Control again (refused, or the control lost)
             }
             return;
         }
         f.wait_ms = f.wait_ms.saturating_sub(dt);
-        if !want || self.scanning || f.wait_ms > 0 {
+        if !want || self.scanning || f.wait_ms > 0 || (f.fails >= MAX_FAILS && !f.kept) {
             return; // a scan running (a search, BLE NEARBY) would hold the connection up
         }
         let peer = self.sensors_store.bt.unwrap_or_default();
         match ble::connect(b, &mut self.rx, &peer) {
             Ok(()) => (self.ftms.connecting, self.ftms.busy_ms) = (Some(0), 0),
-            Err(_) => self.ftms.retry_later(),
+            Err(_) => {
+                self.ftms.fails = self.ftms.fails.saturating_add(1);
+                self.ftms.retry_later();
+            }
         }
     }
 
@@ -331,7 +385,7 @@ impl App {
         let (Some((bytes, n)), Some(conn)) = (ftms::encode(c, f.resistance), f.conn) else { return };
         let data = bytes.get(..n).unwrap_or(&[]);
         if ble::write(b, &mut self.rx, conn, f.handle(CONTROL), data).is_ok() {
-            (f.cp_wait, f.cp_ms) = (data.first().copied(), 0);
+            (f.cp_wait, f.cp_ms, f.cp_inflight, f.busy_ms) = (data.first().copied(), 0, true, 0);
         } else {
             self.trainer.unsent();
         }
@@ -343,10 +397,12 @@ impl App {
         match e {
             Event::Connected { conn, .. } => {
                 (self.ftms.conn, self.ftms.connecting, self.ftms.step) = (Some(conn), None, Step::Service);
+                self.ftms.fails = 0;
                 self.ftms_next(b);
             }
             Event::Disconnected { .. } => self.ftms_lost(),
             Event::Timeout { .. } => {
+                self.ftms.fails = self.ftms.fails.saturating_add(1);
                 self.ftms.connecting = None;
                 self.ftms.retry_later();
             }
@@ -390,9 +446,8 @@ impl App {
     fn ftms_answer(&mut self, b: &mut impl Board, e: Event) {
         let f = &mut self.ftms;
         let step = f.step;
-        if step != Step::Ready {
-            f.waiting = false;
-        }
+        // the answer to a command's write, not to the discovery's (the control may have been lost while it was out)
+        let cp_answer = matches!(e, Event::Written { .. }) && core::mem::take(&mut f.cp_inflight);
         f.step = match (step, e) {
             (Step::Service, Event::Services { status: 0, list, .. }) => {
                 match ble::services(list).find(|(u, ..)| *u == (SERVICE, ble::UUID_BLE)) {
@@ -406,7 +461,7 @@ impl App {
                     }
                 }
             }
-            (Step::Service, _) => return self.ftms_drop(b),
+            (Step::Service, Event::Services { .. }) => return self.ftms_drop(b),
             (Step::Chars(from), Event::Chars { status: 0, list, .. }) if !list.is_empty() => {
                 let mut last = 0;
                 for ((uuid, t), _, decl, value) in ble::chars(list) {
@@ -419,7 +474,7 @@ impl App {
                 // handles that do not move forward end it (a peer must not keep us asking)
                 if last >= from && last < f.end { Step::Chars(last + 1) } else { Step::Descs(0) }
             }
-            (Step::Chars(_), _) => Step::Descs(0),
+            (Step::Chars(_), Event::Chars { .. }) => Step::Descs(0),
             (Step::Descs(i), Event::Descs { status: 0, list, .. }) => {
                 if let (Some((h, _)), Some(slot)) =
                     (ble::descs(list).find(|(_, u)| *u == (ble::CCCD, ble::UUID_BLE)), f.cccd.get_mut(usize::from(i)))
@@ -428,8 +483,8 @@ impl App {
                 }
                 Step::Descs(i + 1)
             }
-            (Step::Descs(i), _) => Step::Descs(i + 1),
-            (Step::Cccd(i), Event::Written { .. }) => Step::Cccd(i + 1),
+            (Step::Descs(i), Event::Descs { .. }) => Step::Descs(i + 1),
+            (Step::Cccd(i), Event::Written { .. }) if !cp_answer => Step::Cccd(i + 1),
             (Step::Read(i), Event::Read { status, handle, data, .. }) => {
                 if status == 0 && handle == f.handle(FEATURE) {
                     f.modes = ftms::modes(data);
@@ -440,8 +495,9 @@ impl App {
                 }
                 Step::Read(i + 1)
             }
+            (Step::Control, Event::Written { .. }) if cp_answer => return, // a command's, the control lost since
             (Step::Control, Event::Written { status: 0, .. }) => {
-                f.waiting = true; // its response is an indication
+                (f.waiting, f.busy_ms) = (true, 0); // its response is an indication
                 return;
             }
             // the trainer forgot the subscription (FTMS 4.16.3): subscribed again, a few times
@@ -454,6 +510,7 @@ impl App {
             }
             (Step::Control, Event::Written { .. }) => {
                 f.tries += 1; // refused (a procedure in progress): asked again at the next pass, a few times
+                f.waiting = false;
                 return;
             }
             (Step::Ready, Event::Written { status, .. }) => {
@@ -462,8 +519,9 @@ impl App {
                 }
                 return;
             }
-            _ => return,
+            _ => return, // not the answer awaited: the request stays out
         };
+        self.ftms.waiting = false;
         self.ftms_next(b);
     }
 
@@ -509,11 +567,16 @@ impl App {
                         f.step = Step::Ready; // read only: no Control Point, or no control given
                         return self.notice("BT TRAINER: NO CONTROL");
                     }
-                    if ble::write(b, rx, conn, cp, &ftms::REQUEST_CONTROL).is_ok() {
-                        true
-                    } else {
-                        f.tries += 1; // the chip refused: again at the next pass
-                        return;
+                    if f.cp_inflight {
+                        return; // a command's write is out: one GATT procedure at a time
+                    }
+                    match ble::write(b, rx, conn, cp, &ftms::REQUEST_CONTROL) {
+                        Ok(()) => true,
+                        Err(nrf::Error::Code(NRF_ERROR_BUSY)) => return, // not a refusal: again at the next pass
+                        Err(_) => {
+                            f.tries += 1; // the chip refused: again at the next pass
+                            return;
+                        }
                     }
                 }
                 Step::Idle | Step::Ready => return,
@@ -556,7 +619,7 @@ impl App {
                 self.trainer.resend();
                 if self.ftms.step == Step::Ready {
                     (self.ftms.step, self.ftms.tries) = (Step::Control, 0);
-                    self.ftms_next(b);
+                    self.ftms_next(b); // waits for a command's write still out (step_ftms asks again)
                 }
             }
         } else if handle == f.handle(CONTROL) {

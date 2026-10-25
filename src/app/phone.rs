@@ -114,7 +114,7 @@ pub struct Phone {
     /// The PHONE menu's PAIR window: pairing accepted until a bond, the window's end or the link's (the advertising
     /// stops at a connection, so it cannot tell).
     pairing: bool,
-    conn: Option<u16>,
+    pub(crate) conn: Option<u16>,
     /// How long the link has been up (a link left unencrypted is dropped: [`UNSECURED_MS`]).
     link_ms: u32,
     secure: bool,
@@ -621,6 +621,11 @@ impl App {
         let Some(e) = ble::event(p) else { return };
         if self.ftms_owns(&e) {
             return self.ftms_event(b, e);
+        }
+        if let Event::Connected { conn, role: 1, .. } = e
+            && self.ftms.conn == Some(conn)
+        {
+            self.ftms_lost(); // the trainer's DISCONNECTED was lost: its handle is the phone's now
         }
         let rx = &mut self.rx;
         match e {

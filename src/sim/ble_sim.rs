@@ -388,6 +388,9 @@ impl Nordic {
                 self.server.sys_attrs = (args[4] == 1).then(|| args[5..5 + len].to_vec());
                 ok(self, &[]);
             }
+            0xaa if u16_at(0) == 1 && self.ftms.as_ref().is_some_and(|t| !t.connected) && self.phone.is_none() => {
+                self.queue(&[1, 0xaa, 0x02, 0x30, 0, 0]); // the trainer's link is gone
+            }
             0xaa if self.phone.as_ref().is_some_and(|p| !p.connected) => {
                 self.queue(&[1, 0xaa, 0x02, 0x30, 0, 0]); // BLE_ERROR_INVALID_CONN_HANDLE: no such link
             }

@@ -206,12 +206,16 @@ pub fn scan_stop(b: &mut impl Board, rx: &mut Rx) -> Result<(), Error> {
     Cmd::new(GAP_SCAN_STOP).run(b, rx)
 }
 
-/// The connection parameters asked for as a central: stock's (BOARD.md 11): 7.5 to 15 ms, no latency, supervision
-/// time-out 4 s.
-pub const CENTRAL_PARAMS: ConnParams = (6, 12, 0, 400);
+/// The connection parameters asked for as a central (the trainer): 30 to 60 ms, no latency, supervision time-out 4 s.
+/// Slower than stock's 7.5 to 15 ms (BOARD.md 11) since a trainer's data is 1 to 4 Hz and the Control Point a few
+/// writes: a longer interval saves the radio's wake-ups. FTMS sets no interval; the Bluetooth Core Specification
+/// allows 7.5 ms to 4 s (supervision time-out above (1 + latency) * 2 * interval: 0.12 s here), and a trainer can
+/// ask for its own (accepted, `Event::ConnParamRequest`). That trainers take 30 to 60 ms is inferred, not seen.
+pub const CENTRAL_PARAMS: ConnParams = (24, 48, 0, 400);
 
 /// Connects to `peer` (its address byte and 6 bytes, as an advertising report gives them) as a central, scanning
-/// for it as stock does (active, 60 ms in 60 ms, no time-out of the stack's: the app cancels), with
+/// for it at half duty (active, a 30 ms window every 60 ms as `nrf::scan_start`; no time-out of the stack's: the app
+/// cancels), with
 /// [`CENTRAL_PARAMS`] and configuration [`TAG`]. [`Event::Connected`] role 2 answers.
 pub fn connect(b: &mut impl Board, rx: &mut Rx, peer: &[u8; 7]) -> Result<(), Error> {
     connect_cmd(peer).run(b, rx)
@@ -220,7 +224,7 @@ pub fn connect(b: &mut impl Board, rx: &mut Rx, peer: &[u8; 7]) -> Result<(), Er
 fn connect_cmd(peer: &[u8; 7]) -> Cmd {
     let (min, max, lat, sup) = CENTRAL_PARAMS;
     let mut c = Cmd::new(GAP_CONNECT);
-    c.u8(1).bytes(peer).u8(1).u8(1).u16(0x60).u16(0x60).u16(0);
+    c.u8(1).bytes(peer).u8(1).u8(1).u16(0x60).u16(0x30).u16(0);
     c.u8(1).u16(min).u16(max).u16(lat).u16(sup).u8(TAG);
     c
 }
@@ -829,9 +833,10 @@ mod tests {
         let mut c = Cmd::new(GATTC_WRITE);
         c.u16(0).u8(1).u8(1).u8(0).u16(0x0d).u16(0).data16(&[1, 0]);
         assert_eq!(c.payload(), Some(&[0, 0x9c, 0, 0, 1, 1, 0, 0x0d, 0, 0, 0, 2, 0, 1, 1, 0][..]));
-        // sd_ble_gap_connect as BOARD.md 11 has it from stock: address, scan and connection parameters, tag 1
+        // sd_ble_gap_connect as BOARD.md 11 has it from stock (the same layout; ours scans a 30 ms window and asks 30 to
+        // 60 ms): address, scan and connection parameters, tag 1
         let c = connect_cmd(&[3, 1, 2, 3, 4, 5, 6]);
-        let want = [0, 0x8c, 1, 3, 1, 2, 3, 4, 5, 6, 1, 1, 0x60, 0, 0x60, 0, 0, 0, 1, 6, 0, 12, 0, 0, 0, 0x90, 1, 1];
+        let want = [0, 0x8c, 1, 3, 1, 2, 3, 4, 5, 6, 1, 1, 0x60, 0, 0x30, 0, 0, 0, 1, 24, 0, 48, 0, 0, 0, 0x90, 1, 1];
         assert_eq!(c.payload(), Some(&want[..]));
         // a connection parameter update request as a central gets: [conn] 01 [the 4 values]
         let req = [2, 0x1f, 0, 1, 0, 24, 0, 40, 0, 0, 0, 0x90, 1];

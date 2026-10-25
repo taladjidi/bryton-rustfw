@@ -16,9 +16,10 @@
 //!   maximum, increment, each s16; the resistance in 0.1).
 //! - The field sizes (u16 speed in 0.01 km/h, u16 cadence in 0.5 rpm, u24 distance, s16 power, energy u16 + u16 +
 //!   u8, u8 heart rate...) are the GATT Specification Supplement's; pycycling (github.com/zacharyedwardbull/pycycling,
-//!   `ftms_parsers/indoor_bike_data.py`) reads them the same way, and reads the cadence bit (2) as present when set:
-//!   the specification's table 4.10 says the opposite for that one bit, which no trainer does (pycycling, and Zwift's
-//!   and Wahoo's trainers as its users report: inferred, not seen here).
+//!   `ftms_parsers/indoor_bike_data.py`) reads them the same way, and reads the cadence bit (2) as present when set.
+//!   Checked against the specification text (FTMS 1.0, table 4.10): every flag but two is "field present when set";
+//!   More Data (bit 0) is the other way round, and so is Instantaneous Cadence (bit 2: "fields present" when 0, "not
+//!   present" when 1), which no trainer does (pycycling's users: inferred, not seen here).
 //! - The errors a Control Point write can get (CSS Part B 1.2): 0xfd, its CCCD not set for indications; 0xfe, a
 //!   procedure already in progress. The SoftDevice gives them as GATT status 0x0100 + the ATT error.
 
@@ -41,8 +42,6 @@ pub const STATUS: u16 = 0x2ada;
 
 /// GATT status of a Control Point write refused because its CCCD is not set for indications.
 pub const CCCD_NOT_SET: u16 = 0x01fd;
-/// GATT status of a Control Point write while a procedure is in progress.
-pub const IN_PROGRESS: u16 = 0x01fe;
 
 /// Request Control: the first write, before any target.
 pub const REQUEST_CONTROL: [u8; 1] = [0x00];
@@ -210,6 +209,7 @@ pub fn encode(c: Command, (lo, hi): (i16, i16)) -> Option<([u8; 7], usize)> {
         Command::Resistance(half) => {
             let (lo, hi) = (i32::from(lo), i32::from(hi.max(lo)));
             let level = lo + (hi - lo) * i32::from(half.min(200)) / 200;
+            // the level is a u8 in 0.1 units (FTMS 1.0, 4.16): 25.5 at most, whatever range the trainer reports
             b[..2].copy_from_slice(&[0x04, level.clamp(0, 255) as u8]);
             2
         }
