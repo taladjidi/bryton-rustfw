@@ -121,7 +121,7 @@ impl App {
         // [`WHEEL_BKP`] alone is not enough: it is written only when a setting is changed, and a unit can have its
         // sensors paired and pages set without that (review of ecb8b98: stock's then replaced them)
         let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xa7)
-            || Kind::ALL.iter().any(|k| SensorId::from_word(b.backup_read(k.backup())).is_some())
+            || Kind::ALL.iter().any(|k| k.from_word(b.backup_read(k.backup())).is_some())
             || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some());
         if own || self.resume_pending {
             if !own {
@@ -174,10 +174,13 @@ impl App {
             let j = ((j + 250) / 500 * 500).min(u32::from(hi)) as u16;
             (s.wprime_j, n) = (j.clamp(lo, hi), n + 1);
         }
+        if let Some(r) = i.remote {
+            (s.remote, n) = (r, n + 1);
+        }
         self.save_misc(b);
         for (kind, id) in Kind::ALL.into_iter().zip(i.sensors) {
             if let Some(id) = id {
-                b.backup_write(kind.backup(), id.to_word()); // paired at the next start if ANT is not up
+                b.backup_write(kind.backup(), kind.to_word(id)); // paired at the next start if ANT is not up
                 if self.ant {
                     self.set_sensor(b, kind, Sensor::Paired(id));
                 }

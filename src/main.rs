@@ -25,7 +25,7 @@ use bryton_rustfw::{App, Board, POLL_MS, TOUCH_MS};
 use core::sync::atomic::{AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
-// ANT_KEY: the ANT+ network key from the private ant_key.bin, or None (build.rs).
+// ANT_KEY, DI2_KEY: the ANT+ and Shimano network keys from the private ant_key.bin / di2_key.bin, or None (build.rs).
 include!(concat!(env!("OUT_DIR"), "/ant_key.rs"));
 
 #[inline(always)]
@@ -1240,7 +1240,7 @@ fn checkpoint(n: u32) {
 #[inline(never)]
 fn make_app(board: &mut S510) -> &'static mut App {
     static APP: static_cell::StaticCell<App> = static_cell::StaticCell::new();
-    let app = APP.init_with(|| App::new(board, ANT_KEY));
+    let app = APP.init_with(|| App::new_with(board, ANT_KEY, DI2_KEY));
     app.begin(board);
     app
 }

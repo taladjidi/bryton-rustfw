@@ -526,7 +526,7 @@ fn workout_from_the_calendar() {
     sim.emmc.image = crate::fat::tests::image();
     sim.own_settings(); // the defaults, not stock's
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
@@ -694,7 +694,7 @@ fn workout_gauge_field() {
     sim.emmc.image = crate::fat::tests::image();
     sim.own_settings(); // the defaults, not stock's
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: scripted_power });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: scripted_power, network: 0, ack: &[] });
     SCRIPTED_W.store(210, Relaxed);
     let mut app = App::start(&mut sim, Some(KEY));
     let fields = [Field::WktPower, Field::StepTime, Field::NextStep, Field::Time, Field::Time, Field::Time];
@@ -851,12 +851,12 @@ fn held_key_scrolls_a_menu() {
 #[test]
 fn pairs_sensors_from_the_menu() {
     let mut sim = Sim::new(9, 0, 0);
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
-    sim.nordic.sensors.push(AntSensor { device_type: 0x79, id: 555, data: spd_cad });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x79, id: 555, data: spd_cad, network: 0, ack: &[] });
     sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
-    assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign 5 channels");
+    assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign the 6 ANT+ channels");
     assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
     app.press(&mut sim, Press::Long(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -889,7 +889,7 @@ fn pairs_sensors_from_the_menu() {
 fn keeps_the_paired_sensor_until_forgotten() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 999, data: hr80 }); // a friend's strap
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 999, data: hr80, network: 0, ack: &[] }); // a friend's strap
     sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     assert!(sim.nordic.got.contains(&vec![6, 0xd3, 0, 0x26, 0x62, 0x78, 0xf1]), "the paired strap only");
@@ -922,7 +922,7 @@ fn a_silent_sensor_searches_then_rests() {
     assert_eq!(opens(&sim), 1, "resting");
     run(&mut sim, &mut app, 2000);
     assert_eq!(opens(&sim), 2, "searching again");
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
     run(&mut sim, &mut app, 1000);
     assert_eq!(app.live.get(Metric::Hr), Some(72), "found");
     run(&mut sim, &mut app, 60_000);
@@ -935,7 +935,7 @@ fn a_silent_sensor_searches_then_rests() {
 fn pages_are_configured_from_the_menu() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power300 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power300, network: 0, ack: &[] });
     sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     app.press(&mut sim, Press::Long(Key::Page));
@@ -1004,7 +1004,7 @@ fn strap_beats(ms: u64) -> [u8; 8] {
 fn hrv_fields_from_the_strap() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: strap_beats });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: strap_beats, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 4, fields: [Dfa, Rmssd, Hr, Time, Time, Time] };
@@ -1071,7 +1071,7 @@ fn ride_card_at_the_end() {
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(hills);
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 2000);
     sim.gnss.fix = Some(8000);
@@ -1352,9 +1352,9 @@ fn auto_backlight_follows_the_ambient_light() {
     assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Light))), "LIGHT % AUTO");
     assert_eq!(Settings::from_word(sim.backup[11]).light_level, LIGHT_AUTO, "kept");
     run(&mut sim, &mut app, 4000);
-    assert_eq!(sensor_row(&app, 5), "LUX 300");
-    assert_eq!(sensor_row(&app, 6), "TEMP C 21.5");
-    assert_eq!(sensor_row(&app, 7), "HPA 1013");
+    assert_eq!(sensor_row(&app, 8), "LUX 300");
+    assert_eq!(sensor_row(&app, 9), "TEMP C 21.5");
+    assert_eq!(sensor_row(&app, 10), "HPA 1013");
     assert_consistent(&sim, &app);
     sim.save("sensor_rows");
     app.press(&mut sim, Press::Short(Key::Back));
@@ -1400,8 +1400,8 @@ fn missing_sensor_chips() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 10_000);
     assert_eq!(sim.light_level, LIGHT_LEVELS[1]);
-    assert_eq!(sensor_row(&app, 5), "LUX NONE");
-    assert_eq!(sensor_row(&app, 6), "TEMP C NONE");
+    assert_eq!(sensor_row(&app, 8), "LUX NONE");
+    assert_eq!(sensor_row(&app, 9), "TEMP C NONE");
 }
 
 /// The barometer converts once per reading (one-shot), every 10 s.
@@ -1414,8 +1414,8 @@ fn barometer_one_shot() {
     assert_eq!(app.baro, Some((10_132, 2150)));
     sim.bus.baro = Some((9_500, -512));
     run(&mut sim, &mut app, 20_000);
-    assert_eq!(sensor_row(&app, 6), "TEMP C -5.1");
-    assert_eq!(sensor_row(&app, 7), "HPA 950");
+    assert_eq!(sensor_row(&app, 9), "TEMP C -5.1");
+    assert_eq!(sensor_row(&app, 10), "HPA 950");
 }
 
 #[test]
@@ -1993,8 +1993,8 @@ fn a_ride_with_laps_and_pauses() {
     sim.gnss.fix = Some(8000);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp });
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_ramp });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_ramp, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 6, fields: [Timer, Dist, AvgSpeed, AvgHr, AvgPower, Graph] };
@@ -2108,8 +2108,8 @@ fn derived_power_and_climb_fields() {
     sim.gnss.fix = Some(8000);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp });
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_lr });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_lr, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Power10s, Power30s, Np, If, Tss] };
@@ -2206,9 +2206,9 @@ fn power_noisy(ms: u64) -> [u8; 8] {
 fn graph_field() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 3, fields: [Graph, MaxSpeed, HrGraph, Timer, Timer, Timer] };
@@ -2238,9 +2238,9 @@ fn graph_plots_by_tap_and_span_by_hold() {
         (tap || held).then_some((120, 100))
     });
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 2, fields: [Graph, HrGraph, Timer, Timer, Timer, Timer] };
@@ -2356,7 +2356,7 @@ fn idle_is_free_and_no_pass_stalls() {
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.route = Some(ride_route);
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
     sim.gnss.fix = Some(8000);
     app.press(&mut sim, Press::Short(Key::Start));
@@ -2580,9 +2580,9 @@ fn perf_budgets() {
             sim.gnss.route = Some(course_route);
         }
         sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72 });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
         app.pages[..3].copy_from_slice(&pages);
         if course {
@@ -2624,10 +2624,13 @@ fn perf_budgets() {
         // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow
         // clear of the zoom buttons, 1211 without them)
         ("map", [map, values, graph], 0, None, (1_800, 50)),
-        // 456, 3: on the course, the profile's rider column (a whole profile at each eighth), two values
-        ("course profile", [profile, values, map], 0, None, (600, 10)),
-        // 1548, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds
-        ("course page", [values, graph, map], crate::COURSE, None, (2_000, 20)),
+        // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
+        // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
+        // 19 000 px each)
+        ("course profile", [profile, values, map], 0, None, (800, 10)),
+        // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
+        // NEXT TURN's last digit (1548 before it), the turn's two banners
+        ("course page", [values, graph, map], crate::COURSE, None, (2_600, 20)),
         // 3400, 41: zoomed in at 2 m a pixel (map.rs), following the rider: a whole map at each re-centre (~35 s)
         ("map zoomed", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (4_500, 60)),
     ];
@@ -2723,9 +2726,12 @@ fn course_ride() {
     };
     assert_eq!(row(&app, 0).split_once(' ').map(|r| r.1), Some("..."), "listed at once, measured next");
     run(&mut sim, &mut app, 1000);
-    let mut rows: Vec<_> = (0..5).map(|i| row(&app, i)).collect();
+    let mut rows: Vec<_> = (0..7).map(|i| row(&app, i)).collect();
     rows.sort();
-    assert_eq!(rows, ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM"]);
+    assert_eq!(
+        rows,
+        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
+    );
     assert_consistent(&sim, &app);
     sim.save("courses_menu");
 
@@ -2804,7 +2810,7 @@ fn course_ride() {
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(crate::COURSE), "after the map page");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields[..5]);
+    assert_eq!(shown(&app).collect::<Vec<_>>(), crate::COURSE_PAGE.fields);
     assert_consistent(&sim, &app);
     sim.save("course_page");
     app.press(&mut sim, Press::Short(Key::Page));
@@ -2826,6 +2832,103 @@ fn course_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.banner.as_str(), "COURSE OFF");
     assert_eq!(fields(&app), ["--", "--", "--", "--", "--"]);
+}
+
+/// The zigzag (course/cues.rs `zigzag`, tools/fat_image.py's `Zigzag.gpx`) ridden at 8 m/s from its start.
+fn zigzag_route(ms: u64) -> (i32, i32, i32) {
+    let pts = crate::course::cues::tests::zigzag();
+    let mut s = ms as f64 * 0.008;
+    let mut at = (pts[0].0, pts[0].1, 90.0);
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        let heading = (b.0 - a.0).atan2(b.1 - a.1).to_degrees().rem_euclid(360.0);
+        if s <= len {
+            at = (a.0 + (b.0 - a.0) * s / len, a.1 + (b.1 - a.1) * s / len, heading);
+            break;
+        }
+        (s, at) = (s - len, (b.0, b.1, heading));
+    }
+    let m_per_unit = 0.011_132;
+    ((at.1 / m_per_unit) as i32, (at.0 / m_per_unit) as i32, (at.2 * 1e5) as i32)
+}
+
+/// Turn-by-turn on the zigzag's GPX track (its turns found on its shape): each turn said in the banner with its
+/// arrow 200 m before ("LEFT 200 M", a beep) and at it ("LEFT NOW", two beeps), once each, in order; the course
+/// page's NEXT TURN field shows the arrow and the distance, redrawn by its changed characters. The banner costs its
+/// own pixels and no more.
+#[test]
+fn course_cues_ride() {
+    use crate::course::Turn;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(zigzag_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    let list = &app.courses.as_deref().unwrap().list;
+    let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIGZAG").unwrap();
+    app.follow_course(k);
+    run(&mut sim, &mut app, 200);
+    assert_eq!(app.screen(), Screen::Ride(crate::COURSE));
+    let text = |app: &App| std::string::String::from(app.field_text(Field::NextTurn).as_str());
+    assert_eq!(text(&app), "--", "no fix yet");
+    let cues: Vec<_> = app.courses.as_deref().unwrap().course.cues().to_vec();
+    let kinds: Vec<_> = cues.iter().map(|c| c.turn).collect();
+    use Turn::*;
+    assert_eq!(kinds, [Left, Right, SharpRight, SlightLeft, Right, UTurn]);
+
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    // to 400 m: the left turn at 1 km is 600 m ahead
+    while sim.ms < 50_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    let t = text(&app);
+    let m: u32 = t.trim_start_matches('\x01').trim_end_matches('M').parse().unwrap();
+    assert!(t.starts_with('\x01') && (570..=610).contains(&m), "{t:?}");
+    assert_consistent(&sim, &app);
+    sim.save("course_next_turn");
+
+    // the ride to the end: every banner as it shows, where the rider is then (m), the tones
+    let (tones, mut said, mut last) = (sim.tones.len(), Vec::new(), std::string::String::new());
+    let mut banner_px = Vec::new();
+    let end = (app.courses.as_deref().unwrap().course.len_m() as u64 + 40) * 125;
+    while sim.ms < end {
+        let px = sim.pixels;
+        run(&mut sim, &mut app, 500);
+        let b = std::string::String::from(app.banner.as_str());
+        if app.banner_ms.is_some() && b != last {
+            said.push((sim.ms as f64 * 0.008, b.clone()));
+            banner_px.push(sim.pixels - px);
+            if b.ends_with("NOW") && said.len() == 2 {
+                assert_consistent(&sim, &app);
+                sim.save("course_cue_banner");
+            }
+        }
+        last = b;
+    }
+    let mut want = Vec::new();
+    for c in &cues {
+        let words = std::format!("{} {}", c.turn.glyph(), c.turn.word());
+        want.push((f64::from(c.at_m) - 200.0, std::format!("{words} 200 M")));
+        want.push((f64::from(c.at_m) - 32.0, std::format!("{words} NOW")));
+    }
+    let texts: Vec<_> = said.iter().map(|s| s.1.as_str()).collect();
+    assert_eq!(texts, want.iter().map(|w| w.1.as_str()).collect::<Vec<_>>(), "{said:?}");
+    for (s, w) in said.iter().zip(&want) {
+        assert!((s.0 - w.0).abs() <= 24.0, "{s:?} where {w:?}"); // a fix a second, looked at every 500 ms
+    }
+    let beeps = sim.tones[tones..].iter().filter(|&&hz| hz == 1800).count();
+    assert_eq!(beeps, 3 * cues.len(), "a beep at 200 m, two at the turn");
+    // the half second a banner shows: the banner (240 x 44 = 10560 px, at the top) and the page's own changes; once in a while
+    // the profile moves on by an eighth then too (a whole profile)
+    banner_px.sort();
+    let median = banner_px[banner_px.len() / 2];
+    std::println!("a cue's banner: {median} px in its half second (median; {banner_px:?})");
+    assert!(median < 10560 + 2000, "{banner_px:?}");
+    assert_consistent(&sim, &app);
 }
 
 /// Max HR and FTP from the menu: Start edits the value in place, Lap steps it up (1 bpm, 5 W), Page down,
@@ -2946,4 +3049,59 @@ fn pan_after_zoom_in_moves_with_the_finger() {
     assert_eq!(app.map_zoom.map(|z| z + 1), zoom.map(|z| z + 2), "one level out");
     assert_eq!(app.map_centre, centre, "not panned");
     assert_consistent(&sim, &app);
+}
+
+/// A cue comes up whatever is on screen while navigating: over a menu, over the media remote, and with the light
+/// timed out or switched off with Back (it comes back on, as for a key). The panel equals a full redraw each time (a
+/// screen updating its own parts does not paint over the banner).
+#[test]
+fn course_cues_over_any_screen() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(zigzag_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    let list = &app.courses.as_deref().unwrap().list;
+    let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIGZAG").unwrap();
+    app.follow_course(k);
+    run(&mut sim, &mut app, 200);
+    app.settings.light_timeout = 1; // 10 s
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let cues: Vec<_> = app.courses.as_deref().unwrap().course.cues().to_vec();
+    // each cue's first banner (200 m before) found on a different screen
+    let screens = [Some(Screen::Menu(Menu::Main, 0)), Some(Screen::Media), None, None];
+    for (i, (cue, screen)) in cues.iter().zip(screens).enumerate() {
+        let at_ms = (u64::from(cue.at_m).saturating_sub(260)) * 125;
+        while sim.ms < at_ms {
+            run(&mut sim, &mut app, 500);
+        }
+        match screen {
+            Some(s) => {
+                app.open(s);
+                app.show(&mut sim);
+            }
+            None if i == 2 => {}           // the light timed out on its own (10 s, no key)
+            None => app.backlight = false, // the light switched off by the rider (Back on the overview)
+        }
+        run(&mut sim, &mut app, 3000);
+        if screen.is_none() {
+            assert!(!sim.backlight, "cue {i}: the light off before the cue");
+        }
+        let until = sim.ms + 12_000;
+        while sim.ms < until && !app.banner.as_str().ends_with("200 M") {
+            run(&mut sim, &mut app, 250);
+        }
+        assert!(app.banner.as_str().ends_with("200 M"), "cue {i} said: {:?}", app.banner.as_str());
+        run(&mut sim, &mut app, 250);
+        assert!(sim.backlight, "cue {i}: the light on for it");
+        assert_consistent(&sim, &app);
+        if let Some(s) = screen {
+            assert_eq!(app.screen(), s, "cue {i}: the screen stays");
+            app.close();
+            app.show(&mut sim);
+        }
+    }
 }

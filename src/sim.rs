@@ -527,6 +527,8 @@ pub struct Nordic {
     /// ANT+ sensors in range.
     pub sensors: Vec<AntSensor>,
     pub channels: [Channel; 8],
+    /// The network keys set (`06 cc [net] [key]`), by network.
+    pub keys: [Option<[u8; 8]>; 2],
     /// The BLE peripheral side (ble_sim.rs), and the phone in range.
     pub server: ble_sim::Server,
     pub phone: Option<ble_sim::PhoneSim>,
@@ -536,17 +538,22 @@ pub struct Nordic {
     out: std::collections::VecDeque<u8>,
 }
 
-/// An ANT+ sensor in range: its device type and number, and its 8 data bytes as a function of the time (ms).
+/// An ANT sensor in range: its device type and number, its 8 data bytes as a function of the time (ms), the
+/// network it is on (0 ANT+, 1 Shimano's: heard only by a channel assigned to it once that network has a key), and
+/// the pages it sends as acknowledged data (message 0x4f, as a Di2 sends its button page) rather than broadcast.
 pub struct AntSensor {
     pub device_type: u8,
     pub id: u16,
     pub data: fn(u64) -> [u8; 8],
+    pub network: u8,
+    pub ack: &'static [u8],
 }
 
-/// An ANT channel: the ID it was set to, open or not, the sensor it found, its next broadcast, when it opened and
-/// its low-priority search time-out (2.5 s units).
+/// An ANT channel: the network and ID it was set to, open or not, the sensor it found, its next broadcast, when it
+/// opened and its low-priority search time-out (2.5 s units).
 #[derive(Default, Clone, Copy)]
 pub struct Channel {
+    net: Option<u8>,
     device_type: u8,
     device: u16,
     pub open: bool,
@@ -590,8 +597,16 @@ impl Nordic {
                 continue;
             }
             self.channels[ch].next = c.next + 250;
-            let hit = |s: &AntSensor| s.device_type == c.device_type && (c.device == 0 || c.device == s.id);
-            let Some(i) = c.found.or_else(|| self.sensors.iter().position(hit)) else {
+            let keyed = |n: u8| self.keys.get(usize::from(n)).is_some_and(Option::is_some);
+            let hit = |s: &AntSensor| {
+                c.net == Some(s.network)
+                    && keyed(s.network)
+                    && s.device_type == c.device_type
+                    && (c.device == 0 || c.device == s.id)
+            };
+            // a sensor taken out of range (removed) is lost: the channel searches again
+            let found = c.found.filter(|&i| i < self.sensors.len());
+            let Some(i) = found.or_else(|| self.sensors.iter().position(hit)) else {
                 if c.search_timeout != 0xff && now >= c.opened + 2500 * u64::from(c.search_timeout) {
                     // nothing found: EVENT_RX_SEARCH_TIMEOUT, then the channel closes
                     self.channels[ch].open = false;
@@ -602,7 +617,8 @@ impl Nordic {
             };
             self.channels[ch].found = Some(i);
             let data = (self.sensors[i].data)(now);
-            self.ant_event(&[&[9, 0x4e, ch as u8][..], &data].concat(), 0x80, ch as u8); // EVENT_RX
+            let id = if self.sensors[i].ack.contains(&data[0]) { 0x4f } else { 0x4e };
+            self.ant_event(&[&[9, id, ch as u8][..], &data].concat(), 0x80, ch as u8); // EVENT_RX
         }
     }
 
@@ -629,6 +645,12 @@ impl Nordic {
         if let [6, op, ch, rest @ ..] = p {
             let ch = usize::from(*ch);
             match (*op, rest) {
+                (0xcc, [k @ ..]) if k.len() == 8 => {
+                    if let Some(slot) = self.keys.get_mut(ch) {
+                        *slot = k.try_into().ok(); // the channel byte is the network number here
+                    }
+                }
+                (0xc2, [_, net, _]) => self.channels[ch].net = Some(*net),
                 (0xd3, [d0, d1, t, _]) => {
                     self.channels[ch].device = u16::from_le_bytes([*d0, *d1]);
                     self.channels[ch].device_type = *t;
@@ -1027,6 +1049,9 @@ pub use ble_sim::{Act, PhoneSim};
 
 #[cfg(test)]
 mod phone_tests;
+
+#[cfg(test)]
+mod shift_tests;
 
 /// The computer at the other end of the dev link: what it received, and the staging area.
 #[derive(Default)]

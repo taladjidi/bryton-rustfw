@@ -19,7 +19,7 @@
   grade. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
-  when the course is loaded): its profile large, the distance to go, distance, moving time and average speed.
+  when the course is loaded): its profile large, the next turn, the distance to go, distance and moving time.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (4x in a half-width box, 7x or 8x across the screen); only a longer
   value ("200-220", "1.6K 6%") takes the largest smaller scale it fits. Times: "MM:SS" under an hour (the step left
@@ -205,7 +205,17 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
-- **Fields:** TO GO KM, OFF CRS M (red while off course), CLIMB (on a climb what is left and the grade of the next
+- **Turn by turn** (course/cues.rs), as Garmin's, Wahoo's and Hammerhead's: the cues the file states (a FIT
+  course's course points: left, right, slight and sharp turns, U-turn, straight on, summit, water, food, danger,
+  first aid; GPX waypoints or track points whose `type`, `sym` or `name` is a turn word, as BRouter and RideWithGPS
+  write them), else the turns of the course's shape (a GPX track, Bryton's routes): 45 degrees or more over 25 m
+  either side, corners drawn with several points merged, so a winding road gives none; slight under 60 degrees,
+  sharp from 110, a U-turn from 159 (BRouter's classes). Up to 256 a course (turns kept first). The next one is
+  said in the banner with its arrow 200 m before (or 20 s at the speed ridden, if farther) with a beep ("LEFT
+  200 M"), and at the turn (32 m or 4 s) with two ("LEFT NOW"); nothing off course. Not read: the turns of
+  Bryton's `voiceTrip.fit` (their values are not known), cue names (street names).
+- **Fields:** TO GO KM, NEXT TURN (the next cue's arrow and distance, "350M", "1.2K"; "--" off course), OFF CRS M
+  (red while off course), CLIMB (on a climb what is left and the grade of the next
   200 m, "1.6K 6%"; before it the next climb's length and grade; coloured by grade), CLIMB M (the climb's gain left,
   or the next climb's), UP LEFT M (the course's ascent left), and PROFILE: the course's elevation from the eighth of
   it the rider is in to the end, the rider's place, the ridden part dark, the climbs green, yellow, orange or red by
@@ -237,6 +247,16 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
   power, on stock's channels. A paired sensor is kept
   through power off, so a friend's is never taken. A silent sensor searches 30 s, then rests a minute. Needs the
   ANT+ key from your own stock firmware ([install.md](install.md)).
+- **Electronic shifting** (not yet seen on the unit): **DI2** (Shimano's own ANT channel, as stock and the patched
+  stock firmware's P12 use it; needs Shimano's network key, copied from your stock image with the ANT+ one by
+  `tools/ant_key.py`) and **SHIFTING** (the public ANT+ Shifting profile: SRAM AXS, Campagnolo), paired from the
+  sensors menu; one shifting system is kept per bike. Fields (group SHIFTING): **GEAR** front-rear ("2-11"),
+  **SHIFTS** in this ride, **SHIFT BAT** (Di2: percent; ANT+: NEW, GOOD, OK, LOW, CRIT; red when low). Each shift
+  while riding goes in the ride file as a FIT gear change event (front or rear, the gears after it), as stock
+  writes them. **DI2 KEYS** (sensors menu): what each hood button press does (left / right, single / long): next
+  or previous page, lap, start, play / pause, next or previous track, or nothing. IMPORT takes the Di2 and its
+  button actions from stock's Sensor.ini (P12's numbers included). Not done: the gear ratio (needs the chainring
+  and cassette teeth), the ANT+ Shifting remotes' buttons (no public layout).
 - **GPS** (u-blox M10): speed when no wheel sensor is paired; at power-up it gets the time and the last position,
   for a faster fix.
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind

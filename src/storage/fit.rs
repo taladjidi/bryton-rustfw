@@ -4,7 +4,8 @@
 //! Layout: a 14-byte header (data size, its own CRC), then definition and data messages (little-endian), then the
 //! file CRC. Messages: file_id, event (timer start, stop at a pause, start at a resume), one record a second (only
 //! the fields that are present: a new record definition goes out when that set changes), a lap at each Lap key,
-//! and at the end the last lap, session and activity.
+//! a gear change event at each shift of an electronic groupset ([`Writer::gear`]), and at the end the last lap,
+//! session and activity.
 //!
 //! **Checkpoints.** [`Writer`] holds no file data, only where it is: the data length, the running CRC of the data
 //! bytes, what is defined, and the ride totals. [`Writer::checkpoint`] writes the file CRC after the data and the
@@ -125,6 +126,7 @@ const L_SESSION: u8 = 4;
 const L_ACTIVITY: u8 = 5;
 const L_DEV_ID: u8 = 6;
 const L_FIELD_DESC: u8 = 7;
+const L_GEAR: u8 = 8;
 
 /// The full copy's developer data, after file_id (module doc): developer_data_id, then a field_description each
 /// for `Alpha1` and `RMSSD`, definitions included.
@@ -157,6 +159,9 @@ const DEV_RECORD: [Field; 2] = [(0, 4, 0), (1, 2, 0)];
 
 const FILE_ID: [Field; 4] = [(0, 1, ENUM), (1, 2, U16), (2, 2, U16), (4, 4, U32)];
 const EVENT: [Field; 3] = [(253, 4, U32), (0, 1, ENUM), (1, 1, ENUM)];
+/// [`EVENT`] with its data field (3, gear_change_data: rear_gear_num in bits 0..7, rear_gear (teeth) 8..15,
+/// front_gear_num 16..23, front_gear 24..31; garmin_fit_sdk/profile.py and fitdecode's profile, its components).
+const GEAR_EVENT: [Field; 4] = [(253, 4, U32), (0, 1, ENUM), (1, 1, ENUM), (3, 4, U32)];
 /// timestamp, position_lat, position_long, altitude, speed, distance, heart_rate, cadence, power, temperature: the
 /// mask bits of [`Writer`] in this order.
 const RECORD: [Field; 10] = [
@@ -244,7 +249,7 @@ pub struct Writer {
     /// CRC of those bytes.
     crc: u16,
     /// Local message types whose definition is in the file.
-    defined: u8,
+    defined: u16,
     /// [`RECORD`] fields in the current record definition.
     mask: u16,
     start: u32,
@@ -341,6 +346,15 @@ impl Writer {
         self.message(sink, L_LAP, 19, &LAP, &v)?;
         (self.lap_start, self.lap_dist, self.laps) = (self.last, self.dist_mm, self.laps + 1);
         Ok(())
+    }
+
+    /// A gear change at `time` (the front one if `front`, else the rear): event front_gear_change (42) or
+    /// rear_gear_change (43), type marker (3), with the gears after it, from 1. The teeth are not known: 0xff
+    /// (invalid). Stock writes the same events (`Fit_WriteGearChangeEvent` 0xd021b9a4).
+    pub fn gear(&mut self, sink: &mut impl Sink, time: u32, front: bool, front_n: u8, rear_n: u8) -> Result<(), Error> {
+        self.last = self.last.max(time);
+        let data = 0xff00_ff00 | u32::from(front_n) << 16 | u32::from(rear_n);
+        self.message(sink, L_GEAR, 21, &GEAR_EVENT, &[self.last, if front { 42 } else { 43 }, 3, data])
     }
 
     /// [`LAP`]'s values for the lap from `lap_start` to `last`: elapsed and timer time and distance, with the
@@ -503,7 +517,7 @@ impl Writer {
         Some(Writer {
             len: w[0],
             crc: w[1] as u16,
-            defined: (w[1] >> 16) as u8,
+            defined: (w[1] >> 16) as u16,
             mask: w[2] as u16,
             dev: w[2] >> 16 & 1 != 0,
             start: w[3],
@@ -836,10 +850,19 @@ mod tests {
             .collect()
     }
 
+    /// A gear change of the test ride at `time`, if one: every 45 s from 7 s, front every third time.
+    fn shift(time: u32) -> Option<(bool, u8, u8)> {
+        let t = time - T0;
+        (t % 45 == 7).then_some((t % 135 == 7, (t / 135 % 2 + 1) as u8, (t / 45 % 11 + 1) as u8))
+    }
+
     /// Writes `samples` from `w`, a checkpoint every 60 s; the last record stored whole, None if the sink failed.
     fn write(sink: &mut impl Sink, w: &mut Writer, samples: &[Sample], rec: &mut [u8; RECORD_LEN]) -> Option<()> {
         for s in samples {
             w.record(sink, s).ok()?;
+            if let Some((front, f, r)) = shift(s.time) {
+                w.gear(sink, s.time, front, f, r).ok()?;
+            }
             if (s.time - T0) % 60 == 0 {
                 *rec = w.checkpoint(sink).ok()?;
             }
@@ -923,6 +946,34 @@ mod tests {
         assert_eq!(field(r, 13), Some(0xfe), "-2 C");
     }
 
+    /// Gear changes: front_gear_change (42) and rear_gear_change (43) events, marker, with the gears in their data;
+    /// the definition, written once, is known again from a recovery record (local 8, past the record's old byte).
+    #[test]
+    fn gear_change_events() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        for s in &ride(60) {
+            w.record(&mut f, s).unwrap();
+            match s.time - T0 {
+                10 => w.gear(&mut f, s.time, false, 2, 10).unwrap(),
+                20 => {
+                    let rec = w.checkpoint(&mut f).unwrap();
+                    w = Writer::from_record(&rec).unwrap();
+                }
+                30 => w.gear(&mut f, s.time, true, 1, 10).unwrap(),
+                _ => {}
+            }
+        }
+        w.finish(&mut f, T0 + 61).unwrap();
+        let m = decode(&f).unwrap();
+        let gears: Vec<_> = m.iter().filter(|x| x.0 == 21 && field(x, 1) == Some(3)).collect();
+        assert_eq!(gears.len(), 2);
+        assert_eq!((field(gears[0], 0), field(gears[0], 3)), (Some(43), Some(0xff02_ff0a)), "rear: 2-10");
+        assert_eq!((field(gears[1], 0), field(gears[1], 253)), (Some(42), Some(u64::from(T0 + 30))), "front");
+        let defs = f.windows(6).filter(|d| d[0] == 0x40 | L_GEAR && d[3..6] == [21, 0, 4]).count();
+        assert_eq!(defs, 1, "defined once");
+    }
+
     /// The golden rule: cut the power after every byte of a ride. The last stored recovery record always gives
     /// back a valid file (the checkpoint's, byte for byte), and the ride goes on from it to a valid finished file.
     #[test]
@@ -951,6 +1002,9 @@ mod tests {
         at_checkpoint.insert(w.data_len(), full.clone());
         for s in &samples {
             w.record(&mut full, s).unwrap();
+            if let Some((front, f, r)) = shift(s.time) {
+                w.gear(&mut full, s.time, front, f, r).unwrap(); // the gear events cut and resumed too
+            }
             if (s.time - T0) % 60 == 0 {
                 w.checkpoint(&mut full).unwrap();
                 at_checkpoint.insert(w.data_len(), full.clone());

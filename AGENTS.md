@@ -216,7 +216,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
   memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/course.rs`: the course model,
   pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
-  off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns.
+  off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns. `src/course/cues.rs`:
+  turn-by-turn cues (FIT course points, GPX turn words, else the turns of the course's shape), the next one said.
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
   restores from under the arrow and the track; IGN's raster tiles first where the owner's packs have them.
@@ -247,7 +248,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   after `dev.py reset`): a firmware that reads the link takes the bytes first.
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
-  `ant_key.bin`, and build.rs passes it to main.rs as `ANT_KEY` (None without the file). Tests use a stand-in key. `tools/font.py`, `tools/pixel_font.py`: the fonts.
+  `ant_key.bin`, and build.rs passes it to main.rs as `ANT_KEY` (None without the file). Shimano's private network
+  key (the Di2 channel) is handled the same way: `di2_key.bin`, `DI2_KEY`, never printed, no hash of it kept.
+  Tests use stand-in keys. `tools/font.py`, `tools/pixel_font.py`: the fonts.
 - `link.x`, `pack.py`: memory map and the update file. `pack.py` re-checks what the stock updater checks.
 
 ## Before every commit

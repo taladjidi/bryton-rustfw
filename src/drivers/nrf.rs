@@ -362,18 +362,37 @@ pub fn ant_closed(p: &[u8]) -> Option<u8> {
     }
 }
 
-/// Enables ANT, sets the ANT+ network key (licensed: build.rs reads it from a private file, never from this
-/// repository) and assigns channels `0..channels` as receivers on that network, as stock does at start.
-pub fn ant_start(b: &mut impl Board, rx: &mut Rx, key: [u8; 8], channels: u8) -> Result<(), Error> {
-    let [k0, k1, k2, k3, k4, k5, k6, k7] = key;
+/// Enables ANT, sets the network keys (network 0 the ANT+ one, licensed; network 1 Shimano's, if given: build.rs
+/// reads both from private files, never from this repository) and assigns channel `ch` as a receiver on network
+/// `nets[ch]`, as stock does at start. A channel on network 1 without its key is left unassigned (its opening then
+/// fails). Returns whether network 1 is up.
+pub fn ant_start(
+    b: &mut impl Board,
+    rx: &mut Rx,
+    key: [u8; 8],
+    private: Option<[u8; 8]>,
+    nets: &[u8],
+) -> Result<bool, Error> {
     // enable: 15 channels, 0 encrypted, event queue 32, then stock's buffer pointer and size (sent as stock sends
     // them; the chip allocates its own, inferred)
     call(b, rx, &[ANT_CMD, 0xfa, 1, 0x0f, 0, 0x20, 0, 0x7c, 0x16, 0x06, 0x24, 0xfc, 0x05], &mut [])?;
-    call(b, rx, &[ANT_CMD, 0xcc, 0, k0, k1, k2, k3, k4, k5, k6, k7], &mut [])?;
-    for ch in 0..channels {
-        call(b, rx, &[ANT_CMD, 0xc2, ch, 0, 0, 0], &mut [])?; // assign: slave, network 0, no extended
+    fn set_key(
+        b: &mut impl Board,
+        rx: &mut Rx,
+        net: u8,
+        [k0, k1, k2, k3, k4, k5, k6, k7]: [u8; 8],
+    ) -> Result<usize, Error> {
+        call(b, rx, &[ANT_CMD, 0xcc, net, k0, k1, k2, k3, k4, k5, k6, k7], &mut [])
     }
-    Ok(())
+    set_key(b, rx, 0, key)?;
+    // Shimano's network failing leaves the ANT+ sensors as they are
+    let private = private.is_some_and(|k| set_key(b, rx, 1, k).is_ok());
+    for (ch, &net) in (0..).zip(nets) {
+        if net == 0 || private {
+            call(b, rx, &[ANT_CMD, 0xc2, ch, 0, net, 0], &mut [])?; // assign: slave, network `net`, no extended
+        }
+    }
+    Ok(private)
 }
 
 /// Opens (closed, assigned) channel `ch` for sensors of `device_type` with stock's settings: for `id` only, or for
@@ -421,17 +440,20 @@ pub fn ant_channel_id(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<Option<
     }
 }
 
-/// The channel and the 8 data bytes of ANT event `p`, if it is a broadcast: `[ANT_EVT][size][0x4e][channel]
-/// [8 data bytes]...`, 44 bytes in all.
+/// The channel and the 8 data bytes of ANT event `p`, if it is data: a broadcast `[ANT_EVT][size][0x4e][channel]
+/// [8 data bytes]...`, or the same as acknowledged data (0x4f: Shimano's button page, stock's
+/// `Ant_Di2_OnAntEvent`), 44 bytes in all.
 ///
 /// ```
 /// let mut p = [0u8; 44];
 /// p[..12].copy_from_slice(&[8, 9, 0x4e, 3, 4, 0, 0, 0, 0, 0, 0, 72]);
 /// assert_eq!(bryton_rustfw::nrf::ant_broadcast(&p), Some((3, [4, 0, 0, 0, 0, 0, 0, 72])));
+/// p[2] = 0x4f;
+/// assert_eq!(bryton_rustfw::nrf::ant_broadcast(&p), Some((3, [4, 0, 0, 0, 0, 0, 0, 72])), "acknowledged");
 /// ```
 pub fn ant_broadcast(p: &[u8]) -> Option<(u8, [u8; 8])> {
     match p {
-        [ANT_EVT, _, 0x4e, ch, d0, d1, d2, d3, d4, d5, d6, d7, ..] if p.len() == 44 => {
+        [ANT_EVT, _, 0x4e | 0x4f, ch, d0, d1, d2, d3, d4, d5, d6, d7, ..] if p.len() == 44 => {
             Some((*ch, [*d0, *d1, *d2, *d3, *d4, *d5, *d6, *d7]))
         }
         _ => None,

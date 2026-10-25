@@ -150,6 +150,12 @@ pub struct Settings {
     pub hr_alert: u16,
     /// The power the workout gauge shows ([`Field::WktPower`]): an index in [`WKT_AVGS`]; kept in register 16.
     pub wkt_avg: usize,
+    /// What each shifter button press does, by [`sensors::Press`]: 3 bits each, the single presses in register 16
+    /// (bits 18..23), the long ones in register 28 (bits 5..7 and 13..15), the bits those words left free. 0, in
+    /// words written before: nothing.
+    // ponytail: split over two words because no backup register is free (BOARD.md 8); one place once settings
+    // move to a file on the card
+    pub remote: [menu::Remote; 4],
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -187,6 +193,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                remote: [menu::Remote::None; 4],
             },
             0xa6 => Settings {
                 wheel_mm: index(w & 7),
@@ -200,6 +207,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                remote: [menu::Remote::None; 4],
             },
             0xa5 => Settings {
                 wheel_mm: wheel((w & 0xfff) as u16),
@@ -213,6 +221,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                remote: [menu::Remote::None; 4],
             },
             _ => Settings {
                 wheel_mm: WHEELS[1],
@@ -226,6 +235,7 @@ impl Settings {
                 drink_min: 0,
                 hr_alert: 0,
                 wkt_avg: 0,
+                remote: [menu::Remote::None; 4],
             },
         }
     }
@@ -240,19 +250,32 @@ impl Settings {
     /// assert_eq!(Settings::from_word(0).with_alerts_word(0).eat_min, 0, "off without the tag");
     /// ```
     pub fn alerts_word(self) -> u32 {
+        let [_, _, l, r] = self.remote.map(|a| a as u32);
         (0xc2 << 24)
             | u32::from(self.hr_alert.min(255)) << 16
+            | r << 13
             | (u32::from(self.drink_min / 5) & 0x1f) << 8
+            | l << 5
             | (u32::from(self.eat_min / 5) & 0x1f)
     }
 
-    /// Self with the alerts of register 28 ([`Settings::alerts_word`]).
+    /// Self with the alerts of register 28 ([`Settings::alerts_word`]), and the long presses' actions.
+    ///
+    /// ```
+    /// use bryton_rustfw::{Settings, menu::Remote};
+    /// let s = Settings { eat_min: 120, remote: [Remote::Lap, Remote::Play, Remote::PrevTrack, Remote::Start], ..Settings::from_word(0) };
+    /// let back = Settings::from_word(0).with_power_word(s.power_word()).with_alerts_word(s.alerts_word());
+    /// assert_eq!((back.remote, back.eat_min), (s.remote, 120));
+    /// ```
     pub fn with_alerts_word(self, w: u32) -> Settings {
+        let [s0, s1, ..] = self.remote;
         if w >> 24 != 0xc2 {
-            return Settings { eat_min: 0, drink_min: 0, hr_alert: 0, ..self };
+            let remote = [s0, s1, menu::Remote::None, menu::Remote::None];
+            return Settings { eat_min: 0, drink_min: 0, hr_alert: 0, remote, ..self };
         }
         let min = |v: u32| ((v & 0x1f) as u16 * 5).min(120);
-        Settings { eat_min: min(w), drink_min: min(w >> 8), hr_alert: (w >> 16 & 0xff) as u16, ..self }
+        let remote = [s0, s1, menu::Remote::from_bits(w >> 5), menu::Remote::from_bits(w >> 13)];
+        Settings { eat_min: min(w), drink_min: min(w >> 8), hr_alert: (w >> 16 & 0xff) as u16, remote, ..self }
     }
 
     /// These settings with the weight, W' and the workout gauge's window kept in `w` (RTC backup register 16): tag
@@ -266,21 +289,28 @@ impl Settings {
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
     /// ```
     pub fn with_power_word(self, w: u32) -> Settings {
+        let [_, _, s2, s3] = self.remote;
         if w >> 24 != 0xc1 {
-            return Settings { weight_kg: power::WEIGHT_KG, wprime_j: power::WPRIME_J, wkt_avg: 0, ..self };
+            let remote = [menu::Remote::None, menu::Remote::None, s2, s3];
+            return Settings { weight_kg: power::WEIGHT_KG, wprime_j: power::WPRIME_J, wkt_avg: 0, remote, ..self };
         }
         let (kg, wp) = (menu::WEIGHT_RANGE, menu::WPRIME_RANGE);
         Settings {
             weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
             wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
             wkt_avg: (w >> 16 & 3) as usize,
+            remote: [menu::Remote::from_bits(w >> 18), menu::Remote::from_bits(w >> 21), s2, s3],
             ..self
         }
     }
 
-    /// The weight, W' and the gauge's window as kept in register 16 ([`Settings::with_power_word`]).
+    /// The weight, W', the gauge's window and the single presses' actions as kept in register 16
+    /// ([`Settings::with_power_word`]).
     pub fn power_word(self) -> u32 {
+        let [l, r, ..] = self.remote.map(|a| a as u32);
         (0xc1 << 24)
+            | r << 21
+            | l << 18
             | (self.wkt_avg as u32 & 3) << 16
             | (u32::from(self.wprime_j / 500) & 0xff) << 8
             | u32::from(self.weight_kg) & 0xff
@@ -331,6 +361,7 @@ impl Settings {
                 if v == 0 { l.push_str("OFF") } else { l.push_u32(u32::from(v)) }
             }
             Setting::WktAvg => l.push_str(WKT_AVGS.get(self.wkt_avg).copied().unwrap_or("")),
+            Setting::Remote(n) => l.push_str(self.remote.get(usize::from(n)).map_or("", |a| a.name())),
         }
     }
 
@@ -353,6 +384,11 @@ impl Settings {
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
             Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
+            Setting::Remote(n) => {
+                if let Some(a) = self.remote.get_mut(usize::from(n)) {
+                    *a = menu::Remote::from_bits(*a as u32 + 1);
+                }
+            }
             _ => {} // numbers: Setting::number
         }
     }
@@ -433,10 +469,11 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
 };
 
 /// The course page, an extra page while a course is followed ([`COURSE`]; Garmin and Wahoo add theirs the same
-/// way): the course's profile large, the distance to go, distance, moving time and average speed. Not configurable.
+/// way): the course's profile large, the next turn across the width, then the owner's list: the distance to go, the
+/// distance, the moving time and the average speed. Not configurable.
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 5, fields: [Profile, ToGo, Dist, Timer, AvgSpeed, Time] }
+    PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, Dist, Timer, AvgSpeed] }
 };
 
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).

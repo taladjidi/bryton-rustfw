@@ -128,6 +128,7 @@ impl Acc {
                 self.max_hr = self.max_hr.max(r.hr.unwrap_or(0));
             }
             Msg::Session(s) => self.session = self.session.or(Some(*s)),
+            Msg::CoursePoint { .. } => {}
         }
     }
 

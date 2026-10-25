@@ -321,9 +321,10 @@ def bryton_route(pts):
     return f + struct.pack('<H', fit_crc(f))
 
 
-def garmin_course(pts):
+def garmin_course(pts, cues=((80, 1),)):
     """A FIT course as Garmin's SDK cookbook encodes one (CourseEncode): file_id (type 6), course, lap, a timer
-    start event, a record per point (time, semicircles, altitude, distance), a course point, the stop event."""
+    start event, a record per point (time, semicircles, altitude, distance), course points (after the record of
+    their point: `cues`, (point index, type)) with their position, distance and type, the stop event."""
     U8, U16, S32, U32, STR = 0x00, 0x84, 0x85, 0x86, 0x07
     semi = lambda v: int(round(v * 2**31 / 180))  # noqa: E731
     t0 = 1_100_000_000
@@ -337,9 +338,10 @@ def garmin_course(pts):
     for i, p in enumerate(pts):
         d += bytes([0x04]) + struct.pack('<IiiHI', t0 + 3 * i, semi(p[0]), semi(p[1]), int(round((p[2] + 500) * 5)),
                                          int(p[3] * 100))
-        if i == 80:  # a summit point at the climb's foot, as the cookbook puts one among the records
-            d += bytes([0x45, 0, 0, 32, 0, 3, 1, 4, U32, 2, 4, S32, 5, 1, U8])
-            d += bytes([0x05]) + struct.pack('<IiB', t0 + 3 * i, semi(p[0]), 1)
+        for k, kind in cues:  # the hill's: a summit point at the climb's foot, as the cookbook puts one
+            if k == i:
+                d += bytes([0x45, 0, 0, 32, 0, 5, 1, 4, U32, 2, 4, S32, 3, 4, S32, 4, 4, U32, 5, 1, U8])
+                d += bytes([0x05]) + struct.pack('<IiiIB', t0 + 3 * i, semi(p[0]), semi(p[1]), int(p[3] * 100), kind)
     d += bytes([0x03]) + struct.pack('<IBB', t0 + 3 * len(pts), 0, 9)
     h = bytearray(struct.pack('<BBHI4s', 14, 0x10, 2140, len(d), b'.FIT'))
     h += struct.pack('<H', fit_crc(h))
@@ -355,13 +357,53 @@ def gpx(pts):
             % rows).encode()
 
 
+def lines(corners, step):
+    """Points every `step` m (at most) along straight lines between `corners` (x east, y north, m), as course.rs's
+    tests' `lines`."""
+    pts = [corners[0]]
+    for a, b in zip(corners, corners[1:]):
+        n = max(1, math.ceil(math.hypot(b[0] - a[0], b[1] - a[1]) / step))
+        pts += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(1, n + 1)]
+    return pts
+
+
+# The zigzag's corners after the winding stretch, and its hairpin (course/cues.rs `zigzag`, which sim.rs rides).
+ZIGZAG_END = [(3300.0, 600.0), (2800.0, 100.0), (2800.0, -500.0), (2350.0, -700.0)]
+HAIRPIN = [(2350.0, -700.0), (1900.0, -900.0), (1900.0, -906.0), (2350.0, -706.0)]
+# Its turns as a FIT course states them: (corner, course_point type: 6 left, 7 right, 22 sharp right, 19 slight left,
+# 23 U-turn; FIT profile), and a water point on the winding stretch (3).
+ZIGZAG_CUES = [((1000.0, 0.0), 6), ((1000.0, 600.0), 7), ((2550.0, 600.0), 3), ((3300.0, 600.0), 22),
+               ((2800.0, 100.0), 19), ((2800.0, -500.0), 7), ((1900.0, -903.0), 23)]
+
+
+def zigzag():
+    """A made-up course of turns south-east of 0 N 0 E (course/cues.rs `zigzag`): a left and a right corner, 1.5 km
+    of winding road (15 m either side, 300 m waves: no turn), a sharp right, a slight left, a right, a hairpin.
+    Points as `hill`'s: (latitude, longitude, altitude, distance)."""
+    xy = lines([(0.0, 0.0), (1000.0, 0.0), (1000.0, 600.0), (1800.0, 600.0)], 10.0)
+    xy += [(1800.0 + 10.0 * k, 600.0 + 15.0 * math.sin(2 * math.pi * 10.0 * k / 300.0)) for k in range(1, 151)]
+    xy += lines(ZIGZAG_END, 10.0)[1:] + lines(HAIRPIN, 3.0)[1:]
+    pts, dist = [], 0.0
+    for i, (x, y) in enumerate(xy):
+        if i:
+            dist += math.hypot(x - xy[i - 1][0], y - xy[i - 1][1])
+        pts.append((y / 111_320, x / 111_320, 50.0, dist))
+    return pts
+
+
 def courses(m):
     """Made-up courses (storage/course.rs, sim.rs): stock's \\PlanTrip with a route in Bryton's layout and a file that
-    is no FIT, and \\Courses (copied over USB) with the same hill as a Garmin FIT course and as GPX."""
+    is no FIT, and \\Courses (copied over USB) with the same hill as a Garmin FIT course and as GPX; and the zigzag
+    as a FIT course with its turns as course points and as a GPX track (its turns found on its shape)."""
     pts = hill()
+    zig = zigzag()
+    def near(c):  # the zigzag's point nearest corner c
+        return min(range(len(zig)), key=lambda i: math.hypot(zig[i][1] * 111_320 - c[0], zig[i][0] * 111_320 - c[1]))
+    turns = [(near(c), kind) for c, kind in ZIGZAG_CUES]
     os.makedirs(os.path.join(m, 'PlanTrip', 'LiveSegment'))
     for name, data in (('PlanTrip/Hill.fit', bryton_route(pts)), ('PlanTrip/Broken.fit', b'not a FIT file\n'),
-                       ('Courses/Hill_Garmin.fit', garmin_course(pts)), ('Courses/Hill.gpx', gpx(hill(10.0)))):
+                       ('Courses/Hill_Garmin.fit', garmin_course(pts)), ('Courses/Hill.gpx', gpx(hill(10.0))),
+                       ('Courses/Turns.fit', garmin_course(zig, turns)), ('Courses/Zigzag.gpx', gpx(zig))):
         os.makedirs(os.path.dirname(os.path.join(m, name)), exist_ok=True)
         with open(os.path.join(m, name), 'wb') as f:
             f.write(data)
