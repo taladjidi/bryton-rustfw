@@ -71,8 +71,13 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
     let page = app.pages()[n];
     for (i, v) in values.iter().enumerate() {
         let bx = crate::ui::field_box(page.layout, crate::ui::RIDE_H, i).unwrap();
-        crate::ui::draw_field_frame(&mut f, bx, page.fields[i]);
-        crate::ui::draw_field_value(&mut f, bx, v, zone_fg(page.fields[i], v));
+        // heart rate and power fill their box with their zone's colour (steady test sensors: the 3 s average the
+        // power's box takes equals the live value)
+        let zone = zone_fg(page.fields[i], v);
+        let (fg, bg) =
+            if zone == crate::ui::WHITE { (zone, crate::ui::BLACK) } else { (crate::ui::ink_on(zone), zone) };
+        crate::ui::draw_field_frame_on(&mut f, bx, page.fields[i], bg);
+        crate::ui::draw_field_value_on(&mut f, bx, v, fg, bg);
     }
     f.px
 }
@@ -3278,8 +3283,10 @@ fn perf_budgets() {
     let cases: [Case; 8] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
         ("overview", [values, graph, map], PAGES, None, (150, 5)),
-        // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
-        ("six values", [values, graph, map], 0, None, (9_000, 20)),
+        // 9845, 10: the changed digits only, but large (a glyph of a 6-field page is ~960 px), and the power and heart
+        // rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
+        // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
+        ("six values", [values, graph, map], 0, None, (12_000, 20)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
         ("two graphs", [graph, values, map], 0, None, (1_000, 30)),
         // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow

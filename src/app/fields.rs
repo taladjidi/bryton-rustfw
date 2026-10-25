@@ -296,6 +296,24 @@ impl App {
         l
     }
 
+    /// The colour of field `f`'s value and of its box's background: the plain power fields (live, 3, 10, 30 s) and the
+    /// live heart rate fill their box with their zone's colour, the value in black or white over it (the owner: the
+    /// zone at a glance; zone 1's grey on its own was nearly white); the rest on black ([`App::field_color`]).
+    pub(crate) fn field_ink(&self, f: Field) -> (u16, u16) {
+        let zone = match f {
+            // the live power's box takes the 3 s average's zone: second-to-second power crosses a zone's edge all
+            // the time, and each change fills the whole box again (18,000 px/s on the sim's noisy power, against
+            // 6,500 without the colour); its digits stay live
+            Field::Power if self.live.get(Metric::Power).is_some() => Some(Field::Power3s),
+            Field::Power3s | Field::Power10s | Field::Power30s | Field::Hr => Some(f),
+            _ => None,
+        };
+        match zone.map(|z| self.field_color(z)) {
+            Some(bg) if bg != ui::WHITE => (ui::ink_on(bg), bg),
+            _ => (self.field_color(f), ui::BLACK),
+        }
+    }
+
     /// The colour of ride field `f`'s value: heart rate and power (live, rolling, NP, max) in their zone's colour,
     /// W' balance as it drains ([`power::wbal_color`]), the rest white.
     pub(crate) fn field_color(&self, f: Field) -> u16 {

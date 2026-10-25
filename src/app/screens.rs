@@ -54,8 +54,8 @@ pub(crate) enum Drawn {
     Digits([u8; 4]),
     /// A fingerprint of what the box shows, redrawn whole when it changes (the date, the notices).
     Print(u32),
-    /// A value and its colour.
-    Value(Line<8>, u16),
+    /// A value, its colour and its box's background (a zone's colour for the plain power and heart rate fields).
+    Value(Line<8>, u16, u16),
     /// A map.
     Map(map::Shown),
     /// A graph.
@@ -236,7 +236,10 @@ impl App {
             Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
             Widget::Field(f) => match graph_plot(f) {
                 Some(plot) => Drawn::Graph(self.graph_now(plot, ui::graph_area(bx).2)),
-                None => Drawn::Value(self.field_text(f), self.field_color(f)),
+                None => {
+                    let (fg, bg) = self.field_ink(f);
+                    Drawn::Value(self.field_text(f), fg, bg)
+                }
             },
         }
     }
@@ -255,7 +258,8 @@ impl App {
                 ui::draw_notices(c, &n[..self.notices.iter().take_while(|l| !l.as_str().is_empty()).count()]);
             }
             (Widget::Field(f), d) => {
-                ui::draw_field_frame(c, bx, f);
+                let bg = if let Drawn::Value(_, _, bg) = d { bg } else { ui::BLACK };
+                ui::draw_field_frame_on(c, bx, f, bg);
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
@@ -269,7 +273,7 @@ impl App {
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
                     }
-                    Drawn::Value(text, fg) => ui::draw_field_value(c, bx, text.as_str(), fg),
+                    Drawn::Value(text, fg, bg) => ui::draw_field_value_on(c, bx, text.as_str(), fg, bg),
                     _ => {}
                 }
             }
@@ -493,13 +497,18 @@ impl App {
                     }
                     Drawn::Digits(now)
                 }
-                (Widget::Field(f), Drawn::Value(was, was_fg)) => {
-                    let (text, fg) = (self.field_text(f), self.field_color(f));
-                    if (was, was_fg) != (text, fg) {
+                (Widget::Field(f), Drawn::Value(was, was_fg, was_bg)) => {
+                    let (text, (fg, bg)) = (self.field_text(f), self.field_ink(f));
+                    let mut p = Panel(b, self.area());
+                    if bg != was_bg {
+                        // another zone: the box filled again, its label, its value (once per zone change)
+                        ui::draw_field_frame_on(&mut p, bx, f, bg);
+                        ui::draw_field_value_on(&mut p, bx, text.as_str(), fg, bg);
+                    } else if (was, was_fg) != (text, fg) {
                         let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
-                        ui::draw_field_value_changes(&mut Panel(b, self.area()), bx, old, text.as_str(), fg);
+                        ui::draw_field_value_changes_on(&mut p, bx, old, text.as_str(), fg, bg);
                     }
-                    Drawn::Value(text, fg)
+                    Drawn::Value(text, fg, bg)
                 }
                 _ => {
                     let now = self.now_drawn(bx, w);

@@ -876,9 +876,9 @@ fn value_scale(big: &str, w: u32, h: u32) -> u32 {
 /// (empty when there is none or it would not fit: the tail goes first), and the value band (left, right).
 type ValueAt<'a> = (Style, u32, u32, &'a str, &'a str, (u32, u32));
 
-fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16) -> ValueAt<'a> {
+fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16, bg: u16) -> ValueAt<'a> {
     let (mut big, tail) = value.split_once(SMALL_TAIL).unwrap_or((value, ""));
-    let style = Style { fg, scale: value_scale(big, w, h), ..LABEL };
+    let style = Style { fg, bg, scale: value_scale(big, w, h), ..LABEL };
     let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H).saturating_sub(style.height()) / 2;
     let band = (x + 1, x + w - 1);
     let room = band.1 - band.0;
@@ -908,7 +908,16 @@ fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s:
 }
 
 /// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
-pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field) {
+pub fn draw_field_frame(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field) {
+    draw_field_frame_on(c, bx, field, BLACK);
+}
+
+/// The same over background `bg` (a zone's colour: the whole box filled, the label in black or white over it).
+pub fn draw_field_frame_on(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, bg: u16) {
+    let label = if bg == BLACK { GREY } else { ink_on(bg) };
+    if bg != BLACK {
+        c.fill(x, y, w - u32::from(x + w < W), h - u32::from(y + h < H - 2), bg);
+    }
     if x + w < W {
         c.fill(x + w - 1, y, 1, h, GREY);
     }
@@ -916,44 +925,74 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
         c.fill(x, y + h - 1, w, 1, GREY);
     }
     if !field.is_picture() {
-        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
+        text::draw(c, &Style { fg: label, bg, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
     }
+}
+
+/// The ink that reads over background `bg`: black over light colours, white over dark ones (blue, purple).
+///
+/// ```
+/// use bryton_rustfw::ui::{ink_on, BLACK, WHITE};
+/// assert_eq!([ink_on(0xfe80), ink_on(0x537f), ink_on(0x98b2)], [BLACK, WHITE, WHITE]); // yellow, blue, purple
+/// ```
+pub fn ink_on(bg: u16) -> u16 {
+    let (r, g, b) = (u32::from(bg >> 11) * 255 / 31, u32::from(bg >> 5 & 63) * 255 / 63, u32::from(bg & 31) * 255 / 31);
+    if r * 299 + g * 587 + b * 114 > 128_000 { BLACK } else { WHITE }
 }
 
 /// A field's value in `fg`, centred by its ink under its label, in a fixed band (what was there before is cleared):
 /// at the box's scale, a [`SMALL_TAIL`] small and grey after it, bottoms aligned.
 pub fn draw_field_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &str, fg: u16) {
-    let (style, left, top, big, tail, (l, r)) = value_at(bx, value, fg);
+    draw_field_value_on(c, bx, value, fg, BLACK);
+}
+
+/// The same over background `bg`.
+pub fn draw_field_value_on(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &str, fg: u16, bg: u16) {
+    let (style, left, top, big, tail, (l, r)) = value_at(bx, value, fg, bg);
+    let tail_style = Style { bg, ..TAIL };
     let bh = style.height();
-    c.fill(l, top, left.saturating_sub(l), bh, BLACK);
+    c.fill(l, top, left.saturating_sub(l), bh, bg);
     let mut end = text::draw_clipped(c, &style, left, top, r, big);
     if !tail.is_empty() {
         // the ink's bottom rows level: 7 font rows of each
-        let ty = top + 7 * style.scale - 7 * TAIL.scale;
-        let tw = TAIL.width(tail).min(r.saturating_sub(end));
-        c.fill(end, top, tw, ty - top, BLACK);
-        let t_end = text::draw_clipped(c, &TAIL, end, ty, r, tail);
-        c.fill(end, ty + TAIL.height(), tw, (top + bh).saturating_sub(ty + TAIL.height()), BLACK);
+        let ty = top + 7 * style.scale - 7 * tail_style.scale;
+        let tw = tail_style.width(tail).min(r.saturating_sub(end));
+        c.fill(end, top, tw, ty - top, bg);
+        let t_end = text::draw_clipped(c, &tail_style, end, ty, r, tail);
+        c.fill(end, ty + tail_style.height(), tw, (top + bh).saturating_sub(ty + tail_style.height()), bg);
         end = t_end;
     }
-    c.fill(end, top, r.saturating_sub(end), bh, BLACK);
+    c.fill(end, top, r.saturating_sub(end), bh, bg);
 }
 
 /// A field's value that was `old`: only the characters that changed when the length and the place of the small tail
 /// are the same (they keep their cells), else the whole value band, and the rows of the old one's band outside it
 /// (a value drawn smaller: "OPEN" then "200-220", 2026-10-25 review).
 pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: &str, new: &str, fg: u16) {
-    let (style, left, top, big, tail, (l, r)) = value_at(bx, new, fg);
-    let (old_style, _, old_top, old_big, old_tail, _) = value_at(bx, old, fg);
+    draw_field_value_changes_on(c, bx, old, new, fg, BLACK);
+}
+
+/// The same over background `bg`.
+pub fn draw_field_value_changes_on(
+    c: &mut impl Canvas,
+    bx: (u32, u32, u32, u32),
+    old: &str,
+    new: &str,
+    fg: u16,
+    bg: u16,
+) {
+    let (style, left, top, big, tail, (l, r)) = value_at(bx, new, fg, bg);
+    let (old_style, _, old_top, old_big, old_tail, _) = value_at(bx, old, fg, bg);
+    let tail_style = Style { bg, ..TAIL };
     if old_big.len() != big.len() || old_tail.len() != tail.len() || old.is_empty() {
         let (end, old_end) = (top + style.height(), old_top + old_style.height());
-        c.fill(l, old_top, r - l, top.saturating_sub(old_top), BLACK);
-        c.fill(l, end, r - l, old_end.saturating_sub(end), BLACK);
-        return draw_field_value(c, bx, new, fg);
+        c.fill(l, old_top, r - l, top.saturating_sub(old_top), bg);
+        c.fill(l, end, r - l, old_end.saturating_sub(end), bg);
+        return draw_field_value_on(c, bx, new, fg, bg);
     }
     draw_cells(c, &style, left, top, r, big, Some(old_big));
-    let ty = top + 7 * style.scale - 7 * TAIL.scale;
-    draw_cells(c, &TAIL, left + style.width(big), ty, r, tail, Some(old_tail));
+    let ty = top + 7 * style.scale - 7 * tail_style.scale;
+    draw_cells(c, &tail_style, left + style.width(big), ty, r, tail, Some(old_tail));
 }
 
 /// A graph's axis text and figures: the label font (2x), grey; no 1x text where a rider reads (UI review).
