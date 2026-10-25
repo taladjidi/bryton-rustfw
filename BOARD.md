@@ -305,7 +305,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 - PDDS_D3 stays 0 (stock too): D1 and D2 power down, D3 only stops, so the system is in Stop, not Standby (the
   HAL's HAL_PWREx_EnterSTANDBYMode doc; Standby needs D1, D2 and D3 all in DStandby), and the GPIOs keep their
   levels (Nordic PI4 / PA6, GNSS power). In Stop the WKUP pin reaches the core only through EXTI line 55
-  (EXTI_CPUIMR2 bit 23, reset value 0 in ST's SVD): stock unmasks it and IRQ 149 (WAKEUP_PIN) before standby.
+  (EXTI_CPUIMR2 bit 23, reset value 0 in ST's SVD, but read 0xfff5ffff on the unit while running: already unmasked
+  there): stock unmasks it and enables IRQ 149 (WAKEUP_PIN) before standby. Enabling IRQ 149 in the NVIC (our standby
+  had cleared every enable) made the power button start the unit (2026-10-25, rustfw ea359a0, seen on the unit).
   Without it the press woke nothing (2026-10-25: WFI never returned, PWR_CPUCR.SBF clear at the next boot); to see
   with the fix.
 - Stock waits for the back key to be released first (otherwise it wakes at once). Power off and on with the

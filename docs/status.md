@@ -211,7 +211,8 @@ The dated findings are in [journal.md](journal.md).
 - **A power cut mid-ride** (the battery connector or a hard power off): the reset mid-ride and the resume are seen
   (2026-10-24, below); a cut while a sector is written is covered by the host tests and the card's reliable write.
 - **Stock reading this firmware's rides** (\Activities\261024083403.fit, 261024083931.fit) and the Bryton app's sync.
-- **"Rebooting with just the power button does not work"** (the owner, after the GPS test): to clarify and fix.
+- **The power button starts the unit after a switch-off:** fixed in ea359a0 (IRQ 149 enabled before standby), seen
+  on the unit 2026-10-25, installed and unplugged.
 
 - **New since the installed build, seen only from RAM or in the simulator (2026-10-24):** touch gestures by feel and
   their axes; the overview and its notices; banners (ride start, pause, lap, end); eleven page layouts; graphs (five
