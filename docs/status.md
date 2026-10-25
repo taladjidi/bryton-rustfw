@@ -40,6 +40,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **UI review 2, step A (sim only so far):** the touch lock (Back and Lap held together 1 s: the padlock in the strip,
+  a tap on the gear ignored, again to unlock; try it with a glove: the two keys are on opposite sides), Back on the
+  overview doing nothing, the zone bars (the 4 px bar and its 3 s hold with a real power meter and strap: legible in
+  sunlight? the lemon yellow, magenta, violet and cyan zones by eye), the readings once a second, the 48 px map
+  buttons, the targets as "210" and "+-10", the confirmations "START: YES BACK: NO".
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
   DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
   for one of this firmware's rides) has it, `\Activities` not; the next start's totals the same (the cache written
