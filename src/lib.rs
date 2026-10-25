@@ -165,6 +165,10 @@ pub struct App {
     screen: Screen,
     ble: Option<nrf::Version>,
     rx: nrf::Rx,
+    /// The Nordic link's watchdog (app/link.rs), and the keys to start ANT again with.
+    watch: Watch,
+    ant_key: Option<[u8; 8]>,
+    di2_key: Option<[u8; 8]>,
     nearby: nrf::Nearby,
     scanning: bool,
     redraw_ms: u32,
@@ -415,6 +419,9 @@ impl App {
             screen: Screen::Main,
             ble,
             rx,
+            watch: Watch::new(ble.is_some() && (ant || ant_key.is_none())),
+            ant_key,
+            di2_key,
             nearby: nrf::Nearby::new(),
             scanning: false,
             redraw_ms: 0,
@@ -611,6 +618,7 @@ impl App {
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
+        self.watch_radio(b);
         self.poll_gnss(b);
         if self.gnss_ms == FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again

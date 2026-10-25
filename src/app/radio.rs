@@ -40,6 +40,7 @@ impl App {
             self.set_sensor(b, other, Sensor::Off);
         }
         let i = kind as usize;
+        self.watch.owed[i] = Sensor::Off; // what the rider asks for now is what is wanted
         let resting = self.resting_ms[i] != u32::MAX;
         if self.sensors[i] != Sensor::Off && !resting && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err() {
             return; // still open: leave it as it was

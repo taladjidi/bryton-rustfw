@@ -65,6 +65,12 @@ pub struct PhoneSim {
 }
 
 impl PhoneSim {
+    /// The chip was reset: the link is gone (the phone is still in range, and connects again to the next advertising).
+    pub fn hang_up(&mut self) {
+        (self.connected, self.secure) = (false, false);
+        self.subscribed.clear();
+    }
+
     /// An iPhone: ANCS (handles 0x10..), AMS (0x20..), CTS (0x30..); `ios` false leaves only CTS.
     pub fn new(ios: bool) -> Self {
         let vs = |i: usize| U::Vs(crate::phone::VS[i]);

@@ -208,7 +208,9 @@ impl Session {
                 h.send(decimal(stats.uptime_ms, &mut [0; 10]));
                 h.send(b" ms, awake ");
                 h.send(decimal(stats.awake_permille, &mut [0; 10]));
-                h.send(b" permille\n");
+                h.send(b" permille, radio resets ");
+                h.send(decimal(u32::from(app.radio_resets()), &mut [0; 10]));
+                h.send(b"\n");
             }
             Some(b"bat") => {
                 // the battery history: one line a minute, oldest first, "mV" or "mV c" while charging; then "end"

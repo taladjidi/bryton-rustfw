@@ -2,7 +2,9 @@
 //! bytes ([`Board::nrf_reset`], [`Board::nrf_send`], [`Board::nrf_recv`]); the framing and the commands are here.
 //!
 //! Framing: a 2-byte little-endian length, then the payload `[type][op][arguments]`. A response is
-//! `[RESP][op][result u32][outputs]`. There is no resync: after a broken frame, reset the chip.
+//! `[RESP][op][result u32][outputs]`. There is no marker to resync on: a lost or stray byte leaves the length framing
+//! out of step. [`Rx`] counts the signs of that (`strikes`, `timeouts`); `app/link.rs` watches them, drains and
+//! retries, and failing that resets the chip and starts it again.
 
 use crate::Board;
 
@@ -40,6 +42,10 @@ pub const MAX: usize = 256;
 /// How long a command may take before it is given up (stock waits 5 s; replies take a few ms).
 pub const TIMEOUT_MS: u32 = 500;
 
+/// A length header past this cannot be a frame (a BLE event is at most one ATT packet, about 250 bytes, and a
+/// header): it counts as garbage and is not read through, so a stray byte does not swallow up to 64 KB of real frames.
+pub const GARBAGE: usize = 512;
+
 /// Longest BLE event kept while a command waits ([`Rx::pop`]).
 pub const KEPT: usize = 128;
 
@@ -58,6 +64,13 @@ pub struct Rx {
     /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
     /// PHONE menu shows it when the link could not be set up.
     pub failed: Option<(u8, u32)>,
+    /// A good frame (a type the chip sends) arrived since this was last taken (`app/link.rs`).
+    pub heard: bool,
+    /// Garbage in a row since the last good frame: a length header past [`GARBAGE`], a frame of a type the chip
+    /// never sends. Two in a row mean the framing is out of step.
+    pub strikes: u8,
+    /// Commands in a row that got no response, since the last good frame.
+    pub timeouts: u8,
 }
 
 impl Default for Rx {
@@ -79,7 +92,17 @@ impl Rx {
             kept_len: [0; 8],
             kept_n: 0,
             failed: None,
+            heard: false,
+            strikes: 0,
+            timeouts: 0,
         }
+    }
+
+    /// Forgets the frame being read and the events kept, and the signs of a broken link: the stream is read again
+    /// from a frame boundary (after a drain, or a chip reset).
+    pub fn resync(&mut self) {
+        (self.got, self.want, self.last, self.kept_n) = (0, None, 0, 0);
+        (self.strikes, self.timeouts) = (0, 0);
     }
 
     /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits (eight
@@ -137,7 +160,9 @@ impl Rx {
             if self.got == 2 {
                 self.got = 0;
                 let n = usize::from(u16::from_le_bytes(self.header));
-                if n > 0 {
+                if n > GARBAGE {
+                    self.strikes = self.strikes.saturating_add(1);
+                } else if n > 0 {
                     self.want = Some(n);
                 }
             }
@@ -153,7 +178,17 @@ impl Rx {
         self.want = None;
         self.got = 0;
         self.last = if want <= MAX { want } else { 0 };
-        self.buf.get(..want) // None (dropped) when it did not fit
+        let good = match self.buf.get(..want) {
+            Some([RESP | BLE_EVT | ANT_EVT, ..]) => Some(true),
+            Some(_) => Some(false), // a type the chip never sends
+            None => None,           // did not fit: dropped
+        };
+        match good {
+            Some(true) => (self.heard, self.strikes, self.timeouts) = (true, 0, 0),
+            Some(false) => self.strikes = self.strikes.saturating_add(1),
+            None => {}
+        }
+        self.buf.get(..want)
     }
 }
 
@@ -213,6 +248,9 @@ pub fn call(b: &mut impl Board, rx: &mut Rx, payload: &[u8], out: &mut [u8]) -> 
         _ => None,
     };
     let r = wait(b, rx, response).unwrap_or(Err(Error::Timeout));
+    if r == Err(Error::Timeout) {
+        rx.timeouts = rx.timeouts.saturating_add(1);
+    }
     if let (Err(e), Some(op)) = (r, op) {
         rx.failed = Some((op, if let Error::Code(c) = e { c } else { u32::MAX }));
     }

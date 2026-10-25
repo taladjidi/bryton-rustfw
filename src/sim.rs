@@ -531,6 +531,12 @@ pub struct Nordic {
     pub ant_refuse: Option<[u8; 2]>,
     /// Reset since power-up: before that, commands would go nowhere.
     pub reset: bool,
+    /// Hung: no answer, no event, until the next reset (unlike `dead`, which a reset does not cure).
+    pub hung: bool,
+    /// Resets so far, and the simulated time (ms) of each.
+    pub resets: Vec<u64>,
+    /// Damage to the chip's stream: bytes dropped, added or flipped (xorshift state, per mille of the bytes).
+    pub chaos: Option<(u32, u32)>,
     pub enabled: bool,
     /// Simulated time (ms) at which the running scan times out.
     scan_end: Option<u64>,
@@ -633,10 +639,32 @@ impl Nordic {
     }
 
     fn queue(&mut self, payload: &[u8]) {
-        if !self.dead {
-            self.out.extend((payload.len() as u16).to_le_bytes());
-            self.out.extend(payload);
+        if self.dead || self.hung {
+            return;
         }
+        let frame = [&(payload.len() as u16).to_le_bytes()[..], payload].concat();
+        let Some((x, rate)) = &mut self.chaos else {
+            return self.out.extend(frame);
+        };
+        for byte in frame {
+            *x ^= *x << 13;
+            *x ^= *x >> 17;
+            *x ^= *x << 5;
+            if *x % 1000 >= *rate {
+                self.out.push_back(byte);
+                continue;
+            }
+            match (*x >> 12) % 3 {
+                0 => {}                                                // lost
+                1 => self.out.extend([byte, (*x >> 20) as u8]),        // a stray byte after it
+                _ => self.out.push_back(byte ^ 1 << ((*x >> 20) % 8)), // a bit flipped
+            }
+        }
+    }
+
+    /// A stray byte in the stream, between frames.
+    pub fn stray(&mut self, byte: u8) {
+        self.out.push_back(byte);
     }
 
     fn take(&mut self, p: &[u8], now: u64) {
@@ -933,15 +961,24 @@ impl Board for Sim {
 
     fn nrf_reset(&mut self) {
         let sensors = std::mem::take(&mut self.nordic.sensors);
-        let phone = self.nordic.phone.take();
+        let mut phone = self.nordic.phone.take();
+        if let Some(p) = &mut phone {
+            p.hang_up();
+        }
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
-        self.nordic = Nordic { dead, refuse, ant_refuse, sensors, phone, reset: true, ..Nordic::default() };
+        let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
+        resets.push(self.ms);
+        self.nordic =
+            Nordic { dead, refuse, ant_refuse, sensors, phone, reset: true, resets, chaos, ..Nordic::default() };
         self.ms += 950;
     }
 
     fn nrf_send(&mut self, data: &[u8]) {
         let (n, now) = (&mut self.nordic, self.ms);
         assert!(n.reset, "bytes to the Nordic chip before its reset");
+        if n.hung {
+            return;
+        }
         for &b in data {
             if let Some(p) = n.rx.push(b) {
                 let p = p.to_vec();
@@ -1079,6 +1116,9 @@ pub use ble_sim::{Act, PhoneSim};
 
 #[cfg(test)]
 mod phone_tests;
+
+#[cfg(test)]
+mod link_tests;
 
 #[cfg(test)]
 mod shift_tests;

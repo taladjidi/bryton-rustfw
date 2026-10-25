@@ -291,6 +291,25 @@ impl Phone {
 }
 
 impl App {
+    /// The chip is about to be reset: the link and the server are gone with it (the bond and settings stay).
+    pub(crate) fn phone_down(&mut self, b: &mut impl Board) {
+        let had_call = self.phone.call.is_some();
+        self.phone.unlink();
+        (self.phone.ready, self.phone.adv, self.phone.pairing) = (false, Adv::Off, false);
+        if had_call {
+            self.end_ring(b);
+        }
+    }
+
+    /// The chip was reset: the server set up again, and the advertising of a bonded phone's wait back (the bond
+    /// is read from the card at the start, [`App::phone_storage`], and starts it itself when not yet read).
+    pub(crate) fn phone_up(&mut self, b: &mut impl Board) {
+        self.phone_setup(b);
+        if self.phone.ready && self.phone.loaded {
+            self.idle_advertising(b);
+        }
+    }
+
     /// Sets up the GATT server (HID, battery, device information), the name and appearance, the advertising
     /// data, and registers the phone's vendor UUIDs: once, after the chip started.
     #[inline(never)] // its command buffers in its own frame, once at the start
