@@ -367,10 +367,14 @@ impl App {
         let mut rx = nrf::Rx::new();
         let ble = nrf::start(b).ok();
         let nets = Kind::ALL.map(Kind::network);
+        let mut refusal = None;
         let (ant, di2) = match (ble, ant_key) {
             (Some(_), Some(key)) => match nrf::ant_start(b, &mut rx, key, di2_key, &nets) {
                 Ok(di2) => (true, di2),
-                Err(_) => (false, false),
+                Err(e) => {
+                    refusal = rx.failed.filter(|_| matches!(e, nrf::Error::Code(_))); // an answer (link.rs)
+                    (false, false)
+                }
             },
             _ => (false, false),
         };
@@ -428,7 +432,7 @@ impl App {
             screen: Screen::Main,
             ble,
             rx,
-            watch: Watch::new(ble.is_some() && (ant || ant_key.is_none())),
+            watch: Watch::new(ble.is_some() && (ant || ant_key.is_none()), refusal),
             ant_key,
             di2_key,
             nearby: nrf::Nearby::new(),

@@ -170,3 +170,29 @@ fn a_damaged_stream_is_recovered_from() {
     assert!(resyncs > 20, "{resyncs} resyncs reached");
     assert!(resets > 2, "{resets} chip resets reached");
 }
+
+/// Review: a chip that answers with an error code to ANT's enable was reset every 5 min for ever.
+#[test]
+fn ant_refused_is_not_a_broken_link() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.nordic.ant_refuse = Some([0xfa, 1]);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 60 * 60 * 1000);
+    assert!(app.watch.resets <= 1, "a chip that answers is reset {} times", app.watch.resets);
+}
+
+/// The same after a restart: a channel refused at every open is not owed for ever.
+#[test]
+fn a_refusal_at_a_restart_is_not_retried_by_reset() {
+    let (mut sim, mut app) = riding();
+    sim.nordic.dead = true; // a real fault: one reset
+    run(&mut sim, &mut app, 40_000);
+    sim.nordic.dead = false;
+    sim.nordic.ant_refuse = Some([0xc4, 0]); // the strap's channel is refused from now on
+    run(&mut sim, &mut app, 60 * 60 * 1000);
+    let n = app.watch.resets;
+    assert!(n <= 3, "reset {n} times");
+    run(&mut sim, &mut app, 60 * 60 * 1000);
+    assert_eq!(app.watch.resets, n, "still resetting a chip that answers");
+}
