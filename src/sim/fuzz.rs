@@ -595,7 +595,7 @@ fn map_zoom_taps() {
             let far = 3 * 296 * v.mpp16 as i32 / 16 + 100_000; // PAN_SCREENS heights from the track (100 km)
             assert!((c.0 - p.0).abs() < far && (c.1 - p.1).abs() < far, "{c:?} {v:?}");
         }
-        assert!(app.map_zoom.is_none_or(|l| (MIN_LEVEL..MAX_LEVEL).contains(&l)), "{:?}", app.map_zoom);
+        assert!(app.map_zoom.is_none_or(|l| (MIN_LEVEL..=MAX_LEVEL).contains(&l)), "{:?}", app.map_zoom);
         assert!(app.map_view(0).is_none_or(|v| v.mpp16 >= 24), "no finer than 1.5 m a pixel");
         for _ in 0..usize::from(next() % 8) {
             app.step(&mut sim);

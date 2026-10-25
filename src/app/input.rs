@@ -71,6 +71,11 @@ impl Keys {
         Keys { stuck: mask, ..Keys::default() }
     }
 
+    /// The keys of `mask` that count: not one down since the start and not released since.
+    pub fn live(&self, mask: u8) -> u8 {
+        mask & !self.stuck
+    }
+
     /// One poll, `dt_ms` after the previous one, with the keys held down (`mask` of [`Key`] codes). One press at
     /// most per poll, the first key in `Key::ALL` order.
     pub fn poll(&mut self, mask: u8, dt_ms: u32) -> Option<Press> {
@@ -400,7 +405,9 @@ impl App {
             (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
             // a tap selects the row; a tap on the row chosen already acts on it (as Start)
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Tap(_, y))) => {
-                let slot = (u32::from(y).checked_sub(ui::LIST_Y)).map(|d| (d / ui::MENU_ROW) as usize);
+                // the bottom rows under the last slot (316 to 319) are the last slot's, not the next screen's
+                let slot = (u32::from(y).checked_sub(ui::LIST_Y))
+                    .map(|d| ((d / ui::MENU_ROW) as usize).min(ui::MENU_ROWS - 1));
                 let row = match slot.map(|k| menu::first_shown(sel, ui::MENU_ROWS) + k) {
                     Some(row) if self.row(menu, row).is_some() => row,
                     _ => return self.update_menu_rows(b, menu, sel), // a row's "SURE?" goes

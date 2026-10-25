@@ -940,11 +940,15 @@ pub fn draw_field_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &s
 }
 
 /// A field's value that was `old`: only the characters that changed when the length and the place of the small tail
-/// are the same (they keep their cells), else the whole value band.
+/// are the same (they keep their cells), else the whole value band, and the rows of the old one's band outside it
+/// (a value drawn smaller: "OPEN" then "200-220", 2026-10-25 review).
 pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: &str, new: &str, fg: u16) {
-    let (style, left, top, big, tail, (_, r)) = value_at(bx, new, fg);
-    let (_, _, _, old_big, old_tail, _) = value_at(bx, old, fg);
+    let (style, left, top, big, tail, (l, r)) = value_at(bx, new, fg);
+    let (old_style, _, old_top, old_big, old_tail, _) = value_at(bx, old, fg);
     if old_big.len() != big.len() || old_tail.len() != tail.len() || old.is_empty() {
+        let (end, old_end) = (top + style.height(), old_top + old_style.height());
+        c.fill(l, old_top, r - l, top.saturating_sub(old_top), BLACK);
+        c.fill(l, end, r - l, old_end.saturating_sub(end), BLACK);
         return draw_field_value(c, bx, new, fg);
     }
     draw_cells(c, &style, left, top, r, big, Some(old_big));
@@ -1623,5 +1627,40 @@ pub(crate) mod tests {
             draw_ferris(&mut row);
             assert!(row.px[..] == f.px[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
         }
+    }
+
+    /// A value redrawn over another, whatever their lengths and scales, leaves what a fresh draw of the new one
+    /// does, in every field box (2026-10-25 review: "OPEN" then "200-220", "95-105" then "100-110", any short value
+    /// then "1.6K 6%" left the old glyphs' pixels above and below the smaller value).
+    #[test]
+    fn values_redrawn_leave_nothing_behind() {
+        let vals = [
+            "OPEN", "95-105", "100-110", "1.6K 10%", "0.5K -1%", "--", "9", "99", "9.9", "99.9", "999", "9999",
+            "99.99", "100.0", "1:00|00", "59:59", "12:34|56", "1.6K 6%", "12K 10%", "200-220", "50/50", "-12.5",
+            "CRIT", "9999K", "88/88",
+        ];
+        let boxes: Vec<_> = (1..LAYOUTS.len() as u8)
+            .flat_map(|n| (0..8).filter_map(move |i| field_box(n, RIDE_H, i)))
+            .chain((0..4).filter_map(overview_box))
+            .collect();
+        let mut bad = Vec::new();
+        for &bx in &boxes {
+            for old in vals {
+                for new in vals {
+                    let mut b = Frame::new();
+                    draw_field_value(&mut b, bx, new, WHITE);
+                    // "" as the old text: a new colour, all of it (App::update_page)
+                    for was in [old, ""] {
+                        let mut a = Frame::new();
+                        draw_field_value(&mut a, bx, old, if was.is_empty() { RED } else { WHITE });
+                        draw_field_value_changes(&mut a, bx, was, new, WHITE);
+                        if a.px != b.px {
+                            bad.push(std::format!("{bx:?}: {old:?} was {was:?} -> {new}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{} left over, first {:?}", bad.len(), bad.first());
     }
 }

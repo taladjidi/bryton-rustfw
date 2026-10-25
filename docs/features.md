@@ -68,9 +68,11 @@
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
   switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then what
-  the ride says (a turn ahead, a workout step, a reminder, a climb), then the rest. A lower one never covers a
-  higher one; the other waits (one at most, the higher kept) and shows next, so two said in the same second both
-  show. An incoming call is above them all: a banner said during it waits and shows when the call ends.
+  the ride says (a workout step, a reminder, a climb), then a turn ahead, then the rest. A lower one never covers
+  a higher one; the other waits (one at most, the higher kept) and shows next, so an alarm and a workout step
+  said in the same second both show. A newer one of the same rank replaces the one up, which does not come back,
+  and a turn cue is good for its moment only: one waiting, or one pushed off, goes when another cue is said. An
+  incoming call is above them all: a banner said during it waits and shows when the call ends.
 
 ## Keys
 
@@ -227,8 +229,10 @@ copied over USB into `\Courses`, read only:
   write them, BRouter's roundabouts with their exit), else the turns of the course's shape (a GPX track, Bryton's
   routes): 45 degrees or more over 25 m either side, corners drawn with several points merged; slight under 60
   degrees, sharp from 110, a U-turn from 159 (BRouter's classes). A roundabout is one cue with its exit ("EXIT 2",
-  a ring arrow; the exit counted in quarter turns, either direction of traffic). A road that winds says nothing:
-  bends wider than about 20 m of radius and hairpins (a U-turn whose way out does not come back along the way
+  a ring arrow; the exit counted in quarter turns, either direction of traffic), told from a junction's corners by
+  its ring (a turn spread over several points, none as sharp as a corner): a jog is a turn at each corner, a
+  turn with kinks before and after its own way, a swerve back to the same heading nothing. A road that winds says
+  nothing: bends wider than about 20 m of radius and hairpins (a U-turn whose way out does not come back along the way
   in) give no cue, a junction's corner does (without a road map, a junction taken in one wide sweep says nothing
   either). Up to 256 a course, thinned evenly along it past that (turns kept before points of interest). The next one is
   said in the banner with its arrow 200 m before (or 20 s at the speed ridden, if farther) with a beep ("LEFT

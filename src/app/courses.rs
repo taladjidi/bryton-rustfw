@@ -118,7 +118,7 @@ impl App {
                     l.push_str(" M");
                     self.tones.play(&Self::CUE_TONES);
                 }
-                self.say_as(l.as_str(), if d == 0 { Banner::Now } else { Banner::Ride });
+                self.say_as(l.as_str(), if d == 0 { Banner::Now } else { Banner::Cue });
             }
         }
     }

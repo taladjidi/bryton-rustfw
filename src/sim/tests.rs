@@ -275,6 +275,22 @@ fn quick_taps_and_swipes() {
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 1), "the short tap selects row 1");
 }
 
+/// A tap in a menu's bottom rows, under the last slot (y 316 to 319), selects the last row shown, not the first
+/// of the next screen (2026-10-25 review: it turned the page).
+#[test]
+fn a_tap_at_the_bottom_stays_on_the_screen() {
+    for y in [ui::H - 1, ui::LIST_Y + ui::MENU_ROWS as u32 * ui::MENU_ROW] {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        app.press(&mut sim, Press::Long(Key::Page));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
+        assert!(app.rows(Menu::Main) > ui::MENU_ROWS, "a second screen of rows");
+        app.input(&mut sim, Input::Touch(Gesture::Tap(120, y as u16)));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Main, ui::MENU_ROWS - 1), "y {y}");
+        assert_consistent(&sim, &app);
+    }
+}
+
 /// Touch in a menu: a tap on MAX HR selects it, a second one edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
 #[test]
 fn touch_edits_a_number_and_goes_back() {
@@ -1273,6 +1289,16 @@ fn gps_fix_and_speed() {
     assert_eq!(app.strip.gps, None);
     app.press(&mut sim, Press::Long(Key::Back));
     assert!(!sim.gnss.powered, "off with the unit");
+}
+
+/// A key stuck down since the start does not keep the light on (2026-10-25 review: the time-out never came).
+#[test]
+fn a_stuck_key_lets_the_light_time_out() {
+    let mut sim = Sim::new(9, 0, 0).keys(|_| Key::Lap as u8);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_timeout = 1; // 10 s
+    run(&mut sim, &mut app, 11_000);
+    assert_eq!(sim.light_level, 0, "timed out");
 }
 
 /// The backlight: level and time-out from the menu (kept with the wheel size); after the time-out any key
@@ -2653,10 +2679,46 @@ fn banners_wait_their_turn() {
     assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("< LEFT NOW"), "not covered by LAP");
     assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("2/6 200-220W"), "then the step");
     assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()), None, "LAP gave way to the step: nothing after");
-    app.say_as("< RIGHT 200 M", Banner::Ride);
+    app.say_as("< RIGHT 200 M", Banner::Cue);
     app.alarm("OFF COURSE");
     assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("OFF COURSE"), "an alarm first");
     assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("< RIGHT 200 M"), "then the cue");
+}
+
+/// A banner replaced by a newer one of its kind does not come back, and a cue is only good for its moment
+/// (2026-10-25 review: LEFT NOW, then RIGHT 50 M, then RIGHT NOW showed the stale LEFT NOW again after the right
+/// turn; LAP said twice showed 8 s).
+#[test]
+fn banners_replaced_do_not_come_back() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    let shown = |sim: &mut Sim, app: &mut App, ms| {
+        run(sim, app, ms);
+        assert_consistent(sim, app);
+        app.banner_ms.map(|_| std::string::String::from(app.banner.as_str()))
+    };
+    app.say_as("< LEFT NOW", Banner::Now);
+    assert_eq!(shown(&mut sim, &mut app, 1000).as_deref(), Some("< LEFT NOW"));
+    app.say_as("> RIGHT 50 M", Banner::Cue); // waits under the turn now
+    assert_eq!(shown(&mut sim, &mut app, 1000).as_deref(), Some("< LEFT NOW"));
+    app.say_as("> RIGHT NOW", Banner::Now); // replaces LEFT NOW; the cue ahead waiting is past
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("> RIGHT NOW"));
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()), None, "nothing stale after the turn");
+    // a cue ahead pushed off by the turn now does not come back either
+    app.say_as("> RIGHT 200 M", Banner::Cue);
+    app.say_as("> RIGHT NOW", Banner::Now);
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()), None, "not RIGHT 200 M after RIGHT NOW");
+    // the same kind: the newer replaces, the older does not follow
+    app.say("LAP");
+    app.say("LAP");
+    assert_eq!(shown(&mut sim, &mut app, u64::from(BANNER_MS) - 200).as_deref(), Some("LAP"));
+    assert_eq!(shown(&mut sim, &mut app, 400), None, "LAP twice is up 4 s, not 8");
+    app.say_as("2/6 200-220W", Banner::Ride);
+    app.say_as("3/6 150W", Banner::Ride);
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("3/6 150W"));
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()), None, "the older step does not follow");
 }
 
 /// TOUCH in DEVICE: Start turns the touch panel off (kept in register 11's bit 23), and then no gesture acts, a tap

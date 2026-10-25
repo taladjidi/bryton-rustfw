@@ -13,12 +13,21 @@ pub const BANNER_MS: u32 = 4000;
 pub(crate) enum Banner {
     /// What a key just did, a notice.
     Info,
-    /// What the ride says: a turn ahead, a workout step, a reminder, a climb.
+    /// A turn ahead.
+    Cue,
+    /// What the ride says: a workout step, a reminder, a climb.
     Ride,
     /// A turn now.
     Now,
     /// An alarm (heart rate high, off course, the battery low, a ride not saving): white on red.
     Alarm,
+}
+
+impl Banner {
+    /// A turn cue, ahead or now: good for its moment only.
+    fn is_cue(self) -> bool {
+        matches!(self, Banner::Cue | Banner::Now)
+    }
 }
 
 /// What a page box holds.
@@ -387,17 +396,23 @@ impl App {
         self.say_as(text, Banner::Alarm);
     }
 
-    /// Shows `text` as a banner of `kind`. One up of a higher kind stays and this one waits; one of the same or a
-    /// lower kind waits for this one. One waits at most (the higher kind kept, else the newer) and shows when the
-    /// banner up goes ([`App::unbanner`]): two things said in one second (a workout step and a turn cue) both show.
-    /// An incoming call is above them all: a banner waits under it ([`App::area`]).
+    /// Shows `text` as a banner of `kind`. One up of a higher kind stays and this one waits; one up of a lower kind
+    /// waits for this one; one of the same kind is replaced (2026-10-25 review: a turn said again after the next
+    /// one, LAP twice shown 8 s). One waits at most (the higher kind kept, else the newer) and shows when the
+    /// banner up goes ([`App::unbanner`]): an alarm over a workout step, the step after it. A cue is good for its
+    /// moment only: one waiting, or one up pushed off, goes when another cue is said. An incoming call is above
+    /// them all: a banner waits under it ([`App::area`]).
     pub(crate) fn say_as(&mut self, text: &str, kind: Banner) {
         let mut l = Line::<40>::new();
         l.push_str(text);
+        if kind.is_cue() && self.banner_next.is_some_and(|n| n.1.is_cue()) {
+            self.banner_next = None;
+        }
         let up = self.banner_ms.is_some().then_some((self.banner, self.banner_kind));
         let (show, wait) = match up {
             Some(up) if up.1 > kind => (up, Some((l, kind))),
-            _ => ((l, kind), up),
+            Some(up) if up.1 < kind && !(up.1.is_cue() && kind.is_cue()) => ((l, kind), Some(up)),
+            _ => ((l, kind), None),
         };
         if let Some(w) = wait
             && self.banner_next.is_none_or(|n| n.1 <= w.1)

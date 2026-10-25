@@ -144,7 +144,7 @@ fn incoming_calls() {
     run(&mut sim, &mut app, 3000);
     assert!(app.phone.ringing, "the third");
     // a turn cue during the call: the caller stays in the banner's place, the cue waits for the call to end
-    app.say_as("< LEFT 200 M", crate::Banner::Ride);
+    app.say_as("< LEFT 200 M", crate::Banner::Cue);
     run(&mut sim, &mut app, 1000);
     let mut call = crate::ui::tests::Frame::new();
     crate::ui::draw_call(&mut call, "Work");

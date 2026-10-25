@@ -673,7 +673,8 @@ impl App {
             _ => {}
         }
         let mask = b.keys_down();
-        self.idle_ms = if mask != 0 { 0 } else { self.idle_ms.saturating_add(POLL_MS) };
+        // a key stuck since the start is no use: it does not keep the light on either
+        self.idle_ms = if self.keys.live(mask) != 0 { 0 } else { self.idle_ms.saturating_add(POLL_MS) };
         if let Some(p) = self.keys.poll(mask, POLL_MS) {
             self.press(b, p);
         }
