@@ -40,6 +40,10 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The sleep power steps** (main.rs `sleep_power_init`, BOARD.md 1), a boot / clock change: from RAM with
+  `POWER_STEPS=0` (as before), 1, 3, 7, then 15 (the default): the screen and touch, keys, the dev link and the
+  drive, the Nordic link (sensors, phone), GPS fix, backlight PWM, a beep, a ride recorded and saved. Then the
+  gain: battery draw idle on the overview, before and after.
 - **The end-ride screen (app/riding.rs `end_input`, recorder.rs "A discarded ride")**, with an EMMC_WRITE=1 build:
   a short ride, Start, Start held: END RIDE, the time and distance, RESUME selected; Page and Lap move, Back and
   RESUME leave it paused on its page; taps with gloves on each button. SAVE: the card (it stays on Page and Lap,

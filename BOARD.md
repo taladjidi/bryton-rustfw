@@ -13,6 +13,14 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   - AHB /2 = **HCLK 100 MHz**. APB1 to APB4 /8 = 12.5 MHz each.
   - Regulator VOS3 in normal use; VOS1 is needed for USB.
 - The bootloader uses the same PLL1 and bus setup as the OS, so code started by it runs at 200 MHz.
+- **While the core sleeps** (WFI = CSleep: the CPU clock stops, a peripheral keeps its clocks while its LPEN bit
+  is set; RM0399 RCC). Sleep at VOS3, 200 MHz, LDO: 16.5 mA with every peripheral off, 47.1 mA with all on
+  (DS12930 table 44). This firmware (main.rs `sleep_power_init`, `POWER_STEPS`) clears every RCC_xxxLPENR bit but
+  FMC, SDMMC1, the TCMs, AXI SRAM, D2 SRAMs, SRAM4, BKPRAM, USB1 OTG HS + ULPI, LPTIM1, USART2, TIM1, SYSCFG, RTC
+  (the flash interface and the GPIO ports included), and stops PLL2 (unless FMCSEL or SDMMCSEL is on it) and PLL3:
+  nothing it uses runs from them. **Inferred, not yet seen on the unit.** Which PLLs and peripherals the
+  bootloader leaves on: to read (`dev.py peek 0x58024400` RCC_CR, `0x580244d4 9` RCC_AHB3ENR..APB4ENR,
+  `0x580244fc 9` the LPENR registers).
 
 ## 2. Boot hand-off
 
