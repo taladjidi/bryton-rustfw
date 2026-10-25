@@ -211,7 +211,8 @@ MENU
   SECURE; ERR and a command's code if the radio refused the set-up), PAIR, REMOTE (the media remote), NOTIFY on /
   off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the
-  banner; a second Start (or a tap on the row) does it, any other key or touch drops it.
+  banner ("START: YES BACK: NO"); a second Start (or a tap on the row) does it, Back says no (it only cancels, the
+  menu stays), any other key or touch drops it.
 - **PAGES:** the overview's four fields; the ride pages, each with EDIT ON PAGE (the page editor), LAYOUT (the next
   layout its fields fit) and its fields; ADD PAGE (up to six: a 2 x 2 page, the editor open on it). A field row
   opens the field groups
@@ -257,7 +258,7 @@ ascent, NP (from the ride's records), average power, average and max heart rate,
 The ride's file is read once to draw it, 96 KB a main loop pass ("READING RIDE", about 0.1 s for a 300 KB ride;
 a long ride takes a few passes, the loop never stalls); the card opens when it is read. Back returns to the list.
 
-**Delete** (storage/trash.rs): on a ride's card, Start asks "DELETE RIDE? START AGAIN: YES" (any other key drops
+**Delete** (storage/trash.rs): on a ride's card, Start asks "DELETE RIDE? START: YES BACK: NO" (any other key drops
 it), Start again moves the ride out of sight, never erases it: `\Activities\<name>.fit` into `\Rustfw\Deleted\`,
 and this firmware's full copy of the same ride (`\Rustfw\Activities\<name>.fit`), if any, into
 `\Rustfw\Deleted\Full\`, under the same name (a name already there gets `-1`, `-2`...). A computer sees them

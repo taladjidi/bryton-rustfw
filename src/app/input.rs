@@ -278,12 +278,9 @@ impl App {
             self.strip.locked = !self.strip.locked; // the strip shows it; the banner says it
             return self.say(if self.strip.locked { "TOUCH LOCKED" } else { "TOUCH UNLOCKED" });
         }
-        if self.banner_ms.take().is_some() {
-            self.unbanner(b); // and the input acts, except Back: it only clears the banner (a call's Back declines, and the editor's
-            // KEEP CHANGES? is a question)
-            if i == Input::Back && !self.phone.ringing && !matches!(self.screen, Screen::Edit(..)) {
-                return;
-            }
+        let cleared = self.banner_ms.take().is_some();
+        if cleared {
+            self.unbanner(b); // and the input acts, except Back (below)
         }
         // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
         let armed = self.confirm.take();
@@ -291,6 +288,11 @@ impl App {
             && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
         {
             self.update_menu_rows(b, menu, sel); // its "SURE?" goes
+        }
+        // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines, and the
+        // editor's KEEP CHANGES? is a question that Back answers
+        if cleared && i == Input::Back && !self.phone.ringing && !matches!(self.screen, Screen::Edit(..)) {
+            return;
         }
         let graph_hit = match (self.screen, i) {
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y) | Gesture::Hold(x, y))) => {

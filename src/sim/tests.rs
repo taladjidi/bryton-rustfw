@@ -696,7 +696,7 @@ fn delete_rides() {
     // the 20 Oct ride (row 2): asked, dropped by another key, asked again, deleted
     open_card(&mut sim, &mut app, 2);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART AGAIN: YES");
+    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
     assert_eq!(app.confirm, Some(PAST_DELETE));
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -1189,7 +1189,7 @@ fn keeps_the_paired_sensor_until_forgotten() {
     let closes = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count();
     assert_eq!(closes(&sim), 1, "closed and opened for it again");
     assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "still paired");
-    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART AGAIN: FORGET");
+    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART: FORGET");
     assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "SURE?");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
@@ -2072,6 +2072,33 @@ fn back_held_3s_powers_off_after_release() {
     assert!(sim.touch.run_since.is_none(), "the touch chip in reset: no INT to keep the core out of standby");
     assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
+}
+
+/// Back answers a confirmation "no": the asking row goes back to its label, nothing is done, and the menu stays
+/// (the Back only cancels).
+#[test]
+fn back_says_no_to_a_confirmation() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    let import = menu::SYSTEM.iter().position(|&r| r == menu::Row::Stock(menu::StockRow::Import)).unwrap();
+    app.open(Screen::Menu(Menu::System, import));
+    app.show(&mut sim);
+    app.settings.ftp = 55;
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.menu_row(Menu::System, import).unwrap().1.as_str(), "SURE?");
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, import), "the menu stays");
+    assert_eq!(app.menu_row(Menu::System, import).unwrap().1.as_str(), "FROM STOCK");
+    run(&mut sim, &mut app, 200);
+    assert!(app.banner_ms.is_none());
+    assert_consistent(&sim, &app);
+    app.input(&mut sim, Input::Select);
+    app.input(&mut sim, Input::Back);
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.settings.ftp, 55, "Start, Back, Start: asked again, not done");
+    app.input(&mut sim, Input::Back);
+    assert!(matches!(app.screen(), Screen::Menu(Menu::System, _)), "Back cancelled the second asking too");
 }
 
 /// Lap on the overview during a ride marks a lap, as on a ride page (and as a shifter's lap does); off a ride it does
@@ -3470,7 +3497,7 @@ fn import_asks_first() {
     app.settings.ftp = 55; // stock's is another: an import shows
     app.input(&mut sim, Input::Select);
     assert_eq!((app.menu_row(Menu::System, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
-    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART AGAIN: YES");
+    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART: YES BACK: NO");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
     sim.save("import_sure");

@@ -476,7 +476,7 @@ impl App {
         self.confirm = Some((menu, sel));
         let mut l = Line::<40>::new();
         l.push_str(what);
-        l.push_str("?\nSTART AGAIN: YES");
+        l.push_str("?\nSTART: YES BACK: NO");
         self.say(l.as_str());
         false
     }
@@ -575,7 +575,7 @@ impl App {
                     Some(Sensor::Paired(id)) if !heard && self.confirm != Some((menu, sel)) => {
                         self.set_sensor(b, kind, Sensor::Paired(id));
                         self.confirm = Some((menu, sel));
-                        self.say("SEARCHING AGAIN\nSTART AGAIN: FORGET");
+                        self.say("SEARCHING AGAIN\nSTART: FORGET");
                     }
                     Some(Sensor::Paired(_)) => {
                         let mut l = Line::<40>::new();

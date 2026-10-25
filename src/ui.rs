@@ -1546,11 +1546,11 @@ pub(crate) mod tests {
             "PAUSED: HOLD START TO END",
             "HOLD BACK AGAIN TO SWITCH OFF",
             "INCOMING CALL\nMum",
-            "FORGET HEART RATE?\nSTART AGAIN: YES",
-            "FORGET SPEED+CAD?\nSTART AGAIN: YES",
-            "IMPORT SETTINGS?\nSTART AGAIN: YES",
-            "SEARCHING AGAIN\nSTART AGAIN: FORGET",
-            "FORGET THE PHONE?\nSTART AGAIN: YES",
+            "FORGET HEART RATE?\nSTART: YES BACK: NO",
+            "FORGET SPEED+CAD?\nSTART: YES BACK: NO",
+            "IMPORT SETTINGS?\nSTART: YES BACK: NO",
+            "SEARCHING AGAIN\nSTART: FORGET",
+            "FORGET THE PHONE?\nSTART: YES BACK: NO",
         ] {
             let (a, b) = lines(&LABEL, t, W - 12);
             assert!(LABEL.width(a) <= W - 12 && LABEL.width(b) <= W - 12, "{t}: {a} / {b}");
