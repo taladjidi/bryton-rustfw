@@ -152,7 +152,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,
   and its arms in `Settings::text` / `cycle` / `step`: never a row number. Back pops a screen stack (`App::open` /
   `close`), so no screen knows where Back goes.
-- `src/ui/text.rs`: anti-aliased proportional text (`text::draw`, a `Style`, `Align`), one panel window per glyph.
+- `src/ui/text.rs`: text in the pixel font at a scale (`text::draw`, a `Style`, `Align`), one panel window per glyph.
   For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
   `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.
 - `src/ui/fonts.rs`: glyph data, **generated** by `tools/font.py` (4 bits per pixel); never edit it by hand.
