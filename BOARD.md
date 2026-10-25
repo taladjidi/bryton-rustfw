@@ -283,7 +283,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
   0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`) and 0 (what the USB drive saw last at a
-  drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md). None free.
+  drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md). None free: the standby breadcrumbs share 0 (tag 0x5b) and 31 (the
+  reset flags, tag 0x5c), the last writer winning; the whole table is in src/app/settings.rs.
 - **Setting it** (this firmware, from the phone's time; not yet seen on the unit): RM0399's calendar initialisation:
   PWR_CR1 DBP, RTC_WPR 0xca then 0x53, INIT (RTC_ISR bit 7, RTC_ICSR in main.rs), wait for INITF (bit 6, 10 ms at
   most), TR and DR (the weekday in DR bits 13..15, 1 Monday to 7 Sunday; 0 is forbidden), INIT cleared, RSF (bit 5)

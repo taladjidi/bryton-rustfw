@@ -8,7 +8,7 @@ use crate::*;
 impl App {
     /// USB DRIVE (DEVICE menu, dev link `drive`): lends the card to the computer, unless USB is not up or a ride is
     /// running or not saved yet; why not is said in the banner and returned.
-    pub fn drive_on(&mut self) -> Result<(), &'static str> {
+    pub fn drive_on(&mut self, b: &mut impl Board) -> Result<(), &'static str> {
         let why = if self.strip.usb != UsbDot::Ready {
             Some("CONNECT USB")
         } else if self.ride.state() != ride::State::Idle {
@@ -23,6 +23,13 @@ impl App {
             return Err(why);
         }
         if !self.emmc.lent() {
+            if self.trash_check {
+                // a delete a cut left, finished first (the review of 2026-10-25): lent, the ride would be in neither
+                // folder, a computer's fsck could free or reconnect its chain, and the move would then link the
+                // ride's name onto it. Failed: the move's own check of the chain still holds
+                let t = fat::write::dos_time(self.rec_time().0);
+                self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t).is_err();
+            }
             self.past.stop(); // a past ride being read
             self.emmc.lend(true);
             self.drive.insert();

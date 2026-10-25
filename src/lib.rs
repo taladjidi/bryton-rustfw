@@ -119,7 +119,8 @@ pub trait Board {
     /// and sends the data, every wait bounded. The card's programming busy is left to the caller (CMD13).
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, emmc::BusError>;
     /// eMMC writes are allowed in this build (on the unit, only with EMMC_WRITE=1 until the first writes are done
-    /// with the owner): without, the recorder does not touch the card and says so at a ride's start.
+    /// with the owner): without, `emmc::Card::write` refuses every write (the one gate), and the recorder does not
+    /// touch the card and says so at a ride's start.
     fn emmc_writable(&self) -> bool {
         true
     }

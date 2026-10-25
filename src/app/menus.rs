@@ -546,7 +546,7 @@ impl App {
             Some(Row::Step(k)) => self.start_workout(k),
             Some(Row::Drive) if self.emmc.lent() => self.drive_off(),
             Some(Row::Drive) => {
-                let _ = self.drive_on(); // why not is in the banner
+                let _ = self.drive_on(b); // why not is in the banner
             }
             Some(Row::About) => self.open(Screen::About),
             Some(Row::Nearby) => {

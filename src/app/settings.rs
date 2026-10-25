@@ -81,6 +81,57 @@ pub const OVERVIEW: usize = PAGES;
 /// after the ride pages in their round while a course is followed.
 pub const COURSE: usize = PAGES + 1;
 
+// The RTC backup registers (32 words, kept in standby and through a reset; BOARD.md 8 has stock's side), all named
+// here, each word behind a tag so an empty or foreign one reads as unset:
+//
+//   reg      owner                                                  name
+//   0        diagnostics: USB drive at a drop (0xd1), standby (0x5b) USB_LAST_BKP = STANDBY_BKP
+//   1..4     stock (clock set, clock, USB mode)                     -
+//   5..8, 10 paired ANT+ sensors (tag 0xa5)                         sensors::Kind::backup
+//   9, 12,13 stock (12: its Nordic image; 13: last battery mV)      -
+//   11       wheel, backlight, max HR, FTP                          WHEEL_BKP
+//   14       paired shifting system (0x61 / 0x62)                   sensors::Kind::backup
+//   15       stock reads it at boot                                 -
+//   16       weight and W' (0xc1)                                   POWER_BKP
+//   17, 18   GNSS aiding                                            AID_BKP
+//   19       stock reads it at boot (once ours: set back to 0)      STOCK_BKP19
+//   20..27   ride pages and the overview (0xd / 0xe)                PAGE_BKP
+//   28       alerts (0xc2)                                          ALERTS_BKP
+//   29       fault marker (0xfa)                                    FAULT_BKP
+//   30       a ride open on the card                                RIDE_BKP
+//   31       diagnostics: USB drops (0x0b), reset flags (0x5c)      USB_DROPS_BKP = STANDBY_FLAGS_BKP
+//
+// None is free, so the two diagnostics share 0 and 31: the last writer wins and its tag says whose word it is.
+
+/// RTC backup register counting the USB drops the link recovered from (the board's SOF watch): tag 0x0b, the count
+/// in the low 16 bits; shared with [`STANDBY_FLAGS_BKP`] (its tag 0x5c restarts the count).
+pub const USB_DROPS_BKP: usize = 31;
+
+/// RTC backup register with what the USB drive saw last at a drop ([`App::usb_dropped`]): tag 0xd1; shared with
+/// [`STANDBY_BKP`].
+pub const USB_LAST_BKP: usize = 0;
+
+/// The standby breadcrumbs (main.rs `standby`: the power button did not start the unit after switching off,
+/// 2026-10-25): tag 0x5b in bits 24..31, the boots since standby was entered in bits 16..23, the times WFI returned
+/// in standby in bits 0..15. Shared with [`USB_LAST_BKP`].
+pub const STANDBY_BKP: usize = USB_LAST_BKP;
+
+/// The reset and standby flags at the first boot after standby ([`standby_flags_word`]); shared with
+/// [`USB_DROPS_BKP`].
+pub const STANDBY_FLAGS_BKP: usize = USB_DROPS_BKP;
+
+/// [`STANDBY_FLAGS_BKP`]'s word: tag 0x5c in bits 24..31, RCC_RSR's flags (bits 17..30) in bits 10..23 and
+/// PWR_CPUCR's low 10 bits (its stop and standby flags) in bits 0..9. Tagged, so the USB drop count never takes it
+/// for its own (raw, the flags' top byte could read as its tag 0x0b).
+///
+/// ```
+/// let w = bryton_rustfw::standby_flags_word(0x0b02_0000, 0x1c0);
+/// assert_eq!((w >> 24, w >> 10 & 0x3fff, w & 0x3ff), (0x5c, 0x0b02_0000 >> 17, 0x1c0));
+/// ```
+pub fn standby_flags_word(rsr: u32, cpucr: u32) -> u32 {
+    0x5c00_0000 | (rsr >> 7 & 0x00ff_fc00) | (cpucr & 0x3ff)
+}
+
 /// The page the editor works on (its copy, kept or dropped when it is left): the field picker's page number then.
 pub const EDITED: usize = PAGES + 2;
 

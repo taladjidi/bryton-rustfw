@@ -107,6 +107,8 @@ pub enum Error {
     ExtCsd,
     /// The card is lent to the computer as a USB drive ([`Emmc::lend`]): nothing else may touch it.
     Lent,
+    /// A write in a build that may not write the card ([`Board::emmc_writable`]): refused before any command.
+    ReadOnly,
 }
 
 /// Stock's layout of the card, from SEC_COUNT (BOARD.md 15).
@@ -247,8 +249,13 @@ impl Card {
     /// Writes `buf.len() / 512` sectors from `lba` on, as reliable writes when the card offers them (module doc);
     /// else CMD24 for one, CMD25 then CMD12 for more. Then waits for the card to program them (CMD13) and checks its
     /// status. Refused ([`Error::Range`]) unless every sector is below [`Layout::fat_end`]: nothing past stock's
-    /// FAT volume is ever written.
+    /// FAT volume is ever written. Refused ([`Error::ReadOnly`]) in a build that may not write the card: the one gate
+    /// every writer goes through (the recorder, the bond, the scan's cache, the dev link, the USB drive), so none
+    /// has to remember it.
     pub fn write(&self, b: &mut impl Board, lba: u32, buf: &[u8]) -> Result<(), Error> {
+        if !b.emmc_writable() {
+            return Err(Error::ReadOnly);
+        }
         let n = (buf.len() / SECTOR) as u32;
         let end = lba.checked_add(n).ok_or(Error::Range)?;
         if n == 0 || !buf.len().is_multiple_of(SECTOR) || end > self.layout.fat_end {

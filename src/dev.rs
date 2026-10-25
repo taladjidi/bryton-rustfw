@@ -31,7 +31,8 @@
 //!   then `end`. Read only.
 //! - `wtest <lba>`: the first write on the unit, on one sector the computer picked in free space ([`Effect::WriteTest`],
 //!   [`write_test`]): reads it, writes it back changed, reads that back, writes the original back, reads that back;
-//!   `ok`, or `err <step>` (`err read`, `err write`, `err pattern`, `err restore`...). Refused by a read-only build.
+//!   `ok`, or `err <step>` (`err read`, `err write`, `err pattern`, `err restore`...). Refused by a read-only build,
+//!   and while a ride runs or waits to be saved (`err ride open`).
 //! - `drive`: lends the eMMC's FAT volume to the computer as a USB drive ([`Effect::Drive`], app/drive.rs): `ok`,
 //!   or `err <why>` (no ride may run or wait to be saved). The computer's eject gives it back.
 //! - `drivelog`: the USB drive's last 32 commands, oldest first, a line each: `op lba count status residue` in hex
@@ -285,6 +286,9 @@ impl Session {
                 h.send(b"end\n");
             }
             Some(b"wtest") => match (words.next().and_then(parse), words.next()) {
+                // the recorder is the card's only writer while a ride is open: a cut between the flip and the
+                // restore would leave that sector wrong, maybe the ride's file or the FAT (the review of 2026-10-25)
+                (Some(_), None) if !app.ride_settled() => h.send(b"err ride open\n"),
                 (Some(n), None) => return Effect::WriteTest(n),
                 _ => h.send(b"err usage: wtest <lba>\n"),
             },
@@ -554,6 +558,7 @@ fn send_error(h: &mut impl Host, e: emmc::Error) {
         Error::Range => h.send(b"err range\n"),
         Error::ExtCsd => h.send(b"err ext_csd\n"),
         Error::Lent => h.send(b"err lent as usb drive\n"),
+        Error::ReadOnly => h.send(b"err read-only build\n"),
     }
 }
 

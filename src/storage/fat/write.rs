@@ -80,6 +80,9 @@ pub struct Handle {
     pub clusters: u32,
     /// Size in bytes, as its entry says.
     pub size: u32,
+    /// The first cluster of the folder its entry is in (0: none, a chain without an entry): [`Fat::remove`] walks
+    /// back through it to the long name's first pieces.
+    pub dir: u32,
 }
 
 impl Handle {
@@ -87,6 +90,23 @@ impl Handle {
     pub fn file(&self) -> File {
         File { cluster: self.first, size: self.size, dir: false }
     }
+}
+
+/// Marks deleted (0xe5) the long name pieces before entry `slot` of directory sector `s` that carry checksum
+/// `sum`, back to the first piece (its 0x40 bit); true if the name goes on in the sector before.
+fn mark_long_name(s: &mut [u8; SECTOR], slot: usize, sum: u8) -> bool {
+    for k in (0..slot).rev() {
+        let e = &mut s[k * 32..k * 32 + 32];
+        if e[11] != 0x0f || e[13] != sum || e[0] == 0xe5 || e[0] == 0 {
+            return false;
+        }
+        let first = e[0] & 0x40 != 0;
+        e[0] = 0xe5;
+        if first {
+            return false;
+        }
+    }
+    true
 }
 
 /// A name this writer gives: 1 to [`NAME`] printable ASCII characters, none that FAT forbids, no leading or
@@ -441,7 +461,8 @@ impl Fat {
                 let (last, clusters) = self.chain_end(d, f.cluster)?;
                 let slot = c.entry.checked_sub(1).ok_or(Error::Corrupt)? as u8;
                 let entry_lba = self.lba(c.cluster) + c.sector;
-                return Ok(Handle { entry_lba, slot, first: f.cluster, last, clusters, size: f.size });
+                let (first, size) = (f.cluster, f.size);
+                return Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster });
             }
         }
         Err(Error::NotFound)
@@ -586,7 +607,7 @@ impl Fat {
         let (entries, n) = dir_entries(name, short, attr, first, size, time);
         let (entry_lba, slot) = self.add_entries(d, dir, entries.get(..n).ok_or(Error::Corrupt)?)?;
         let (last, clusters) = self.chain_end(d, first)?;
-        Ok(Handle { entry_lba, slot, first, last, clusters, size })
+        Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster })
     }
 
     /// Creates file `name` in `dir`, empty, with one cluster taken (so its entry never changes cluster).
@@ -652,13 +673,42 @@ impl Fat {
         let short: [u8; 32] = s.get(slot * 32..slot * 32 + 32).and_then(|e| e.try_into().ok()).ok_or(Error::Corrupt)?;
         let sum = short_sum(&short);
         s[slot * 32] = 0xe5;
-        for k in (0..slot).rev() {
-            if s[k * 32 + 11] != 0x0f || s[k * 32 + 13] != sum || s[k * 32] == 0xe5 {
+        let mut more = mark_long_name(&mut s, slot, sum);
+        self.write(d, h.entry_lba, &s)?;
+        // stock's and computers' long names cross sectors (this writer's never do): the first pieces in the sectors
+        // before, at most two (20 pieces and the 8.3 entry), else left as orphans that chkdsk reports
+        let mut lba = h.entry_lba;
+        for _ in 0..2 {
+            if !more {
                 break;
             }
-            s[k * 32] = 0xe5;
+            let Some(prev) = self.dir_sector_before(d, h.dir, lba)? else { break };
+            self.read(d, prev, &mut s)?;
+            more = mark_long_name(&mut s, ENTRIES, sum);
+            self.write(d, prev, &s)?;
+            lba = prev;
         }
-        self.write(d, h.entry_lba, &s)
+        Ok(())
+    }
+
+    /// The sector before `lba` in the folder whose chain starts at `dir` (None at its start, or `dir` unknown).
+    fn dir_sector_before(&mut self, d: &mut impl Disk, dir: u32, lba: u32) -> Result<Option<u32>, Error> {
+        let c = lba.checked_sub(self.data_start).map_or(0, |x| x / self.spc + 2);
+        if !self.valid(c) || dir == 0 {
+            return Ok(None);
+        }
+        if lba > self.lba(c) {
+            return Ok(Some(lba - 1));
+        }
+        let mut p = dir;
+        for _ in 0..DIR_ENTRIES {
+            match self.next(d, p)? {
+                Some(n) if n == c => return Ok(Some(self.lba(p) + self.spc - 1)),
+                Some(n) => p = n,
+                None => break,
+            }
+        }
+        Ok(None)
     }
 
     /// Whether the FAT sector whose first entry is cluster `first`'s holds only what a FAT holds: free, a cluster
@@ -759,6 +809,16 @@ pub(crate) mod tests {
     /// size past its chain or on cluster 0, FATs that differ; Ok(lost clusters: taken, named by no entry). Walks
     /// every directory.
     pub fn fsck(img: &[u8]) -> Result<u32, std::string::String> {
+        fsck_with(img, true)
+    }
+
+    /// [`fsck`] without the orphan long name check: after a cut that tore a directory sector (garbage in it, which
+    /// may read as anything), as the torn-sector power-cut tests make.
+    pub fn fsck_torn(img: &[u8]) -> Result<u32, std::string::String> {
+        fsck_with(img, false)
+    }
+
+    fn fsck_with(img: &[u8], orphans: bool) -> Result<u32, std::string::String> {
         let mut d = Ram(img.to_vec(), 0);
         let mut fat = Fat::mount(&mut d).map_err(|e| std::format!("mount {e:?}"))?;
         let fs = fat.fat_size as usize * SECTOR;
@@ -771,6 +831,9 @@ pub(crate) mod tests {
         let mut dirs = std::vec![fat.root()];
         let mut id = 0;
         while let Some(dir) = dirs.pop() {
+            if orphans {
+                orphan_long_names(&mut fat, &mut d, dir.cluster)?;
+            }
             let mut chains = std::vec![(dir.cluster, u32::MAX)];
             let mut c = fat.cursor(dir).map_err(|e| std::format!("{e:?}"))?;
             while let Some((e, _)) = fat.next_raw(&mut d, &mut c).map_err(|e| std::format!("dir {e:?}"))? {
@@ -853,6 +916,71 @@ pub(crate) mod tests {
             return Err(std::format!("lost chain in a loop at {c}"));
         }
         Ok(lost)
+    }
+
+    /// Long name pieces not followed by the 8.3 entry whose checksum they carry (chkdsk and fsck_msdos report
+    /// them): Err for the first, in the folder whose chain starts at `dir`, read in order across its sectors.
+    fn orphan_long_names(fat: &mut Fat, d: &mut Ram, dir: u32) -> Result<(), std::string::String> {
+        let (mut c, mut pending) = (dir, None::<u8>);
+        let orphan = |c: u32| Err(std::format!("orphan long name piece in the folder at {dir} (cluster {c})"));
+        for _ in 0..fat.clusters {
+            for k in 0..fat.spc {
+                let mut s = [0u8; SECTOR];
+                d.read(fat.lba(c) + k, &mut s).unwrap();
+                for e in s.chunks_exact(32) {
+                    if e[0] == 0 {
+                        return if pending.is_some() { orphan(c) } else { Ok(()) };
+                    }
+                    let live = e[0] != 0xe5;
+                    if live && e[11] == 0x0f {
+                        if pending.is_some_and(|p| p != e[13]) {
+                            return orphan(c);
+                        }
+                        pending = Some(e[13]);
+                    } else if let Some(sum) = pending.take()
+                        && (!live || short_sum(e) != sum)
+                    {
+                        return orphan(c);
+                    }
+                }
+            }
+            match fat.entry(d, c).unwrap() {
+                n if fat.valid(n) => c = n,
+                _ => break,
+            }
+        }
+        if pending.is_some() { orphan(c) } else { Ok(()) }
+    }
+
+    /// A long name across two sectors (stock's and computers' do; this writer's never), removed: every piece marked
+    /// deleted, those in the sector before the 8.3 entry's too (the review of 2026-10-25: they were left as orphans
+    /// chkdsk reports), and fsck says so.
+    #[test]
+    fn remove_marks_a_long_name_across_sectors() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.mkdir(&mut d, fat.root(), "Cross", T).unwrap();
+        fat.create(&mut d, dir, "261020080000.fit", T).unwrap();
+        // its three entries (two pieces, the 8.3) moved to slots 14, 15 and the next sector's 0, the slots between
+        // deleted, as a computer may leave them
+        let lba = fat.lba(dir.cluster) as usize * SECTOR;
+        let e: Vec<u8> = d.0[lba + 2 * 32..lba + 5 * 32].to_vec();
+        assert_eq!((e[11], e[32 + 11], e[64 + 11] & 0x10), (0x0f, 0x0f, 0), "two pieces, then the file");
+        for k in 2..14 {
+            d.0[lba + k * 32..lba + k * 32 + 32].fill(0);
+            d.0[lba + k * 32] = 0xe5;
+        }
+        d.0[lba + 14 * 32..lba + 16 * 32].copy_from_slice(&e[..64]);
+        d.0[lba + SECTOR..lba + SECTOR + 32].copy_from_slice(&e[64..]);
+        assert_eq!(fsck(&d.0).map(|_| ()), Ok(()));
+        let h = fat.locate(&mut d, dir, "261020080000.fit").unwrap();
+        assert_eq!(h.entry_lba as usize * SECTOR, lba + SECTOR);
+        fat.remove(&mut d, &h).unwrap();
+        assert_eq!(fat.locate(&mut d, dir, "261020080000.fit").err(), Some(Error::NotFound));
+        assert!(fsck(&d.0).is_ok(), "{:?}", fsck(&d.0));
+        // fsck sees an orphan piece
+        d.0[lba + 15 * 32] = e[32];
+        assert!(fsck(&d.0).is_err_and(|e| e.contains("orphan")));
     }
 
     /// fsck itself: a lost chain (taken, named by no entry: what a cut in a move leaves) is only lost while it ends
@@ -940,6 +1068,32 @@ pub(crate) mod tests {
         let mut fat = Fat::mount(&mut d).unwrap();
         let free = (2..fat.clusters + 2).filter(|&c| fat.entry(&mut d, c).unwrap() == 0).count() as u32;
         (free, fat.fsinfo_read(&mut d).unwrap().map_or(u32::MAX, |f| f.0))
+    }
+
+    /// A card nearly full: the free clusters after the first `keep` marked bad in both FATs (0x0ffffff7: neither
+    /// free nor lost, so `fsck` still passes), and FSInfo's count set to the `keep` left if `tell` (else as it was:
+    /// a stale count, as after a computer's write).
+    pub fn fill(img: &mut [u8], keep: u32, tell: bool) {
+        let u = |img: &[u8], at: usize, n: usize| {
+            img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b))
+        };
+        let (fat0, fat_len, fsinfo) = (u(img, 14, 2) * SECTOR, u(img, 36, 4) * SECTOR, u(img, 48, 2) * SECTOR);
+        let (mut free, mut kept) = (0u32, 0u32);
+        for at in (fat0 + 8..fat0 + fat_len).step_by(4) {
+            if u(img, at, 4) & 0x0fff_ffff == 0 {
+                free += 1;
+                if free > keep {
+                    for k in [0, fat_len] {
+                        img[at + k..at + k + 4].copy_from_slice(&0x0fff_fff7u32.to_le_bytes());
+                    }
+                } else {
+                    kept += 1;
+                }
+            }
+        }
+        if tell {
+            img[fsinfo + 488..fsinfo + 492].copy_from_slice(&kept.to_le_bytes());
+        }
     }
 
     const T: (u16, u16) = (0x5b58, 0x6000);

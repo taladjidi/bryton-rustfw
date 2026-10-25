@@ -58,6 +58,13 @@ fn writes_below_b_only() {
     }
     assert_eq!(card.write(&mut sim, 0, &[0u8; 100]), Err(Error::Range), "not whole sectors");
     assert!(sim.emmc.cmds.is_empty(), "refused before any command");
+    // a build that may not write the card: refused here, whoever the writer, nothing sent
+    sim.writable = false;
+    assert_eq!(card.write(&mut sim, 3, &[1u8; SECTOR]), Err(Error::ReadOnly));
+    assert_eq!(Emmc::new().write(&mut sim, 3, &[1u8; SECTOR]), Err(Error::ReadOnly));
+    assert!(sim.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
+    assert!(sim.emmc.image[3 * SECTOR..4 * SECTOR].iter().all(|&b| b == 7));
+    sim.writable = true;
     // the power goes after 2 sectors of a 4-sector write: the first 2 land, the card is gone
     let mut emmc = Emmc::new();
     sim.emmc.cut_after = Some(sim.emmc.sectors_written + 2);
@@ -215,6 +222,14 @@ fn sector_command_reads_and_survives_a_dead_card() {
     assert_eq!(sim.emmc.cmds.iter().filter(|c| matches!(c.0, 24 | 25)).count(), 2, "written twice");
     serve(&mut sim, &mut session, &mut pc, b"wtest 0x03a2bfe6\n");
     assert_eq!(pc.got, b"err write\n");
+    // never while a ride is open: the recorder is the card's only writer then
+    app.press(&mut sim, Press::Short(Key::Start));
+    pc.got.clear();
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert_eq!(session.feed(b"wtest 0x1000\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(pc.got, b"err ride open\n");
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
     pc.got.clear();
     assert_eq!(session.feed(b"sector\nsector 1 2\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err usage: sector <n>\nerr usage: sector <n>\n");

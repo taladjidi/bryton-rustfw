@@ -584,7 +584,7 @@ fn touch_during_drive_commands() {
         sim.own_settings();
         let mut app = App::start(&mut sim, None);
         app.set_usb(&mut sim, UsbDot::Ready);
-        assert!(app.drive_on().is_ok());
+        assert!(app.drive_on(&mut sim).is_ok());
         let mut h = Host::default();
         let mut gestures = 0;
         for (tag, c) in noise.chunks_exact(4).take(200).enumerate() {

@@ -647,12 +647,12 @@ mod tests {
         }
     }
 
-    /// Speed on a real ride (outside the repository; prints only the cost): `cargo test-host --release -- --ignored
-    /// parse_speed --nocapture`.
+    /// Speed on a real ride (outside the repository, the first `.fit` in the folder `BRYTON_RIDES`; prints only the
+    /// cost): `BRYTON_RIDES=<folder> cargo test-host --release -- --ignored parse_speed --nocapture`.
     #[test]
     #[ignore]
     fn parse_speed() {
-        let dir = "/Users/tangui/Documents/bryton/rides";
+        let Ok(dir) = std::env::var("BRYTON_RIDES") else { return };
         let Some(f) = std::fs::read_dir(dir).ok().and_then(|d| {
             d.filter_map(|e| e.ok().map(|e| e.path())).find(|p| p.extension().is_some_and(|e| e == "fit"))
         }) else {
