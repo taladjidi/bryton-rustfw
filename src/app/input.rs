@@ -268,8 +268,18 @@ impl App {
             }
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
             (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.zoom_at(x, y).is_some() => {
-                self.map_zoom = self.zoom_at(x, y).flatten();
+                if let Some(z) = self.zoom_at(x, y) {
+                    (self.map_zoom, self.map_centre) = (z.map(|z| z.level), z.and_then(|z| z.centre));
+                }
                 return self.update_page(b);
+            }
+            // a drag on the zoomed map pans it (App::touch makes it from the drag released; else it is a swipe)
+            (Screen::Ride(_), Input::Touch(Gesture::Drag(_, _, dx, dy))) => {
+                if let Some(c) = self.pan(dx, dy) {
+                    self.map_centre = Some(c);
+                    return self.update_page(b);
+                }
+                return;
             }
             // a tap on a graph shows the next plot (kept with the page), a hold switches between the last minutes and
             // the whole ride
@@ -398,6 +408,16 @@ impl App {
     /// down (the release makes the gesture). A touch keeps the backlight on like a key. The gesture, if one ended
     /// here, comes back as an input for the caller to act on once it has stopped sleeping ([`App::input`]).
     pub fn touch(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
+        let i = self.touch_gesture(b, dt_ms);
+        // a drag that starts on the map zoomed in pans it, whatever gesture it made (a swipe, or one too short)
+        match self.touch.take_drag() {
+            Some(((x, y), (dx, dy))) if self.pans_at(x, y) => Some(Input::Touch(Gesture::Drag(x, y, dx, dy))),
+            _ => i,
+        }
+    }
+
+    /// The gesture waiting, or the one this sample ends ([`App::touch`]).
+    fn touch_gesture(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
         if let Some(i) = self.touch_pending.take() {
             self.idle_ms = 0;
             return Some(i);

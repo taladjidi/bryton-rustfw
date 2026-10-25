@@ -35,7 +35,13 @@
     rider: centred a little ahead of them, and centred again only when the arrow leaves the middle of the map (a
     new basemap each time, about every 35 s at 2 m a pixel and 29 km/h). Zooming out to the fitted level goes back
     to fitting the whole track (and course). Kept until the unit is switched off. A hold on the map still opens the
-    menu; a map of half a page or less has no buttons.
+    menu; a map of half a page or less has no buttons. The fitted map keeps the arrow clear of the buttons.
+  - **Pan:** zoomed in, drag the map: it moves with the finger, redrawn once when the finger lifts (one new
+    basemap, no redraw while dragging), at most two map widths past the track and the course. The map then stays
+    put instead of following, and a third button, a crosshair under "-", follows the rider again. "+" and "-" zoom
+    around the centre panned to. While zoomed in, a drag on the map pans instead of changing page or opening the
+    media remote; the keys still change pages. Fitted, swipes keep their meanings. A new ride, or a course followed
+    or dropped, fits the map again.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
 
 - **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track

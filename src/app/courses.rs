@@ -39,6 +39,9 @@ impl App {
     /// Select on course `k`: reads it to follow it ([`App::step_courses`]), or stops following it.
     pub(crate) fn follow_course(&mut self, k: usize) {
         let Some(c) = self.courses.as_deref_mut() else { return };
+        // another map (the course in or out of the fit): fitted until "+", not a zoom from before that waited for
+        // the fit to grow (review)
+        (self.map_zoom, self.map_centre) = (None, None);
         if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) {
             c.on = None;
             return self.say("COURSE OFF");

@@ -205,7 +205,7 @@ impl App {
                 Drawn::Print(self.notices.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
             }
             Widget::Field(Field::Map) => {
-                Drawn::Map(map::Shown::of(&self.track, map::area(bx), self.route().as_ref(), self.map_zoom))
+                Drawn::Map(map::Shown::of(&self.track, map::area(bx), self.route().as_ref(), self.zoom()))
             }
             Widget::Field(Field::Profile) => Drawn::Profile(self.profile_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WorkoutGraph) => Drawn::Workout(self.workout_now(ui::plot_area(bx).2)),
@@ -235,7 +235,7 @@ impl App {
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
-                        map::draw(c, map::area(bx), &self.track, m.view, base, self.route().as_ref());
+                        map::draw(c, map::area(bx), &self.track, m.view, base, self.route().as_ref(), m.panned());
                     }
                     Drawn::Profile(p) => self.draw_profile(c, bx, p),
                     Drawn::Workout(w) => self.draw_workout_graph(c, bx, w),
@@ -253,13 +253,44 @@ impl App {
         }
     }
 
-    /// A tap at (`x`, `y`) on the page's map's "+" or "-": the zoom it asks for (None: the fit); None elsewhere.
-    pub(crate) fn zoom_at(&self, x: u16, y: u16) -> Option<Option<u32>> {
+    /// The map's zoom set by hand, if any.
+    pub(crate) fn zoom(&self) -> Option<map::Zoom> {
+        self.map_zoom.map(|level| map::Zoom { level, centre: self.map_centre })
+    }
+
+    /// The page's (first) map: its area and how it is drawn.
+    fn page_map(&self) -> Option<(map::Rect, map::Shown)> {
         let i = self.first_map()?;
-        let (Some((bx, _)), Some(Drawn::Map(m))) = (self.widgets().nth(i), self.drawn.get(i)) else { return None };
-        let area = map::area(bx);
-        let zoom_in = map::button_at(area, m, i32::from(x), i32::from(y))?;
-        Some(map::zoom(&self.track, area, self.route().as_ref(), m, zoom_in))
+        match (self.widgets().nth(i), self.drawn.get(i)) {
+            (Some((bx, _)), Some(Drawn::Map(m))) => Some((map::area(bx), *m)),
+            _ => None,
+        }
+    }
+
+    /// A tap at (`x`, `y`) on the page's map's buttons: the zoom it asks for (None: the fit); None elsewhere. "+"
+    /// and "-" keep the centre panned to; "re-centre" drops it.
+    pub(crate) fn zoom_at(&self, x: u16, y: u16) -> Option<Option<map::Zoom>> {
+        let (area, m) = self.page_map()?;
+        let (level, centre) = match map::button_at(area, &m, i32::from(x), i32::from(y))? {
+            map::Button::Centre => (self.map_zoom, None),
+            b => (map::zoom(&self.track, area, self.route().as_ref(), &m, b == map::Button::In), self.map_centre),
+        };
+        Some(level.map(|level| map::Zoom { level, centre }))
+    }
+
+    /// A drag from (`x`, `y`) pans the page's map: it starts on a map zoomed in by hand.
+    pub(crate) fn pans_at(&self, x: u16, y: u16) -> bool {
+        let (x, y) = (i32::from(x), i32::from(y));
+        matches!(self.screen, Screen::Ride(_))
+            && self
+                .page_map()
+                .is_some_and(|(a, m)| m.zoomed() && (a.0..a.0 + a.2).contains(&x) && (a.1..a.1 + a.3).contains(&y))
+    }
+
+    /// The page's map's centre after a drag of (`dx`, `dy`) pixels ([`map::pan`]); None when it does not pan.
+    pub(crate) fn pan(&self, dx: i16, dy: i16) -> Option<(i32, i32)> {
+        let (area, m) = self.page_map()?;
+        map::pan(&self.track, area, self.route().as_ref(), &m, (i32::from(dx), i32::from(dy)))
     }
 
     /// The map in box `i` as drawn (tests).
@@ -366,7 +397,7 @@ impl App {
             let now = match (w, old) {
                 (_, Drawn::Map(mut m)) => {
                     let area = map::area(bx);
-                    let (zoom, route) = (self.map_zoom, self.route());
+                    let (zoom, route) = (self.zoom(), self.route());
                     if first == Some(i) && map::refit(area, &self.track, &m, route.as_ref(), zoom) {
                         let view = map::Shown::of(&self.track, area, route.as_ref(), zoom).view;
                         self.render_basemap(b, area, view);

@@ -1763,9 +1763,52 @@ fn map_zoom_buttons() {
     app.show(&mut sim);
     let half = map::area(ui::field_box(2, ui::RIDE_H, 0).unwrap());
     assert_eq!(map::buttons(half), None);
-    tap(&mut sim, &mut app, plus);
-    assert_eq!(app.map_zoom, None, "no buttons, no zoom");
+    app.map_zoom = Some(MIN_LEVEL + 1); // as if zoomed in on the full page: "+" or "-" there would change it
+    for b in [plus, minus] {
+        tap(&mut sim, &mut app, b);
+        assert_eq!(app.map_zoom, Some(MIN_LEVEL + 1), "no buttons, no zoom");
+    }
     sim.save("map_zoom_half");
+}
+
+/// A zoom set in one ride is not the next ride's (review: unused while the new fit was finer, it came back by
+/// itself as the fit grew); a course followed or dropped fits the map again too.
+#[test]
+fn map_zoom_ends_with_the_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(ride_route);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    sim.gnss.fix = Some(500);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.screen = Screen::Ride(2);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 200_000);
+    let area = crate::map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [plus, _] = crate::map::buttons(area).unwrap();
+    app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
+    app.input(&mut sim, Input::Touch(Gesture::Drag(100, 200, 30, 0)));
+    assert!(app.map_zoom.is_some() && app.map_centre.is_some(), "zoomed and panned");
+    // the ride ended, a new one started
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.map_zoom, app.map_centre), (None, None), "the new ride's map fitted");
+    app.screen = Screen::Ride(2);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 200_000);
+    assert!(matches!(app.drawn[0], crate::Drawn::Map(m) if m.view.is_some() && !m.zoomed()), "still fitted");
+    assert_consistent(&sim, &app);
+    // zoomed again, then a course followed: fitted to it
+    app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
+    assert!(app.map_zoom.is_some());
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.open_courses(&mut sim);
+    app.follow_course(hill(&app));
+    assert_eq!((app.map_zoom, app.map_centre), (None, None), "a course: the map fitted");
 }
 
 /// A course followed, the map zoomed in: the course drawn under the track as at the fit, the view following the
@@ -1809,6 +1852,106 @@ fn map_zoom_with_a_course() {
     }
     assert!(views > 0, "the view follows the rider");
     sim.save("map_zoom_course");
+}
+
+/// A finger dragged from `from` by `by` pixels on the touch panel, through the touch path as on the unit (sampled every
+/// [`TOUCH_MS`]), then lifted; the passes run until it is handled.
+pub(super) fn drag(sim: &mut Sim, app: &mut App, from: (i32, i32), by: (i32, i32)) {
+    let t0 = sim.ms;
+    sim.touch.finger = Box::new(move |ms| {
+        let t = ms.checked_sub(t0)? as i32;
+        let k = (t - 50).clamp(0, 200);
+        (t < 400).then_some(((from.0 + by.0 * k / 200) as u16, (from.1 + by.1 * k / 200) as u16))
+    });
+    run(sim, app, 800);
+    sim.touch.finger = Box::new(|_| None);
+}
+
+/// Panning the map (map.rs): fitted, a swipe still changes the page; zoomed in, a drag on the map moves the map with
+/// the finger at the release, the view stops following, "+" keeps the centre, "re-centre" follows again; the pan is
+/// kept near the track; the keys still change pages and a hold still opens the menu. The panel equals the screenshot
+/// at each step.
+#[test]
+fn map_pan() {
+    use crate::map;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    sim.gnss.fix = Some(500);
+    run(&mut sim, &mut app, 200_000);
+    let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [plus, minus] = map::buttons(area).unwrap();
+    let centre_button = (minus.0, minus.1 + minus.3 + 4, minus.2, minus.3);
+    let tap = |sim: &mut Sim, app: &mut App, b: map::Rect| {
+        app.input(sim, Input::Touch(Gesture::Tap((b.0 + b.2 / 2) as u16, (b.1 + b.3 / 2) as u16)));
+        assert_consistent(sim, app);
+    };
+    // fitted: a swipe on the map changes the page as before, and back
+    drag(&mut sim, &mut app, (160, 200), (-80, 0));
+    assert_eq!(app.screen(), Screen::Ride(0), "swipe left: the next page");
+    drag(&mut sim, &mut app, (80, 200), (80, 0));
+    assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the map again");
+    assert_eq!(app.map_centre, None);
+    tap(&mut sim, &mut app, plus);
+    tap(&mut sim, &mut app, plus);
+    let v0 = app.map_view(0).unwrap();
+    let m = |px: i32| px * v0.mpp16 as i32 / 16;
+    // zoomed: a drag pans, the map moving with the finger (right and up: the view goes west and south)
+    let (px, t0) = (sim.pixels, sim.ms);
+    drag(&mut sim, &mut app, (100, 200), (60, -40));
+    assert_eq!(app.screen(), Screen::Ride(2), "the drag panned, no page change");
+    let v = app.map_view(0).unwrap();
+    assert_eq!((v.cx, v.cy), (v0.cx - m(60), v0.cy - m(40)), "moved by the finger's vector");
+    assert_eq!(app.map_centre, Some((v.cx, v.cy)));
+    assert_consistent(&sim, &app);
+    sim.save("map_pan");
+    std::println!("a pan: {} px drawn in {} ms", sim.pixels - px, sim.ms - t0);
+    // a short drag (not a swipe) pans too
+    drag(&mut sim, &mut app, (100, 200), (-20, 0));
+    assert_eq!(app.map_view(0).unwrap().cx, v.cx + m(20));
+    // the view stays where it was put while the rider goes on
+    let (kept, px, t0) = (app.map_view(0), sim.pixels, sim.ms);
+    run(&mut sim, &mut app, 60_000);
+    assert_eq!(app.map_view(0), kept, "panned: no following");
+    std::println!("panned, riding: {} px/s", (sim.pixels - px) / ((sim.ms - t0) / 1000));
+    assert_consistent(&sim, &app);
+    // "+" while panned: finer around the same centre
+    tap(&mut sim, &mut app, plus);
+    let z = app.map_view(0).unwrap();
+    assert!(z.mpp16 < v0.mpp16 && (z.cx, z.cy) == (kept.unwrap().cx, kept.unwrap().cy), "{z:?}");
+    // a hold on the zoomed map still opens the menu
+    app.input(&mut sim, Input::Touch(Gesture::Hold(100, 200)));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
+    app.input(&mut sim, Input::Back);
+    // the pan is kept within PAN_SCREENS map widths of the track
+    for _ in 0..30 {
+        drag(&mut sim, &mut app, (200, 150), (-180, 0));
+    }
+    let far = app.map_view(0).unwrap();
+    let east = app.track.points().iter().map(|p| p.0).max().unwrap();
+    assert!(far.cx <= east + area.2 * map::PAN_SCREENS * far.mpp16 as i32 / 16 + 1, "{far:?}");
+    assert!(far.cx > east, "far east: {far:?}");
+    assert_consistent(&sim, &app);
+    sim.save("map_pan_far");
+    // re-centre: following the rider again, the button gone
+    tap(&mut sim, &mut app, centre_button);
+    assert_eq!(app.map_centre, None);
+    let v = app.map_view(0).unwrap();
+    let (x, y) = v.px(area, app.track.pos().unwrap());
+    assert!(x >= area.2 / 5 && x < area.2 * 4 / 5 && y >= area.1 + area.3 / 5, "the rider in the middle: {x},{y}");
+    assert!(app.zoom_at(centre_button.0 as u16 + 20, centre_button.1 as u16 + 20).is_none(), "no re-centre button");
+    sim.save("map_pan_recentred");
+    run(&mut sim, &mut app, 30_000);
+    assert_consistent(&sim, &app);
+    // zoomed, the keys still change pages
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0), "Page: the next page");
 }
 
 /// Heart rate rising from 90 to 209 over two minutes, then again: every zone at the default max of 190.
@@ -2465,7 +2608,8 @@ fn perf_budgets() {
         ("six values", [values, graph, map], 0, None, (9_000, 20)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
         ("two graphs", [graph, values, map], 0, None, (1_000, 30)),
-        // 1260, 33: the track's new segments and the arrow, refits included (1211 without the zoom buttons)
+        // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow
+        // clear of the zoom buttons, 1211 without them)
         ("map", [map, values, graph], 0, None, (1_800, 50)),
         // 456, 3: on the course, the profile's rider column (a whole profile at each eighth), two values
         ("course profile", [profile, values, map], 0, None, (600, 10)),

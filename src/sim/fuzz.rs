@@ -261,7 +261,7 @@ fn course_files() {
         track.add(0, 0, 0);
         let route = c.route((0, 0));
         let view = crate::map::View::fit(&track, (0, 24, 240, 296), route.as_ref());
-        crate::map::draw(&mut f, (0, 24, 240, 296), &track, view, None, route.as_ref());
+        crate::map::draw(&mut f, (0, 24, 240, 296), &track, view, None, route.as_ref(), false);
     };
     for (i, good) in files.iter().enumerate() {
         let gpx = i == 2;
@@ -421,8 +421,9 @@ fn touch_during_drive_commands() {
     }
 }
 
-/// Random taps on the map page while riding, most on or near the zoom buttons (map.rs), with the ride going on
-/// between them: no panic, the zoom level in range, the panel equal to the screenshot, and the buttons reached.
+/// Random taps on the map page while riding, most on or near the zoom buttons (map.rs), and drags of random
+/// vectors through the touch path, with the ride going on between them: no panic, the zoom level in range, a pan
+/// kept near the track, the panel equal to the screenshot, and the buttons and the pan reached.
 #[test]
 fn map_zoom_taps() {
     use super::*;
@@ -440,14 +441,30 @@ fn map_zoom_taps() {
     app.press(&mut sim, Press::Short(Key::Start));
     let mut noise = bytes(7, 1 << 12);
     let mut next = || noise.next().unwrap_or(0);
-    let mut changes = 0;
+    let (mut changes, mut pans) = (0, 0);
     for k in 0..400 {
-        // half the taps in the buttons' corner (x 180..240, y 0..120), the rest anywhere
+        // half the taps in the buttons' corner (x 180..240, y 0..170: "+", "-", "re-centre"), the rest anywhere
         let (a, b) = (u16::from(next()), u16::from(next()));
-        let (x, y) = if a % 2 == 0 { (180 + a % 60, b % 120) } else { (a % 240, (b + a) % 320) };
-        let before = app.map_zoom;
-        app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
-        changes += u32::from(app.map_zoom != before);
+        let (x, y) = if a % 2 == 0 { (180 + a % 60, b % 170) } else { (a % 240, (b + a) % 320) };
+        let before = (app.map_zoom, app.map_centre);
+        if k % 3 == 0 {
+            // a drag: a swipe changes the page while the map is fitted; back to the map
+            let by = (i32::from(next()) - 128, i32::from(next()) - 128);
+            super::tests::drag(&mut sim, &mut app, (i32::from(x % 240), i32::from(30 + y % 280)), by);
+            if app.screen() != Screen::Ride(2) {
+                app.screen = Screen::Ride(2);
+                app.show(&mut sim);
+            }
+            pans += u32::from(app.map_centre.is_some() && app.map_centre != before.1);
+        } else {
+            app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
+        }
+        changes += u32::from(app.map_zoom != before.0);
+        if let (Some(c), Some(v)) = (app.map_centre, app.map_view(0)) {
+            let p = app.track.pos().unwrap_or_default();
+            let far = 3 * 296 * v.mpp16 as i32 / 16 + 100_000; // PAN_SCREENS heights from the track (100 km)
+            assert!((c.0 - p.0).abs() < far && (c.1 - p.1).abs() < far, "{c:?} {v:?}");
+        }
         assert!(app.map_zoom.is_none_or(|l| (MIN_LEVEL..MAX_LEVEL).contains(&l)), "{:?}", app.map_zoom);
         assert!(app.map_view(0).is_none_or(|v| v.mpp16 >= 32), "no finer than 2 m a pixel");
         for _ in 0..usize::from(next() % 8) {
@@ -460,6 +477,7 @@ fn map_zoom_taps() {
     }
     assert_eq!(app.screen(), Screen::Ride(2), "taps on the map leave the page");
     assert!(changes > 20, "the buttons reached: {changes} zoom changes");
+    assert!(pans > 10, "the pan reached: {pans} pans");
 }
 
 /// A damaged volume under the scan of stock's rides: it ends (done or failed), never hangs or panics.

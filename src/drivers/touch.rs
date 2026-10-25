@@ -113,6 +113,9 @@ pub enum Gesture {
     Hold(u16, u16),
     /// A drag of at least [`SWIPE_X`] or [`SWIPE_Y`], given at the release.
     Swipe(Dir),
+    /// A drag that pans the zoomed map: its start and its vector. Not made here (the release of a drag is a
+    /// [`Gesture::Swipe`] or nothing): the app makes it from [`Recogniser::take_drag`] where a drag pans.
+    Drag(u16, u16, i16, i16),
 }
 
 /// A finger on the panel.
@@ -130,6 +133,8 @@ struct Finger {
 pub struct Recogniser {
     finger: Option<Finger>,
     delta: (i16, i16),
+    /// The last drag released: its start and its vector (the zoomed map pans by it).
+    drag: Option<((u16, u16), (i16, i16))>,
 }
 
 impl Recogniser {
@@ -143,10 +148,19 @@ impl Recogniser {
         self.delta
     }
 
+    /// The drag just released (its start point and vector, pixels), whatever gesture it made (a swipe or none),
+    /// once; a new touch drops it.
+    pub fn take_drag(&mut self) -> Option<((u16, u16), (i16, i16))> {
+        self.drag.take()
+    }
+
     /// One sample, `dt_ms` after the previous one: the finger's point, or None when no finger is down.
     pub fn feed(&mut self, p: Option<(u16, u16)>, dt_ms: u32) -> Option<Gesture> {
         let (Some(f), p) = (&mut self.finger, p) else {
             self.delta = (0, 0);
+            if p.is_some() {
+                self.drag = None;
+            }
             self.finger = p.map(|p| Finger { start: p, last: p, ms: 0, dragged: false, held: false });
             return None;
         };
@@ -154,6 +168,9 @@ impl Recogniser {
             let f = self.finger.take()?;
             self.delta = (0, 0);
             let (dx, dy) = (i32::from(f.last.0) - i32::from(f.start.0), i32::from(f.last.1) - i32::from(f.start.1));
+            if f.dragged && !f.held {
+                self.drag = Some((f.start, (dx as i16, dy as i16))); // points are panel pixels: they fit
+            }
             return match () {
                 _ if f.held => None,
                 _ if !f.dragged => Some(Gesture::Tap(f.last.0, f.last.1)),
@@ -206,6 +223,26 @@ mod tests {
         assert_eq!(swipe(10, -80), [Gesture::Swipe(Dir::Up)]);
         assert_eq!(swipe(-10, 80), [Gesture::Swipe(Dir::Down)]);
         assert_eq!(swipe(25, 0), [], "a drag too short to be a swipe");
+    }
+
+    /// The drag released is kept once, whether it was a swipe or too short for one; a tap or a hold leaves none.
+    #[test]
+    fn drag_kept_at_the_release() {
+        let mut r = Recogniser::default();
+        for p in [(100, 100), (110, 104), (125, 112)] {
+            r.feed(Some(p), 50);
+        }
+        assert_eq!(r.feed(None, 50), None, "too short for a swipe");
+        assert_eq!(r.take_drag(), Some(((100, 100), (25, 12))));
+        assert_eq!(r.take_drag(), None, "once");
+        for p in [(100, 100), (40, 230)] {
+            r.feed(Some(p), 50);
+        }
+        assert_eq!(r.feed(None, 50), Some(Gesture::Swipe(Dir::Down)));
+        r.feed(Some((10, 10)), 50);
+        assert_eq!(r.take_drag(), None, "a new touch drops it");
+        assert_eq!(r.feed(None, 50), Some(Gesture::Tap(10, 10)));
+        assert_eq!(r.take_drag(), None, "a tap is no drag");
     }
 
     #[test]

@@ -130,7 +130,7 @@ pub fn draw(
     (track, view, base): (&map::Track, Option<map::View>, Option<&crate::tiles::Basemap>),
     elev: &dyn Fn(u32) -> (u32, u16),
 ) {
-    map::draw(c, map::area(MAP), track, view, base, None);
+    map::draw(c, map::area(MAP), track, view, base, None, false);
     let grey = Style { fg: super::GREY, ..LABEL };
     text::draw_in(c, &grey, 0, PAGE_Y + 2, W, Align::Centre, card.title.as_str());
     let (x, y, w, h) = ELEV;

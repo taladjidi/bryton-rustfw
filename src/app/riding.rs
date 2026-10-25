@@ -24,6 +24,7 @@ impl App {
                 track.seed(p.lat, p.lon);
             }
             self.track = track;
+            (self.map_zoom, self.map_centre) = (None, None); // a new map: fitted until "+" (review)
             self.new_ride = true;
         }
         self.say(match ev {

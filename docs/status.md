@@ -93,6 +93,9 @@ The dated findings are in [journal.md](journal.md).
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
 - **The map's zoom buttons** ("+" and "-" on the full-page map): hit with a gloved finger, the time of a re-centre
   over IGN at 2 m a pixel, and whether one every 35 s or so is acceptable awake time.
+- **Panning the zoomed map** by a drag: the drag read from the panel's points (no swipe taken for a page change while
+  zoomed in), the time of the redraw at the release (a basemap render plus the whole map, about 79 K pixels in the
+  simulator), the crosshair button.
 - **The basemap** (roads and water from stock's cached tiles, `\Map\Data\Temp`): the FAT volume mounted by our
   reader, the tiles at the last known position, the time a view change takes (simulated with real tiles: about
   140 KB read, 84 K buffer pixels, 73 K panel pixels), the 1.5 MB SDRAM zeroing at boot (`hw::map_memory`).
