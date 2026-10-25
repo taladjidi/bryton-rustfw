@@ -58,8 +58,9 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `pack.py` prints: about 48 KB, of which about 20 KB is the USB stack and about 2 KB the
-    pixel font (a font costs nothing until something draws with it: the linker drops it).
+  - watch the image size `pack.py` prints: about 310 KB (2026-10-25; stock's is over 3 MB). Size costs little here
+    (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
+    until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it was held in main's frame several times over (111 KB) and opening a workout overflowed the
   stack (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
@@ -272,7 +273,7 @@ It runs, in order:
 - the layout guard: `src/lib.rs` keeps `#![forbid(unsafe_code)]`, and `unsafe` appears only in hw.rs (plus usb.rs's
   marker line), so the library cannot reach a register;
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
-- `cargo clippy --release -- -D warnings`;
+- `cargo clippy --release -- -D warnings`, and on the tests and the simulator;
 - `cargo test-host` (unit tests, simulator tests and doc tests on the Mac; writes `target/sim/preview.bmp`);
 - the firmware build;
 - `pack.py`;

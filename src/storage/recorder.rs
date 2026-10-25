@@ -1569,7 +1569,7 @@ mod tests {
     #[test]
     fn an_old_ride_left_open_is_saved_and_a_new_one_started() {
         let mut d = card(crate::fat::tests::image());
-        drop(open_ride(&mut d, 200));
+        let _ = open_ride(&mut d, 200);
         let img = d.img;
         let name2 = *b"261025100000";
         for (later, marker, resumed) in [(2 * 86_400, false, false), (600, false, true), (2 * 86_400, true, true)] {

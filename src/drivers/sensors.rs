@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn shifting_one_by() {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
-        dec.decode(Kind::Shifting, [1, 0, 0xff, 7 << 5 | 10, 0 << 5 | 12, 0, 0, 0], 2105, &mut live);
+        dec.decode(Kind::Shifting, [1, 0, 0xff, 7 << 5 | 10, 12, 0, 0, 0], 2105, &mut live);
         assert_eq!(live.get(Metric::Gear), Some(11));
     }
 

@@ -242,19 +242,27 @@ fn every_write_is_reliable_when_the_card_offers_it() {
     let (sim, _) = start(None);
     let cmds = &sim.emmc.cmds;
     assert!(!cmds.iter().any(|c| c.0 == 24), "a plain single-sector write");
-    for (k, c) in cmds.iter().enumerate().filter(|c| c.1.0 == 25) {
+    for (k, _) in cmds.iter().enumerate().filter(|c| c.1.0 == 25) {
         assert!(k > 0 && cmds[k - 1].0 == 23 && cmds[k - 1].1 & 1 << 31 != 0, "CMD25 without a reliable CMD23");
     }
     let total = sim.emmc.sectors_written;
-    let mut resumed = 0;
+    let (mut resumed, mut first) = (0, None);
     for cut in 0..total {
         let (mut sim, _) = start(Some(cut));
         let (mut sim, mut app) = reboot(&mut sim, 2);
         run(&mut sim, &mut app, 1000);
-        resumed += usize::from(app.notices[0].as_str().ends_with("RIDE RESUMED"));
+        let back = app.notices[0].as_str().ends_with("RIDE RESUMED");
+        resumed += usize::from(back);
+        // once the ride's first checkpoint is on the card, every later cut resumes it: a cut that does not is a
+        // ride lost (a cut before it finds no ride to resume, which is right: nothing was saved yet)
+        match (first, back) {
+            (None, true) => first = Some(cut),
+            (Some(f), false) => panic!("cut {cut}: the ride not resumed, though cut {f} resumed it"),
+            _ => {}
+        }
         let lost = crate::fat::write::tests::fsck(&sim.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
         assert!(lost <= 2, "cut {cut}: {lost} clusters lost");
     }
-    std::println!("{total} cuts, {resumed} resumed");
+    std::println!("{total} cuts, {resumed} resumed from cut {first:?}");
     assert!(resumed > 0);
 }

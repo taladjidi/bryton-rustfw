@@ -789,7 +789,8 @@ mod tests {
         if crc(0, f) != 0 {
             return Err("file crc");
         }
-        let mut defs: [Option<(u16, Vec<(u8, u8)>)>; 16] = Default::default();
+        type Def = Option<(u16, Vec<(u8, u8)>)>; // global message number, (field, size) each
+        let mut defs: [Def; 16] = Default::default();
         let (mut i, mut out) = (14, Vec::new());
         while i < 14 + size {
             let h = f[i];
@@ -865,7 +866,7 @@ mod tests {
             if let Some((front, f, r)) = shift(s.time) {
                 w.gear(sink, s.time, front, f, r).ok()?;
             }
-            if (s.time - T0) % 60 == 0 {
+            if (s.time - T0).is_multiple_of(60) {
                 *rec = w.checkpoint(sink).ok()?;
             }
         }
@@ -1011,7 +1012,7 @@ mod tests {
             if let Some((front, f, r)) = shift(s.time) {
                 w.gear(&mut full, s.time, front, f, r).unwrap(); // the gear events cut and resumed too
             }
-            if (s.time - T0) % 60 == 0 {
+            if (s.time - T0).is_multiple_of(60) {
                 w.checkpoint(&mut full).unwrap();
                 at_checkpoint.insert(w.data_len(), full.clone());
             }
@@ -1081,7 +1082,7 @@ mod tests {
         assert_eq!(field(records[10], 230), Some(0xffff_ffff), "no DFA a1 yet: invalid");
         assert_eq!(field(records[10], 231), Some(0xffff));
         let a = f32::from_bits(field(records[100], 230).unwrap() as u32);
-        assert!((a - (500 + 100 % 700) as f32 / 1000.0).abs() < 1e-6, "{a}");
+        assert!((a - (500 + 100) as f32 / 1000.0).abs() < 1e-6, "{a}");
         assert_eq!(field(records[100], 231), Some(20 + 100 % 40));
         // the same records otherwise: the clean file's fields, in the same order
         let cm = decode(&clean).unwrap();

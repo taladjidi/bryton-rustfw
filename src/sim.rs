@@ -659,7 +659,7 @@ impl Nordic {
             }
             let ch = usize::from(*ch);
             match (*op, rest) {
-                (0xcc, [k @ ..]) if k.len() == 8 => {
+                (0xcc, k) if k.len() == 8 => {
                     if let Some(slot) = self.keys.get_mut(ch) {
                         *slot = k.try_into().ok(); // the channel byte is the network number here
                     }

@@ -11,6 +11,7 @@ n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort |
     || { echo "layout: unsafe outside hw.rs: $n"; exit 1; }
 cargo fmt --check
 cargo clippy --release -- -D warnings
+cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings  # the tests and the simulator too
 cargo test-host
 RUSTDOCFLAGS="-D warnings" cargo doc --target aarch64-apple-darwin --no-deps -q  # docs: no broken or private links
 if command -v cargo-deny >/dev/null 2>&1; then cargo deny check -s; else echo "cargo-deny: not installed, skipped"; fi
