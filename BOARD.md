@@ -458,9 +458,20 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   0x13, sec info request 0x14, auth status 0x19, conn sec update 0x1a, timeout 0x1b), GATTC from 0x30, GATTS from 0x50
   (write 0x50, system attributes missing 0x52, MTU request 0x55). Layouts: src/drivers/ble.rs, from the nRF5 SDK
   serialization codecs pc-ble-driver carries.
-- **The peripheral side (this firmware, simulated only; docs/status.md has the test order):** no `sd_ble_cfg_set`,
-  so the defaults: one peripheral link, ATT MTU 23, attribute table 1408 B, 10 vendor UUIDs, connection
-  configuration tag 0 (ble.h, ble_gap.h, ble_gatts.h `*_DEFAULT`). The keyset given with `sd_ble_gap_sec_params_reply`
+- **What this firmware configures (src/drivers/nrf.rs `start`, simulated only; docs/status.md has the test order):**
+  two `sd_ble_cfg_set` before `sd_ble_enable`, each no larger than stock's: `00 69 20 00 00 00 01 01 02 03 00`
+  (BLE_CONN_CFG_GAP, present, tag 1, 2 links, event length 3) and `00 69 40 00 00 00 01 01 01 00`
+  (BLE_GAP_CFG_ROLE_COUNT, present, 1 peripheral, 1 central, 0 central security), the layout of pc-ble-driver's
+  `ble_cfg_set_req_enc` (API v5: the id u32, a presence byte, the tag for a connection configuration, the
+  structure). Advertising and `sd_ble_gap_connect` then use tag 1: the phone's link (peripheral) and a trainer's
+  (central, FTMS) at once. A chip that refuses either, or answers `sd_ble_enable` NO_MEM, is reset and started
+  without them (the defaults: one peripheral link, tag 0), so the phone works either way. The rest stays at the
+  defaults: ATT MTU 23, attribute table 1408 B, 10 vendor UUIDs (ble.h, ble_gap.h, ble_gatts.h `*_DEFAULT`).
+- **The central side (this firmware, simulated only):** `sd_ble_gap_connect` with stock's layout and parameters
+  above (scan 0x60 / 0x60, 7.5 to 15 ms, latency 0, 4 s, tag 1), `sd_ble_gap_connect_cancel` `00 8d` after 10 s,
+  `sd_ble_gap_scan_stop` `00 8b`; a peripheral's connection parameter update request (0x1f) answered with its own
+  values (`00 75 [conn] 01 [4 x u16]`). The GATT client's events carry their connection handle (bytes 3-4), which
+  sends the trainer's to app/ftms.rs and the phone's to app/phone.rs. The keyset given with `sd_ble_gap_sec_params_reply`
   comes back after BLE_GAP_EVT_AUTH_STATUS's own fields (the serialization's extension, ble_gap_evt_app.c). Stock has
   a peripheral too (ble_advertising, peer manager, its own services 0x7766 for Android notifications and 0x5566
   'ldc', Ghidra 0xd029c010 / 0xd029c3e0) but no HID, ANCS client or AMS client.

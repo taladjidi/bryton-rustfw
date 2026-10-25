@@ -47,6 +47,18 @@ The dated findings are in [journal.md](journal.md).
   agent_b2.md) is accepted by the chip; the capabilities page (54) comes after the request (page 70); the trainer
   takes pages 49 (ERG under a workout), 48 and 51 (SIM on a course; the trainer's speed advances the ride), 55; and
   its page 71 answers pass. Pairing is kept in backup register 14 only while no shifting system is (no register free).
+- **The two links' configuration and the Bluetooth trainer, FTMS (nrf.rs `start`, drivers/ftms.rs, app/ftms.rs;
+  phase 2)**: only against the simulator's chip and trainer. On the unit, in this order:
+  1. `sd_ble_cfg_set` (`00 69 20 00 00 00 01 01 02 03 00`, then `00 69 40 00 00 00 01 01 01 00`) answered 0 and
+     `sd_ble_enable` after it answered 0 (else the chip is reset and started as before: `dev.py info` would show
+     two resets at the start, and SENSORS' BT TRAINER says NO LINK);
+  2. the phone still pairs and comes back, advertising on tag 1 (the PHONE menu, media keys, a notification);
+  3. SENSORS > BT TRAINER lists a real FTMS trainer (its service data or its UUID list), Select connects to it
+     (`sd_ble_gap_connect` tag 1, stock's layout) **while the phone is linked**; its data on the pages; ERG under a
+     workout, SIM on a course (the Control Point's responses: the trainer screen does not say NOT ACCEPTED);
+  4. the trainer switched off and on: the link made again; the phone unaffected throughout.
+  Inferred and to check there: the cadence bit of Indoor Bike Data read as present when set (pycycling's reading,
+  the specification's table says the opposite), a resistance level spread over the trainer's own range, Cw 0.51.
 - **The sleep power steps** (main.rs `sleep_power_init`): seen on the unit 2026-10-25 from RAM, masks 0, 8, 4, 1, 3
   and 15 (boots, dev link, BLE, keys, a full redraw at 16 MHz clean, PLL3 off, a ride recorded and discarded by keys;
   with 15 the owner checked touch, backlight, the USB drive and the power button). Still to see: a GPS fix outdoors,

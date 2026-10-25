@@ -197,7 +197,12 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
 - `src/trainer.rs`: the home trainer whatever the link (what is read, what is commanded: ERG, resistance, SIM; when to
   send again; nothing is sent until the rider or a workout or course takes it over). Pure logic.
-  `src/drivers/fec.rs`: ANT+ FE-C pages as bytes (the transport; FTMS will be a sibling), sources in its module doc.
+  `src/drivers/fec.rs`: ANT+ FE-C pages as bytes, sources in its module doc; `src/drivers/ftms.rs`: its Bluetooth
+  sibling, FTMS (advertising, Indoor Bike Data, Control Point, status) as bytes.
+  `src/app/ftms.rs`: the Bluetooth trainer's link, the unit as a central beside the phone's link: the search from
+  SENSORS (BT TRAINER), connect with backoff, discovery, subscriptions, Request Control, the commands on the Control
+  Point (one procedure at a time), its readings into the trainer's; ANT+ first when both are paired, both kept in
+  `\Rustfw\sensors.bin`. Tests: `src/sim/ftms_tests.rs` against `ble_sim.rs`'s `FtmsSim`.
   `src/app/trainer.rs`: the glue (readings into `Live` where no meter or sensor is heard, the commands sent as
   acknowledged messages, the workout's power step and the course's grade as drives) and the trainer screen and
   fields; `src/ui/trainer.rs` draws the screen. One acknowledged message per 250 ms on its channel; its pairing is in
@@ -208,9 +213,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`). BLE
   events that arrive while a command waits are kept (`Rx::pop`); the main loop acts on events only once the bytes
   read are framed (a command sent mid-read would take the rest of the stream out of order).
-- `src/drivers/ble.rs`: the SoftDevice API v5 calls of the phone link (GAP peripheral, GATT server and client) and
-  its events, serialized as the nRF5 SDK's codecs do (sources in the module doc); `sim/ble_sim.rs` models the chip's
-  side and a scripted phone.
+- `src/drivers/ble.rs`: the SoftDevice API v5 calls of the phone link (GAP peripheral, GATT server and client), the
+  central's (connect, cancel, scan stop) and their events, each with its connection, serialized as the nRF5 SDK's
+  codecs do (sources in the module doc); `nrf::start` configures two links (`sd_ble_cfg_set`) and falls back to the
+  defaults when refused; `sim/ble_sim.rs` models the chip's side, a scripted phone and an FTMS trainer.
 - `src/phone.rs`: the phone link's formats, pure logic: the HID report map, ANCS, AMS, CTS, the bond's sector.
 - `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
@@ -365,7 +371,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
 | 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
 | 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator, a switched-off core that still runs (`--off`: a pending interrupt waking the standby's WFI, 2026-10-25) | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit on the unit |
-| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), BLE events into the phone link (`ble::event`, `App::phone_event` on the Sim, and the ANCS / AMS / CTS formats), and a damaged volume under the ride scan, random page edits, random and damaged `pages.bin` copies and keys and taps in the page editor and on the end-ride screen; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
+| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), BLE events into the phone link (`ble::event`, `App::phone_event` on the Sim, and the ANCS / AMS / CTS formats) and into the trainer's (FTMS data, status and responses, connections mixed), and a damaged volume under the ride scan, random page edits, random and damaged `pages.bin` copies and keys and taps in the page editor and on the end-ride screen; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |
