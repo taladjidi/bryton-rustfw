@@ -60,12 +60,22 @@ pub const REPEAT_MS: u32 = 100;
 #[derive(Default)]
 pub struct Keys {
     held_ms: [u32; 4],
+    /// Keys down since before the start, not seen until released: the power button is Back's line, and the press
+    /// that woke the unit from standby, held on, was taken for Back held 3 s, which switched it off again.
+    stuck: u8,
 }
 
 impl Keys {
+    /// The keys down at the start (`mask`): ignored until each is released.
+    pub fn at_start(mask: u8) -> Self {
+        Keys { stuck: mask, ..Keys::default() }
+    }
+
     /// One poll, `dt_ms` after the previous one, with the keys held down (`mask` of [`Key`] codes). One press at
     /// most per poll, the first key in `Key::ALL` order.
     pub fn poll(&mut self, mask: u8, dt_ms: u32) -> Option<Press> {
+        self.stuck &= mask;
+        let mask = mask & !self.stuck;
         let mut press = None;
         for (key, held) in Key::ALL.into_iter().zip(&mut self.held_ms) {
             let long = key.long_ms();

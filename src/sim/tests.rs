@@ -1423,11 +1423,13 @@ fn back_short_press_toggles_the_backlight() {
 
 #[test]
 fn back_held_3s_powers_off_after_release() {
-    let mut sim = Sim::new(8, 0, 0).keys(|ms| if (1000..6000).contains(&ms) { Key::Back as u8 } else { 0 });
+    // pressed after the start (a key already down at the start is ignored until released)
+    let mut sim = Sim::new(8, 0, 0).keys(|ms| if (4000..9000).contains(&ms) { Key::Back as u8 } else { 0 });
     let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 10_000);
+    assert!(sim.ms < 4000);
+    run(&mut sim, &mut app, 13_000);
     assert!(sim.standby);
-    assert!(sim.ms >= 6000, "standby while the key is still down would wake the unit at once");
+    assert!(sim.ms >= 9000, "standby while the key is still down would wake the unit at once");
     assert!(sim.asleep && !sim.display_on && !sim.backlight);
     assert!(sim.touch.run_since.is_none(), "the touch chip in reset: no INT to keep the core out of standby");
     assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
@@ -3109,4 +3111,17 @@ fn about_screen() {
     sim.save("about");
     app.press(&mut sim, Press::Short(Key::Back));
     assert!(matches!(app.screen(), Screen::Menu(Menu::Device, _)));
+}
+
+/// Woken by the power button (Back's line) held on through the start: the hold is not Back held 3 s, so the unit
+/// stays on; released and held again for 3 s, it switches off as usual.
+#[test]
+fn the_power_button_held_through_the_start_does_not_switch_off() {
+    let mut sim =
+        Sim::new(9, 0, 0).keys(|ms| if ms < 5000 || (8000..12_000).contains(&ms) { Key::Back as u8 } else { 0 });
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 7000);
+    assert!(!sim.standby, "the wake-up press held 5 s is not a switch-off");
+    run(&mut sim, &mut app, 6000);
+    assert!(sim.standby, "a new 3 s hold switches off");
 }

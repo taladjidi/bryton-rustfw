@@ -338,7 +338,7 @@ impl App {
             .with_power_word(b.backup_read(POWER_BKP))
             .with_alerts_word(b.backup_read(ALERTS_BKP));
         App {
-            keys: Keys::default(),
+            keys: Keys::at_start(b.keys_down()),
             backlight: true,
             light_shown: 0,
             idle_ms: 0,
