@@ -24,18 +24,71 @@ fn bytes(seed: u32, n: usize) -> impl Iterator<Item = u8> {
 #[test]
 fn nordic_packets() {
     let mut rx = crate::nrf::Rx::new();
+    // random bytes (the stream out of step), then frames built on purpose: a length header and an advertising
+    // report, an ANT event (broadcast, acknowledged, channel closed) or random bytes; random bytes alone never
+    // make a 44-byte ANT event or an advertising report (code review: the decoders were never reached)
+    let mut reached = [0usize; 3];
+    let look = |p: &[u8], reached: &mut [usize; 3]| {
+        let _ = crate::nrf::event_id(p);
+        reached[0] += usize::from(crate::nrf::ant_broadcast(p).is_some());
+        reached[1] += usize::from(crate::nrf::ant_closed(p).is_some());
+        if let Some(r) = crate::nrf::adv_report(p) {
+            reached[2] += 1;
+            let _ = (crate::nrf::ad_name(r.data), crate::nrf::ad_maker(r.data));
+        }
+    };
     for seed in 1..=4u32 {
-        for b in bytes(seed, 1 << 20) {
+        for b in bytes(seed, 1 << 18) {
             if let Some(p) = rx.push(b) {
-                let _ = crate::nrf::event_id(p);
-                let _ = crate::nrf::ant_broadcast(p);
-                let _ = crate::nrf::ant_closed(p);
-                if let Some(r) = crate::nrf::adv_report(p) {
-                    let _ = (crate::nrf::ad_name(r.data), crate::nrf::ad_maker(r.data));
+                look(p, &mut reached);
+            }
+        }
+        // a fresh receiver: the random bytes above leave it waiting for a length of up to 64 KB
+        let mut rx = crate::nrf::Rx::new();
+        let mut v = bytes(seed + 100, 1 << 20);
+        let mut r = || v.next().unwrap_or(0);
+        for _ in 0..4000 {
+            let mut p = std::vec::Vec::new();
+            match r() % 4 {
+                0 => {
+                    // BLE_GAP_EVT_ADV_REPORT: [2][1d 00][conn][peer 7][direct 7][rssi][flags][dlen][present][data]
+                    p.extend([2, 0x1d, 0]);
+                    p.extend((0..20).map(|_| r())); // up to present, index 22: the data from 23
+                    let n = usize::from(r() % 40);
+                    p[21] = n as u8;
+                    let mut data = std::vec::Vec::new();
+                    while data.len() < n {
+                        let len = 1 + r() % 12;
+                        data.push(len);
+                        data.push([0x01, 0x09, 0x08, 0xff, 0x03][usize::from(r() % 5)]);
+                        data.extend((1..len).map(|_| r()));
+                    }
+                    data.truncate(n + usize::from(r() % 3)); // sometimes longer than dlen says
+                    p.extend(data);
+                }
+                1 | 2 => {
+                    // ANT event, 44 bytes: a broadcast / acknowledged message, or a channel event
+                    p.push(8);
+                    p.extend((0..43).map(|_| r()));
+                    p[2] = [0x4e, 0x4f, 0x40, r()][usize::from(r() % 4)];
+                    if r() % 3 == 0 {
+                        p[42] = 0x07; // EVENT_CHANNEL_CLOSED
+                    }
+                    if r() % 8 == 0 {
+                        p.truncate(usize::from(r() % 44)); // a short one
+                    }
+                }
+                _ => p.extend((0..r() % 64).map(|_| r())),
+            }
+            let n = p.len() as u16;
+            for b in n.to_le_bytes().into_iter().chain(p) {
+                if let Some(q) = rx.push(b) {
+                    look(q, &mut reached);
                 }
             }
         }
     }
+    assert!(reached.iter().all(|&n| n > 100), "broadcasts, closed channels, adv reports reached: {reached:?}");
 }
 
 /// Random heart-rate broadcasts into the beat decoder, and its intervals and random ones into the HRV: no panic,
@@ -712,13 +765,41 @@ fn scan_caches() {
 #[test]
 fn ubx_frames() {
     let mut parser = crate::gnss::Parser::new();
+    // random bytes, then UBX frames built on purpose (sync, class, id, length, payload, Fletcher checksum): NAV-PVT
+    // with random content, other messages, bad checksums, garbage between; random bytes alone never pass the
+    // checksum, so the decoder was never reached (code review)
+    let mut pvts = 0;
     for seed in 1..=4u32 {
-        for b in bytes(seed, 1 << 20) {
+        for b in bytes(seed, 1 << 18) {
             if let Some((c, i, p)) = parser.push(b) {
                 let _ = crate::gnss::pvt(c, i, p);
             }
         }
+        let mut v = bytes(seed + 200, 1 << 20);
+        let mut r = || v.next().unwrap_or(0);
+        for _ in 0..3000 {
+            let (class, id, len) = match r() % 4 {
+                0 | 1 => (0x01, 0x07, 92),
+                2 => (0x01, 0x07, usize::from(r())),
+                _ => (r(), r(), usize::from(r() % 120)),
+            };
+            let mut f = std::vec![0xb5, 0x62, class, id, len as u8, (len >> 8) as u8];
+            f.extend((0..len).map(|_| r()));
+            let (mut a, mut b) = (0u8, 0u8);
+            for &x in &f[2..] {
+                a = a.wrapping_add(x);
+                b = b.wrapping_add(a);
+            }
+            f.extend([a, b ^ u8::from(r() % 10 == 0)]); // now and then a bad checksum
+            f.extend((0..r() % 4).map(|_| r())); // garbage between frames
+            for x in f {
+                if let Some((c, i, p)) = parser.push(x) {
+                    pvts += usize::from(crate::gnss::pvt(c, i, p).is_some());
+                }
+            }
+        }
     }
+    assert!(pvts > 1000, "NAV-PVT decoded: {pvts}");
 }
 
 /// Random bytes, and real LZ4 blocks with random bytes changed, into the LZ4 decoder and the IGN tile decoder: no
