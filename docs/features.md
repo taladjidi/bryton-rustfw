@@ -43,7 +43,7 @@
     area.
   The map is read and drawn once per view change (at most 6 IGN tiles, about 150 KB read); the arrow and the track
   restore it from SDRAM.
-  - **Zoom:** on a full-page map, "+" and "-" top right (40 x 40 pixels, for a gloved finger). Each tap is one
+  - **Zoom:** on a full-page map, "+" and "-" top right (48 x 48 pixels, 8 apart, for a gloved finger). Each tap is one
     level (steps of about 1.4) from the one shown, finer or coarser than the fit alike (indoors the fit is already
     at 2 m a pixel: "-" zooms out by hand), from 1.5 m a pixel (IGN's zoom 16 about 1:1 in France) out. At a
     level set by hand the map follows the rider: centred a little ahead of them, and centred again only when the
