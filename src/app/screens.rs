@@ -458,7 +458,7 @@ impl App {
         if self.screen == Screen::Summary {
             let (_, _, cols, _) = ui::card::ELEV;
             let m = map::Shown::of(&self.track, map::area(ui::card::MAP), None, None);
-            self.summary = Some((m, self.graph_shown(ride::Plot::Alt, true, cols)));
+            self.summary = Some((m, self.graph_summary(cols)));
         }
         if let (Some((v, o)), false) = (self.card_view(), self.emmc.lent()) {
             // a card's map over the basemap too (the owner, 2026-10-24); the page's is drawn again when it shows

@@ -379,6 +379,7 @@ impl App {
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
         let alt = input.alt_mm.map(|mm| (mm / 1000 + ride::ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);
         self.history.second([input.power, input.hr, wbal, dfa, alt]);
+        self.history.dist_second(self.ride.dist_m(), alt);
         // the course followed: where the rider is on it, and what to say
         let fix = self.pvt.filter(|p| p.good());
         let ev = match (self.courses.as_deref_mut(), fix) {

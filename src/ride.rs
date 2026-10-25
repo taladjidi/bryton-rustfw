@@ -577,6 +577,10 @@ pub fn alt_scale(seen: impl Iterator<Item = u32>) -> (u32, u32) {
     let lo = lo / 20 * 20;
     (lo, (hi.div_ceil(20) * 20).max(lo + 60))
 }
+/// Metres one column of the altitude along the distance starts with (doubled each time they fill: 4 km, 8 km...).
+const DIST_STEP_M: u32 = 8;
+/// Columns of the altitude along the distance (at least the card's profile width).
+const DIST_COLS: usize = 256;
 /// Plots kept.
 pub const PLOTS: usize = Plot::ALL.len();
 /// Bars of the whole ride kept: when full, neighbouring bars are merged and each bar covers twice the time.
@@ -607,6 +611,11 @@ pub struct History {
     acc_n: u32,
     acc: [(u32, u32); PLOTS],
     halved: u32,
+    /// The altitude along the distance (the summary's profile): column k is the altitude where the ride was
+    /// `k * dist_step` m along; columns filled, and metres a column covers (doubled when full).
+    by_dist: [u16; DIST_COLS],
+    dist_n: u32,
+    dist_step: u32,
 }
 
 impl Default for History {
@@ -623,6 +632,9 @@ impl Default for History {
             acc_n: 0,
             acc: [(0, 0); PLOTS],
             halved: 0,
+            by_dist: [0; DIST_COLS],
+            dist_n: 0,
+            dist_step: DIST_STEP_M,
         }
     }
 }
@@ -697,6 +709,36 @@ impl History {
         }
         self.whole_n += 1;
         self.acc_n = 0;
+    }
+
+    /// The altitude (m + [`ALT_OFFSET`]) at `dist_m` into the ride, once a second. Columns the ride skipped (a fast
+    /// second is longer than a column) take the same altitude; standing still rewrites the same column.
+    pub fn dist_second(&mut self, dist_m: u32, alt: Option<u16>) {
+        let Some(alt) = alt else { return };
+        while (dist_m / self.dist_step) as usize >= DIST_COLS {
+            for j in 0..DIST_COLS / 2 {
+                self.by_dist[j] = mean(self.by_dist[2 * j], self.by_dist[2 * j + 1]);
+            }
+            self.by_dist[DIST_COLS / 2..].fill(0);
+            self.dist_n = self.dist_n.div_ceil(2);
+            self.dist_step *= 2;
+        }
+        let i = (dist_m / self.dist_step) as usize;
+        let from = (self.dist_n as usize).min(i);
+        if let Some(cols) = self.by_dist.get_mut(from..=i) {
+            cols.fill(alt);
+        }
+        self.dist_n = self.dist_n.max(i as u32 + 1);
+    }
+
+    /// Columns of the altitude along the distance filled so far.
+    pub fn dist_len(&self) -> u32 {
+        self.dist_n
+    }
+
+    /// Column `k` of the altitude along the distance (0: none).
+    pub fn dist_bar(&self, k: u32) -> u16 {
+        self.by_dist.get(k as usize).copied().unwrap_or(0)
     }
 
     /// Bars pushed so far.
@@ -884,5 +926,26 @@ mod tests {
         assert_eq!((alt(0), alt(1), alt(255)), (0, 2, 510), "pairs merged (0, 1 -> 0; 2, 3 -> 2)");
         assert_eq!(alt(256), 512, "then a bar per two");
         assert_eq!(mean(0, 7), 7);
+    }
+
+    /// The altitude follows the distance: a long stop adds no columns, a halving keeps the shape.
+    #[test]
+    fn altitude_by_distance() {
+        let mut h = History::default();
+        let o = ALT_OFFSET as u16;
+        for m in 0..80 {
+            h.dist_second(m * 5, Some(o + m as u16)); // climbs 1 m a second, 5 m a second
+        }
+        for _ in 0..3000 {
+            h.dist_second(395, Some(o + 79)); // a long stop
+        }
+        assert_eq!(h.dist_len(), 395 / DIST_STEP_M + 1, "the stop adds no column");
+        assert!(h.dist_bar(0) <= o + 1 && h.dist_bar(1) <= o + 3, "the climb is at the start");
+        assert!(h.dist_bar(h.dist_len() - 2) > o + 70);
+        for m in 80..2000 {
+            h.dist_second(m * 5, Some(o + 79));
+        }
+        assert!(h.dist_step > DIST_STEP_M, "halved");
+        assert!(h.dist_bar(0) < o + 13 && h.dist_bar(h.dist_len() - 1) == o + 79);
     }
 }

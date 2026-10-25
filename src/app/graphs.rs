@@ -12,6 +12,8 @@ use crate::*;
 pub(crate) struct GraphShown {
     plot: ride::Plot,
     whole: bool,
+    /// Over the distance, not the time (the summary's altitude).
+    dist: bool,
     n: u32,
     halved: u32,
     scale: (u32, u32),
@@ -93,7 +95,15 @@ impl App {
     pub(crate) fn graph_shown(&self, plot: ride::Plot, whole: bool, cols: u32) -> GraphShown {
         let h = &self.history;
         let (n, halved) = if whole { (h.whole_len(), h.whole_halved()) } else { (h.len(), 0) };
-        let mut g = GraphShown { plot, whole, n, halved, scale: (0, 1), stats: self.graph_stats(plot) };
+        let mut g = GraphShown { plot, whole, dist: false, n, halved, scale: (0, 1), stats: self.graph_stats(plot) };
+        g.scale = self.graph_scale(g, cols);
+        g
+    }
+
+    /// What the summary card's altitude shows: the whole ride, with distance on the x axis.
+    pub(crate) fn graph_summary(&self, cols: u32) -> GraphShown {
+        let mut g = self.graph_shown(ride::Plot::Alt, true, cols);
+        (g.dist, g.n, g.halved) = (true, self.history.dist_len(), 0);
         g.scale = self.graph_scale(g, cols);
         g
     }
@@ -146,7 +156,7 @@ impl App {
         }
         let per = g.n.div_ceil(cols.max(1)).max(1);
         let (sum, count) = (i * per..((i + 1) * per).min(g.n))
-            .map(|k| u32::from(h.whole_bar(k, g.plot)))
+            .map(|k| u32::from(if g.dist { h.dist_bar(k) } else { h.whole_bar(k, g.plot) }))
             .filter(|&v| v != 0)
             .fold((0, 0), |(s, n), v| (s + v, n + 1));
         if count == 0 { 0 } else { (sum / count) as u16 }

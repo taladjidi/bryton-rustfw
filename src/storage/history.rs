@@ -7,7 +7,7 @@
 //! - **A past ride's card** ([`Past::start`], then [`Past::step`] once a main loop pass, a bounded amount each: a
 //!   long ride is about a second of reading, never in one pass): its file read once, in [`IO`]-byte reads, through a FIT reader that
 //!   picks the position and altitude ([`Reader::with_position`]): the track ([`crate::map::Track`], thinned as a
-//!   live one), the elevation profile (the altitudes, decimated to [`SAMPLES`], then one column a share of them),
+//!   live one), the elevation profile (the altitudes, decimated to [`SAMPLES`], then one column an equal share of the distance),
 //!   and the numbers: the session's (time, distance, ascent, average power and heart rate) and the records' (NP
 //!   with [`crate::power`]'s method, a record a second; maximum heart rate; work). TSS with the FTP set now.
 //!
@@ -304,6 +304,10 @@ impl Past {
                 if let Some((lat, lon)) = r.pos.filter(|p| p.0.unsigned_abs() <= 1 << 30) {
                     track.add(degrees_e7(lat), degrees_e7(lon), 0);
                 }
+                // a record without a distance stands where the last one did
+                if let Some(cm) = r.dist_cm {
+                    samples.dist = cm;
+                }
                 if let Some(dm) = r.alt_dm {
                     samples.push((dm / 10 + ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);
                 }
@@ -316,14 +320,7 @@ impl Past {
         self.track.end();
         let got = acc.ride(ride.file, ride.start).unwrap_or(*ride);
         self.card = Card::of(&got.stats(*ftp));
-        let kept = self.samples.v.get(..self.samples.len).unwrap_or(&[]);
-        for (i, col) in self.elev.iter_mut().enumerate() {
-            // the samples column i stands for (at least one: a short ride is stretched)
-            let (lo, hi) = (i * kept.len() / COLS, (i + 1) * kept.len() / COLS);
-            let part = kept.get(lo..hi.max(lo + 1)).unwrap_or(&[]);
-            let sum: u32 = part.iter().map(|&v| u32::from(v)).sum();
-            *col = sum.checked_div(part.len() as u32).unwrap_or(0) as u16;
-        }
+        self.samples.columns(&mut self.elev);
         self.scale = alt_scale(self.elev.iter().map(|&v| u32::from(v)));
         self.reading = None;
         Some(Ok(()))
@@ -344,6 +341,9 @@ impl Past {
 /// Altitudes, one every `every` given, thinned to every other one when full.
 struct Samples {
     v: [u16; SAMPLES],
+    /// The distance (1/100 m) of each, and the last one read.
+    d: [u32; SAMPLES],
+    dist: u32,
     len: usize,
     every: u32,
     k: u32,
@@ -351,7 +351,7 @@ struct Samples {
 
 impl Samples {
     const fn new() -> Self {
-        Samples { v: [0; SAMPLES], len: 0, every: 1, k: 0 }
+        Samples { v: [0; SAMPLES], d: [0; SAMPLES], dist: 0, len: 0, every: 1, k: 0 }
     }
 
     fn push(&mut self, a: u16) {
@@ -363,13 +363,48 @@ impl Samples {
         if self.len == SAMPLES {
             for i in 0..SAMPLES / 2 {
                 self.v[i] = self.v[2 * i];
+                self.d[i] = self.d[2 * i];
             }
             self.len = SAMPLES / 2;
             self.every = self.every.saturating_mul(2);
         }
         if let Some(slot) = self.v.get_mut(self.len) {
             *slot = a;
+            if let Some(d) = self.d.get_mut(self.len) {
+                *d = self.dist;
+            }
             self.len += 1;
+        }
+    }
+}
+
+impl Samples {
+    /// The profile: each column the mean altitude over an equal share of the distance (a column nothing fell in
+    /// takes the one before). Without a distance (all at 0), an equal share of the samples.
+    fn columns(&self, out: &mut [u16; COLS]) {
+        let kept = self.v.get(..self.len).unwrap_or(&[]);
+        let total = self.d.get(..self.len).and_then(|d| d.iter().max()).copied().unwrap_or(0);
+        if total == 0 {
+            for (i, col) in out.iter_mut().enumerate() {
+                // the samples column i stands for (at least one: a short ride is stretched)
+                let (lo, hi) = (i * kept.len() / COLS, (i + 1) * kept.len() / COLS);
+                let part = kept.get(lo..hi.max(lo + 1)).unwrap_or(&[]);
+                let sum: u32 = part.iter().map(|&v| u32::from(v)).sum();
+                *col = sum.checked_div(part.len() as u32).unwrap_or(0) as u16;
+            }
+            return;
+        }
+        let mut acc = [(0u32, 0u32); COLS];
+        for (&a, &d) in kept.iter().zip(&self.d) {
+            let i = (u64::from(d) * COLS as u64 / (u64::from(total) + 1)) as usize;
+            if let Some(c) = acc.get_mut(i) {
+                *c = (c.0 + u32::from(a), c.1 + 1);
+            }
+        }
+        let mut last = 0;
+        for (col, (sum, n)) in out.iter_mut().zip(acc) {
+            last = sum.checked_div(n).map_or(last, |v| v as u16);
+            *col = last;
         }
     }
 }
@@ -415,5 +450,30 @@ mod tests {
         assert!(s.v[..s.len].windows(2).all(|w| w[1] - w[0] == step), "evenly spaced");
         assert_eq!(degrees_e7(1 << 30), 900_000_000);
         assert_eq!(degrees_e7(-(1 << 29)), -450_000_000);
+    }
+
+    /// Columns cover equal distance: a climb in the first tenth of the distance is the first tenth of the columns
+    /// even if the rider stood still for most of the samples.
+    #[test]
+    fn profile_follows_distance() {
+        let mut s = Samples::new();
+        for k in 0..100u32 {
+            s.dist = k * 1000; // 10 m a sample, climbing 1 m each
+            s.push(1000 + k as u16);
+        }
+        s.dist = 100_000;
+        for _ in 0..400 {
+            s.push(1100); // a long stop at the top
+        }
+        let mut out = [0; COLS];
+        s.columns(&mut out);
+        assert!(out[0] < 1010 && out[COLS - 1] == 1100, "{out:?}");
+        assert!(out[COLS / 2] >= 1050 || out[COLS / 2] == 1100, "the climb fills the distance, not the time");
+        let mut flat = Samples::new();
+        for k in 0..100u16 {
+            flat.push(1000 + k); // no distance at all
+        }
+        flat.columns(&mut out);
+        assert!(out[0] < 1010 && out[COLS - 1] > 1090);
     }
 }
