@@ -87,7 +87,7 @@
 | Lap | a lap (while riding) | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | end a paused ride (or END RIDE in the ride menu) | |
-| Back | on a ride page, the overview; on the overview, backlight on / off | back |
+| Back | on a ride page, the overview; on the overview, nothing | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 | hold Lap | the phone's music: play / pause (PHONE below) | |
 | hold Back and Lap together 1 s | the touch lock on or off, on every screen: all touch is ignored and a padlock shows in the strip (until unlocked or switched off); neither key acts on its own | the same |

@@ -91,9 +91,8 @@ impl App {
     /// Shows and sounds what following the course said: off course (banner and the alert's beeps), back on it, a
     /// climb starting ("CLIMB 3.4 KM 7%", a beep).
     pub(crate) fn course_event(&mut self, ev: course::Event) {
-        // seen whatever the screen: the light comes on as for a key, even if switched off with Back (Back again
-        // turns it off)
-        (self.idle_ms, self.backlight) = (0, true);
+        // seen whatever the screen: the light comes on as for a key, even after its time-out
+        self.idle_ms = 0;
         match ev {
             course::Event::Off => {
                 self.alarm("OFF COURSE");

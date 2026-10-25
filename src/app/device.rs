@@ -85,10 +85,10 @@ impl App {
         self.notice("USB RECONNECT");
     }
 
-    /// Sets the backlight to what it should be now: the chosen level, unless switched off (Back) or timed out.
+    /// Sets the backlight to what it should be now: the chosen level, unless timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
         let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;
-        let on = self.backlight && (timeout_ms == 0 || self.idle_ms < timeout_ms);
+        let on = timeout_ms == 0 || self.idle_ms < timeout_ms;
         let level = match LIGHT_LEVELS.get(self.settings.light_level) {
             _ if !on => 0,
             Some(&l) => l,

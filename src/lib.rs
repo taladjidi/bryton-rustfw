@@ -140,8 +140,6 @@ pub trait Board {
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
-    /// The backlight is wanted on (Back toggles it); it is on unless timed out.
-    backlight: bool,
     /// The level the backlight is at (0: off).
     light_shown: u8,
     /// Since the last key press.
@@ -378,7 +376,6 @@ impl App {
         let store = PageStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
-            backlight: true,
             light_shown: 0,
             idle_ms: 0,
             chips: ambient::init(b),

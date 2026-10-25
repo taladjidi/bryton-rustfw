@@ -257,7 +257,7 @@ impl App {
     }
 
     /// Acts on an input: Next goes from the main screen through the ride pages and back, Menu opens the menu, Back
-    /// toggles the backlight; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
+    /// goes from a ride page to the overview; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
     /// number being edited goes up with Prev, down with Next. Off switches off anywhere.
     pub fn input(&mut self, b: &mut impl Board, i: Input) {
         if matches!(i, Input::Touch(_)) && (!self.settings.touch || self.strip.locked) {
@@ -266,12 +266,12 @@ impl App {
         let before = self.screen;
         self.clamp_menu(); // a row gone while the menu showed (drawn again below if the screen of rows changed)
         let recording = self.ride.state() == ride::State::Running;
-        let woke = self.light_shown == 0 && self.backlight;
+        let woke = self.light_shown == 0;
         self.idle_ms = 0;
         if woke {
             self.update_light(b); // an input after the time-out: the light comes back (and the input acts)
             if i == Input::Back {
-                return; // Back's own job is the light: done
+                return; // Back that wakes the screen only wakes it: nothing is acted on blind
             }
         }
         if i == Input::TouchLock {
@@ -432,10 +432,6 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::End) => self.end_ride(),
             (Screen::Summary, _) => self.screen = Screen::Main,
             (Screen::Ride(_), Input::Prev) => return self.lap(),
-            (Screen::Main, Input::Back) => {
-                self.backlight = !self.backlight;
-                self.update_light(b);
-            }
             (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 let rows = self.rows(menu).max(1);

@@ -1591,9 +1591,9 @@ fn backlight_level_and_timeout() {
     app.press(&mut sim, Press::Short(Key::Back)); // a ride page's Back: the overview
     run(&mut sim, &mut app, 11_000);
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(sim.light_level, 60, "Back after the time-out: on, not toggled off");
+    assert_eq!(sim.light_level, 60, "Back after the time-out: on");
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(sim.light_level, 0, "then Back on the overview toggles");
+    assert_eq!((sim.light_level, app.screen()), (60, Screen::Main), "then Back on the overview: nothing");
     let _again = App::start(&mut sim, None);
     assert_eq!(sim.light_level, 60, "kept: {:x}", sim.backup[11]);
 }
@@ -1999,7 +1999,8 @@ fn auto_backlight_follows_the_ambient_light() {
     let reads = sim.bus.light_reads - reads0;
     assert!((230..=245).contains(&reads), "{reads} readings in 60 s");
 
-    app.press(&mut sim, Press::Short(Key::Back)); // backlight off: no readings
+    app.settings.light_timeout = 1; // 10 s: the light is off, so no readings
+    run(&mut sim, &mut app, 12_000);
     let reads = sim.bus.light_reads;
     run(&mut sim, &mut app, 30_000);
     assert_eq!(sim.bus.light_reads, reads);
@@ -2034,8 +2035,9 @@ fn barometer_one_shot() {
     assert_eq!(built_in_row(&app, 2), "HPA 950");
 }
 
+/// Back on the overview does nothing (it used to switch the light off, a black screen that looked like a crash).
 #[test]
-fn back_short_press_toggles_the_backlight() {
+fn back_on_the_overview_does_nothing() {
     // Presses after the start (which takes about 1 s with the Nordic chip): at 3 s and at 4 s.
     let back = |ms| (3000..3200).contains(&ms) || (4000..4100).contains(&ms);
     let mut sim = Sim::new(8, 0, 0).keys(move |ms| if back(ms) { Key::Back as u8 } else { 0 });
@@ -2043,9 +2045,10 @@ fn back_short_press_toggles_the_backlight() {
     let t0 = sim.ms;
     assert!(t0 < 3000);
     run(&mut sim, &mut app, 3500 - t0);
-    assert!(!sim.backlight);
+    assert!(sim.backlight && app.screen() == Screen::Main);
     run(&mut sim, &mut app, 1000);
-    assert!(sim.backlight);
+    assert!(sim.backlight && app.screen() == Screen::Main);
+    assert_consistent(&sim, &app);
 }
 
 #[test]
@@ -3987,8 +3990,8 @@ fn course_cues_over_any_screen() {
                 app.open(s);
                 app.show(&mut sim);
             }
-            None if i == 2 => {}           // the light timed out on its own (10 s, no key)
-            None => app.backlight = false, // the light switched off by the rider (Back on the overview)
+            None if i == 2 => {}          // the light timed out on its own (10 s, no key)
+            None => app.idle_ms = 60_000, // the light timed out (well past the 10 s)
         }
         run(&mut sim, &mut app, 3000);
         if screen.is_none() {

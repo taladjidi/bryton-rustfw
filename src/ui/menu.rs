@@ -14,7 +14,7 @@ pub enum Input {
     Prev,
     /// Start: select a row (on a ride page, start, pause or resume).
     Select,
-    /// Back: out of a menu (on a page, the backlight on or off).
+    /// Back: out of a menu (on a ride page, the overview; on the overview, nothing).
     Back,
     /// Page held: the menu (the ride menu while a ride records or is paused).
     Menu,
