@@ -856,6 +856,10 @@ pub struct Imported {
     pub hr_alert: Option<u16>,
     /// The backlight follows the ambient light (DeviceData.ini `[DeviceSys] brightnessAuto=1`).
     pub light_auto: bool,
+    /// The sea-level pressure of its altitude calibration, hPa x 10 (`[DeviceSys] Alt_P0`, a float; written with
+    /// `calAltitude_km` by Cfg_DevDataApplySettingById, ghidra notes agent_a2.md). The typed altitude
+    /// `calAltitude_km` (m; `_mi` in yards, inferred) is where it was made, not taken.
+    pub alt_p0_dhpa: Option<u32>,
 }
 
 /// Stock's field ids (`GridN=` in Bike`<n>`Profile.ini) and the field here that shows the same value, or the
@@ -987,6 +991,7 @@ impl Imported {
         // brightnessAuto: written with brightness and AutoBrnVal by Cfg_DevDataApplySettingById (agent_a2.md); 1 on,
         // inferred. The manual `brightness` is not taken: its scale is not checked.
         self.light_auto = number(t, "DeviceSys", "brightnessAuto", 0) == Some(1);
+        self.alt_p0_dhpa = number(t, "DeviceSys", "Alt_P0", 1).filter(|p| (8500..=11000).contains(p));
         number(t, "DeviceSys", "ActBike", 0).unwrap_or(0).min(2) as u8
     }
 
@@ -1435,6 +1440,18 @@ pub(crate) mod tests {
     }
 
     /// Made-up settings files in stock's layout (the keys and sections of a unit's files, none of its values).
+    /// `[DeviceSys] Alt_P0`, stock's sea-level pressure of its altitude calibration (a float, hPa).
+    #[test]
+    fn imports_stock_altitude_pressure() {
+        let mut d = Imported::default();
+        d.device(b"[DeviceSys]\nAlt_P0=1020.0\ncalAltitude_km=200\n");
+        assert_eq!(d.alt_p0_dhpa, Some(10_200));
+        d.device(b"[DeviceSys]\nAlt_P0=1013.25\n");
+        assert_eq!(d.alt_p0_dhpa, Some(10_132));
+        d.device(b"[DeviceSys]\nAlt_P0=0.0\n");
+        assert_eq!(d.alt_p0_dhpa, None, "out of range");
+    }
+
     #[test]
     fn imports_stock_settings() {
         let user = b"[Info]\nVer=1000\n\n[UserProfile]\nWbalance=21000\nCP=255\nWeight_kg=72.50000\n\n[FTP]\n\

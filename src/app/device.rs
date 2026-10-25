@@ -53,6 +53,9 @@ pub const MAX_PASS_MS: u32 = 1000;
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
 
+/// How often the barometer is read while riding (or averaging for a calibration); app/barometer.rs.
+pub const BARO_RIDE_MS: u32 = 1000;
+
 /// How often the touch panel is read while a finger is on it: a swipe of 100 ms gives ten points.
 pub const TOUCH_MS: u32 = 10;
 

@@ -176,6 +176,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/drivers/touch.rs`: the touch controller (Sitronix, I2C1) against the `Board` primitives `touch_read` / `touch_reset` /
   `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `sim.rs`
   has a model of the chip (`TouchChip`) with a scripted finger. `tools/i2c.py --touch` reads it from the computer.
+- `src/altitude.rs`: the barometric altitude: the international barometric formula as an integer table, the
+  smoothing, the calibration (typed, from the receiver, at a ride's start; `\Rustfw\altcal.bin`'s sector), and which
+  source the ride takes (barometer or GPS, with a reference number that makes the ride forget its low point when it
+  changes). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
 - `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
@@ -245,7 +249,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
-  `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`,
+  `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
+  climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
   RTC read and set, standby, SysTick sleep. No app logic.

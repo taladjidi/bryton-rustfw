@@ -4,7 +4,7 @@
 //! **Climbing** ([`Climb`]): VAM is the metres climbed per hour (Ferrari's *velocità ascensionale media*, as
 //! Garmin and Wahoo show it), here over the last minute of moving time; grade is rise over run, x 100, over the
 //! last 30 s of moving time and at least 20 m (shorter, GPS altitude noise of a metre or two would swing it by
-//! several percent). Both from GPS altitude; the barometer (ambient.rs, a reading every 10 s) would be steadier.
+//! several percent). Both from the barometer's altitude when it reads (altitude.rs, a reading a second, steadier), else from GPS's.
 //!
 //! **Recorder hook.** Nothing here is stored: every change of state and every second of ride comes out as an
 //! [`Event`], and the app hands each one to one place (`App::recorder` in lib.rs), which feeds the recorder
@@ -50,8 +50,11 @@ pub struct Input {
     pub cadence: Option<u16>,
     /// W.
     pub power: Option<u16>,
-    /// Altitude of a good fix, mm.
+    /// Altitude, mm: the barometer's (calibrated) when it reads, else a good fix's.
     pub alt_mm: Option<i32>,
+    /// Which altitude that is: 0 the receiver's, else the barometer on one calibration (`altitude.rs`). A change
+    /// forgets the low point and the climb window (the two are not on the same level).
+    pub alt_ref: u8,
 }
 
 /// Words of [`Ride::to_words`].
@@ -62,6 +65,10 @@ pub const AUTO_PAUSE_X10: u16 = 20;
 
 /// Altitude gain is counted once it exceeds the last low point by this much (GPS altitude is noisy).
 pub const ASCENT_HYSTERESIS_MM: i32 = 5000;
+
+/// The same for the barometer: its noise after smoothing is a few decimetres (wind, speed changes at the case's
+/// vent, inferred; the chip's own is 5 cm), so 2 m keeps small climbs and counts no noise.
+pub const BARO_HYSTERESIS_MM: i32 = 2000;
 
 /// A sum and a count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -96,6 +103,7 @@ pub struct Ride {
     cadence: Avg,
     ascent_mm: u32,
     alt_low: Option<i32>,
+    alt_ref: u8,
     lap_timer_s: u32,
     lap_dist9: u64,
     max_hr: u16,
@@ -122,6 +130,7 @@ impl Ride {
             cadence: Avg { sum: 0, n: 0 },
             ascent_mm: 0,
             alt_low: None,
+            alt_ref: 0,
             lap_timer_s: 0,
             lap_dist9: 0,
             max_hr: 0,
@@ -179,6 +188,11 @@ impl Ride {
             self.max_hr = self.max_hr.max(i.hr.unwrap_or(0));
             // an altitude no road has (a receiver's garbage) is no altitude: every difference below stays in range
             let alt_mm = i.alt_mm.filter(|a| ALT_RANGE_MM.contains(a));
+            if i.alt_ref != self.alt_ref {
+                (self.alt_ref, self.alt_low) = (i.alt_ref, None);
+                self.climb.second(None, self.dist9); // starts again
+            }
+            let hysteresis = if self.alt_ref == 0 { ASCENT_HYSTERESIS_MM } else { BARO_HYSTERESIS_MM };
             self.climb.second(alt_mm, self.dist9);
             self.power.add(i.power); // zeros count: coasting is part of the average power
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
@@ -186,7 +200,7 @@ impl Ride {
                 let low = self.alt_low.get_or_insert(alt);
                 if alt < *low {
                     *low = alt;
-                } else if alt - *low >= ASCENT_HYSTERESIS_MM {
+                } else if alt - *low >= hysteresis {
                     self.ascent_mm = self.ascent_mm.saturating_add((alt - *low) as u32);
                     *low = alt;
                 }
@@ -691,7 +705,36 @@ mod tests {
     use super::*;
 
     fn at(speed: u16) -> Input {
-        Input { speed_x10: Some(speed), hr: Some(140), cadence: Some(90), power: Some(200), alt_mm: None }
+        Input { speed_x10: Some(speed), hr: Some(140), cadence: Some(90), power: Some(200), alt_mm: None, alt_ref: 0 }
+    }
+
+    /// A change of altitude source is not a climb, and the barometer's hysteresis is finer than the receiver's.
+    #[test]
+    fn an_altitude_reference_change_and_the_barometers_hysteresis() {
+        let mut r = Ride::new();
+        r.start_pause();
+        let alt = |mm, alt_ref| Input { alt_mm: Some(mm), alt_ref, ..at(200) };
+        for _ in 0..10 {
+            r.second(&alt(100_000, 0));
+        }
+        for _ in 0..10 {
+            r.second(&alt(140_000, 1)); // the barometer, on another level: 40 m that nobody climbed
+        }
+        assert_eq!(r.ascent_m(), 0);
+        for d in [0, 1000, 0, 1000, 0] {
+            r.second(&alt(140_000 + d, 1)); // a metre of wiggle: nothing
+        }
+        assert_eq!(r.ascent_m(), 0);
+        for s in 0..10 {
+            r.second(&alt(140_000 + s * 500, 1)); // 4.5 m climbed: counted past 2 m
+        }
+        assert_eq!(r.ascent_m(), 4);
+        let mut g = Ride::new();
+        g.start_pause();
+        for s in 0..10 {
+            g.second(&alt(100_000 + s * 500, 0)); // the same climb on the receiver: under its 5 m
+        }
+        assert_eq!(g.ascent_m(), 0);
     }
 
     #[test]

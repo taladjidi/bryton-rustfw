@@ -116,7 +116,9 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     let _ = s;
     crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10]);
     crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
-    let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, "--")];
+    // the barometer is read a second after the start: the temperature is there by the time the tests look
+    let temp = app.field_text(Field::Temp);
+    let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, temp.as_str())];
     for (i, (field, v)) in values.into_iter().enumerate() {
         let bx = crate::ui::overview_box(i).unwrap();
         crate::ui::draw_field_frame(&mut f, bx, field);
@@ -2678,6 +2680,7 @@ fn a_ride_with_laps_and_pauses() {
     sim.own_settings(); // the defaults, not stock's
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(climb);
+    sim.bus.baro_alt = Some(climb); // the barometer climbs with the receiver
     sim.gnss.fix = Some(8000);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
@@ -2793,6 +2796,7 @@ fn derived_power_and_climb_fields() {
     let mut sim = Sim::new(9, 0, 0);
     sim.gnss.route = Some(ride_route);
     sim.gnss.alt = Some(climb);
+    sim.bus.baro_alt = Some(climb); // the barometer climbs with the receiver
     sim.gnss.fix = Some(8000);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();

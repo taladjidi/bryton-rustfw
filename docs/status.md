@@ -44,6 +44,10 @@ The dated findings are in [journal.md](journal.md).
   quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
   recording through it.
+- **Barometric altitude (src/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 2 m
+  ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SYSTEM > BUILT IN against a known
+  height, the ride start's own calibration, `\Rustfw\altcal.bin` kept over a restart, the chip's current at a reading
+  a second (datasheet, not measured), `Alt_P0` of a real DeviceData.ini.
 
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
   DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`

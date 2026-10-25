@@ -120,7 +120,11 @@ impl App {
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
             Menu::System => menu::SYSTEM.get(i).copied(),
-            Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
+            Menu::BuiltIn => match menu::BUILT_IN.get(i) {
+                Some(&r) => Some(Row::Read(r)),
+                // the barometer's altitude and its calibration, after its readings
+                None => [Row::Set(menu::Setting::Altitude), Row::AltGps].get(i - menu::BUILT_IN.len()).copied(),
+            },
             Menu::Ride(n) => {
                 use menu::RideRow;
                 let rows = [
@@ -214,6 +218,14 @@ impl App {
             Row::Drive => {
                 label.push_str("USB DRIVE");
                 value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
+            }
+            Row::AltGps => {
+                label.push_str("FROM GPS");
+                self.alt_gps_row(&mut value);
+            }
+            Row::Set(menu::Setting::Altitude) if !(self.editing && self.screen == Screen::Menu(menu, i)) => {
+                label.push_str(menu::Setting::Altitude.label());
+                self.alt_row(&mut value);
             }
             Row::Set(s) => {
                 label.push_str(s.label());
@@ -557,10 +569,14 @@ impl App {
             }
             Some(Row::Set(s)) if s.number().is_some() => {
                 self.editing = !self.editing;
+                if self.editing && s == menu::Setting::Altitude {
+                    self.editing = self.alt_edit_start(); // from the altitude the barometer reads
+                }
                 if !self.editing {
                     self.save_misc(b);
                 }
             }
+            Some(Row::AltGps) => self.alt_from_gps(),
             Some(Row::Set(s)) => {
                 self.settings.cycle(s);
                 self.save_misc(b);

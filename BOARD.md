@@ -693,6 +693,11 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
   barometer at CTRL_REG1 0x02 (so stock's power-down value is 0x02: output rate 0, BDU) and CTRL_REG2 0x12, the
   accelerometer off (CTRL_REG1 0x07). Indoors, dim: a light reading of 3 (0.1 lux); the barometer 994.5 hPa,
   25.5 C.
+- **Altitude calibration in stock** (ghidra notes agent_a2.md: Cfg_DevDataReadAltitudeCalib 0xd01867c2,
+  Cfg_DevDataApplySettingById id 0x1d, Sensor_CalibrateAltitudeFromGps 0xd0193dc0, Baro_CheckAltCalibrationAtLocation
+  0xd026aaac): `\System\DeviceData.ini` `[DeviceSys]` keeps `calAltitude_km` (default 200: metres), `calAltitude_mi` (default
+  218.7: yards, inferred from 200 m) and `Alt_P0` (float, hPa, default 1020.0, the sea-level pressure); the GPS altitude
+  of a 3D fix can be sent to the sensor task as the calibration. This firmware imports `Alt_P0` only.
 - **Light reading** (`Sensor_LightSensorReadLux` 0xd023e1e8): ALS_DATA 0x0d..0x0f, 20 bits little endian; lux =
   reading x 0.025 x calibration / 1000 (the calibration word comes from an eMMC raw sector, 1000 by default). 0.025 is
   the datasheet's 0.6 / (gain 6 x 4), the 4 being the 400 ms of a 20-bit conversion (MEAS_RATE 0x05: 20 bits, one
