@@ -32,6 +32,19 @@
 //! (an earlier one, or a read-only one, which keep their pages there only) changed them, and those pages win, the
 //! others staying the file's. A build that may not write the card never reads or writes the file: its pages are
 //! the registers' (three at most).
+//!
+//! **A change the file must wait for** (made during a paused ride, with the editor still open after ADD PAGE, or
+//! with the drive lent; or not written yet at a switch-off) goes to the registers at once, marked
+//! [`PAGES_NEWER`] ([`App::hold_pages`]), so a switch-off, a reset or a fault before the file is written keeps it:
+//! at the next start the mark makes the registers' pages win where they differ from the file's (even when they
+//! equal its previous ones: a change undone), the file's others kept, and the file is written once no ride is open.
+//! The registers keep three pages, lossily ([`Page::to_cfg`]): a change to pages 4 to 6, or a page added or deleted
+//! before them, is lost if the unit goes off before the file is written (they come back as the file had them).
+//!
+//! **No change before the file is read**: the editor, LAYOUT and the picker read it first, and refuse while it
+//! cannot be ("USB DRIVE ON", "PAGES NOT READ"), so the registers' three pages are never written over the file's six.
+//! A failed read is tried again ([`LOAD_TRIES`] times by the passes, then at each change asked for); a write never
+//! goes out without the newest copy's number.
 
 use crate::*;
 use menu::EditRow;
@@ -40,16 +53,27 @@ use page::{Page, Saved};
 /// The pages' file is read this long after the start (or at the first ride page or menu, if sooner).
 pub const PAGES_LOAD_MS: u32 = 2000;
 
+/// Failed reads of the file after which the passes stop trying (a page change still tries, once each).
+const LOAD_TRIES: u8 = 3;
+
 /// `\Rustfw\pages.bin`, read and to be written.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PageStore {
-    /// Read (or tried).
+    /// Read, or known not to be there (no file, no volume). A failed read leaves it false: tried again, and no page
+    /// changes until then (the next write needs the newest copy's number, and the pages beyond the registers' three).
     pub(crate) loaded: bool,
+    /// Reads that failed (I/O), the passes' retries stopping at [`LOAD_TRIES`].
+    pub(crate) tries: u8,
     /// The pages changed since the file was written.
     pub(crate) dirty: bool,
+    /// The registers hold the changed pages already ([`App::hold_pages`]).
+    pub(crate) held: bool,
+    /// At the start, the registers said they were newer than the file ([`PAGES_NEWER`]).
+    pub(crate) newer: bool,
     /// The newest copy's number.
     pub(crate) seq: u32,
-    /// The registers of the first ride pages at the start, before the first start's import could write them.
+    /// The registers of the first ride pages at the start, before the first start's import could write them
+    /// ([`PAGES_NEWER`] taken out).
     pub(crate) boot: [u32; 2 * REG_PAGES],
     /// The file was read whole (1024 bytes): written over in place, one sector, no FAT sector touched. Else the next
     /// write creates or grows it, and a cut in an earlier one may have left the FAT copies different in a sector,
@@ -66,7 +90,9 @@ impl PageStore {
         for (w, r) in boot.iter_mut().zip(PAGE_BKP.iter().take(REG_PAGES).flatten()) {
             *w = b.backup_read(*r);
         }
-        PageStore { boot, ..Default::default() }
+        let newer = boot[1] & PAGES_NEWER != 0;
+        boot[1] &= !PAGES_NEWER;
+        PageStore { boot, newer, ..Default::default() }
     }
 }
 
@@ -94,9 +120,13 @@ impl App {
         }
     }
 
-    /// The first ride pages and the overview written to their backup registers.
+    /// The first ride pages and the overview written to their backup registers, marked [`PAGES_NEWER`] while the
+    /// file is behind them.
     pub(crate) fn save_page_registers(&self, b: &mut impl Board) {
-        let words = register_words(&self.pages, self.page_count);
+        let mut words = register_words(&self.pages, self.page_count);
+        if self.store.dirty {
+            words[1] |= PAGES_NEWER;
+        }
         for (r, w) in PAGE_BKP.iter().take(REG_PAGES).flatten().zip(words) {
             b.backup_write(*r, w);
         }
@@ -104,26 +134,49 @@ impl App {
     }
 
     /// The ride pages changed: written to the file between rides ([`App::step_pages`]), or at once to the registers
-    /// by a build that may not write the card.
+    /// by a build that may not write the card. A graph's plot chosen by a tap goes (its box may have moved).
     pub(crate) fn pages_changed(&mut self, b: &mut impl Board) {
+        self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if self.card_writable {
-            self.store.dirty = true;
+            (self.store.dirty, self.store.held) = (true, false);
         } else {
             self.save_page_registers(b);
+        }
+    }
+
+    /// The file can be written in the next passes: read, not lent, no ride open, the editor closed.
+    fn pages_writable_soon(&self) -> bool {
+        self.store.loaded && !self.emmc.lent() && self.edit.is_none() && self.ride_settled()
+    }
+
+    /// Changed pages the file does not have yet go to the registers now, marked [`PAGES_NEWER`]: lossy (the first
+    /// three, as [`Page::to_cfg`] keeps them), but kept through a switch-off, a reset or a flat battery's restart
+    /// (the module doc: which pages win at the next start). Called when the file must wait (a ride, the editor, the
+    /// drive) and at a switch-off.
+    pub(crate) fn hold_pages(&mut self, b: &mut impl Board) {
+        if self.card_writable && self.store.dirty && !self.store.held {
+            self.save_page_registers(b);
+            self.store.held = true;
         }
     }
 
     /// The pages' file read when it is time, written when the pages changed and no ride is open.
     #[inline(never)]
     pub(crate) fn step_pages(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() {
+        if !self.card_writable {
+            return;
+        }
+        if !self.pages_writable_soon() {
+            self.hold_pages(b);
+        }
+        if self.emmc.lent() {
             return;
         }
         let due = self.screen != Screen::Main || self.gnss_ms >= PAGES_LOAD_MS || self.store.dirty;
-        if !self.store.loaded && due {
+        if !self.store.loaded && self.store.tries < LOAD_TRIES && due {
             self.load_pages(b);
         }
-        if self.store.loaded && self.store.dirty && self.edit.is_none() && self.ride_settled() {
+        if self.store.dirty && self.pages_writable_soon() {
             if !self.store.sound && !self.sync_fats_step(b) {
                 return; // the FAT copies compared over the next passes first
             }
@@ -162,10 +215,21 @@ impl App {
         }
     }
 
+    /// The pages may be changed: the file read first ([`App::ensure_pages`]); else why not, said.
+    pub(crate) fn pages_ready(&mut self, b: &mut impl Board) -> bool {
+        self.ensure_pages(b);
+        let why = match () {
+            _ if !self.card_writable || self.store.loaded => return true,
+            _ if self.emmc.lent() => "USB DRIVE ON",
+            _ => "PAGES NOT READ",
+        };
+        self.say(why);
+        false
+    }
+
     /// Reads `\Rustfw\pages.bin` (module doc: which pages win).
     #[inline(never)] // its 1 KB buffer in its own frame
     fn load_pages(&mut self, b: &mut impl Board) {
-        self.store.loaded = true;
         let mut file = [0u8; 1024];
         let mut d = emmc::Volume(&mut self.emmc, b);
         let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
@@ -176,16 +240,22 @@ impl App {
             }
             fat.read_at(&mut d, &f, 0, &mut file)
         });
-        self.store.sound = read == Ok(1024);
-        let Some(s) = read.ok().filter(|&n| n == 1024).and_then(|_| Saved::newest(&file)) else { return };
-        self.store.seq = s.seq;
-        if self.store.dirty {
-            return; // changed before the file was read: those changes win, written next
+        if read == Err(fat::Error::Io) {
+            self.store.tries = self.store.tries.saturating_add(1);
+            return; // tried again: a write now would not know the newest copy's number
         }
+        self.store.loaded = true;
+        self.store.sound = read == Ok(1024);
+        let Some(s) = read.ok().filter(|&n| n == 1024).and_then(|_| Saved::newest(&file)) else {
+            self.store.dirty |= self.store.newer; // no file: the registers' pages written as the first
+            return;
+        };
+        self.store.seq = s.seq;
         let boot = self.store.boot;
         let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
-        if boot != s.words && boot != s.was {
-            // another build changed the registers since: its pages there win
+        if self.store.newer || (boot != s.words && boot != s.was) {
+            // changes the file did not get (a switch-off before it was written), or another build changed the
+            // registers since: the registers' pages win where they differ from the file's
             for (i, (now, then)) in boot.chunks_exact(2).zip(s.words.chunks_exact(2)).enumerate() {
                 let w = [now[0], now[1]];
                 if now != then
@@ -208,6 +278,7 @@ impl App {
             return;
         }
         self.page_count = n;
+        self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if let Screen::Ride(k) = self.screen {
             if k >= n && k < PAGES {
                 self.screen = Screen::Main;
@@ -231,6 +302,7 @@ impl App {
         for (w, r) in was.iter_mut().zip(PAGE_BKP.iter().take(REG_PAGES).flatten()) {
             *w = b.backup_read(*r);
         }
+        was[1] &= !PAGES_NEWER;
         let s = Saved {
             seq: self.store.seq.wrapping_add(1),
             pages: core::array::from_fn(|i| self.pages[i]),
@@ -277,7 +349,9 @@ impl App {
         if self.ride.state() == ride::State::Running {
             return self.say("PAUSE TO EDIT");
         }
-        self.ensure_pages(b);
+        if !self.pages_ready(b) {
+            return;
+        }
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         self.edit = Some(Editing { page: n, work: p, orig: p, undo: None, asking: false });
         self.open(Screen::Edit(n, k.min(p.cells().saturating_sub(1))));
@@ -433,10 +507,12 @@ impl App {
         }
     }
 
-    /// A page added at `at` (2 x 2: speed, timer, distance, heart rate) and the editor opened on it; the editor's
+    /// A page added at `at` (past the last: after it; 2 x 2: speed, timer, distance, heart rate) and the editor opened on it; the editor's
     /// work on the page it was on kept first.
     pub(crate) fn add_page(&mut self, b: &mut impl Board, at: usize) {
-        self.ensure_pages(b);
+        if !self.pages_ready(b) {
+            return;
+        }
         if self.page_count >= PAGES {
             return self.say("6 PAGES AT MOST");
         }
@@ -479,7 +555,9 @@ impl App {
 
     /// The menu's LAYOUT: page `n` (`n` < [`PAGES`]) to the next layout every field of it fits, its fields in order.
     pub(crate) fn next_layout(&mut self, b: &mut impl Board, n: usize) {
-        self.ensure_pages(b);
+        if !self.pages_ready(b) {
+            return;
+        }
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         let order = ui::LAYOUT_ORDER;
         let at = p.preset_id().and_then(|id| order.iter().position(|&l| l == id)).unwrap_or(order.len() - 1);
@@ -495,8 +573,8 @@ impl App {
     /// The picker's field `f` for box `k` of page `n`: the editor's copy, a ride page (if it is readable there) or
     /// the overview; then back to the editor or the page's menu.
     pub(crate) fn pick(&mut self, b: &mut impl Board, n: usize, k: usize, f: Field) {
-        if n != EDITED {
-            self.ensure_pages(b);
+        if n < PAGES && !self.pages_ready(b) {
+            return;
         }
         let page = match n {
             EDITED => self.edit.map(|e| e.work),

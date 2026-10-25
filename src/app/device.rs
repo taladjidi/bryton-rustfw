@@ -172,6 +172,7 @@ impl App {
         self.recorder.checkpoint_now();
         self.full.checkpoint_now();
         self.step_recorder(b);
+        self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
         if self.ble.is_some() {
             nrf::system_off(b);
         }

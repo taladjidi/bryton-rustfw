@@ -121,11 +121,31 @@ impl Page {
         ui::rows_box(self.used(), ui::RIDE_H, k).filter(|_| k < self.cells())
     }
 
-    /// Cells whose field is not readable in its box ([`fits`]).
+    /// Cell `k`'s field is not readable in its box ([`fits`]).
+    pub fn misfit(&self, k: usize) -> bool {
+        self.cell_box(k).is_none_or(|b| !self.fields.get(k).is_some_and(|&f| fits(f, b)))
+    }
+
+    /// Cells whose field is not readable in its box.
     pub fn misfits(&self) -> usize {
-        (0..self.cells())
-            .filter(|&k| self.cell_box(k).is_none_or(|b| !self.fields.get(k).is_some_and(|&f| fits(f, b))))
-            .count()
+        (0..self.cells()).filter(|&k| self.misfit(k)).count()
+    }
+
+    /// Cells showing `f` that is not readable there.
+    pub fn misfits_of(&self, f: Field) -> usize {
+        (0..self.cells()).filter(|&k| self.fields.get(k) == Some(&f) && self.misfit(k)).count()
+    }
+
+    /// Every cell at least the smallest value box ([`ui::VALUE_MIN`]): the floor of every edit, and what a page read
+    /// from the file is checked for (a box under it would not even hold a value's label; drawing assumes it).
+    ///
+    /// ```
+    /// use bryton_rustfw::{page::Page, ui::Field::*};
+    /// let tiny = Page { rows: [(1, 2), (3, 1), (3, 1), (3, 1), (3, 1)], fields: [Speed; 8] };
+    /// assert!(tiny.well_formed() && !tiny.roomy(), "a row 22 px high");
+    /// ```
+    pub fn roomy(&self) -> bool {
+        (0..self.cells()).all(|k| self.cell_box(k).is_some_and(|b| b.2 >= ui::VALUE_MIN.0 && b.3 >= ui::VALUE_MIN.1))
     }
 
     /// Well formed, every field readable in its cell.
@@ -150,12 +170,19 @@ impl Page {
         self.used().iter().take(r).map(|x| usize::from(x.1)).sum()
     }
 
-    /// `self` after an edit, if it is well formed and leaves no more fields unreadable than there were (a page of
-    /// an earlier build with a small graph can still be edited elsewhere); else why not (the banner says it).
+    /// `self` after an edit, if it is well formed, every box holds a value ([`Page::roomy`]) and no field is
+    /// unreadable that was readable before: a field unreadable after it only where it already was (a page of an
+    /// earlier build with a small graph can still be edited elsewhere, but making that graph fit may not squeeze
+    /// another field, nor a value under 3x); else why not (the banner says it). Cells move in an edit, so they are
+    /// matched by their field: no field has more unreadable cells after it than before.
     fn checked(&self, after: Page) -> Result<Page, &'static str> {
         if !after.well_formed() {
             Err("NO ROOM")
-        } else if after.misfits() > self.misfits() {
+        } else if !after.roomy()
+            || (0..after.cells()).any(|k| {
+                after.misfit(k) && after.fields.get(k).is_none_or(|&f| after.misfits_of(f) > self.misfits_of(f))
+            })
+        {
             Err("TOO SMALL")
         } else {
             Ok(after)
@@ -385,7 +412,7 @@ impl Saved {
     }
 
     /// From a sector [`Saved::to_sector`] wrote; None if it is not one (never written, damaged, a page not well
-    /// formed or a field this build does not have).
+    /// formed or with a box smaller than an edit leaves, [`Page::roomy`], or a field this build does not have).
     pub fn from_sector(s: &[u8; 512]) -> Option<Saved> {
         let crc = crate::fit::crc(0, s.get(..CRC_AT)?);
         if &s[..4] != MAGIC || s.get(CRC_AT..CRC_AT + 2)? != crc.to_le_bytes() {
@@ -404,7 +431,7 @@ impl Saved {
                 }
                 *f = Field::from_index(u32::from(i));
             }
-            if k < count && !p.well_formed() {
+            if k < count && !(p.well_formed() && p.roomy()) {
                 return None;
             }
         }

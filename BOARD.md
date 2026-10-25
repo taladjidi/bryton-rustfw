@@ -278,7 +278,8 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   tag 0xa, read only), 11 (wheel, backlight, max HR, FTP), 16 (weight and W', tag 0xc1, and the Di2 single
   presses' actions; the long presses' are in 28's free bits), 17, 18 (GNSS aiding: the RTC's offset
   from UTC and the last position) and 20..27 (the first three ride pages and the overview, two each, tags 0xd /
-  0xe; all the ride pages are in `\Rustfw\pages.bin`, the registers their copy for earlier builds), each behind a
+  0xe; all the ride pages are in `\Rustfw\pages.bin`, the registers their copy for earlier builds; bit 24 of 21 set
+  while they hold page changes the file does not have yet, `PAGES_NEWER`), each behind a
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,

@@ -285,7 +285,9 @@ impl App {
         self.ensure_pages(b);
         let mut pages = 0;
         let ours = quiet && self.store.seq != 0;
-        for (k, p) in i.pages.iter().enumerate().filter(|_| !ours) {
+        // the file not read (lent, a read error): its pages unknown, so stock's are not put over them
+        let known = !self.card_writable || self.store.loaded;
+        for (k, p) in i.pages.iter().enumerate().filter(|_| !ours && known) {
             if let (Some(p), Some(page)) = (p, self.pages.get_mut(k)) {
                 *page = *p;
                 pages = k + 1;

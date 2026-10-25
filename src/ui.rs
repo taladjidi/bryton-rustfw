@@ -895,7 +895,7 @@ type ValueAt<'a> = (Style, u32, u32, &'a str, &'a str, (u32, u32));
 fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16, bg: u16) -> ValueAt<'a> {
     let (mut big, tail) = value.split_once(SMALL_TAIL).unwrap_or((value, ""));
     let style = Style { fg, bg, scale: value_scale(big, w, h), ..LABEL };
-    let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H).saturating_sub(style.height()) / 2;
+    let top = y + FIELD_LABEL_H + h.saturating_sub(1 + FIELD_LABEL_H).saturating_sub(style.height()) / 2;
     let band = (x + 1, x + w - 1);
     let room = band.1 - band.0;
     while ink(&style, big) > room {
@@ -1078,7 +1078,7 @@ fn has_axes(w: u32, h: u32) -> bool {
 /// axes ([`draw_graph_axes`]) and the figures ([`draw_graph_stats`]) when the box has it.
 pub fn graph_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
     let (left, head, below) = if has_axes(w, h) { (AXIS_W, GRAPH_HEAD_H, AXIS_H) } else { (0, FIELD_LABEL_H, 0) };
-    (x + 4 + left, y + head, w - 8 - left, h - head - 4 - below)
+    (x + 4 + left, y + head, w.saturating_sub(8 + left), h.saturating_sub(head + 4 + below))
 }
 
 /// What a graph plots, in its label line (`title`: "POWER W", "HR"), and, when the box has room, its axes: the

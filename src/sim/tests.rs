@@ -2930,10 +2930,11 @@ fn graph_plots_by_tap_and_span_by_hold() {
     run(&mut sim, &mut app, until);
     app.press(&mut sim, Press::Short(Key::Start)); // paused: the taps act
     let mut shots = std::vec::Vec::new();
+    let shown = |app: &App| app.widgets().next().map(|w| w.1);
     for (k, want) in [HrGraph, WbalGraph, DfaGraph, AltGraph].into_iter().enumerate() {
         let until = taps[k] + 500 - sim.ms;
         run(&mut sim, &mut app, until);
-        assert_eq!(app.pages()[0].fields[0], want, "tap {k}");
+        assert_eq!((shown(&app), app.pages()[0].fields[0]), (Some(Widget::Field(want)), Graph), "tap {k}");
         assert_consistent(&sim, &app);
         shots.push(std::format!("graph_{k}"));
         sim.save(&shots[k]);
@@ -2948,7 +2949,7 @@ fn graph_plots_by_tap_and_span_by_hold() {
     app.press(&mut sim, Press::Short(Key::Start)); // recording again: touch only turns pages
     let until = riding[1] + 1500 - sim.ms;
     run(&mut sim, &mut app, until);
-    assert_eq!((app.pages()[0].fields[0], app.graph_whole), (AltGraph, true), "the tap and the hold ignored");
+    assert_eq!((shown(&app), app.graph_whole), (Some(Widget::Field(AltGraph)), true), "the tap and the hold ignored");
     assert_eq!(app.screen(), Screen::Ride(0), "no menu by a hold while recording");
     run(&mut sim, &mut app, 60_000);
     assert_consistent(&sim, &app);
