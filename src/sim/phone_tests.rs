@@ -217,7 +217,13 @@ fn a_refused_setup_is_named() {
 #[test]
 fn ant_alongside_the_phone() {
     let (mut sim, _) = unit(iphone(std::vec![(3000, Act::Notify(6, 3, "Mail", "Hi"))]));
-    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 25126, data: |_| [4, 0, 0, 0, 0, 0, 0, 72] });
+    sim.nordic.sensors.push(AntSensor {
+        device_type: 0x78,
+        id: 25126,
+        data: |_| [4, 0, 0, 0, 0, 0, 0, 72],
+        network: 0,
+        ack: &[],
+    });
     sim.backup[crate::sensors::Kind::Hr.backup()] = SensorId { device: 25126, trans: 0xf1 }.to_word();
     let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
     app.activate(&mut sim, Menu::Phone, 1);

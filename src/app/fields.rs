@@ -162,6 +162,32 @@ impl App {
             Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo => {
                 return self.course_text(f);
             }
+            Field::Gear => {
+                match self.live.get(Metric::Gear) {
+                    Some(g) => {
+                        l.push_u32(u32::from(g >> 8));
+                        l.push_str("-");
+                        l.push_u32(u32::from(g & 0xff));
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::Shifts => (Some(u32::from(self.shifts)), false),
+            Field::ShiftBattery => {
+                match self.live.get(Metric::ShiftBattery) {
+                    Some(s) if s >= sensors::SHIFT_STATUS => {
+                        let status = usize::from(s - sensors::SHIFT_STATUS);
+                        l.push_str(["?", "NEW", "GOOD", "OK", "LOW", "CRIT"].get(status).copied().unwrap_or("?"));
+                    }
+                    Some(p) => {
+                        l.push_u32(u32::from(p));
+                        l.push_str("%");
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
             Field::Temp => {
                 let t = self.baro.map(|(_, t)| i32::from(t) / 10); // C x 100 to tenths
                 if t.is_some_and(|t| t < 0) {
@@ -261,6 +287,11 @@ impl App {
         }
         if let Some(c) = self.course_color(f) {
             return c;
+        }
+        // a shifting battery low (20 % or less, or the ANT+ status low or critical): red, to charge before the ride
+        let low = |s: u16| if s >= sensors::SHIFT_STATUS { s >= sensors::SHIFT_STATUS + 4 } else { s <= 20 };
+        if f == Field::ShiftBattery && self.live.get(Metric::ShiftBattery).is_some_and(low) {
+            return ui::RED;
         }
         let p = &self.power;
         let power = match f {

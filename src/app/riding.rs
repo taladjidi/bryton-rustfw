@@ -19,6 +19,7 @@ impl App {
             self.ride_started = (self.date, self.strip.time);
             self.history = ride::History::default();
             self.alerts = alerts::Alerts::new();
+            self.shifts = 0;
             let mut track = map::Track::new();
             if let Some(p) = self.pvt.filter(|p| p.good()) {
                 track.seed(p.lat, p.lon);

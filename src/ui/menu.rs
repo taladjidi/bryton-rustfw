@@ -87,7 +87,79 @@ pub enum Setting {
     HrAlert,
     /// The power the workout gauge shows (a choice of [`crate::WKT_AVGS`]: 3, 10, 30 s or each second).
     WktAvg,
+    /// What a shifter button press does ([`Remote`]), for press `n` ([`crate::sensors::Press`]).
+    Remote(u8),
 }
+
+/// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
+/// so there are eight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remote {
+    /// Nothing.
+    None = 0,
+    /// The next ride page.
+    NextPage,
+    /// The previous ride page.
+    PrevPage,
+    /// A lap, as the Lap key.
+    Lap,
+    /// Start, pause or resume, as the Start key.
+    Start,
+    /// Play or pause the phone's music.
+    Play,
+    /// The next track.
+    NextTrack,
+    /// The previous track.
+    PrevTrack,
+}
+
+impl Remote {
+    /// Every action, by its number.
+    pub const ALL: [Remote; 8] = {
+        use Remote::*;
+        [None, NextPage, PrevPage, Lap, Start, Play, NextTrack, PrevTrack]
+    };
+
+    /// Its name in the menu.
+    pub fn name(self) -> &'static str {
+        ["NONE", "NEXT PAGE", "PREV PAGE", "LAP", "START", "PLAY", "NEXT TRK", "PREV TRK"][self as usize]
+    }
+
+    /// The action numbered `n` (its low 3 bits).
+    pub fn from_bits(n: u32) -> Remote {
+        Self::ALL[(n & 7) as usize]
+    }
+
+    /// The action stock's sensor ini keeps as `n` for a Di2 press (`leftpress`...: 0 none, 1 lap, 2 start / stop,
+    /// 3 lock, 4 next page; the patched stock firmware's P12 adds 5 previous page, 6 to 10 its screens, 11 play /
+    /// pause, 12 next and 13 previous track; bryton-S510-mods patches/P12-di2-button-actions.c), None for those that
+    /// have no equivalent here.
+    ///
+    /// ```
+    /// use bryton_rustfw::menu::Remote;
+    /// assert_eq!([1, 4, 5, 13, 3].map(Remote::from_stock), [Remote::Lap, Remote::NextPage, Remote::PrevPage, Remote::PrevTrack, Remote::None]);
+    /// ```
+    pub fn from_stock(n: u32) -> Remote {
+        match n {
+            1 => Remote::Lap,
+            2 => Remote::Start,
+            4 => Remote::NextPage,
+            5 => Remote::PrevPage,
+            11 => Remote::Play,
+            12 => Remote::NextTrack,
+            13 => Remote::PrevTrack,
+            _ => Remote::None,
+        }
+    }
+}
+
+/// The Di2 buttons menu: an action for each press ([`crate::sensors::Press`]).
+pub const REMOTE: [Row; 4] = [
+    Row::Set(Setting::Remote(0)),
+    Row::Set(Setting::Remote(1)),
+    Row::Set(Setting::Remote(2)),
+    Row::Set(Setting::Remote(3)),
+];
 
 impl Setting {
     /// The row's label.
@@ -104,6 +176,7 @@ impl Setting {
             Setting::Drink => "DRINK MIN",
             Setting::HrAlert => "HR OVER",
             Setting::WktAvg => "WKT POWER",
+            Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
 

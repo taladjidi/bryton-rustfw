@@ -15,11 +15,13 @@ ANT+ sensors use a network key licensed under the ANT+ adopter terms, so it is n
 firmware carries it; copy it from your own stock image:
 
     tools/fetch_firmware.py        # once: the stock image into firmware/R039/IMG.raw (gitignored)
-    tools/ant_key.py               # finds the key in it (by its SHA-256), writes ant_key.bin (gitignored)
-    ./check.sh                     # build.rs builds the key in when ant_key.bin exists
+    tools/ant_key.py               # finds the key in it (by its SHA-256), writes ant_key.bin (gitignored),
+                                   # and Shimano's network key (the 8 bytes after it) into di2_key.bin
+    ./check.sh                     # build.rs builds the keys in when the files exist
 
-Without `ant_key.bin` the firmware builds without ANT+ (BLE still works). A build with the key is for your own
-unit: don't publish its `out/IMG.bin`. `touch ant_key.bin` if you put it back with an old date.
+Without `ant_key.bin` the firmware builds without ANT+ (BLE still works); without `di2_key.bin`, without the Di2
+channel (SENSORS > DI2 reads NO KEY). A build with the keys is for your own unit: don't publish its `out/IMG.bin`.
+`touch ant_key.bin` if you put it back with an old date.
 
 ## Install
 

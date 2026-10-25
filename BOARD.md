@@ -274,7 +274,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   (20..31 hold values after stock, 0x22 then 0x35a..0x3c5, from something not traced). The bootloader has no RTC
   address in it.
 - This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
-  power), 11 (wheel, backlight, max HR, FTP), 16 (weight and W', tag 0xc1), 17, 18 (GNSS aiding: the RTC's offset
+  power), 14 (the paired shifting system, ANT+ tag 0x61 or Di2 tag 0x62; 14 held a ride page of the first builds,
+  tag 0xa, read only), 11 (wheel, backlight, max HR, FTP), 16 (weight and W', tag 0xc1, and the Di2 single
+  presses' actions; the long presses' are in 28's free bits), 17, 18 (GNSS aiding: the RTC's offset
   from UTC and the last position) and 20..27 (ride pages and the overview, two each, tags 0xd / 0xe), each behind a
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
   the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
@@ -395,9 +397,14 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   - A BLE scan with the channel open (searching) still works: fewer reports, as the radio is shared.
 - **ANT+ sensor channels, as stock opens them** (`Ant_OpenSensorChannel` 0xd025e7f0): channel, device type, period
   (1/32768 s): 0 heart rate 0x78 8070; 1 speed 0x7b 8118; 2 cadence 0x7a 16204; 3 speed and cadence 0x79 8086;
-  4 power 0x0b 4091; then 5 0x22, 6 0x01, 7 0x28, 8 0x11, 9 0x02, 10 0x14, 11 0x23 (other ANT devices, not used
-  here). All channels are assigned once at start (`06 c2 [ch] 00 00 00`); a channel is reconfigured only while
-  closed. Close: `06 c5 [ch]`, answered `01 c5 [result]`, then an ANT event with event code 0x07 (channel closed)
+  4 power 0x0b 4091; 5 ANT+ shifting 0x22 8192; 6 Shimano Di2 0x01 8198 (0x2006); then 7 0x28, 8 0x11, 9 0x02,
+  10 0x14, 11 0x23 (other ANT devices, not used here). All channels are assigned once at start (`06 c2 [ch] 00
+  [net] 00`); a channel is reconfigured only while closed. **Two networks** (stock's assignment table 0xd027d2a0,
+  disassembled 2026-10-25): channels 6 (Di2) and 9 (Shimano STEPS) on network 1, the rest on 0 (channels 13 and
+  14, stock's scan channels, extended: 14 on 0, 13 on 1). `Ant_SetNetworkKeys` 0xd027d6d4 sets key 0 from the table
+  at 0x24010410 and key 1 from 8 bytes on (in R039's image, the 8 bytes after the ANT+ key: `tools/ant_key.py`).
+  Every channel at 2457 MHz (0x39), low-priority search time-out 0xff (power: 7 and 0x61, not traced).
+  Shimano's channel sends its button page as acknowledged data (ANT message 0x4f, stock's `Ant_Di2_OnAntEvent`). Close: `06 c5 [ch]`, answered `01 c5 [result]`, then an ANT event with event code 0x07 (channel closed)
   in byte 42 and the channel in byte 43 (inferred from the ANT message format; the simulator models it).
 - **BLE sensors (central), traced in stock, not yet tried on the unit** (Ghidra; ser_*_enc / _dec):
   - `sd_ble_gap_connect` op 0x8c: `00 8c 01 [addr type byte][6 addr] 01 [scan flags][interval][window][timeout]

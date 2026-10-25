@@ -59,11 +59,14 @@ fn heart_rate_beats() {
     }
 }
 
-/// Random broadcasts into every ANT+ decoder (speed, cadence, both, power, heart rate), with restarts: no panic
-/// (a u32 overflow did panic here), speeds and cadences within what a bike does.
+/// Random broadcasts into every ANT decoder (speed, cadence, both, power, heart rate, the two shifting ones), with
+/// restarts: no panic (a u32 overflow did panic here), speeds and cadences within what a bike does. Half the
+/// messages carry a page the shifting decoders read (random bytes would rarely), and the test checks they were
+/// reached: gears, battery, button presses, within what the formats can say.
 #[test]
 fn ant_decoders() {
-    use crate::sensors::{Decoders, Kind, Live, Metric};
+    use crate::sensors::{Decoders, Kind, Live, Metric, SHIFT_STATUS};
+    let (mut gears, mut batteries, mut presses) = (0, 0, 0);
     for seed in 5..=8u32 {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         let v: std::vec::Vec<u8> = bytes(seed, 1 << 18).collect();
@@ -72,10 +75,25 @@ fn ant_decoders() {
             if n % 97 == 0 {
                 dec.restart(kind);
             }
-            dec.decode(kind, core::array::from_fn(|i| c[i]), 2105, &mut live);
+            let mut d: [u8; 8] = core::array::from_fn(|i| c[i]);
+            if c[8] & 0x80 != 0 {
+                d[0] = [0, 1, 4, 0x52][usize::from(c[8] >> 3) % 4];
+            }
+            live.tick(1000); // values age out within 5 messages
+            dec.decode(kind, d, 2105, &mut live);
             assert!(live.get(Metric::Speed).is_none_or(|s| s <= 2_700), "{:?}", live.get(Metric::Speed));
+            if let Some(g) = live.get(Metric::Gear) {
+                assert!(g >> 8 > 0 && g & 0xff > 0, "gears from 1: {g:x}");
+                gears += 1;
+            }
+            if let Some(b) = live.get(Metric::ShiftBattery) {
+                assert!(b <= 100 || (SHIFT_STATUS + 1..=SHIFT_STATUS + 5).contains(&b), "battery {b:x}");
+                batteries += 1;
+            }
+            presses += usize::from(dec.press.take().is_some());
         }
     }
+    assert!(gears > 1000 && batteries > 1000 && presses > 100, "reached: {gears} {batteries} {presses}");
 }
 
 /// Random bytes from the computer, with command words mixed in, into the dev link protocol.

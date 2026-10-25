@@ -157,11 +157,19 @@ pub struct App {
     list_dirty: bool,
     /// ANT started (needs BLE and a built-in ANT+ key).
     ant: bool,
-    sensors: [Sensor; 5],
+    /// Shimano's network up (its key built in): the Di2 channel can open.
+    di2: bool,
+    sensors: [Sensor; Kind::ALL.len()],
     /// Since each sensor's last broadcast.
-    heard_ms: [u32; 5],
+    heard_ms: [u32; Kind::ALL.len()],
     /// Since each sensor's channel was closed by its search time-out (`u32::MAX`: not resting).
-    resting_ms: [u32; 5],
+    resting_ms: [u32; Kind::ALL.len()],
+    /// The gear last heard (front, rear: [`Metric::Gear`]), to count the shifts and record them.
+    gear: Option<u16>,
+    /// Gear changes in this ride.
+    shifts: u16,
+    /// A shifter button pressed while the chip's bytes were read: acted on once they are (app/radio.rs).
+    remote_press: Option<sensors::Press>,
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
     live: Live,
@@ -287,27 +295,42 @@ impl App {
     /// Panel up, backlight on, the Nordic chip started (BLE, then ANT with `ant_key` and the paired sensors), the
     /// settings read, the first ride page drawn.
     pub fn start(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
-        let mut app = Self::new(b, ant_key);
+        Self::start_with(b, ant_key, None)
+    }
+
+    /// [`App::start`] with Shimano's network key too (`di2_key`: the Di2 channel, sensors.rs).
+    pub fn start_with(b: &mut impl Board, ant_key: Option<[u8; 8]>, di2_key: Option<[u8; 8]>) -> Self {
+        let mut app = Self::new_with(b, ant_key, di2_key);
         app.begin(b);
         app
     }
 
-    /// The first half of [`App::start`]: the panel and the chips started, the state read back. It returns the app
-    /// as one struct expression, which the caller can place where it lives (main.rs `make_app`) before
-    /// [`App::begin`] runs on it there: a named local returned at the end was one more copy of the app on the stack.
+    /// [`App::new_with`] without Shimano's network key.
     pub fn new(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
+        Self::new_with(b, ant_key, None)
+    }
+
+    /// The first half of [`App::start_with`]: the panel and the chips started, the state read back. It returns the
+    /// app as one struct expression, which the caller can place where it lives (main.rs `make_app`) before
+    /// [`App::begin`] runs on it there: a named local returned at the end was one more copy of the app on the stack.
+    pub fn new_with(b: &mut impl Board, ant_key: Option<[u8; 8]>, di2_key: Option<[u8; 8]>) -> Self {
         panel::init(b);
         play(b, &BEEP_ON);
         let mut rx = nrf::Rx::new();
         let ble = nrf::start(b).ok();
-        let ant = match (ble, ant_key) {
-            (Some(_), Some(key)) => nrf::ant_start(b, &mut rx, key, Kind::ALL.len() as u8).is_ok(),
-            _ => false,
+        let nets = Kind::ALL.map(Kind::network);
+        let (ant, di2) = match (ble, ant_key) {
+            (Some(_), Some(key)) => match nrf::ant_start(b, &mut rx, key, di2_key, &nets) {
+                Ok(di2) => (true, di2),
+                Err(_) => (false, false),
+            },
+            _ => (false, false),
         };
-        let mut sensors = [Sensor::Off; 5];
+        let mut sensors = [Sensor::Off; Kind::ALL.len()];
         for (kind, s) in Kind::ALL.into_iter().zip(&mut sensors) {
-            if let Some(id) = SensorId::from_word(b.backup_read(kind.backup()))
+            if let Some(id) = kind.from_word(b.backup_read(kind.backup()))
                 && ant
+                && (kind.network() == 0 || di2)
                 && nrf::ant_open(b, &mut rx, kind.channel(), kind.device_type(), kind.period(), Some(id)).is_ok()
             {
                 *s = Sensor::Paired(id);
@@ -356,9 +379,13 @@ impl App {
             redraw_ms: 0,
             list_dirty: false,
             ant,
+            di2,
             sensors,
-            heard_ms: [u32::MAX; 5],
-            resting_ms: [u32::MAX; 5],
+            heard_ms: [u32::MAX; Kind::ALL.len()],
+            resting_ms: [u32::MAX; Kind::ALL.len()],
+            gear: None,
+            shifts: 0,
+            remote_press: None,
             ask: 0,
             live: Live::default(),
             decoders: Decoders::default(),
@@ -547,7 +574,7 @@ impl App {
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
             {
                 self.sensors[kind as usize] = Sensor::Paired(id);
-                b.backup_write(kind.backup(), id.to_word());
+                b.backup_write(kind.backup(), kind.to_word(id));
                 let mut l = Line::<20>::new();
                 l.push_str(kind.name());
                 l.push_str(" PAIRED");

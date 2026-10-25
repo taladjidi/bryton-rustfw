@@ -557,6 +557,12 @@ impl Recorder {
         self.put(110, |w, sink| w.lap(sink, time));
     }
 
+    /// A gear change at `time` ([`Writer::gear`]): in RAM like the rest, dropped (counted) when there is no room, so
+    /// a shifting system can never hold the ride up.
+    pub fn gear(&mut self, time: u32, front: bool, front_n: u8, rear_n: u8) {
+        self.put(32, |w, sink| w.gear(sink, time, front, front_n, rear_n));
+    }
+
     /// The ride ended at `time`: the end messages in RAM, the save at the next [`Recorder::io`].
     pub fn end(&mut self, time: u32, ride: [u32; RIDE_WORDS]) {
         self.ride = ride;

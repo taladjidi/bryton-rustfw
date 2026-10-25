@@ -45,6 +45,8 @@ pub enum Menu {
     Courses,
     /// The phone link ([`menu::PHONE`]).
     Phone,
+    /// What the Di2 buttons do ([`menu::REMOTE`]).
+    Remote,
 }
 
 /// A menu's title (a page's is followed by its number).
@@ -66,6 +68,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Steps => "WORKOUT",
         Menu::Courses => "COURSES",
         Menu::Phone => "PHONE",
+        Menu::Remote => "DI2 KEYS",
     }
 }
 
@@ -86,7 +89,9 @@ impl App {
             Menu::Fields(..) => (i < ui::FIELD_GROUPS.len()).then_some(Row::Group(i)),
             Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g)?.1.get(i).map(|&f| Row::Pick(f)),
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
-            Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len()).map(|&r| Row::Read(r)),
+            Menu::Sensors if i == Kind::ALL.len() => Some(Row::Open(Menu::Remote)),
+            Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len() - 1).map(|&r| Row::Read(r)),
+            Menu::Remote => menu::REMOTE.get(i).copied(),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
             Menu::Stock => menu::STOCK.get(i).map(|&r| Row::Stock(r)),
             Menu::Alerts => menu::ALERTS.get(i).copied(),
@@ -141,6 +146,7 @@ impl App {
                 label.push_str(kind.name());
                 match (self.ant, self.sensors.get(k)?) {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
+                    (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),
                     (true, Sensor::Off) => value.push_str("OFF"),
                     (true, Sensor::Search) => value.push_str("SEARCH"),
                     (true, Sensor::Paired(id)) => value.push_u32(u32::from(id.device)),

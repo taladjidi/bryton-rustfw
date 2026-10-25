@@ -319,7 +319,10 @@ pub struct Imported {
     /// Wheel circumference, mm (Sensor.ini, a speed sensor's `Wheel`; unit inferred).
     pub wheel_mm: Option<u16>,
     /// ANT+ sensors per [`crate::sensors::Kind::ALL`] (Sensor.ini).
-    pub sensors: [Option<SensorId>; 5],
+    pub sensors: [Option<SensorId>; crate::sensors::Kind::ALL.len()],
+    /// What the Di2 buttons do, by [`crate::sensors::Press`] (Sensor.ini, the paired Di2's `leftpress`,
+    /// `rightpress`, `leftlongpress`, `rightlongpress`: [`crate::menu::Remote::from_stock`]).
+    pub remote: Option<[crate::menu::Remote; 4]>,
     /// Ride pages (the bike's `[Page1]` to `[Page4]`, the enabled ones first).
     pub pages: [Option<PageCfg>; PAGES],
     /// Eat and drink reminders, minutes of ride time, and the heart rate alert, bpm (the bike's `[Reminder<n>]`).
@@ -428,9 +431,10 @@ impl Imported {
 
     /// From Sensor.ini: per kind, the first active ANT sensor (`HWType=0`, inferred: the BLE ones carry a `Mac`)
     /// of the sections `HRSensor<n>`, `SPDSensor<n>`, `CADSensor<n>`, `COMSensor<n>` (combined speed and cadence,
-    /// inferred from the name) and `PWRSensor<n>`; and a speed sensor's wheel.
+    /// inferred from the name), `PWRSensor<n>`, `ESSSensor<n>` (ANT+ shifting) and `DI2Sensor<n>`
+    /// (`Cfg_SensorIniReadEntry` 0xd0200e94); a speed sensor's wheel; the Di2's button actions.
     pub fn sensors(&mut self, t: &[u8]) {
-        const PREFIX: [&str; 5] = ["HR", "SPD", "CAD", "COM", "PWR"];
+        const PREFIX: [&str; 7] = ["HR", "SPD", "CAD", "COM", "PWR", "ESS", "DI2"];
         for (k, (prefix, slot)) in PREFIX.iter().zip(&mut self.sensors).enumerate() {
             for n in 1..=4u32 {
                 let mut buf = [0u8; 16];
@@ -440,6 +444,11 @@ impl Imported {
                 if let (Some(id), true, None) = (id, ant, *slot) {
                     // a 20-bit device number: the top 4 bits go in the transmission type's upper nibble
                     *slot = Some(SensorId { device: id as u16, trans: ((id >> 16) as u8) << 4 });
+                    if *prefix == "DI2" {
+                        let press = |key| crate::menu::Remote::from_stock(number(t, section, key, 0).unwrap_or(0));
+                        let keys = ["leftpress", "rightpress", "leftlongpress", "rightlongpress"];
+                        self.remote = Some(keys.map(press));
+                    }
                 }
                 let wheel = number(t, section, "Wheel", 0).filter(|w| (1000..=3000).contains(w));
                 if (k == 1 || k == 3) && self.wheel_mm.is_none() {

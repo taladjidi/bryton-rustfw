@@ -14,6 +14,30 @@
 //! bit 7 is a toggle) also carries the beat before it in bytes 2-3. The RR intervals ([`Beats`]) follow the patch
 //! project's P8 (bryton-S510-mods `patches/P8-hrv-recording.c`): one new beat gives one interval; after missed
 //! broadcasts, page 4's previous beat still gives the last one, and with two new beats the first one too.
+//!
+//! **Electronic shifting**, two channels as stock opens them (BOARD.md 11):
+//! - [`Kind::Shifting`], the public ANT+ Shifting profile (device type 34, 4 Hz; SRAM AXS, Campagnolo, any system
+//!   that implements it). Its pages are ANT+ members' documents; what is decoded here is what an open
+//!   implementation and stock agree on: page 1 (shift system status) as github.com/cujomalainey/antplus-arduino
+//!   `src/Profiles/Shifting/DataPages/ANTPLUS_ShiftingShiftSystemStatus.cpp` lays it out (byte 1 event count, byte 3
+//!   current gear: rear in bits 0-4, front in 5-7; byte 4 the gear counts the same way) and as stock reads it
+//!   (`Ant_EssHandleMessage` 0xd02a2a6c: front 7 and rear 31 are "no value", the gears shown one more than sent);
+//!   the common battery page 82 (0x52; byte 2 the battery identifier, its upper nibble the component, 0xff for one
+//!   battery; byte 7 bits 4-6 the status, 1 new to 5 critical, 7 invalid: the ANT+ common pages, read so by stock's
+//!   0xd02a28a8, which shows the worst component's).
+//! - [`Kind::Di2`], Shimano's own ANT channel (device type 1, period 8198, on a private network whose key is
+//!   Shimano's, copied from the owner's stock image like the ANT+ one: build.rs). No public document: the layout is
+//!   stock's decoder (`Ant_Di2_OnAntEvent` 0xd02a2744, `Sensor_Di2ReadData` 0xd0288cc8, `Sensor_Di2UpdateGearRatio`
+//!   0xd0288ae0; ghidra recovered_src/sensors/di2_buttons.c): page 0, bytes 2 and 3 the front and rear gear (from 1;
+//!   stock takes none while either is 0), byte 4 the battery in percent (inferred from stock's Sensor Details screen,
+//!   which shows it as "60%"); page 4 (sent acknowledged, about every 205 ms), byte 1 the right hood button and
+//!   byte 2 the left one, upper nibble 1 single press or 2 long press, lower nibble a press counter, so a new press
+//!   changes the byte (stock's `Sensor_Di2Poll` 0xd0288d8c acts on a change, as here, from 0 at start). The button
+//!   decoding is the one the patch project's P12 hooks and ran on the unit with the owner's Di2 (bryton-S510-mods
+//!   `patches/P12-di2-button-actions.c`, `docs/how-it-works.md` "Di2 hood buttons (P12)", FLASHLOG #19 to #31); its
+//!   test's press sequence is replayed by the `di2_presses` test. Double presses are not decoded (stock neither).
+
+use crate::nrf::SensorId;
 
 /// A kind of ANT+ sensor, one ANT channel each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,11 +52,16 @@ pub enum Kind {
     SpeedCadence,
     /// Power meter.
     Power,
+    /// Electronic shifting, the public ANT+ Shifting profile (module doc).
+    Shifting,
+    /// Shimano Di2, its own ANT channel on a private network (module doc).
+    Di2,
 }
 
 impl Kind {
     /// Every kind, in channel order.
-    pub const ALL: [Kind; 5] = [Kind::Hr, Kind::Speed, Kind::Cadence, Kind::SpeedCadence, Kind::Power];
+    pub const ALL: [Kind; 7] =
+        [Kind::Hr, Kind::Speed, Kind::Cadence, Kind::SpeedCadence, Kind::Power, Kind::Shifting, Kind::Di2];
 
     /// Stock's ANT channel for it.
     pub fn channel(self) -> u8 {
@@ -46,22 +75,57 @@ impl Kind {
 
     /// ANT+ device type.
     pub fn device_type(self) -> u8 {
-        [0x78, 0x7b, 0x7a, 0x79, 0x0b][self as usize]
+        [0x78, 0x7b, 0x7a, 0x79, 0x0b, 0x22, 0x01][self as usize]
     }
 
-    /// Channel period, in 1/32768 s (stock's: cadence at half rate, power at 8 Hz).
+    /// Channel period, in 1/32768 s (stock's: cadence at half rate, power at 8 Hz, the shifting ones at 4 Hz).
     pub fn period(self) -> u16 {
-        [8070, 8118, 16204, 8086, 4091][self as usize]
+        [8070, 8118, 16204, 8086, 4091, 8192, 8198][self as usize]
+    }
+
+    /// The ANT network of its channel: 0 the ANT+ one, 1 Shimano's (stock assigns channel 6 to network 1,
+    /// 0xd027d2a0, whose key is the second `Ant_SetNetworkKeys` 0xd027d6d4 sets).
+    pub fn network(self) -> u8 {
+        u8::from(self == Kind::Di2)
     }
 
     /// Its name in the sensors menu.
     pub fn name(self) -> &'static str {
-        ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER"][self as usize]
+        ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER", "SHIFTING", "DI2"][self as usize]
     }
 
-    /// The RTC backup register that keeps the paired sensor (none of them is used by stock, BOARD.md 8).
+    /// The RTC backup register that keeps the paired sensor (none of them is used by stock, BOARD.md 8). The two
+    /// shifting kinds share 14 (one shifting system per bike), told apart by their tags ([`Kind::to_word`]).
     pub fn backup(self) -> usize {
-        [5, 6, 7, 8, 10][self as usize]
+        [5, 6, 7, 8, 10, 14, 14][self as usize]
+    }
+
+    /// Its paired sensor as kept in [`Kind::backup`]: [`SensorId::to_word`] (tag 0xa5), and for the shifting kinds
+    /// tags 0x61 and 0x62, whose top nibble is no ride page of the earlier builds that used register 14
+    /// ([`crate::PageCfg::from_word`] wants 0xa).
+    ///
+    /// ```
+    /// use bryton_rustfw::{nrf::SensorId, sensors::Kind};
+    /// let s = SensorId { device: 4321, trans: 5 };
+    /// assert_eq!(Kind::Di2.from_word(Kind::Di2.to_word(s)), Some(s));
+    /// assert_eq!(Kind::Shifting.from_word(Kind::Di2.to_word(s)), None, "the other shifting kind's");
+    /// assert_eq!(Kind::Hr.from_word(Kind::Hr.to_word(s)), Some(s));
+    /// ```
+    pub fn to_word(self, id: SensorId) -> u32 {
+        (id.to_word() & 0x00ff_ffff) | u32::from(self.tag()) << 24
+    }
+
+    /// The sensor [`Kind::to_word`] kept in `w`, if it is this kind's.
+    pub fn from_word(self, w: u32) -> Option<SensorId> {
+        (w >> 24 == u32::from(self.tag())).then_some(SensorId { device: w as u16, trans: (w >> 16) as u8 })
+    }
+
+    fn tag(self) -> u8 {
+        match self {
+            Kind::Shifting => 0x61,
+            Kind::Di2 => 0x62,
+            _ => 0xa5,
+        }
     }
 }
 
@@ -78,6 +142,30 @@ pub enum Metric {
     Power,
     /// The right pedal's share of the power, percent (a dual-sided power meter).
     Balance,
+    /// The gear, front in the upper byte and rear in the lower, both from 1 (electronic shifting).
+    Gear,
+    /// The gears there are, the same way (ANT+ Shifting only; 0 for a count not sent).
+    Gears,
+    /// The shifting system's battery: percent (Di2), or [`SHIFT_STATUS`] plus the ANT+ battery status (1 new, 2
+    /// good, 3 ok, 4 low, 5 critical) of its worst component.
+    ShiftBattery,
+}
+
+/// [`Metric::ShiftBattery`] holds an ANT+ battery status from here up, a percent under it.
+pub const SHIFT_STATUS: u16 = 0x100;
+
+/// A shifter button press ([`Decoders::press`]); its number is the index of its action in
+/// [`crate::Settings::remote`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// Left button, single press.
+    LeftShort = 0,
+    /// Right button, single press.
+    RightShort = 1,
+    /// Left button, long press.
+    LeftLong = 2,
+    /// Right button, long press.
+    RightLong = 3,
 }
 
 /// A value older than this is dropped (the sensor stopped or went out of range).
@@ -86,8 +174,8 @@ pub const STALE_MS: u32 = 5000;
 /// The latest value of each [`Metric`], and its age.
 #[derive(Default)]
 pub struct Live {
-    values: [Option<u16>; 5],
-    age_ms: [u32; 5],
+    values: [Option<u16>; 8],
+    age_ms: [u32; 8],
 }
 
 impl Live {
@@ -219,6 +307,12 @@ pub struct Decoders {
     cadence: Revs,
     sc_speed: Revs,
     sc_cadence: Revs,
+    /// The Di2 button bytes last seen (page 4: right, left), 0 at start as stock's.
+    buttons: [u8; 2],
+    /// The ANT+ shifting system's battery status per component (0: not heard).
+    battery: [u8; 16],
+    /// A shifter button pressed, for the app to take.
+    pub press: Option<Press>,
 }
 
 /// Wheel revolutions per minute x 100 to km/h x 10, for a wheel of `wheel_mm` circumference.
@@ -239,7 +333,9 @@ impl Decoders {
             Kind::Speed => self.speed = Revs::default(),
             Kind::Cadence => self.cadence = Revs::default(),
             Kind::SpeedCadence => (self.sc_speed, self.sc_cadence) = (Revs::default(), Revs::default()),
-            Kind::Power => {}
+            Kind::Shifting => self.battery = [0; 16],
+            // the button bytes kept, as stock's (a press missed while silent is not made up later)
+            Kind::Power | Kind::Di2 => {}
         }
     }
 
@@ -287,6 +383,50 @@ impl Decoders {
                 }
             }
             Kind::Power => {}
+            // page 1, shift system status: rear gear in bits 0-4, front in 5-7, from 0 (all ones: no value)
+            Kind::Shifting if d[0] == 1 => {
+                let (front, rear) = (d[3] >> 5, d[3] & 0x1f);
+                if front != 7 && rear != 0x1f {
+                    live.set(Metric::Gear, u16::from(front + 1) << 8 | u16::from(rear + 1));
+                }
+                live.set(Metric::Gears, u16::from(d[4] >> 5) << 8 | u16::from(d[4] & 0x1f));
+            }
+            // common page 82, battery status: the worst component's
+            Kind::Shifting if d[0] == 0x52 => {
+                let status = d[7] >> 4 & 7;
+                if let (1..=5, Some(slot)) = (status, self.battery.get_mut(usize::from(d[2] >> 4))) {
+                    *slot = status;
+                }
+                if let Some(&worst) = self.battery.iter().max().filter(|&&s| s > 0) {
+                    live.set(Metric::ShiftBattery, SHIFT_STATUS + u16::from(worst));
+                }
+            }
+            Kind::Shifting => {}
+            // Shimano's page 0: front and rear gear from 1 (0: not known yet), the battery in percent
+            Kind::Di2 if d[0] == 0 => {
+                if d[2] > 0 && d[3] > 0 {
+                    live.set(Metric::Gear, u16::from(d[2]) << 8 | u16::from(d[3]));
+                }
+                if d[4] <= 100 {
+                    live.set(Metric::ShiftBattery, u16::from(d[4]));
+                }
+            }
+            // page 4: a button byte that changed is a press (upper nibble 1 single, 2 long)
+            Kind::Di2 if d[0] == 4 => {
+                for (side, (&now, last)) in [d[1], d[2]].iter().zip(&mut self.buttons).enumerate() {
+                    if now == core::mem::replace(last, now) {
+                        continue;
+                    }
+                    self.press = match (now >> 4, side) {
+                        (1, 0) => Some(Press::RightShort),
+                        (1, _) => Some(Press::LeftShort),
+                        (2, 0) => Some(Press::RightLong),
+                        (2, _) => Some(Press::LeftLong),
+                        _ => self.press,
+                    };
+                }
+            }
+            Kind::Di2 => {}
         }
     }
 }
@@ -345,6 +485,45 @@ mod tests {
         assert_eq!(b.rr(), none, "98 ms: a glitch");
         b.update(page(0x04, 6900, 9200, 11));
         assert_eq!(b.rr(), none, "2246 ms: out of range");
+    }
+
+    /// The Di2 button page, with the press sequence of the patch project's test of the same decoding on stock
+    /// (bryton-S510-mods tests/test_tools.py `test_di2_presses_run_their_action_once`): a new byte is one press,
+    /// the same byte again none, another kind (3) none, each side on its own.
+    #[test]
+    fn di2_presses() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let mut press = |right: u8, left: u8| {
+            dec.decode(Kind::Di2, [4, right, left, 0, 0, 0, 0, 0], 2105, &mut live);
+            dec.press.take()
+        };
+        assert_eq!(press(0x11, 0), Some(Press::RightShort));
+        assert_eq!(press(0x11, 0), None, "repeated: the same press");
+        assert_eq!(press(0x22, 0), Some(Press::RightLong));
+        assert_eq!(press(0x22, 0x13), Some(Press::LeftShort));
+        assert_eq!(press(0x22, 0x24), Some(Press::LeftLong));
+        assert_eq!(press(0x35, 0x24), None, "unknown kind");
+        assert_eq!(press(0x17, 0x24), Some(Press::RightShort));
+    }
+
+    /// The shifting systems' gear and battery (sensors.rs module doc): ANT+ page 1 from 0 with all ones for none,
+    /// the common battery page's worst component; Shimano's page 0 from 1, nothing while a gear is 0.
+    #[test]
+    fn shifting_pages() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Shifting, [1, 0, 0xff, 0xff, 2 << 5 | 12, 0, 0, 0], 2105, &mut live);
+        assert_eq!((live.get(Metric::Gear), live.get(Metric::Gears)), (None, Some(0x020c)), "no gear yet");
+        dec.decode(Kind::Shifting, [1, 1, 0xff, 1 << 5 | 3, 2 << 5 | 12, 0, 0, 0], 2105, &mut live);
+        assert_eq!(live.get(Metric::Gear), Some(0x0204), "2-4");
+        dec.decode(Kind::Shifting, [0x52, 0xff, 0x11, 0, 0, 0, 0, 2 << 4], 2105, &mut live);
+        dec.decode(Kind::Shifting, [0x52, 0xff, 0x21, 0, 0, 0, 0, 4 << 4], 2105, &mut live);
+        dec.decode(Kind::Shifting, [0x52, 0xff, 0x31, 0, 0, 0, 0, 7 << 4], 2105, &mut live);
+        assert_eq!(live.get(Metric::ShiftBattery), Some(SHIFT_STATUS + 4), "the low one; 7 is no status");
+        let mut live = Live::default();
+        dec.decode(Kind::Di2, [0, 0, 0, 11, 255, 0, 0, 0], 2105, &mut live);
+        assert_eq!((live.get(Metric::Gear), live.get(Metric::ShiftBattery)), (None, None));
+        dec.decode(Kind::Di2, [0, 0, 2, 11, 60, 0, 0, 0], 2105, &mut live);
+        assert_eq!((live.get(Metric::Gear), live.get(Metric::ShiftBattery)), (Some(0x020b), Some(60)));
     }
 
     #[test]

@@ -40,6 +40,17 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **Electronic shifting (sensors.rs, app/radio.rs)**, all simulated only, the owner's Di2 at hand: with
+  `di2_key.bin` built in (`tools/ant_key.py`), SENSORS > DI2 reads OFF (not NO KEY: the chip took network 1's key
+  and channel 6's assignment); Start finds the Di2 within seconds (turn a crank or shift to wake it), its number
+  shown green. GEAR shows front-rear and follows the shifts (check front and rear are not swapped: inferred from
+  stock's gear ratio code); SHIFT BAT shows the percent stock's Sensor Details showed (60 % on the patch project's
+  picture; the byte is inferred to be a percent). DI2 KEYS: set R PRESS to NEXT PAGE, press the right hood button
+  once: one page; a long press: its action; the left button too (the sides inferred from stock: byte 1 right,
+  byte 2 left). A ride with shifts: SHIFTS counts them, and the saved file has gear change events (fitdecode, or
+  Intervals.icu's gear chart). A Di2 switched off (or out of range): GEAR goes to "--". An ANT+ Shifting system
+  (SRAM AXS) if one can be borrowed: SHIFTING row, gear, battery status.
+
 - **The phone link (BLE, app/phone.rs)**, in this order, the dev link up (`dev.py run`, then the screenshots), an
   iPhone at hand. A build run from RAM without EMMC_WRITE=1 keeps the bond only until a reset: after one, forget
   "S510" on the iPhone before pairing again (the iPhone keeps a key the unit no longer has).

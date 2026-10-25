@@ -1,8 +1,10 @@
 //! The ANT+ sensors through the Nordic chip: each kind's channel (off, searching, paired), the rest after a search
 //! timed out, and [`App::poll_nrf`], which reads the chip's events: broadcasts into the live values, the sensors
-//! found while searching paired and kept in backup registers, BLE devices for the nearby list.
+//! found while searching paired and kept in backup registers, BLE devices for the nearby list. The shifting
+//! system's gear changes (counted, recorded) and its buttons ([`App::remote`]) are here too.
 
 use crate::*;
+use phone::Media;
 
 /// How long a sensor's channel rests, closed, after its search timed out ([`nrf::SEARCH_TIMEOUT`]) before it
 /// searches again: so a strap not worn costs the radio 30 s of listening in 90 instead of all the time.
@@ -23,6 +25,9 @@ pub enum Sensor {
 impl App {
     /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing.
     pub(crate) fn set_sensor(&mut self, b: &mut impl Board, kind: Kind, want: Sensor) {
+        if kind.network() == 1 && !self.di2 {
+            return; // no channel without Shimano's key
+        }
         let i = kind as usize;
         let resting = self.resting_ms[i] != u32::MAX;
         if self.sensors[i] != Sensor::Off && !resting && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err() {
@@ -36,7 +41,10 @@ impl App {
             Sensor::Search => None,
             Sensor::Paired(id) => Some(id),
         };
-        b.backup_write(kind.backup(), id.map_or(0, SensorId::to_word));
+        // the two shifting kinds share a register: forgetting one leaves the other's pairing
+        if id.is_some() || kind.from_word(b.backup_read(kind.backup())).is_some() {
+            b.backup_write(kind.backup(), id.map_or(0, |id| kind.to_word(id)));
+        }
         if want != Sensor::Off
             && nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok()
         {
@@ -72,6 +80,11 @@ impl App {
                     for &rr in self.decoders.beats.rr() {
                         self.hrv.push(rr);
                     }
+                    if matches!(kind, Kind::Shifting | Kind::Di2) {
+                        self.shifted();
+                        // acted on once the stream is read (a media key sends a command)
+                        self.remote_press = self.decoders.press.take().or(self.remote_press);
+                    }
                     self.heard_ms[kind as usize] = 0;
                     if self.sensors[kind as usize] == Sensor::Search {
                         self.ask |= 1 << ch;
@@ -101,6 +114,49 @@ impl App {
         }
         if title && self.screen == Screen::Nearby {
             ui::draw_nearby(&mut Panel(b, (0, self.bottom())), self.nearby.count(), self.scanning);
+        }
+        if let Some(p) = self.remote_press.take() {
+            self.remote(b, p);
+        }
+    }
+
+    /// The gear just decoded: a change while riding is a shift, counted and recorded (a gear change event, the
+    /// front or the rear one; recorder.rs takes it into RAM, never waiting on the card).
+    fn shifted(&mut self) {
+        let Some(now) = self.live.get(Metric::Gear) else { return };
+        let Some(was) = self.gear.replace(now).filter(|&g| g != now) else { return };
+        if self.ride.state() != ride::State::Running {
+            return;
+        }
+        self.shifts = self.shifts.saturating_add(1);
+        if !self.card_writable {
+            return;
+        }
+        let (_, t) = self.rec_time();
+        let front = now >> 8 != was >> 8;
+        let [rear_n, front_n] = now.to_le_bytes();
+        self.recorder.gear(t, front, front_n, rear_n);
+        self.full.gear(t, front, front_n, rear_n);
+    }
+
+    /// A shifter button pressed: the action the remote menu set for it (menu.rs [`menu::Remote`]). Next and
+    /// previous page act on the ride pages and the overview only (as stock's Di2 page actions), Lap and Start as
+    /// those keys anywhere.
+    pub(crate) fn remote(&mut self, b: &mut impl Board, p: sensors::Press) {
+        let action = self.settings.remote.get(p as usize).copied().unwrap_or(menu::Remote::None);
+        let page = matches!(self.screen, Screen::Main | Screen::Ride(_));
+        match action {
+            menu::Remote::None => {}
+            menu::Remote::NextPage if page => self.input(b, Input::Next),
+            menu::Remote::PrevPage if matches!(self.screen, Screen::Ride(_)) => {
+                self.input(b, Input::Touch(Gesture::Swipe(Dir::Right)))
+            }
+            menu::Remote::NextPage | menu::Remote::PrevPage => {}
+            menu::Remote::Lap => self.input(b, Input::Prev),
+            menu::Remote::Start => self.input(b, Input::Select),
+            menu::Remote::Play => self.media(b, Media::PlayPause, false),
+            menu::Remote::NextTrack => self.media(b, Media::Next, false),
+            menu::Remote::PrevTrack => self.media(b, Media::Prev, false),
         }
     }
 }

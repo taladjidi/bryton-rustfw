@@ -531,12 +531,19 @@ pub enum Field {
     /// What plays on the phone (AMS): the elapsed time of the track, m:ss (its title is on the media screen and in the
     /// banner when it changes).
     Music,
+    // electronic shifting (sensors.rs)
+    /// The gear, front-rear ("2-11"), from 1.
+    Gear,
+    /// Gear changes in this ride.
+    Shifts,
+    /// The shifting system's battery: percent (Di2), or its status (ANT+: NEW, GOOD, OK, LOW, CRIT).
+    ShiftBattery,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 56] = {
+    pub const ALL: [Field; 59] = {
         use Field::*;
         [
             Time,
@@ -594,7 +601,10 @@ impl Field {
             Profile, // the workout player again:
             WorkoutGraph,
             WktPower, // the phone:
-            Music,
+            Music,    // electronic shifting:
+            Gear,
+            Shifts,
+            ShiftBattery,
         ]
     };
 
@@ -660,6 +670,10 @@ impl Field {
             "WKT GRAPH",
             "WKT POWER",
             "MUSIC",
+            // electronic shifting
+            "GEAR",
+            "SHIFTS",
+            "SHIFT BAT",
         ];
         LABELS[self as usize]
     }
@@ -672,8 +686,9 @@ impl Field {
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
             "88/88", "888-888", "8:88:88", "888-888", // the course followed:
-            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888", // the phone:
-            "88:88",
+            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",  // the phone:
+            "88:88", // electronic shifting:
+            "8-88", "8888", "GOOD",
         ];
         WIDEST[self as usize]
     }
@@ -706,7 +721,7 @@ impl Field {
 }
 
 /// The fields by kind, for the picker: a page's box is a group then a field, a few rows each, not 55 in a row.
-pub const FIELD_GROUPS: [(&str, &[Field]); 9] = {
+pub const FIELD_GROUPS: [(&str, &[Field]); 10] = {
     use Field::*;
     [
         (
@@ -721,6 +736,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 9] = {
         ("COURSE", &[ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
+        ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
     ]
 };
 
