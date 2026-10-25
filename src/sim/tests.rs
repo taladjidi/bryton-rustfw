@@ -2076,6 +2076,28 @@ fn back_held_3s_powers_off_after_release() {
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
 }
 
+/// An empty list says so in a row, not in a banner that goes after 4 s: WORKOUTS with nothing planned.
+#[test]
+fn empty_workouts_say_so_in_a_row() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
+    assert_eq!(app.rows(Menu::Workouts), 1);
+    let (label, _, color) = app.menu_row(Menu::Workouts, 0).unwrap();
+    assert_eq!((label.as_str(), color), ("NONE PLANNED", ui::GREY));
+    run(&mut sim, &mut app, 6000);
+    assert!(app.banner_ms.is_none(), "no banner");
+    assert_consistent(&sim, &app);
+    sim.save("menu_workouts_empty");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0), "the row does nothing");
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
+}
+
 /// The ride's card stays until Back or Start: another key, a swipe, a tap or a hold does not dismiss it (2026-10-25
 /// review 2, P4: a raindrop threw the summary away).
 #[test]

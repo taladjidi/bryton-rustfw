@@ -150,6 +150,7 @@ impl App {
             Menu::History if i == 0 => Some(Row::Open(Menu::Stock)),
             Menu::History if self.stock.index.is_empty() => (i == 1).then_some(Row::Stock(menu::StockRow::Scan)),
             Menu::History => self.stock.index.get(i - 1).map(|_| Row::Past(i - 1)),
+            Menu::Workouts if self.calendar.get(0).is_none() => (i == 0).then_some(Row::Empty("NONE PLANNED")),
             Menu::Workouts => self.calendar.get(i).map(|_| Row::Workout(i)),
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
@@ -178,6 +179,10 @@ impl App {
         match row {
             Row::Open(Menu::Page(_)) if matches!(menu, Menu::Ride(_)) => label.push_str("EDIT THIS PAGE"),
             Row::Open(Menu::Main) => label.push_str("ALL SETTINGS"),
+            Row::Empty(text) => {
+                label.push_str(text);
+                color = ui::GREY;
+            }
             Row::Ride(r) => {
                 use menu::RideRow;
                 label.push_str(match r {
@@ -422,7 +427,8 @@ impl App {
         let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
-                ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel);
+                let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
+                ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
                     self.row(menu, i)
                 {
@@ -487,9 +493,6 @@ impl App {
         match self.row(menu, sel) {
             Some(Row::Open(Menu::Workouts)) => {
                 self.load_calendar(b);
-                if self.calendar.get(0).is_none() {
-                    self.say("NO WORKOUT PLANNED");
-                }
                 self.open(Screen::Menu(Menu::Workouts, 0));
             }
             Some(Row::Open(Menu::Courses)) => self.open_courses(b),
@@ -635,7 +638,7 @@ impl App {
                     self.phone_changed();
                 }
             }
-            Some(Row::Read(_) | Row::Stock(_)) | None => {}
+            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_)) | None => {}
         }
     }
 }

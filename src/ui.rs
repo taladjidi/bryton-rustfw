@@ -1491,7 +1491,9 @@ pub(crate) fn menu_label_w(label: &str, value: &str) -> u32 {
 /// where white was 2:1).
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
     let y = LIST_Y + i as u32 * MENU_ROW;
-    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
+    // a row with no value and a grey one is a note (an empty list), not a choice
+    let note = value.is_empty() && value_color == GREY;
+    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, if note { GREY } else { WHITE }) };
     let name_w = menu_label_w(label, value);
     let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
     c.fill(0, y, W, ty - y, bg);

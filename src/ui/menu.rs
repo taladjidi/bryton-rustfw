@@ -262,6 +262,9 @@ pub enum Reading {
 pub enum Row {
     /// Opens a menu.
     Open(Menu),
+    /// What an empty list says, as a grey row that does nothing (not a banner that goes after 4 s and leaves a bare
+    /// list): "NONE PLANNED" in WORKOUTS.
+    Empty(&'static str),
     /// Opens the list of BLE devices nearby (and starts a scan).
     Nearby,
     /// Opens ABOUT: the firmware's version and commit, and Ferris.
