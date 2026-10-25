@@ -230,7 +230,7 @@ impl App {
         self.save_misc(b);
     }
 
-    /// Applies stock's settings ([`stock::import`]) where this firmware has them, and says how many (`quiet`:
+    /// Applies stock's settings ([`stock::Scan::import`]) where this firmware has them, and says how many (`quiet`:
     /// nothing said when there was nothing).
     pub(crate) fn import_stock(&mut self, b: &mut impl Board, quiet: bool) {
         let Ok(i) = self.stock.import(&mut emmc::Volume(&mut self.emmc, b)) else {

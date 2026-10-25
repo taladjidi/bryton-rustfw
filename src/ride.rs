@@ -728,6 +728,7 @@ impl History {
     }
 
     /// See [`History::whole_len`]: seconds one whole-ride bar covers.
+    #[cfg(test)]
     pub fn whole_bar_s(&self) -> u32 {
         self.per * BAR_S
     }

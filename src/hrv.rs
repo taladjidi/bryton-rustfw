@@ -15,7 +15,7 @@
 //!   its two differences instead of inflating the value.
 //!
 //! Both are recomputed every [`EVERY`] beats (about every 3 to 5 s while riding): the cost is bounded by the
-//! window, about 4 n multiply-adds per box size for n beats (`dfa_cost` measures it).
+//! window, about 4 n multiply-adds per box size for n beats.
 
 use crate::tiles::ln;
 
@@ -251,22 +251,5 @@ mod tests {
         }
         assert_eq!(h.rmssd(), Some(29), "the ectopic beat left out; the 815s add two zeros");
         assert!(h.alpha1().is_some_and(|a| a < 0.5), "alternation: anti-correlated");
-    }
-
-    /// The CPU cost of one computation with a full window (2 minutes at 150 bpm: 300 beats).
-    #[test]
-    fn dfa_cost() {
-        let mut g = noise(7, 20.0);
-        let mut h = Hrv::default();
-        for _ in 0..300 {
-            h.push((400.0 + g()) as u16);
-        }
-        let t = std::time::Instant::now();
-        for _ in 0..100 {
-            core::hint::black_box(h.dfa_now());
-        }
-        // box size s over n beats: n / s boxes of 2 s multiply-adds for the line, 2 s for the residuals
-        let ops: usize = (4..=16).map(|s| 300 / s * s * 4).sum();
-        std::println!("DFA alpha1 of 300 beats: {:?} on this computer, {ops} multiply-adds", t.elapsed() / 100);
     }
 }

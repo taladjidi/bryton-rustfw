@@ -13,18 +13,10 @@
 
 use crate::Board;
 
-/// Firmware version (1 byte).
-pub const REG_VERSION: u8 = 0x00;
 /// Status: device status in the low nibble, error code in the high one.
 pub const REG_STATUS: u8 = 0x01;
-/// Resolution, 3 bytes, decoded by [`resolution`].
-pub const REG_RESOLUTION: u8 = 0x04;
-/// Firmware revision, 4 bytes (FW_Rev_3 first).
-pub const REG_REVISION: u8 = 0x0c;
 /// The first point, 3 bytes (of a 4-byte slot), decoded by [`point`].
 pub const REG_POINT: u8 = 0x12;
-/// Max number of contacts supported (1 byte).
-pub const REG_MAX_CONTACTS: u8 = 0x3f;
 
 /// The status says the chip is ready: Normal (0) or Idle (4), no error (st1232.c).
 ///
@@ -133,7 +125,6 @@ struct Finger {
 #[derive(Default)]
 pub struct Recogniser {
     finger: Option<Finger>,
-    delta: (i16, i16),
     /// The last drag released: its start and its vector (the zoomed map pans by it).
     drag: Option<((u16, u16), (i16, i16))>,
 }
@@ -142,11 +133,6 @@ impl Recogniser {
     /// A finger was down at the last sample: keep reading until it is lifted (the release makes the gesture).
     pub fn down(&self) -> bool {
         self.finger.is_some()
-    }
-
-    /// How far the finger moved since the previous sample (for scrolling a list by hand).
-    pub fn delta(&self) -> (i16, i16) {
-        self.delta
     }
 
     /// The drag just released (its start point and vector, pixels), whatever gesture it made (a swipe or none),
@@ -158,7 +144,6 @@ impl Recogniser {
     /// One sample, `dt_ms` after the previous one: the finger's point, or None when no finger is down.
     pub fn feed(&mut self, p: Option<(u16, u16)>, dt_ms: u32) -> Option<Gesture> {
         let (Some(f), p) = (&mut self.finger, p) else {
-            self.delta = (0, 0);
             if p.is_some() {
                 self.drag = None;
             }
@@ -167,7 +152,6 @@ impl Recogniser {
         };
         let Some(p) = p else {
             let f = self.finger.take()?;
-            self.delta = (0, 0);
             let (dx, dy) = (i32::from(f.last.0) - i32::from(f.start.0), i32::from(f.last.1) - i32::from(f.start.1));
             if f.dragged && !f.held {
                 self.drag = Some((f.start, (dx as i16, dy as i16))); // points are panel pixels: they fit
@@ -182,7 +166,6 @@ impl Recogniser {
                 _ => None, // a short drag: neither
             };
         };
-        self.delta = ((i32::from(p.0) - i32::from(f.last.0)) as i16, (i32::from(p.1) - i32::from(f.last.1)) as i16);
         f.last = p;
         f.ms = f.ms.saturating_add(dt_ms);
         let (dx, dy) = (i32::from(p.0) - i32::from(f.start.0), i32::from(p.1) - i32::from(f.start.1));
@@ -244,15 +227,5 @@ mod tests {
         assert_eq!(r.take_drag(), None, "a new touch drops it");
         assert_eq!(r.feed(None, 50), Some(Gesture::Tap(10, 10)));
         assert_eq!(r.take_drag(), None, "a tap is no drag");
-    }
-
-    #[test]
-    fn delta_follows_the_finger() {
-        let mut r = Recogniser::default();
-        r.feed(Some((50, 200)), 50);
-        r.feed(Some((50, 190)), 50);
-        assert_eq!(r.delta(), (0, -10));
-        r.feed(None, 50);
-        assert_eq!(r.delta(), (0, 0));
     }
 }
