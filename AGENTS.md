@@ -139,6 +139,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - `phone.rs`: the phone link over BLE: the GATT server set up (HID, battery, device information), advertising,
     bonding and the bond in `\Rustfw\ble.bin`, the BLE events, the GATT client of the phone (ANCS, AMS, CTS
     discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
+  - `notifs.rs`: the phone's last notifications kept (`phone::Inbox`), the NOTIFICATIONS list (a tap on the overview's
+    notices, or PHONE in the menu) and a notification's detail.
   - `riding.rs`: Start / pause, the end-ride screen (RESUME, SAVE, DISCARD), the second tick, the recorder glue.
     `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
   - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
