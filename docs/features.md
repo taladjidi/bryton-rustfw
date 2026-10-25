@@ -20,6 +20,13 @@
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the distance to go, distance, moving time and average speed.
+- **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
+  a box of that size has the same digit height (4x in a half-width box, 7x or 8x across the screen); only a longer
+  value ("200-220", "1.6K 6%") takes the largest smaller scale it fits. Times: "MM:SS" under an hour (the step left
+  "M:SS"), then "H:MM" at the box's size with the seconds small and grey after it ("1:23 45"); the seconds go first
+  when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
+  across the screen at least 120 px tall (a smaller graph shows its title and bars), and the workout gauge's target
+  line only in a box 100 px tall or more.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied

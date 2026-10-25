@@ -245,7 +245,7 @@ impl App {
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
                     }
-                    Drawn::Value(text, fg) => ui::draw_field_value(c, bx, f, text.as_str(), fg),
+                    Drawn::Value(text, fg) => ui::draw_field_value(c, bx, text.as_str(), fg),
                     _ => {}
                 }
             }
@@ -439,7 +439,7 @@ impl App {
                     let (text, fg) = (self.field_text(f), self.field_color(f));
                     if (was, was_fg) != (text, fg) {
                         let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
-                        ui::draw_field_value_changes(&mut Panel(b, self.area()), bx, f, old, text.as_str(), fg);
+                        ui::draw_field_value_changes(&mut Panel(b, self.area()), bx, old, text.as_str(), fg);
                     }
                     Drawn::Value(text, fg)
                 }

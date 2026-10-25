@@ -175,7 +175,7 @@ impl App {
                 None => l.push_str("END"),
             },
             (Field::StepTime, Some((p, _))) => match p.left(steps, self.ride.dist_m()) {
-                Left::Time(t) => push_clock(&mut l, t),
+                Left::Time(t) => push_duration(&mut l, t, false),
                 Left::Distance(m) => push_km(&mut l, m),
                 Left::Lap => l.push_str("LAP"),
                 Left::Done => l.push_str("--"),

@@ -60,6 +60,29 @@ pub(crate) fn push_clock<const N: usize>(l: &mut Line<N>, s: u32) {
     l.push_str(ui::DIGITS[(s % 10) as usize]);
 }
 
+/// Seconds as a ride field shows a duration: under an hour "MM:SS" ("M:SS" without `pad`), then "H:MM" with the
+/// seconds as a small tail ("1:23|45", [`ui::SMALL_TAIL`]), so a timer's digits are as big as a speed's.
+pub(crate) fn push_duration<const N: usize>(l: &mut Line<N>, s: u32, pad: bool) {
+    let two = |l: &mut Line<N>, v: u32| {
+        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
+        l.push_str(ui::DIGITS[(v % 10) as usize]);
+    };
+    if s >= 3600 {
+        l.push_u32(s / 3600);
+        l.push_str(":");
+        two(l, s / 60 % 60);
+        l.push_str("|");
+    } else {
+        if pad {
+            two(l, s / 60);
+        } else {
+            l.push_u32(s / 60);
+        }
+        l.push_str(":");
+    }
+    two(l, s % 60);
+}
+
 /// Metres as km with 2 decimals.
 pub(crate) fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
     l.push_u32(m / 1000);
@@ -105,13 +128,7 @@ impl App {
                 return l;
             }
             Field::Timer | Field::LapTime => {
-                let s = if f == Field::Timer { r.timer_s() } else { r.lap_s() };
-                l.push_u32(s / 3600);
-                for v in [s / 60 % 60, s % 60] {
-                    l.push_str(":");
-                    l.push_str(ui::DIGITS[(v / 10) as usize % 10]);
-                    l.push_str(ui::DIGITS[(v % 10) as usize]);
-                }
+                push_duration(&mut l, if f == Field::Timer { r.timer_s() } else { r.lap_s() }, true);
                 return l;
             }
             Field::Dist | Field::LapDist => {
@@ -156,7 +173,7 @@ impl App {
             Field::WktPower => return self.gauge_now(0).value,
             Field::Music if self.phone.now.title.as_str().is_empty() => (None, false),
             Field::Music => {
-                push_clock(&mut l, self.phone.now.elapsed());
+                push_duration(&mut l, self.phone.now.elapsed(), false);
                 return l;
             }
             Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo => {
@@ -283,5 +300,24 @@ impl App {
             (_, _, Some(j)) if f == Field::Wbal => power::wbal_color(j, self.settings.wprime_j),
             _ => ui::WHITE,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations() {
+        let d = |s, pad| {
+            let mut l = Line::<8>::new();
+            push_duration(&mut l, s, pad);
+            l
+        };
+        assert_eq!([d(0, true).as_str(), d(65, true).as_str(), d(65, false).as_str()], ["00:00", "01:05", "1:05"]);
+        assert_eq!(
+            [d(3599, true).as_str(), d(3600, true).as_str(), d(45_296, false).as_str()],
+            ["59:59", "1:00|00", "12:34|56"]
+        );
     }
 }

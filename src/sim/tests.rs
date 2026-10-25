@@ -72,7 +72,7 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
     for (i, v) in values.iter().enumerate() {
         let bx = crate::ui::field_box(page.layout, crate::ui::RIDE_H, i).unwrap();
         crate::ui::draw_field_frame(&mut f, bx, page.fields[i]);
-        crate::ui::draw_field_value(&mut f, bx, page.fields[i], v, zone_fg(page.fields[i], v));
+        crate::ui::draw_field_value(&mut f, bx, v, zone_fg(page.fields[i], v));
     }
     f.px
 }
@@ -115,7 +115,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     for (i, (field, v)) in values.into_iter().enumerate() {
         let bx = crate::ui::overview_box(i).unwrap();
         crate::ui::draw_field_frame(&mut f, bx, field);
-        crate::ui::draw_field_value(&mut f, bx, field, v, crate::ui::WHITE);
+        crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     crate::ui::draw_ferris(&mut f);
     f.px
@@ -1991,7 +1991,7 @@ fn a_ride_with_laps_and_pauses() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 5000);
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
-    assert_eq!((text(&app, Timer), text(&app, Dist), app.strip.rec), ("0:00:00".into(), "0.00".into(), Rec::Idle));
+    assert_eq!((text(&app, Timer), text(&app, Dist), app.strip.rec), ("00:00".into(), "0.00".into(), Rec::Idle));
     app.press(&mut sim, Press::Short(Key::Start));
     let (t0, mut px0) = (sim.ms, sim.pixels);
     let mut seconds = 0;
@@ -2009,10 +2009,12 @@ fn a_ride_with_laps_and_pauses() {
             px0 = sim.pixels; // the averages have settled
         }
     }
-    // the averages of ramps settle as a long ride's do: from then on, mostly the timer, the distance, the graph
+    // the averages of ramps settle as a long ride's do: from then on, mostly the timer, the distance, the graph (1250 px/s
+    // before the UI review's step 3: the timer's seconds at the box's 4x, 560 px of ink instead of a 240 px 2x cell, and
+    // the graph without its 1x axes in a half box, 112 columns instead of 85)
     let px_s = (sim.pixels - px0) / 120;
     std::println!("ride page (timer, km, avg km/h, avg HR, avg W, graph), minutes 10 to 12: {px_s} px/s");
-    assert!(px_s < 1500, "{px_s} px/s while riding");
+    assert!(px_s < 1800, "{px_s} px/s while riding");
     assert_eq!(app.strip.rec, Rec::Running);
     let timer = app.ride.timer_s();
     assert!((719..=721).contains(&timer), "timer {timer}");
@@ -2043,7 +2045,7 @@ fn a_ride_with_laps_and_pauses() {
     let hr_fg = crate::ride::hr_color(crate::ride::hr_zone(hr, 190));
     let w_fg = crate::ride::power_color(crate::ride::power_zone(w, 200));
     assert!(colors_in(&sim, bx(0)).contains(&hr_fg) && colors_in(&sim, bx(1)).contains(&w_fg), "zone colours");
-    assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("0:01:00".into(), "0.48".into()));
+    assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("01:00".into(), "0.48".into()));
     assert_eq!(text(&app, MaxSpeed), "28.8");
     let ascent = app.ride.ascent_m();
     assert!((150..=157).contains(&ascent), "0.2 m/s for 780 s: {ascent} m");
