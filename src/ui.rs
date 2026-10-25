@@ -1272,7 +1272,7 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
         return draw_ferris(c);
     }
     for (r, n) in notices.iter().take(NOTICES).enumerate() {
-        // "19:36 Edwige A...": the time small and grey, the text in the large font for every row (cut, not shrunk:
+        // "19:36 A CALLER": the time small and grey, the text in the large font for every row (cut, not shrunk:
         // one row smaller than the other read as inconsistent on the unit)
         let style = Style { fg: if r == 0 { WHITE } else { GREY }, ..LABEL };
         let small = Style { fg: GREY, scale: 1, ..LABEL };

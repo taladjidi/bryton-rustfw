@@ -746,7 +746,7 @@ mod tests {
             push_fixed(&mut l, v, shift, dec);
             std::string::String::from(l.as_str())
         };
-        assert_eq!(s(488_566_100, 7, 5), "48.85661");
+        assert_eq!(s(51_234_561, 7, 5), "5.12345");
         assert_eq!(s(-1_224_194_200, 7, 5), "-122.41942");
         assert_eq!(s(23_500, 3, 0), "23");
         assert_eq!(s(1_000_500, 7, 5), "0.10005");

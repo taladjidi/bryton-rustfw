@@ -161,7 +161,7 @@ impl Aid {
     ///
     /// ```
     /// use bryton_rustfw::gnss::Aid;
-    /// let a = Aid { offset_15min: Some(-20), pos: Some((488_566_000, -22_945_000)) };
+    /// let a = Aid { offset_15min: Some(-20), pos: Some((5_123_000, 4_234_000)) };
     /// assert_eq!(Aid::from_words(a.to_words()), a);
     /// assert_eq!(Aid::from_words([0, 0]), Aid { offset_15min: None, pos: None });
     /// ```
@@ -305,7 +305,7 @@ mod tests {
         let mut parser = Parser::new();
         let got: std::vec::Vec<_> = c.iter().filter_map(|&b| parser.push(b).map(|(c, i, p)| (c, i, p.len()))).collect();
         assert_eq!(got, [(0x06, 0x8a, 19)]);
-        for f in [mga_time((2026, 10, 23, 15, 4, 5), 2), mga_pos(488_566_000, 22_945_000, 10_000)] {
+        for f in [mga_time((2026, 10, 23, 15, 4, 5), 2), mga_pos(5_123_000, 4_234_000, 10_000)] {
             let mut parser = Parser::new();
             let got: std::vec::Vec<_> =
                 f.iter().filter_map(|&b| parser.push(b).map(|(c, i, p)| (c, i, p.len()))).collect();

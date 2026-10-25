@@ -3,7 +3,7 @@
 
 use crate::*;
 
-/// `v / 10^shift` with `decimals` decimals (truncated): `push_fixed(l, 488566100, 7, 5)` gives "48.85661".
+/// `v / 10^shift` with `decimals` decimals (truncated): `push_fixed(l, 51234561, 7, 5)` gives "5.12345".
 pub(crate) fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
     if v < 0 {
         l.push_str("-");

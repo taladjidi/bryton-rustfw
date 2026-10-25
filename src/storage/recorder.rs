@@ -1111,7 +1111,7 @@ mod tests {
     fn sample(t: u32) -> Sample {
         Sample {
             time: T0 + t,
-            pos: Some((488_566_000 + 300 * t as i32, 23_522_000 - 200 * t as i32)),
+            pos: Some((5_123_000 + 300 * t as i32, 4_234_000 - 200 * t as i32)),
             alt_mm: Some(35_000 + 100 * (t % 50) as i32),
             speed_mm_s: Some(7000 + 10 * (t % 100)),
             hr: (t >= 10).then_some(120 + (t % 40) as u8),

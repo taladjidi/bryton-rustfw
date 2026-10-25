@@ -839,7 +839,7 @@ mod tests {
         (0..secs)
             .map(|t| Sample {
                 time: T0 + 1 + t,
-                pos: Some((488_566_000 + 300 * t as i32, 23_522_000 - 200 * t as i32)),
+                pos: Some((5_123_000 + 300 * t as i32, 4_234_000 - 200 * t as i32)),
                 alt_mm: Some(35_000 + 100 * (t % 50) as i32),
                 speed_mm_s: Some(7000 + 10 * (t % 100)),
                 hr: (t >= 10).then_some(120 + (t % 40) as u8),
@@ -896,7 +896,7 @@ mod tests {
         assert_eq!(records.len(), 300);
         let r = records[100];
         assert_eq!(field(r, 253), Some(u64::from(T0 + 101)));
-        assert_eq!(field(r, 0), Some(u64::from(semicircles(488_596_000))));
+        assert_eq!(field(r, 0), Some(u64::from(semicircles(5_153_000))));
         assert_eq!(field(r, 3), Some(120 + 100 % 40));
         assert_eq!(field(r, 7), Some(200 + 100 % 60));
         assert_eq!(field(records[0], 3), None, "no HR yet: the field is left out");

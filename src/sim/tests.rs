@@ -1381,7 +1381,7 @@ fn gps_fix_and_speed() {
     }
     // the fix taught the RTC's offset (+2 h) and the position (to 1e-4 degrees): kept for the next power-up
     let aid = crate::gnss::Aid::from_words([sim.backup[17], sim.backup[18]]);
-    assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((488_566_000, -22_945_000)) });
+    assert_eq!(aid, crate::gnss::Aid { offset_15min: Some(8), pos: Some((5_123_000, 4_234_000)) });
     sim.gnss.powered = false; // a power cycle: the board drives the line low at boot
     sim.gnss.off_since = sim.ms;
     let mut again = App::start(&mut sim, None);
@@ -1394,7 +1394,7 @@ fn gps_fix_and_speed() {
         sim.gnss.got.windows(32).any(|w| w == crate::gnss::mga_time(crate::from_epoch_s(crate::epoch_s(utc) - back), 2))
     });
     assert!(sent_time, "UTC from the RTC at the next power-up");
-    assert!(sent(&sim, crate::gnss::mga_pos(488_566_000, -22_945_000, 10_000)), "and the last position");
+    assert!(sent(&sim, crate::gnss::mga_pos(5_123_000, 4_234_000, 10_000)), "and the last position");
     sim.gnss.powered = false; // silent receiver: the fix ages out
     run(&mut sim, &mut app, u64::from(PVT_STALE_MS) + 200);
     assert_eq!(app.strip.gps, None);
