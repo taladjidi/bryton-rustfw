@@ -114,7 +114,7 @@ fn edit_a_page_on_the_page() {
     action(&mut sim, &mut app, menu::EditRow::SplitAcross);
     assert!(app.banner.as_str().contains("2 A ROW"), "{}", app.banner.as_str());
     assert_eq!(app.screen(), Screen::Menu(Menu::Edit(3), 1), "refused: the actions stay");
-    press(&mut sim, &mut app, Key::Back);
+    super::tests::back(&mut sim, &mut app);
     assert!(app.file_untouched_since_start(&sim), "nothing written while editing");
     press(&mut sim, &mut app, Key::Back);
     assert_eq!(app.screen(), Screen::Edit(0, 3), "Back asks first");

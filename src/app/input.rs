@@ -279,7 +279,11 @@ impl App {
             return self.say(if self.strip.locked { "TOUCH LOCKED" } else { "TOUCH UNLOCKED" });
         }
         if self.banner_ms.take().is_some() {
-            self.unbanner(b); // and the input acts
+            self.unbanner(b); // and the input acts, except Back: it only clears the banner (a call's Back declines, and the editor's
+            // KEEP CHANGES? is a question)
+            if i == Input::Back && !self.phone.ringing && !matches!(self.screen, Screen::Edit(..)) {
+                return;
+            }
         }
         // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
         let armed = self.confirm.take();
@@ -427,11 +431,11 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(self.menu_root(), 0))
             }
-            // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
+            // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap (on the overview too)
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
             (Screen::Main | Screen::Ride(_), Input::End) => self.end_ride(),
             (Screen::Summary, _) => self.screen = Screen::Main,
-            (Screen::Ride(_), Input::Prev) => return self.lap(),
+            (Screen::Main | Screen::Ride(_), Input::Prev) => return self.lap(),
             (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 let rows = self.rows(menu).max(1);

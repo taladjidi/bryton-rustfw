@@ -41,6 +41,14 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
     }
 }
 
+/// Back, after the banner up (if one is) is cleared: a Back with a banner up only clears it.
+pub(super) fn back(sim: &mut Sim, app: &mut App) {
+    if app.banner_ms.is_some() {
+        app.press(sim, Press::Short(Key::Back));
+    }
+    app.press(sim, Press::Short(Key::Back));
+}
+
 /// The screen drawn step by step on the panel equals the screen drawn at once from the state (the screenshot).
 pub(super) fn assert_consistent(sim: &Sim, app: &App) {
     for y in 0..H {
@@ -622,7 +630,7 @@ fn ride_history() {
     assert_consistent(&sim, &app);
     sim.save("history_card");
 
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "back to the list, on that ride");
     // the ride without a track: its card all the same, "NO FIX" on the map
     app.press(&mut sim, Press::Short(Key::Lap));
@@ -1087,7 +1095,7 @@ fn back_returns_where_it_came_from() {
     delete_page_by_keys(&mut sim, &mut app);
     assert_eq!(app.page_count(), 1);
     for _ in 0..3 {
-        app.press(&mut sim, Press::Short(Key::Back)); // PAGES, the menu, out
+        back(&mut sim, &mut app); // PAGES, the menu, out
     }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -1149,8 +1157,8 @@ fn pairs_sensors_from_the_menu() {
     assert_eq!(sim.backup[Kind::SpeedCadence.backup()], SensorId { device: 555, trans: 0xf1 }.to_word());
     assert_consistent(&sim, &app);
     sim.save("sensors");
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
+    back(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 200);
     assert!(ride(&mut sim, &app, 0, &["22.7", "72", "60"], true) == sim.screen, "22.7 km/h, HR 72, 60 rpm");
@@ -1346,8 +1354,8 @@ fn start_from_the_overview() {
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
-    app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Main, "any key: the overview");
+    back(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Main, "Back: the overview");
 }
 
 /// The card at the end of a ride: its track, its elevation profile, its numbers.
@@ -1924,7 +1932,7 @@ fn ride_menu() {
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
-    back(&mut sim, &mut app, 1);
+    back(&mut sim, &mut app, 2); // the banner, then the card
     assert_eq!(app.screen(), Screen::Main, "the card, then the overview");
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no ride: the full menu again");
@@ -2064,6 +2072,49 @@ fn back_held_3s_powers_off_after_release() {
     assert!(sim.touch.run_since.is_none(), "the touch chip in reset: no INT to keep the core out of standby");
     assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
+}
+
+/// Lap on the overview during a ride marks a lap, as on a ride page (and as a shifter's lap does); off a ride it does
+/// nothing.
+#[test]
+fn lap_on_the_overview_marks_a_lap() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    run(&mut sim, &mut app, 200);
+    assert_ne!(app.banner.as_str(), "LAP", "no ride: no lap");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 5000);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.banner.as_str(), "LAP");
+    run(&mut sim, &mut app, 200);
+    assert_eq!(app.screen(), Screen::Main);
+    assert_consistent(&sim, &app);
+}
+
+/// Back pressed with a banner up only clears it (it used to leave the page as well); Page, Lap and Start still act at
+/// once, and a ringing call's Back still declines.
+#[test]
+fn back_clearing_a_banner_only_clears_it() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0));
+    app.say("EAT REMINDER");
+    run(&mut sim, &mut app, 300);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Ride(0), "the banner cleared, the page kept");
+    run(&mut sim, &mut app, 300);
+    assert!(app.banner_ms.is_none());
+    assert_consistent(&sim, &app);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main, "no banner: Back goes back");
+    app.say("EAT REMINDER");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0), "Page acts at once");
 }
 
 /// Back and Lap held together for 1 s lock the touch: a padlock in the strip, every tap and swipe ignored, the keys
@@ -2554,7 +2605,7 @@ fn map_zoom_ends_with_the_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Start));
     run(&mut sim, &mut app, 2000);
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.map_zoom, app.map_centre), (None, None), "the new ride's map fitted");
     app.screen = Screen::Ride(2);
@@ -3589,7 +3640,7 @@ fn course_read_after_leaving_the_list() {
         app.press(&mut sim, Press::Short(Key::Page));
     }
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Back));
+    back(&mut sim, &mut app);
     let left = app.screen();
     assert!(!matches!(left, Screen::Menu(Menu::Courses, _) | Screen::Ride(_)), "{left:?}");
     run(&mut sim, &mut app, 200);
