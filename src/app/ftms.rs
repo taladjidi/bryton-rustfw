@@ -31,7 +31,7 @@ pub const CONNECT_MS: u32 = 10_000;
 pub const FIRST_WAIT_MS: u32 = 2_000;
 /// The longest wait between two connections, ms.
 pub const MAX_WAIT_MS: u32 = 60_000;
-/// Connections failed in a row after which the unit stops trying (see [`App::ftms_retry`]), unless the trainer was
+/// Connections failed in a row after which the unit stops trying (see `App::ftms_retry`), unless the trainer was
 /// connected during the ride running.
 pub const MAX_FAILS: u8 = 5;
 /// A GATT request (a discovery, a read, a write, Request Control's response) not answered in this long drops the link.
