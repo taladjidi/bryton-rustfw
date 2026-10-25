@@ -2895,3 +2895,42 @@ fn course_page_before_a_fix() {
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Ride(crate::COURSE), "Back from the menu returns to it");
 }
+
+/// After "+" the pan's range is smaller: a centre panned to the old edge is outside it, and a small drag must still
+/// move the map with the finger, not jump back across (review of 6de15ed: 960 m the wrong way). A drag that starts
+/// on a button does not pan.
+#[test]
+fn pan_after_zoom_in_moves_with_the_finger() {
+    use crate::map;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    sim.gnss.fix = Some(500);
+    run(&mut sim, &mut app, 200_000);
+    let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [plus, _] = map::buttons(area).unwrap();
+    let (px, py) = ((plus.0 + 20) as u16, (plus.1 + 20) as u16);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(px, py)));
+    for _ in 0..30 {
+        drag(&mut sim, &mut app, (200, 150), (-180, 0));
+    }
+    app.input(&mut sim, Input::Touch(Gesture::Tap(px, py)));
+    let before = app.map_view(0).unwrap();
+    drag(&mut sim, &mut app, (150, 150), (-15, 0)); // the finger left: the view goes east, or stays at the edge
+    let after = app.map_view(0).unwrap();
+    assert!(after.cx >= before.cx, "a drag left moved the view west by {} m", before.cx - after.cx);
+    assert_consistent(&sim, &app);
+    // a gloved tap sliding 12 px on "-" is "-": a level out, the panned centre kept, not a pan
+    let [_, minus] = map::buttons(area).unwrap();
+    let (zoom, centre) = (app.map_zoom, app.map_centre);
+    drag(&mut sim, &mut app, (minus.0 + 14, minus.1 + 20), (12, 0));
+    assert_eq!(app.map_zoom.map(|z| z + 1), zoom.map(|z| z + 2), "one level out");
+    assert_eq!(app.map_centre, centre, "not panned");
+    assert_consistent(&sim, &app);
+}

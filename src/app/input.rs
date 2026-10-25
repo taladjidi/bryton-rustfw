@@ -411,6 +411,12 @@ impl App {
         let i = self.touch_gesture(b, dt_ms);
         // a drag that starts on the map zoomed in pans it, whatever gesture it made (a swipe, or one too short)
         match self.touch.take_drag() {
+            // a gloved tap that slides a little on a button is that button's tap, not a pan (review of 6de15ed)
+            Some(((x, y), (dx, dy)))
+                if self.pans_at(x, y) && dx.abs() < 24 && dy.abs() < 24 && self.zoom_at(x, y).is_some() =>
+            {
+                Some(Input::Touch(Gesture::Tap(x, y)))
+            }
             Some(((x, y), (dx, dy))) if self.pans_at(x, y) => Some(Input::Touch(Gesture::Drag(x, y, dx, dy))),
             _ => i,
         }

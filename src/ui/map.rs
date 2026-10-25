@@ -488,8 +488,14 @@ pub fn pan(
         None => (track.min, track.max),
     };
     let (rx, ry) = (m(area.2 * PAN_SCREENS), m(area.3 * PAN_SCREENS));
-    let cx = v.cx.saturating_sub(m(dx)).clamp(min.0.saturating_sub(rx), max.0.saturating_add(rx));
-    let cy = v.cy.saturating_add(m(dy)).clamp(min.1.saturating_sub(ry), max.1.saturating_add(ry));
+    // clamped, but never moved against the drag: after "+" the range is smaller and a centre at its old edge is
+    // outside it, where a small drag would have jumped back across (review of 6de15ed)
+    let go = |old: i32, new: i32, lo: i32, hi: i32| {
+        let c = new.clamp(lo, hi);
+        if (c - old).signum() * (new - old).signum() < 0 { old } else { c }
+    };
+    let cx = go(v.cx, v.cx.saturating_sub(m(dx)), min.0.saturating_sub(rx), max.0.saturating_add(rx));
+    let cy = go(v.cy, v.cy.saturating_add(m(dy)), min.1.saturating_sub(ry), max.1.saturating_add(ry));
     Some((cx, cy))
 }
 
