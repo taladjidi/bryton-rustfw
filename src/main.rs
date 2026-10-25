@@ -425,19 +425,32 @@ fn rtc_set(tr: u32, dr: u32) {
 // Power off = standby, as Pwr_StopModePeriphTransition(0) + HAL_PWREx_EnterSTANDBYMode(D2) and (D1) in stock
 // (BOARD.md 9): wake-up pin WKUP1 (PA0, the power button), rising edge, no pull. Waking resets the unit:
 // bootloader, then this firmware again.
+//
+// PDDS_D3 stays 0, as in stock: D1 and D2 power down but D3 only stops, so the system is in Stop, not Standby
+// (STM32CubeH7 HAL, stm32h7xx_hal_pwr_ex.c, HAL_PWREx_EnterSTANDBYMode: "the whole system in STOP if
+// PWR_CPUCR_PDDS_D3 = 0"; the system enters Standby only when D1, D2 and D3 all are in DStandby). D3 keeps the
+// GPIO levels (Nordic PI4 / PA6, GNSS power, touch reset); in Standby they would float. In Stop the WKUP pins reach
+// the core only through their EXTI lines 55..60 (same file, "Wakeup Pins configuration"), and EXTI_CPUIMR2 resets
+// to 0 (ST's STM32H747_CM7 SVD), so stock unmasks line 55 (HAL_EXTI_D1_EventInputConfig(55, IT, 1) and IRQ 149,
+// ghidra/recovered_src/system/board.c Pwr_StopModePeriphTransition). Without it the press woke nothing (seen on
+// the unit, 2026-10-25: WFI never returned, PWR_CPUCR.SBF clear at the next boot).
 // ---------------------------------------------------------------------------------------------------------------
 const PWR: u32 = 0x5802_4800;
 const PWR_CR1: u32 = PWR;
 const PWR_CPUCR: u32 = PWR + 0x10;
 const PWR_WKUPCR: u32 = PWR + 0x20;
+const PWR_WKUPFR: u32 = PWR + 0x24;
 const PWR_WKUPEPR: u32 = PWR + 0x28;
+const EXTI_CPUIMR2: u32 = 0x5800_0090; // stm32h747xx.h: EXTI_D1 at 0x58000080, IMR2 at +0x10; line 55 = bit 23
+const WKUP1_LINE: u32 = 1 << (55 - 32);
+const WKUP_IRQ: u32 = 149; // stm32h747xx.h WAKEUP_PIN_IRQn
 
 // Standby breadcrumbs (the power button does not start the unit after switching off, 2026-10-25: to find where it
 // stops): bryton_rustfw::STANDBY_BKP (non-zero WFI returns: the core spun instead of sleeping) and, at the first
 // boot after it, STANDBY_FLAGS_BKP; registers shared with the USB drop diagnostics, each word tagged (settings.rs).
 const STANDBY_CRUMB: u32 = 0x5b00_0000;
 const CRUMB: u32 = STANDBY_BKP as u32;
-const RCC_RSR: u32 = RCC + 0x0d0; // RM0399 RCC_RSR (inferred offset: to check against the reference manual)
+const RCC_RSR: u32 = RCC + 0x0d0; // stm32h747xx.h RCC_TypeDef: RSR at 0xD0; RMVF bit 16
 
 fn crumb_read(n: u32) -> u32 {
     rd(RTC_BKP0R + 4 * n)
@@ -467,6 +480,10 @@ fn standby() -> ! {
     wr(PWR_WKUPCR, 0x3f); // clear the wake-up flags
     wr(PWR_WKUPEPR, 1); // WKUPEN1, polarity rising (WKUPP1 = 0), no pull
     modify(PWR_CPUCR, 0, 1 << 9); // CSSF: clear the standby / stop flags
+    // RMVF set then cleared (cleared too in case the flags stay held while it is set): the reset flags read at the
+    // next boot are then only this switch-off's (they otherwise add up from the last power-on reset)
+    modify(RCC_RSR, 0, 1 << 16);
+    modify(RCC_RSR, 1 << 16, 0);
     modify(PWR_CPUCR, 0, (1 << 1) | 1); // PDDS_D2, PDDS_D1
     modify(0xe000_ed10, 0, 1 << 2); // SCB_SCR.SLEEPDEEP
     loop {
@@ -474,7 +491,7 @@ fn standby() -> ! {
         // has no standby to wake from: the unit looks dead until the four-button restart and drains its battery
         // (seen on the unit, 2026-10-25: the touch line's EXTI and its NVIC wake-up, added 2026-10-23; reproduced
         // on Renode, renode/run.py --off). Cleared again at every return, so a wake-up source added later cannot
-        // bring it back. The WKUP pins wake through PWR, not through these.
+        // bring it back. Then only the power button is let back in.
         modify(EXTI_CPUIMR1, TOUCH_LINE, 0);
         wr(EXTI_CPUPR1, TOUCH_LINE);
         timer_stop();
@@ -483,10 +500,17 @@ fn standby() -> ! {
             wr(NVIC_ICER0 + 4 * k, u32::MAX);
             wr(NVIC_ICPR0 + 4 * k, u32::MAX);
         }
+        // the power button's one way in: EXTI line 55 for this core, and its IRQ in the NVIC so that WFI returns
+        // if D1 only stopped (interrupts stay masked: no handler runs)
+        modify(EXTI_CPUIMR2, 0, WKUP1_LINE);
+        wr(NVIC_ISER0 + 4 * (WKUP_IRQ / 32), 1 << (WKUP_IRQ % 32));
         barrier();
         wfi();
         let c = crumb_read(CRUMB); // WFI returned: not in standby
         crumb_write(CRUMB, (c & 0xffff_0000) | ((c & 0xffff) + 1).min(0xffff));
+        if rd(PWR_WKUPFR) & 1 != 0 {
+            system_reset(); // WKUPF1: the power button, so start
+        }
     }
 }
 

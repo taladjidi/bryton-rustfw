@@ -302,6 +302,12 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 - PA0 must be a GPIO input before standby (stock does it at boot): left in its reset analog mode, the press does
   not wake the unit (seen on the unit, 2026-10-23); only the four-button restart brings it back.
 - Entry as stock: PWR_CPUCR PDDS_D1 and PDDS_D2 set, SLEEPDEEP, WFI. Waking resets the unit.
+- PDDS_D3 stays 0 (stock too): D1 and D2 power down, D3 only stops, so the system is in Stop, not Standby (the
+  HAL's HAL_PWREx_EnterSTANDBYMode doc; Standby needs D1, D2 and D3 all in DStandby), and the GPIOs keep their
+  levels (Nordic PI4 / PA6, GNSS power). In Stop the WKUP pin reaches the core only through EXTI line 55
+  (EXTI_CPUIMR2 bit 23, reset value 0 in ST's SVD): stock unmasks it and IRQ 149 (WAKEUP_PIN) before standby.
+  Without it the press woke nothing (2026-10-25: WFI never returned, PWR_CPUCR.SBF clear at the next boot); to see
+  with the fix.
 - Stock waits for the back key to be released first (otherwise it wakes at once). Power off and on with the
   power button, as this firmware does it:
 
