@@ -120,7 +120,7 @@ impl Keys {
 /// What is on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
-    /// The main screen: the time, big, and Ferris.
+    /// The main screen: the time, big, the date and four fields.
     Main,
     /// Ride page `n`.
     Ride(usize),

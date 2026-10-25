@@ -9,7 +9,7 @@
   in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
   only the rides new or changed since are read), and the latest notices (a GPS fix, a
-  sensor paired, the battery low), or Ferris the Rust crab when there are none.
+  sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT).
 - **Ride pages:** one to six, each made of rows (up to five, each a share of the height, one or two boxes side by
   side, eight fields at most), made on the page itself in the page editor (below) or from a layout of the menu (one
   to eight fields: even grids, and uneven ones such as a big box over two or over a 2 x 2 grid, two over a big one,

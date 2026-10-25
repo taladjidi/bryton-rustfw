@@ -132,11 +132,10 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
         crate::ui::draw_field_frame(&mut f, bx, field);
         crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
-    crate::ui::draw_ferris(&mut f);
     f.px
 }
 
-/// The main screen, the overview: the strip, the time, the date, four fields, Ferris (no notices yet).
+/// The main screen, the overview: the strip, the time, the date, four fields (no notices yet, so nothing under them).
 #[test]
 fn boots_into_the_main_screen() {
     let mut sim = Sim::new(12, 34, 56);
@@ -148,6 +147,9 @@ fn boots_into_the_main_screen() {
     assert!(pos(SWRESET) < pos(SLPOUT) && pos(SLPOUT) < pos(DISPON));
     assert!(main_screen(&mut sim, &app, UsbDot::Ready) == sim.screen);
     assert_consistent(&sim, &app);
+    // no notices: nothing under the fields, Ferris is not on the overview
+    let (top, bottom) = (ui::NOTICES_Y as usize * W as usize, H as usize * W as usize);
+    assert!(sim.screen[top..bottom].iter().all(|&p| p == ui::BLACK), "no Ferris on the overview");
     sim.save("preview");
 }
 

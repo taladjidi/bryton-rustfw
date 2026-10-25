@@ -106,7 +106,7 @@ pub fn draw_bitmap(c: &mut impl Canvas, bitmap: &[u16], x: u32, y: u32, scale: u
 
 /// Width of one character cell of the monospaced pixel font, in font pixels.
 const CELL: u32 = 6;
-/// Ferris: scale and top left corner (centred, at the bottom of the overview).
+/// Ferris: scale and top left corner (centred; where the overview's notices end).
 pub const CRAB_SCALE: u32 = 4;
 /// Ferris left edge.
 pub const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
@@ -1282,8 +1282,7 @@ pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Opt
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The overview (the main screen): the time, the date, four fields of the user's choice, the notices (Ferris when
-// there are none)
+// The overview (the main screen): the time, the date, four fields of the user's choice, the notices
 // ---------------------------------------------------------------------------------------------------------------
 
 /// Hours and minutes: the pixel font at 7x, white. No seconds: the overview changes once a minute.
@@ -1340,11 +1339,11 @@ pub const GEAR_AT: (u32, u32) = (W - 30, DATE_Y);
 /// Where a tap opens the menu: around the gear, wider than it, a finger's size (above the overview's fields).
 pub const GEAR_TAP: (u32, u32, u32, u32) = (W - 64, DATE_Y - 24, 64, OVERVIEW_Y - (DATE_Y - 24));
 
-/// The notices, newest first; with none, Ferris.
+/// The notices, newest first; with none, the area stays black.
 pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
     c.fill(0, NOTICES_Y, W, H - NOTICES_Y, BLACK);
     if notices.is_empty() {
-        return draw_ferris(c);
+        return; // nothing to say: nothing drawn (Ferris is in ABOUT)
     }
     for (r, n) in notices.iter().take(NOTICES).enumerate() {
         // "19:36 A CALLER": the time small and grey, the text in the large font for every row (cut, not shrunk:
@@ -1457,11 +1456,6 @@ pub fn draw_about(c: &mut impl Canvas, version: &str, describe: &str, date: &str
     let grey = Style { fg: GREY, ..LABEL };
     line(&grey, date);
     line(&grey, "SAFE RUST");
-}
-
-/// Ferris, at the bottom of the overview.
-pub fn draw_ferris(c: &mut impl Canvas) {
-    draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1757,11 +1751,9 @@ pub(crate) mod tests {
         };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);
-        draw_ferris(&mut f);
         for y in [0, 8, STRIP_H, CRAB_Y + 20, H - 1] {
             let mut row = Row::new(y);
             draw_strip(&mut row, &strip);
-            draw_ferris(&mut row);
             assert!(row.px[..] == f.px[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
         }
     }
