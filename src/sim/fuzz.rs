@@ -646,6 +646,69 @@ fn ride_scan_on_a_damaged_volume() {
     }
 }
 
+/// Random and damaged caches of the ride scan (`\Rustfw\scan.bin`, storage/stock.rs `Cache`) on the synthetic
+/// volume: entries of random bytes (some with a plausible date, so they are counted), written whole (a right CRC:
+/// taken, and counted at once) or then damaged on the card (refused whole). Nothing panics, and once the scan has
+/// listed the rides, what it shows is what the rides are (random entries name no ride: dropped).
+#[test]
+fn scan_caches() {
+    use crate::stock::{ENTRY, Scan, Status, Summary};
+    let img = crate::fat::tests::image();
+    let today = (2026, 10, 23);
+    let mut plain = Scan::new();
+    plain.start(today);
+    while plain.step(&mut crate::fat::tests::Ram(img.clone(), 0), 1 << 20) {}
+    let want = Summary { bytes: 0, ..plain.out };
+    let mut noise = bytes(9, 1 << 24);
+    let (mut taken, mut refused) = (0, 0);
+    for round in 0..80 {
+        let mut d = crate::fat::tests::Ram(img.clone(), 0);
+        let c = crate::stock::tests::cache();
+        let n = usize::from(noise.next().unwrap_or(0)) % 48;
+        for i in 0..n {
+            let mut e = [0u8; ENTRY];
+            e.iter_mut().for_each(|b| *b = noise.next().unwrap_or(0));
+            if i % 2 == 0 {
+                // a ride of 2020 to 2027, counted, in or out of the window
+                let y = 2020 + u16::from(e[8] % 8);
+                e[8..10].copy_from_slice(&y.to_le_bytes());
+                (e[10], e[11], e[14]) = (1 + e[10] % 12, 1 + e[11] % 28, 1);
+            }
+            c.push_raw(&e);
+        }
+        c.write(&mut d, (0, 0)).unwrap();
+        if round % 2 == 1 {
+            let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+            let f = fat.open(&mut d, "Rustfw/scan.bin").unwrap();
+            let at = fat.lba(f.cluster) as usize * crate::fat::SECTOR;
+            for _ in 0..1 + usize::from(noise.next().unwrap_or(0)) % 4 {
+                let k = (usize::from(noise.next().unwrap_or(0)) << 8 | usize::from(noise.next().unwrap_or(0)))
+                    % f.size as usize;
+                d.0[at + k] ^= 1 << (noise.next().unwrap_or(0) % 8);
+            }
+        }
+        let mut s = Scan::new();
+        s.set_cache(crate::stock::tests::cache());
+        s.load(&mut d, today);
+        if s.ready() {
+            taken += 1;
+            assert_eq!(s.cache().map(|c| c.len()), Some(n), "taken whole");
+        } else {
+            refused += 1;
+            assert_eq!(s.cache().map(|c| c.len()), Some(0), "refused whole");
+        }
+        s.start(today);
+        let mut passes = 0;
+        while s.step(&mut d, 1 << 12) {
+            passes += 1;
+            assert!(passes < 10_000, "the scan does not end");
+        }
+        assert_eq!((s.status(), Summary { bytes: 0, ..s.out }), (Status::Done, want), "round {round}");
+        assert_eq!(s.cache().map(|c| c.len()), Some(6), "the rides only");
+    }
+    assert!(taken >= 40 && refused >= 30, "the reader reached: {taken} taken, {refused} refused");
+}
+
 #[test]
 fn ubx_frames() {
     let mut parser = crate::gnss::Parser::new();

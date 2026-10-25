@@ -69,6 +69,12 @@ pub trait Board {
     fn rtc_set(&mut self, tr: u32, dr: u32);
     /// Busy wait.
     fn delay_ms(&mut self, ms: u32);
+    /// Microseconds the CPU has been awake (working, not asleep in a wait) since start-up, wrapping: what a pass's
+    /// work took, so the app can bound its background work by time and count a key's hold in real time (a long
+    /// pass is longer than [`POLL_MS`]). The DWT cycle counter on the unit. 0 always: work is not timed.
+    fn awake_us(&mut self) -> u32 {
+        0
+    }
     /// Standby, woken by the power button (a reset). Never returns on the unit; the simulation records it.
     fn standby(&mut self);
     /// Nordic chip: resets it as stock does with its UART up (BOARD.md 11), and returns once it can take commands.
@@ -256,8 +262,12 @@ pub struct App {
     /// The panel was sampled during a drive command: the main loop's next `dt_ms` (its sleep since its own last
     /// read) is time those samples already counted.
     touch_sampled: bool,
-    /// The scan of stock's rides (the stock data menu), and its buffer for reading stock's settings.
+    /// The scan of stock's rides (the stock data menu, the overview's totals), over its cache when main.rs gives
+    /// it one ([`App::set_scan_cache`]).
     stock: stock::Scan,
+    /// [`Board::awake_us`] at the start of the last pass: the work since, plus [`POLL_MS`] of sleep, is the time a
+    /// held key counts.
+    awake_at: u32,
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
@@ -436,6 +446,7 @@ impl App {
             touch_pending: None,
             touch_sampled: false,
             stock: stock::Scan::new(),
+            awake_at: 0,
             past: history::Past::new(),
             calendar: Default::default(),
             calendar_day: None,
@@ -460,6 +471,7 @@ impl App {
     pub fn begin(&mut self, b: &mut impl Board) {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
+        self.awake_at = b.awake_us();
         self.resume_pending = self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN;
         self.full_pending = self.resume_pending;
         if self.chips.baro {
@@ -507,6 +519,9 @@ impl App {
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
+        // the time since the last pass: its sleep and the work of that pass (bounded: a first pass, a stall)
+        let now = b.awake_us();
+        let pass_ms = POLL_MS + (now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)) / 1000).min(MAX_PASS_MS);
         let (tr, dr) = b.rtc();
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
@@ -660,8 +675,8 @@ impl App {
             _ => {}
         }
         let mask = b.keys_down();
-        self.idle_ms = if mask != 0 { 0 } else { self.idle_ms.saturating_add(POLL_MS) };
-        if let Some(p) = self.keys.poll(mask, POLL_MS) {
+        self.idle_ms = if mask != 0 { 0 } else { self.idle_ms.saturating_add(pass_ms) };
+        if let Some(p) = self.keys.poll(mask, pass_ms) {
             self.press(b, p);
         }
         if mask == 0 {

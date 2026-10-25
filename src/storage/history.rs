@@ -63,7 +63,8 @@ pub struct Ride {
     pub max_hr: Option<u8>,
 }
 
-const NONE: Ride = Ride {
+/// No ride: a ride's fields all empty.
+pub(crate) const NONE: Ride = Ride {
     file: File { cluster: 0, size: 0, dir: false },
     start: (0, 0, 0, 0, 0),
     timer_s: 0,

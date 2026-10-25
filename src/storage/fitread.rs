@@ -192,8 +192,8 @@ pub struct Reader {
     last_ts: u32,
     pos: u32,
     result: Option<Result<(), Error>>,
-    /// [`crate::fit::CRC_TABLE`], copied: with the reader, in DTCM (seen on the unit: reading the table from the
-    /// image, in uncached SDRAM, costs most of the scan's time).
+    /// [`crate::fit::CRC_TABLE`], copied out of the image (seen on the unit: reading the table from the image, in
+    /// uncached SDRAM, costs most of the scan's time); [`Reader::push_slice`] copies it once more onto the stack.
     table: [u16; 256],
     /// The position and altitude are read too ([`Reader::with_position`]).
     position: bool,
@@ -504,6 +504,9 @@ impl Reader {
     /// assert_eq!((n, a.result()), (file.len(), b.result()));
     /// ```
     pub fn push_slice(&mut self, buf: &[u8], mut f: impl FnMut(Msg)) -> usize {
+        // the CRC table on the stack (DTCM, no wait states) for the runs: the reader itself may be in AXI SRAM,
+        // which is not cached (the app's cell, main.rs make_app), and a run looks it up once a byte
+        let table = self.table;
         let mut i = 0;
         while let Some(rest) = buf.get(i..).filter(|r| !r.is_empty()) {
             if self.state == State::Done {
@@ -518,9 +521,11 @@ impl Reader {
                     // all of the message the buffer has but its last byte, which `push` takes (it ends it)
                     let run = rest.get(..k - 1).unwrap_or(&[]);
                     self.take(self.local, self.at, run, usize::from(n));
+                    let mut crc = self.crc;
                     for &b in run {
-                        self.crc = (self.crc >> 8) ^ self.table[usize::from((self.crc as u8) ^ b)];
+                        crc = (crc >> 8) ^ table[usize::from((crc as u8) ^ b)];
                     }
+                    self.crc = crc;
                     let len = run.len() as u32;
                     (self.at, self.pos, self.data_left) = (self.at + len, self.pos + len, self.data_left - len);
                     i += run.len();

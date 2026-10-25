@@ -234,7 +234,7 @@ impl Fat {
         Ok(c)
     }
 
-    fn lba(&self, cluster: u32) -> u32 {
+    pub(crate) fn lba(&self, cluster: u32) -> u32 {
         self.data_start + (cluster - 2) * self.spc
     }
 

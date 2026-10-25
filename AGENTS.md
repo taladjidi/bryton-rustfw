@@ -188,8 +188,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
   `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `sim.rs` has a model of the card
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
-  basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at boot only at the first start, for stock's settings, or
-  when a ride is open).
+  basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at the first main loop pass, for the scan's cache of
+  stock's rides; at boot at the first start, for stock's settings, or when a ride is open).
 - `src/storage/fat.rs`: a FAT32 reader: boot sector, chains, 8.3 and long names, files at an offset, directory
   listings; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`,
   which also puts made-up stock rides and settings files on it). `src/storage/fat/write.rs`: the write path, only
@@ -205,7 +205,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
-  over the main loop's passes) and the import of its settings. `src/power_curve.rs`: best powers per duration in
+  over the main loop's passes, each pass bounded by `Board::awake_us`) and the import of its settings. Its cache
+  (`Cache`, `\Rustfw\scan.bin`, 256 KB in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
+  (totals, history, best powers), so each ride is decoded once ever and a start reads only new or changed rides. `src/power_curve.rs`: best powers per duration in
   one pass, merged across rides, and the 2-parameter CP / W' fit. Pure logic.
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).

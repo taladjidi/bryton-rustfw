@@ -40,6 +40,15 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The scan's cache (storage/stock.rs `Cache`, `\Rustfw\scan.bin`)**, with an EMMC_WRITE=1 build: the first start
+  reads every ride as before (`dev.py info` awake permille during it: now at most about 15 ms of work a pass, so
+  lower than the 717 seen; Back held 3 s switches off during it), then `\Rustfw\scan.bin` is there (64 + 64 bytes a
+  ride; `dev.py ls Rustfw`). The next start: the overview's totals at the first screen, no 30 s of `--`, and the
+  scan 30 s later reads nothing (`dev.py info` stays low). A ride saved: the next scan reads only it. A ride deleted
+  from the computer: gone from the totals. The first write of the cache reads both FATs once (`Fat::sync_fats`):
+  one pass of about 0.5 s, inferred from the FAT's size (also after a cache that did not check out). `dev.py bench
+  scan` now reads only rides not in the cache: measure it with the cache deleted.
+
 - **Electronic shifting (sensors.rs, app/radio.rs)**, all simulated only, the owner's Di2 at hand: with
   `di2_key.bin` built in (`tools/ant_key.py`), SENSORS > DI2 reads OFF (not NO KEY: the chip took network 1's key
   and channel 6's assignment); Start finds the Di2 within seconds (turn a crank or shift to wake it), its number

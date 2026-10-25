@@ -324,6 +324,83 @@ fn overview_totals_from_stocks_rides() {
     sim.save("overview_totals");
 }
 
+/// The scan's cache (storage/stock.rs `Cache`): the first start reads every ride and writes `\Rustfw\scan.bin`;
+/// the next start shows the overview's totals from it at its first pass, and reads no ride. Prints what each
+/// start cost with the unit's cost of reading and parsing (about 430 ns a byte): passes, the longest pass's work,
+/// the time the scan took.
+#[test]
+fn overview_totals_from_the_cache_at_once() {
+    let fields = [Field::WeekKm, Field::TotalKm, Field::Time, Field::Time, Field::Time, Field::Time];
+    let page = PageCfg { layout: 2, fields };
+    let start = |image: std::vec::Vec<u8>| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = image;
+        sim.work_ns_per_byte = 430;
+        let w = page.to_words();
+        (sim.backup[26], sim.backup[27]) = (w[0], w[1]);
+        let mut app = App::start(&mut sim, None);
+        app.set_scan_cache(crate::stock::tests::cache());
+        (sim, app)
+    };
+    let (mut sim, mut app) = start(crate::stock::tests::with_rides(64));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.field_text(Field::TotalKm).as_str(), "--", "no cache yet: nothing to show before the scan");
+    run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS));
+    let (t0, mut passes, mut longest, mut last) = (sim.ms, 0, 0, 0);
+    while app.stock.status() == crate::stock::Status::Running {
+        longest = longest.max(last);
+        let us = sim.awake_ns / 1000;
+        run(&mut sim, &mut app, 1);
+        (passes, last) = (passes + 1, sim.awake_ns / 1000 - us);
+    }
+    std::println!(
+        "first start: {} rides read, {} bytes, {passes} passes, longest {longest} us of work, the last (the cache \
+         written, both FATs read first: once) {last} us, {} ms",
+        app.stock.read,
+        app.stock.out.bytes,
+        sim.ms - t0
+    );
+    assert!(longest < 20_000, "each pass bounded by time: {longest} us");
+    assert_eq!(app.stock.read, 70);
+    let total = app.field_text(Field::TotalKm);
+    run(&mut sim, &mut app, 100);
+    assert!(!app.stock.unsaved(), "written");
+    let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    assert_eq!(fat.open(&mut d, "Rustfw/scan.bin").map(|f| f.size), Ok(64 + 70 * 64));
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+
+    // the next start: the totals at the first pass, then a scan that reads no ride
+    let (mut sim2, mut app2) = start(sim.emmc.image.clone());
+    run(&mut sim2, &mut app2, u64::from(POLL_MS));
+    assert_eq!(app2.field_text(Field::TotalKm).as_str(), total.as_str(), "from the cache, at once");
+    assert_eq!(app2.field_text(Field::WeekKm).as_str(), "19");
+    run(&mut sim2, &mut app2, u64::from(STOCK_SCAN_MS) + 2000);
+    assert_eq!(app2.stock.status(), crate::stock::Status::Done);
+    std::println!("next start: {} rides read, {} bytes", app2.stock.read, app2.stock.out.bytes);
+    assert_eq!((app2.stock.read, app2.stock.out.bytes, app2.stock.unsaved()), (0, 0, false));
+    assert_eq!(app2.field_text(Field::TotalKm).as_str(), total.as_str());
+    assert_consistent(&sim2, &app2);
+}
+
+/// Back held 3 s switches off even while a scan makes every pass long (each read here costs 250 ms of work):
+/// the hold counts the passes' real time ([`Board::awake_us`]), not their number.
+#[test]
+fn back_held_switches_off_during_a_slow_scan() {
+    let mut sim = Sim::new(9, 0, 0).keys(|ms| if (5000..8300).contains(&ms) { Key::Back as u8 } else { 0 });
+    sim.emmc.image = crate::stock::tests::with_rides(64);
+    sim.work_ns_per_byte = 30_000;
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    app.stock.start(app.date);
+    let left = 4000u64.saturating_sub(sim.ms);
+    run(&mut sim, &mut app, left);
+    assert_eq!(app.stock.status(), crate::stock::Status::Running);
+    run(&mut sim, &mut app, 5000);
+    assert!(sim.standby, "off, released at 8.3 s");
+    assert_eq!(app.stock.status(), crate::stock::Status::Running, "while the scan ran");
+}
+
 /// The stock data menu over the synthetic volume (tools/fat_image.py) through the eMMC model: READ RIDES
 /// reads stock's rides (a bounded amount per pass), the rows show the totals and CP, IMPORT applies stock's
 /// settings. Prints what the scan cost: bytes and reads (the model takes no time to read; on the unit the

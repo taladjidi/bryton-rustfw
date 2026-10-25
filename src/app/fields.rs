@@ -138,7 +138,7 @@ impl App {
             }
             Field::WeekKm | Field::WeekH | Field::YearKm | Field::TotalKm => {
                 // the rides on the card (once read: see step_stock) and the one running
-                if self.stock.status() != stock::Status::Done {
+                if !self.stock.ready() {
                     l.push_str("--");
                     return l;
                 }
