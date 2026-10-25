@@ -29,7 +29,7 @@ impl App {
         }
         self.say(match ev {
             ride::Event::Start => "RIDE STARTED",
-            ride::Event::Pause => "PAUSED: HOLD = END",
+            ride::Event::Pause => "PAUSED: HOLD START TO END",
             _ => "RESUMED",
         });
         if ev == ride::Event::Start {
@@ -49,7 +49,7 @@ impl App {
             // a build that may not write the card: no recorder at all (it would read both FATs at each try only to
             // fail: about 2 s of a stopped loop every 5 s, the second review found), said once a ride
             if ev == ride::Event::Start {
-                self.notice("NOT RECORDING");
+                self.alarm_notice("NOT RECORDING");
             }
             return;
         }
@@ -60,7 +60,7 @@ impl App {
                 // a ride the boot has not reopened yet (the card failed then) is resumed in this one's place
                 self.recorder.start(t, recorder::ride_name(local), self.resume_pending);
                 if self.recorder.phase() != recorder::Phase::Starting {
-                    self.notice("NOT RECORDING"); // the last ride's save is still failing
+                    self.alarm_notice("NOT RECORDING"); // the last ride's save is still failing
                 } else {
                     // no full copy of a ride the clean one does not record
                     self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
@@ -161,12 +161,12 @@ impl App {
             }
             recorder::Outcome::Kept(_) => {
                 // not in \Activities: left in \Rustfw\Rides as it was (damaged, or the card kept failing)
-                self.notice("SAVE FAILED");
+                self.alarm_notice("SAVE FAILED");
             }
             recorder::Outcome::Failed(_) => {
                 // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
                 if self.recorder.fails() % 60 == 1 {
-                    self.notice("NOT SAVING");
+                    self.alarm_notice("NOT SAVING");
                 }
             }
         }

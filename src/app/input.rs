@@ -194,7 +194,7 @@ impl App {
             // checkpoints first, and the next start resumes the ride paused)
             (_, Input::Off) if self.busy() && self.off_armed_ms == 0 => {
                 self.off_armed_ms = OFF_CONFIRM_MS;
-                return self.say("HOLD AGAIN: OFF");
+                return self.alarm("HOLD BACK AGAIN TO SWITCH OFF");
             }
             (_, Input::Off) => return self.power_off(b),
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call

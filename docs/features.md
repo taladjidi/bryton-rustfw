@@ -51,7 +51,12 @@
 
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
-  once a minute). Each is a banner and three beeps, played without stopping the loop; nothing while paused.
+  once a minute). Each is a banner ("EAT REMINDER", "DRINK REMINDER", "HEART RATE HIGH" in red) and three beeps,
+  played without stopping the loop; nothing while paused.
+- **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
+  for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
+  (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
+  switches off). No time in front: the strip shows it.
 
 ## Keys
 
@@ -248,12 +253,12 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
   photo (the camera's shutter is volume up, always sent as HID).
 - **Now playing** (AMS): title, artist, album, duration, playing or paused and the elapsed time; the title in the
   banner when the track changes; the MUSIC field (group PHONE) shows the elapsed time.
-- **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as a
-  line holds; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
+- **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as
+  two banner lines hold; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
   OFF stops them.
-- **Calls:** over the bottom of any screen (the ride page above keeps going): a red decline and a green answer
-  button with handsets, the caller in the orange banner; Start or the green button answers, Back or the red one
-  declines; a call answered or ended on the phone takes them away. No call time and no hang-up: iOS removes the
+- **Calls:** "INCOMING CALL" and the caller in the banner at the top, a red decline and a green answer button
+  at the bottom, each with a handset and its key's name (BACK, START); the page between keeps going. Start or the
+  green button answers, Back or the red one declines; a call answered or ended on the phone takes them away. No call time and no hang-up: iOS removes the
   call's notification at the answer (seen on the unit), so nothing tells the unit when the call ends.
 - **Time:** the clock is set from the phone (Current Time Service) at each connection, and the time zone kept for
   the GPS and the ride files (it replaces the one learnt at a fix); not while a ride is open, so its times never jump.

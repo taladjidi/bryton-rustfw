@@ -351,7 +351,7 @@ impl App {
         for i in 0..ui::MENU_ROWS {
             let print = self.menu_row_print(menu, sel, i);
             if self.menu_shown[i] != print {
-                self.draw_menu_row(&mut Panel(b, (0, self.bottom())), menu, sel, i);
+                self.draw_menu_row(&mut Panel(b, self.area()), menu, sel, i);
                 self.menu_shown[i] = print;
             }
         }

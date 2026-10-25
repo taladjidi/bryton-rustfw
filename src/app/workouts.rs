@@ -268,7 +268,7 @@ impl App {
     pub(crate) fn update_gauge(&mut self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let cols = ui::gauge_cols(bx);
         let now = self.gauge_now(cols);
-        let mut p = Panel(b, (0, self.bottom()));
+        let mut p = Panel(b, self.area());
         if !now.same_frame(&old) {
             self.draw_gauge(&mut p, bx, now);
             return Drawn::Gauge(now);

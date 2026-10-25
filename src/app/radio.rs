@@ -100,7 +100,7 @@ impl App {
             self.phone_event(b, ev.get(..n).unwrap_or(&[]));
         }
         if title && self.screen == Screen::Nearby {
-            ui::draw_nearby(&mut Panel(b, (0, self.bottom())), self.nearby.count(), self.scanning);
+            ui::draw_nearby(&mut Panel(b, self.area()), self.nearby.count(), self.scanning);
         }
     }
 }

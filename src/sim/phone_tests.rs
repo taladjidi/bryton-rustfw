@@ -71,9 +71,9 @@ fn pairing_from_the_menu() {
     assert!(bond.attrs_len > 0, "the HID report's CCCD kept");
     assert!(s.notify && s.keys);
 
-    // a message: its title and text in the banner and the notices (as much as a line holds), at the phone's time
+    // a message: its title and text in the banner and the notices (as much as two banner lines hold), at the phone's time
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.notices[0].as_str(), "09:41 Bob: Lunch at ");
+    assert_eq!(app.notices[0].as_str(), "09:41 Bob: Lunch at 1?");
 
     // the phone walks away: the unit advertises slowly again, for it to come back
     run(&mut sim, &mut app, 3000);

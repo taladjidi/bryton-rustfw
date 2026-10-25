@@ -85,7 +85,7 @@ impl App {
     pub(crate) fn course_event(&mut self, ev: course::Event) {
         match ev {
             course::Event::Off => {
-                self.say("OFF COURSE");
+                self.alarm("OFF COURSE");
                 self.tones.play(&BEEP_ALERT);
             }
             course::Event::Back => self.say("BACK ON COURSE"),

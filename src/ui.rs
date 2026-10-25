@@ -1126,47 +1126,83 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
     }
 }
 
-/// `style`, or at scale 1 if `text` would not fit in `w` ("08:41 HEART RATE PAIRED"): smaller rather than cut.
-fn fit(style: Style, text: &str, w: u32) -> Style {
-    if style.width(text) > w { Style { scale: 1, ..style } } else { style }
+/// Height of a banner: a notice over the top of any screen other than the overview (the strip and the page's
+/// first 20 px), two lines of the 2x font.
+pub const BANNER_H: u32 = 44;
+
+/// `text` as at most two lines that fit `w` in `style`: cut at a newline, else at the last space that lets the first
+/// line fit (else at the last character that does); the second line is what is left (cut when drawn if too long).
+///
+/// ```
+/// use bryton_rustfw::ui::{lines, LABEL};
+/// assert_eq!(lines(&LABEL, "LAP", 228), ("LAP", ""));
+/// assert_eq!(lines(&LABEL, "PAUSED: HOLD START TO END", 228), ("PAUSED: HOLD START", "TO END"));
+/// assert_eq!(lines(&LABEL, "INCOMING CALL\nMum", 228), ("INCOMING CALL", "Mum"));
+/// ```
+pub fn lines<'a>(style: &Style, text: &'a str, w: u32) -> (&'a str, &'a str) {
+    if let Some((a, b)) = text.split_once('\n') {
+        return (a, b);
+    }
+    if style.width(text) <= w {
+        return (text, "");
+    }
+    let fits = |end: usize| text.get(..end).is_some_and(|t| style.width(t) <= w);
+    match text.char_indices().rev().find(|&(i, ch)| ch == ' ' && fits(i)).map(|(i, _)| i) {
+        Some(i) => (text.get(..i).unwrap_or(""), text.get(i + 1..).unwrap_or("")),
+        None => {
+            let i = text.char_indices().map(|(i, _)| i).take_while(|&i| fits(i)).last().unwrap_or(0);
+            (text.get(..i).unwrap_or(""), text.get(i..).unwrap_or(""))
+        }
+    }
 }
 
-/// Top of a banner: a notice over the bottom of any screen other than the overview.
-pub const BANNER_Y: u32 = H - 40;
-
-/// A banner: `text` in black on orange over the bottom of the screen.
-pub fn draw_banner(c: &mut impl Canvas, text: &str) {
-    c.fill(0, BANNER_Y, W, 4, BLACK);
-    let style = fit(Style { fg: BLACK, bg: ACCENT, ..LABEL }, text, W);
-    c.fill(0, BANNER_Y + 4, W, 8, ACCENT);
-    text::draw_in(c, &style, 0, BANNER_Y + 12, W, Align::Centre, text);
-    c.fill(0, BANNER_Y + 12 + style.height(), W, H - BANNER_Y - 12 - style.height(), ACCENT);
+/// A banner over the top of the screen: `text` on one or two lines ([`lines`]) at 2x, black on orange, or white on
+/// red for an `alarm` (heart rate high, off course, the battery low, a ride not saving).
+pub fn draw_banner(c: &mut impl Canvas, text: &str, alarm: bool) {
+    let (fg, bg) = if alarm { (WHITE, RED) } else { (BLACK, ACCENT) };
+    let style = Style { fg, bg, ..LABEL };
+    let lh = style.height();
+    let (a, b) = lines(&style, text, W - 12);
+    let rows: &[&str] = if b.is_empty() { &[a] } else { &[a, b] };
+    let mut y = (BANNER_H - lh * rows.len() as u32) / 2;
+    c.fill(0, 0, W, y, bg);
+    for t in rows {
+        text::draw_in(c, &style, 0, y, W, Align::Centre, t);
+        y += lh;
+    }
+    c.fill(0, y, W, BANNER_H - y, bg);
 }
 
-/// Top of the incoming call's overlay: the two buttons, then the banner with the caller.
-pub const CALL_Y: u32 = BANNER_Y - CALL_BUTTON_H - 8;
-/// The call buttons' height.
-const CALL_BUTTON_H: u32 = 56;
+/// The call buttons' height: a handset and the key's name.
+const CALL_BUTTON_H: u32 = 64;
+/// Top of the incoming call's buttons (the banner with the caller is at the top).
+pub const CALL_Y: u32 = H - CALL_BUTTON_H - 12;
 /// The decline (red, left) and answer (green, right) buttons: x, y, w, h.
 pub const CALL_BUTTONS: [(u32, u32, u32, u32); 2] =
-    [(8, CALL_Y + 4, W / 2 - 16, CALL_BUTTON_H), (W / 2 + 8, CALL_Y + 4, W / 2 - 16, CALL_BUTTON_H)];
+    [(8, CALL_Y + 6, W / 2 - 16, CALL_BUTTON_H), (W / 2 + 8, CALL_Y + 6, W / 2 - 16, CALL_BUTTON_H)];
 /// A telephone handset, 16 x 16 (the earpiece top left, the mouthpiece bottom right).
 const HANDSET: [u16; 16] = [
     0x3000, 0x7800, 0x7c00, 0x7c00, 0x7800, 0x3800, 0x3800, 0x1c00, 0x1c00, 0x0e00, 0x0706, 0x039f, 0x01ff, 0x00fe,
     0x007c, 0x0000,
 ];
 
-/// An incoming call over the bottom of any screen: a red decline and a green answer button, each with a handset,
-/// and the banner with the caller (the page above keeps updating: [`crate::App`]'s bottom is [`CALL_Y`]). Once
-/// answered it goes: iOS removes the call's notification at the answer (seen on the unit, 2026-10-24), so neither
-/// the call's time nor a hang-up can follow over ANCS.
+/// An incoming call over any screen: the banner at the top says it is a call and who calls; two buttons at the
+/// bottom, each with a handset and the key that does the same: a red decline (BACK) and a green answer (START). The
+/// page between keeps updating ([`crate::App`]'s drawing area stops at [`CALL_Y`]). Once answered it goes: iOS
+/// removes the call's notification at the answer (seen on the unit, 2026-10-24), so neither the call's time nor a
+/// hang-up can follow over ANCS.
 pub fn draw_call(c: &mut impl Canvas, who: &str) {
-    c.fill(0, CALL_Y, W, BANNER_Y - CALL_Y, BLACK);
+    let mut l = text::Line::<48>::new();
+    l.push_str("INCOMING CALL\n");
+    l.push_str(who);
+    draw_banner(c, l.as_str(), false);
+    c.fill(0, CALL_Y, W, H - CALL_Y, BLACK);
     for (i, &(x, y, w, h)) in CALL_BUTTONS.iter().enumerate() {
-        c.fill(x, y, w, h, if i == 0 { RED } else { GREEN });
-        draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + h / 2 - 16, 2, WHITE);
+        let (bg, fg, key) = if i == 0 { (RED, WHITE, "BACK") } else { (GREEN, BLACK, "START") };
+        c.fill(x, y, w, h, bg);
+        draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + 6, 2, fg);
+        text::draw_in(c, &Style { fg, bg, ..LABEL }, x + 2, y + h - 4 - LABEL.height(), w - 4, Align::Centre, key);
     }
-    draw_banner(c, if who.is_empty() { "INCOMING CALL" } else { who });
 }
 
 /// Ferris, at the bottom of the overview.
@@ -1234,11 +1270,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn long_notices_fit() {
-        for t in ["08:41 RIDE RESUMED", "08:41 HEART RATE PAIRED", "08:41 SPEED+CAD PAIRED", "08:41 FAULT RESET 3"] {
-            assert!(fit(LABEL, t, W - 8).width(t) <= W - 8, "{t}");
+    fn banners_fit_two_lines() {
+        for t in
+            ["HEART RATE PAIRED", "PAUSED: HOLD START TO END", "HOLD BACK AGAIN TO SWITCH OFF", "INCOMING CALL\nMum"]
+        {
+            let (a, b) = lines(&LABEL, t, W - 12);
+            assert!(LABEL.width(a) <= W - 12 && LABEL.width(b) <= W - 12, "{t}: {a} / {b}");
+            assert_eq!(a.len() + b.len() + usize::from(!b.is_empty()), t.len(), "{t}: nothing lost");
         }
-        assert_eq!(fit(LABEL, "08:41 RIDE RESUMED", W - 8).scale, LABEL.scale, "the usual size when it fits");
+        assert!(2 * LABEL.height() <= BANNER_H && BANNER_H > PAGE_Y, "two lines, over the strip");
+        let mut f = Frame::new();
+        draw_banner(&mut f, "A VERY LONG BANNER THAT GOES ON AND ON PAST TWO LINES", true);
+        draw_call(&mut f, "Somebody with a long name");
     }
 
     /// A framebuffer that panics on any fill off screen.

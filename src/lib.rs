@@ -197,12 +197,13 @@ pub struct App {
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
     /// The latest notices, newest first (empty lines: none).
-    notices: [Line<20>; ui::NOTICES],
+    notices: [Line<40>; ui::NOTICES],
     /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
     /// redrawn meanwhile; when it goes, the screen is drawn again.
     banner_ms: Option<u32>,
-    /// What the banner says.
-    banner: Line<20>,
+    /// What the banner says (two lines at most), and whether it is an alarm (white on red).
+    banner: Line<40>,
+    banner_alarm: bool,
     banner_drawn: bool,
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
@@ -386,6 +387,7 @@ impl App {
             notices: Default::default(),
             banner_ms: None,
             banner: Line::new(),
+            banner_alarm: false,
             banner_drawn: false,
             had_fix: false,
             told_low: false,
@@ -490,7 +492,11 @@ impl App {
             self.lag_s = 0;
         }
         if let Some(a) = self.alert.take() {
-            self.say(a.text());
+            if a == alerts::Alert::HrHigh {
+                self.alarm(a.text())
+            } else {
+                self.say(a.text())
+            }
             self.tones.play(&BEEP_ALERT);
         }
         self.play_tones(b);
@@ -510,7 +516,7 @@ impl App {
             self.strip.charging = charging;
             let low = self.strip.battery.is_some_and(|p| p <= 15) && !charging;
             if low && !self.told_low {
-                self.notice("BATTERY LOW");
+                self.alarm_notice("BATTERY LOW");
             }
             self.told_low = low;
             if self.chips.baro {
@@ -583,7 +589,7 @@ impl App {
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         if let Some(ms) = self.banner_ms {
             if !core::mem::replace(&mut self.banner_drawn, true) {
-                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str());
+                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str(), self.banner_alarm);
             }
             self.banner_ms = Some(ms + POLL_MS).filter(|&ms| ms < BANNER_MS);
             if self.banner_ms.is_none() {
@@ -594,17 +600,17 @@ impl App {
             Screen::Main | Screen::Ride(_) => self.update_page(b),
             Screen::Summary => {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
-                let bottom = self.bottom();
+                let area = self.area();
                 if let Some((m, _)) = &mut self.summary {
                     let (base, view) = (Some(&self.basemap), m.view);
-                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, base, None, None);
+                    map::update(&mut Panel(b, area), map::area(ui::card::MAP), &self.track, m, base, None, None);
                     if m.view != view {
                         self.show(b); // refitted: the basemap of the new view under it (else black; review)
                     }
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, (0, self.bottom())), &self.nearby);
+                ui::draw_list(&mut Panel(b, self.area()), &self.nearby);
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }

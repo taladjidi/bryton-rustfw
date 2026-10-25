@@ -1040,7 +1040,7 @@ fn start_from_the_overview() {
     assert_consistent(&sim, &app);
     sim.save("ride_started");
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "PAUSED: HOLD = END");
+    assert_eq!(app.banner.as_str(), "PAUSED: HOLD START TO END");
     app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
     run(&mut sim, &mut app, 200);
@@ -2288,7 +2288,7 @@ fn off_during_a_ride_asks_twice() {
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Back));
-    assert!(!sim.standby && app.banner.as_str() == "HOLD AGAIN: OFF", "warned");
+    assert!(!sim.standby && app.banner.as_str() == "HOLD BACK AGAIN TO SWITCH OFF", "warned");
     run(&mut sim, &mut app, 12_000);
     app.press(&mut sim, Press::Long(Key::Back));
     assert!(!sim.standby, "the warning ran out: warned again");
@@ -2383,7 +2383,7 @@ fn eat_reminder_on_a_ride() {
     run(&mut sim, &mut app, 299_000);
     assert_eq!(sim.tones.len(), tones0, "not yet");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.banner.as_str(), "EAT");
+    assert_eq!(app.banner.as_str(), "EAT REMINDER");
     let beeps: std::vec::Vec<u32> = sim.tones[tones0..].to_vec();
     assert_eq!(beeps, [2500, 0, 2500, 0, 2500, 0], "three beeps, then off");
     assert!(sim.ms - steps0 >= 300_000, "{}", sim.ms - steps0);

@@ -6,7 +6,7 @@ entirely. Not affiliated with Bryton.
 | | | | |
 |:-:|:-:|:-:|:-:|
 | ![Overview](docs/img/overview.png) | ![Ride started](docs/img/ride.png) | ![Power fields](docs/img/power.png) | ![W' balance graph](docs/img/wbal.png) |
-| Overview: time, date, four fields, notices (sim) | Start: the ride, said in a banner (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot (sim) |
+| Overview: time, date, four fields, notices (sim) | Start: the ride, said in a banner at the top (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot (sim) |
 | ![Power and HR graphs](docs/img/graphs.png) | ![HRV](docs/img/hrv.png) | ![Layout](docs/img/layout.png) | ![Settings](docs/img/settings.png) |
 | Power graph with its axes, over the HR graph (sim) | DFA a1 and RMSSD from the strap's beats (sim) | An uneven layout: a big box over 2 x 2 (sim) | Menu: settings edited in place (sim) |
 | ![Ride card](docs/img/card.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |
@@ -18,7 +18,7 @@ entirely. Not affiliated with Bryton.
 | ![Workout graph](docs/img/workout-graph.png) | ![Workout gauge](docs/img/workout-gauge.png) | ![Menu](docs/img/menu.png) | ![Field groups](docs/img/field-groups.png) |
 | The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: one screen of groups (sim) | A page's field: its group, then the field (sim) |
 | ![IGN map](docs/img/ign-map.png) | ![Media remote](docs/img/phone-media.png) | ![A call](docs/img/phone-call.png) | ![Map zoom](docs/img/map-zoom.png) |
-| The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): answer or decline (sim) | The map zoomed in with "+" and "-", panned by a drag, the crosshair to follow again (sim, synthetic tiles) |
+| The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) | The map zoomed in with "+" and "-", panned by a drag, the crosshair to follow again (sim, synthetic tiles) |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
