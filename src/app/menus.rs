@@ -441,7 +441,7 @@ impl App {
     /// Before a row that cannot be undone (`what`: "FORGET HEART RATE"): true when this Select confirms the one just
     /// before on the same row (no other input between: [`App::input`] clears it); else it asks, in the banner and in
     /// the row ("SURE?"), and the row waits for a second Start or tap.
-    fn confirmed(&mut self, menu: Menu, sel: usize, what: &str) -> bool {
+    pub(crate) fn confirmed(&mut self, menu: Menu, sel: usize, what: &str) -> bool {
         if self.confirm.take() == Some((menu, sel)) {
             return true;
         }

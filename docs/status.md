@@ -40,6 +40,13 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
+  DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
+  for one of this firmware's rides) has it, `\Activities` not; the next start's totals the same (the cache written
+  without it). Then, on stock: the ride gone from its history and nothing else changed (its `.sum` / `.csum` left in
+  `\System\History\Summary`: whether stock lists a summary without its FIT is inferred from Ghidra, not seen);
+  moved back from the computer, the ride back in both histories.
+
 - **The scan's cache (storage/stock.rs `Cache`, `\Rustfw\scan.bin`)**, with an EMMC_WRITE=1 build: the first start
   reads every ride as before (`dev.py info` awake permille during it: now at most about 15 ms of work a pass, so
   lower than the 717 seen; Back held 3 s switches off during it), then `\Rustfw\scan.bin` is there (64 + 64 bytes a

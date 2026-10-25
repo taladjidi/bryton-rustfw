@@ -11,4 +11,5 @@ pub mod ign;
 pub mod ini;
 pub mod recorder;
 pub mod stock;
+pub mod trash;
 pub mod workout;

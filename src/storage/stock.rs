@@ -11,7 +11,8 @@
 //! A ride counts only if its file is whole (header, CRC) and has its session: `tmp.fit` (stock's ride in
 //! progress) and the GNSS logs (`.ubx`) do not have a ride's name and are never opened. The ride's day is its
 //! name's (local time, as stock names them). Nothing of stock's is ever written: only the cache, in this firmware's
-//! folder ([`Cache::write`]).
+//! folder ([`Cache::write`]); a ride HISTORY's DELETE moved away ([`crate::trash`]) leaves the cache at once
+//! ([`Scan::forget`]).
 //!
 //! Stock keeps a summary per ride (`\System\History\Summary\<name>.sum` / `.csum`, ghidra/STORAGE_AND_MAPS.md
 //! 3), which would be cheaper to read than the FIT file, but its layout is not established (version-dependent
@@ -606,6 +607,25 @@ impl Scan {
         if let Some(f) = &mut self.fat {
             f.forget();
         }
+    }
+
+    /// A ride moved away (HISTORY's DELETE, [`crate::trash`]): its entry dropped from the cache, and the totals, the
+    /// power curve and the index counted again at once, no ride read; the cache written later ([`Scan::save`]). A
+    /// scan running starts again (its marks follow the entries' places). Without a cache the sums cannot be
+    /// undone: the rides are read again from `date`.
+    pub fn forget(&mut self, file: &File, start: Start, date: (u16, u8, u8)) {
+        let Some(c) = &mut self.cache else { return self.start(date) };
+        if let Some(i) = c.find(&key(file, start)) {
+            let len = c.len;
+            c.bytes.copy_within(HEAD + (i + 1) * ENTRY..HEAD + len * ENTRY, HEAD + i * ENTRY);
+            c.bytes.get_mut(HEAD + (len - 1) * ENTRY..HEAD + len * ENTRY).unwrap_or(&mut []).fill(0);
+            (c.len, c.hint) = (len - 1, 0);
+            self.dirty = true;
+        }
+        if self.status == Status::Running {
+            self.start(date);
+        }
+        self.recount();
     }
 
     /// Goes on for about `budget` bytes read (a directory entry counts 32); false once it is done or failed.
