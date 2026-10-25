@@ -80,10 +80,10 @@
 | Key | Overview and ride pages | Menus |
 |---|---|---|
 | Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down (stops at the last row) |
-| hold Page | the menu | |
+| hold Page | the menu; during a ride (recording or paused), the ride menu | |
 | Lap | a lap (while riding) | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
-| hold Start | end a paused ride | |
+| hold Start | end a paused ride (or END RIDE in the ride menu) | |
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 | hold Lap | the phone's music: play / pause (PHONE below) | |
@@ -108,14 +108,14 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
-| hold (600 ms, still) | the menu (as holding Page); not while a ride records | | |
+| hold (600 ms, still) | the menu (as holding Page; the ride menu while paused); not while a ride records | | |
 | tap | the gear right of the overview's date: the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
 Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
 records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
-glove, rain); swipes still turn pages and the keys do everything. TOUCH in DEVICE (ON / OFF) switches gestures off
+glove, rain); swipes still turn pages and the keys do everything. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
 altogether, for rain: the keys only, the call's buttons included.
 
 ## Ride
@@ -149,24 +149,64 @@ altogether, for rain: the keys only, the call's buttons included.
 
 ## Menu
 
-The groups, nothing more than a few rows away:
+Hold Page (or tap the gear) for the menu: what to ride first, then what was ridden, then the set-up (UI review
+4.3). A row that opens a menu or a screen ends in ">"; a value sits on the right with its unit ("FTP  200 W"). Any
+setting is three levels down at most (MENU > SETTINGS > ME > FTP), the diagnostics under SYSTEM:
+
+```
+MENU
+ +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step
+ +- COURSES >      the course files (green: followed); Start follows or stops
+ +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
+ +- PAGES >        OVERVIEW (four fields), PAGE 1..3 (FIELDS: the layout, FIELD n -> group -> field)
+ +- SENSORS >      HEART RATE, SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING; DI2 KEYS >; PHONE >
+ +- SETTINGS >
+     +- ME >       MAX HR, FTP, WEIGHT, W'
+     +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
+     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, GAUGE POWER (the workout gauge's window)
+     +- BIKE >     WHEEL
+     +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
+```
+
 - **SENSORS:** Start on a row: an off sensor searches; a searching one stops; a paired one heard asks "SURE?" and
   a second Start forgets it; a paired one silent searches for it again at once (not after its rest), and a second
-  Start forgets it. Then the light, temperature and pressure readings.
-- **Asked first:** forgetting a sensor or the phone and IMPORT show "SURE?" in the row and ask in the banner; a
-  second Start (or a tap on the row) does it, any other key or touch drops it.
+  Start forgets it. DI2 KEYS: what each Di2 hood button press does. PHONE: LINK (OFF, PAIRING, WAITING, LINKED,
+  SECURE; ERR and a command's code if the radio refused the set-up), PAIR, REMOTE (the media remote), NOTIFY on /
+  off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
+- **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the
+  banner; a second Start (or a tap on the row) does it, any other key or touch drops it.
 - **PAGES:** the overview's four fields, pages 1 to 3 (field count, each field). A field row opens the field groups
   (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
   beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the
   page. Any of the 56 fields is a few presses away, not up to 55.
-- **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
-  keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
-- **DEVICE:** backlight level (or AUTO) and time-out, TOUCH on / off, wheel size, GPS (fix, satellites, position,
-  altitude, UTC), BLE devices nearby, USB DRIVE (below), ABOUT (Ferris, the version, the commit the build is made
-  from and its date; `dev.py info` gives the same commit).
-- **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
-- **PHONE:** LINK (OFF, PAIRING, WAITING, LINKED, SECURE; ERR and a command's code if the radio refused the set-up),
-  PAIR, REMOTE (the media remote), NOTIFY on / off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
+- **The ride menu:** Page held while a ride records or is paused opens RIDE instead, the rows that apply only:
+  ```
+  RIDE
+   +- PAUSE / RESUME   as Start; PAUSE stays (END RIDE right under it), RESUME goes back to the page
+   +- END RIDE         asked first ("SURE?", Start again), then the ride's card (paused first if it was running)
+   +- WORKOUT >        while a step runs: NEXT STEP (no lap), STOP WORKOUT (the ride goes on)
+   +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
+   +- BRIGHTNESS       changed in place
+   +- SENSORS >        the same menu as off the ride
+   +- EDIT THIS PAGE > the page's layout and fields (not on the course page, which has none)
+   +- ALL SETTINGS >   the full menu above
+  ```
+  An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
+  that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when
+  the workout ends) moves the selection to the last row left.
+- **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
+  to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, GAUGE POWER, WHEEL) goes to its next value.
+- **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
+  altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
+  build is made from and its date; `dev.py info` gives the same commit).
+- **Where the rows were** before this tree (2026-10-25), old path -> new path: SENSORS > LUX / TEMP C / HPA -> SYSTEM >
+  BUILT IN; RIDER > MAX HR, FTP W, WEIGHT KG, W' KJ -> SETTINGS > ME > MAX HR, FTP, WEIGHT, W'; RIDER > WKT POWER ->
+  DISPLAY > GAUGE POWER; DEVICE > LIGHT % / LIGHT OFF / TOUCH -> DISPLAY > BRIGHTNESS / OFF AFTER / TOUCH; DEVICE >
+  WHEEL MM -> BIKE > WHEEL; DEVICE > GPS, NEARBY BLE, USB DRIVE, ABOUT -> SYSTEM > GPS, BLE NEARBY, USB DRIVE, ABOUT;
+  ALERTS > EAT MIN, DRINK MIN, HR OVER -> SETTINGS > ALERTS > EAT, DRINK, HR ABOVE; STOCK DATA > IMPORT -> SYSTEM >
+  IMPORT FROM STOCK; STOCK DATA's other rows -> HISTORY > FITNESS; PHONE -> SENSORS > PHONE. WORKOUTS, COURSES,
+  HISTORY, PAGES, SENSORS (the ANT rows, DI2 KEYS) stay where they were. The settings are kept as before (same
+  backup registers, same formats).
 
 ## History
 
@@ -197,8 +237,8 @@ TrainingPeaks), read only:
   from 0 to 150 % of FTP, heart rate from half the max to it, a quarter for an open target) in its zone colour; a
   white line where the rider is, the part done dark. A distance step is drawn at 30 km/h, an open step as 5 min.
   Only the columns the line leaves and reaches are redrawn (about 300 px/s in a full-page box, sim).
-- **WKT POWER**, a gauge field: the reading the step targets big (power over the window set by the menu's WKT
-  POWER row: 3 s, 10 s, 30 s or each second, "POWER 3S" in its title; heart rate for a heart-rate step, cadence for
+- **WKT POWER**, a gauge field: the reading the step targets big (power over the window set by DISPLAY > GAUGE
+  POWER: 3 s, 10 s, 30 s or each second, "POWER 3S" in its title; heart rate for a heart-rate step, cadence for
   a cadence one), a bar from 30 % under the target band to 30 % over it with the band as a green box and a marker
   at the reading, and the band in numbers under it ("200-220"). The number and the marker are coloured by how far
   the reading is: green in the band, yellow within 5 %, blue further under, red further over (the zone palette's
@@ -249,7 +289,8 @@ copied over USB into `\Courses`, read only:
 
 ## Stock data
 
-What Bryton's firmware left on the card, read only (nothing of stock's is ever written), from the STOCK DATA menu:
+What Bryton's firmware left on the card, read only (nothing of stock's is ever written), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM
+STOCK):
 - **READ RIDES** reads every ride in `\Activities` (stock's `YYMMDDhhmmss.fit` and this firmware's saved rides; stock's
   ride in progress `tmp.fit` and files that are not whole rides are left out), a bounded amount per pass of the main
   loop (15 ms of work at most, 4 ms during a ride), so keys and touch keep answering. **Each ride is decoded once
@@ -303,13 +344,13 @@ What Bryton's firmware left on the card, read only (nothing of stock's is ever w
 ## Phone (BLE, no app)
 
 The unit pairs with a phone as a Bluetooth accessory, with nothing to install on the phone:
-- **Pairing:** PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
+- **Pairing:** SENSORS > PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
   pair from the phone's Bluetooth settings (Just Works: no code). One phone is kept (its key and the notifications
   it enabled), in `\Rustfw\ble.bin` on the card, read 3 s after the start; FORGET erases it. A build that may not
   write the card keeps it until switched off. Not paired, the unit does not advertise at all; paired and not
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
-  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. PHONE >
+  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. SENSORS > PHONE >
   REMOTE is a player, also opened by a swipe down on the overview or a ride page (a swipe up closes it): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
   time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
   the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,
@@ -335,7 +376,7 @@ With a cable in, a dev link starts: screenshots, key presses, register and memor
 sector reads, and running a new build from RAM (`dev.py`, see AGENTS.md). Unplugging resets the unit.
 
 **USB drive:** the computer can mount the eMMC's FAT volume (BRYTON: rides, routes, workouts, map tiles) without
-going back to stock. The unit is a card reader with the card out until DEVICE > USB DRIVE (or `dev.py drive`) lends
+going back to stock. The unit is a card reader with the card out until SETTINGS > SYSTEM > USB DRIVE (or `dev.py drive`) lends
 it; refused with a banner while a ride runs (END THE RIDE FIRST), waits to be saved (RIDE NOT SAVED YET) or without
 the dev link up (CONNECT USB). Lent, nothing else touches the card: no ride can start (USB DRIVE ON), the scans, the
 basemap and the dev link's card commands wait. Ejecting on the computer gives it back; so does USB DRIVE again on

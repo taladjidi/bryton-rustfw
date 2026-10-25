@@ -40,11 +40,17 @@ impl App {
             (S::Scan, stock::Status::Done) => v.push_u32(u32::from(o.all.rides)),
             (S::Scan, _) if self.stock.ready() => v.push_u32(u32::from(o.all.rides)),
             (S::Scan, stock::Status::Failed(_)) => v.push_str("NONE"),
-            (S::Import, _) => v.push_str("SETTINGS"),
+            (S::Import, _) => v.push_str("FROM STOCK"),
             _ if !self.stock.ready() => v.push_str("--"),
             (S::Cp | S::WPrime | S::Fit, _) if cp.is_none() => v.push_str("--"),
-            (S::Cp, _) => v.push_u32(cp.map_or(0, |c| u32::from(c.cp))),
-            (S::WPrime, _) => push_fixed(v, cp.map_or(0, |c| c.w_prime) as i32, 3, 1),
+            (S::Cp, _) => {
+                v.push_u32(cp.map_or(0, |c| u32::from(c.cp)));
+                v.push_str(" W");
+            }
+            (S::WPrime, _) => {
+                push_fixed(v, cp.map_or(0, |c| c.w_prime) as i32, 3, 1);
+                v.push_str(" KJ");
+            }
             (S::Fit, _) => {
                 let c = cp.map_or((0, 0), |c| (c.points, c.err_pct));
                 v.push_u32(u32::from(c.0));

@@ -16,7 +16,7 @@ pub enum Input {
     Select,
     /// Back: out of a menu (on a page, the backlight on or off).
     Back,
-    /// Page held: the menu.
+    /// Page held: the menu (the ride menu while a ride records or is paused).
     Menu,
     /// Start held: end a paused ride.
     End,
@@ -165,22 +165,41 @@ pub const REMOTE: [Row; 4] = [
 ];
 
 impl Setting {
-    /// The row's label.
+    /// The row's label: what it is, in words; the unit goes after the value ([`Setting::unit`]).
     pub fn label(self) -> &'static str {
         match self {
-            Setting::Wheel => "WHEEL MM",
-            Setting::Light => "LIGHT %",
-            Setting::LightOff => "LIGHT OFF",
+            Setting::Wheel => "WHEEL",
+            Setting::Light => "BRIGHTNESS",
+            Setting::LightOff => "OFF AFTER",
             Setting::Touch => "TOUCH",
             Setting::MaxHr => "MAX HR",
-            Setting::Ftp => "FTP W",
-            Setting::Weight => "WEIGHT KG",
-            Setting::WPrime => "W' KJ",
-            Setting::Eat => "EAT MIN",
-            Setting::Drink => "DRINK MIN",
-            Setting::HrAlert => "HR OVER",
-            Setting::WktAvg => "WKT POWER",
+            Setting::Ftp => "FTP",
+            Setting::Weight => "WEIGHT",
+            Setting::WPrime => "W'",
+            Setting::Eat => "EAT",
+            Setting::Drink => "DRINK",
+            Setting::HrAlert => "HR ABOVE",
+            Setting::WktAvg => "GAUGE POWER",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
+        }
+    }
+
+    /// The unit shown after a number (not while it is edited: the row has no room for it): "FTP  200 W".
+    ///
+    /// ```
+    /// use bryton_rustfw::menu::Setting;
+    /// assert_eq!([Setting::Ftp, Setting::Eat, Setting::Touch].map(Setting::unit), [" W", " MIN", ""]);
+    /// ```
+    pub fn unit(self) -> &'static str {
+        match self {
+            Setting::Wheel => " MM",
+            Setting::Light => "%",
+            Setting::MaxHr | Setting::HrAlert => " BPM",
+            Setting::Ftp => " W",
+            Setting::Weight => " KG",
+            Setting::WPrime => " KJ",
+            Setting::Eat | Setting::Drink => " MIN",
+            _ => "",
         }
     }
 
@@ -274,7 +293,30 @@ pub enum Row {
     Pick(crate::ui::Field),
     /// A row of the phone menu.
     Phone(PhoneRow),
+    /// A row of the ride menu that acts on the ride, the workout or the course.
+    Ride(RideRow),
 }
+
+/// What the ride menu's own rows do ([`crate::Menu::Ride`]); its other rows open a menu or change a setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RideRow {
+    /// Pauses the ride (the menu stays, END RIDE under it), or resumes it (back to the page), as Start.
+    Pause,
+    /// Ends the ride (asked first), as Start held while paused.
+    End,
+    /// The workout's next step, as Lap but without a lap.
+    NextStep,
+    /// Stops the workout; the ride goes on.
+    StopWorkout,
+    /// Stops following the course; the ride goes on.
+    StopCourse,
+}
+
+/// The workout menu of a ride (while a step runs).
+pub const WORKOUT_NOW: [Row; 2] = [Row::Ride(RideRow::NextStep), Row::Ride(RideRow::StopWorkout)];
+
+/// The course menu of a ride (while one is followed).
+pub const COURSE_NOW: [Row; 1] = [Row::Ride(RideRow::StopCourse)];
 
 /// What the phone menu shows ([`PHONE`]): the link (app/phone.rs) and its settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,7 +355,7 @@ pub const PHONE: [PhoneRow; 6] = {
     [Status, Pair, Media, Notify, Keys, Forget]
 };
 
-/// What the stock data menu shows ([`STOCK`]): read from the rides and settings Bryton's firmware left on the
+/// A row of FITNESS ([`FITNESS`]) or SYSTEM's import: read from the rides and settings Bryton's firmware left on the
 /// card ([`crate::stock`]); only the scan and the import act, on Select.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StockRow {
@@ -346,8 +388,8 @@ impl StockRow {
     pub fn label(self) -> &'static str {
         match self {
             StockRow::Scan => "READ RIDES",
-            StockRow::Cp => "CP W",
-            StockRow::WPrime => "W' KJ",
+            StockRow::Cp => "CP",
+            StockRow::WPrime => "W'",
             StockRow::Fit => "CP FIT",
             StockRow::WeekKm => "WEEK KM",
             StockRow::WeekH => "WEEK H",
@@ -360,28 +402,48 @@ impl StockRow {
     }
 }
 
-/// The stock data menu.
-pub const STOCK: [StockRow; 11] = {
+/// The fitness menu (HISTORY > FITNESS): what stock's rides give. Their settings' import is in SYSTEM.
+pub const FITNESS: [StockRow; 10] = {
     use StockRow::*;
-    [Scan, Cp, WPrime, Fit, WeekKm, WeekH, YearKm, YearH, AllKm, AllH, Import]
+    [Scan, Cp, WPrime, Fit, WeekKm, WeekH, YearKm, YearH, AllKm, AllH]
 };
 
-/// The alerts menu.
-pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
-
-/// The main menu: a screen of groups, so nothing is more than one screen of rows away.
-pub const MAIN: [Row; 10] = [
-    Row::Open(Menu::Sensors),
-    Row::Open(Menu::Pages),
-    Row::Open(Menu::Rider),
-    Row::Open(Menu::Device),
-    Row::Open(Menu::Alerts),
+/// The main menu (off a ride): what to ride, what was ridden, then the set-up; six rows, one screen.
+pub const MAIN: [Row; 6] = [
     Row::Open(Menu::Workouts),
     Row::Open(Menu::Courses),
     Row::Open(Menu::History),
-    Row::Open(Menu::Stock),
-    Row::Open(Menu::Phone),
+    Row::Open(Menu::Pages),
+    Row::Open(Menu::Sensors),
+    Row::Open(Menu::Settings),
 ];
+
+/// SETTINGS: a menu per subject, each a screen of settings, so any setting is three levels down at most.
+pub const SETTINGS: [Row; 5] = [
+    Row::Open(Menu::Me),
+    Row::Open(Menu::Alerts),
+    Row::Open(Menu::Display),
+    Row::Open(Menu::Bike),
+    Row::Open(Menu::System),
+];
+
+/// ME: the rider's numbers the metrics are computed from.
+pub const ME: [Row; 4] =
+    [Row::Set(Setting::MaxHr), Row::Set(Setting::Ftp), Row::Set(Setting::Weight), Row::Set(Setting::WPrime)];
+
+/// ALERTS: the reminders and the heart rate alert.
+pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
+
+/// DISPLAY: the backlight, the touch panel, the power the workout gauge shows.
+pub const DISPLAY: [Row; 4] =
+    [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::WktAvg)];
+
+/// BIKE: the wheel.
+pub const BIKE: [Row; 1] = [Row::Set(Setting::Wheel)];
+
+/// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
+pub const SYSTEM: [Row; 6] =
+    [Row::Drive, Row::Stock(StockRow::Import), Row::Open(Menu::Gps), Row::Nearby, Row::Open(Menu::BuiltIn), Row::About];
 
 /// The pages menu: the overview and the ride pages.
 pub const PAGES: [Row; 4] = [
@@ -391,29 +453,7 @@ pub const PAGES: [Row; 4] = [
     Row::Open(Menu::Page(2)),
 ];
 
-/// The rider menu: the numbers the metrics are computed from, and the workout gauge's power.
-pub const RIDER: [Row; 5] = [
-    Row::Set(Setting::MaxHr),
-    Row::Set(Setting::Ftp),
-    Row::Set(Setting::Weight),
-    Row::Set(Setting::WPrime),
-    Row::Set(Setting::WktAvg),
-];
-
-/// The device menu: the backlight, the touch panel, the wheel, the GPS readings, the BLE devices nearby, the USB
-/// drive, ABOUT.
-pub const DEVICE: [Row; 8] = [
-    Row::Set(Setting::Light),
-    Row::Set(Setting::LightOff),
-    Row::Set(Setting::Touch),
-    Row::Set(Setting::Wheel),
-    Row::Open(Menu::Gps),
-    Row::Nearby,
-    Row::Drive,
-    Row::About,
-];
-
-/// The built-in sensors' readings, under the ANT sensors in the sensors menu.
+/// The built-in sensors' readings (SYSTEM > BUILT IN).
 pub const BUILT_IN: [Reading; 3] = [Reading::Lux, Reading::TempC, Reading::Hpa];
 
 /// The GPS menu (all but the first only once the receiver has reported).

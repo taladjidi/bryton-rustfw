@@ -850,9 +850,12 @@ fn menu_touch_and_keys() {
             let row_y = |r: u8| (ui::LIST_Y + u32::from(r % ui::MENU_ROWS as u8) * ui::MENU_ROW + 10) as u16;
             if a % 29 == 0 {
                 // straight to a row that asks first: a sensor, the phone's FORGET, IMPORT
-                let import = menu::STOCK.len() - 1;
-                let at =
-                    [(Menu::Sensors, usize::from(b) % 5), (Menu::Phone, menu::PHONE.len() - 1), (Menu::Stock, import)];
+                let import = menu::SYSTEM.iter().position(|&r| r == menu::Row::Stock(menu::StockRow::Import));
+                let at = [
+                    (Menu::Sensors, usize::from(b) % 5),
+                    (Menu::Phone, menu::PHONE.len() - 1),
+                    (Menu::System, import.unwrap_or(0)),
+                ];
                 app.open(Screen::Menu(at[usize::from(b) % 3].0, at[usize::from(b) % 3].1));
                 app.show(&mut sim);
             }
@@ -914,7 +917,8 @@ fn menu_touch_and_keys() {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
             }
-            if k % 60 == 0 {
+            // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
+            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
                 super::tests::assert_consistent(&sim, &app);
             }
         }
@@ -922,4 +926,110 @@ fn menu_touch_and_keys() {
     std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
     assert!(off > 50 && riding > 10, "touch off {off}, taps and holds while recording {riding}");
+}
+
+/// Keys and taps by chance through the whole menu tree (UI review steps 6 and 8), a ride started and ended, workouts
+/// and courses there to start: no panic, the selection inside its menu, every menu reached (the ride menu and its
+/// WORKOUT and COURSE menus too), and no stored setting (the settings' registers, the pages, the sensors) changed
+/// but by an act in a menu: Start or a tap on a row, or the end of a number's edit (Back or a swipe right keep it).
+#[test]
+fn menu_tree_by_chance() {
+    use super::*;
+    use crate::touch::Dir;
+    use std::collections::BTreeMap;
+    let mut reached = BTreeMap::<std::string::String, u32>::new();
+    let watched: Vec<usize> = [WHEEL_BKP, POWER_BKP, ALERTS_BKP]
+        .into_iter()
+        .chain(PAGE_BKP.iter().flatten().copied())
+        .chain(crate::sensors::Kind::ALL.iter().map(|k| k.backup()))
+        .collect();
+    let (mut acts, mut rides) = (0, 0);
+    for seed in 1..=16u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+        app.set_course_memory(crate::storage::course::tests::memory());
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let mut tapped = 0;
+        for k in 0..2500 {
+            let (a, b) = (next() % 100, next());
+            // a tap on the row tapped last half the time: the second tap that acts
+            tapped = if b % 2 == 0 { tapped } else { b / 2 % ui::MENU_ROWS as u32 };
+            let row_y = (ui::LIST_Y + tapped * ui::MENU_ROW + 10) as u16;
+            // down more than up and out, so the deep menus are reached
+            let i = match a {
+                0..=29 => Input::Next,
+                30..=37 => Input::Prev,
+                38..=59 => Input::Select,
+                60..=69 => Input::Back,
+                70..=75 => Input::Menu,
+                76 => Input::End,
+                77..=79 => Input::NextHeld,
+                80..=91 => Input::Touch(Gesture::Tap(120, row_y)),
+                92..=93 => Input::Touch(Gesture::Tap(10, (ui::PAGE_Y + 8) as u16)),
+                _ => Input::Touch(Gesture::Swipe([Dir::Left, Dir::Right, Dir::Up, Dir::Down][(b % 4) as usize])),
+            };
+            let stored = |sim: &Sim| watched.iter().map(|&r| sim.backup[r]).collect::<Vec<_>>();
+            let (before, editing) = (stored(&sim), app.editing);
+            let in_menu = matches!(app.screen(), Screen::Menu(..));
+            app.input(&mut sim, i);
+            if stored(&sim) != before {
+                let act = matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
+                    || editing && matches!(i, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)));
+                assert!(act && in_menu, "seed {seed} step {k}: {i:?} changed a stored setting");
+                acts += 1;
+            }
+            if let Screen::Menu(m, s) = app.screen() {
+                assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
+                let name = std::format!("{m:?}");
+                *reached.entry(name.split('(').next().unwrap_or("").into()).or_default() += 1;
+            }
+            rides += u32::from(app.screen() == Screen::Summary);
+            for _ in 0..1 + b % 3 {
+                // one pass at least: a banner said by the input is drawn by the pass after it
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+            if k % 250 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
+                super::tests::assert_consistent(&sim, &app);
+            }
+        }
+    }
+    std::println!("reached: {reached:?}; {acts} stored by an act, {rides} ride cards");
+    let all = [
+        "Main",
+        "Settings",
+        "Me",
+        "Alerts",
+        "Display",
+        "Bike",
+        "System",
+        "BuiltIn",
+        "Gps",
+        "Sensors",
+        "Remote",
+        "Phone",
+        "Pages",
+        "Page",
+        "Fields",
+        "Group",
+        "History",
+        "Stock",
+        "Workouts",
+        "Steps",
+        "Courses",
+        "Ride",
+        "WorkoutNow",
+        "CourseNow",
+    ];
+    for m in all {
+        assert!(reached.contains_key(m), "{m} never reached: {reached:?}");
+    }
+    assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
 }

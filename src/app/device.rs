@@ -144,7 +144,7 @@ impl App {
         }
         self.light_ms = self.light_ms.saturating_add(POLL_MS);
         let wanted = (self.settings.light_level == LIGHT_AUTO && self.light_shown != 0)
-            || matches!(self.screen, Screen::Menu(Menu::Sensors, _));
+            || matches!(self.screen, Screen::Menu(Menu::BuiltIn, _));
         match (wanted, self.measuring) {
             (true, false) => {
                 self.measuring = ambient::light_start(b);

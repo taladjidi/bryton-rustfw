@@ -184,6 +184,27 @@ impl App {
         self.menu_chosen = false;
     }
 
+    /// The menu Page held opens: the ride menu while a ride records or is paused (over the page it was held on),
+    /// else the main menu.
+    fn menu_root(&self) -> Menu {
+        match (self.ride.state(), self.screen) {
+            (ride::State::Idle, _) => Menu::Main,
+            (_, Screen::Ride(n)) => Menu::Ride(n),
+            _ => Menu::Ride(OVERVIEW),
+        }
+    }
+
+    /// Out of every menu at once, to the page the first one was opened over (the first ride page if that one is
+    /// off now, as the course page once the course is stopped): a ride menu's row that acted.
+    pub(crate) fn leave_menus(&mut self) {
+        let page = match self.under.first().copied() {
+            Some(Screen::Ride(n)) if !self.page_on(n) => self.ride_page(0, 1),
+            Some(s @ (Screen::Main | Screen::Ride(_))) => s,
+            _ => Screen::Main,
+        };
+        (self.depth, self.screen, self.menu_chosen) = (0, page, false);
+    }
+
     /// Back to the screen under this one (a ride page switched off since shows the main screen).
     pub(crate) fn close(&mut self) {
         self.depth = self.depth.saturating_sub(1);
@@ -193,6 +214,15 @@ impl App {
             _ => Screen::Main,
         };
         self.menu_chosen = false;
+        self.clamp_menu();
+    }
+
+    /// The selection on a row the menu still has: rows go when what they act on does (the ride menu's WORKOUT when
+    /// the workout ends, COURSE when the course is stopped from COURSES).
+    fn clamp_menu(&mut self) {
+        if let Screen::Menu(m, sel) = self.screen {
+            self.screen = Screen::Menu(m, sel.min(self.rows(m).max(1) - 1));
+        }
     }
 
     /// Acts on a key press ([`Input::of`]). A key held to repeat that acted (a list scrolled, a value stepped) is
@@ -214,6 +244,7 @@ impl App {
             return; // TOUCH OFF: the keys only
         }
         let before = self.screen;
+        self.clamp_menu(); // a row gone while the menu showed (drawn again below if the screen of rows changed)
         let recording = self.ride.state() == ride::State::Running;
         let woke = self.light_shown == 0 && self.backlight;
         self.idle_ms = 0;
@@ -360,19 +391,14 @@ impl App {
                 if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
                     && (ui::GEAR_TAP.1..ui::GEAR_TAP.1 + ui::GEAR_TAP.3).contains(&u32::from(y)) =>
             {
-                self.open(Screen::Menu(Menu::Main, 0)) // the gear: the menu by a tap, as the hold anywhere
+                self.open(Screen::Menu(self.menu_root(), 0)) // the gear: the menu by a tap, as the hold anywhere
             }
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
-                self.open(Screen::Menu(Menu::Main, 0))
+                self.open(Screen::Menu(self.menu_root(), 0))
             }
             // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
-            (Screen::Main | Screen::Ride(_), Input::End) => {
-                let Some(ev) = self.ride.end() else { return };
-                self.recorder(ev);
-                self.player = None; // the workout ends with the ride
-                self.screen = Screen::Summary; // the ride's card; any key goes on to the overview
-            }
+            (Screen::Main | Screen::Ride(_), Input::End) => self.end_ride(),
             (Screen::Summary, _) => self.screen = Screen::Main,
             (Screen::Ride(_), Input::Prev) => return self.lap(),
             (Screen::Main, Input::Back) => {

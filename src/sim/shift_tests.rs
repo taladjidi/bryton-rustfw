@@ -56,6 +56,7 @@ fn sensor_row(app: &App, i: usize) -> std::string::String {
 /// The sensors menu's row `row`, then Start.
 fn select_sensor(sim: &mut Sim, app: &mut App, row: usize) {
     app.press(sim, Press::Long(Key::Page));
+    super::tests::to_row(sim, app, crate::menu::Row::Open(Menu::Sensors));
     app.press(sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0));
     for _ in 0..row {

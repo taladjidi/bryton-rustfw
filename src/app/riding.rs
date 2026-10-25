@@ -58,10 +58,24 @@ impl App {
         let Some(ev) = self.ride.lap() else { return };
         self.say("LAP");
         self.recorder(ev);
+        self.next_step();
+    }
+
+    /// The workout's next step, if one runs (Lap, or NEXT STEP in the ride menu).
+    pub(crate) fn next_step(&mut self) {
         let (steps, dist) = (self.plan.steps(), self.ride.dist_m());
         if let Some(e) = self.player.as_mut().filter(|p| p.step(steps).is_some()).map(|p| p.skip(steps, dist)) {
             self.workout_event(e);
         }
+    }
+
+    /// Ends a paused ride (Start held, END RIDE in the ride menu): the recorder saves it, the workout ends with it,
+    /// and its card shows (any key goes on to the overview).
+    pub(crate) fn end_ride(&mut self) {
+        let Some(ev) = self.ride.end() else { return };
+        self.recorder(ev);
+        self.player = None;
+        (self.depth, self.screen) = (0, Screen::Summary);
     }
 
     // -----------------------------------------------------------------------------------------------------------

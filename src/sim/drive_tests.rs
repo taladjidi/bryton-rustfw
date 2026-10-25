@@ -109,16 +109,16 @@ fn read_only_build_offers_a_write_protected_drive() {
     assert_eq!(app.banner.as_str(), "USB DRIVE OFF");
 }
 
-/// USB DRIVE in the DEVICE menu: Select lends the card (the row says ON), Select again takes it back.
+/// USB DRIVE in the SYSTEM menu: Select lends the card (the row says ON), Select again takes it back.
 #[test]
 fn the_device_menu_row() {
     let (mut sim, mut app) = started(true);
-    let row = menu::DEVICE.iter().position(|&r| r == menu::Row::Drive).unwrap();
-    app.open(Screen::Menu(Menu::Device, row));
+    let row = menu::SYSTEM.iter().position(|&r| r == menu::Row::Drive).unwrap();
+    app.open(Screen::Menu(Menu::System, row));
     app.show(&mut sim);
     app.input(&mut sim, Input::Select);
     assert!(app.drive_lent());
-    assert_eq!(app.menu_row(Menu::Device, row).unwrap().1.as_str(), "ON");
+    assert_eq!(app.menu_row(Menu::System, row).unwrap().1.as_str(), "ON");
     app.input(&mut sim, Input::Select);
     assert!(!app.drive_lent());
 }

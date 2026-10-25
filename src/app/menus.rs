@@ -10,19 +10,35 @@ pub const SCAN_S: u16 = 10;
 /// The device list and the sensors menu are redrawn at most this often while reports come in.
 pub const LIST_REDRAW_MS: u32 = 1000;
 
-/// The menus.
+/// The menus (the tree: docs/features.md, "Menus").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Menu {
-    /// Sensors, pages, wheel, nearby.
+    /// The main menu ([`menu::MAIN`]): workouts, courses, history, pages, sensors, settings.
     Main,
-    /// One row per sensor kind.
+    /// One row per sensor kind, then the Di2 buttons and the phone.
     Sensors,
     /// The overview and the ride pages ([`menu::PAGES`]).
     Pages,
-    /// The rider's numbers ([`menu::RIDER`]).
-    Rider,
-    /// Backlight, wheel, GPS, BLE ([`menu::DEVICE`]).
-    Device,
+    /// One menu per subject ([`menu::SETTINGS`]).
+    Settings,
+    /// The rider's numbers ([`menu::ME`]).
+    Me,
+    /// The backlight, the touch panel, the gauge ([`menu::DISPLAY`]).
+    Display,
+    /// The wheel ([`menu::BIKE`]).
+    Bike,
+    /// The card, stock's settings, the diagnostics, ABOUT ([`menu::SYSTEM`]).
+    System,
+    /// The built-in sensors' readings ([`menu::BUILT_IN`]).
+    BuiltIn,
+    /// The ride menu, Page held while a ride records or is paused, over ride page `n` ([`OVERVIEW`] from the
+    /// overview): RESUME or PAUSE, END RIDE, WORKOUT and COURSE while one runs, BRIGHTNESS, SENSORS, EDIT THIS PAGE,
+    /// ALL SETTINGS (the main menu). Rows that do not apply are not shown.
+    Ride(usize),
+    /// The workout running ([`menu::WORKOUT_NOW`]).
+    WorkoutNow,
+    /// The course followed ([`menu::COURSE_NOW`]).
+    CourseNow,
     /// Ride page `n`'s layout and fields.
     Page(usize),
     /// The field groups, for box `i` of page `n` (Select on a field row).
@@ -31,7 +47,7 @@ pub enum Menu {
     Group(usize, usize, usize),
     /// What the GNSS receiver reports.
     Gps,
-    /// What stock's rides and settings give ([`menu::STOCK`]).
+    /// FITNESS: what stock's rides give ([`menu::FITNESS`]), first in the history.
     Stock,
     /// Reminders and alerts ([`menu::ALERTS`]).
     Alerts,
@@ -55,13 +71,20 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Main => "MENU",
         Menu::Sensors => "SENSORS",
         Menu::Pages => "PAGES",
-        Menu::Rider => "RIDER",
-        Menu::Device => "DEVICE",
+        Menu::Settings => "SETTINGS",
+        Menu::Me => "ME",
+        Menu::Display => "DISPLAY",
+        Menu::Bike => "BIKE",
+        Menu::System => "SYSTEM",
+        Menu::BuiltIn => "BUILT IN",
+        Menu::Ride(_) => "RIDE",
+        Menu::WorkoutNow => "WORKOUT",
+        Menu::CourseNow => "COURSE",
         Menu::Page(_) => "PAGE ",
         Menu::Fields(..) => "FIELD",
         Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g).map_or("", |g| g.0),
         Menu::Gps => "GPS",
-        Menu::Stock => "STOCK DATA",
+        Menu::Stock => "FITNESS",
         Menu::Alerts => "ALERTS",
         Menu::History => "HISTORY",
         Menu::Workouts => "WORKOUTS",
@@ -84,20 +107,40 @@ impl App {
         match menu {
             Menu::Main => menu::MAIN.get(i).copied(),
             Menu::Pages => menu::PAGES.get(i).copied(),
-            Menu::Rider => menu::RIDER.get(i).copied(),
-            Menu::Device => menu::DEVICE.get(i).copied(),
+            Menu::Settings => menu::SETTINGS.get(i).copied(),
+            Menu::Me => menu::ME.get(i).copied(),
+            Menu::Display => menu::DISPLAY.get(i).copied(),
+            Menu::Bike => menu::BIKE.get(i).copied(),
+            Menu::System => menu::SYSTEM.get(i).copied(),
+            Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
+            Menu::Ride(n) => {
+                use menu::RideRow;
+                let rows = [
+                    (Row::Ride(RideRow::Pause), true),
+                    (Row::Ride(RideRow::End), true),
+                    (Row::Open(Menu::WorkoutNow), self.workout_running()),
+                    (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
+                    (Row::Set(menu::Setting::Light), true),
+                    (Row::Open(Menu::Sensors), true),
+                    (Row::Open(Menu::Page(n)), n <= OVERVIEW), // the course page has no settings
+                    (Row::Open(Menu::Main), true),
+                ];
+                rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
+            }
+            Menu::WorkoutNow => menu::WORKOUT_NOW.get(i).copied(),
+            Menu::CourseNow => menu::COURSE_NOW.get(i).copied(),
             Menu::Fields(..) => (i < ui::FIELD_GROUPS.len()).then_some(Row::Group(i)),
             Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g)?.1.get(i).map(|&f| Row::Pick(f)),
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
-            Menu::Sensors if i == Kind::ALL.len() => Some(Row::Open(Menu::Remote)),
-            Menu::Sensors => menu::BUILT_IN.get(i - Kind::ALL.len() - 1).map(|&r| Row::Read(r)),
+            Menu::Sensors => [Menu::Remote, Menu::Phone].get(i - Kind::ALL.len()).map(|&m| Row::Open(m)),
             Menu::Remote => menu::REMOTE.get(i).copied(),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
-            Menu::Stock => menu::STOCK.get(i).map(|&r| Row::Stock(r)),
+            Menu::Stock => menu::FITNESS.get(i).map(|&r| Row::Stock(r)),
             Menu::Alerts => menu::ALERTS.get(i).copied(),
-            // no rides yet: the scan's row, which shows how far it is
-            Menu::History if self.stock.index.is_empty() => (i == 0).then_some(Row::Stock(menu::StockRow::Scan)),
-            Menu::History => self.stock.index.get(i).map(|_| Row::Past(i)),
+            // FITNESS first, then the rides; none yet: the scan's row, which shows how far it is
+            Menu::History if i == 0 => Some(Row::Open(Menu::Stock)),
+            Menu::History if self.stock.index.is_empty() => (i == 1).then_some(Row::Stock(menu::StockRow::Scan)),
+            Menu::History => self.stock.index.get(i - 1).map(|_| Row::Past(i - 1)),
             Menu::Workouts => self.calendar.get(i).map(|_| Row::Workout(i)),
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
@@ -121,7 +164,21 @@ impl App {
     pub(crate) fn menu_row(&self, menu: Menu, i: usize) -> Option<(Line<16>, Line<12>, u16)> {
         use menu::{Reading, Row};
         let (mut label, mut value, mut color) = (Line::new(), Line::new(), ui::WHITE);
-        match self.row(menu, i)? {
+        let row = self.row(menu, i)?;
+        match row {
+            Row::Open(Menu::Page(_)) if matches!(menu, Menu::Ride(_)) => label.push_str("EDIT THIS PAGE"),
+            Row::Open(Menu::Main) => label.push_str("ALL SETTINGS"),
+            Row::Ride(r) => {
+                use menu::RideRow;
+                label.push_str(match r {
+                    RideRow::Pause if self.ride.state() == ride::State::Running => "PAUSE",
+                    RideRow::Pause => "RESUME",
+                    RideRow::End => "END RIDE",
+                    RideRow::NextStep => "NEXT STEP",
+                    RideRow::StopWorkout => "STOP WORKOUT",
+                    RideRow::StopCourse => "STOP FOLLOWING",
+                });
+            }
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
             Row::Open(Menu::Page(n)) => {
                 label.push_str("PAGE ");
@@ -129,7 +186,7 @@ impl App {
                 layout_text(&mut value, self.pages.get(n)?.layout);
             }
             Row::Open(m) => label.push_str(menu_title(m)),
-            Row::Nearby => label.push_str("NEARBY BLE"),
+            Row::Nearby => label.push_str("BLE NEARBY"),
             Row::About => label.push_str("ABOUT"),
             Row::Drive => {
                 label.push_str("USB DRIVE");
@@ -140,7 +197,14 @@ impl App {
                 let edited = self.editing && self.screen == Screen::Menu(menu, i);
                 value.push_str(if edited { "< " } else { "" });
                 self.settings.text(s, &mut value);
-                value.push_str(if edited { " >" } else { "" });
+                let number = value.as_str().starts_with(|c: char| c.is_ascii_digit());
+                value.push_str(if edited {
+                    " >"
+                } else if number {
+                    s.unit()
+                } else {
+                    ""
+                });
             }
             Row::Sensor(k) => {
                 let kind = *Kind::ALL.get(k)?;
@@ -313,6 +377,10 @@ impl App {
                 }
             }
         }
+        if matches!(row, Row::Open(_) | Row::Nearby | Row::About) && value.as_str().is_empty() {
+            value.push_str(">"); // opens a menu or a screen
+            color = ui::GREY;
+        }
         if self.confirm == Some((menu, i)) {
             // waiting for a second Start (App::confirmed)
             value.clear();
@@ -402,6 +470,38 @@ impl App {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
                 }
                 self.open(Screen::Menu(m, 0))
+            }
+            Some(Row::Ride(r)) => {
+                use menu::RideRow;
+                match r {
+                    RideRow::Pause => {
+                        self.start_pause();
+                        if self.ride.state() == ride::State::Running {
+                            self.leave_menus(); // resumed: back to riding
+                        }
+                    }
+                    RideRow::End if self.confirmed(menu, sel, "END RIDE") => {
+                        if self.ride.state() == ride::State::Running {
+                            let ev = self.ride.start_pause(); // paused first, as by Start (the recorder's order)
+                            self.recorder(ev);
+                        }
+                        self.end_ride();
+                    }
+                    RideRow::End => {}
+                    RideRow::NextStep => {
+                        self.next_step();
+                        self.leave_menus();
+                    }
+                    RideRow::StopWorkout => {
+                        self.player = None;
+                        self.say("WORKOUT STOPPED");
+                        self.leave_menus();
+                    }
+                    RideRow::StopCourse => {
+                        self.stop_course();
+                        self.leave_menus();
+                    }
+                }
             }
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };

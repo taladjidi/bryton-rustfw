@@ -75,13 +75,13 @@ The dated findings are in [journal.md](journal.md).
      `sd_ble_cfg_set`, inferred). The heart-rate strap still reads (ANT+ unchanged).
   2. **Advertising:** PAIR: LINK PAIRING; the iPhone's Settings > Bluetooth lists "S510" under Other Devices within a
      few seconds (the advertising data: HID and battery services, ANCS solicitation; the name in the scan
-     response). The NEARBY BLE scan of a second unit, or nRF Connect, sees the same.
+     response). The BLE NEARBY scan of a second unit, or nRF Connect, sees the same.
   3. **Pairing:** tap S510 on the iPhone: "Bluetooth Pairing Request ... S510 would like to pair with your iPhone",
      Pair (Just Works, no code); then iOS asks whether S510 may receive the iPhone's notifications: Allow. The unit:
      banner PHONE PAIRED, LINK SECURE, the clock set to the iPhone's time (and the date), Settings > Bluetooth shows
      S510 connected. Note the order the events came in if pairing fails (the security request at connection: is
      the iPhone's prompt shown without opening a HID characteristic?).
-  4. **Media:** start music on the iPhone; PHONE > REMOTE shows its title, artist and PLAYING with the time running;
+  4. **Media:** start music on the iPhone; SENSORS > PHONE > REMOTE shows its title, artist and PLAYING with the time running;
      Start pauses (AMS), Page next, Lap previous, held Page / Lap the volume (the iPhone's volume HUD). Hold Lap on
      a ride page: play / pause. The MUSIC field.
   5. **Camera:** open the iPhone's Camera, hold a finger on the REMOTE screen: a photo (HID volume up). If the banner
@@ -114,7 +114,7 @@ The dated findings are in [journal.md](journal.md).
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
   checked against openant).
 - **The automatic backlight by eye:** stock's curve (8 % in the dark, the 1 % minimum above 120 lux): is the panel
-  readable in full sun at 1 % (compare LIGHT % 100 and 10 outdoors)?
+  readable in full sun at 1 % (compare BRIGHTNESS 100 and 10 outdoors)?
 - **Backlight levels** (60 / 30 / 10 %) and the time-out, each by eye.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
 - **The map's zoom buttons** ("+" and "-" on the full-page map, now any level, coarser than the fit too, and the
@@ -128,7 +128,7 @@ The dated findings are in [journal.md](journal.md).
 - **The basemap** (roads and water from stock's cached tiles, `\Map\Data\Temp`): the FAT volume mounted by our
   reader, the tiles at the last known position, the time a view change takes (simulated with real tiles: about
   140 KB read, 84 K buffer pixels, 73 K panel pixels), the 1.5 MB SDRAM zeroing at boot (`hw::map_memory`).
-- **STOCK DATA on the unit:** how long READ RIDES takes over stock's rides (about 175 KB a ride on one unit's
+- **HISTORY > FITNESS on the unit:** how long READ RIDES takes over stock's rides (about 175 KB a ride on one unit's
   backups, so about 35 MB for 200 rides; the eMMC read speed and the parsing time per byte from SDRAM code are
   not measured: estimated 10 to 20 s at 256 KB a pass), the menu's response meanwhile, and IMPORT against the
   unit's own `\System` files (checked on the host against two backups); the first start over stock's volume
@@ -155,7 +155,7 @@ The dated findings are in [journal.md](journal.md).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
 - **The USB drive (mass storage, msc.rs): to do, high speed** (all of it in docs/usb.md). Seen on the unit (2026-10-24): the composite
-  device keeps the dev link; DEVICE > USB DRIVE (or `dev.py drive`) mounts BRYTON (macOS refuses the mount while its
+  device keeps the dev link; SETTINGS > SYSTEM > USB DRIVE (or `dev.py drive`) mounts BRYTON (macOS refuses the mount while its
   screen is locked: "mount approval dissented, 0xF8DA0008"); 40 files equal to the backup; a write (a 48-byte file)
   read back through the firmware's own FAT reader after the eject and restart. **High speed drops** every long read
   after 15 to 40 MB at 6.4 to 7.2 MB/s: the Mac resets the device, which then stays unconfigured (orange dot) until a

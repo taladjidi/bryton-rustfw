@@ -213,8 +213,9 @@ pub struct App {
     /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
     /// when no key is down.
     repeated: bool,
-    /// The screens under this one, the latest last: Back returns to them, with their selection.
-    under: [Screen; 6],
+    /// The screens under this one, the latest last: Back returns to them, with their selection. At most six now (a
+    /// page, the ride menu, ALL SETTINGS, PAGES, a page, its field groups, under a group), so eight is room to spare.
+    under: [Screen; 8],
     depth: usize,
     /// The ride pages, then the overview's fields ([`OVERVIEW`]).
     pages: [PageCfg; PAGES + 1],
@@ -424,7 +425,7 @@ impl App {
             menu_chosen: false,
             confirm: None,
             repeated: false,
-            under: [Screen::Main; 6],
+            under: [Screen::Main; 8],
             depth: 0,
             pages: core::array::from_fn(|i| {
                 PageCfg::from_words(PAGE_BKP[i].map(|r| b.backup_read(r)))
@@ -687,7 +688,9 @@ impl App {
                 | Menu::Stock
                 | Menu::History
                 | Menu::Courses
-                | Menu::Device
+                | Menu::System
+                | Menu::BuiltIn
+                | Menu::Ride(_)
                 | Menu::Phone),
                 sel,
             ) if self.redraw_ms >= LIST_REDRAW_MS => {

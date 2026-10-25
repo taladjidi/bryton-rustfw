@@ -1371,10 +1371,11 @@ pub fn draw_title(c: &mut impl Canvas, title: &str) {
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
 }
 
-/// A menu row's label box: its own length (at most 10 characters: "NEARBY BLE") and half a character's gap; the
-/// value takes the rest of the row (beside "FIELD 1", 9 characters: every field's name, a test checks).
-fn menu_label_w(label: &str) -> u32 {
-    (label.len().min(10) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
+/// A menu row's label box: its own length and half a character's gap, but never over the value, which is whole
+/// (a long course name is cut before its length; every row of the tree fits whole, a test checks).
+pub(crate) fn menu_label_w(label: &str, value: &str) -> u32 {
+    let own = (label.len() as u32 * 2 + 1) * CELL / 2 * LABEL.scale;
+    own.min(NEARBY.2.saturating_sub(LABEL.width(value)))
 }
 
 /// Menu row `i`: `label` on the left, `value` on the right in `value_color` (white unless it says a state), centred
@@ -1383,7 +1384,7 @@ fn menu_label_w(label: &str) -> u32 {
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
     let y = LIST_Y + i as u32 * MENU_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
-    let name_w = menu_label_w(label);
+    let name_w = menu_label_w(label, value);
     let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
     c.fill(0, y, W, ty - y, bg);
     c.fill(0, ty, NEARBY.0, LABEL.height(), bg);
@@ -1412,13 +1413,15 @@ pub(crate) mod tests {
 
     #[test]
     fn menu_labels_are_whole() {
-        assert!(LABEL.width("NEARBY BLE") <= menu_label_w("NEARBY BLE"), "a 10-letter label is not cut");
+        assert!(LABEL.width("EDIT THIS PAGE") <= menu_label_w("EDIT THIS PAGE", ">"), "a long label is not cut");
+        let cut = menu_label_w("A COURSE WITH A LONG NAME", "42.1 KM");
+        assert_eq!(cut + LABEL.width("42.1 KM"), NEARBY.2, "the value stays whole");
     }
 
     #[test]
     fn field_names_fit_their_menu_row() {
         for f in Field::ALL {
-            assert!(LABEL.width(f.label()) <= NEARBY.2 - menu_label_w("FIELD 1"), "{}", f.label());
+            assert!(LABEL.width(f.label()) <= NEARBY.2 - menu_label_w("FIELD 1", ""), "{}", f.label());
         }
     }
 
