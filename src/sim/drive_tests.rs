@@ -90,6 +90,27 @@ fn lent_to_the_computer_one_owner_at_a_time() {
     assert_eq!(command(&mut sim, &mut app, &mut h, 10, 0, false, &[0; 6]).1, 1, "no medium any more");
 }
 
+/// A full card (the review of 2026-10-25): the ride's recording stops at once, "CARD FULL" said once, and the ride
+/// ended, the card is lent to the computer that would free it (it was refused for good: the ride never settled).
+#[test]
+fn a_full_card_never_holds_the_drive() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    crate::fat::write::tests::fill(&mut sim.emmc.image, 0, true);
+    sim.writable = true;
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 10_000);
+    let full = app.notices.iter().filter(|n| n.as_str().ends_with("CARD FULL")).count();
+    assert_eq!(full, 1, "{:?}", app.notices.iter().map(|n| n.as_str()).collect::<Vec<_>>());
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    app.press(&mut sim, Press::Long(Key::Start)); // end
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(app.drive_on(), Ok(()));
+}
+
 /// A build that may not write the card (EMMC_WRITE unset): the drive is write protected (MODE SENSE) and a write
 /// fails with nothing sent to the card; having only read, the card is taken back from the unit without a restart.
 #[test]

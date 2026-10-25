@@ -941,6 +941,32 @@ pub(crate) mod tests {
         (free, fat.fsinfo_read(&mut d).unwrap().map_or(u32::MAX, |f| f.0))
     }
 
+    /// A card nearly full: the free clusters after the first `keep` marked bad in both FATs (0x0ffffff7: neither
+    /// free nor lost, so `fsck` still passes), and FSInfo's count set to the `keep` left if `tell` (else as it was:
+    /// a stale count, as after a computer's write).
+    pub fn fill(img: &mut [u8], keep: u32, tell: bool) {
+        let u = |img: &[u8], at: usize, n: usize| {
+            img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b))
+        };
+        let (fat0, fat_len, fsinfo) = (u(img, 14, 2) * SECTOR, u(img, 36, 4) * SECTOR, u(img, 48, 2) * SECTOR);
+        let (mut free, mut kept) = (0u32, 0u32);
+        for at in (fat0 + 8..fat0 + fat_len).step_by(4) {
+            if u(img, at, 4) & 0x0fff_ffff == 0 {
+                free += 1;
+                if free > keep {
+                    for k in [0, fat_len] {
+                        img[at + k..at + k + 4].copy_from_slice(&0x0fff_fff7u32.to_le_bytes());
+                    }
+                } else {
+                    kept += 1;
+                }
+            }
+        }
+        if tell {
+            img[fsinfo + 488..fsinfo + 492].copy_from_slice(&kept.to_le_bytes());
+        }
+    }
+
     const T: (u16, u16) = (0x5b58, 0x6000);
 
     fn read_all(fat: &mut Fat, d: &mut Ram, path: &str) -> Vec<u8> {

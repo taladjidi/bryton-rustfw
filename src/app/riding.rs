@@ -203,6 +203,10 @@ impl App {
                 // not in \Activities: left in \Rustfw\Rides as it was (damaged, or the card kept failing)
                 self.alarm_notice("SAVE FAILED");
             }
+            recorder::Outcome::Stopped(e) => {
+                // the ride's recording stops here (said once): what reached the card is saved next
+                self.alarm_notice(if e == fat::Error::Refused { "CARD FULL" } else { "CARD ERROR" });
+            }
             recorder::Outcome::Failed(_) => {
                 // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
                 if self.recorder.fails() % 60 == 1 {

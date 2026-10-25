@@ -77,7 +77,10 @@
 //! Errors: nothing here panics; a failing card leaves the data in RAM and is tried again after [`RETRY`] calls;
 //! samples that do not fit the buffer meanwhile are counted ([`Recorder::dropped`]), never the file lost. Only a
 //! card error is tried again, and a save or a ride left unfinished only [`GIVE_UP`] times in a row: then it is
-//! left as it is ([`Outcome::Kept`]), so that the next ride records.
+//! left as it is ([`Outcome::Kept`]), so that the next ride records. A checkpoint refused for a reason a retry
+//! cannot mend (the card full, or `Corrupt`) stops the ride's recording ([`Outcome::Stopped`]): the file is saved as
+//! its last checkpoint left it, which takes no new cluster, so a full card never leaves a ride open for good (nor the
+//! card unlendable to the computer that would free it).
 
 use crate::fat::write::{Handle, dos_time};
 use crate::fat::{DiskWrite, Error, Fat, File, SECTOR};
@@ -195,6 +198,10 @@ pub enum Outcome {
     Kept([u8; 12]),
     /// The card failed (tried again later).
     Failed(Error),
+    /// The card refused a checkpoint for a reason a retry cannot mend: `Refused` (no free cluster: the card full)
+    /// or `Corrupt`. The ride stops being recorded; what reached the card is saved as its last checkpoint left it
+    /// (`Saved` follows), or, before its first checkpoint, nothing was.
+    Stopped(Error),
 }
 
 /// One recovery record.
@@ -313,6 +320,10 @@ pub struct Recorder {
     tail: [u8; TAIL],
     tail_off: u32,
     len: u32,
+    /// The file's length at the last checkpoint (what the card holds); the card refused a checkpoint
+    /// ([`Outcome::Stopped`]): the save is of that length.
+    on_card: u32,
+    stopped: bool,
     /// The FIT header (bytes 0..14), kept for rewriting sector 0.
     head: [u8; 14],
     /// Seconds of ride since the last checkpoint; a checkpoint is wanted now; the end is written in the buffer.
@@ -397,6 +408,8 @@ impl Recorder {
             tail: [0; TAIL],
             tail_off: 0,
             len: 0,
+            on_card: 0,
+            stopped: false,
             head: [0; 14],
             since: 0,
             want: false,
@@ -495,8 +508,8 @@ impl Recorder {
         let Ok(w) = Writer::begin_with(&mut sink, time, dev) else { return };
         (self.writer, self.last_rec) = (w, time);
         self.len = 14 + w.data_len();
-        (self.phase, self.file, self.name, self.since, self.want, self.ended) =
-            (Phase::Starting, None, name, 0, true, false);
+        (self.phase, self.file, self.name, self.since, self.want, self.ended, self.stopped) =
+            (Phase::Starting, None, name, 0, true, false, false);
         self.resume_old = resume_old;
     }
 
@@ -605,6 +618,22 @@ impl Recorder {
                 (self.phase, self.want, self.fails) = (Phase::Done, false, 0);
                 Outcome::Kept(self.name)
             }
+            Err(e) if e != Error::Io && matches!(self.phase, Phase::Starting | Phase::Recording) => {
+                // a checkpoint the card refuses (full: no free cluster) or cannot take (Corrupt) would be refused
+                // forever, the ride never saved and the card never lent to free space (the review of 2026-10-25):
+                // the ride stops here, saved as its last checkpoint left it (moving it takes no new cluster), and
+                // so the card is settled. Before that checkpoint there is nothing to save (a "starting" record is
+                // marked done by the next recovery)
+                self.errors = self.errors.saturating_add(1);
+                self.fails = 0;
+                if self.phase == Phase::Recording && self.on_card > 0 {
+                    (self.phase, self.stopped) = (Phase::Saving, true);
+                } else {
+                    self.phase = Phase::Done;
+                }
+                self.want = false;
+                Outcome::Stopped(e)
+            }
             Err(e) => {
                 self.errors = self.errors.saturating_add(1);
                 self.fails = self.fails.saturating_add(1);
@@ -696,7 +725,9 @@ impl Recorder {
         if self.phase == Phase::Saving {
             let first = self.file.map_or(0, |h| h.first);
             let size = self.len;
-            let o = match self.save(&mut fat, d, t, first, size) {
+            let saved =
+                if self.stopped { self.save_as_is(&mut fat, d, t) } else { self.save(&mut fat, d, t, first, size) };
+            let o = match saved {
                 Ok(o) => o,
                 Err(e) if self.retry(e) => return Err(e),
                 Err(_) => {
@@ -706,7 +737,7 @@ impl Recorder {
                     Outcome::Kept(self.name)
                 }
             };
-            (self.phase, self.want) = (Phase::Done, false);
+            (self.phase, self.want, self.stopped) = (Phase::Done, false, false);
             return Ok(o);
         }
         Ok(Outcome::Nothing)
@@ -829,8 +860,23 @@ impl Recorder {
         if let Some(rest) = self.tail.get_mut(keep..) {
             rest.fill(0);
         }
-        (self.tail_off, self.since, self.want) = (next, 0, false);
+        (self.tail_off, self.since, self.want, self.on_card) = (next, 0, false, self.len);
         Ok(())
+    }
+
+    /// The save of the file as its last checkpoint left it, [`Recorder::on_card`] bytes (the card refused the next
+    /// one): the sector its trailer ends in and sector 0 written again from the record first. A full card refuses
+    /// before any sector is written (`write_sectors` takes the clusters first), but a checkpoint that failed later
+    /// (`Corrupt` at its size or its record) has rewritten them; within the file's clusters: no new one taken.
+    fn save_as_is(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Outcome, Error> {
+        let mut file = self.file.ok_or(Error::NotFound)?;
+        let (rec, slot, size) = (self.rec.ok_or(Error::NotFound)?, 3 * (self.seq % 2), self.on_card);
+        let mut s = [0u8; SECTOR];
+        fat.read_sector(d, &rec, slot + 1, &mut s)?;
+        fat.write_sectors(d, &mut file, size.saturating_sub(2) / SECTOR as u32, &s)?;
+        fat.read_sector(d, &rec, slot, &mut s)?;
+        fat.write_sectors(d, &mut file, 0, &s)?;
+        self.save(fat, d, t, file.first, size)
     }
 
     /// The save from step 2 on (module doc): the file at `first`, `size` bytes, checked, moved, the record done:
@@ -1013,9 +1059,13 @@ impl Recorder {
                     // too old to go on (the second review, R6): ended at its last record, and saved
                     let (last, ride) = (self.writer.last_time(), self.ride);
                     self.end(last, ride);
-                    self.checkpoint(fat, d, t, Phase::Saving)?;
                     self.phase = Phase::Saving;
-                    let o = self.save(fat, d, t, file.first, self.len)?;
+                    let o = match self.checkpoint(fat, d, t, Phase::Saving) {
+                        Ok(()) => self.save(fat, d, t, file.first, self.len)?,
+                        // the card full: the end messages do not fit, the ride is saved as it is
+                        Err(Error::Refused) => self.save_as_is(fat, d, t)?,
+                        Err(e) => return Err(e),
+                    };
                     (self.phase, self.want) = (Phase::Done, false);
                     return Ok(o);
                 }
@@ -1040,7 +1090,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::fat::Disk;
-    use crate::fat::write::tests::{free_counts, fsck};
+    use crate::fat::write::tests::{fill, free_counts, fsck};
     use crate::fitread::{Msg, Reader};
     use std::vec::Vec;
 
@@ -1342,7 +1392,9 @@ mod tests {
                     let path = std::format!("Activities/{}.fit", core::str::from_utf8(&n).unwrap());
                     assert_eq!(saved(&d.img, &path).map(|s| s.0 == all), Ok(true), "{what}");
                 }
-                Outcome::Failed(_) | Outcome::Kept(_) => panic!("{what}: recovery failed: {outcome:?}"),
+                Outcome::Failed(_) | Outcome::Kept(_) | Outcome::Stopped(_) => {
+                    panic!("{what}: recovery failed: {outcome:?}")
+                }
             }
             assert_eq!(r.phase(), Phase::Done, "{what}");
             max_lost = max_lost.max(check_clean(&d.img, &what));
@@ -1864,32 +1916,105 @@ mod tests {
         let mut one = card(img.clone());
         ride(&mut Recorder::new(), &mut one, 0).unwrap();
         let keep = (free_counts(&img).0 - free_counts(&one.img).0) * 3 / 2;
-        // the other free clusters marked bad in both FATs (0x0ffffff7: neither free nor lost), FSInfo told
         let mut img = img;
-        let u = |img: &[u8], at: usize, n: usize| {
-            img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b))
-        };
-        let (fat0, fat_len, fsinfo) = (u(&img, 14, 2) * SECTOR, u(&img, 36, 4) * SECTOR, u(&img, 48, 2) * SECTOR);
-        let (mut free, mut kept) = (0u32, 0u32);
-        for at in (fat0 + 8..fat0 + fat_len).step_by(4) {
-            if u(&img, at, 4) & 0x0fff_ffff == 0 {
-                free += 1;
-                if free > keep {
-                    for k in [0, fat_len] {
-                        img[at + k..at + k + 4].copy_from_slice(&0x0fff_fff7u32.to_le_bytes());
-                    }
-                } else {
-                    kept += 1;
-                }
-            }
-        }
-        img[fsinfo + 488..fsinfo + 492].copy_from_slice(&kept.to_le_bytes());
+        fill(&mut img, keep, true);
         let mut d = card(img);
         let out = ride_all(&mut pair(), &mut d, 0).unwrap();
         assert_eq!(out[0], Outcome::Saved(NAME));
         let (times, session) = saved(&d.img, SAVED).unwrap();
         assert_eq!((times.len(), session), (SECS as usize - 60, true), "the clean copy whole");
         assert!(saved(&d.img, SAVED_FULL).is_err());
+        assert_eq!(check_clean(&d.img, "after"), 0);
+    }
+
+    /// The seconds of a saved ride, checked to be `T0 + 0, T0 + 1, ...` (a ride of [`seconds`] only), cut short
+    /// (the card refused a checkpoint) but not empty, and without its session (never ended on the card).
+    fn cut_short(img: &[u8], path: &str) -> usize {
+        let (times, session) = saved(img, path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let want: Vec<u32> = (0..times.len() as u32).map(|t| T0 + t).collect();
+        assert!(times == want && !times.is_empty() && times.len() < SECS as usize && !session, "{path}: {times:?}");
+        times.len()
+    }
+
+    /// A card one cluster short of a ride (the review of 2026-10-25: the refused checkpoint was tried again for
+    /// ever, the ride never saved and the card never lent): the recording stops at the refused checkpoint and the
+    /// ride is saved as its last checkpoint left it, a whole FIT file, its folder left empty, a clean volume.
+    #[test]
+    fn a_card_one_cluster_short_saves_what_fit() {
+        let img = crate::fat::tests::image();
+        let mut one = card(img.clone());
+        ride(&mut Recorder::new(), &mut one, 0).unwrap();
+        let need = free_counts(&img).0 - free_counts(&one.img).0;
+        let mut img = img;
+        fill(&mut img, need - 1, true);
+        let mut d = card(img);
+        let mut r = Recorder::new();
+        assert_eq!(ride(&mut r, &mut d, 0), Some(Outcome::Saved(NAME)));
+        assert_eq!((r.phase(), r.errors), (Phase::Done, 1), "stopped at the first refusal, never tried again");
+        let (times, session) = saved(&d.img, SAVED).unwrap();
+        let want: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
+        assert!(!session && !times.is_empty() && want.starts_with(&times), "{} of {}", times.len(), want.len());
+        let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        assert_eq!(fat.open(&mut ram, "Rustfw/Rides/261023100000.fit"), Err(Error::NotFound));
+        assert_eq!(check_clean(&d.img, "after"), 0);
+    }
+
+    /// The card filled mid-ride (a computer's copy, say), with both copies: the clean one is saved as far as its
+    /// last checkpoint; the full one stops at its reserve when FSInfo's count says the card is full, and when that
+    /// count is stale (it does not see the card fill) the card's refusal stops it and it is saved likewise.
+    #[test]
+    fn a_card_full_mid_ride_saves_both_copies_as_far_as_they_fit() {
+        for tell in [true, false] {
+            let mut d = card(crate::fat::tests::image());
+            let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+            for r in rs.iter_mut() {
+                r.start(T0 - 1, NAME, false);
+            }
+            seconds(&mut rs, &mut d, 0, 400, &mut last);
+            fill(&mut d.img, 0, tell);
+            seconds(&mut rs, &mut d, 400, SECS, &mut last);
+            for r in rs.iter_mut() {
+                r.end(T0 + SECS, words(SECS));
+            }
+            for _ in 0..3 {
+                pass(&mut rs, &mut d, SECS, &mut last);
+            }
+            assert_eq!(rs.each_ref().map(|r| r.phase()), [Phase::Done; 2], "tell {tell}");
+            assert_eq!(last[0], Outcome::Saved(NAME), "tell {tell}");
+            assert!(cut_short(&d.img, SAVED) >= 300);
+            if tell {
+                assert_eq!(last[1], Outcome::Kept(NAME));
+                assert!(saved(&d.img, SAVED_FULL).is_err());
+                assert_eq!(check_clean(&d.img, "told"), 0);
+            } else {
+                assert_eq!(last[1], Outcome::Saved(NAME));
+                assert!(cut_short(&d.img, SAVED_FULL) >= 300);
+                assert_eq!(fsck(&d.img), Ok(0), "FSInfo's count stale, on purpose");
+            }
+        }
+    }
+
+    /// A reset on a full card: the boot reopens the ride at its last checkpoint (written again in place: no new
+    /// cluster), the ride goes on, and the next checkpoint's refusal saves it as far as it fit.
+    #[test]
+    fn a_ride_resumed_on_a_full_card_is_saved() {
+        let mut d = card(crate::fat::tests::image());
+        let (mut r, mut last) = (Recorder::new(), [Outcome::Nothing]);
+        r.start(T0 - 1, NAME, false);
+        seconds(core::slice::from_mut(&mut r), &mut d, 0, 270, &mut last);
+        fill(&mut d.img, 0, true);
+        let mut r = Recorder::new(); // the reset: what was in RAM is gone
+        assert!(matches!(r.recover(&mut d, local(270)), Outcome::Resumed(..)));
+        r.resume(T0 + 280);
+        seconds(core::slice::from_mut(&mut r), &mut d, 280, SECS, &mut last);
+        r.end(T0 + SECS, words(SECS));
+        for _ in 0..3 {
+            pass(core::slice::from_mut(&mut r), &mut d, SECS, &mut last);
+        }
+        assert_eq!((r.phase(), last[0]), (Phase::Done, Outcome::Saved(NAME)));
+        let (times, session) = saved(&d.img, SAVED).unwrap();
+        assert!(!session && times.len() >= 200 && times.iter().all(|&t| t < T0 + SECS), "{times:?}");
         assert_eq!(check_clean(&d.img, "after"), 0);
     }
 
