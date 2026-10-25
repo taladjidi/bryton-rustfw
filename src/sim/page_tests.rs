@@ -811,3 +811,80 @@ fn more_survives_a_cut_with_its_pages() {
         assert_eq!(new, app2.pages()[0].fields[0] == Ascent, "cut {cut}: pages and MORE from one copy");
     }
 }
+
+// ---- review fixes ----
+
+fn paused(sim: &mut Sim, app: &mut App) {
+    press(sim, app, Key::Start);
+    run(sim, app, 3000);
+    app.start_pause();
+    run(sim, app, 500);
+    assert_eq!(app.ride.state(), ride::State::Paused);
+}
+
+#[test]
+fn review_delete_in_paused_ride_then_off_misaligns_more() {
+    let w = Page::preset(14, [Wbal, Np, Hr, Power, Cadence, Dist, Timer, Ascent]).unwrap();
+    let (mut sim, mut app) = started();
+    let v = Page::preset(14, [Ascent, Np, Hr, Power, Cadence, Dist, Timer, Wbal]).unwrap();
+    (app.more[0], app.more[1]) = (Some(v), Some(w));
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 300);
+    assert_eq!(file(&sim).unwrap().more[1], Some(w));
+    let p1 = app.pages()[1];
+    paused(&mut sim, &mut app);
+    app.screen = Screen::Ride(0);
+    app.edit_page(&mut sim, 0, 0);
+    app.delete_page(&mut sim);
+    assert_eq!((app.pages()[0], app.more[0]), (p1, Some(w)), "in RAM: follows");
+    app.power_off(&mut sim);
+    let (_, app2) = reboot(&mut sim);
+    let i = (0..app2.page_count()).find(|&i| app2.pages()[i] == p1);
+    assert_ne!(i.and_then(|i| app2.more[i]), Some(v), "the deleted page's MORE is not kept for another page");
+}
+
+#[test]
+fn review_graph_tap_on_own_more() {
+    let (mut sim, mut app) = started();
+    app.screen = Screen::Ride(1);
+    app.show(&mut sim);
+    app.more[1] = Some(Page::preset(4, [Graph, Hr, Dist, Timer, Time, Time, Time, Time]).unwrap());
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
+    run(&mut sim, &mut app, 100);
+    let k = app.widgets().position(|(_, w)| matches!(w, Widget::Field(Graph))).unwrap();
+    let (x, y) = centre(&app, k);
+    let px = sim.pixels;
+    app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
+    assert_eq!(sim.pixels, px, "nothing changed, nothing redrawn");
+}
+
+#[test]
+fn review_menu_over_more() {
+    let (mut sim, mut app) = started();
+    app.screen = Screen::Ride(1);
+    app.show(&mut sim);
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
+    app.input(&mut sim, Input::Menu);
+    app.input(&mut sim, Input::Back);
+    assert_eq!((app.screen(), app.more_shown()), (Screen::Ride(1), Some(1)), "MORE back after a menu");
+}
+
+#[test]
+fn review_reset_more_in_the_more_editor() {
+    let (mut sim, mut app) = started();
+    let w = Page::preset(14, [Wbal, Np, Hr, Power, Cadence, Dist, Timer, Ascent]).unwrap();
+    app.more[1] = Some(w);
+    let n = app.page_count();
+    app.screen = Screen::Ride(1);
+    app.show(&mut sim);
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
+    let (x, y) = centre(&app, 2);
+    app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
+    assert!(app.edit.unwrap().more);
+    let r = menu::EDIT_ROWS.iter().position(|&r| r == menu::EditRow::DeletePage).unwrap();
+    let m = Menu::Edit(2);
+    app.activate(&mut sim, m, r);
+    assert!(app.more[1].is_some(), "asked first");
+    app.activate(&mut sim, m, r);
+    assert_eq!((app.more[1], app.page_count()), (None, n), "MORE reset, the page kept");
+}

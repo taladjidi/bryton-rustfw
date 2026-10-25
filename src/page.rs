@@ -331,7 +331,9 @@ impl Page {
         let mut fields = [Time; CELLS];
         let mut n = 0;
         for f in self.fields.iter().take(self.cells()).copied().filter(|&f| fits(f, room)) {
-            if let Some(slot) = fields.get_mut(n) {
+            if !fields.get(..n).unwrap_or(&[]).contains(&f)
+                && let Some(slot) = fields.get_mut(n)
+            {
                 *slot = f;
                 n += 1;
             }
@@ -398,6 +400,12 @@ const CRC_AT: usize = PAGES_AT + crate::PAGES * PAGE_BYTES;
 /// the flags and the pages. A bad one leaves every page its default, the pages above it untouched.
 const MORE_AT: usize = CRC_AT + 2;
 const MORE_CRC_AT: usize = MORE_AT + 1 + crate::PAGES * PAGE_BYTES;
+
+/// The MORE part's CRC: the flags and pages, continuing the first CRC over the pages (not over the pages with their
+/// CRC, which is always 0), so a copy torn at `MORE_AT` mixes nothing: the older MORE fails against the newer pages.
+fn more_crc(s: &[u8; 512]) -> u16 {
+    crate::fit::crc(crate::fit::crc(0, &s[..CRC_AT]), &s[MORE_AT..MORE_CRC_AT])
+}
 
 /// The ride pages as the file keeps them: two copies, one a sector, the newer whole one (the larger `seq`) the one
 /// read; a write goes over the older, so a power cut while writing one leaves the other (the recorder's two
@@ -479,7 +487,7 @@ impl Saved {
             }
         }
         s[MORE_AT] = flags;
-        let crc = crate::fit::crc(0, &s[MORE_AT..MORE_CRC_AT]);
+        let crc = more_crc(&s);
         s[MORE_CRC_AT..MORE_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
         s
     }
@@ -503,9 +511,7 @@ impl Saved {
         // the MORE variants: none where the flags or their CRC are not there (a file of an earlier build)
         let mut more = [None; crate::PAGES];
         let flags = s[MORE_AT];
-        if flags != 0
-            && s.get(MORE_CRC_AT..MORE_CRC_AT + 2)? == crate::fit::crc(0, s.get(MORE_AT..MORE_CRC_AT)?).to_le_bytes()
-        {
+        if flags != 0 && s.get(MORE_CRC_AT..MORE_CRC_AT + 2)? == more_crc(s).to_le_bytes() {
             for (k, (m, b)) in more.iter_mut().zip(s[MORE_AT + 1..MORE_CRC_AT].chunks_exact(PAGE_BYTES)).enumerate() {
                 *m = read_page(b).filter(|p| flags & 1 << k != 0 && p.well_formed() && p.roomy());
             }
@@ -671,8 +677,23 @@ mod tests {
         assert_eq!(Saved::from_sector(&bad), Some(plain), "the MORE part damaged");
         let mut bad = sector;
         bad[MORE_AT + 1 + PAGE_BYTES + ROWS] = 250; // a field this build lacks, CRC made right
-        let crc = crate::fit::crc(0, &bad[MORE_AT..MORE_CRC_AT]);
+        let crc = more_crc(&bad);
         bad[MORE_CRC_AT..MORE_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(Saved::from_sector(&bad), Some(Saved { more: [None, None, None, None, None, Some(p)], ..s }));
+    }
+
+    #[test]
+    fn torn_at_more_keeps_no_mix() {
+        let p = Page::preset(4, [Speed, Hr, Dist, Timer, Time, Time, Time, Time]).unwrap();
+        let q = Page::preset(2, [Ascent, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
+        let w = Page::preset(14, [Wbal, Np, Hr, Power, Cadence, Dist, Timer, Ascent]).unwrap();
+        let mk = |seq, pg, more| Saved { seq, pages: [pg; crate::PAGES], count: 3, words: [0; 6], was: [0; 6], more };
+        let old = mk(4, p, [None, Some(w), None, None, None, None]).to_sector();
+        let new = mk(6, q, [None; crate::PAGES]).to_sector();
+        let mut torn = old;
+        torn[..MORE_AT].copy_from_slice(&new[..MORE_AT]);
+        let s = Saved::from_sector(&torn).unwrap();
+        assert_eq!(s.pages[0], q);
+        assert_eq!(s.more, [None; crate::PAGES], "new pages with an older copy's MORE");
     }
 }

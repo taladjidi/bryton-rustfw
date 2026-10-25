@@ -222,7 +222,8 @@ impl App {
                 value.push_u32(PAGES as u32);
             }
             Row::Edit(r) => {
-                label.push_str(r.label());
+                let reset = r == menu::EditRow::DeletePage && self.edit.is_some_and(|e| e.more);
+                label.push_str(if reset { "RESET MORE" } else { r.label() });
                 self.edit_row_value(menu, r, &mut value, &mut color);
             }
             Row::Open(m) => label.push_str(menu_title(m)),

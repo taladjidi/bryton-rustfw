@@ -40,6 +40,8 @@
 //! equal its previous ones: a change undone), the file's others kept, and the file is written once no ride is open.
 //! The registers keep three pages, lossily ([`Page::to_cfg`]): a change to pages 4 to 6, or a page added or deleted
 //! before them, is lost if the unit goes off before the file is written (they come back as the file had them).
+//! A MORE variant is not in the registers at all: a MORE edit made then is lost the same way, and where the registers
+//! win over the file's page, that page's MORE goes back to its default (it may belong to another page).
 //!
 //! **No change before the file is read**: the editor, LAYOUT and the picker read it first, and refuse while it
 //! cannot be ("USB DRIVE ON", "PAGES NOT READ"), so the registers' three pages are never written over the file's six.
@@ -255,6 +257,7 @@ impl App {
         self.store.seq = s.seq;
         let boot = self.store.boot;
         let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
+        let mut more_in = s.more;
         if self.store.newer || (boot != s.words && boot != s.was) {
             // changes the file did not get (a switch-off before it was written), or another build changed the
             // registers since: the registers' pages win where they differ from the file's
@@ -264,7 +267,13 @@ impl App {
                     && let Some(c) = PageCfg::from_words(w)
                     && let Some(slot) = list.get_mut(i)
                 {
-                    *slot = Page::from_cfg(c);
+                    let page = Page::from_cfg(c);
+                    if *slot != page
+                        && let Some(m) = more_in.get_mut(i)
+                    {
+                        *m = None; // not the page the file's MORE was made for (one deleted or changed)
+                    }
+                    *slot = page;
                 }
             }
             self.store.dirty = true;
@@ -273,7 +282,7 @@ impl App {
         }
         let mut n = 0;
         let mut more = [None; PAGES];
-        for (p, m) in list.into_iter().zip(s.more) {
+        for (p, m) in list.into_iter().zip(more_in) {
             if let (Some(p), Some(slot), Some(ms)) = (p, self.pages.get_mut(n), more.get_mut(n)) {
                 (*slot, *ms) = (p, m);
                 n += 1;
@@ -495,6 +504,18 @@ impl App {
             EditRow::Shorter => w.resize(k, false).map(|p| (p, k)),
             EditRow::Undo => e.undo.map(|u| (u, k)).ok_or("NOTHING TO UNDO"),
             EditRow::AddPage => return self.add_page(b, e.page + 1),
+            EditRow::DeletePage if e.more => {
+                // in MORE this row resets the variant to its default; the page stays
+                if self.confirmed(menu, sel, "RESET THIS MORE") {
+                    if let Some(m) = self.more.get_mut(e.page) {
+                        *m = None;
+                    }
+                    self.pages_changed(b);
+                    self.leave_editor(b, false);
+                    self.say("MORE RESET");
+                }
+                return;
+            }
             EditRow::DeletePage if self.page_count <= 1 => Err("ONE PAGE AT LEAST"),
             EditRow::DeletePage => {
                 if self.confirmed(menu, sel, "DELETE THIS PAGE") {
@@ -552,7 +573,7 @@ impl App {
     }
 
     /// The edited page deleted, out of the editor.
-    fn delete_page(&mut self, b: &mut impl Board) {
+    pub(crate) fn delete_page(&mut self, b: &mut impl Board) {
         let Some(e) = self.edit.take() else { return };
         if e.page < self.page_count && self.page_count > 1 {
             self.pages.copy_within(e.page + 1..PAGES, e.page);
