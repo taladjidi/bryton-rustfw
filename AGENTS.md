@@ -111,6 +111,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/ui/`: what is drawn and the menus;
 - `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
+- `src/drivers.rs`: the module root of `src/drivers/`.
+- `src/storage.rs`: the module root of `src/storage/`.
+- `src/board.rs`: the module root of `src/board/`.
 
 - `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
   to that: a new concern goes in its own file in `src/app/`.
@@ -167,6 +170,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   format of `pages.bin` (two copies, seq and CRC). Pure logic.
 - `src/power.rs`: power metrics once a second (3 / 10 / 30 s averages, NP, IF, TSS, kJ, kcal, W' balance), running
   sums over a ring, integers only; ride.rs keeps max heart rate and the climbing (VAM, grade). Pure logic.
+- `src/ui/card.rs`: a ride's card once it has ended, and for each past ride: its map, elevation profile and ten
+  numbers. Drawn once, when shown.
+- `src/ui/media.rs`: the media player screen: what the phone says is playing (AMS), a progress bar, touch buttons,
+  each part in its own fixed box.
 - `src/ui/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
   and drawing in runs per row clipped to `Canvas::clip`, so a dirty box and a screenshot row use the same code.
 - `src/drivers/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the
@@ -179,6 +186,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   smoothing, the calibration (typed, from the receiver, at a ride's start; `\Rustfw\altcal.bin`'s sector), and which
   source the ride takes (barometer or GPS, with a reference number that makes the ride forget its low point when it
   changes). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
+- `src/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
+  at a time. Pure logic.
 - `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
@@ -251,6 +260,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
+- `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
+  counted while riding, a system that goes silent.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
   RTC read and set, standby, SysTick sleep. No app logic.
 - `src/board/usb.rs`: OTG_HS and the ULPI PHY brought up as stock does it, and a composite device: the CDC serial
@@ -265,6 +276,11 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
   after `dev.py reset`): a firmware that reads the link takes the bytes first.
+- `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
+- `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
+  SHA256SUMS.
+- `tools/stack_check.py`: the firmware's stack frames against their budgets (check.sh, after the build).
+- `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo).
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
   `ant_key.bin`, and build.rs passes it to main.rs as `ANT_KEY` (None without the file). Shimano's private network
