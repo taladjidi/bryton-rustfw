@@ -17,12 +17,21 @@
 //! **Never a ride lost, never in two places.** A move is the FAT writer's (fat/write.rs): the old entry marked
 //! deleted (0xe5 only, never zeroed), then the new entry on the same chain. Between the two, the chain is named by
 //! no entry, so first a record, `\Rustfw\delete.rec` (one sector: a tag, "pending", the name, the suffix, each
-//! file's first cluster and size, a CRC), says what is being moved; after the last move it says "done". A cut
+//! file's first cluster, size and first sector's CRC, a CRC), says what is being moved; after the last move it says
+//! "done". A cut
 //! anywhere leaves either the record not written (nothing moved yet: a torn record does not check out and is
 //! ignored), or a pending record, which the next start finishes ([`finish`]): the FATs made equal first
 //! ([`Fat::sync_fats`]), then each file is found in its new place (done), or removed from its old place if still
-//! there, and linked into the new one if its chain is still whole. Tested by cutting the power after every sector
-//! written (below).
+//! there, and linked into the new one if its chain is still whole and still the ride's (its first sector's CRC: a
+//! computer's fsck may have freed it and something taken it). A suffix taken then is recorded before any entry
+//! changes, and a folder removed meanwhile is made again. The app finishes a pending move at the scan's start and
+//! before lending the card to a computer (app/drive.rs), which would see the ride in neither folder. Tested by
+//! cutting the power after every sector written (below).
+//!
+//! **The FAT sync** (`Fat::sync_fats`, both FATs read whole: 3 to 4 s on the owner's 15 MB, estimated) runs in one
+//! call, as the recorder's (recorder.rs, "After a cut"): only at the first delete on a card (the folders made) and
+//! when a cut left a move pending, before any chain is read; spreading it would leave a move half known across
+//! passes.
 
 use crate::fat::write::Handle;
 use crate::fat::{DiskWrite, Error, Fat, File, SECTOR};
@@ -40,14 +49,18 @@ const SUFFIXES: u8 = 99;
 const FROM: [&str; 2] = [ACTIVITIES, FULL_PATH];
 const TO: [&str; 2] = ["Rustfw/Deleted", "Rustfw/Deleted/Full"];
 
+/// One file of a move: its first cluster, its size, and the CRC of its first sector (None: an empty file, or a
+/// record of the first builds, flag 1, which had none).
+type Moved = (u32, u32, Option<u16>);
+
 /// The move under way: the ride's name (`YYMMDDhhmmss`), the suffix of the new name, and per file of [`FROM`]
-/// its first cluster and size (None: no such file).
+/// what moves (None: no such file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Rec {
     pending: bool,
     name: [u8; 12],
     suffix: u8,
-    files: [Option<(u32, u32)>; 2],
+    files: [Option<Moved>; 2],
 }
 
 impl Rec {
@@ -58,11 +71,13 @@ impl Rec {
         s[5..17].copy_from_slice(&self.name);
         s[17] = self.suffix;
         for (k, f) in self.files.iter().enumerate() {
-            if let Some((first, size)) = f {
+            if let Some((first, size, crc)) = f {
                 let at = 32 + 16 * k;
-                s[at] = 1;
+                s[at] = 2;
                 s[at + 4..at + 8].copy_from_slice(&first.to_le_bytes());
                 s[at + 8..at + 12].copy_from_slice(&size.to_le_bytes());
+                s[at + 12] = u8::from(crc.is_some());
+                s[at + 14..at + 16].copy_from_slice(&crc.unwrap_or(0).to_le_bytes());
             }
         }
         let crc = crate::fit::crc(0, &s[..SECTOR - 2]);
@@ -75,7 +90,11 @@ impl Rec {
             return None;
         }
         let word = |i: usize| u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
-        let file = |k: usize| (s[32 + 16 * k] == 1).then(|| (word(36 + 16 * k), word(40 + 16 * k)));
+        let file = |k: usize| {
+            let (at, flag) = (32 + 16 * k, s[32 + 16 * k]);
+            let crc = (flag == 2 && s[at + 12] == 1).then(|| u16::from_le_bytes([s[at + 14], s[at + 15]]));
+            matches!(flag, 1 | 2).then(|| (word(at + 4), word(at + 8), crc))
+        };
         let mut name = [0u8; 12];
         name.copy_from_slice(&s[5..17]);
         Some(Rec { pending: s[4] == 1, name, suffix: s[17], files: [file(0), file(1)] })
@@ -115,6 +134,24 @@ fn rec_file(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Hand
     Ok(h)
 }
 
+/// The folder file `k` of [`TO`] goes to, made if missing (a computer may have removed it since the record).
+fn to_dir(fat: &mut Fat, d: &mut impl DiskWrite, k: usize, t: (u16, u16)) -> Result<File, Error> {
+    let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
+    let deleted = fat.ensure_dir(d, mine, DELETED, t)?;
+    if k == 0 { Ok(deleted) } else { fat.ensure_dir(d, deleted, "Full", t) }
+}
+
+/// The CRC of the first sector of the chain `h` (None for an empty file): what says, after a cut, that a chain
+/// named by no entry is still the ride's.
+fn first_crc(fat: &mut Fat, d: &mut impl DiskWrite, h: &Handle) -> Result<Option<u16>, Error> {
+    if h.first == 0 {
+        return Ok(None);
+    }
+    let mut s = [0u8; SECTOR];
+    fat.read_sector(d, h, 0, &mut s)?;
+    Ok(Some(crate::fit::crc(0, &s)))
+}
+
 /// The first suffix from `from` whose name is free in every folder of `to` the files go to.
 fn free_suffix(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, from: u8) -> Result<u8, Error> {
     let mut buf = [0u8; 20];
@@ -138,11 +175,13 @@ fn free_suffix(fat: &mut Fat, d: &mut impl DiskWrite, r: &Rec, from: u8) -> Resu
 /// Moves the ride whose file in `\Activities` is `ride` (its first cluster: the history's), and its full copy if
 /// any, into `\Rustfw\Deleted` (module doc); first finishes a move a cut left. `t`: (DOS date, time) of the new
 /// entries and folders. [`Error::NotFound`] when no ride in `\Activities` has that chain (gone since the history
-/// was made).
+/// was made). A move of this ride a failure left (a card error midway) is finished: Ok, it is deleted.
 #[inline(never)] // in its own frame, not the main loop's
 pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), Error> {
     let mut fat = Fat::mount(d)?;
-    finish_on(&mut fat, d, t)?;
+    if finish_on(&mut fat, d, t)?.is_some_and(|r| r.files[0].map(|f| f.0) == Some(ride.cluster)) {
+        return Ok(());
+    }
     // the name the chain has in \Activities
     let acts = fat.open(d, ACTIVITIES)?;
     let mut c = fat.cursor(acts)?;
@@ -163,7 +202,7 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
             Err(e) => return Err(e),
         };
         files[k] = match fat.locate(d, dir, file_name(&name, 0, &mut buf)?) {
-            Ok(h) => Some((h.first, h.size)),
+            Ok(h) => Some((h.first, h.size, first_crc(&mut fat, d, &h)?)),
             Err(Error::NotFound | Error::Refused) => None,
             Err(e) => return Err(e),
         };
@@ -189,61 +228,77 @@ pub fn delete(d: &mut impl DiskWrite, ride: &File, t: (u16, u16)) -> Result<(), 
     r.suffix = free_suffix(&mut fat, d, &r, 0)?;
     let mut rec = rec_file(&mut fat, d, t)?;
     fat.write_sectors(d, &mut rec, 0, &r.to_sector())?;
-    moves(&mut fat, d, &mut r, t)?;
+    moves(&mut fat, d, &mut r, &mut rec, t)?;
     r.pending = false;
     fat.write_sectors(d, &mut rec, 0, &r.to_sector())
 }
 
-/// At start-up: finishes a move a cut left (module doc); true if there was one. Reads one sector when there is
-/// none.
+/// At start-up, and before the card is lent to a computer: finishes a move a cut left (module doc); true if there
+/// was one. Reads one sector when there is none.
 #[inline(never)]
 pub fn finish(d: &mut impl DiskWrite, t: (u16, u16)) -> Result<bool, Error> {
     let mut fat = Fat::mount(d)?;
-    finish_on(&mut fat, d, t)
+    Ok(finish_on(&mut fat, d, t)?.is_some())
 }
 
-fn finish_on(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<bool, Error> {
+/// The move finished, if one was pending.
+fn finish_on(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Option<Rec>, Error> {
     let mut rec = match fat.open(d, DIR).and_then(|dir| fat.locate(d, dir, REC)) {
         Ok(h) if h.size >= SECTOR as u32 => h,
-        Ok(_) | Err(Error::NotFound) => return Ok(false),
+        Ok(_) | Err(Error::NotFound) => return Ok(None),
         Err(e) => return Err(e),
     };
     let mut s = [0u8; SECTOR];
     fat.read_sector(d, &rec, 0, &mut s)?;
-    let Some(mut r) = Rec::from_sector(&s).filter(|r| r.pending) else { return Ok(false) };
+    let Some(mut r) = Rec::from_sector(&s).filter(|r| r.pending) else { return Ok(None) };
     fat.sync_fats(d)?; // first: a FAT sector the cut left different (or torn) would break the chains read next
-    moves(fat, d, &mut r, t)?;
+    moves(fat, d, &mut r, &mut rec, t)?;
     r.pending = false;
     fat.write_sectors(d, &mut rec, 0, &r.to_sector())?;
-    Ok(true)
+    Ok(Some(r))
 }
 
 /// Each file of `r` moved, or found moved already: the old entry marked deleted if it is still there, then the new
-/// one, unless it is there already. A chain no longer whole (a computer's fsck took it meanwhile) is left as it is.
-fn moves(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, t: (u16, u16)) -> Result<(), Error> {
+/// one, unless it is there already. A chain named by no entry is linked only if it is still the ride's: whole for
+/// its size and its first sector the one the record says (a computer's fsck may have freed it meanwhile, and
+/// something else taken it: linked, two files would share clusters). A new suffix goes into the record `rec`
+/// before any entry changes, so a second cut finishes with the same one, in both folders.
+fn moves(fat: &mut Fat, d: &mut impl DiskWrite, r: &mut Rec, rec: &mut Handle, t: (u16, u16)) -> Result<(), Error> {
     let mut buf = [0u8; 20];
     for k in 0..2 {
-        let (Some((first, size)), Some(from), Some(to)) = (r.files[k], FROM.get(k), TO.get(k)) else { continue };
-        let dst = fat.open(d, to)?;
+        let (Some((first, size, crc)), Some(from)) = (r.files[k], FROM.get(k)) else { continue };
+        let dst = to_dir(fat, d, k, t)?;
         match fat.find(d, dst, file_name(&r.name, r.suffix, &mut buf)?) {
-            Ok(f) if f.cluster == first => continue,               // moved already
-            Ok(_) => r.suffix = free_suffix(fat, d, r, r.suffix)?, // a name taken since (by a computer)
+            Ok(f) if f.cluster == first => continue, // moved already
+            Ok(_) => {
+                // a name taken since (by a computer): another suffix, free in both folders, recorded first
+                for j in (0..2).filter(|&j| r.files[j].is_some()) {
+                    to_dir(fat, d, j, t)?;
+                }
+                r.suffix = free_suffix(fat, d, r, r.suffix)?;
+                fat.write_sectors(d, rec, 0, &r.to_sector())?;
+            }
             Err(Error::NotFound) => {}
             Err(e) => return Err(e),
         }
-        let src = fat.open(d, from)?;
-        match fat.locate(d, src, file_name(&r.name, 0, &mut buf)?) {
-            Ok(h) if h.first == first => fat.remove(d, &h)?,
-            Ok(_) | Err(Error::NotFound | Error::Corrupt | Error::Refused) => {} // gone already
+        let gone = match fat.open(d, from).and_then(|src| fat.locate(d, src, file_name(&r.name, 0, &mut buf)?)) {
+            Ok(h) if h.first == first => {
+                fat.remove(d, &h)?;
+                false
+            }
+            Ok(_) | Err(Error::NotFound | Error::Corrupt | Error::Refused) => true, // gone already
             Err(e) => return Err(e),
-        }
-        let whole = match fat.chain(d, first) {
-            Ok(h) => h.clusters.checked_mul(fat.cluster_bytes()).is_none_or(|b| b >= size),
+        };
+        let ours = match fat.chain(d, first) {
+            Ok(h) => {
+                h.clusters.checked_mul(fat.cluster_bytes()).is_none_or(|b| b >= size)
+                    && (!gone || crc.is_none() || first_crc(fat, d, &h)? == crc)
+            }
             Err(Error::Corrupt) => false,
             Err(e) => return Err(e),
         };
-        if whole || first == 0 {
-            let dst = fat.open(d, to)?;
+        if ours || first == 0 {
+            let dst = to_dir(fat, d, k, t)?;
             fat.link(d, dst, file_name(&r.name, r.suffix, &mut buf)?, &Handle { first, size, ..Handle::default() }, t)?;
         }
     }
@@ -417,5 +472,78 @@ pub(crate) mod tests {
             let lost = fsck(&d.0).unwrap_or_else(|e| panic!("cut after {budget}: {e}"));
             assert!(lost == 0 || !finished && lost == 1, "cut after {budget}: {lost} lost");
         }
+    }
+
+    /// A chain the cut left named by no entry that a computer's fsck reconnected (FILE0000.CHK) and something then
+    /// overwrote: no longer the ride's (its first sector not the one recorded), so it is not linked as the ride
+    /// (the review of 2026-10-25: it was, and the two files shared clusters).
+    #[test]
+    fn a_reused_chain_is_not_linked() {
+        let ride = cluster(&volume(), RIDE);
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let (h, root) = (Handle { first: ride.cluster, size: ride.size, ..Handle::default() }, fat.root());
+        fat.link(&mut d, root, "FILE0000.CHK", &h, T).unwrap();
+        let at = fat.lba(ride.cluster) as usize * SECTOR;
+        d.0[at..at + 16].fill(0x42);
+        assert_eq!(finish(&mut d, T), Ok(true));
+        assert_eq!(file(&d.0, "Rustfw/Deleted/261020080000.fit"), None, "not the ride any more");
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// A delete that failed midway (a card error) and is asked again: the move is finished and the ride is deleted
+    /// (it said DELETE FAILED, the ride no longer being in `\Activities` when looked for).
+    #[test]
+    fn a_delete_asked_again_after_a_failure_succeeds() {
+        let ride = cluster(&volume(), RIDE);
+        let mut d = Ram(cut_midway(), 0);
+        assert_eq!(delete(&mut d, &ride, T), Ok(()));
+        assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
+        assert_eq!(fsck(&d.0), Ok(0));
+    }
+
+    /// A move finished after a cut, which has to take a suffix (a computer put a file of the ride's name in
+    /// `\Rustfw\Deleted` meanwhile), cut again at every sector: the suffix is recorded before any entry changes, so
+    /// the last start finishes with the same one, each copy in one place under it, no cluster shared.
+    #[test]
+    fn a_suffix_taken_while_finishing_survives_a_second_cut() {
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let del = fat.open(&mut d, "Rustfw/Deleted").unwrap();
+        fat.create(&mut d, del, "261020080000.fit", T).unwrap();
+        let img = d.0;
+        let mut whole = Cut(img.clone(), u64::MAX);
+        assert_eq!(finish(&mut whole, T), Ok(true));
+        let writes = u64::MAX - whole.1;
+        for budget in 0..writes {
+            let mut d = Cut(img.clone(), budget);
+            let _ = finish(&mut d, T);
+            d.1 = u64::MAX;
+            finish(&mut d, T).unwrap();
+            let what = std::format!("cut after {budget} of {writes}");
+            assert_eq!(fsck(&d.0).map_err(|e| std::format!("{what}: {e}")), Ok(0));
+            for p in ["Rustfw/Deleted/261020080000-1.fit", "Rustfw/Deleted/Full/261020080000-1.fit"] {
+                assert!(file(&d.0, p).is_some_and(|f| !f.is_empty()), "{what}: {p}");
+            }
+            assert_eq!(file(&d.0, "Rustfw/Deleted/261020080000-2.fit"), None, "{what}");
+        }
+    }
+
+    /// A pending move whose folder a computer removed meanwhile: made again and finished, never left pending (it
+    /// stopped every later delete).
+    #[test]
+    fn a_removed_folder_is_made_again() {
+        let mut d = Ram(cut_midway(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let mine = fat.open(&mut d, DIR).unwrap();
+        let lba = fat.lba(mine.cluster) as usize * SECTOR;
+        let name: Vec<u8> = "Delet".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let k = (0..SECTOR / 32).find(|k| d.0[lba + k * 32 + 1..lba + k * 32 + 11] == name[..]).unwrap();
+        d.0[lba + k * 32] = 0xe5; // its long name and its 8.3 entry: gone, as a computer deletes
+        d.0[lba + (k + 1) * 32] = 0xe5;
+        assert_eq!(file(&d.0, "Rustfw/Deleted/Full/261020080000.fit"), None);
+        assert_eq!(finish(&mut d, T), Ok(true));
+        assert!(file(&d.0, "Rustfw/Deleted/261020080000.fit").is_some());
+        assert!(fsck(&d.0).is_ok(), "{:?}", fsck(&d.0));
     }
 }

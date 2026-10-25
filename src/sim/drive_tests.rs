@@ -40,19 +40,19 @@ fn started(writable: bool) -> (Sim, App) {
 fn lent_to_the_computer_one_owner_at_a_time() {
     let (mut sim, mut app) = started(true);
     app.set_usb(&mut sim, UsbDot::Powered);
-    assert_eq!(app.drive_on(), Err("CONNECT USB"));
+    assert_eq!(app.drive_on(&mut sim), Err("CONNECT USB"));
     app.set_usb(&mut sim, UsbDot::Ready);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.drive_on(), Err("END THE RIDE FIRST"));
+    assert_eq!(app.drive_on(&mut sim), Err("END THE RIDE FIRST"));
     assert_eq!(app.banner.as_str(), "END THE RIDE FIRST");
     run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     app.press(&mut sim, Press::Long(Key::Start)); // end: saved at the next pass
-    assert_eq!(app.drive_on(), Err("RIDE NOT SAVED YET"));
+    assert_eq!(app.drive_on(&mut sim), Err("RIDE NOT SAVED YET"));
     run(&mut sim, &mut app, 2000);
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
 
-    assert_eq!(app.drive_on(), Ok(()));
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
     sim.emmc.cmds.clear();
     app.press(&mut sim, Press::Short(Key::Back)); // the ride's card closed
     app.press(&mut sim, Press::Short(Key::Start));
@@ -108,7 +108,7 @@ fn a_full_card_never_holds_the_drive() {
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     app.press(&mut sim, Press::Long(Key::Start)); // end
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.drive_on(), Ok(()));
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
 }
 
 /// A build that may not write the card (EMMC_WRITE unset): the drive is write protected (MODE SENSE) and a write
@@ -116,7 +116,7 @@ fn a_full_card_never_holds_the_drive() {
 #[test]
 fn read_only_build_offers_a_write_protected_drive() {
     let (mut sim, mut app) = started(false);
-    app.drive_on().unwrap();
+    app.drive_on(&mut sim).unwrap();
     let mut h = Host::default();
     command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]);
     let (ms, _) = command(&mut sim, &mut app, &mut h, 2, 192, true, &[0x1a, 0, 0x3f, 0, 192, 0]);
@@ -162,7 +162,7 @@ fn a_swipe_during_a_long_read() {
     app.set_usb(&mut sim, UsbDot::Ready);
     run(&mut sim, &mut app, 1000);
     samples.set(0);
-    app.drive_on().unwrap();
+    app.drive_on(&mut sim).unwrap();
     let mut h = Host::default();
     assert_eq!(command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]).1, 1, "UNIT ATTENTION: medium changed");
     samples.set(0);
@@ -189,7 +189,7 @@ fn a_tap_across_the_end_of_a_command() {
     let mut app = App::start(&mut sim, None);
     app.set_usb(&mut sim, UsbDot::Ready);
     run(&mut sim, &mut app, 1000);
-    app.drive_on().unwrap();
+    app.drive_on(&mut sim).unwrap();
     let mut h = Host::default();
     command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]);
     samples.set(0);
@@ -198,4 +198,21 @@ fn a_tap_across_the_end_of_a_command() {
     assert_eq!(app.touch(&mut sim, 2000), None, "2 s slept since the main loop's last read: not a hold");
     let g = (0..8).find_map(|_| app.touch(&mut sim, 20));
     assert!(matches!(g, Some(Input::Touch(Gesture::Tap(..)))), "{g:?}");
+}
+
+/// A delete a cut left halfway (the ride named by no entry, trash.rs) is finished before the card is lent, even
+/// before the scan that finishes it at start-up: lent first, the computer would see the ride nowhere and its fsck
+/// could free or reconnect the chain the move then links (the review of 2026-10-25).
+#[test]
+fn a_delete_cut_halfway_is_finished_before_lending() {
+    use crate::storage::trash::tests::{cut_midway, file};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000);
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_none(), "not finished yet");
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }

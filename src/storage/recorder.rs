@@ -1097,7 +1097,7 @@ mod tests {
     extern crate std;
     use super::*;
     use crate::fat::Disk;
-    use crate::fat::write::tests::{fill, free_counts, fsck};
+    use crate::fat::write::tests::{fill, free_counts, fsck, fsck_torn};
     use crate::fitread::{Msg, Reader};
     use std::vec::Vec;
 
@@ -1466,7 +1466,8 @@ mod tests {
             };
             let path = std::format!("Activities/{}.fit", core::str::from_utf8(&n).unwrap());
             assert_eq!(saved(&d.img, &path).map(|s| s.0 == all), Ok(true), "{what}: the next ride");
-            let lost = check_clean(&d.img, &what);
+            let lost = fsck_torn(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(free_counts(&d.img).0, free_counts(&d.img).1, "{what}: FSInfo's free count");
             if lost > 2 {
                 // only a torn sector of the root directory (making \Rustfw or \Activities): its other entries lost
                 assert!(root.contains(&cut_lba), "{what}: {lost} clusters lost");
@@ -1775,7 +1776,7 @@ mod tests {
             // the next ride: both copies
             let out = ride_all(&mut pair(), &mut d, 0).unwrap_or_else(|| panic!("{what}: the next ride"));
             assert!(matches!(out[..], [Outcome::Saved(a), Outcome::Saved(b)] if a == b), "{what}: {out:?}");
-            let lost = fsck(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let lost = if torn { fsck_torn(&d.img) } else { fsck(&d.img) }.unwrap_or_else(|e| panic!("{what}: {e}"));
             if !torn {
                 max_lost = max_lost.max(lost);
             }

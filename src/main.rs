@@ -1448,7 +1448,7 @@ fn main() -> ! {
                             woke = true;
                         }
                         Effect::Drive => {
-                            match app.drive_on() {
+                            match app.drive_on(&mut board) {
                                 Ok(()) => l.send(b"ok\n"),
                                 Err(why) => {
                                     l.send(b"err ");

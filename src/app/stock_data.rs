@@ -201,7 +201,10 @@ impl App {
                 self.close();
                 self.clamp_menu(); // the list one ride shorter: the selection on the next one, or the last
             }
-            Err(_) => self.alarm_notice("DELETE FAILED"),
+            Err(_) => {
+                self.trash_check = true; // a move the failure left midway, finished at the next scan or lending
+                self.alarm_notice("DELETE FAILED");
+            }
         }
     }
 
