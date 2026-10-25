@@ -179,6 +179,8 @@ pub const STALE_MS: u32 = 5000;
 pub struct Live {
     values: [Option<u16>; 8],
     age_ms: [u32; 8],
+    /// The values as of the last [`Live::snapshot`]: what the pages show.
+    shown: [Option<u16>; 8],
 }
 
 impl Live {
@@ -191,6 +193,18 @@ impl Live {
     /// The current value of `m`, if fresh enough.
     pub fn get(&self, m: Metric) -> Option<u16> {
         self.values[m as usize]
+    }
+
+    /// The value of `m` as of the last [`Live::snapshot`]: what a page shows. The sensors broadcast at 4 Hz and the
+    /// digits changed at every one (UI review 2: unreadable, and a redraw each time); the page takes one reading a
+    /// second, in the second's tick.
+    pub fn shown(&self, m: Metric) -> Option<u16> {
+        self.shown[m as usize]
+    }
+
+    /// Takes the values now as the ones shown, once a second.
+    pub fn snapshot(&mut self) {
+        self.shown = self.values;
     }
 
     /// Ages the values by `dt_ms`, dropping the stale ones.

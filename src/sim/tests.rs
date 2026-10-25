@@ -2076,6 +2076,37 @@ fn back_held_3s_powers_off_after_release() {
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
 }
 
+/// The live readings on the pages (power, speed, cadence, heart rate) change once a second, in the second's tick,
+/// though the sensors broadcast at 4 Hz and the value in hand changes at each broadcast (UI review 2).
+#[test]
+fn live_readings_show_at_one_hertz() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fast, network: 0, ack: &[] });
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fast, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    let (mut changes, mut raw, mut seconds) = (0, 0, 0);
+    let text = |app: &App| [Field::Power, Field::Hr].map(|f| std::string::String::from(app.field_text(f).as_str()));
+    let (mut last, mut last_raw, mut last_sec) = (text(&app), app.live.get(Metric::Power), app.seconds);
+    for _ in 0..80 {
+        run(&mut sim, &mut app, 250);
+        let (now, now_raw) = (text(&app), app.live.get(Metric::Power));
+        raw += u32::from(now_raw != last_raw);
+        if now != last {
+            changes += 1;
+            assert_ne!(app.seconds, last_sec, "a reading changed between two seconds: {last:?} to {now:?}");
+        }
+        seconds += u32::from(app.seconds != last_sec);
+        (last, last_raw, last_sec) = (now, now_raw, app.seconds);
+    }
+    std::println!("20 s: {changes} changes shown, {raw} in the live value, {seconds} seconds");
+    assert!(changes >= 10 && changes <= seconds, "shown: {changes} of {seconds} seconds");
+    assert!(raw > changes + 15, "the sensors really change at each broadcast: {raw}");
+    assert!(sim.nordic.sensors.len() == 2);
+}
+
 /// An empty list says so in a row, not in a banner that goes after 4 s: WORKOUTS with nothing planned.
 #[test]
 fn empty_workouts_say_so_in_a_row() {
@@ -3091,6 +3122,19 @@ fn power_noisy(ms: u64) -> [u8; 8] {
     [0x10, 1, 0xff, 85, 0, 0, p0, p1]
 }
 
+/// Power and heart rate that change at every broadcast (4 Hz, the sensors' own rate): a power meter's and a strap's
+/// real readings move all the time, the test sensors above only once a second.
+fn power_fast(ms: u64) -> [u8; 8] {
+    let k = ms / 250;
+    let swell = (k / 4 % 120).min(120 - k / 4 % 120) as u16;
+    let noise = (k.wrapping_mul(2_654_435_761) >> 7) % 61;
+    let [p0, p1] = (110 + 3 * swell + noise as u16).to_le_bytes();
+    [0x10, 1, 0xff, 85, 0, 0, p0, p1]
+}
+fn hr_fast(ms: u64) -> [u8; 8] {
+    [4, 0, 0, 0, 0, 0, 0, 120 + ((ms / 250).wrapping_mul(2_654_435_761) >> 9) as u8 % 9]
+}
+
 /// The graph field: power in its zones' colours, one pixel column per sample, drawn by differences as it
 /// scrolls (the screenshot agrees). Prints the pixels a second it costs.
 #[test]
@@ -3603,7 +3647,7 @@ fn tones_do_not_cut_each_other() {
 fn perf_budgets() {
     use Field::*;
     // a ride on the GPS route, with a power meter and a strap, from start-up
-    let ride = |pages: [crate::page::Page; 3], screen: usize, zoom: Option<u32>| {
+    let ride = |pages: [crate::page::Page; 3], screen: usize, zoom: Option<u32>, fast: bool| {
         let mut sim = Sim::new(9, 0, 0);
         sim.gnss.route = Some(ride_route);
         let course = screen == crate::COURSE || pages.iter().any(|p| p.fields.contains(&Profile));
@@ -3612,9 +3656,11 @@ fn perf_budgets() {
             sim.gnss.route = Some(course_route);
         }
         sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
-        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_noisy, network: 0, ack: &[] });
+        let (power_fn, hr_fn): (fn(u64) -> [u8; 8], fn(u64) -> [u8; 8]) =
+            if fast { (power_fast, hr_fast) } else { (power_noisy, hr72) };
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fn, network: 0, ack: &[] });
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
-        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+        sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
         app.pages[..3].copy_from_slice(&pages);
         if course {
@@ -3650,40 +3696,44 @@ fn perf_budgets() {
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, (u64, u64));
-    let cases: [Case; 10] = [
+    type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, bool, (u64, u64));
+    let cases: [Case; 11] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
-        ("overview", [values, graph, map], PAGES, None, (150, 5)),
+        ("overview", [values, graph, map], PAGES, None, false, (150, 5)),
         // made in the editor: 7101, 10 (8959 at VALUE_MARGIN 2): eight values at 3x in 120 x 74 boxes, the zone fills of power and heart rate
         // as on six values
-        ("eight values", [eight, graph, map], 0, None, (12_000, 20)),
+        ("eight values", [eight, graph, map], 0, None, false, (12_000, 20)),
         // 3581, 22 (3854 at VALUE_MARGIN 2): a graph over four values (the second row of values taller)
-        ("graph over four", [made, values, map], 0, None, (5_000, 30)),
+        ("graph over four", [made, values, map], 0, None, false, (5_000, 30)),
         // 8070, 10 since values keep 3 px from their rules (9862 before): the changed digits only, but large (a glyph
         // of a 6-field page is ~960 px), and the power and heart rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
         // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
-        ("six values", [values, graph, map], 0, None, (12_000, 20)),
+        ("six values", [values, graph, map], 0, None, false, (12_000, 20)),
+        // the same page with a power meter and a strap that change at every broadcast (4 Hz, like the real ones):
+        // 8301, 10 with the readings shown once a second (taken in the second's tick); 11339, 20 when each broadcast
+        // was drawn
+        ("six values, 4 Hz sensors", [values, graph, map], 0, None, true, (9_500, 15)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
-        ("two graphs", [graph, values, map], 0, None, (1_000, 30)),
+        ("two graphs", [graph, values, map], 0, None, false, (1_000, 30)),
         // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow
         // clear of the zoom buttons, 1211 without them)
-        ("map", [map, values, graph], 0, None, (1_800, 50)),
+        ("map", [map, values, graph], 0, None, false, (1_800, 50)),
         // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
         // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
         // 19 000 px each)
-        ("course profile", [profile, values, map], 0, None, (800, 10)),
+        ("course profile", [profile, values, map], 0, None, false, (800, 10)),
         // 1999, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds,
         // NEXT TURN's last digit (1548 before it), the turn's two banners
-        ("course page", [values, graph, map], crate::COURSE, None, (2_600, 20)),
+        ("course page", [values, graph, map], crate::COURSE, None, false, (2_600, 20)),
         // 4563, 44: zoomed in at 1.5 m a pixel (map.rs MIN_LEVEL), following the rider: a whole map at each
         // re-centre (about every 26 s at 8 m/s)
-        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (6_000, 60)),
+        ("map zoomed 1.5 m", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), false, (6_000, 60)),
         // 3470, 42: at 2 m a pixel, a re-centre about every 35 s
-        ("map zoomed 2 m", [map, values, graph], 0, Some(2), (4_500, 60)),
+        ("map zoomed 2 m", [map, values, graph], 0, Some(2), false, (4_500, 60)),
     ];
     let mut over = std::vec::Vec::new();
-    for (name, pages, screen, zoom, (px_max, win_max)) in cases {
-        let (px, win) = ride(pages, screen, zoom);
+    for (name, pages, screen, zoom, fast, (px_max, win_max)) in cases {
+        let (px, win) = ride(pages, screen, zoom, fast);
         std::println!("{name}: {px} px/s, {win} windows/s (budget {px_max}, {win_max})");
         if px > px_max || win > win_max {
             over.push(std::format!("{name}: {px} px/s, {win} windows/s over {px_max}, {win_max}"));

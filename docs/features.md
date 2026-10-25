@@ -10,6 +10,10 @@
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
   only the rides new or changed since are read), and the latest notices (a GPS fix, a
   sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT).
+- **Readings at 1 Hz:** the power, speed, cadence and heart rate values on the pages are the readings of the second's
+  tick, not of each 4 Hz broadcast (the digits were unreadable and each change a redraw: 8,301 px/s against 11,339 on
+  six values with a power meter and a strap, windows 10 a second against 20); the recorder and the averages still take
+  each second's reading.
 - **Ride pages:** one to six, each made of rows (up to five, each a share of the height, one or two boxes side by
   side, eight fields at most), made on the page itself in the page editor (below) or from a layout of the menu (one
   to eight fields: even grids, and uneven ones such as a big box over two or over a 2 x 2 grid, two over a big one,

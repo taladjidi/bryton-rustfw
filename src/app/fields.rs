@@ -116,7 +116,7 @@ impl App {
     /// The text of ride field `f` now ("--" without a value).
     pub(crate) fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
-        let (r, live) = (&self.ride, |m| self.live.get(m).map(u32::from));
+        let (r, live) = (&self.ride, |m| self.live.shown(m).map(u32::from)); // one reading a second
         let (p, ftp) = (&self.power, self.settings.ftp);
         // the value, and whether it is in tenths
         let (v, tenths) = match f {
@@ -304,7 +304,7 @@ impl App {
             // the live power's box takes the 3 s average's zone: second-to-second power crosses a zone's edge all
             // the time, and each change fills the whole box again (18,000 px/s on the sim's noisy power, against
             // 6,500 without the colour); its digits stay live
-            Field::Power if self.live.get(Metric::Power).is_some() => Some(Field::Power3s),
+            Field::Power if self.live.shown(Metric::Power).is_some() => Some(Field::Power3s),
             Field::Power3s | Field::Power10s | Field::Power30s | Field::Hr => Some(f),
             _ => None,
         };
@@ -333,7 +333,7 @@ impl App {
         }
         let p = &self.power;
         let power = match f {
-            Field::Power => self.live.get(Metric::Power),
+            Field::Power => self.live.shown(Metric::Power),
             Field::Power3s => p.rolling(0),
             Field::Power10s => p.rolling(1),
             Field::Power30s => p.rolling(2),
@@ -342,7 +342,7 @@ impl App {
             _ => None,
         };
         let hr = match f {
-            Field::Hr => self.live.get(Metric::Hr),
+            Field::Hr => self.live.shown(Metric::Hr),
             Field::MaxHr => self.ride.max_hr(),
             _ => None,
         };

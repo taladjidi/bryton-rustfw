@@ -242,6 +242,7 @@ impl App {
 
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
+        self.live.snapshot(); // the pages show this second's readings, not each broadcast's
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),
             hr: self.live.get(Metric::Hr),
