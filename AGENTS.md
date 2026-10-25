@@ -155,8 +155,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/ui/fonts.rs`: glyph data, **generated** by `tools/font.py` (4 bits per pixel); never edit it by hand.
   - `PIXEL`, the UI font: this project's own 5 x 7 dot matrix (`tools/pixel_font.py`, one text grid per glyph),
     drawn at 2x or 4x (`Style::scale`) so it matches Ferris.
-  - `SANS_16`, `SANS_BOLD_32`: DejaVu Sans, anti-aliased, if smooth text is ever wanted.
-  - To change a glyph or add a font, edit those files and run `python3 tools/font.py` (needs PIL).
+  - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL).
 - `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
 - `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
