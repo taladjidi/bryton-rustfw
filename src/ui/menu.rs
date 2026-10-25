@@ -271,8 +271,14 @@ pub enum Row {
     Sensor(usize),
     /// A reading.
     Read(Reading),
-    /// Ride page `n`'s field count.
+    /// Ride page `n`'s layout: Select goes to the next one ([`crate::ui::LAYOUT_ORDER`]) its fields fit.
     Layout(usize),
+    /// Opens the page editor on ride page `n` (app/editor.rs).
+    EditPage(usize),
+    /// Adds a ride page after the last and opens the editor on it.
+    AddPage,
+    /// A row of the page editor's actions ([`EDIT_ROWS`]).
+    Edit(EditRow),
     /// Ride page `n`'s field `i`.
     Field(usize, usize),
     /// A row of the stock data menu.
@@ -445,13 +451,50 @@ pub const BIKE: [Row; 1] = [Row::Set(Setting::Wheel)];
 pub const SYSTEM: [Row; 6] =
     [Row::Drive, Row::Stock(StockRow::Import), Row::Open(Menu::Gps), Row::Nearby, Row::Open(Menu::BuiltIn), Row::About];
 
-/// The pages menu: the overview and the ride pages.
-pub const PAGES: [Row; 4] = [
-    Row::Open(Menu::Page(crate::OVERVIEW)),
-    Row::Open(Menu::Page(0)),
-    Row::Open(Menu::Page(1)),
-    Row::Open(Menu::Page(2)),
-];
+/// What the page editor does to the selected cell or its page (Start in the editor: UI review 2, 5.2 point 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditRow {
+    /// The field picker (groups, then fields).
+    Field,
+    /// A second cell beside it, in its row.
+    SplitAcross,
+    /// A row under its row.
+    SplitDown,
+    /// Merged with its neighbour: the other cell of its row, else the row under it.
+    Merge,
+    /// Its row one share taller.
+    Taller,
+    /// Its row one share shorter.
+    Shorter,
+    /// The last action undone (and done again).
+    Undo,
+    /// A new page after this one.
+    AddPage,
+    /// This page deleted (asked first).
+    DeletePage,
+}
+
+impl EditRow {
+    /// The row's label (the two splits have an icon beside it: no dash in the text).
+    pub fn label(self) -> &'static str {
+        match self {
+            EditRow::Field => "FIELD",
+            EditRow::SplitAcross | EditRow::SplitDown => "SPLIT",
+            EditRow::Merge => "MERGE",
+            EditRow::Taller => "TALLER",
+            EditRow::Shorter => "SHORTER",
+            EditRow::Undo => "UNDO",
+            EditRow::AddPage => "ADD PAGE",
+            EditRow::DeletePage => "DELETE PAGE",
+        }
+    }
+}
+
+/// The page editor's actions, the cell's first (one screen), then the page's.
+pub const EDIT_ROWS: [EditRow; 9] = {
+    use EditRow::*;
+    [Field, SplitAcross, SplitDown, Merge, Taller, Shorter, Undo, AddPage, DeletePage]
+};
 
 /// The built-in sensors' readings (SYSTEM > BUILT IN).
 pub const BUILT_IN: [Reading; 3] = [Reading::Lux, Reading::TempC, Reading::Hpa];

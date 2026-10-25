@@ -752,7 +752,7 @@ pub type Layout = (&'static [(u8, u8)], &'static str);
 
 /// The layouts by the id a page keeps ([`crate::PageCfg::layout`]); 0 is a page switched off. Ids 1, 2, 3, 4 and 6
 /// are the layouts of earlier builds, whose id was their field count, so pages kept then read the same.
-pub const LAYOUTS: [Layout; 13] = [
+pub const LAYOUTS: [Layout; 15] = [
     (&[], "OFF"),
     (&[(1, 1)], "1"),
     (&[(1, 1), (1, 1)], "2"),
@@ -766,10 +766,14 @@ pub const LAYOUTS: [Layout; 13] = [
     (&[(2, 1), (1, 1), (1, 2)], "BIG+1+2"),
     (&[(1, 2), (1, 1), (1, 2)], "2+1+2"),
     (&[(2, 1), (1, 1), (1, 2), (1, 2)], "BIG+1+2X2"),
+    // ids 13 and 14 are this build's (stock's pages of 7 and 8 fields); earlier builds refuse them, so the backup
+    // registers never keep them (crate::page::Page::to_cfg)
+    (&[(1, 1), (1, 2), (1, 2), (1, 2)], "1+2X3"),
+    (&[(1, 2), (1, 2), (1, 2), (1, 2)], "2X4"),
 ];
 
-/// The order the page menu goes through the layouts: by field count.
-pub const LAYOUT_ORDER: [u8; 13] = [0, 1, 2, 8, 3, 7, 9, 4, 10, 5, 11, 6, 12];
+/// The order the page menu goes through the layouts: by field count (none is off: a page is deleted instead).
+pub const LAYOUT_ORDER: [u8; 14] = [1, 2, 8, 3, 7, 9, 4, 10, 5, 11, 6, 12, 13, 14];
 
 /// Layout `id`, if there is one.
 pub fn layout(id: u8) -> Option<Layout> {
@@ -791,8 +795,7 @@ pub const RIDE_Y: u32 = PAGE_Y;
 /// Height of the ride fields: everything under the strip.
 pub const RIDE_H: u32 = H - RIDE_Y;
 
-/// Field box `i` (x, y, w, h) of layout `id` in a field area `h` high, row by row, left to right; the last row and
-/// the last box of a row take what division leaves. None past the last.
+/// Field box `i` (x, y, w, h) of layout `id` in a field area `h` high ([`rows_box`]). None past the last.
 ///
 /// ```
 /// use bryton_rustfw::ui::{field_box, RIDE_Y};
@@ -801,7 +804,13 @@ pub const RIDE_H: u32 = H - RIDE_Y;
 /// assert_eq!(field_box(5, 300, 5), None);
 /// ```
 pub fn field_box(id: u8, h: u32, i: usize) -> Option<(u32, u32, u32, u32)> {
-    let (rows, _) = layout(id)?;
+    rows_box(layout(id)?.0, h, i)
+}
+
+/// Box `i` of rows `rows` (top to bottom, each its share of the height and its boxes side by side) in a field area
+/// `h` high, row by row, left to right; the last row and the last box of a row take what division leaves. None past
+/// the last. The one geometry of the ride pages, preset or edited ([`crate::page::Page`]).
+pub fn rows_box(rows: &[(u8, u8)], h: u32, i: usize) -> Option<(u32, u32, u32, u32)> {
     let total: u32 = rows.iter().map(|&(share, _)| u32::from(share)).sum();
     let (mut y, mut k) = (0, i);
     for (r, &(share, n)) in rows.iter().enumerate() {
@@ -827,6 +836,11 @@ const VALUE_CHARS: u32 = 5;
 
 /// A value's ink stays this far from its box's edges (and its rules).
 const VALUE_MARGIN: u32 = 2;
+
+/// The smallest value box an edit may leave (w, h): five characters at 3x under the label (UI review 2, 5.2 point 2;
+/// at 2x a value is no longer read at a glance).
+pub const VALUE_MIN: (u32, u32) =
+    (ink_cells(VALUE_CHARS, 3) + 2 * VALUE_MARGIN, PIXEL.height as u32 * 3 + FIELD_LABEL_H + 1);
 
 /// In a field's value, what follows this is drawn small and grey after the rest: the seconds of a time over an
 /// hour ("1:23|45"), so the hours and minutes keep the box's size.
@@ -926,6 +940,54 @@ pub fn draw_field_frame_on(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u3
     }
     if !field.is_picture() {
         text::draw(c, &Style { fg: label, bg, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
+    }
+}
+
+/// Width of the page editor's frame round the selected cell (UI review 2, 5.2 point 5).
+pub const FRAME: u32 = 3;
+
+/// The inside of a field box: without its rules (right and bottom edges, [`draw_field_frame_on`]).
+pub fn box_inside((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    (x, y, w - u32::from(x + w < W), h - u32::from(y + h < H - 2))
+}
+
+/// The page editor's frame round box `bx`, inside its rules, in `color`.
+pub fn draw_cell_frame(c: &mut impl Canvas, bx: (u32, u32, u32, u32), color: u16) {
+    let (x, y, w, h) = box_inside(bx);
+    c.fill(x, y, w, FRAME, color);
+    c.fill(x, y + h - FRAME, w, FRAME, color);
+    c.fill(x, y + FRAME, FRAME, h - 2 * FRAME, color);
+    c.fill(x + w - FRAME, y + FRAME, FRAME, h - 2 * FRAME, color);
+}
+
+/// The page editor's hint in the strip's place, over its orange line: what the keys do.
+pub fn draw_edit_hint(c: &mut impl Canvas, text: &str) {
+    c.fill(0, 0, W, STRIP_H, BLACK);
+    text::draw_in(c, &Style { fg: ACCENT, ..LABEL }, 0, STRIP_H - LABEL.height(), W, Align::Centre, text);
+    c.fill(0, STRIP_H, W, 2, ACCENT);
+}
+
+/// The strip whole again after the hint ([`draw_edit_hint`]): its background first, which [`draw_strip`] leaves.
+pub fn draw_strip_whole(c: &mut impl Canvas, s: &Strip) {
+    c.fill(0, 0, W, STRIP_H, BLACK);
+    draw_strip(c, s);
+}
+
+/// A split's icon at the right of menu row `i` (the editor's SPLIT rows, no dash in the text): a box 24 x 16 cut
+/// side by side (`stacked` false) or one over the other, in the row's ink.
+pub fn draw_split_icon(c: &mut impl Canvas, i: usize, stacked: bool, selected: bool) {
+    let (iw, ih) = (24, 16);
+    let ink = if selected { BLACK } else { WHITE };
+    let x = NEARBY.0 + NEARBY.2 - iw;
+    let y = LIST_Y + i as u32 * MENU_ROW + (MENU_ROW - 1 - ih) / 2;
+    c.fill(x, y, iw, 2, ink);
+    c.fill(x, y + ih - 2, iw, 2, ink);
+    c.fill(x, y, 2, ih, ink);
+    c.fill(x + iw - 2, y, 2, ih, ink);
+    if stacked {
+        c.fill(x, y + ih / 2 - 1, iw, 2, ink);
+    } else {
+        c.fill(x + iw / 2 - 1, y, 2, ih, ink);
     }
 }
 
@@ -1560,7 +1622,7 @@ pub(crate) mod tests {
             for n in 1..LAYOUTS.len() as u8 {
                 let b: Vec<_> = (0..8).map_while(|i| field_box(n, h, i)).collect();
                 assert_eq!(b.len(), field_count(n));
-                assert!(b.len() <= 6, "a page keeps six fields");
+                assert!(b.len() <= crate::page::CELLS, "a page keeps eight fields");
                 let area: u32 = b.iter().map(|&(_, _, w, h)| w * h).sum();
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
                 let mut f = Frame::new();

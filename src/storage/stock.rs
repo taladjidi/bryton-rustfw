@@ -22,9 +22,9 @@ use crate::fitread::{Msg, Reader};
 use crate::history::{Acc, Index, Ride, Start};
 use crate::ini::{get, number};
 use crate::nrf::SensorId;
+use crate::page::{CELLS, Page};
 use crate::power_curve::{Curve, Rolling};
 use crate::ui::Field;
-use crate::{PAGES, PageCfg, ui};
 
 /// The power curve covers the rides of this many days back.
 pub const WINDOW_DAYS: u16 = 90;
@@ -113,6 +113,9 @@ pub fn ride_start(name: &[u8]) -> Option<Start> {
     }
     Some((y, m, d, two(6), two(8)))
 }
+
+/// Stock's data pages at most (`[Page1]` to `[Page4]`).
+pub const STOCK_PAGES: usize = 4;
 
 /// Rides the cache keeps at most (`CACHE_RIDES` x [`ENTRY`] bytes: 256 KB in AXI SRAM, main.rs
 /// `make_scan_cache`). Past it, a new ride is read at every start and not counted.
@@ -824,7 +827,7 @@ pub struct Imported {
     /// `rightpress`, `leftlongpress`, `rightlongpress`: [`crate::menu::Remote::from_stock`]).
     pub remote: Option<[crate::menu::Remote; 4]>,
     /// Ride pages (the bike's `[Page1]` to `[Page4]`, the enabled ones first).
-    pub pages: [Option<PageCfg>; PAGES],
+    pub pages: [Option<Page>; STOCK_PAGES],
     /// Eat and drink reminders, minutes of ride time, and the heart rate alert, bpm (the bike's `[Reminder<n>]`).
     pub eat_min: Option<u16>,
     /// See `eat_min`.
@@ -978,7 +981,7 @@ impl Imported {
     /// when it is 1: ApplicationglobalSetting_IsPageAvailable 0xd01535e0), each with the fields of its
     /// `Grid<type>` line (`type`: the field count; Page_LoadBikeProfilePage reads one list per count, so the others
     /// are what the page would show with another count). The fields with an equivalent here, in stock's order and
-    /// each once, at most 6, give the layout of that many fields; a page with none is left out.
+    /// each once, at most 8, give the first layout of that many fields; a page with none is left out.
     pub fn pages(&mut self, t: &[u8]) {
         let mut out = 0;
         for n in 1..=4u32 {
@@ -990,20 +993,20 @@ impl Imported {
             }
             let mut buf = [0u8; 16];
             let Some(list) = get(t, section, named(&mut buf, "Grid", "", count)) else { continue };
-            let mut page = PageCfg { layout: 0, fields: [Field::Time; 6] };
+            let mut fields = [Field::Time; CELLS];
             let mut k = 0;
             for id in list.split(|&b| b == b',').filter_map(|v| crate::ini::decimal(v, 0)) {
                 let Some(f) = stock_field(id) else { continue };
-                if page.fields.get(..k).is_some_and(|had| had.contains(&f)) {
+                if fields.get(..k).is_some_and(|had| had.contains(&f)) {
                     continue; // a ring and the number of one value
                 }
-                if let Some(slot) = page.fields.get_mut(k) {
+                if let Some(slot) = fields.get_mut(k) {
                     *slot = f;
                     k += 1;
                 }
             }
-            page.layout = ui::LAYOUT_ORDER.iter().copied().find(|&l| ui::field_count(l) == k).unwrap_or(0);
-            if let (true, Some(slot)) = (page.layout != 0, self.pages.get_mut(out)) {
+            let page = crate::page::preset_of(k).and_then(|id| Page::preset(id, fields));
+            if let (Some(page), Some(slot)) = (page, self.pages.get_mut(out)) {
                 *slot = Some(page);
                 out += 1;
             }
@@ -1438,10 +1441,10 @@ pub(crate) mod tests {
         assert_eq!(i.sensors[4], None, "a BLE power meter");
         use Field::*;
         let p0 = i.pages[0].unwrap();
-        assert_eq!((ui::field_count(p0.layout), &p0.fields[..3]), (3, &[Speed, Hr, Time][..]));
+        assert_eq!((p0.cells(), &p0.fields[..3]), (3, &[Speed, Hr, Time][..]));
         let p1 = i.pages[1].unwrap();
         let want = [Power, Dfa, Wbal, Np, Timer, Dist];
-        assert_eq!((ui::field_count(p1.layout), &p1.fields[..]), (6, &want[..]), "each once, the first 6 mapped");
+        assert_eq!((p1.cells(), &p1.fields[..6]), (6, &want[..]), "each once, the 6 with an equivalent");
         assert_eq!(i.pages[2], None, "page 4 has nothing mapped; page 5 is not a data page");
         assert_eq!((i.drink_min, i.eat_min, i.hr_alert), (Some(45), None, Some(170)), "HR to the menu's 5s");
         let mut d = Imported::default();

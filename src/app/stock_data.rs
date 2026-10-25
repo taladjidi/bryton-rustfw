@@ -246,11 +246,20 @@ impl App {
                 n += 1;
             }
         }
+        // stock's pages in the first places, as many as it had (the others kept after them)
+        let mut pages = 0;
         for (k, p) in i.pages.iter().enumerate() {
             if let (Some(p), Some(page)) = (p, self.pages.get_mut(k)) {
                 *page = *p;
-                save_page(b, k, p);
+                pages = k + 1;
                 n += 1;
+            }
+        }
+        if pages > 0 {
+            self.page_count = self.page_count.max(pages);
+            self.pages_changed(b);
+            if !self.card_writable {
+                self.save_page_registers(b);
             }
         }
         if quiet && n == 0 {

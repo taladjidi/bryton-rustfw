@@ -68,9 +68,6 @@ pub(crate) enum Drawn {
     Gauge(GaugeShown),
 }
 
-/// Box `i` of a page with this many fields (the ride pages' and the overview's grids).
-pub(crate) type BoxAt = fn(u8, usize) -> Option<(u32, u32, u32, u32)>;
-
 /// Boxes on a page at most.
 pub(crate) const BOXES: usize = 8;
 
@@ -151,16 +148,23 @@ impl App {
     /// Draws the whole screen below the bar from the state (the panel was cleared, or a screenshot row).
     pub(crate) fn draw_screen(&self, c: &mut impl Canvas) {
         match self.screen {
-            Screen::Main | Screen::Ride(_) => {
+            Screen::Main | Screen::Ride(_) | Screen::Edit(..) => {
                 for (i, (bx, w)) in self.widgets().enumerate() {
                     self.draw_widget(c, i, bx, w);
                 }
+                self.draw_edit_frame(c);
             }
             Screen::Menu(menu, sel) => {
                 let mut title = Line::<16>::new();
                 match menu {
                     Menu::Page(OVERVIEW) => title.push_str("OVERVIEW"),
                     Menu::Steps if !self.plan.name().is_empty() => title.push_str(self.plan.name()),
+                    Menu::Edit(k) => {
+                        title.push_str("PAGE ");
+                        title.push_u32(self.edit.map_or(0, |e| e.page) as u32 + 1);
+                        title.push_str(" BOX ");
+                        title.push_u32(k as u32 + 1);
+                    }
                     Menu::Page(n) => {
                         title.push_str(menu_title(menu));
                         title.push_u32(n as u32 + 1);
@@ -199,19 +203,24 @@ impl App {
     /// themselves.
     pub(crate) fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + use<> {
         let mut all = [((0, 0, 0, 0), Widget::Clock); BOXES];
-        let (page, at, fixed): (_, BoxAt, &[Widget]) = match self.screen {
-            Screen::Main => (OVERVIEW, |_, i| ui::overview_box(i), &[Widget::Clock, Widget::Date, Widget::Notices]),
-            Screen::Ride(n) => (n, |layout, i| ui::field_box(layout, ui::RIDE_H, i), &[]),
+        let (page, fixed): (_, &[Widget]) = match self.screen {
+            Screen::Main => (OVERVIEW, &[Widget::Clock, Widget::Date, Widget::Notices]),
+            Screen::Ride(n) => (n, &[]),
+            Screen::Edit(..) => (EDITED, &[]),
             _ => return all.into_iter().take(0),
         };
-        let p = if page == COURSE { COURSE_PAGE } else { self.pages.get(page).copied().unwrap_or(DEFAULT_PAGES[0]) };
+        let p = match page {
+            COURSE => page::Page::from_cfg(COURSE_PAGE).unwrap_or(BLANK),
+            n => self.page_ref(n).copied().unwrap_or(BLANK),
+        };
         let mut n = 0;
         for (slot, &w) in all.iter_mut().zip(fixed) {
             slot.1 = w;
             n += 1;
         }
         for (i, &f) in p.fields.iter().enumerate() {
-            let (Some(bx), Some(slot)) = (at(p.layout, i), all.get_mut(n)) else { break };
+            let bx = if page == OVERVIEW { ui::overview_box(i) } else { p.cell_box(i) };
+            let (Some(bx), Some(slot)) = (bx, all.get_mut(n)) else { break };
             *slot = (bx, Widget::Field(f));
             n += 1;
         }
@@ -357,8 +366,10 @@ impl App {
     pub(crate) fn redraw_top(&mut self, b: &mut impl Board) {
         let mut p = Panel(b, (0, ui::BANNER_H));
         p.fill(0, 0, ui::W, ui::BANNER_H, ui::BLACK);
-        ui::draw_strip(&mut p, &self.strip); // not drawn while covered (update_strip)
-        self.strip_shown = self.strip;
+        if !self.hint_shown {
+            self.strip_shown = self.strip; // not drawn while covered (update_strip)
+        }
+        self.draw_top(&mut p);
         self.draw_screen(&mut p);
     }
 
@@ -458,6 +469,13 @@ impl App {
         let mut p = Panel(b, self.area());
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
+        let hint = matches!(self.screen, Screen::Edit(..));
+        if hint != self.hint_shown {
+            // into the editor or out of it: its hint in the strip's place, or the strip back
+            self.hint_shown = hint;
+            self.strip_shown = self.strip;
+            self.draw_top(&mut Panel(b, self.area()));
+        }
         if let Screen::Menu(menu, sel) = self.screen {
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
         }
@@ -466,9 +484,11 @@ impl App {
         }
     }
 
-    /// Redraws what changed in the page's boxes since they were drawn.
+    /// Redraws what changed in the page's boxes since they were drawn; in the editor, the frame again over the
+    /// selected box when it changed.
     pub(crate) fn update_page(&mut self, b: &mut impl Board) {
         let first = self.first_map();
+        let selected = if let Screen::Edit(_, k) = self.screen { Some(k) } else { None };
         for (i, (bx, w)) in self.widgets().enumerate() {
             let Some(&old) = self.drawn.get(i) else { break };
             let now = match (w, old) {
@@ -524,13 +544,16 @@ impl App {
             if let Some(d) = self.drawn.get_mut(i) {
                 *d = now;
             }
+            if selected == Some(i) && now != old {
+                ui::draw_cell_frame(&mut Panel(b, self.area()), bx, ui::ACCENT);
+            }
         }
     }
 
     /// Row `y` of the screen as the app drew it: the screenshot source.
     pub fn render_row(&self, y: u32) -> Row {
         let mut row = Row::new(y);
-        ui::draw_strip(&mut row, &self.strip_shown);
+        self.draw_top(&mut row);
         self.draw_screen(&mut row);
         row
     }

@@ -18,6 +18,7 @@ pub mod dev;
 pub mod drivers;
 pub mod hrv;
 pub mod msc;
+pub mod page;
 pub mod phone;
 pub mod power;
 pub mod power_curve;
@@ -217,8 +218,15 @@ pub struct App {
     /// page, the ride menu, ALL SETTINGS, PAGES, a page, its field groups, under a group), so eight is room to spare.
     under: [Screen; 8],
     depth: usize,
-    /// The ride pages, then the overview's fields ([`OVERVIEW`]).
-    pages: [PageCfg; PAGES + 1],
+    /// The ride pages (the first `page_count`), then the overview's fields ([`OVERVIEW`]).
+    pages: [page::Page; PAGES + 1],
+    page_count: usize,
+    /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
+    store: PageStore,
+    /// The page editor's work, while it is open.
+    edit: Option<Editing>,
+    /// The strip's place shows the editor's hint (app/editor.rs), not the strip.
+    hint_shown: bool,
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
     /// The latest notices, newest first (empty lines: none).
@@ -362,6 +370,8 @@ impl App {
         let misc = Settings::from_word(b.backup_read(WHEEL_BKP))
             .with_power_word(b.backup_read(POWER_BKP))
             .with_alerts_word(b.backup_read(ALERTS_BKP));
+        let (pages, page_count) = pages_from_registers(b);
+        let store = PageStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
             backlight: true,
@@ -427,12 +437,11 @@ impl App {
             repeated: false,
             under: [Screen::Main; 8],
             depth: 0,
-            pages: core::array::from_fn(|i| {
-                PageCfg::from_words(PAGE_BKP[i].map(|r| b.backup_read(r)))
-                    .or_else(|| PageCfg::from_words_b(PAGE_BKP_B[i].map(|r| b.backup_read(r))))
-                    .or_else(|| OLD_PAGE_BKP.get(i).and_then(|&r| PageCfg::from_word(b.backup_read(r))))
-                    .unwrap_or(DEFAULT_PAGES[i])
-            }),
+            pages,
+            page_count,
+            store,
+            edit: None,
+            hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
             notices: Default::default(),
             banner_ms: None,
@@ -509,9 +518,7 @@ impl App {
         }
         if b.backup_read(STOCK_BKP19) >> 28 == 0xb {
             // pages kept from register 19 by builds of 2026-10-23: kept where stock does not look, 19 given back
-            for (n, page) in self.pages.iter().enumerate() {
-                save_page(b, n, page);
-            }
+            self.save_page_registers(b);
             b.backup_write(STOCK_BKP19, 0);
         }
         // pages kept one register each by the first builds (14 to 16), read at each boot but never saved where they
@@ -521,9 +528,7 @@ impl App {
                 && PageCfg::from_word(b.backup_read(old)).is_some()
         });
         if old {
-            for (n, page) in self.pages.iter().enumerate() {
-                save_page(b, n, page);
-            }
+            self.save_page_registers(b);
         }
         self.first_start(b); // before the first page is drawn: stock's pages on it
         if self.ble.is_some() {
@@ -651,6 +656,10 @@ impl App {
             self.step_stock(b);
             self.step_courses(b);
             self.step_past(b);
+            self.step_pages(b);
+        }
+        if self.edit.is_some() && self.ride.state() == ride::State::Running {
+            self.leave_editor(b, true); // recording again (by no key of the editor's): its work kept, never lost
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
         // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
@@ -664,7 +673,7 @@ impl App {
             }
         }
         match self.screen {
-            Screen::Main | Screen::Ride(_) => self.update_page(b),
+            Screen::Main | Screen::Ride(_) | Screen::Edit(..) => self.update_page(b),
             Screen::Summary => {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
                 let area = self.area();

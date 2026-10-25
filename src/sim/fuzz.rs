@@ -495,7 +495,7 @@ fn ini_files() {
         let mut i = crate::stock::import(&t, &t, &t);
         assert!(i.device(&t) <= 2, "ActBike: one of stock's three bikes");
         for p in i.pages.iter().flatten() {
-            assert!(crate::ui::layout(p.layout).is_some() && p.layout != 0);
+            assert!(p.well_formed());
         }
         for m in [i.eat_min, i.drink_min].into_iter().flatten() {
             assert!((5..=120).contains(&m) && m % 5 == 0, "{m}");

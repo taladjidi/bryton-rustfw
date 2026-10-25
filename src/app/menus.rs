@@ -17,7 +17,7 @@ pub enum Menu {
     Main,
     /// One row per sensor kind, then the Di2 buttons and the phone.
     Sensors,
-    /// The overview and the ride pages ([`menu::PAGES`]).
+    /// The overview, the ride pages, ADD PAGE.
     Pages,
     /// One menu per subject ([`menu::SETTINGS`]).
     Settings,
@@ -39,8 +39,10 @@ pub enum Menu {
     WorkoutNow,
     /// The course followed ([`menu::COURSE_NOW`]).
     CourseNow,
-    /// Ride page `n`'s layout and fields.
+    /// Ride page `n`'s editor, layout and fields (the overview's fields).
     Page(usize),
+    /// The page editor's actions on cell `k` of the page it edits ([`menu::EDIT_ROWS`]).
+    Edit(usize),
     /// The field groups, for box `i` of page `n` (Select on a field row).
     Fields(usize, usize),
     /// Group `g`'s fields, for box `i` of page `n`.
@@ -81,6 +83,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::WorkoutNow => "WORKOUT",
         Menu::CourseNow => "COURSE",
         Menu::Page(_) => "PAGE ",
+        Menu::Edit(_) => "BOX ",
         Menu::Fields(..) => "FIELD",
         Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g).map_or("", |g| g.0),
         Menu::Gps => "GPS",
@@ -95,9 +98,9 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
     }
 }
 
-/// A page's layout by its name ("OFF" for none).
-pub(crate) fn layout_text(l: &mut Line<12>, layout: u8) {
-    l.push_str(ui::layout(layout).map_or("?", |(_, name)| name));
+/// A page's layout by its name ("CUSTOM" for one made in the editor).
+pub(crate) fn layout_text(l: &mut Line<12>, p: &page::Page) {
+    l.push_str(p.preset_id().and_then(ui::layout).map_or("CUSTOM", |(_, name)| name));
 }
 
 impl App {
@@ -106,7 +109,12 @@ impl App {
         use menu::Row;
         match menu {
             Menu::Main => menu::MAIN.get(i).copied(),
-            Menu::Pages => menu::PAGES.get(i).copied(),
+            Menu::Pages => match i {
+                0 => Some(Row::Open(Menu::Page(OVERVIEW))),
+                _ if i <= self.page_count => Some(Row::Open(Menu::Page(i - 1))),
+                _ => (i == self.page_count + 1).then_some(Row::AddPage),
+            },
+            Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
             Menu::Me => menu::ME.get(i).copied(),
             Menu::Display => menu::DISPLAY.get(i).copied(),
@@ -122,7 +130,8 @@ impl App {
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
                     (Row::Set(menu::Setting::Light), true),
                     (Row::Open(Menu::Sensors), true),
-                    (Row::Open(Menu::Page(n)), n <= OVERVIEW), // the course page has no settings
+                    // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
+                    (Row::Open(Menu::Page(n)), n <= OVERVIEW && self.ride.state() != ride::State::Running),
                     (Row::Open(Menu::Main), true),
                 ];
                 rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
@@ -148,8 +157,9 @@ impl App {
             Menu::Phone => menu::PHONE.get(i).map(|&r| Row::Phone(r)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
             Menu::Page(n) => match i {
-                0 => Some(Row::Layout(n)),
-                _ if i <= ui::field_count(self.pages.get(n)?.layout) => Some(Row::Field(n, i - 1)),
+                0 => Some(Row::EditPage(n)),
+                1 => Some(Row::Layout(n)),
+                _ if i - 2 < self.page_ref(n)?.cells() => Some(Row::Field(n, i - 2)),
                 _ => None,
             },
         }
@@ -183,7 +193,18 @@ impl App {
             Row::Open(Menu::Page(n)) => {
                 label.push_str("PAGE ");
                 label.push_u32(n as u32 + 1);
-                layout_text(&mut value, self.pages.get(n)?.layout);
+                layout_text(&mut value, self.page_ref(n)?);
+            }
+            Row::EditPage(_) => label.push_str("EDIT ON PAGE"),
+            Row::AddPage => {
+                label.push_str("ADD PAGE");
+                value.push_u32(self.page_count as u32);
+                value.push_str("/");
+                value.push_u32(PAGES as u32);
+            }
+            Row::Edit(r) => {
+                label.push_str(r.label());
+                self.edit_row_value(menu, r, &mut value, &mut color);
             }
             Row::Open(m) => label.push_str(menu_title(m)),
             Row::Nearby => label.push_str("BLE NEARBY"),
@@ -288,13 +309,13 @@ impl App {
                 }
             }
             Row::Layout(n) => {
-                label.push_str("FIELDS");
-                layout_text(&mut value, self.pages.get(n)?.layout);
+                label.push_str("LAYOUT");
+                layout_text(&mut value, self.page_ref(n)?);
             }
             Row::Field(n, f) => {
                 label.push_str("FIELD ");
                 label.push_u32(f as u32 + 1);
-                value.push_str(self.pages.get(n)?.fields.get(f)?.label());
+                value.push_str(self.page_ref(n)?.fields.get(f)?.label());
             }
             Row::Stock(r) => {
                 label.push_str(r.label());
@@ -323,7 +344,7 @@ impl App {
                 label.push_str(ui::FIELD_GROUPS.get(g)?.0);
                 // the field the box shows now, beside its group
                 if let Menu::Fields(n, f) = menu
-                    && let Some(&now) = self.pages.get(n)?.fields.get(f)
+                    && let Some(&now) = self.page_ref(n)?.fields.get(f)
                     && now.group() == g
                 {
                     value.push_str(now.label());
@@ -370,14 +391,14 @@ impl App {
             Row::Pick(field) => {
                 label.push_str(field.label());
                 if let Menu::Group(n, f, _) = menu
-                    && self.pages.get(n)?.fields.get(f) == Some(&field)
+                    && self.page_ref(n)?.fields.get(f) == Some(&field)
                 {
                     color = ui::GREEN;
                     value.push_str("ON");
                 }
             }
         }
-        if matches!(row, Row::Open(_) | Row::Nearby | Row::About) && value.as_str().is_empty() {
+        if matches!(row, Row::Open(_) | Row::Nearby | Row::About | Row::EditPage(_)) && value.as_str().is_empty() {
             value.push_str(">"); // opens a menu or a screen
             color = ui::GREY;
         }
@@ -400,7 +421,14 @@ impl App {
     pub(crate) fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, slot: usize) {
         let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         match self.menu_row(menu, i) {
-            Some((label, value, color)) => ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel),
+            Some((label, value, color)) => {
+                ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel);
+                if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
+                    self.row(menu, i)
+                {
+                    ui::draw_split_icon(c, slot, r == menu::EditRow::SplitDown, i == sel);
+                }
+            }
             None => c.fill(0, ui::LIST_Y + slot as u32 * ui::MENU_ROW, ui::W, ui::MENU_ROW, ui::BLACK),
         }
     }
@@ -441,7 +469,7 @@ impl App {
     /// Before a row that cannot be undone (`what`: "FORGET HEART RATE"): true when this Select confirms the one just
     /// before on the same row (no other input between: [`App::input`] clears it); else it asks, in the banner and in
     /// the row ("SURE?"), and the row waits for a second Start or tap.
-    fn confirmed(&mut self, menu: Menu, sel: usize, what: &str) -> bool {
+    pub(crate) fn confirmed(&mut self, menu: Menu, sel: usize, what: &str) -> bool {
         if self.confirm.take() == Some((menu, sel)) {
             return true;
         }
@@ -465,6 +493,8 @@ impl App {
                 self.open(Screen::Menu(Menu::Workouts, 0));
             }
             Some(Row::Open(Menu::Courses)) => self.open_courses(b),
+            // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
+            Some(Row::Open(Menu::Page(n))) if matches!(menu, Menu::Ride(_)) && n < PAGES => self.edit_page(n, 0),
             Some(Row::Open(m)) => {
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
@@ -558,38 +588,29 @@ impl App {
                     None => {}
                 }
             }
-            Some(Row::Layout(n)) => {
-                if let Some(page) = self.pages.get_mut(n) {
-                    let order = ui::LAYOUT_ORDER;
-                    let i = order.iter().position(|&l| l == page.layout).unwrap_or(0);
-                    page.layout = order[(i + 1) % order.len()];
-                    if n == 0 && page.layout == 0 {
-                        page.layout = order[1]; // the first page is never off
-                    }
-                    save_page(b, n, page);
+            Some(Row::Layout(n)) => self.next_layout(b, n),
+            Some(Row::EditPage(n)) => self.edit_page(n, 0),
+            Some(Row::AddPage) => self.add_page(b, self.page_count),
+            Some(Row::Edit(r)) => {
+                if let Menu::Edit(k) = menu {
+                    self.edit_action(b, menu, sel, k, r);
                 }
             }
             Some(Row::Field(n, f)) => {
                 // the picker opens on the group of the field the box shows
-                let g = self.pages.get(n).and_then(|p| p.fields.get(f)).map_or(0, |x| x.group());
+                let g = self.page_ref(n).and_then(|p| p.fields.get(f)).map_or(0, |x| x.group());
                 self.open(Screen::Menu(Menu::Fields(n, f), g));
             }
             Some(Row::Group(g)) => {
                 if let Menu::Fields(n, f) = menu {
-                    let now = self.pages.get(n).and_then(|p| p.fields.get(f));
+                    let now = self.page_ref(n).and_then(|p| p.fields.get(f));
                     let at = ui::FIELD_GROUPS.get(g).and_then(|(_, l)| l.iter().position(|x| Some(x) == now));
                     self.open(Screen::Menu(Menu::Group(n, f, g), at.unwrap_or(0)));
                 }
             }
             Some(Row::Pick(field)) => {
-                if let Menu::Group(n, f, _) = menu
-                    && let Some(page) = self.pages.get_mut(n)
-                    && let Some(slot) = page.fields.get_mut(f)
-                {
-                    *slot = field;
-                    save_page(b, n, page);
-                    self.close(); // the groups
-                    self.close(); // back to the page's menu, its row showing the new field
+                if let Menu::Group(n, f, _) = menu {
+                    self.pick(b, n, f, field);
                 }
             }
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {

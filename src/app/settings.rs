@@ -4,6 +4,7 @@
 //! the same one; the paired sensors' are [`sensors::Kind::backup`].
 
 use crate::*;
+use page::Page;
 
 /// A ride page: its layout (an id in [`ui::LAYOUTS`], 0: off) and what each field shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,23 +66,31 @@ impl PageCfg {
     }
 }
 
-/// Ride pages at most.
-pub const PAGES: usize = 3;
+/// Ride pages at most (UI review 2, 5.2 point 11: six is six presses round with the Page key). They are kept in
+/// `\Rustfw\pages.bin` (app/editor.rs), the first [`REG_PAGES`] also in backup registers.
+pub const PAGES: usize = 6;
+
+/// The ride pages the backup registers keep: the fallback when the file is missing or bad, and what earlier builds
+/// (and read-only ones, which do not write the card) read.
+pub const REG_PAGES: usize = 3;
 
 /// The overview's fields are kept as page [`OVERVIEW`] (four fields, never off), after the ride pages.
 pub const OVERVIEW: usize = PAGES;
 
-/// [`Screen::Ride`]'s number for the course page (its fields fixed: the profile, the distances, time and speed), after the ride pages in their round while a
-/// course is followed.
+/// [`Screen::Ride`]'s number for the course page (its fields fixed: the profile, the distances, time and speed),
+/// after the ride pages in their round while a course is followed.
 pub const COURSE: usize = PAGES + 1;
 
-/// The backup registers of the ride pages and the overview, two each ([`PageCfg::to_words`]).
+/// The page the editor works on (its copy, kept or dropped when it is left): the field picker's page number then.
+pub const EDITED: usize = PAGES + 2;
+
+/// The backup registers of the first ride pages and the overview, two each ([`PageCfg::to_words`]).
 /// Registers 20 to 31 are not referenced by stock (R039; ghidra/HARDWARE.md, RTC and backup registers), 19 is: its
 /// boot reads it (AGENTS.md, "Share the storage with stock").
-pub(crate) const PAGE_BKP: [[usize; 2]; PAGES + 1] = [[20, 21], [22, 23], [24, 25], [26, 27]];
+pub(crate) const PAGE_BKP: [[usize; 2]; REG_PAGES + 1] = [[20, 21], [22, 23], [24, 25], [26, 27]];
 
 /// Where builds of 2026-10-23 kept them (from 19, which stock reads: moved, and 19 given back).
-pub(crate) const PAGE_BKP_B: [[usize; 2]; PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26]];
+pub(crate) const PAGE_BKP_B: [[usize; 2]; REG_PAGES + 1] = [[19, 20], [21, 22], [23, 24], [25, 26]];
 
 /// The backup register stock reads at boot (with 15: whether to keep its last battery voltage); stock's own first
 /// boot writes 0 there.
@@ -89,7 +98,7 @@ pub(crate) const STOCK_BKP19: usize = 19;
 
 /// Where earlier builds kept the ride pages, one register each ([`PageCfg::from_word`]): read when the new ones
 /// are empty.
-pub(crate) const OLD_PAGE_BKP: [usize; PAGES] = [14, 15, 16];
+pub(crate) const OLD_PAGE_BKP: [usize; REG_PAGES] = [14, 15, 16];
 
 /// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Settings`].
 pub(crate) const WHEEL_BKP: usize = 11;
@@ -469,7 +478,7 @@ pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
 /// computers ship (2026-10-24: Wahoo's default stack is a data page, an elevation page and a map page with an
 /// elevation profile and a few fields; Garmin's map page, when navigating, distance and time to the destination):
 /// the ride's essentials, the climbing, the map whole; the overview's totals last.
-pub(crate) const DEFAULT_PAGES: [PageCfg; PAGES + 1] = {
+pub(crate) const DEFAULT_PAGES: [PageCfg; REG_PAGES + 1] = {
     use Field::*;
     [
         PageCfg { layout: 6, fields: [Speed, Timer, Dist, AvgSpeed, Hr, Power] },
@@ -490,14 +499,65 @@ pub(crate) const COURSE_PAGE: PageCfg = {
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).
 pub(crate) const AID_BKP: [usize; 2] = [17, 18];
 
-/// Writes ride page (or overview) `n`'s configuration to its backup registers.
-pub(crate) fn save_page(b: &mut impl Board, n: usize, page: &PageCfg) {
-    if let Some(regs) = PAGE_BKP.get(n) {
-        for (r, w) in regs.iter().zip(page.to_words()) {
+/// The backup registers of ride page (or overview) `n`, if it has some.
+fn page_regs(n: usize) -> Option<[usize; 2]> {
+    PAGE_BKP.get(if n == OVERVIEW { REG_PAGES } else { n }).copied().filter(|_| n < REG_PAGES || n == OVERVIEW)
+}
+
+/// Writes ride page (or overview) `n` to its backup registers, if it has some ([`Page::to_cfg`]).
+pub(crate) fn save_page(b: &mut impl Board, n: usize, page: &Page) {
+    save_cfg(b, n, page.to_cfg());
+}
+
+/// Writes `c` as ride page (or overview) `n`'s backup registers (layout 0: switched off, for a page not there).
+pub(crate) fn save_cfg(b: &mut impl Board, n: usize, c: PageCfg) {
+    if let Some(regs) = page_regs(n) {
+        for (r, w) in regs.iter().zip(c.to_words()) {
             b.backup_write(*r, w);
         }
     }
 }
+
+/// The ride pages and the overview the backup registers keep (each format of earlier builds read too, a default
+/// for one that holds none), the pages switched off left out (one at least); how many ride pages.
+pub(crate) fn pages_from_registers(b: &mut impl Board) -> ([Page; PAGES + 1], usize) {
+    let first = Page::from_cfg(DEFAULT_PAGES[0]).unwrap_or(BLANK);
+    let mut pages = [first; PAGES + 1];
+    let mut n = 0;
+    for i in 0..REG_PAGES {
+        if let Some(p) = Page::from_cfg(register_page(b, i)) {
+            pages[n] = p;
+            n += 1;
+        }
+    }
+    pages[OVERVIEW] = Page::from_cfg(register_page(b, REG_PAGES)).unwrap_or(pages[OVERVIEW]);
+    (pages, n.max(1))
+}
+
+/// Page `i` of the backup registers (`REG_PAGES`: the overview) in any format earlier builds kept, else its default.
+fn register_page(b: &mut impl Board, i: usize) -> PageCfg {
+    let now = PAGE_BKP[i].map(|r| b.backup_read(r));
+    let then = PAGE_BKP_B[i].map(|r| b.backup_read(r));
+    let first = OLD_PAGE_BKP.get(i).map(|&r| b.backup_read(r));
+    PageCfg::from_words(now)
+        .or_else(|| PageCfg::from_words_b(then))
+        .or_else(|| first.and_then(PageCfg::from_word))
+        .unwrap_or(DEFAULT_PAGES[i])
+}
+
+/// The backup registers' words of the first ride pages, as [`save_page`] writes them (a page not there: off).
+pub(crate) fn register_words(pages: &[Page], count: usize) -> [u32; 2 * REG_PAGES] {
+    let mut w = [0; 2 * REG_PAGES];
+    for (i, out) in w.chunks_exact_mut(2).enumerate() {
+        let off = PageCfg { layout: 0, fields: [Field::Time; 6] };
+        let c = if i < count { pages.get(i).map_or(off, Page::to_cfg) } else { off };
+        out.copy_from_slice(&c.to_words());
+    }
+    w
+}
+
+/// A page of one cell showing the time: what a page that cannot be read becomes.
+pub const BLANK: Page = Page { rows: [(1, 1), (0, 0), (0, 0), (0, 0), (0, 0)], fields: [Field::Time; page::CELLS] };
 
 impl App {
     /// Writes the settings to their backup registers.
@@ -507,8 +567,13 @@ impl App {
         b.backup_write(ALERTS_BKP, self.settings.alerts_word());
     }
 
-    /// The ride page settings.
-    pub fn pages(&self) -> &[PageCfg; PAGES + 1] {
+    /// The ride pages (the first [`App::page_count`]), then the overview's fields ([`OVERVIEW`]).
+    pub fn pages(&self) -> &[Page; PAGES + 1] {
         &self.pages
+    }
+
+    /// How many ride pages there are.
+    pub fn page_count(&self) -> usize {
+        self.page_count
     }
 }

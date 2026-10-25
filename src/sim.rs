@@ -1082,6 +1082,9 @@ mod phone_tests;
 #[cfg(test)]
 mod shift_tests;
 
+#[cfg(test)]
+mod page_tests;
+
 /// The computer at the other end of the dev link: what it received, and the staging area.
 #[derive(Default)]
 pub struct Pc {
