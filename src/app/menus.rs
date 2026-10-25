@@ -130,6 +130,7 @@ impl App {
             }
             Row::Open(m) => label.push_str(menu_title(m)),
             Row::Nearby => label.push_str("NEARBY BLE"),
+            Row::About => label.push_str("ABOUT"),
             Row::Drive => {
                 label.push_str("USB DRIVE");
                 value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
@@ -394,6 +395,7 @@ impl App {
             Some(Row::Drive) => {
                 let _ = self.drive_on(); // why not is in the banner
             }
+            Some(Row::About) => self.open(Screen::About),
             Some(Row::Nearby) => {
                 if self.ble.is_some() && !self.scanning {
                     self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();

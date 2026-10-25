@@ -127,7 +127,8 @@ One screen of groups, nothing more than a screen of rows away:
 - **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
   keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
 - **DEVICE:** backlight level (or AUTO) and time-out, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
-  devices nearby, USB DRIVE (below).
+  devices nearby, USB DRIVE (below), ABOUT (Ferris, the version, the commit the build is made from and its date;
+  `dev.py info` gives the same commit).
 - **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
 - **PHONE:** LINK (OFF, PAIRING, WAITING, LINKED, SECURE; ERR and a command's code if the radio refused the set-up),
   PAIR, REMOTE (the media remote), NOTIFY on / off, MEDIA KEY on / off, FORGET (BONDED while a phone is).

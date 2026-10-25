@@ -63,7 +63,8 @@ fn info_answers() {
     Session::new().feed(b"info\n", &app, Stats { uptime_ms: 1234, awake_permille: 0 }, &mut pc);
     assert_eq!(
         pc.got,
-        format!("bryton-rustfw {} up 1234 ms, awake 0 permille\n", env!("CARGO_PKG_VERSION")).as_bytes()
+        format!("bryton-rustfw {} {} up 1234 ms, awake 0 permille\n", env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"))
+            .as_bytes()
     );
 }
 

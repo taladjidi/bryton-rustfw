@@ -156,6 +156,7 @@ impl App {
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
             }
+            Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
             Screen::Nearby => {
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.nearby.count(), self.scanning);

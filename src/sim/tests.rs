@@ -3092,3 +3092,21 @@ fn course_cues_over_any_screen() {
         }
     }
 }
+
+/// ABOUT (DEVICE menu, last row): Ferris large, the version, the commit the build is made from; Back returns to the
+/// menu. The panel equals a full redraw.
+#[test]
+fn about_screen() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::About);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::About);
+    let rust = sim.screen.iter().filter(|&&p| p == ui::RUST).count();
+    assert!(rust > 64 * 64, "Ferris, large: {rust} px");
+    assert_consistent(&sim, &app);
+    sim.save("about");
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Device, _)));
+}

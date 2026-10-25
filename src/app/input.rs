@@ -100,6 +100,8 @@ pub enum Screen {
     Past,
     /// The phone's media remote (app/phone.rs).
     Media,
+    /// ABOUT: the version, the commit, Ferris.
+    About,
 }
 
 /// Places in the round of the ride pages: the pages, then the course page.
@@ -385,7 +387,7 @@ impl App {
                 }
             }
             (
-                Screen::Menu(..) | Screen::Nearby | Screen::Past,
+                Screen::Menu(..) | Screen::Nearby | Screen::Past | Screen::About,
                 Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
             ) => self.close(),
             _ => return,

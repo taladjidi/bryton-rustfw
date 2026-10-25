@@ -238,6 +238,8 @@ pub enum Row {
     Open(Menu),
     /// Opens the list of BLE devices nearby (and starts a scan).
     Nearby,
+    /// Opens ABOUT: the firmware's version and commit, and Ferris.
+    About,
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
     Drive,
     /// A setting.
@@ -394,14 +396,15 @@ pub const RIDER: [Row; 5] = [
     Row::Set(Setting::WktAvg),
 ];
 
-/// The device menu: the backlight, the wheel, the GPS readings, the BLE devices nearby.
-pub const DEVICE: [Row; 6] = [
+/// The device menu: the backlight, the wheel, the GPS readings, the BLE devices nearby, the USB drive, ABOUT.
+pub const DEVICE: [Row; 7] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Wheel),
     Row::Open(Menu::Gps),
     Row::Nearby,
     Row::Drive,
+    Row::About,
 ];
 
 /// The built-in sensors' readings, under the ANT sensors in the sensors menu.

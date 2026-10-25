@@ -1190,6 +1190,27 @@ pub fn draw_call(c: &mut impl Canvas, who: &str) {
     draw_banner(c, if who.is_empty() { "INCOMING CALL" } else { who });
 }
 
+/// ABOUT: Ferris large, the firmware's name, its version and commit (`describe`: "1a2b3c4", "-dirty" when built
+/// from changes not committed) and the commit's date, and where it lives.
+pub fn draw_about(c: &mut impl Canvas, version: &str, describe: &str, date: &str) {
+    const BIG: u32 = 8; // Ferris 128 x 88
+    draw_crab(c, (W - 16 * BIG) / 2, PAGE_Y + 16, BIG, RUST);
+    let mut y = PAGE_Y + 16 + 11 * BIG + 20;
+    let mut line = |style: &Style, s: &str| {
+        text::draw_in(c, style, 0, y, W, Align::Centre, s);
+        y += style.height() + 8;
+    };
+    line(&LABEL, "BRYTON-RUSTFW");
+    let mut v = text::Line::<24>::new();
+    v.push_str("V");
+    v.push_str(version);
+    line(&LABEL, v.as_str());
+    line(&LABEL, describe);
+    let grey = Style { fg: GREY, ..LABEL };
+    line(&grey, date);
+    line(&grey, "SAFE RUST");
+}
+
 /// Ferris, at the bottom of the overview.
 pub fn draw_ferris(c: &mut impl Canvas) {
     draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);

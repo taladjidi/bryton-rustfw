@@ -201,7 +201,9 @@ impl Session {
         match words.next() {
             None => {}
             Some(b"info") => {
-                h.send(concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " up ").as_bytes());
+                h.send(
+                    concat!("bryton-rustfw ", env!("CARGO_PKG_VERSION"), " ", env!("GIT_DESCRIBE"), " up ").as_bytes(),
+                );
                 h.send(decimal(stats.uptime_ms, &mut [0; 10]));
                 h.send(b" ms, awake ");
                 h.send(decimal(stats.awake_permille, &mut [0; 10]));
