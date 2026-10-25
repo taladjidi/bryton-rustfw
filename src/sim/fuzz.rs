@@ -1686,3 +1686,55 @@ fn random_pass_lengths() {
         assert!(opens >= 2, "seed {seed}: the strap searched again ({opens} opens, longest pass {worst} ms)");
     }
 }
+
+/// Notification answers on the Data Source (ANCS): made-up attribute lists with long, short, empty and non-ASCII
+/// values (a lying length too), cut into fragments of random size, then kept in the inbox and wrapped. No panic, the
+/// inbox keeps the newest eight, every wrapped line fits, and the whole answers were reached (counted).
+#[test]
+fn notification_answers() {
+    use crate::phone::{DataSource, Inbox, wrap};
+    let (mut whole, mut cut) = (0, 0);
+    let mut inbox = Inbox::default();
+    for seed in 1..=40u32 {
+        let r: Vec<u8> = bytes(seed * 2654, 6000).collect();
+        let mut at = 0;
+        let mut take = |n: usize| {
+            at += n;
+            r.get(at - n..at).unwrap_or(&[]).to_vec()
+        };
+        let mut ds = DataSource::default();
+        for round in 0..6usize {
+            let lens = [usize::from(take(1)[0]) % 40, usize::from(take(1)[0]) % 40, usize::from(take(1)[0]) % 200];
+            let mut a = std::vec![0u8, round as u8, 0, 0, 0];
+            for (id, n) in [0u8, 1, 3].into_iter().zip(lens) {
+                let lie = take(1)[0] % 16 == 0; // a length longer than the value
+                a.push(id);
+                a.extend(((n + usize::from(lie) * 300) as u16).to_le_bytes());
+                a.extend(take(n));
+            }
+            let mut left = &a[..];
+            while !left.is_empty() {
+                let n = (usize::from(take(1)[0]) % 40 + 1).min(left.len());
+                let (frag, rest) = left.split_at(n);
+                left = rest;
+                match ds.push(frag) {
+                    Some(attrs) => {
+                        whole += 1;
+                        inbox.add(&attrs, (seed as u8 % 24, round as u8));
+                        for k in 0..crate::phone::INBOX {
+                            if let Some(n) = inbox.get(k) {
+                                for cols in [1, 7, 19] {
+                                    assert!(wrap(n.message.as_str(), cols).all(|l| l.len() <= cols && !l.is_empty()));
+                                }
+                            }
+                        }
+                    }
+                    None => cut += 1,
+                }
+            }
+        }
+    }
+    assert!(whole > 20 && cut > 20, "{whole} whole, {cut} cut");
+    assert_eq!(inbox.len(), crate::phone::INBOX);
+    assert!(inbox.get(crate::phone::INBOX).is_none());
+}

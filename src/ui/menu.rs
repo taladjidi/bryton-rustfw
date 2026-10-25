@@ -297,6 +297,8 @@ pub enum Row {
     Field(usize, usize),
     /// A row of the stock data menu.
     Stock(StockRow),
+    /// Notification `n` of the NOTIFICATIONS list, newest first: Select opens its detail.
+    Notif(usize),
     /// Past ride `n` of the history, newest first: Select opens its card.
     Past(usize),
     /// Planned workout `n` of the calendar ([`crate::storage::workout::Calendar`]): Select shows its steps.

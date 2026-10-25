@@ -146,6 +146,8 @@ pub struct Phone {
     pub(crate) call: Option<(u32, Line<24>)>,
     /// The call's overlay is up (its caller known): buttons and banner over the bottom of the screen.
     pub(crate) ringing: bool,
+    /// The last notifications, for the NOTIFICATIONS list (app/notifs.rs).
+    pub(crate) inbox: ph::Inbox,
     /// What plays.
     pub(crate) now: ph::NowPlaying,
     /// The AMS commands the playing app accepts ([`ph::ams_commands`]; 0: no list yet, all tried).
@@ -191,6 +193,7 @@ impl Default for Phone {
             ds: ph::DataSource::default(),
             call: None,
             ringing: false,
+            inbox: ph::Inbox::default(),
             now: ph::NowPlaying::default(),
             commands: 0,
             release: false,
@@ -895,6 +898,7 @@ impl App {
                         l.push_str(a.message.as_str());
                     }
                     self.notice(l.as_str());
+                    self.keep_notif(&a);
                 }
             }
         } else if handle == h[EU] {
