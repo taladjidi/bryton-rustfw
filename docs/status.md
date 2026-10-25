@@ -40,6 +40,14 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The page editor and `\Rustfw\pages.bin` (app/editor.rs, page.rs)**, with an EMMC_WRITE=1 build: a hold on a
+  ride page's box opens the editor (the frame, the hint in the strip's place, live values); SPLIT, MERGE, TALLER,
+  UNDO, a field; Back asks KEEP CHANGES?; ADD PAGE up to six, the Page key round them all; DELETE PAGE. Then
+  `dev.py ls Rustfw`: `pages.bin`, 1024 bytes. The first write compares both FAT copies first (as the scan's cache:
+  some 10 s of passes, inferred; the loop stays responsive). Restart: the pages as made (the file read 2 s after the
+  start: a page shown before that is the registers' copy). Not while a ride records: no editor by a hold, no EDIT
+  THIS PAGE in the RIDE menu until paused. The installed stock-switch case: stock and an earlier build of this
+  firmware still read pages 1 to 3 from registers 20 to 25 (layouts of up to six fields).
 - **The scan's cache (storage/stock.rs `Cache`, `\Rustfw\scan.bin`)**, with an EMMC_WRITE=1 build: the first start
   reads every ride as before (`dev.py info` awake permille during it: now at most about 15 ms of work a pass, so
   lower than the 717 seen; Back held 3 s switches off during it), then `\Rustfw\scan.bin` is there (64 + 64 bytes a

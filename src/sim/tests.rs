@@ -3308,8 +3308,8 @@ fn perf_budgets() {
         ("eight values", [eight, graph, map], 0, None, (12_000, 20)),
         // 3581, 22 (3854 at VALUE_MARGIN 2): a graph over four values (the second row of values taller)
         ("graph over four", [made, values, map], 0, None, (5_000, 30)),
-        // 8070, 10 since values keep 3 px from their rules (9862 before): the changed digits only, but large (a glyph of a 6-field page is ~960 px), and the power and heart
-        // rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
+        // 8070, 10 since values keep 3 px from their rules (9862 before): the changed digits only, but large (a glyph
+        // of a 6-field page is ~960 px), and the power and heart rate boxes filled with their zone's colour again at each zone change (the noisy power's 3 s average crosses
         // a zone's edge about every 4 s: a box of ~12,000 px); 6538 before the zone backgrounds
         ("six values", [values, graph, map], 0, None, (12_000, 20)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
