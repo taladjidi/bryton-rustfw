@@ -834,8 +834,10 @@ const FIELD_LABEL_H: u32 = 22;
 /// distance at 4x and a heart rate at 6x).
 const VALUE_CHARS: u32 = 5;
 
-/// A value's ink stays this far from its box's edges (and its rules).
-const VALUE_MARGIN: u32 = 2;
+/// A value's ink stays this far from its box's edges (and its rules): two values side by side are then 2 x 3 + 1 px
+/// apart, more than twice the gap between two characters of one value at 3x (UI review 2, P2: at 2 px, "12:00" and
+/// "5.76" in a row read "12:005.76"). A half-width box holds five characters at 3x, no longer 4x.
+const VALUE_MARGIN: u32 = 3;
 
 /// The smallest value box an edit may leave (w, h): five characters at 3x under the label (UI review 2, 5.2 point 2;
 /// at 2x a value is no longer read at a glance).
@@ -866,7 +868,7 @@ const fn ink_cells(n: u32, scale: u32) -> u32 {
 /// ```
 /// use bryton_rustfw::ui::{box_scale, field_box, RIDE_H};
 /// let half = field_box(6, RIDE_H, 0).unwrap(); // 2 x 3: 120 x 98
-/// assert_eq!((box_scale(half.2, half.3), box_scale(240, 296)), (4, 8));
+/// assert_eq!((box_scale(half.2, half.3), box_scale(240, 296)), (3, 8));
 /// ```
 pub fn box_scale(w: u32, h: u32) -> u32 {
     let fits =
@@ -1612,6 +1614,24 @@ pub(crate) mod tests {
             assert_eq!(*f as usize, i, "{f:?}");
         }
         assert_eq!((Field::Power30s.widest(), Field::If.widest(), Field::Dfa.widest()), ("8888", "8.88", "8.88"));
+    }
+
+    /// Two values side by side never run together: the gap between their inks is at least twice the gap between
+    /// two characters of one (one blank column of the font at the value's scale), in every layout.
+    #[test]
+    fn neighbouring_values_keep_apart() {
+        for id in 1..LAYOUTS.len() as u8 {
+            let b: Vec<_> = (0..8).map_while(|i| field_box(id, RIDE_H, i)).collect();
+            for pair in b.windows(2).filter(|p| p[0].1 == p[1].1) {
+                let at = |bx| {
+                    let (style, left, _, big, _, _) = value_at(bx, "88.88", WHITE, BLACK);
+                    (left, left + ink(&style, big), style.scale)
+                };
+                let ((_, right_end, s1), (next_left, _, s2)) = (at(pair[0]), at(pair[1]));
+                let gap = next_left - right_end;
+                assert!(gap >= 2 * s1.max(s2), "layout {id}: {gap} px between values at {s1}x");
+            }
+        }
     }
 
     /// The ride boxes tile the field area exactly, every value fits its box, and Ferris and the top line stay
