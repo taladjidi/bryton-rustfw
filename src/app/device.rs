@@ -105,12 +105,12 @@ impl App {
         self.battery.history()
     }
 
-    /// The tones playing go on: each lasts its time, in passes of [`POLL_MS`], then the next; the buzzer stops after
+    /// The tones playing go on: each lasts its time, by the pass's real length, then the next; the buzzer stops after
     /// the last of a melody for a pass, then the next melody queued starts. Nothing waits: the loop goes on meanwhile.
     pub(crate) fn play_tones(&mut self, b: &mut impl Board) {
-        let t = &mut self.tones;
+        let (t, dt) = (&mut self.tones, self.dt_ms);
         if t.ms > 0 {
-            t.ms = t.ms.saturating_sub(POLL_MS);
+            t.ms = t.ms.saturating_sub(dt);
             return;
         }
         if t.left.is_empty() && !t.on {
@@ -121,7 +121,7 @@ impl App {
         match t.left.split_first() {
             Some((&(hz, len), rest)) => {
                 b.beep(hz);
-                (t.left, t.ms, t.on) = (rest, len.saturating_sub(POLL_MS), true);
+                (t.left, t.ms, t.on) = (rest, len.saturating_sub(dt), true);
             }
             None if t.on => {
                 b.beep(0);
@@ -137,7 +137,7 @@ impl App {
         if !self.chips.light {
             return;
         }
-        self.light_ms = self.light_ms.saturating_add(POLL_MS);
+        self.light_ms = self.light_ms.saturating_add(self.dt_ms);
         let wanted = (self.settings.light_level == LIGHT_AUTO && self.light_shown != 0)
             || matches!(self.screen, Screen::Menu(Menu::BuiltIn, _));
         match (wanted, self.measuring) {
