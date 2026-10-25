@@ -854,7 +854,11 @@ fn usb_drive_commands() {
             if c[20] % 16 == 0 {
                 packet[usize::from(c[21]) % 31] ^= c[22] | 1; // a damaged CBW
             }
-            h.out = (0..c[23] % 20).map(|i| std::vec![i; PACKET]).collect();
+            // full packets, and now and then odd sizes off the packet grid (a short one is legal from a host)
+            let odd = c[22] % 3 == 0;
+            h.out = (0..c[23] % 20)
+                .map(|i| std::vec![i; if odd { 1 + usize::from(i) * 37 % PACKET } else { PACKET }])
+                .collect();
             h.stalled = false;
             d.packet(&packet, &mut h, &mut m);
             if let Some(csw) = h.got.pop() {

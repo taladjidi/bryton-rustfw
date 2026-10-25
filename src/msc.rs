@@ -407,24 +407,27 @@ impl Drive {
         let mut at = 0u32;
         while done < host {
             let Some(n) = pipe.recv(&mut packet) else { return (PHASE, host - relevant) };
-            let n = n.min((host - done) as usize);
+            let n = n.min(PACKET).min((host - done) as usize);
             done += n as u32;
-            if at >= count {
-                continue; // past the command's data: discarded
-            }
-            let take = n.min(buf.len() - fill);
-            buf[fill..fill + take].copy_from_slice(&packet[..take]);
-            fill += take;
-            let blocks = ((count - at) as usize).min(CHUNK);
-            if fill == blocks * BLOCK {
-                if status == PASSED && !media.write(lba + at, &buf[..fill]) {
-                    status = FAILED;
-                    self.sense = WRITE_ERROR;
+            // a packet's bytes fill the chunk up to its end and the rest go to the next one: a short packet (a host
+            // may send one) leaves the stream off the packet grid, and taking up to the buffer's end instead ran a
+            // last, shorter chunk past its size, never written though PASSED (code review, 2026-10-25)
+            let mut off = 0;
+            while off < n && at < count {
+                let blocks = ((count - at) as usize).min(CHUNK);
+                let take = (n - off).min(blocks * BLOCK - fill);
+                buf[fill..fill + take].copy_from_slice(&packet[off..off + take]);
+                (fill, off) = (fill + take, off + take);
+                if fill == blocks * BLOCK {
+                    if status == PASSED && !media.write(lba + at, &buf[..fill]) {
+                        status = FAILED;
+                        self.sense = WRITE_ERROR;
+                    }
+                    self.wrote = true;
+                    (at, fill) = (at + blocks as u32, 0);
+                    relevant += (blocks * BLOCK) as u32;
                 }
-                self.wrote = true;
-                (at, fill) = (at + blocks as u32, 0);
-                relevant += (blocks * BLOCK) as u32;
-            }
+            } // past the command's data: discarded
         }
         (status, host - relevant)
     }
@@ -583,6 +586,22 @@ pub(crate) mod tests {
         assert_eq!((st, res), (PASSED, 0));
         assert!(m.0[50 * BLOCK..70 * BLOCK] == new[..]);
         assert!(d.wrote());
+        // the same data in packets of odd sizes (a short one off the packet grid): written whole all the same
+        let odd: Vec<u8> = (0..20 * BLOCK).map(|i| (i * 13 + 5) as u8).collect();
+        let sizes = [100, 512, 412, 512, 37, 500]; // 2073 a cycle: chunk ends fall inside packets
+        let mut cut = 0;
+        h.out.clear();
+        for k in 0.. {
+            let n = sizes[k % sizes.len()].min(odd.len() - cut);
+            h.out.push_back(odd[cut..cut + n].to_vec());
+            cut += n;
+            if cut == odd.len() {
+                break;
+            }
+        }
+        let (_, st, res) = run(&mut d, &mut h, &mut m, 40, 20 * 512, false, &rw10(0x2a, 50, 20));
+        assert_eq!((st, res), (PASSED, 0));
+        assert!(m.0[50 * BLOCK..70 * BLOCK] == odd[..], "every block written");
         // past the end: refused before any data, the host's data taken and dropped (case 9)
         h.out = std::iter::repeat_n(std::vec![0u8; 512], 2).collect();
         let (_, st, res) = run(&mut d, &mut h, &mut m, 5, 1024, false, &rw10(0x2a, 99, 2));
