@@ -234,6 +234,8 @@ pub struct App {
     menu_shown: [u32; ui::MENU_ROWS],
     /// The ride's track, from the good fixes.
     track: map::Track,
+    /// The map's zoom level set by its "+" and "-" ([`map::mpp16`]); None: fitted to the track (per power-up).
+    map_zoom: Option<u32>,
     /// The eMMC, for the basemap and the dev link (identified at first use, never at boot).
     emmc: emmc::Emmc,
     /// Roads and water under the first map field of a page, drawn once per view.
@@ -399,6 +401,7 @@ impl App {
             power: power::Power::default(),
             menu_shown: [0; ui::MENU_ROWS],
             track: map::Track::new(),
+            map_zoom: None,
             emmc: emmc::Emmc::new(),
             basemap: tiles::Basemap::new(),
             touch_ok: touch::init(b),
@@ -591,7 +594,7 @@ impl App {
                 let bottom = self.bottom();
                 if let Some((m, _)) = &mut self.summary {
                     let (base, view) = (Some(&self.basemap), m.view);
-                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, base, None);
+                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, base, None, None);
                     if m.view != view {
                         self.show(b); // refitted: the basemap of the new view under it (else black; review)
                     }

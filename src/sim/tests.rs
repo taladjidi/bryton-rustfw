@@ -42,7 +42,7 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 }
 
 /// The screen drawn step by step on the panel equals the screen drawn at once from the state (the screenshot).
-fn assert_consistent(sim: &Sim, app: &App) {
+pub(super) fn assert_consistent(sim: &Sim, app: &App) {
     for y in 0..H {
         let (drawn, panel) = (app.render_row(y).px, &sim.screen[(y * W) as usize..((y + 1) * W) as usize]);
         let bad: Vec<_> = (0..W as usize).filter(|&x| drawn[x] != panel[x]).collect();
@@ -1460,7 +1460,7 @@ fn route_from(ms: u64, (lat0, lon0): (i32, i32), sign: f64) -> (i32, i32, i32) {
 }
 
 /// The ride west and south of 0 N 0 E, where the synthetic tiles are (tools/fat_image.py).
-fn tiles_route(ms: u64) -> (i32, i32, i32) {
+pub(super) fn tiles_route(ms: u64) -> (i32, i32, i32) {
     route_from(ms, crate::tiles::tests::ORIGIN, -1.0)
 }
 
@@ -1682,6 +1682,133 @@ fn map_page_follows_a_ride() {
     run(&mut sim, &mut app, 10_000);
     assert_consistent(&sim, &app);
     sim.save("map_field");
+}
+
+/// The map's "+" and "-" (map.rs, manual zoom) on the full-page map over the basemap: each tap one level, the view
+/// following the rider across re-centres (the arrow always on the map), the panel equal to the screenshot at each
+/// step, back to the fit at its level; a hold on the map still opens the menu; no buttons in a map of half a page.
+#[test]
+fn map_zoom_buttons() {
+    use crate::map::{self, MIN_LEVEL, mpp16};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    assert_eq!(app.screen(), Screen::Ride(2), "the map page");
+    sim.gnss.fix = Some(500);
+    run(&mut sim, &mut app, 200_000); // out and onto the loop: a fit coarser than a few levels
+    let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [plus, minus] = map::buttons(area).unwrap();
+    let tap = |sim: &mut Sim, app: &mut App, b: map::Rect| {
+        app.input(sim, Input::Touch(Gesture::Tap((b.0 + b.2 / 2) as u16, (b.1 + b.3 / 2) as u16)));
+        assert_consistent(sim, app);
+    };
+    let fit = app.map_view(0).unwrap();
+    assert_eq!(app.map_zoom, None);
+    sim.save("map_zoom_fit");
+    tap(&mut sim, &mut app, plus);
+    let first = app.map_zoom.expect("zoomed in");
+    assert_eq!(mpp16(first + 1), fit.mpp16, "one level finer than the fit");
+    assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(first));
+    for _ in 0..20 {
+        tap(&mut sim, &mut app, plus);
+    }
+    assert_eq!(app.map_zoom, Some(MIN_LEVEL), "no finer than 2 m a pixel");
+    assert_eq!(app.map_view(0).unwrap().mpp16, 32);
+    sim.save("map_zoom_in");
+    // riding on, zoomed in: the view follows, centred again only when the arrow leaves the middle part
+    let (t0, px0) = (sim.ms, sim.pixels);
+    let mut recentres = 0;
+    while sim.ms < t0 + 120_000 {
+        let view = app.map_view(0);
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        let v = app.map_view(0).unwrap();
+        recentres += u32::from(Some(v) != view);
+        assert_eq!(v.mpp16, 32, "the zoom kept");
+        let (x, y) = v.px(area, app.track.pos().unwrap());
+        assert!(x >= area.2 / 6 && x < area.2 * 5 / 6, "the arrow on the map: {x}");
+        assert!(y >= area.1 + area.3 / 6 && y < area.1 + area.3 * 5 / 6, "the arrow on the map: {y}");
+        if (sim.ms - t0) % 30_000 < u64::from(POLL_MS) {
+            assert_consistent(&sim, &app);
+        }
+    }
+    let s = (sim.ms - t0) / 1000;
+    std::println!("map zoomed in at 2 m a pixel: {recentres} re-centres in {s} s, {} px/s", (sim.pixels - px0) / s);
+    assert!((2..=12).contains(&recentres), "followed, not redrawn every second: {recentres}");
+    sim.save("map_zoom_follow");
+    // out again, a level at a time, until the fit: then automatic
+    let mut taps = 0;
+    while app.map_zoom.is_some() && taps < 40 {
+        tap(&mut sim, &mut app, minus);
+        taps += 1;
+    }
+    assert_eq!(app.map_zoom, None, "back to the fit");
+    let shown = map::Shown::of(&app.track, area, None, None);
+    assert_eq!(app.map_view(0), shown.view, "the fitted view");
+    tap(&mut sim, &mut app, minus);
+    assert_eq!(app.map_zoom, None, "no coarser than the fit");
+    // a hold on the map still opens the menu, even on a button
+    app.input(&mut sim, Input::Touch(Gesture::Hold((plus.0 + 4) as u16, (plus.1 + 4) as u16)));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, _)));
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Ride(2));
+    // half a page: no buttons, a tap there does not zoom
+    app.pages[2] =
+        PageCfg { layout: 2, fields: [Field::Map, Field::Speed, Field::Time, Field::Time, Field::Time, Field::Time] };
+    app.show(&mut sim);
+    let half = map::area(ui::field_box(2, ui::RIDE_H, 0).unwrap());
+    assert_eq!(map::buttons(half), None);
+    tap(&mut sim, &mut app, plus);
+    assert_eq!(app.map_zoom, None, "no buttons, no zoom");
+    sim.save("map_zoom_half");
+}
+
+/// A course followed, the map zoomed in: the course drawn under the track as at the fit, the view following the
+/// rider along it.
+#[test]
+fn map_zoom_with_a_course() {
+    use crate::map;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(course_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.open_courses(&mut sim);
+    app.follow_course(hill(&app));
+    for _ in 0..100 {
+        app.step(&mut sim); // read over a few passes
+    }
+    sim.gnss.fix = Some(500);
+    app.screen = Screen::Ride(2);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 20_000);
+    let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [plus, _] = map::buttons(area).unwrap();
+    for _ in 0..3 {
+        app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
+    }
+    let level = app.map_zoom.expect("zoomed in");
+    let mut views = 0;
+    for _ in 0..12 {
+        let view = app.map_view(0);
+        run(&mut sim, &mut app, 10_000);
+        let v = app.map_view(0).unwrap();
+        views += u32::from(Some(v) != view);
+        assert_eq!(v.mpp16, map::mpp16(level));
+        let (x, y) = v.px(area, app.track.pos().unwrap());
+        assert!(x >= area.0 && x < area.0 + area.2 && y >= area.1 && y < area.1 + area.3, "the arrow on the map");
+        let course = sim.screen.iter().filter(|&&p| p == map::COURSE).count();
+        assert!(course > 50, "the course drawn: {course} px");
+        assert_consistent(&sim, &app);
+    }
+    assert!(views > 0, "the view follows the rider");
+    sim.save("map_zoom_course");
 }
 
 /// Heart rate rising from 90 to 209 over two minutes, then again: every zone at the default max of 190.
@@ -2288,7 +2415,7 @@ fn tones_do_not_cut_each_other() {
 fn perf_budgets() {
     use Field::*;
     // a ride on the GPS route, with a power meter and a strap, from start-up
-    let ride = |pages: [PageCfg; 3], screen: usize| {
+    let ride = |pages: [PageCfg; 3], screen: usize, zoom: Option<u32>| {
         let mut sim = Sim::new(9, 0, 0);
         sim.gnss.route = Some(ride_route);
         let course = screen == crate::COURSE || pages.iter().any(|p| p.fields.contains(&Profile));
@@ -2315,6 +2442,7 @@ fn perf_budgets() {
         if screen != PAGES {
             app.press(&mut sim, Press::Short(Key::Start));
             app.screen = Screen::Ride(screen); // the page measured (a course loaded opens the course page)
+            app.map_zoom = zoom;
             app.show(&mut sim);
         }
         run(&mut sim, &mut app, 120_000); // settled: the map fitted, the graph full
@@ -2329,24 +2457,26 @@ fn perf_budgets() {
     let graph = p(2, [Graph, HrGraph, Time, Time, Time, Time]);
     let map = p(1, [Map, Time, Time, Time, Time, Time]);
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
-    type Case = (&'static str, [PageCfg; 3], usize, (u64, u64));
-    let cases: [Case; 6] = [
+    type Case = (&'static str, [PageCfg; 3], usize, Option<u32>, (u64, u64));
+    let cases: [Case; 7] = [
         // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
-        ("overview", [values, graph, map], PAGES, (150, 5)),
+        ("overview", [values, graph, map], PAGES, None, (150, 5)),
         // 6794, 8: the changed digits only, but large (a glyph of a 6-field page is ~960 px)
-        ("six values", [values, graph, map], 0, (9_000, 20)),
+        ("six values", [values, graph, map], 0, None, (9_000, 20)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
-        ("two graphs", [graph, values, map], 0, (1_000, 30)),
-        // 1112, 33: the track's new segments and the arrow, refits included
-        ("map", [map, values, graph], 0, (1_800, 50)),
+        ("two graphs", [graph, values, map], 0, None, (1_000, 30)),
+        // 1260, 33: the track's new segments and the arrow, refits included (1211 without the zoom buttons)
+        ("map", [map, values, graph], 0, None, (1_800, 50)),
         // 456, 3: on the course, the profile's rider column (a whole profile at each eighth), two values
-        ("course profile", [profile, values, map], 0, (600, 10)),
+        ("course profile", [profile, values, map], 0, None, (600, 10)),
         // 1548, 9: the course page (COURSE_PAGE): the profile's rider column, the distances, the timer's seconds
-        ("course page", [values, graph, map], crate::COURSE, (2_000, 20)),
+        ("course page", [values, graph, map], crate::COURSE, None, (2_000, 20)),
+        // 3400, 41: zoomed in at 2 m a pixel (map.rs), following the rider: a whole map at each re-centre (~35 s)
+        ("map zoomed", [map, values, graph], 0, Some(crate::map::MIN_LEVEL), (4_500, 60)),
     ];
     let mut over = std::vec::Vec::new();
-    for (name, pages, screen, (px_max, win_max)) in cases {
-        let (px, win) = ride(pages, screen);
+    for (name, pages, screen, zoom, (px_max, win_max)) in cases {
+        let (px, win) = ride(pages, screen, zoom);
         std::println!("{name}: {px} px/s, {win} windows/s (budget {px_max}, {win_max})");
         if px > px_max || win > win_max {
             over.push(std::format!("{name}: {px} px/s, {win} windows/s over {px_max}, {win_max}"));
