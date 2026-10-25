@@ -396,7 +396,7 @@ impl App {
             // recording, above)
             (Screen::Ride(n), Input::Touch(Gesture::Hold(x, y))) if n < PAGES => {
                 let k = self.widgets().position(|(bx, _)| inside(bx, x, y)).unwrap_or(0);
-                self.edit_page(n, k)
+                self.edit_page(b, n, k)
             }
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(self.menu_root(), 0))

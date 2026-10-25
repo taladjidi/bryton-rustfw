@@ -246,9 +246,12 @@ impl App {
                 n += 1;
             }
         }
-        // stock's pages in the first places, as many as it had (the others kept after them)
+        // stock's pages in the first places, as many as it had (the others kept after them); not at a first start
+        // over pages of this firmware's in \Rustfw\pages.bin (the backup registers lost: a flat backup battery)
+        self.ensure_pages(b);
         let mut pages = 0;
-        for (k, p) in i.pages.iter().enumerate() {
+        let ours = quiet && self.store.seq != 0;
+        for (k, p) in i.pages.iter().enumerate().filter(|_| !ours) {
             if let (Some(p), Some(page)) = (p, self.pages.get_mut(k)) {
                 *page = *p;
                 pages = k + 1;

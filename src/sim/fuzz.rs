@@ -1150,7 +1150,7 @@ fn page_editor_inputs() {
                 // back into the editor, on a page by chance
                 app.leave_menus();
                 app.screen = Screen::Ride(usize::from(b) % app.page_count());
-                app.edit_page(usize::from(b) % app.page_count(), usize::from(next()) % 8);
+                app.edit_page(&mut sim, usize::from(b) % app.page_count(), usize::from(next()) % 8);
                 app.show(&mut sim);
             }
             let i = match a % 12 {

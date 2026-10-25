@@ -183,7 +183,7 @@ fn never_while_recording() {
     assert_eq!(app.screen(), Screen::Ride(0), "no editor by a hold");
     app.press(&mut sim, Press::Long(Key::Page));
     assert!(!(0..app.rows(Menu::Ride(0))).any(|i| app.row(Menu::Ride(0), i) == Some(menu::Row::Open(Menu::Page(0)))));
-    app.edit_page(0, 0);
+    app.edit_page(&mut sim, 0, 0);
     assert_eq!(app.banner.as_str(), "PAUSE TO EDIT");
     press(&mut sim, &mut app, Key::Start); // PAUSE (the ride menu's first row)
     assert_eq!(app.ride.state(), ride::State::Paused);
@@ -248,13 +248,13 @@ fn pages_added_and_deleted() {
     while app.page_count() > 1 {
         let n = app.page_count();
         app.screen = Screen::Ride(0);
-        app.edit_page(0, 0);
+        app.edit_page(&mut sim, 0, 0);
         app.open(Screen::Menu(Menu::Edit(0), 8));
         app.input(&mut sim, Input::Select);
         app.input(&mut sim, Input::Select);
         assert_eq!(app.page_count(), n - 1);
     }
-    app.edit_page(0, 0);
+    app.edit_page(&mut sim, 0, 0);
     app.open(Screen::Menu(Menu::Edit(0), 8));
     app.input(&mut sim, Input::Select);
     assert_eq!((app.page_count(), app.banner.as_str()), (1, "ONE PAGE AT LEAST"));
@@ -395,4 +395,41 @@ fn a_cut_at_every_sector_reads_old_or_new() {
         );
         assert!(olds > 0);
     }
+}
+
+/// A change in the first seconds, before the file would be read: it is read first, so the change is made to its
+/// pages (the fourth and later kept), not to the registers' three.
+#[test]
+fn an_early_change_keeps_the_files_pages() {
+    let (mut sim, mut app) = started();
+    app.add_page(&mut sim, 3);
+    app.leave_editor(&mut sim, true);
+    run(&mut sim, &mut app, 200);
+    assert_eq!(file(&sim).unwrap().count, 4);
+    let mut sim2 = Sim::new(9, 0, 0);
+    (sim2.emmc.image, sim2.backup) = (sim.emmc.image.clone(), sim.backup);
+    let mut app = App::start(&mut sim2, None);
+    app.step(&mut sim2);
+    assert_eq!(app.page_count(), 3, "the registers' pages at first");
+    app.screen = Screen::Ride(1);
+    app.edit_page(&mut sim2, 1, 0);
+    assert_eq!(app.page_count(), 4, "the file read before the editor opened");
+    app.leave_editor(&mut sim2, true);
+}
+
+/// A flat backup battery (every register lost) over a card with stock's settings and this firmware's pages: the
+/// first start takes stock's settings, but the pages are the file's.
+#[test]
+fn a_first_start_keeps_the_files_pages() {
+    let (mut sim, mut app) = started();
+    app.pages[0] = Page::preset(2, [Wbal, Np, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    let want = pages(&app);
+    let mut sim2 = Sim::new(9, 0, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    let mut app = App::start(&mut sim2, None);
+    assert_eq!(app.settings.ftp, 265, "stock's settings taken");
+    run(&mut sim2, &mut app, 3000);
+    assert_eq!(pages(&app), want);
 }

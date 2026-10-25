@@ -154,6 +154,14 @@ impl App {
         false
     }
 
+    /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
+    /// is made to the file's pages, not to the registers' copy (which would then be written over the file's).
+    pub(crate) fn ensure_pages(&mut self, b: &mut impl Board) {
+        if self.card_writable && !self.emmc.lent() && !self.store.loaded {
+            self.load_pages(b);
+        }
+    }
+
     /// Reads `\Rustfw\pages.bin` (module doc: which pages win).
     #[inline(never)] // its 1 KB buffer in its own frame
     fn load_pages(&mut self, b: &mut impl Board) {
@@ -265,10 +273,11 @@ impl App {
     // -----------------------------------------------------------------------------------------------------------
 
     /// Opens the editor on ride page `n`, box `k` selected; refused while a ride records.
-    pub(crate) fn edit_page(&mut self, n: usize, k: usize) {
+    pub(crate) fn edit_page(&mut self, b: &mut impl Board, n: usize, k: usize) {
         if self.ride.state() == ride::State::Running {
             return self.say("PAUSE TO EDIT");
         }
+        self.ensure_pages(b);
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         self.edit = Some(Editing { page: n, work: p, orig: p, undo: None, asking: false });
         self.open(Screen::Edit(n, k.min(p.cells().saturating_sub(1))));
@@ -427,6 +436,7 @@ impl App {
     /// A page added at `at` (2 x 2: speed, timer, distance, heart rate) and the editor opened on it; the editor's
     /// work on the page it was on kept first.
     pub(crate) fn add_page(&mut self, b: &mut impl Board, at: usize) {
+        self.ensure_pages(b);
         if self.page_count >= PAGES {
             return self.say("6 PAGES AT MOST");
         }
@@ -452,7 +462,7 @@ impl App {
         l.push_u32(at as u32 + 1);
         l.push_str(" ADDED");
         self.say(l.as_str());
-        self.edit_page(at, 0);
+        self.edit_page(b, at, 0);
     }
 
     /// The edited page deleted, out of the editor.
@@ -469,6 +479,7 @@ impl App {
 
     /// The menu's LAYOUT: page `n` (`n` < [`PAGES`]) to the next layout every field of it fits, its fields in order.
     pub(crate) fn next_layout(&mut self, b: &mut impl Board, n: usize) {
+        self.ensure_pages(b);
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         let order = ui::LAYOUT_ORDER;
         let at = p.preset_id().and_then(|id| order.iter().position(|&l| l == id)).unwrap_or(order.len() - 1);
@@ -484,6 +495,9 @@ impl App {
     /// The picker's field `f` for box `k` of page `n`: the editor's copy, a ride page (if it is readable there) or
     /// the overview; then back to the editor or the page's menu.
     pub(crate) fn pick(&mut self, b: &mut impl Board, n: usize, k: usize, f: Field) {
+        if n != EDITED {
+            self.ensure_pages(b);
+        }
         let page = match n {
             EDITED => self.edit.map(|e| e.work),
             _ => self.page_ref(n).copied(),

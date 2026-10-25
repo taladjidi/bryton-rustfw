@@ -494,7 +494,7 @@ impl App {
             }
             Some(Row::Open(Menu::Courses)) => self.open_courses(b),
             // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
-            Some(Row::Open(Menu::Page(n))) if matches!(menu, Menu::Ride(_)) && n < PAGES => self.edit_page(n, 0),
+            Some(Row::Open(Menu::Page(n))) if matches!(menu, Menu::Ride(_)) && n < PAGES => self.edit_page(b, n, 0),
             Some(Row::Open(m)) => {
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
@@ -589,7 +589,7 @@ impl App {
                 }
             }
             Some(Row::Layout(n)) => self.next_layout(b, n),
-            Some(Row::EditPage(n)) => self.edit_page(n, 0),
+            Some(Row::EditPage(n)) => self.edit_page(b, n, 0),
             Some(Row::AddPage) => self.add_page(b, self.page_count),
             Some(Row::Edit(r)) => {
                 if let Menu::Edit(k) = menu {
