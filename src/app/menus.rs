@@ -263,7 +263,13 @@ impl App {
             }
             Row::BtFound(k) => {
                 let d = self.ftms.found.get(k)?;
-                label.push_str(if d.name().is_empty() { "FTMS TRAINER" } else { d.name() });
+                let fec = d.proto == crate::fecble::Proto::Fec;
+                label.push_str(match (d.name().is_empty(), fec) {
+                    (false, _) => d.name(),
+                    (true, false) => "FTMS TRAINER",
+                    (true, true) => "FE-C TRAINER",
+                });
+                value.push_str(if fec { "FE-C " } else { "FTMS " });
                 value.push_str(if d.rssi < 0 { "-" } else { "" });
                 value.push_u32(u32::from(d.rssi.unsigned_abs()));
             }

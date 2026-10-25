@@ -133,6 +133,7 @@ Others
 - [ ] E-bike: Shimano STEPS and ANT+ LEV (stock, Garmin, Wahoo, Karoo)
 - [ ] Smart trainer, ANT+ FE-C (stock, all)
 - [ ] Smart trainer over BLE FTMS (Garmin, Wahoo, Karoo, Coros): simulated only (phase 2), beside the phone
+- [ ] Smart trainer over BLE without FTMS, FE-C over BLE (Tacx scheme; Van Rysel D500): simulated only
 - [ ] Remote buttons (Bryton ESS, Garmin Edge remote) (stock, Garmin)
 - [ ] Running dynamics / MTB fork and shock sensors (Garmin, Karoo)
 - [x] GPS (u-blox M10), with time and last position at power-up for a fast fix (stock, all): unit

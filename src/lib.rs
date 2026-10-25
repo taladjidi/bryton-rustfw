@@ -32,7 +32,7 @@ pub mod ui;
 pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
-pub use drivers::{ambient, battery, ble, emmc, fec, ftms, gnss, nrf, panel, sensors, touch};
+pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, sensors, touch};
 pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split

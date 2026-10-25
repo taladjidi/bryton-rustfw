@@ -8,10 +8,10 @@ use super::*;
 use crate::menu::Row;
 use crate::ui::Field;
 
-const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+pub(super) const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
 /// The unit with the synthetic volume and `t` in range (and `phone`, if any).
-fn unit_with(t: FtmsSim, phone: Option<PhoneSim>) -> (Sim, App) {
+pub(super) fn unit_with(t: FtmsSim, phone: Option<PhoneSim>) -> (Sim, App) {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     sim.own_settings();
@@ -21,7 +21,7 @@ fn unit_with(t: FtmsSim, phone: Option<PhoneSim>) -> (Sim, App) {
     (sim, app)
 }
 
-fn trainer(sim: &Sim) -> &FtmsSim {
+pub(super) fn trainer(sim: &Sim) -> &FtmsSim {
     sim.nordic.ftms.as_ref().expect("the trainer")
 }
 
@@ -36,7 +36,7 @@ fn pair(sim: &mut Sim, app: &mut App) {
     assert_eq!(app.screen(), Screen::Menu(Menu::BtTrainers, 0));
     run(sim, app, 1100);
     let (label, value, _) = app.menu_row(Menu::BtTrainers, 0).expect("a trainer heard");
-    assert_eq!((label.as_str(), value.as_str()), ("SIM BIKE", "-56"));
+    assert_eq!((label.as_str(), value.as_str()), ("SIM BIKE", "FTMS -56"));
     sim.save("ftms_search");
     app.press(sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, Kind::ALL.len()), "back to SENSORS");
@@ -44,11 +44,11 @@ fn pair(sim: &mut Sim, app: &mut App) {
 }
 
 /// The trainer in `\Rustfw\sensors.bin`.
-fn bt_file(sim: &Sim) -> Option<[u8; 7]> {
+pub(super) fn bt_file(sim: &Sim) -> Option<[u8; 7]> {
     let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).ok()?;
     let v = crate::fat::tests::read_all(&mut fat, &mut d, "Rustfw/sensors.bin").ok()?;
-    crate::sensors::bt_from_sector(&v.try_into().ok()?)
+    crate::sensors::bt_from_sector(&v.try_into().ok()?).map(|b| b.0)
 }
 
 /// The phone paired, then the trainer: both links up at once (the trainer on connection 1 as our peripheral, the

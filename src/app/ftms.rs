@@ -1,4 +1,6 @@
-//! The home trainer over Bluetooth (FTMS, drivers/ftms.rs): the unit as a central, beside the phone's link where it
+//! The home trainer over Bluetooth (FTMS, drivers/ftms.rs; or FE-C over BLE, drivers/fecble.rs, for trainers without
+//! FTMS: the same link, discovery and reconnection, other service, no Request Control, the FE-C pages of the ANT+
+//! path written as frames): the unit as a central, beside the phone's link where it
 //! is a peripheral (app/phone.rs). Paired from SENSORS (BT TRAINER: a scan lists the trainers that advertise FTMS),
 //! kept in `\Rustfw\sensors.bin` with the ANT+ one, and then:
 //! - **connected** whenever it is paired, the chip took the two links' configuration (`nrf::start`) and no ANT+
@@ -20,6 +22,7 @@
 //! screen and priority (a power meter or a speed sensor heard wins, app/trainer.rs `fold_trainer`).
 
 use crate::ble::{self, Event};
+use crate::fecble::{self, Proto};
 use crate::ftms::{self, BIKE_DATA, CONTROL, FEATURE, POWER_RANGE, RESISTANCE_RANGE, SERVICE, STATUS};
 use crate::trainer::Command;
 use crate::*;
@@ -51,8 +54,15 @@ const TRIES: u8 = 3;
 
 /// The characteristics subscribed to, with the CCCD value: notifications, the Control Point's indications.
 const NOTIFYING: [(u16, u8); 3] = [(BIKE_DATA, 1), (STATUS, 1), (CONTROL, 2)];
+/// FE-C over BLE: the trainer's messages.
+const NOTIFYING_FEC: [(u16, u8); 1] = [(fecble::NOTIFY, 1)];
 /// The characteristics read once.
 const READS: [u16; 3] = [FEATURE, RESISTANCE_RANGE, POWER_RANGE];
+
+/// What is subscribed to on a link of the protocol (`fec`: FE-C over BLE).
+fn notifying(fec: bool) -> &'static [(u16, u8)] {
+    if fec { &NOTIFYING_FEC } else { &NOTIFYING }
+}
 
 /// Where the link is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +94,8 @@ pub(crate) struct Found {
     pub(crate) rssi: i8,
     name: [u8; 14],
     name_len: u8,
+    /// What it speaks (FTMS when it offers both).
+    pub(crate) proto: Proto,
 }
 
 impl Found {
@@ -107,6 +119,12 @@ pub(crate) struct Ftms {
     end: u16,
     chars: [(u16, u16, u16); 12],
     n_chars: usize,
+    /// The link speaks FE-C over BLE (set when the connection is asked for), the vendor UUID type its base got
+    /// (0: not registered with the chip yet; kept across links, not across a chip reset), and whether the trainer's
+    /// frames carry the sum checksum (fecble.rs).
+    fec: bool,
+    vs: u8,
+    fec_sum: bool,
     /// The CCCDs of [`NOTIFYING`].
     cccd: [u16; 3],
     /// A GATT request is out, for so long.
@@ -147,6 +165,9 @@ impl Default for Ftms {
             end: 0,
             chars: [(0, 0, 0); 12],
             n_chars: 0,
+            fec: false,
+            vs: 0,
+            fec_sum: false,
             cccd: [0; 3],
             waiting: false,
             busy_ms: 0,
@@ -162,7 +183,7 @@ impl Default for Ftms {
             max_w: trainer::MAX_W,
             modes: None,
             searching: false,
-            found: [Found { peer: [0; 7], rssi: 0, name: [0; 14], name_len: 0 }; 4],
+            found: [Found { peer: [0; 7], rssi: 0, name: [0; 14], name_len: 0, proto: Proto::Ftms }; 4],
             n_found: 0,
         }
     }
@@ -177,7 +198,16 @@ impl Ftms {
     /// The link is gone (or given up): what belonged to it, and the wait before the next.
     fn unlink(&mut self) {
         let (found, n_found, searching, backoff_ms) = (self.found, self.n_found, self.searching, self.backoff_ms);
-        *self = Ftms { found, n_found, searching, backoff_ms, fails: self.fails, kept: self.kept, ..Ftms::default() };
+        *self = Ftms {
+            found,
+            n_found,
+            searching,
+            backoff_ms,
+            fails: self.fails,
+            kept: self.kept,
+            vs: self.vs,
+            ..Ftms::default()
+        };
         self.retry_later();
     }
 
@@ -186,8 +216,9 @@ impl Ftms {
         self.backoff_ms = (self.backoff_ms * 2).min(MAX_WAIT_MS);
     }
 
-    /// An advertising report heard while searching: a trainer that advertises FTMS is listed (its name may come in
-    /// the scan response, a report of its own). True when the list changed.
+    /// An advertising report heard while searching: a trainer that advertises FTMS or the FE-C over BLE service is
+    /// listed with the protocol it speaks (its name, and the service itself, may come in the scan response, a report
+    /// of its own; FTMS wins when both are heard). True when the list changed.
     pub(crate) fn found(&mut self, r: &nrf::AdvReport) -> bool {
         if !self.searching {
             return false;
@@ -195,9 +226,10 @@ impl Ftms {
         let mut peer = [r.addr_type; 7];
         peer[1..].copy_from_slice(&r.addr);
         let known = self.found[..self.n_found].iter().position(|d| d.peer == peer);
+        let proto = fecble::advertised(r.data);
         let i = match known {
             Some(i) => i,
-            None if ftms::advertised(r.data) && self.n_found < self.found.len() => {
+            None if proto.is_some() && self.n_found < self.found.len() => {
                 self.n_found += 1;
                 self.n_found - 1
             }
@@ -205,6 +237,14 @@ impl Ftms {
         };
         let Some(d) = self.found.get_mut(i) else { return false };
         (d.peer, d.rssi) = (peer, r.rssi);
+        if let Some(p) = proto
+            && (p == Proto::Ftms || known.is_none())
+        {
+            d.proto = p;
+        }
+        if known.is_none() {
+            d.name_len = 0;
+        }
         if let Some(name) = nrf::ad_name(r.data) {
             let n = name.len().min(d.name.len());
             for (slot, &c) in d.name.iter_mut().zip(&name[..n]) {
@@ -217,7 +257,11 @@ impl Ftms {
 
     /// Commands may go out.
     pub(crate) fn ready(&self) -> bool {
-        self.conn.is_some() && self.step == Step::Ready && self.control && self.cp_wait.is_none()
+        self.conn.is_some()
+            && self.step == Step::Ready
+            && self.control
+            && self.cp_wait.is_none()
+            && !(self.fec && self.cp_inflight)
     }
 }
 
@@ -239,7 +283,7 @@ impl App {
     pub(crate) fn ftms_down(&mut self) {
         let fails = self.ftms.fails;
         self.ftms.unlink();
-        (self.ftms.wait_ms, self.ftms.fails) = (0, fails);
+        (self.ftms.wait_ms, self.ftms.fails, self.ftms.vs) = (0, fails, 0); // the chip forgets the UUID base too
         self.heard_ms[Kind::Trainer as usize] = u32::MAX;
     }
 
@@ -285,11 +329,16 @@ impl App {
     /// scan stopped, the connection made at once.
     pub(crate) fn ftms_pair(&mut self, b: &mut impl Board, i: usize) {
         let Some(peer) = self.ftms.found.get(i).filter(|_| i < self.ftms.n_found).map(|d| d.peer) else { return };
+        let fec = self.ftms.found.get(i).is_some_and(|d| d.proto == Proto::Fec);
         if self.sensors[Kind::Trainer as usize] != Sensor::Off {
             self.set_sensor(b, Kind::Trainer, Sensor::Off);
         }
-        self.sensors_store.dirty |= self.sensors_store.bt != Some(peer);
-        self.sensors_store.bt = Some(peer);
+        let changed = self.sensors_store.bt != Some(peer) || self.sensors_store.bt_fec != fec;
+        if changed {
+            self.ftms_drop(b); // a link to the trainer paired before is not this one's
+        }
+        self.sensors_store.dirty |= changed;
+        (self.sensors_store.bt, self.sensors_store.bt_fec) = (Some(peer), fec);
         if self.scanning {
             let _ = ble::scan_stop(b, &mut self.rx);
             self.scanning = false;
@@ -365,8 +414,20 @@ impl App {
             return; // a scan running (a search, BLE NEARBY) would hold the connection up
         }
         let peer = self.sensors_store.bt.unwrap_or_default();
+        let fec = self.sensors_store.bt_fec;
+        if fec && self.ftms.vs == 0 {
+            // the service's 128-bit base, once per chip start (the phone link took 8 of the 10 the SoftDevice holds)
+            match ble::uuid_vs_add(b, &mut self.rx, &fecble::BASE) {
+                Ok(t) => self.ftms.vs = t,
+                Err(_) => {
+                    self.ftms.fails = self.ftms.fails.saturating_add(1);
+                    self.ftms.retry_later();
+                    return;
+                }
+            }
+        }
         match ble::connect(b, &mut self.rx, &peer) {
-            Ok(()) => (self.ftms.connecting, self.ftms.busy_ms) = (Some(0), 0),
+            Ok(()) => (self.ftms.connecting, self.ftms.busy_ms, self.ftms.fec) = (Some(0), 0, fec),
             Err(_) => {
                 self.ftms.fails = self.ftms.fails.saturating_add(1);
                 self.ftms.retry_later();
@@ -389,6 +450,20 @@ impl App {
         } else {
             self.trainer.unsent();
         }
+    }
+
+    /// FE-C over BLE: `page` written to the trainer as a frame (app/trainer.rs `send_trainer`), one write in flight.
+    /// False when it could not go: the caller has it due again.
+    pub(crate) fn ftms_fec_send(&mut self, b: &mut impl Board, page: [u8; 8]) -> bool {
+        let f = &mut self.ftms;
+        let (Some(conn), false) = (f.conn, f.cp_inflight) else { return false };
+        let handle = f.handle(fecble::WRITE);
+        let frame = fecble::frame(page, f.fec_sum);
+        if handle == 0 || ble::write(b, &mut self.rx, conn, handle, &frame).is_err() {
+            return false;
+        }
+        (f.cp_wait, f.cp_ms, f.cp_inflight) = (Some(page[0]), 0, true);
+        true
     }
 
     /// A BLE event of the trainer's link ([`App::ftms_owns`]).
@@ -450,13 +525,14 @@ impl App {
         let cp_answer = matches!(e, Event::Written { .. }) && core::mem::take(&mut f.cp_inflight);
         f.step = match (step, e) {
             (Step::Service, Event::Services { status: 0, list, .. }) => {
-                match ble::services(list).find(|(u, ..)| *u == (SERVICE, ble::UUID_BLE)) {
+                let service = if f.fec { (fecble::SERVICE, f.vs) } else { (SERVICE, ble::UUID_BLE) };
+                match ble::services(list).find(|(u, ..)| *u == service) {
                     Some((_, start, end)) => {
                         f.end = end;
                         Step::Chars(start)
                     }
                     None => {
-                        self.notice("NOT AN FTMS TRAINER");
+                        self.notice(if self.ftms.fec { "NOT A FE-C TRAINER" } else { "NOT AN FTMS TRAINER" });
                         return self.ftms_drop(b);
                     }
                 }
@@ -466,7 +542,8 @@ impl App {
                 let mut last = 0;
                 for ((uuid, t), _, decl, value) in ble::chars(list) {
                     if let Some(c) = f.chars.get_mut(f.n_chars) {
-                        *c = (if t == ble::UUID_BLE { uuid } else { 0 }, decl, value);
+                        // the 16-bit part counts for the service's own base only
+                        *c = (if t == (if f.fec { f.vs } else { ble::UUID_BLE }) { uuid } else { 0 }, decl, value);
                         f.n_chars += 1;
                     }
                     last = value;
@@ -516,6 +593,8 @@ impl App {
             (Step::Ready, Event::Written { status, .. }) => {
                 if status != 0 && f.cp_wait.take().is_some() {
                     self.trainer.unsent(); // refused: due again
+                } else if f.fec {
+                    f.cp_wait = None; // written: the answer, if any, is a page 71 among the notifications
                 }
                 return;
             }
@@ -532,9 +611,12 @@ impl App {
             let rx = &mut self.rx;
             let f = &mut self.ftms;
             let sent = match f.step {
-                Step::Service => ble::discover_service(b, rx, conn, (SERVICE, ble::UUID_BLE)).is_ok(),
+                Step::Service => {
+                    let service = if f.fec { (fecble::SERVICE, f.vs) } else { (SERVICE, ble::UUID_BLE) };
+                    ble::discover_service(b, rx, conn, service).is_ok()
+                }
                 Step::Chars(from) => ble::discover_chars(b, rx, conn, from, f.end).is_ok(),
-                Step::Descs(i) => match NOTIFYING.get(usize::from(i)) {
+                Step::Descs(i) => match notifying(f.fec).get(usize::from(i)) {
                     Some(&(uuid, _)) => {
                         // the descriptors lie between the value and the next declaration (or the service's end)
                         let value = f.handle(uuid);
@@ -547,20 +629,30 @@ impl App {
                         continue;
                     }
                 },
-                Step::Cccd(i) => match (NOTIFYING.get(usize::from(i)), f.cccd.get(usize::from(i))) {
+                Step::Cccd(i) => match (notifying(f.fec).get(usize::from(i)), f.cccd.get(usize::from(i))) {
                     (Some(&(_, v)), Some(&h)) => h != 0 && ble::write(b, rx, conn, h, &[v, 0]).is_ok(),
                     _ => {
                         f.step = Step::Read(0);
                         continue;
                     }
                 },
-                Step::Read(i) => match READS.get(usize::from(i)) {
+                Step::Read(i) => match READS.get(usize::from(i)).filter(|_| !f.fec) {
                     Some(&u) => f.handle(u) != 0 && ble::read(b, rx, conn, f.handle(u)).is_ok(),
                     None => {
                         f.step = Step::Control;
                         continue;
                     }
                 },
+                Step::Control if f.fec => {
+                    // no control to ask for: the trainer takes the pages as they come
+                    let write = f.handle(fecble::WRITE) != 0;
+                    (f.step, f.control, f.tries, f.backoff_ms) = (Step::Ready, write, 0, FIRST_WAIT_MS);
+                    self.trainer.resend();
+                    if !write {
+                        self.notice("BT TRAINER: NO CONTROL");
+                    }
+                    return;
+                }
                 Step::Control => {
                     let cp = f.handle(CONTROL);
                     if cp == 0 || f.cccd[2] == 0 || f.tries >= TRIES {
@@ -600,7 +692,11 @@ impl App {
     /// A notification or indication from the trainer: its data, its status, the Control Point's responses.
     fn ftms_hvx(&mut self, b: &mut impl Board, handle: u16, data: &[u8]) {
         let f = &mut self.ftms;
-        if handle == 0 {
+        if f.fec {
+            if handle != 0 && handle == f.handle(fecble::NOTIFY) {
+                self.fec_message(data);
+            }
+        } else if handle == 0 {
         } else if handle == f.handle(BIKE_DATA) {
             if self.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
                 self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
@@ -643,5 +739,18 @@ impl App {
                 }
             }
         }
+    }
+
+    /// A notification of an FE-C over BLE trainer: a frame, its page decoded as the ANT+ path does (a frame of
+    /// another shape or with a wrong checksum is dropped).
+    fn fec_message(&mut self, data: &[u8]) {
+        let Some((page, sum)) = fecble::parse(data) else { return };
+        if self.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
+            self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
+        }
+        (self.ftms.fec_sum, self.ftms.quiet_ms) = (sum, 0);
+        fec::decode(page, &mut self.trainer.reading);
+        self.heard_ms[Kind::Trainer as usize] = 0;
+        self.fold_trainer();
     }
 }

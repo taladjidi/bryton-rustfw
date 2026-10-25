@@ -624,7 +624,7 @@ impl Nordic {
     }
 }
 
-/// An FTMS indoor bike trainer (drivers/ftms.rs) in range: it advertises the service, takes a central's connection
+/// An FTMS indoor bike trainer (drivers/ftms.rs), or (`new_fec`) an FE-C over BLE one (drivers/fecble.rs) in range: it advertises the service, takes a central's connection
 /// on connection 1, serves Feature, Indoor Bike Data, the ranges, the Control Point and the Machine Status from its
 /// table (handles 0x40..), notifies its data every 250 ms once subscribed, and answers each Control Point write
 /// with an indication, which it holds until the last one is confirmed (FTMS: one procedure at a time).
@@ -657,6 +657,15 @@ pub struct FtmsSim {
     /// A write while a procedure was in progress, or an indication sent before the last was confirmed: client
     /// errors (FTMS 4.16.3), counted.
     pub violations: u32,
+    /// FE-C over BLE (the D500's GATT table: Cycling Power, the vendor service 6e40fec1 with its notify and write
+    /// characteristics, the DFU service): its checksum is the sum's, not the XOR's; the frames it notifies next;
+    /// frames written that were no frame; when the last one was written.
+    pub fec: bool,
+    pub sum: bool,
+    out: Vec<Vec<u8>>,
+    pub rejected: u32,
+    pub raw: Vec<u8>,
+    last_write_ms: Option<u64>,
     /// The response to indicate, and whether the last indication waits for its confirmation.
     pending: Option<Vec<u8>>,
     pub(super) unconfirmed: bool,
@@ -667,6 +676,9 @@ pub struct FtmsSim {
 pub const FT_DATA: u16 = 0x44;
 pub const FT_CP: u16 = 0x4b;
 pub const FT_STATUS: u16 = 0x4e;
+/// The FE-C over BLE trainer's handles: its notify characteristic's value (the CCCD is the next) and its write one.
+pub const FC_NOTIFY: u16 = 0x42;
+pub const FC_WRITE: u16 = 0x45;
 
 impl FtmsSim {
     pub fn new() -> Self {
@@ -711,10 +723,81 @@ impl FtmsSim {
             drop_at: None,
             refuse_control: false,
             violations: 0,
+            fec: false,
+            sum: false,
+            out: Vec::new(),
+            rejected: 0,
+            raw: Vec::new(),
+            last_write_ms: None,
             pending: None,
             unconfirmed: false,
             next_ms: 0,
         }
+    }
+
+    /// The D500 as seen from a computer: Cycling Power, the vendor service 6e40fec1 (fec2 notify, fec3 write and
+    /// write without response), the Nordic DFU service nobody touches; 0x1818, 0x1816 in its advertising, the
+    /// 128-bit UUID and the name in the scan response.
+    pub fn new_fec() -> Self {
+        let mut t = Self::new();
+        let vs = |p: u16| {
+            let mut b = crate::fecble::BASE;
+            b[12..14].copy_from_slice(&p.to_le_bytes());
+            U::Vs(b)
+        };
+        let mut db = Vec::new();
+        let mut add = |handle: u16, uuid: U, kind: Kind, value: &[u8]| {
+            db.push(Attr { handle, uuid, kind, value: value.to_vec() })
+        };
+        add(0x20, U::Sig(0x1818), Kind::Service, &[]);
+        add(0x21, U::Sig(0x2a63), Kind::Decl(0x10), &[]);
+        add(0x22, U::Sig(0x2a63), Kind::Value, &[]);
+        add(0x23, U::Sig(0x2902), Kind::Cccd, &[0, 0]);
+        add(0x40, vs(0xfec1), Kind::Service, &[]);
+        add(0x41, vs(0xfec2), Kind::Decl(0x10), &[]);
+        add(FC_NOTIFY, vs(0xfec2), Kind::Value, &[]);
+        add(0x43, U::Sig(0x2902), Kind::Cccd, &[0, 0]);
+        add(0x44, vs(0xfec3), Kind::Decl(0x0c), &[]);
+        add(FC_WRITE, vs(0xfec3), Kind::Value, &[]);
+        add(0x50, U::Sig(0xfe59), Kind::Service, &[]);
+        (t.db, t.fec, t.addr) = (db, true, 0xc5);
+        t
+    }
+
+    /// A frame written to its write characteristic (or the CCCD): the GATT status. A page is applied as the
+    /// trainer would (49 target power, 48 resistance, 51 track), answered by a page 71, the capabilities (54) when
+    /// asked; messages closer than 200 ms are a violation (the unit sends one per 250 ms).
+    fn fec_write(&mut self, h: u16, data: &[u8], now: u64) -> u16 {
+        if h != FC_WRITE {
+            if let Some(a) = self.db.iter_mut().find(|a| a.handle == h && a.kind == Kind::Cccd) {
+                a.value = data.to_vec();
+            }
+            return 0;
+        }
+        let Some((p, _)) = crate::fecble::parse(data) else {
+            self.rejected += 1;
+            return 0;
+        };
+        if self.last_write_ms.is_some_and(|at| now < at + 200) {
+            self.violations += 1;
+        }
+        self.last_write_ms = Some(now);
+        self.got.push(p.to_vec());
+        self.raw = data.to_vec();
+        let u16_at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
+        match p[0] {
+            0x31 => (self.mode, self.target_w, self.control) = (5, (u16_at(6) / 4) as i16, true),
+            0x30 => (self.mode, self.resistance, self.control) = (4, p[7], true),
+            0x33 => (self.mode, self.grade_x100, self.control) = (0x11, (i32::from(u16_at(5)) - 20_000) as i16, true),
+            0x46 if p[6] == 54 => {
+                self.out.push(crate::fecble::broadcast([54, 255, 255, 255, 255, 0xe8, 0x03, 0x07], self.sum).to_vec())
+            }
+            _ => {}
+        }
+        if matches!(p[0], 0x30 | 0x31 | 0x33) {
+            self.out.push(crate::fecble::broadcast([71, p[0], 0xff, 0, 255, 255, 0x20, 0x03], self.sum).to_vec());
+        }
+        0
     }
 
     /// Its address as the unit's chip reports it (`adv_report` in sim.rs: type byte 0, then the 6 bytes).
@@ -725,6 +808,7 @@ impl FtmsSim {
     /// The link is gone: its subscriptions and the control with it.
     pub fn hang_up(&mut self) {
         (self.connected, self.control, self.pending, self.unconfirmed) = (false, false, None, false);
+        (self.out, self.last_write_ms) = (Vec::new(), None);
         for a in self.db.iter_mut().filter(|a| a.kind == Kind::Cccd) {
             a.value = vec![0, 0];
         }
@@ -736,10 +820,16 @@ impl FtmsSim {
     }
 
     /// Its advertising: the Service Data (available, an indoor bike), then the scan response with its name.
-    pub fn reports(&self) -> [(u8, i8, &'static [u8]); 2] {
+    pub fn reports(&self) -> [(u8, i8, Vec<u8>); 2] {
+        if self.fec {
+            let mut scan = b"\x09\x09SIM D500".to_vec();
+            scan.extend([17, 0x07]);
+            scan.extend(crate::fecble::BASE);
+            return [(self.addr, -55, vec![2, 0x01, 0x06, 5, 0x03, 0x18, 0x18, 0x16, 0x18]), (self.addr, -56, scan)];
+        }
         [
-            (self.addr, -55, &[2, 0x01, 0x06, 6, 0x16, 0x26, 0x18, 0x01, 0x20, 0x00]),
-            (self.addr, -56, b"\x09\x09SIM BIKE"),
+            (self.addr, -55, vec![2, 0x01, 0x06, 6, 0x16, 0x26, 0x18, 0x01, 0x20, 0x00]),
+            (self.addr, -56, b"\x09\x09SIM BIKE".to_vec()),
         ]
     }
 }
@@ -756,7 +846,9 @@ impl Nordic {
     fn ftms_write(&mut self, h: u16, data: &[u8], now: u64) {
         let Some(mut t) = self.ftms.take() else { return };
         let mut status = 0u16;
-        if h == FT_CP {
+        if t.fec {
+            status = t.fec_write(h, data, now);
+        } else if h == FT_CP {
             if !t.on(FT_CP, 2) || core::mem::take(&mut t.forget_cccd) {
                 if let Some(a) = t.db.iter_mut().find(|a| a.handle == FT_CP + 1) {
                     a.value = vec![0, 0];
@@ -808,9 +900,49 @@ impl Nordic {
         self.gattc_on(conn, 0x39, 0, &b);
     }
 
+    /// The FE-C over BLE trainer's moves at `now`: its drop, the frames it owes, pages 16 and 25 every 250 ms.
+    fn fec_tick(&mut self, t: &mut FtmsSim, now: u64) {
+        if !t.connected {
+            return;
+        }
+        if t.drop_at.is_some_and(|at| now >= at) {
+            t.drop_at = None;
+            t.hang_up();
+            self.evt(0x11, &[1, 0, 0x08]);
+            return;
+        }
+        if t.on(FC_NOTIFY, 1) {
+            for f in std::mem::take(&mut t.out) {
+                self.hvx_on(1, FC_NOTIFY, 1, &f);
+            }
+        }
+        while now >= t.next_ms {
+            t.next_ms += 250;
+            t.power = if t.mode == 5 && t.control { t.target_w.max(0) as u16 } else { t.rider_w };
+            t.speed_mm_s = match t.mode {
+                0x11 => (10_000 - i32::from(t.grade_x100) * 8).clamp(1000, 20_000) as u32,
+                4 => 8000 - u32::from(t.resistance) * 20,
+                _ => u32::from(t.power) * 42,
+            };
+            if !t.on(FC_NOTIFY, 1) {
+                continue;
+            }
+            let [s0, s1] = (t.speed_mm_s as u16).to_le_bytes();
+            let [p0, p1] = t.power.to_le_bytes();
+            for page in [[16, 25, 0, 0, s0, s1, 0xff, 0x30], [25, 1, 90, 0, 0, p0, p1 & 0x0f, 0x30]] {
+                self.hvx_on(1, FC_NOTIFY, 1, &crate::fecble::broadcast(page, t.sum));
+            }
+        }
+    }
+
     /// The trainer's moves at `now`: its response indicated, its data notified, its scripted faults.
     pub(super) fn ftms_tick(&mut self, now: u64) {
         let Some(mut t) = self.ftms.take() else { return };
+        if t.fec {
+            self.fec_tick(&mut t, now);
+            self.ftms = Some(t);
+            return;
+        }
         if t.connected {
             if t.drop_at.is_some_and(|at| now >= at) {
                 t.drop_at = None;

@@ -2032,3 +2032,107 @@ fn ftms_link_events() {
     assert!(gatt.iter().all(|&n| n > 5), "Services, Chars, Descs, Read, ConnParamRequest: {gatt:?}");
     assert!(listed.iter().all(|&n| n > 5), "listed, named, past the cap: {listed:?}");
 }
+
+/// The FE-C over BLE trainer's link (drivers/fecble.rs, app/ftms.rs): with the D500 connected on connection 1,
+/// notifications on its characteristic that are frames (valid with either checksum, wrong checksum, cut short,
+/// wrong sync, length or message id, every page the app decodes), mixed with random BLE events on connections 0, 1
+/// or any other, between passes that let the link be made again; advertising data with 128-bit lists (the service's
+/// base, other UUIDs, cut short); and random bytes into the parsers. No panic, and each path reached: frames
+/// accepted (with each checksum) and refused, every decoded page, the listing of FE-C trainers.
+#[test]
+fn fecble_link_events() {
+    use super::ble_sim::FC_NOTIFY;
+    use super::*;
+    const IDS: [u16; 12] = [0x10, 0x11, 0x13, 0x1b, 0x21, 0x23, 0x52, 0x55, 0x30, 0x32, 0x33, 0x38];
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.nordic.ftms = Some(FtmsSim::new_fec());
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 4000);
+    app.sensors_store.bt = sim.nordic.ftms.as_ref().map(FtmsSim::peer);
+    app.sensors_store.bt_fec = true;
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ftms.conn, Some(1), "connected before the fuzz");
+    let mut frames = [0usize; 3]; // accepted with the XOR, with the sum, refused
+    let mut seen = 0u8;
+    let mut listed = [0usize; 2]; // FE-C trainers listed, advertising data without the service
+    for seed in 1..=4u32 {
+        let v: Vec<u8> = bytes(seed, 1 << 16).collect();
+        for (k, c) in v.chunks_exact(24).enumerate() {
+            let mut p = std::vec![2];
+            if c[0] % 3 != 0 {
+                // a notification on the trainer's characteristic: a frame, damaged one way or another
+                let number = [16, 25, 54, 71, 80, 81, c[1], c[2]][usize::from(c[3]) % 8];
+                let page = [number, c[4], c[5], c[6], c[7], c[8], c[9], c[10]];
+                let mut f = crate::fecble::broadcast(page, c[11] % 2 == 0).to_vec();
+                match c[12] % 8 {
+                    0 => f[12] ^= 1 + c[13] % 255, // a wrong checksum
+                    1 => f.truncate(usize::from(c[13]) % 13),
+                    2 => f[0] = c[13],
+                    3 => f[1] = c[13],
+                    4 => f[2] = c[13],
+                    5 => f.extend(&c[14..14 + usize::from(c[13]) % 8]), // longer than a frame
+                    _ => {}
+                }
+                match crate::fecble::parse(&f) {
+                    Some((_, sum)) => frames[usize::from(sum)] += 1,
+                    None => frames[2] += 1,
+                }
+                p.extend(0x39u16.to_le_bytes());
+                p.extend(1u16.to_le_bytes());
+                p.extend([0, 0, 0, 0]);
+                p.extend(FC_NOTIFY.to_le_bytes());
+                p.push(1);
+                p.extend((f.len() as u16).to_le_bytes());
+                p.extend(&f);
+            } else {
+                p.extend(IDS[usize::from(c[1]) % IDS.len()].to_le_bytes());
+                p.extend(u16::from(c[2] % 3).to_le_bytes());
+                p.extend(&c[3..3 + usize::from(c[4]) % 20]);
+            }
+            app.phone_event(&mut sim, &p);
+            seen |= app.trainer.reading.seen;
+            if app.ftms.conn.is_none() {
+                app.ftms_retry(); // at once, the chip is not reset: its UUID base stays registered
+                run(&mut sim, &mut app, 1000);
+            } else if k % 64 == 0 {
+                run(&mut sim, &mut app, 500);
+            }
+        }
+        // advertising data: 128-bit lists (the base or not), flags, FTMS-less 16-bit lists, junk, cut short
+        app.ftms.searching = true;
+        for c in v.chunks_exact(24) {
+            let mut ad = std::vec::Vec::new();
+            for part in c[..20].chunks_exact(5) {
+                match part[0] % 5 {
+                    0 => ad.extend([2, 0x01, 6]),
+                    1 => {
+                        ad.extend([17, 0x06 + part[1] % 2]);
+                        ad.extend(crate::fecble::BASE);
+                    }
+                    2 => {
+                        ad.extend([17, 0x07]);
+                        ad.extend([part[1]; 16]);
+                    }
+                    3 => ad.extend([5, 0x03, 0x18, 0x18, 0x16, 0x18]),
+                    _ => ad.extend([part[1] % 20, part[2], part[3], part[4]]), // a structure whose length lies
+                }
+            }
+            ad.truncate(usize::from(c[21]) % (ad.len() + 1));
+            let r =
+                crate::nrf::AdvReport { addr_type: c[22] % 2, addr: [c[23] % 7, 1, 2, 3, 4, 5], rssi: -50, data: &ad };
+            let fec = crate::fecble::advertised(&ad) == Some(crate::fecble::Proto::Fec);
+            listed[0] += usize::from(app.ftms.found(&r) && fec);
+            listed[1] += usize::from(crate::fecble::advertised(&ad).is_none());
+        }
+        app.ftms.searching = false;
+        for c in v.chunks(13) {
+            let _ = crate::fecble::parse(c);
+            let _ = crate::fecble::advertised(c);
+        }
+    }
+    std::println!("fecble fuzz reached {frames:?} {seen:#x} {listed:?}");
+    assert!(frames.iter().all(|&n| n > 50), "accepted with each checksum, refused: {frames:?}");
+    assert_eq!(seen & 0x3f, 0x3f, "every page decoded");
+    assert!(listed.iter().all(|&n| n > 5), "FE-C trainers listed, advertising without the service: {listed:?}");
+}

@@ -59,6 +59,21 @@ The dated findings are in [journal.md](journal.md).
   4. the trainer switched off and on: the link made again; the phone unaffected throughout.
   Inferred and to check there: the cadence bit of Indoor Bike Data read as present when set (pycycling's reading,
   the specification's table says the opposite), a resistance level spread over the trainer's own range, Cw 0.51.
+- **The Bluetooth trainer without FTMS, FE-C over BLE (drivers/fecble.rs, app/ftms.rs; phase 2)**: only against the
+  simulator's D500 (`FtmsSim::new_fec`). On the unit with the owner's Van Rysel D500 (its older model has no FTMS;
+  2026-10-26 from a computer: name `VANRYSEL-HT-xxxx`, 0x1818 and 0x1816 and the 128-bit 6e40fec1-b5a3-f393-e0a9-
+  e50e24dcca9e in its advertising or scan response, characteristics 6e40fec2 notify and 6e40fec3 write):
+  1. SENSORS > BT TRAINER lists it as `FE-C` (the 128-bit UUID may be in the scan response only: the search waits
+     for it); Select connects; `sd_ble_uuid_vs_add` for the base answers 0 (the phone link took 8 of the 10
+     vendor UUIDs; a duplicate answering the existing type is inferred, not seen) and the service is found;
+  2. the notifications on 6e40fec2 give pages 16 and 25 (power, cadence, speed on the pages); the capabilities
+     request (page 70) is answered by page 54;
+  3. which checksum the trainer takes: the frame is `A4 09 4F 05 <page> <checksum>`; the XOR of all the bytes
+     (ANT's) is sent until a notification shows the sum of the bytes after the sync (pycycling's), which is then
+     used. If the trainer ignores the writes, this is the first thing to look at (a write with response, one per
+     250 ms; its ATT answer would say refused);
+  4. ERG under a workout (page 49), SIM on a course (page 51), the trainer's page 71 answers pass; the link made
+     again after the trainer is switched off and on. Pairing keeps the protocol in `\Rustfw\sensors.bin` (`F`).
 - **The sleep power steps** (main.rs `sleep_power_init`): seen on the unit 2026-10-25 from RAM, masks 0, 8, 4, 1, 3
   and 15 (boots, dev link, BLE, keys, a full redraw at 16 MHz clean, PLL3 off, a ride recorded and discarded by keys;
   with 15 the owner checked touch, backlight, the USB drive and the power button). Still to see: a GPS fix outdoors,

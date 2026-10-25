@@ -171,7 +171,7 @@ impl App {
     /// The chip reset and started again as at boot (`App::new_with`), every channel that was open opened again, the
     /// phone link set up again. What the sensors showed goes stale by itself ("--") and comes back with their data.
     #[inline(never)] // its buffers in its own frame
-    fn radio_restart(&mut self, b: &mut impl Board) {
+    pub(crate) fn radio_restart(&mut self, b: &mut impl Board) {
         let mut open = self.sensors;
         for (s, owed) in open.iter_mut().zip(self.watch.owed) {
             if *s == Sensor::Off {

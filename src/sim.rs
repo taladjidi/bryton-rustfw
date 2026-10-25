@@ -842,7 +842,7 @@ impl Nordic {
             }
             let trainer = self.ftms.as_ref().filter(|t| t.connectable && !t.connected).map(|t| t.reports());
             for (addr, rssi, data) in trainer.into_iter().flatten() {
-                self.queue(&adv_report(addr, rssi, data));
+                self.queue(&adv_report(addr, rssi, &data));
             }
             self.scan_end = Some(now + 1000 * u64::from(u16::from_le_bytes([t0, t1])));
             return;
@@ -1342,6 +1342,8 @@ mod link_tests;
 #[cfg(test)]
 mod altitude_tests;
 
+#[cfg(test)]
+mod fecble_tests;
 #[cfg(test)]
 mod ftms_tests;
 #[cfg(test)]

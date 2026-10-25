@@ -42,6 +42,8 @@ pub(crate) struct SensorStore {
     pub(crate) trainer: Option<SensorId>,
     /// The paired Bluetooth trainer (app/ftms.rs): its address byte and address.
     pub(crate) bt: Option<[u8; 7]>,
+    /// It speaks FE-C over BLE (drivers/fecble.rs), else FTMS.
+    pub(crate) bt_fec: bool,
 }
 
 /// The bike's weight told to the trainer (its SIM mode wants it), kg.
@@ -132,6 +134,7 @@ impl App {
     /// per [`ACK_GAP_MS`]. Nothing here waits on the card or the recorder.
     fn send_trainer(&mut self, b: &mut impl Board) {
         let bt = self.ftms_on();
+        let fec_ble = bt && self.sensors_store.bt_fec;
         let heard = self.trainer_heard() && (self.ant || bt);
         if !heard {
             if core::mem::take(&mut self.trainer_up) {
@@ -141,7 +144,7 @@ impl App {
         }
         self.trainer_up = true;
         let d = self.trainer_drive();
-        if bt {
+        if bt && !fec_ble {
             // FTMS: the set-up is the link's (app/ftms.rs); a command once the last one's response came
             let ready = self.ftms.ready();
             if let Some(c) = self.trainer.due(self.dt_ms, ready, &d) {
@@ -149,8 +152,9 @@ impl App {
             }
             return;
         }
+        // ANT+, or FE-C over BLE (the same pages, one message per slot; over BLE once the link is ready)
         self.ack_gap_ms = self.ack_gap_ms.saturating_add(self.dt_ms);
-        let page = if self.trainer_no_control || self.ack_gap_ms < ACK_GAP_MS {
+        let page = if self.trainer_no_control || self.ack_gap_ms < ACK_GAP_MS || (bt && !self.ftms.ready()) {
             self.trainer.due(self.dt_ms, false, &d); // the clocks run, nothing goes out
             None
         } else {
@@ -169,6 +173,12 @@ impl App {
         };
         let Some(page) = page else { return };
         self.ack_gap_ms = 0;
+        if bt {
+            if !self.ftms_fec_send(b, page) {
+                self.trainer.unsent(); // not written: due again at the next free slot
+            }
+            return;
+        }
         match nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page) {
             Ok(()) => {}
             Err(nrf::Error::Timeout) => {
@@ -200,7 +210,9 @@ impl App {
                     fat.read_at(&mut d, &f, 0, &mut s)
                 });
                 if let (Ok(512), Some(t)) = (read, sensors::from_sector(&s)) {
-                    (self.sensors_store.trainer, self.sensors_store.bt) = (t, sensors::bt_from_sector(&s));
+                    let bt = sensors::bt_from_sector(&s);
+                    (self.sensors_store.trainer, self.sensors_store.bt) = (t, bt.map(|b| b.0));
+                    self.sensors_store.bt_fec = bt.is_some_and(|b| b.1);
                 }
             }
             if let Some(id) = Kind::Trainer.from_word(b.backup_read(Kind::Trainer.backup())) {
@@ -220,7 +232,7 @@ impl App {
             return;
         }
         let (local, _) = self.rec_time();
-        let sector = sensors::sector(self.sensors_store.trainer, self.sensors_store.bt);
+        let sector = sensors::sector(self.sensors_store.trainer, self.sensors_store.bt, self.sensors_store.bt_fec);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let r = fat::Fat::mount(&mut d).and_then(|mut fat| {
             let t = fat::write::dos_time(local);
