@@ -3037,3 +3037,58 @@ fn pan_after_zoom_in_moves_with_the_finger() {
     assert_eq!(app.map_centre, centre, "not panned");
     assert_consistent(&sim, &app);
 }
+
+/// A cue comes up whatever is on screen while navigating: over a menu, over the media remote, and with the light
+/// timed out or switched off with Back (it comes back on, as for a key). The panel equals a full redraw each time (a
+/// screen updating its own parts does not paint over the banner).
+#[test]
+fn course_cues_over_any_screen() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(zigzag_route);
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    app.open_courses(&mut sim);
+    run(&mut sim, &mut app, 1000);
+    let list = &app.courses.as_deref().unwrap().list;
+    let k = (0..list.len()).find(|&i| list.get(i).unwrap().name() == "ZIGZAG").unwrap();
+    app.follow_course(k);
+    run(&mut sim, &mut app, 200);
+    app.settings.light_timeout = 1; // 10 s
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let cues: Vec<_> = app.courses.as_deref().unwrap().course.cues().to_vec();
+    // each cue's first banner (200 m before) found on a different screen
+    let screens = [Some(Screen::Menu(Menu::Main, 0)), Some(Screen::Media), None, None];
+    for (i, (cue, screen)) in cues.iter().zip(screens).enumerate() {
+        let at_ms = (u64::from(cue.at_m).saturating_sub(260)) * 125;
+        while sim.ms < at_ms {
+            run(&mut sim, &mut app, 500);
+        }
+        match screen {
+            Some(s) => {
+                app.open(s);
+                app.show(&mut sim);
+            }
+            None if i == 2 => {}           // the light timed out on its own (10 s, no key)
+            None => app.backlight = false, // the light switched off by the rider (Back on the overview)
+        }
+        run(&mut sim, &mut app, 3000);
+        if screen.is_none() {
+            assert!(!sim.backlight, "cue {i}: the light off before the cue");
+        }
+        let until = sim.ms + 12_000;
+        while sim.ms < until && !app.banner.as_str().ends_with("200 M") {
+            run(&mut sim, &mut app, 250);
+        }
+        assert!(app.banner.as_str().ends_with("200 M"), "cue {i} said: {:?}", app.banner.as_str());
+        run(&mut sim, &mut app, 250);
+        assert!(sim.backlight, "cue {i}: the light on for it");
+        assert_consistent(&sim, &app);
+        if let Some(s) = screen {
+            assert_eq!(app.screen(), s, "cue {i}: the screen stays");
+            app.close();
+            app.show(&mut sim);
+        }
+    }
+}
