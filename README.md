@@ -19,6 +19,8 @@ entirely. Not affiliated with Bryton.
 | The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap selects then acts (sim) | A page's field: its group, then the field (sim) |
 | ![IGN map](docs/img/ign-map.png) | ![Media remote](docs/img/phone-media.png) | ![A call](docs/img/phone-call.png) | ![Map zoom](docs/img/map-zoom.png) |
 | The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) | The map zoomed in with "+" and "-", panned by a drag, the crosshair to follow again (sim, synthetic tiles) |
+| ![Ride menu](docs/img/ride-menu.png) | ![Settings](docs/img/menu-settings.png) | | |
+| Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS: a menu per subject, any setting three levels down at most (sim) | | |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*

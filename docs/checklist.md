@@ -334,6 +334,7 @@ Storage, USB and updates
 - [x] Overview fields and pages 1 to 3 (stock): sim
 - [x] Menus in groups, one screen each; a field picked by group then field (Garmin, Wahoo: categories): sim
 - [x] The menu tree of the UI review (4.3): WORKOUTS, COURSES, HISTORY, PAGES, SENSORS, SETTINGS (ME, ALERTS, DISPLAY, BIKE, SYSTEM); any setting three levels down at most, units after the values: sim
+- [x] A ride menu while riding (Garmin's controls, Karoo's drawer; UI review step 8): PAUSE / RESUME, END RIDE (asked first), WORKOUT (NEXT STEP, STOP), COURSE (STOP FOLLOWING), BRIGHTNESS, SENSORS, EDIT THIS PAGE, ALL SETTINGS; only the rows that apply: sim
 - [x] GPS status: fix, satellites, position, altitude, UTC (stock About, Garmin): unit
 - [~] Settings kept through power off (stock, all): RTC backup registers, not a file
 - [ ] Time zone, daylight saving, date and time formats (stock, all)

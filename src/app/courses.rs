@@ -44,11 +44,18 @@ impl App {
         // the fit to grow (review)
         (self.map_zoom, self.map_centre) = (None, None);
         if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) {
-            c.on = None;
-            return self.say("COURSE OFF");
+            return self.stop_course();
         }
         c.load(k);
         self.say("READING COURSE");
+    }
+
+    /// Stops following the course (its row in COURSES, STOP FOLLOWING in the ride menu); the map fits again.
+    pub(crate) fn stop_course(&mut self) {
+        let Some(c) = self.courses.as_deref_mut().filter(|c| c.on.is_some()) else { return };
+        c.on = None;
+        (self.map_zoom, self.map_centre) = (None, None);
+        self.say("COURSE OFF");
     }
 
     /// Bytes of course files read per pass: as much as the scan of stock's rides while no ride runs (about 40 ms

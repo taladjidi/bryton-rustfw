@@ -67,7 +67,7 @@ The dated findings are in [journal.md](journal.md).
      banner PHONE PAIRED, LINK SECURE, the clock set to the iPhone's time (and the date), Settings > Bluetooth shows
      S510 connected. Note the order the events came in if pairing fails (the security request at connection: is
      the iPhone's prompt shown without opening a HID characteristic?).
-  4. **Media:** start music on the iPhone; PHONE > REMOTE shows its title, artist and PLAYING with the time running;
+  4. **Media:** start music on the iPhone; SENSORS > PHONE > REMOTE shows its title, artist and PLAYING with the time running;
      Start pauses (AMS), Page next, Lap previous, held Page / Lap the volume (the iPhone's volume HUD). Hold Lap on
      a ride page: play / pause. The MUSIC field.
   5. **Camera:** open the iPhone's Camera, hold a finger on the REMOTE screen: a photo (HID volume up). If the banner

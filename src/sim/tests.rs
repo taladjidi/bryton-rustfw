@@ -608,8 +608,8 @@ fn workout_from_the_calendar() {
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), text(&app, Workout)), (Screen::Menu(Menu::Steps, 0), "3/6".into()));
-    for _ in 0..3 {
-        app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..4 {
+        app.press(&mut sim, Press::Short(Key::Back)); // WORKOUTS, ALL SETTINGS, the ride menu, out
     }
     assert_eq!(app.screen(), Screen::Ride(0));
     for _ in 0..3 {
@@ -1324,8 +1324,8 @@ fn built_in_row(app: &App, i: usize) -> std::string::String {
     format!("{} {}", label.as_str(), value.as_str())
 }
 
-/// The way from menu `from` to `row`, by the rows the app shows (the first found, at most 5 menus down; the full
-/// menu opened from the ride menu is not walked again): each menu on the way and the row chosen in it.
+/// The way from menu `from` to `row`, by the rows the app shows (the first found, at most 5 menus down; the main
+/// menu walked into only from the ride menu, as ALL SETTINGS): each menu on the way and the row chosen in it.
 pub(crate) fn path_to(app: &App, from: Menu, row: menu::Row) -> Option<Vec<(Menu, usize)>> {
     fn walk(app: &App, from: Menu, row: menu::Row, depth: usize) -> Option<Vec<(Menu, usize)>> {
         for i in 0..app.rows(from) {
@@ -1334,7 +1334,7 @@ pub(crate) fn path_to(app: &App, from: Menu, row: menu::Row) -> Option<Vec<(Menu
                 return Some(std::vec![(from, i)]);
             }
             if let menu::Row::Open(m) = r
-                && m != Menu::Main
+                && (m != Menu::Main || matches!(from, Menu::Ride(_)))
                 && depth < 5
                 && let Some(mut p) = walk(app, m, row, depth + 1)
             {
@@ -1510,6 +1510,146 @@ fn menu_tree_reaches_everything() {
         app.press(&mut sim, Press::Short(Key::Back));
         assert_eq!(app.screen(), Screen::Main, "{m:?}: {depth} Backs to the overview");
     }
+}
+
+/// The labels of the menu shown, one per row.
+fn labels(app: &App) -> Vec<std::string::String> {
+    let Screen::Menu(m, _) = app.screen() else { panic!("not a menu: {:?}", app.screen()) };
+    (0..app.rows(m)).map(|i| app.menu_row(m, i).unwrap().0.as_str().into()).collect()
+}
+
+/// The ride menu (UI review step 8): Page held while a ride records or is paused opens RIDE instead of the full
+/// menu, with only the rows that apply: WORKOUT while a step runs, COURSE while one is followed, EDIT THIS PAGE but
+/// on the course page. Each row acts: PAUSE stays (RESUME then, and END RIDE under it), RESUME goes back to the page,
+/// BRIGHTNESS changes in place, NEXT STEP, STOP WORKOUT and STOP FOLLOWING act and go back to riding, END RIDE asks
+/// first and then shows the ride's card. SENSORS, EDIT THIS PAGE and ALL SETTINGS open their menus; Back goes up one
+/// level at a time; no wrap. Screenshots: ride_menu, ride_menu_paused, ride_menu_workout, ride_menu_end.
+#[test]
+fn ride_menu() {
+    use menu::{RideRow, Row};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course::tests::memory());
+    let hold_page = |sim: &mut Sim, app: &mut App| app.press(sim, Press::Long(Key::Page));
+    let back = |sim: &mut Sim, app: &mut App, n| (0..n).for_each(|_| app.press(sim, Press::Short(Key::Back)));
+    hold_page(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no ride: the full menu");
+    back(&mut sim, &mut app, 1);
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride
+    assert_eq!(app.screen(), Screen::Ride(0));
+    hold_page(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), 0));
+    let base = ["PAUSE", "END RIDE", "BRIGHTNESS", "SENSORS", "EDIT THIS PAGE", "ALL SETTINGS"];
+    assert_eq!(labels(&app), base, "no workout, no course: their rows not shown");
+    run(&mut sim, &mut app, 1100);
+    assert_consistent(&sim, &app);
+    sim.save("ride_menu");
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), 0), "no wrap");
+    // BRIGHTNESS: in place
+    to_row(&mut sim, &mut app, Row::Set(Setting::Light));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((sim.light_level, app.screen()), (60, Screen::Menu(Menu::Ride(0), 2)));
+    // SENSORS, EDIT THIS PAGE, ALL SETTINGS: their menus, Back to the ride menu's row, then to the page
+    for (row, m, at) in [
+        (Row::Open(Menu::Sensors), Menu::Sensors, 3),
+        (Row::Open(Menu::Page(0)), Menu::Page(0), 4),
+        (Row::Open(Menu::Main), Menu::Main, 5),
+    ] {
+        back(&mut sim, &mut app, 1);
+        hold_page(&mut sim, &mut app);
+        to_row(&mut sim, &mut app, row);
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(app.screen(), Screen::Menu(m, 0), "{row:?}");
+        back(&mut sim, &mut app, 1);
+        assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), at));
+    }
+    back(&mut sim, &mut app, 1);
+    assert_eq!(app.screen(), Screen::Ride(0), "Back: the page");
+    assert_eq!(app.ride.state(), ride::State::Running, "nothing changed the ride");
+
+    // PAUSE stays, the row says RESUME; RESUME goes back to the page
+    hold_page(&mut sim, &mut app);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::Menu(Menu::Ride(0), 0)));
+    assert_eq!(labels(&app)[0], "RESUME");
+    run(&mut sim, &mut app, 1100);
+    assert_consistent(&sim, &app);
+    sim.save("ride_menu_paused");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Running, Screen::Ride(0)));
+
+    // a workout from ALL SETTINGS > WORKOUTS: WORKOUT > NEXT STEP, STOP WORKOUT
+    hold_page(&mut sim, &mut app);
+    to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // the first one's steps
+    app.press(&mut sim, Press::Short(Key::Start)); // START
+    assert_eq!(app.screen(), Screen::Ride(0));
+    let step = |app: &App| app.player.as_ref().and_then(|p| p.step(app.plan.steps()));
+    assert_eq!(step(&app), Some(0));
+    hold_page(&mut sim, &mut app);
+    assert_eq!(labels(&app)[2], "WORKOUT");
+    run(&mut sim, &mut app, 1100);
+    assert_consistent(&sim, &app);
+    sim.save("ride_menu_workout");
+    to_row(&mut sim, &mut app, Row::Ride(RideRow::NextStep));
+    assert_eq!(app.screen(), Screen::Menu(Menu::WorkoutNow, 0));
+    back(&mut sim, &mut app, 1);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Ride(0), 2), "Back: the ride menu, on WORKOUT");
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // NEXT STEP
+    assert_eq!((step(&app), app.screen()), (Some(1), Screen::Ride(0)));
+    assert!(app.banner.as_str().starts_with("2/"), "the step said, no lap: {:?}", app.banner.as_str());
+    hold_page(&mut sim, &mut app);
+    to_row(&mut sim, &mut app, Row::Ride(RideRow::StopWorkout));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.player.is_none(), app.screen(), app.banner.as_str()), (true, Screen::Ride(0), "WORKOUT STOPPED"));
+    assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");
+
+    // a course from ALL SETTINGS > COURSES: on its page, COURSE > STOP FOLLOWING, and no EDIT THIS PAGE
+    hold_page(&mut sim, &mut app);
+    to_row(&mut sim, &mut app, Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(COURSE), "COURSE ON"));
+    hold_page(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Ride(COURSE), 0));
+    assert_eq!(labels(&app), ["PAUSE", "END RIDE", "COURSE", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"]);
+    to_row(&mut sim, &mut app, Row::Ride(RideRow::StopCourse));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.courses.as_deref().unwrap().on.is_none(), "not followed");
+    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(0), "COURSE OFF"), "its page gone: the first");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+
+    // END RIDE: asked first, then the card
+    hold_page(&mut sim, &mut app);
+    assert_eq!(labels(&app), base);
+    to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), main_row(&app, 1).as_str()), (ride::State::Running, "END RIDE SURE?"));
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("ride_menu_end");
+    app.press(&mut sim, Press::Short(Key::Page)); // anything else drops it
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    back(&mut sim, &mut app, 1);
+    assert_eq!(app.screen(), Screen::Main, "the card, then the overview");
+    hold_page(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no ride: the full menu again");
 }
 
 /// The row index of `row` in the menu that holds it (off a ride, from the main menu).

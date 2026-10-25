@@ -78,6 +78,11 @@ impl App {
         self.open(Screen::Menu(Menu::Steps, 0));
     }
 
+    /// A workout is playing a step (not done): the ride menu shows WORKOUT.
+    pub(crate) fn workout_running(&self) -> bool {
+        self.player.as_ref().is_some_and(|p| p.step(self.plan.steps()).is_some())
+    }
+
     /// Starts the workout opened from step `at`, and the ride if none runs; the first ride page.
     pub(crate) fn start_workout(&mut self, at: usize) {
         if self.ride.state() == ride::State::Idle {

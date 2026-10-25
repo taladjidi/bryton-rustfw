@@ -77,10 +77,10 @@
 | Key | Overview and ride pages | Menus |
 |---|---|---|
 | Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down (stops at the last row) |
-| hold Page | the menu | |
+| hold Page | the menu; during a ride (recording or paused), the ride menu | |
 | Lap | a lap (while riding) | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
-| hold Start | end a paused ride | |
+| hold Start | end a paused ride (or END RIDE in the ride menu) | |
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 | hold Lap | the phone's music: play / pause (PHONE below) | |
@@ -105,7 +105,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
-| hold (600 ms, still) | the menu (as holding Page); not while a ride records | | |
+| hold (600 ms, still) | the menu (as holding Page; the ride menu while paused); not while a ride records | | |
 | tap | the gear right of the overview's date: the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
@@ -176,6 +176,21 @@ MENU
   (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
   beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the
   page. Any of the 56 fields is a few presses away, not up to 55.
+- **The ride menu:** Page held while a ride records or is paused opens RIDE instead, the rows that apply only:
+  ```
+  RIDE
+   +- PAUSE / RESUME   as Start; PAUSE stays (END RIDE right under it), RESUME goes back to the page
+   +- END RIDE         asked first ("SURE?", Start again), then the ride's card (paused first if it was running)
+   +- WORKOUT >        while a step runs: NEXT STEP (no lap), STOP WORKOUT (the ride goes on)
+   +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
+   +- BRIGHTNESS       changed in place
+   +- SENSORS >        the same menu as off the ride
+   +- EDIT THIS PAGE > the page's layout and fields (not on the course page, which has none)
+   +- ALL SETTINGS >   the full menu above
+  ```
+  An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
+  that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when
+  the workout ends) moves the selection to the last row left.
 - **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
   to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, GAUGE POWER, WHEEL) goes to its next value.
 - **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
@@ -318,13 +333,13 @@ What Bryton's firmware left on the card, read only (nothing is ever written), fr
 ## Phone (BLE, no app)
 
 The unit pairs with a phone as a Bluetooth accessory, with nothing to install on the phone:
-- **Pairing:** PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
+- **Pairing:** SENSORS > PHONE > PAIR advertises for a minute ("S510"; the phone sees a HID accessory, appearance generic HID);
   pair from the phone's Bluetooth settings (Just Works: no code). One phone is kept (its key and the notifications
   it enabled), in `\Rustfw\ble.bin` on the card, read 3 s after the start; FORGET erases it. A build that may not
   write the card keeps it until switched off. Not paired, the unit does not advertise at all; paired and not
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
-  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. PHONE >
+  as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. SENSORS > PHONE >
   REMOTE is a player, also opened by a swipe down on the overview or a ride page (a swipe up closes it): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
   time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
   the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,

@@ -16,7 +16,7 @@ pub enum Input {
     Select,
     /// Back: out of a menu (on a page, the backlight on or off).
     Back,
-    /// Page held: the menu.
+    /// Page held: the menu (the ride menu while a ride records or is paused).
     Menu,
     /// Start held: end a paused ride.
     End,
@@ -293,7 +293,30 @@ pub enum Row {
     Pick(crate::ui::Field),
     /// A row of the phone menu.
     Phone(PhoneRow),
+    /// A row of the ride menu that acts on the ride, the workout or the course.
+    Ride(RideRow),
 }
+
+/// What the ride menu's own rows do ([`crate::Menu::Ride`]); its other rows open a menu or change a setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RideRow {
+    /// Pauses the ride (the menu stays, END RIDE under it), or resumes it (back to the page), as Start.
+    Pause,
+    /// Ends the ride (asked first), as Start held while paused.
+    End,
+    /// The workout's next step, as Lap but without a lap.
+    NextStep,
+    /// Stops the workout; the ride goes on.
+    StopWorkout,
+    /// Stops following the course; the ride goes on.
+    StopCourse,
+}
+
+/// The workout menu of a ride (while a step runs).
+pub const WORKOUT_NOW: [Row; 2] = [Row::Ride(RideRow::NextStep), Row::Ride(RideRow::StopWorkout)];
+
+/// The course menu of a ride (while one is followed).
+pub const COURSE_NOW: [Row; 1] = [Row::Ride(RideRow::StopCourse)];
 
 /// What the phone menu shows ([`PHONE`]): the link (app/phone.rs) and its settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
