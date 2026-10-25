@@ -220,13 +220,18 @@ copied over USB into `\Courses`, read only:
 - **Turn by turn** (course/cues.rs), as Garmin's, Wahoo's and Hammerhead's: the cues the file states (a FIT
   course's course points: left, right, slight and sharp turns, U-turn, straight on, summit, water, food, danger,
   first aid; GPX waypoints or track points whose `type`, `sym` or `name` is a turn word, as BRouter and RideWithGPS
-  write them), else the turns of the course's shape (a GPX track, Bryton's routes): 45 degrees or more over 25 m
-  either side, corners drawn with several points merged, so a winding road gives none; slight under 60 degrees,
-  sharp from 110, a U-turn from 159 (BRouter's classes). Up to 256 a course (turns kept first). The next one is
+  write them, BRouter's roundabouts with their exit), else the turns of the course's shape (a GPX track, Bryton's
+  routes): 45 degrees or more over 25 m either side, corners drawn with several points merged; slight under 60
+  degrees, sharp from 110, a U-turn from 159 (BRouter's classes). A roundabout is one cue with its exit ("EXIT 2",
+  a ring arrow; the exit counted in quarter turns, either direction of traffic). A road that winds says nothing:
+  bends wider than about 20 m of radius and hairpins (a U-turn whose way out does not come back along the way
+  in) give no cue, a junction's corner does (without a road map, a junction taken in one wide sweep says nothing
+  either). Up to 256 a course, thinned evenly along it past that (turns kept before points of interest). The next one is
   said in the banner with its arrow 200 m before (or 20 s at the speed ridden, if farther) with a beep ("LEFT
   200 M"), and at the turn (32 m or 4 s) with two ("LEFT NOW"); nothing off course. Not read: the turns of
   Bryton's `voiceTrip.fit` (their values are not known), cue names (street names).
-- **Fields:** TO GO KM, NEXT TURN (the next cue's arrow and distance, "350M", "1.2K"; "--" off course), OFF CRS M
+- **Fields:** TO GO KM, NEXT TURN (the next cue's arrow and distance, "350M", "1.2K"; END past the last one;
+  "--" off course), OFF CRS M
   (red while off course), CLIMB (on a climb what is left and the grade of the next
   200 m, "1.6K 6%"; before it the next climb's length and grade; coloured by grade), CLIMB M (the climb's gain left,
   or the next climb's), UP LEFT M (the course's ascent left), and PROFILE: the course's elevation from the eighth of

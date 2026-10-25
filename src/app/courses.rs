@@ -158,6 +158,8 @@ impl App {
                         }
                     }
                 }
+                // no turn left before the end: said, not "--" as off course
+                None if c.cues_done(at) => l.push_str("END"),
                 None => l.push_str("--"),
             },
             (Field::ToGo, _) => ui::card::push_km(&mut l, c.len_m().saturating_sub(d)),

@@ -317,8 +317,8 @@ mod tests {
     #[test]
     fn every_glyph_fits_its_cell_and_its_data() {
         for font in [&PIXEL, &SANS_16, &SANS_BOLD_32] {
-            // the pixel font has the cue arrows too, on codes 1 to 9 (tools/pixel_font.py)
-            let extra = if core::ptr::eq(font, &PIXEL) { 9 } else { 0 };
+            // the pixel font has the cue arrows too, on codes 1 to 10 (tools/pixel_font.py)
+            let extra = if core::ptr::eq(font, &PIXEL) { 10 } else { 0 };
             assert_eq!(font.glyphs.len(), 0x7f - 0x20 + extra);
             for (i, g) in font.glyphs.iter().enumerate() {
                 assert!(g.x + g.w <= g.advance && g.y + g.h <= font.height, "glyph {i} outside its cell");
@@ -351,9 +351,8 @@ mod tests {
         let mut y = 0;
         // All of ASCII in the pixel font at 2x and in the small smooth font; a sample at 4x (all would not fit), and
         // the cue arrows.
-        let arrows = "\x01\x02\x03\x04\x05\x06\x07\x08\x09";
-        for (style, sample) in
-            [(&PIX2, ascii.as_str()), (&PIX4, "12:34 25.4km/h"), (&PIX4, arrows), (&SMALL, ascii.as_str())]
+        let arrows = "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a";
+        for (style, sample) in [(&PIX2, ascii.as_str()), (&PIX4, "25.4km/h"), (&PIX4, arrows), (&SMALL, ascii.as_str())]
         {
             let mut line = std::string::String::new();
             for c in sample.chars() {
