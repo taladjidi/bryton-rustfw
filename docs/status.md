@@ -63,6 +63,10 @@ The dated findings are in [journal.md](journal.md).
   simulator's D500 (`FtmsSim::new_fec`). On the unit with the owner's Van Rysel D500 (its older model has no FTMS;
   2026-10-26 from a computer: name `VANRYSEL-HT-xxxx`, 0x1818 and 0x1816 and the 128-bit 6e40fec1-b5a3-f393-e0a9-
   e50e24dcca9e in its advertising or scan response, characteristics 6e40fec2 notify and 6e40fec3 write):
+  Seen from the computer the same night (bleak, no bike on it): its notifications are `A4 09 4F 00 <page> <xor>`
+  (message 0x4F, channel 0, ANT's XOR checksum), pages 16 and 25 at about 4 Hz and 81 now and then; page 25 says
+  calibration needed (byte 6 bits 4 and 5); a page 70 request for 54 or 71 got no answer on channel 5 or 0, so the
+  capabilities may never come over BLE; whether a target (page 49) is applied needs the bike on it.
   1. SENSORS > BT TRAINER lists it as `FE-C` (the 128-bit UUID may be in the scan response only: the search waits
      for it); Select connects; `sd_ble_uuid_vs_add` for the base answers 0 (the phone link took 8 of the 10
      vendor UUIDs; a duplicate answering the existing type is inferred, not seen) and the service is found;
