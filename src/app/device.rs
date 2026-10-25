@@ -10,6 +10,12 @@ pub const BEEP_ON: [(u32, u32); 2] = [(1500, 80), (2500, 120)];
 /// The power-off tones.
 pub const BEEP_OFF: [(u32, u32); 2] = [(2500, 80), (1500, 120)];
 
+/// A ride started or resumed: rising, short (not blocking: the tone player).
+pub const BEEP_START: [(u32, u32); 2] = [(1800, 60), (2600, 90)];
+
+/// A ride paused: falling.
+pub const BEEP_PAUSE: [(u32, u32); 2] = [(2600, 60), (1800, 90)];
+
 /// An alert's tones: three short beeps (0 Hz: silence), played without blocking (`App::tones`).
 pub const BEEP_ALERT: [(u32, u32); 5] = [(2500, 100), (0, 50), (2500, 100), (0, 50), (2500, 100)];
 

@@ -856,7 +856,11 @@ fn workout_from_the_calendar() {
         assert!(ms < 30_000, "the warm-up ends");
     }
     assert!((14_000..16_500).contains(&(sim.ms - start)), "20 s from the start: {} ms after 5 s", sim.ms - start);
-    assert_eq!(sim.tones[tones..], [2500, 0, 2000, 0, 2000, 0, 2500], "start, beep at 2 and 1 s left, the next step");
+    assert_eq!(
+        sim.tones[tones..],
+        [1800, 2600, 0, 2500, 0, 2000, 0, 2000, 0, 2500],
+        "the ride's start, the step's start, beep at 2 and 1 s left, the next step"
+    );
     assert_eq!(app.banner.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
     assert_eq!(fields(&app), ["210|+-10", "0:25", "150", "2/6"]);
@@ -3428,9 +3432,10 @@ fn eat_reminder_on_a_ride() {
     sim.gnss.fix = Some(8000);
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Start)); // the ride
+    run(&mut sim, &mut app, 500); // its start's beep
     let tones0 = sim.tones.len();
     let steps0 = sim.ms;
-    run(&mut sim, &mut app, 299_000);
+    run(&mut sim, &mut app, 298_500);
     assert_eq!(sim.tones.len(), tones0, "not yet");
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.banner.as_str(), "EAT REMINDER");
@@ -3441,6 +3446,7 @@ fn eat_reminder_on_a_ride() {
     sim.save("eat_reminder");
     // paused on the minute: nothing more
     app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 500); // the pause's beep
     let n = sim.tones.len();
     run(&mut sim, &mut app, 120_000);
     assert_eq!(sim.tones.len(), n, "paused: no reminder");
@@ -4459,5 +4465,19 @@ fn distance_profile_fills_the_width() {
         let g = app.graph_summary(cols);
         let empty: Vec<u32> = (0..cols).filter(|&i| app.graph_value(g, cols, i) == 0).collect();
         assert!(empty.is_empty(), "n = {n}: columns {empty:?} are empty");
+    }
+}
+
+/// Start, pause and resume each beep: rising for a start or a resume, falling for a pause (the owner, 2026-10-25).
+#[test]
+fn start_and_pause_beep() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    for want in [[1800, 2600, 0], [2600, 1800, 0], [1800, 2600, 0]] {
+        let t0 = sim.tones.len();
+        app.start_pause();
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(sim.tones[t0..], want);
     }
 }
