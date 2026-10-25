@@ -14,7 +14,7 @@ pub enum Input {
     Prev,
     /// Start: select a row (on a ride page, start, pause or resume).
     Select,
-    /// Back: out of a menu (on a page, the backlight on or off).
+    /// Back: out of a menu (on a ride page, the overview; on the overview, nothing).
     Back,
     /// Page held: the menu (the ride menu while a ride records or is paused).
     Menu,
@@ -24,6 +24,8 @@ pub enum Input {
     Off,
     /// Lap held: play or pause the phone's music (app/phone.rs), from any page.
     Media,
+    /// Back and Lap held together: the touch lock on or off, on every screen.
+    TouchLock,
     /// Page or Lap still held: [`Input::Next`] or [`Input::Prev`] again (a list scrolls, a value steps).
     NextHeld,
     /// See [`Input::NextHeld`].
@@ -54,6 +56,7 @@ impl Input {
             Press::Long(Key::Start) => Input::End,
             Press::Long(Key::Back) => Input::Off,
             Press::Long(Key::Lap) => Input::Media,
+            Press::Chord => Input::TouchLock,
             Press::Repeat(Key::Page) => Input::NextHeld,
             Press::Repeat(Key::Lap) => Input::PrevHeld,
             _ => return None,
@@ -265,6 +268,9 @@ pub enum Reading {
 pub enum Row {
     /// Opens a menu.
     Open(Menu),
+    /// What an empty list says, as a grey row that does nothing (not a banner that goes after 4 s and leaves a bare
+    /// list): "NONE PLANNED" in WORKOUTS.
+    Empty(&'static str),
     /// Opens the list of BLE devices nearby (and starts a scan).
     Nearby,
     /// Opens ABOUT: the firmware's version and commit, and Ferris.

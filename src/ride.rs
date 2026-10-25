@@ -431,10 +431,57 @@ impl Climb {
 // Zones
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Zone colours, RGB565, from stock's zone palette (seven ABGR words at 0xd0086a8c..0xd0086aa4 of the R039
-/// image, read by its zone colour lookup at 0xd01530bc): grey #b4b4b4, blue #506eff, green #7dff1e, yellow
-/// #ffd000, orange #ffa600, red #ff302a, purple #9a1590.
-pub const ZONE_COLORS: [u16; 7] = [0xb5b6, 0x537f, 0x7fe3, 0xfe80, 0xfd20, 0xf985, 0x98b2];
+/// Zone colours, RGB565: stock's palette for the first three (seven ABGR words at 0xd0086a8c..0xd0086aa4 of the R039
+/// image, read by its zone colour lookup at 0xd01530bc: grey #b4b4b4, blue #506eff, green #7dff1e), a lemon yellow
+/// where stock's #ffd000 is next to the orange, then magenta, violet and cyan where stock has orange, red and purple: orange is the menu selection and the info
+/// banners (`ui::ACCENT`) and red the alarms (`ui::RED`), and a zone must never look like either (UI review 2, P3:
+/// heart rate zone 4 was exactly the banner orange). Tested: no zone colour is near either.
+pub const ZONE_COLORS: [u16; 7] = [0xb5b6, 0x537f, 0x7fe3, 0xffe0, 0xf81f, 0x901f, 0x07ff];
+
+/// A zone shown with hysteresis, so a value on a zone's edge does not flip the bar every second: the zone shown
+/// changes only after the new one has held for [`ZoneHold::HOLD_S`] seconds in a row (the first zone, and the loss of
+/// the reading, at once).
+///
+/// ```
+/// use bryton_rustfw::ride::ZoneHold;
+/// let mut z = ZoneHold::default();
+/// assert_eq!(z.second(Some(3)), 3, "the first zone at once");
+/// let seen: Vec<u8> = [4, 3, 4, 4, 3, 4, 4, 4, 4].map(|n| z.second(Some(n))).to_vec();
+/// assert_eq!(seen, [3, 3, 3, 3, 3, 3, 3, 4, 4], "4 shown after three in a row; flicker changes nothing");
+/// assert_eq!(z.second(None), 0, "no reading: no zone");
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZoneHold {
+    shown: u8,
+    cand: u8,
+    held: u8,
+}
+
+impl ZoneHold {
+    /// Seconds in a row in a new zone before it is shown.
+    pub const HOLD_S: u8 = 3;
+
+    /// This second's zone (None: no reading); the zone to show, 0 for none.
+    pub fn second(&mut self, zone: Option<u8>) -> u8 {
+        let z = zone.unwrap_or(0);
+        if z == self.shown || z == 0 || self.shown == 0 {
+            (self.shown, self.cand, self.held) = (z, z, 0);
+        } else if z == self.cand {
+            self.held += 1;
+            if self.held >= Self::HOLD_S {
+                (self.shown, self.held) = (z, 0);
+            }
+        } else {
+            (self.cand, self.held) = (z, 1);
+        }
+        self.shown
+    }
+
+    /// The zone shown now, 0 for none.
+    pub fn shown(&self) -> u8 {
+        self.shown
+    }
+}
 
 /// Altitudes a ride can have, mm (the Dead Sea's shore to above Everest): outside, the receiver's reading is dropped.
 pub const ALT_RANGE_MM: core::ops::RangeInclusive<i32> = -500_000..=9_000_000;

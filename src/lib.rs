@@ -142,8 +142,6 @@ pub trait Board {
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
-    /// The backlight is wanted on (Back toggles it); it is on unless timed out.
-    backlight: bool,
     /// The level the backlight is at (0: off).
     light_shown: u8,
     /// Since the last key press.
@@ -194,6 +192,8 @@ pub struct App {
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
     live: Live,
+    /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
+    zones: [ride::ZoneHold; 4],
     decoders: Decoders,
     /// RMSSD and DFA alpha1 from the strap's beats.
     hrv: hrv::Hrv,
@@ -391,7 +391,6 @@ impl App {
         let store = PageStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
-            backlight: true,
             light_shown: 0,
             idle_ms: 0,
             chips: ambient::init(b),
@@ -413,6 +412,7 @@ impl App {
                 battery: None,
                 charging: false,
                 rec: Rec::Idle,
+                locked: false,
             },
             strip_shown: Strip {
                 time: (0, 0),
@@ -423,6 +423,7 @@ impl App {
                 battery: None,
                 charging: false,
                 rec: Rec::Idle,
+                locked: false,
             },
             screen: Screen::Main,
             ble,
@@ -443,6 +444,7 @@ impl App {
             shifts: 0,
             ask: 0,
             live: Live::default(),
+            zones: [ride::ZoneHold::default(); 4],
             decoders: Decoders::default(),
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),

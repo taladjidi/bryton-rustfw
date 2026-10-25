@@ -71,7 +71,7 @@ impl App {
     }
 
     /// Ends a paused ride (Start held, END RIDE in the ride menu): the recorder saves it, the workout ends with it,
-    /// and its card shows (any key goes on to the overview).
+    /// and its card shows (Back or Start goes on to the overview).
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
         self.recorder(ev);
@@ -251,6 +251,7 @@ impl App {
     pub(crate) fn second(&mut self) {
         self.alt_second();
         let alt = self.alt_now();
+        self.live.snapshot(); // the pages show this second's readings, not each broadcast's
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),
             hr: self.live.get(Metric::Hr),
@@ -274,6 +275,12 @@ impl App {
             self.workout_event(e);
         }
         self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let (p, hr) = (&self.power, self.live.shown(Metric::Hr));
+        let zones = [p.rolling(0), p.rolling(1), p.rolling(2)].map(|w| w.map(|w| ride::power_zone(w, ftp)));
+        for (hold, z) in self.zones.iter_mut().zip(zones.into_iter().chain([hr.map(|v| ride::hr_zone(v, max_hr))])) {
+            hold.second(z);
+        }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
         let alt = input.alt_mm.map(|mm| (mm / 1000 + ride::ALT_OFFSET).clamp(1, i32::from(u16::MAX)) as u16);

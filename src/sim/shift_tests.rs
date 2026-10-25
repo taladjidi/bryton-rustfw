@@ -86,8 +86,8 @@ fn di2_pairs_and_shows_gear_and_battery() {
     assert_eq!(app.field_text(Field::ShiftBattery).as_str(), "60%");
     assert_eq!(app.field_color(Field::ShiftBattery), crate::ui::WHITE);
     // a ride: the shift at 20 s counted
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    super::tests::back(&mut sim, &mut app);
+    super::tests::back(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.field_text(Field::Shifts).as_str(), "0");
     run_to(&mut sim, &mut app, 21_000);
@@ -256,7 +256,7 @@ fn hood_press_outside_the_pages_does_nothing() {
 fn hood_lap_on_the_overview() {
     let (mut sim, mut app) = di2_app(di2, Remote::Lap);
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Back));
+    super::tests::back(&mut sim, &mut app);
     assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Running));
     let mut lap = false;
     while sim.ms < 9_000 {

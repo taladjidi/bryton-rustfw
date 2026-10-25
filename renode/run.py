@@ -172,7 +172,7 @@ def main():
     preview = ROOT / 'target/sim/preview.bmp'
     if preview.exists():
         sim = bmp_rgb(preview)
-        for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, Ferris (ui.rs)
+        for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, the empty notices (ui.rs)
             bad = [x for x in range(W) if rgb(screen, x, y) != sim[y][x]]
             if bad:
                 fails.append(f'row {y} differs from the simulator at x {bad[0]}..{bad[-1]}')

@@ -48,7 +48,13 @@ pub enum Press {
     /// Still held: one every [`REPEAT_MS`] from [`REPEAT_AFTER_MS`] on (a value editor steps on it). The
     /// [`Press::Short`] or [`Press::Long`] still follows.
     Repeat(Key),
+    /// Back and Lap held together for [`CHORD_MS`]: the touch lock ([`Input::TouchLock`]). While they are down
+    /// together neither acts on its own, at its release or held.
+    Chord,
 }
+
+/// Back and Lap held together this long toggle the touch lock.
+pub const CHORD_MS: u32 = 1000;
 
 /// A held key repeats from then on ([`Press::Repeat`]).
 pub const REPEAT_AFTER_MS: u32 = 500;
@@ -63,6 +69,10 @@ pub struct Keys {
     /// Keys down since before the start, not seen until released: the power button is Back's line, and the press
     /// that woke the unit from standby, held on, was taken for Back held 3 s, which switched it off again.
     stuck: u8,
+    /// How long Back and Lap have been down together.
+    chord_ms: u32,
+    /// Back and Lap were down together and one is still down: their own presses are dropped until both are up.
+    chord: bool,
 }
 
 impl Keys {
@@ -81,6 +91,13 @@ impl Keys {
     pub fn poll(&mut self, mask: u8, dt_ms: u32) -> Option<Press> {
         self.stuck &= mask;
         let mask = mask & !self.stuck;
+        let pair = Key::Back as u8 | Key::Lap as u8;
+        let chord_was = self.chord;
+        let both = mask & pair == pair;
+        self.chord = (self.chord || both) && mask & pair != 0;
+        let chord_ms = if both { self.chord_ms + dt_ms } else { 0 };
+        let fired = chord_ms >= CHORD_MS && self.chord_ms < CHORD_MS;
+        self.chord_ms = chord_ms;
         let mut press = None;
         for (key, held) in Key::ALL.into_iter().zip(&mut self.held_ms) {
             let long = key.long_ms();
@@ -92,16 +109,18 @@ impl Keys {
                 _ => None,
             };
             *held = now;
-            press = press.or(p);
+            if !((self.chord || chord_was) && pair & key as u8 != 0) {
+                press = press.or(p);
+            }
         }
-        press
+        if fired { Some(Press::Chord) } else { press }
     }
 }
 
 /// What is on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
-    /// The main screen: the time, big, and Ferris.
+    /// The main screen: the time, big, the date and four fields.
     Main,
     /// Ride page `n`.
     Ride(usize),
@@ -238,25 +257,30 @@ impl App {
     }
 
     /// Acts on an input: Next goes from the main screen through the ride pages and back, Menu opens the menu, Back
-    /// toggles the backlight; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
+    /// goes from a ride page to the overview; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
     /// number being edited goes up with Prev, down with Next. Off switches off anywhere.
     pub fn input(&mut self, b: &mut impl Board, i: Input) {
-        if matches!(i, Input::Touch(_)) && !self.settings.touch {
-            return; // TOUCH OFF: the keys only
+        if matches!(i, Input::Touch(_)) && (!self.settings.touch || self.strip.locked) {
+            return; // TOUCH OFF, or locked: the keys only
         }
         let before = self.screen;
         self.clamp_menu(); // a row gone while the menu showed (drawn again below if the screen of rows changed)
         let recording = self.ride.state() == ride::State::Running;
-        let woke = self.light_shown == 0 && self.backlight;
+        let woke = self.light_shown == 0;
         self.idle_ms = 0;
         if woke {
             self.update_light(b); // an input after the time-out: the light comes back (and the input acts)
             if i == Input::Back {
-                return; // Back's own job is the light: done
+                return; // Back that wakes the screen only wakes it: nothing is acted on blind
             }
         }
-        if self.banner_ms.take().is_some() {
-            self.unbanner(b); // and the input acts
+        if i == Input::TouchLock {
+            self.strip.locked = !self.strip.locked; // the strip shows it; the banner says it
+            return self.say(if self.strip.locked { "TOUCH LOCKED" } else { "TOUCH UNLOCKED" });
+        }
+        let cleared = self.banner_ms.take().is_some();
+        if cleared {
+            self.unbanner(b); // and the input acts, except Back (below)
         }
         // a row waiting to be confirmed (App::confirmed): only Start or a tap on it confirms, anything else drops it
         let armed = self.confirm.take();
@@ -264,6 +288,11 @@ impl App {
             && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
         {
             self.update_menu_rows(b, menu, sel); // its "SURE?" goes
+        }
+        // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines, and the
+        // editor's KEEP CHANGES? is a question that Back answers
+        if cleared && i == Input::Back && !self.phone.ringing && !matches!(self.screen, Screen::Edit(..)) {
+            return;
         }
         let graph_hit = match (self.screen, i) {
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y) | Gesture::Hold(x, y))) => {
@@ -407,15 +436,13 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(self.menu_root(), 0))
             }
-            // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
+            // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap (on the overview too)
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
             (Screen::Main | Screen::Ride(_), Input::End) => self.end_ride(),
-            (Screen::Summary, _) => self.screen = Screen::Main,
-            (Screen::Ride(_), Input::Prev) => return self.lap(),
-            (Screen::Main, Input::Back) => {
-                self.backlight = !self.backlight;
-                self.update_light(b);
-            }
+            // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
+            (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,
+            (Screen::Summary, _) => return,
+            (Screen::Main | Screen::Ride(_), Input::Prev) => return self.lap(),
             (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 let rows = self.rows(menu).max(1);
@@ -502,6 +529,9 @@ impl App {
         // charged again, a tap still down at the command's end was a hold (review)
         let dt_ms = if core::mem::take(&mut self.touch_sampled) { 0 } else { dt_ms };
         let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, false, dt_ms);
+        if self.strip.locked {
+            return None; // locked: a finger neither acts nor keeps the light on
+        }
         if finger {
             self.idle_ms = 0;
         }

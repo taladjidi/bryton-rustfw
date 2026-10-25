@@ -106,7 +106,7 @@ pub fn draw_bitmap(c: &mut impl Canvas, bitmap: &[u16], x: u32, y: u32, scale: u
 
 /// Width of one character cell of the monospaced pixel font, in font pixels.
 const CELL: u32 = 6;
-/// Ferris: scale and top left corner (centred, at the bottom of the overview).
+/// Ferris: scale and top left corner (centred; where the overview's notices end).
 pub const CRAB_SCALE: u32 = 4;
 /// Ferris left edge.
 pub const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
@@ -152,6 +152,8 @@ pub struct Strip {
     pub charging: bool,
     /// The ride: the time is white with no ride, green while it records, orange while paused or auto-paused.
     pub rec: Rec,
+    /// The touch is locked (Back and Lap held together): a padlock left of the time.
+    pub locked: bool,
 }
 
 /// The ride's state as the strip shows it.
@@ -194,6 +196,9 @@ pub const USB_ICON: [u16; 14] = [
 const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 /// The ride's state, right of the time: a red dot while it records, orange bars while paused, nothing otherwise.
 const STRIP_REC: (u32, u32) = (STRIP_TIME.0 + STRIP_TIME.1 + 3, 10);
+/// The touch lock's padlock, left of the time, in the 8 px between "GPS" and the time: 7 wide, 10 high.
+const STRIP_LOCK: (u32, u32) = (81, 8);
+const PADLOCK: [u16; 10] = [0x3800, 0x4400, 0x4400, 0xfe00, 0xfe00, 0xee00, 0xee00, 0xfe00, 0xfe00, 0xfe00];
 /// A dot 10 px wide (bit 15 leftmost), and two bars.
 const REC_DOT: [u16; 10] = [0x1e00, 0x7f80, 0x7f80, 0xffc0, 0xffc0, 0xffc0, 0xffc0, 0x7f80, 0x7f80, 0x1e00];
 const PAUSE_BARS: [u16; 10] = [0xe1c0; 10];
@@ -234,6 +239,12 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             Rec::Running => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, RED),
             Rec::Paused => draw_bitmap(c, &PAUSE_BARS, STRIP_REC.0, top + 2, 1, ACCENT),
             Rec::NotSaving => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, GREY),
+        }
+    }
+    if changed(|s| s.locked as u32) {
+        c.fill(STRIP_LOCK.0, top + 2, STRIP_LOCK.1, 10, BLACK);
+        if s.locked {
+            draw_bitmap(c, &PADLOCK, STRIP_LOCK.0, top + 2, 1, WHITE);
         }
     }
     if changed(|s| u32::from(s.radio)) {
@@ -892,9 +903,9 @@ fn value_scale(big: &str, w: u32, h: u32) -> u32 {
 /// (empty when there is none or it would not fit: the tail goes first), and the value band (left, right).
 type ValueAt<'a> = (Style, u32, u32, &'a str, &'a str, (u32, u32));
 
-fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16, bg: u16) -> ValueAt<'a> {
+fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16) -> ValueAt<'a> {
     let (mut big, tail) = value.split_once(SMALL_TAIL).unwrap_or((value, ""));
-    let style = Style { fg, bg, scale: value_scale(big, w, h), ..LABEL };
+    let style = Style { fg, scale: value_scale(big, w, h), ..LABEL };
     let top = y + FIELD_LABEL_H + h.saturating_sub(1 + FIELD_LABEL_H).saturating_sub(style.height()) / 2;
     let band = (x + 1, x + w - 1);
     let room = band.1 - band.0;
@@ -923,17 +934,25 @@ fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s:
     }
 }
 
-/// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
-pub fn draw_field_frame(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field) {
-    draw_field_frame_on(c, bx, field, BLACK);
+/// Height of a zone bar along the top of a box (above the label, a pixel apart from it: the labels of the value fields
+/// start 5 px down).
+pub const ZONE_BAR_H: u32 = 4;
+
+/// The zone bar of box `bx` in `color` (BLACK clears it): the box's full width less its right rule.
+pub fn draw_zone_bar(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), color: u16) {
+    c.fill(x, y, w - u32::from(x + w < W), ZONE_BAR_H, color);
 }
 
-/// The same over background `bg` (a zone's colour: the whole box filled, the label in black or white over it).
-pub fn draw_field_frame_on(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, bg: u16) {
-    let label = if bg == BLACK { GREY } else { ink_on(bg) };
-    if bg != BLACK {
-        c.fill(x, y, w - u32::from(x + w < W), h - u32::from(y + h < H - 2), bg);
+/// A field's frame with its zone bar (`bar`; BLACK: none), for the plain power and heart rate fields.
+pub fn draw_field_frame_bar(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field, bar: u16) {
+    draw_field_frame(c, bx, field);
+    if bar != BLACK {
+        draw_zone_bar(c, bx, bar);
     }
+}
+
+/// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
+pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field) {
     if x + w < W {
         c.fill(x + w - 1, y, 1, h, GREY);
     }
@@ -941,14 +960,14 @@ pub fn draw_field_frame_on(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u3
         c.fill(x, y + h - 1, w, 1, GREY);
     }
     if !field.is_picture() {
-        text::draw(c, &Style { fg: label, bg, ..LABEL }, x + 6, y + 4, Align::Left, field.label());
+        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + ZONE_BAR_H + 1, Align::Left, field.label());
     }
 }
 
 /// Width of the page editor's frame round the selected cell (UI review 2, 5.2 point 5).
 pub const FRAME: u32 = 3;
 
-/// The inside of a field box: without its rules (right and bottom edges, [`draw_field_frame_on`]).
+/// The inside of a field box: without its rules (right and bottom edges, [`draw_field_frame`]).
 pub fn box_inside((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
     (x, y, w - u32::from(x + w < W), h - u32::from(y + h < H - 2))
 }
@@ -993,70 +1012,40 @@ pub fn draw_split_icon(c: &mut impl Canvas, i: usize, stacked: bool, selected: b
     }
 }
 
-/// The ink that reads over background `bg`: black over light colours, white over dark ones (blue, purple).
-///
-/// ```
-/// use bryton_rustfw::ui::{ink_on, BLACK, WHITE};
-/// assert_eq!([ink_on(0xfe80), ink_on(0x537f), ink_on(0x98b2)], [BLACK, WHITE, WHITE]); // yellow, blue, purple
-/// ```
-pub fn ink_on(bg: u16) -> u16 {
-    let (r, g, b) = (u32::from(bg >> 11) * 255 / 31, u32::from(bg >> 5 & 63) * 255 / 63, u32::from(bg & 31) * 255 / 31);
-    if r * 299 + g * 587 + b * 114 > 128_000 { BLACK } else { WHITE }
-}
-
 /// A field's value in `fg`, centred by its ink under its label, in a fixed band (what was there before is cleared):
 /// at the box's scale, a [`SMALL_TAIL`] small and grey after it, bottoms aligned.
 pub fn draw_field_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &str, fg: u16) {
-    draw_field_value_on(c, bx, value, fg, BLACK);
-}
-
-/// The same over background `bg`.
-pub fn draw_field_value_on(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &str, fg: u16, bg: u16) {
-    let (style, left, top, big, tail, (l, r)) = value_at(bx, value, fg, bg);
-    let tail_style = Style { bg, ..TAIL };
+    let (style, left, top, big, tail, (l, r)) = value_at(bx, value, fg);
     let bh = style.height();
-    c.fill(l, top, left.saturating_sub(l), bh, bg);
+    c.fill(l, top, left.saturating_sub(l), bh, BLACK);
     let mut end = text::draw_clipped(c, &style, left, top, r, big);
     if !tail.is_empty() {
         // the ink's bottom rows level: 7 font rows of each
-        let ty = top + 7 * style.scale - 7 * tail_style.scale;
-        let tw = tail_style.width(tail).min(r.saturating_sub(end));
-        c.fill(end, top, tw, ty - top, bg);
-        let t_end = text::draw_clipped(c, &tail_style, end, ty, r, tail);
-        c.fill(end, ty + tail_style.height(), tw, (top + bh).saturating_sub(ty + tail_style.height()), bg);
+        let ty = top + 7 * style.scale - 7 * TAIL.scale;
+        let tw = TAIL.width(tail).min(r.saturating_sub(end));
+        c.fill(end, top, tw, ty - top, BLACK);
+        let t_end = text::draw_clipped(c, &TAIL, end, ty, r, tail);
+        c.fill(end, ty + TAIL.height(), tw, (top + bh).saturating_sub(ty + TAIL.height()), BLACK);
         end = t_end;
     }
-    c.fill(end, top, r.saturating_sub(end), bh, bg);
+    c.fill(end, top, r.saturating_sub(end), bh, BLACK);
 }
 
 /// A field's value that was `old`: only the characters that changed when the length and the place of the small tail
 /// are the same (they keep their cells), else the whole value band, and the rows of the old one's band outside it
 /// (a value drawn smaller: "OPEN" then "200-220", 2026-10-25 review).
 pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: &str, new: &str, fg: u16) {
-    draw_field_value_changes_on(c, bx, old, new, fg, BLACK);
-}
-
-/// The same over background `bg`.
-pub fn draw_field_value_changes_on(
-    c: &mut impl Canvas,
-    bx: (u32, u32, u32, u32),
-    old: &str,
-    new: &str,
-    fg: u16,
-    bg: u16,
-) {
-    let (style, left, top, big, tail, (l, r)) = value_at(bx, new, fg, bg);
-    let (old_style, _, old_top, old_big, old_tail, _) = value_at(bx, old, fg, bg);
-    let tail_style = Style { bg, ..TAIL };
+    let (style, left, top, big, tail, (l, r)) = value_at(bx, new, fg);
+    let (old_style, _, old_top, old_big, old_tail, _) = value_at(bx, old, fg);
     if old_big.len() != big.len() || old_tail.len() != tail.len() || old.is_empty() {
         let (end, old_end) = (top + style.height(), old_top + old_style.height());
-        c.fill(l, old_top, r - l, top.saturating_sub(old_top), bg);
-        c.fill(l, end, r - l, old_end.saturating_sub(end), bg);
-        return draw_field_value_on(c, bx, new, fg, bg);
+        c.fill(l, old_top, r - l, top.saturating_sub(old_top), BLACK);
+        c.fill(l, end, r - l, old_end.saturating_sub(end), BLACK);
+        return draw_field_value(c, bx, new, fg);
     }
     draw_cells(c, &style, left, top, r, big, Some(old_big));
-    let ty = top + 7 * style.scale - 7 * tail_style.scale;
-    draw_cells(c, &tail_style, left + style.width(big), ty, r, tail, Some(old_tail));
+    let ty = top + 7 * style.scale - 7 * TAIL.scale;
+    draw_cells(c, &TAIL, left + style.width(big), ty, r, tail, Some(old_tail));
 }
 
 /// A graph's axis text and figures: the label font (2x), grey; no 1x text where a rider reads (UI review).
@@ -1271,8 +1260,7 @@ pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Opt
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The overview (the main screen): the time, the date, four fields of the user's choice, the notices (Ferris when
-// there are none)
+// The overview (the main screen): the time, the date, four fields of the user's choice, the notices
 // ---------------------------------------------------------------------------------------------------------------
 
 /// Hours and minutes: the pixel font at 7x, white. No seconds: the overview changes once a minute.
@@ -1329,11 +1317,11 @@ pub const GEAR_AT: (u32, u32) = (W - 30, DATE_Y);
 /// Where a tap opens the menu: around the gear, wider than it, a finger's size (above the overview's fields).
 pub const GEAR_TAP: (u32, u32, u32, u32) = (W - 64, DATE_Y - 24, 64, OVERVIEW_Y - (DATE_Y - 24));
 
-/// The notices, newest first; with none, Ferris.
+/// The notices, newest first; with none, the area stays black.
 pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
     c.fill(0, NOTICES_Y, W, H - NOTICES_Y, BLACK);
     if notices.is_empty() {
-        return draw_ferris(c);
+        return; // nothing to say: nothing drawn (Ferris is in ABOUT)
     }
     for (r, n) in notices.iter().take(NOTICES).enumerate() {
         // "19:36 A CALLER": the time small and grey, the text in the large font for every row (cut, not shrunk:
@@ -1448,11 +1436,6 @@ pub fn draw_about(c: &mut impl Canvas, version: &str, describe: &str, date: &str
     line(&grey, "SAFE RUST");
 }
 
-/// Ferris, at the bottom of the overview.
-pub fn draw_ferris(c: &mut impl Canvas) {
-    draw_crab(c, CRAB_X, CRAB_Y, CRAB_SCALE, RUST);
-}
-
 // ---------------------------------------------------------------------------------------------------------------
 // Menus: a title, then rows of a label and a value; the selected row in orange.
 // ---------------------------------------------------------------------------------------------------------------
@@ -1486,7 +1469,9 @@ pub(crate) fn menu_label_w(label: &str, value: &str) -> u32 {
 /// where white was 2:1).
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
     let y = LIST_Y + i as u32 * MENU_ROW;
-    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
+    // a row with no value and a grey one is a note (an empty list), not a choice
+    let note = value.is_empty() && value_color == GREY;
+    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, if note { GREY } else { WHITE }) };
     let name_w = menu_label_w(label, value);
     let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
     c.fill(0, y, W, ty - y, bg);
@@ -1535,11 +1520,11 @@ pub(crate) mod tests {
             "PAUSED: HOLD START TO END",
             "HOLD BACK AGAIN TO SWITCH OFF",
             "INCOMING CALL\nMum",
-            "FORGET HEART RATE?\nSTART AGAIN: YES",
-            "FORGET SPEED+CAD?\nSTART AGAIN: YES",
-            "IMPORT SETTINGS?\nSTART AGAIN: YES",
-            "SEARCHING AGAIN\nSTART AGAIN: FORGET",
-            "FORGET THE PHONE?\nSTART AGAIN: YES",
+            "FORGET HEART RATE?\nSTART: YES BACK: NO",
+            "FORGET SPEED+CAD?\nSTART: YES BACK: NO",
+            "IMPORT SETTINGS?\nSTART: YES BACK: NO",
+            "SEARCHING AGAIN\nSTART: FORGET",
+            "FORGET THE PHONE?\nSTART: YES BACK: NO",
         ] {
             let (a, b) = lines(&LABEL, t, W - 12);
             assert!(LABEL.width(a) <= W - 12 && LABEL.width(b) <= W - 12, "{t}: {a} / {b}");
@@ -1624,7 +1609,7 @@ pub(crate) mod tests {
             let b: Vec<_> = (0..8).map_while(|i| field_box(id, RIDE_H, i)).collect();
             for pair in b.windows(2).filter(|p| p[0].1 == p[1].1) {
                 let at = |bx| {
-                    let (style, left, _, big, _, _) = value_at(bx, "88.88", WHITE, BLACK);
+                    let (style, left, _, big, _, _) = value_at(bx, "88.88", WHITE);
                     (left, left + ink(&style, big), style.scale)
                 };
                 let ((_, right_end, s1), (next_left, _, s2)) = (at(pair[0]), at(pair[1]));
@@ -1721,6 +1706,7 @@ pub(crate) mod tests {
             battery: Some(80),
             charging: false,
             rec: Rec::Idle,
+            locked: false,
         };
         let next = Strip { time: (10, 0), blink: false, rec: Rec::Running, ..strip };
         let (mut a, mut b) = (Frame::new(), Frame::new());
@@ -1741,14 +1727,13 @@ pub(crate) mod tests {
             battery: Some(87),
             charging: true,
             rec: Rec::Paused,
+            locked: false,
         };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);
-        draw_ferris(&mut f);
         for y in [0, 8, STRIP_H, CRAB_Y + 20, H - 1] {
             let mut row = Row::new(y);
             draw_strip(&mut row, &strip);
-            draw_ferris(&mut row);
             assert!(row.px[..] == f.px[(y * W) as usize..((y + 1) * W) as usize], "row {y}");
         }
     }

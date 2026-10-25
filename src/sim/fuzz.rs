@@ -925,6 +925,7 @@ fn menu_touch_and_keys() {
     use super::*;
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
+    let (mut locks, mut locked_touches) = (0, 0);
     for seed in 1..=12u32 {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
@@ -948,6 +949,7 @@ fn menu_touch_and_keys() {
                 app.settings.touch = !app.settings.touch; // TOUCH off and on
             }
             let i = match a % 14 {
+                _ if a % 23 == 3 => Input::TouchLock,
                 0 | 1 => Input::Next,
                 2 => Input::Prev,
                 3 => Input::Select,
@@ -963,9 +965,15 @@ fn menu_touch_and_keys() {
             let (before, chosen, editing) = (app.screen(), app.menu_chosen, app.editing);
             let (pages, whole) = (app.pages, app.graph_whole);
             let recording = app.ride.state() == crate::ride::State::Running;
+            let was_locked = app.strip.locked;
             app.input(&mut sim, i);
+            locks += u32::from(i == Input::TouchLock);
             let same = app.screen() == before && app.pages == pages && app.graph_whole == whole;
             if let Input::Touch(g) = i {
+                if was_locked {
+                    assert!(same, "locked: {g:?} did something");
+                    locked_touches += 1;
+                }
                 if !app.settings.touch {
                     assert!(same, "TOUCH OFF: {g:?} did something");
                     off += 1;
@@ -1003,12 +1011,16 @@ fn menu_touch_and_keys() {
                 sim.delay_ms(POLL_MS);
             }
             // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
-            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) {
+            // (a banner said by this input is drawn by the next pass: skipped until it is)
+            let waiting = app.banner_ms.is_some() && !app.banner_drawn;
+            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) && !waiting {
                 super::tests::assert_consistent(&sim, &app);
             }
         }
     }
     std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
+    std::println!("touch lock: {locks} toggles, {locked_touches} touches while locked");
+    assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
     assert!(off > 50 && riding > 10, "touch off {off}, taps and holds while recording {riding}");
 }
@@ -1460,4 +1472,49 @@ fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
         app.step(sim);
         crate::Board::delay_ms(sim, crate::POLL_MS);
     }
+}
+
+/// Random key masks through `Keys::poll` (the touch lock's chord): no panic, and a chord only when Back and Lap have
+/// both been down for the last second, once per hold; neither of the two acts while the other is down with it.
+#[test]
+fn keys_chord() {
+    use crate::{CHORD_MS, Key, Keys, Press};
+    let pair = Key::Back as u8 | Key::Lap as u8;
+    let (mut chords, mut shorts) = (0u32, 0u32);
+    for seed in 1..=20u32 {
+        let mut k = Keys::default();
+        let mut noise = bytes(seed * 104_729, 1 << 12);
+        let (mut mask, mut both_ms, mut chord_seen, mut run_fired) = (0u8, 0u32, false, false);
+        while let Some(n) = noise.next() {
+            // hold the mask 50 to 450 ms, then change one or two keys, often to both Back and Lap
+            let dt = 50 * (1 + u32::from(n % 9));
+            let p = k.poll(mask, dt);
+            both_ms = if mask & pair == pair { both_ms + dt } else { 0 };
+            if mask & pair == 0 {
+                chord_seen = false;
+            }
+            run_fired &= both_ms != 0;
+            match p {
+                Some(Press::Chord) => {
+                    assert!(both_ms >= CHORD_MS && !run_fired, "chord at {both_ms} ms, again in one run");
+                    (chord_seen, run_fired) = (true, true);
+                    chords += 1;
+                }
+                Some(Press::Short(key) | Press::Long(key) | Press::Repeat(key)) => {
+                    assert!(!(chord_seen && pair & key as u8 != 0), "{p:?} after a chord");
+                    shorts += u32::from(matches!(p, Some(Press::Short(_))));
+                }
+                None => {}
+            }
+            mask = match noise.next().unwrap_or(0) % 6 {
+                0 | 1 => pair,
+                2 => 0,
+                3 => mask ^ Key::Back as u8,
+                4 => mask ^ Key::Lap as u8,
+                _ => mask ^ Key::Page as u8,
+            };
+        }
+    }
+    std::println!("keys: {chords} chords, {shorts} short presses");
+    assert!(chords > 20 && shorts > 50, "reached: {chords} chords, {shorts} shorts");
 }
