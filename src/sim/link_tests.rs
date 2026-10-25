@@ -196,3 +196,59 @@ fn a_refusal_at_a_restart_is_not_retried_by_reset() {
     run(&mut sim, &mut app, 60 * 60 * 1000);
     assert_eq!(app.watch.resets, n, "still resetting a chip that answers");
 }
+
+/// Review: a resync dropped the bytes of a connection's end, and the unit stayed "connected" for ever, advertising
+/// nothing, so the bonded phone could not come back. The resync asks the chip about the link.
+#[test]
+fn a_lost_disconnection_is_found_after_a_resync() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word(); // frames flow, so a stray byte is noticed
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+    let mut p = PhoneSim::new(true);
+    p.connect_at = 1000;
+    sim.nordic.phone = Some(p);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.phone.link(), Link::Secure);
+    let adverts = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [0, 0x73]).count();
+    let before = adverts(&sim);
+    let now = sim.ms;
+    sim.nordic.phone.as_mut().unwrap().lose_link(now + 20_000);
+    sim.nordic.stray(0x5a); // the link is out of step: drained and resynced, with no event of the end
+    run(&mut sim, &mut app, 12_000);
+    assert_eq!(app.watch.resyncs, 1);
+    assert_eq!(app.watch.resets, 0);
+    assert!(adverts(&sim) > before, "advertising again");
+    run(&mut sim, &mut app, 20_000);
+    assert_eq!(app.phone.link(), Link::Secure, "the phone is back");
+}
+
+/// Review: a probe that timed out replaced the last real failure (shown in the PHONE menu) with "no answer".
+#[test]
+fn a_silent_probe_keeps_the_last_failure() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.rx.failed = Some((0x42, 7));
+    sim.nordic.hung = true;
+    assert!(!app.probe(&mut sim));
+    assert_eq!(app.rx.failed, Some((0x42, 7)));
+}
+
+/// Review: a chip reset in the middle of the PAIR window ended the pairing while the screen said to pair.
+#[test]
+fn a_reset_during_pairing_goes_on_pairing() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 4000);
+    app.activate(&mut sim, Menu::Phone, 1);
+    assert_eq!(app.phone.link(), Link::Pairing);
+    sim.nordic.hung = true;
+    run(&mut sim, &mut app, 40_000);
+    sim.nordic.hung = false;
+    run(&mut sim, &mut app, 60_000);
+    assert!(app.watch.resets >= 1);
+    assert_eq!(app.phone.link(), Link::Pairing, "pairing resumed");
+}

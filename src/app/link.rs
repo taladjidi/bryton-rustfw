@@ -9,6 +9,10 @@
 //!   normal, is never reset; a chip that hangs, or a link whose length bytes swallowed the stream, does not
 //!   answer.
 //!
+//! A refusal (an error code) is an answer, not a broken link: it is believed when it comes twice, noted, and not
+//! retried by resets. After a resync the phone link is asked about ([`App::phone_recheck`]: the dropped bytes may
+//! have held its end); the events already framed are kept.
+//!
 //! Recovery: drain the stream and start reading at a frame boundary, ask again; failing that reset the chip, start
 //! ANT again (keys, channels), reopen every channel that was open, and set the phone link up again (a bonded
 //! phone reconnects by itself). Attempts back off (15 s, doubling to 5 min) and the backoff relaxes after 10 quiet
@@ -99,8 +103,12 @@ impl App {
     }
 
     /// Asks the chip its version: whether the link answers (an error code is an answer).
-    fn probe(&mut self, b: &mut impl Board) -> bool {
+    pub(crate) fn probe(&mut self, b: &mut impl Board) -> bool {
+        let failed = self.rx.failed; // a silence is not a failure of the phone's setup (PHONE menu): keep the last
         let r = nrf::call(b, &mut self.rx, &[nrf::CMD, nrf::SD_BLE_VERSION_GET, 1], &mut [0; 8]);
+        if r == Err(nrf::Error::Timeout) {
+            self.rx.failed = failed;
+        }
         r != Err(nrf::Error::Timeout)
     }
 
@@ -137,6 +145,7 @@ impl App {
             if self.probe(b) {
                 let w = &mut self.watch;
                 (w.quiet_ms, w.wait_ms, w.resyncs) = (0, RESYNC_WAIT_MS, w.resyncs.saturating_add(1));
+                self.phone_recheck(b);
                 return;
             }
         }
@@ -173,9 +182,10 @@ impl App {
         self.resting_ms = [u32::MAX; Kind::ALL.len()];
         self.heard_ms = [u32::MAX; Kind::ALL.len()]; // a sensor back counts as after a drop-out (decoders restart)
         self.sensors = [Sensor::Off; Kind::ALL.len()];
+        let pairing = self.phone.pairing();
         self.phone_down(b);
         self.ble = nrf::start(b).ok();
-        self.rx.resync();
+        self.rx.reset();
         self.strip.radio = self.ble.is_some();
         self.ant = false;
         self.di2 = false;
@@ -219,6 +229,9 @@ impl App {
         if self.ble.is_some() {
             self.rx.failed = None;
             self.phone_up(b);
+            if pairing {
+                self.phone_pair(b); // the PAIR window was open: it goes on (the screen still says so)
+            }
             self.watch.phone_owed = self.phone.link() == Link::NoBle && matches!(self.rx.failed, Some((_, u32::MAX)));
         }
     }

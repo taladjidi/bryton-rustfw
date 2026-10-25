@@ -219,6 +219,11 @@ pub enum Link {
 }
 
 impl Phone {
+    /// The PAIR window is open.
+    pub(crate) fn pairing(&self) -> bool {
+        self.pairing
+    }
+
     /// The link as the menu shows it.
     pub fn link(&self) -> Link {
         match (self.ready, self.conn, self.secure, self.adv) {
@@ -298,6 +303,37 @@ impl App {
         (self.phone.ready, self.phone.adv, self.phone.pairing) = (false, Adv::Off, false);
         if had_call {
             self.end_ring(b);
+        }
+    }
+
+    /// The link ended: what belonged to it is dropped, and the wait for the bonded phone starts again.
+    fn link_lost(&mut self, b: &mut impl Board) {
+        let had_call = self.phone.call.is_some();
+        self.phone.unlink();
+        self.phone.pairing = false;
+        if had_call {
+            self.end_ring(b);
+        }
+        self.idle_advertising(b);
+    }
+
+    /// After a resync of the Nordic link, whose dropped bytes may have held the link's end (or the advertising's):
+    /// a link the chip knows nothing of is over, and the wait for the bonded phone is asserted again (review: a
+    /// lost DISCONNECTED left the unit connected for ever, advertising nothing, and the bonded phone could not
+    /// come back).
+    pub(crate) fn phone_recheck(&mut self, b: &mut impl Board) {
+        if !self.phone.ready {
+            return;
+        }
+        if let Some(conn) = self.phone.conn {
+            // the chip refuses a link it has not (a time-out is no answer: the link is left as it is)
+            if matches!(ble::sys_attr_get(b, &mut self.rx, conn, &mut [0; ph::ATTRS]), Err(nrf::Error::Code(_))) {
+                self.link_lost(b);
+            }
+        } else if !self.phone.pairing {
+            let _ = ble::adv_stop(b, &mut self.rx);
+            self.phone.adv = Adv::Off;
+            self.idle_advertising(b);
         }
     }
 
@@ -582,15 +618,7 @@ impl App {
                     let _ = ble::authenticate(b, rx, conn); // the phone asks the rider to pair
                 }
             }
-            Event::Disconnected { conn, .. } if Some(conn) == self.phone.conn => {
-                let had_call = self.phone.call.is_some();
-                self.phone.unlink();
-                self.phone.pairing = false;
-                if had_call {
-                    self.end_ring(b);
-                }
-                self.idle_advertising(b);
-            }
+            Event::Disconnected { conn, .. } if Some(conn) == self.phone.conn => self.link_lost(b),
             Event::SecParamsRequest { conn } => {
                 // pairing: while asked for (PAIR), or with no bond yet (then the unit advertises only after PAIR)
                 let ok = self.phone.pairing || !self.phone.bonded();
