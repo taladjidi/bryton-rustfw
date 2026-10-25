@@ -305,6 +305,10 @@ pub struct App {
     /// [`Board::awake_us`] at the start of the last pass: the work since, plus the sleep ([`Board::last_sleep`]),
     /// is the time a held key counts.
     awake_at: u32,
+    /// The length of this pass, ms: the sleep plus the work since the last ([`App::step`] sets it once, capped at
+    /// [`MAX_PASS_MS`]); every timer counts it, never a fixed [`POLL_MS`], so a long pass (a slow card) or a
+    /// shorter or longer sleep (stop mode) keeps them right.
+    dt_ms: u32,
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
     /// A ride's delete the last run may have left unfinished: looked for when the scan of the rides first runs
@@ -500,6 +504,7 @@ impl App {
             touch_sampled: false,
             stock: stock::Scan::new(),
             awake_at: 0,
+            dt_ms: POLL_MS,
             past: history::Past::new(),
             trash_check: false,
             calendar: Default::default(),
@@ -575,7 +580,8 @@ impl App {
         let now = b.awake_us();
         let (sleep_ms, sleep_work_us) = b.last_sleep();
         let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
-        let pass_ms = sleep_ms + (work_us / 1000).min(MAX_PASS_MS);
+        let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
+        self.dt_ms = pass_ms;
         let (tr, dr) = b.rtc();
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
@@ -598,9 +604,9 @@ impl App {
             self.tones.play(&BEEP_ALERT);
         }
         self.play_tones(b);
-        self.off_armed_ms = self.off_armed_ms.saturating_sub(POLL_MS);
+        self.off_armed_ms = self.off_armed_ms.saturating_sub(pass_ms);
         self.seconds = sec;
-        self.battery_ms = self.battery_ms.saturating_add(POLL_MS);
+        self.battery_ms = self.battery_ms.saturating_add(pass_ms);
         if self.battery_ms >= BATTERY_MS {
             self.battery_ms = 0;
             let charging = b.charger_present();
@@ -623,8 +629,9 @@ impl App {
             self.poll_nrf(b);
         }
         self.watch_radio(b);
+        let gnss_before = self.gnss_ms;
         self.poll_gnss(b);
-        if self.gnss_ms == FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
+        if gnss_before < FAULT_CLEAR_MS && self.gnss_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
         }
         if !self.had_fix && self.pvt.is_some_and(|p| p.good()) {
@@ -655,16 +662,16 @@ impl App {
             }
         }
         self.ask = 0;
-        self.live.tick(POLL_MS);
+        self.live.tick(pass_ms);
         for h in &mut self.heard_ms {
-            *h = h.saturating_add(POLL_MS);
+            *h = h.saturating_add(pass_ms);
         }
         for kind in Kind::ALL {
             let i = kind as usize;
             if self.resting_ms[i] == u32::MAX {
                 continue;
             }
-            self.resting_ms[i] += POLL_MS;
+            self.resting_ms[i] = self.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
             if self.resting_ms[i] >= SEARCH_REST_MS {
                 let id = match self.sensors[i] {
                     Sensor::Paired(id) => Some(id),
@@ -684,13 +691,13 @@ impl App {
         if self.edit.is_some() && self.ride.state() == ride::State::Running {
             self.leave_editor(b, true); // recording again (by no key of the editor's): its work kept, never lost
         }
-        self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
+        self.redraw_ms = self.redraw_ms.saturating_add(pass_ms);
         // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
         if let Some(ms) = self.banner_ms.filter(|_| !self.phone.ringing) {
             if !core::mem::replace(&mut self.banner_drawn, true) {
                 ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str(), self.banner_kind == Banner::Alarm);
             }
-            self.banner_ms = Some(ms + POLL_MS).filter(|&ms| ms < BANNER_MS);
+            self.banner_ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < BANNER_MS);
             if self.banner_ms.is_none() {
                 self.unbanner(b);
             }

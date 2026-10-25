@@ -454,7 +454,7 @@ fn overview_totals_from_the_cache_at_once() {
 /// the hold counts the passes' real time ([`Board::awake_us`]), not their number.
 #[test]
 fn back_held_switches_off_during_a_slow_scan() {
-    let mut sim = Sim::new(9, 0, 0).keys(|ms| if (5000..8300).contains(&ms) { Key::Back as u8 } else { 0 });
+    let mut sim = Sim::new(9, 0, 0).keys(|ms| if (5000..9300).contains(&ms) { Key::Back as u8 } else { 0 });
     sim.emmc.image = crate::stock::tests::with_rides(64);
     sim.work_ns_per_byte = 30_000;
     let mut app = App::start(&mut sim, None);
@@ -463,8 +463,10 @@ fn back_held_switches_off_during_a_slow_scan() {
     let left = 4000u64.saturating_sub(sim.ms);
     run(&mut sim, &mut app, left);
     assert_eq!(app.stock.status(), crate::stock::Status::Running);
-    run(&mut sim, &mut app, 5000);
-    assert!(sim.standby, "off, released at 8.3 s");
+    // the other card loads (pages, altitude) come due by the real time now and make some passes a second long: the
+    // hold is sampled once a pass, so it is longer here
+    run(&mut sim, &mut app, 6000);
+    assert!(sim.standby, "off, released at 9.3 s");
     assert_eq!(app.stock.status(), crate::stock::Status::Running, "while the scan ran");
 }
 
@@ -4360,4 +4362,80 @@ fn history_reaches_the_oldest_of_a_full_index() {
     assert_eq!(app.stock.index.len(), crate::history::RIDES);
     assert_eq!(app.rows(Menu::History), crate::history::RIDES + 1, "FITNESS and every ride");
     assert_eq!(app.row(Menu::History, crate::history::RIDES), Some(menu::Row::Past(crate::history::RIDES - 1)));
+}
+
+/// Passes of `pass` ms each for `ms` (a slow card, or a deeper sleep): the step is told the pass was that long
+/// ([`Board::last_sleep`]), as main.rs does.
+pub(super) fn run_passes(sim: &mut Sim, app: &mut App, ms: u64, pass: u32) {
+    let end = sim.ms + ms;
+    while sim.ms < end && !sim.standby {
+        app.step(sim);
+        sim.sleep = (pass, 0);
+        sim.delay_ms(pass);
+    }
+}
+
+/// Every timer counts the pass's real length, not a pass: with passes of 400 ms (8 times POLL_MS) a banner lasts
+/// BANNER_MS, a tone its length, the backlight times out on time, a silent sensor rests its minute, and the radio
+/// watchdog counts the quiet in ms (2026-10-25 review: about 23 timers added a fixed POLL_MS a pass).
+#[test]
+fn timers_count_real_time_in_long_passes() {
+    const PASS: u32 = 400;
+    // a banner
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run_passes(&mut sim, &mut app, 3000, PASS);
+    app.notice("STRAP PAIRED");
+    let t0 = sim.ms;
+    run_passes(&mut sim, &mut app, u64::from(BANNER_MS) - 2 * u64::from(PASS), PASS);
+    assert!(app.banner_ms.is_some(), "still there before its time");
+    while app.banner_ms.is_some() {
+        run_passes(&mut sim, &mut app, 1, PASS);
+    }
+    let shown = sim.ms - t0;
+    assert!((u64::from(BANNER_MS)..=u64::from(BANNER_MS + 2 * PASS)).contains(&shown), "banner {shown} ms");
+    // a tone
+    static MELODY: [(u32, u32); 1] = [(1000, 1000)];
+    app.tones.play(&MELODY);
+    let n0 = sim.tones.len();
+    while sim.tones.len() == n0 {
+        run_passes(&mut sim, &mut app, 1, PASS);
+    }
+    let t1 = sim.ms;
+    while sim.tones.last() != Some(&0) {
+        run_passes(&mut sim, &mut app, 1, PASS);
+    }
+    let played = sim.ms - t1;
+    assert!((1000..=1000 + 2 * u64::from(PASS)).contains(&played), "tone {played} ms");
+    // the backlight: 10 s of no key
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_level = 2;
+    app.settings.light_timeout = 1;
+    run_passes(&mut sim, &mut app, 1, PASS);
+    assert_ne!(app.light_shown, 0);
+    let t0 = sim.ms;
+    while app.light_shown != 0 && sim.ms < t0 + 30_000 {
+        run_passes(&mut sim, &mut app, 1, PASS);
+    }
+    let on = sim.ms - t0;
+    assert!((9000..=10_000 + 2 * u64::from(PASS)).contains(&on), "light on {on} ms");
+    // a silent strap: searches 30 s, closes, rests SEARCH_REST_MS, searches again
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    let mut app = App::start(&mut sim, Some(KEY));
+    let opens = |sim: &Sim| sim.nordic.got.iter().filter(|p| p.starts_with(&[6, 0xc4, 0])).count();
+    run_passes(&mut sim, &mut app, 31_000, PASS);
+    assert!(!sim.nordic.channels[0].open, "closed by its search time-out");
+    run_passes(&mut sim, &mut app, u64::from(SEARCH_REST_MS) - 3000, PASS);
+    assert_eq!(opens(&sim), 1, "resting");
+    run_passes(&mut sim, &mut app, 4000, PASS);
+    assert_eq!(opens(&sim), 2, "searching again");
+    // the watchdog's quiet, in ms: the chip heard from, then silent
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run_passes(&mut sim, &mut app, 10_000, PASS);
+    let quiet = app.watch.quiet_ms;
+    assert!((8000..=10_400).contains(&quiet), "quiet {quiet} ms after 10 s of passes of {PASS} ms");
 }

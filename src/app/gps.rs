@@ -23,11 +23,11 @@ impl App {
     /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
     /// and the speed when no speed sensor is paired.
     pub(crate) fn poll_gnss(&mut self, b: &mut impl Board) {
-        if self.gnss_ms < GNSS_ON_MS && self.gnss_ms + POLL_MS >= GNSS_ON_MS {
+        if self.gnss_ms < GNSS_ON_MS && self.gnss_ms.saturating_add(self.dt_ms) >= GNSS_ON_MS {
             b.gnss_power(true);
         }
-        self.gnss_ms = self.gnss_ms.saturating_add(POLL_MS);
-        self.pvt_ms = self.pvt_ms.saturating_add(POLL_MS);
+        self.gnss_ms = self.gnss_ms.saturating_add(self.dt_ms);
+        self.pvt_ms = self.pvt_ms.saturating_add(self.dt_ms);
         let mut send = if self.gnss_ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
         for _ in 0..GNSS_READ / 32 {
             let mut buf = send.take().unwrap_or([0xff; 32]);

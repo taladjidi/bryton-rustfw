@@ -1638,3 +1638,51 @@ fn keys_chord() {
     std::println!("keys: {chords} chords, {shorts} short presses");
     assert!(chords > 20 && shorts > 50, "reached: {chords} chords, {shorts} shorts");
 }
+
+/// Random pass lengths (5 ms to a second, as a slow card or a deeper sleep gives) through `App::step`: the timers
+/// fire in real time whatever the passes, and nothing panics. Reach: a banner ends, a tone ends, the backlight
+/// times out, a silent strap's channel closes and is searched again, in every seed.
+#[test]
+fn random_pass_lengths() {
+    use super::tests::STRAP;
+    use crate::{App, Board, Key, Kind, Press, SEARCH_REST_MS, Screen};
+    static MELODY: [(u32, u32); 2] = [(1000, 300), (2000, 300)];
+    for seed in 1..=6u32 {
+        let mut sim = super::Sim::new(9, 0, 0);
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+        app.settings.light_level = 2;
+        app.settings.light_timeout = 1;
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert!(matches!(app.screen(), Screen::Ride(_)));
+        app.notice("FUZZ");
+        app.tones.play(&MELODY);
+        let mut r = bytes(seed, 1 << 16).map(u32::from);
+        let (mut banner_gone, mut tone_done, mut dark, mut opens) = (false, false, false, 0usize);
+        let (t0, mut worst) = (sim.ms, 0u64);
+        while sim.ms - t0 < 200_000 {
+            let pass = 5 + (r.next().unwrap_or(0) << 8 | r.next().unwrap_or(0)) % 996;
+            app.step(&mut sim);
+            sim.sleep = (pass, 0);
+            sim.delay_ms(pass);
+            worst = worst.max(u64::from(pass));
+            let t = sim.ms - t0;
+            banner_gone |= t > 5000 && app.banner_ms.is_none();
+            tone_done |= t > 2000 && sim.tones.last() == Some(&0);
+            dark |= app.light_shown == 0;
+            opens = sim.nordic.got.iter().filter(|p| p.starts_with(&[6, 0xc4, 0])).count();
+            // on time, whatever the passes: never early, never later than a few passes
+            if t < 3900 {
+                assert!(app.banner_ms.is_some(), "seed {seed}: banner early at {t} ms");
+            }
+            if t < SEARCH_REST_MS as u64 / 2 {
+                assert!(opens <= 1, "seed {seed}: the rest cut short at {t} ms");
+            }
+            if t < 9900 {
+                assert_ne!(app.light_shown, 0, "seed {seed}: backlight off early at {t} ms");
+            }
+        }
+        assert!(banner_gone && tone_done && dark, "seed {seed}: {banner_gone} {tone_done} {dark}");
+        assert!(opens >= 2, "seed {seed}: the strap searched again ({opens} opens, longest pass {worst} ms)");
+    }
+}

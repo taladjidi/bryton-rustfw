@@ -63,7 +63,7 @@ impl App {
     pub(crate) fn step_altitude(&mut self, b: &mut impl Board) {
         if self.chips.baro {
             let busy = self.ride.state() == ride::State::Running || self.alt.progress().is_some();
-            self.baro_ms = self.baro_ms.saturating_add(POLL_MS);
+            self.baro_ms = self.baro_ms.saturating_add(self.dt_ms);
             if self.baro_ms >= if busy { BARO_RIDE_MS } else { BATTERY_MS } {
                 self.baro_ms = 0;
                 // the conversion started one period ago; the next one now (one-shot: the chip sleeps in between)

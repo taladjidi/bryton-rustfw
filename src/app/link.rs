@@ -36,7 +36,7 @@ const RESYNC_WAIT_MS: u32 = 5_000;
 /// The watchdog's state.
 pub struct Watch {
     /// Since the last frame from the chip.
-    quiet_ms: u32,
+    pub(crate) quiet_ms: u32,
     /// Until the next recovery may run.
     wait_ms: u32,
     /// The wait after the last chip reset (0: none yet in this calm).
@@ -115,10 +115,10 @@ impl App {
     /// Once a pass, after the chip's events were read: counts the quiet, and recovers when the link is out of step.
     pub(crate) fn watch_radio(&mut self, b: &mut impl Board) {
         let heard = core::mem::take(&mut self.rx.heard);
-        let w = &mut self.watch;
-        w.quiet_ms = if heard { 0 } else { w.quiet_ms.saturating_add(POLL_MS) };
-        w.wait_ms = w.wait_ms.saturating_sub(POLL_MS);
-        w.calm_ms = w.calm_ms.saturating_add(POLL_MS);
+        let (w, dt) = (&mut self.watch, self.dt_ms);
+        w.quiet_ms = if heard { 0 } else { w.quiet_ms.saturating_add(dt) };
+        w.wait_ms = w.wait_ms.saturating_sub(dt);
+        w.calm_ms = w.calm_ms.saturating_add(dt);
         if w.calm_ms >= CALM_MS {
             (w.delay_ms, w.told) = (0, false);
         }

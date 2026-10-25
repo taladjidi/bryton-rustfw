@@ -506,10 +506,10 @@ impl App {
             return;
         }
         self.phone_storage(b);
-        self.phone.now.tick(POLL_MS);
+        self.phone.now.tick(self.dt_ms);
         let Some(conn) = self.phone.conn else { return };
-        self.phone.busy_ms = self.phone.busy_ms.saturating_add(POLL_MS);
-        self.phone.link_ms = self.phone.link_ms.saturating_add(POLL_MS);
+        self.phone.busy_ms = self.phone.busy_ms.saturating_add(self.dt_ms);
+        self.phone.link_ms = self.phone.link_ms.saturating_add(self.dt_ms);
         if !self.phone.secure && !self.phone.pairing && self.phone.link_ms >= UNSECURED_MS {
             self.phone.link_ms = 0; // once: the disconnection's event unlinks
             let _ = ble::disconnect(b, &mut self.rx, conn);
