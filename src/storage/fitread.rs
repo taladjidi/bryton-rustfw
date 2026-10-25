@@ -243,6 +243,7 @@ impl Reader {
     }
 
     /// Bytes of the file taken so far.
+    #[cfg(test)]
     pub fn offset(&self) -> u32 {
         self.pos
     }

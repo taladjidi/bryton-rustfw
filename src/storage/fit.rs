@@ -282,7 +282,7 @@ pub struct Writer {
 }
 
 impl Writer {
-    /// Nothing written yet ([`Writer::begin`] starts a file).
+    /// Nothing written yet (`Writer::begin_with` starts a file).
     pub const fn new() -> Writer {
         const S: Stat = Stat { sum: 0, n: 0, max: 0 };
         Writer {
@@ -307,6 +307,7 @@ impl Writer {
 
     /// Starts a ride file at FIT time `time`: header, file_id, timer start, then a checkpoint (its record is
     /// returned). The sink should be empty.
+    #[cfg(test)]
     pub fn start(sink: &mut impl Sink, time: u32) -> Result<(Writer, [u8; RECORD_LEN]), Error> {
         let mut w = Writer::begin(sink, time)?;
         let rec = w.checkpoint(sink)?;
@@ -315,11 +316,12 @@ impl Writer {
 
     /// [`Writer::start`] without its checkpoint: file_id and timer start only (the recorder buffers them in RAM
     /// and checkpoints once the file exists).
+    #[cfg(test)]
     pub fn begin(sink: &mut impl Sink, time: u32) -> Result<Writer, Error> {
         Writer::begin_with(sink, time, false)
     }
 
-    /// [`Writer::begin`], with developer fields when `dev` (the full copy: module doc).
+    /// Like `Writer::begin`, with developer fields when `dev` (the full copy: module doc).
     pub fn begin_with(sink: &mut impl Sink, time: u32, dev: bool) -> Result<Writer, Error> {
         let mut w = Writer { start: time, last: time, lap_start: time, dev, ..Writer::default() };
         // 255: development (not a registered manufacturer: this is not Bryton's firmware)
@@ -456,6 +458,7 @@ impl Writer {
     }
 
     /// Ends the ride at FIT time `time`: [`Writer::end`], then a checkpoint (the finished file).
+    #[cfg(test)]
     pub fn finish(&mut self, sink: &mut impl Sink, time: u32) -> Result<[u8; RECORD_LEN], Error> {
         self.end(sink, time)?;
         self.checkpoint(sink)

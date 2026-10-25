@@ -4,14 +4,6 @@
 use super::*;
 use crate::altitude::{By, Cal, P_STD};
 
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
-
 /// Noise in -1.0..1.0, a function of the time (the same on every run).
 fn noise(ms: u64, salt: u64) -> f64 {
     let x = (ms / 1000).wrapping_add(salt).wrapping_mul(0x9e37_79b9_7f4a_7c15);

@@ -1136,6 +1136,15 @@ impl Board for Sim {
     }
 }
 
+/// Passes of the main loop for `ms`: a step, then the sleep (the test helper every sim test module shares).
+fn run(sim: &mut Sim, app: &mut App, ms: u64) {
+    let end = sim.ms + ms;
+    while sim.ms < end {
+        app.step(sim);
+        sim.delay_ms(POLL_MS);
+    }
+}
+
 #[cfg(test)]
 mod tests;
 

@@ -147,8 +147,6 @@ pub enum Metric {
     Balance,
     /// The gear, front in the upper byte and rear in the lower, both from 1 (electronic shifting).
     Gear,
-    /// The gears there are, the same way (ANT+ Shifting only; 0 for a count not sent).
-    Gears,
     /// The shifting system's battery: percent (Di2), or [`SHIFT_STATUS`] plus the ANT+ battery status (1 new, 2
     /// good, 3 ok, 4 low, 5 critical) of its worst component.
     ShiftBattery,
@@ -412,7 +410,6 @@ impl Decoders {
                     let front = if front == 7 { 0 } else { front + 1 };
                     live.set(Metric::Gear, u16::from(front) << 8 | u16::from(rear + 1));
                 }
-                live.set(Metric::Gears, u16::from(d[4] >> 5) << 8 | u16::from(d[4] & 0x1f));
             }
             // common page 82, battery status: the worst component's
             Kind::Shifting if d[0] == 0x52 => {
@@ -574,7 +571,7 @@ mod tests {
     fn shifting_pages() {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         dec.decode(Kind::Shifting, [1, 0, 0xff, 0xff, 2 << 5 | 12, 0, 0, 0], 2105, &mut live);
-        assert_eq!((live.get(Metric::Gear), live.get(Metric::Gears)), (None, Some(0x020c)), "no gear yet");
+        assert_eq!(live.get(Metric::Gear), None, "no gear yet");
         dec.decode(Kind::Shifting, [1, 1, 0xff, 1 << 5 | 3, 2 << 5 | 12, 0, 0, 0], 2105, &mut live);
         assert_eq!(live.get(Metric::Gear), Some(0x0204), "2-4");
         dec.decode(Kind::Shifting, [0x52, 0xff, 0x11, 0, 0, 0, 0, 2 << 4], 2105, &mut live);

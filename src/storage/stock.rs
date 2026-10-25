@@ -6,7 +6,7 @@
 //!   ride is decoded once ever: its [`Entry`] (64 bytes) goes into the [`Cache`], this firmware's own
 //!   `\Rustfw\scan.bin`, which a start reads first (the totals at once) so that only new or changed rides are
 //!   read; the sums are made from the entries (again on a new day: the windows move);
-//! - **its settings** (`\System\*.ini`): [`import`] maps what has an equivalent here ([`Imported`]).
+//! - **its settings** (`\System\*.ini`): [`Scan::import`] maps what has an equivalent here ([`Imported`]).
 //!
 //! A ride counts only if its file is whole (header, CRC) and has its session: `tmp.fit` (stock's ride in
 //! progress) and the GNSS logs (`.ubx`) do not have a ride's name and are never opened. The ride's day is its
@@ -527,6 +527,7 @@ impl Scan {
     }
 
     /// The cache, if it has one.
+    #[cfg(test)]
     pub fn cache(&self) -> Option<&Cache> {
         self.cache.as_deref()
     }
@@ -801,7 +802,7 @@ impl Scan {
         }
     }
 
-    /// Reads stock's settings files ([`import`]), each into a buffer of [`IO`] bytes on the stack: `\System\DeviceData.ini` for the bike
+    /// Reads stock's settings files ([`Imported`]), each into a buffer of [`IO`] bytes on the stack: `\System\DeviceData.ini` for the bike
     /// in use and the backlight, then `UserProfile.ini`, `Sensor.ini` and that bike's `Bike<n>Profile.ini`. A missing file gives
     /// nothing from it.
     #[inline(never)] // as `advance`
@@ -1070,6 +1071,7 @@ impl Imported {
 }
 
 /// Stock's settings from the three files' text ([`Imported::user`], [`Imported::sensors`], [`Imported::bike`]).
+#[cfg(test)]
 pub fn import(user: &[u8], sensor: &[u8], bike: &[u8]) -> Imported {
     let mut i = Imported::default();
     i.user(user);

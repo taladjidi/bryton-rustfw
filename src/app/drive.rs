@@ -92,6 +92,7 @@ impl App {
     }
 
     /// The card is lent to the computer.
+    #[cfg(test)]
     pub fn drive_lent(&self) -> bool {
         self.emmc.lent()
     }

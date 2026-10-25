@@ -353,11 +353,6 @@ impl App {
         app
     }
 
-    /// [`App::new_with`] without Shimano's network key.
-    pub fn new(b: &mut impl Board, ant_key: Option<[u8; 8]>) -> Self {
-        Self::new_with(b, ant_key, None)
-    }
-
     /// The first half of [`App::start_with`]: the panel and the chips started, the state read back. It returns the
     /// app as one struct expression, which the caller can place where it lives (main.rs `make_app`) before
     /// [`App::begin`] runs on it there: a named local returned at the end was one more copy of the app on the stack.

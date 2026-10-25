@@ -27,8 +27,6 @@ pub const SD_BLE_VERSION_GET: u8 = 0x65;
 pub const SD_POWER_SYSTEM_OFF: u8 = 0x32;
 /// `sd_ble_gap_scan_start` (API v5: flags, interval, window, timeout).
 pub const SD_BLE_GAP_SCAN_START: u8 = 0x8a;
-/// `sd_ble_gap_scan_stop`.
-pub const SD_BLE_GAP_SCAN_STOP: u8 = 0x8b;
 /// BLE event id: an advertising report.
 pub const EVT_ADV_REPORT: u16 = 0x1d;
 /// BLE event id: a timeout (the scan's, here).

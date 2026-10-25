@@ -7,14 +7,6 @@ use crate::fat::tests::{Ram, read_all};
 use crate::page::{Page, Saved};
 use crate::ui::Field::{self, *};
 
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
-
 /// A unit with this firmware's settings and the classic pages (speed over heart rate and cadence; four fields; the
 /// map) on the synthetic volume, past the pages' file's read.
 fn started() -> (Sim, App) {

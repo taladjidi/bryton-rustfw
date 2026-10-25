@@ -85,13 +85,6 @@ pub struct Handle {
     pub dir: u32,
 }
 
-impl Handle {
-    /// The file as the reader takes it.
-    pub fn file(&self) -> File {
-        File { cluster: self.first, size: self.size, dir: false }
-    }
-}
-
 /// Marks deleted (0xe5) the long name pieces before entry `slot` of directory sector `s` that carry checksum
 /// `sum`, back to the first piece (its 0x40 bit); true if the name goes on in the sector before.
 fn mark_long_name(s: &mut [u8; SECTOR], slot: usize, sum: u8) -> bool {

@@ -1,16 +1,9 @@
 //! The phone link (app/phone.rs) against the simulated chip and a scripted phone (ble_sim.rs): pairing, the bond
 //! on the card, reconnection, media keys (AMS and HID), notifications, a call, the time, and ANT+ alongside.
 
+use super::tests::assert_consistent;
 use super::*;
 use crate::phone::Stored;
-
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
 
 /// `\Rustfw\ble.bin` as the card holds it.
 fn stored(sim: &Sim) -> Option<Stored> {
@@ -356,12 +349,4 @@ fn a_call_in_a_burst_of_messages() {
     app.input(&mut sim, Input::Select);
     run(&mut sim, &mut app, 2000);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0)]);
-}
-
-/// The same screen drawn step by step and at once (tests.rs has the original).
-fn assert_consistent(sim: &Sim, app: &App) {
-    for y in 0..H {
-        let (drawn, panel) = (app.render_row(y).px, &sim.screen[(y * W) as usize..((y + 1) * W) as usize]);
-        assert!(drawn[..] == panel[..], "row {y}");
-    }
 }

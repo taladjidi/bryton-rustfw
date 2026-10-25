@@ -6,14 +6,6 @@ use super::*;
 use crate::msc::tests::{Host, cbw, rw10};
 use crate::ui::UsbDot;
 
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
-
 /// One command from the computer: its data and status (the CSW checked).
 fn command(sim: &mut Sim, app: &mut App, h: &mut Host, tag: u32, len: u32, dir_in: bool, cb: &[u8]) -> (Vec<u8>, u8) {
     app.drive_packet(sim, &cbw(tag, len, dir_in, cb), h);

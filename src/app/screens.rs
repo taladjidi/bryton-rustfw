@@ -78,6 +78,7 @@ impl App {
     }
 
     /// The last basemap view change's cost.
+    #[cfg(test)]
     pub fn basemap_stats(&self) -> tiles::Stats {
         self.basemap.stats
     }

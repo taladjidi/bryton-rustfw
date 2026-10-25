@@ -10,14 +10,6 @@ fn hr72(_: u64) -> [u8; 8] {
     [4, 0, 0, 0, 0, 0, 0, 72]
 }
 
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
-
 /// A unit with the card, ANT started, the strap paired and in range, riding.
 fn riding() -> (Sim, App) {
     let mut sim = Sim::new(9, 0, 0);
