@@ -10,8 +10,10 @@
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
   only the rides new or changed since are read), and the latest notices (a GPS fix, a
   sensor paired, the battery low), or Ferris the Rust crab when there are none.
-- **Ride pages:** up to three, each in one of eleven layouts (one to six fields: even grids, and uneven ones such as
-  a big box over two or over a 2 x 2 grid, two over a big one, three rows), chosen in the menu: speed, heart rate, cadence,
+- **Ride pages:** one to six, each made of rows (up to five, each a share of the height, one or two boxes side by
+  side, eight fields at most), made on the page itself in the page editor (below) or from a layout of the menu (one
+  to eight fields: even grids, and uneven ones such as a big box over two or over a 2 x 2 grid, two over a big one,
+  three rows, four rows of two): speed, heart rate, cadence,
   power, time, map, timer, distance, average and top speed, average heart rate and power, lap time and distance,
   ascent, a zone graph; heart rate variability from a strap's beats: DFA a1 (the aerobic threshold marker, about
   0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute); and
@@ -22,7 +24,8 @@
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, distance and moving time.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
-  a box of that size has the same digit height (4x in a half-width box, 7x or 8x across the screen); only a longer
+  a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
+  stays 3 px from its box's rules, so two values side by side never read as one); only a longer
   value ("200-220", "1.6K 6%") takes the largest smaller scale it fits. Times: "MM:SS" under an hour (the step left
   "M:SS"), then "H:MM" at the box's size with the seconds small and grey after it ("1:23 45"); the seconds go first
   when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
@@ -95,6 +98,35 @@ The power button starts it again. After the backlight's time-out, any key brings
   2:1); a row's value is white like its label, green when it says a state that is on (a sensor heard, the phone
   linked).
 
+- **The page editor** (app/editor.rs; UI review 2, 5.2): a hold on a ride page's box, PAGES > a page > EDIT ON
+  PAGE, or RIDE > EDIT THIS PAGE while paused; never while a ride records (recording again behind it closes it,
+  its work kept). The page shows at its real size with live values, the selected box in a 3 px orange frame, and
+  the hint in the strip's place ("PAGE 2  START: MENU"):
+  ```
+  +------------------------+
+  |  PAGE 2  START: MENU   |   the hint, orange, where the strip was
+  +#########+--------------+
+  #KM/H     #HR            |   the selected box framed
+  #  28.4   #  142         |
+  ##########+--------------+
+  |TIMER      KM           |
+  |  1:02      21.84       |
+  +------------------------+
+  ```
+  Page / Lap (or a tap) move the frame; Start (or a tap on the framed box) opens its actions: FIELD (the groups,
+  then the fields), SPLIT with a side-by-side icon (a second box in its row), SPLIT with a stacked icon (a row
+  under it, half its height), MERGE (with the other box of its row, else the row under it, whose fields go),
+  TALLER, SHORTER, UNDO (the last action, again to redo), ADD PAGE (after this one), DELETE PAGE (asked first; one
+  page stays). An action that would leave a field too small to read says why in the banner ("TOO SMALL",
+  "2 A ROW AT MOST", "5 ROWS AT MOST", "8 BOXES AT MOST") and changes nothing: a value wants five characters at 3x
+  (93 x 53 px), a graph, the course profile or the workout gauge 120 x 118, the map half the page. Back leaves:
+  at once when nothing changed, else "KEEP CHANGES?" (Start keeps, Back drops).
+- **Where the pages are kept:** `\Rustfw\pages.bin`, two copies of one sector (a sequence number and a CRC each;
+  a write goes over the older, so a cut leaves the other), written when the pages changed and no ride is open; then
+  the first three pages in backup registers 20 to 25 as earlier builds kept them (a custom page as the layout of
+  its field count, six fields at most). At a start the registers give the pages at once, the file 2 s later (the
+  card is not touched at boot) and wins, unless another build changed the registers since: then its pages there
+  win, the file's others kept. A build that may not write the card keeps its pages (three) in the registers only.
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
   goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
   graph between the last minutes and the whole ride; neither while a ride records (below).
@@ -108,7 +140,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
-| hold (600 ms, still) | the menu (as holding Page; the ride menu while paused); not while a ride records | | |
+| hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
 | tap | the gear right of the overview's date: the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
@@ -161,7 +193,7 @@ MENU
  +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step
  +- COURSES >      the course files (green: followed); Start follows or stops
  +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
- +- PAGES >        OVERVIEW (four fields), PAGE 1..3 (FIELDS: the layout, FIELD n -> group -> field)
+ +- PAGES >        OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT, FIELD n -> group -> field), ADD PAGE
  +- SENSORS >      HEART RATE, SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING; DI2 KEYS >; PHONE >
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
@@ -178,7 +210,9 @@ MENU
   off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the
   banner; a second Start (or a tap on the row) does it, any other key or touch drops it.
-- **PAGES:** the overview's four fields, pages 1 to 3 (field count, each field). A field row opens the field groups
+- **PAGES:** the overview's four fields; the ride pages, each with EDIT ON PAGE (the page editor), LAYOUT (the next
+  layout its fields fit) and its fields; ADD PAGE (up to six: a 2 x 2 page, the editor open on it). A field row
+  opens the field groups
   (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
   beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the
   page. Any of the 56 fields is a few presses away, not up to 55.
@@ -191,7 +225,7 @@ MENU
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
    +- BRIGHTNESS       changed in place
    +- SENSORS >        the same menu as off the ride
-   +- EDIT THIS PAGE > the page's layout and fields (not on the course page, which has none)
+   +- EDIT THIS PAGE > paused only: the page editor on the page (the overview: its fields; the course page has none)
    +- ALL SETTINGS >   the full menu above
   ```
   An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when

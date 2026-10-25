@@ -333,12 +333,12 @@ fn old_page_in_register_14_survives_pairing() {
     let page = PageCfg::from_word(old).unwrap();
     sim.nordic.sensors.push(AntSensor { device_type: 0x22, id: 77, data: axs, network: 0, ack: &[] });
     let mut app = App::start(&mut sim, Some(KEY));
-    assert_eq!(app.pages[0], page, "read");
+    assert_eq!(app.pages[0], page.into(), "read");
     select_sensor(&mut sim, &mut app, Kind::Shifting as usize);
     run(&mut sim, &mut app, 3000);
     assert_eq!(sim.backup[14], Kind::Shifting.to_word(SensorId { device: 77, trans: 0xf1 }), "14 reused");
     let mut sim2 = Sim::new(9, 0, 0);
     sim2.backup = sim.backup;
     let app2 = App::start(&mut sim2, Some(KEY));
-    assert_eq!(app2.pages[0], page, "kept");
+    assert_eq!(app2.pages[0], page.into(), "kept");
 }
