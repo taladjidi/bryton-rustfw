@@ -27,7 +27,8 @@ impl App {
             self.track = track;
             (self.map_zoom, self.map_centre) = (None, None); // a new map: fitted until "+" (review)
             self.new_ride = true;
-            self.alt.ride_start(); // a calibration older than three hours is made again from the receiver
+            let now = self.now_s();
+            self.alt.ride_start(now); // a calibration older than three hours is made again from the receiver
         }
         self.say(match ev {
             ride::Event::Start => "RIDE STARTED",
@@ -193,7 +194,8 @@ impl App {
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
                 self.power.new_ride();
-                self.alt.ride_start();
+                let now = self.now_s();
+                self.alt.ride_start(now);
                 self.notice("RIDE RESUMED");
             }
             recorder::Outcome::Saved(_) => {
@@ -250,6 +252,9 @@ impl App {
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
         self.alt_second();
+        if self.ride.state() != ride::State::Idle {
+            self.alt_follow();
+        }
         let alt = self.alt_now();
         self.live.snapshot(); // the pages show this second's readings, not each broadcast's
         let input = ride::Input {
