@@ -28,6 +28,18 @@ pub const CAPS_TRIES: u8 = 5;
 /// See [`CAPS_TRIES`].
 pub const CAPS_RETRY_MS: u32 = 2000;
 
+/// Calibration request bits (FE-C page 1 byte 1): the zero offset, the spin-down.
+pub const CAL_ZERO: u8 = 0x40;
+/// See [`CAL_ZERO`].
+pub const CAL_SPIN: u8 = 0x80;
+/// A calibration ends with "no answer" when no page 2 comes for this long, ms (the request is sent again every
+/// [`RESEND_MS`] until the first one), or when it lasts [`CAL_TOTAL_MS`] in all.
+pub const CAL_ANSWER_MS: u32 = 60_000;
+/// See [`CAL_ANSWER_MS`].
+pub const CAL_TOTAL_MS: u32 = 180_000;
+/// How long a calibration's result stays on screen, ms.
+pub const CAL_SHOW_MS: u32 = 10_000;
+
 /// A grade past these is not sent, % x 100: most trainers stop at 15 to 20 %.
 pub const GRADE_RANGE: core::ops::RangeInclusive<i16> = -1000..=2000;
 
@@ -80,6 +92,8 @@ pub enum Command {
         /// Rolling resistance coefficient, 5e-5 units.
         crr: u8,
     },
+    /// A calibration asked for: the [`CAL_ZERO`] and [`CAL_SPIN`] bits.
+    Calibrate(u8),
     /// The rider and the bike: weights in 0.01 kg and 0.05 kg, the wheel's diameter in mm.
     User {
         /// Rider, 0.01 kg.
@@ -120,6 +134,22 @@ pub struct Reading {
     pub maker: Option<u16>,
     /// Serial number (common page 81).
     pub serial: Option<u32>,
+    /// Calibration in progress (page 2): the calibrations pending ([`CAL_ZERO`] / [`CAL_SPIN`] bits), the conditions
+    /// byte (bits 4-5 temperature, 6-7 speed: 1 too low, 2 ok), the target speed km/h x 10 and the target spin-down
+    /// time ms.
+    pub cal_pending: u8,
+    /// See `cal_pending`.
+    pub cal_cond: u8,
+    /// See `cal_pending`.
+    pub cal_target_x10: Option<u16>,
+    /// See `cal_pending`.
+    pub cal_target_ms: Option<u16>,
+    /// The calibration's response (page 1): the bits of what succeeded, the spin-down time ms.
+    pub cal_result: Option<(u8, Option<u16>)>,
+    /// How many page 2 and page 1 came (wrapping): a new page is a change of the count.
+    pub cal_pages: u8,
+    /// See `cal_pages`.
+    pub cal_results: u8,
     /// The pages understood so far, one bit each ([`crate::fec::seen`]); for the tests.
     pub seen: u8,
 }
@@ -134,6 +164,26 @@ impl Reading {
     pub fn needs_user(&self) -> bool {
         self.status & 4 != 0
     }
+}
+
+/// Where a calibration is. The trainer asks for it (status bits), the rider starts it, the trainer's page 2 says what
+/// to do (speed up, then stop pedalling) and its page 1 ends it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cal {
+    /// None.
+    Idle,
+    /// Asked, no page 2 yet.
+    Asking,
+    /// The speed is too low: pedal up to the target.
+    Speed,
+    /// The speed is right: stop pedalling and coast.
+    Coast,
+    /// Done, the spin-down time ms (None: not told).
+    Done(Option<u16>),
+    /// The trainer says it failed.
+    Failed,
+    /// The trainer never answered, or never finished.
+    NoAnswer,
 }
 
 /// What the app says drives the trainer now (the workout, the course); the trainer's own state fills the rest.
@@ -163,6 +213,7 @@ enum Sent {
     Caps,
     User,
     Command,
+    Cal,
 }
 
 /// The trainer's state: what was read, what the rider chose, what was sent last.
@@ -185,6 +236,13 @@ pub struct Trainer {
     user_ms: u32,
     user_kg: u16,
     what: Sent,
+    cal: Cal,
+    cal_req: u8,
+    cal_send: bool,
+    cal_since: u32,
+    cal_total: u32,
+    cal_resend: u32,
+    cal_seen: (u8, u8),
 }
 
 impl Default for Trainer {
@@ -206,6 +264,13 @@ impl Default for Trainer {
             user_ms: 0,
             user_kg: 0,
             what: Sent::Nothing,
+            cal: Cal::Idle,
+            cal_req: 0,
+            cal_send: false,
+            cal_since: 0,
+            cal_total: 0,
+            cal_resend: 0,
+            cal_seen: (0, 0),
         }
     }
 }
@@ -293,6 +358,7 @@ impl Trainer {
     pub fn unsent(&mut self) {
         match core::mem::replace(&mut self.what, Sent::Nothing) {
             Sent::Command => self.last = None,
+            Sent::Cal => self.cal_send = true,
             Sent::Caps => (self.caps_tries, self.caps_ms) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS),
             Sent::User => self.user_sent = false,
             Sent::Nothing => {}
@@ -309,6 +375,79 @@ impl Trainer {
         (self.last, self.caps_tries, self.caps_ms) = (None, 0, CAPS_RETRY_MS);
         (self.user_sent, self.what) = (false, Sent::Nothing);
         self.reading = Reading::default();
+        self.cal_seen = (0, 0);
+        if self.calibrating() {
+            (self.cal, self.cal_since) = (Cal::NoAnswer, 0);
+        }
+    }
+
+    /// Where the calibration is.
+    pub fn cal(&self) -> Cal {
+        self.cal
+    }
+
+    /// A calibration runs (asked and not ended): no other command goes out meanwhile.
+    pub fn calibrating(&self) -> bool {
+        matches!(self.cal, Cal::Asking | Cal::Speed | Cal::Coast)
+    }
+
+    /// The rider starts a calibration: the spin-down, and the zero offset too when the trainer asked for it. The
+    /// request goes out at the next free slot (and again every [`RESEND_MS`] until the trainer answers).
+    pub fn start_calibration(&mut self) {
+        let s = self.reading.status;
+        // the spin-down unless only the power calibration is asked for
+        let spin = if s & 2 != 0 || s & 1 == 0 { CAL_SPIN } else { 0 };
+        self.cal_req = spin | if s & 1 != 0 { CAL_ZERO } else { 0 };
+        self.cal = Cal::Asking;
+        (self.cal_send, self.cal_since, self.cal_total, self.cal_resend) = (true, 0, 0, 0);
+        self.cal_seen = (self.reading.cal_pages, self.reading.cal_results);
+    }
+
+    /// The rider gives up, or dismisses the result. Nothing is sent: the trainer leaves the calibration on its own
+    /// when no request follows (inferred, fec.rs); the mode and the target go out again at once.
+    pub fn cancel_calibration(&mut self) {
+        if self.cal != Cal::Idle {
+            (self.cal, self.cal_send, self.last) = (Cal::Idle, false, None);
+        }
+    }
+
+    /// The calibration's clocks and the pages the trainer sent for it.
+    fn cal_tick(&mut self, dt_ms: u32) {
+        let r = self.reading;
+        self.cal_since = self.cal_since.saturating_add(dt_ms);
+        if !self.calibrating() {
+            if self.cal != Cal::Idle && self.cal_since >= CAL_SHOW_MS {
+                self.cancel_calibration();
+            }
+            return;
+        }
+        self.cal_total = self.cal_total.saturating_add(dt_ms);
+        let end = |t: &mut Self, c: Cal| (t.cal, t.cal_since, t.cal_send, t.last) = (c, 0, false, None);
+        if r.cal_results != self.cal_seen.1 {
+            self.cal_seen.1 = r.cal_results;
+            // either bit set is a success (as GoldenCheetah reads it)
+            return match r.cal_result {
+                Some((ok, ms)) if ok != 0 => end(self, Cal::Done(ms)),
+                _ => end(self, Cal::Failed),
+            };
+        }
+        if r.cal_pages != self.cal_seen.0 {
+            self.cal_seen.0 = r.cal_pages;
+            (self.cal_since, self.cal_send) = (0, false);
+            match (r.cal_cond >> 6, self.cal) {
+                (1, _) | (_, Cal::Asking) => self.cal = Cal::Speed,
+                (2, _) => self.cal = Cal::Coast,
+                _ => {}
+            }
+        }
+        if self.cal_total >= CAL_TOTAL_MS || self.cal_since >= CAL_ANSWER_MS {
+            end(self, Cal::NoAnswer);
+        } else if self.cal == Cal::Asking {
+            self.cal_resend += dt_ms;
+            if self.cal_resend >= RESEND_MS {
+                (self.cal_resend, self.cal_send) = (0, true);
+            }
+        }
     }
 
     /// One pass, `dt_ms` long, with the trainer `heard` or not: the command to send now, if any: at once when it
@@ -319,6 +458,15 @@ impl Trainer {
         }
         self.sent_ms = self.sent_ms.saturating_add(dt_ms);
         (self.user_ms, self.caps_ms) = (self.user_ms.saturating_add(dt_ms), self.caps_ms.saturating_add(dt_ms));
+        self.cal_tick(dt_ms);
+        if self.calibrating() {
+            // the calibration's request, and no other command until it ends
+            if heard && core::mem::take(&mut self.cal_send) {
+                self.what = Sent::Cal;
+                return Some(Command::Calibrate(self.cal_req));
+            }
+            return None;
+        }
         if !heard || !self.engaged(d) {
             return None;
         }
@@ -334,6 +482,9 @@ impl Trainer {
     /// until its page 54 is seen, [`CAPS_TRIES`] times at most), the rider and the bike, and the rider again when it
     /// asks for them (at most every 10 s) or when the rider's weight (`weight_kg`) changed.
     pub fn setup(&mut self, weight_kg: u16) -> Option<Setup> {
+        if self.calibrating() {
+            return None; // no other control page meanwhile
+        }
         if self.reading.seen & crate::fec::seen::P54 == 0
             && self.caps_tries < CAPS_TRIES
             && self.caps_ms >= CAPS_RETRY_MS
@@ -431,6 +582,77 @@ mod tests {
         assert_eq!(t.due(250, true, &none), None);
         t.unsent();
         assert!(t.due(250, true, &none).is_some());
+    }
+
+    /// A calibration: the request, no other command meanwhile, the steps from page 2, the end from page 1, then the
+    /// mode and the target go out again.
+    #[test]
+    fn calibration_steps() {
+        let mut t = Trainer::default();
+        let none = Drive::default();
+        t.step_by(&none, true, false);
+        assert_eq!(t.due(250, true, &none), Some(Command::Power(420)));
+        t.reading.status = 2;
+        t.start_calibration();
+        assert_eq!(t.due(250, true, &none), Some(Command::Calibrate(CAL_SPIN)));
+        assert_eq!(t.setup(70), None, "no set-up page meanwhile");
+        assert_eq!(t.due(250, true, &none), None, "not again at once");
+        assert_eq!(t.due(RESEND_MS, true, &none), Some(Command::Calibrate(CAL_SPIN)), "until the trainer answers");
+        t.unsent();
+        assert_eq!(t.due(250, true, &none), Some(Command::Calibrate(CAL_SPIN)), "a refusal is due again");
+        t.reading.cal_pages = 1;
+        t.reading.cal_cond = 1 << 6;
+        assert_eq!(t.due(250, true, &none), None);
+        assert_eq!(t.cal(), Cal::Speed);
+        assert_eq!(t.due(RESEND_MS * 2, true, &none), None, "answered: not asked again, no ERG target");
+        t.reading.cal_pages = 2;
+        t.reading.cal_cond = 2 << 6;
+        t.due(250, true, &none);
+        assert_eq!(t.cal(), Cal::Coast);
+        t.reading.cal_result = Some((CAL_SPIN, Some(2500)));
+        t.reading.cal_results = 1;
+        assert_eq!(t.due(250, true, &none), Some(Command::Power(420)), "the target is back at once");
+        assert_eq!(t.cal(), Cal::Done(Some(2500)));
+        t.due(CAL_SHOW_MS, true, &none);
+        assert_eq!(t.cal(), Cal::Idle, "the result is shown for a while");
+        // power asked for alone: the zero offset; both: both
+        t.reading.status = 1;
+        t.start_calibration();
+        assert_eq!(t.due(250, true, &none), Some(Command::Calibrate(CAL_ZERO)));
+        t.reading.status = 3;
+        t.start_calibration();
+        assert_eq!(t.due(250, true, &none), Some(Command::Calibrate(CAL_SPIN | CAL_ZERO)));
+    }
+
+    #[test]
+    fn calibration_fails_and_times_out() {
+        let mut t = Trainer::default();
+        let none = Drive::default();
+        t.start_calibration();
+        t.reading.cal_result = Some((0, None));
+        t.reading.cal_results = 1;
+        t.due(250, true, &none);
+        assert_eq!(t.cal(), Cal::Failed);
+        t.cancel_calibration();
+        t.start_calibration();
+        for _ in 0..62 {
+            t.due(1000, true, &none);
+        }
+        assert_eq!(t.cal(), Cal::NoAnswer, "no page 2 in a minute");
+        t.cancel_calibration();
+        t.start_calibration();
+        for k in 0..200 {
+            t.reading.cal_pages = t.reading.cal_pages.wrapping_add(1); // pages keep coming, it never ends
+            t.due(1000, true, &none);
+            if !t.calibrating() {
+                assert!(k >= 179, "{k}");
+                break;
+            }
+        }
+        assert_eq!(t.cal(), Cal::NoAnswer, "three minutes in all");
+        t.start_calibration();
+        t.lost();
+        assert_eq!(t.cal(), Cal::NoAnswer, "the trainer went silent");
     }
 
     #[test]

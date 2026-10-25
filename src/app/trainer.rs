@@ -15,13 +15,18 @@
 //! again. A chip that does not answer at all (the message's layout is inferred, not seen on the unit) turns the
 //! control off for the power-up, with a notice, instead of letting the link watchdog reset the chip over it.
 //!
+//! **Calibration** (spin-down, FE-C pages 1 and 2, trainer.rs [`Cal`]): the trainer screen offers CALIBRATE beside MODE
+//! while the trainer's status asks for it, and Start held does the same; not during a ride (a notice). While it runs
+//! no other control page goes out, the screen says what to do from the trainer's page 2 (pedal up to the target
+//! speed, then stop pedalling), then the result; CANCEL or Back give up, and the mode and the target go out again.
+//!
 //! **The pairing is in `\Rustfw\sensors.bin`** (sensors.rs `sector`), not in a backup register: 14 is the
 //! shifting systems', 15 is stock's. Read a few seconds after the start (like the barometer's file), written between
 //! rides.
 
 use crate::*;
-use trainer::{Command, Drive, Mode, Setup};
-use ui::trainer::Now;
+use trainer::{Cal, Command, Drive, Mode, Setup};
+use ui::trainer::{Bottom, Now};
 
 /// The least time between two acknowledged messages on the trainer's channel, ms: its period (8192 / 32768 s).
 pub const ACK_GAP_MS: u32 = 250;
@@ -131,6 +136,9 @@ impl App {
     /// The trainer's set-up when it is first heard, and the command that is due: one acknowledged message at most
     /// per [`ACK_GAP_MS`]. Nothing here waits on the card or the recorder.
     fn send_trainer(&mut self, b: &mut impl Board) {
+        if self.trainer.calibrating() && self.ride.state() != ride::State::Idle {
+            self.trainer.cancel_calibration(); // a ride started: the trainer is the ride's
+        }
         let bt = self.ftms_on();
         let heard = self.trainer_heard() && (self.ant || bt);
         if !heard {
@@ -254,8 +262,40 @@ impl App {
         let mut target = Line::<12>::new();
         self.push_trainer_target(&mut target, true);
         let engaged = t.engaged(&d);
+        // the calibration's steps: the status line and, under the mode, what the trainer is doing
+        let (mut stat, mut src) = (Line::<20>::new(), Line::<20>::new());
+        let cal = match t.cal() {
+            Cal::Idle => None,
+            Cal::Asking => Some(("STARTING...", ui::trainer::WARN)),
+            Cal::Speed => {
+                let kmh = |v: Option<u16>, l: &mut Line<20>| match v {
+                    Some(v) => l.push_u32((u32::from(v) + 5) / 10),
+                    None => l.push_str("--"),
+                };
+                stat.push_str("PEDAL TO ");
+                kmh(r.cal_target_x10, &mut stat);
+                stat.push_str(" KM/H");
+                src.push_str("SPEED NOW ");
+                kmh(r.speed_x10, &mut src);
+                src.push_str(" KM/H");
+                Some(("", ui::trainer::WARN))
+            }
+            Cal::Coast => Some(("STOP PEDALLING", ui::trainer::GOOD)),
+            Cal::Done(ms) => {
+                if let Some(ms) = ms {
+                    src.push_str("SPIN-DOWN ");
+                    src.push_u32(u32::from(ms));
+                    src.push_str(" MS");
+                }
+                Some(("CALIBRATED", ui::trainer::GOOD))
+            }
+            Cal::Failed => Some(("FAILED: TRY AGAIN", ui::trainer::BAD)),
+            Cal::NoAnswer => Some(("NO ANSWER", ui::trainer::BAD)),
+        };
         let (status, status_color) = if !self.trainer_heard() {
             ("NO TRAINER", ui::trainer::BAD)
+        } else if let Some((text, color)) = cal {
+            (if text.is_empty() { stat.as_str() } else { text }, color)
         } else if r.needs_calibration() {
             ("CALIBRATE", ui::trainer::WARN)
         } else if !engaged {
@@ -275,15 +315,47 @@ impl App {
             (None, Some(_)) => "COURSE",
             _ => "MANUAL",
         };
+        let source = match (cal, src.as_str()) {
+            (Some(_), "") => "SPIN-DOWN",
+            (Some(_), text) => text,
+            _ => source,
+        };
         f(&Now {
             mode: t.mode(&d).name(),
             source,
+            bottom: self.trainer_bottom(),
             target: target.as_str(),
             power: self.live.shown(Metric::Power),
             cadence: self.live.shown(Metric::Cadence).and_then(|c| u8::try_from(c).ok()),
             status,
             status_color,
         })
+    }
+
+    /// The bottom row of the trainer screen: CALIBRATE beside MODE while the trainer asks for it or a result is shown,
+    /// CANCEL while it runs. ANT+ only (the calibration pages are FE-C's).
+    fn trainer_bottom(&self) -> Bottom {
+        let t = &self.trainer;
+        if t.calibrating() {
+            Bottom::Cancel
+        } else if self.trainer_heard() && !self.ftms_on() && (t.reading.needs_calibration() || t.cal() != Cal::Idle) {
+            Bottom::Both
+        } else {
+            Bottom::Mode
+        }
+    }
+
+    /// CALIBRATE: starts the calibration, or cancels the one running (CANCEL, Start held). Not during a ride.
+    fn calibrate_action(&mut self) {
+        if self.trainer.calibrating() {
+            self.trainer.cancel_calibration();
+        } else if self.ride.state() != ride::State::Idle {
+            self.notice("NO CALIBRATION RIDING");
+        } else if !self.trainer_heard() || self.ftms_on() {
+            self.notice("NEEDS AN ANT+ TRAINER"); // the Bluetooth link has no calibration page yet
+        } else {
+            self.trainer.start_calibration();
+        }
     }
 
     /// The target as text: "250 W", "40 %", "-2.5 %" (`unit` with a space; the page field without).
@@ -370,10 +442,12 @@ impl App {
                 self.trainer.step_by(&d, i == Input::NextHeld, true);
             }
             Input::Select => self.trainer.cycle_mode(&d),
-            Input::Touch(Gesture::Tap(x, y)) => match ui::trainer::hit(x, y) {
+            Input::End => self.calibrate_action(), // Start held (riding it is the ride's, input.rs)
+            Input::Touch(Gesture::Tap(x, y)) => match ui::trainer::hit(x, y, self.trainer_bottom()) {
                 Some(Button::Plus) => self.trainer.step_by(&d, true, false),
                 Some(Button::Minus) => self.trainer.step_by(&d, false, false),
                 Some(Button::Mode) => self.trainer.cycle_mode(&d),
+                Some(Button::Calibrate) => self.calibrate_action(),
                 None => return,
             },
             _ => return,

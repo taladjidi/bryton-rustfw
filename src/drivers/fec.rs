@@ -21,6 +21,21 @@
 //! - The data request page 70 and the capabilities page 54 (max resistance N in 5-6, modes in the low bits of 7)
 //!   are from the profile as developer pages restate it; inferred, not seen on a trainer.
 //!
+//! - Calibration (pages 1 and 2), GoldenCheetah, github.com/GoldenCheetah/GoldenCheetah `src/ANT/ANTMessage.cpp`
+//!   (`fecRequestCalibration`, the decoder, citing "ANT+ Device Profile Fitness Equipment, Rev 4.1, 6.4.1 Data Page 1")
+//!   and `ANTChannel.cpp` / `ANT.h`. **Page 1, the request** (head unit to trainer, acknowledged): byte 1 the
+//!   calibration asked, 0x40 zero offset, 0x80 spin-down; byte 2 reserved 0; byte 3 temperature, 4-5 zero offset, 6-7
+//!   spin-down time, all 0xff (invalid) in a request. **Page 1, the response** (trainer, at the end): byte 1 the
+//!   same two bits, set for a calibration that succeeded (GoldenCheetah takes either bit as success); byte 3 the
+//!   temperature (0.5 degree units from -25, 0xff invalid); 4-5 the zero offset; 6-7 the spin-down time in ms.
+//!   **Page 2, in progress** (trainer, repeated during the calibration): byte 1 the calibrations pending (the same
+//!   two bits); byte 2 the conditions: bits 4-5 the temperature (1 too low, 2 ok, 3 too high), bits 6-7 the speed (1
+//!   too low, 2 ok); byte 3 the temperature; 4-5 the target speed, 0.001 m/s (0xffff invalid); 6-7 the target
+//!   spin-down time, ms. The trainer asks for the calibration in page 25's status nibble (bit 0 power / zero offset,
+//!   bit 1 resistance / spin-down). Inferred, not in the open sources: that both bits may be asked in one request
+//!   (this unit asks for the spin-down, and the zero offset only when the trainer asks for it), and that a trainer
+//!   leaves the calibration by itself when no request follows (nothing is sent to cancel).
+//!
 //! Page 26 (torque) is not decoded: the trainer sends power in page 25. Page 17 (settings) neither.
 
 use crate::trainer::{Command, MAX_W, Reading};
@@ -39,6 +54,10 @@ pub mod seen {
     pub const P80: u8 = 16;
     /// Page 81, product.
     pub const P81: u8 = 32;
+    /// Page 1, calibration response.
+    pub const P1: u8 = 64;
+    /// Page 2, calibration in progress.
+    pub const P2: u8 = 128;
 }
 
 /// Takes the 8 data bytes of a broadcast from the trainer into `r`; pages not listed in the module doc change
@@ -67,6 +86,21 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
             r.status = d[6] >> 4 & 7;
             r.limits = d[7] & 3;
             r.state = d[7] >> 4 & 7;
+        }
+        // the calibration's response: what succeeded, the spin-down time
+        1 => {
+            r.seen |= seen::P1;
+            r.cal_result = Some((d[1] & 0xc0, Some(u16_at(6)).filter(|&v| v != 0xffff)));
+            r.cal_results = r.cal_results.wrapping_add(1);
+        }
+        // the calibration in progress: what is pending, the conditions, the target speed and spin-down time
+        2 => {
+            r.seen |= seen::P2;
+            r.cal_pending = d[1] & 0xc0;
+            r.cal_cond = d[2];
+            r.cal_target_x10 = Some(u16_at(4)).filter(|&v| v != 0xffff).map(|v| (u32::from(v) * 36 / 1000) as u16);
+            r.cal_target_ms = Some(u16_at(6)).filter(|&v| v != 0xffff);
+            r.cal_pages = r.cal_pages.wrapping_add(1);
         }
         54 => {
             r.seen |= seen::P54;
@@ -98,6 +132,8 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
 /// ```
 pub fn encode(c: Command) -> [u8; 8] {
     match c {
+        // zero offset and spin-down bits in byte 1; the rest invalid
+        Command::Calibrate(req) => [0x01, req & 0xc0, 0, 255, 255, 255, 255, 255],
         Command::Resistance(half) => [0x30, 255, 255, 255, 255, 255, 255, half.min(200)],
         Command::Power(q) => {
             let [lo, hi] = q.min(MAX_W * 4).to_le_bytes(); // page 49's field holds 0.25 W units to 16383 W
@@ -148,6 +184,23 @@ mod tests {
         decode([71, 0x31, 0, 0, 255, 255, 0x20, 0x03], &mut r);
         assert_eq!(r.last_cmd, Some((0x31, 0)));
         assert_eq!(r.seen, seen::P16 | seen::P25 | seen::P54 | seen::P71);
+    }
+
+    #[test]
+    fn calibration_pages() {
+        let mut r = Reading::default();
+        // speed too low (condition 1), target 9.723 m/s = 35.0 km/h, spin-down 3000 ms
+        decode([2, 0x80, 0x60, 90, 0xfb, 0x25, 0xb8, 0x0b], &mut r);
+        assert_eq!(
+            (r.cal_pending, r.cal_cond >> 6, r.cal_target_x10, r.cal_target_ms),
+            (0x80, 1, Some(350), Some(3000))
+        );
+        decode([2, 0x80, 0xa0, 90, 0xff, 0xff, 0xff, 0xff], &mut r);
+        assert_eq!((r.cal_cond >> 6, r.cal_target_x10, r.cal_target_ms, r.cal_pages), (2, None, None, 2));
+        decode([1, 0x80, 0, 90, 0xff, 0xff, 0xc4, 0x09], &mut r);
+        assert_eq!((r.cal_result, r.cal_results), (Some((0x80, Some(2500))), 1));
+        assert_eq!(r.seen, seen::P1 | seen::P2);
+        assert_eq!(encode(Command::Calibrate(0xff)), [1, 0xc0, 0, 255, 255, 255, 255, 255], "only the two bits");
     }
 
     #[test]

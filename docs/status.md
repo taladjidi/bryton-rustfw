@@ -47,6 +47,14 @@ The dated findings are in [journal.md](journal.md).
   agent_b2.md) is accepted by the chip; the capabilities page (54) comes after the request (page 70); the trainer
   takes pages 49 (ERG under a workout), 48 and 51 (SIM on a course; the trainer's speed advances the ride), 55; and
   its page 71 answers pass. Pairing is kept in backup register 14 only while no shifting system is (no register free).
+- **Spin-down calibration of the ANT+ FE-C trainer (trainer.rs `Cal`, drivers/fec.rs pages 1 and 2, app/trainer.rs,
+  ui/trainer.rs)**: only against the simulator's trainer. On the Van Rysel D500 showing CALIBRATE: CALIBRATE beside
+  MODE (or Start held) sends page 1 with the spin-down bit (0x80), and the trainer answers with page 2 (the layout is
+  GoldenCheetah's, from the profile rev 4.1, fec.rs doc; the temperature and speed condition bits and the target speed
+  in 0.001 m/s are to be seen on a real trainer); the screen says PEDAL TO nn KM/H, then STOP PEDALLING, then
+  CALIBRATED with the spin-down time from its page 1; the status bit clears afterwards; the request's reserved bytes
+  and a request with both bits (when the trainer asks for the zero offset as well) are inferred; that the trainer
+  leaves the calibration by itself after CANCEL (nothing is sent) is inferred; the ERG target comes back after.
 - **The two links' configuration and the Bluetooth trainer, FTMS (nrf.rs `start`, drivers/ftms.rs, app/ftms.rs;
   phase 2)**: only against the simulator's chip and trainer. On the unit, in this order:
   1. `sd_ble_cfg_set` (`00 69 20 00 00 00 01 01 02 03 00`, then `00 69 40 00 00 00 01 01 01 00`) answered 0 and

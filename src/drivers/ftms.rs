@@ -218,7 +218,7 @@ pub fn encode(c: Command, (lo, hi): (i16, i16)) -> Option<([u8; 7], usize)> {
             b = [0x11, 0, 0, g0, g1, crr / 2, CW];
             7
         }
-        Command::User { .. } => return None,
+        Command::User { .. } | Command::Calibrate(_) => return None, // FE-C pages only
     };
     Some((b, n))
 }
