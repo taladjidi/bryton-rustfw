@@ -71,6 +71,13 @@ impl PhoneSim {
         self.subscribed.clear();
     }
 
+    /// The link is lost without the chip's event reaching the unit (it was among bytes dropped): the phone is
+    /// still in range, and connects again to the next advertising.
+    pub fn lose_link(&mut self, now: u64) {
+        self.hang_up();
+        self.connect_at = now;
+    }
+
     /// An iPhone: ANCS (handles 0x10..), AMS (0x20..), CTS (0x30..); `ios` false leaves only CTS.
     pub fn new(ios: bool) -> Self {
         let vs = |i: usize| U::Vs(crate::phone::VS[i]);
@@ -367,6 +374,9 @@ impl Nordic {
                 let len = usize::from(u16_at(2));
                 self.server.sys_attrs = (args[4] == 1).then(|| args[5..5 + len].to_vec());
                 ok(self, &[]);
+            }
+            0xaa if self.phone.as_ref().is_some_and(|p| !p.connected) => {
+                self.queue(&[1, 0xaa, 0x02, 0x30, 0, 0]); // BLE_ERROR_INVALID_CONN_HANDLE: no such link
             }
             0xaa => {
                 // this model's system attributes: (handle, value) of each CCCD on

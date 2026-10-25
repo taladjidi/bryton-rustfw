@@ -230,3 +230,108 @@ fn stock_sea_level_pressure() {
     assert_eq!(app.alt.cal().map(|c| (c.by, c.p0)), Some((By::Stock, 10_200 * 4096 / 10)));
     assert_ne!(app.alt.cal().unwrap().p0, P_STD);
 }
+
+/// The receiver reads 40 m above the truth (the barometer, once calibrated by a typed altitude, does not).
+fn gps_high(ms: u64) -> i32 {
+    truth(ms) + 40_000
+}
+
+/// The biggest step between two seconds of the ride's altitude (the value the records take), over `secs`.
+fn biggest_step(sim: &mut Sim, app: &mut App, secs: u32) -> u32 {
+    let mut last = app.alt_now().0;
+    let mut worst = 0;
+    for _ in 0..secs {
+        run(sim, app, 1000);
+        let now = app.alt_now().0;
+        if let (Some(a), Some(b)) = (last, now) {
+            worst = worst.max(a.abs_diff(b));
+        }
+        last = now;
+    }
+    worst
+}
+
+/// Review: a ride started before the fix took the barometer on the standard day, then the receiver (40 m apart),
+/// then the barometer again once calibrated: the records stepped each time. The source change continues from the
+/// last value now; the climb is 0.5 m/s.
+#[test]
+fn a_ride_started_before_a_fix_has_no_step() {
+    let mut sim = unit(0);
+    sim.gnss.fix = None; // the fix comes 20 s into the ride
+    sim.gnss.alt = Some(gps_high);
+    sim.bus.baro_alt = Some(truth);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 6000);
+    app.start_pause();
+    let mut worst = biggest_step(&mut sim, &mut app, 20);
+    sim.gnss.fix = Some(5000);
+    worst = worst.max(biggest_step(&mut sim, &mut app, 120));
+    assert_eq!(app.alt.cal().map(|c| c.by), Some(By::Auto), "the average ran");
+    assert!(worst < 3000, "a step of {worst} mm");
+}
+
+/// A resumed ride: the calibration kept on the card comes back (a read, during the ride), so the altitude stays on
+/// the barometer instead of going to the receiver, 40 m apart.
+#[test]
+fn a_resumed_ride_has_no_step() {
+    let mut sim = unit(0);
+    sim.gnss.alt = Some(gps_high);
+    sim.bus.baro_alt = Some(truth);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 12_000);
+    let now = app.now_s();
+    assert!(app.alt.calibrate(truth(sim.ms), now));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(stored(&sim).map(|c| c.by), Some(By::Typed), "written between rides");
+    app.start_pause();
+    let before = biggest_step(&mut sim, &mut app, 40);
+    assert!(before < 3000);
+    let last = app.alt_now().0.unwrap();
+    app.press(&mut sim, Press::Long(Key::Back));
+    app.press(&mut sim, Press::Long(Key::Back));
+    assert!(sim.standby);
+    let mut sim2 = unit(2);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    sim2.ms = sim.ms + 90_000;
+    sim2.gnss.alt = Some(gps_high);
+    sim2.bus.baro_alt = Some(truth);
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, u64::from(ALT_LOAD_MS) + 6000);
+    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    app.start_pause();
+    let a = app.alt_now().0.unwrap();
+    let climbed = 90_000 / 2 + 2000; // mm
+    assert!(a.abs_diff(last) < climbed + 10_000, "{last} then {a}");
+    assert!(biggest_step(&mut sim2, &mut app, 60) < 3000);
+}
+
+/// Review: Back out of the ALTITUDE edit calibrated and trusted the number; only Select (or a tap) on a changed value does.
+#[test]
+fn back_leaves_the_altitude_as_it_was() {
+    let mut sim = unit(0);
+    sim.gnss.alt = Some(flat_300);
+    sim.bus.baro_alt = Some(truth);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 12_000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, menu::Row::Open(Menu::BuiltIn));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start)); // edit
+    for _ in 0..5 {
+        app.press(&mut sim, Press::Short(Key::Lap));
+    }
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.alt.cal(), None, "Back: not calibrated");
+    app.press(&mut sim, Press::Short(Key::Start)); // edit again
+    app.press(&mut sim, Press::Short(Key::Start)); // Select with nothing changed
+    assert_eq!(app.alt.cal(), None, "unchanged: not calibrated");
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Lap));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.alt.cal().map(|c| c.by), Some(By::Typed), "Select on a changed value");
+}

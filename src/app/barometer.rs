@@ -9,8 +9,9 @@
 //! Faster would add nothing the filter keeps. Idle: every [`BATTERY_MS`], as before (the menu's pressure and
 //! temperature rows).
 //!
-//! **The file** is read and written between rides only (`ride_settled`: the recorder is the card's one writer while a
-//! ride is open), once after [`ALT_LOAD_MS`], and never in a build that may not write the card. A write that fails
+//! **The file** is written between rides only (`ride_settled`: the recorder is the card's one writer while a ride
+//! is open); read once after [`ALT_LOAD_MS`], also while a ride is open (a read: a resumed ride gets its calibration
+//! back, so its altitude does not change source), and never in a build that may not write the card. A write that fails
 //! says so and is not retried until the next calibration; a ride never waits for it.
 
 use crate::*;
@@ -29,6 +30,8 @@ pub const ALT_MENU_OFFSET: i32 = 500;
 pub(crate) struct AltStore {
     /// Read, or known not to be there.
     pub(crate) loaded: bool,
+    /// The altitude the edit opened at (menu units): a calibration only when it was changed.
+    pub(crate) edited_from: u16,
 }
 
 impl App {
@@ -47,6 +50,13 @@ impl App {
     /// graphs and the file's records all take it from here.
     pub(crate) fn alt_now(&self) -> (Option<i32>, u8) {
         self.alt.source(self.pvt.filter(|p| p.good()).map(|p| p.alt_mm))
+    }
+
+    /// Once a second while a ride is open: the altitude of the ride goes on from its last value when the source
+    /// changes (altitude.rs `follow`).
+    pub(crate) fn alt_follow(&mut self) {
+        let gps = self.pvt.filter(|p| p.good()).map(|p| p.alt_mm);
+        self.alt.follow(gps);
     }
 
     /// The barometer, once a pass: its reading when due (a second while riding or averaging), then the file.
@@ -91,12 +101,16 @@ impl App {
             self.say("NO BAROMETER");
             return false;
         };
-        self.settings.alt_m = m;
+        (self.settings.alt_m, self.alt_store.edited_from) = (m, m);
         true
     }
 
-    /// The edit is over: the barometer reads the typed altitude from now on.
+    /// The edit is confirmed (Select or a tap; Back leaves things as they were): the barometer reads the typed
+    /// altitude from now on, if it was changed.
     pub(crate) fn alt_typed(&mut self) {
+        if self.settings.alt_m == self.alt_store.edited_from {
+            return;
+        }
         let m = (i32::from(self.settings.alt_m) - ALT_MENU_OFFSET) * 1000;
         let now = self.now_s();
         let set = self.alt.calibrate(m, now);
@@ -144,9 +158,10 @@ impl App {
     /// The calibration file: read once, written when the calibration changed, between rides.
     #[inline(never)]
     fn alt_storage(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() || self.gnss_ms < ALT_LOAD_MS || !self.ride_settled() {
+        if !self.card_writable || self.emmc.lent() || self.gnss_ms < ALT_LOAD_MS {
             return;
         }
+        // the read is allowed while a ride is open (a resumed ride has its calibration back); the write is not
         if !self.alt_store.loaded {
             self.alt_store.loaded = true;
             let mut s = [0u8; 512];
@@ -162,6 +177,9 @@ impl App {
                 let now = self.now_s();
                 self.alt.load(cal, now);
             }
+        }
+        if !self.ride_settled() {
+            return;
         }
         let Some(cal) = self.alt.take_dirty() else { return };
         let (local, _) = self.rec_time();

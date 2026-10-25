@@ -98,11 +98,18 @@ impl Rx {
         }
     }
 
-    /// Forgets the frame being read and the events kept, and the signs of a broken link: the stream is read again
-    /// from a frame boundary (after a drain, or a chip reset).
+    /// Forgets the frame being read and the signs of a broken link: the stream is read again from a frame
+    /// boundary (after a drain). The events already kept are whole frames and stay (a connection's end among them:
+    /// review); the app asks the chip what the dropped bytes may have held (`App::phone_recheck`).
     pub fn resync(&mut self) {
-        (self.got, self.want, self.last, self.kept_n) = (0, None, 0, 0);
+        (self.got, self.want, self.last) = (0, None, 0);
         (self.strikes, self.timeouts) = (0, 0);
+    }
+
+    /// [`Rx::resync`] after a chip reset: the events kept belong to a link that is gone, too.
+    pub fn reset(&mut self) {
+        self.resync();
+        self.kept_n = 0;
     }
 
     /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits (eight
@@ -662,6 +669,20 @@ mod tests {
         }
         assert_eq!(ids.len(), 8);
         assert_eq!(ids.last(), Some(&Some(0x11)), "the disconnection kept, an old notification dropped");
+    }
+
+    #[test]
+    fn a_resync_keeps_the_events_already_framed() {
+        let mut rx = Rx::new();
+        keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
+        rx.push(5); // half a frame
+        rx.resync();
+        let mut out = [0; KEPT];
+        let n = rx.pop(&mut out).expect("the disconnection kept");
+        assert_eq!(event_id(&out[..n]), Some(0x11));
+        keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
+        rx.reset();
+        assert_eq!(rx.pop(&mut out), None, "a chip reset forgets them");
     }
 
     fn report(addr: u8, rssi: i8, data: &[u8]) -> AdvReport<'_> {

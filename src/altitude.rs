@@ -29,7 +29,11 @@
 //! in the last [`FRESH_S`], or this power-up); the receiver's otherwise, while it has a fix; with no fix the
 //! barometer on whatever calibration it has (the standard day if none): a ride's ascent wants only differences. Each
 //! calibration, and each change of source, is a new *reference* (a number the ride sees): the ride forgets its low
-//! point and its climb window then, so a correction of 10 m never counts as 10 m of climbing.
+//! point and its climb window then, so a correction of 10 m never counts as 10 m of climbing. Trust ends with the
+//! calibration's age ([`FRESH_S`], checked at each ride's start, also within one power-up). The records' altitude
+//! stays continuous: while a ride is open [`Altimeter::follow`] shifts a new source (barometer to receiver or back)
+//! to continue from the last value; a typed or averaged calibration of the same source is a correction, not
+//! shifted. A resumed ride reads `altcal.bin` (a read, allowed during a ride) so it keeps its source.
 //!
 //! **No drift correction during a ride.** Weather moves the pressure about 1 hPa in 3 hours at most on a normal day
 //! (8 m in 3 h, 3 m an hour): over a ride the ascent counts differences over minutes, so it is untouched, and only
@@ -85,8 +89,9 @@ pub fn alt_mm(p: u32, p0: u32) -> Option<i32> {
 /// assert!(alt_mm(P_STD, p0_for(P_STD, 120_000).unwrap()).unwrap().abs_diff(120_000) < 100);
 /// ```
 pub fn p0_for(p: u32, alt_mm_target: i32) -> Option<u32> {
-    let (mut lo, mut hi) = (*P0_RANGE.start(), *P0_RANGE.end());
-    if alt_mm(p, lo)? > alt_mm_target || alt_mm(p, hi)? < alt_mm_target {
+    // below 0.8 p the table's ratio passes 1.25 (a Dead Sea day, 1065 hPa, wants 852): start there if higher
+    let (mut lo, mut hi) = ((*P0_RANGE.start()).max(p / 5 * 4 + 64), *P0_RANGE.end());
+    if lo > hi || alt_mm(p, lo)? > alt_mm_target || alt_mm(p, hi)? < alt_mm_target {
         return None;
     }
     for _ in 0..24 {
@@ -206,6 +211,10 @@ pub struct Altimeter {
     p_sum: u64,
     /// The calibration changed and is not in the file yet.
     dirty: bool,
+    /// The last second of a ride: the reference the ride saw and the altitude given (with `off`).
+    last: Option<(u8, i32)>,
+    /// Added to a source's altitude so a change of source continues from the last value (the records show no step).
+    off: i32,
 }
 
 impl Default for Altimeter {
@@ -228,6 +237,8 @@ impl Altimeter {
             alt_sum: 0,
             p_sum: 0,
             dirty: false,
+            last: None,
+            off: 0,
         }
     }
 
@@ -270,6 +281,11 @@ impl Altimeter {
         if self.cal.is_none_or(|c| c.by == By::Stock) {
             self.cal = Some(cal);
             self.trusted = cal.fresh(now_s);
+            self.bump();
+            (self.last, self.off) = (None, 0); // start-up (or a resume): what was followed so far is not the ride's
+            if self.trusted && self.want == Want::Auto {
+                (self.want, self.n, self.alt_sum, self.p_sum) = (Want::None, 0, 0, 0); // a ride's start waited for it
+            }
         }
     }
 
@@ -281,14 +297,20 @@ impl Altimeter {
         }
         self.cal = Some(Cal { p0, when_s: 0, by: By::Stock });
         self.dirty = true;
+        self.bump(); // the altitude moved: a new reference for the ride (it jumped 56 m with none)
         true
+    }
+
+    /// A new reference for the ride.
+    fn bump(&mut self) {
+        self.epoch = self.epoch.checked_add(1).unwrap_or(1);
     }
 
     fn set(&mut self, p0: u32, now_s: u32, by: By) {
         self.cal = Some(Cal { p0, when_s: now_s, by });
         self.trusted = true;
         self.dirty = true;
-        self.epoch = self.epoch.checked_add(1).unwrap_or(1);
+        self.bump();
         self.want = Want::None;
     }
 
@@ -304,8 +326,13 @@ impl Altimeter {
         (self.want, self.n, self.alt_sum, self.p_sum) = (Want::Manual, 0, 0, 0);
     }
 
-    /// A ride starts: if the calibration is not trusted, average the receiver's altitude for one (module doc).
-    pub fn ride_start(&mut self) {
+    /// A ride starts (or is resumed): if the calibration is not fresh at `now_s` (3 h, also within one power-up),
+    /// average the receiver's altitude for one (module doc). The ride's altitude starts from the source's own.
+    pub fn ride_start(&mut self, now_s: u32) {
+        (self.last, self.off) = (None, 0);
+        if !self.cal.is_some_and(|c| c.fresh(now_s)) {
+            self.trusted = false;
+        }
         if !self.trusted && self.want == Want::None {
             (self.want, self.n, self.alt_sum, self.p_sum) = (Want::Auto, 0, 0, 0);
         }
@@ -355,9 +382,38 @@ impl Altimeter {
     /// The altitude for the ride and its reference number: the barometer's when it reads and the calibration is
     /// trusted (or the receiver has nothing), else the receiver's (reference 0).
     pub fn source(&self, gps: Option<i32>) -> (Option<i32>, u8) {
-        match self.alt_mm() {
+        let (a, r, off) = self.pick(gps);
+        (a.map(|a| a.saturating_add(off)), r)
+    }
+
+    /// The source chosen, its reference, and the shift to add to it: the one kept, or the one a change of source
+    /// since the last [`Altimeter::follow`] calls for (so a reading between two seconds is shifted too).
+    fn pick(&self, gps: Option<i32>) -> (Option<i32>, u8, i32) {
+        let (a, r) = match self.alt_mm() {
             Some(a) if self.trusted || gps.is_none() => (Some(a), self.epoch),
             _ => (gps, 0),
+        };
+        let off = match (a, self.last) {
+            (Some(a), Some((lr, last))) if lr != r => {
+                if (lr == 0) != (r == 0) {
+                    last.saturating_sub(a)
+                } else {
+                    0
+                }
+            }
+            _ => self.off,
+        };
+        (a, r, off)
+    }
+
+    /// Once a second while a ride is open, before [`Altimeter::source`]: when the source changes between the
+    /// barometer and the receiver, the new one is shifted to continue from the last value (a ride started before
+    /// a fix, a calibration made on the way). A new calibration of the same source is a correction and not shifted.
+    /// The ride's ascent does not depend on it (the reference changes anyway).
+    pub fn follow(&mut self, gps: Option<i32>) {
+        if let (Some(a), r, off) = self.pick(gps) {
+            self.off = off;
+            self.last = Some((r, a.saturating_add(off)));
         }
     }
 
@@ -459,7 +515,7 @@ mod tests {
         a.feed(Some(950 * 4096));
         let day = 1_800_000_000;
         a.load(Cal { p0: P_STD, when_s: day - 4 * 3600, by: By::Typed }, day);
-        a.ride_start();
+        a.ride_start(day);
         assert_eq!(a.progress(), Some(0), "four hours old: a new one");
         assert_eq!(a.source(Some(500_000)), (Some(500_000), 0), "the receiver's meanwhile");
         assert!(a.source(None).0.is_some() && a.source(None).1 != 0, "no fix: the barometer, as it is");
@@ -470,7 +526,7 @@ mod tests {
         assert!(alt.is_some() && r > 1, "a new reference");
         let mut b = Altimeter::new();
         b.load(Cal { p0: P_STD, when_s: day - 3600, by: By::Gps }, day);
-        b.ride_start();
+        b.ride_start(day);
         assert_eq!(b.progress(), None, "an hour old: kept");
         let mut c = Altimeter::new();
         c.load(Cal { p0: P_STD, when_s: day + 5, by: By::Gps }, day);
@@ -510,5 +566,64 @@ mod tests {
                 assert!((h - f64::from(s)).abs() < 5.0, "{s}: {h}"); // lag of the filter: 3 s of climb
             }
         }
+    }
+
+    #[test]
+    fn a_calibration_expires_in_a_power_up() {
+        let mut a = Altimeter::new();
+        for _ in 0..10 {
+            a.feed(Some(P_STD));
+        }
+        assert!(a.calibrate(0, 1_000_000));
+        a.ride_start(1_000_000 + 600);
+        assert_eq!(a.progress(), None, "ten minutes: kept");
+        a.ride_start(1_000_000 + 6 * 3600);
+        assert_eq!(a.progress(), Some(0), "6 h later in the same power-up: made again");
+        assert_eq!(a.source(Some(5)), (Some(5), 0), "and the receiver's meanwhile");
+    }
+
+    #[test]
+    fn importing_stock_is_a_new_reference() {
+        let mut a = Altimeter::new();
+        for _ in 0..10 {
+            a.feed(Some(P_STD));
+        }
+        let (h0, e0) = a.source(None);
+        assert!(a.import_stock(10200));
+        let (h1, e1) = a.source(None);
+        assert_ne!(e0, e1, "the altitude moved {} mm", h1.unwrap() - h0.unwrap());
+    }
+
+    #[test]
+    fn low_places_calibrate() {
+        // the Dead Sea's shore, -430 m, on a 1013 hPa day: about 1065 hPa; and -500 m
+        for (hpa, m) in [(1065, -430), (1070, -500), (1080, -500)] {
+            let p = hpa * 4096;
+            let p0 = p0_for(p, m * 1000).unwrap_or_else(|| panic!("{hpa} hPa at {m} m"));
+            assert!(alt_mm(p, p0).unwrap().abs_diff(m * 1000) < 100);
+        }
+    }
+
+    #[test]
+    fn a_change_of_source_continues_from_the_last_value() {
+        let mut a = Altimeter::new();
+        for _ in 0..10 {
+            a.feed(Some(P_STD - 4096 * 12));
+        }
+        // no calibration, no fix: the barometer on the standard day
+        a.ride_start(0);
+        a.follow(None);
+        let (v0, _) = a.source(None);
+        // a fix 40 m higher: the receiver's, shifted to the last value
+        a.follow(Some(v0.unwrap() + 40_000));
+        let (v1, r) = a.source(Some(v0.unwrap() + 40_000));
+        assert_eq!(r, 0);
+        assert_eq!(v1, v0, "no step");
+        // the receiver climbs 1 m: 1 m in the records
+        a.follow(Some(v0.unwrap() + 41_000));
+        assert_eq!(a.source(Some(v0.unwrap() + 41_000)).0, Some(v0.unwrap() + 1000));
+        // a new ride starts from the source's own
+        a.ride_start(0);
+        assert_eq!(a.source(Some(7)).0, Some(7));
     }
 }

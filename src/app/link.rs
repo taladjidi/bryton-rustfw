@@ -9,6 +9,10 @@
 //!   normal, is never reset; a chip that hangs, or a link whose length bytes swallowed the stream, does not
 //!   answer.
 //!
+//! A refusal (an error code) is an answer, not a broken link: it is believed when it comes twice, noted, and not
+//! retried by resets. After a resync the phone link is asked about ([`App::phone_recheck`]: the dropped bytes may
+//! have held its end); the events already framed are kept.
+//!
 //! Recovery: drain the stream and start reading at a frame boundary, ask again; failing that reset the chip, start
 //! ANT again (keys, channels), reopen every channel that was open, and set the phone link up again (a bonded
 //! phone reconnects by itself). Attempts back off (15 s, doubling to 5 min) and the backoff relaxes after 10 quiet
@@ -49,11 +53,17 @@ pub struct Watch {
     pub(crate) owed: [Sensor; Kind::ALL.len()],
     /// The phone link's setup got no answer at a restart (a refusal is not this: it would be refused again).
     phone_owed: bool,
+    /// ANT, or a channel, was refused with an error code: the chip answers, so it is no broken link, and a reset
+    /// would be refused again (review: it reset a working chip every 5 min for ever).
+    pub(crate) refused: bool,
+    /// The last refusal seen (command, code). A refusal is believed when it comes twice: a damaged link can
+    /// turn a response into an error code, and a restart is cheap.
+    refusal: Option<(u8, u32)>,
 }
 
 impl Watch {
     /// The start. A chip (or its ANT) that did not start at boot was just tried: the first recovery waits.
-    pub const fn new(started: bool) -> Self {
+    pub const fn new(started: bool, refusal: Option<(u8, u32)>) -> Self {
         let wait_ms = if started { 0 } else { FIRST_WAIT_MS };
         Watch {
             quiet_ms: 0,
@@ -65,6 +75,8 @@ impl Watch {
             told: false,
             owed: [Sensor::Off; Kind::ALL.len()],
             phone_owed: false,
+            refused: false,
+            refusal,
         }
     }
 }
@@ -91,8 +103,12 @@ impl App {
     }
 
     /// Asks the chip its version: whether the link answers (an error code is an answer).
-    fn probe(&mut self, b: &mut impl Board) -> bool {
+    pub(crate) fn probe(&mut self, b: &mut impl Board) -> bool {
+        let failed = self.rx.failed; // a silence is not a failure of the phone's setup (PHONE menu): keep the last
         let r = nrf::call(b, &mut self.rx, &[nrf::CMD, nrf::SD_BLE_VERSION_GET, 1], &mut [0; 8]);
+        if r == Err(nrf::Error::Timeout) {
+            self.rx.failed = failed;
+        }
         r != Err(nrf::Error::Timeout)
     }
 
@@ -110,7 +126,7 @@ impl App {
             return;
         }
         // ANT wanted (a key) but not up, or a channel not reopened: a restart on a damaged link failed: another
-        let ant_down = (self.ant_key.is_some() && !self.ant)
+        let ant_down = (self.ant_key.is_some() && !self.ant && !self.watch.refused)
             || self.watch.phone_owed
             || self.watch.owed.iter().any(|&s| s != Sensor::Off);
         let broken = self.ble.is_none() || ant_down || self.rx.strikes >= 2 || self.rx.timeouts >= 2;
@@ -129,6 +145,7 @@ impl App {
             if self.probe(b) {
                 let w = &mut self.watch;
                 (w.quiet_ms, w.wait_ms, w.resyncs) = (0, RESYNC_WAIT_MS, w.resyncs.saturating_add(1));
+                self.phone_recheck(b);
                 return;
             }
         }
@@ -140,6 +157,14 @@ impl App {
             self.notice("RADIO RESET");
         }
         self.radio_restart(b);
+    }
+
+    /// A command was refused with an error code: true (and noted) when the same refusal came before.
+    fn refusal(&mut self) -> bool {
+        let seen = self.rx.failed.is_some() && self.rx.failed == self.watch.refusal;
+        self.watch.refusal = self.rx.failed;
+        self.watch.refused |= seen;
+        seen
     }
 
     /// The chip reset and started again as at boot (`App::new_with`), every channel that was open opened again, the
@@ -157,17 +182,21 @@ impl App {
         self.resting_ms = [u32::MAX; Kind::ALL.len()];
         self.heard_ms = [u32::MAX; Kind::ALL.len()]; // a sensor back counts as after a drop-out (decoders restart)
         self.sensors = [Sensor::Off; Kind::ALL.len()];
+        let pairing = self.phone.pairing();
         self.phone_down(b);
         self.ble = nrf::start(b).ok();
-        self.rx.resync();
+        self.rx.reset();
         self.strip.radio = self.ble.is_some();
         self.ant = false;
         self.di2 = false;
+        let was_refused = core::mem::take(&mut self.watch.refused);
         let nets = Kind::ALL.map(Kind::network);
-        if let (Some(_), Some(key)) = (self.ble, self.ant_key)
-            && let Ok(di2) = nrf::ant_start(b, &mut self.rx, key, self.di2_key, &nets)
-        {
-            (self.ant, self.di2) = (true, di2);
+        if let (Some(_), Some(key)) = (self.ble, self.ant_key) {
+            match nrf::ant_start(b, &mut self.rx, key, self.di2_key, &nets) {
+                Ok(di2) => (self.ant, self.di2) = (true, di2),
+                Err(nrf::Error::Code(_)) => drop(self.refusal()),
+                Err(nrf::Error::Timeout) => {}
+            }
         }
         for kind in Kind::ALL {
             let want = open[kind as usize];
@@ -175,19 +204,34 @@ impl App {
                 Sensor::Paired(id) => Some(id),
                 _ => None,
             };
-            if want != Sensor::Off
-                && self.ant
-                && (kind.network() == 0 || self.di2)
-                && nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok()
-            {
+            if want == Sensor::Off {
+                continue;
+            }
+            let possible = self.ant && (kind.network() == 0 || self.di2);
+            let opened = possible
+                && match nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id) {
+                    Ok(()) => true,
+                    Err(nrf::Error::Code(_)) if self.refusal() => false,
+                    Err(_) => continue, // owed: asked for again
+                };
+            if opened {
                 self.sensors[kind as usize] = want;
+            }
+            // opened, refused or impossible (no Shimano key): not owed. Only a link that does not answer is.
+            if self.ant || self.watch.refused {
                 self.watch.owed[kind as usize] = Sensor::Off;
             }
+        }
+        if self.watch.refused && !was_refused {
+            self.notice("ANT REFUSED");
         }
         self.watch.phone_owed = false;
         if self.ble.is_some() {
             self.rx.failed = None;
             self.phone_up(b);
+            if pairing {
+                self.phone_pair(b); // the PAIR window was open: it goes on (the screen still says so)
+            }
             self.watch.phone_owed = self.phone.link() == Link::NoBle && matches!(self.rx.failed, Some((_, u32::MAX)));
         }
     }

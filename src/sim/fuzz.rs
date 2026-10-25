@@ -1408,7 +1408,7 @@ fn page_editor_inputs() {
 #[test]
 fn barometric_altitude() {
     use crate::altitude::{Altimeter, Cal, P_STD};
-    let mut reach = [0usize; 8];
+    let mut reach = [0usize; 9];
     for seed in 1..=4u32 {
         let mut v = bytes(seed, 1 << 20);
         let mut r = move || {
@@ -1438,7 +1438,11 @@ fn barometric_altitude() {
                 0 => a.feed(None),
                 1 => reach[0] += usize::from(a.calibrate(alt, now)),
                 2 => a.from_gps(),
-                3 => a.ride_start(),
+                3 => a.ride_start(now),
+                7 => {
+                    a.follow(gps);
+                    reach[8] += usize::from(a.source(gps).0.is_some());
+                }
                 4 => reach[1] += usize::from(a.import_stock(r() % 20_000)),
                 5 | 6 => a.second(gps, now),
                 _ => a.feed(Some(p)),
