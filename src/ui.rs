@@ -53,7 +53,7 @@ pub fn grade_color(x10: i32) -> u16 {
     }
 }
 
-/// Small text: labels. The pixel font at 2x, so its dots match Ferris' look (fonts.rs also has smooth fonts).
+/// Small text: labels. The pixel font at 2x, so its dots match Ferris' look.
 pub const LABEL: Style = Style { font: &PIXEL, scale: 2, fg: WHITE, bg: BLACK };
 /// Large text: values, the pixel font at 4x like Ferris.
 pub const VALUE: Style = Style { font: &PIXEL, scale: 4, fg: WHITE, bg: BLACK };
