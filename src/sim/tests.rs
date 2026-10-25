@@ -66,6 +66,7 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
             battery: Some(63),
             charging: false,
             rec: app.strip.rec,
+            locked: app.strip.locked,
         },
     );
     let page = app.pages()[n];
@@ -111,6 +112,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
             battery: Some(63),
             charging: false,
             rec: app.strip.rec,
+            locked: app.strip.locked,
         },
     );
     let _ = s;
@@ -1516,6 +1518,7 @@ fn gps_fix_and_speed() {
         battery: Some(63),
         charging: false,
         rec: Rec::Idle,
+        locked: false,
     };
     crate::ui::draw_strip(&mut want, &strip);
     assert!(want.px == sim.screen, "GPS speed, green GPS");
@@ -2058,6 +2061,73 @@ fn back_held_3s_powers_off_after_release() {
     assert!(sim.touch.run_since.is_none(), "the touch chip in reset: no INT to keep the core out of standby");
     assert_eq!(sim.nordic.got.last(), Some(&vec![0, 0x32]), "the radio chip switched off too");
     assert_eq!(sim.tones, [1500, 2500, 0, 2500, 1500, 0], "rising at power-on, falling at power-off");
+}
+
+/// Back and Lap held together for 1 s lock the touch: a padlock in the strip, every tap and swipe ignored, the keys
+/// still work; the same hold again unlocks. Neither key acts on its own while they are down together.
+#[test]
+fn back_and_lap_together_lock_the_touch() {
+    let both = |ms: u64| (5000..6300).contains(&ms) || (14_000..15_300).contains(&ms);
+    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    let tap = move |t0: u64| move |ms: u64| (t0..t0 + 80).contains(&ms).then_some((gx, gy));
+    let (a, b) = (tap(8000), tap(17_000));
+    let mut sim = Sim::new(9, 0, 0)
+        .keys(move |ms| if both(ms) { Key::Back as u8 | Key::Lap as u8 } else { 0 })
+        .finger(move |ms| a(ms).or(b(ms)));
+    let mut app = App::start(&mut sim, None);
+    let left = 5500 - sim.ms;
+    run(&mut sim, &mut app, left);
+    assert!(!app.strip.locked, "not yet: held 0.5 s");
+    run(&mut sim, &mut app, 1000);
+    assert!(app.strip.locked && app.banner.as_str() == "TOUCH LOCKED");
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.screen(), Screen::Main, "neither key acted at its release");
+    assert!(sim.backlight, "Back did not toggle the light");
+    // the padlock is in the strip, and the screen equals the panel
+    let lit = |sim: &Sim| (81..88).any(|x| sim.screen[(12 * W + x) as usize] == ui::WHITE);
+    run(&mut sim, &mut app, 4500); // the banner goes, the gear tapped at 8 s
+    assert!(lit(&sim), "padlock");
+    assert_consistent(&sim, &app);
+    sim.save("touch_lock");
+    run(&mut sim, &mut app, 100);
+    assert_eq!(app.screen(), Screen::Main, "a tap on the gear: ignored while locked");
+    // keys still work, on every screen
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0));
+    assert!(app.strip.locked);
+    app.press(&mut sim, Press::Short(Key::Back));
+    let left = 15_800u64.saturating_sub(sim.ms);
+    run(&mut sim, &mut app, left);
+    assert!(!app.strip.locked && app.banner.as_str() == "TOUCH UNLOCKED");
+    run(&mut sim, &mut app, 2500);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "unlocked: the gear's tap at 17 s works");
+    assert_consistent(&sim, &app);
+}
+
+/// Back and Lap pressed one after the other (not together) still act on their own.
+#[test]
+fn chord_keys_alone_still_act() {
+    let mut k = Keys::default();
+    assert_eq!(k.poll(Key::Back as u8, 50), None);
+    assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Back)));
+    assert_eq!(k.poll(Key::Lap as u8, 50), None);
+    assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Lap)));
+    // together: neither acts; the chord fires once, at 1 s
+    let both = Key::Back as u8 | Key::Lap as u8;
+    let held: Vec<_> = (0..24).map(|_| k.poll(both, 50)).collect();
+    assert_eq!(held.iter().filter(|p| **p == Some(Press::Chord)).count(), 1);
+    assert_eq!(held[19], Some(Press::Chord), "at 1 s");
+    assert!(held.iter().all(|p| matches!(p, None | Some(Press::Chord))), "no repeat or long of either: {held:?}");
+    assert_eq!(k.poll(Key::Back as u8, 50), None, "one released, one down");
+    assert_eq!(k.poll(0, 50), None, "and the release of the other: nothing");
+    // a quick overlap (under 1 s) acts as neither
+    for _ in 0..4 {
+        assert_eq!(k.poll(both, 50), None);
+    }
+    assert_eq!(k.poll(0, 50), None);
+    // and keys work again after
+    assert_eq!(k.poll(Key::Lap as u8, 50), None);
+    assert_eq!(k.poll(0, 50), Some(Press::Short(Key::Lap)));
 }
 
 /// A synthetic ride at 8 m/s (28.8 km/h): 240 s east with a gentle wiggle, then a loop of 600 m radius

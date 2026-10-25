@@ -152,6 +152,8 @@ pub struct Strip {
     pub charging: bool,
     /// The ride: the time is white with no ride, green while it records, orange while paused or auto-paused.
     pub rec: Rec,
+    /// The touch is locked (Back and Lap held together): a padlock left of the time.
+    pub locked: bool,
 }
 
 /// The ride's state as the strip shows it.
@@ -194,6 +196,9 @@ pub const USB_ICON: [u16; 14] = [
 const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 /// The ride's state, right of the time: a red dot while it records, orange bars while paused, nothing otherwise.
 const STRIP_REC: (u32, u32) = (STRIP_TIME.0 + STRIP_TIME.1 + 3, 10);
+/// The touch lock's padlock, left of the time, in the 8 px between "GPS" and the time: 7 wide, 10 high.
+const STRIP_LOCK: (u32, u32) = (81, 8);
+const PADLOCK: [u16; 10] = [0x3800, 0x4400, 0x4400, 0xfe00, 0xfe00, 0xee00, 0xee00, 0xfe00, 0xfe00, 0xfe00];
 /// A dot 10 px wide (bit 15 leftmost), and two bars.
 const REC_DOT: [u16; 10] = [0x1e00, 0x7f80, 0x7f80, 0xffc0, 0xffc0, 0xffc0, 0xffc0, 0x7f80, 0x7f80, 0x1e00];
 const PAUSE_BARS: [u16; 10] = [0xe1c0; 10];
@@ -234,6 +239,12 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             Rec::Running => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, RED),
             Rec::Paused => draw_bitmap(c, &PAUSE_BARS, STRIP_REC.0, top + 2, 1, ACCENT),
             Rec::NotSaving => draw_bitmap(c, &REC_DOT, STRIP_REC.0, top + 2, 1, GREY),
+        }
+    }
+    if changed(|s| s.locked as u32) {
+        c.fill(STRIP_LOCK.0, top + 2, STRIP_LOCK.1, 10, BLACK);
+        if s.locked {
+            draw_bitmap(c, &PADLOCK, STRIP_LOCK.0, top + 2, 1, WHITE);
         }
     }
     if changed(|s| u32::from(s.radio)) {
@@ -1721,6 +1732,7 @@ pub(crate) mod tests {
             battery: Some(80),
             charging: false,
             rec: Rec::Idle,
+            locked: false,
         };
         let next = Strip { time: (10, 0), blink: false, rec: Rec::Running, ..strip };
         let (mut a, mut b) = (Frame::new(), Frame::new());
@@ -1741,6 +1753,7 @@ pub(crate) mod tests {
             battery: Some(87),
             charging: true,
             rec: Rec::Paused,
+            locked: false,
         };
         let mut f = Frame::new();
         draw_strip(&mut f, &strip);

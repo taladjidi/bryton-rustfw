@@ -24,6 +24,8 @@ pub enum Input {
     Off,
     /// Lap held: play or pause the phone's music (app/phone.rs), from any page.
     Media,
+    /// Back and Lap held together: the touch lock on or off, on every screen.
+    TouchLock,
     /// Page or Lap still held: [`Input::Next`] or [`Input::Prev`] again (a list scrolls, a value steps).
     NextHeld,
     /// See [`Input::NextHeld`].
@@ -54,6 +56,7 @@ impl Input {
             Press::Long(Key::Start) => Input::End,
             Press::Long(Key::Back) => Input::Off,
             Press::Long(Key::Lap) => Input::Media,
+            Press::Chord => Input::TouchLock,
             Press::Repeat(Key::Page) => Input::NextHeld,
             Press::Repeat(Key::Lap) => Input::PrevHeld,
             _ => return None,

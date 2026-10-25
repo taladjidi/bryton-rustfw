@@ -90,6 +90,7 @@
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 | hold Lap | the phone's music: play / pause (PHONE below) | |
+| hold Back and Lap together 1 s | the touch lock on or off, on every screen: all touch is ignored and a padlock shows in the strip (until unlocked or switched off); neither key acts on its own | the same |
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
@@ -148,7 +149,8 @@ A swipe is a drag of at least 37 px across or 48 px up or down, given at the rel
 Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
 records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
 glove, rain); swipes still turn pages and the keys do everything. TOUCH in SETTINGS > DISPLAY (ON / OFF) switches gestures off
-altogether, for rain: the keys only, the call's buttons included.
+altogether, for rain: the keys only, the call's buttons included; the touch lock (Back and Lap held together 1 s) is the
+quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent one.
 
 ## Ride
 

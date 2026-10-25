@@ -397,6 +397,7 @@ impl App {
                 battery: None,
                 charging: false,
                 rec: Rec::Idle,
+                locked: false,
             },
             strip_shown: Strip {
                 time: (0, 0),
@@ -407,6 +408,7 @@ impl App {
                 battery: None,
                 charging: false,
                 rec: Rec::Idle,
+                locked: false,
             },
             screen: Screen::Main,
             ble,

@@ -48,7 +48,13 @@ pub enum Press {
     /// Still held: one every [`REPEAT_MS`] from [`REPEAT_AFTER_MS`] on (a value editor steps on it). The
     /// [`Press::Short`] or [`Press::Long`] still follows.
     Repeat(Key),
+    /// Back and Lap held together for [`CHORD_MS`]: the touch lock ([`Input::TouchLock`]). While they are down
+    /// together neither acts on its own, at its release or held.
+    Chord,
 }
+
+/// Back and Lap held together this long toggle the touch lock.
+pub const CHORD_MS: u32 = 1000;
 
 /// A held key repeats from then on ([`Press::Repeat`]).
 pub const REPEAT_AFTER_MS: u32 = 500;
@@ -63,6 +69,10 @@ pub struct Keys {
     /// Keys down since before the start, not seen until released: the power button is Back's line, and the press
     /// that woke the unit from standby, held on, was taken for Back held 3 s, which switched it off again.
     stuck: u8,
+    /// How long Back and Lap have been down together.
+    chord_ms: u32,
+    /// Back and Lap were down together and one is still down: their own presses are dropped until both are up.
+    chord: bool,
 }
 
 impl Keys {
@@ -81,6 +91,13 @@ impl Keys {
     pub fn poll(&mut self, mask: u8, dt_ms: u32) -> Option<Press> {
         self.stuck &= mask;
         let mask = mask & !self.stuck;
+        let pair = Key::Back as u8 | Key::Lap as u8;
+        let chord_was = self.chord;
+        let both = mask & pair == pair;
+        self.chord = (self.chord || both) && mask & pair != 0;
+        let chord_ms = if both { self.chord_ms + dt_ms } else { 0 };
+        let fired = chord_ms >= CHORD_MS && self.chord_ms < CHORD_MS;
+        self.chord_ms = chord_ms;
         let mut press = None;
         for (key, held) in Key::ALL.into_iter().zip(&mut self.held_ms) {
             let long = key.long_ms();
@@ -92,9 +109,11 @@ impl Keys {
                 _ => None,
             };
             *held = now;
-            press = press.or(p);
+            if !((self.chord || chord_was) && pair & key as u8 != 0) {
+                press = press.or(p);
+            }
         }
-        press
+        if fired { Some(Press::Chord) } else { press }
     }
 }
 
@@ -241,8 +260,8 @@ impl App {
     /// toggles the backlight; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
     /// number being edited goes up with Prev, down with Next. Off switches off anywhere.
     pub fn input(&mut self, b: &mut impl Board, i: Input) {
-        if matches!(i, Input::Touch(_)) && !self.settings.touch {
-            return; // TOUCH OFF: the keys only
+        if matches!(i, Input::Touch(_)) && (!self.settings.touch || self.strip.locked) {
+            return; // TOUCH OFF, or locked: the keys only
         }
         let before = self.screen;
         self.clamp_menu(); // a row gone while the menu showed (drawn again below if the screen of rows changed)
@@ -254,6 +273,10 @@ impl App {
             if i == Input::Back {
                 return; // Back's own job is the light: done
             }
+        }
+        if i == Input::TouchLock {
+            self.strip.locked = !self.strip.locked; // the strip shows it; the banner says it
+            return self.say(if self.strip.locked { "TOUCH LOCKED" } else { "TOUCH UNLOCKED" });
         }
         if self.banner_ms.take().is_some() {
             self.unbanner(b); // and the input acts
@@ -499,6 +522,9 @@ impl App {
         // charged again, a tap still down at the command's end was a hold (review)
         let dt_ms = if core::mem::take(&mut self.touch_sampled) { 0 } else { dt_ms };
         let (g, finger) = sample_touch(b, &mut self.touch, self.touch_ok, false, dt_ms);
+        if self.strip.locked {
+            return None; // locked: a finger neither acts nor keeps the light on
+        }
         if finger {
             self.idle_ms = 0;
         }
