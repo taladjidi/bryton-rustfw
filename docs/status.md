@@ -40,6 +40,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The Nordic link watchdog (app/link.rs)**: `dev.py info` ends with "radio resets 0" over a normal ride and a
+  quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
+  of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
+  recording through it.
+
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
   DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
   for one of this firmware's rides) has it, `\Activities` not; the next start's totals the same (the cache written
