@@ -40,6 +40,15 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The end-ride screen (app/riding.rs `end_input`, recorder.rs "A discarded ride")**, with an EMMC_WRITE=1 build:
+  a short ride, Start, Start held: END RIDE, the time and distance, RESUME selected; Page and Lap move, Back and
+  RESUME leave it paused on its page; taps with gloves on each button. SAVE: the card (it stays on Page and Lap,
+  goes on Back or Start), `dev.py ls Activities` and `Rustfw/Activities` have it, the history lists it. Another ride,
+  DISCARD: "DISCARD RIDE?", KEEP selected; DISCARD: "RIDE DISCARDED", `dev.py ls Rustfw/Discarded` and
+  `Rustfw/Discarded/Full` have it, `\Activities` not, the history and the totals as before; `tools/sync.py` (dry
+  run) does not list it. A restart (`dev.py reset`) with the screen up: "RIDE RESUMED", paused. The first ride after
+  this build makes `\Rustfw\Discarded\Full` at its start (the FATs compared first, a few seconds).
+
 - **The Nordic link watchdog (app/link.rs)**: `dev.py info` ends with "radio resets 0" over a normal ride and a
   quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps

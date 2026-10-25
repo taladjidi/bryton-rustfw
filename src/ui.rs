@@ -1427,6 +1427,63 @@ pub fn draw_call(c: &mut impl Canvas, who: &str) {
     }
 }
 
+/// The end-ride screen's buttons (x, y, w, h), top to bottom: 64 px tall (a gloved finger, the call's buttons), 12
+/// px apart, under the title and the ride's numbers.
+pub const END_BUTTONS: [(u32, u32, u32, u32); 3] = [(12, 84, W - 24, 64), (12, 160, W - 24, 64), (12, 236, W - 24, 64)];
+
+/// The end-ride screen's buttons by slot: RESUME (the default), SAVE, DISCARD; or the discard's question, DISCARD
+/// and KEEP (the default) apart, where a second tap of the DISCARD before cannot reach DISCARD again.
+pub fn end_labels(discard: bool) -> [Option<&'static str>; 3] {
+    if discard { [Some("DISCARD"), None, Some("KEEP")] } else { [Some("RESUME"), Some("SAVE"), Some("DISCARD")] }
+}
+
+/// The end-ride screen's slot at (`x`, `y`), if a button of `labels` is there.
+pub fn end_hit(labels: &[Option<&str>; 3], x: u16, y: u16) -> Option<usize> {
+    END_BUTTONS.iter().zip(labels).position(|(&(bx, by, w, h), l)| {
+        l.is_some() && (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
+    })
+}
+
+/// The end-ride screen (`discard`: its question, "DISCARD RIDE?"): the title, the ride's numbers (`stats`), the
+/// buttons of [`end_labels`], slot `sel` selected; between the question's two, where the ride goes.
+pub fn draw_end(c: &mut impl Canvas, discard: bool, stats: &str, sel: usize) {
+    let title = if discard { "DISCARD RIDE?" } else { "END RIDE" };
+    text::draw_in(c, &LABEL, 0, PAGE_Y + 8, W, Align::Centre, title);
+    text::draw_in(c, &LABEL, 0, PAGE_Y + 32, W, Align::Centre, stats);
+    let labels = end_labels(discard);
+    for (k, l) in labels.iter().enumerate() {
+        match l {
+            Some(l) => draw_end_button(c, k, l, k == sel),
+            None => {
+                let (_, y, _, h) = END_BUTTONS[1];
+                let grey = Style { fg: GREY, ..LABEL };
+                text::draw_in(c, &grey, 0, y + h / 2 - LABEL.height() - 2, W, Align::Centre, "KEPT IN");
+                text::draw_in(c, &grey, 0, y + h / 2 + 2, W, Align::Centre, "RUSTFW/DISCARDED");
+            }
+        }
+    }
+}
+
+/// End-ride button `k` alone (the selection moved: only the two buttons are drawn again): selected, orange with
+/// black text (the menus' selected row); else a grey frame, the label white, DISCARD's red.
+pub fn draw_end_button(c: &mut impl Canvas, k: usize, label: &str, selected: bool) {
+    let Some(&(x, y, w, h)) = END_BUTTONS.get(k) else { return };
+    let ty = y + (h - LABEL.height()) / 2;
+    let (bg, fg) = match (selected, label) {
+        (true, _) => (ACCENT, BLACK),
+        (false, "DISCARD") => (BLACK, RED),
+        _ => (BLACK, WHITE),
+    };
+    let frame = if selected { ACCENT } else { GREY };
+    c.fill(x, y, w, 2, frame);
+    c.fill(x, y + h - 2, w, 2, frame);
+    c.fill(x, y + 2, 2, h - 4, frame);
+    c.fill(x + w - 2, y + 2, 2, h - 4, frame);
+    c.fill(x + 2, y + 2, w - 4, ty - y - 2, bg);
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, x + 2, ty, w - 4, Align::Centre, label);
+    c.fill(x + 2, ty + LABEL.height(), w - 4, y + h - 2 - ty - LABEL.height(), bg);
+}
+
 /// ABOUT: Ferris large, the firmware's name, its version and commit (`describe`: "1a2b3c4", "-dirty" when built
 /// from changes not committed) and the commit's date, and where it lives.
 pub fn draw_about(c: &mut impl Canvas, version: &str, describe: &str, date: &str) {

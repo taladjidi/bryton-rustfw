@@ -229,7 +229,7 @@ fn sector_command_reads_and_survives_a_dead_card() {
     assert_eq!(session.feed(b"wtest 0x1000\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err ride open\n");
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     pc.got.clear();
     assert_eq!(session.feed(b"sector\nsector 1 2\n", &app, Stats::default(), &mut pc), Effect::None);
     assert_eq!(pc.got, b"err usage: sector <n>\nerr usage: sector <n>\n");

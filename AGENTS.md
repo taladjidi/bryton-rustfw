@@ -136,8 +136,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - `phone.rs`: the phone link over BLE: the GATT server set up (HID, battery, device information), advertising,
     bonding and the bond in `\Rustfw\ble.bin`, the BLE events, the GATT client of the phone (ANCS, AMS, CTS
     discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
-  - `riding.rs`: Start / pause, the second tick, the recorder glue. `stock_data.rs`: the scan of stock's rides and
-    the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
+  - `riding.rs`: Start / pause, the end-ride screen (RESUME, SAVE, DISCARD), the second tick, the recorder glue.
+    `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
   - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
     use refused), when it may be (no ride running or unsaved), taken back on eject, a restart after the computer
@@ -210,7 +210,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `\Activities\YYMMDDhhmmss.fit`. Its tests cut the power after every sector of a whole ride and of the reboot.
   Two recorders run per ride (`Kind`): the clean copy above, and the full one (`Alpha1` / `RMSSD` developer fields,
   `\Rustfw\Full`, `\Rustfw\full.rec`, saved to `\Rustfw\Activities`), which never holds the clean one up
-  (`App::step_full`, docs/sync.md).
+  (`App::step_full`, docs/sync.md). A ride discarded at its end goes through the same save into
+  `\Rustfw\Discarded` (`Discarded\Full`), its records saying so, so no cut puts it in `\Activities`.
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
@@ -331,7 +332,7 @@ ride). Each layer catches what the others miss; none proves the firmware right o
 | 1. Build checks | fmt, clippy `-D warnings`, `forbid(unsafe_code)`, `pack.py` | undocumented `unsafe`, an image the updater or the bootloader would refuse | behaviour |
 | 2. Host tests | unit, simulator (`Sim`, panel model), doc tests, `dev_tests` | logic, the panel protocol bytes, the dev protocol | everything below `Board` |
 | 3. Emulation | Renode (`renode/run.py`) | start-up order, faults Renode models, pixels equal to the simulator, a switched-off core that still runs (`--off`: a pending interrupt waking the standby's WFI, 2026-10-25) | the MPU, caches and attributes the bootloader leaves on, a real WFI wake, SPI and ULPI timing. On 2026-10-22 it passed an image whose SPI1 lost master mode to a mode fault on the unit on the unit |
-| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), BLE events into the phone link (`ble::event`, `App::phone_event` on the Sim, and the ANCS / AMS / CTS formats), and a damaged volume under the ride scan, random page edits, random and damaged `pages.bin` copies and keys and taps in the page editor; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
+| 4. Fuzzing | `sim.rs` `fuzz`: pseudo-random bytes (xorshift, seeded: failures reproduce) into the Nordic packet and UBX parsers with every decoder, into `dev::Session` with command words mixed in, into the FIT reader and the INI import, CBWs and command blocks into the USB drive (`msc.rs`), BLE events into the phone link (`ble::event`, `App::phone_event` on the Sim, and the ANCS / AMS / CTS formats), and a damaged volume under the ride scan, random page edits, random and damaged `pages.bin` copies and keys and taps in the page editor and on the end-ride screen; a host test, no new dependency | panics and out-of-range reads on input from the radio chip, the GNSS receiver, the cable and the files on the card (it would have caught `ant_closed` indexing a short packet) | logic errors that do not panic |
 | 5. Gate | `check.sh` before every commit | a commit that skips layers 1 to 3 | |
 | 6. On the unit, boot | first the dev link (`dev.py peek` / `poke`, `run`) when USB comes up. Before that, a `DIAG_STOP=N` build: the checkpoint at boot stage N waits for USB power and resets; power on, hold Page, plug in: Engineer Mode means stage N was reached (control: an image without it gives none). Written from Engineer Mode with `tools/iaprecover.py --write`. The backlight is no readout (BOARD.md) | where a boot stops when nothing else is visible | anything after the panel is up |
 | 7. On the unit, features | docs/status.md "Not yet seen on the unit", the dev link once it runs | the hardware facts the layers above stub | |

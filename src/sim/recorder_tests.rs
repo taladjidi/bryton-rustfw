@@ -41,7 +41,7 @@ fn a_ride_reset_resumed_and_saved() {
     app.press(&mut sim2, Press::Short(Key::Start)); // resume
     run(&mut sim2, &mut app, 30_000);
     app.press(&mut sim2, Press::Short(Key::Start)); // pause
-    app.press(&mut sim2, Press::Long(Key::Start)); // end
+    save_ride(&mut sim2, &mut app); // end
     run(&mut sim2, &mut app, 2000);
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
     assert_eq!(sim2.backup[RIDE_BKP], 0);
@@ -137,7 +137,7 @@ fn seconds_caught_up_keep_their_own_time() {
     run(&mut sim, &mut app, 5000);
     let (_, now) = app.rec_time();
     app.press(&mut sim, Press::Short(Key::Start)); // pause
-    app.press(&mut sim, Press::Long(Key::Start)); // end
+    save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);
     let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
     let times = record_times(&sim.emmc.image, &path);
@@ -165,7 +165,7 @@ fn a_full_copy_that_fails_never_stops_the_ride() {
     assert!(app.notices.iter().any(|n| n.as_str().ends_with("NO FULL COPY")));
     assert_ne!(app.strip.rec, Rec::NotSaving);
     app.press(&mut sim, Press::Short(Key::Start)); // pause
-    app.press(&mut sim, Press::Long(Key::Start)); // end
+    save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
     assert_eq!(sim.backup[RIDE_BKP], 0, "nothing left open");
@@ -218,7 +218,7 @@ fn start_while_the_card_failed_at_boot() {
     assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")), "{:?}", app.notices[0].as_str());
     assert_eq!((app.ride.state(), app.ride_started), (ride::State::Paused, ((2026, 10, 23), (9, 0))));
     assert!(app.ride.timer_s() + 60 >= timer);
-    app.press(&mut sim, Press::Long(Key::Start)); // end
+    save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
@@ -265,4 +265,216 @@ fn every_write_is_reliable_when_the_card_offers_it() {
     }
     std::println!("{total} cuts, {resumed} resumed from cut {first:?}");
     assert!(resumed > 0);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The end-ride screen (app/riding.rs `end_input`): RESUME, SAVE, DISCARD
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A ride of 70 s (a checkpoint on the card), paused, and Start held: the end-ride screen, RESUME selected, the ride
+/// paused.
+fn to_end_screen(sim: &mut Sim, app: &mut App) {
+    app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 70_000);
+    app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 1000);
+    app.press(sim, Press::Long(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::End(0), ride::State::Paused), "the end-ride screen");
+}
+
+/// The ride's file `dir/<name>.fit` on the simulated card, if any.
+pub(super) fn ride_file(sim: &Sim, dir: &str, name: [u8; 12]) -> Option<Vec<u8>> {
+    let path = std::format!("{dir}/{}.fit", core::str::from_utf8(&name).unwrap());
+    crate::storage::trash::tests::file(&sim.emmc.image, &path)
+}
+
+/// Where each copy of ride `name` is: (clean, full), each the folders it is in.
+pub(super) fn places(sim: &Sim, name: [u8; 12]) -> [Vec<&'static str>; 2] {
+    let at = |dirs: [&'static str; 4]| dirs.into_iter().filter(|d| ride_file(sim, d, name).is_some()).collect();
+    [
+        at(["Activities", "Rustfw/Rides", "Rustfw/Discarded", "Rustfw/Deleted"]),
+        at(["Rustfw/Activities", "Rustfw/Full", "Rustfw/Discarded/Full", "Rustfw/Deleted/Full"]),
+    ]
+}
+
+/// The history's scan to its end: the rides it lists and its totals.
+fn scanned(sim: &mut Sim, app: &mut App) -> (usize, crate::stock::Summary) {
+    app.stock.start(app.date);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(sim, app, u64::from(POLL_MS));
+    }
+    (app.stock.index.len(), crate::stock::Summary { bytes: 0, ..app.stock.out })
+}
+
+/// The end-ride screen by the keys: Page and Lap move (no wrap), Back and the default (RESUME) leave the ride paused as
+/// it was, on its page; SAVE is today's end: both copies saved, the history lists it, and the card stays until Back
+/// or Start. Screenshot: end_ride.
+#[test]
+fn end_ride_screen_by_keys() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    let before = scanned(&mut sim, &mut app).0;
+    to_end_screen(&mut sim, &mut app);
+    run(&mut sim, &mut app, 200);
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("end_ride");
+    let timer = app.ride.timer_s();
+    for (k, want) in [(Key::Lap, 0), (Key::Page, 1), (Key::Page, 2), (Key::Page, 2), (Key::Lap, 1)] {
+        app.press(&mut sim, Press::Short(k));
+        assert_eq!(app.screen(), Screen::End(want), "{k:?}");
+    }
+    run(&mut sim, &mut app, 200);
+    super::tests::assert_consistent(&sim, &app); // only the two buttons drawn again, the panel as the screen
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "Back: RESUME");
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.ride.timer_s(), timer, "still paused");
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "the default: RESUME");
+    // SAVE
+    let name = app.recorder.name();
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "SAVE: the card");
+    run(&mut sim, &mut app, 2000);
+    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]]);
+    assert_eq!(sim.backup[RIDE_BKP], 0);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    for k in [Key::Page, Key::Lap] {
+        app.press(&mut sim, Press::Short(k));
+        assert_eq!(app.screen(), Screen::Summary, "the card stays: {k:?}");
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Main, "Start: the overview");
+    assert_eq!(scanned(&mut sim, &mut app).0, before + 1, "in the history");
+}
+
+/// DISCARD asks once more (KEEP selected, Back keeps), then ends the ride and moves both copies into
+/// `\Rustfw\Discarded`: the history, its totals and the curve as they were, nothing in `\Activities`, the volume
+/// clean; the next ride is saved as ever. Screenshot: end_ride_discard.
+#[test]
+fn discard_by_keys_moves_both_copies() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    let before = scanned(&mut sim, &mut app);
+    to_end_screen(&mut sim, &mut app);
+    let name = app.recorder.name();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Discard(2), "asked, KEEP selected");
+    run(&mut sim, &mut app, 200);
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("end_ride_discard");
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::End(2), "Back: KEEP");
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::End(2), ride::State::Paused), "KEEP");
+    app.press(&mut sim, Press::Short(Key::Start));
+    for (k, want) in [(Key::Lap, 0), (Key::Lap, 0), (Key::Page, 2), (Key::Page, 2), (Key::Lap, 0)] {
+        app.press(&mut sim, Press::Short(k));
+        assert_eq!(app.screen(), Screen::Discard(want), "{k:?}: the gap skipped");
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Idle), "discarded");
+    run(&mut sim, &mut app, 2000);
+    assert!(app.notices[0].as_str().ends_with("RIDE DISCARDED"), "{}", app.notices[0].as_str());
+    assert_eq!(places(&sim, name), [["Rustfw/Discarded"], ["Rustfw/Discarded/Full"]]);
+    assert_eq!(sim.backup[RIDE_BKP], 0);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    assert_eq!(scanned(&mut sim, &mut app), before, "the history and its totals as they were");
+    // the next ride is recorded and saved as ever
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 5000);
+    let next = app.recorder.name();
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(places(&sim, next), [["Activities"], ["Rustfw/Activities"]]);
+}
+
+/// The end-ride screen by touch: a tap acts on the button under it at once (the screen is the confirmation): RESUME,
+/// KEEP, DISCARD and SAVE; a tap between the buttons does nothing; a swipe right is Back.
+#[test]
+fn end_ride_screen_by_touch() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    let tap = |sim: &mut Sim, app: &mut App, k: usize| {
+        let (x, y, w, h) = ui::END_BUTTONS[k];
+        super::tests::drag(sim, app, ((x + w / 2) as i32, (y + h / 2) as i32), (0, 0));
+    };
+    to_end_screen(&mut sim, &mut app);
+    let name = app.recorder.name();
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::END_BUTTONS[1].1 - 6) as u16)));
+    assert_eq!(app.screen(), Screen::End(0), "between two buttons: nothing");
+    tap(&mut sim, &mut app, 0);
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Paused), "RESUME");
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(crate::touch::Dir::Right)));
+    assert_eq!(app.screen(), Screen::Ride(0), "a swipe right: Back");
+    app.press(&mut sim, Press::Long(Key::Start));
+    tap(&mut sim, &mut app, 2);
+    assert_eq!(app.screen(), Screen::Discard(2), "DISCARD asks");
+    tap(&mut sim, &mut app, 1);
+    assert_eq!(app.screen(), Screen::Discard(2), "the text between: nothing");
+    tap(&mut sim, &mut app, 2);
+    assert_eq!((app.screen(), app.ride.state()), (Screen::End(2), ride::State::Paused), "KEEP, where DISCARD was");
+    tap(&mut sim, &mut app, 1);
+    assert_eq!(app.screen(), Screen::Summary, "SAVE");
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]]);
+    app.press(&mut sim, Press::Short(Key::Back));
+    // a second ride, discarded by two taps
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 5000);
+    let name = app.recorder.name();
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
+    tap(&mut sim, &mut app, 2);
+    tap(&mut sim, &mut app, 0);
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Idle), "DISCARD");
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(places(&sim, name), [["Rustfw/Discarded"], ["Rustfw/Discarded/Full"]]);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
+/// A reset while the end-ride screen (or its question) is up: the ride comes back paused at its last checkpoint, as
+/// from a page, every second of it (the pause was a checkpoint), and is then saved as ever.
+#[test]
+fn a_reset_on_the_end_screen_resumes_the_ride() {
+    for question in [false, true] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        to_end_screen(&mut sim, &mut app);
+        let (name, timer) = (app.recorder.name(), app.ride.timer_s());
+        if question {
+            app.press(&mut sim, Press::Short(Key::Page));
+            app.press(&mut sim, Press::Short(Key::Page));
+            app.press(&mut sim, Press::Short(Key::Start));
+            assert_eq!(app.screen(), Screen::Discard(2));
+        }
+        run(&mut sim, &mut app, 3000);
+        assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "the ride open");
+        let (mut sim, mut app) = reboot(&mut sim, 5);
+        run(&mut sim, &mut app, 1000);
+        assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+        assert_eq!(app.ride.state(), ride::State::Paused);
+        assert_eq!(app.ride.timer_s(), timer, "every second: the pause was a checkpoint");
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 2000);
+        assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]], "question {question}");
+    }
 }

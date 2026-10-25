@@ -1352,12 +1352,12 @@ fn start_from_the_overview() {
     sim.save("ride_started");
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.banner.as_str(), "PAUSED: HOLD START TO END");
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
     app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Main, "any key: the overview");
+    assert_eq!(app.screen(), Screen::Main, "Back: the overview");
 }
 
 /// The card at the end of a ride: its track, its elevation profile, its numbers.
@@ -1378,7 +1378,7 @@ fn ride_card_at_the_end() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 40 * 60_000);
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Summary);
     let card = app.ride_card();
     assert_eq!((card.stats[0].0, card.stats[0].1.as_str()), ("TIME", "0:40"));
@@ -1812,9 +1812,10 @@ fn labels(app: &App) -> Vec<std::string::String> {
 /// The ride menu (UI review step 8): Page held while a ride records or is paused opens RIDE instead of the full
 /// menu, with only the rows that apply: WORKOUT while a step runs, COURSE while one is followed, EDIT THIS PAGE but
 /// on the course page. Each row acts: PAUSE stays (RESUME then, and END RIDE under it), RESUME goes back to the page,
-/// BRIGHTNESS changes in place, NEXT STEP, STOP WORKOUT and STOP FOLLOWING act and go back to riding, END RIDE asks
-/// first and then shows the ride's card. SENSORS, EDIT THIS PAGE and ALL SETTINGS open their menus; Back goes up one
-/// level at a time; no wrap. Screenshots: ride_menu, ride_menu_paused, ride_menu_workout, ride_menu_end.
+/// BRIGHTNESS changes in place, NEXT STEP, STOP WORKOUT and STOP FOLLOWING act and go back to riding, END RIDE
+/// pauses and opens the end-ride screen (RESUME back to the page, SAVE the ride's card). SENSORS, EDIT THIS PAGE and
+/// ALL SETTINGS open their menus; Back goes up one level at a time; no wrap. Screenshots: ride_menu,
+/// ride_menu_paused, ride_menu_workout.
 #[test]
 fn ride_menu() {
     use menu::{RideRow, Row};
@@ -1916,19 +1917,20 @@ fn ride_menu() {
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
 
-    // END RIDE: asked first, then the card
+    // END RIDE: the end-ride screen (the ride paused), RESUME back to the page as it was, then SAVE: the card
     hold_page(&mut sim, &mut app);
     assert_eq!(labels(&app), base);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.ride.state(), main_row(&app, 1).as_str()), (ride::State::Running, "END RIDE SURE?"));
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::End(0)));
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
-    sim.save("ride_menu_end");
-    app.press(&mut sim, Press::Short(Key::Page)); // anything else drops it
-    app.press(&mut sim, Press::Short(Key::Lap));
-    assert_eq!(app.ride.state(), ride::State::Running);
+    app.press(&mut sim, Press::Short(Key::Start)); // RESUME: the page, the ride paused
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::Ride(0)));
+    hold_page(&mut sim, &mut app);
+    to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
     app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
     run(&mut sim, &mut app, 200);
@@ -2209,7 +2211,7 @@ fn ign_map_under_the_map() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 20_000);
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
     assert_eq!(app.screen(), Screen::Summary);
     assert!(app.basemap_stats().ign, "the card's basemap: {:?}", app.basemap_stats());
@@ -2491,7 +2493,7 @@ fn map_zoom_ends_with_the_ride() {
     assert!(app.map_zoom.is_some() && app.map_centre.is_some(), "zoomed and panned");
     // the ride ended, a new one started
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Back));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -2771,7 +2773,7 @@ fn a_ride_with_laps_and_pauses() {
     app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.ride.state(), crate::ride::State::Running, "a long Start does not end a running ride");
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
     assert_eq!((app.ride.state(), app.strip.rec), (crate::ride::State::Idle, Rec::Idle), "ended");
     assert!(app.ride.dist_m() > 2000, "the totals stay on screen");
@@ -2844,7 +2846,7 @@ fn derived_power_and_climb_fields() {
     }
     // a new ride: the totals and W' start again
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Start));
+    save_ride(&mut sim, &mut app);
     app.press(&mut sim, Press::Short(Key::Back)); // the card, then the overview
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);

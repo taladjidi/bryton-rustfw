@@ -512,14 +512,16 @@ impl App {
                             self.leave_menus(); // resumed: back to riding
                         }
                     }
-                    RideRow::End if self.confirmed(menu, sel, "END RIDE") => {
+                    // the end-ride screen, which is the confirmation (RESUME its default)
+                    RideRow::End => {
                         if self.ride.state() == ride::State::Running {
                             let ev = self.ride.start_pause(); // paused first, as by Start (the recorder's order)
                             self.recorder(ev);
                         }
-                        self.end_ride();
+                        if self.ride.state() == ride::State::Paused {
+                            self.open(Screen::End(0));
+                        }
                     }
-                    RideRow::End => {}
                     RideRow::NextStep => {
                         self.next_step();
                         self.leave_menus();

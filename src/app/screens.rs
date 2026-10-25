@@ -175,6 +175,9 @@ impl App {
                 self.draw_menu_rows(c, menu, sel);
             }
             Screen::Summary => self.draw_summary(c),
+            Screen::End(sel) | Screen::Discard(sel) => {
+                ui::draw_end(c, matches!(self.screen, Screen::Discard(_)), self.end_stats().as_str(), sel)
+            }
             Screen::Past => {
                 let (p, h) = (&self.past, ui::card::ELEV.3);
                 let view = map::View::fit_whole(&p.track, map::area(ui::card::MAP));

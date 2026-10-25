@@ -59,10 +59,18 @@
     dropped, fits the map again.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
 
-- **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track
-  (over the basemap, as the history's cards),
-  the elevation profile, time, distance, average speed, ascent, NP, average power, average and max heart rate, TSS,
-  kJ. Any key goes on to the overview. Each past ride has the same card (HISTORY, below).
+- **End of a ride:** Start held while paused (or END RIDE in the ride menu) opens the end-ride screen, which is the
+  confirmation: the ride's time and distance, and three large buttons (64 px, gloves): RESUME (selected), SAVE,
+  DISCARD. Page and Lap move, Start acts, a tap acts at once, Back is RESUME. RESUME goes back to the page, the ride
+  still paused as it was; SAVE ends and saves it (below) and shows its card. DISCARD asks once more ("DISCARD
+  RIDE?", KEEP selected, the two buttons apart so a second tap cannot hit DISCARD again; Back keeps), then ends the
+  ride and moves both copies to `\Rustfw\Discarded` (the full one to `\Rustfw\Discarded\Full`): never erased, a
+  computer can move it back, but in no history, totals, curve or sync ("RIDE DISCARDED"). While the screen is up
+  the ride is paused and recorded as ever: a reset brings it back paused.
+- **Ride card:** after SAVE, its card: the date and start time, the map of the track (over the basemap, as the
+  history's cards), the elevation profile, time, distance, average speed, ascent, NP, average power, average and max
+  heart rate, TSS, kJ. It stays until Back or Start (then the overview). Each past ride has the same card (HISTORY,
+  below).
 
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
@@ -86,7 +94,7 @@
 | hold Page | the menu; during a ride (recording or paused), the ride menu | |
 | Lap | a lap (while riding) | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
-| hold Start | end a paused ride (or END RIDE in the ride menu) | |
+| hold Start | a paused ride: the end-ride screen (RESUME, SAVE, DISCARD; or END RIDE in the ride menu) | |
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
 | hold Lap | the phone's music: play / pause (PHONE below) | |
@@ -172,7 +180,8 @@ altogether, for rain: the keys only, the call's buttons included.
   `\Activities\YYMMDDhhmmss.fit` (stock's name and place: stock, its app, a computer and the history see it;
   "RIDE SAVED"). A card that fails shows "NOT SAVING" and the strip's dot grey, and is tried again; the ride goes
   on in RAM. A file that does not read back whole is left in `\Rustfw\Rides` ("SAVE FAILED"), never in the way of
-  the next ride.
+  the next ride. A ride discarded goes through the same steps into `\Rustfw\Discarded` instead, its records saying
+  so from the end on, so a cut during it finishes there at the next start (never in `\Activities`).
 - **A full copy of each ride** (simulator only so far): `\Rustfw\Activities\YYMMDDhhmmss.fit` has the same records,
   each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads) and `RMSSD`, from the
   strap's beats. It is a second file because Bryton's server refuses developer fields, and the `\Activities` file
@@ -220,7 +229,7 @@ MENU
   ```
   RIDE
    +- PAUSE / RESUME   as Start; PAUSE stays (END RIDE right under it), RESUME goes back to the page
-   +- END RIDE         asked first ("SURE?", Start again), then the ride's card (paused first if it was running)
+   +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (no lap), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
    +- BRIGHTNESS       changed in place

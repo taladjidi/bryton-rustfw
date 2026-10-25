@@ -111,6 +111,10 @@ pub enum Screen {
     Menu(Menu, usize),
     /// The BLE devices heard.
     Nearby,
+    /// The end-ride screen (app/riding.rs), button slot `k` selected ([`ui::end_labels`]): RESUME, SAVE, DISCARD.
+    End(usize),
+    /// Its DISCARD's question: DISCARD or KEEP.
+    Discard(usize),
     /// The card of the ride just ended: its map, elevation profile and numbers.
     Summary,
     /// The card of a past ride (`App::past`); Back returns to the history.
@@ -323,6 +327,7 @@ impl App {
                 return;
             }
             (Screen::Edit(..), _) => return self.editor_input(b, i),
+            (Screen::End(_) | Screen::Discard(_), _) => return self.end_input(b, i),
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
                     self.editing = false;
@@ -404,10 +409,15 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Menu | Input::Touch(Gesture::Hold(..))) => {
                 self.open(Screen::Menu(self.menu_root(), 0))
             }
-            // the ride: Select starts, pauses, resumes; End on a paused ride ends it; Prev marks a lap
+            // the ride: Select starts, pauses, resumes; End on a paused ride asks how to end it; Prev marks a lap
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
-            (Screen::Main | Screen::Ride(_), Input::End) => self.end_ride(),
-            (Screen::Summary, _) => self.screen = Screen::Main,
+            (Screen::Main | Screen::Ride(_), Input::End) if self.ride.state() == ride::State::Paused => {
+                self.open(Screen::End(0))
+            }
+            // the card stays until Back or Start (a stray touch or key never takes it away)
+            (Screen::Summary, Input::Back | Input::Select | Input::Touch(Gesture::Swipe(Dir::Right))) => {
+                self.screen = Screen::Main
+            }
             (Screen::Ride(_), Input::Prev) => return self.lap(),
             (Screen::Main, Input::Back) => {
                 self.backlight = !self.backlight;

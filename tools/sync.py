@@ -13,7 +13,8 @@ the full copy `\\Rustfw\\Activities\\<name>.fit` (Alpha1 and RMSSD in the record
 is one, else the clean one. Bryton's own server refuses the full one, so it never goes there (the Bryton app syncs
 from the unit itself). Every file is checked whole (its FIT CRCs) before it goes anywhere: a copy the USB link cut
 short is never uploaded. The rides found either on a mounted volume (this firmware's USB drive, or stock's) or
-through the dev link (dev.py `ls` / `get`, read only).
+through the dev link (dev.py `ls` / `get`, read only). Rides discarded at their end (`\\Rustfw\\Discarded`) and deleted
+from the history (`\\Rustfw\\Deleted`) are never read.
 
 Workouts: Intervals.icu's planned workouts (events of category WORKOUT) of today and the next N days, each as FIT
 (`/events/{id}/download.fit`), written to `\\Workout\\calendar\\YYYYMMDD\\icu<id>.fit`, where stock's app puts them and
@@ -569,6 +570,9 @@ def selftest():
                         ('Activities/261020080000.fit', fake_fit(b'on strava already')),
                         ('Activities/261024100000.fit', clean[:-1]),  # cut short: never uploaded
                         ('Activities/tmp.fit', fake_fit(b'stock in progress')),
+                        # discarded at the end of the ride (recorder.rs): never uploaded
+                        ('Rustfw/Discarded/261024080000.fit', fake_fit(fid(4) + b'discarded')),
+                        ('Rustfw/Discarded/Full/261024080000.fit', fake_fit(fid(4) + b'discarded', dev=True)),
                         ('Activities/250101080000.fit', fake_fit(b'too old'))]:
             Path(vol, p).parent.mkdir(parents=True, exist_ok=True)
             Path(vol, p).write_bytes(data)

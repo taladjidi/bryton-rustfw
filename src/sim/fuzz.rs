@@ -1064,6 +1064,12 @@ fn menu_tree_by_chance() {
             let (before, editing) = (stored(&sim), app.editing);
             let in_menu = matches!(app.screen(), Screen::Menu(..));
             app.input(&mut sim, i);
+            if matches!(app.screen(), Screen::End(_)) && b % 4 != 0 {
+                // SAVE most times, as Start held (or END RIDE, asked) did before the end-ride screen: a ride ended
+                // now and then leaves the walk the menus off a ride (the end-ride screen: end_ride_screen_by_chance)
+                app.input(&mut sim, Input::Next);
+                app.input(&mut sim, Input::Select);
+            }
             if stored(&sim) != before {
                 let act = matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
                     || editing && matches!(i, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)));
@@ -1391,4 +1397,109 @@ fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
         app.step(sim);
         crate::Board::delay_ms(sim, crate::POLL_MS);
     }
+}
+
+/// Keys and taps by chance on the end-ride screen and its question (app/riding.rs `end_input`), one ride after
+/// another: no panic, the ride never running again from there (paused until it ends), and every ride ended in exactly
+/// one place, as chosen: SAVE in `\Activities` and `\Rustfw\Activities` (the card shows), DISCARD in
+/// `\Rustfw\Discarded` and its `Full` (the overview shows), never lost; RESUME back to the paused ride. Each of the
+/// three is reached (counted over the seeds), the volume stays clean.
+#[test]
+fn end_ride_screen_by_chance() {
+    use super::recorder_tests::places;
+    use super::*;
+    use crate::touch::Dir;
+    let (mut saves, mut discards, mut resumes, mut asked) = (0, 0, 0, 0);
+    for seed in 1..=6u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let pass = |sim: &mut Sim, app: &mut App, ms: u32| {
+            for _ in 0..ms / POLL_MS {
+                app.step(sim);
+                sim.delay_ms(POLL_MS);
+            }
+        };
+        pass(&mut sim, &mut app, 2000);
+        for round in 0..8 {
+            let what = std::format!("seed {seed} round {round}");
+            app.press(&mut sim, Press::Short(Key::Start));
+            pass(&mut sim, &mut app, 3000);
+            app.press(&mut sim, Press::Short(Key::Start));
+            app.input(&mut sim, Input::End);
+            assert_eq!(app.screen(), Screen::End(0), "{what}");
+            let name = app.recorder.name();
+            let mut steps = 0;
+            while app.ride.state() != ride::State::Idle {
+                steps += 1;
+                assert!(steps < 2000, "{what}: never ended");
+                let (a, b) = (next() % 100, next());
+                // a button's centre, a little off, most taps; anywhere else the rest
+                let (bx, by, w, h) = ui::END_BUTTONS[(b % 3) as usize];
+                let (jx, jy) = ((b >> 8) % 40, (b >> 16) % 40);
+                let tap = if a % 5 == 0 {
+                    ((b >> 8) % ui::W, (b >> 16) % ui::H)
+                } else {
+                    (bx + w / 2 + jx - 20, by + h / 2 + jy - 20)
+                };
+                let i = match a {
+                    0..=19 => Input::Next,
+                    20..=34 => Input::Prev,
+                    35..=44 => Input::Select,
+                    45..=52 => Input::Back,
+                    53..=56 => Input::End,
+                    57..=59 => Input::Menu,
+                    60..=61 => Input::NextHeld,
+                    62..=63 => Input::Media,
+                    64..=91 => Input::Touch(Gesture::Tap(tap.0 as u16, tap.1 as u16)),
+                    _ => Input::Touch(Gesture::Swipe([Dir::Left, Dir::Right, Dir::Up, Dir::Down][(b % 4) as usize])),
+                };
+                let was = app.screen();
+                app.input(&mut sim, i);
+                assert_ne!(app.ride.state(), ride::State::Running, "{what}: {i:?} on {was:?}");
+                asked += u32::from(matches!(app.screen(), Screen::Discard(_)) && !matches!(was, Screen::Discard(_)));
+                match (app.ride.state(), app.screen()) {
+                    (ride::State::Paused, Screen::End(_) | Screen::Discard(_)) => {}
+                    (ride::State::Paused, s) => {
+                        // RESUME: the ride paused on its page (or what a page's input opened from there); back to it
+                        resumes += u32::from(matches!(was, Screen::End(_) | Screen::Discard(_)));
+                        if !matches!(s, Screen::Main | Screen::Ride(_)) {
+                            app.input(&mut sim, Input::Back);
+                            app.input(&mut sim, Input::Back);
+                            app.input(&mut sim, Input::Back);
+                        }
+                        if app.screen() == Screen::Media {
+                            app.input(&mut sim, Input::Back);
+                        }
+                        app.input(&mut sim, Input::End);
+                    }
+                    _ => {}
+                }
+                pass(&mut sim, &mut app, POLL_MS * (1 + b % 3));
+            }
+            let discarded = app.screen() == Screen::Main;
+            assert!(discarded || app.screen() == Screen::Summary, "{what}: {:?}", app.screen());
+            pass(&mut sim, &mut app, 3000);
+            let want: [&[&str]; 2] = if discarded {
+                discards += 1;
+                [&["Rustfw/Discarded"], &["Rustfw/Discarded/Full"]]
+            } else {
+                saves += 1;
+                [&["Activities"], &["Rustfw/Activities"]]
+            };
+            assert_eq!(places(&sim, name), want, "{what}: in one place, as chosen");
+            assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "{what}");
+            app.input(&mut sim, Input::Back); // the card, if it shows
+            pass(&mut sim, &mut app, 1000);
+        }
+    }
+    std::println!("end-ride screen by chance: {saves} saved, {discards} discarded, {resumes} resumed, {asked} asked");
+    assert!(saves > 5 && discards > 5 && resumes > 20 && asked > 10, "{saves} {discards} {resumes} {asked}");
 }

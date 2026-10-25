@@ -47,7 +47,7 @@ fn lent_to_the_computer_one_owner_at_a_time() {
     assert_eq!(app.banner.as_str(), "END THE RIDE FIRST");
     run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Short(Key::Start)); // pause
-    app.press(&mut sim, Press::Long(Key::Start)); // end: saved at the next pass
+    save_ride(&mut sim, &mut app); // end: saved at the next pass
     assert_eq!(app.drive_on(&mut sim), Err("RIDE NOT SAVED YET"));
     run(&mut sim, &mut app, 2000);
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
@@ -106,7 +106,7 @@ fn a_full_card_never_holds_the_drive() {
     let full = app.notices.iter().filter(|n| n.as_str().ends_with("CARD FULL")).count();
     assert_eq!(full, 1, "{:?}", app.notices.iter().map(|n| n.as_str()).collect::<Vec<_>>());
     app.press(&mut sim, Press::Short(Key::Start)); // pause
-    app.press(&mut sim, Press::Long(Key::Start)); // end
+    save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);
     assert_eq!(app.drive_on(&mut sim), Ok(()));
 }

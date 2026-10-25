@@ -224,7 +224,7 @@ fn the_bond_waits_for_the_ride_to_settle() {
     run(&mut sim2, &mut app, 2000);
     assert!(stored(&sim2).and_then(|s| s.bond).is_some(), "not written during the ride");
     app.press(&mut sim2, Press::Short(Key::Start));
-    app.press(&mut sim2, Press::Long(Key::Start));
+    save_ride(&mut sim2, &mut app);
     run(&mut sim2, &mut app, 1000);
     assert_eq!(stored(&sim2).map(|s| s.bond.is_none()), Some(true), "written once it ended");
 }

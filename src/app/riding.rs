@@ -69,13 +69,92 @@ impl App {
         }
     }
 
-    /// Ends a paused ride (Start held, END RIDE in the ride menu): the recorder saves it, the workout ends with it,
-    /// and its card shows (any key goes on to the overview).
+    /// Ends a paused ride (SAVE on the end-ride screen): the recorder saves it, the workout ends with it, and its
+    /// card shows (until Back or Start).
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
         self.recorder(ev);
         self.player = None;
         (self.depth, self.screen) = (0, Screen::Summary);
+    }
+
+    /// Ends a paused ride and discards it (DISCARD, asked twice): the recorder saves both copies into
+    /// `\Rustfw\Discarded` instead (recorder.rs, "A discarded ride": never erased, never in the history), the
+    /// workout ends with it, back to the overview.
+    pub(crate) fn discard_ride(&mut self) {
+        let Some(ev) = self.ride.end() else { return };
+        self.recorder(ev);
+        self.recorder.discard();
+        self.full.discard();
+        self.player = None;
+        (self.depth, self.screen) = (0, Screen::Main);
+        self.say("DISCARDING");
+    }
+
+    /// The end-ride screen's numbers: the timer and the distance.
+    pub(crate) fn end_stats(&self) -> Line<24> {
+        let mut l = Line::new();
+        push_clock(&mut l, self.ride.timer_s());
+        l.push_str("  ");
+        push_km(&mut l, self.ride.dist_m());
+        l.push_str(" KM");
+        l
+    }
+
+    /// An input on the end-ride screen or its question (ui::draw_end): Page and Lap move between the buttons, no
+    /// wrap (only the two that change drawn again), Start acts on the one selected, a tap on a button acts on it,
+    /// Back (or a swipe right) is RESUME, or KEEP. RESUME leaves the ride paused as it was; while the screen is up
+    /// the ride stays paused and its recording as it was (a reset then resumes it paused, as ever).
+    pub(crate) fn end_input(&mut self, b: &mut impl Board, i: Input) {
+        let (discard, sel) = match self.screen {
+            Screen::End(k) => (false, k),
+            Screen::Discard(k) => (true, k),
+            _ => return,
+        };
+        if self.ride.state() != ride::State::Paused {
+            self.leave_menus(); // resumed meanwhile (a shifter's Start): nothing to end
+            return self.show(b);
+        }
+        let labels = ui::end_labels(discard);
+        let cancel = if discard { 2 } else { 0 };
+        let k = match i {
+            Input::Next | Input::Prev => {
+                // the next button that way, none past the ends (as the menus: a held key stops there)
+                let mut k = sel;
+                let k = loop {
+                    k = if i == Input::Next { k + 1 } else { k.checked_sub(1).unwrap_or(labels.len()) };
+                    match labels.get(k) {
+                        Some(Some(_)) => break k,
+                        Some(None) => {}
+                        None => return,
+                    }
+                };
+                self.screen = if discard { Screen::Discard(k) } else { Screen::End(k) };
+                let area = self.area();
+                for j in [sel, k] {
+                    if let Some(Some(l)) = labels.get(j) {
+                        ui::draw_end_button(&mut Panel(b, area), j, l, j == k);
+                    }
+                }
+                return;
+            }
+            Input::Select => sel,
+            Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => cancel,
+            Input::Touch(Gesture::Tap(x, y)) => match ui::end_hit(&labels, x, y) {
+                Some(k) => k,
+                None => return,
+            },
+            _ => return,
+        };
+        self.screen = if discard { Screen::Discard(k) } else { Screen::End(k) }; // KEEP comes back to it
+        match (discard, k) {
+            (false, 0) => self.leave_menus(), // RESUME: the paused ride, on the page it was ended from
+            (false, 1) => self.end_ride(),
+            (false, _) => self.open(Screen::Discard(2)), // asked, KEEP selected
+            (true, 0) => self.discard_ride(),
+            (true, _) => self.close(), // KEEP: back to the end-ride screen
+        }
+        self.show(b);
     }
 
     // -----------------------------------------------------------------------------------------------------------
@@ -200,6 +279,7 @@ impl App {
                     self.stock.start(self.date); // the history again, with this ride
                 }
             }
+            recorder::Outcome::Discarded(_) => self.notice("RIDE DISCARDED"), // the history as it was: no scan
             recorder::Outcome::Kept(_) => {
                 // not in \Activities: left in \Rustfw\Rides as it was (damaged, or the card kept failing)
                 self.alarm_notice("SAVE FAILED");

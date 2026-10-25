@@ -172,6 +172,13 @@ impl Default for EmmcCard {
     }
 }
 
+/// Start held on a paused ride, then SAVE on the end-ride screen (Page to it, Start): today's end and save.
+pub(crate) fn save_ride(sim: &mut Sim, app: &mut App) {
+    app.press(sim, Press::Long(Key::Start));
+    app.press(sim, Press::Short(Key::Page));
+    app.press(sim, Press::Short(Key::Start));
+}
+
 /// What the simulated eMMC holds in sector `lba` when it has no image: the sector number, then a pattern that depends on it.
 pub fn emmc_sector(lba: u32) -> [u8; 512] {
     let mut s = [0u8; 512];
