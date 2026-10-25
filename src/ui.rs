@@ -531,12 +531,14 @@ pub enum Field {
     /// What plays on the phone (AMS): the elapsed time of the track, m:ss (its title is on the media screen and in the
     /// banner when it changes).
     Music,
+    /// The course's next cue: its arrow and how far ("350M", "1.2K"); "--" off course (course/cues.rs).
+    NextTurn,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 56] = {
+    pub const ALL: [Field; 57] = {
         use Field::*;
         [
             Time,
@@ -594,7 +596,8 @@ impl Field {
             Profile, // the workout player again:
             WorkoutGraph,
             WktPower, // the phone:
-            Music,
+            Music,    // the course followed again:
+            NextTurn,
         ]
     };
 
@@ -660,6 +663,7 @@ impl Field {
             "WKT GRAPH",
             "WKT POWER",
             "MUSIC",
+            "NEXT TURN",
         ];
         LABELS[self as usize]
     }
@@ -672,8 +676,9 @@ impl Field {
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
             "88/88", "888-888", "8:88:88", "888-888", // the course followed:
-            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888", // the phone:
-            "88:88",
+            "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",  // the phone:
+            "88:88", // the course followed again:
+            "888.8K",
         ];
         WIDEST[self as usize]
     }
@@ -718,7 +723,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 9] = {
         ("CLIMB", &[Ascent, Vam, Grade]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, NextStep, WorkoutGraph, WktPower]),
-        ("COURSE", &[ToGo, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
+        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
     ]

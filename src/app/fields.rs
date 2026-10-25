@@ -159,7 +159,7 @@ impl App {
                 push_clock(&mut l, self.phone.now.elapsed());
                 return l;
             }
-            Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo => {
+            Field::ToGo | Field::OffCourse | Field::Climb | Field::ClimbGain | Field::UpToGo | Field::NextTurn => {
                 return self.course_text(f);
             }
             Field::Temp => {

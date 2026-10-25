@@ -28,10 +28,15 @@
 //!   merge across short dips), and ends at its top. These thresholds are this firmware's choice (inferred: Garmin
 //!   does not publish its own; stock's Climb Challenge, seen in its code, also starts a climb at 2 %).
 //!
+//! - **Cues ([`cues`]):** turn-by-turn cues, from the file or found on the course's shape, and the next one said.
+//!
 //! Nothing here panics or loops on any input: every index is checked, every loop is bounded by [`POINTS`],
 //! [`CLIMBS`] or a window (the file readers are fuzzed in sim.rs `fuzz`).
 
 use crate::map::{Route, cos_q16, project};
+
+pub mod cues;
+pub use cues::*;
 
 /// Points kept at most.
 pub const POINTS: usize = 4096;
@@ -104,6 +109,13 @@ pub fn step_mm(a: (i32, i32), b: (i32, i32)) -> u64 {
     let dy = clamp((i64::from(b.0) - i64::from(a.0)) * 11_132 / 1000);
     let dx = clamp((i64::from(b.1) - i64::from(a.1)) * 11_132 * cos / 65_536 / 1000);
     (dx * dx).unsigned_abs().saturating_add((dy * dy).unsigned_abs()).isqrt()
+}
+
+/// How far `p` is from box `b` (min x, min y, max x, max y), m; 0 inside.
+fn box_m(b: &(i32, i32, i32, i32), p: (i32, i32)) -> u64 {
+    let dx = (i64::from(b.0) - i64::from(p.0)).max(i64::from(p.0) - i64::from(b.2)).max(0);
+    let dy = (i64::from(b.1) - i64::from(p.1)).max(i64::from(p.1) - i64::from(b.3)).max(0);
+    (dx * dx + dy * dy).unsigned_abs().isqrt()
 }
 
 /// Bit `i` of a gap set: no segment into point `i`.
@@ -239,6 +251,17 @@ pub enum Event {
     Back,
     /// A climb starts.
     Climb(Climb),
+    /// A cue ahead, and how far, m (0: at the turn) ([`cues`]).
+    Cue(Cue, u32),
+}
+
+/// What a course file gives, in order: a point, or a cue at a position (degrees x 1e-7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Item {
+    /// A point of the course.
+    Point(Pt),
+    /// A cue (FIT `course_point`, a GPX turn word), with the file's distance of it if stated (m).
+    Cue(i32, i32, Turn, Option<u32>),
 }
 
 /// Where the rider is on the course.
@@ -259,6 +282,11 @@ pub struct Tracker {
     said: usize,
     /// Segments and chunk boxes looked at so far: the cost (sim.rs checks a budget).
     pub examined: u32,
+    /// The next cue (its index), what of it was said (0 nothing, 1 the warning, 2 the turn), the speed along the
+    /// course, m/s.
+    cue: usize,
+    cue_said: u8,
+    speed: u32,
 }
 
 impl Tracker {
@@ -274,6 +302,9 @@ impl Tracker {
             warned: false,
             said: 0,
             examined: 0,
+            cue: 0,
+            cue_said: 0,
+            speed: 0,
         }
     }
 
@@ -312,6 +343,7 @@ pub struct Course {
     id: u32,
     /// Bit `i`: no segment from point `i - 1` to point `i` (a gap between two track segments, [`JUMP_M`]).
     gaps: [u32; POINTS / 32],
+    cues: Cues,
     // while reading: the distance so far, the last point not kept yet
     odo: Odometer,
     pending: Option<((i32, i32), u32, u16)>,
@@ -342,6 +374,7 @@ impl Course {
             range: (0, 0),
             id: 0,
             gaps: [0; POINTS / 32],
+            cues: Cues::new(),
             odo: Odometer::new(),
             pending: None,
         }
@@ -351,6 +384,15 @@ impl Course {
     pub fn clear(&mut self) {
         (self.origin, self.len, self.step_m, self.n_boxes, self.n_climbs) = (None, 0, FIRST_STEP_M, 0, 0);
         (self.has_alt, self.odo, self.pending, self.gaps) = (false, Odometer::new(), None, [0; POINTS / 32]);
+        self.cues = Cues::new();
+    }
+
+    /// The next thing the file gives.
+    pub fn take(&mut self, item: Item) {
+        match item {
+            Item::Point(pt) => self.add(pt),
+            Item::Cue(lat, lon, turn, dist_m) => self.add_cue(lat, lon, turn, dist_m),
+        }
     }
 
     /// The next point of the file: latitude and longitude in degrees x 1e-7, altitude in decimetres. Points off the
@@ -479,6 +521,7 @@ impl Course {
             });
         }
         (self.climbs, self.n_climbs) = self.find_climbs();
+        self.finish_cues();
         self.id = self.id.wrapping_add(1);
     }
 
@@ -635,11 +678,7 @@ impl Course {
     /// course every lap's box holds `p`: the nearest box alone would always pick the first laps (review 2).
     fn search(&self, p: (i32, i32), along: u32, n: &mut u32) -> Option<Hit> {
         let boxes = self.boxes.get(..self.n_boxes).unwrap_or(&[]);
-        let box_m = |b: &(i32, i32, i32, i32)| {
-            let dx = (i64::from(b.0) - i64::from(p.0)).max(i64::from(p.0) - i64::from(b.2)).max(0);
-            let dy = (i64::from(b.1) - i64::from(p.1)).max(i64::from(p.1) - i64::from(b.3)).max(0);
-            (dx * dx + dy * dy).unsigned_abs().isqrt()
-        };
+        let box_m = |b: &(i32, i32, i32, i32)| box_m(b, p);
         let near = boxes.iter().map(box_m).min().unwrap_or(u64::MAX).saturating_add(u64::from(LOST_M));
         let segs = self.len.saturating_sub(1);
         let span = |c: usize| (c * CHUNK).min(segs)..((c + 1) * CHUNK).min(segs);
@@ -662,6 +701,7 @@ impl Course {
 
     /// The rider's fix (degrees x 1e-7), once a second: where `t` is now, and what to say (one thing at a time).
     pub fn follow(&self, t: &mut Tracker, lat: i32, lon: i32) -> Option<Event> {
+        let was = t.off_m.map(|_| t.along_m);
         let o = self.origin.filter(|_| self.len >= 2)?;
         let p = project(o, lat, lon);
         let segs = self.len - 1;
@@ -689,6 +729,9 @@ impl Course {
         if t.warned && h.off_m <= BACK_M {
             t.warned = false;
             return Some(Event::Back);
+        }
+        if let Some(e) = self.cue_step(t, was) {
+            return Some(e);
         }
         // climbs gone by (the rider joined later on) are not said; the one being entered is, once
         let climbs = self.climbs();

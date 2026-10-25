@@ -27,7 +27,8 @@ def pixel_glyphs():
     """The same as glyphs(), for the pixel font: coverage is 0 or 15."""
     from pixel_font import GLYPHS, ADVANCE, HEIGHT, BASELINE
     out = []
-    for code in range(FIRST, LAST + 1):
+    from pixel_font import EXTRA
+    for code in [*range(FIRST, LAST + 1), *map(ord, EXTRA)]:
         rows = GLYPHS[chr(code)].split()
         assert all(len(r) == 5 for r in rows) and len(rows) in (7, 8, 9), repr(chr(code))
         img = Image.new('L', (ADVANCE, HEIGHT), 0)

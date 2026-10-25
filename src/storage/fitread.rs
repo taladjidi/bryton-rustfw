@@ -30,6 +30,9 @@
 //!   is read as a `record`: 1 latitude and 2 longitude (sint32, degrees x 1e6, inferred), 3 altitude (uint16,
 //!   (m + 500) x 5 as FIT's, inferred).
 //!
+//! - message 32 `course_point`, with the position only: 2 position_lat, 3 position_long (sint32 semicircles), 4 distance (uint32,
+//!   1/100 m), 5 type (enum `course_point`) (the same profile; storage/course.rs reads them as cues).
+//!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
 //! small state machine one step (fuzzed in sim.rs `fuzz`).
 
@@ -78,6 +81,15 @@ pub enum Msg {
     Record(Record),
     /// A `session`.
     Session(Session),
+    /// A `course_point` (only from a reader [`Reader::with_position`]): its position (semicircles) and type.
+    CoursePoint {
+        /// Latitude and longitude, semicircles.
+        pos: Option<(i32, i32)>,
+        /// Its `course_point` type (FIT profile).
+        kind: Option<u8>,
+        /// Its distance along the course, 1/100 m.
+        dist_cm: Option<u32>,
+    },
 }
 
 /// Why a file is not a whole FIT file.
@@ -113,6 +125,10 @@ fn slot(global: u16, num: u8, position: bool) -> Option<u8> {
         (249, 1) if position => 4, // Bryton's route point: latitude, degrees x 1e6
         (249, 2) if position => 5, // longitude
         (249, 3) if position => 6, // altitude
+        (32, 2) if position => 4,  // course_point: position_lat
+        (32, 3) if position => 5,  // position_long
+        (32, 5) if position => 1,  // type
+        (32, 4) if position => 2,  // distance
         (18, 2) => 1,              // start_time
         (18, 8) => 2,              // total_timer_time
         (18, 9) => 3,              // total_distance
@@ -459,7 +475,7 @@ impl Reader {
             }
             if from < to && to == off + size {
                 // sint32: invalid is the largest value
-                let signed = (def.global == 20 || def.global == 249) && (s == 4 || s == 5);
+                let signed = matches!(def.global, 20 | 32 | 249) && (s == 4 || s == 5);
                 let invalid = if signed {
                     0x7fff_ffff
                 } else if size == 4 {
@@ -539,6 +555,10 @@ impl Reader {
                 // (m + 500) x 5 to decimetres; a uint16 altitude given in 4 bytes still reads as its value
                 let alt_dm = get(7).or(get(6)).map(|v| (i64::from(v) * 2 - 5000) as i32);
                 Some(Msg::Record(Record { time, hr: u8_(1), dist_cm: get(2), power: u16_(3), pos, alt_dm }))
+            }
+            32 => {
+                let pos = get(4).zip(get(5)).map(|(a, b)| (a as i32, b as i32));
+                Some(Msg::CoursePoint { pos, kind: u8_(1), dist_cm: get(2) })
             }
             18 => Some(Msg::Session(Session {
                 start: get(1),

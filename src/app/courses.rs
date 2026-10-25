@@ -1,5 +1,6 @@
 //! The course followed: the course memory (from main.rs), the list read from the card, the course loaded and
-//! followed, its events (off course, back on, climbs) said and beeped, and its fields (distance and ascent left).
+//! followed, its events (off course, back on, climbs, turn-by-turn cues) said and beeped, and its fields (distance
+//! and ascent left, the next turn).
 
 use crate::*;
 
@@ -99,8 +100,30 @@ impl App {
                 self.say(l.as_str());
                 self.tones.play(&Self::CLIMB_TONES);
             }
+            course::Event::Cue(c, d) => {
+                let mut l = Line::<20>::new();
+                l.push_str(c.turn.glyph());
+                l.push_str(" ");
+                l.push_str(c.turn.word());
+                if d == 0 {
+                    l.push_str(" NOW");
+                    self.tones.play(&Self::TURN_TONES);
+                } else {
+                    // to the nearest 50 m, as a voice would say it
+                    l.push_str(" ");
+                    l.push_u32((d + 25) / 50 * 50);
+                    l.push_str(" M");
+                    self.tones.play(&Self::CUE_TONES);
+                }
+                self.say(l.as_str());
+            }
         }
     }
+
+    /// The beep of a cue ahead ("LEFT 200 M").
+    pub(crate) const CUE_TONES: [(u32, u32); 1] = [(1800, 150)];
+    /// The beeps at the turn ("LEFT NOW").
+    pub(crate) const TURN_TONES: [(u32, u32); 3] = [(1800, 120), (0, 60), (1800, 120)];
 
     /// The course fields' text: "--" without a course followed and a fix on it.
     pub(crate) fn course_text(&self, f: Field) -> Line<8> {
@@ -112,6 +135,28 @@ impl App {
         let d = at.along_m;
         let climb = c.climb_at(d).and_then(|(k, on)| Some((*c.climbs().get(k)?, on)));
         match (f, climb) {
+            (Field::NextTurn, _) => match c.next_cue(at) {
+                Some((cue, m)) => {
+                    l.push_str(cue.turn.glyph());
+                    match m {
+                        0..1000 => {
+                            l.push_u32(m / 10 * 10);
+                            l.push_str("M");
+                        }
+                        1000..100_000 => {
+                            l.push_u32(m / 1000);
+                            l.push_str(".");
+                            l.push_u32(m / 100 % 10);
+                            l.push_str("K");
+                        }
+                        _ => {
+                            l.push_u32((m / 1000).min(9999));
+                            l.push_str("K");
+                        }
+                    }
+                }
+                None => l.push_str("--"),
+            },
             (Field::ToGo, _) => ui::card::push_km(&mut l, c.len_m().saturating_sub(d)),
             (Field::OffCourse, _) => l.push_u32(at.off_m.unwrap_or(0).min(9999)),
             (Field::UpToGo, _) => l.push_u32(c.ascent_left(at)),

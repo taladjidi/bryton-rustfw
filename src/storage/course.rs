@@ -11,8 +11,9 @@
 //! **FIT courses** (Garmin's FIT SDK, the course encoding cookbook: github.com/garmin/fit-csharp-sdk
 //! `Cookbook/CourseEncode/Program.cs`, read 2026-10-24): `file_id` (type 6, course), `course` (name, sport), a
 //! `lap`, timer `event`s, then a `record` per point (position_lat, position_long, altitude, distance), with
-//! `course_point`s (turns, summits) among them. Only the records' positions, altitudes and distances are read (the
-//! distance: the course's own length, [`crate::course::Odometer`]).
+//! `course_point`s (turns, summits) among them. The records' positions, altitudes and distances are read (the
+//! distance: the course's own length, [`crate::course::Odometer`]), and the course points' positions and types
+//! (cues, [`crate::course::cues`]).
 //!
 //! **Bryton's routes** (`\PlanTrip\<name>.fit`, written by its app; read on the host from one unit's backup,
 //! 2026-10-24: 14 files, every one the same layout; field meanings inferred from how the values relate):
@@ -34,19 +35,24 @@
 //!   in whole percent; not in `voiceTrip.fit`; not read: the model works out its own); points about 20 to 30 m
 //!   apart.
 //!
-//! The climbs of 250 are not used: the model finds its own the same way for every file.
+//! The climbs of 250 are not used: the model finds its own the same way for every file. Nor are the turns of
+//! `voiceTrip.fit`: their type values could not be established (the Ghidra notes name the turn dialog,
+//! `ApplicationTurnInfoDialog_UpdateContent`, not the values; the owner's routes have none), so a route's turns are
+//! found on its shape as a GPX track's are.
 //!
 //! **GPX** (GPX 1.1 schema, www.topografix.com/GPX/1/1/, read 2026-10-24): `<trkpt lat=".." lon="..">` (in
 //! `<trk><trkseg>`) and `<rtept>` (in `<rte>`) are `wptType`: `lat` and `lon` attributes in decimal degrees (WGS84),
 //! an optional `<ele>` child in metres; the values are `xsd:decimal` (no exponent). [`Gpx`] reads only that: track
 //! and route points in file order, their elevation, and where a `trk`, `trkseg` or `rte` starts (a jump there is a
-//! gap, [`crate::course::Odometer`]); anything else (waypoints, names, extensions) is skipped. A tag
+//! gap, [`crate::course::Odometer`]); and cues: a `trkpt`, `rtept` or `wpt` (waypoint) whose `type`, `sym` or
+//! `name` (the first, the more specific) is a turn word ([`crate::course::Turn::from_text`]: BRouter's and
+//! RideWithGPS's conventions, in course/cues.rs); anything else (other waypoints, names, extensions) is skipped. A tag
 //! longer than [`TAG`] bytes is cut (its attributes past that are not seen).
 //!
 //! Nothing here panics or loops on any input (fuzzed in sim.rs `fuzz`): every loop is bounded by the file's size,
 //! the list or a buffer.
 
-use crate::course::{Course, Odometer, Pt, Tracker};
+use crate::course::{Course, Item, Odometer, Pt, Tracker, Turn};
 use crate::fat::{self, Disk, Fat, File};
 use crate::fitread::{Msg, Reader};
 use crate::history::degrees_e7;
@@ -182,15 +188,15 @@ impl Stream {
         Stream { file: e.file, gpx: e.gpx, offset: 0, fit: Reader::with_position(), xml: Gpx::new() }
     }
 
-    /// Reads on for about `budget` bytes, each point (degrees x 1e-7, altitude in dm) to `f` in order; true once
-    /// the file is done (its end, [`MAX_BYTES`], or the end of its FIT data).
+    /// Reads on for about `budget` bytes, each point (degrees x 1e-7, altitude in dm) and cue to `f` in order;
+    /// true once the file is done (its end, [`MAX_BYTES`], or the end of its FIT data).
     #[inline(never)] // its read buffer lives in its own frame
     fn step(
         &mut self,
         fat: &mut Fat,
         d: &mut impl Disk,
         budget: u32,
-        f: &mut dyn FnMut(Pt),
+        f: &mut dyn FnMut(Item),
     ) -> Result<bool, fat::Error> {
         let mut io = [0u8; IO];
         let (size, mut spent) = (self.file.size.min(MAX_BYTES), 0u32);
@@ -205,13 +211,17 @@ impl Stream {
                 self.xml.push_slice(buf, f);
                 continue;
             }
-            self.fit.push_slice(buf, |m| {
-                if let Msg::Record(r) = m
-                    && let Some((lat, lon)) = r.pos
-                {
-                    let dist_m = r.dist_cm.map(|cm| cm / 100);
-                    f(Pt { lat: degrees_e7(lat), lon: degrees_e7(lon), alt_dm: r.alt_dm, split: false, dist_m });
+            self.fit.push_slice(buf, |m| match m {
+                Msg::Record(r) => {
+                    if let Some((lat, lon)) = r.pos {
+                        let (lat, lon, dist_m) = (degrees_e7(lat), degrees_e7(lon), r.dist_cm.map(|cm| cm / 100));
+                        f(Item::Point(Pt { lat, lon, alt_dm: r.alt_dm, split: false, dist_m }));
+                    }
                 }
+                Msg::CoursePoint { pos: Some((lat, lon)), kind: Some(k), dist_cm } => {
+                    f(Item::Cue(degrees_e7(lat), degrees_e7(lon), Turn::from_fit(k), dist_cm.map(|cm| cm / 100)));
+                }
+                _ => {}
             });
             if self.fit.result().is_some() {
                 return Ok(true);
@@ -313,8 +323,10 @@ impl Courses {
             Job::Idle => Progress::Idle,
             Job::Measure { k, s, odo } => {
                 let done = fat.and_then(|mut fat| {
-                    s.step(&mut fat, d, budget, &mut |pt| {
-                        odo.step(pt);
+                    s.step(&mut fat, d, budget, &mut |it| {
+                        if let Item::Point(pt) = it {
+                            odo.step(pt);
+                        }
                     })
                 });
                 if done == Ok(false) {
@@ -328,7 +340,7 @@ impl Courses {
             }
             Job::Load { k, s } => {
                 let course = &mut self.course;
-                let done = fat.and_then(|mut fat| s.step(&mut fat, d, budget, &mut |pt| course.add(pt)));
+                let done = fat.and_then(|mut fat| s.step(&mut fat, d, budget, &mut |it| course.take(it)));
                 if done == Ok(false) {
                     return Progress::Reading;
                 }
@@ -345,18 +357,37 @@ impl Courses {
     }
 }
 
-/// A GPX reader, a byte at a time: track and route points (`trkpt`, `rtept`) with their elevation (see the module
-/// doc).
+/// A GPX reader, a byte at a time: track and route points (`trkpt`, `rtept`) with their elevation, and the cues of
+/// points and waypoints (`wpt`) whose `type`, `sym` or `name` is a turn word (see the module doc).
 pub struct Gpx {
     tag: [u8; TAG],
     tag_len: usize,
     in_tag: bool,
-    /// Inside `<ele>`: its text so far.
-    ele: Option<([u8; 24], usize)>,
-    /// The point open: latitude, longitude (degrees x 1e-7), elevation (dm).
-    pt: Option<(i32, i32, Option<i32>)>,
+    /// Inside a point's `ele`, `type`, `sym` or `name`: which, and its text so far (longer: past the end, unread).
+    text: Option<(Text, [u8; 24], usize)>,
+    /// The point open.
+    pt: Option<Open>,
     /// A track, segment or route has started since the last point: the next one starts a segment.
     split: bool,
+}
+
+/// A point's child element whose text is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Text {
+    Ele,
+    /// A turn word, by rank: `name` 1, `sym` 2, `type` 3 (the more specific wins).
+    Cue(u8),
+}
+
+/// A point being read: latitude, longitude (degrees x 1e-7), elevation (dm), a waypoint (a cue only, not a point of
+/// the way), its cue and the rank of the element it came from.
+#[derive(Clone, Copy, Debug)]
+struct Open {
+    lat: i32,
+    lon: i32,
+    alt: Option<i32>,
+    wpt: bool,
+    cue: Option<(u8, Turn)>,
 }
 
 impl Default for Gpx {
@@ -368,11 +399,11 @@ impl Default for Gpx {
 impl Gpx {
     /// At the start of a file.
     pub const fn new() -> Self {
-        Gpx { tag: [0; TAG], tag_len: 0, in_tag: false, ele: None, pt: None, split: false }
+        Gpx { tag: [0; TAG], tag_len: 0, in_tag: false, text: None, pt: None, split: false }
     }
 
-    /// The next bytes of the file; each point to `f` as it ends.
-    pub fn push_slice(&mut self, buf: &[u8], f: &mut dyn FnMut(Pt)) {
+    /// The next bytes of the file; each point and cue to `f` as it ends.
+    pub fn push_slice(&mut self, buf: &[u8], f: &mut dyn FnMut(Item)) {
         for &b in buf {
             if self.in_tag {
                 if b == b'>' {
@@ -384,43 +415,63 @@ impl Gpx {
                 }
             } else if b == b'<' {
                 (self.in_tag, self.tag_len) = (true, 0);
-                if let (Some((text, n)), Some(p)) = (self.ele.take(), self.pt.as_mut()) {
-                    p.2 = decimal(text.get(..n).unwrap_or(&[]).trim_ascii(), 1).and_then(|v| i32::try_from(v).ok());
+                if let (Some((what, text, n)), Some(p)) = (self.text.take(), self.pt.as_mut()) {
+                    // past the buffer: unread (None), not cut
+                    let t = text.get(..n).unwrap_or(b"?").trim_ascii();
+                    match what {
+                        Text::Ele => p.alt = decimal(t, 1).and_then(|v| i32::try_from(v).ok()),
+                        Text::Cue(rank) => {
+                            if let Some(turn) = Turn::from_text(t).filter(|_| p.cue.is_none_or(|c| c.0 < rank)) {
+                                p.cue = Some((rank, turn));
+                            }
+                        }
+                    }
                 }
-            } else if let Some((text, n)) = self.ele.as_mut()
-                && let Some(slot) = text.get_mut(*n)
-            {
-                *slot = b;
-                *n += 1;
+            } else if let Some((_, text, n)) = self.text.as_mut() {
+                if let Some(slot) = text.get_mut(*n) {
+                    *slot = b;
+                }
+                *n = (*n + 1).min(text.len() + 1);
             }
         }
     }
 
     /// A whole tag (between `<` and `>`).
-    fn tag_end(&mut self, f: &mut dyn FnMut(Pt)) {
+    fn tag_end(&mut self, f: &mut dyn FnMut(Item)) {
         let t = self.tag.get(..self.tag_len).unwrap_or(&[]);
         let name = t.split(|&b| b.is_ascii_whitespace() || b == b'/' && t.first() != Some(&b'/')).next();
+        let text = |w| Some((w, [0; 24], 0));
         match name.unwrap_or(&[]) {
-            b"trkpt" | b"rtept" => {
+            n @ (b"trkpt" | b"rtept" | b"wpt") => {
+                let wpt = n == b"wpt";
                 let ll = attr(t, b"lat").zip(attr(t, b"lon"));
                 self.pt =
                     ll.filter(|&(la, lo)| la.abs() <= 900_000_000 && lo.abs() <= 1_800_000_000).map(|(la, lo)| {
-                        (la as i32, lo as i32, None) // in range: the casts keep the values
+                        // in range: the casts keep the values
+                        Open { lat: la as i32, lon: lo as i32, alt: None, wpt, cue: None }
                     });
                 if t.last() == Some(&b'/') {
                     self.emit(f);
                 }
             }
-            b"/trkpt" | b"/rtept" => self.emit(f),
-            b"ele" => self.ele = Some(([0; 24], 0)),
+            b"/trkpt" | b"/rtept" | b"/wpt" => self.emit(f),
+            b"ele" => self.text = text(Text::Ele),
+            b"name" => self.text = text(Text::Cue(1)),
+            b"sym" => self.text = text(Text::Cue(2)),
+            b"type" => self.text = text(Text::Cue(3)),
             b"trk" | b"trkseg" | b"rte" => self.split = true,
             _ => {}
         }
     }
 
-    fn emit(&mut self, f: &mut dyn FnMut(Pt)) {
-        if let Some((lat, lon, alt_dm)) = self.pt.take() {
-            f(Pt { lat, lon, alt_dm, split: core::mem::take(&mut self.split), dist_m: None });
+    fn emit(&mut self, f: &mut dyn FnMut(Item)) {
+        let Some(p) = self.pt.take() else { return };
+        if !p.wpt {
+            let split = core::mem::take(&mut self.split);
+            f(Item::Point(Pt { lat: p.lat, lon: p.lon, alt_dm: p.alt, split, dist_m: None }));
+        }
+        if let Some((_, turn)) = p.cue {
+            f(Item::Cue(p.lat, p.lon, turn, None));
         }
     }
 }
@@ -493,7 +544,11 @@ pub(crate) mod tests {
     fn gpx_points(text: &[u8], chunk: usize) -> Vec<(i32, i32, Option<i32>)> {
         let (mut g, mut v) = (Gpx::new(), Vec::new());
         for part in text.chunks(chunk) {
-            g.push_slice(part, &mut |p| v.push((p.lat, p.lon, p.alt_dm)));
+            g.push_slice(part, &mut |it| {
+                if let Item::Point(p) = it {
+                    v.push((p.lat, p.lon, p.alt_dm));
+                }
+            });
         }
         v
     }
@@ -523,13 +578,51 @@ pub(crate) mod tests {
             <trk><trkseg><trkpt lat="0.1" lon="0"/><trkpt lat="0.11" lon="0"/></trkseg></trk>
             <rte><rtept lat="0.2" lon="0"/></rte></gpx>"#;
         let (mut g, mut v, mut odo) = (Gpx::new(), Vec::new(), Odometer::new());
-        g.push_slice(text, &mut |p| {
-            odo.step(p);
-            v.push(p.split);
+        g.push_slice(text, &mut |it| {
+            if let Item::Point(p) = it {
+                odo.step(p);
+                v.push(p.split);
+            }
         });
         assert_eq!(v, [true, false, true, true, false, true]);
         let m = odo.len_m().unwrap();
         assert!(m.abs_diff(1112 + 111 + 1112) <= 2, "the 9.9 km and 10 km jumps left out: {m}");
+    }
+
+    /// Cues in GPX: BRouter's "gpsies" style (`wpt` with `sym` and `type`), its Locus style (`sym` on a track
+    /// point), RideWithGPS's (`name` on a waypoint); `type` over `sym` over `name`; a waypoint that is no cue (a
+    /// cafe), a word too long for the buffer and a waypoint without a position give none. A waypoint is no point
+    /// of the way.
+    #[test]
+    fn gpx_cues() {
+        let text = br#"<gpx><wpt lon="0.001" lat="0.002"><name>right</name><sym>tslr</sym><type>TSLR</type></wpt>
+            <wpt lat="0.003" lon="0.004"><name>Left</name></wpt>
+            <wpt lat="0.005" lon="0.006"><name>Cafe</name><sym>Water</sym></wpt>
+            <wpt lat="0.007" lon="0.008"><name>Cafe du Port</name></wpt>
+            <wpt lat="0.009" lon="0.010"><type>leftleftleftleftleftleftleftleft</type></wpt>
+            <wpt><name>left</name></wpt>
+            <trk><trkseg><trkpt lat="0" lon="0"><ele>1</ele><sym>left_sharp</sym></trkpt>
+            <trkpt lat="0.001" lon="0"><name>u-turn</name></trkpt></trkseg></trk></gpx>"#;
+        for chunk in [1, 5, 4096] {
+            let (mut g, mut v) = (Gpx::new(), Vec::new());
+            for part in text.chunks(chunk) {
+                g.push_slice(part, &mut |it| v.push(it));
+            }
+            let pt = |lat, lon, alt_dm, split| Item::Point(Pt { lat, lon, alt_dm, split, dist_m: None });
+            assert_eq!(
+                v,
+                [
+                    Item::Cue(20_000, 10_000, Turn::SlightRight, None),
+                    Item::Cue(30_000, 40_000, Turn::Left, None),
+                    Item::Cue(50_000, 60_000, Turn::Water, None),
+                    pt(0, 0, Some(10), true),
+                    Item::Cue(0, 0, Turn::SharpLeft, None),
+                    pt(10_000, 0, None, false),
+                    Item::Cue(10_000, 0, Turn::UTurn, None),
+                ],
+                "chunks of {chunk}"
+            );
+        }
     }
 
     /// Long digit runs (review 2: 12 digits and 7 places overflowed i64): refused, the point with them too.
@@ -568,18 +661,40 @@ pub(crate) mod tests {
             steps += 1;
         }
         assert!(steps > 4, "the lengths over several steps of 4 KB: {steps}");
-        let names: Vec<_> = (0..c.list.len()).map(|i| c.list.get(i).unwrap().name()).collect();
+        let names: Vec<std::string::String> = (0..c.list.len()).map(|i| c.list.get(i).unwrap().name().into()).collect();
         let mut sorted = names.clone();
         sorted.sort();
-        assert_eq!(sorted, ["BROKEN", "HILL", "HILL", "HILL GARMIN"], "in the folders' order: {names:?}");
-        let broken = names.iter().position(|&n| n == "BROKEN").unwrap();
-        for i in (0..4).filter(|&i| i != broken) {
+        assert_eq!(sorted, ["BROKEN", "HILL", "HILL", "HILL GARMIN", "TURNS", "ZIGZAG"], "folders' order: {names:?}");
+        let broken = names.iter().position(|n| n == "BROKEN").unwrap();
+        for i in (0..names.len()).filter(|&i| names[i].starts_with("HILL")) {
             let e = *c.list.get(i).unwrap();
             assert!(e.dist_m.unwrap().abs_diff(5000) <= 10, "{}: {:?}", e.name(), e.dist_m);
             assert_eq!(load(&mut c, &mut d, i), Progress::Loaded(true), "{i}");
             let k = c.course.climbs();
             assert_eq!(k.len(), 1, "{i}: {k:?}");
             assert!(k[0].start_m.abs_diff(2000) <= 50 && k[0].gain_m.abs_diff(120) <= 3, "{i}: {k:?}");
+            // its two corners found on its shape (the Garmin file's summit is no turn), the summit kept
+            let cues: Vec<_> = c.course.cues().iter().map(|q| (q.at_m, q.turn)).collect();
+            let turns: Vec<_> = cues.iter().filter(|q| q.1.is_turn()).collect();
+            assert_eq!(turns.iter().map(|q| q.1).collect::<Vec<_>>(), [Turn::Left, Turn::Right], "{i}: {cues:?}");
+            assert!(turns[0].0.abs_diff(2000) <= 25 && turns[1].0.abs_diff(4000) <= 25, "{i}: {cues:?}");
+            let summits = cues.iter().filter(|q| q.1 == Turn::Summit).count();
+            assert_eq!(summits, usize::from(names[i] == "HILL GARMIN"), "{i}: {cues:?}");
+        }
+        // the zigzag: its FIT course's cues are where the GPX track's turns are found, the water point besides
+        let at = |n: &str| names.iter().position(|x| x == n).unwrap();
+        let (zigzag, turns_fit) = (at("ZIGZAG"), at("TURNS"));
+        assert_eq!(load(&mut c, &mut d, zigzag), Progress::Loaded(true));
+        let found: Vec<_> = c.course.cues().iter().map(|q| (q.at_m, q.turn)).collect();
+        assert_eq!(load(&mut c, &mut d, turns_fit), Progress::Loaded(true));
+        let stated: Vec<_> = c.course.cues().iter().map(|q| (q.at_m, q.turn)).collect();
+        let water = stated.iter().position(|q| q.1 == Turn::Water).expect("the water point");
+        assert!((3140..=3190).contains(&stated[water].0), "halfway along the winding road: {stated:?}");
+        let mut turns = stated.clone();
+        turns.remove(water);
+        assert_eq!(turns.len(), found.len(), "{stated:?} {found:?}");
+        for (s, f) in turns.iter().zip(&found) {
+            assert!(s.1 == f.1 && s.0.abs_diff(f.0) <= 12, "{s:?} {f:?}: {stated:?} {found:?}");
         }
         assert!(c.list.get(broken).unwrap().dist_m.is_none(), "not a FIT file: no points");
         assert_eq!(load(&mut c, &mut d, broken), Progress::Loaded(false));

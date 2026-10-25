@@ -19,7 +19,7 @@
   grade. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
-  when the course is loaded): its profile large, the distance to go, distance, moving time and average speed.
+  when the course is loaded): its profile large, the next turn, the distance to go, distance and moving time.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
@@ -188,7 +188,17 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
-- **Fields:** TO GO KM, OFF CRS M (red while off course), CLIMB (on a climb what is left and the grade of the next
+- **Turn by turn** (course/cues.rs), as Garmin's, Wahoo's and Hammerhead's: the cues the file states (a FIT
+  course's course points: left, right, slight and sharp turns, U-turn, straight on, summit, water, food, danger,
+  first aid; GPX waypoints or track points whose `type`, `sym` or `name` is a turn word, as BRouter and RideWithGPS
+  write them), else the turns of the course's shape (a GPX track, Bryton's routes): 45 degrees or more over 25 m
+  either side, corners drawn with several points merged, so a winding road gives none; slight under 60 degrees,
+  sharp from 110, a U-turn from 159 (BRouter's classes). Up to 256 a course (turns kept first). The next one is
+  said in the banner with its arrow 200 m before (or 20 s at the speed ridden, if farther) with a beep ("LEFT
+  200 M"), and at the turn (32 m or 4 s) with two ("LEFT NOW"); nothing off course. Not read: the turns of
+  Bryton's `voiceTrip.fit` (their values are not known), cue names (street names).
+- **Fields:** TO GO KM, NEXT TURN (the next cue's arrow and distance, "350M", "1.2K"; "--" off course), OFF CRS M
+  (red while off course), CLIMB (on a climb what is left and the grade of the next
   200 m, "1.6K 6%"; before it the next climb's length and grade; coloured by grade), CLIMB M (the climb's gain left,
   or the next climb's), UP LEFT M (the course's ascent left), and PROFILE: the course's elevation from the eighth of
   it the rider is in to the end, the rider's place, the ridden part dark, the climbs green, yellow, orange or red by

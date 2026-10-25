@@ -654,7 +654,7 @@ mod tests {
                 match r.push(b) {
                     Some(Msg::Record(x)) => roll.sample(x.time, x.power),
                     Some(Msg::Session(s)) => session = Some(s),
-                    None => {}
+                    _ => {}
                 }
             }
             match (r.result(), session) {
