@@ -57,6 +57,13 @@
 //! unfinished, and when the folders are made (a cut there leaves no record). A ride whose entry the cut tore is
 //! saved from its record (its chain and length), not resumed.
 //!
+//! That sync reads both FATs whole in one call (about 1.5 to 3 s on the unit's 15 MB, estimated: the perf review of
+//! 2026-10-25), and it stays in one call on purpose. It runs only at the first ride on a card and after a cut, the
+//! ride's seconds missed meanwhile are caught up ([`crate::MAX_CATCH_UP`]: 10 s), and it must come before any chain is
+//! read or written. Spread over passes (`Fat::sync_fats_from`, as the scan's cache does) it would hold the first
+//! checkpoint back by seconds and put a resumable cursor, and a state per sync position for the power-cut tests to
+//! cover, into the one path that must never lose a ride: a pause the rider sees twice per card is the smaller cost.
+//!
 //! **Two copies of each ride** (docs/sync.md): Bryton's server refuses a ride whose records hold developer fields,
 //! and Intervals.icu reads DFA a1 from one (`Alpha1`), so one file cannot serve both. Two recorders run side by side
 //! ([`Kind`]), each with everything above of its own: the clean one (protocol 1.0, no developer data: what stock,
