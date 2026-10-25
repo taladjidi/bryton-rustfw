@@ -46,6 +46,9 @@ pub const GARBAGE: usize = 512;
 
 /// Longest BLE event kept while a command waits ([`Rx::pop`]).
 pub const KEPT: usize = 128;
+/// Events kept at most: an ANCS answer of the longest message the inbox keeps (120 bytes) and a long title is about
+/// 180 bytes, ten notifications of 20 at the 23-byte ATT MTU, read in one pass (eight lost it).
+pub const KEPT_N: usize = 16;
 
 /// Reassembles packets from the byte stream, and keeps the BLE events that arrive while a command waits for its
 /// response (a phone's connection or pairing must not be lost to an ANT command's wait; advertising reports are).
@@ -56,8 +59,8 @@ pub struct Rx {
     want: Option<usize>,
     /// The last packet's length (in `buf`).
     last: usize,
-    kept: [[u8; KEPT]; 8],
-    kept_len: [u8; 8],
+    kept: [[u8; KEPT]; KEPT_N],
+    kept_len: [u8; KEPT_N],
     kept_n: usize,
     /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
     /// PHONE menu shows it when the link could not be set up.
@@ -86,8 +89,8 @@ impl Rx {
             got: 0,
             want: None,
             last: 0,
-            kept: [[0; KEPT]; 8],
-            kept_len: [0; 8],
+            kept: [[0; KEPT]; KEPT_N],
+            kept_len: [0; KEPT_N],
             kept_n: 0,
             failed: None,
             heard: false,
@@ -110,7 +113,7 @@ impl Rx {
         self.kept_n = 0;
     }
 
-    /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits (eight
+    /// Keeps the last packet for [`Rx::pop`] if it is a BLE event other than an advertising report and fits ([`KEPT_N`]
     /// at most; when full, the oldest notification ([`EVT_HVX`]) makes room for another kind of event, else the new
     /// one is dropped). The main loop keeps them too, and acts on them once the bytes read are all
     /// framed: a command sent from the middle of a read would take the rest of the stream out of order.
@@ -656,7 +659,7 @@ mod tests {
     fn a_flood_of_notifications_does_not_push_out_a_disconnection() {
         // an iPhone's notifications after subscribing (ANCS's pre-existing ones), then the link's end
         let mut rx = Rx::new();
-        for uid in 0..12u8 {
+        for uid in 0..KEPT_N as u8 + 4 {
             keep(&mut rx, &[BLE_EVT, 0x39, 0, 0, 0, 0, 0, 0, 0, 0x12, 0, 1, 1, 0, uid]);
         }
         keep(&mut rx, &[BLE_EVT, 0x11, 0, 0, 0, 0x08]);
@@ -665,7 +668,7 @@ mod tests {
         while let Some(n) = rx.pop(&mut out) {
             ids.push(event_id(&out[..n]));
         }
-        assert_eq!(ids.len(), 8);
+        assert_eq!(ids.len(), KEPT_N);
         assert_eq!(ids.last(), Some(&Some(0x11)), "the disconnection kept, an old notification dropped");
     }
 

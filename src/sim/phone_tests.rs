@@ -501,3 +501,15 @@ fn the_longest_notification_fits() {
     app.draw_notif(&mut f, 0, 0);
     assert!((ui::W - 60..ui::W).all(|x| (ui::LIST_Y..ui::LIST_Y + 20).all(|y| f.at(x, y) == ui::BLACK)), "no MORE");
 }
+
+/// The longest message the inbox keeps (120 bytes) with a long title arrives whole through the phone: its answer is
+/// more fragments than one main loop pass used to keep (eight).
+#[test]
+fn the_longest_message_arrives_whole() {
+    let long: &'static str = std::boxed::Box::leak("abcdefghijklmnopqrs ".repeat(6).into_boxed_str());
+    let script = std::vec![(4000, Act::Notify(4, 7, "A sender with a long name", long))];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.phone.inbox.len(), 1, "the answer was dropped");
+}
