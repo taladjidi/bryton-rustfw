@@ -57,11 +57,12 @@ pub fn resolution(b: [u8; 3]) -> (u16, u16) {
 /// ```
 /// use bryton_rustfw::touch::point;
 /// assert_eq!(point([0x81, 0x2c, 0x05]), Some((44, 261)));
-/// assert_eq!(point([0x80 | 0x10, 0x00, 0x40]), Some((256, 64)));
+/// assert_eq!(point([0x80 | 0x10, 0x00, 0x40]), Some((239, 64)), "past the panel's edge: kept on it");
 /// assert_eq!(point([0x11, 0x2c, 0x05]), None, "not valid: no finger");
 /// ```
 pub fn point(b: [u8; 3]) -> Option<(u16, u16)> {
-    (b[0] & 0x80 != 0).then(|| xy(b))
+    // the chip's 11 bits reach past the 240 x 320 panel: a point is clamped onto it, so no box test ever sees one off
+    (b[0] & 0x80 != 0).then(|| xy(b)).map(|(x, y)| (x.min(239), y.min(319)))
 }
 
 /// Releases the chip from reset (a low pulse first: a RAM run finds it as the last image left it) and waits for it to

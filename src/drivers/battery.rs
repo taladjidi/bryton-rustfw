@@ -85,7 +85,7 @@ impl Battery {
     pub fn update(&mut self, mv: u16, charging: bool) -> bool {
         // a quarter of each new reading: smooths the noise and load dips without lagging minutes behind
         self.mv = Some(self.mv.map_or(mv, |old| ((3 * u32::from(old) + u32::from(mv)) / 4) as u16));
-        self.low = if !charging && mv < EMPTY_MV { self.low + 1 } else { 0 };
+        self.low = if !charging && mv < EMPTY_MV { self.low.saturating_add(1) } else { 0 };
         if self.readings.is_multiple_of(PER_MINUTE)
             && let (Some(mv), Some(slot)) = (self.mv, self.log.get_mut(self.logged % LOG))
         {

@@ -177,10 +177,12 @@ impl Ride {
             self.max_speed = self.max_speed.max(v);
             self.hr.add(i.hr);
             self.max_hr = self.max_hr.max(i.hr.unwrap_or(0));
-            self.climb.second(i.alt_mm, self.dist9);
+            // an altitude no road has (a receiver's garbage) is no altitude: every difference below stays in range
+            let alt_mm = i.alt_mm.filter(|a| ALT_RANGE_MM.contains(a));
+            self.climb.second(alt_mm, self.dist9);
             self.power.add(i.power); // zeros count: coasting is part of the average power
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
-            if let Some(alt) = i.alt_mm {
+            if let Some(alt) = alt_mm {
                 let low = self.alt_low.get_or_insert(alt);
                 if alt < *low {
                     *low = alt;
@@ -419,6 +421,9 @@ impl Climb {
 /// image, read by its zone colour lookup at 0xd01530bc): grey #b4b4b4, blue #506eff, green #7dff1e, yellow
 /// #ffd000, orange #ffa600, red #ff302a, purple #9a1590.
 pub const ZONE_COLORS: [u16; 7] = [0xb5b6, 0x537f, 0x7fe3, 0xfe80, 0xfd20, 0xf985, 0x98b2];
+
+/// Altitudes a ride can have, mm (the Dead Sea's shore to above Everest): outside, the receiver's reading is dropped.
+pub const ALT_RANGE_MM: core::ops::RangeInclusive<i32> = -500_000..=9_000_000;
 
 /// Max heart rate before it is set (stock's default, `MHR` in its UserProfile.ini: 190).
 pub const MAX_HR: u16 = 190;
@@ -733,6 +738,12 @@ mod tests {
             r.second(&Input { alt_mm: Some(a * 1000), ..at(200) });
         }
         assert_eq!(r.ascent_m(), 52 + 20, "98 to 150, then 120 to 140");
+        // a receiver's garbage in between (overflowed the differences before, a panic in debug): no ascent, no panic
+        for a in [i32::MAX, i32::MIN, 140_000, i32::MAX, 141_000] {
+            r.second(&Input { alt_mm: Some(a), ..at(200) });
+        }
+        assert_eq!(r.ascent_m(), 52 + 20, "the garbage dropped");
+        assert!(r.vam().is_none_or(|v| v.abs() < 10_000) && r.grade_x10().is_none_or(|g| g.abs() < 1000));
     }
 
     #[test]
