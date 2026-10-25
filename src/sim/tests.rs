@@ -632,6 +632,142 @@ fn ride_history() {
     assert_consistent(&sim, &app);
 }
 
+/// DELETE in the history (trash.rs) over the synthetic volume with a full copy of the 20 Oct ride: on a ride's card,
+/// Start asks (any other key drops it), Start again moves the ride into `\Rustfw\Deleted` and its full copy into
+/// `\Rustfw\Deleted\Full`; the list, the totals and the power curve lose it at once (no ride read again), the list
+/// keeps its place, the scan's cache is written without it, the volume stays whole. A name taken in
+/// `\Rustfw\Deleted` gets a suffix. Refused during a ride and with a ride waiting to be resumed or saved.
+#[test]
+fn delete_rides() {
+    use crate::storage::trash::tests::{file, volume};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = volume();
+    {
+        // a file of the 22 Oct ride's name in \Rustfw\Deleted already
+        let mut d = crate::fat::tests::Ram(core::mem::take(&mut sim.emmc.image), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let mine = fat.open(&mut d, "Rustfw").unwrap();
+        let del = fat.ensure_dir(&mut d, mine, "Deleted", (0, 0)).unwrap();
+        fat.create(&mut d, del, "261022100000.fit", (0, 0)).unwrap();
+        sim.emmc.image = d.0;
+    }
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    app.set_map_memory(crate::tiles::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
+    app.press(&mut sim, Press::Short(Key::Start));
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 60_000);
+    }
+    let row =
+        |app: &App, i| app.menu_row(Menu::History, i).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()));
+    let all0 = app.stock.out.all;
+    let (curve0, read0) = (app.stock.out.curve, app.stock.read);
+    let open_card = |sim: &mut Sim, app: &mut App, n: usize| {
+        for _ in 0..20 {
+            match app.screen() {
+                Screen::Menu(Menu::History, s) if s < n => app.press(sim, Press::Short(Key::Page)),
+                Screen::Menu(Menu::History, s) if s > n => app.press(sim, Press::Short(Key::Lap)),
+                _ => break,
+            }
+        }
+        assert_eq!(app.screen(), Screen::Menu(Menu::History, n));
+        app.press(sim, Press::Short(Key::Start));
+        for _ in 0..100 {
+            run(sim, app, u64::from(POLL_MS));
+            if app.screen() == Screen::Past {
+                break;
+            }
+        }
+        assert_eq!(app.screen(), Screen::Past);
+    };
+    // the 20 Oct ride (row 2): asked, dropped by another key, asked again, deleted
+    open_card(&mut sim, &mut app, 2);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART AGAIN: YES");
+    assert_eq!(app.confirm, Some(PAST_DELETE));
+    app.press(&mut sim, Press::Short(Key::Lap));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped the first");
+    let (clean, full) = (
+        file(&sim.emmc.image, "Activities/261020080000.fit").unwrap(),
+        file(&sim.emmc.image, "Rustfw/Activities/261020080000.fit").unwrap(),
+    );
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "back to the list, in its place");
+    assert_eq!(app.banner.as_str(), "RIDE DELETED");
+    let img = &sim.emmc.image;
+    assert_eq!(file(img, "Activities/261020080000.fit"), None);
+    assert_eq!(file(img, "Rustfw/Activities/261020080000.fit"), None);
+    assert_eq!(file(img, "Rustfw/Deleted/261020080000.fit"), Some(clean), "kept, under its name");
+    assert_eq!(file(img, "Rustfw/Deleted/Full/261020080000.fit"), Some(full), "the full copy too");
+    assert_eq!(crate::fat::write::tests::fsck(img), Ok(0));
+    let rows: Vec<_> = (1..5).map(|i| row(&app, i)).collect();
+    let want = ["THU 22 OCT 5.0", "THU 1 OCT 12.0", "SAT 15 MAR 6.0"];
+    assert_eq!(rows, want.map(|r| Some(r.into())).into_iter().chain([None]).collect::<Vec<_>>(), "at once");
+    let all = app.stock.out.all;
+    assert_eq!((all.rides, all.dist_m, all.time_s), (all0.rides - 1, all0.dist_m - 14_400, all0.time_s - 1800));
+    assert_ne!(app.stock.out.curve, curve0, "its 400 W bests gone from the curve");
+    assert_eq!((app.stock.read, app.stock.status()), (read0, crate::stock::Status::Done), "no ride read again");
+    // the cache written without it, between rides
+    run(&mut sim, &mut app, 1000);
+    assert!(!app.stock.unsaved());
+    let size = |img: &[u8], p: &str| {
+        let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        fat.open(&mut d, p).map(|f| f.size)
+    };
+    assert_eq!(size(&sim.emmc.image, "Rustfw/scan.bin"), Ok(64 + 64 * u32::from(all.rides + app.stock.out.skipped)));
+    assert_consistent(&sim, &app);
+
+    // the 22 Oct ride: its name taken in \Rustfw\Deleted, a suffix
+    open_card(&mut sim, &mut app, 1);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000-1.fit").is_some_and(|f| !f.is_empty()));
+    assert_eq!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000.fit"), Some(Vec::new()), "the other kept");
+    assert_eq!(row(&app, 1).unwrap(), "THU 1 OCT 12.0");
+
+    // refused during a ride, and with a ride waiting to be resumed or saved
+    open_card(&mut sim, &mut app, 1);
+    let ev = app.ride.start_pause();
+    app.recorder(ev);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "NOT DURING A RIDE");
+    assert_eq!(app.screen(), Screen::Past);
+    app.ride = crate::ride::Ride::default();
+    app.resume_pending = true;
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.banner.as_str(), "NOT DURING A RIDE", "a ride waiting");
+    assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
+/// A delete a power cut left halfway (the ride in neither folder: its chain named by no entry, trash.rs) is finished
+/// when the next start's scan of the rides begins (30 s in; the card is not touched at boot), before it reads them:
+/// the ride in `\Rustfw\Deleted`, the volume whole, the history without it.
+#[test]
+fn a_delete_cut_halfway_is_finished_at_start() {
+    use crate::storage::trash::tests::{cut_midway, file};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    assert!(crate::fat::write::tests::fsck(&sim.emmc.image).is_ok_and(|lost| lost > 0), "a lost chain");
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 2000);
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/Full/261020080000.fit").is_some());
+    assert_eq!(file(&sim.emmc.image, "Activities/261020080000.fit"), None);
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+    assert_eq!(app.stock.status(), crate::stock::Status::Done);
+    assert!((0..app.stock.index.len()).all(|i| app.stock.index.get(i).unwrap().start.2 != 20), "not listed");
+}
+
 fn power210(_: u64) -> [u8; 8] {
     [0x10, 1, 0xff, 85, 0, 0, 210, 0]
 }

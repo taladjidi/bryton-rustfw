@@ -135,6 +135,9 @@ fn page_at(k: usize) -> usize {
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
 pub const OFF_CONFIRM_MS: u32 = 10_000;
 
+/// The value of `App::confirm` while a past ride's DELETE waits for its second Start: no menu row has it.
+pub(crate) const PAST_DELETE: (Menu, usize) = (Menu::History, usize::MAX);
+
 impl App {
     /// The first ride page that is on from place `from` in the round (taken round), going forward by `step` (1, or
     /// [`ROUND`] - 1 for backward): the ride pages, then the course page while a course is followed; page 1 is never
@@ -219,7 +222,7 @@ impl App {
 
     /// The selection on a row the menu still has: rows go when what they act on does (the ride menu's WORKOUT when
     /// the workout ends, COURSE when the course is stopped from COURSES).
-    fn clamp_menu(&mut self) {
+    pub(crate) fn clamp_menu(&mut self) {
         if let Screen::Menu(m, sel) = self.screen {
             self.screen = Screen::Menu(m, sel.min(self.rows(m).max(1) - 1));
         }
@@ -446,6 +449,11 @@ impl App {
                 return self.select_row(b, menu, sel, armed);
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
+            // a past ride's card: Start asks to delete it, Start again deletes it (moved, kept: trash.rs)
+            (Screen::Past, Input::Select) => {
+                self.confirm = armed;
+                self.delete_past(b);
+            }
             (
                 Screen::Menu(..) | Screen::Nearby | Screen::Past | Screen::About,
                 Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),

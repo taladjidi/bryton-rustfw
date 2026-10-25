@@ -115,6 +115,13 @@ impl App {
         {
             self.stock.start(self.date);
         }
+        if self.stock.status() == stock::Status::Running && self.trash_check && self.ride_settled() {
+            // a delete a cut left (trash.rs): finished before the scan reads the rides (it then drops the ride); not
+            // at boot (the card is not touched then), not during a ride (it makes the FATs equal first)
+            self.trash_check = false;
+            let t = fat::write::dos_time(self.rec_time().0);
+            let _ = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t); // failed: finished by the next delete
+        }
         let t0 = b.awake_us();
         if self.stock.status() == stock::Status::Running {
             let idle = self.ride.state() == ride::State::Idle;
@@ -167,6 +174,33 @@ impl App {
             }
             Some(Err(_)) => self.notice("BAD RIDE FILE"),
             None => {}
+        }
+    }
+
+    /// DELETE on a past ride's card (Start, then Start again: [`PAST_DELETE`]): the ride moved into
+    /// `\Rustfw\Deleted` ([`trash::delete`]: kept, never erased), its full copy too; the history, the totals and the
+    /// power curve without it at once; back to the list. Never while a ride runs or waits to be saved or resumed.
+    pub(crate) fn delete_past(&mut self, b: &mut impl Board) {
+        if !self.ride_settled() {
+            return self.notice("NOT DURING A RIDE");
+        }
+        if !self.card_writable || self.emmc.lent() {
+            return self.notice("CARD BUSY");
+        }
+        let (menu, sel) = PAST_DELETE;
+        if !self.confirmed(menu, sel, "DELETE RIDE") {
+            return;
+        }
+        let r = self.past.ride;
+        let t = fat::write::dos_time(self.rec_time().0);
+        match trash::delete(&mut emmc::Volume(&mut self.emmc, b), &r.file, t) {
+            Ok(()) => {
+                self.stock.forget(&r.file, r.start, self.date);
+                self.notice("RIDE DELETED");
+                self.close();
+                self.clamp_menu(); // the list one ride shorter: the selection on the next one, or the last
+            }
+            Err(_) => self.alarm_notice("DELETE FAILED"),
         }
     }
 

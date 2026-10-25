@@ -30,7 +30,7 @@ pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock};
+pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
 pub use app::*;
@@ -208,7 +208,8 @@ pub struct App {
     /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
     menu_chosen: bool,
     /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
-    /// on it again acts; any other input clears it (App::confirmed).
+    /// on it again acts; any other input clears it (App::confirmed). A past ride's DELETE, asked on its card, is
+    /// [`PAST_DELETE`].
     confirm: Option<(Menu, usize)>,
     /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
     /// when no key is down.
@@ -285,6 +286,9 @@ pub struct App {
     awake_at: u32,
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
+    /// A ride's delete the last run may have left unfinished: looked for when the scan of the rides first runs
+    /// ([`trash::finish`]).
+    trash_check: bool,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
     /// file; where it is (workout.rs).
     calendar: storage::workout::Calendar,
@@ -467,6 +471,7 @@ impl App {
             stock: stock::Scan::new(),
             awake_at: 0,
             past: history::Past::new(),
+            trash_check: false,
             calendar: Default::default(),
             calendar_day: None,
             plan_file: None,
@@ -493,6 +498,7 @@ impl App {
         self.awake_at = b.awake_us();
         self.resume_pending = self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN;
         self.full_pending = self.resume_pending;
+        self.trash_check = self.card_writable;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
         }

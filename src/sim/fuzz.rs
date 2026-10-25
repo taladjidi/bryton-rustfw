@@ -1033,3 +1033,86 @@ fn menu_tree_by_chance() {
     }
     assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
 }
+
+/// HISTORY by chance (trash.rs, `App::delete_past`): Page, Lap, Start, Back and taps over the list and the cards of
+/// the synthetic volume with a full copy, a ride started and stopped now and then. No panic, the selection inside
+/// the list, deletes reached (none while riding), and after each the volume whole and no ride lost: every ride
+/// file is in `\Activities` or in `\Rustfw\Deleted`, the list one shorter at once.
+#[test]
+fn history_by_chance() {
+    use super::*;
+    use crate::ui::menu::Input;
+    let rides = |img: &[u8], dir: &str| {
+        let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let Ok(f) = fat.open(&mut d, dir) else { return 0 };
+        let mut c = fat.cursor(f).unwrap();
+        let mut n = 0;
+        while let Some(e) = fat.list(&mut d, &mut c).unwrap() {
+            n += u32::from(!e.file.dir && e.name().get(..12).is_some_and(|s| s.iter().all(u8::is_ascii_digit)));
+        }
+        n
+    };
+    let (mut deletes, mut refused) = (0, 0);
+    for seed in 1..=8u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::storage::trash::tests::volume();
+        let all = rides(&sim.emmc.image, "Activities");
+        let mut app = App::start(&mut sim, None);
+        app.set_scan_cache(crate::stock::tests::cache());
+        app.set_map_memory(crate::tiles::tests::memory());
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for k in 0..600 {
+            if !matches!(app.screen(), Screen::Menu(Menu::History, _) | Screen::Past) {
+                if app.stock.status() == crate::stock::Status::Idle {
+                    app.stock.start(app.date);
+                }
+                app.open(Screen::Menu(Menu::History, 0));
+                app.show(&mut sim);
+            }
+            let r = next();
+            let i = match r % 100 {
+                0..=24 => Input::Next,
+                25..=34 => Input::Prev,
+                35..=79 => Input::Select,
+                80..=89 => Input::Back,
+                _ => Input::Touch(crate::touch::Gesture::Tap(120, (ui::LIST_Y + 10) as u16)),
+            };
+            if r % 97 == 0 {
+                let ev = app.ride.start_pause(); // riding now and then (stopped again below)
+                app.recorder(ev);
+            }
+            let riding = !app.ride_settled();
+            let (before, rows) = (rides(&sim.emmc.image, "Activities"), app.stock.index.len());
+            app.input(&mut sim, i);
+            let after = rides(&sim.emmc.image, "Activities");
+            if after != before {
+                assert!(!riding, "seed {seed} step {k}: deleted during a ride");
+                assert_eq!(after + 1, before, "seed {seed} step {k}: one ride");
+                assert_eq!(after + rides(&sim.emmc.image, "Rustfw/Deleted"), all, "seed {seed} step {k}: none lost");
+                assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0), "seed {seed} step {k}");
+                assert_eq!(app.stock.index.len() + 1, rows, "seed {seed} step {k}: the list at once");
+                deletes += 1;
+            }
+            refused += u32::from(riding && app.banner.as_str() == "NOT DURING A RIDE");
+            if app.ride.state() != crate::ride::State::Idle && r % 5 == 0 {
+                app.ride = crate::ride::Ride::default();
+            }
+            if let Screen::Menu(m, s) = app.screen() {
+                assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
+            }
+            for _ in 0..1 + r % 3 {
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+        }
+    }
+    std::println!("{deletes} deletes, {refused} refused while riding");
+    assert!(deletes > 5 && refused > 0, "{deletes} deletes, {refused} refused");
+}

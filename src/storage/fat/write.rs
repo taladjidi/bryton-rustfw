@@ -22,7 +22,8 @@
 //!   recorder's recovery record names it and finishes the move); the other order would leave two entries on one
 //!   chain, which a computer's fsck calls cross-linked and a delete of either would free under the other;
 //! - **a delete** only marks the entry (and its long name pieces) 0xe5: the rest of the entry, its first cluster
-//!   included, stays, so a lost file can be found by hand. Only the recorder's own entries are ever deleted.
+//!   included, stays, so a lost file can be found by hand. Only the recorder's own entries are ever deleted, and the
+//!   old entry of a ride HISTORY's DELETE moves into `\Rustfw\Deleted` (`trash`, the second half of a move).
 //! - **FSInfo** (free count, next free hint) is written after the FAT sectors it counts; a cut between leaves the
 //!   count a little high, which the FAT32 spec allows (it is a hint) and [`Fat::sync_fats`] puts right.
 //!

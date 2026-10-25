@@ -209,6 +209,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   (`Cache`, `\Rustfw\scan.bin`, 256 KB in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
   (totals, history, best powers), so each ride is decoded once ever and a start reads only new or changed rides. `src/power_curve.rs`: best powers per duration in
   one pass, merged across rides, and the 2-parameter CP / W' fit. Pure logic.
+- `src/storage/trash.rs`: HISTORY's DELETE: a ride moved (never erased) into `\Rustfw\Deleted` (its full copy
+  into `\Rustfw\Deleted\Full`), `\Rustfw\delete.rec` naming the move so the next start finishes one a cut left;
+  stock's `.sum` / `.csum` left as they are (module doc: why).
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).
 - `src/storage/workout.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read

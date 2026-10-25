@@ -213,13 +213,25 @@ MENU
 
 ## History
 
-HISTORY lists the rides in `\Activities` (stock's, read only), newest first: the day ("TUE 20 OCT") and the
+HISTORY lists the rides in `\Activities` (stock's and this firmware's), newest first: the day ("TUE 20 OCT") and the
 distance in km, a screen of rows at a time. Opening it reads the rides as READ RIDES does (below), and the rows
 appear as the rides are read; the newest 128 are kept. Start on a ride opens its card, the same as at the end of a
 ride: the date and start time, the track (fitted to the map), the elevation profile, time, distance, average speed,
 ascent, NP (from the ride's records), average power, average and max heart rate, TSS (at the FTP set now) and kJ.
 The ride's file is read once to draw it, 96 KB a main loop pass ("READING RIDE", about 0.1 s for a 300 KB ride;
 a long ride takes a few passes, the loop never stalls); the card opens when it is read. Back returns to the list.
+
+**Delete** (storage/trash.rs): on a ride's card, Start asks "DELETE RIDE? START AGAIN: YES" (any other key drops
+it), Start again moves the ride out of sight, never erases it: `\Activities\<name>.fit` into `\Rustfw\Deleted\`,
+and this firmware's full copy of the same ride (`\Rustfw\Activities\<name>.fit`), if any, into
+`\Rustfw\Deleted\Full\`, under the same name (a name already there gets `-1`, `-2`...). A computer sees them
+there; moving a file back puts the ride back in both firmwares' histories. The list, the totals and the power curve
+lose it at once (the scan's cache drops its entry, no ride read again), and the list stays on the same row. Refused
+("NOT DURING A RIDE") while a ride runs or waits to be resumed or saved. Stock's summaries of the ride
+(`\System\History\Summary\<name>.sum / .csum`) are left as they are: stock's own files; stock's history is
+built from the FIT files it finds, so the ride goes from it too (inferred). A power cut during the move loses
+nothing: `\Rustfw\delete.rec` says what is being moved, and the next start finishes it (tested by cutting the
+power after every sector written).
 
 ## Workouts
 
@@ -292,7 +304,7 @@ copied over USB into `\Courses`, read only:
 
 ## Stock data
 
-What Bryton's firmware left on the card, read only (nothing of stock's is ever written), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM
+What Bryton's firmware left on the card, read only (nothing of stock's is ever written; HISTORY's DELETE moves a ride's file, above), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM
 STOCK):
 - **READ RIDES** reads every ride in `\Activities` (stock's `YYMMDDhhmmss.fit` and this firmware's saved rides; stock's
   ride in progress `tmp.fit` and files that are not whole rides are left out), a bounded amount per pass of the main
