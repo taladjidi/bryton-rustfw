@@ -67,7 +67,7 @@ fn read_only_build_does_not_touch_the_card() {
     sim.emmc.image = crate::fat::tests::image();
     sim.writable = false;
     let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 1000);
+    run(&mut sim, &mut app, u64::from(BOND_LOAD_MS) + 1000); // past the phone's bond read (a read-only build reads it)
     let cmds = sim.emmc.cmds.len();
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 20_000);

@@ -86,8 +86,9 @@ impl App {
     /// work is [`App::step_recorder`]'s, at the end of the pass.
     pub(crate) fn recorder(&mut self, ev: ride::Event) {
         if !self.card_writable {
-            // a build that may not write the card: no recorder at all (it would read both FATs at each try only to
-            // fail: about 2 s of a stopped loop every 5 s, the second review found), said once a ride
+            // a build that may not write the card (emmc::Card::write refuses it): no recorder at all (it would read
+            // both FATs at each try only to fail: about 2 s of a stopped loop every 5 s, the second review found),
+            // said once a ride
             if ev == ride::Event::Start {
                 self.alarm_notice("NOT RECORDING");
             }
@@ -162,8 +163,8 @@ impl App {
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
     /// backup register that marks a ride open.
     pub(crate) fn step_recorder(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() {
-            return;
+        if self.emmc.lent() {
+            return; // a read-only build has no ride here: [`App::recorder`] never starts one, nor is one resumed
         }
         let (local, _) = self.rec_time();
         if self.recorder.phase() != recorder::Phase::Done {

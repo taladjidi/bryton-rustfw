@@ -1222,12 +1222,7 @@ impl Board for S510 {
         EMMC_WRITE
     }
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
-        // the write path has not run on the unit yet: it is enabled only in a build made for that session with the
-        // owner (EMMC_WRITE=1 cargo build --release; AGENTS.md, the eMMC is read only until then). Any other build
-        // refuses here, before a command goes out, and the app says NOT RECORDING at a ride's start.
-        if !EMMC_WRITE {
-            return Err(BusError::Timeout);
-        }
+        // a build without EMMC_WRITE=1 never gets here: emmc::Card::write refuses first (emmc_writable)
         emmc_write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {

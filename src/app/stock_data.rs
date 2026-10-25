@@ -129,7 +129,8 @@ impl App {
                 && b.awake_us().wrapping_sub(t0) < us
             {}
         }
-        // the cache written, its FAT comparison first spread over passes in the same time budget
+        // the cache written, its FAT comparison first spread over passes in the same time budget (a read-only build
+        // skips it: its write would be refused by emmc::Card::write after those reads, for nothing)
         let t = fat::write::dos_time(self.rec_time().0);
         while self.stock.unsaved()
             && self.card_writable

@@ -139,9 +139,6 @@ impl App {
             return;
         }
         self.shifts = self.shifts.saturating_add(1);
-        if !self.card_writable {
-            return;
-        }
         let (_, t) = self.rec_time();
         let front = now >> 8 != was >> 8;
         let [rear_n, front_n] = now.to_le_bytes();

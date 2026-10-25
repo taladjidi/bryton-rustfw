@@ -200,6 +200,35 @@ fn the_bonded_phone_comes_back() {
     assert_ne!(app.phone.link(), Link::Secure);
 }
 
+/// The bond is written only once the ride has settled, never while one runs: here the card is full, so the
+/// recorder has stopped (done) though the ride goes on, and FORGET's erasing waits for the ride's end (the review of
+/// 2026-10-25: the write was gated on the recorder only).
+#[test]
+fn the_bond_waits_for_the_ride_to_settle() {
+    let (mut sim, mut app) = unit(iphone(Vec::new()));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 3000);
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    crate::fat::write::tests::fill(&mut sim2.emmc.image, 0, true);
+    let mut phone = PhoneSim::new(true);
+    (phone.key, phone.connect_at) = (Some(ble_sim::LTK), 0);
+    sim2.nordic.phone = Some(phone);
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, BOND_LOAD_MS as u64 + 1000);
+    app.press(&mut sim2, Press::Short(Key::Start));
+    run(&mut sim2, &mut app, 2000);
+    assert_eq!(app.recorder.phase(), crate::recorder::Phase::Done, "the card full: not recording");
+    app.activate(&mut sim2, Menu::Phone, 5);
+    app.activate(&mut sim2, Menu::Phone, 5); // FORGET, confirmed
+    run(&mut sim2, &mut app, 2000);
+    assert!(stored(&sim2).and_then(|s| s.bond).is_some(), "not written during the ride");
+    app.press(&mut sim2, Press::Short(Key::Start));
+    app.press(&mut sim2, Press::Long(Key::Start));
+    run(&mut sim2, &mut app, 1000);
+    assert_eq!(stored(&sim2).map(|s| s.bond.is_none()), Some(true), "written once it ended");
+}
+
 /// During a ride the phone's time is not taken: the ride's record times must not jump.
 #[test]
 fn no_clock_change_during_a_ride() {
