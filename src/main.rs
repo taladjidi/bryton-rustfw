@@ -1090,7 +1090,12 @@ fn i2c_read(i2c: u32, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
 // ---------------------------------------------------------------------------------------------------------------
 // The board for the app in lib.rs: each method is the transport only.
 // ---------------------------------------------------------------------------------------------------------------
-struct S510;
+/// The board: its state is the awake time counted so far ([`Board::awake_us`]): the cycle counter's last value
+/// and the cycles before it (the counter wraps every 21 s of work).
+struct S510 {
+    cycles_at: u32,
+    cycles: u64,
+}
 
 impl Board for S510 {
     fn panel_power_on(&mut self) {
@@ -1122,6 +1127,13 @@ impl Board for S510 {
     }
     fn delay_ms(&mut self, ms: u32) {
         delay_ms(ms);
+    }
+    fn awake_us(&mut self) -> u32 {
+        // DWT_CYCCNT stops in WFI (seen on the unit, 2026-10-23): it counts work only; read at least every 21 s of
+        // it (each main loop pass does)
+        let now = cycles();
+        self.cycles += u64::from(now.wrapping_sub(core::mem::replace(&mut self.cycles_at, now)));
+        (self.cycles / u64::from(CPU_HZ / 1_000_000)) as u32
     }
     fn standby(&mut self) {
         standby();
@@ -1254,6 +1266,14 @@ fn make_courses() -> &'static mut bryton_rustfw::storage::course::Courses {
     COURSES.init_with(bryton_rustfw::storage::course::Courses::new)
 }
 
+/// The scan's cache of stock's rides (storage/stock.rs `Cache`, 256 KB), in AXI SRAM (link.x `.axibss`). A const
+/// cell: zeroed with the section at reset, never built on the stack.
+fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
+    static CACHE: static_cell::ConstStaticCell<bryton_rustfw::stock::Cache> =
+        static_cell::ConstStaticCell::new(bryton_rustfw::stock::Cache::new());
+    CACHE.take()
+}
+
 /// The dev link's `bench`: `count` reads of `n` sectors from `lba`, timed, in microseconds. Its buffer in its own
 /// frame, not main's.
 #[inline(never)]
@@ -1287,12 +1307,13 @@ fn main() -> ! {
     gnss_init();
     i2c_init();
     checkpoint(4);
-    let mut board = S510;
+    let mut board = S510 { cycles_at: 0, cycles: 0 };
     let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
         app.set_map_memory(mem); // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map
     }
     app.set_course_memory(make_courses());
+    app.set_scan_cache(make_scan_cache());
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;

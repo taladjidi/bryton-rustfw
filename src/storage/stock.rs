@@ -2,16 +2,24 @@
 //! - **its rides** (`\Activities\YYMMDDhhmmss.fit`, ghidra/STORAGE_AND_MAPS.md 2.1): [`Scan`] goes through them
 //!   a bounded number of bytes per call, so the app spreads it over its passes and stays responsive; it gives the
 //!   power curve of the last [`WINDOW_DAYS`] days, CP and W' ([`crate::power_curve`]) and the distance and time
-//!   of this week, this year and all time ([`Summary`]), and the ride history's index ([`Scan::index`]);
+//!   of this week, this year and all time ([`Summary`]), and the ride history's index ([`Scan::index`]). Each
+//!   ride is decoded once ever: its [`Entry`] (64 bytes) goes into the [`Cache`], this firmware's own
+//!   `\Rustfw\scan.bin`, which a start reads first (the totals at once) so that only new or changed rides are
+//!   read; the sums are made from the entries (again on a new day: the windows move);
 //! - **its settings** (`\System\*.ini`): [`import`] maps what has an equivalent here ([`Imported`]).
 //!
 //! A ride counts only if its file is whole (header, CRC) and has its session: `tmp.fit` (stock's ride in
 //! progress) and the GNSS logs (`.ubx`) do not have a ride's name and are never opened. The ride's day is its
-//! name's (local time, as stock names them). Nothing is ever written: the FAT reader has no write path.
+//! name's (local time, as stock names them). Nothing of stock's is ever written: only the cache, in this firmware's
+//! folder ([`Cache::write`]).
+//!
+//! Stock keeps a summary per ride (`\System\History\Summary\<name>.sum` / `.csum`, ghidra/STORAGE_AND_MAPS.md
+//! 3), which would be cheaper to read than the FIT file, but its layout is not established (version-dependent
+//! offsets, medium confidence in the Ghidra notes), and this firmware's own rides have none: not used.
 
-use crate::fat::{self, Cursor, Disk, Fat, File};
-use crate::fitread::{Msg, Reader, Session};
-use crate::history::{Acc, Index, Start};
+use crate::fat::{self, Cursor, Disk, DiskWrite, Fat, File, Seek};
+use crate::fitread::{Msg, Reader};
+use crate::history::{Acc, Index, Ride, Start};
 use crate::ini::{get, number};
 use crate::nrf::SensorId;
 use crate::power_curve::{Curve, Rolling};
@@ -35,10 +43,10 @@ pub struct Totals {
 }
 
 impl Totals {
-    fn add(&mut self, s: &Session) {
+    fn add(&mut self, r: &Ride) {
         self.rides = self.rides.saturating_add(1);
-        self.dist_m = self.dist_m.saturating_add(s.dist_cm.unwrap_or(0) / 100);
-        self.time_s = self.time_s.saturating_add(s.timer_ms.unwrap_or(0) / 1000);
+        self.dist_m = self.dist_m.saturating_add(r.dist_m);
+        self.time_s = self.time_s.saturating_add(r.timer_s);
     }
 }
 
@@ -106,13 +114,310 @@ pub fn ride_start(name: &[u8]) -> Option<Start> {
     Some((y, m, d, two(6), two(8)))
 }
 
-/// A scan of stock's rides, a bounded amount per [`Scan::step`].
+/// Rides the cache keeps at most (`CACHE_RIDES` x [`ENTRY`] bytes: 256 KB in AXI SRAM, main.rs
+/// `make_scan_cache`). Past it, a new ride is read at every start and not counted.
+// ponytail: 4096 rides is 20 years at 200 a year; a bigger table (or one paged from the file) when that is near.
+pub const CACHE_RIDES: usize = 4096;
+/// Bytes of a ride in the cache ([`Entry`]).
+pub const ENTRY: usize = 64;
+/// Bytes of the cache file's header.
+const HEAD: usize = 64;
+/// The cache's folder (this firmware's own, the recorder's) and its name.
+pub const CACHE_DIR: &str = "Rustfw";
+/// See [`CACHE_DIR`].
+pub const CACHE_NAME: &str = "scan.bin";
+const MAGIC: [u8; 4] = *b"RFSC";
+/// Raised whenever an entry's layout or meaning changes: an older cache is then rebuilt.
+const VERSION: u16 = 1;
+/// The cache in memory: the file's image, header and entries, in whole sectors.
+pub const CACHE_BYTES: usize = (HEAD + CACHE_RIDES * ENTRY).next_multiple_of(fat::SECTOR);
+
+/// A ride as the cache keeps it: what the overview, the power curve and the history need of it, so its file is
+/// decoded once ever. Its identity is its file (first cluster and size) and its start (its name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// The ride as the history lists it.
+    pub ride: Ride,
+    /// A whole ride with its session, counted; false for a file with a ride's name that is not one (cut, bad CRC,
+    /// no session, unreadable), kept so that it is not read again.
+    pub counted: bool,
+    /// Its best powers per [`crate::power_curve::DURATIONS`], W (0: none).
+    pub best: [u16; crate::power_curve::N],
+}
+
+/// The bytes that name a ride in the cache: its first cluster, size and start (an entry's first 14).
+fn key(file: &File, (y, mo, d, h, mi): Start) -> [u8; 14] {
+    let mut k = [0u8; 14];
+    k[0..4].copy_from_slice(&file.cluster.to_le_bytes());
+    k[4..8].copy_from_slice(&file.size.to_le_bytes());
+    k[8..10].copy_from_slice(&y.to_le_bytes());
+    k[10..14].copy_from_slice(&[mo, d, h, mi]);
+    k
+}
+
+impl Entry {
+    /// Its 64 bytes, little endian: 0 the key (first cluster u32, size u32, year u16, month, day, hour, minute),
+    /// 14 flags (bit 0: counted), 15 average and 16 maximum heart rate (0xff: none), 18 ascent, 20 average power,
+    /// 22 NP (u16, 0xffff: none), 24 moving time s, 28 distance m (u32), 32 seconds with power, 34 work kJ (u16,
+    /// saturated: 18 hours, 65 MJ), 36 the 13 best powers (u16).
+    pub fn to_bytes(&self) -> [u8; ENTRY] {
+        let r = &self.ride;
+        let mut b = [0u8; ENTRY];
+        b[..14].copy_from_slice(&key(&r.file, r.start));
+        b[14] = u8::from(self.counted);
+        (b[15], b[16]) = (r.avg_hr.map_or(0xff, |v| v.min(0xfe)), r.max_hr.map_or(0xff, |v| v.min(0xfe)));
+        let u16_ = |v: Option<u16>| v.map_or(0xffff, |v| v.min(0xfffe)).to_le_bytes();
+        let sat = |v: u32| (v.min(0xffff) as u16).to_le_bytes();
+        b[18..20].copy_from_slice(&u16_(r.ascent_m));
+        b[20..22].copy_from_slice(&u16_(r.avg_power));
+        b[22..24].copy_from_slice(&u16_(r.np));
+        b[24..28].copy_from_slice(&r.timer_s.to_le_bytes());
+        b[28..32].copy_from_slice(&r.dist_m.to_le_bytes());
+        b[32..34].copy_from_slice(&sat(r.power_s));
+        b[34..36].copy_from_slice(&sat(r.kj));
+        for (i, w) in self.best.iter().enumerate() {
+            b[36 + 2 * i..38 + 2 * i].copy_from_slice(&w.to_le_bytes());
+        }
+        b
+    }
+
+    /// The entry in `b` (at least [`ENTRY`] bytes; None if shorter).
+    pub fn from_bytes(b: &[u8]) -> Option<Entry> {
+        let b: &[u8; ENTRY] = b.get(..ENTRY)?.try_into().ok()?;
+        let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+        let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let opt16 = |i: usize| Some(u16_at(i)).filter(|&v| v != 0xffff);
+        let opt8 = |v: u8| Some(v).filter(|&v| v != 0xff);
+        let ride = Ride {
+            file: File { cluster: u32_at(0), size: u32_at(4), dir: false },
+            start: (u16_at(8), b[10], b[11], b[12], b[13]),
+            timer_s: u32_at(24),
+            dist_m: u32_at(28),
+            ascent_m: opt16(18),
+            avg_power: opt16(20),
+            np: opt16(22),
+            power_s: u32::from(u16_at(32)),
+            kj: u32::from(u16_at(34)),
+            avg_hr: opt8(b[15]),
+            max_hr: opt8(b[16]),
+        };
+        let best = core::array::from_fn(|i| u16_at(36 + 2 * i));
+        Some(Entry { ride, counted: b[14] & 1 != 0, best })
+    }
+
+    /// The ride's day, days since 1970.
+    fn day(&self) -> u16 {
+        let (y, m, d, _, _) = self.ride.start;
+        u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0)
+    }
+}
+
+/// The scan's cache (`\Rustfw\scan.bin`): an [`Entry`] per ride file of `\Activities` read once, so a start reads
+/// only the rides that are new or changed, and drops the ones that are gone. In memory it is the file's image.
+///
+/// File: a 64-byte header (`RFSC`, version u16, entry size u16, entry count u32, then a FIT CRC-16 of the header's
+/// first 12 bytes followed by the entries), the entries, the file's size exactly 64 + count x 64. Anything else (a
+/// cut while it was written, another version, a damaged sector) is ignored whole and the rides are read again: a
+/// cache is never trusted in part.
+pub struct Cache {
+    bytes: [u8; CACHE_BYTES],
+    len: usize,
+    seen: [u32; CACHE_RIDES / 32],
+    /// The entry after the last one found: the next ride listed is usually that one (entries keep the directory's
+    /// order).
+    hint: usize,
+    /// The file on the card checked out when read, or was written whole since: no cut to mend. False at first (all
+    /// zeros: the cache lands in .bss, link.x).
+    whole: bool,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Cache {
+    /// Empty.
+    pub const fn new() -> Self {
+        Cache { bytes: [0; CACHE_BYTES], len: 0, seen: [0; CACHE_RIDES / 32], hint: 0, whole: false }
+    }
+
+    /// Entries kept.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// No entries.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Entry `i`.
+    pub fn get(&self, i: usize) -> Option<Entry> {
+        if i >= self.len {
+            return None;
+        }
+        Entry::from_bytes(self.bytes.get(HEAD + i * ENTRY..)?)
+    }
+
+    fn mark(&mut self, i: usize) {
+        if let Some(w) = self.seen.get_mut(i / 32) {
+            *w |= 1 << (i % 32);
+        }
+    }
+
+    fn was_seen(&self, i: usize) -> bool {
+        self.seen.get(i / 32).is_some_and(|w| w & 1 << (i % 32) != 0)
+    }
+
+    /// The entry with key `k`, from the hint on, then from the start.
+    fn find(&mut self, k: &[u8; 14]) -> Option<usize> {
+        let at = |i: usize| HEAD + i * ENTRY;
+        let hit = |c: &Cache, i: usize| c.bytes.get(at(i)..at(i) + 14) == Some(&k[..]);
+        let i = (self.hint..self.len).chain(0..self.hint.min(self.len)).find(|&i| hit(self, i))?;
+        self.hint = i + 1;
+        Some(i)
+    }
+
+    /// Adds `e`, marked seen; false when full.
+    fn push(&mut self, e: &Entry) -> bool {
+        let Some(slot) = self.bytes.get_mut(HEAD + self.len * ENTRY..HEAD + (self.len + 1) * ENTRY) else {
+            return false;
+        };
+        if self.len >= CACHE_RIDES {
+            return false;
+        }
+        slot.copy_from_slice(&e.to_bytes());
+        self.mark(self.len);
+        self.len += 1;
+        true
+    }
+
+    /// Adds entry bytes `e` as they are (the fuzz tests' caches).
+    #[cfg(test)]
+    pub(crate) fn push_raw(&mut self, e: &[u8; ENTRY]) {
+        if let Some(slot) = self.bytes.get_mut(HEAD + self.len * ENTRY..HEAD + (self.len + 1) * ENTRY) {
+            slot.copy_from_slice(e);
+            self.len += 1;
+        }
+    }
+
+    /// Keeps only the entries seen since [`Scan::start`] (their order kept); true if any went.
+    fn keep_seen(&mut self) -> bool {
+        let mut kept = 0;
+        for i in 0..self.len {
+            if !self.was_seen(i) {
+                continue;
+            }
+            if kept != i {
+                self.bytes.copy_within(HEAD + i * ENTRY..HEAD + (i + 1) * ENTRY, HEAD + kept * ENTRY);
+            }
+            kept += 1;
+        }
+        let gone = kept != self.len;
+        self.bytes.get_mut(HEAD + kept * ENTRY..).unwrap_or(&mut []).fill(0); // the file's padding
+        (self.len, self.seen, self.hint) = (kept, [0; CACHE_RIDES / 32], 0);
+        gone
+    }
+
+    /// The CRC of the header's first 12 bytes and the entries.
+    fn crc(&self) -> u16 {
+        let head = self.bytes.get(..12).unwrap_or(&[]);
+        crate::fit::crc(crate::fit::crc(0, head), self.bytes.get(HEAD..HEAD + self.len * ENTRY).unwrap_or(&[]))
+    }
+
+    /// The header written for the entries kept; the file's size.
+    fn seal(&mut self) -> usize {
+        let mut h = [0u8; HEAD];
+        h[..4].copy_from_slice(&MAGIC);
+        h[4..6].copy_from_slice(&VERSION.to_le_bytes());
+        h[6..8].copy_from_slice(&(ENTRY as u16).to_le_bytes());
+        h[8..12].copy_from_slice(&(self.len as u32).to_le_bytes());
+        self.bytes[..HEAD].copy_from_slice(&h);
+        let crc = self.crc();
+        self.bytes[12..14].copy_from_slice(&crc.to_le_bytes());
+        HEAD + self.len * ENTRY
+    }
+
+    /// The file's image, whole sectors (after [`Cache::seal`]).
+    fn sectors(&self) -> &[u8] {
+        let n = (HEAD + self.len * ENTRY).next_multiple_of(fat::SECTOR);
+        self.bytes.get(..n).unwrap_or(&[])
+    }
+
+    /// Takes the `size` bytes just read into [`Cache::bytes`] as the file, if they check out; else empty.
+    fn take(&mut self, size: usize) -> bool {
+        let b = &self.bytes;
+        let n = u32::from_le_bytes([b[8], b[9], b[10], b[11]]) as usize;
+        let ok = b[..4] == MAGIC
+            && b[4..6] == VERSION.to_le_bytes()
+            && b[6..8] == (ENTRY as u16).to_le_bytes()
+            && b[14..HEAD].iter().all(|&x| x == 0)
+            && n <= CACHE_RIDES
+            && size == HEAD + n * ENTRY;
+        self.len = if ok { n } else { 0 };
+        let ok = ok && self.crc() == u16::from_le_bytes([b[12], b[13]]);
+        if !ok {
+            self.len = 0;
+            self.bytes.fill(0); // in place: a 256 KB temporary would not fit the stack
+        }
+        self.bytes.get_mut(HEAD + self.len * ENTRY..).unwrap_or(&mut []).fill(0);
+        (self.seen, self.hint, self.whole) = ([0; CACHE_RIDES / 32], 0, ok);
+        ok
+    }
+
+    /// Reads it from the volume, whole or not at all; false when there is none or it does not check out.
+    pub fn read(&mut self, d: &mut impl Disk) -> bool {
+        let mut fat = match Fat::mount(d) {
+            Ok(f) => f,
+            Err(_) => return self.take(0),
+        };
+        let f = fat.open(d, CACHE_DIR).and_then(|dir| fat.open_in(d, dir, CACHE_NAME));
+        let size = match f {
+            Ok(f) if !f.dir && (f.size as usize) <= CACHE_BYTES => fat.read_at(d, &f, 0, &mut self.bytes),
+            _ => Ok(0),
+        };
+        self.take(size.unwrap_or(0))
+    }
+
+    /// Writes it as `\Rustfw\scan.bin` (created if needed) with the FAT writer's order (fat/write.rs): an old file
+    /// is first made one that does not check out (its first sector zeroed), then the sectors are written over it,
+    /// then its size. A cut anywhere leaves the volume whole for stock and a computer, and a file the next start
+    /// ignores (its rides read again); the second FAT may then differ from the first in the sector being written,
+    /// so a write after a cache that did not check out (or none) makes them equal first ([`Fat::sync_fats`]: both
+    /// FATs read, once). `time`: the FAT entry's (DOS date, time).
+    pub fn write(&mut self, d: &mut impl DiskWrite, time: (u16, u16)) -> Result<(), fat::Error> {
+        let size = self.seal();
+        let mut fat = Fat::mount(d)?;
+        if !self.whole {
+            fat.sync_fats(d)?;
+        }
+        let dir = fat.ensure_dir(d, fat.root(), CACHE_DIR, time)?;
+        self.whole = false; // until it is written whole
+        let mut h = match fat.locate(d, dir, CACHE_NAME) {
+            Err(fat::Error::NotFound) => fat.create(d, dir, CACHE_NAME, time)?,
+            other => {
+                let mut h = other?;
+                fat.write_sectors(d, &mut h, 0, &[0; fat::SECTOR])?;
+                h
+            }
+        };
+        fat.write_sectors(d, &mut h, 0, self.sectors())?;
+        fat.set_size(d, &mut h, size as u32, time)?;
+        self.whole = true;
+        Ok(())
+    }
+}
+
+/// A scan of stock's rides, a bounded amount per [`Scan::step`], over the [`Cache`] when it has one.
 pub struct Scan {
     status: Status,
     fat: Option<Fat>,
     dir: Option<Cursor>,
-    /// The ride being read: its file, how far, its day, its start.
+    /// The ride being read: its file, how far, its day, its start; where its chain was left.
     file: Option<(File, u32, u16, Start)>,
+    seek: Seek,
     reader: Reader,
     rolling: Rolling,
     /// Its session and totals so far.
@@ -121,8 +426,15 @@ pub struct Scan {
     today: u16,
     week: u16,
     year: u16,
+    cache: Option<&'static mut Cache>,
+    /// The cache was read (or tried), it changed since it was read or written, `out` is whole.
+    loaded: bool,
+    dirty: bool,
+    shown: bool,
     /// Files listed so far (shown as progress).
     pub listed: u16,
+    /// Rides read (not found in the cache) since the scan started.
+    pub read: u16,
     /// What was found so far.
     pub out: Summary,
     /// The rides read whole, newest first (the ride history).
@@ -135,6 +447,12 @@ impl Default for Scan {
     }
 }
 
+/// The first day of the week and of the year of `day` (days since 1970).
+fn weeks(today: u16, y: u16) -> (u16, u16) {
+    let day = |y, m, d| u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
+    (today - (today + 3) % 7, day(y, 1, 1)) // 1970-01-01 was a Thursday: (days + 3) % 7 is 0 on Monday
+}
+
 impl Scan {
     /// No scan yet.
     pub const fn new() -> Self {
@@ -143,13 +461,19 @@ impl Scan {
             fat: None,
             dir: None,
             file: None,
+            seek: Seek::new(),
             reader: Reader::new(),
             rolling: Rolling::new(),
             acc: Acc::new(),
             today: 0,
             week: 0,
             year: 0,
+            cache: None,
+            loaded: false,
+            dirty: false,
+            shown: false,
             listed: 0,
+            read: 0,
             out: Summary {
                 curve: Curve { watts: [0; crate::power_curve::N], day: [0; crate::power_curve::N] },
                 week: Totals { rides: 0, dist_m: 0, time_s: 0 },
@@ -163,6 +487,16 @@ impl Scan {
         }
     }
 
+    /// Gives the scan its cache: from then on it reads it before the rides and keeps every ride read in it.
+    pub fn set_cache(&mut self, c: &'static mut Cache) {
+        self.cache = Some(c);
+    }
+
+    /// The cache, if it has one.
+    pub fn cache(&self) -> Option<&Cache> {
+        self.cache.as_deref()
+    }
+
     /// Bytes of rides read since the scan started.
     pub fn read_bytes(&self) -> u32 {
         self.out.bytes
@@ -173,15 +507,67 @@ impl Scan {
         self.status
     }
 
-    /// Starts again from the first ride, with today's date (y, m, d) for the window and the totals.
-    pub fn start(&mut self, (y, m, d): (u16, u8, u8)) {
-        let day = |y, m, d| u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
-        self.today = day(y, m, d);
-        self.week = self.today - (self.today + 3) % 7; // 1970-01-01 was a Thursday: (days + 3) % 7 is 0 on Monday
-        self.year = day(y, 1, 1);
-        (self.status, self.fat, self.dir, self.file, self.listed) = (Status::Running, None, None, None, 0);
-        self.out = Summary::default();
-        self.index.clear();
+    /// [`Scan::out`] and [`Scan::index`] hold every ride: a scan finished, or the cache read.
+    pub fn ready(&self) -> bool {
+        self.shown
+    }
+
+    /// The cache holds rides not written yet.
+    pub fn unsaved(&self) -> bool {
+        self.dirty && self.status != Status::Running
+    }
+
+    fn set_today(&mut self, (y, m, d): (u16, u8, u8)) {
+        self.today = u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
+        (self.week, self.year) = weeks(self.today, y);
+    }
+
+    /// Reads the cache once (nothing without one), and shows its rides at once: totals, curve, history.
+    pub fn load(&mut self, d: &mut impl Disk, date: (u16, u8, u8)) {
+        if self.loaded || self.cache.is_none() {
+            return;
+        }
+        if self.status != Status::Running {
+            self.set_today(date);
+        }
+        self.read_cache(d);
+    }
+
+    fn read_cache(&mut self, d: &mut impl Disk) {
+        self.loaded = true;
+        if let Some(c) = &mut self.cache
+            && c.read(d)
+        {
+            self.recount();
+            self.shown = true;
+        }
+    }
+
+    /// A new day (`date`) moves the week, the year and the curve's window: counted again from the cache, without
+    /// reading a ride (nothing without a cache, or while a scan runs).
+    pub fn new_day(&mut self, date: (u16, u8, u8)) {
+        let (y, m, d) = date;
+        let today = u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
+        if today != self.today && self.cache.is_some() && self.shown && self.status != Status::Running {
+            self.set_today(date);
+            self.recount();
+        }
+    }
+
+    /// Starts again from the first ride, with today's date (y, m, d) for the window and the totals. With a cache,
+    /// what it shows stays until the scan ends.
+    pub fn start(&mut self, date: (u16, u8, u8)) {
+        self.set_today(date);
+        (self.status, self.fat, self.dir, self.file, self.listed, self.read) =
+            (Status::Running, None, None, None, 0, 0);
+        self.out.bytes = 0;
+        match &mut self.cache {
+            Some(c) => (c.seen, c.hint) = ([0; CACHE_RIDES / 32], 0),
+            None => (self.out, self.shown) = (Summary::default(), false),
+        }
+        if self.cache.is_none() {
+            self.index.clear();
+        }
     }
 
     /// Goes on for about `budget` bytes read (a directory entry counts 32); false once it is done or failed.
@@ -195,8 +581,26 @@ impl Scan {
         self.status == Status::Running
     }
 
+    /// Writes the cache if it changed ([`Cache::write`]); once only on a failure (the next start reads again what
+    /// was not kept).
+    pub fn save(&mut self, d: &mut impl DiskWrite, time: (u16, u16)) -> Result<(), fat::Error> {
+        if !self.unsaved() {
+            return Ok(());
+        }
+        self.dirty = false;
+        match &mut self.cache {
+            Some(c) => c.write(d, time),
+            None => Ok(()),
+        }
+    }
+
     #[inline(never)] // its read buffer lives in its own frame, not in the caller's (the main loop's)
     fn advance(&mut self, d: &mut impl Disk, spent: &mut u32) -> Result<(), fat::Error> {
+        if !self.loaded && self.cache.is_some() {
+            *spent += IO as u32;
+            self.read_cache(d);
+            return Ok(());
+        }
         let fat = match &mut self.fat {
             Some(f) => f,
             None => {
@@ -215,12 +619,18 @@ impl Scan {
         let Some((file, offset, day, start)) = self.file else {
             *spent += 32;
             match fat.list(d, dir)? {
-                None => self.status = Status::Done,
+                None => self.finish(),
                 Some(e) => {
                     if let (false, Some(day), Some(start)) = (e.file.dir, ride_day(e.name()), ride_start(e.name())) {
                         self.listed = self.listed.saturating_add(1);
+                        if let Some(c) = &mut self.cache
+                            && let Some(i) = c.find(&key(&e.file, start))
+                        {
+                            c.mark(i); // read before, unchanged
+                            return Ok(());
+                        }
                         self.file = Some((e.file, 0, day, start));
-                        (self.reader, self.acc) = (Reader::new(), Acc::new());
+                        (self.reader, self.acc, self.seek) = (Reader::new(), Acc::new(), Seek::new());
                         self.rolling.reset();
                     }
                 }
@@ -228,7 +638,7 @@ impl Scan {
             return Ok(());
         };
         let mut io = [0u8; IO]; // on the stack for this call only: the scan stays small between passes
-        let n = match fat.read_at(d, &file, offset, &mut io) {
+        let n = match fat.read_from(d, &file, offset, &mut io, &mut self.seek) {
             Ok(n) => n,
             Err(_) => {
                 self.end_file(false); // one bad file: skipped, the scan goes on
@@ -237,11 +647,10 @@ impl Scan {
         };
         *spent += n as u32;
         self.out.bytes = self.out.bytes.saturating_add(n as u32);
-        let in_window = self.today.saturating_sub(day) < WINDOW_DAYS;
         let (rolling, acc) = (&mut self.rolling, &mut self.acc);
         self.reader.push_slice(io.get(..n).unwrap_or(&[]), |m| {
-            if let (Msg::Record(r), true) = (m, in_window) {
-                rolling.sample(r.time, r.power);
+            if let Msg::Record(r) = m {
+                rolling.sample(r.time, r.power); // every ride's bests: the cache keeps them, the window moves
             }
             acc.take(&m);
         });
@@ -253,28 +662,64 @@ impl Scan {
         Ok(())
     }
 
-    /// The ride read: counted if it was whole, with a session.
+    /// The ride read: its entry kept in the cache (counted at the end), or counted now without one. Counted only
+    /// if it was whole, with a session.
     fn end_file(&mut self, whole: bool) {
-        let Some((file, _, day, start)) = self.file.take() else { return };
-        let o = &mut self.out;
-        match self.acc.session() {
-            Some(s) if whole => {
-                if let Some(r) = self.acc.ride(file, start) {
-                    self.index.add(r);
-                }
-                o.all.add(&s);
-                if day >= self.year {
-                    o.year.add(&s);
-                }
-                if day >= self.week {
-                    o.week.add(&s);
-                }
-                if self.rolling.best[0] > 0 {
-                    o.with_power = o.with_power.saturating_add(1);
-                    o.curve.merge(&self.rolling.best, day);
-                }
+        let Some((file, _, _, start)) = self.file.take() else { return };
+        self.read = self.read.saturating_add(1);
+        let ride = self.acc.ride(file, start).filter(|_| whole);
+        let counted = ride.is_some();
+        let ride = ride.unwrap_or(Ride { file, start, ..crate::history::NONE });
+        let e = Entry { ride, counted, best: self.rolling.best };
+        match &mut self.cache {
+            // ponytail: a full cache keeps no more (CACHE_RIDES)
+            Some(c) => self.dirty |= c.push(&e),
+            None => self.count(&e),
+        }
+    }
+
+    /// Every ride listed: the cache keeps those (gone files dropped) and counts them all again.
+    fn finish(&mut self) {
+        self.status = Status::Done;
+        if let Some(c) = &mut self.cache {
+            self.dirty |= c.keep_seen();
+            self.recount();
+        }
+        self.shown = true;
+    }
+
+    /// `out` and `index` from the cache's entries.
+    fn recount(&mut self) {
+        let bytes = self.out.bytes;
+        self.out = Summary { bytes, ..Summary::default() };
+        self.index.clear();
+        let n = self.cache.as_ref().map_or(0, |c| c.len);
+        for i in 0..n {
+            if let Some(e) = self.cache.as_ref().and_then(|c| c.get(i)) {
+                self.count(&e);
             }
-            _ => o.skipped = o.skipped.saturating_add(1),
+        }
+    }
+
+    /// One ride into `out` and `index`.
+    fn count(&mut self, e: &Entry) {
+        let o = &mut self.out;
+        if !e.counted {
+            o.skipped = o.skipped.saturating_add(1);
+            return;
+        }
+        let (r, day) = (&e.ride, e.day());
+        self.index.add(*r);
+        o.all.add(r);
+        if day >= self.year {
+            o.year.add(r);
+        }
+        if day >= self.week {
+            o.week.add(r);
+        }
+        if e.best[0] > 0 && self.today.saturating_sub(day) < WINDOW_DAYS {
+            o.with_power = o.with_power.saturating_add(1);
+            o.curve.merge(&e.best, day);
         }
     }
 
@@ -551,7 +996,7 @@ pub fn import(user: &[u8], sensor: &[u8], bike: &[u8]) -> Imported {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
     use super::*;
     use crate::fat::tests::{Ram, image};
@@ -591,6 +1036,259 @@ mod tests {
         one.start(TODAY);
         while one.step(&mut d, u32::MAX) {}
         assert_eq!(one.out, o);
+    }
+
+    /// The test volume with `k` more rides (a ride name a minute apart on 2026-10-10, each a copy of the
+    /// 30-minute ride of 2026-10-20), through the FAT writer.
+    pub(crate) fn with_rides(k: u32) -> std::vec::Vec<u8> {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let ride = crate::fat::tests::read_all(&mut fat, &mut d, "Activities/261020080000.fit").unwrap();
+        let mut padded = ride.clone();
+        padded.resize(ride.len().div_ceil(fat::SECTOR) * fat::SECTOR, 0);
+        let dir = fat.open(&mut d, "Activities").unwrap();
+        for i in 0..k {
+            let name = std::format!("261010{:02}{:02}00.fit", i / 60, i % 60);
+            let mut h = fat.create(&mut d, dir, &name, (0, 0)).unwrap();
+            fat.write_sectors(&mut d, &mut h, 0, &padded).unwrap();
+            fat.set_size(&mut d, &mut h, ride.len() as u32, (0, 0)).unwrap();
+        }
+        d.0
+    }
+
+    /// A cache of its own (as main.rs gives the app one), on the heap for the test.
+    pub(crate) fn cache() -> &'static mut Cache {
+        std::boxed::Box::leak(std::boxed::Box::new(Cache::new()))
+    }
+
+    /// A whole scan of `d`, `budget` bytes a step: the scan and its passes.
+    fn scan(d: &mut impl Disk, cache: Option<&'static mut Cache>, budget: u32) -> (Scan, u32) {
+        let mut s = Scan::new();
+        if let Some(c) = cache {
+            s.set_cache(c);
+        }
+        s.start(TODAY);
+        let mut passes = 1;
+        while s.step(d, budget) {
+            passes += 1;
+            assert!(passes < 100_000);
+        }
+        (s, passes)
+    }
+
+    /// Adds `name` to `\Activities`: a copy of the 30-minute ride of 2026-10-20.
+    fn add_ride(d: &mut Ram, name: &str) {
+        let mut fat = Fat::mount(d).unwrap();
+        let ride = crate::fat::tests::read_all(&mut fat, d, "Activities/261020080000.fit").unwrap();
+        let mut padded = ride.clone();
+        padded.resize(ride.len().div_ceil(fat::SECTOR) * fat::SECTOR, 0);
+        let dir = fat.open(d, "Activities").unwrap();
+        let mut h = fat.create(d, dir, name, (0, 0)).unwrap();
+        fat.write_sectors(d, &mut h, 0, &padded).unwrap();
+        fat.set_size(d, &mut h, ride.len() as u32, (0, 0)).unwrap();
+    }
+
+    /// What a scan costs on a volume of 70 rides (the owner's count): bytes, disk reads, passes, host time;
+    /// printed. With a cache that was written, no ride is read.
+    #[test]
+    fn scan_cost() {
+        let mut d = Ram(with_rides(64), 0);
+        let t = std::time::Instant::now();
+        let (mut s, passes) = scan(&mut d, Some(cache()), 96 * 1024);
+        let ns = t.elapsed().as_nanos() as u64;
+        let b = u64::from(s.out.bytes);
+        std::println!(
+            "scan, first start: {} rides, {b} bytes, {} disk reads, {passes} passes of 96 KB, {} ns/byte on the host",
+            s.listed,
+            d.1,
+            ns / b.max(1)
+        );
+        assert_eq!((s.out.all.rides, s.read), (4 + 64, 70));
+        s.save(&mut d, (0, 0)).unwrap();
+        d.1 = 0;
+        let t = std::time::Instant::now();
+        let (again, passes) = scan(&mut d, Some(cache()), 96 * 1024);
+        std::println!(
+            "scan, next start: {} rides, {} bytes of rides, {} disk reads, {passes} passes, {} us on the host",
+            again.listed,
+            again.out.bytes,
+            d.1,
+            t.elapsed().as_micros()
+        );
+        assert_eq!((again.out.bytes, again.read), (0, 0), "no ride read");
+        assert_eq!(again.out, Summary { bytes: 0, ..s.out });
+    }
+
+    /// The cache: written after the first scan, read at the next start (totals at once, nothing read), and a ride
+    /// added, removed or changed is picked up; the volume checks out under fsck.
+    #[test]
+    fn the_cache_follows_the_rides() {
+        let mut d = Ram(image(), 0);
+        let (mut first, _) = scan(&mut d, Some(cache()), 4096);
+        let want = Summary { bytes: 0, ..first.out };
+        assert_eq!((want.all.rides, want.skipped), (4, 2));
+        assert!(first.unsaved());
+        first.save(&mut d, (0, 0)).unwrap();
+        assert!(!first.unsaved());
+        assert_eq!(crate::fat::write::tests::fsck(&d.0), Ok(0));
+        // the next start: the totals before any ride is read
+        let mut s = Scan::new();
+        s.set_cache(cache());
+        assert!(!s.ready());
+        s.load(&mut d, TODAY);
+        assert!(s.ready());
+        assert_eq!((s.out, s.index.len()), (want, first.index.len()));
+        assert_eq!(s.index.get(0), first.index.get(0));
+        s.start(TODAY);
+        while s.step(&mut d, 4096) {}
+        assert_eq!((s.read, s.out, s.unsaved()), (0, want, false), "nothing read, nothing to write");
+        // a ride added, one removed (the 2025 one), one changed (cut short)
+        add_ride(&mut d, "261022180000.fit");
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Activities").unwrap();
+        let old = fat.locate(&mut d, dir, "250315090000.fit").unwrap();
+        fat.remove(&mut d, &old).unwrap();
+        let mut cut = fat.locate(&mut d, dir, "261001070000.fit").unwrap();
+        fat.set_size(&mut d, &mut cut, 1000, (0, 0)).unwrap();
+        s.start(TODAY);
+        while s.step(&mut d, 4096) {}
+        assert_eq!(s.read, 2, "the new ride and the changed one");
+        let all = Totals { rides: 3, dist_m: 37_400 - 6000 - 12_000 + 14_400, time_s: 4200 - 600 - 1200 + 1800 };
+        assert_eq!((s.out.all, s.out.skipped), (all, 3), "the cut one counts as not whole");
+        assert!(s.unsaved());
+        s.save(&mut d, (0, 0)).unwrap();
+        // and once more from the card: the same as a scan without a cache
+        let (c, _) = scan(&mut d, Some(cache()), 4096);
+        let (none, _) = scan(&mut d, None, 4096);
+        assert_eq!((c.read, c.out), (0, Summary { bytes: 0, ..none.out }));
+        assert_eq!(crate::fat::write::tests::fsck(&d.0), Ok(1), "the removed ride's chain: the test's remove");
+    }
+
+    /// A new day moves the week, the year and the curve's window, from the cache: no ride read.
+    #[test]
+    fn a_new_day_counts_again_from_the_cache() {
+        let mut d = Ram(image(), 0);
+        let (s, _) = scan(&mut d, Some(cache()), 1 << 20);
+        assert_eq!(s.out.week.rides, 2);
+        let mut s = s;
+        s.save(&mut d, (0, 0)).unwrap();
+        let bytes = s.out.bytes;
+        s.new_day((2026, 10, 26)); // the next Monday
+        assert_eq!((s.out.week, s.out.year.rides, s.out.bytes), (Totals::default(), 3, bytes));
+        s.new_day((2027, 3, 1)); // a new year, the October rides out of the 90 days
+        assert_eq!((s.out.year.rides, s.out.all.rides, s.out.with_power), (0, 4, 0));
+        assert_eq!(s.out.curve.watts, [0; crate::power_curve::N]);
+    }
+
+    /// A cache that does not check out is ignored whole and written again.
+    #[test]
+    fn a_damaged_cache_is_rebuilt() {
+        let mut d = Ram(image(), 0);
+        let (mut first, _) = scan(&mut d, Some(cache()), 4096);
+        first.save(&mut d, (0, 0)).unwrap();
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Rustfw/scan.bin").unwrap();
+        let lba = fat.lba(f.cluster) as usize * fat::SECTOR;
+        for at in [5, 9, HEAD + 3, HEAD + 2 * ENTRY + 40] {
+            d.0[lba + at] ^= 0x10;
+            let mut s = Scan::new();
+            s.set_cache(cache());
+            s.load(&mut d, TODAY);
+            assert!(!s.ready(), "byte {at} damaged: not taken");
+            s.start(TODAY);
+            while s.step(&mut d, 4096) {}
+            assert_eq!((s.read, s.out.all), (6, first.out.all), "every ride read again");
+            s.save(&mut d, (0, 0)).unwrap();
+            let (c, _) = scan(&mut d, Some(cache()), 4096);
+            assert_eq!(c.read, 0, "written whole again");
+        }
+    }
+
+    /// A disk whose power goes after `.1` more sector writes: nothing written from then on.
+    struct Cut(Ram, u32);
+
+    impl Disk for Cut {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), fat::Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for Cut {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), fat::Error> {
+            for (i, s) in buf.chunks(fat::SECTOR).enumerate() {
+                if self.1 == 0 {
+                    return Err(fat::Error::Io);
+                }
+                self.1 -= 1;
+                self.0.write(lba + i as u32, s)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// The power cut after every sector of the cache's writes (the first one, which makes the folder and the
+    /// file, and a later one over it): the volume stays whole for fsck, and the next start's totals are right.
+    #[test]
+    fn a_cut_while_the_cache_is_written() {
+        let base = with_rides(16);
+        let (want, _) = scan(&mut Ram(base.clone(), 0), None, 1 << 20);
+        // a written cache, then a ride more for the second write
+        let mut d = Ram(base.clone(), 0);
+        let (mut s, _) = scan(&mut d, Some(cache()), 1 << 20);
+        s.save(&mut d, (0, 0)).unwrap();
+        add_ride(&mut d, "261022180000.fit");
+        let (want2, _) = scan(&mut Ram(d.0.clone(), 0), None, 1 << 20);
+        let mut cuts = 0;
+        for (img, want) in [(base, want.out), (d.0, want2.out)] {
+            let want = Summary { bytes: 0, ..want };
+            for k in 0.. {
+                let mut cut = Cut(Ram(img.clone(), 0), k);
+                let mut s = Scan::new();
+                s.set_cache(cache());
+                s.load(&mut cut, TODAY);
+                s.start(TODAY);
+                while s.step(&mut cut, 1 << 20) {}
+                let done = s.save(&mut cut, (0, 0)).is_ok();
+                // the next start: right once its scan ends (the cache, or the rides read again), and its own write
+                // mends what the cut left (FATs that differ)
+                let mut d = cut.0;
+                let mut next = Scan::new();
+                next.set_cache(cache());
+                next.load(&mut d, TODAY);
+                next.start(TODAY);
+                while next.step(&mut d, 1 << 20) {}
+                assert_eq!(Summary { bytes: 0, ..next.out }, want, "the next start, cut after {k} sectors");
+                next.save(&mut d, (0, 0)).unwrap();
+                let f = crate::fat::write::tests::fsck(&d.0);
+                assert!(f.is_ok(), "cut after {k} sectors: {f:?}");
+                if done {
+                    assert_eq!(next.read, 0);
+                    break;
+                }
+                cuts += 1;
+            }
+        }
+        assert!(cuts > 4, "{cuts} cuts");
+    }
+
+    #[test]
+    fn an_entry_in_bytes_and_back() {
+        let ride = Ride {
+            file: File { cluster: 1234, size: 99_000, dir: false },
+            start: (2026, 10, 23, 8, 15),
+            timer_s: 3600,
+            dist_m: 30_000,
+            ascent_m: Some(450),
+            avg_power: None,
+            np: Some(230),
+            power_s: 3500,
+            kj: 700,
+            avg_hr: Some(140),
+            max_hr: None,
+        };
+        let e = Entry { ride, counted: true, best: core::array::from_fn(|i| 600 - i as u16 * 20) };
+        assert_eq!(Entry::from_bytes(&e.to_bytes()), Some(e));
+        assert_eq!(Entry::from_bytes(&[0; ENTRY - 1]), None);
     }
 
     #[test]

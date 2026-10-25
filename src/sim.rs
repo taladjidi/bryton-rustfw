@@ -66,6 +66,11 @@ pub struct Sim {
     pub emmc: EmmcCard,
     pub bus: Bus,
     pub touch: TouchChip,
+    /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
+    /// `dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`Board::awake_us`]. 0 (the default): free.
+    pub work_ns_per_byte: u64,
+    /// Work done so far, ns.
+    pub awake_ns: u64,
 }
 
 /// The Sitronix touch controller (BOARD.md 17), as the protocol doc describes it: Init for 50 ms after its reset
@@ -771,6 +776,8 @@ impl Sim {
                 accel_ctrl1: 0x77,
             },
             touch: TouchChip { run_since: None, finger: Box::new(|_| None), reads: 0 },
+            work_ns_per_byte: 0,
+            awake_ns: 0,
         }
     }
 
@@ -1002,7 +1009,16 @@ impl Board for Sim {
     }
 
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, crate::emmc::BusError> {
+        if self.work_ns_per_byte > 0 {
+            let before = self.awake_ns / 1_000_000;
+            self.awake_ns += buf.len() as u64 * self.work_ns_per_byte;
+            self.ms += self.awake_ns / 1_000_000 - before; // the work takes time as well
+        }
         self.emmc.read(index, arg, buf)
+    }
+
+    fn awake_us(&mut self) -> u32 {
+        (self.awake_ns / 1000) as u32
     }
 
     fn emmc_writable(&self) -> bool {
