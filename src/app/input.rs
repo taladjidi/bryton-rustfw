@@ -266,6 +266,11 @@ impl App {
             (Screen::Ride(n), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
                 self.screen = self.ride_page(place(n) + 1, 1)
             }
+            // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
+            (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.zoom_at(x, y).is_some() => {
+                self.map_zoom = self.zoom_at(x, y).flatten();
+                return self.update_page(b);
+            }
             // a tap on a graph shows the next plot (kept with the page), a hold switches between the last minutes and
             // the whole ride
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..)))

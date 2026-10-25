@@ -30,6 +30,12 @@
     area.
   The map is read and drawn once per view change (at most 6 IGN tiles, about 150 KB read); the arrow and the track
   restore it from SDRAM.
+  - **Zoom:** on a full-page map, "+" and "-" top right (40 x 40 pixels, for a gloved finger). Each tap is one
+    level (steps of about 1.4), down to 2 m a pixel (IGN's zoom 16 about 1:1). Zoomed in, the map follows the
+    rider: centred a little ahead of them, and centred again only when the arrow leaves the middle of the map (a
+    new basemap each time, about every 35 s at 2 m a pixel and 29 km/h). Zooming out to the fitted level goes back
+    to fitting the whole track (and course). Kept until the unit is switched off. A hold on the map still opens the
+    menu; a map of half a page or less has no buttons.
 - Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
 
 - **Ride card:** when a ride ends (Start held while paused), its card: the date and start time, the map of the track

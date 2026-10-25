@@ -421,6 +421,47 @@ fn touch_during_drive_commands() {
     }
 }
 
+/// Random taps on the map page while riding, most on or near the zoom buttons (map.rs), with the ride going on
+/// between them: no panic, the zoom level in range, the panel equal to the screenshot, and the buttons reached.
+#[test]
+fn map_zoom_taps() {
+    use super::*;
+    use crate::map::{MAX_LEVEL, MIN_LEVEL};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(super::tests::tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    sim.gnss.fix = Some(500);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut noise = bytes(7, 1 << 12);
+    let mut next = || noise.next().unwrap_or(0);
+    let mut changes = 0;
+    for k in 0..400 {
+        // half the taps in the buttons' corner (x 180..240, y 0..120), the rest anywhere
+        let (a, b) = (u16::from(next()), u16::from(next()));
+        let (x, y) = if a % 2 == 0 { (180 + a % 60, b % 120) } else { (a % 240, (b + a) % 320) };
+        let before = app.map_zoom;
+        app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
+        changes += u32::from(app.map_zoom != before);
+        assert!(app.map_zoom.is_none_or(|l| (MIN_LEVEL..MAX_LEVEL).contains(&l)), "{:?}", app.map_zoom);
+        assert!(app.map_view(0).is_none_or(|v| v.mpp16 >= 32), "no finer than 2 m a pixel");
+        for _ in 0..usize::from(next() % 8) {
+            app.step(&mut sim);
+            sim.delay_ms(POLL_MS);
+        }
+        if k % 50 == 0 {
+            super::tests::assert_consistent(&sim, &app);
+        }
+    }
+    assert_eq!(app.screen(), Screen::Ride(2), "taps on the map leave the page");
+    assert!(changes > 20, "the buttons reached: {changes} zoom changes");
+}
+
 /// A damaged volume under the scan of stock's rides: it ends (done or failed), never hangs or panics.
 #[test]
 fn ride_scan_on_a_damaged_volume() {

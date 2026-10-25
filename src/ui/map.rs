@@ -9,6 +9,12 @@
 //! - **Zoom:** the view fits the whole track in the middle two thirds of the map, at a scale of 2^k or 1.5 x 2^k
 //!   metres per pixel; it is fitted again (one full redraw) only when the position nears the edge, so a loop is drawn once and a ride out
 //!   redraws each time it grows by about half.
+//! - **Manual zoom:** a map box at least [`ZOOM_BOX`] (the full-page map) has "+" and "-" buttons top right
+//!   ([`buttons`], 40 x 40 pixels for a gloved finger), drawn by [`draw`] like the rest of the map. Each tap is one
+//!   level ([`zoom`]), down to level [`MIN_LEVEL`] (2 m a pixel: IGN's zoom 16 drawn about 1:1). Zoomed in, the view
+//!   follows the rider ([`View::follow`]): it is centred a sixth of the map ahead of them, and centred again only
+//!   when the arrow leaves the middle three fifths, so the basemap is drawn once per re-centre, not every second.
+//!   Zooming out to the level the fit would choose, or past it, goes back to the fit.
 //! - **Redraw:** otherwise only the box around the new segment and the arrow's old and new places is drawn, from
 //!   the state, through [`Clip`]: the same [`draw`] paints the whole map, a dirty box, or one screenshot row (each
 //!   segment is a run per row, clipped to [`Canvas::clip`]), so they agree by construction.
@@ -25,9 +31,14 @@ use crate::ui::{self, Canvas, H, LABEL, W};
 pub const POINTS: usize = 512;
 /// Spacing of the track points until the track first fills, metres.
 const FIRST_STEP_M: i32 = 10;
-/// Zoom levels: level `i` is [`mpp16`]`(i)` / 16 metres per pixel; 2 m to about 1000 km.
-const MIN_LEVEL: u32 = 2;
-const MAX_LEVEL: u32 = 40;
+/// The finest zoom level: level `i` is [`mpp16`]`(i)` / 16 metres per pixel, so 2 m (IGN's zoom 16 about 1:1).
+pub const MIN_LEVEL: u32 = 2;
+/// The coarsest zoom level, about 1000 km a pixel.
+pub const MAX_LEVEL: u32 = 40;
+/// The smallest map box with the zoom buttons, pixels: the full-page map (layout 1, 240 x 296), not half a page.
+pub const ZOOM_BOX: (i32, i32) = (200, 200);
+/// A zoom button's side, pixels: a gloved finger's size.
+const BUTTON: i32 = 40;
 /// The view is fitted again when the position comes this close to the map's edge (pixels).
 const MARGIN: i32 = 20;
 /// The arrow's length from its centre to its tip (pixels).
@@ -262,10 +273,29 @@ impl View {
         Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16 })
     }
 
+    /// The view of `track` in `area` at `mpp16`, zoomed in: centred a sixth of the map ahead of the rider (behind
+    /// them is where they have been), so the arrow crosses the middle part before the next re-centre; None before a
+    /// position.
+    pub fn follow(track: &Track, area: Rect, mpp16: i64) -> Option<View> {
+        let p = track.pos?;
+        let ahead = if track.stale { 0 } else { i64::from(area.2.min(area.3) / 6) * mpp16 / 16 };
+        let dir = Arrow::dir(track.heading);
+        let at = |s: i32| (i64::from(s) * ahead / 256) as i32;
+        Some(View { cx: p.0 + at(SIN16[dir]), cy: p.1 + at(SIN16[(dir + 4) % 16]), mpp16 })
+    }
+
     /// Where point `p` (metres) falls on screen.
     pub(crate) fn px(&self, area: Rect, p: (i32, i32)) -> (i32, i32) {
         let px = |d: i32| (i64::from(d) * 16).div_euclid(self.mpp16) as i32;
         (area.0 + area.2 / 2 + px(p.0 - self.cx), area.1 + area.3 / 2 - px(p.1 - self.cy))
+    }
+
+    /// Zoomed in, the arrow is still in the middle three fifths of the map: no need to centre again.
+    fn follows(&self, area: Rect, track: &Track) -> bool {
+        let Some(p) = track.pos else { return true };
+        let (x, y) = self.px(area, p);
+        let (mx, my) = (area.2 / 5, area.3 / 5);
+        x >= area.0 + mx && x < area.0 + area.2 - mx && y >= area.1 + my && y < area.1 + area.3 - my
     }
 
     /// The position is still well inside the map: no need to fit again.
@@ -290,8 +320,12 @@ impl Arrow {
     /// The arrow for the track's last position.
     fn of(view: &View, area: Rect, track: &Track) -> Option<Arrow> {
         let (x, y) = view.px(area, track.pos?);
-        let dir = (track.heading.rem_euclid(36_000_000) + 1_125_000) / 2_250_000 % 16;
-        Some(Arrow { x, y, dir: dir as usize, stale: track.stale })
+        Some(Arrow { x, y, dir: Self::dir(track.heading), stale: track.stale })
+    }
+
+    /// The nearest of the 16 directions to `heading` (degrees x 1e-5).
+    fn dir(heading: i32) -> usize {
+        ((heading.rem_euclid(36_000_000) + 1_125_000) / 2_250_000 % 16) as usize
     }
 
     /// The box it covers, outline included.
@@ -320,15 +354,63 @@ pub struct Shown {
     arrow: Option<Arrow>,
     /// The course drawn ([`Route::id`]).
     route: Option<u32>,
+    /// The view follows the rider at a zoom set by hand ([`View::follow`]), not the fit.
+    zoomed: bool,
 }
 
 impl Shown {
-    /// The map of `track` (and `route`) in `area` as [`draw`] will show it when drawn whole now.
-    pub fn of(track: &Track, area: Rect, route: Option<&Route>) -> Shown {
-        let view = View::fit(track, area, route);
+    /// The map of `track` (and `route`) in `area` at `zoom` (a level; None: the fit) as [`draw`] will show it when
+    /// drawn whole now.
+    pub fn of(track: &Track, area: Rect, route: Option<&Route>, zoom: Option<u32>) -> Shown {
+        let fit = View::fit(track, area, route);
+        let zoomed = zoomed(area, fit, zoom);
+        let view = zoomed.map_or(fit, |m| View::follow(track, area, m));
         let arrow = view.and_then(|v| Arrow::of(&v, area, track));
-        Shown { view, points: track.len, thinned: track.thinned, arrow, route: route.map(|r| r.id) }
+        let route = route.map(|r| r.id);
+        Shown { view, points: track.len, thinned: track.thinned, arrow, route, zoomed: zoomed.is_some() }
     }
+}
+
+/// The scale (`mpp16`) of `zoom` in `area` when it applies: a box with the buttons, finer than the fit's.
+fn zoomed(area: Rect, fit: Option<View>, zoom: Option<u32>) -> Option<i64> {
+    let m = mpp16(zoom?);
+    (buttons(area).is_some() && m < fit?.mpp16).then_some(m)
+}
+
+/// The zoom buttons of a map in `area`, "+" then "-", top right; None in a box smaller than [`ZOOM_BOX`].
+///
+/// ```
+/// use bryton_rustfw::map::buttons;
+/// assert_eq!(buttons((0, 24, 240, 296)), Some([(196, 28, 40, 40), (196, 72, 40, 40)]));
+/// assert_eq!(buttons((0, 24, 240, 148)), None, "half a page");
+/// ```
+pub fn buttons(area: Rect) -> Option<[Rect; 2]> {
+    let x = area.0 + area.2 - BUTTON - 4;
+    (area.2 >= ZOOM_BOX.0 && area.3 >= ZOOM_BOX.1)
+        .then_some([(x, area.1 + 4, BUTTON, BUTTON), (x, area.1 + 8 + BUTTON, BUTTON, BUTTON)])
+}
+
+/// The button of the map in `area` (drawn as `shown`) at (`x`, `y`): Some(true) "+", Some(false) "-"; None
+/// elsewhere, or while the map has no view (no buttons drawn).
+pub fn button_at(area: Rect, shown: &Shown, x: i32, y: i32) -> Option<bool> {
+    let [plus, minus] = buttons(area).filter(|_| shown.view.is_some())?;
+    let inside = |r: Rect| (r.0..r.0 + r.2).contains(&x) && (r.1..r.1 + r.3).contains(&y);
+    if inside(plus) {
+        Some(true)
+    } else if inside(minus) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The zoom after a tap on "+" (`zoom_in`) or "-" on the map in `area` drawn as `shown`: one level from the one
+/// shown, at most [`MIN_LEVEL`]; None (the fit) at the fit's level or coarser.
+pub fn zoom(track: &Track, area: Rect, route: Option<&Route>, shown: &Shown, zoom_in: bool) -> Option<u32> {
+    let (v, fit) = (shown.view?, View::fit(track, area, route)?);
+    let level = (MIN_LEVEL..MAX_LEVEL).find(|&l| mpp16(l) >= v.mpp16).unwrap_or(MAX_LEVEL);
+    let next = if zoom_in { level.saturating_sub(1).max(MIN_LEVEL) } else { level + 1 };
+    (mpp16(next) < fit.mpp16).then_some(next)
 }
 
 /// The map area of a ride field box: the box less its frame lines (ui::draw_field_frame).
@@ -546,19 +628,37 @@ pub fn draw(
         }
         None => {}
     }
+    for (i, b) in buttons(area).into_iter().flatten().enumerate() {
+        // a black square, a white frame and a white bar (and its upright for "+"), 4 pixels thick
+        let (x, y, s) = (b.0, b.1, b.2);
+        run(&mut c, k, x, y, s, s, ui::BLACK);
+        for (fx, fy, fw, fh) in
+            [(0, 0, s, 2), (0, s - 2, s, 2), (0, 0, 2, s), (s - 2, 0, 2, s), (10, s / 2 - 2, s - 20, 4)]
+        {
+            run(&mut c, k, x + fx, y + fy, fw, fh, ui::WHITE);
+        }
+        if i == 0 {
+            run(&mut c, k, x + s / 2 - 2, y + 10, 4, s - 20, ui::WHITE);
+        }
+    }
 }
 
-/// The view must change: the first position, the position near the edge, the track thinned, another course. The
-/// first fix after the last known position keeps the view when it falls inside it (no new basemap).
-pub fn refit(area: Rect, track: &Track, shown: &Shown, route: Option<&Route>) -> bool {
-    match shown.view {
-        None => track.pos.is_some(),
-        Some(v) => shown.thinned != track.thinned || !v.keeps(area, track) || shown.route != route.map(|r| r.id),
+/// The view must change: the first position, the position near the edge, the track thinned, another course, the
+/// zoom changed (`zoom`: a level, None: the fit), zoomed in the arrow out of the middle part. The first fix after
+/// the last known position keeps the view when it falls inside it (no new basemap).
+pub fn refit(area: Rect, track: &Track, shown: &Shown, route: Option<&Route>, zoom: Option<u32>) -> bool {
+    let Some(v) = shown.view else { return track.pos.is_some() };
+    if shown.thinned != track.thinned || shown.route != route.map(|r| r.id) {
+        return true;
+    }
+    match zoomed(area, View::fit(track, area, route), zoom) {
+        Some(m) => !shown.zoomed || v.mpp16 != m || !v.follows(area, track),
+        None => shown.zoomed || !v.keeps(area, track),
     }
 }
 
 /// Brings the map in `area` on the panel `c` from `shown` to the track now: the whole map when the view must
-/// change ([`refit`]; the caller draws the basemap for [`Shown::of`] first), else only the box holding the new
+/// change ([`refit`], at `zoom`; the caller draws the basemap for [`Shown::of`] first), else only the box holding the new
 /// segments and the arrow's old and new places, its background copied from `base`.
 pub fn update(
     c: &mut dyn Canvas,
@@ -567,11 +667,12 @@ pub fn update(
     shown: &mut Shown,
     base: Option<&Basemap>,
     route: Option<&Route>,
+    zoom: Option<u32>,
 ) {
-    let refit = refit(area, track, shown, route);
+    let refit = refit(area, track, shown, route, zoom);
     let Some(v) = shown.view.filter(|_| !refit) else {
         if refit {
-            *shown = Shown::of(track, area, route);
+            *shown = Shown::of(track, area, route, zoom);
             draw(c, area, track, shown.view, base, route);
         }
         return;
