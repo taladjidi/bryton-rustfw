@@ -1787,28 +1787,43 @@ fn notification_answers() {
 }
 
 /// Pages of the FE-C profile (random bytes behind a page number chosen from the ones decoded, a few others) into the
-/// decoder, and random driving of the trainer model: no panic, every page reached, every command a page of the
-/// profile with its fields in range.
+/// decoder, and random driving of the trainer model (calibrations started and cancelled, pages 1 and 2 of random
+/// bytes and of the profile's structure): no panic, every page reached, every command a page of the profile with its
+/// fields in range, nothing but the calibration request while one runs, and every step of a calibration reached.
 #[test]
 fn fec_pages_and_commands() {
     use crate::fec::{self, seen};
     use crate::trainer::{Command, Drive, Reading, Trainer};
     let mut got = 0u8;
     let mut pages = [0usize; 4];
+    let mut cals = [0usize; 6]; // calibrations: speed, coast, done, failed, no answer, a request sent
     for seed in 1..=4u32 {
         let mut v = bytes(seed, 1 << 16);
         let mut r = || v.next().unwrap_or(0);
         let (mut reading, mut t) = (Reading::default(), Trainer::default());
         for _ in 0..4000 {
-            let page = [16, 25, 25, 54, 71, 80, 81, r()][usize::from(r() % 8)];
+            let page = [16, 25, 25, 54, 71, 80, 81, 1, 2, 2, r()][usize::from(r() % 11)];
             let mut d: [u8; 8] = core::array::from_fn(|_| r());
             d[0] = page;
+            if page == 2 {
+                // the profile's structure: spin-down pending, the speed condition 1 or 2, a target speed
+                d[1] = [0x80, 0x40, 0xc0, r()][usize::from(r() % 4)];
+                d[2] = (d[2] & 0x3f) | [0x40, 0x80, 0x40, 0x80, r()][usize::from(r() % 5)] & 0xc0;
+            }
+            if page == 1 {
+                d[1] = [0x80, 0x40, 0, r()][usize::from(r() % 4)];
+            }
             fec::decode(d, &mut reading);
             got |= reading.seen;
             if let Some(h) = reading.power {
                 assert!(h < 0xfff);
             }
             t.reading = reading;
+            match r() % 40 {
+                0 => t.start_calibration(),
+                1 => t.cancel_calibration(),
+                _ => {}
+            }
             // the rider and the course at random
             let drive = Drive {
                 erg_w: (r() % 2 == 0).then(|| u16::from_le_bytes([r(), r()])),
@@ -1826,7 +1841,25 @@ fn fec_pages_and_commands() {
                 }
                 _ => None,
             };
+            let was = t.calibrating();
             let due = t.due(u32::from(r()) * 20, r() % 8 != 0, &drive);
+            cals[match t.cal() {
+                crate::trainer::Cal::Speed => 0,
+                crate::trainer::Cal::Coast => 1,
+                crate::trainer::Cal::Done(_) => 2,
+                crate::trainer::Cal::Failed => 3,
+                crate::trainer::Cal::NoAnswer => 4,
+                _ => 5,
+            }] += 1;
+            if was && t.calibrating() {
+                assert!(matches!(due, None | Some(Command::Calibrate(_))), "{due:?} during a calibration");
+            }
+            if let Some(Command::Calibrate(req)) = due {
+                cals[5] += 1;
+                let p = fec::encode(Command::Calibrate(req));
+                assert!(p[0] == 1 && p[1] != 0 && p[1] & 0x3f == 0, "{p:?}");
+                continue;
+            }
             if r() % 7 == 0 {
                 t.unsent(); // a refusal or a TX_FAILED, whatever went out last
             }
@@ -1855,8 +1888,9 @@ fn fec_pages_and_commands() {
             }
         }
     }
-    let all = seen::P16 | seen::P25 | seen::P54 | seen::P71 | seen::P80 | seen::P81;
+    let all = seen::P16 | seen::P25 | seen::P54 | seen::P71 | seen::P80 | seen::P81 | seen::P1 | seen::P2;
     assert_eq!(got, all, "every page decoded");
+    assert!(cals[..5].iter().all(|&n| n > 20) && cals[5] > 20, "every calibration step reached: {cals:?}");
     assert!(pages.iter().all(|&n| n > 100), "every control page sent: {pages:?}");
 }
 
@@ -1892,7 +1926,7 @@ fn fec_pages_into_the_app() {
             assert!(s <= 2400, "{s}");
         }
     }
-    assert_eq!(seen_bits, 0x3f, "every page reached the app");
+    assert_eq!(seen_bits, 0xff, "every page reached the app");
     assert!(sim.nordic.trainer.got.iter().any(|p| matches!(p[0], 0x30 | 0x31 | 0x33)), "commands went out");
 }
 

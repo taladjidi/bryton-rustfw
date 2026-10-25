@@ -5,7 +5,11 @@
 use super::*;
 use crate::fat::tests::{Ram, read_all};
 use crate::menu::{RideRow, Row};
-use crate::ui::Field;
+use crate::ui::{
+    Field,
+    trainer::{Bottom, Button},
+};
+use std::string::{String, ToString};
 
 const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const ID: SensorId = SensorId { device: 5555, trans: 0xf1 };
@@ -234,8 +238,8 @@ fn the_screen_changes_the_target_and_the_mode() {
     }
     run(&mut sim, &mut app, 600);
     assert_eq!(sim.nordic.trainer.grade_x100, 50);
-    let (_, mx, my, mw, mh) = crate::ui::trainer::BUTTONS[2];
-    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap((mx + mw / 2) as u16, (my + mh / 2) as u16)));
+    let (mx, my) = crate::ui::trainer::bottom_centre(Bottom::Mode, Button::Mode).unwrap();
+    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(mx, my)));
     assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "ERG");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_ne!(app.screen(), Screen::Trainer);
@@ -466,9 +470,8 @@ fn riding_the_keys_on_the_trainer_screen_are_the_rides() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 600);
     assert_eq!(sim.nordic.trainer.target_w, 105, "Page still steps the target");
-    let (_, mx, my, mw, mh) = crate::ui::trainer::BUTTONS[2];
-    let tap = (mx + mw / 2, my + mh / 2);
-    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(tap.0 as u16, tap.1 as u16)));
+    let (mx, my) = crate::ui::trainer::bottom_centre(Bottom::Mode, Button::Mode).unwrap();
+    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(mx, my)));
     assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "RES", "MODE changes it");
 }
 
@@ -541,4 +544,151 @@ fn the_trainer_screen_stays_within_its_pixel_budget() {
     let (px, win) = ((sim.pixels - px) / s, (sim.windows - win) / s);
     std::println!("trainer screen: {px} px/s, {win} windows/s");
     assert!(px <= 2_000 && win <= 12, "{px} px/s, {win} windows/s");
+}
+
+// ---- spin-down calibration (FE-C pages 1 and 2) ----
+
+/// The unit asked to calibrate, on the trainer screen with the ERG target taken over (105 W).
+fn calibrating_unit() -> (Sim, App) {
+    let (mut sim, mut app) = unit();
+    sim.nordic.trainer.status = 2; // resistance calibration needed
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    app.press(&mut sim, Press::Short(Key::Page)); // ERG 105 W, taken over
+    run(&mut sim, &mut app, 1500);
+    (sim, app)
+}
+
+/// The status and source lines of the trainer screen.
+fn lines(app: &App) -> (String, String) {
+    app.with_trainer_now(|n| (n.status.to_string(), n.source.to_string()))
+}
+
+fn tap(sim: &mut Sim, app: &mut App, b: Button) {
+    let bottom = app.with_trainer_now(|n| n.bottom);
+    let (x, y) = crate::ui::trainer::bottom_centre(bottom, b).expect("the button is there");
+    app.input(sim, Input::Touch(crate::touch::Gesture::Tap(x, y)));
+}
+
+/// The whole flow by keys: CALIBRATE offered, Start held asks, the screen tells to speed up (with the speed now),
+/// then to stop pedalling, then the result; no other control page goes out meanwhile, and the ERG target is back
+/// after.
+#[test]
+fn a_spin_down_by_the_keys() {
+    let (mut sim, mut app) = calibrating_unit();
+    assert_eq!(lines(&app).0, "CALIBRATE");
+    assert_eq!(app.with_trainer_now(|n| n.bottom), Bottom::Both);
+    sim.save("trainer_cal_offer");
+    let n = sim.nordic.trainer.got.len();
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 2600);
+    assert_eq!(sim.nordic.trainer.cal_requests, [0x80], "the spin-down, asked once");
+    assert_eq!(lines(&app), ("PEDAL TO 30 KM/H".into(), "SPEED NOW 27 KM/H".into()), "180 W is 7.56 m/s");
+    assert_eq!(app.with_trainer_now(|n| n.bottom), Bottom::Cancel);
+    sim.save("trainer_cal_speed");
+    sim.nordic.trainer.rider_w = 230; // 9.66 m/s, past the target
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(lines(&app).0, "STOP PEDALLING");
+    sim.save("trainer_cal_coast");
+    run(&mut sim, &mut app, 9000);
+    assert_eq!(lines(&app), ("CALIBRATED".into(), "SPIN-DOWN 2500 MS".into()));
+    assert_eq!(app.with_trainer_now(|n| n.bottom), Bottom::Both, "the result stays a while");
+    sim.save("trainer_cal_done");
+    let pages: Vec<u8> = sim.nordic.trainer.got[n..].iter().map(|p| p[0]).collect();
+    let target = pages.iter().position(|&p| p == 0x31).expect("the target comes back");
+    assert!(pages[..target].iter().all(|&p| p == 0x01), "nothing but the request until the end: {pages:?}");
+    let last = sim.nordic.trainer.got.last();
+    assert_eq!(last, Some(&[0x31, 255, 255, 255, 255, 255, 0xa4, 0x01]), "105 W in 0.25 W units");
+    assert_eq!(sim.nordic.trainer.status & 3, 0, "the trainer stopped asking");
+    run(&mut sim, &mut app, 11_000);
+    assert_eq!(app.trainer.cal(), crate::trainer::Cal::Idle);
+    assert_eq!((lines(&app).0.as_str(), app.with_trainer_now(|n| n.bottom)), ("OK", Bottom::Mode));
+    super::tests::assert_consistent(&sim, &app);
+}
+
+/// By touch: CALIBRATE, then CANCEL; the target comes back and MODE is still there beside CALIBRATE.
+#[test]
+fn a_spin_down_by_touch_and_cancel() {
+    let (mut sim, mut app) = calibrating_unit();
+    tap(&mut sim, &mut app, Button::Calibrate);
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(sim.nordic.trainer.cal_requests, [0x80]);
+    assert!(app.trainer.calibrating());
+    let n = sim.nordic.trainer.got.len();
+    tap(&mut sim, &mut app, Button::Calibrate); // now CANCEL
+    run(&mut sim, &mut app, 1000);
+    assert!(!app.trainer.calibrating());
+    assert_eq!(sim.nordic.trainer.got[n..].iter().map(|p| p[0]).collect::<Vec<_>>(), [0x31], "the target again");
+    assert_eq!(lines(&app).0, "CALIBRATE", "the trainer still asks");
+    tap(&mut sim, &mut app, Button::Mode);
+    assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "RES");
+}
+
+/// Back gives up a calibration and leaves.
+#[test]
+fn back_cancels_a_spin_down() {
+    let (mut sim, mut app) = calibrating_unit();
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 1500);
+    assert!(app.trainer.calibrating());
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_ne!(app.screen(), Screen::Trainer);
+    assert!(!app.trainer.calibrating());
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.trainer.got.last().map(|p| p[0]), Some(0x31), "the ERG target is back");
+}
+
+/// Not during a ride: a notice, nothing sent.
+#[test]
+fn no_spin_down_while_riding() {
+    let (mut sim, mut app) = calibrating_unit();
+    app.start_key(&mut sim);
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 1500);
+    app.press(&mut sim, Press::Long(Key::Start));
+    assert!(app.notices[0].as_str().contains("NO CALIBRATION"), "{}", app.notices[0].as_str());
+    tap(&mut sim, &mut app, Button::Calibrate);
+    run(&mut sim, &mut app, 2000);
+    assert!(sim.nordic.trainer.cal_requests.is_empty());
+    assert!(!app.trainer.calibrating());
+}
+
+/// A trainer that never answers: the request is sent again every few seconds, then "NO ANSWER" after a minute, and the
+/// target is back.
+#[test]
+fn a_spin_down_nobody_answers() {
+    let (mut sim, mut app) = calibrating_unit();
+    sim.nordic.trainer.cal_mute = true;
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(lines(&app).0, "STARTING...");
+    run(&mut sim, &mut app, 55_000);
+    assert!(app.trainer.calibrating());
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(lines(&app).0, "NO ANSWER");
+    sim.save("trainer_cal_no_answer");
+    let k = sim.nordic.trainer.cal_requests.len();
+    assert!((14..=17).contains(&k), "again every 4 s: {k}");
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(sim.nordic.trainer.got.last().map(|p| p[0]), Some(0x31));
+    assert_eq!(sim.nordic.trainer.cal_requests.len(), k, "and no more");
+}
+
+/// A failure is shown with a retry, which can succeed.
+#[test]
+fn a_failed_spin_down_can_be_tried_again() {
+    let (mut sim, mut app) = calibrating_unit();
+    sim.nordic.trainer.cal_fails = true;
+    sim.nordic.trainer.rider_w = 230;
+    app.press(&mut sim, Press::Long(Key::Start));
+    run(&mut sim, &mut app, 14_000);
+    assert_eq!(lines(&app).0, "FAILED: TRY AGAIN");
+    assert_eq!(sim.nordic.trainer.status & 3, 2, "still asked for");
+    sim.save("trainer_cal_failed");
+    sim.nordic.trainer.cal_fails = false;
+    tap(&mut sim, &mut app, Button::Calibrate);
+    run(&mut sim, &mut app, 14_000);
+    assert_eq!(lines(&app).0, "CALIBRATED");
+    assert_eq!(sim.nordic.trainer.cal_requests, [0x80, 0x80]);
 }

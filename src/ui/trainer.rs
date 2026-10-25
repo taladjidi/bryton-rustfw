@@ -14,6 +14,20 @@ pub enum Button {
     Plus,
     /// The next mode.
     Mode,
+    /// Start the calibration, or cancel the one running.
+    Calibrate,
+}
+
+/// The bottom row of buttons.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Bottom {
+    /// MODE, the whole width.
+    #[default]
+    Mode,
+    /// MODE and CALIBRATE side by side (the trainer asks for a calibration, or a result is shown).
+    Both,
+    /// CANCEL, the whole width (a calibration runs).
+    Cancel,
 }
 
 // The text styles are 20 px (LABEL) and 40 px (VALUE) high: each box under the one above.
@@ -23,11 +37,27 @@ const SOURCE_Y: u32 = MODE_Y + 42;
 const TARGET_Y: u32 = SOURCE_Y + 22;
 const NOW_Y: u32 = TARGET_Y + 44;
 const STATUS_Y: u32 = NOW_Y + 24;
-/// The buttons as (button, x, y, w, h).
-pub const BUTTONS: [(Button, u32, u32, u32, u32); 3] = {
-    const Y1: u32 = STATUS_Y + 26;
-    [(Button::Minus, 8, Y1, 108, 56), (Button::Plus, 124, Y1, 108, 56), (Button::Mode, 8, Y1 + 62, 224, 40)]
-};
+const Y1: u32 = STATUS_Y + 26;
+const BOTTOM_Y: u32 = Y1 + 62;
+const BOTTOM_H: u32 = 40;
+/// The target buttons as (button, x, y, w, h).
+pub const BUTTONS: [(Button, u32, u32, u32, u32); 2] =
+    [(Button::Minus, 8, Y1, 108, 56), (Button::Plus, 124, Y1, 108, 56)];
+
+type BottomButton = (Button, u32, u32, &'static str, u16, u16);
+
+/// The bottom row's buttons: (button, x, w, label, background, text colour).
+fn bottom_buttons(b: Bottom) -> [Option<BottomButton>; 2] {
+    let mode = (Button::Mode, 8, 224, "MODE", ACCENT, super::BLACK);
+    match b {
+        Bottom::Mode => [Some(mode), None],
+        Bottom::Both => [
+            Some((Button::Mode, 8, 104, "MODE", ACCENT, super::BLACK)),
+            Some((Button::Calibrate, 116, 116, "CALIBRATE", YELLOW, super::BLACK)),
+        ],
+        Bottom::Cancel => [Some((Button::Calibrate, 8, 224, "CANCEL", RED, WHITE)), None],
+    }
+}
 
 /// The boxes of the two readings: each value right-aligned in a box of its own, its unit drawn once beside it (the
 /// screen's left half power, the right half cadence): `(box x, box width, unit x, unit)`.
@@ -42,9 +72,15 @@ fn reading_boxes() -> [(u32, u32, u32, &'static str); 2] {
 }
 
 /// The button under a touch at (`x`, `y`), if any.
-pub fn hit(x: u16, y: u16) -> Option<Button> {
+pub fn hit(x: u16, y: u16, bottom: Bottom) -> Option<Button> {
     let (x, y) = (u32::from(x), u32::from(y));
-    BUTTONS.iter().find(|&&(_, bx, by, w, h)| x >= bx && x < bx + w && y >= by && y < by + h).map(|b| b.0)
+    let row = bottom_buttons(bottom).into_iter().flatten().map(|(b, bx, w, ..)| (b, bx, BOTTOM_Y, w, BOTTOM_H));
+    BUTTONS
+        .iter()
+        .copied()
+        .chain(row)
+        .find(|&(_, bx, by, w, h)| x >= bx && x < bx + w && y >= by && y < by + h)
+        .map(|b| b.0)
 }
 
 /// What to show.
@@ -64,11 +100,13 @@ pub struct Now<'a> {
     pub status: &'a str,
     /// See `status`.
     pub status_color: u16,
+    /// The bottom row.
+    pub bottom: Bottom,
 }
 
 /// What is on screen: one fingerprint per box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Shown([u32; 6]);
+pub struct Shown([u32; 7]);
 
 fn fnv(h: u32, s: &str) -> u32 {
     s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
@@ -78,13 +116,9 @@ fn fnv(h: u32, s: &str) -> u32 {
 pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
     text::draw_in(c, &LABEL, 8, TITLE_Y, W - 16, Align::Left, "TRAINER");
     for &(b, x, y, w, h) in &BUTTONS {
-        c.fill(x, y, w, h, if b == Button::Mode { ACCENT } else { DARK });
-        let (label, fg) = match b {
-            Button::Minus => ("-", WHITE),
-            Button::Plus => ("+", WHITE),
-            Button::Mode => ("MODE", super::BLACK),
-        };
-        let st = Style { fg, bg: if b == Button::Mode { ACCENT } else { DARK }, ..VALUE };
+        c.fill(x, y, w, h, DARK);
+        let st = Style { fg: WHITE, bg: DARK, ..VALUE };
+        let label = if b == Button::Minus { "-" } else { "+" };
         text::draw(c, &st, x + w / 2, y + (h - st.height()) / 2, Align::Centre, label);
     }
     for (_, _, x, unit) in reading_boxes() {
@@ -126,6 +160,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         fnv(4, power.as_str()),
         fnv(5, cadence.as_str()),
         fnv(u32::from(now.status_color) + 6, now.status),
+        fnv(7, ["MODE", "BOTH", "CANCEL"][now.bottom as usize]),
     ];
     let bold = Style { fg: ACCENT, ..VALUE };
     let grey = Style { fg: GREY, ..LABEL };
@@ -157,8 +192,19 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
                     if i == 3 { power.as_str() } else { cadence.as_str() },
                 );
             }
-            _ => {
+            5 => {
                 text::draw_in(c, &Style { fg: now.status_color, ..LABEL }, 8, STATUS_Y, w, Align::Centre, now.status);
+            }
+            _ => {
+                // the whole row: it changes only when the buttons do
+                c.fill(8, BOTTOM_Y, w, BOTTOM_H, super::BLACK);
+                for (_, x, bw, label, bg, fg) in bottom_buttons(now.bottom).into_iter().flatten() {
+                    c.fill(x, BOTTOM_Y, bw, BOTTOM_H, bg);
+                    let big = VALUE.width(label) + 8 <= bw;
+                    let st = Style { fg, bg, ..if big { VALUE } else { LABEL } };
+                    let y = BOTTOM_Y + (BOTTOM_H - st.height()) / 2;
+                    text::draw(c, &st, x + bw / 2, y, Align::Centre, label);
+                }
             }
         }
     }
@@ -170,3 +216,10 @@ pub const BAD: u16 = RED;
 pub const WARN: u16 = YELLOW;
 /// See [`BAD`].
 pub const GOOD: u16 = GREEN;
+
+/// The middle of `button` in the bottom row `bottom`, for the tests' taps.
+#[cfg(test)]
+pub fn bottom_centre(bottom: Bottom, button: Button) -> Option<(u16, u16)> {
+    let (_, x, w, ..) = bottom_buttons(bottom).into_iter().flatten().find(|b| b.0 == button)?;
+    Some(((x + w / 2) as u16, (BOTTOM_Y + BOTTOM_H / 2) as u16))
+}

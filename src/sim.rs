@@ -629,6 +629,16 @@ pub struct SimTrainer {
     pub dist_mm: u64,
     /// Fuzzing: the pages are pseudo-random ones of the profile (xorshift state), not the model's.
     pub fuzz: Option<u32>,
+    /// A calibration is scripted to fail (its response says nothing succeeded), or the trainer ignores the request.
+    pub cal_fails: bool,
+    pub cal_mute: bool,
+    /// Where the calibration is: 0 none, 1 waiting for the speed, 2 coasting (ticks counted in `cal_coast`).
+    pub cal: u8,
+    /// The calibration requests received (byte 1), in order.
+    pub cal_requests: Vec<u8>,
+    /// The target speed of the calibration, mm/s (0: 8333, 30 km/h).
+    pub cal_target_mm_s: u16,
+    cal_coast: u8,
     ticks: u32,
     events: u8,
     acc: u16,
@@ -645,6 +655,13 @@ impl SimTrainer {
             0x33 => {
                 self.mode = 0x33;
                 self.grade_x100 = i32::from(u16::from_le_bytes([d[5], d[6]])) - 20_000;
+            }
+            0x01 => {
+                self.cal_requests.push(d[1]);
+                if !self.cal_mute && d[1] & 0xc0 != 0 && self.cal == 0 {
+                    (self.cal, self.cal_coast) = (1, 0);
+                }
+                return;
             }
             0x37 => {
                 self.user = Some(d);
@@ -671,12 +688,13 @@ impl SimTrainer {
                 *x ^= *x << 5;
                 *x
             };
-            let page = [16, 25, 25, 54, 71, 80, 81, 0, 255][(next() % 9) as usize];
+            let page = [16, 25, 25, 54, 71, 80, 81, 0, 255, 1, 2][(next() % 11) as usize];
             let mut d: [u8; 8] = core::array::from_fn(|_| (next() >> 8) as u8);
             d[0] = page;
             return d;
         }
-        self.power = if self.mode == 0x31 { self.target_w } else { self.rider_w };
+        // calibrating, the brake is off: the rider's power, whatever the mode was
+        self.power = if self.mode == 0x31 && self.cal == 0 { self.target_w } else { self.rider_w };
         self.speed_mm_s = match self.mode {
             0x33 => (10_000 - self.grade_x100 * 8).clamp(1000, 20_000) as u32,
             0x30 => 8000 - u32::from(self.resistance) * 20,
@@ -688,6 +706,25 @@ impl SimTrainer {
         }
         if core::mem::take(&mut self.capabilities) {
             return [54, 255, 255, 255, 255, 0xe8, 0x03, 0x07];
+        }
+        if self.cal != 0 && t % 4 == 3 {
+            let target = if self.cal_target_mm_s == 0 { 8333 } else { self.cal_target_mm_s };
+            if self.cal == 1 && self.speed_mm_s >= u32::from(target) {
+                self.cal = 2;
+            }
+            if self.cal == 2 {
+                self.cal_coast += 1;
+                if self.cal_coast > 6 {
+                    // the end: the response; the trainer stops asking when it succeeded
+                    self.cal = 0;
+                    let ok = if self.cal_fails { 0 } else { 0x80 };
+                    self.status &= if self.cal_fails { 0xff } else { !3 };
+                    return [1, ok, 0, 90, 0xff, 0xff, 0xc4, 0x09]; // 2500 ms
+                }
+            }
+            let speed = if self.cal == 1 { 1 } else { 2 };
+            let [t0, t1] = target.to_le_bytes();
+            return [2, 0x80, speed << 6 | 2 << 4, 90, t0, t1, 0xb8, 0x0b]; // spin-down time 3000 ms
         }
         match t % 64 {
             1 => return [80, 255, 255, 1, 0x0f, 0x00, 0x34, 0x12], // manufacturer 15
