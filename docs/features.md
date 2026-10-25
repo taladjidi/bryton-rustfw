@@ -7,7 +7,8 @@
   the battery (green while charging, red at 15 % and under).
 - **Overview** (the main screen): the time, big (no seconds: it changes once a minute), the date, four fields chosen
   in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
-  rides on the card, read by themselves 30 s after start-up), and the latest notices (a GPS fix, a
+  rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
+  only the rides new or changed since are read), and the latest notices (a GPS fix, a
   sensor paired, the battery low), or Ferris the Rust crab when there are none.
 - **Ride pages:** up to three, each in one of eleven layouts (one to six fields: even grids, and uneven ones such as
   a big box over two or over a 2 x 2 grid, two over a big one, three rows), chosen in the menu: speed, heart rate, cadence,
@@ -284,10 +285,16 @@ copied over USB into `\Courses`, read only:
 
 ## Stock data
 
-What Bryton's firmware left on the card, read only (nothing is ever written), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM STOCK):
-- **READ RIDES** reads every ride in `\Activities` (stock's `YYMMDDhhmmss.fit`; its ride in progress `tmp.fit` and
-  files that are not whole rides are left out), a bounded amount per pass of the main loop, more while no ride
-  runs. The menu then shows:
+What Bryton's firmware left on the card, read only (nothing of stock's is ever written), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM
+STOCK):
+- **READ RIDES** reads every ride in `\Activities` (stock's `YYMMDDhhmmss.fit` and this firmware's saved rides; stock's
+  ride in progress `tmp.fit` and files that are not whole rides are left out), a bounded amount per pass of the main
+  loop (15 ms of work at most, 4 ms during a ride), so keys and touch keep answering. **Each ride is decoded once
+  ever:** what the overview, the power curve and the history need of it (64 bytes: distance, time, ascent, power,
+  heart rate, its best powers) goes into the scan's cache, `\Rustfw\scan.bin`, written between rides; a start shows
+  the totals from it at once and reads only the rides that are new or changed (name, size, first cluster), and drops
+  those deleted. A new day counts the week, the year and the 90 days again from it. A cache that does not check out
+  (a cut while it was written) is ignored whole and rebuilt. The menu then shows:
   - **CP and W'** from the best powers of the last 90 days (1 s to 60 min), fitted with the 2-parameter model
     on the 2 to 20 minute bests, and **CP FIT**: the points used and the model's largest error. A stop or a
     power dropout ends an effort (a best never spans a cafe stop);

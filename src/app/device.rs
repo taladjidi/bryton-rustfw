@@ -47,6 +47,8 @@ pub(crate) fn play(b: &mut impl Board, tones: &[(u32, u32)]) {
 
 /// Main loop period: the time and the keys are read this often.
 pub const POLL_MS: u32 = 50;
+/// A pass's work counted at most ([`Board::awake_us`]): the first pass, or a stall, is not a key held for seconds.
+pub const MAX_PASS_MS: u32 = 1000;
 
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
