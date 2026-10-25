@@ -60,6 +60,22 @@ impl App {
         self.stock.read_bytes().wrapping_sub(before)
     }
 
+    /// The dev link's `bench map`: draws the basemap of the full-page map at zoom level `level`, at the rider's
+    /// position moved by (`dx`, `dy`) m (a view not drawn yet: a cold re-centre), and gives what it read and drew;
+    /// None without a position or a card. The page's own basemap is drawn again at its next view.
+    pub fn bench_map(&mut self, b: &mut impl Board, level: u32, dx: i32, dy: i32) -> Option<tiles::Stats> {
+        let area = map::area(ui::field_box(1, ui::RIDE_H, 0)?);
+        let level = level.clamp(map::MIN_LEVEL, map::MAX_LEVEL);
+        let mut v = map::View::follow(&self.track, area, map::mpp16(level))?;
+        (v.cx, v.cy) = (v.cx.saturating_add(dx), v.cy.saturating_add(dy));
+        let o = self.track.origin()?;
+        if self.emmc.lent() {
+            return None;
+        }
+        self.basemap.render(&mut emmc::Volume(&mut self.emmc, b), area, v, o);
+        Some(self.basemap.stats)
+    }
+
     /// The scan of stock's rides goes on, if it runs.
     pub(crate) fn step_stock(&mut self, b: &mut impl Board) {
         // read once by itself, a while after start-up and not during a ride, for the totals on the overview

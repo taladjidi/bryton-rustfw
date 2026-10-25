@@ -16,6 +16,9 @@
 //!   digits, or `err <why>`. Read only; the eMMC is touched by nothing else, and only from the first of these two.
 //! - `bench <lba> <sectors> <count>`: reads `count` times `sectors` eMMC sectors from `lba` on ([`Effect::Bench`]) and
 //!   answers `bench <microseconds>` (the time the reads took, to measure the eMMC path), or `err <why>`.
+//! - `bench map <level> <dx> <dy>`: draws the full-page map's basemap at the unit's position moved by (`dx`, `dy`)
+//!   m, at zoom level `level` ([`Effect::BenchMap`], [`App::bench_map`]); answers `map <us> <tiles read> <bytes
+//!   read> <IGN tiles decoded> <pixels> <zoom>` in hex (`err nofix` without a position): what a re-centre costs.
 //! - `bench scan <kb>`: runs the scan of stock's rides over about `kb` KB ([`Effect::BenchScan`]) and answers
 //!   `bench <microseconds>` (the bytes read are about `kb` KB).
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
@@ -103,6 +106,8 @@ pub enum Effect {
     /// Time the scan of stock's rides over about this many bytes ([`App::bench_scan`]); answer with
     /// [`send_bench`].
     BenchScan(u32),
+    /// Time the basemap of the full-page map at zoom level, moved by (dx, dy) m ([`App::bench_map`]).
+    BenchMap(u32, i32, i32),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
 }
@@ -307,6 +312,16 @@ impl Session {
                     _ => h.send(b"err usage: get <path> <offset> <len 1..4096>\n"),
                 }
             }
+            Some(b"bench") if line.starts_with(b"bench map") => {
+                let mut n = words.skip(1).map(|w| {
+                    let (neg, w) = w.strip_prefix(b"-").map_or((false, w), |w| (true, w));
+                    parse(w).and_then(|v| i32::try_from(v).ok()).map(|v| if neg { -v } else { v })
+                });
+                match (n.next().flatten(), n.next().flatten(), n.next().flatten()) {
+                    (Some(level @ 0..=60), Some(dx), Some(dy)) => return Effect::BenchMap(level as u32, dx, dy),
+                    _ => h.send(b"err usage: bench map <level> <dx m> <dy m>\n"),
+                }
+            }
             Some(b"bench") if line.starts_with(b"bench scan") => match words.nth(1).and_then(parse) {
                 Some(kb @ 1..=65_536) => return Effect::BenchScan(kb * 1024),
                 _ => h.send(b"err usage: bench scan <kb>\n"),
@@ -468,6 +483,20 @@ pub fn send_get(h: &mut impl Host, d: &mut impl crate::fat::Disk, path: &str, of
             line[2 * i + 1] = DIGITS[usize::from(b & 15)];
         }
         h.send(&line[..2 * chunk.len()]);
+    }
+    h.send(b"\n");
+}
+
+/// The answer to `bench map`: the time and what was read and drawn, or `err nofix`.
+pub fn send_bench_map(h: &mut impl Host, r: Option<(u32, crate::tiles::Stats)>) {
+    let Some((us, s)) = r else {
+        h.send(b"err nofix\n");
+        return;
+    };
+    h.send(b"map");
+    for v in [us, s.tiles_read, s.bytes_read, s.ign_tiles, s.px, u32::from(s.zoom)] {
+        h.send(b" ");
+        h.send(&hex(v)[..8]);
     }
     h.send(b"\n");
 }

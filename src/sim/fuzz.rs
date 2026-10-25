@@ -84,8 +84,21 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 10] =
-        [b"peek ", b"poke ", b"load ", b"key ", b"0x4", b"\n", b"shot\n", b"bat\n", b"sector ", b"emmc\n"];
+    let words: [&[u8]; 12] = [
+        b"peek ",
+        b"poke ",
+        b"load ",
+        b"key ",
+        b"0x4",
+        b"\n",
+        b"shot\n",
+        b"bat\n",
+        b"sector ",
+        b"emmc\n",
+        b"bench map ",
+        b" -",
+    ];
+    let mut maps = 0;
     for seed in 1..=4u32 {
         let (mut session, mut pc) = (Session::new(), super::Pc::default());
         let mut buf = std::vec::Vec::new();
@@ -96,12 +109,29 @@ fn dev_link_input() {
                 buf.push(b);
             }
             if k % 64 == 63 {
-                let _ = session.feed(&buf, &app, Stats::default(), &mut pc);
+                maps += usize::from(matches!(
+                    session.feed(&buf, &app, Stats::default(), &mut pc),
+                    crate::dev::Effect::BenchMap(..)
+                ));
                 buf.clear();
                 pc.got.clear();
             }
         }
     }
+    // `bench map` lines by structure (random bytes almost never make one): numbers valid, negative, huge, broken
+    let tokens: [&str; 8] = ["7", "-250", "99", "0x10", "-", "4294967296", "-2147483648", "60"];
+    let (mut session, mut pc) = (Session::new(), super::Pc::default());
+    for c in bytes(9, 3 << 12).collect::<std::vec::Vec<_>>().chunks_exact(3) {
+        let t = |b: u8| tokens[usize::from(b) % tokens.len()];
+        let line = std::format!("bench map {} {} {}\n", t(c[0]), t(c[1]), t(c[2]));
+        if let crate::dev::Effect::BenchMap(level, ..) = session.feed(line.as_bytes(), &app, Stats::default(), &mut pc)
+        {
+            assert!(level <= 60);
+            maps += 1;
+        }
+        pc.got.clear();
+    }
+    assert!(maps > 0, "bench map reached");
 }
 
 /// FIT files from the card (stock's rides): random bytes behind a valid header, and every kind of damage to a

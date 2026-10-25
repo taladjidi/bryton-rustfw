@@ -215,6 +215,10 @@ def main():
     p.add_argument('lba', nargs='?', default='0x10000')
     p.add_argument('n', nargs='?', type=int, default=16)
     p.add_argument('count', nargs='?', type=int, default=128)
+    p = sub.add_parser('mapbench', help='time the basemap of the full-page map at the unit\'s position: mapbench LEVEL '
+                       '[STEPS]: STEPS views, each moved a screen east (cold re-centres)')
+    p.add_argument('level', type=int)
+    p.add_argument('steps', nargs='?', type=int, default=4)
     p = sub.add_parser('sector', help='read eMMC sectors (read only): sector N [COUNT] [-o file]')
     p.add_argument('n', type=lambda x: int(x, 0))
     p.add_argument('count', nargs='?', type=lambda x: int(x, 0), default=1)
@@ -288,6 +292,16 @@ def main():
                     sys.exit(f'dev.py: {e}')
                 Path(a.o).write_bytes(data)
                 print(f'{len(data)} bytes -> {a.o}')
+            elif a.cmd == 'mapbench':
+                # a screen east each time (240 px at the level's metres a pixel): a view never drawn before
+                mpp = [1, 1.5][a.level % 2] * 2 ** (a.level // 2)  # map.rs mpp16(level) / 16
+                for k in range(a.steps):
+                    r = command(s, f'bench map {a.level} {int(240 * mpp * (k + 1))} 0').split()
+                    if r[0] != 'map':
+                        sys.exit(' '.join(r))
+                    us, tiles, nbytes, ign, px, zoom = (int(v, 16) for v in r[1:])
+                    print(f'level {a.level} (zoom {zoom}): {us / 1000:.1f} ms, {tiles} stock tiles, {ign} IGN tiles '
+                          f'decoded, {nbytes / 1024:.0f} KB read, {px} px')
             elif a.cmd == 'bench' and a.lba == 'scan':
                 answer = command(s, f'bench scan {a.n}')
                 us = int(answer.split()[1], 16)

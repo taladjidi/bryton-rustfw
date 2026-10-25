@@ -1366,6 +1366,14 @@ fn main() -> ! {
                             l.flush();
                             woke = true;
                         }
+                        Effect::BenchMap(level, dx, dy) => {
+                            let t = cycles();
+                            let got = app.bench_map(&mut board, level, dx, dy);
+                            let us = cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000);
+                            dev::send_bench_map(l, got.map(|s| (us, s)));
+                            l.flush();
+                            woke = true;
+                        }
                         Effect::Find(lba, count, lo, hi) => {
                             let emmc = app.emmc();
                             dev::find_sectors(l, &mut |at, buf| emmc.read(&mut board, at, buf), lba, count, (lo, hi));

@@ -108,3 +108,31 @@ fn load_refuses_bad_images_and_recovers() {
     assert!(pc.got.starts_with(b"err usage"));
     assert!(pc.got.ends_with(b"ok\n"));
 }
+
+/// `bench map`: parsed with negative offsets, bad ones refused; the app draws the full-page map's basemap at the
+/// position moved by them, IGN tiles decoded (the synthetic packs), and says so; `err nofix` without a position.
+#[test]
+fn bench_map() {
+    let (sim, app) = app_at(9, 0, 0);
+    let mut pc = Pc::default();
+    let mut s = Session::new();
+    assert_eq!(s.feed(b"bench map 6 -300 120\n", &app, Stats::default(), &mut pc), Effect::BenchMap(6, -300, 120));
+    assert_eq!(s.feed(b"bench map 6 x 1\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert!(pc.got.starts_with(b"err usage: bench map"));
+    drop(sim);
+
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::tiles::tests::image_with_packs();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some(crate::tiles::tests::ORIGIN) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    let s = app.bench_map(&mut sim, 4, 100, 0).expect("the last known position");
+    assert!(s.ign && s.ign_tiles > 0 && s.px > 0, "{s:?}");
+    let mut pc = Pc::default();
+    crate::dev::send_bench_map(&mut pc, Some((1500, s)));
+    assert!(pc.got.starts_with(b"map 000005dc "), "{:?}", std::string::String::from_utf8_lossy(&pc.got));
+    let mut pc = Pc::default();
+    crate::dev::send_bench_map(&mut pc, None);
+    assert_eq!(pc.got, b"err nofix\n");
+}
