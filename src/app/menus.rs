@@ -214,7 +214,7 @@ impl App {
                     RideRow::NextStep => "NEXT STEP",
                     RideRow::StopWorkout => "STOP WORKOUT",
                     RideRow::StopCourse => "STOP FOLLOWING",
-                    RideRow::Trainer => "TRAINER",
+                    RideRow::Trainer => "TRAINER CONTROL",
                 });
             }
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),

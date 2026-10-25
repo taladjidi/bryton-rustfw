@@ -732,7 +732,7 @@ impl Field {
             "88:88", // electronic shifting:
             "8-88", "8888", "GOOD",   // the course followed again:
             "888.8K", // the trainer:
-            "ERG", "8.8%",
+            "ERG", "-10.0%", // the widest target: a grade (a power is "2000W")
         ];
         WIDEST[self as usize]
     }

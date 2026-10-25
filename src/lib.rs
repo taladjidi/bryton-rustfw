@@ -196,6 +196,12 @@ pub struct App {
     trainer: trainer::Trainer,
     trainer_shown: ui::trainer::Shown,
     trainer_up: bool,
+    /// The pairing file's state, the time since the last acknowledged message, whether the second ticked since the
+    /// screen was drawn, and whether the chip never answered one (control off for this power-up).
+    sensors_store: SensorStore,
+    ack_gap_ms: u32,
+    trainer_second: bool,
+    trainer_no_control: bool,
     live: Live,
     /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
     zones: [ride::ZoneHold; 4],
@@ -538,6 +544,10 @@ impl App {
             trainer: trainer::Trainer::default(),
             trainer_shown: ui::trainer::Shown::default(),
             trainer_up: false,
+            sensors_store: SensorStore::default(),
+            ack_gap_ms: 0,
+            trainer_second: false,
+            trainer_no_control: false,
         }
     }
 

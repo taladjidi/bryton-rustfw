@@ -41,4 +41,5 @@ pub use riding::*;
 pub use screens::*;
 pub use settings::*;
 pub use stock_data::*;
+pub(crate) use trainer::SensorStore;
 pub(crate) use workouts::GaugeShown;

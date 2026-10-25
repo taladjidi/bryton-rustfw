@@ -40,9 +40,10 @@ impl App {
                     self.pvt = Some(pvt);
                     self.pvt_ms = 0;
                     self.learn_aid(b, pvt);
-                    // a speed sensor heard lately gives the speed; a paired one that is silent (a dead battery, a
-                    // magnet knocked off) must not leave the ride without one: then the GPS's
-                    let sensor = [Kind::Speed, Kind::SpeedCadence]
+                    // a speed sensor or a trainer heard lately gives the speed (indoors a fix through a window says
+                    // 0 km/h and would stop the ride); a paired one that is silent (a dead battery, a magnet knocked
+                    // off) must not leave the ride without one: then the GPS's
+                    let sensor = [Kind::Speed, Kind::SpeedCadence, Kind::Trainer]
                         .iter()
                         .any(|&k| self.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS));
                     if pvt.good() {

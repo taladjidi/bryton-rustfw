@@ -386,6 +386,8 @@ impl SensorId {
 
 /// ANT event code: the channel is closed (after [`ant_close`], or a search that timed out).
 const EVENT_CHANNEL_CLOSED: u8 = 0x07;
+/// An acknowledged message was not acknowledged by the other end (ANT message 0x40 event code 6).
+const EVENT_TRANSFER_TX_FAILED: u8 = 0x06;
 
 /// Low-priority search time-out, in 2.5 s units: 12 = 30 s. Then the chip closes the channel and the app reopens it
 /// later ([`crate::SEARCH_REST_MS`]), so a sensor that is not sending (a strap not worn) does not keep the radio
@@ -404,6 +406,23 @@ pub const SEARCH_TIMEOUT: u8 = 12;
 pub fn ant_closed(p: &[u8]) -> Option<u8> {
     match p {
         [ANT_EVT, .., EVENT_CHANNEL_CLOSED, ch] if p.len() == 44 => Some(*ch),
+        _ => None,
+    }
+}
+
+/// The channel of ANT event `p` if it reports an acknowledged message not delivered (`EVENT_TRANSFER_TX_FAILED`): the
+/// message is sent again.
+///
+/// ```
+/// let mut p = [0u8; 44];
+/// p[0] = 8;
+/// (p[42], p[43]) = (6, 7);
+/// assert_eq!(bryton_rustfw::nrf::ant_tx_failed(&p), Some(7));
+/// assert_eq!(bryton_rustfw::nrf::ant_tx_failed(&[8, 6, 7]), None, "short");
+/// ```
+pub fn ant_tx_failed(p: &[u8]) -> Option<u8> {
+    match p {
+        [ANT_EVT, .., EVENT_TRANSFER_TX_FAILED, ch] if p.len() == 44 => Some(*ch),
         _ => None,
     }
 }
@@ -474,14 +493,15 @@ pub fn ant_open(
 /// Sends 8 data bytes as an acknowledged message on channel `ch` (`sd_ant_acknowledge_message_tx`, op 0xc8; stock's
 /// encoder 0xd02bf3c8 writes the op, the channel, the size, then the bytes: Ghidra notes/agent_b2.md; the layout is
 /// inferred from those notes, not yet seen on the unit). The trainer's control pages go this way. The chip refusing
-/// it (the last one still queued) is a lost command, not a fault of the link: the caller sends again, and the
-/// link watchdog does not see it.
+/// it (the last one still queued) or not answering it (the layout is a guess) is a lost command, not a fault of the
+/// link: the caller decides, and the link watchdog does not see it (neither the `failed` note nor the `timeouts`
+/// count, which would reset the chip after two).
 pub fn ant_ack(b: &mut impl Board, rx: &mut Rx, ch: u8, data: [u8; 8]) -> Result<(), Error> {
     let [d0, d1, d2, d3, d4, d5, d6, d7] = data;
-    let failed = rx.failed;
+    let (failed, timeouts) = (rx.failed, rx.timeouts);
     let r = call(b, rx, &[ANT_CMD, 0xc8, ch, 8, d0, d1, d2, d3, d4, d5, d6, d7], &mut []);
-    if matches!(r, Err(Error::Code(_))) {
-        rx.failed = failed;
+    if r.is_err() {
+        (rx.failed, rx.timeouts) = (failed, timeouts);
     }
     r.map(drop)
 }

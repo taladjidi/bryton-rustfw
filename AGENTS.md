@@ -200,7 +200,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `src/drivers/fec.rs`: ANT+ FE-C pages as bytes (the transport; FTMS will be a sibling), sources in its module doc.
   `src/app/trainer.rs`: the glue (readings into `Live` where no meter or sensor is heard, the commands sent as
   acknowledged messages, the workout's power step and the course's grade as drives) and the trainer screen and
-  fields; `src/ui/trainer.rs` draws the screen.
+  fields; `src/ui/trainer.rs` draws the screen. One acknowledged message per 250 ms on its channel; its pairing is in
+  `\Rustfw\sensors.bin` (backup register 14 is the shifting systems').
 - `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the

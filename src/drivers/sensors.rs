@@ -108,8 +108,8 @@ impl Kind {
     }
 
     /// The RTC backup register that keeps the paired sensor (none of them is used by stock, BOARD.md 8). The two
-    /// shifting kinds and the trainer share 14, told apart by their tags ([`Kind::to_word`]): no register is free, so
-    /// the trainer is kept there only while no shifting system is (app/trainer.rs `keep_pairing`).
+    /// shifting kinds share 14, told apart by their tags ([`Kind::to_word`]). The trainer's entry is the old builds':
+    /// it is kept in [`SENSORS_FILE`] now, and a word found here is moved there (app/trainer.rs `sensors_storage`).
     pub fn backup(self) -> usize {
         [5, 6, 7, 8, 10, 14, 14, 14][self as usize]
     }
@@ -141,6 +141,43 @@ impl Kind {
             Kind::Trainer => 0x63,
             _ => 0xa5,
         }
+    }
+}
+
+/// `\Rustfw\sensors.bin`, one sector: the pairings that have no backup register of their own (the trainer's: 14 is
+/// the shifting systems', 15 is stock's). A tag and the sensor's word as [`Kind::to_word`] writes it, 0 for none,
+/// then a CRC; a damaged sector reads as no pairing, which is a pairing to redo, nothing more.
+pub const SENSORS_FILE: &str = "sensors.bin";
+
+/// The sector of [`SENSORS_FILE`] holding `trainer`.
+///
+/// ```
+/// use bryton_rustfw::{nrf::SensorId, sensors};
+/// let t = Some(SensorId { device: 5555, trans: 0xf1 });
+/// let mut s = sensors::sector(t);
+/// assert_eq!(sensors::from_sector(&s), Some(t));
+/// assert_eq!(sensors::from_sector(&sensors::sector(None)), Some(None), "a trainer forgotten");
+/// s[5] ^= 1;
+/// assert_eq!(sensors::from_sector(&s), None);
+/// ```
+pub fn sector(trainer: Option<SensorId>) -> [u8; 512] {
+    let mut s = [0; 512];
+    s[..4].copy_from_slice(b"SNS1");
+    s[4..8].copy_from_slice(&trainer.map_or(0, |id| Kind::Trainer.to_word(id)).to_le_bytes());
+    let crc = crate::fit::crc(0, &s[..8]);
+    s[8..10].copy_from_slice(&crc.to_le_bytes());
+    s
+}
+
+/// The trainer [`sector`] kept (Some(None): none), or None if `s` is no such sector.
+pub fn from_sector(s: &[u8; 512]) -> Option<Option<SensorId>> {
+    if s[..4] != *b"SNS1" || s[8..10] != crate::fit::crc(0, &s[..8]).to_le_bytes() {
+        return None;
+    }
+    let w = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
+    match Kind::Trainer.from_word(w) {
+        Some(id) => Some(Some(id)),
+        None => (w == 0).then_some(None),
     }
 }
 

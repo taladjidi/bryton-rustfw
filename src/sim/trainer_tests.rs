@@ -3,6 +3,7 @@
 //! trainer screen's keys.
 
 use super::*;
+use crate::fat::tests::{Ram, read_all};
 use crate::menu::{RideRow, Row};
 use crate::ui::Field;
 
@@ -29,6 +30,25 @@ fn unit() -> (Sim, App) {
     (sim, app)
 }
 
+/// The trainer in `\Rustfw\sensors.bin` on the card: None without a readable file.
+fn sensors_file(sim: &Sim) -> Option<Option<SensorId>> {
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).ok()?;
+    let v = read_all(&mut fat, &mut d, "Rustfw/sensors.bin").ok()?;
+    crate::sensors::from_sector(&v.try_into().ok()?)
+}
+
+/// The same unit started again on the same card and backup registers (a restart).
+fn restart(sim: &mut Sim) -> (Sim, App) {
+    let mut sim2 = Sim::new(9, 5, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    sim2.nordic.sensors.push(trainer_sensor());
+    sim2.nordic.trainer.rider_w = 180;
+    let app = App::start_with(&mut sim2, Some(KEY), Some([8, 7, 6, 5, 4, 3, 2, 1]));
+    (sim2, app)
+}
+
 /// The control pages (48, 49, 51) the trainer received, in order.
 fn commands(sim: &Sim) -> Vec<[u8; 8]> {
     sim.nordic.trainer.got.iter().copied().filter(|p| matches!(p[0], 0x30 | 0x31 | 0x33)).collect()
@@ -53,6 +73,7 @@ fn records(sim: &Sim, name: [u8; 12]) -> Vec<(Option<u16>, Option<u32>)> {
 #[test]
 fn pairs_reads_and_waits_to_be_taken_over() {
     let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
     sim.own_settings();
     sim.nordic.sensors.push(trainer_sensor());
     sim.nordic.trainer.rider_w = 180;
@@ -67,7 +88,8 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     assert!(sim.nordic.got.contains(&vec![6, 0xd3, 7, 0, 0, 0x11, 0]), "any trainer, device type 17");
     assert!(sim.nordic.got.contains(&vec![6, 0xd1, 7, 0, 0x20]), "8192 / 32768 s");
     run(&mut sim, &mut app, 4000);
-    assert_eq!(sim.backup[14], Kind::Trainer.to_word(ID), "paired and kept");
+    assert_eq!(sensors_file(&sim), Some(Some(ID)), "paired and kept in the sensors file");
+    assert_eq!(sim.backup[14], 0, "and not in the register the shifting systems use");
     let (label, value, _) = app.menu_row(Menu::Sensors, Kind::Trainer as usize).unwrap();
     assert_eq!((label.as_str(), value.as_str()), ("TRAINER", "5555"));
     let live = |app: &App, m| app.live.get(m);
@@ -244,4 +266,279 @@ fn trainer_fields_on_a_page() {
     sim.save("trainer_fields");
     super::tests::assert_consistent(&sim, &app);
     assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "105W");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review of ecbe541
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Indoors with a GPS fix (through a window) at 0 km/h: the trainer's speed is the ride's, whatever the phase of the
+/// receiver's second against the trainer's pages. The ride at 7.56 m/s for a minute is about 450 m.
+#[test]
+fn a_gps_fix_at_zero_does_not_replace_the_trainers_speed() {
+    for off in (0..1000).step_by(100) {
+        let (mut sim, mut app) = unit();
+        sim.gnss.fix = Some(0);
+        run(&mut sim, &mut app, 3000);
+        sim.gnss.next_ms += off;
+        run(&mut sim, &mut app, 1500);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 60_000);
+        let (dist, timer) = (app.ride.dist_m(), app.ride.timer_s());
+        assert!(dist > 400 && timer >= 55, "offset {off}: {dist} m in {timer} s");
+    }
+}
+
+/// The chip takes one acknowledged message per channel period and refuses the next: the set-up pages, the rider's
+/// quick changes and the grade changes wait their turn, none is lost, none is refused.
+#[test]
+fn setup_and_commands_wait_for_the_chip() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.ack_model = true;
+    run(&mut sim, &mut app, 3000);
+    let t = &sim.nordic.trainer;
+    assert_eq!((t.asked.as_slice(), t.user.is_some()), (&[54][..], true), "both set-up pages came");
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    for _ in 0..4 {
+        app.press(&mut sim, Press::Short(Key::Page)); // +5 W each, faster than a channel period
+        run(&mut sim, &mut app, 60);
+    }
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.trainer.target_w, 120);
+    for _ in 0..2 {
+        app.press(&mut sim, Press::Short(Key::Start)); // resistance, then simulation
+    }
+    for _ in 0..4 {
+        app.press(&mut sim, Press::Short(Key::Lap)); // -0.5 % each
+        run(&mut sim, &mut app, 60);
+    }
+    run(&mut sim, &mut app, 1000);
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.grade_x100), (0x33, -200));
+    assert_eq!(sim.nordic.ack_refused, 0, "never an acknowledged message while the last one is queued");
+}
+
+/// The trainer not acknowledging a message (`EVENT_TRANSFER_TX_FAILED`) sends it again: the capabilities request
+/// first, a command later.
+#[test]
+fn a_message_the_trainer_did_not_acknowledge_is_sent_again() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.ack_fail = 1;
+    run(&mut sim, &mut app, 3000);
+    let t = &sim.nordic.trainer;
+    assert_eq!(t.asked, [54], "the first request failed on air, the second arrived");
+    assert!(t.user.is_some());
+    assert_eq!(app.trainer.reading.max_resistance, Some(1000), "and was answered");
+    app.open(Screen::Trainer);
+    sim.nordic.ack_fail = 1;
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(sim.nordic.trainer.target_w, 105, "the command came the second time");
+}
+
+/// A chip that never answers an acknowledged message (the layout of op 0xc8 is inferred): the control is off for the
+/// power-up with a notice, one try only, and the link watchdog does not reset the chip over it.
+#[test]
+fn a_chip_that_never_answers_an_ack_turns_the_control_off() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.ack_silent = true;
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.rx.timeouts, 0, "the link watchdog does not count it");
+    assert!(app.notices[0].as_str().contains("TRAINER CONTROL FAILED"), "{:?}", app.notices[0].as_str());
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 20_000);
+    let acks = sim.nordic.got.iter().filter(|p| p.get(1) == Some(&0xc8)).count();
+    assert_eq!(acks, 1, "tried once");
+    assert!(
+        sim.nordic.resets.len() == 1 && app.radio_resets() == 0,
+        "only the start reset the chip: {:?}",
+        sim.nordic.resets
+    );
+    assert_eq!(app.field_text(Field::Power).as_str(), "180", "and the readings go on");
+}
+
+/// An earlier build's pairing in register 14 is moved to the file, 14 left alone; a Di2 in 14 and a trainer in the
+/// file are both there after a restart.
+#[test]
+fn the_trainer_is_kept_beside_a_di2_across_restarts() {
+    let (mut sim, mut app) = unit(); // the old way: the trainer's word in register 14
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(sensors_file(&sim), Some(Some(ID)), "moved to the file");
+    assert_eq!(sim.backup[14], 0, "14 is free for a shifting system again");
+    // a Di2 paired now
+    let di2 = SensorId { device: 77, trans: 5 };
+    sim.backup[14] = Kind::Di2.to_word(di2);
+    let (mut sim2, mut app2) = restart(&mut sim);
+    run(&mut sim2, &mut app2, 6000);
+    assert_eq!(app2.sensors[Kind::Trainer as usize], Sensor::Paired(ID), "the trainer is back");
+    assert_eq!(app2.sensors[Kind::Di2 as usize], Sensor::Paired(di2), "and the Di2");
+    assert_eq!(sim2.backup[14], Kind::Di2.to_word(di2));
+    // forgetting it is kept too
+    app2.set_sensor(&mut sim2, Kind::Trainer, Sensor::Off);
+    run(&mut sim2, &mut app2, 500);
+    assert_eq!(sensors_file(&sim2), Some(None));
+    let (mut sim3, mut app3) = restart(&mut sim2);
+    run(&mut sim3, &mut app3, 6000);
+    assert_eq!(app3.sensors[Kind::Trainer as usize], Sensor::Off);
+    assert_eq!(sim3.backup[14], Kind::Di2.to_word(di2));
+}
+
+/// A power cut after every sector of the pairing's write, the first (the file created) and the second (forgetting
+/// it): the next start has the old pairing or the new, and the volume is clean.
+#[test]
+fn a_cut_at_every_sector_of_the_pairing_reads_old_or_new() {
+    let started = || {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        sim.nordic.sensors.push(trainer_sensor());
+        let mut app = App::start(&mut sim, Some(KEY));
+        run(&mut sim, &mut app, 4000); // the (absent) file read
+        (sim, app)
+    };
+    for second in [false, true] {
+        let setup = || {
+            let (mut sim, mut app) = started();
+            if second {
+                app.set_sensor(&mut sim, Kind::Trainer, Sensor::Paired(ID));
+                run(&mut sim, &mut app, 500);
+                assert_eq!(sensors_file(&sim), Some(Some(ID)));
+                app.set_sensor(&mut sim, Kind::Trainer, Sensor::Off);
+            } else {
+                app.set_sensor(&mut sim, Kind::Trainer, Sensor::Paired(ID));
+            }
+            let base = sim.emmc.sectors_written;
+            (sim, app, base)
+        };
+        let (mut sim, mut app, base) = setup();
+        run(&mut sim, &mut app, 500);
+        let total = sim.emmc.sectors_written - base;
+        assert!(total > 0);
+        let new = if second { Sensor::Off } else { Sensor::Paired(ID) };
+        let old = if second { Sensor::Paired(ID) } else { Sensor::Off };
+        let (mut olds, mut news) = (0, 0);
+        for cut in 0..total {
+            let (mut sim, mut app, base) = setup();
+            sim.emmc.cut_after = Some(base + cut);
+            run(&mut sim, &mut app, 500);
+            let (mut sim2, mut app2) = restart(&mut sim);
+            run(&mut sim2, &mut app2, 6000);
+            let got = app2.sensors[Kind::Trainer as usize];
+            assert!(got == old || got == new, "second {second}, cut {cut}: {got:?}");
+            // the next write (the FAT copies compared first when the file was not whole) leaves a clean volume
+            app2.set_sensor(&mut sim2, Kind::Trainer, Sensor::Paired(SensorId { device: 1, trans: 1 }));
+            run(&mut sim2, &mut app2, 500);
+            assert!(!app2.sensors_store.dirty, "cut {cut}: written");
+            let lost = crate::fat::write::tests::fsck(&sim2.emmc.image).unwrap_or_else(|e| panic!("cut {cut}: {e}"));
+            assert!(lost <= 2, "cut {cut}: {lost} clusters lost");
+            if got == old {
+                olds += 1;
+            } else {
+                news += 1;
+            }
+        }
+        std::println!("second {second}: {total} sectors, {olds} cuts read the old pairing, {news} the new");
+        assert!(olds > 0);
+    }
+}
+
+/// Start and Lap keep their ride meaning on the trainer screen while riding; the mode changes by the MODE button
+/// (and not at all under a workout or a course).
+#[test]
+fn riding_the_keys_on_the_trainer_screen_are_the_rides() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 4000);
+    assert!(app.ride.lap_s() >= 3);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.ride.lap_s(), 0, "Lap marked a lap");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused, "Start paused the ride");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert_eq!(app.screen(), Screen::Trainer);
+    assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "ERG", "the mode is where it was");
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 600);
+    assert_eq!(sim.nordic.trainer.target_w, 105, "Page still steps the target");
+    let (_, mx, my, mw, mh) = crate::ui::trainer::BUTTONS[2];
+    let tap = (mx + mw / 2, my + mh / 2);
+    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(tap.0 as u16, tap.1 as u16)));
+    assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "RES", "MODE changes it");
+}
+
+/// A refusal of another command page is not "NOT ACCEPTED" for the command in force.
+#[test]
+fn not_accepted_is_for_the_command_in_force() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page)); // ERG, taken over
+    let status = |app: &App, what: &str| app.with_trainer_now(|n| n.status == what);
+    app.trainer.reading.last_cmd = Some((0x30, 3)); // a resistance command refused earlier
+    assert!(!status(&app, "NOT ACCEPTED"), "the target power is not the one refused");
+    app.trainer.reading.last_cmd = Some((0x31, 3));
+    assert!(status(&app, "NOT ACCEPTED"));
+    app.trainer.reading.last_cmd = Some((0x31, 0));
+    assert!(!status(&app, "NOT ACCEPTED"));
+}
+
+/// A course followed before the ride starts sends no grade (the course's first would be put on the trainer while the
+/// rider sits); it does once the ride runs.
+#[test]
+fn no_grade_before_the_ride_starts() {
+    let (mut sim, mut app) = unit();
+    app.set_course_memory(crate::storage::course::tests::memory());
+    run(&mut sim, &mut app, 1000);
+    app.open_courses(&mut sim);
+    for _ in 0..100 {
+        app.step(&mut sim);
+    }
+    app.follow_course(super::tests::hill(&app));
+    run(&mut sim, &mut app, 4000);
+    assert!(app.courses.as_deref().unwrap().on.is_some());
+    assert!(commands(&sim).is_empty(), "nothing sent: {:?}", commands(&sim));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 4000);
+    assert!(commands(&sim).iter().any(|p| p[0] == 0x33), "the grade goes out with the ride");
+}
+
+/// The rider's weight changed: the trainer is told again.
+#[test]
+fn a_new_weight_is_sent_to_the_trainer() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    let kg = app.settings.weight_kg;
+    assert_eq!(sim.nordic.trainer.user.map(|p| [p[1], p[2]]), Some((kg * 100).to_le_bytes()));
+    app.settings.weight_kg = kg + 5;
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.trainer.user.map(|p| [p[1], p[2]]), Some(((kg + 5) * 100).to_le_bytes()));
+}
+
+/// The trainer screen with the rider's power moving at 4 Hz: the second's snapshot is drawn, in boxes of its own,
+/// on the second's tick only (a budget in the style of `perf_budgets`). Measured 2026-10-25: 1604 px/s, 6 windows/s
+/// (724, 3 of them the strip's blinking GPS search with a steady power; the power's box, 4 digits, the rest). The
+/// first version drew both readings in half-width boxes: 2777, 9.
+#[test]
+fn the_trainer_screen_stays_within_its_pixel_budget() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 5000);
+    let (px, win, t0) = (sim.pixels, sim.windows, sim.ms);
+    for k in 0..240u16 {
+        sim.nordic.trainer.rider_w = 180 + (k % 7) * 3;
+        run(&mut sim, &mut app, 250);
+    }
+    let s = (sim.ms - t0) / 1000;
+    super::tests::assert_consistent(&sim, &app);
+    let (px, win) = ((sim.pixels - px) / s, (sim.windows - win) / s);
+    std::println!("trainer screen: {px} px/s, {win} windows/s");
+    assert!(px <= 2_000 && win <= 12, "{px} px/s, {win} windows/s");
 }

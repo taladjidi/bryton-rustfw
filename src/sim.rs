@@ -570,6 +570,17 @@ pub struct Nordic {
     pub channels: [Channel; 8],
     /// The FE-C trainer (device type 0x11) among `sensors` is this model: its pages instead of the sensor's `data`.
     pub trainer: SimTrainer,
+    /// The chip refuses an acknowledged message (op 0xc8) with TRANSFER_IN_PROGRESS for 250 ms (a channel period)
+    /// after one went out, as the real one does while the last is still queued (review of ecbe541); the count of
+    /// those refusals, and when the chip is free again.
+    pub ack_model: bool,
+    pub ack_busy_until: u64,
+    pub ack_refused: u32,
+    /// The chip never answers an acknowledged message (the 0xc8 layout is inferred, not seen on the unit).
+    pub ack_silent: bool,
+    /// Acknowledged messages that fail on air: EVENT_TRANSFER_TX_FAILED (code 6) after each, instead of
+    /// TX_COMPLETED, while this is non-zero (counted down); the trainer does not get them.
+    pub ack_fail: u32,
     /// The network keys set (`06 cc [net] [key]`), by network.
     pub keys: [Option<[u8; 8]>; 2],
     /// The BLE peripheral side (ble_sim.rs), and the phone in range.
@@ -848,7 +859,20 @@ impl Nordic {
                 }
                 (0xda, [t]) => self.channels[ch].search_timeout = *t,
                 // sd_ant_acknowledge_message_tx: the size, then the 8 bytes (nrf::ant_ack)
+                (0xc8, _) if self.ack_silent => return,
+                (0xc8, [8, ..]) if self.ack_model && now < self.ack_busy_until => {
+                    self.ack_refused += 1;
+                    self.queue(&[1, 0xc8, 0x1f, 0x40, 0, 0]); // NRF_ERROR_... TRANSFER_IN_PROGRESS (0x401f)
+                    return;
+                }
                 (0xc8, [8, d @ ..]) if d.len() == 8 && self.channels[ch].device_type == 0x11 => {
+                    self.ack_busy_until = now + 250;
+                    if self.ack_fail > 0 {
+                        self.ack_fail -= 1;
+                        self.queue(&[1, 0xc8, 0, 0, 0, 0]);
+                        self.ant_event(&[1, 0x40, ch as u8, 1, 6], 6, ch as u8); // EVENT_TRANSFER_TX_FAILED
+                        return;
+                    }
                     self.trainer.command(d.try_into().unwrap_or([0; 8]));
                 }
                 (0xc5, _) => {
@@ -1118,6 +1142,7 @@ impl Board for Sim {
         }
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
         let trainer = std::mem::take(&mut self.nordic.trainer);
+        let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         resets.push(self.ms);
         self.nordic = Nordic {
@@ -1126,6 +1151,8 @@ impl Board for Sim {
             ant_refuse,
             sensors,
             trainer,
+            ack_model,
+            ack_silent,
             phone,
             reset: true,
             resets,

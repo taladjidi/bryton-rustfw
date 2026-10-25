@@ -23,7 +23,7 @@
 //!
 //! Page 26 (torque) is not decoded: the trainer sends power in page 25. Page 17 (settings) neither.
 
-use crate::trainer::{Command, Reading};
+use crate::trainer::{Command, MAX_W, Reading};
 
 /// Bits of [`Reading::seen`]: the pages decoded.
 pub mod seen {
@@ -100,7 +100,7 @@ pub fn encode(c: Command) -> [u8; 8] {
     match c {
         Command::Resistance(half) => [0x30, 255, 255, 255, 255, 255, 255, half.min(200)],
         Command::Power(q) => {
-            let [lo, hi] = q.min(4000).to_le_bytes();
+            let [lo, hi] = q.min(MAX_W * 4).to_le_bytes(); // page 49's field holds 0.25 W units to 16383 W
             [0x31, 255, 255, 255, 255, 255, lo, hi]
         }
         Command::Track { grade_x100, crr } => {
@@ -155,5 +155,14 @@ mod tests {
         // 75.5 kg, 9.5 kg bike (190 x 0.05), a 668 mm wheel
         let p = encode(Command::User { weight_cg: 7550, bike_50g: 190, wheel_mm: 668 });
         assert_eq!(p, [0x37, 0x7e, 0x1d, 255, 8 | 0xe0, 0x0b, 66, 0]);
+    }
+
+    /// The target power goes to the trainer's own limit ([`MAX_W`]), not to 1000 W (review of ecbe541).
+    #[test]
+    fn power_up_to_max_w() {
+        let page = |q| u16::from_le_bytes([encode(Command::Power(q))[6], encode(Command::Power(q))[7]]);
+        assert_eq!(page(MAX_W * 4), 8000, "2000 W in quarter watts");
+        assert_eq!(page(5000), 5000, "1250 W is not cut at 1000 W");
+        assert_eq!(page(u16::MAX), MAX_W * 4, "and no further");
     }
 }

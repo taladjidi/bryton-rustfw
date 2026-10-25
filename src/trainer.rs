@@ -18,8 +18,15 @@
 /// reliable).
 pub const RESEND_MS: u32 = 4000;
 
-/// Longest target power, W (the profile's limit is 1000 W x 4 = 4000 in quarter watts; no trainer goes past 2000).
+/// Longest target power, W (page 49's field is 0.25 W units in 16 bits, so it could say 16383 W; no trainer goes
+/// past 2000).
 pub const MAX_W: u16 = 2000;
+
+/// How many times the capabilities are asked for before giving up (a trainer that never answers page 70), and the
+/// wait between two asks, ms.
+pub const CAPS_TRIES: u8 = 5;
+/// See [`CAPS_TRIES`].
+pub const CAPS_RETRY_MS: u32 = 2000;
 
 /// A grade past these is not sent, % x 100: most trainers stop at 15 to 20 %.
 pub const GRADE_RANGE: core::ops::RangeInclusive<i16> = -1000..=2000;
@@ -149,6 +156,15 @@ pub enum Setup {
     User,
 }
 
+/// What went out last, so a message that did not get through is the one sent again ([`Trainer::unsent`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sent {
+    Nothing,
+    Caps,
+    User,
+    Command,
+}
+
 /// The trainer's state: what was read, what the rider chose, what was sent last.
 #[derive(Clone, Copy, Debug)]
 pub struct Trainer {
@@ -163,9 +179,12 @@ pub struct Trainer {
     last: Option<Command>,
     sent_ms: u32,
     step: usize,
-    caps_asked: bool,
+    caps_tries: u8,
+    caps_ms: u32,
     user_sent: bool,
     user_ms: u32,
+    user_kg: u16,
+    what: Sent,
 }
 
 impl Default for Trainer {
@@ -181,9 +200,12 @@ impl Default for Trainer {
             last: None,
             sent_ms: 0,
             step: 0,
-            caps_asked: false,
+            caps_tries: 0,
+            caps_ms: CAPS_RETRY_MS,
             user_sent: false,
             user_ms: 0,
+            user_kg: 0,
+            what: Sent::Nothing,
         }
     }
 }
@@ -237,8 +259,12 @@ impl Trainer {
         self.engaged || d.erg_w.is_some() || d.grade_x100.is_some()
     }
 
-    /// Start: the next mode (the adjustment made on a workout step is dropped).
+    /// Start: the next mode (the adjustment made on a workout step is dropped). Not while a workout or a course drives
+    /// the trainer: the mode in force is theirs.
     pub fn cycle_mode(&mut self, d: &Drive) {
+        if d.erg_w.is_some() || d.grade_x100.is_some() {
+            return;
+        }
         self.mode = self.mode(d).next();
         (self.engaged, self.adjust_w) = (true, 0);
     }
@@ -262,14 +288,21 @@ impl Trainer {
         }
     }
 
-    /// The last command did not go out: it is sent again at the next pass.
+    /// The last message (a command, the capabilities request, the rider's page) did not get through, the chip
+    /// refusing it or the trainer not acknowledging it: it is due again at the next free slot.
     pub fn unsent(&mut self) {
-        self.last = None;
+        match core::mem::replace(&mut self.what, Sent::Nothing) {
+            Sent::Command => self.last = None,
+            Sent::Caps => (self.caps_tries, self.caps_ms) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS),
+            Sent::User => self.user_sent = false,
+            Sent::Nothing => {}
+        }
     }
 
     /// The trainer went silent (or was never heard): what was sent is not known to stand any more.
     pub fn lost(&mut self) {
-        (self.last, self.caps_asked, self.user_sent) = (None, false, false);
+        (self.last, self.caps_tries, self.caps_ms) = (None, 0, CAPS_RETRY_MS);
+        (self.user_sent, self.what) = (false, Sent::Nothing);
         self.reading = Reading::default();
     }
 
@@ -280,27 +313,31 @@ impl Trainer {
             (self.step, self.adjust_w) = (d.step, 0); // an adjustment belongs to the step it was made on
         }
         self.sent_ms = self.sent_ms.saturating_add(dt_ms);
-        self.user_ms = self.user_ms.saturating_add(dt_ms);
+        (self.user_ms, self.caps_ms) = (self.user_ms.saturating_add(dt_ms), self.caps_ms.saturating_add(dt_ms));
         if !heard || !self.engaged(d) {
             return None;
         }
         let c = self.command(d);
         if self.last != Some(c) || self.sent_ms >= RESEND_MS {
-            (self.last, self.sent_ms) = (Some(c), 0);
+            (self.last, self.sent_ms, self.what) = (Some(c), 0, Sent::Command);
             return Some(c);
         }
         None
     }
 
-    /// What to send once the trainer is heard, one thing per call: its capabilities, the rider and the bike, and the
-    /// rider again when it asks for them (at most every 10 s).
-    pub fn setup(&mut self) -> Option<Setup> {
-        if !self.caps_asked {
-            self.caps_asked = true;
+    /// What to send once the trainer is heard, one thing per call: its capabilities (again every [`CAPS_RETRY_MS`]
+    /// until its page 54 is seen, [`CAPS_TRIES`] times at most), the rider and the bike, and the rider again when it
+    /// asks for them (at most every 10 s) or when the rider's weight (`weight_kg`) changed.
+    pub fn setup(&mut self, weight_kg: u16) -> Option<Setup> {
+        if self.reading.seen & crate::fec::seen::P54 == 0
+            && self.caps_tries < CAPS_TRIES
+            && self.caps_ms >= CAPS_RETRY_MS
+        {
+            (self.caps_tries, self.caps_ms, self.what) = (self.caps_tries + 1, 0, Sent::Caps);
             return Some(Setup::Capabilities);
         }
-        if !self.user_sent || (self.reading.needs_user() && self.user_ms >= 10_000) {
-            (self.user_sent, self.user_ms) = (true, 0);
+        if !self.user_sent || self.user_kg != weight_kg || (self.reading.needs_user() && self.user_ms >= 10_000) {
+            (self.user_sent, self.user_ms, self.user_kg, self.what) = (true, 0, weight_kg, Sent::User);
             return Some(Setup::User);
         }
         None
@@ -349,12 +386,58 @@ mod tests {
         assert_eq!(t.mode(&course), Mode::Sim);
         assert_eq!(t.grade(&course), -350);
         let mut t = Trainer::default();
-        assert_eq!(t.setup(), Some(Setup::Capabilities));
-        assert_eq!(t.setup(), Some(Setup::User));
-        assert_eq!(t.setup(), None);
+        t.reading.seen = crate::fec::seen::P54; // its capabilities came
+        assert_eq!(t.setup(70), Some(Setup::User));
+        assert_eq!(t.setup(70), None);
         t.reading.status = 4;
-        assert_eq!(t.setup(), None, "asked, but too soon after");
+        assert_eq!(t.setup(70), None, "asked, but too soon after");
         t.due(10_000, false, &none);
-        assert_eq!(t.setup(), Some(Setup::User));
+        assert_eq!(t.setup(70), Some(Setup::User));
+    }
+
+    /// A start-up message that did not get through is sent again; the capabilities are asked until they come, a
+    /// few times; a new weight is told; a workout or a course keeps the mode.
+    #[test]
+    fn setup_is_retried_and_bounded() {
+        let mut t = Trainer::default();
+        let none = Drive::default();
+        assert_eq!(t.setup(70), Some(Setup::Capabilities));
+        t.unsent(); // refused by the chip
+        assert_eq!(t.setup(70), Some(Setup::Capabilities), "at once, and a refusal is not a try");
+        assert_eq!(t.setup(70), Some(Setup::User));
+        t.unsent(); // TX_FAILED
+        assert_eq!(t.setup(70), Some(Setup::User), "the rider's page again");
+        assert_eq!(t.setup(70), None, "the capabilities are asked again in a while");
+        let mut asks = 1;
+        for _ in 0..20 {
+            t.due(CAPS_RETRY_MS, false, &none);
+            asks += u8::from(t.setup(70) == Some(Setup::Capabilities));
+        }
+        assert_eq!(asks, CAPS_TRIES, "asked again until the limit, no more");
+        t.reading.seen = 0;
+        t.lost();
+        assert_eq!(t.setup(70), Some(Setup::Capabilities), "a trainer heard again starts over");
+        assert_eq!(t.setup(70), Some(Setup::User));
+        assert_eq!(t.setup(75), Some(Setup::User), "the rider's weight changed: told again");
+        assert_eq!(t.setup(75), None);
+        // a command refused is due again, not waited for
+        t.step_by(&none, true, false);
+        assert!(t.due(250, true, &none).is_some());
+        assert_eq!(t.due(250, true, &none), None);
+        t.unsent();
+        assert!(t.due(250, true, &none).is_some());
+    }
+
+    #[test]
+    fn a_workout_or_a_course_keeps_the_mode() {
+        let mut t = Trainer::default();
+        let workout = Drive { erg_w: Some(200), ..Drive::default() };
+        t.cycle_mode(&workout);
+        assert_eq!((t.mode(&Drive::default()), t.engaged), (Mode::Erg, false), "ignored");
+        let course = Drive { grade_x100: Some(100), ..Drive::default() };
+        t.cycle_mode(&course);
+        assert_eq!(t.mode(&Drive::default()), Mode::Erg);
+        t.cycle_mode(&Drive::default());
+        assert_eq!(t.mode(&Drive::default()), Mode::Resistance);
     }
 }

@@ -29,6 +29,18 @@ pub const BUTTONS: [(Button, u32, u32, u32, u32); 3] = {
     [(Button::Minus, 8, Y1, 108, 56), (Button::Plus, 124, Y1, 108, 56), (Button::Mode, 8, Y1 + 62, 224, 40)]
 };
 
+/// The boxes of the two readings: each value right-aligned in a box of its own, its unit drawn once beside it (the
+/// screen's left half power, the right half cadence): `(box x, box width, unit x, unit)`.
+fn reading_boxes() -> [(u32, u32, u32, &'static str); 2] {
+    let half = (W - 16) / 2;
+    let one = |end: u32, widest: &str, unit: &'static str| {
+        let unit_x = end - LABEL.width(unit);
+        let (bw, right) = (LABEL.width(widest), unit_x - LABEL.width(" "));
+        (right - bw, bw, unit_x, unit)
+    };
+    [one(8 + half - 4, "8888", "W"), one(8 + 2 * half - 4, "888", "RPM")]
+}
+
 /// The button under a touch at (`x`, `y`), if any.
 pub fn hit(x: u16, y: u16) -> Option<Button> {
     let (x, y) = (u32::from(x), u32::from(y));
@@ -44,7 +56,7 @@ pub struct Now<'a> {
     pub source: &'a str,
     /// The target with its unit ("250 W", "40 %", "2.5 %").
     pub target: &'a str,
-    /// The trainer's power and cadence; None: not heard.
+    /// The power and cadence shown (the second's snapshot, [`crate::sensors::Live::shown`]); None: not heard.
     pub power: Option<u16>,
     /// See `power`.
     pub cadence: Option<u8>,
@@ -56,7 +68,7 @@ pub struct Now<'a> {
 
 /// What is on screen: one fingerprint per box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Shown([u32; 5]);
+pub struct Shown([u32; 6]);
 
 fn fnv(h: u32, s: &str) -> u32 {
     s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
@@ -74,6 +86,9 @@ pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
         };
         let st = Style { fg, bg: if b == Button::Mode { ACCENT } else { DARK }, ..VALUE };
         text::draw(c, &st, x + w / 2, y + (h - st.height()) / 2, Align::Centre, label);
+    }
+    for (_, _, x, unit) in reading_boxes() {
+        text::draw(c, &Style { fg: GREY, ..LABEL }, x, NOW_Y, Align::Left, unit);
     }
     let mut shown = Shown::default();
     update(c, now, &mut shown);
@@ -94,28 +109,23 @@ pub fn shown(now: &Now) -> Shown {
 
 /// Redraws the boxes whose text changed since `shown` (all of them when it is the default: a fingerprint is never 0).
 pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
-    let mut reading = Line::<24>::new();
+    // power and cadence: the value alone in a box of its own, the unit beside it drawn once
+    let (mut power, mut cadence) = (Line::<12>::new(), Line::<12>::new());
     match now.power {
-        Some(p) => {
-            reading.push_u32(u32::from(p));
-            reading.push_str(" W");
-        }
-        None => reading.push_str("-- W"),
+        Some(p) => power.push_u32(u32::from(p)),
+        None => power.push_str("--"),
     }
-    reading.push_str("  ");
     match now.cadence {
-        Some(r) => {
-            reading.push_u32(u32::from(r));
-            reading.push_str(" RPM");
-        }
-        None => reading.push_str("-- RPM"),
+        Some(r) => cadence.push_u32(u32::from(r)),
+        None => cadence.push_str("--"),
     }
     let prints = [
         fnv(1, now.mode),
         fnv(2, now.source),
         fnv(3, now.target),
-        fnv(4, reading.as_str()),
-        fnv(u32::from(now.status_color) + 5, now.status),
+        fnv(4, power.as_str()),
+        fnv(5, cadence.as_str()),
+        fnv(u32::from(now.status_color) + 6, now.status),
     ];
     let bold = Style { fg: ACCENT, ..VALUE };
     let grey = Style { fg: GREY, ..LABEL };
@@ -135,8 +145,17 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
             2 => {
                 text::draw_in(c, &VALUE, 8, TARGET_Y, w, Align::Centre, now.target);
             }
-            3 => {
-                text::draw_in(c, &LABEL, 8, NOW_Y, w, Align::Centre, reading.as_str());
+            3 | 4 => {
+                let (x, bw, ..) = reading_boxes()[i - 3];
+                text::draw_in(
+                    c,
+                    &LABEL,
+                    x,
+                    NOW_Y,
+                    bw,
+                    Align::Right,
+                    if i == 3 { power.as_str() } else { cadence.as_str() },
+                );
             }
             _ => {
                 text::draw_in(c, &Style { fg: now.status_color, ..LABEL }, 8, STATUS_Y, w, Align::Centre, now.status);

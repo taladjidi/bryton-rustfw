@@ -27,11 +27,12 @@ fn nordic_packets() {
     // random bytes (the stream out of step), then frames built on purpose: a length header and an advertising
     // report, an ANT event (broadcast, acknowledged, channel closed) or random bytes; random bytes alone never
     // make a 44-byte ANT event or an advertising report (code review: the decoders were never reached)
-    let mut reached = [0usize; 3];
-    let look = |p: &[u8], reached: &mut [usize; 3]| {
+    let mut reached = [0usize; 4];
+    let look = |p: &[u8], reached: &mut [usize; 4]| {
         let _ = crate::nrf::event_id(p);
         reached[0] += usize::from(crate::nrf::ant_broadcast(p).is_some());
         reached[1] += usize::from(crate::nrf::ant_closed(p).is_some());
+        reached[3] += usize::from(crate::nrf::ant_tx_failed(p).is_some());
         if let Some(r) = crate::nrf::adv_report(p) {
             reached[2] += 1;
             let _ = (crate::nrf::ad_name(r.data), crate::nrf::ad_maker(r.data));
@@ -71,8 +72,10 @@ fn nordic_packets() {
                     p.push(8);
                     p.extend((0..43).map(|_| r()));
                     p[2] = [0x4e, 0x4f, 0x40, r()][usize::from(r() % 4)];
-                    if r() % 3 == 0 {
-                        p[42] = 0x07; // EVENT_CHANNEL_CLOSED
+                    match r() % 6 {
+                        0 | 1 => p[42] = 0x07, // EVENT_CHANNEL_CLOSED
+                        2 => p[42] = 0x06,     // EVENT_TRANSFER_TX_FAILED
+                        _ => {}
                     }
                     if r() % 8 == 0 {
                         p.truncate(usize::from(r() % 44)); // a short one
@@ -1817,13 +1820,16 @@ fn fec_pages_and_commands() {
                 1 => t.cycle_mode(&drive),
                 _ => {}
             }
-            let user = match t.setup() {
+            let user = match t.setup(u16::from(r())) {
                 Some(crate::trainer::Setup::User) => {
                     Some(Command::User { weight_cg: u16::from_le_bytes([r(), r()]), bike_50g: 190, wheel_mm: 668 })
                 }
                 _ => None,
             };
             let due = t.due(u32::from(r()) * 20, r() % 8 != 0, &drive);
+            if r() % 7 == 0 {
+                t.unsent(); // a refusal or a TX_FAILED, whatever went out last
+            }
             for c in [due, Some(t.command(&drive)), user].into_iter().flatten() {
                 let p = fec::encode(c);
                 pages[match p[0] {
@@ -1832,7 +1838,7 @@ fn fec_pages_and_commands() {
                         0
                     }
                     0x31 => {
-                        assert!(u16::from_le_bytes([p[6], p[7]]) <= 4000);
+                        assert!(u16::from_le_bytes([p[6], p[7]]) <= crate::trainer::MAX_W * 4);
                         1
                     }
                     0x33 => {

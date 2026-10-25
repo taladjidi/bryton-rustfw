@@ -387,6 +387,12 @@ impl App {
                 return;
             }
             (Screen::Trainer, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            // riding, Start and Lap are the ride's (pause, lap) as on any ride page: a key meant for the ride must
+            // not change the trainer's mode; the touch buttons change the mode and the target down
+            (Screen::Trainer, Input::Select) if self.ride.state() != ride::State::Idle => return self.start_key(b),
+            (Screen::Trainer, Input::Prev) if self.ride.state() != ride::State::Idle => return self.lap(),
+            (Screen::Trainer, Input::PrevHeld) if self.ride.state() != ride::State::Idle => return,
+            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => self.open(Screen::End(0)),
             (Screen::Trainer, _) => return self.trainer_input(b, i),
             (Screen::Edit(..), _) => return self.editor_input(b, i),
             (Screen::End(_) | Screen::Discard(_), _) => return self.end_input(b, i),

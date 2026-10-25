@@ -53,9 +53,11 @@ impl App {
             Sensor::Search => None,
             Sensor::Paired(id) => Some(id),
         };
-        // the two shifting kinds share a register: forgetting one leaves the other's pairing
+        // the two shifting kinds share a register: forgetting one leaves the other's pairing; the trainer is in
+        // the sensors file (a word an earlier build left in the register goes with it, once that is written)
         match id {
             Some(id) => self.keep_pairing(b, kind, id),
+            None if kind == Kind::Trainer => self.forget_trainer(),
             None if kind.from_word(b.backup_read(kind.backup())).is_some() => b.backup_write(kind.backup(), 0),
             None => {}
         }
@@ -110,6 +112,8 @@ impl App {
                     }
                 } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
                     self.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
+                } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
+                    self.trainer.unsent(); // an acknowledged message the trainer did not take: sent again
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {
                     self.scanning = false; // the scan's (source 1)
                     title = true;
