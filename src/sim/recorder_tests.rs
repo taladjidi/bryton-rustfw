@@ -2,14 +2,6 @@
 
 use super::*;
 
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
-
 /// Start from a key; the unit reset mid-ride (the card and the backup registers kept): at the start the ride
 /// comes back paused at its last checkpoint; Start goes on, a long Start ends it, and it is saved in
 /// `\Activities` under stock's name, where the history finds it. The volume stays clean.

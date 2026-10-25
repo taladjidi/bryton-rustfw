@@ -10,14 +10,6 @@ use crate::ui::Field;
 const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 const DI2_KEY: [u8; 8] = [8, 7, 6, 5, 4, 3, 2, 1];
 
-fn run(sim: &mut Sim, app: &mut App, ms: u64) {
-    let end = sim.ms + ms;
-    while sim.ms < end {
-        app.step(sim);
-        sim.delay_ms(POLL_MS);
-    }
-}
-
 /// Runs until simulated time `ms`.
 fn run_to(sim: &mut Sim, app: &mut App, ms: u64) {
     let left = ms.saturating_sub(sim.ms);
