@@ -180,6 +180,7 @@ impl App {
             }
             Field::Workout | Field::StepTarget | Field::StepTime | Field::NextStep => return self.workout_text(f),
             Field::WktPower => return self.gauge_now(0).value,
+            Field::TrainerMode | Field::TrainerTarget => return self.trainer_field(f),
             Field::Music if self.phone.now.title.as_str().is_empty() => (None, false),
             Field::Music => {
                 push_duration(&mut l, self.phone.now.elapsed(), false);

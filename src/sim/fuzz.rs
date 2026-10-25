@@ -1782,3 +1782,110 @@ fn notification_answers() {
     assert_eq!(inbox.len(), crate::phone::INBOX);
     assert!(inbox.get(crate::phone::INBOX).is_none());
 }
+
+/// Pages of the FE-C profile (random bytes behind a page number chosen from the ones decoded, a few others) into the
+/// decoder, and random driving of the trainer model: no panic, every page reached, every command a page of the
+/// profile with its fields in range.
+#[test]
+fn fec_pages_and_commands() {
+    use crate::fec::{self, seen};
+    use crate::trainer::{Command, Drive, Reading, Trainer};
+    let mut got = 0u8;
+    let mut pages = [0usize; 4];
+    for seed in 1..=4u32 {
+        let mut v = bytes(seed, 1 << 16);
+        let mut r = || v.next().unwrap_or(0);
+        let (mut reading, mut t) = (Reading::default(), Trainer::default());
+        for _ in 0..4000 {
+            let page = [16, 25, 25, 54, 71, 80, 81, r()][usize::from(r() % 8)];
+            let mut d: [u8; 8] = core::array::from_fn(|_| r());
+            d[0] = page;
+            fec::decode(d, &mut reading);
+            got |= reading.seen;
+            if let Some(h) = reading.power {
+                assert!(h < 0xfff);
+            }
+            t.reading = reading;
+            // the rider and the course at random
+            let drive = Drive {
+                erg_w: (r() % 2 == 0).then(|| u16::from_le_bytes([r(), r()])),
+                step: usize::from(r() % 4),
+                grade_x100: (r() % 2 == 0).then(|| i16::from_le_bytes([r(), r()])),
+            };
+            match r() % 4 {
+                0 => t.step_by(&drive, r() % 2 == 0, r() % 2 == 0),
+                1 => t.cycle_mode(&drive),
+                _ => {}
+            }
+            let user = match t.setup() {
+                Some(crate::trainer::Setup::User) => {
+                    Some(Command::User { weight_cg: u16::from_le_bytes([r(), r()]), bike_50g: 190, wheel_mm: 668 })
+                }
+                _ => None,
+            };
+            let due = t.due(u32::from(r()) * 20, r() % 8 != 0, &drive);
+            for c in [due, Some(t.command(&drive)), user].into_iter().flatten() {
+                let p = fec::encode(c);
+                pages[match p[0] {
+                    0x30 => {
+                        assert!(p[7] <= 200);
+                        0
+                    }
+                    0x31 => {
+                        assert!(u16::from_le_bytes([p[6], p[7]]) <= 4000);
+                        1
+                    }
+                    0x33 => {
+                        assert!(u16::from_le_bytes([p[5], p[6]]) <= 40_000);
+                        2
+                    }
+                    0x37 => 3,
+                    other => panic!("page {other:#x}"),
+                }] += 1;
+            }
+            if r() % 50 == 0 {
+                t.lost();
+                reading = Reading::default();
+            }
+        }
+    }
+    let all = seen::P16 | seen::P25 | seen::P54 | seen::P71 | seen::P80 | seen::P81;
+    assert_eq!(got, all, "every page decoded");
+    assert!(pages.iter().all(|&n| n > 100), "every control page sent: {pages:?}");
+}
+
+/// The app with a trainer that sends random pages: it keeps running, the power and speed it feeds stay within what
+/// the formats can say, and commands go out once the rider takes the trainer over.
+#[test]
+fn fec_pages_into_the_app() {
+    use crate::sim::{AntSensor, Sim, run};
+    use crate::{
+        sensors::{Kind, Metric},
+        *,
+    };
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.backup[14] = Kind::Trainer.to_word(SensorId { device: 5555, trans: 0xf1 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x11, id: 5555, data: |_| [0; 8], network: 0, ack: &[] });
+    sim.nordic.trainer.fuzz = Some(0x1234_5679);
+    let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut seen_bits = 0;
+    for k in 0..400 {
+        run(&mut sim, &mut app, 250);
+        seen_bits |= app.trainer.reading.seen;
+        if k == 20 {
+            app.open(Screen::Trainer);
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        if let Some(p) = app.live.get(Metric::Power) {
+            assert!(p < 0xfff);
+        }
+        if let Some(s) = app.live.get(Metric::Speed) {
+            assert!(s <= 2400, "{s}");
+        }
+    }
+    assert_eq!(seen_bits, 0x3f, "every page reached the app");
+    assert!(sim.nordic.trainer.got.iter().any(|p| matches!(p[0], 0x30 | 0x31 | 0x33)), "commands went out");
+}

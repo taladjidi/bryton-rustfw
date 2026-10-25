@@ -59,12 +59,22 @@ pub enum Kind {
     Shifting,
     /// Shimano Di2, its own ANT channel on a private network (module doc).
     Di2,
+    /// A smart trainer, ANT+ FE-C (device type 17; fec.rs).
+    Trainer,
 }
 
 impl Kind {
     /// Every kind, in channel order.
-    pub const ALL: [Kind; 7] =
-        [Kind::Hr, Kind::Speed, Kind::Cadence, Kind::SpeedCadence, Kind::Power, Kind::Shifting, Kind::Di2];
+    pub const ALL: [Kind; 8] = [
+        Kind::Hr,
+        Kind::Speed,
+        Kind::Cadence,
+        Kind::SpeedCadence,
+        Kind::Power,
+        Kind::Shifting,
+        Kind::Di2,
+        Kind::Trainer,
+    ];
 
     /// Stock's ANT channel for it.
     pub fn channel(self) -> u8 {
@@ -78,12 +88,12 @@ impl Kind {
 
     /// ANT+ device type.
     pub fn device_type(self) -> u8 {
-        [0x78, 0x7b, 0x7a, 0x79, 0x0b, 0x22, 0x01][self as usize]
+        [0x78, 0x7b, 0x7a, 0x79, 0x0b, 0x22, 0x01, 0x11][self as usize]
     }
 
     /// Channel period, in 1/32768 s (stock's: cadence at half rate, power at 8 Hz, the shifting ones at 4 Hz).
     pub fn period(self) -> u16 {
-        [8070, 8118, 16204, 8086, 4091, 8192, 8198][self as usize]
+        [8070, 8118, 16204, 8086, 4091, 8192, 8198, 8192][self as usize]
     }
 
     /// The ANT network of its channel: 0 the ANT+ one, 1 Shimano's (stock assigns channel 6 to network 1,
@@ -94,13 +104,14 @@ impl Kind {
 
     /// Its name in the sensors menu.
     pub fn name(self) -> &'static str {
-        ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER", "SHIFTING", "DI2"][self as usize]
+        ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER", "SHIFTING", "DI2", "TRAINER"][self as usize]
     }
 
     /// The RTC backup register that keeps the paired sensor (none of them is used by stock, BOARD.md 8). The two
-    /// shifting kinds share 14 (one shifting system per bike), told apart by their tags ([`Kind::to_word`]).
+    /// shifting kinds and the trainer share 14, told apart by their tags ([`Kind::to_word`]): no register is free, so
+    /// the trainer is kept there only while no shifting system is (app/trainer.rs `keep_pairing`).
     pub fn backup(self) -> usize {
-        [5, 6, 7, 8, 10, 14, 14][self as usize]
+        [5, 6, 7, 8, 10, 14, 14, 14][self as usize]
     }
 
     /// Its paired sensor as kept in [`Kind::backup`]: [`SensorId::to_word`] (tag 0xa5), and for the shifting kinds
@@ -127,6 +138,7 @@ impl Kind {
         match self {
             Kind::Shifting => 0x61,
             Kind::Di2 => 0x62,
+            Kind::Trainer => 0x63,
             _ => 0xa5,
         }
     }
@@ -354,7 +366,7 @@ impl Decoders {
             Kind::Shifting => self.battery = [0; 16],
             // the next button page is the baseline (a press missed while silent is not made up later)
             Kind::Di2 => self.buttons = None,
-            Kind::Power => {}
+            Kind::Power | Kind::Trainer => {}
         }
     }
 
@@ -450,6 +462,8 @@ impl Decoders {
                 }
             }
             Kind::Di2 => {}
+            // FE-C is decoded by the app into the trainer model (fec.rs), which decides what feeds `live`
+            Kind::Trainer => {}
         }
     }
 }

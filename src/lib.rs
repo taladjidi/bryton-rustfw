@@ -27,11 +27,12 @@ pub mod ride;
 #[cfg(test)]
 mod sim;
 pub mod storage;
+pub mod trainer;
 pub mod ui;
 pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
-pub use drivers::{ambient, battery, ble, emmc, gnss, nrf, panel, sensors, touch};
+pub use drivers::{ambient, battery, ble, emmc, fec, gnss, nrf, panel, sensors, touch};
 pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
@@ -191,6 +192,10 @@ pub struct App {
     shifts: u16,
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
+    /// The home trainer (trainer.rs, app/trainer.rs), the trainer screen as drawn, and whether it was heard last pass.
+    trainer: trainer::Trainer,
+    trainer_shown: ui::trainer::Shown,
+    trainer_up: bool,
     live: Live,
     /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
     zones: [ride::ZoneHold; 4],
@@ -530,6 +535,9 @@ impl App {
             drive: msc::Drive::new(),
             restart: false,
             phone: Phone::default(),
+            trainer: trainer::Trainer::default(),
+            trainer_shown: ui::trainer::Shown::default(),
+            trainer_up: false,
         }
     }
 
@@ -662,7 +670,7 @@ impl App {
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
             {
                 self.sensors[kind as usize] = Sensor::Paired(id);
-                b.backup_write(kind.backup(), kind.to_word(id));
+                self.keep_pairing(b, kind, id);
                 let mut l = Line::<20>::new();
                 l.push_str(kind.name());
                 l.push_str(" PAIRED");
@@ -757,6 +765,7 @@ impl App {
         }
         self.step_recorder(b);
         self.step_altitude(b);
+        self.step_trainer(b);
         if self.ble.is_some() {
             self.step_phone(b);
         }

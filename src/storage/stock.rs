@@ -962,7 +962,7 @@ impl Imported {
     /// inferred from the name), `PWRSensor<n>`, `ESSSensor<n>` (ANT+ shifting) and `DI2Sensor<n>`
     /// (`Cfg_SensorIniReadEntry` 0xd0200e94); a speed sensor's wheel; the Di2's button actions.
     pub fn sensors(&mut self, t: &[u8]) {
-        const PREFIX: [&str; 7] = ["HR", "SPD", "CAD", "COM", "PWR", "ESS", "DI2"];
+        const PREFIX: [&str; 8] = ["HR", "SPD", "CAD", "COM", "PWR", "ESS", "DI2", "TRN"];
         for (k, (prefix, slot)) in PREFIX.iter().zip(&mut self.sensors).enumerate() {
             for n in 1..=4u32 {
                 let mut buf = [0u8; 16];

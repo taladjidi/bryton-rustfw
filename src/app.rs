@@ -22,6 +22,7 @@ mod riding;
 mod screens;
 mod settings;
 mod stock_data;
+mod trainer;
 mod workouts;
 
 pub use barometer::*;

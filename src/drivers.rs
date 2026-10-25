@@ -6,6 +6,7 @@ pub mod ambient;
 pub mod battery;
 pub mod ble;
 pub mod emmc;
+pub mod fec;
 pub mod gnss;
 pub mod nrf;
 pub mod panel;

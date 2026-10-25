@@ -332,6 +332,8 @@ pub enum RideRow {
     StopWorkout,
     /// Stops following the course; the ride goes on.
     StopCourse,
+    /// Opens the trainer screen (app/trainer.rs).
+    Trainer,
 }
 
 /// The workout menu of a ride (while a step runs).

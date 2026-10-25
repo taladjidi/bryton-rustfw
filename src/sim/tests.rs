@@ -1161,7 +1161,7 @@ fn pairs_sensors_from_the_menu() {
     sim.classic_pages();
     let mut app = App::start(&mut sim, Some(KEY));
     let ops: Vec<_> = sim.nordic.got.iter().filter(|p| p[0] == 6).map(|p| p[1]).collect();
-    assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign the 6 ANT+ channels");
+    assert_eq!(ops, [0xfa, 0xcc, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2, 0xc2], "enable, key, assign the 7 ANT+ channels");
     assert!(sim.nordic.got.contains(&[&[6, 0xcc, 0][..], &KEY].concat()), "the key on network 0");
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
@@ -3855,7 +3855,7 @@ fn course_route(ms: u64) -> (i32, i32, i32) {
 }
 
 /// The list row of stock's hill (in \PlanTrip: the first HILL listed).
-fn hill(app: &App) -> usize {
+pub(super) fn hill(app: &App) -> usize {
     let list = &app.courses.as_deref().unwrap().list;
     (0..list.len()).find(|&i| list.get(i).unwrap().name() == "HILL").unwrap()
 }

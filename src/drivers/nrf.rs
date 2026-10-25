@@ -471,6 +471,21 @@ pub fn ant_open(
     Ok(())
 }
 
+/// Sends 8 data bytes as an acknowledged message on channel `ch` (`sd_ant_acknowledge_message_tx`, op 0xc8; stock's
+/// encoder 0xd02bf3c8 writes the op, the channel, the size, then the bytes: Ghidra notes/agent_b2.md; the layout is
+/// inferred from those notes, not yet seen on the unit). The trainer's control pages go this way. The chip refusing
+/// it (the last one still queued) is a lost command, not a fault of the link: the caller sends again, and the
+/// link watchdog does not see it.
+pub fn ant_ack(b: &mut impl Board, rx: &mut Rx, ch: u8, data: [u8; 8]) -> Result<(), Error> {
+    let [d0, d1, d2, d3, d4, d5, d6, d7] = data;
+    let failed = rx.failed;
+    let r = call(b, rx, &[ANT_CMD, 0xc8, ch, 8, d0, d1, d2, d3, d4, d5, d6, d7], &mut []);
+    if matches!(r, Err(Error::Code(_))) {
+        rx.failed = failed;
+    }
+    r.map(drop)
+}
+
 /// Closes channel `ch` and waits for the chip to report it closed, so it can be opened again with another ID.
 pub fn ant_close(b: &mut impl Board, rx: &mut Rx, ch: u8) -> Result<(), Error> {
     call(b, rx, &[ANT_CMD, 0xc5, ch], &mut [])?;

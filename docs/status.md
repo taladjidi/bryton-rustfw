@@ -40,6 +40,13 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The home trainer, ANT+ FE-C (src/trainer.rs, drivers/fec.rs, app/trainer.rs; phase 1)**: only against the
+  simulator's model of a trainer. On the unit with a smart trainer: SENSORS > TRAINER finds it (channel 7, type 17,
+  8192, which is not stock's channel 8), its power, cadence and speed on the pages; the acknowledged send
+  (`sd_ant_acknowledge_message_tx`, op 0xc8, `[6 c8 ch 8 data]`, inferred from stock's encoder, Ghidra notes
+  agent_b2.md) is accepted by the chip; the capabilities page (54) comes after the request (page 70); the trainer
+  takes pages 49 (ERG under a workout), 48 and 51 (SIM on a course; the trainer's speed advances the ride), 55; and
+  its page 71 answers pass. Pairing is kept in backup register 14 only while no shifting system is (no register free).
 - **The sleep power steps** (main.rs `sleep_power_init`): seen on the unit 2026-10-25 from RAM, masks 0, 8, 4, 1, 3
   and 15 (boots, dev link, BLE, keys, a full redraw at 16 MHz clean, PLL3 off, a ride recorded and discarded by keys;
   with 15 the owner checked touch, backlight, the USB drive and the power button). Still to see: a GPS fix outdoors,

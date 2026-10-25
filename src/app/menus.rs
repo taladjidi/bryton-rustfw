@@ -135,6 +135,7 @@ impl App {
                     (Row::Ride(RideRow::End), true),
                     (Row::Open(Menu::WorkoutNow), self.workout_running()),
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
+                    (Row::Ride(RideRow::Trainer), self.trainer_on()),
                     (Row::Set(menu::Setting::Light), true),
                     (Row::Open(Menu::Sensors), true),
                     // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
@@ -148,7 +149,14 @@ impl App {
             Menu::Fields(..) => (i < ui::FIELD_GROUPS.len()).then_some(Row::Group(i)),
             Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g)?.1.get(i).map(|&f| Row::Pick(f)),
             Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
-            Menu::Sensors => [Menu::Remote, Menu::Phone].get(i - Kind::ALL.len()).map(|&m| Row::Open(m)),
+            Menu::Sensors => {
+                let rows = [
+                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
+                    (Row::Open(Menu::Remote), true),
+                    (Row::Open(Menu::Phone), true),
+                ];
+                rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i - Kind::ALL.len())
+            }
             Menu::Remote => menu::REMOTE.get(i).copied(),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
             Menu::Stock => menu::FITNESS.get(i).map(|&r| Row::Stock(r)),
@@ -206,6 +214,7 @@ impl App {
                     RideRow::NextStep => "NEXT STEP",
                     RideRow::StopWorkout => "STOP WORKOUT",
                     RideRow::StopCourse => "STOP FOLLOWING",
+                    RideRow::Trainer => "TRAINER",
                 });
             }
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
@@ -565,6 +574,7 @@ impl App {
                         self.stop_course();
                         self.leave_menus();
                     }
+                    RideRow::Trainer => self.open(Screen::Trainer),
                 }
             }
             Some(Row::Past(n)) => {

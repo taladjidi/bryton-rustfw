@@ -140,6 +140,8 @@ pub enum Screen {
     Past,
     /// The phone's media remote (app/phone.rs).
     Media,
+    /// The trainer: mode and target (app/trainer.rs).
+    Trainer,
     /// ABOUT: the version, the commit, Ferris.
     About,
     /// Notification `k` of the inbox in full (app/notifs.rs), its first line shown `top`.
@@ -384,6 +386,8 @@ impl App {
                 }
                 return;
             }
+            (Screen::Trainer, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            (Screen::Trainer, _) => return self.trainer_input(b, i),
             (Screen::Edit(..), _) => return self.editor_input(b, i),
             (Screen::End(_) | Screen::Discard(_), _) => return self.end_input(b, i),
             (Screen::Menu(menu, sel), _) if self.editing => {

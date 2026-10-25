@@ -54,8 +54,10 @@ impl App {
             Sensor::Paired(id) => Some(id),
         };
         // the two shifting kinds share a register: forgetting one leaves the other's pairing
-        if id.is_some() || kind.from_word(b.backup_read(kind.backup())).is_some() {
-            b.backup_write(kind.backup(), id.map_or(0, |id| kind.to_word(id)));
+        match id {
+            Some(id) => self.keep_pairing(b, kind, id),
+            None if kind.from_word(b.backup_read(kind.backup())).is_some() => b.backup_write(kind.backup(), 0),
+            None => {}
         }
         if want != Sensor::Off
             && nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok()
@@ -87,8 +89,15 @@ impl App {
                         if kind == Kind::Hr {
                             self.hrv = Default::default();
                         }
+                        if kind == Kind::Trainer {
+                            self.trainer.lost();
+                        }
                     }
                     self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
+                    if kind == Kind::Trainer {
+                        fec::decode(data, &mut self.trainer.reading);
+                        self.fold_trainer();
+                    }
                     for &rr in self.decoders.beats.rr() {
                         self.hrv.push(rr);
                     }

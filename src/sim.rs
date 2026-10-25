@@ -568,6 +568,8 @@ pub struct Nordic {
     /// ANT+ sensors in range.
     pub sensors: Vec<AntSensor>,
     pub channels: [Channel; 8],
+    /// The FE-C trainer (device type 0x11) among `sensors` is this model: its pages instead of the sensor's `data`.
+    pub trainer: SimTrainer,
     /// The network keys set (`06 cc [net] [key]`), by network.
     pub keys: [Option<[u8; 8]>; 2],
     /// The BLE peripheral side (ble_sim.rs), and the phone in range.
@@ -577,6 +579,122 @@ pub struct Nordic {
     pub got: Vec<Vec<u8>>,
     rx: crate::nrf::Rx,
     out: std::collections::VecDeque<u8>,
+}
+
+/// A simulated FE-C trainer (drivers/fec.rs): sends pages 16 and 25 (and 80, 81, 54 when asked), applies the control
+/// pages it is sent (power follows the target in ERG, the speed follows the grade in SIM) and answers each with
+/// page 71. Every control page received is kept in `got`.
+#[derive(Default)]
+pub struct SimTrainer {
+    /// Every control page received, in order.
+    pub got: Vec<[u8; 8]>,
+    /// The data pages asked for (page 70), in order.
+    pub asked: Vec<u8>,
+    /// The page of the last control command (0: none yet, the trainer is on its own), its target power W, resistance
+    /// 0.5 %, grade 0.01 %.
+    pub mode: u8,
+    pub target_w: u16,
+    pub resistance: u8,
+    pub grade_x100: i32,
+    /// The power the rider makes when the trainer does not hold a target, W.
+    pub rider_w: u16,
+    /// The status nibble of page 25 (1 and 2 calibration, 4 user configuration), and its target flags.
+    pub status: u8,
+    pub limits: u8,
+    /// The user configuration page last received.
+    pub user: Option<[u8; 8]>,
+    /// The power and speed (mm/s) now.
+    pub power: u16,
+    pub speed_mm_s: u32,
+    /// Distance, mm; pages sent.
+    pub dist_mm: u64,
+    /// Fuzzing: the pages are pseudo-random ones of the profile (xorshift state), not the model's.
+    pub fuzz: Option<u32>,
+    ticks: u32,
+    events: u8,
+    acc: u16,
+    answer: Option<[u8; 8]>,
+    capabilities: bool,
+}
+
+impl SimTrainer {
+    fn command(&mut self, d: [u8; 8]) {
+        self.got.push(d);
+        match d[0] {
+            0x30 => (self.mode, self.resistance) = (0x30, d[7]),
+            0x31 => (self.mode, self.target_w) = (0x31, u16::from_le_bytes([d[6], d[7]]) / 4),
+            0x33 => {
+                self.mode = 0x33;
+                self.grade_x100 = i32::from(u16::from_le_bytes([d[5], d[6]])) - 20_000;
+            }
+            0x37 => {
+                self.user = Some(d);
+                self.status &= !4;
+            }
+            0x46 => {
+                self.asked.push(d[6]);
+                self.capabilities |= d[6] == 54;
+                return;
+            }
+            _ => return,
+        }
+        self.answer = Some([71, d[0], 0xff, 0, 0xff, 0xff, d[6], d[7]]); // passed
+    }
+
+    /// The next page, a quarter second on.
+    fn page(&mut self) -> [u8; 8] {
+        self.ticks += 1;
+        let t = self.ticks;
+        if let Some(x) = &mut self.fuzz {
+            let mut next = || {
+                *x ^= *x << 13;
+                *x ^= *x >> 17;
+                *x ^= *x << 5;
+                *x
+            };
+            let page = [16, 25, 25, 54, 71, 80, 81, 0, 255][(next() % 9) as usize];
+            let mut d: [u8; 8] = core::array::from_fn(|_| (next() >> 8) as u8);
+            d[0] = page;
+            return d;
+        }
+        self.power = if self.mode == 0x31 { self.target_w } else { self.rider_w };
+        self.speed_mm_s = match self.mode {
+            0x33 => (10_000 - self.grade_x100 * 8).clamp(1000, 20_000) as u32,
+            0x30 => 8000 - u32::from(self.resistance) * 20,
+            _ => u32::from(self.power) * 42,
+        };
+        self.dist_mm += u64::from(self.speed_mm_s) / 4;
+        if let Some(a) = self.answer.take() {
+            return a;
+        }
+        if core::mem::take(&mut self.capabilities) {
+            return [54, 255, 255, 255, 255, 0xe8, 0x03, 0x07];
+        }
+        match t % 64 {
+            1 => return [80, 255, 255, 1, 0x0f, 0x00, 0x34, 0x12], // manufacturer 15
+            2 => return [81, 255, 255, 1, 0x78, 0x56, 0x34, 0x12],
+            _ => {}
+        }
+        if t.is_multiple_of(4) {
+            let [s0, s1] = (self.speed_mm_s as u16).to_le_bytes();
+            [16, 25, t as u8, (self.dist_mm / 1000) as u8, s0, s1, 0xff, 0x38]
+        } else {
+            self.events = self.events.wrapping_add(1);
+            self.acc = self.acc.wrapping_add(self.power);
+            let [a0, a1] = self.acc.to_le_bytes();
+            let [p0, p1] = self.power.to_le_bytes();
+            [
+                25,
+                self.events,
+                if self.power > 0 { 90 } else { 0xff },
+                a0,
+                a1,
+                p0,
+                p1 & 0xf | self.status << 4,
+                0x30 | self.limits,
+            ]
+        }
+    }
 }
 
 /// An ANT sensor in range: its device type and number, its 8 data bytes as a function of the time (ms), the
@@ -657,7 +775,8 @@ impl Nordic {
                 continue;
             };
             self.channels[ch].found = Some(i);
-            let data = (self.sensors[i].data)(now);
+            let data =
+                if self.sensors[i].device_type == 0x11 { self.trainer.page() } else { (self.sensors[i].data)(now) };
             let id = if self.sensors[i].ack.contains(&data[0]) { 0x4f } else { 0x4e };
             self.ant_event(&[&[9, id, ch as u8][..], &data].concat(), 0x80, ch as u8); // EVENT_RX
         }
@@ -728,6 +847,10 @@ impl Nordic {
                         Channel { open: true, found: None, next: now, opened: now, ..self.channels[ch] };
                 }
                 (0xda, [t]) => self.channels[ch].search_timeout = *t,
+                // sd_ant_acknowledge_message_tx: the size, then the 8 bytes (nrf::ant_ack)
+                (0xc8, [8, d @ ..]) if d.len() == 8 && self.channels[ch].device_type == 0x11 => {
+                    self.trainer.command(d.try_into().unwrap_or([0; 8]));
+                }
                 (0xc5, _) => {
                     self.channels[ch].open = false;
                     self.queue(&[1, 0xc5, 0, 0, 0, 0]);
@@ -994,10 +1117,21 @@ impl Board for Sim {
             p.hang_up();
         }
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
+        let trainer = std::mem::take(&mut self.nordic.trainer);
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         resets.push(self.ms);
-        self.nordic =
-            Nordic { dead, refuse, ant_refuse, sensors, phone, reset: true, resets, chaos, ..Nordic::default() };
+        self.nordic = Nordic {
+            dead,
+            refuse,
+            ant_refuse,
+            sensors,
+            trainer,
+            phone,
+            reset: true,
+            resets,
+            chaos,
+            ..Nordic::default()
+        };
         self.ms += 950;
     }
 
@@ -1162,6 +1296,8 @@ mod altitude_tests;
 
 #[cfg(test)]
 mod shift_tests;
+#[cfg(test)]
+mod trainer_tests;
 
 #[cfg(test)]
 mod page_tests;

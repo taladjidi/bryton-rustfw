@@ -417,7 +417,8 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
 - **ANT+ sensor channels, as stock opens them** (`Ant_OpenSensorChannel` 0xd025e7f0): channel, device type, period
   (1/32768 s): 0 heart rate 0x78 8070; 1 speed 0x7b 8118; 2 cadence 0x7a 16204; 3 speed and cadence 0x79 8086;
   4 power 0x0b 4091; 5 ANT+ shifting 0x22 8192; 6 Shimano Di2 0x01 8198 (0x2006); then 7 0x28, 8 0x11, 9 0x02,
-  10 0x14, 11 0x23 (other ANT devices, not used here). All channels are assigned once at start (`06 c2 [ch] 00
+  10 0x14, 11 0x23 (other ANT devices, not used here). This firmware puts the FE-C trainer (type 0x11, 8192) on channel 7, free here, not on stock's 8 (a
+  channel is only a number; stock's own is untouched). All channels are assigned once at start (`06 c2 [ch] 00
   [net] 00`); a channel is reconfigured only while closed. **Two networks** (stock's assignment table 0xd027d2a0,
   disassembled 2026-10-25): channels 6 (Di2) and 9 (Shimano STEPS) on network 1, the rest on 0 (channels 13 and
   14, stock's scan channels, extended: 14 on 0, 13 on 1). `Ant_SetNetworkKeys` 0xd027d6d4 sets key 0 from the table

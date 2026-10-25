@@ -8,6 +8,7 @@ pub mod media;
 pub mod menu;
 pub mod text;
 pub mod tiles;
+pub mod trainer;
 
 use crate::fonts::PIXEL;
 use text::{Align, Style};
@@ -565,12 +566,17 @@ pub enum Field {
     ShiftBattery,
     /// The course's next cue: its arrow and how far ("350M", "1.2K"); "--" off course (course/cues.rs).
     NextTurn,
+    // the trainer (trainer.rs)
+    /// The trainer's mode in force: ERG, RES or SIM.
+    TrainerMode,
+    /// Its target: watts (ERG), percent (RES) or grade (SIM).
+    TrainerTarget,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 60] = {
+    pub const ALL: [Field; 62] = {
         use Field::*;
         [
             Time,
@@ -632,7 +638,9 @@ impl Field {
             Gear,
             Shifts,
             ShiftBattery, // the course followed again:
-            NextTurn,
+            NextTurn,     // the trainer:
+            TrainerMode,
+            TrainerTarget,
         ]
     };
 
@@ -703,6 +711,9 @@ impl Field {
             "SHIFTS",
             "SHIFT BAT",
             "NEXT TURN",
+            // the trainer
+            "MODE",
+            "TRG",
         ];
         LABELS[self as usize]
     }
@@ -719,8 +730,9 @@ impl Field {
             "88/88", "888-888", "88:88", "888-888", // the course followed:
             "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",  // the phone:
             "88:88", // electronic shifting:
-            "8-88", "8888", "GOOD", // the course followed again:
-            "888.8K",
+            "8-88", "8888", "GOOD",   // the course followed again:
+            "888.8K", // the trainer:
+            "ERG", "8.8%",
         ];
         WIDEST[self as usize]
     }
@@ -753,7 +765,7 @@ impl Field {
 }
 
 /// The fields by kind, for the picker: a page's box is a group then a field, a few rows each, not 55 in a row.
-pub const FIELD_GROUPS: [(&str, &[Field]); 10] = {
+pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
     use Field::*;
     [
         (
@@ -769,6 +781,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 10] = {
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
+        ("TRAINER", &[TrainerMode, TrainerTarget]),
     ]
 };
 

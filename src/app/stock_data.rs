@@ -282,7 +282,7 @@ impl App {
         self.save_misc(b);
         for (kind, id) in Kind::ALL.into_iter().zip(i.sensors) {
             if let Some(id) = id {
-                b.backup_write(kind.backup(), kind.to_word(id)); // paired at the next start if ANT is not up
+                self.keep_pairing(b, kind, id); // paired at the next start if ANT is not up
                 if self.ant {
                     self.set_sensor(b, kind, Sensor::Paired(id));
                 }

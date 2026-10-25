@@ -195,6 +195,12 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
+- `src/trainer.rs`: the home trainer whatever the link (what is read, what is commanded: ERG, resistance, SIM; when to
+  send again; nothing is sent until the rider or a workout or course takes it over). Pure logic.
+  `src/drivers/fec.rs`: ANT+ FE-C pages as bytes (the transport; FTMS will be a sibling), sources in its module doc.
+  `src/app/trainer.rs`: the glue (readings into `Live` where no meter or sensor is heard, the commands sent as
+  acknowledged messages, the workout's power step and the course's grade as drives) and the trainer screen and
+  fields; `src/ui/trainer.rs` draws the screen.
 - `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the

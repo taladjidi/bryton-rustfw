@@ -187,6 +187,7 @@ impl App {
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
             }
+            Screen::Trainer => self.draw_trainer(c),
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
             Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
             Screen::Nearby => {
@@ -489,6 +490,9 @@ impl App {
         }
         if self.screen == Screen::Media {
             self.phone.shown = ui::media::shown(&self.media_now());
+        }
+        if self.screen == Screen::Trainer {
+            self.trainer_printed();
         }
         if self.strip.more != self.strip_shown.more {
             self.update_strip(b); // the MORE marker
