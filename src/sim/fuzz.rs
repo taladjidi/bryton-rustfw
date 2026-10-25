@@ -1033,3 +1033,170 @@ fn menu_tree_by_chance() {
     }
     assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
 }
+
+/// Random edits of random pages (page.rs): every result well formed, within 5 rows and 8 cells, never more fields
+/// unreadable than before; each edit reached both ways (done and refused).
+#[test]
+fn page_edits() {
+    use crate::page::{CELLS, Page, ROWS};
+    use crate::ui::{Field, LAYOUTS};
+    let mut done = [0u32; 6];
+    let mut refused = [0u32; 6];
+    let mut noise = bytes(2024, 1 << 18);
+    let mut next = || u32::from(noise.next().unwrap_or(0));
+    for _ in 0..2000 {
+        let fields: [Field; CELLS] = core::array::from_fn(|_| Field::from_index(next() % Field::ALL.len() as u32));
+        let Some(mut p) = Page::preset(1 + (next() % (LAYOUTS.len() as u32 - 1)) as u8, fields) else { continue };
+        for _ in 0..20 {
+            let k = next() as usize % (p.cells() + 1); // one past the last too
+            let f = Field::from_index(next() % Field::ALL.len() as u32);
+            let op = next() as usize % 6;
+            let r = match op {
+                0 => p.split_across(k, f).map(|q| (q, k)),
+                1 => p.split_down(k, f).map(|q| (q, k)),
+                2 => p.merge(k),
+                3 => p.resize(k, next() % 2 == 0).map(|q| (q, k)),
+                4 => p.with_field(k, f).map(|q| (q, k)),
+                _ => p.merge(k).and_then(|(q, k)| q.split_down(k, f).map(|q| (q, k))),
+            };
+            match r {
+                Ok((q, at)) => {
+                    assert!(q.well_formed() && q.used().len() <= ROWS && q.cells() <= CELLS, "{op}: {q:?}");
+                    assert!(q.misfits() <= p.misfits(), "{op} made a field unreadable: {p:?} -> {q:?}");
+                    assert!(at < q.cells());
+                    done[op] += 1;
+                    p = q;
+                }
+                Err(_) => refused[op] += 1,
+            }
+        }
+    }
+    std::println!("page edits done {done:?}, refused {refused:?}");
+    assert!(done.iter().chain(&refused).all(|&n| n > 50), "every edit reached both ways: {done:?} {refused:?}");
+}
+
+/// Random and damaged copies of `\Rustfw\pages.bin` (page.rs `Saved`): no panic; random bytes with a good tag and
+/// CRC (so the checks after them run) give only well formed pages, and both kinds are reached.
+#[test]
+fn pages_file() {
+    use crate::page::{Page, Saved};
+    use crate::ui::Field;
+    let (mut good, mut bad) = (0u32, 0u32);
+    let p = Page::preset(5, [Field::Hr; 8]).unwrap();
+    let whole = Saved { seq: 9, pages: [p; crate::PAGES], count: 3, words: [1; 6], was: [2; 6] }.to_sector();
+    for seed in 1..=3000u32 {
+        let mut s = [0u8; 512];
+        for (b, x) in s.iter_mut().zip(bytes(seed, 512)) {
+            *b = x;
+        }
+        if seed % 2 == 0 {
+            // a valid copy with a few bytes changed
+            s = whole;
+            for (i, x) in bytes(seed * 31, 6).enumerate() {
+                let at = usize::from(x) + 256 * (i % 2);
+                s[at] ^= 1 << (i % 8);
+            }
+        } else {
+            // random rows, fields and count behind a good tag, the CRC made to match
+            s[..4].copy_from_slice(b"RPG1");
+            s[8] = (seed % 8) as u8;
+            for b in &mut s[60..60 + crate::PAGES * 13] {
+                *b = match *b % 4 {
+                    0 => (1 + *b % 3) << 4 | (1 + *b / 4 % 2),
+                    1 => 0,
+                    _ => *b % (Field::ALL.len() as u8 + 2),
+                };
+            }
+            let at = 60 + crate::PAGES * 13;
+            let crc = crate::fit::crc(0, &s[..at]);
+            s[at..at + 2].copy_from_slice(&crc.to_le_bytes());
+        }
+        let mut file = [0u8; 1024];
+        file[..512].copy_from_slice(&s);
+        match Saved::newest(&file) {
+            Some(saved) => {
+                assert!((1..=crate::PAGES).contains(&saved.count));
+                assert!(saved.pages[..saved.count].iter().all(Page::well_formed));
+                good += 1;
+            }
+            None => bad += 1,
+        }
+    }
+    std::println!("pages.bin copies: {good} read, {bad} refused");
+    assert!(good > 20 && bad > 1000, "{good} {bad}");
+}
+
+/// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at
+/// times: no panic, 1 to 6 pages all well formed, the panel equal to the screenshot, the editor never open while
+/// recording; splits, merges, pages added and deleted all reached.
+#[test]
+fn page_editor_inputs() {
+    use super::*;
+    let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
+    for seed in 1..=24u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        let mut app = App::start(&mut sim, None);
+        let mut noise = bytes(seed * 104_729, 1 << 14);
+        let mut next = || noise.next().unwrap_or(0);
+        for k in 0..400 {
+            let (a, b) = (next(), next());
+            if !matches!(
+                app.screen(),
+                Screen::Edit(..) | Screen::Menu(Menu::Edit(_) | Menu::Fields(..) | Menu::Group(..), _)
+            ) && a % 3 != 0
+            {
+                // back into the editor, on a page by chance
+                app.leave_menus();
+                app.screen = Screen::Ride(usize::from(b) % app.page_count());
+                app.edit_page(usize::from(b) % app.page_count(), usize::from(next()) % 8);
+                app.show(&mut sim);
+            }
+            let i = match a % 12 {
+                0..=2 => Input::Next,
+                3 => Input::Prev,
+                4..=6 => Input::Select,
+                7 => Input::Back,
+                8 => Input::Touch(Gesture::Tap(u16::from(b) % 240, u16::from(next()) % 320)),
+                9 => Input::Touch(Gesture::Tap(120, (ui::LIST_Y + u32::from(b % 6) * ui::MENU_ROW + 10) as u16)),
+                10 if b % 8 == 0 => {
+                    app.start_pause(); // a ride recording, or paused again
+                    continue;
+                }
+                _ => Input::Touch(Gesture::Hold(u16::from(b) % 240, u16::from(next()) % 320)),
+            };
+            let (count, cells) = (app.page_count(), app.edit.map(|e| e.work.cells()));
+            app.input(&mut sim, i);
+            for _ in 0..1 + usize::from(b % 3) {
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+            added += usize::from(app.page_count() > count);
+            deleted += usize::from(app.page_count() < count);
+            if let (Some(c), Some(e)) = (cells, app.edit) {
+                splits += usize::from(e.work.cells() > c);
+                merges += usize::from(e.work.cells() < c);
+            }
+            assert!((1..=PAGES).contains(&app.page_count()));
+            assert!(app.pages()[..app.page_count()].iter().all(|p| p.well_formed()));
+            if app.ride.state() == crate::ride::State::Running {
+                assert!(app.edit.is_none() || !matches!(app.screen(), Screen::Edit(..)), "editing while recording");
+            }
+            if k % 50 == 0 {
+                run_a_bit(&mut sim, &mut app);
+                super::tests::assert_consistent(&sim, &app);
+            }
+        }
+    }
+    std::println!("editor reached: {splits} splits, {merges} merges, {added} pages added, {deleted} deleted");
+    assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
+}
+
+/// Passes until the banner is gone (the strip and the page under it drawn again).
+fn run_a_bit(sim: &mut super::Sim, app: &mut crate::App) {
+    for _ in 0..100 {
+        app.step(sim);
+        crate::Board::delay_ms(sim, crate::POLL_MS);
+    }
+}
