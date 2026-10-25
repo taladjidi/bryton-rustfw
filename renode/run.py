@@ -2,13 +2,15 @@
 """Runs the firmware ELF on Renode's STM32H747 (s510.repl) and checks the hardware layer the host tests cannot:
 start-up, clocks and GPIO writes, the SPI1 byte stream to the panel, no fault, no hang.
 
-  renode/run.py [--seconds 8] [--vbus] [--renode PATH]
+  renode/run.py [--seconds 8] [--vbus | --off] [--renode PATH]
 
 It logs every SPI1 data write together with the D/C pin (PG9), decodes the panel protocol into a screen
 (target/renode/screen.png) and compares its fixed parts (the status strip's line, Ferris) with the simulator's preview
 (target/sim/preview.bmp, written by cargo test-host). --vbus raises PC13 first, so the USB start path runs: Renode
 models the OTG core but no host, so the dot must turn orange (or red if the core reset fails) and the clock keep
-running.
+running. --off then holds Back 10 s and lets go: the unit switches off, and the core must stay asleep in the
+standby's WFI (Renode has no standby: the instruction count over 2 s shows whether anything pending keeps waking it,
+the bug that left the unit spinning, dead to the power button, 2026-10-25).
 """
 import argparse, os, re, struct, subprocess, sys
 from pathlib import Path
@@ -102,24 +104,40 @@ def main():
     # 8 s: the start waits about 1 s for the Nordic chip, which Renode lacks, so its commands time out first.
     ap.add_argument('--seconds', type=float, default=8)
     ap.add_argument('--vbus', action='store_true')
+    ap.add_argument('--off', action='store_true')
     ap.add_argument('--renode', default=RENODE)
     a = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
-    log = OUT / ('vbus.log' if a.vbus else 'boot.log')
+    log = OUT / ('vbus.log' if a.vbus else 'off.log' if a.off else 'boot.log')
     script = [f'$elf=@{ELF}', f'include @{ROOT}/renode/s510.resc', 'logLevel 2',
               'logLevel 0 spi1', 'sysbus LogPeripheralAccess spi1', 'logLevel 0 gpioPortG',
               'sysbus LogPeripheralAccess gpioPortG', 'logLevel 0 usb1', 'sysbus LogPeripheralAccess usb1',
               'gpioPortE OnGPIO 3 true', 'gpioPortA OnGPIO 1 true']   # Page and Back released (low = pressed)
     if a.vbus:
         script.append('gpioPortC OnGPIO 13 true')
-    script += [f'emulation RunFor "{a.seconds}"', 'cpu PC', 'quit']
+    script += [f'emulation RunFor "{a.seconds}"']
+    if a.off:
+        # Back held (low; 10 s: 4 were too short in emulated time), released; the switching off ends with standby:
+        # then the count, twice, 2 s apart
+        script += ['gpioPortA OnGPIO 1 false', 'emulation RunFor "10"', 'gpioPortA OnGPIO 1 true',
+                   'emulation RunFor "2"', 'echo "instructions"', 'cpu ExecutedInstructions', 'emulation RunFor "2"',
+                   'echo "instructions"', 'cpu ExecutedInstructions']
+    script += ['cpu PC', 'quit']
     with open(log, 'w') as f:
         subprocess.run([a.renode, '--disable-gui', '--console', '-e', '; '.join(script)], stdout=f,
                        stderr=subprocess.STDOUT, check=True, cwd=ROOT)
 
-    stream, dc, usb, after_usb, pc = [], 0, 0, 0, None
+    stream, dc, usb, after_usb, pc, counts, counting = [], 0, 0, 0, None, [], False
     for line in open(log, errors='replace'):
+        plain = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
+        if plain == 'instructions':
+            counting = True
+            continue
+        if counting and re.fullmatch(r'0x[0-9a-fA-F]+|[0-9]+', plain):
+            counts.append(int(plain, 0))  # the first number after the marker (log lines may come between)
+            counting = False
+            continue
         if m := BSRR_G.search(line):
             v = int(m[1], 16)
             dc = 1 if v & DC else 0 if v & (DC << 16) else dc
@@ -165,6 +183,14 @@ def main():
         dot = rgb(screen, 167 + 6, 2 + 6)                                   # the USB symbol's stem (ui.rs)
         if dot not in ((248, 164, 0), (248, 0, 0)):                         # powered (no host) or failed
             fails.append(f'USB symbol is {dot}, neither orange nor red')
+    if a.off:
+        if len(counts) != 2:
+            fails.append(f'instruction counts not read: {counts}')
+        else:
+            ran = counts[1] - counts[0]
+            print(f'switched off: {ran} instructions in 2 s; last panel commands {[hex(c) for c in cmds[-4:]]}')
+            if ran > 100_000:  # asleep: none (a WFI that stays); spinning at 400 MHz: hundreds of millions
+                fails.append(f'the core kept running after switching off ({ran} instructions in 2 s): no standby')
     for f in fails:
         print('FAIL', f)
     print('renode check ok' if not fails else f'{len(fails)} failures (log: {log})')

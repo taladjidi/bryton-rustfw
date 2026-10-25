@@ -433,26 +433,27 @@ const PWR_WKUPCR: u32 = PWR + 0x20;
 const PWR_WKUPEPR: u32 = PWR + 0x28;
 
 fn standby() -> ! {
-    // nothing pending may wake the WFI below, or it returns, the core spins with the panel off and the power button
-    // has no standby to wake from: the unit looks dead until the four-button restart (seen on the unit, 2026-10-25;
-    // inferred cause: the touch line's EXTI and its NVIC wake-up, added 2026-10-23 after power-on last worked).
-    // The WKUP pins wake through PWR, not through these.
-    modify(EXTI_CPUIMR1, TOUCH_LINE, 0);
-    wr(EXTI_CPUPR1, TOUCH_LINE);
-    timer_stop();
-    wr(SCB_ICSR, 1 << 25); // PENDSTCLR
-    for k in 0..8 {
-        wr(NVIC_ICER0 + 4 * k, u32::MAX);
-        wr(NVIC_ICPR0 + 4 * k, u32::MAX);
-    }
     wr(PWR_WKUPEPR, 0); // all wake-up pins off while changing them
     wr(PWR_WKUPCR, 0x3f); // clear the wake-up flags
     wr(PWR_WKUPEPR, 1); // WKUPEN1, polarity rising (WKUPP1 = 0), no pull
     modify(PWR_CPUCR, 0, 1 << 9); // CSSF: clear the standby / stop flags
     modify(PWR_CPUCR, 0, (1 << 1) | 1); // PDDS_D2, PDDS_D1
     modify(0xe000_ed10, 0, 1 << 2); // SCB_SCR.SLEEPDEEP
-    barrier();
     loop {
+        // nothing pending may wake the WFI, or it returns, the core spins with the panel off and the power button
+        // has no standby to wake from: the unit looks dead until the four-button restart and drains its battery
+        // (seen on the unit, 2026-10-25: the touch line's EXTI and its NVIC wake-up, added 2026-10-23; reproduced
+        // on Renode, renode/run.py --off). Cleared again at every return, so a wake-up source added later cannot
+        // bring it back. The WKUP pins wake through PWR, not through these.
+        modify(EXTI_CPUIMR1, TOUCH_LINE, 0);
+        wr(EXTI_CPUPR1, TOUCH_LINE);
+        timer_stop();
+        wr(SCB_ICSR, 1 << 25); // PENDSTCLR
+        for k in 0..8 {
+            wr(NVIC_ICER0 + 4 * k, u32::MAX);
+            wr(NVIC_ICPR0 + 4 * k, u32::MAX);
+        }
+        barrier();
         wfi();
     }
 }
