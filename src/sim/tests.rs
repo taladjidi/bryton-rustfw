@@ -263,6 +263,18 @@ fn usb_drops_are_counted() {
     assert_eq!(app.notices[0].as_str(), "09:00 USB RECONNECT");
 }
 
+/// The two diagnostics that share registers 0 and 31 (settings.rs) never read each other's words as their own: the
+/// standby breadcrumbs' reset flags, whose top byte can be the drop count's tag 0x0b raw, are tagged 0x5c, so a drop
+/// after them counts from 1 (the review of 2026-10-25).
+#[test]
+fn the_standby_flags_are_no_usb_drop_count() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    sim.backup[STANDBY_FLAGS_BKP] = standby_flags_word(0x0b00_0000, 0x40); // pin and power-on resets, standby
+    app.usb_dropped(&mut sim);
+    assert_eq!(sim.backup[USB_DROPS_BKP], 0x0b00_0001);
+}
+
 /// Quick touches count: a 60 ms tap and a 120 ms swipe (the panel is read on INT and every 10 ms while a finger
 /// is down, not once per 50 ms pass when INT happens to be low).
 #[test]

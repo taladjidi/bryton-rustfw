@@ -60,14 +60,6 @@ pub const TOUCH_MS: u32 = 10;
 /// smoothing ([`ambient::Auto`]), a change of light reaches the backlight in about a second.
 pub const LIGHT_MS: u32 = 250;
 
-/// RTC backup register counting the USB drops the link recovered from (the board's SOF watch): tag 0x0b, the count
-/// in the low 16 bits. Free before (BOARD.md 8: stock never uses it).
-pub const USB_DROPS_BKP: usize = 31;
-
-/// RTC backup register with what the USB drive saw last at a drop ([`App::usb_dropped`]): tag 0xd1. Free before
-/// (BOARD.md 8).
-pub const USB_LAST_BKP: usize = 0;
-
 impl App {
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `dev.py peek`) and
     /// said in a notice.

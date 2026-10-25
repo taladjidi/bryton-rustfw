@@ -21,7 +21,7 @@ use board::{hw, usb};
 use bryton_rustfw::dev::{self, Effect, Host, Session, Stats};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::ui::UsbDot;
-use bryton_rustfw::{App, Board, POLL_MS, TOUCH_MS};
+use bryton_rustfw::{App, Board, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, TOUCH_MS, standby_flags_word};
 use core::sync::atomic::{AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
@@ -433,11 +433,10 @@ const PWR_WKUPCR: u32 = PWR + 0x20;
 const PWR_WKUPEPR: u32 = PWR + 0x28;
 
 // Standby breadcrumbs (the power button does not start the unit after switching off, 2026-10-25: to find where it
-// stops). RTC backup register 0 (the USB drive's last-drop record, also a diagnostic; stock R039 does not use it):
-// tag 0x5b in bits 24..31, the boots since standby was entered in bits 16..23, the times WFI returned in standby in
-// bits 0..15 (non-zero: the core spun instead of sleeping). Register 31 (the USB drop count, also a diagnostic): at
-// the first boot after it, RCC_RSR's flags (bits 16..31) and PWR_CPUCR's low half (its standby flags), raw.
+// stops): bryton_rustfw::STANDBY_BKP (non-zero WFI returns: the core spun instead of sleeping) and, at the first
+// boot after it, STANDBY_FLAGS_BKP; registers shared with the USB drop diagnostics, each word tagged (settings.rs).
 const STANDBY_CRUMB: u32 = 0x5b00_0000;
+const CRUMB: u32 = STANDBY_BKP as u32;
 const RCC_RSR: u32 = RCC + 0x0d0; // RM0399 RCC_RSR (inferred offset: to check against the reference manual)
 
 fn crumb_read(n: u32) -> u32 {
@@ -451,19 +450,19 @@ fn crumb_write(n: u32, v: u32) {
 
 /// At boot: counts a boot after standby was entered, and at the first one keeps the reset flags.
 fn standby_crumb_at_boot() {
-    let c = crumb_read(0);
+    let c = crumb_read(CRUMB);
     if c >> 24 != STANDBY_CRUMB >> 24 {
         return;
     }
     let boots = (c >> 16) & 0xff;
     if boots == 0 {
-        crumb_write(31, (rd(RCC_RSR) & 0xffff_0000) | (rd(PWR_CPUCR) & 0xffff));
+        crumb_write(STANDBY_FLAGS_BKP as u32, standby_flags_word(rd(RCC_RSR), rd(PWR_CPUCR)));
     }
-    crumb_write(0, (c & 0xff00_ffff) | (boots.saturating_add(1).min(0xff) << 16));
+    crumb_write(CRUMB, (c & 0xff00_ffff) | (boots.saturating_add(1).min(0xff) << 16));
 }
 
 fn standby() -> ! {
-    crumb_write(0, STANDBY_CRUMB);
+    crumb_write(CRUMB, STANDBY_CRUMB);
     wr(PWR_WKUPEPR, 0); // all wake-up pins off while changing them
     wr(PWR_WKUPCR, 0x3f); // clear the wake-up flags
     wr(PWR_WKUPEPR, 1); // WKUPEN1, polarity rising (WKUPP1 = 0), no pull
@@ -486,8 +485,8 @@ fn standby() -> ! {
         }
         barrier();
         wfi();
-        let c = crumb_read(0); // WFI returned: not in standby
-        crumb_write(0, (c & 0xffff_0000) | ((c & 0xffff) + 1).min(0xffff));
+        let c = crumb_read(CRUMB); // WFI returned: not in standby
+        crumb_write(CRUMB, (c & 0xffff_0000) | ((c & 0xffff) + 1).min(0xffff));
     }
 }
 
