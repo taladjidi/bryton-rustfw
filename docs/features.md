@@ -20,6 +20,13 @@
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, distance and moving time.
+- **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
+  a box of that size has the same digit height (4x in a half-width box, 7x or 8x across the screen); only a longer
+  value ("200-220", "1.6K 6%") takes the largest smaller scale it fits. Times: "MM:SS" under an hour (the step left
+  "M:SS"), then "H:MM" at the box's size with the seconds small and grey after it ("1:23 45"); the seconds go first
+  when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
+  across the screen at least 120 px tall (a smaller graph shows its title and bars), and the workout gauge's target
+  line only in a box 100 px tall or more.
 - **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
@@ -51,15 +58,23 @@
 
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
-  once a minute). Each is a banner and three beeps, played without stopping the loop; nothing while paused.
+  once a minute). Each is a banner ("EAT REMINDER", "DRINK REMINDER", "HEART RATE HIGH" in red) and three beeps,
+  played without stopping the loop; nothing while paused.
+- **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
+  for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
+  (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
+  switches off). No time in front: the strip shows it. Banners have a rank: an alarm, then a turn now, then what
+  the ride says (a turn ahead, a workout step, a reminder, a climb), then the rest. A lower one never covers a
+  higher one; the other waits (one at most, the higher kept) and shows next, so two said in the same second both
+  show. An incoming call is above them all: a banner said during it waits and shows when the call ends.
 
 ## Keys
 
 | Key | Overview and ride pages | Menus |
 |---|---|---|
-| Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down |
+| Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down (stops at the last row) |
 | hold Page | the menu | |
-| Lap | a lap (while riding) | up |
+| Lap | a lap (while riding) | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | end a paused ride | |
 | Back | on a ride page, the overview; on the overview, backlight on / off | back |
@@ -68,8 +83,14 @@
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
 
+- **Menus:** rows 44 px tall (about 8 mm, a fingertip), six a screen, a longer menu turned a screen at a time;
+  a "<" left of the title goes back. The selected row is black on orange (10:1 contrast; white on that orange was
+  2:1); a row's value is white like its label, green when it says a state that is on (a sensor heard, the phone
+  linked).
+
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
-  goes to the next one (kept with the page), a hold switches every graph between the last minutes and the whole ride.
+  goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
+  graph between the last minutes and the whole ride; neither while a ride records (below).
   Each has its scale on the left and its time span under it; power and heart rate are coloured by zone, W' balance as
   it drains, DFA alpha1 against the aerobic threshold (green above 0.75, orange to 0.5, red under).
 
@@ -80,12 +101,15 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
-| hold (600 ms, still) | the menu (as holding Page) | | |
-| tap | the gear right of the overview's date: the menu; a graph: its next plot | selects the row touched and acts on it (as Start) | keep it |
+| hold (600 ms, still) | the menu (as holding Page); not while a ride records | | |
+| tap | the gear right of the overview's date: the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
-Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
+Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs). **Touch safety:** while a ride
+records (not paused), a tap or a hold on a page does nothing but the map's buttons: no menu, no graph changed (a wet
+glove, rain); swipes still turn pages and the keys do everything. TOUCH in DEVICE (ON / OFF) switches gestures off
+altogether, for rain: the keys only, the call's buttons included.
 
 ## Ride
 
@@ -118,17 +142,21 @@ Gestures reach the app as the same `Input` events as the keys (src/ui/menu.rs).
 
 ## Menu
 
-One screen of groups, nothing more than a screen of rows away:
-- **SENSORS:** pair, forget; then the light, temperature and pressure readings.
+The groups, nothing more than a few rows away:
+- **SENSORS:** Start on a row: an off sensor searches; a searching one stops; a paired one heard asks "SURE?" and
+  a second Start forgets it; a paired one silent searches for it again at once (not after its rest), and a second
+  Start forgets it. Then the light, temperature and pressure readings.
+- **Asked first:** forgetting a sensor or the phone and IMPORT show "SURE?" in the row and ask in the banner; a
+  second Start (or a tap on the row) does it, any other key or touch drops it.
 - **PAGES:** the overview's four fields, pages 1 to 3 (field count, each field). A field row opens the field groups
   (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
   beside it; a group lists its fields, the current one selected; Select puts it in the box and goes back to the
   page. Any of the 56 fields is a few presses away, not up to 55.
 - **RIDER:** MAX HR (1 bpm steps) and FTP (5 W steps: Start, then Lap up and Page down, held to repeat, Start to
   keep), weight (1 kg), W' (0.5 kJ), WKT POWER (the workout gauge's window).
-- **DEVICE:** backlight level (or AUTO) and time-out, wheel size, GPS (fix, satellites, position, altitude, UTC), BLE
-  devices nearby, USB DRIVE (below), ABOUT (Ferris, the version, the commit the build is made from and its date;
-  `dev.py info` gives the same commit).
+- **DEVICE:** backlight level (or AUTO) and time-out, TOUCH on / off, wheel size, GPS (fix, satellites, position,
+  altitude, UTC), BLE devices nearby, USB DRIVE (below), ABOUT (Ferris, the version, the commit the build is made
+  from and its date; `dev.py info` gives the same commit).
 - **ALERTS, WORKOUTS, COURSES, HISTORY, STOCK DATA.**
 - **PHONE:** LINK (OFF, PAIRING, WAITING, LINKED, SECURE; ERR and a command's code if the radio refused the set-up),
   PAIR, REMOTE (the media remote), NOTIFY on / off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
@@ -270,12 +298,12 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
   photo (the camera's shutter is volume up, always sent as HID).
 - **Now playing** (AMS): title, artist, album, duration, playing or paused and the elapsed time; the title in the
   banner when the track changes; the MUSIC field (group PHONE) shows the elapsed time.
-- **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as a
-  line holds; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
+- **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as
+  two banner lines hold; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
   OFF stops them.
-- **Calls:** over the bottom of any screen (the ride page above keeps going): a red decline and a green answer
-  button with handsets, the caller in the orange banner; Start or the green button answers, Back or the red one
-  declines; a call answered or ended on the phone takes them away. No call time and no hang-up: iOS removes the
+- **Calls:** "INCOMING CALL" and the caller in the banner at the top, a red decline and a green answer button
+  at the bottom, each with a handset and its key's name (BACK, START); the page between keeps going. Start or the
+  green button answers, Back or the red one declines; a call answered or ended on the phone takes them away. No call time and no hang-up: iOS removes the
   call's notification at the answer (seen on the unit), so nothing tells the unit when the call ends.
 - **Time:** the clock is set from the phone (Current Time Service) at each connection, and the time zone kept for
   the GPS and the ride files (it replaces the one learnt at a fix); not while a ride is open, so its times never jump.

@@ -682,14 +682,16 @@ impl Field {
         LABELS[self as usize]
     }
 
-    /// The widest value it shows: the value's scale is chosen so this fits.
+    /// The widest value it shows (a time: without its small seconds): the tests draw it in every box of every layout
+    /// (the scale follows the value, not this; one longer than [`VALUE_CHARS`] gets a smaller one).
+    #[cfg(test)]
     fn widest(self) -> &'static str {
         const WIDEST: [&str; Field::ALL.len()] = [
-            "88:88", "888", "88.8", "888", "8888", "", "88:88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88:88",
+            "88:88", "888", "88.8", "888", "8888", "", "88:88", "88.88", "88.8", "88.8", "888", "8888", "88:88",
             "88.88", "8888", "", "-88.8", "", "8.88", "888", // power.rs and the ride's derived metrics:
             "8888", "8888", "8888", "8888", "8.88", "888", "8888", "8888", "88.8", "-88.8", "8888", "888", "888",
             "88/88", "-8888", "-88.8", "", "", "", "8888", "888.8", "88888", "888888", // the workout player:
-            "88/88", "888-888", "8:88:88", "888-888", // the course followed:
+            "88/88", "888-888", "88:88", "888-888", // the course followed:
             "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",  // the phone:
             "88:88", // electronic shifting:
             "8-88", "8888", "GOOD", // the course followed again:
@@ -818,16 +820,91 @@ pub fn field_box(id: u8, h: u32, i: usize) -> Option<(u32, u32, u32, u32)> {
 /// Height of a field's label line.
 const FIELD_LABEL_H: u32 = 22;
 
-/// The value style for `field` in a box `w` x `h`: the largest pixel-font scale its widest value fits.
-fn value_style(field: Field, w: u32, h: u32) -> Style {
-    let mut style = Style { scale: 1, ..LABEL };
-    for scale in (1..=8).rev() {
-        style.scale = scale;
-        if style.width(field.widest()) + 8 <= w && style.height() + FIELD_LABEL_H <= h {
-            break;
+/// The characters a value box is sized for: "88.88", "12:34", "-88.8". A box's values all have one scale, so the
+/// eye finds the same digit height in every box of a size (the UI review, 2026-10-25: a timer at 2x beside a
+/// distance at 4x and a heart rate at 6x).
+const VALUE_CHARS: u32 = 5;
+
+/// A value's ink stays this far from its box's edges (and its rules).
+const VALUE_MARGIN: u32 = 2;
+
+/// In a field's value, what follows this is drawn small and grey after the rest: the seconds of a time over an
+/// hour ("1:23|45"), so the hours and minutes keep the box's size.
+pub const SMALL_TAIL: char = '|';
+
+/// The small tail's style ([`SMALL_TAIL`]).
+const TAIL: Style = Style { fg: GREY, ..LABEL };
+
+/// The width of `s` in the pixel font less its last cell's blank column: its ink for laying out, the same for every
+/// text of a length (so a value's characters keep their cells as they change).
+fn ink(style: &Style, s: &str) -> u32 {
+    style.width(s).saturating_sub(if s.is_empty() { 0 } else { style.scale })
+}
+
+/// The ink width of `n` cells of the pixel font at `scale` (the last cell's blank column left out).
+const fn ink_cells(n: u32, scale: u32) -> u32 {
+    (n * CELL - 1) * scale
+}
+
+/// The value scale of a box `w` x `h`: the largest at which five characters ("88.88", "12:34") fit its width and the
+/// height under the label; 2 at least.
+///
+/// ```
+/// use bryton_rustfw::ui::{box_scale, field_box, RIDE_H};
+/// let half = field_box(6, RIDE_H, 0).unwrap(); // 2 x 3: 120 x 98
+/// assert_eq!((box_scale(half.2, half.3), box_scale(240, 296)), (4, 8));
+/// ```
+pub fn box_scale(w: u32, h: u32) -> u32 {
+    let fits =
+        |s: u32| ink_cells(VALUE_CHARS, s) + 2 * VALUE_MARGIN <= w && PIXEL.height as u32 * s + FIELD_LABEL_H < h;
+    (2..=8).rev().find(|&s| fits(s)).unwrap_or(2)
+}
+
+/// The scale of a value whose big part is `big` in a box `w` x `h`: the box's ([`box_scale`]), or, for a value
+/// longer than [`VALUE_CHARS`] that does not fit it ("1.6K 6%", "200-220"), the largest under it at which it does.
+/// By its length only, so a value that keeps its length keeps its scale and its characters their cells.
+fn value_scale(big: &str, w: u32, h: u32) -> u32 {
+    let n = big.len() as u32;
+    let mut scale = box_scale(w, h);
+    while scale > 1 && ink_cells(n.max(1), scale) + 2 * VALUE_MARGIN > w {
+        scale -= 1;
+    }
+    scale
+}
+
+/// Where a value goes in box `bx`: its style, the big part's left edge and top, the big part and the small tail
+/// (empty when there is none or it would not fit: the tail goes first), and the value band (left, right).
+type ValueAt<'a> = (Style, u32, u32, &'a str, &'a str, (u32, u32));
+
+fn value_at<'a>((x, y, w, h): (u32, u32, u32, u32), value: &'a str, fg: u16) -> ValueAt<'a> {
+    let (mut big, tail) = value.split_once(SMALL_TAIL).unwrap_or((value, ""));
+    let style = Style { fg, scale: value_scale(big, w, h), ..LABEL };
+    let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H).saturating_sub(style.height()) / 2;
+    let band = (x + 1, x + w - 1);
+    let room = band.1 - band.0;
+    while ink(&style, big) > room {
+        big = big.get(..big.len().saturating_sub(1)).unwrap_or(""); // too long even at 1x: cut, whole characters
+    }
+    let with_tail = style.width(big) + ink(&TAIL, tail);
+    let (tail, ink) = if tail.is_empty() || with_tail > room { ("", ink(&style, big)) } else { (tail, with_tail) };
+    (style, band.0 + room.saturating_sub(ink) / 2, top, big, tail, band)
+}
+
+/// Draws `s` in `style` from `x`, character by character, only those that differ from `old` (all: None), each in its
+/// cell, nothing at or right of `right`.
+fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str, old: Option<&str>) {
+    let cell = CELL * style.scale;
+    for (i, ch) in s.char_indices() {
+        let cx = x + i as u32 * cell;
+        match old.map(|o| o.get(i..).and_then(|t| t.chars().next())) {
+            _ if cx >= right => {}
+            None => {
+                text::draw_clipped(c, style, cx, y, right, s.get(i..i + ch.len_utf8()).unwrap_or(" "));
+            }
+            Some(Some(was)) if was == ch => {}
+            Some(was) => text::redraw_char(c, style, (cx, y, right), was.unwrap_or(' '), ch),
         }
     }
-    style
 }
 
 /// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
@@ -843,49 +920,58 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     }
 }
 
-/// A field's value in `fg`, centred under its label, in a fixed box (what was there before is cleared).
-pub fn draw_field_value(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, value: &str, fg: u16) {
-    let style = Style { fg, ..value_style(field, w, h) };
-    let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H - style.height()) / 2;
-    text::draw_in(c, &style, x + 1, top, w - 2, Align::Centre, value);
-}
-
-/// A field's value that was `old`: only the characters that changed when the length is the same (they keep their
-/// cells), else the whole value box.
-pub fn draw_field_value_changes(
-    c: &mut impl Canvas,
-    bx: (u32, u32, u32, u32),
-    field: Field,
-    old: &str,
-    new: &str,
-    fg: u16,
-) {
-    let (x, y, w, h) = bx;
-    let style = Style { fg, ..value_style(field, w, h) };
-    if old.len() != new.len() || style.width(new) + 2 > w {
-        return draw_field_value(c, bx, field, new, fg);
+/// A field's value in `fg`, centred by its ink under its label, in a fixed band (what was there before is cleared):
+/// at the box's scale, a [`SMALL_TAIL`] small and grey after it, bottoms aligned.
+pub fn draw_field_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), value: &str, fg: u16) {
+    let (style, left, top, big, tail, (l, r)) = value_at(bx, value, fg);
+    let bh = style.height();
+    c.fill(l, top, left.saturating_sub(l), bh, BLACK);
+    let mut end = text::draw_clipped(c, &style, left, top, r, big);
+    if !tail.is_empty() {
+        // the ink's bottom rows level: 7 font rows of each
+        let ty = top + 7 * style.scale - 7 * TAIL.scale;
+        let tw = TAIL.width(tail).min(r.saturating_sub(end));
+        c.fill(end, top, tw, ty - top, BLACK);
+        let t_end = text::draw_clipped(c, &TAIL, end, ty, r, tail);
+        c.fill(end, ty + TAIL.height(), tw, (top + bh).saturating_sub(ty + TAIL.height()), BLACK);
+        end = t_end;
     }
-    let top = y + FIELD_LABEL_H + (h - 1 - FIELD_LABEL_H - style.height()) / 2;
-    draw_changed_chars(c, &style, x + 1 + (w - 2 - style.width(new)) / 2, top, old, new);
+    c.fill(end, top, r.saturating_sub(end), bh, BLACK);
 }
 
-/// A graph's axis text: the pixel font at 1x, grey.
-const AXIS: Style = Style { scale: 1, fg: GREY, ..LABEL };
-/// Room left of the plot for its scale (four characters: "0.75", "2400"), and under it for the time.
-const AXIS_W: u32 = 4 * CELL + 3;
-const AXIS_H: u32 = 10;
+/// A field's value that was `old`: only the characters that changed when the length and the place of the small tail
+/// are the same (they keep their cells), else the whole value band.
+pub fn draw_field_value_changes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: &str, new: &str, fg: u16) {
+    let (style, left, top, big, tail, (_, r)) = value_at(bx, new, fg);
+    let (_, _, _, old_big, old_tail, _) = value_at(bx, old, fg);
+    if old_big.len() != big.len() || old_tail.len() != tail.len() || old.is_empty() {
+        return draw_field_value(c, bx, new, fg);
+    }
+    draw_cells(c, &style, left, top, r, big, Some(old_big));
+    let ty = top + 7 * style.scale - 7 * TAIL.scale;
+    draw_cells(c, &TAIL, left + style.width(big), ty, r, tail, Some(old_tail));
+}
 
-/// A graph box this big has its axes drawn (smaller ones show the bars alone).
+/// A graph's axis text and figures: the label font (2x), grey; no 1x text where a rider reads (UI review).
+const AXIS: Style = Style { fg: GREY, ..LABEL };
+/// Room left of the plot for its scale (four characters: "0.75", "2400"), and under it for the time.
+const AXIS_W: u32 = 4 * CELL * 2 + 3;
+const AXIS_H: u32 = 22;
+/// The label lines of a graph with axes: the title and a figure, then the second figure.
+const GRAPH_HEAD_H: u32 = 2 * 20 + 4;
+
+/// A graph box this big has its axes and figures drawn (smaller ones show the title and the bars alone): the full
+/// width, so the 2x scale leaves the plot most of the box.
 fn has_axes(w: u32, h: u32) -> bool {
-    w >= 110 && h >= 80
+    w >= 200 && h >= 120
 }
 
 /// The graph's plot in field box `bx`: left, top, columns, height. One bar per pixel column, side by side, so the
 /// bars make a filled area as stock's graph does; the newest bar is the rightmost column. Room is left for the
-/// axes ([`draw_graph_axes`]) when the box has it.
+/// axes ([`draw_graph_axes`]) and the figures ([`draw_graph_stats`]) when the box has it.
 pub fn graph_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
-    let (left, below) = if has_axes(w, h) { (AXIS_W, AXIS_H) } else { (0, 0) };
-    (x + 4 + left, y + FIELD_LABEL_H, w - 8 - left, h - FIELD_LABEL_H - 4 - below)
+    let (left, head, below) = if has_axes(w, h) { (AXIS_W, GRAPH_HEAD_H, AXIS_H) } else { (0, FIELD_LABEL_H, 0) };
+    (x + 4 + left, y + head, w - 8 - left, h - head - 4 - below)
 }
 
 /// What a graph plots, in its label line (`title`: "POWER W", "HR"), and, when the box has room, its axes: the
@@ -909,23 +995,29 @@ pub fn draw_graph_axes(c: &mut impl Canvas, bx: (u32, u32, u32, u32), title: &st
     text::draw_in(c, &AXIS, a.0 + a.2 / 2, ty, a.2 - a.2 / 2, Align::Right, "NOW");
 }
 
-/// Room at a graph's top right for two figures ([`draw_graph_stats`]): "AVG 1234".
-const STATS_W: u32 = 8 * CELL;
+/// Room at a graph's top right for its figures ([`draw_graph_stats`]): "AVG 1234".
+const STATS_W: u32 = 8 * CELL * 2;
 
-/// Two figures of the ride (`lines`: "AVG 182", "NP 195") at the right of a graph's label line, one above the other,
-/// each in its own box (None: left as drawn); none in a box too narrow to hold them beside `title`.
+/// Two figures of the ride (`lines`: what each was, "" when not drawn yet, and is: "AVG 182", "NP 195") at the right
+/// of a graph's label lines, one above the other, each in its own box (None: left as drawn), only its changed
+/// characters when its length stays; only in a box with axes, which has the two lines.
 pub fn draw_graph_stats(
     c: &mut impl Canvas,
-    (x, y, w, _): (u32, u32, u32, u32),
+    (x, y, w, h): (u32, u32, u32, u32),
     title: &str,
-    lines: [Option<&str>; 2],
+    lines: [Option<(&str, &str)>; 2],
 ) {
-    if LABEL.width(title) + STATS_W + 16 > w {
+    if !has_axes(w, h) || LABEL.width(title) + STATS_W + 16 > w {
         return;
     }
     let style = Style { fg: WHITE, ..AXIS };
-    for (k, l) in (0..).zip(lines).filter_map(|(k, l)| Some((k, l?))) {
-        text::draw_in(c, &style, x + w - 6 - STATS_W, y + 3 + k * (AXIS.height() + 2), STATS_W, Align::Right, l);
+    for (k, (was, l)) in (0..).zip(lines).filter_map(|(k, l)| Some((k, l?))) {
+        let (right, ly) = (x + w - 6, y + 4 + k * AXIS.height());
+        if was.len() == l.len() && style.width(l) <= STATS_W {
+            draw_changed_chars(c, &style, right - style.width(l), ly, was, l);
+        } else {
+            text::draw_in(c, &style, right - STATS_W, ly, STATS_W, Align::Right, l);
+        }
     }
 }
 
@@ -981,12 +1073,12 @@ pub type GaugeBar = ((u32, u32), Option<(u32, u16)>);
 type GaugeArea = (u32, u32, u32, u32);
 
 /// The gauge field's parts in box `bx`: the bar (left, top, columns, height), the number's top and style, the
-/// target line's top and style (the axis text in a box under 100 high, so the number keeps room). Fixed for a box,
-/// so the number and the marker are redrawn in place.
+/// target line's top and style (none in a box under 100 high: its 2x text would leave the number no room; the band shows
+/// on the bar). Fixed for a box, so the number and the marker are redrawn in place.
 fn gauge_parts(bx: (u32, u32, u32, u32)) -> (GaugeArea, u32, Style, (u32, Style)) {
     let (x, y, w, h) = bx;
-    let small = if h < 100 { AXIS } else { Style { fg: GREY, ..LABEL } };
-    let target_y = (y + h).saturating_sub(2 + small.height()).max(y);
+    let small = Style { fg: GREY, ..LABEL };
+    let target_y = (y + h).saturating_sub(2 + if h < 100 { 0 } else { small.height() }).max(y);
     let gh = (h / 8).clamp(12, 24); // the bar's height: a quarter of it above and below the track is the marker's
     let bar = (x + 8, target_y.saturating_sub(2 + gh).max(y), w.saturating_sub(16), gh);
     let top = y + FIELD_LABEL_H;
@@ -1037,7 +1129,7 @@ pub fn draw_gauge(
     fg: u16,
     g: Option<GaugeBar>,
 ) {
-    let (x, _, w, _) = bx;
+    let (x, _, w, h) = bx;
     let (bar, _, _, (target_y, small)) = gauge_parts(bx);
     draw_plot_title(c, bx, title);
     draw_gauge_value(c, bx, "", value, fg);
@@ -1045,7 +1137,9 @@ pub fn draw_gauge(
         Some(g) => draw_gauge_columns(c, bar, g, 0, bar.2),
         None => c.fill(bar.0, bar.1, bar.2, bar.3, BLACK),
     }
-    text::draw_in(c, &small, x + 1, target_y, w.saturating_sub(2), Align::Centre, target);
+    if h >= 100 {
+        text::draw_in(c, &small, x + 1, target_y, w.saturating_sub(2), Align::Centre, target);
+    }
 }
 
 /// The gauge's number that was `old` ("": not drawn) now `new` in `fg`: only the characters that changed when the
@@ -1147,47 +1241,83 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
     }
 }
 
-/// `style`, or at scale 1 if `text` would not fit in `w` ("08:41 HEART RATE PAIRED"): smaller rather than cut.
-fn fit(style: Style, text: &str, w: u32) -> Style {
-    if style.width(text) > w { Style { scale: 1, ..style } } else { style }
+/// Height of a banner: a notice over the top of any screen other than the overview (the strip and the page's
+/// first 20 px), two lines of the 2x font.
+pub const BANNER_H: u32 = 44;
+
+/// `text` as at most two lines that fit `w` in `style`: cut at a newline, else at the last space that lets the first
+/// line fit (else at the last character that does); the second line is what is left (cut when drawn if too long).
+///
+/// ```
+/// use bryton_rustfw::ui::{lines, LABEL};
+/// assert_eq!(lines(&LABEL, "LAP", 228), ("LAP", ""));
+/// assert_eq!(lines(&LABEL, "PAUSED: HOLD START TO END", 228), ("PAUSED: HOLD START", "TO END"));
+/// assert_eq!(lines(&LABEL, "INCOMING CALL\nMum", 228), ("INCOMING CALL", "Mum"));
+/// ```
+pub fn lines<'a>(style: &Style, text: &'a str, w: u32) -> (&'a str, &'a str) {
+    if let Some((a, b)) = text.split_once('\n') {
+        return (a, b);
+    }
+    if style.width(text) <= w {
+        return (text, "");
+    }
+    let fits = |end: usize| text.get(..end).is_some_and(|t| style.width(t) <= w);
+    match text.char_indices().rev().find(|&(i, ch)| ch == ' ' && fits(i)).map(|(i, _)| i) {
+        Some(i) => (text.get(..i).unwrap_or(""), text.get(i + 1..).unwrap_or("")),
+        None => {
+            let i = text.char_indices().map(|(i, _)| i).take_while(|&i| fits(i)).last().unwrap_or(0);
+            (text.get(..i).unwrap_or(""), text.get(i..).unwrap_or(""))
+        }
+    }
 }
 
-/// Top of a banner: a notice over the bottom of any screen other than the overview.
-pub const BANNER_Y: u32 = H - 40;
-
-/// A banner: `text` in black on orange over the bottom of the screen.
-pub fn draw_banner(c: &mut impl Canvas, text: &str) {
-    c.fill(0, BANNER_Y, W, 4, BLACK);
-    let style = fit(Style { fg: BLACK, bg: ACCENT, ..LABEL }, text, W);
-    c.fill(0, BANNER_Y + 4, W, 8, ACCENT);
-    text::draw_in(c, &style, 0, BANNER_Y + 12, W, Align::Centre, text);
-    c.fill(0, BANNER_Y + 12 + style.height(), W, H - BANNER_Y - 12 - style.height(), ACCENT);
+/// A banner over the top of the screen: `text` on one or two lines ([`lines`]) at 2x, black on orange, or white on
+/// red for an `alarm` (heart rate high, off course, the battery low, a ride not saving).
+pub fn draw_banner(c: &mut impl Canvas, text: &str, alarm: bool) {
+    let (fg, bg) = if alarm { (WHITE, RED) } else { (BLACK, ACCENT) };
+    let style = Style { fg, bg, ..LABEL };
+    let lh = style.height();
+    let (a, b) = lines(&style, text, W - 12);
+    let rows: &[&str] = if b.is_empty() { &[a] } else { &[a, b] };
+    let mut y = (BANNER_H - lh * rows.len() as u32) / 2;
+    c.fill(0, 0, W, y, bg);
+    for t in rows {
+        text::draw_in(c, &style, 0, y, W, Align::Centre, t);
+        y += lh;
+    }
+    c.fill(0, y, W, BANNER_H - y, bg);
 }
 
-/// Top of the incoming call's overlay: the two buttons, then the banner with the caller.
-pub const CALL_Y: u32 = BANNER_Y - CALL_BUTTON_H - 8;
-/// The call buttons' height.
-const CALL_BUTTON_H: u32 = 56;
+/// The call buttons' height: a handset and the key's name.
+const CALL_BUTTON_H: u32 = 64;
+/// Top of the incoming call's buttons (the banner with the caller is at the top).
+pub const CALL_Y: u32 = H - CALL_BUTTON_H - 12;
 /// The decline (red, left) and answer (green, right) buttons: x, y, w, h.
 pub const CALL_BUTTONS: [(u32, u32, u32, u32); 2] =
-    [(8, CALL_Y + 4, W / 2 - 16, CALL_BUTTON_H), (W / 2 + 8, CALL_Y + 4, W / 2 - 16, CALL_BUTTON_H)];
+    [(8, CALL_Y + 6, W / 2 - 16, CALL_BUTTON_H), (W / 2 + 8, CALL_Y + 6, W / 2 - 16, CALL_BUTTON_H)];
 /// A telephone handset, 16 x 16 (the earpiece top left, the mouthpiece bottom right).
 const HANDSET: [u16; 16] = [
     0x3000, 0x7800, 0x7c00, 0x7c00, 0x7800, 0x3800, 0x3800, 0x1c00, 0x1c00, 0x0e00, 0x0706, 0x039f, 0x01ff, 0x00fe,
     0x007c, 0x0000,
 ];
 
-/// An incoming call over the bottom of any screen: a red decline and a green answer button, each with a handset,
-/// and the banner with the caller (the page above keeps updating: [`crate::App`]'s bottom is [`CALL_Y`]). Once
-/// answered it goes: iOS removes the call's notification at the answer (seen on the unit, 2026-10-24), so neither
-/// the call's time nor a hang-up can follow over ANCS.
+/// An incoming call over any screen: the banner at the top says it is a call and who calls; two buttons at the
+/// bottom, each with a handset and the key that does the same: a red decline (BACK) and a green answer (START). The
+/// page between keeps updating ([`crate::App`]'s drawing area stops at [`CALL_Y`]). Once answered it goes: iOS
+/// removes the call's notification at the answer (seen on the unit, 2026-10-24), so neither the call's time nor a
+/// hang-up can follow over ANCS.
 pub fn draw_call(c: &mut impl Canvas, who: &str) {
-    c.fill(0, CALL_Y, W, BANNER_Y - CALL_Y, BLACK);
+    let mut l = text::Line::<48>::new();
+    l.push_str("INCOMING CALL\n");
+    l.push_str(who);
+    draw_banner(c, l.as_str(), false);
+    c.fill(0, CALL_Y, W, H - CALL_Y, BLACK);
     for (i, &(x, y, w, h)) in CALL_BUTTONS.iter().enumerate() {
-        c.fill(x, y, w, h, if i == 0 { RED } else { GREEN });
-        draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + h / 2 - 16, 2, WHITE);
+        let (bg, fg, key) = if i == 0 { (RED, WHITE, "BACK") } else { (GREEN, BLACK, "START") };
+        c.fill(x, y, w, h, bg);
+        draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + 6, 2, fg);
+        text::draw_in(c, &Style { fg, bg, ..LABEL }, x + 2, y + h - 4 - LABEL.height(), w - 4, Align::Centre, key);
     }
-    draw_banner(c, if who.is_empty() { "INCOMING CALL" } else { who });
 }
 
 /// ABOUT: Ferris large, the firmware's name, its version and commit (`describe`: "1a2b3c4", "-dirty" when built
@@ -1220,11 +1350,20 @@ pub fn draw_ferris(c: &mut impl Canvas) {
 // Menus: a title, then rows of a label and a value; the selected row in orange.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Rows a menu shows at most.
-pub const MENU_ROWS: usize = ((H - LIST_Y) / LIST_ROW) as usize;
+/// Menu row pitch: 44 px, about 8 mm on this panel (0.18 mm a pixel), a fingertip's size (Apple's 44 pt, Material's
+/// 48 dp); 20 px rows (3.6 mm) let a gloved finger cover two or three (UI review, 2026-10-25).
+pub const MENU_ROW: u32 = 44;
 
-/// The title line of a menu or list.
+/// Rows a menu shows at most (6); a longer menu turns a screen of rows at a time.
+pub const MENU_ROWS: usize = ((H - LIST_Y) / MENU_ROW) as usize;
+
+/// Where a tap goes back (as Back): the "<" at the left of a menu's title, a finger wide, from the strip's line to
+/// the first row.
+pub const BACK_TAP: (u32, u32, u32, u32) = (0, PAGE_Y, 48, LIST_Y - PAGE_Y);
+
+/// The title line of a menu, with the "<" that goes back ([`BACK_TAP`]).
 pub fn draw_title(c: &mut impl Canvas, title: &str) {
+    text::draw_in(c, &LABEL, 4, NEARBY.1, NEARBY.0 - 4, Align::Left, "<");
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
 }
 
@@ -1234,16 +1373,23 @@ fn menu_label_w(label: &str) -> u32 {
     (label.len().min(10) as u32 * 2 + 1) * CELL / 2 * LABEL.scale
 }
 
-/// Menu row `i`: `label` on the left, `value` on the right in `value_color`; selected, the row is orange.
+/// Menu row `i`: `label` on the left, `value` on the right in `value_color` (white unless it says a state), centred
+/// in its [`MENU_ROW`], a dark line under it; selected, the row is orange with black text (10:1 against the orange,
+/// where white was 2:1).
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
-    let y = LIST_Y + i as u32 * LIST_ROW;
+    let y = LIST_Y + i as u32 * MENU_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
     let name_w = menu_label_w(label);
-    c.fill(0, y, NEARBY.0, LIST_ROW, bg);
-    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, y, name_w, Align::Left, label);
+    let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
+    c.fill(0, y, W, ty - y, bg);
+    c.fill(0, ty, NEARBY.0, LABEL.height(), bg);
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty, name_w, Align::Left, label);
     let fg = if selected { BLACK } else { value_color };
-    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, y, NEARBY.2 - name_w, Align::Right, value);
-    c.fill(NEARBY.0 + NEARBY.2, y, W - NEARBY.0 - NEARBY.2, LIST_ROW, bg);
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, ty, NEARBY.2 - name_w, Align::Right, value);
+    c.fill(NEARBY.0 + NEARBY.2, ty, W - NEARBY.0 - NEARBY.2, LABEL.height(), bg);
+    let below = ty + LABEL.height();
+    c.fill(0, below, W, y + MENU_ROW - 1 - below, bg);
+    c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
 }
 
 #[cfg(test)]
@@ -1254,12 +1400,10 @@ pub(crate) mod tests {
     use std::vec::Vec;
 
     #[test]
-    fn every_field_in_one_group_that_fits_a_screen() {
+    fn every_field_in_one_group() {
         for f in Field::ALL {
             assert_eq!(FIELD_GROUPS.iter().filter(|(_, g)| g.contains(&f)).count(), 1, "{f:?}");
         }
-        assert!(FIELD_GROUPS.iter().all(|(_, g)| g.len() <= MENU_ROWS), "a group is one screen");
-        assert!(FIELD_GROUPS.len() <= MENU_ROWS);
     }
 
     #[test]
@@ -1275,11 +1419,26 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn long_notices_fit() {
-        for t in ["08:41 RIDE RESUMED", "08:41 HEART RATE PAIRED", "08:41 SPEED+CAD PAIRED", "08:41 FAULT RESET 3"] {
-            assert!(fit(LABEL, t, W - 8).width(t) <= W - 8, "{t}");
+    fn banners_fit_two_lines() {
+        for t in [
+            "HEART RATE PAIRED",
+            "PAUSED: HOLD START TO END",
+            "HOLD BACK AGAIN TO SWITCH OFF",
+            "INCOMING CALL\nMum",
+            "FORGET HEART RATE?\nSTART AGAIN: YES",
+            "FORGET SPEED+CAD?\nSTART AGAIN: YES",
+            "IMPORT SETTINGS?\nSTART AGAIN: YES",
+            "SEARCHING AGAIN\nSTART AGAIN: FORGET",
+            "FORGET THE PHONE?\nSTART AGAIN: YES",
+        ] {
+            let (a, b) = lines(&LABEL, t, W - 12);
+            assert!(LABEL.width(a) <= W - 12 && LABEL.width(b) <= W - 12, "{t}: {a} / {b}");
+            assert_eq!(a.len() + b.len() + usize::from(!b.is_empty()), t.len(), "{t}: nothing lost");
         }
-        assert_eq!(fit(LABEL, "08:41 RIDE RESUMED", W - 8).scale, LABEL.scale, "the usual size when it fits");
+        assert!(2 * LABEL.height() <= BANNER_H && BANNER_H > PAGE_Y, "two lines, over the strip");
+        let mut f = Frame::new();
+        draw_banner(&mut f, "A VERY LONG BANNER THAT GOES ON AND ON PAST TWO LINES", true);
+        draw_call(&mut f, "Somebody with a long name");
     }
 
     /// A framebuffer that panics on any fill off screen.
@@ -1361,8 +1520,13 @@ pub(crate) mod tests {
                 let mut f = Frame::new();
                 for (&bx, field) in b.iter().flat_map(|bx| Field::ALL.iter().map(move |f| (bx, f))) {
                     draw_field_frame(&mut f, bx, *field);
-                    draw_field_value(&mut f, bx, *field, field.widest(), WHITE);
-                    assert!(value_style(*field, bx.2, bx.3).scale >= 2, "{n} fields: {field:?} readable");
+                    draw_field_value(&mut f, bx, field.widest(), WHITE);
+                    assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{n} fields: {field:?} readable");
+                    if field.widest().len() as u32 <= VALUE_CHARS {
+                        let s = value_scale(field.widest(), bx.2, bx.3);
+                        assert_eq!(s, box_scale(bx.2, bx.3), "{n} fields: {field:?} at its box's scale");
+                        assert!(ink_cells(VALUE_CHARS, s) + 2 * VALUE_MARGIN <= bx.2, "{n} fields: {field:?} fits");
+                    }
                 }
             }
         }
@@ -1401,12 +1565,20 @@ pub(crate) mod tests {
     #[test]
     fn changed_characters_equal_a_full_redraw() {
         let bx = field_box(4, RIDE_H, 1).unwrap();
-        for (old, new) in [("22.7", "22.8"), ("22.7", "9.8"), ("--", "135"), ("99", "00")] {
+        for (old, new) in [
+            ("22.7", "22.8"),
+            ("22.7", "9.8"),
+            ("--", "135"),
+            ("99", "00"),
+            ("12:31", "12:38"),
+            ("1:23|45", "1:23|46"),
+            ("59:59", "1:00|00"),
+        ] {
             let (mut a, mut b) = (Frame::new(), Frame::new());
-            draw_field_value(&mut a, bx, Field::Speed, old, WHITE);
+            draw_field_value(&mut a, bx, old, WHITE);
             let before = a.fills;
-            draw_field_value_changes(&mut a, bx, Field::Speed, old, new, WHITE);
-            draw_field_value(&mut b, bx, Field::Speed, new, WHITE);
+            draw_field_value_changes(&mut a, bx, old, new, WHITE);
+            draw_field_value(&mut b, bx, new, WHITE);
             assert!(a.px == b.px, "{old} -> {new}");
             if old.len() == new.len() && old != "99" {
                 assert!(a.fills - before < 4, "{old} -> {new}: {} fills", a.fills - before);

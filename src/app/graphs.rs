@@ -115,17 +115,24 @@ impl App {
             ride::Plot::Hr => ["AVG", "MAX"],
             _ => return,
         };
-        let lines = core::array::from_fn::<_, 2, _>(|k| {
-            let mut l = Line::<10>::new();
-            l.push_str(names[k]);
-            l.push_str(" ");
-            match g.stats[k] {
-                Some(v) => l.push_u32(u32::from(v)),
-                None => l.push_str("--"),
-            }
-            l
-        });
-        let line = |k: usize| (old.map(|o| o.stats[k]) != Some(g.stats[k])).then(|| lines[k].as_str());
+        let text = |stats: [Option<u16>; 2]| {
+            core::array::from_fn::<_, 2, _>(|k| {
+                let mut l = Line::<10>::new();
+                l.push_str(names[k]);
+                l.push_str(" ");
+                match stats[k] {
+                    Some(v) => l.push_u32(u32::from(v)),
+                    None => l.push_str("--"),
+                }
+                l
+            })
+        };
+        let (lines, was) = (text(g.stats), old.map(|o| text(o.stats)));
+        // each figure that changed, with what it was (its characters redrawn alone when the length stays)
+        let line = |k: usize| {
+            let was = was.as_ref().map(|w| w[k].as_str());
+            (old.map(|o| o.stats[k]) != Some(g.stats[k])).then(|| (was.unwrap_or(""), lines[k].as_str()))
+        };
         ui::draw_graph_stats(c, bx, graph_title(g.plot), [line(0), line(1)]);
     }
 
@@ -232,7 +239,7 @@ impl App {
         let a = ui::graph_area(bx);
         let now = self.graph_now(old.plot, a.2);
         let step = if now.whole { 1 } else { STEP };
-        let mut p = Panel(b, (0, self.bottom()));
+        let mut p = Panel(b, self.area());
         let same = GraphShown { n: old.n, stats: old.stats, ..now } == old;
         if same && now.stats != old.stats {
             self.draw_graph_stats(&mut p, bx, now, Some(old));
@@ -300,7 +307,7 @@ impl App {
     pub(crate) fn update_profile(&mut self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let a = ui::plot_area(bx);
         let now = self.profile_now(a.2);
-        let mut p = Panel(b, (0, self.bottom()));
+        let mut p = Panel(b, self.area());
         if (ProfileShown { rider: old.rider, ..now }) != old {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), ui::plot_area(bx).1 - bx.1, ui::BLACK);
             self.draw_profile(&mut p, bx, now);
@@ -349,7 +356,7 @@ impl App {
     ) -> Drawn {
         let a = ui::plot_area(bx);
         let now = self.workout_now(a.2);
-        let mut p = Panel(b, (0, self.bottom()));
+        let mut p = Panel(b, self.area());
         if (WorkoutShown { rider: old.rider, ..now }) != old {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), a.1 - bx.1, ui::BLACK);
             self.draw_workout_graph(&mut p, bx, now);

@@ -71,9 +71,9 @@ fn pairing_from_the_menu() {
     assert!(bond.attrs_len > 0, "the HID report's CCCD kept");
     assert!(s.notify && s.keys);
 
-    // a message: its title and text in the banner and the notices (as much as a line holds), at the phone's time
+    // a message: its title and text in the banner and the notices (as much as two banner lines hold), at the phone's time
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.notices[0].as_str(), "09:41 Bob: Lunch at ");
+    assert_eq!(app.notices[0].as_str(), "09:41 Bob: Lunch at 1?");
 
     // the phone walks away: the unit advertises slowly again, for it to come back
     run(&mut sim, &mut app, 3000);
@@ -143,8 +143,17 @@ fn incoming_calls() {
     assert_consistent(&sim, &app);
     run(&mut sim, &mut app, 3000);
     assert!(app.phone.ringing, "the third");
-    run(&mut sim, &mut app, 5000);
+    // a turn cue during the call: the caller stays in the banner's place, the cue waits for the call to end
+    app.say_as("< LEFT 200 M", crate::Banner::Ride);
+    run(&mut sim, &mut app, 1000);
+    let mut call = crate::ui::tests::Frame::new();
+    crate::ui::draw_call(&mut call, "Work");
+    let top = (crate::ui::W * crate::ui::BANNER_H) as usize;
+    assert!(sim.screen[..top] == call.px[..top], "the caller, not the cue");
+    assert_consistent(&sim, &app);
+    run(&mut sim, &mut app, 4000);
     assert!(!app.phone.ringing, "ended on the phone: closed");
+    assert!(app.banner.as_str() == "< LEFT 200 M" && app.banner_drawn, "then the cue");
     assert_consistent(&sim, &app);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
 }
@@ -171,7 +180,9 @@ fn the_bonded_phone_comes_back() {
     run(&mut sim2, &mut app, 200);
     assert_eq!(sim2.nordic.phone.as_ref().unwrap().reports, [0x01, 0], "play / pause over HID");
 
-    app.activate(&mut sim2, Menu::Phone, 5); // FORGET
+    app.activate(&mut sim2, Menu::Phone, 5); // FORGET: asked first
+    assert!(app.banner.as_str().starts_with("FORGET THE PHONE?") && app.phone.bonded());
+    app.activate(&mut sim2, Menu::Phone, 5); // confirmed
     run(&mut sim2, &mut app, 500);
     assert_eq!(app.phone.link(), Link::Off);
     assert_eq!(sim2.nordic.server.adv, None);

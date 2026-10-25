@@ -27,8 +27,8 @@ impl Alert {
     /// The banner's text.
     pub fn text(self) -> &'static str {
         match self {
-            Alert::Eat => "EAT",
-            Alert::Drink => "DRINK",
+            Alert::Eat => "EAT REMINDER",
+            Alert::Drink => "DRINK REMINDER",
             Alert::HrHigh => "HEART RATE HIGH",
         }
     }

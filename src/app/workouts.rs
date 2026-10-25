@@ -111,7 +111,7 @@ impl App {
                 }
             }
         }
-        self.say(l.as_str());
+        self.say_as(l.as_str(), Banner::Ride);
         self.tones.play(&Self::STEP_TONE);
     }
 
@@ -175,7 +175,7 @@ impl App {
                 None => l.push_str("END"),
             },
             (Field::StepTime, Some((p, _))) => match p.left(steps, self.ride.dist_m()) {
-                Left::Time(t) => push_clock(&mut l, t),
+                Left::Time(t) => push_duration(&mut l, t, false),
                 Left::Distance(m) => push_km(&mut l, m),
                 Left::Lap => l.push_str("LAP"),
                 Left::Done => l.push_str("--"),
@@ -268,7 +268,7 @@ impl App {
     pub(crate) fn update_gauge(&mut self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let cols = ui::gauge_cols(bx);
         let now = self.gauge_now(cols);
-        let mut p = Panel(b, (0, self.bottom()));
+        let mut p = Panel(b, self.area());
         if !now.same_frame(&old) {
             self.draw_gauge(&mut p, bx, now);
             return Drawn::Gauge(now);

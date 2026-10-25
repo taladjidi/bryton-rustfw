@@ -192,6 +192,12 @@ pub struct App {
     settings: Settings,
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     editing: bool,
+    /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
+    /// row, or on the row a menu opens on, only selects it (one stray touch never acts).
+    menu_chosen: bool,
+    /// A row that cannot be undone (forget a sensor or the phone, import stock's settings) asked to be confirmed: Start
+    /// on it again acts; any other input clears it (App::confirmed).
+    confirm: Option<(Menu, usize)>,
     /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
     /// when no key is down.
     repeated: bool,
@@ -203,12 +209,14 @@ pub struct App {
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
     /// The latest notices, newest first (empty lines: none).
-    notices: [Line<20>; ui::NOTICES],
+    notices: [Line<40>; ui::NOTICES],
     /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
     /// redrawn meanwhile; when it goes, the screen is drawn again.
     banner_ms: Option<u32>,
-    /// What the banner says.
-    banner: Line<20>,
+    /// What the banner says (two lines at most) and its kind (an alarm white on red); the one waiting for it to go.
+    banner: Line<40>,
+    banner_kind: Banner,
+    banner_next: Option<(Line<40>, Banner)>,
     banner_drawn: bool,
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
@@ -397,6 +405,8 @@ impl App {
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
             settings: misc,
             editing: false,
+            menu_chosen: false,
+            confirm: None,
             repeated: false,
             under: [Screen::Main; 6],
             depth: 0,
@@ -410,6 +420,8 @@ impl App {
             notices: Default::default(),
             banner_ms: None,
             banner: Line::new(),
+            banner_kind: Banner::Info,
+            banner_next: None,
             banner_drawn: false,
             had_fix: false,
             told_low: false,
@@ -525,7 +537,7 @@ impl App {
             self.lag_s = 0;
         }
         if let Some(a) = self.alert.take() {
-            self.say(a.text());
+            self.say_as(a.text(), if a == alerts::Alert::HrHigh { Banner::Alarm } else { Banner::Ride });
             self.tones.play(&BEEP_ALERT);
         }
         self.play_tones(b);
@@ -545,7 +557,7 @@ impl App {
             self.strip.charging = charging;
             let low = self.strip.battery.is_some_and(|p| p <= 15) && !charging;
             if low && !self.told_low {
-                self.notice("BATTERY LOW");
+                self.alarm_notice("BATTERY LOW");
             }
             self.told_low = low;
             if self.chips.baro {
@@ -616,9 +628,10 @@ impl App {
             self.step_past(b);
         }
         self.redraw_ms = self.redraw_ms.saturating_add(POLL_MS);
-        if let Some(ms) = self.banner_ms {
+        // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
+        if let Some(ms) = self.banner_ms.filter(|_| !self.phone.ringing) {
             if !core::mem::replace(&mut self.banner_drawn, true) {
-                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str());
+                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str(), self.banner_kind == Banner::Alarm);
             }
             self.banner_ms = Some(ms + POLL_MS).filter(|&ms| ms < BANNER_MS);
             if self.banner_ms.is_none() {
@@ -629,17 +642,17 @@ impl App {
             Screen::Main | Screen::Ride(_) => self.update_page(b),
             Screen::Summary => {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
-                let bottom = self.bottom();
+                let area = self.area();
                 if let Some((m, _)) = &mut self.summary {
                     let (base, view) = (Some(&self.basemap), m.view);
-                    map::update(&mut Panel(b, (0, bottom)), map::area(ui::card::MAP), &self.track, m, base, None, None);
+                    map::update(&mut Panel(b, area), map::area(ui::card::MAP), &self.track, m, base, None, None);
                     if m.view != view {
                         self.show(b); // refitted: the basemap of the new view under it (else black; review)
                     }
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, (0, self.bottom())), &self.nearby);
+                ui::draw_list(&mut Panel(b, self.area()), &self.nearby);
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }

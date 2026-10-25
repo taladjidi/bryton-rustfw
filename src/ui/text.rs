@@ -137,6 +137,56 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
     width
 }
 
+/// Draws `s` from `x` as [`draw`] does, but nothing at or right of `right`: the last glyph's cell is cut there (its
+/// blank columns, when the text was laid out by its ink). Returns where the text drawn ends.
+pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str) -> u32 {
+    let Style { font, scale, fg, bg } = *style;
+    let scale = scale.max(1);
+    let mut palette = [bg; 16];
+    for (a, p) in palette.iter_mut().enumerate() {
+        *p = blend(fg, bg, a as u8);
+    }
+    let mut x = x;
+    for ch in s.chars() {
+        let g = font.glyph(ch);
+        let w = (u32::from(g.advance) * scale).min(right.saturating_sub(x));
+        if w == 0 {
+            break;
+        }
+        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / scale, py / scale))]);
+        x += w;
+    }
+    x
+}
+
+/// Character `old` drawn at (`x`, `y`) in `style` becomes `new`: only the box that holds either one's ink is sent,
+/// not the whole cell (the rest of the cell is the background in both). A digit of the pixel font is 5 x 7 of its
+/// 6 x 10 cell: 58 % of the pixels. Nothing at or right of `right`.
+pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32, u32), old: char, new: char) {
+    let Style { font, scale, fg, bg } = *style;
+    let scale = scale.max(1);
+    let (a, g) = (font.glyph(old), font.glyph(new));
+    let boxes = [a, g].map(|k| (u32::from(k.x), u32::from(k.y), u32::from(k.x + k.w), u32::from(k.y + k.h)));
+    let inked = boxes.iter().filter(|b| b.2 > b.0 && b.3 > b.1);
+    let (x0, y0, x1, y1) =
+        inked.fold((u32::MAX, u32::MAX, 0, 0), |u, b| (u.0.min(b.0), u.1.min(b.1), u.2.max(b.2), u.3.max(b.3)));
+    if x0 >= x1 {
+        return; // neither has ink: nothing changes
+    }
+    let left = x + x0 * scale;
+    let w = ((x1 - x0) * scale).min(right.saturating_sub(left));
+    if w == 0 {
+        return;
+    }
+    let mut palette = [bg; 16];
+    for (k, p) in palette.iter_mut().enumerate() {
+        *p = blend(fg, bg, k as u8);
+    }
+    c.blit(left, y + y0 * scale, w, (y1 - y0) * scale, &mut |px, py| {
+        palette[usize::from(font.coverage(g, px / scale + x0, py / scale + y0))]
+    });
+}
+
 /// Draws `s` in a box `w` wide from `x` (aligned inside it) and paints the rest of the box with the background, so a
 /// shorter value leaves nothing of the previous one. Text wider than the box is cut at the box's last whole
 /// character. Returns the width of the text drawn.

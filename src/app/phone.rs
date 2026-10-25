@@ -516,6 +516,7 @@ impl App {
             let mut p = Panel(b, (ui::CALL_Y, ui::H));
             p.fill(0, ui::CALL_Y, ui::W, ui::H - ui::CALL_Y, ui::BLACK);
             self.draw_screen(&mut p);
+            self.redraw_top(b); // the strip and the page's top, or a banner said meanwhile
         }
     }
 
@@ -832,14 +833,14 @@ impl App {
                 Some((uid, who)) if *uid == a.uid => {
                     *who = a.title;
                     let who = *who;
-                    // over the bottom of whatever screen is up: the page above keeps updating (bottom())
-                    self.banner_ms = None;
+                    // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
+                    self.banner_drawn = false;
                     self.phone.ringing = true;
                     ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str());
                     self.tones.play(&BEEP_ALERT);
                 }
                 _ => {
-                    let mut l = Line::<20>::new();
+                    let mut l = Line::<40>::new();
                     l.push_str(a.title.as_str());
                     if !a.message.as_str().is_empty() {
                         l.push_str(": ");
@@ -851,7 +852,7 @@ impl App {
         } else if handle == h[EU] {
             self.phone.now.update(data);
             if core::mem::take(&mut self.phone.now.new_title) {
-                let mut l = Line::<20>::new();
+                let mut l = Line::<40>::new();
                 l.push_str(self.phone.now.title.as_str());
                 if self.screen != Screen::Media {
                     self.say(l.as_str());
@@ -904,7 +905,7 @@ impl App {
     /// Redraws what changed on the media screen (the time and the bar's new columns, a second).
     pub(crate) fn update_media(&mut self, b: &mut impl Board) {
         let mut shown = self.phone.shown;
-        ui::media::update(&mut Panel(b, (0, self.bottom())), &self.media_now(), &mut shown, false);
+        ui::media::update(&mut Panel(b, self.area()), &self.media_now(), &mut shown, false);
         self.phone.shown = shown;
     }
 }

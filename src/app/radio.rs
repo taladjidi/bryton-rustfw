@@ -122,7 +122,7 @@ impl App {
             self.phone_event(b, ev.get(..n).unwrap_or(&[]));
         }
         if title && self.screen == Screen::Nearby {
-            ui::draw_nearby(&mut Panel(b, (0, self.bottom())), self.nearby.count(), self.scanning);
+            ui::draw_nearby(&mut Panel(b, self.area()), self.nearby.count(), self.scanning);
         }
         // a shifter's presses, once the stream is read (a media key sends a command): one per side
         for p in core::mem::take(&mut self.decoders.press).into_iter().flatten() {

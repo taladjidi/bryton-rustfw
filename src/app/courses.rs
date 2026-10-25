@@ -89,7 +89,7 @@ impl App {
         (self.idle_ms, self.backlight) = (0, true);
         match ev {
             course::Event::Off => {
-                self.say("OFF COURSE");
+                self.alarm("OFF COURSE");
                 self.tones.play(&BEEP_ALERT);
             }
             course::Event::Back => self.say("BACK ON COURSE"),
@@ -100,7 +100,7 @@ impl App {
                 l.push_str(" KM ");
                 l.push_u32(k.grade_x10().div_ceil(10).max(1));
                 l.push_str("%");
-                self.say(l.as_str());
+                self.say_as(l.as_str(), Banner::Ride);
                 self.tones.play(&Self::CLIMB_TONES);
             }
             course::Event::Cue(c, d) => {
@@ -118,7 +118,7 @@ impl App {
                     l.push_str(" M");
                     self.tones.play(&Self::CUE_TONES);
                 }
-                self.say(l.as_str());
+                self.say_as(l.as_str(), if d == 0 { Banner::Now } else { Banner::Ride });
             }
         }
     }
@@ -221,6 +221,6 @@ impl App {
             }
             None => value.push_str("--"),
         }
-        Some(if c.on == Some(e.file) { ui::GREEN } else { ui::GREY })
+        Some(if c.on == Some(e.file) { ui::GREEN } else { ui::WHITE })
     }
 }

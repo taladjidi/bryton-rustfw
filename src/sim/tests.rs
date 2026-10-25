@@ -72,7 +72,7 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
     for (i, v) in values.iter().enumerate() {
         let bx = crate::ui::field_box(page.layout, crate::ui::RIDE_H, i).unwrap();
         crate::ui::draw_field_frame(&mut f, bx, page.fields[i]);
-        crate::ui::draw_field_value(&mut f, bx, page.fields[i], v, zone_fg(page.fields[i], v));
+        crate::ui::draw_field_value(&mut f, bx, v, zone_fg(page.fields[i], v));
     }
     f.px
 }
@@ -115,7 +115,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     for (i, (field, v)) in values.into_iter().enumerate() {
         let bx = crate::ui::overview_box(i).unwrap();
         crate::ui::draw_field_frame(&mut f, bx, field);
-        crate::ui::draw_field_value(&mut f, bx, field, v, crate::ui::WHITE);
+        crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     crate::ui::draw_ferris(&mut f);
     f.px
@@ -215,13 +215,17 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the previous ride page, round");
     assert_consistent(&sim, &app);
 
-    let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| (5000..5100).contains(&ms).then_some((120, row1)));
+    let row1 = ui::LIST_Y as u16 + ui::MENU_ROW as u16 + 5;
+    let taps = |ms: u64| (5000..5100).contains(&ms) || (5600..5700).contains(&ms);
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row1)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     let left_ms = 5500 - sim.ms;
     run(&mut sim, &mut app, left_ms);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "row 1: PAGES");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 1), "the first tap selects row 1");
+    assert_consistent(&sim, &app);
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "a second tap on it acts: PAGES");
     assert_consistent(&sim, &app);
 }
 
@@ -259,7 +263,7 @@ fn usb_drops_are_counted() {
 #[test]
 fn quick_taps_and_swipes() {
     let swipe = |ms: u64| (5000..5120).contains(&ms).then(|| ((200 - (ms - 5000) as i64 * 120 / 120) as u16, 160));
-    let row1 = ui::LIST_Y as u16 + ui::LIST_ROW as u16 + 5;
+    let row1 = ui::LIST_Y as u16 + ui::MENU_ROW as u16 + 5;
     let tap = move |ms: u64| (7003..7063).contains(&ms).then_some((120, row1));
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| swipe(ms).or(tap(ms)));
     let mut app = App::start(&mut sim, None);
@@ -268,13 +272,13 @@ fn quick_taps_and_swipes() {
     assert_eq!(app.screen(), Screen::Ride(0), "the fast swipe left");
     app.press(&mut sim, Press::Long(Key::Page));
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "the short tap on row 1");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 1), "the short tap selects row 1");
 }
 
-/// Touch in a menu: a tap on MAX HR edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
+/// Touch in a menu: a tap on MAX HR selects it, a second one edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
 #[test]
 fn touch_edits_a_number_and_goes_back() {
-    let row = |r: u16| ui::LIST_Y as u16 + r * ui::LIST_ROW as u16 + 5;
+    let row = |r: u16| ui::LIST_Y as u16 + r * ui::MENU_ROW as u16 + 5;
     let max_hr = row(row_of(menu::Row::Set(Setting::MaxHr)) as u16);
     let tap = move |t0: u64, y: u16| move |ms: u64| (t0..t0 + 100).contains(&ms).then_some((120, y));
     let drag = |t0: u64, (x0, y0): (i64, i64), (dx, dy): (i64, i64)| {
@@ -285,7 +289,8 @@ fn touch_edits_a_number_and_goes_back() {
     };
     let (a, b, c, d) =
         (tap(5000, max_hr), drag(6000, (120, 250), (0, -100)), tap(7000, max_hr), drag(8000, (40, 160), (120, 0)));
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)).or(c(ms)).or(d(ms)));
+    let first = tap(4500, max_hr); // a tap selects the row the menu opened on; the next one acts
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| first(ms).or(a(ms)).or(b(ms)).or(c(ms)).or(d(ms)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr)); // in RIDER
@@ -654,7 +659,7 @@ fn workout_graph_field() {
     for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Lap));
     }
-    run(&mut sim, &mut app, 5000);
+    run(&mut sim, &mut app, 10_000); // the step's banner, then the one that waited for it
     let (at, px0, s0) = (rider(&app).unwrap(), sim.pixels, sim.ms);
     assert!(at > now + 30, "Lap jumps it: column {now}, then {at}");
     run(&mut sim, &mut app, 30_000);
@@ -757,9 +762,15 @@ fn menu_lists_the_devices_nearby() {
     assert_consistent(&sim, &app);
     sim.save("main_menu");
     app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "Lap on the first row stays there: no wrap");
     let last = menu::MAIN.len() - 1;
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, last), "Lap from the top wraps to the last row");
-    app.press(&mut sim, Press::Short(Key::Page)); // round to the top
+    for _ in 0..last + 3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, last), "Page stops at the last row");
+    for _ in 0..last {
+        app.press(&mut sim, Press::Short(Key::Lap));
+    }
     to_row(&mut sim, &mut app, menu::Row::Nearby);
     let nearby = row_of(menu::Row::Nearby);
     assert_eq!(app.screen(), Screen::Menu(Menu::Device, nearby), "NEARBY BLE, in DEVICE");
@@ -873,7 +884,8 @@ fn pairs_sensors_from_the_menu() {
 }
 
 /// After a restart the paired sensor's channel opens for it only: a friend's strap is not taken. Start on it
-/// in the sensors menu forgets it (channel closed, register cleared).
+/// in the sensors menu, while it is silent, searches for it again; Start once more forgets it (channel closed,
+/// register cleared).
 #[test]
 fn keeps_the_paired_sensor_until_forgotten() {
     let mut sim = Sim::new(9, 0, 0);
@@ -887,8 +899,17 @@ fn keeps_the_paired_sensor_until_forgotten() {
     assert!(ride(&mut sim, &app, 0, &["--", "--", "--"], true) == sim.screen, "the friend's strap is not shown");
     app.press(&mut sim, Press::Long(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count(), 1, "closed");
+    app.press(&mut sim, Press::Short(Key::Start)); // silent: searched for again, not forgotten
+    let closes = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count();
+    assert_eq!(closes(&sim), 1, "closed and opened for it again");
+    assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "still paired");
+    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART AGAIN: FORGET");
+    assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "SURE?");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("sensor_search_again");
+    app.press(&mut sim, Press::Short(Key::Start)); // again: forgotten
+    assert_eq!(closes(&sim), 2, "closed");
     assert_eq!(sim.backup[Kind::Hr.backup()], 0, "forgotten");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
@@ -1040,7 +1061,7 @@ fn start_from_the_overview() {
     assert_consistent(&sim, &app);
     sim.save("ride_started");
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "PAUSED: HOLD = END");
+    assert_eq!(app.banner.as_str(), "PAUSED: HOLD START TO END");
     app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
     run(&mut sim, &mut app, 200);
@@ -1993,7 +2014,7 @@ fn a_ride_with_laps_and_pauses() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 5000);
     let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
-    assert_eq!((text(&app, Timer), text(&app, Dist), app.strip.rec), ("0:00:00".into(), "0.00".into(), Rec::Idle));
+    assert_eq!((text(&app, Timer), text(&app, Dist), app.strip.rec), ("00:00".into(), "0.00".into(), Rec::Idle));
     app.press(&mut sim, Press::Short(Key::Start));
     let (t0, mut px0) = (sim.ms, sim.pixels);
     let mut seconds = 0;
@@ -2011,10 +2032,12 @@ fn a_ride_with_laps_and_pauses() {
             px0 = sim.pixels; // the averages have settled
         }
     }
-    // the averages of ramps settle as a long ride's do: from then on, mostly the timer, the distance, the graph
+    // the averages of ramps settle as a long ride's do: from then on, mostly the timer, the distance, the graph (1250 px/s
+    // before the UI review's step 3: the timer's seconds at the box's 4x, 560 px of ink instead of a 240 px 2x cell, and
+    // the graph without its 1x axes in a half box, 112 columns instead of 85)
     let px_s = (sim.pixels - px0) / 120;
     std::println!("ride page (timer, km, avg km/h, avg HR, avg W, graph), minutes 10 to 12: {px_s} px/s");
-    assert!(px_s < 1500, "{px_s} px/s while riding");
+    assert!(px_s < 1800, "{px_s} px/s while riding");
     assert_eq!(app.strip.rec, Rec::Running);
     let timer = app.ride.timer_s();
     assert!((719..=721).contains(&timer), "timer {timer}");
@@ -2045,7 +2068,7 @@ fn a_ride_with_laps_and_pauses() {
     let hr_fg = crate::ride::hr_color(crate::ride::hr_zone(hr, 190));
     let w_fg = crate::ride::power_color(crate::ride::power_zone(w, 200));
     assert!(colors_in(&sim, bx(0)).contains(&hr_fg) && colors_in(&sim, bx(1)).contains(&w_fg), "zone colours");
-    assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("0:01:00".into(), "0.48".into()));
+    assert_eq!((text(&app, LapTime), text(&app, LapDist)), ("01:00".into(), "0.48".into()));
     assert_eq!(text(&app, MaxSpeed), "28.8");
     let ascent = app.ride.ascent_m();
     assert!((150..=157).contains(&ascent), "0.2 m/s for 780 s: {ascent} m");
@@ -2215,15 +2238,17 @@ fn graph_field() {
     sim.save("graph");
 }
 
-/// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation), kept with the page;
-/// a hold switches every graph between the last minutes and the whole ride.
+/// A tap on a graph shows the next plot (power, heart rate, W' balance, DFA alpha1, elevation) until the unit is
+/// switched off, the page as kept unchanged; a hold switches every graph between the last minutes and the whole
+/// ride. Only while the ride is paused (or none runs): while it records, a tap or a hold on a page does nothing (UI
+/// review step 7: a wet glove changed the page for good, or opened the menu over the ride).
 #[test]
 fn graph_plots_by_tap_and_span_by_hold() {
     let taps = [400_000u64, 401_000, 402_000, 403_000];
-    let hold = 405_000u64;
+    let (hold, riding) = (405_000u64, [420_000u64, 422_000]);
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| {
-        let tap = taps.iter().any(|&t| (t..t + 80).contains(&ms));
-        let held = (hold..hold + 900).contains(&ms);
+        let tap = taps.iter().chain(&riding[..1]).any(|&t| (t..t + 80).contains(&ms));
+        let held = (hold..hold + 900).contains(&ms) || (riding[1]..riding[1] + 900).contains(&ms);
         (tap || held).then_some((120, 100))
     });
     sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
@@ -2233,9 +2258,13 @@ fn graph_plots_by_tap_and_span_by_hold() {
     let mut app = App::start(&mut sim, Some(KEY));
     use Field::*;
     app.pages[0] = PageCfg { layout: 2, fields: [Graph, HrGraph, Timer, Timer, Timer, Timer] };
+    save_page(&mut sim, 0, &app.pages[0]);
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // a ride: W' balance runs
     sim.gnss.fix = Some(7000);
+    let until = taps[0] - 2000 - sim.ms;
+    run(&mut sim, &mut app, until);
+    app.press(&mut sim, Press::Short(Key::Start)); // paused: the taps act
     let mut shots = std::vec::Vec::new();
     for (k, want) in [HrGraph, WbalGraph, DfaGraph, AltGraph].into_iter().enumerate() {
         let until = taps[k] + 500 - sim.ms;
@@ -2245,13 +2274,18 @@ fn graph_plots_by_tap_and_span_by_hold() {
         shots.push(std::format!("graph_{k}"));
         sim.save(&shots[k]);
     }
-    assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]).unwrap().fields[0], AltGraph, "kept");
+    assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]).unwrap().fields[0], Graph, "not kept");
     let until = hold + 1500 - sim.ms;
     run(&mut sim, &mut app, until);
     assert!(app.graph_whole, "the hold");
     assert_eq!(app.screen(), Screen::Ride(0), "on a graph, a hold is not the menu");
     assert_consistent(&sim, &app);
     sim.save("graph_whole");
+    app.press(&mut sim, Press::Short(Key::Start)); // recording again: touch only turns pages
+    let until = riding[1] + 1500 - sim.ms;
+    run(&mut sim, &mut app, until);
+    assert_eq!((app.pages()[0].fields[0], app.graph_whole), (AltGraph, true), "the tap and the hold ignored");
+    assert_eq!(app.screen(), Screen::Ride(0), "no menu by a hold while recording");
     run(&mut sim, &mut app, 60_000);
     assert_consistent(&sim, &app);
 }
@@ -2290,7 +2324,7 @@ fn off_during_a_ride_asks_twice() {
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Back));
-    assert!(!sim.standby && app.banner.as_str() == "HOLD AGAIN: OFF", "warned");
+    assert!(!sim.standby && app.banner.as_str() == "HOLD BACK AGAIN TO SWITCH OFF", "warned");
     run(&mut sim, &mut app, 12_000);
     app.press(&mut sim, Press::Long(Key::Back));
     assert!(!sim.standby, "the warning ran out: warned again");
@@ -2385,7 +2419,7 @@ fn eat_reminder_on_a_ride() {
     run(&mut sim, &mut app, 299_000);
     assert_eq!(sim.tones.len(), tones0, "not yet");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.banner.as_str(), "EAT");
+    assert_eq!(app.banner.as_str(), "EAT REMINDER");
     let beeps: std::vec::Vec<u32> = sim.tones[tones0..].to_vec();
     assert_eq!(beeps, [2500, 0, 2500, 0, 2500, 0], "three beeps, then off");
     assert!(sim.ms - steps0 >= 300_000, "{}", sim.ms - steps0);
@@ -2537,6 +2571,98 @@ fn long_reads_spread_over_passes() {
     assert_eq!(app.menu_row(Menu::Workouts, 0).unwrap().0.as_str(), "FRI 23 OCT", "today's still first");
     std::println!("the most read in a pass: {} KB ({})", worst.0 / 1024, worst.1);
     assert!(worst.0 <= MAX, "{} B in one pass ({})", worst.0, worst.1);
+}
+
+/// Banners said in the same second both show (review of the turn cues: a workout step's banner was lost under a
+/// cue): the higher kind first (a turn now over a step, an alarm over a turn), the other waits and follows; a lower
+/// one said meanwhile does not push out the one waiting; then the page is whole again.
+#[test]
+fn banners_wait_their_turn() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    let shown = |sim: &mut Sim, app: &mut App, ms| {
+        run(sim, app, ms);
+        assert_consistent(sim, app);
+        app.banner_ms.map(|_| std::string::String::from(app.banner.as_str()))
+    };
+    app.say_as("2/6 200-220W", Banner::Ride); // the workout's step and a turn, in one second
+    app.say_as("< LEFT NOW", Banner::Now);
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("< LEFT NOW"), "the turn first");
+    app.say("LAP");
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("< LEFT NOW"), "not covered by LAP");
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("2/6 200-220W"), "then the step");
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()), None, "LAP gave way to the step: nothing after");
+    app.say_as("< RIGHT 200 M", Banner::Ride);
+    app.alarm("OFF COURSE");
+    assert_eq!(shown(&mut sim, &mut app, 200).as_deref(), Some("OFF COURSE"), "an alarm first");
+    assert_eq!(shown(&mut sim, &mut app, BANNER_MS.into()).as_deref(), Some("< RIGHT 200 M"), "then the cue");
+}
+
+/// TOUCH in DEVICE: Start turns the touch panel off (kept in register 11's bit 23), and then no gesture acts, a tap
+/// on the gear included; the keys turn it on again.
+#[test]
+fn touch_can_be_switched_off() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::Touch));
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Touch))), "TOUCH ON");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Touch))), "TOUCH OFF");
+    assert!(!Settings::from_word(sim.backup[WHEEL_BKP]).touch, "kept");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("touch_off");
+    let shown = app.screen();
+    app.input(&mut sim, Input::Touch(Gesture::Tap(10, (ui::PAGE_Y + 8) as u16))); // the "<"
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(crate::touch::Dir::Right)));
+    assert_eq!(app.screen(), shown, "touch does nothing");
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back));
+    }
+    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(gx, gy)));
+    assert_eq!(app.screen(), Screen::Main, "not the gear either");
+    app.press(&mut sim, Press::Long(Key::Page)); // the keys: back to TOUCH, on again
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::Touch));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(Settings::from_word(sim.backup[WHEEL_BKP]).touch, "on again");
+}
+
+/// IMPORT asks first: Start shows "SURE?" in the row and asks in the banner; any other input drops it (Page and
+/// back); Start twice imports, and a tap on the row asking does too.
+#[test]
+fn import_asks_first() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    let import = menu::STOCK.iter().position(|&r| r == menu::StockRow::Import).unwrap();
+    app.open(Screen::Menu(Menu::Stock, import));
+    app.show(&mut sim);
+    app.settings.ftp = 55; // stock's is another: an import shows
+    app.input(&mut sim, Input::Select);
+    assert_eq!((app.menu_row(Menu::Stock, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
+    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART AGAIN: YES");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    sim.save("import_sure");
+    app.input(&mut sim, Input::Prev);
+    app.input(&mut sim, Input::Next);
+    assert_eq!(app.menu_row(Menu::Stock, import).unwrap().1.as_str(), "SETTINGS", "dropped by Page");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
+    app.input(&mut sim, Input::Select);
+    app.input(&mut sim, Input::Select);
+    assert_ne!(app.settings.ftp, 55, "Start twice: imported");
+    app.settings.ftp = 55;
+    let y = (ui::LIST_Y + (import % ui::MENU_ROWS) as u32 * ui::MENU_ROW + 20) as u16;
+    app.input(&mut sim, Input::Select); // asks
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, y))); // the row chosen and asking: a tap confirms
+    assert_ne!(app.settings.ftp, 55, "imported again");
+    run(&mut sim, &mut app, 200);
+    assert_consistent(&sim, &app);
 }
 
 /// A workout's step tone and an alert in the same pass: one tone player, so both play whole, one after the other
@@ -2911,12 +3037,12 @@ fn course_cues_ride() {
     }
     let beeps = sim.tones[tones..].iter().filter(|&&hz| hz == 1800).count();
     assert_eq!(beeps, 3 * cues.len(), "a beep at 200 m, two at the turn");
-    // the half second a banner shows: the banner (240 x 40 = 9600 px) and the page's own changes; once in a while
+    // the half second a banner shows: the banner (240 x 44 = 10560 px, at the top) and the page's own changes; once in a while
     // the profile moves on by an eighth then too (a whole profile)
     banner_px.sort();
     let median = banner_px[banner_px.len() / 2];
     std::println!("a cue's banner: {median} px in its half second (median; {banner_px:?})");
-    assert!(median < 9600 + 2000, "{banner_px:?}");
+    assert!(median < 10560 + 2000, "{banner_px:?}");
     assert_consistent(&sim, &app);
 }
 

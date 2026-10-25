@@ -7,6 +7,20 @@ use crate::*;
 /// How long a banner stays up, unless an input dismisses it first.
 pub const BANNER_MS: u32 = 4000;
 
+/// A banner's kind, lowest first: a higher one is not covered by a lower one ([`App::say_as`]). An incoming call is
+/// above them all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Banner {
+    /// What a key just did, a notice.
+    Info,
+    /// What the ride says: a turn ahead, a workout step, a reminder, a climb.
+    Ride,
+    /// A turn now.
+    Now,
+    /// An alarm (heart rate high, off course, the battery low, a ride not saving): white on red.
+    Alarm,
+}
+
 /// What a page box holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Widget {
@@ -165,7 +179,7 @@ impl App {
             }
         }
         if self.banner_ms.is_some() && self.banner_drawn {
-            ui::draw_banner(c, self.banner.as_str());
+            ui::draw_banner(c, self.banner.as_str(), self.banner_kind == Banner::Alarm);
         }
         if self.phone.ringing {
             ui::draw_call(c, self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()));
@@ -246,7 +260,7 @@ impl App {
                         let a = ui::graph_area(bx);
                         ui::draw_graph(c, a, &|k| self.graph_bar(g, a.2, a.3, k));
                     }
-                    Drawn::Value(text, fg) => ui::draw_field_value(c, bx, f, text.as_str(), fg),
+                    Drawn::Value(text, fg) => ui::draw_field_value(c, bx, text.as_str(), fg),
                     _ => {}
                 }
             }
@@ -309,28 +323,45 @@ impl App {
         [h / 10, h % 10, m / 10, m % 10]
     }
 
-    /// How far down the page may be drawn: above the banner while one is up.
-    pub(crate) fn bottom(&self) -> u32 {
-        if self.phone.ringing {
-            ui::CALL_Y
-        } else if self.banner_ms.is_some() {
-            ui::BANNER_Y
-        } else {
-            ui::H
+    /// The rows the page may be drawn in (top, bottom): under the banner while one (or a call) is up, above a call's
+    /// buttons.
+    pub(crate) fn area(&self) -> (u32, u32) {
+        let top = if self.phone.ringing || self.banner_ms.is_some() { ui::BANNER_H } else { 0 };
+        (top, if self.phone.ringing { ui::CALL_Y } else { ui::H })
+    }
+
+    /// The banner is gone: what is under it (the strip, the page's top) drawn again, from what the screen shows.
+    pub(crate) fn unbanner(&mut self, b: &mut impl Board) {
+        self.banner_ms = None;
+        self.redraw_top(b);
+        if let Some((text, kind)) = self.banner_next.take() {
+            (self.banner, self.banner_kind) = (text, kind); // the one that waited, next
+            (self.banner_ms, self.banner_drawn) = (Some(0), false);
         }
     }
 
-    /// The banner is gone: what is under it drawn again, from what the screen shows.
-    pub(crate) fn unbanner(&mut self, b: &mut impl Board) {
-        self.banner_ms = None;
-        let mut p = Panel(b, (ui::BANNER_Y, ui::H));
-        p.fill(0, ui::BANNER_Y, ui::W, ui::H - ui::BANNER_Y, ui::BLACK);
+    /// The banner's rows drawn again from what the screen shows: the strip, the page's top, the banner if one is up.
+    pub(crate) fn redraw_top(&mut self, b: &mut impl Board) {
+        let mut p = Panel(b, (0, ui::BANNER_H));
+        p.fill(0, 0, ui::W, ui::BANNER_H, ui::BLACK);
+        ui::draw_strip(&mut p, &self.strip); // not drawn while covered (update_strip)
+        self.strip_shown = self.strip;
         self.draw_screen(&mut p);
     }
 
     /// Adds a notice (newest first), stamped with the time: what the unit itself has to say (a fix, a sensor
     /// paired, the battery low); phone notifications will come here too.
     pub(crate) fn notice(&mut self, text: &str) {
+        self.notice_as(text, Banner::Info);
+    }
+
+    /// A notice that is an alarm (the battery low, a ride not saving): its banner white on red.
+    pub(crate) fn alarm_notice(&mut self, text: &str) {
+        self.notice_as(text, Banner::Alarm);
+    }
+
+    /// A notice, its banner of `kind`.
+    fn notice_as(&mut self, text: &str, kind: Banner) {
         self.notices.rotate_right(1);
         let (h, m) = self.strip.time;
         let mut l = Line::new();
@@ -340,17 +371,43 @@ impl App {
         l.push_str(" ");
         l.push_str(text);
         self.notices[0] = l;
-        // over the overview the notice is in its own box already
+        // over the overview the notice is in its own box already; the banner without the time (the strip has it)
         if self.screen != Screen::Main {
-            self.say(l.as_str());
+            self.say_as(text, kind);
         }
     }
 
     /// Shows `text` in the banner for [`BANNER_MS`] (what a key just did, a notice).
     pub(crate) fn say(&mut self, text: &str) {
-        self.banner.clear();
-        self.banner.push_str(text);
-        (self.banner_ms, self.banner_drawn) = (Some(0), false);
+        self.say_as(text, Banner::Info);
+    }
+
+    /// Shows `text` in a red banner: an alarm (heart rate high, off course).
+    pub(crate) fn alarm(&mut self, text: &str) {
+        self.say_as(text, Banner::Alarm);
+    }
+
+    /// Shows `text` as a banner of `kind`. One up of a higher kind stays and this one waits; one of the same or a
+    /// lower kind waits for this one. One waits at most (the higher kind kept, else the newer) and shows when the
+    /// banner up goes ([`App::unbanner`]): two things said in one second (a workout step and a turn cue) both show.
+    /// An incoming call is above them all: a banner waits under it ([`App::area`]).
+    pub(crate) fn say_as(&mut self, text: &str, kind: Banner) {
+        let mut l = Line::<40>::new();
+        l.push_str(text);
+        let up = self.banner_ms.is_some().then_some((self.banner, self.banner_kind));
+        let (show, wait) = match up {
+            Some(up) if up.1 > kind => (up, Some((l, kind))),
+            _ => ((l, kind), up),
+        };
+        if let Some(w) = wait
+            && self.banner_next.is_none_or(|n| n.1 <= w.1)
+        {
+            self.banner_next = Some(w);
+        }
+        if up != Some(show) {
+            (self.banner, self.banner_kind) = show;
+            (self.banner_ms, self.banner_drawn) = (Some(0), false);
+        }
     }
 
     /// Clears the page area and draws the current screen.
@@ -379,7 +436,7 @@ impl App {
             let view = m.view;
             self.render_basemap(b, map::area(bx), view);
         }
-        let mut p = Panel(b, (0, self.bottom()));
+        let mut p = Panel(b, self.area());
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
         if let Screen::Menu(menu, sel) = self.screen {
@@ -404,7 +461,7 @@ impl App {
                         self.render_basemap(b, area, view);
                     }
                     let (base, route) = ((first == Some(i)).then_some(&self.basemap), self.route());
-                    let mut p = Panel(b, (0, self.bottom()));
+                    let mut p = Panel(b, self.area());
                     map::update(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom);
                     Drawn::Map(m)
                 }
@@ -416,7 +473,7 @@ impl App {
                     let now = self.main_digits();
                     for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
                         if d != was {
-                            ui::draw_main_digit(&mut Panel(b, (0, self.bottom())), k, d);
+                            ui::draw_main_digit(&mut Panel(b, self.area()), k, d);
                         }
                     }
                     Drawn::Digits(now)
@@ -425,7 +482,7 @@ impl App {
                     let (text, fg) = (self.field_text(f), self.field_color(f));
                     if (was, was_fg) != (text, fg) {
                         let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
-                        ui::draw_field_value_changes(&mut Panel(b, (0, self.bottom())), bx, f, old, text.as_str(), fg);
+                        ui::draw_field_value_changes(&mut Panel(b, self.area()), bx, old, text.as_str(), fg);
                     }
                     Drawn::Value(text, fg)
                 }
@@ -435,7 +492,7 @@ impl App {
                         if let Some(d) = self.drawn.get_mut(i) {
                             *d = now;
                         }
-                        self.draw_widget(&mut Panel(b, (0, self.bottom())), i, bx, w);
+                        self.draw_widget(&mut Panel(b, self.area()), i, bx, w);
                     }
                     now
                 }

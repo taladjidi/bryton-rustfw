@@ -29,8 +29,9 @@ pub enum Input {
     /// See [`Input::NextHeld`].
     PrevHeld,
     /// A gesture on the touch panel: on a page, swipe left the next page, swipe right the previous one, hold the
-    /// menu; in a menu, a tap selects that row, swipe up or down turns a screen of rows, swipe right is Back; while a
-    /// number is edited, swipe up or down steps it, a tap keeps it.
+    /// menu (not while a ride records); in a menu, a tap selects a row and a second tap on it acts, the "<" is Back,
+    /// swipe up or down turns a screen of rows, swipe right is Back; while a number is edited, swipe up or down steps
+    /// it, a tap keeps it. None with TOUCH off.
     Touch(Gesture),
 }
 
@@ -69,6 +70,8 @@ pub enum Setting {
     Light,
     /// Backlight time-out (a choice of [`crate::LIGHT_TIMEOUTS_S`]).
     LightOff,
+    /// The touch panel on or off (keys always work).
+    Touch,
     /// Max heart rate (a number).
     MaxHr,
     /// FTP (a number), also the CP of W' balance.
@@ -168,6 +171,7 @@ impl Setting {
             Setting::Wheel => "WHEEL MM",
             Setting::Light => "LIGHT %",
             Setting::LightOff => "LIGHT OFF",
+            Setting::Touch => "TOUCH",
             Setting::MaxHr => "MAX HR",
             Setting::Ftp => "FTP W",
             Setting::Weight => "WEIGHT KG",
@@ -396,10 +400,12 @@ pub const RIDER: [Row; 5] = [
     Row::Set(Setting::WktAvg),
 ];
 
-/// The device menu: the backlight, the wheel, the GPS readings, the BLE devices nearby, the USB drive, ABOUT.
-pub const DEVICE: [Row; 7] = [
+/// The device menu: the backlight, the touch panel, the wheel, the GPS readings, the BLE devices nearby, the USB
+/// drive, ABOUT.
+pub const DEVICE: [Row; 8] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
+    Row::Set(Setting::Touch),
     Row::Set(Setting::Wheel),
     Row::Open(Menu::Gps),
     Row::Nearby,
