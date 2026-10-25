@@ -93,8 +93,8 @@ def check(path, finished, full=False):
         r = records[t]
         print(f"  record {t}", r)
         assert r["timestamp"].timestamp() == T0 + 1 + t
-        assert abs(r["position_lat"] * 180 / 2**31 - (48.8566 + 3e-5 * t)) < 1e-6
-        assert abs(r["position_long"] * 180 / 2**31 - (2.3522 - 2e-5 * t)) < 1e-6
+        assert abs(r["position_lat"] * 180 / 2**31 - (0.5123 + 3e-5 * t)) < 1e-6
+        assert abs(r["position_long"] * 180 / 2**31 - (0.4234 - 2e-5 * t)) < 1e-6
         assert abs(r["altitude"] - (35 + 0.1 * (t % 50))) < 0.2
         assert abs(r["speed"] - (7 + 0.01 * (t % 100))) < 1e-9
         assert ("heart_rate" in r) == (t >= 10) and ("power" in r) == (t >= 30 and not 200 <= t < 215)

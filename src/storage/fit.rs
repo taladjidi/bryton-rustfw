@@ -94,10 +94,17 @@ pub struct Sample {
     pub alpha1_milli: Option<u16>,
     /// RMSSD, ms (hrv.rs): the full copy's `RMSSD` developer field only.
     pub rmssd_ms: Option<u16>,
+    /// The ride's ascent so far, m (ride.rs): the lap's and the session's total_ascent.
+    pub ascent_m: Option<u32>,
 }
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
 pub const RECORD_LEN: usize = 4 * WORDS + 4;
+
+/// The ride's ascent in a recovery record: bits 17..30 of its third word, m (16383 m at most).
+const ASCENT_MAX: u32 = 0x3fff;
+/// Bit 31 of that word: the record's file has lap and session with total_ascent (records before it: 0).
+const LAYOUT_ASCENT: u32 = 1 << 31;
 
 const HEADER: u32 = 14;
 const WORDS: usize = 21;
@@ -177,8 +184,9 @@ const RECORD: [Field; 10] = [
     (13, 1, S8),
 ];
 /// timestamp, start_time, total_elapsed_time, total_timer_time, total_distance, avg / max speed, heart rate,
-/// cadence, power, event, event_type. Lap and session take the same values; the field numbers differ.
-const LAP: [Field; 15] = [
+/// cadence, power, event, event_type, total_ascent (m). Lap and session take the same values; the field numbers
+/// differ (FIT profile: lap 21, session 22).
+const LAP: [Field; 16] = [
     (253, 4, U32),
     (2, 4, U32),
     (7, 4, U32),
@@ -194,9 +202,10 @@ const LAP: [Field; 15] = [
     (20, 2, U16),
     (0, 1, ENUM),
     (1, 1, ENUM),
+    (21, 2, U16),
 ];
 /// [`LAP`]'s fields, then sport, first_lap_index, num_laps.
-const SESSION: [Field; 18] = [
+const SESSION: [Field; 19] = [
     (253, 4, U32),
     (2, 4, U32),
     (7, 4, U32),
@@ -212,6 +221,7 @@ const SESSION: [Field; 18] = [
     (21, 2, U16),
     (0, 1, ENUM),
     (1, 1, ENUM),
+    (22, 2, U16),
     (5, 1, ENUM),
     (25, 2, U16),
     (26, 2, U16),
@@ -267,6 +277,8 @@ pub struct Writer {
     paused_at: u32,
     /// The full copy: protocol 2.0, developer fields in the records (module doc).
     dev: bool,
+    /// The ride's ascent so far, m (the samples' [`Sample::ascent_m`]).
+    ascent_m: u32,
 }
 
 impl Writer {
@@ -289,6 +301,7 @@ impl Writer {
             paused_s: 0,
             paused_at: 0,
             dev: false,
+            ascent_m: 0,
         }
     }
 
@@ -343,6 +356,7 @@ impl Writer {
         self.last = self.last.max(time);
         let mut v = self.lap_values();
         v[7..13].fill(u32::MAX);
+        v[15] = u32::MAX; // the lap's own ascent is not kept: left out, as its averages
         self.message(sink, L_LAP, 19, &LAP, &v)?;
         (self.lap_start, self.lap_dist, self.laps) = (self.last, self.dist_mm, self.laps + 1);
         Ok(())
@@ -361,7 +375,7 @@ impl Writer {
 
     /// [`LAP`]'s values for the lap from `lap_start` to `last`: elapsed and timer time and distance, with the
     /// ride's averages and maxima (the lap's when it is the only one).
-    fn lap_values(&self) -> [u32; 15] {
+    fn lap_values(&self) -> [u32; 16] {
         let pausing =
             if self.paused_at != 0 { self.last.saturating_sub(self.paused_at.max(self.lap_start)) } else { 0 };
         let elapsed = self.last.saturating_sub(self.lap_start);
@@ -388,6 +402,7 @@ impl Writer {
             mp,
             9, // event lap
             1, // stop
+            self.ascent_m.min(0xfffe),
         ]
     }
 
@@ -399,6 +414,9 @@ impl Writer {
         if let Some(v) = s.speed_mm_s {
             self.dist_mm = self.dist_mm.saturating_add(v.saturating_mul(dt));
             self.max_speed = self.max_speed.max(v);
+        }
+        if let Some(a) = s.ascent_m {
+            self.ascent_m = self.ascent_m.max(a.min(ASCENT_MAX));
         }
         self.stats[0].add(s.hr.map(u32::from));
         self.stats[1].add(s.cadence.map(u32::from));
@@ -456,14 +474,15 @@ impl Writer {
         let mut lap = self.lap_values();
         if self.laps > 0 {
             lap[7..13].fill(u32::MAX);
+            lap[15] = u32::MAX;
         }
         self.message(sink, L_LAP, 19, &LAP, &lap)?;
         // the ride as one lap: the session's values
         let whole = Writer { lap_start: self.start, lap_dist: 0, ..*self }.lap_values();
         // session: event session (8), stop (1), cycling (2), first lap 0, the laps
-        let mut v = [0u32; 18];
-        v[..15].copy_from_slice(&whole);
-        (v[13], v[15], v[16], v[17]) = (8, 2, 0, self.laps + 1);
+        let mut v = [0u32; 19];
+        v[..16].copy_from_slice(&whole);
+        (v[13], v[16], v[17], v[18]) = (8, 2, 0, self.laps + 1);
         self.message(sink, L_SESSION, 18, &SESSION, &v)?;
         // activity: one session, manual (0), event activity (26), stop (1)
         self.message(sink, L_ACTIVITY, 34, &ACTIVITY, &[self.last, whole[3], 1, 0, 26, 1])?;
@@ -516,12 +535,16 @@ impl Writer {
             *x = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
         }
         let s = |i: usize| Stat { sum: w[i], n: w[i + 1], max: w[i + 2] };
+        // a record from a build before total_ascent: its file defines lap and session without it, so they are
+        // defined again (a later definition of a local type replaces the earlier one: FIT protocol)
+        let old = |d: u16| if w[2] & LAYOUT_ASCENT == 0 { d & !(1 << L_LAP | 1 << L_SESSION) } else { d };
         Some(Writer {
             len: w[0],
             crc: w[1] as u16,
-            defined: (w[1] >> 16) as u16,
+            defined: old((w[1] >> 16) as u16),
             mask: w[2] as u16,
             dev: w[2] >> 16 & 1 != 0,
+            ascent_m: w[2] >> 17 & ASCENT_MAX,
             start: w[3],
             last: w[4],
             dist_mm: w[5],
@@ -541,7 +564,7 @@ impl Writer {
         let w: [u32; WORDS] = [
             self.len,
             u32::from(self.crc) | u32::from(self.defined) << 16,
-            u32::from(self.mask) | u32::from(self.dev) << 16,
+            u32::from(self.mask) | u32::from(self.dev) << 16 | self.ascent_m.min(ASCENT_MAX) << 17 | LAYOUT_ASCENT,
             self.start,
             self.last,
             self.dist_mm,
@@ -849,6 +872,7 @@ mod tests {
                 temp_c: Some((t % 30) as i8 - 5),
                 alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
                 rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
+                ascent_m: Some(t / 10), // the ride's ascent so far: 1 m every 10 s
             })
             .collect()
     }
@@ -883,6 +907,35 @@ mod tests {
         }
     }
 
+    /// A ride open under a build before total_ascent, resumed by this one: the record lacks the layout bit, so the
+    /// lap and session are defined again before their new layout is written; the file decodes, the session has
+    /// the ascent (the golden rule across an update with a ride open).
+    #[test]
+    fn a_ride_from_before_total_ascent_resumes() {
+        let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
+        let (mut w, _) = Writer::start(&mut f, T0).unwrap();
+        let samples = ride(240);
+        for s in &samples[..120] {
+            w.record(&mut f, s).unwrap();
+        }
+        rec = w.checkpoint(&mut f).unwrap_or(rec);
+        // the record as the earlier build wrote it: bit 31 of its third word clear, the CRC made again
+        let (at, mut word) = (2 + 4 * 2, [0u8; 4]);
+        word.copy_from_slice(&rec[at..at + 4]);
+        let old = u32::from_le_bytes(word) & !LAYOUT_ASCENT;
+        rec[at..at + 4].copy_from_slice(&old.to_le_bytes());
+        let c = crc(0, &rec[..RECORD_LEN - 2]);
+        rec[RECORD_LEN - 2..].copy_from_slice(&c.to_le_bytes());
+        let mut w = Writer::from_record(&rec).unwrap();
+        assert_eq!(w.defined & (1 << L_LAP | 1 << L_SESSION), 0, "lap and session to be defined again");
+        w.resume(&mut f, samples[120].time).unwrap();
+        let mut r = [0; RECORD_LEN];
+        write(&mut f, &mut w, &samples[120..], &mut r).unwrap();
+        let m = decode(&f).unwrap();
+        let session = m.iter().rev().find(|x| x.0 == 18).unwrap();
+        assert_eq!(field(session, 22), Some(23), "the session's total_ascent after the resume");
+    }
+
     #[test]
     fn a_ride_decodes_with_its_values() {
         let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
@@ -895,6 +948,9 @@ mod tests {
         assert_eq!(&globals[globals.len() - 4..], [21, 19, 18, 34], "timer stop, lap, session, activity");
         let records: Vec<&Msg> = m.iter().filter(|x| x.0 == 20).collect();
         assert_eq!(records.len(), 300);
+        // the ride's ascent in the lap and the session (FIT profile: lap field 21, session field 22)
+        let last = |g: u16| m.iter().rev().find(|x| x.0 == g).unwrap();
+        assert_eq!((field(last(19), 21), field(last(18), 22)), (Some(29), Some(29)), "total_ascent, m");
         let r = records[100];
         assert_eq!(field(r, 253), Some(u64::from(T0 + 101)));
         assert_eq!(field(r, 0), Some(u64::from(semicircles(5_153_000))));

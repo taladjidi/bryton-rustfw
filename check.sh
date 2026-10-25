@@ -20,6 +20,15 @@ python3 tools/stack_check.py
 python3 pack.py
 python3 -I dev.py selftest
 python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1: no network
+# the test rides decoded by independent readers (fitdecode, Garmin's FIT SDK): FIT_PYTHON may name a Python that has
+# them (a venv); skipped when neither has them
+PY="${FIT_PYTHON:-python3}"
+if "$PY" -c 'import fitdecode, garmin_fit_sdk' 2>/dev/null; then
+    "$PY" tools/fit_check.py target/fit/sample.fit target/fit/cut.fit target/fit/sample_full.fit
+    "$PY" tools/fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
+else
+    echo "fit_check: fitdecode / garmin-fit-sdk not installed, skipped (FIT_PYTHON)"
+fi
 # The firmware on Renode's STM32H747 (renode/run.py), when Renode is installed (AGENTS.md, Emulation).
 export RENODE="${RENODE:-/Applications/Renode.app/Contents/MacOS/renode}"
 if command -v "$RENODE" >/dev/null 2>&1; then

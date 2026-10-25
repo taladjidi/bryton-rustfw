@@ -302,6 +302,8 @@ It runs, in order:
 - the firmware build;
 - `pack.py`;
 - `dev.py selftest`, `tools/sync.py selftest`;
+- `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
+  Python);
 - if Renode is installed: `renode/run.py`, `renode/run.py --vbus` and `renode/run.py --off` (Emulation).
 
 Look at `target/sim/preview.bmp` after any drawing change, and at `target/sim/fonts.bmp` (every font, written by

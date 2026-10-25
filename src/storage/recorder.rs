@@ -1243,6 +1243,7 @@ mod tests {
             temp_c: Some(12),
             alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
             rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
+            ascent_m: Some(t / 10),
         }
     }
 

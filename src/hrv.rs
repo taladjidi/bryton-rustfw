@@ -118,7 +118,9 @@ impl Hrv {
                 drops += 1;
             }
         }
-        dfa_a1(x.get_mut(..n)?)
+        // a1 of 0 or less is no physiology (a stretch of equal intervals, a strap's glitch: two such records seen on
+        // the owner's ride, 2026-10-25), and would read as an all-out effort: no value
+        dfa_a1(x.get_mut(..n)?).filter(|a| *a > 0.01 && a.is_finite())
     }
 }
 
