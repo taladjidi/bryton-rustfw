@@ -4439,3 +4439,22 @@ fn timers_count_real_time_in_long_passes() {
     let quiet = app.watch.quiet_ms;
     assert!((8000..=10_400).contains(&quiet), "quiet {quiet} ms after 10 s of passes of {PASS} ms");
 }
+
+/// The summary card's distance profile fills the whole width whatever the number of columns it has: more than the
+/// width (128 to 256 columns went to half of it), or fewer (stretched).
+#[test]
+fn distance_profile_fills_the_width() {
+    let cols = 232;
+    for n in [40u32, 233, 256] {
+        let mut sim = Sim::new(9, 0, 0);
+        let mut app = App::start(&mut sim, None);
+        let o = crate::ride::ALT_OFFSET as u16;
+        for k in 0..n {
+            app.history.dist_second(k * 8, Some(o + k as u16));
+        }
+        assert_eq!(app.history.dist_len(), n);
+        let g = app.graph_summary(cols);
+        let empty: Vec<u32> = (0..cols).filter(|&i| app.graph_value(g, cols, i) == 0).collect();
+        assert!(empty.is_empty(), "n = {n}: columns {empty:?} are empty");
+    }
+}

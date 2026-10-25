@@ -898,7 +898,7 @@ impl App {
                         l.push_str(a.message.as_str());
                     }
                     self.notice(l.as_str());
-                    self.keep_notif(&a);
+                    self.keep_notif(b, &a);
                 }
             }
         } else if handle == h[EU] {

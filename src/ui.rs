@@ -1355,10 +1355,10 @@ pub fn draw_notif<'a>(
 ) {
     draw_title(c, app);
     let grey = Style { fg: GREY, ..LABEL };
-    text::draw_in(c, &grey, 4, LIST_Y, W - 8, Align::Left, time);
-    if more {
-        text::draw_in(c, &grey, 4, LIST_Y, W - 8, Align::Right, "MORE");
-    }
+    // the time and MORE each in a box of their own, so neither wipes the other
+    let mw = grey.width("MORE");
+    text::draw_in(c, &grey, 4, LIST_Y, W - 12 - mw, Align::Left, time);
+    text::draw_in(c, &grey, W - 4 - mw, LIST_Y, mw, Align::Right, if more { "MORE" } else { "" });
     for (r, (line, head)) in lines.take(NOTIF_LINES).enumerate() {
         let style = Style { fg: if head { ACCENT } else { WHITE }, ..LABEL };
         text::draw_in(c, &style, 4, LIST_Y + LIST_ROW * (r as u32 + 1), W - 8, Align::Left, line);
@@ -1857,5 +1857,23 @@ pub(crate) mod tests {
             }
         }
         assert!(bad.is_empty(), "{} left over, first {:?}", bad.len(), bad.first());
+    }
+
+    /// The time and MORE under a notification's title are both on screen (one used to wipe the other), and MORE goes
+    /// when there is no more.
+    #[test]
+    fn notif_shows_time_and_more() {
+        let lit = |f: &Frame, x0: u32, x1: u32| (x0..x1).any(|x| (LIST_Y..LIST_Y + 20).any(|y| f.at(x, y) != BLACK));
+        let mut f = Frame::new();
+        draw_notif(&mut f, "MESSAGES", "09:41", true, [("Ana", true), ("hi", false)].into_iter());
+        assert!(lit(&f, 4, 80) && lit(&f, W - 60, W), "time left, MORE right");
+        draw_notif(&mut f, "MESSAGES", "09:41", false, [("Ana", true)].into_iter());
+        assert!(lit(&f, 4, 80) && !lit(&f, W - 60, W), "MORE gone, time kept");
+        // more lines than fit: the first NOTIF_LINES are drawn, no more
+        let mut f = Frame::new();
+        let many = (0..NOTIF_LINES + 5).map(|_| ("line", false));
+        draw_notif(&mut f, "MESSAGES", "09:41", true, many);
+        let row = |r: u32| (4..60).any(|x| f.at(x, LIST_Y + LIST_ROW * r + 8) != BLACK);
+        assert!(row(NOTIF_LINES as u32), "the last row is drawn; the Frame refuses a fill off screen");
     }
 }

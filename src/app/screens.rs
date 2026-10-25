@@ -392,11 +392,8 @@ impl App {
     /// A notice, its banner of `kind`.
     fn notice_as(&mut self, text: &str, kind: Banner) {
         self.notices.rotate_right(1);
-        let (h, m) = self.strip.time;
         let mut l = Line::new();
-        for d in [h / 10, h % 10, 10, m / 10, m % 10] {
-            l.push_str(if d == 10 { ":" } else { ui::DIGITS[usize::from(d % 10)] });
-        }
+        l.push_str(hm_text(self.strip.time).as_str());
         l.push_str(" ");
         l.push_str(text);
         self.notices[0] = l;

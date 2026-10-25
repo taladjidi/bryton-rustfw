@@ -357,7 +357,8 @@ impl App {
                 self.say(if accept { "ANSWERED" } else { "DECLINED" });
                 return;
             }
-            // a tap on the overview's notices opens their list, even while recording (it only reads)
+            // a tap on the overview's notices opens their list, even while recording (it only reads; the touch lock
+            // returns before this)
             (Screen::Main, Input::Touch(Gesture::Tap(_, y))) if u32::from(y) >= ui::NOTICES_Y => {
                 self.open(Screen::Menu(Menu::Notifs, 0))
             }

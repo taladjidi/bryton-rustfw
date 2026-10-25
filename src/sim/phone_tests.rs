@@ -424,6 +424,12 @@ fn notifications_during_a_ride() {
     app.input(&mut sim, Input::Back); // to the overview
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::NOTICES_Y + 10) as u16)));
     assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 0), "reachable by a tap while recording");
+    app.input(&mut sim, Input::Back);
+    app.strip.locked = true;
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::NOTICES_Y + 10) as u16)));
+    assert_eq!(app.screen(), Screen::Main, "the touch lock stops the tap");
+    app.strip.locked = false;
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::NOTICES_Y + 10) as u16)));
     app.input(&mut sim, Input::Select);
     assert_eq!(app.screen(), Screen::Notif(0, 0));
     assert_eq!(app.notif_text(0).next(), Some(("Ana", true)));
@@ -441,4 +447,57 @@ fn notifications_row_in_the_phone_menu() {
     app.open(Screen::Menu(Menu::Phone, menu::PHONE.len()));
     app.activate(&mut sim, Menu::Phone, menu::PHONE.len());
     assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 0));
+}
+
+/// A message that arrives while the list is open, or a detail is open over it, moves the selection with it: Back
+/// from the detail lands on the same message, and the rows on screen are the new ones.
+#[test]
+fn a_message_while_the_list_is_open() {
+    let script = std::vec![
+        (4000, Act::Notify(4, 7, "Ana", "First")),
+        (5000, Act::Notify(4, 8, "Bob", "Second")),
+        (9000, Act::Notify(4, 9, "Cy", "Third")),
+    ];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    run(&mut sim, &mut app, 7000);
+    assert_eq!(app.phone.inbox.len(), 2);
+    app.open(Screen::Menu(Menu::Notifs, 1)); // Ana, the older
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 2), "still on Ana");
+    assert_eq!(app.menu_row(Menu::Notifs, 2).unwrap().0.as_str(), "Ana");
+    // and under a detail (the third arrives at 9 s: do it again with a fourth through keep_notif)
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.screen(), Screen::Notif(2, 0));
+    let a = crate::phone::Attributes { uid: 99, ..Default::default() };
+    app.keep_notif(&mut sim, &a);
+    assert_eq!(app.screen(), Screen::Notif(3, 0));
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 3), "Back to the same message");
+    for _ in 0..12 {
+        app.keep_notif(&mut sim, &a);
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, crate::phone::INBOX - 1), "clamped");
+}
+
+/// The longest message the unit asks for (120 characters, in words that waste the most room) still fits the lines
+/// of the detail: Page / Lap change nothing and no MORE is drawn. (Scrolling itself is tested in ui.rs.)
+#[test]
+fn the_longest_notification_fits() {
+    let (mut sim, mut app) = unit(iphone(std::vec![]));
+    let mut a = crate::phone::Attributes { uid: 7, ..Default::default() };
+    crate::phone::fold(&mut a.title, b"A sender with a long name");
+    crate::phone::fold(&mut a.message, "abcdefghijklmnopqrs ".repeat(6).as_bytes());
+    app.keep_notif(&mut sim, &a);
+    app.open(Screen::Menu(Menu::Notifs, 0));
+    app.show(&mut sim);
+    app.input(&mut sim, Input::Select);
+    assert_eq!(app.screen(), Screen::Notif(0, 0));
+    assert!(app.notif_lines(0) > 6 && app.notif_lines(0) <= ui::NOTIF_LINES, "{} lines", app.notif_lines(0));
+    app.input(&mut sim, Input::Next);
+    assert_eq!(app.screen(), Screen::Notif(0, 0));
+    let mut f = crate::ui::tests::Frame::new();
+    app.draw_notif(&mut f, 0, 0);
+    assert!((ui::W - 60..ui::W).all(|x| (ui::LIST_Y..ui::LIST_Y + 20).all(|y| f.at(x, y) == ui::BLACK)), "no MORE");
 }

@@ -383,7 +383,7 @@ impl Samples {
     /// takes the one before). Without a distance (all at 0), an equal share of the samples.
     fn columns(&self, out: &mut [u16; COLS]) {
         let kept = self.v.get(..self.len).unwrap_or(&[]);
-        let total = self.d.get(..self.len).and_then(|d| d.iter().max()).copied().unwrap_or(0);
+        let total = self.d.get(..self.len).and_then(|d| d.last()).copied().unwrap_or(0);
         if total == 0 {
             for (i, col) in out.iter_mut().enumerate() {
                 // the samples column i stands for (at least one: a short ride is stretched)
@@ -395,13 +395,18 @@ impl Samples {
             return;
         }
         let mut acc = [(0u32, 0u32); COLS];
+        let mut at = 0; // a sample whose distance goes back (a glitch) is skipped
         for (&a, &d) in kept.iter().zip(&self.d) {
+            if d < at {
+                continue;
+            }
+            at = d;
             let i = (u64::from(d) * COLS as u64 / (u64::from(total) + 1)) as usize;
             if let Some(c) = acc.get_mut(i) {
                 *c = (c.0 + u32::from(a), c.1 + 1);
             }
         }
-        let mut last = 0;
+        let mut last = kept.first().copied().unwrap_or(0);
         for (col, (sum, n)) in out.iter_mut().zip(acc) {
             last = sum.checked_div(n).map_or(last, |v| v as u16);
             *col = last;
@@ -475,5 +480,20 @@ mod tests {
         }
         flat.columns(&mut out);
         assert!(out[0] < 1010 && out[COLS - 1] > 1090);
+    }
+
+    /// The total is the last sample's distance, a sample that goes back is skipped, and columns before the first
+    /// sample show it instead of 0.
+    #[test]
+    fn profile_ignores_glitches() {
+        let mut s = Samples::new();
+        for k in 0..100u32 {
+            s.dist = if k == 50 { 0 } else { 200_000 + k * 1000 }; // the distance falls back once, and the ride starts late
+            s.push(1000 + k as u16);
+        }
+        let mut out = [0; COLS];
+        s.columns(&mut out);
+        assert!(out.iter().all(|&v| v >= 1000), "no 0 column: {out:?}");
+        assert!(out[COLS - 1] >= 1095, "the glitch's sample did not push the total: {}", out[COLS - 1]);
     }
 }

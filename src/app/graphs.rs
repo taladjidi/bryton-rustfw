@@ -154,8 +154,16 @@ impl App {
         if !g.whole {
             return (g.n + i).checked_sub(cols).map_or(0, |k| h.bar(k, g.plot));
         }
-        let per = g.n.div_ceil(cols.max(1)).max(1);
-        let (sum, count) = (i * per..((i + 1) * per).min(g.n))
+        // the distance profile fits the width (as the summary card's does): column i takes columns lo..hi of the
+        // profile, one at least when it has fewer; the time graphs fill from the left and grow
+        let (lo, hi) = if g.dist {
+            let lo = i * g.n / cols.max(1);
+            (lo, ((i + 1) * g.n / cols.max(1)).max(lo + 1).min(g.n))
+        } else {
+            let per = g.n.div_ceil(cols.max(1)).max(1);
+            (i * per, ((i + 1) * per).min(g.n))
+        };
+        let (sum, count) = (lo..hi)
             .map(|k| u32::from(if g.dist { h.dist_bar(k) } else { h.whole_bar(k, g.plot) }))
             .filter(|&v| v != 0)
             .fold((0, 0), |(s, n), v| (s + v, n + 1));

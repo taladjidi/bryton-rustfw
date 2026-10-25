@@ -8,12 +8,22 @@ use crate::*;
 use phone as ph;
 
 impl App {
-    /// Keeps a notification fetched from the phone. A detail open on a newer one moves with it (the list is newest
-    /// first), so it keeps showing the same notification.
-    pub(crate) fn keep_notif(&mut self, a: &ph::Attributes) {
+    /// Keeps a notification fetched from the phone. A detail or a list selection open on a newer one moves with it
+    /// (the list is newest first), so it keeps showing the same notification; the list on screen is redrawn.
+    pub(crate) fn keep_notif(&mut self, b: &mut impl Board, a: &ph::Attributes) {
+        let had = !self.phone.inbox.is_empty();
         self.phone.inbox.add(a, self.strip.time);
-        if let Screen::Notif(k, top) = self.screen {
-            self.screen = Screen::Notif(k + 1, top);
+        let shift = |s: &mut Screen| match *s {
+            Screen::Notif(k, top) => *s = Screen::Notif(k + 1, top),
+            Screen::Menu(Menu::Notifs, sel) if had => *s = Screen::Menu(Menu::Notifs, (sel + 1).min(ph::INBOX - 1)),
+            _ => {}
+        };
+        shift(&mut self.screen);
+        for s in self.under.iter_mut().take(self.depth) {
+            shift(s);
+        }
+        if let Screen::Menu(Menu::Notifs, sel) = self.screen {
+            self.update_menu_rows(b, Menu::Notifs, sel);
         }
     }
 

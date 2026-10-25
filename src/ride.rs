@@ -581,6 +581,8 @@ pub fn alt_scale(seen: impl Iterator<Item = u32>) -> (u32, u32) {
 const DIST_STEP_M: u32 = 8;
 /// Columns of the altitude along the distance (at least the card's profile width).
 const DIST_COLS: usize = 256;
+/// The most columns one second may skip and still be filled with its altitude (a fast descent); more is a glitch.
+const DIST_GAP: usize = 4;
 /// Plots kept.
 pub const PLOTS: usize = Plot::ALL.len();
 /// Bars of the whole ride kept: when full, neighbouring bars are merged and each bar covers twice the time.
@@ -724,7 +726,10 @@ impl History {
             self.dist_step *= 2;
         }
         let i = (dist_m / self.dist_step) as usize;
-        let from = (self.dist_n as usize).min(i);
+        // only a small gap is bridged: nothing filled yet (the first reading, or after a resume emptied the history)
+        // or a jump (a GPS glitch) starts at `i`, the columns before stay empty (0)
+        let gap = i.saturating_sub(self.dist_n as usize);
+        let from = if self.dist_n == 0 || gap > DIST_GAP { i } else { (self.dist_n as usize).min(i) };
         if let Some(cols) = self.by_dist.get_mut(from..=i) {
             cols.fill(alt);
         }
@@ -947,5 +952,20 @@ mod tests {
         }
         assert!(h.dist_step > DIST_STEP_M, "halved");
         assert!(h.dist_bar(0) < o + 13 && h.dist_bar(h.dist_len() - 1) == o + 79);
+    }
+
+    /// Altitude first read far into the ride (or after a resume emptied the history) leaves the columns before it
+    /// empty; a one-second jump of the distance (a GPS glitch) is not filled with a flat run.
+    #[test]
+    fn altitude_by_distance_gaps() {
+        let o = ALT_OFFSET as u16;
+        let mut h = History::default();
+        h.dist_second(800, Some(o + 5)); // column 100
+        assert!(h.dist_bar(99) == 0 && h.dist_bar(100) == o + 5, "no fake flat line before the first reading");
+        h.dist_second(808, Some(o + 6));
+        h.dist_second(1800, Some(o + 9)); // a glitch: 124 columns in a second
+        assert!(h.dist_bar(102) == 0 && h.dist_bar(225) == o + 9, "the jump leaves a gap");
+        h.dist_second(1832, Some(o + 9)); // 4 columns: a fast descent, bridged
+        assert!(h.dist_bar(226) == o + 9 && h.dist_bar(228) == o + 9);
     }
 }
