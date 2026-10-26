@@ -158,10 +158,10 @@ impl App {
     /// No ride running, and none waiting to be resumed or saved: the card may be used for something else.
     pub(crate) fn ride_settled(&self) -> bool {
         self.ride.state() == ride::State::Idle
-            && self.recorder.phase() == recorder::Phase::Done
-            && self.full.phase() == recorder::Phase::Done
-            && !self.resume_pending
-            && !self.full_pending
+            && self.rec.clean.phase() == recorder::Phase::Done
+            && self.rec.full.phase() == recorder::Phase::Done
+            && !self.rec.resume_pending
+            && !self.rec.full_pending
     }
 
     /// The past ride asked for in HISTORY goes on being read, [`App::SCAN_IDLE`] a pass (someone waits for it);
@@ -226,7 +226,7 @@ impl App {
         let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xac)
             || Kind::ALL.iter().any(|k| k.from_word(b.backup_read(k.backup())).is_some())
             || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some());
-        if own || self.resume_pending {
+        if own || self.rec.resume_pending {
             if !own {
                 self.save_misc(b); // the ride's settings kept as they are: no import at the next start either
             }

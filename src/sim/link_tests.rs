@@ -21,14 +21,14 @@ fn riding() -> (Sim, App) {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 5000);
     assert_eq!(app.live.get(Metric::Hr), Some(72));
-    assert_eq!(app.recorder.phase(), crate::recorder::Phase::Recording);
+    assert_eq!(app.rec.clean.phase(), crate::recorder::Phase::Recording);
     (sim, app)
 }
 
 /// The ride goes on: recording, not failing, and its timer has run for the time that passed.
 fn ride_ok(app: &App, since_ms: u64, sim: &Sim) {
-    assert_eq!(app.recorder.phase(), crate::recorder::Phase::Recording);
-    assert_eq!(app.recorder.fails(), 0);
+    assert_eq!(app.rec.clean.phase(), crate::recorder::Phase::Recording);
+    assert_eq!(app.rec.clean.fails(), 0);
     assert!(u64::from(app.ride.timer_s()) + 2 >= (sim.ms - since_ms) / 1000, "the ride's timer ran");
 }
 

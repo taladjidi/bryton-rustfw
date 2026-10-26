@@ -253,7 +253,7 @@ fn the_bond_waits_for_the_ride_to_settle() {
     run(&mut sim2, &mut app, BOND_LOAD_MS as u64 + 1000);
     app.press(&mut sim2, Press::Short(Key::Start));
     run(&mut sim2, &mut app, 2000);
-    assert_eq!(app.recorder.phase(), crate::recorder::Phase::Done, "the card full: not recording");
+    assert_eq!(app.rec.clean.phase(), crate::recorder::Phase::Done, "the card full: not recording");
     app.activate(&mut sim2, Menu::Phone, 5);
     app.activate(&mut sim2, Menu::Phone, 5); // FORGET, confirmed
     run(&mut sim2, &mut app, 2000);

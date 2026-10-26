@@ -116,7 +116,7 @@ fn an_indoor_ride_resumes_indoor_and_saves_as_indoor_cycling() {
     save_ride(&mut sim2, &mut app);
     run(&mut sim2, &mut app, 2000);
     assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
-    let name = std::string::String::from_utf8(app.recorder.name().to_vec()).unwrap();
+    let name = std::string::String::from_utf8(app.rec.clean.name().to_vec()).unwrap();
     let field = crate::fit::tests::field;
     for path in [std::format!("Activities/{name}.fit"), std::format!("Rustfw/Activities/{name}.fit")] {
         let mut d = crate::fat::tests::Ram(sim2.emmc.image.clone(), 0);
@@ -366,7 +366,7 @@ fn end_ride_screen_by_keys() {
     assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running), "RESUME");
     app.press(&mut sim, Press::Short(Key::Start)); // paused again
     // SAVE
-    let name = app.recorder.name();
+    let name = app.rec.clean.name();
     app.press(&mut sim, Press::Long(Key::Start));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "SAVE: the card, 2 keys, was 3");
@@ -396,7 +396,7 @@ fn discard_by_keys_moves_both_copies() {
     run(&mut sim, &mut app, 2000);
     let before = scanned(&mut sim, &mut app);
     to_end_screen(&mut sim, &mut app);
-    let name = app.recorder.name();
+    let name = app.rec.clean.name();
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Discard(2), "asked, KEEP selected");
@@ -425,7 +425,7 @@ fn discard_by_keys_moves_both_copies() {
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 5000);
-    let next = app.recorder.name();
+    let next = app.rec.clean.name();
     app.press(&mut sim, Press::Short(Key::Start));
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
@@ -445,7 +445,7 @@ fn end_ride_screen_by_touch() {
         super::tests::drag(sim, app, ((x + w / 2) as i32, (y + h / 2) as i32), (0, 0));
     };
     to_end_screen(&mut sim, &mut app);
-    let name = app.recorder.name();
+    let name = app.rec.clean.name();
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::END_BUTTONS[1].1 - 6) as u16)));
     assert_eq!(app.screen(), Screen::End(1), "between two buttons: nothing");
     tap(&mut sim, &mut app, 0);
@@ -469,7 +469,7 @@ fn end_ride_screen_by_touch() {
     // a second ride, discarded by two taps
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 5000);
-    let name = app.recorder.name();
+    let name = app.rec.clean.name();
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Start));
     tap(&mut sim, &mut app, 2);
@@ -490,7 +490,7 @@ fn a_reset_on_the_end_screen_resumes_the_ride() {
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, 2000);
         to_end_screen(&mut sim, &mut app);
-        let (name, timer) = (app.recorder.name(), app.ride.timer_s());
+        let (name, timer) = (app.rec.clean.name(), app.ride.timer_s());
         if question {
             app.press(&mut sim, Press::Short(Key::Page));
             app.press(&mut sim, Press::Short(Key::Page));
@@ -547,7 +547,7 @@ fn a_profile_set_while_paused_is_in_the_saved_ride() {
     assert!(app.indoors());
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
-    let name = std::string::String::from_utf8(app.recorder.name().to_vec()).unwrap();
+    let name = std::string::String::from_utf8(app.rec.clean.name().to_vec()).unwrap();
     for path in [std::format!("Activities/{name}.fit"), std::format!("Rustfw/Activities/{name}.fit")] {
         let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
         let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
@@ -600,7 +600,7 @@ fn a_resumed_ride_takes_the_model_available_at_resume() {
     app.save_misc(&mut sim);
     let settings = (app.settings.ftp, app.settings.wprime_j);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.ride_model.map(|m| m.2), Some(true), "this ride on the fit");
+    assert_eq!(app.rec.model.map(|m| m.2), Some(true), "this ride on the fit");
     assert_ne!(app.cp_model(), settings);
     run(&mut sim, &mut app, 150_000);
 
@@ -610,7 +610,7 @@ fn a_resumed_ride_takes_the_model_available_at_resume() {
     let mut app = App::start(&mut sim2, None);
     run(&mut sim2, &mut app, 1000);
     assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
-    assert_eq!(app.ride_model, Some((settings.0, settings.1, false)), "what this start had at the resume");
+    assert_eq!(app.rec.model, Some((settings.0, settings.1, false)), "what this start had at the resume");
     app.stock.start(app.date);
     while app.stock.status() == crate::stock::Status::Running {
         run(&mut sim2, &mut app, u64::from(POLL_MS));
@@ -642,8 +642,8 @@ fn the_strap_beats_go_into_the_full_copy() {
     run(&mut sim, &mut app, 20_000);
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 150_000);
-    assert_eq!(app.full.beats_dropped, 0);
-    let name = app.recorder.name();
+    assert_eq!(app.rec.full.beats_dropped, 0);
+    let name = app.rec.clean.name();
 
     let mut sim2 = Sim::new(9, 3, 0); // a reset
     sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
@@ -728,7 +728,7 @@ fn a_workout_records_a_lap_per_step() {
     run(&mut sim, &mut app, 115_000); // through the five timed steps, into the cool-down
     app.press(&mut sim, Press::Short(Key::Lap)); // ends the open cool-down: the workout done, one lap
     run(&mut sim, &mut app, 5000);
-    let name = app.recorder.name();
+    let name = app.rec.clean.name();
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 3000);

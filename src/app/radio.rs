@@ -126,7 +126,7 @@ impl App {
                     }
                     for &rr in self.decoders.beats.rr() {
                         self.hrv.push(rr);
-                        self.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: recorder.rs)
+                        self.rec.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: recorder.rs)
                     }
                     if matches!(kind, Kind::Shifting | Kind::Di2) {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)
@@ -189,8 +189,8 @@ impl App {
         let (_, t) = self.rec_time();
         let front = now >> 8 != was >> 8;
         let [rear_n, front_n] = now.to_le_bytes();
-        self.recorder.gear(t, front, front_n, rear_n);
-        self.full.gear(t, front, front_n, rear_n);
+        self.rec.clean.gear(t, front, front_n, rear_n);
+        self.rec.full.gear(t, front, front_n, rear_n);
     }
 
     /// A shifter button pressed: the action the remote menu set for it (menu.rs [`menu::Remote`]). The ride's

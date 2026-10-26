@@ -91,7 +91,7 @@ impl App {
                 None => v.push_str("--"),
             },
             S::Model => {
-                let from_fit = match self.ride_model.filter(|_| self.ride.state() != ride::State::Idle) {
+                let from_fit = match self.rec.model.filter(|_| self.ride.state() != ride::State::Idle) {
                     Some((.., fit)) => fit,
                     None => self.model_now().2,
                 };

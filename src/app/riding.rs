@@ -39,7 +39,7 @@ impl App {
         });
         if ev == ride::Event::Start {
             self.power.new_ride();
-            self.ride_model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
+            self.rec.model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
             (self.profile_by_hand, self.profile) = (false, ride::Profile::Road);
             self.choose_profile(); // after the banner above: INDOOR RIDE replaces it
         }
@@ -107,12 +107,12 @@ impl App {
         let Some(ev) = self.ride.end() else { return };
         // a ride held behind the last one's save: its end drops it (nothing recorded), and the last one, still in
         // the recorder, is never the one discarded
-        let held = [self.recorder.pending(), self.full.pending()];
+        let held = [self.rec.clean.pending(), self.rec.full.pending()];
         self.recorder(ev);
         // too late once the save has begun (a full card stopped the ride): it is in \Activities, so say so
-        let took = held[0] || self.recorder.discard() || !self.card_writable;
+        let took = held[0] || self.rec.clean.discard() || !self.card_writable;
         if !held[1] {
-            self.full.discard();
+            self.rec.full.discard();
         }
         self.plan.player = None;
         (self.depth, self.screen) = (0, Screen::Main);
@@ -134,7 +134,7 @@ impl App {
         if self.emmc.lent() {
             return self.say("USB DRIVE ON");
         }
-        if self.ride.state() != ride::State::Idle && !self.recorder.held() {
+        if self.ride.state() != ride::State::Idle && !self.rec.clean.held() {
             return self.say("END THE RIDE FIRST");
         }
         let step = if self.confirm.take() == Some((menu, sel)) { usize::from(self.give_up_step) + 1 } else { 0 };
@@ -144,14 +144,14 @@ impl App {
         }
         self.give_up_step = 0;
         let (local, _) = self.rec_time();
-        let clean = self.recorder.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
-        let full = self.full.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
+        let clean = self.rec.clean.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
+        let full = self.rec.full.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
         // the boot's recovery over too: the record read by the next ride's first card work (one writer, one ride)
-        if self.recorder.phase() == recorder::Phase::Done {
-            self.resume_pending = false;
+        if self.rec.clean.phase() == recorder::Phase::Done {
+            self.rec.resume_pending = false;
         }
-        if self.full.phase() == recorder::Phase::Done {
-            self.full_pending = false;
+        if self.rec.full.phase() == recorder::Phase::Done {
+            self.rec.full_pending = false;
         }
         use recorder::{GaveUp, Outcome};
         match clean.or(full) {
@@ -259,40 +259,40 @@ impl App {
         match ev {
             ride::Event::Start => {
                 // a ride the boot has not reopened yet (the card failed then) is resumed in this one's place
-                self.recorder.start(t, recorder::ride_name(local), self.resume_pending);
-                if !self.recorder.starting() {
+                self.rec.clean.start(t, recorder::ride_name(local), self.rec.resume_pending);
+                if !self.rec.clean.starting() {
                     self.alarm_notice("NOT RECORDING");
                 } else {
-                    if self.recorder.held() {
+                    if self.rec.clean.held() {
                         // behind the last ride's save, which the card keeps failing: tried again, this one after it
                         self.alarm_notice("NOT RECORDING: CARD");
                     }
                     // (a ride started while the last one is being saved waits for that save: recorder.rs `start`)
                     // no full copy of a ride the clean one does not record
-                    let resume = self.resume_pending || self.full_pending;
-                    self.full.start_after(&self.recorder, t, recorder::ride_name(local), resume);
+                    let resume = self.rec.resume_pending || self.rec.full_pending;
+                    self.rec.full.start_after(&self.rec.clean, t, recorder::ride_name(local), resume);
                 }
             }
             ride::Event::Second => {
                 let s = self.sample(t);
-                self.recorder.second(&s, words);
-                self.full.second(&s, words);
+                self.rec.clean.second(&s, words);
+                self.rec.full.second(&s, words);
             }
             ride::Event::Pause => {
-                self.recorder.pause(t, words);
-                self.full.pause(t, words);
+                self.rec.clean.pause(t, words);
+                self.rec.full.pause(t, words);
             }
             ride::Event::Resume => {
-                self.recorder.resume(t);
-                self.full.resume(t);
+                self.rec.clean.resume(t);
+                self.rec.full.resume(t);
             }
             ride::Event::Lap => {
-                self.recorder.lap(t);
-                self.full.lap(t);
+                self.rec.clean.lap(t);
+                self.rec.full.lap(t);
             }
             ride::Event::End => {
-                self.recorder.end(t, words);
-                self.full.end(t, words);
+                self.rec.clean.end(t, words);
+                self.rec.full.end(t, words);
             }
         }
     }
@@ -302,7 +302,7 @@ impl App {
     pub(crate) fn rec_time(&self) -> (recorder::Local, u32) {
         let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
         let local = (y, mo, d, h, mi, self.seconds);
-        let offset = i64::from(self.gps.aid.offset_15min.unwrap_or(0)) * 900 + i64::from(self.lag_s);
+        let offset = i64::from(self.gps.aid.offset_15min.unwrap_or(0)) * 900 + i64::from(self.rec.lag_s);
         (local, fit::fit_time(from_epoch_s(epoch_s(local) - offset)))
     }
 
@@ -336,8 +336,8 @@ impl App {
     /// next ride's choice. A recorder without a ride open ignores it.
     fn profile_to_recorders(&mut self) {
         let (indoor, by_hand) = (self.profile == ride::Profile::Indoor, self.profile_by_hand);
-        self.recorder.set_profile(indoor, by_hand);
-        self.full.set_profile(indoor, by_hand);
+        self.rec.clean.set_profile(indoor, by_hand);
+        self.rec.full.set_profile(indoor, by_hand);
     }
 
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
@@ -348,20 +348,20 @@ impl App {
         }
         let (local, _) = self.rec_time();
         self.profile_to_recorders(); // before a checkpoint (a ride switched off or cut while paused)
-        if self.recorder.phase() != recorder::Phase::Done {
-            self.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
+        if self.rec.clean.phase() != recorder::Phase::Done {
+            self.rec.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
         }
         // the two copies checkpoint together: the clean one never behind (recorder.rs, "Two copies")
-        self.recorder.keep_up(&self.full);
-        self.full.keep_up(&self.recorder);
-        let was_held = self.recorder.held();
-        let o = if self.resume_pending {
-            let o = self.recorder.recover(&mut emmc::Volume(&mut self.emmc, b), local);
+        self.rec.clean.keep_up(&self.rec.full);
+        self.rec.full.keep_up(&self.rec.clean);
+        let was_held = self.rec.clean.held();
+        let o = if self.rec.resume_pending {
+            let o = self.rec.clean.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             // a card that failed at boot is tried again (the marker stays until the ride is found)
-            self.resume_pending = matches!(o, recorder::Outcome::Failed(_)) || self.recorder.waiting();
+            self.rec.resume_pending = matches!(o, recorder::Outcome::Failed(_)) || self.rec.clean.waiting();
             o
-        } else if self.recorder.due() {
-            self.recorder.io(&mut emmc::Volume(&mut self.emmc, b), local)
+        } else if self.rec.clean.due() {
+            self.rec.clean.io(&mut emmc::Volume(&mut self.emmc, b), local)
         } else {
             recorder::Outcome::Nothing
         };
@@ -372,8 +372,8 @@ impl App {
                 self.ride = ride::Ride::resumed(&words);
                 // its profile from the record (an older one: ROAD, automatic), by hand if the rider set it so;
                 // automatic, a trainer silent for TRAINER_QUIET_S after the restart turns it back to ROAD
-                self.profile = if self.recorder.indoor() { ride::Profile::Indoor } else { ride::Profile::Road };
-                (self.profile_by_hand, self.tlink.quiet_s) = (self.recorder.by_hand(), 0);
+                self.profile = if self.rec.clean.indoor() { ride::Profile::Indoor } else { ride::Profile::Road };
+                (self.profile_by_hand, self.tlink.quiet_s) = (self.rec.clean.by_hand(), 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
@@ -381,7 +381,7 @@ impl App {
                 // cover the part after the restart only (the file has every second's power: the history's and a
                 // computer's cover the whole ride)
                 self.power.new_ride();
-                self.ride_model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
+                self.rec.model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
                 let now = self.now_s();
                 self.alt.ride_start(now);
                 self.notice("RIDE RESUMED");
@@ -407,17 +407,17 @@ impl App {
             }
             recorder::Outcome::Failed(_) => {
                 // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
-                if self.recorder.fails() % 60 == 1 && was_held == self.recorder.held() {
-                    self.alarm_notice(if self.recorder.held() { "NOT RECORDING: CARD" } else { "NOT SAVING" });
+                if self.rec.clean.fails() % 60 == 1 && was_held == self.rec.clean.held() {
+                    self.alarm_notice(if self.rec.clean.held() { "NOT RECORDING: CARD" } else { "NOT SAVING" });
                 }
             }
         }
-        if !was_held && self.recorder.held() {
+        if !was_held && self.rec.clean.held() {
             self.alarm_notice("NOT RECORDING: CARD"); // the ride started behind the last one's save, now stuck
         }
         self.step_full(b, local);
-        let open = self.recorder.phase() != recorder::Phase::Done || self.full.phase() != recorder::Phase::Done;
-        if !self.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
+        let open = self.rec.clean.phase() != recorder::Phase::Done || self.rec.full.phase() != recorder::Phase::Done;
+        if !self.rec.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
             b.backup_write(RIDE_BKP, if open { RIDE_OPEN } else { 0 });
         }
     }
@@ -426,20 +426,20 @@ impl App {
     /// for once the clean one's has been, and whatever it does, it never stops the clean one; a full copy that
     /// cannot be saved is said.
     fn step_full(&mut self, b: &mut impl Board, local: recorder::Local) {
-        if self.full.phase() != recorder::Phase::Done {
-            self.full_pending = false;
+        if self.rec.full.phase() != recorder::Phase::Done {
+            self.rec.full_pending = false;
         }
-        let o = if self.full_pending && !self.resume_pending {
-            let o = self.full.recover(&mut emmc::Volume(&mut self.emmc, b), local);
-            self.full_pending = matches!(o, recorder::Outcome::Failed(_)) || self.full.waiting();
+        let o = if self.rec.full_pending && !self.rec.resume_pending {
+            let o = self.rec.full.recover(&mut emmc::Volume(&mut self.emmc, b), local);
+            self.rec.full_pending = matches!(o, recorder::Outcome::Failed(_)) || self.rec.full.waiting();
             o
-        } else if self.full.due() {
-            self.full.io_after(&self.recorder, &mut emmc::Volume(&mut self.emmc, b), local)
+        } else if self.rec.full.due() {
+            self.rec.full.io_after(&self.rec.clean, &mut emmc::Volume(&mut self.emmc, b), local)
         } else {
             recorder::Outcome::Nothing
         };
         match o {
-            recorder::Outcome::Resumed(..) => self.full.resumed_after(&self.recorder),
+            recorder::Outcome::Resumed(..) => self.rec.full.resumed_after(&self.rec.clean),
             recorder::Outcome::Kept(_) => self.notice("NO FULL COPY"),
             _ => {}
         }

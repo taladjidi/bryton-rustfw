@@ -1826,7 +1826,7 @@ fn end_ride_screen_by_chance() {
             app.press(&mut sim, Press::Short(Key::Start));
             app.input(&mut sim, Input::End);
             assert_eq!(app.screen(), Screen::End(ui::END_SAVE), "{what}");
-            let name = app.recorder.name();
+            let name = app.rec.clean.name();
             let mut steps = 0;
             while app.ride.state() != ride::State::Idle {
                 steps += 1;

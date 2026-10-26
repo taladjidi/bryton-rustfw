@@ -942,7 +942,7 @@ fn delete_rides() {
     assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE");
     assert_eq!(app.screen(), Screen::Past);
     app.ride = crate::ride::Ride::default();
-    app.resume_pending = true;
+    app.rec.resume_pending = true;
     app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE", "a ride waiting");
     assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());

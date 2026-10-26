@@ -50,7 +50,7 @@ impl App {
 
     /// A save stuck, either copy's (GIVE UP SAVE shows).
     pub(crate) fn save_stuck_any(&self) -> bool {
-        self.recorder.stuck() || self.full.stuck()
+        self.rec.clean.stuck() || self.rec.full.stuck()
     }
 
     /// From the unit: takes the card back, unless the computer has it mounted (it said so: PREVENT MEDIUM

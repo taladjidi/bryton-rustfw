@@ -975,7 +975,7 @@ impl App {
     /// (replacing the one learnt at a fix). Not while a ride is open: its record times must not jump (the golden
     /// rule); the next link after it sets them.
     fn phone_time(&mut self, b: &mut impl Board, current: Option<&[u8]>, local: Option<&[u8]>) {
-        if self.ride.state() != ride::State::Idle || self.recorder.phase() != recorder::Phase::Done {
+        if self.ride.state() != ride::State::Idle || self.rec.clean.phase() != recorder::Phase::Done {
             return;
         }
         if let Some(t) = current.and_then(ph::current_time) {

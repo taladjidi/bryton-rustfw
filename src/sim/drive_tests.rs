@@ -238,8 +238,8 @@ fn a_save_stuck_after_its_step_4_lends_the_drive_read_only() {
     run(&mut sim, &mut app, 1000); // its end on the card, step 4 done, 5 failed
     sim.emmc.bad = dirs.to_vec(); // nor \Rustfw\Rides' from here
     run(&mut sim, &mut app, 300_000); // past GIVE_UP tries
-    assert_eq!(app.recorder.phase(), recorder::Phase::Saving, "never done while nameless");
-    assert!(app.recorder.stuck());
+    assert_eq!(app.rec.clean.phase(), recorder::Phase::Saving, "never done while nameless");
+    assert!(app.rec.clean.stuck());
     assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "the marker kept");
     assert_eq!(app.drive_on(&mut sim), Ok(()));
     assert_eq!(app.notes.text.as_str(), "USB DRIVE READ ONLY");
@@ -258,7 +258,7 @@ fn a_save_stuck_after_its_step_4_lends_the_drive_read_only() {
     sim.emmc.bad.clear();
     run(&mut sim, &mut app, 300_000);
     assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE SAVED")));
-    assert_eq!(app.recorder.phase(), recorder::Phase::Recording, "the new ride recorded");
+    assert_eq!(app.rec.clean.phase(), recorder::Phase::Recording, "the new ride recorded");
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 3000);
@@ -302,10 +302,10 @@ fn discarding_a_held_ride_saves_the_last_one() {
     save_ride(&mut sim, &mut app); // ended, its save at the next pass
     app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
     app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
-    assert!(app.recorder.pending() && app.full.pending());
+    assert!(app.rec.clean.pending() && app.rec.full.pending());
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     app.discard_ride();
-    assert!(!app.recorder.pending() && !app.full.pending());
+    assert!(!app.rec.clean.pending() && !app.rec.full.pending());
     run(&mut sim, &mut app, 10_000);
     let after = [fits_in(&sim.emmc.image, "Activities"), fits_in(&sim.emmc.image, "Rustfw/Activities")];
     assert_eq!(after, before.map(|n| n + 1), "the last ride saved, both copies");
@@ -327,15 +327,15 @@ fn a_held_ride_is_said_once_the_save_is_stuck() {
     sim.emmc.bad = dirs.to_vec();
     app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
     app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
-    assert!(app.recorder.pending() && !app.recorder.held());
+    assert!(app.rec.clean.pending() && !app.rec.clean.held());
     let said = |app: &App| app.notes.list.iter().filter(|n| n.as_str().ends_with("NOT RECORDING: CARD")).count();
     assert_eq!(said(&app), 0);
     let mut ms = 0;
-    while !app.recorder.held() && ms < 300_000 {
+    while !app.rec.clean.held() && ms < 300_000 {
         run(&mut sim, &mut app, 100);
         ms += 100;
     }
-    assert!(app.recorder.held());
+    assert!(app.rec.clean.held());
     assert_eq!(said(&app), 1, "said when it became so");
 }
 
@@ -367,10 +367,10 @@ fn give_up_save_frees_a_stuck_save() {
         run(&mut sim, &mut app, 1000); // step 4 done, 5 failed
         sim.emmc.bad = dirs.to_vec();
         run(&mut sim, &mut app, 300_000);
-        assert!(app.recorder.stuck());
+        assert!(app.rec.clean.stuck());
         app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
         app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
-        assert!(app.recorder.held() && app.ride.state() == ride::State::Running);
+        assert!(app.rec.clean.held() && app.ride.state() == ride::State::Running);
         assert_eq!(rows(&app)[0], menu::Row::GiveUpSave);
 
         app.open(Screen::Menu(Menu::System, 0));
@@ -387,14 +387,14 @@ fn give_up_save_frees_a_stuck_save() {
                 assert_eq!(app.notes.text.as_str(), *text);
             }
             app.input(&mut sim, Input::Back); // NO
-            assert!(app.recorder.stuck(), "asked {back_at} times, then Back: nothing done");
+            assert!(app.rec.clean.stuck(), "asked {back_at} times, then Back: nothing done");
         }
         for text in ASK {
             app.input(&mut sim, Input::Select);
             assert_eq!(app.notes.text.as_str(), text);
         }
         app.input(&mut sim, Input::Select); // the second YES
-        assert!(!app.recorder.stuck() && !rows(&app).contains(&menu::Row::GiveUpSave));
+        assert!(!app.rec.clean.stuck() && !rows(&app).contains(&menu::Row::GiveUpSave));
         let said = if nearly_full { "GIVEN UP: COPY THE CARD" } else { "KEPT IN RUSTFW/RESCUE" };
         assert!(app.notes.list[0].as_str().ends_with(said), "{}", app.notes.list[0].as_str());
         let fsck = crate::fat::write::tests::fsck(&sim.emmc.image);
@@ -407,7 +407,7 @@ fn give_up_save_frees_a_stuck_save() {
 
         sim.emmc.bad.clear(); // the card well again: the held ride records
         run(&mut sim, &mut app, 10_000);
-        assert_eq!(app.recorder.phase(), recorder::Phase::Recording, "the held ride recorded");
+        assert_eq!(app.rec.clean.phase(), recorder::Phase::Recording, "the held ride recorded");
         app.leave_menus();
         app.show(&mut sim);
         app.press(&mut sim, Press::Short(Key::Start)); // pause

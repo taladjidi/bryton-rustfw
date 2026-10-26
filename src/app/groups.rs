@@ -286,3 +286,56 @@ pub(crate) struct RampState {
     /// The result screen is due (shown at the next pass).
     pub(crate) show: bool,
 }
+
+/// The ride recorders and what goes with the ride being recorded (app/riding.rs, storage/recorder.rs).
+pub(crate) struct Recording {
+    /// The ride recorder (FIT file, checkpoints, save); a ride to look for on the card at the first step is
+    /// `resume_pending`.
+    pub(crate) clean: recorder::Recorder,
+    /// A ride is left open on the card for `clean`.
+    pub(crate) resume_pending: bool,
+    /// The ride's full copy (developer fields: recorder.rs, "Two copies"), driven after `clean`.
+    pub(crate) full: recorder::Recorder,
+    /// A ride of its own to look for on the card once the clean one's is found.
+    pub(crate) full_pending: bool,
+    /// While seconds are caught up after a long pass: how many seconds ago the one being ticked was (its time).
+    pub(crate) lag_s: u8,
+    /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
+    /// for the whole ride.
+    pub(crate) model: Option<(u16, u16, bool)>,
+}
+
+impl Recording {
+    /// Nothing recorded, nothing to resume.
+    pub(crate) fn new() -> Self {
+        Recording {
+            clean: recorder::Recorder::new(),
+            resume_pending: false,
+            full: recorder::Recorder::of(recorder::Kind::Full),
+            full_pending: false,
+            lag_s: 0,
+            model: None,
+        }
+    }
+
+    /// A ride was left open on the card (`open`): both copies look for theirs at the first step.
+    pub(crate) fn resume_if(&mut self, open: bool) {
+        self.resume_pending = open;
+        self.full_pending = open;
+    }
+
+    /// The strip's recording mark: whether the ride is saving, running or paused (`writable`: the card may be written).
+    pub(crate) fn mark(&self, ride: &ride::Ride, writable: bool) -> Rec {
+        match ride.state() {
+            ride::State::Idle => Rec::Idle,
+            _ if !writable
+                || self.clean.failing()
+                || !matches!(self.clean.phase(), recorder::Phase::Starting | recorder::Phase::Recording) =>
+            {
+                Rec::NotSaving
+            }
+            _ if ride.moving() => Rec::Running,
+            _ => Rec::Paused,
+        }
+    }
+}

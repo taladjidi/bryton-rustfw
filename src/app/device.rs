@@ -199,8 +199,8 @@ impl App {
     pub(crate) fn power_off(&mut self, b: &mut impl Board) {
         // a ride open: what is in RAM goes on the card first, one checkpoint (a few ms, one try); the next start
         // resumes it at this second (the second review, R4)
-        self.recorder.checkpoint_now();
-        self.full.checkpoint_now();
+        self.rec.clean.checkpoint_now();
+        self.rec.full.checkpoint_now();
         self.step_recorder(b);
         self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
         if self.ble.is_some() {

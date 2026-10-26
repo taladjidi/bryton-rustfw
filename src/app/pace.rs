@@ -39,7 +39,7 @@ impl App {
     /// the settings' FTP and W'). W' balance and the pacer both use it, so the budget is the balance of the model
     /// that drained it, the same for the whole ride.
     pub(crate) fn cp_model(&self) -> (u16, u16) {
-        match self.ride_model {
+        match self.rec.model {
             Some((cp, wp, _)) if self.ride.state() != ride::State::Idle => (cp, wp),
             _ => {
                 let (cp, wp, _) = self.model_now();

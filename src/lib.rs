@@ -312,23 +312,13 @@ pub struct App {
     plan: Plan,
     /// The ramp test being ridden, its last result, and the result screen due (app/ramp.rs).
     ramp: RampState,
-    /// The ride recorder (FIT file, checkpoints, save), and a ride to look for on the card at the first step.
     /// The card may be written ([`Board::emmc_writable`]); without, the recorder is not used at all.
     card_writable: bool,
-    recorder: recorder::Recorder,
-    resume_pending: bool,
-    /// The ride's full copy (developer fields: recorder.rs, "Two copies"), driven after `recorder`; a ride of its
-    /// own to look for on the card once the clean one's is found.
-    full: recorder::Recorder,
-    full_pending: bool,
-    /// While seconds are caught up after a long pass: how many seconds ago the one being ticked was (its time).
-    lag_s: u8,
+    /// The ride recorders (clean and full) and the ride model.
+    rec: Recording,
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course_file::Courses>,
-    /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
-    /// for the whole ride.
-    ride_model: Option<(u16, u16, bool)>,
     /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
     /// main.rs: [`App::set_threshold_memory`], 5 KB the app has no room for).
     thresholds: Option<&'static mut thresholds::Scan>,
@@ -483,15 +473,10 @@ impl App {
             trash_check: false,
             plan: Plan::new(),
             ramp: RampState::default(),
-            recorder: recorder::Recorder::new(),
+            rec: Recording::new(),
             card_writable: false,
-            resume_pending: false,
-            full: recorder::Recorder::of(recorder::Kind::Full),
-            full_pending: false,
-            lag_s: 0,
             courses: None,
             pace: PaceState::new(),
-            ride_model: None,
             thresholds: None,
             ahead: None,
             ahead_us: (0, 0, 0),
@@ -514,8 +499,7 @@ impl App {
         // a ride left open on the card: reopened at the first step (not here: its card work in its own frame)
         self.card_writable = b.emmc_writable();
         self.awake_at = b.awake_us();
-        self.resume_pending = self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN;
-        self.full_pending = self.resume_pending;
+        self.rec.resume_if(self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN);
         self.trash_check = self.card_writable;
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
@@ -582,10 +566,10 @@ impl App {
             // each with its own time for the recorder: the first was `n - 1` seconds ago (the second review, R5)
             let n = gone.clamp(1, MAX_CATCH_UP);
             for k in 0..n {
-                self.lag_s = n - 1 - k;
+                self.rec.lag_s = n - 1 - k;
                 self.second();
             }
-            self.lag_s = 0;
+            self.rec.lag_s = 0;
         }
         self.settle_set(b);
         if core::mem::take(&mut self.ramp.show) {
@@ -623,17 +607,7 @@ impl App {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
         }
         self.gps.note_fix();
-        self.strip.rec = match self.ride.state() {
-            ride::State::Idle => Rec::Idle,
-            _ if !self.card_writable
-                || self.recorder.failing()
-                || !matches!(self.recorder.phase(), recorder::Phase::Starting | recorder::Phase::Recording) =>
-            {
-                Rec::NotSaving
-            }
-            _ if self.ride.moving() => Rec::Running,
-            _ => Rec::Paused,
-        };
+        self.strip.rec = self.rec.mark(&self.ride, self.card_writable);
         self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
         t = self.timed(b, Sec::Strip, t);
         for kind in Kind::ALL {
