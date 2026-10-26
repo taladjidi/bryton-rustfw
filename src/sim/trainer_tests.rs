@@ -778,3 +778,31 @@ fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
     assert_eq!(app.rows(Menu::Main), crate::menu::MAIN.len());
     assert_eq!(label(&app, 2).as_deref(), Some("HISTORY"));
 }
+
+/// A trainer heard and no fix: the map page (an arrow on black) is out of the round; with a fix it is back.
+#[test]
+fn the_map_page_is_skipped_on_a_trainer_without_a_fix() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.classic_pages(); // pages 1 and 2, and a map on page 3
+    sim.backup[14] = Kind::Trainer.to_word(ID);
+    sim.nordic.sensors.push(trainer_sensor());
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    assert!(app.trainer_heard(), "the trainer is heard");
+    assert!(!app.pvt.is_some_and(|p| p.good()), "no fix");
+    let round = |sim: &mut Sim, app: &mut App| {
+        let mut seen = std::vec::Vec::new();
+        for _ in 0..6 {
+            app.press(sim, Press::Short(Key::Page));
+            seen.push(app.screen());
+        }
+        seen
+    };
+    assert!(!round(&mut sim, &mut app).contains(&Screen::Ride(2)), "no fix, a trainer: no map page");
+    sim.gnss.fix = Some(500);
+    run(&mut sim, &mut app, 30_000);
+    assert!(app.pvt.is_some_and(|p| p.good()));
+    assert!(round(&mut sim, &mut app).contains(&Screen::Ride(2)), "a fix: the map page is back");
+}

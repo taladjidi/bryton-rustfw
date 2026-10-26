@@ -199,7 +199,20 @@ impl App {
     /// Ride page `n` is in the round: a page not off, the course page while a course is followed.
     pub(crate) fn page_on(&self, n: usize) -> bool {
         // a course followed, whether or not the map can draw it yet (no fix, a ride started without one: review)
-        if n == COURSE { self.courses.as_deref().is_some_and(|c| c.on.is_some()) } else { n < self.page_count }
+        if n == COURSE {
+            self.courses.as_deref().is_some_and(|c| c.on.is_some())
+        } else {
+            n < self.page_count && !self.blank_map(n)
+        }
+    }
+
+    /// Page `n` holds a map that would show an arrow on black: a trainer is heard (the bike is indoors) and the
+    /// receiver has no fix. Skipped in the round until a fix comes (the ride profiles of UI review 3, 4.2 item 4, will
+    /// replace this).
+    fn blank_map(&self, n: usize) -> bool {
+        self.trainer_heard()
+            && !self.pvt.is_some_and(|p| p.good())
+            && self.pages.get(n).is_some_and(|p| p.fields.iter().take(p.cells()).any(|&f| f == Field::Map))
     }
 
     /// Opens screen `s` over this one: Back returns here.
