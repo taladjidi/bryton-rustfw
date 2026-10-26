@@ -248,52 +248,45 @@ impl App {
         use menu::{Reading, Row};
         let (mut label, mut value, mut color) = (Line::new(), Line::new(), ui::WHITE);
         let row = self.row(menu, i)?;
+        // the fixed text of a row is the table's (Row::label); only the rows that depend on state are set here
+        let edit_page = matches!(row, Row::Open(Menu::Page(_))) && matches!(menu, Menu::Ride(_));
+        if edit_page {
+            label.push_str("EDIT THIS PAGE");
+        } else if let Some(text) = row.label() {
+            label.push_str(text);
+        }
         match row {
-            Row::Open(Menu::Page(_)) if matches!(menu, Menu::Ride(_)) => label.push_str("EDIT THIS PAGE"),
-            Row::Open(Menu::Main) => label.push_str("ALL SETTINGS"),
-            Row::Empty(text) => {
-                label.push_str(text);
-                color = ui::GREY;
-            }
+            _ if edit_page => {}
+            Row::Empty(_) => color = ui::GREY,
             Row::Ride(r) => {
                 use menu::RideRow;
-                label.push_str(match r {
-                    RideRow::Pause if self.ride.state() == ride::State::Running => "PAUSE",
-                    RideRow::Pause => "RESUME",
-                    RideRow::End => "END RIDE",
-                    RideRow::NextStep => "NEXT STEP",
-                    RideRow::StopWorkout => "STOP WORKOUT",
-                    RideRow::StopCourse => "STOP FOLLOWING",
-                    RideRow::Trainer => "TRAINER CONTROL",
-                    RideRow::CalPower => "CALIBRATE POWER",
-                    RideRow::Indoor => "INDOOR",
-                });
+                if r == RideRow::Pause {
+                    label.push_str(if self.ride.state() == ride::State::Running { "PAUSE" } else { "RESUME" });
+                }
                 if r == RideRow::Indoor {
                     value.push_str(if self.indoors() { "ON" } else { "OFF" });
                 }
             }
-            Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
+            Row::Open(Menu::Page(OVERVIEW)) => {}
             Row::Open(Menu::Page(n)) => {
                 label.push_str("PAGE ");
                 label.push_u32(n as u32 + 1);
                 layout_text(&mut value, self.page_ref(n)?);
             }
-            Row::EditPage(_) => label.push_str("EDIT ON PAGE"),
             Row::AddPage => {
-                label.push_str("ADD PAGE");
                 value.push_u32(self.view_count() as u32);
                 value.push_str("/");
                 value.push_u32(PAGES as u32);
             }
             Row::Edit(r) => {
-                let reset = r == menu::EditRow::DeletePage && self.edit.is_some_and(|e| e.more);
-                label.push_str(if reset { "RESET MORE" } else { r.label() });
+                if r == menu::EditRow::DeletePage && self.edit.is_some_and(|e| e.more) {
+                    label.clear();
+                    label.push_str("RESET MORE");
+                }
                 self.edit_row_value(menu, r, &mut value, &mut color);
             }
-            Row::Open(m) => label.push_str(menu_title(m)),
-            Row::Nearby => label.push_str("BLE NEARBY"),
+            Row::Open(_) | Row::Nearby | Row::About | Row::EditPage(_) => {}
             Row::BtTrainer => {
-                label.push_str("BT TRAINER");
                 let heard = self.ftms_on() && self.trainer_heard();
                 value.push_str(match (self.sensors_store.bt, self.ble) {
                     (_, Some(v)) if !v.central => "NO LINK",
@@ -320,26 +313,18 @@ impl App {
                 value.push_str(if d.rssi < 0 { "-" } else { "" });
                 value.push_u32(u32::from(d.rssi.unsigned_abs()));
             }
-            Row::About => label.push_str("ABOUT"),
             Row::GiveUpSave => {
-                label.push_str("GIVE UP SAVE");
                 value.push_str("STUCK");
                 color = ui::RED;
             }
             Row::Drive => {
-                label.push_str("USB DRIVE");
                 value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
             }
-            Row::AltGps => {
-                label.push_str("FROM GPS");
-                self.alt_gps_row(&mut value);
-            }
+            Row::AltGps => self.alt_gps_row(&mut value),
             Row::Set(menu::Setting::Altitude) if !(self.editing && self.screen == Screen::Menu(menu, i)) => {
-                label.push_str(menu::Setting::Altitude.label());
                 self.alt_row(&mut value);
             }
             Row::Set(s) => {
-                label.push_str(s.label());
                 let edited = self.editing && self.screen == Screen::Menu(menu, i);
                 value.push_str(if edited { "< " } else { "" });
                 self.settings.text(s, &mut value);
@@ -367,11 +352,6 @@ impl App {
                 }
             }
             Row::Read(r @ (Reading::Lux | Reading::TempC | Reading::Hpa)) => {
-                label.push_str(match r {
-                    Reading::Lux => "LUX",
-                    Reading::TempC => "TEMP C",
-                    _ => "HPA",
-                });
                 let present = if r == Reading::Lux { self.chips.light } else { self.chips.baro };
                 match (r, self.auto.lux10(), self.baro) {
                     _ if !present => value.push_str("NONE"),
@@ -389,9 +369,8 @@ impl App {
                 };
                 let p = self.pvt;
                 match (r, p) {
-                    (Reading::Fix, None) => (label.push_str("FIX"), value.push_str("NO GPS")).1,
+                    (Reading::Fix, None) => value.push_str("NO GPS"),
                     (Reading::Fix, Some(p)) => {
-                        label.push_str("FIX");
                         value.push_str(match p.fix {
                             _ if !p.fix_ok => "NONE",
                             2 => "2D",
@@ -400,16 +379,14 @@ impl App {
                         });
                     }
                     (_, None) => return None,
-                    (Reading::Sats, Some(p)) => (label.push_str("SATS"), value.push_u32(u32::from(p.sats))).1,
-                    (Reading::Lat, Some(p)) => (label.push_str("LAT"), push_fixed(&mut value, p.lat, 7, 5)).1,
-                    (Reading::Lon, Some(p)) => (label.push_str("LON"), push_fixed(&mut value, p.lon, 7, 5)).1,
-                    (Reading::Alt, Some(p)) => (label.push_str("ALT M"), push_fixed(&mut value, p.alt_mm, 3, 0)).1,
+                    (Reading::Sats, Some(p)) => value.push_u32(u32::from(p.sats)),
+                    (Reading::Lat, Some(p)) => push_fixed(&mut value, p.lat, 7, 5),
+                    (Reading::Lon, Some(p)) => push_fixed(&mut value, p.lon, 7, 5),
+                    (Reading::Alt, Some(p)) => push_fixed(&mut value, p.alt_mm, 3, 0),
                     (Reading::Utc | Reading::Date, Some(p)) if !p.time_ok => {
-                        label.push_str(if r == Reading::Utc { "UTC" } else { "DATE" });
                         value.push_str("--"); // the receiver's placeholder until it knows the time
                     }
                     (Reading::Utc, Some(p)) => {
-                        label.push_str("UTC");
                         let (_, _, _, h, m, sec) = p.utc;
                         for (k, v) in [h, m, sec].into_iter().enumerate() {
                             if k > 0 {
@@ -419,7 +396,6 @@ impl App {
                         }
                     }
                     (Reading::Date, Some(p)) => {
-                        label.push_str("DATE");
                         let (y, mo, d, ..) = p.utc;
                         value.push_u32(u32::from(y));
                         value.push_str("-");
@@ -433,19 +409,13 @@ impl App {
                     color = ui::GREEN;
                 }
             }
-            Row::Layout(n) => {
-                label.push_str("LAYOUT");
-                layout_text(&mut value, self.page_ref(n)?);
-            }
+            Row::Layout(n) => layout_text(&mut value, self.page_ref(n)?),
             Row::Field(n, f) => {
                 label.push_str("FIELD ");
                 label.push_u32(f as u32 + 1);
                 value.push_str(self.page_ref(n)?.fields.get(f)?.label());
             }
-            Row::Stock(r) => {
-                label.push_str(r.label());
-                self.stock_value(r, &mut value);
-            }
+            Row::Stock(r) => self.stock_value(r, &mut value),
             Row::Past(n) => {
                 // "SAT 24 OCT", "42.1" (km: a unit does not fit beside the date)
                 let r = self.stock.index.get(n)?;
@@ -465,12 +435,10 @@ impl App {
                 push_hm(&mut value, p.total_s);
             }
             Row::WorkoutStart => {
-                label.push_str("START");
                 push_hm(&mut value, self.plan.total_s());
                 color = ui::GREEN;
             }
             Row::RampTest => {
-                label.push_str("RAMP TEST");
                 value.push_str("FTP ");
                 value.push_u32(u32::from(self.settings.ftp));
             }
@@ -489,7 +457,6 @@ impl App {
             }
             Row::Phone(r) => {
                 use menu::PhoneRow;
-                label.push_str(r.label());
                 let on = |v| if v { "ON" } else { "OFF" };
                 let link = self.phone.link();
                 if r == PhoneRow::Status && link == Link::NoBle && self.ble.is_some() {
@@ -525,7 +492,6 @@ impl App {
                 }
             }
             Row::Pick(field) => {
-                label.push_str(field.label());
                 if let Menu::Group(n, f, _) = menu
                     && self.page_ref(n)?.fields.get(f) == Some(&field)
                 {
@@ -629,72 +595,8 @@ impl App {
     pub(crate) fn activate(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         use menu::Row;
         match self.row(menu, sel) {
-            Some(Row::Open(Menu::Workouts)) => {
-                self.load_calendar(b);
-                self.open(Screen::Menu(Menu::Workouts, 0));
-            }
-            Some(Row::Open(Menu::Courses)) => self.open_courses(b),
-            // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
-            Some(Row::Open(Menu::Page(n))) if matches!(menu, Menu::Ride(_)) && n < PAGES => {
-                self.pages_indoor = self.indoors(); // the set on screen
-                self.edit_page(b, n, 0)
-            }
-            // a set's page list: the editor works on that set (while a ride is open, on the ride's own only)
-            Some(Row::Open(Menu::PageList(indoor)))
-                if self.ride.state() != ride::State::Idle && indoor != self.indoors() =>
-            {
-                self.say("THE RIDE'S SET")
-            }
-            Some(Row::Open(m)) => {
-                if let Menu::PageList(indoor) = m {
-                    self.pages_indoor = indoor;
-                }
-                if m == Menu::History && self.stock.status() == stock::Status::Idle {
-                    self.stock.start(self.date); // the history is what the scan of stock's rides finds
-                }
-                self.open(Screen::Menu(m, 0))
-            }
-            Some(Row::Ride(r)) => {
-                use menu::RideRow;
-                match r {
-                    RideRow::Pause => {
-                        self.start_pause();
-                        if self.ride.state() == ride::State::Running {
-                            self.leave_menus(); // resumed: back to riding
-                        }
-                    }
-                    // the end-ride screen, which is the confirmation (RESUME its default)
-                    RideRow::End => {
-                        if self.ride.state() == ride::State::Running {
-                            let ev = self.ride.start_pause(); // paused first, as by Start (the recorder's order)
-                            self.recorder(ev);
-                        }
-                        if self.ride.state() == ride::State::Paused {
-                            self.open(Screen::End(ui::END_SAVE));
-                        }
-                    }
-                    RideRow::NextStep => {
-                        self.next_step();
-                        self.leave_menus();
-                    }
-                    RideRow::StopWorkout => {
-                        if self.ramp_running() {
-                            self.finish_ramp(); // the cool-down plays, the result shows
-                        } else {
-                            self.player = None;
-                            self.say("WORKOUT STOPPED");
-                        }
-                        self.leave_menus();
-                    }
-                    RideRow::StopCourse => {
-                        self.stop_course();
-                        self.leave_menus();
-                    }
-                    RideRow::Trainer => self.open(Screen::Trainer),
-                    RideRow::CalPower => self.open_powercal(),
-                    RideRow::Indoor => self.toggle_indoor(),
-                }
-            }
+            Some(Row::Open(m)) => self.activate_open(b, menu, m),
+            Some(Row::Ride(r)) => self.activate_ride(r),
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };
                 self.past.start(&r, self.settings.ftp); // read over the next passes (App::step_past)
@@ -728,52 +630,9 @@ impl App {
                 }
                 self.open(Screen::Nearby);
             }
-            Some(Row::Set(s)) if s.number().is_some() => {
-                self.editing = !self.editing;
-                if self.editing && s == menu::Setting::Altitude {
-                    self.editing = self.alt_edit_start(); // from the altitude the barometer reads
-                }
-                if !self.editing {
-                    self.save_misc(b);
-                }
-            }
             Some(Row::AltGps) => self.alt_from_gps(),
-            Some(Row::Set(s)) => {
-                self.settings.cycle(s);
-                self.save_misc(b);
-                self.update_light(b);
-                if s == menu::Setting::Font {
-                    // every text changes at once: the strip and the screen drawn whole
-                    self.banner_drawn = false; // the banner too, if one is up
-                    self.strip_shown = self.strip;
-                    ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
-                    self.show(b);
-                }
-            }
-            Some(Row::Sensor(k)) => {
-                let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
-                let heard = self.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
-                match self.sensors.get(k).copied() {
-                    Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
-                    Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),
-                    // paired but silent: Select searches for it again now (not after its rest); Select once more
-                    // forgets it
-                    Some(Sensor::Paired(id)) if !heard && self.confirm != Some((menu, sel)) => {
-                        self.set_sensor(b, kind, Sensor::Paired(id));
-                        self.confirm = Some((menu, sel));
-                        self.say("SEARCHING AGAIN\nSTART: FORGET");
-                    }
-                    Some(Sensor::Paired(_)) => {
-                        let mut l = Line::<40>::new();
-                        l.push_str("FORGET ");
-                        l.push_str(kind.name());
-                        if self.confirmed(menu, sel, l.as_str()) {
-                            self.set_sensor(b, kind, Sensor::Off);
-                        }
-                    }
-                    None => {}
-                }
-            }
+            Some(Row::Set(s)) => self.activate_setting(b, s),
+            Some(Row::Sensor(k)) => self.activate_sensor(b, menu, sel, k),
             Some(Row::Layout(n)) => self.next_layout(b, n),
             Some(Row::EditPage(n)) => self.edit_page(b, n, 0),
             Some(Row::AddPage) => self.add_page(b, PAGES), // after the last, as many as the file has
@@ -809,22 +668,148 @@ impl App {
             Some(Row::Stock(r @ (menu::StockRow::ApplyFtp | menu::StockRow::ApplyWPrime))) => {
                 self.apply_estimate(b, menu, sel, r)
             }
-            Some(Row::Phone(r)) => {
-                use menu::PhoneRow;
-                match r {
-                    PhoneRow::Status => {}
-                    PhoneRow::Pair => self.phone_pair(b),
-                    PhoneRow::Forget if self.confirmed(menu, sel, "FORGET THE PHONE") => self.phone_forget(b),
-                    PhoneRow::Forget => {}
-                    PhoneRow::Notify => self.phone.stored.notify = !self.phone.stored.notify,
-                    PhoneRow::Keys => self.phone.stored.keys = !self.phone.stored.keys,
-                    PhoneRow::Media => self.open(Screen::Media),
+            Some(Row::Phone(r)) => self.activate_phone(b, menu, sel, r),
+            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_)) | None => {}
+        }
+    }
+
+    /// Select on a row that opens a menu: the lists that load first, the editor on a ride's page, the page set the
+    /// editor works on.
+    fn activate_open(&mut self, b: &mut impl Board, menu: Menu, m: Menu) {
+        match m {
+            Menu::Workouts => {
+                self.load_calendar(b);
+                self.open(Screen::Menu(Menu::Workouts, 0));
+            }
+            Menu::Courses => self.open_courses(b),
+            // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
+            Menu::Page(n) if matches!(menu, Menu::Ride(_)) && n < PAGES => {
+                self.pages_indoor = self.indoors(); // the set on screen
+                self.edit_page(b, n, 0)
+            }
+            // a set's page list: the editor works on that set (while a ride is open, on the ride's own only)
+            Menu::PageList(indoor) if self.ride.state() != ride::State::Idle && indoor != self.indoors() => {
+                self.say("THE RIDE'S SET")
+            }
+            m => {
+                if let Menu::PageList(indoor) = m {
+                    self.pages_indoor = indoor;
                 }
-                if matches!(r, PhoneRow::Notify | PhoneRow::Keys) {
-                    self.phone_changed();
+                if m == Menu::History && self.stock.status() == stock::Status::Idle {
+                    self.stock.start(self.date); // the history is what the scan of stock's rides finds
+                }
+                self.open(Screen::Menu(m, 0))
+            }
+        }
+    }
+
+    /// Select on a row of the ride menu that acts on the ride, the workout or the course.
+    fn activate_ride(&mut self, r: menu::RideRow) {
+        use menu::RideRow;
+        match r {
+            RideRow::Pause => {
+                self.start_pause();
+                if self.ride.state() == ride::State::Running {
+                    self.leave_menus(); // resumed: back to riding
                 }
             }
-            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_)) | None => {}
+            // the end-ride screen, which is the confirmation (RESUME its default)
+            RideRow::End => {
+                if self.ride.state() == ride::State::Running {
+                    let ev = self.ride.start_pause(); // paused first, as by Start (the recorder's order)
+                    self.recorder(ev);
+                }
+                if self.ride.state() == ride::State::Paused {
+                    self.open(Screen::End(ui::END_SAVE));
+                }
+            }
+            RideRow::NextStep => {
+                self.next_step();
+                self.leave_menus();
+            }
+            RideRow::StopWorkout => {
+                if self.ramp_running() {
+                    self.finish_ramp(); // the cool-down plays, the result shows
+                } else {
+                    self.player = None;
+                    self.say("WORKOUT STOPPED");
+                }
+                self.leave_menus();
+            }
+            RideRow::StopCourse => {
+                self.stop_course();
+                self.leave_menus();
+            }
+            RideRow::Trainer => self.open(Screen::Trainer),
+            RideRow::CalPower => self.open_powercal(),
+            RideRow::Indoor => self.toggle_indoor(),
+        }
+    }
+
+    /// Select on a setting: a number starts or ends its editing, a choice cycles.
+    fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
+        if s.number().is_some() {
+            self.editing = !self.editing;
+            if self.editing && s == menu::Setting::Altitude {
+                self.editing = self.alt_edit_start(); // from the altitude the barometer reads
+            }
+            if !self.editing {
+                self.save_misc(b);
+            }
+        } else {
+            self.settings.cycle(s);
+            self.save_misc(b);
+            self.update_light(b);
+            if s == menu::Setting::Font {
+                // every text changes at once: the strip and the screen drawn whole
+                self.banner_drawn = false; // the banner too, if one is up
+                self.strip_shown = self.strip;
+                ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
+                self.show(b);
+            }
+        }
+    }
+
+    /// Select on an ANT+ sensor: pair, stop, search again, forget.
+    fn activate_sensor(&mut self, b: &mut impl Board, menu: Menu, sel: usize, k: usize) {
+        let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
+        let heard = self.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
+        match self.sensors.get(k).copied() {
+            Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
+            Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),
+            // paired but silent: Select searches for it again now (not after its rest); Select once more
+            // forgets it
+            Some(Sensor::Paired(id)) if !heard && self.confirm != Some((menu, sel)) => {
+                self.set_sensor(b, kind, Sensor::Paired(id));
+                self.confirm = Some((menu, sel));
+                self.say("SEARCHING AGAIN\nSTART: FORGET");
+            }
+            Some(Sensor::Paired(_)) => {
+                let mut l = Line::<40>::new();
+                l.push_str("FORGET ");
+                l.push_str(kind.name());
+                if self.confirmed(menu, sel, l.as_str()) {
+                    self.set_sensor(b, kind, Sensor::Off);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Select on a row of the phone menu.
+    fn activate_phone(&mut self, b: &mut impl Board, menu: Menu, sel: usize, r: menu::PhoneRow) {
+        use menu::PhoneRow;
+        match r {
+            PhoneRow::Status => {}
+            PhoneRow::Pair => self.phone_pair(b),
+            PhoneRow::Forget if self.confirmed(menu, sel, "FORGET THE PHONE") => self.phone_forget(b),
+            PhoneRow::Forget => {}
+            PhoneRow::Notify => self.phone.stored.notify = !self.phone.stored.notify,
+            PhoneRow::Keys => self.phone.stored.keys = !self.phone.stored.keys,
+            PhoneRow::Media => self.open(Screen::Media),
+        }
+        if matches!(r, PhoneRow::Notify | PhoneRow::Keys) {
+            self.phone_changed();
         }
     }
 }

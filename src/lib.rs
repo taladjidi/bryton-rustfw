@@ -469,30 +469,8 @@ impl App {
             baro_ms: BATTERY_MS - BARO_RIDE_MS, // the first reading a second after the start (the conversion's)
             alt_store: AltStore::default(),
             seconds: rtc_time_from_tr(b.rtc().0).2,
-            strip: Strip {
-                time: rtc_hm(b),
-                radio: ble.is_some(),
-                gps: None,
-                blink: true,
-                usb: UsbDot::Off,
-                battery: None,
-                charging: false,
-                rec: Rec::Idle,
-                locked: false,
-                more: false,
-            },
-            strip_shown: Strip {
-                time: (0, 0),
-                radio: false,
-                gps: None,
-                blink: true,
-                usb: UsbDot::Off,
-                battery: None,
-                charging: false,
-                rec: Rec::Idle,
-                locked: false,
-                more: false,
-            },
+            strip: Strip { time: rtc_hm(b), radio: ble.is_some(), blink: true, ..Strip::default() },
+            strip_shown: Strip { blink: true, ..Strip::default() },
             screen: Screen::Main,
             ble,
             rx,
@@ -720,25 +698,9 @@ impl App {
         }
         self.play_tones(b);
         self.off_armed_ms = self.off_armed_ms.saturating_sub(pass_ms);
-        self.seconds = sec;
         t = self.timed(b, Sec::Second, t);
-        self.battery_ms = self.battery_ms.saturating_add(pass_ms);
-        if self.battery_ms >= BATTERY_MS {
-            self.battery_ms = 0;
-            let charging = b.charger_present();
-            let reading = b.battery_adc().and_then(|(raw, vref, cal)| battery::millivolts(raw, vref, cal));
-            if let Some(mv) = reading
-                && self.battery.update(mv, charging)
-            {
-                return self.power_off(b); // empty: off before the cell is drawn too low
-            }
-            self.strip.battery = self.battery.percent();
-            self.strip.charging = charging;
-            let low = self.strip.battery.is_some_and(|p| p <= 15) && !charging;
-            if low && !self.told_low {
-                self.alarm_notice("BATTERY LOW");
-            }
-            self.told_low = low;
+        if self.poll_battery(b, pass_ms) {
+            return; // empty: switched off
         }
         t = self.timed(b, Sec::Battery, t);
         self.poll_light(b);
@@ -787,21 +749,7 @@ impl App {
         for h in &mut self.heard_ms {
             *h = h.saturating_add(pass_ms);
         }
-        for kind in Kind::ALL {
-            let i = kind as usize;
-            if self.resting_ms[i] == u32::MAX {
-                continue;
-            }
-            self.resting_ms[i] = self.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
-            if self.resting_ms[i] >= SEARCH_REST_MS {
-                let id = match self.sensors[i] {
-                    Sensor::Paired(id) => Some(id),
-                    _ => None, // still pairing: search for any
-                };
-                let ok = nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok();
-                self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
-            }
-        }
+        self.reopen_rested(b, pass_ms);
         t = self.timed(b, Sec::Radio, t);
         if !self.emmc.lent() {
             // the card is the computer's (the USB drive): the app's card work waits

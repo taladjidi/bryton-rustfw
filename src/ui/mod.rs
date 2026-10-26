@@ -130,13 +130,38 @@ const CRAB_Y: u32 = 272;
 // The status strip: a thin line at the top of every screen
 // ---------------------------------------------------------------------------------------------------------------
 
+/// A box on the panel: left, top, width, height. What a touch is tested against (one place for every hit-test);
+/// the boxes that are only drawn stay tuples, and convert with `Rect::from`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rect(pub u32, pub u32, pub u32, pub u32);
+
+impl From<(u32, u32, u32, u32)> for Rect {
+    fn from((x, y, w, h): (u32, u32, u32, u32)) -> Self {
+        Rect(x, y, w, h)
+    }
+}
+
+impl Rect {
+    /// The touch at (`x`, `y`) is in the box.
+    pub fn contains(self, x: u16, y: u16) -> bool {
+        (self.0..self.0 + self.2).contains(&u32::from(x)) && (self.1..self.1 + self.3).contains(&u32::from(y))
+    }
+
+    /// The box with a margin of `m` px on every side (fingers are wide), clipped at the panel's top left.
+    pub fn grown(self, m: u32) -> Rect {
+        let (x, y) = (self.0.saturating_sub(m), self.1.saturating_sub(m));
+        Rect(x, y, self.0 + self.2 + m - x, self.1 + self.3 + m - y)
+    }
+}
+
 /// Height of the status strip; an orange line follows it.
 pub const STRIP_H: u32 = 22;
 
 /// USB dev link state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UsbDot {
     /// Not plugged in: not shown.
+    #[default]
     Off,
     /// Plugged in, but the PHY or the core did not come up.
     Failed,
@@ -147,7 +172,7 @@ pub enum UsbDot {
 }
 
 /// What the status strip shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Strip {
     /// Time of day, hours and minutes.
     pub time: (u8, u8),
@@ -172,9 +197,10 @@ pub struct Strip {
 }
 
 /// The ride's state as the strip shows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Rec {
     /// No ride running.
+    #[default]
     Idle,
     /// Recording.
     Running,
@@ -1717,9 +1743,7 @@ pub fn end_labels(discard: bool) -> [Option<&'static str>; 3] {
 
 /// The end-ride screen's slot at (`x`, `y`), if a button of `labels` is there.
 pub fn end_hit(labels: &[Option<&str>; 3], x: u16, y: u16) -> Option<usize> {
-    END_BUTTONS.iter().zip(labels).position(|(&(bx, by, w, h), l)| {
-        l.is_some() && (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
-    })
+    END_BUTTONS.iter().zip(labels).position(|(&r, l)| l.is_some() && Rect::from(r).contains(x, y))
 }
 
 /// The end-ride screen (`discard`: its question, "DISCARD RIDE?"): the title, the ride's numbers (`stats`), the
@@ -1841,6 +1865,17 @@ pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, va
 pub(crate) mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn rect_contains_and_grows() {
+        let r = Rect(10, 20, 30, 40);
+        assert!(r.contains(10, 20) && r.contains(39, 59));
+        assert!(!r.contains(9, 20) && !r.contains(40, 20) && !r.contains(10, 60) && !r.contains(10, 19));
+        let g = r.grown(6);
+        assert!(g.contains(4, 14) && g.contains(45, 65) && !g.contains(3, 14) && !g.contains(46, 65));
+        // clipped at the top left: the same far edge
+        assert_eq!(Rect(4, 2, 10, 10).grown(6), Rect(0, 0, 20, 18));
+    }
     use std::vec;
     use std::vec::Vec;
 

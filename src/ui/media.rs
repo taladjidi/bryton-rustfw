@@ -52,11 +52,7 @@ pub const BUTTONS: [(Button, u32, u32, u32, u32); 7] = {
 
 /// The button under a touch at (`x`, `y`), if any (a little margin around each: fingers are wide).
 pub fn hit(x: u16, y: u16) -> Option<Button> {
-    let (x, y) = (u32::from(x), u32::from(y));
-    BUTTONS
-        .iter()
-        .find(|&&(_, bx, by, w, h)| x + 6 >= bx && x < bx + w + 6 && y + 6 >= by && y < by + h + 6)
-        .map(|b| b.0)
+    BUTTONS.iter().find(|&&(_, bx, by, w, h)| super::Rect(bx, by, w, h).grown(6).contains(x, y)).map(|b| b.0)
 }
 
 /// What is on screen, so an update redraws only what changed.

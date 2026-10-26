@@ -60,6 +60,8 @@ pub trait Host {
     fn peek(&mut self, addr: u32) -> u32;
     /// Writes the register at `addr` (in [`IO`], aligned).
     fn poke(&mut self, addr: u32, value: u32);
+    /// Sends what [`Host::send`] queued, so the answer reaches the computer now. Default: nothing queues.
+    fn flush(&mut self) {}
 }
 
 /// The peripheral space (RM0399 memory map) that `peek` and `poke` may reach.
@@ -389,6 +391,74 @@ pub fn check_image(head: &[u8], size: u32) -> Result<(), &'static str> {
         return Err("reset vector not Thumb code in the image");
     }
     Ok(())
+}
+
+/// Reads `count` times `n` sectors (at most 32) from `lba` on and gives the time, us ([`Effect::Bench`]). The 16 KB
+/// buffer is on this frame, not on the caller's.
+#[inline(never)]
+fn bench_reads(app: &mut App, b: &mut impl crate::Board, lba: u32, n: u32, count: u32) -> Result<u32, emmc::Error> {
+    let mut buf = [0u8; 32 * emmc::SECTOR];
+    let len = (n as usize * emmc::SECTOR).min(buf.len());
+    let t = b.awake_us();
+    for k in 0..count {
+        app.emmc().read(b, lba + k * n, &mut buf[..len])?;
+    }
+    Ok(b.awake_us().wrapping_sub(t))
+}
+
+impl App {
+    /// Answers the effect `session` asked for that needs the app and the board (the eMMC, the FAT reader, the
+    /// benchmarks, the drive, the profiler), then flushes `h`. True when board work may have slept, which takes over
+    /// SysTick: the caller's sleep slice is lost, so it ends the slice. The keys, the reset and the image run are the
+    /// caller's (main.rs): false for them.
+    pub fn serve(&mut self, b: &mut impl crate::Board, h: &mut impl Host, session: &Session, effect: Effect) -> bool {
+        match effect {
+            Effect::None | Effect::Key(_) | Effect::Reset | Effect::Run(_) => return false,
+            Effect::ProfReset => {
+                self.prof().reset();
+                return false;
+            }
+            Effect::Sector(lba) => {
+                let mut buf = [0u8; emmc::SECTOR];
+                let r = self.emmc().read(b, lba, &mut buf).map(|()| &buf);
+                send_sector(h, r);
+            }
+            Effect::WriteTest(lba) => write_test(h, self.emmc(), b, lba),
+            Effect::Bench(lba, n, count) => {
+                let r = bench_reads(self, b, lba, n, count);
+                send_bench(h, r);
+            }
+            Effect::BenchScan(bytes) => {
+                let t = b.awake_us();
+                // the bytes it read are about the ones asked (the protocol answers the time only)
+                self.bench_scan(b, bytes);
+                send_bench(h, Ok(b.awake_us().wrapping_sub(t)));
+            }
+            Effect::BenchMap(level, dx, dy) => {
+                let t = b.awake_us();
+                let got = self.bench_map(b, level, dx, dy);
+                let us = b.awake_us().wrapping_sub(t);
+                send_bench_map(h, got.map(|s| (us, s)));
+            }
+            Effect::Find(lba, count, lo, hi) => {
+                let emmc = self.emmc();
+                find_sectors(h, &mut |at, buf| emmc.read(b, at, buf), lba, count, (lo, hi));
+            }
+            Effect::Ls => send_ls(h, &mut emmc::Volume(self.emmc(), b), session.path()),
+            Effect::Get(off, len) => send_get(h, &mut emmc::Volume(self.emmc(), b), session.path(), off, len),
+            Effect::Drive => match self.drive_on(b) {
+                Ok(()) => h.send(b"ok\n"),
+                Err(why) => {
+                    h.send(b"err ");
+                    h.send(why.as_bytes());
+                    h.send(b"\n");
+                }
+            },
+            Effect::Emmc => send_layout(h, self.emmc().card(b)),
+        }
+        h.flush();
+        true
+    }
 }
 
 /// The answer to `sector`: 1024 hex digits and a newline, or the error.

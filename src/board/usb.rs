@@ -428,6 +428,10 @@ impl Host for Link {
         stage_write(offset, data);
     }
 
+    fn flush(&mut self) {
+        Link::flush(self);
+    }
+
     // The computer's addresses reach rd / wr only here, checked again whatever the caller (dev.rs checks them too):
     // aligned, poke in the peripheral space only (RM0399's memory map: 0x40000000 to 0x5fffffff), so the poke itself
     // never writes RAM; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped. A poke can still

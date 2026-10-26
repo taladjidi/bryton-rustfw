@@ -23,6 +23,25 @@ pub enum Sensor {
 }
 
 impl App {
+    /// The channels resting after a search timed out ([`SEARCH_REST_MS`]) search again, `pass_ms` later each.
+    pub(crate) fn reopen_rested(&mut self, b: &mut impl Board, pass_ms: u32) {
+        for kind in Kind::ALL {
+            let i = kind as usize;
+            if self.resting_ms[i] == u32::MAX {
+                continue;
+            }
+            self.resting_ms[i] = self.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
+            if self.resting_ms[i] >= SEARCH_REST_MS {
+                let id = match self.sensors[i] {
+                    Sensor::Paired(id) => Some(id),
+                    _ => None, // still pairing: search for any
+                };
+                let ok = nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok();
+                self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
+            }
+        }
+    }
+
     /// Opens or closes sensor `kind`'s channel to match `want`, and keeps the pairing. One shifting system at a
     /// time: opening one closes and forgets the other (review of 571e613: both open shared the gear, so a packet
     /// of each counted as a shift, and register 14, so pairing one overwrote the other while the menu showed both;

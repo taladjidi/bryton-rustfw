@@ -181,3 +181,29 @@ fn prof_times_the_sections_and_answers() {
     s.feed(b"prof now\n", &app, Stats::default(), &mut pc);
     assert!(pc.got.starts_with(b"err usage"));
 }
+
+/// `App::serve` answers the eMMC effects (what main.rs used to do inline), flushes, and leaves the keys, the reset
+/// and the image run to the board.
+#[test]
+fn serve_answers_the_card_effects() {
+    let (mut sim, mut app) = app_at(9, 0, 0);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    for e in [Effect::None, Effect::Reset, Effect::Run(4), Effect::Key(Press::Short(Key::Back)), Effect::ProfReset] {
+        assert!(!app.serve(&mut sim, &mut pc, &s, e));
+    }
+    assert!(pc.got.is_empty());
+    assert!(app.serve(&mut sim, &mut pc, &s, Effect::Sector(7)));
+    let hex: std::string::String = emmc_sector(7).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(pc.got, format!("{hex}\n").as_bytes());
+    pc.got.clear();
+    assert!(app.serve(&mut sim, &mut pc, &s, Effect::Bench(0, 4, 2)));
+    assert!(pc.got.starts_with(b"bench "), "{:?}", pc.got);
+    pc.got.clear();
+    assert!(app.serve(&mut sim, &mut pc, &s, Effect::BenchMap(4, 0, 0)));
+    assert!(pc.got.starts_with(b"err nofix") || pc.got.starts_with(b"map"), "{:?}", pc.got);
+    pc.got.clear();
+    s.feed(b"ls /\n", &app, Stats::default(), &mut pc);
+    pc.got.clear();
+    assert!(app.serve(&mut sim, &mut pc, &s, Effect::Ls));
+    assert!(pc.got.starts_with(b"err ") || pc.got.ends_with(b"end\n"), "{:?}", pc.got);
+}

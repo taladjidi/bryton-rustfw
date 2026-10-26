@@ -18,7 +18,7 @@
 mod board;
 
 use board::{hw, usb};
-use bryton_rustfw::dev::{self, Effect, Host, Session, Stats};
+use bryton_rustfw::dev::{Effect, Session, Stats};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
 use bryton_rustfw::ui::UsbDot;
@@ -1441,25 +1441,6 @@ fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
 }
 
-/// The dev link's `bench`: `count` reads of `n` sectors from `lba`, timed, in microseconds. Its buffer in its own
-/// frame, not main's.
-#[inline(never)]
-fn bench_reads(
-    app: &mut App,
-    board: &mut S510,
-    lba: u32,
-    n: u32,
-    count: u32,
-) -> Result<u32, bryton_rustfw::emmc::Error> {
-    let mut buf = [0u8; 32 * bryton_rustfw::emmc::SECTOR];
-    let len = (n as usize * bryton_rustfw::emmc::SECTOR).min(buf.len());
-    let t = cycles();
-    for k in 0..count {
-        app.emmc().read(board, lba + k * n, &mut buf[..len])?;
-    }
-    Ok(cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000))
-}
-
 fn main() -> ! {
     mpu_init();
     checkpoint(1);
@@ -1548,86 +1529,17 @@ fn main() -> ! {
                 let usb_at = cycles();
                 if let Some(l) = &mut link {
                     match l.poll(&mut session, app, &mut board, stats) {
-                        Effect::None => {}
                         Effect::Key(p) => press = Some(p),
-                        Effect::ProfReset => app.prof().reset(),
                         Effect::Reset => {
                             l.linger(50);
                             system_reset();
-                        }
-                        Effect::Sector(lba) => {
-                            let mut buf = [0u8; bryton_rustfw::emmc::SECTOR];
-                            let r = app.emmc().read(&mut board, lba, &mut buf).map(|()| &buf);
-                            dev::send_sector(l, r);
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::WriteTest(lba) => {
-                            dev::write_test(l, app.emmc(), &mut board, lba);
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::Bench(lba, n, count) => {
-                            dev::send_bench(l, bench_reads(app, &mut board, lba, n, count));
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::BenchScan(bytes) => {
-                            let t = cycles();
-                            let got = app.bench_scan(&mut board, bytes);
-                            let us = cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000);
-                            dev::send_bench(l, Ok(us));
-                            let _ = got;
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::BenchMap(level, dx, dy) => {
-                            let t = cycles();
-                            let got = app.bench_map(&mut board, level, dx, dy);
-                            let us = cycles().wrapping_sub(t) / (CPU_HZ / 1_000_000);
-                            dev::send_bench_map(l, got.map(|s| (us, s)));
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::Find(lba, count, lo, hi) => {
-                            let emmc = app.emmc();
-                            dev::find_sectors(l, &mut |at, buf| emmc.read(&mut board, at, buf), lba, count, (lo, hi));
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::Ls => {
-                            dev::send_ls(l, &mut bryton_rustfw::emmc::Volume(app.emmc(), &mut board), session.path());
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::Get(off, len) => {
-                            let path = session.path();
-                            dev::send_get(l, &mut bryton_rustfw::emmc::Volume(app.emmc(), &mut board), path, off, len);
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::Drive => {
-                            match app.drive_on(&mut board) {
-                                Ok(()) => l.send(b"ok\n"),
-                                Err(why) => {
-                                    l.send(b"err ");
-                                    l.send(why.as_bytes());
-                                    l.send(b"\n");
-                                }
-                            }
-                            l.flush();
-                            woke = true;
-                        }
-                        Effect::Emmc => {
-                            dev::send_layout(l, app.emmc().card(&mut board));
-                            l.flush();
-                            woke = true;
                         }
                         Effect::Run(size) => {
                             l.linger(50);
                             l.disconnect();
                             hw::run_staged(size);
                         }
+                        e => woke |= app.serve(&mut board, l, &session, e),
                     }
                     if app.restart_wanted() {
                         // the computer wrote to the volume and ejected it: a restart drops every cache of it
