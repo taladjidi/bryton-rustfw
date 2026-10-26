@@ -337,7 +337,7 @@ impl App {
             Field::MaxHr => {
                 self.ride.max_hr().map_or(ui::BLACK, |v| ride::hr_color(ride::hr_zone(v, self.settings.max_hr)))
             }
-            Field::Wbal => p.wbal_j().map_or(ui::BLACK, |j| power::wbal_color(j, self.settings.wprime_j)),
+            Field::Wbal => p.wbal_j().map_or(ui::BLACK, |j| power::wbal_color(j, self.cp_model().1)),
             // in ERG the trainer sets the watts: what the rider controls is cadence, and under 60 rpm the resistance
             // climbs (an alarm, so red)
             Field::Cadence

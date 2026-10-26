@@ -578,7 +578,7 @@ pub enum Field {
     /// The time left in the whole workout (the steps after the one running, and what is left of it).
     WorkoutLeft,
     /// On a climb of the followed course (or within 5 km of one), the power to ride now for the fastest climb with the
-    /// W' left ([`crate::pacing`]), in the workout gauge: the 3 s power against a band around the target; "PACE" and the
+    /// W' left ([`crate::pacing`]), in the workout gauge: the 3 s power against a band around the target; "TOP" and the
     /// time to the top in its title.
     ClimbPace,
 }
@@ -729,7 +729,7 @@ impl Field {
             "TRG",
             "ERG W",
             "WKT LEFT",
-            "PACE",
+            "TOP",
         ];
         LABELS[self as usize]
     }
@@ -1274,19 +1274,57 @@ fn draw_gauge_columns(c: &mut impl Canvas, bar: (u32, u32, u32, u32), g: GaugeBa
     }
 }
 
-/// The gauge field whole in box `bx`: `title` in its label line, `value` big in `fg`, the bar `g` (none: the bar's
-/// place black) and `target` under it.
+/// A gauge's title row: `title` at the left in the label style, and `tag` (the pacer's target, big and green) at the
+/// right end when there is one, then the title is at 1x to leave it room.
+pub fn draw_gauge_title(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), title: &str, tag: &str) {
+    let big = Style { fg: GREEN, ..LABEL };
+    let tag_w = if tag.is_empty() { 0 } else { big.width(tag) };
+    let room = w.saturating_sub(12 + if tag_w > 0 { tag_w + 6 } else { 0 });
+    let (style, dy) = gauge_title_style(tag);
+    if tag_w > 0 {
+        c.fill(x + 6, y + 4, room, LABEL.height(), BLACK); // the 1x title is shorter than what the 2x one left
+    }
+    text::draw_in(c, &style, x + 6, y + dy, room, Align::Left, title);
+    if tag_w > 0 {
+        c.fill(x + 6 + room, y + 4, w.saturating_sub(12 + room), LABEL.height(), BLACK); // the gap and the tag's box
+        text::draw_in(c, &big, (x + w).saturating_sub(6 + tag_w), y + 4, tag_w, Align::Left, tag);
+    }
+}
+
+/// The title's style and its offset in the title row: the label style, or at 1x (centred in the row) beside a tag.
+fn gauge_title_style(tag: &str) -> (Style, u32) {
+    let small = Style { scale: 1, fg: GREY, ..LABEL };
+    if tag.is_empty() {
+        (Style { fg: GREY, ..LABEL }, 4)
+    } else {
+        (Style { ..small }, 4 + (LABEL.height() - small.height()) / 2)
+    }
+}
+
+/// A gauge's title that was `old` now `new` (the tag as it was): only the characters that changed when the length is the
+/// same, else the whole row.
+pub fn update_gauge_title(c: &mut impl Canvas, bx: (u32, u32, u32, u32), (old, new): (&str, &str), tag: &str) {
+    if old.len() == new.len() {
+        let (style, dy) = gauge_title_style(tag);
+        draw_changed_chars(c, &style, bx.0 + 6, bx.1 + dy, old, new);
+    } else {
+        draw_gauge_title(c, bx, new, tag);
+    }
+}
+
+/// The gauge field whole in box `bx`: `title` (and `tag`) in its label line, `value` big in `fg`, the bar `g` (none:
+/// the bar's place black) and `target` under it.
 pub fn draw_gauge(
     c: &mut impl Canvas,
     bx: (u32, u32, u32, u32),
-    (title, target): (&str, &str),
+    (title, tag, target): (&str, &str, &str),
     value: &str,
     fg: u16,
     g: Option<GaugeBar>,
 ) {
     let (x, _, w, h) = bx;
     let (bar, _, _, (target_y, small)) = gauge_parts(bx);
-    draw_plot_title(c, bx, title);
+    draw_gauge_title(c, bx, title, tag);
     draw_gauge_value(c, bx, "", value, fg);
     match g {
         Some(g) => draw_gauge_columns(c, bar, g, 0, bar.2),
@@ -1814,7 +1852,7 @@ pub(crate) mod tests {
         for bx in rides.chain((0..4).filter_map(overview_box)) {
             let cols = gauge_cols(bx);
             let band = (cols / 3, cols * 2 / 3);
-            let titles = ("POWER 30S", "200-220");
+            let titles = ("POWER 30S", "", "200-220");
             let (mut a, mut b) = (Frame::new(), Frame::new());
             draw_gauge(&mut a, bx, titles, "195", YELLOW, Some((band, Some((0, YELLOW)))));
             draw_gauge_marker(&mut a, bx, Some((0, YELLOW)), (band, Some((cols - 1, YELLOW))));

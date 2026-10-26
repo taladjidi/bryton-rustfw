@@ -84,6 +84,8 @@ pub enum Setting {
     Weight,
     /// W' for W' balance (a number, J, shown in kJ).
     WPrime,
+    /// Bike weight (a number), for the climb pacer.
+    BikeWeight,
     // alerts.rs (0: off)
     /// Eat reminder, every so many minutes of ride time.
     Eat,
@@ -183,6 +185,7 @@ impl Setting {
             Setting::Ftp => "FTP",
             Setting::Weight => "WEIGHT",
             Setting::WPrime => "W'",
+            Setting::BikeWeight => "BIKE",
             Setting::Eat => "EAT",
             Setting::Drink => "DRINK",
             Setting::HrAlert => "HR ABOVE",
@@ -205,7 +208,7 @@ impl Setting {
             Setting::Light => "%",
             Setting::MaxHr | Setting::HrAlert => " BPM",
             Setting::Ftp => " W",
-            Setting::Weight => " KG",
+            Setting::Weight | Setting::BikeWeight => " KG",
             Setting::WPrime => " KJ",
             Setting::Eat | Setting::Drink => " MIN",
             Setting::Altitude => " M",
@@ -221,6 +224,7 @@ impl Setting {
             Setting::Ftp => Some((FTP_RANGE, 5)),
             Setting::Weight => Some((WEIGHT_RANGE, 1)),
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
+            Setting::BikeWeight => Some((BIKE_RANGE, 1)),
             Setting::Eat | Setting::Drink => Some((0..=120, 5)),
             Setting::HrAlert => Some((0..=230, 5)),
             // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 5 m steps
@@ -237,8 +241,11 @@ pub const FTP_RANGE: core::ops::RangeInclusive<u16> = 50..=600;
 const _: () = assert!(ride::MAX_HR >= 100 && ride::MAX_HR <= 230 && ride::FTP.is_multiple_of(5));
 /// Rider weights offered, kg.
 pub const WEIGHT_RANGE: core::ops::RangeInclusive<u16> = 30..=150;
+/// Bike weights offered, kg (5 bits in register 16: 0 there means the default).
+pub const BIKE_RANGE: core::ops::RangeInclusive<u16> = 5..=30;
 /// W' offered, J (0.5 kJ steps).
 pub const WPRIME_RANGE: core::ops::RangeInclusive<u16> = 5000..=40_000;
+const _: () = assert!(power::BIKE_KG >= 5 && power::BIKE_KG <= 30);
 const _: () = assert!(power::WEIGHT_KG >= 30 && power::WEIGHT_KG <= 150 && power::WPRIME_J.is_multiple_of(500));
 
 /// A reading shown in a menu (nothing to change).
@@ -473,10 +480,15 @@ pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), 
 pub const DISPLAY: [Row; 4] =
     [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::WktAvg)];
 
-/// BIKE: the wheel, the ride profile, and the barometer's altitude with its calibration from the GPS (a ride setting,
-/// not a diagnostic).
-pub const BIKE: [Row; 4] =
-    [Row::Set(Setting::Wheel), Row::Set(Setting::Altitude), Row::AltGps, Row::Set(Setting::BikeProfile)];
+/// BIKE: the wheel, the bike's weight, the ride profile, and the barometer's altitude with its calibration from the GPS
+/// (a ride setting, not a diagnostic).
+pub const BIKE: [Row; 5] = [
+    Row::Set(Setting::Wheel),
+    Row::Set(Setting::BikeWeight),
+    Row::Set(Setting::Altitude),
+    Row::AltGps,
+    Row::Set(Setting::BikeProfile),
+];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
 pub const SYSTEM: [Row; 6] =

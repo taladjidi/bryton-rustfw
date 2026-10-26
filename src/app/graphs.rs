@@ -181,7 +181,7 @@ impl App {
         let color = match g.plot {
             Plot::Power => ride::power_color(ride::power_zone(v, self.settings.ftp)),
             Plot::Hr => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
-            Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.settings.wprime_j),
+            Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.cp_model().1),
             // above the aerobic threshold's 0.75, between it and 0.5, below (Rogers et al.)
             Plot::Dfa if v >= 75 => ui::GREEN,
             Plot::Dfa if v >= 50 => ui::ACCENT,
@@ -202,7 +202,7 @@ impl App {
         match g.plot {
             Plot::Power => (0, 2 * ftp),
             Plot::Hr => (max / 2, max),
-            Plot::Wbal => (0, u32::from(self.settings.wprime_j) / 10),
+            Plot::Wbal => (0, u32::from(self.cp_model().1) / 10),
             Plot::Dfa => (0, 150),
             Plot::Alt => ride::alt_scale((0..cols).map(|i| u32::from(self.graph_value(g, cols, i)))),
         }

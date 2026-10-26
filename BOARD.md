@@ -283,7 +283,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   address in it.
 - This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
   power), 14 (the paired shifting system, ANT+ tag 0x61 or Di2 tag 0x62; 14 held a ride page of the first builds,
-  tag 0xa, read only), 11 (wheel, backlight, max HR, FTP), 16 (weight and W', tag 0xc1, and the Di2 single
+  tag 0xa, read only), 11 (wheel, backlight, max HR, FTP), 16 (weights and W', tag 0xb; 0xc1 in earlier builds, read only, and the Di2 single
   presses' actions; the long presses' are in 28's free bits), 17, 18 (GNSS aiding: the RTC's offset
   from UTC and the last position) and 20..27 (the first three ride pages and the overview, two each, tags 0xd /
   0xe; all the ride pages are in `\Rustfw\pages.bin`, the registers their copy for earlier builds; bit 24 of 21 set

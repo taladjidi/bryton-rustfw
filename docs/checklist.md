@@ -212,6 +212,7 @@ Others
 - [x] Power zones from FTP (Coggan, 7) (stock, all): sim; FTP in the menu
 - [ ] Power zones edited one by one (stock, Garmin)
 - [x] Weight and W' settings (Garmin, ours): sim
+- [x] Bike weight setting, 5 to 30 kg, for the climb pacer (ours): sim
 - [ ] Rider profile: sex, birthday, height (stock, Garmin)
 - [x] Structured workouts from FIT files, step targets (stock, all): sim, from stock's \Workout\calendar
 - [x] Countdown beeps before a step ends: 500 ms at 2 and 1 s left, 1 s at the change (patch P1's 3-2-1, Garmin, Wahoo; the owner's choice): sim

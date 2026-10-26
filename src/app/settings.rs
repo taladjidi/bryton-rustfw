@@ -96,7 +96,7 @@ pub const WORKOUT: usize = PAGES + 2;
 //   11       wheel, backlight, max HR, FTP                          WHEEL_BKP
 //   14       paired shifting system (0x61 / 0x62)                   sensors::Kind::backup
 //   15       stock reads it at boot                                 -
-//   16       weight and W' (0xc1)                                   POWER_BKP
+//   16       weights and W' (0xb)                                   POWER_BKP
 //   17, 18   GNSS aiding                                            AID_BKP
 //   19       stock reads it at boot (once ours: set back to 0)      STOCK_BKP19
 //   20..27   ride pages and the overview (0xd / 0xe)                PAGE_BKP
@@ -212,6 +212,8 @@ pub struct Settings {
     pub weight_kg: u16,
     /// W', J (in [`menu::WPRIME_RANGE`], a multiple of 500); kept in register 16.
     pub wprime_j: u16,
+    /// Bike weight, kg (in [`menu::BIKE_RANGE`]); kept in register 16; the climb pacer adds it to the rider's.
+    pub bike_kg: u16,
     /// Eat and drink reminders, minutes of ride time (0: off), and the heart rate alert, bpm (0: off); kept in
     /// register 28 ([`Settings::alerts_word`]).
     pub eat_min: u16,
@@ -269,6 +271,7 @@ impl Settings {
             light_timeout: 0,
             weight_kg: power::WEIGHT_KG,
             wprime_j: power::WPRIME_J,
+            bike_kg: power::BIKE_KG,
             eat_min: 0,
             drink_min: 0,
             hr_alert: 0,
@@ -349,42 +352,64 @@ impl Settings {
         Settings { eat_min: min(w), drink_min: min(w >> 8), hr_alert: (w >> 16 & 0xff) as u16, remote, ..self }
     }
 
-    /// These settings with the weight, W' and the workout gauge's window kept in `w` (RTC backup register 16): tag
-    /// 0xc1 in bits 24..31, the weight in kg in 0..7, W' in 0.5 kJ in 8..15, the gauge's window in 16..17 (0 in words
-    /// written before it: 3 s). Without the tag, the defaults ([`power::WEIGHT_KG`], [`power::WPRIME_J`], 3 s).
+    /// These settings with the weight, W', the bike's weight, the workout gauge's window and the single presses' actions
+    /// kept in `w` (RTC backup register 16). Tag 0xb in bits 28..31 (this layout), then the rider's weight less 30 kg in
+    /// 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the bike's kg in 16..20 (0: [`power::BIKE_KG`]), the
+    /// left press's action in 21..23 and the right's in 24..26. Tag 0xc1 in bits 24..31 (earlier builds, read only) is
+    /// the weight in kg in 0..7, W' in 0.5 kJ in 8..15, the window in 16..17, the actions in 18..23, no bike weight.
+    /// Without either tag, the defaults ([`power::WEIGHT_KG`], [`power::WPRIME_J`], [`power::BIKE_KG`], 3 s).
     ///
     /// ```
     /// use bryton_rustfw::Settings;
-    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, ..Settings::from_word(0) };
+    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, bike_kg: 7, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
+    /// // an earlier build's word: its weight and W', the bike at the default
+    /// let old = Settings::from_word(0).with_power_word(0xc1_03_2e_46);
+    /// assert_eq!((old.weight_kg, old.wprime_j, old.bike_kg, old.wkt_avg), (70, 23_000, 9, 3));
     /// ```
     pub fn with_power_word(self, w: u32) -> Settings {
         let [_, _, s2, s3] = self.remote;
-        if w >> 24 != 0xc1 {
-            let remote = [menu::Remote::None, menu::Remote::None, s2, s3];
-            return Settings { weight_kg: power::WEIGHT_KG, wprime_j: power::WPRIME_J, wkt_avg: 0, remote, ..self };
-        }
-        let (kg, wp) = (menu::WEIGHT_RANGE, menu::WPRIME_RANGE);
-        Settings {
-            weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
-            wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
-            wkt_avg: (w >> 16 & 3) as usize,
-            remote: [menu::Remote::from_bits(w >> 18), menu::Remote::from_bits(w >> 21), s2, s3],
-            ..self
+        let (kg, wp, bike) = (menu::WEIGHT_RANGE, menu::WPRIME_RANGE, menu::BIKE_RANGE);
+        match w >> 24 {
+            0xb0..=0xbf => Settings {
+                weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
+                wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
+                wkt_avg: (w >> 14 & 3) as usize,
+                bike_kg: match (w >> 16 & 0x1f) as u16 {
+                    0 => power::BIKE_KG,
+                    b => b.clamp(*bike.start(), *bike.end()),
+                },
+                remote: [menu::Remote::from_bits(w >> 21), menu::Remote::from_bits(w >> 24), s2, s3],
+                ..self
+            },
+            0xc1 => Settings {
+                weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
+                wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
+                wkt_avg: (w >> 16 & 3) as usize,
+                bike_kg: power::BIKE_KG,
+                remote: [menu::Remote::from_bits(w >> 18), menu::Remote::from_bits(w >> 21), s2, s3],
+                ..self
+            },
+            _ => {
+                let remote = [menu::Remote::None, menu::Remote::None, s2, s3];
+                let (weight_kg, wprime_j, bike_kg) = (power::WEIGHT_KG, power::WPRIME_J, power::BIKE_KG);
+                Settings { weight_kg, wprime_j, bike_kg, wkt_avg: 0, remote, ..self }
+            }
         }
     }
 
-    /// The weight, W', the gauge's window and the single presses' actions as kept in register 16
+    /// The weights, W', the gauge's window and the single presses' actions as kept in register 16
     /// ([`Settings::with_power_word`]).
     pub fn power_word(self) -> u32 {
         let [l, r, ..] = self.remote.map(|a| a as u32);
-        (0xc1 << 24)
-            | r << 21
-            | l << 18
-            | (self.wkt_avg as u32 & 3) << 16
-            | (u32::from(self.wprime_j / 500) & 0xff) << 8
-            | u32::from(self.weight_kg) & 0xff
+        (0xb << 28)
+            | r << 24
+            | l << 21
+            | (u32::from(self.bike_kg) & 0x1f) << 16
+            | (self.wkt_avg as u32 & 3) << 14
+            | (u32::from(self.wprime_j / 500) & 0x7f) << 7
+            | u32::from(self.weight_kg.saturating_sub(30)) & 0x7f
     }
 
     /// As kept (tag 0xa7, or 0xa8 / 0xa9 for a profile fixed by hand).
@@ -424,6 +449,7 @@ impl Settings {
             Setting::MaxHr => l.push_u32(u32::from(self.max_hr)),
             Setting::Ftp => l.push_u32(u32::from(self.ftp)),
             Setting::Weight => l.push_u32(u32::from(self.weight_kg)),
+            Setting::BikeWeight => l.push_u32(u32::from(self.bike_kg)),
             Setting::WPrime => {
                 l.push_u32(u32::from(self.wprime_j / 1000));
                 l.push_str(".");
@@ -509,6 +535,7 @@ impl Settings {
             Setting::MaxHr => Some(&mut self.max_hr),
             Setting::Ftp => Some(&mut self.ftp),
             Setting::Weight => Some(&mut self.weight_kg),
+            Setting::BikeWeight => Some(&mut self.bike_kg),
             Setting::WPrime => Some(&mut self.wprime_j),
             Setting::Eat => Some(&mut self.eat_min),
             Setting::Drink => Some(&mut self.drink_min),

@@ -3286,7 +3286,7 @@ fn weight_and_wprime_from_the_menu() {
     assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Weight))), "WEIGHT 68 KG");
     assert_consistent(&sim, &app);
     sim.save("power_settings");
-    assert_eq!(sim.backup[16] >> 24, 0xc1, "tagged");
+    assert_eq!(sim.backup[16] >> 28, 0xb, "tagged");
     let again = App::start(&mut sim, None);
     assert_eq!((again.settings.weight_kg, again.settings.wprime_j, again.settings.ftp), (68, 21_500, 200));
 }
@@ -4039,7 +4039,7 @@ fn course_ride() {
     let g = app.pace_now(100);
     let (w, t) = (app.pace.plan.watts[0], app.pace.plan.total_s);
     assert!(w > app.settings.ftp && w < app.settings.ftp * 2 && (200..1000).contains(&t), "{w} W {t} s");
-    assert_eq!((g.band.is_some(), g.pace), (true, Some(t as u16)));
+    assert_eq!((g.band, g.pace), (None, Some(t as u16)), "ahead of the climb: the time alone");
     assert_consistent(&sim, &app);
 
     // the detour: off course after 5 s beyond 50 m, said once; back
@@ -4084,6 +4084,12 @@ fn course_ride() {
     );
     assert!(app.pace.plan.n < 10, "sections left only: {}", app.pace.plan.n);
     sim.save("course_fields");
+    // the time to the top counts down between plans (the same section: no new plan, the title's digits alone)
+    let (left, key) = (app.pace_now(100).pace.unwrap(), app.pace.key);
+    run(&mut sim, &mut app, 1000);
+    let now = app.pace_now(100).pace.unwrap();
+    assert!(app.pace.key != key || left - now == 1, "{left} s to the top, then {now}");
+    assert_consistent(&sim, &app);
 
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 3000);
@@ -4581,4 +4587,30 @@ fn start_and_pause_beep() {
         run(&mut sim, &mut app, 1000);
         assert_eq!(sim.tones[t0..], want);
     }
+}
+
+/// The bike's weight (BIKE > BIKE, 5 to 30 kg, 9 by default): kept in register 16 with the rider's, read from an
+/// earlier build's word as the default, and the pacer's mass.
+#[test]
+fn bike_weight() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let row = |app: &App| app.menu_row(Menu::Bike, 1).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str()));
+    assert_eq!(row(&app).as_deref(), Some("BIKE 9 KG"));
+    assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 9.0);
+    app.settings.bike_kg = 5;
+    app.settings.step(menu::Setting::BikeWeight, false);
+    assert_eq!(app.settings.bike_kg, 5, "held at the bottom of its range");
+    for _ in 0..40 {
+        app.settings.step(menu::Setting::BikeWeight, true);
+    }
+    assert_eq!(app.settings.bike_kg, 30);
+    app.settings.bike_kg = 12;
+    assert_eq!(row(&app).as_deref(), Some("BIKE 12 KG"));
+    assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 12.0);
+    let kept = Settings::from_word(0).with_power_word(app.settings.power_word());
+    assert_eq!((kept.bike_kg, kept.weight_kg, kept.wprime_j), (12, app.settings.weight_kg, app.settings.wprime_j));
+    // a stored 0 in the bike's bits (a word that never had them) is the default, an earlier build's layout too
+    assert_eq!(Settings::from_word(0).with_power_word(app.settings.power_word() & !(0x1f << 16)).bike_kg, 9);
+    assert_eq!(Settings::from_word(0).with_power_word(0xc1_00_28_46).bike_kg, 9);
 }

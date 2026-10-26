@@ -30,7 +30,8 @@ pub(crate) struct GaugeShown {
 impl GaugeShown {
     /// The same field with only the number or the marker moved.
     fn same_frame(&self, o: &GaugeShown) -> bool {
-        (self.kind, self.avg, self.band, self.step, self.pace) == (o.kind, o.avg, o.band, o.step, o.pace)
+        (self.kind, self.avg, self.band, self.step, self.pace.is_some())
+            == (o.kind, o.avg, o.band, o.step, o.pace.is_some())
     }
 
     /// Its bar for a gauge `cols` wide: the band's columns, the marker in the number's colour.
@@ -306,17 +307,23 @@ impl App {
         GaugeShown { kind, avg, band, step: step.is_some(), pace: None, value, color, marker }
     }
 
-    /// The workout gauge in box `bx` whole, showing `g`: the title says what and over which window ("POWER 3S",
-    /// "HR"), the target under the bar ("200-220"; OPEN for a step without one).
-    pub(crate) fn draw_gauge(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), g: GaugeShown) {
+    /// A gauge's title, and its tag (the pacer's target in a box too short for the target line). The pacer's: "TOP"
+    /// and the time left to the top.
+    fn gauge_title(g: &GaugeShown, h: u32) -> (Line<12>, Line<4>) {
         use storage::workout::Kind;
-        let mut title = Line::<12>::new();
+        let (mut title, mut tag) = (Line::<12>::new(), Line::<4>::new());
         match g.kind {
             _ if g.pace.is_some() => {
-                title.push_str("PACE");
+                title.push_str("TOP");
                 if let Some(s) = g.pace.filter(|&s| s > 0) {
                     title.push_str(" ");
-                    push_duration(&mut title, u32::from(s), false);
+                    title.push_u32(u32::from(s) / 60);
+                    title.push_str(":");
+                    title.push_u32(u32::from(s) / 10 % 6);
+                    title.push_u32(u32::from(s) % 10);
+                }
+                if let Some((lo, hi)) = g.band.filter(|_| h < 100) {
+                    tag.push_u32((u32::from(lo) + u32::from(hi)) / 2);
                 }
             }
             Kind::Hr => title.push_str("HR"),
@@ -326,6 +333,13 @@ impl App {
                 title.push_str(WKT_AVGS.get(g.avg).copied().unwrap_or(""));
             }
         }
+        (title, tag)
+    }
+
+    /// The workout gauge in box `bx` whole, showing `g`: the title says what and over which window ("POWER 3S",
+    /// "HR"), the target under the bar ("200-220"; OPEN for a step without one).
+    pub(crate) fn draw_gauge(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), g: GaugeShown) {
+        let (title, tag) = Self::gauge_title(&g, bx.3);
         let mut target = Line::<12>::new();
         match g.band {
             Some((lo, hi)) => {
@@ -339,7 +353,7 @@ impl App {
             None => {}
         }
         let bar = g.bar(ui::gauge_cols(bx));
-        ui::draw_gauge(c, bx, (title.as_str(), target.as_str()), g.value.as_str(), ui::WHITE, bar);
+        ui::draw_gauge(c, bx, (title.as_str(), tag.as_str(), target.as_str()), g.value.as_str(), ui::WHITE, bar);
     }
 
     /// The workout gauge drawn as `old`: whole for another step, window or reading kind; else only the number's
@@ -351,6 +365,11 @@ impl App {
         if !now.same_frame(&old) {
             self.draw_gauge(&mut p, bx, now);
             return Drawn::Gauge(now);
+        }
+        if now.pace != old.pace {
+            // the time counts down: the digits that changed
+            let ((was, _), (title, tag)) = (Self::gauge_title(&old, bx.3), Self::gauge_title(&now, bx.3));
+            ui::update_gauge_title(&mut p, bx, (was.as_str(), title.as_str()), tag.as_str());
         }
         if now.value != old.value {
             ui::draw_gauge_value(&mut p, bx, old.value.as_str(), now.value.as_str(), ui::WHITE); // the marker has the state

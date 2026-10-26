@@ -9,7 +9,7 @@
 //! **Speed from power.** The steady-state power equation of Martin et al. 1998 ("Validation of a mathematical model
 //! for road cycling power", J Appl Biomech 14(3):276-291): `P eta = v (m g (grade + Crr) + CdA rho v^2 / 2)`, wheel
 //! power against gravity, rolling resistance and air drag; no wind, no kinetic energy (steady speed per section),
-//! grade for sin(angle) and 1 for cos(angle) (3 % error at 20 %). Solved for `v` by bisection ([`speed`]).
+//! grade for sin(angle) and 1 for cos(angle) (3 % error at 20 %). Solved for `v` by Newton's method ([`speed`]).
 //!
 //! **Allocation.** Minimise the total time `sum t_i(P_i)` for `sum (P_i - CP) t_i <= W'`: a Lagrangian with
 //! multiplier `lambda`, section by section `t'(1 + lambda (P - CP)) + lambda t = 0` (the marginal time saved per
@@ -20,14 +20,15 @@
 //! modes, all-out another). `lambda` by bisection so the W' spent just fits the budget. On one constant grade this
 //! gives `P = CP + W'/T`.
 //!
+//! **Cost.** A plan of 32 sections takes a few thousand Newton steps (the `replan_cost` test counts them: about
+//! 40 cycles each on the Cortex-M7, which runs at 200 MHz here), so well under 5 ms, once per section.
+//!
 //! The citations of Martin and Swain are from memory (the papers were not opened here); the arXiv one was checked.
 //! Constants are those of a typical road rider climbing on the hoods; a setting later if the owner asks.
 
 /// Sections a plan holds at most (the course's climbs are cut into at most this many).
 pub const MAX: usize = 32;
 
-/// Bike, bottles and kit, kg (added to the rider's weight).
-pub const BIKE_KG: f32 = 9.0;
 /// Drag area on a climb, hoods, m^2 (Martin 1998 measured 0.32 to 0.41 for road positions).
 pub const CDA: f32 = 0.40;
 /// Rolling resistance coefficient of road tyres on asphalt (typical 0.004 to 0.006).
@@ -99,25 +100,37 @@ fn coefs(grade_x10: i16, mass: f32) -> (f32, f32) {
     (mass * G * (g + CRR), 0.5 * CDA * RHO)
 }
 
-/// The steady speed at pedal power `p` W on a section with terms `k`, `a`, m/s: bisection on the wheel power, which
-/// grows with speed above the speed where `k + a v^2` is zero (downhill) and from 0 otherwise.
+/// Newton steps taken by [`speed`] (tests count them to bound a plan's cost).
+#[cfg(test)]
+extern crate std;
+#[cfg(test)]
+std::thread_local!(static STEPS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) });
+
+/// The steady speed at pedal power `p` W on a section with terms `k`, `a`, m/s: Newton's method on the wheel power
+/// `f(v) = v (k + a v^2)`, which is increasing and convex for `v` above the speed where `k + a v^2` is zero (all
+/// `v > 0` uphill). It starts above the root (`f(v) >= k v` gives `wheel / k` as an upper bound) and so descends to
+/// it monotonically, in about 5 steps; a step that leaves the valid range is halved toward its floor, and the loop
+/// is bounded.
 pub fn speed(p: f32, k: f32, a: f32) -> f32 {
     let wheel = p.max(0.0) * ETA;
     let f = |v: f32| v * (k + a * v * v);
-    let mut lo = if k < 0.0 { sqrt(-k / a).min(VMAX) } else { 0.0 };
-    let mut hi = VMAX;
-    if f(hi) <= wheel {
+    let floor = if k < 0.0 { sqrt(-k / a).min(VMAX) } else { 0.0 };
+    if f(VMAX) <= wheel {
         return VMAX;
     }
-    for _ in 0..20 {
-        let mid = (lo + hi) * 0.5;
-        if f(mid) < wheel {
-            lo = mid;
-        } else {
-            hi = mid;
+    let mut v = if k > 0.0 { (wheel / k).min(VMAX) } else { VMAX };
+    for _ in 0..16 {
+        #[cfg(test)]
+        STEPS.with(|s| s.set(s.get() + 1));
+        let next = v - (f(v) - wheel) / (k + 3.0 * a * v * v).max(1e-3);
+        let next = if next > floor { next } else { (v + floor) * 0.5 }; // also when NaN
+        let step = v - next;
+        v = next;
+        if step < 1e-3 && step > -1e-3 {
+            break;
         }
     }
-    ((lo + hi) * 0.5).max(VMIN)
+    v.clamp(VMIN, VMAX)
 }
 
 /// A section's time at `p`, s, and its derivative by power (s/W, never positive).
@@ -127,20 +140,18 @@ fn time(len: f32, k: f32, a: f32, p: f32) -> (f32, f32) {
     (len / v, -len / (v * v) * dv)
 }
 
-/// The power of one section for the multiplier `lam`, W, in `cp..=hi`.
-fn power_at(len: f32, (k, a): (f32, f32), cp: f32, hi: f32, lam: f32) -> f32 {
+/// The power of one section for the multiplier `lam`, W, known to lie in `lo..=up` (bisected until the bracket is
+/// under a quarter watt: the section's power only falls as `lam` rises, so the brackets of the plan's search narrow
+/// with it and later calls take two or three steps).
+fn power_at(len: f32, (k, a): (f32, f32), cp: f32, (mut lo, mut up): (f32, f32), lam: f32) -> f32 {
     let slope = |p: f32| {
         let (t, dt) = time(len, k, a, p);
         dt * (1.0 + lam * (p - cp)) + lam * t
     };
-    if slope(cp) >= 0.0 {
-        return cp;
-    }
-    if slope(hi) <= 0.0 {
-        return hi;
-    }
-    let (mut lo, mut up) = (cp, hi);
     for _ in 0..12 {
+        if up - lo < 0.25 {
+            break;
+        }
         let mid = (lo + up) * 0.5;
         if slope(mid) < 0.0 {
             lo = mid;
@@ -179,35 +190,47 @@ pub fn plan(secs: &[Sec], r: &Rider) -> Plan {
         *s = (f32::from(i.len_m), coefs(i.grade_x10, mass));
     }
     let sec = sec.get(..n).unwrap_or(&[]);
-    // the W' spent and the time for the multiplier `lam`
-    let run = |lam: f32, out: Option<&mut [u16; MAX]>| {
+    // the W' spent and the time of powers `p`
+    let measure = |p: &[f32; MAX]| {
         let (mut work, mut total) = (0f32, 0f32);
-        let mut out = out;
-        for (i, &(len, c)) in sec.iter().enumerate() {
-            let p = if budget < 1.0 { cp } else { power_at(len, c, cp, hi, lam) };
-            let (t, _) = time(len, c.0, c.1, p);
-            (work, total) = (work + (p - cp) * t, total + t);
-            if let Some(w) = out.as_deref_mut().and_then(|o| o.get_mut(i)) {
-                *w = (p + 0.5).clamp(0.0, 65_535.0) as u16;
-            }
+        for (&(len, (k, a)), &w) in sec.iter().zip(p) {
+            let t = time(len, k, a, w).0;
+            (work, total) = (work + (w - cp) * t, total + t);
         }
         (work, total)
     };
-    let mut lam = 0.0;
-    if budget >= 1.0 && run(0.0, None).0 > budget {
-        let (mut lo, mut up) = (0.0, LAMBDA_MAX);
-        for _ in 0..24 {
-            let mid = (lo + up) * 0.5;
-            if run(mid, None).0 > budget {
-                lo = mid;
-            } else {
-                up = mid;
+    let mut best = [cp; MAX]; // the powers kept: the most that spends no more than the budget
+    let top = [hi; MAX];
+    if budget >= 1.0 {
+        if measure(&top).0 <= budget {
+            best = top; // the budget covers every section at the highest power
+        } else {
+            // bisect the multiplier; each section's power lies between its powers at the two ends, which narrow
+            let (mut lo, mut up) = (0.0, LAMBDA_MAX);
+            let (mut p_lo, mut p_up) = (top, [cp; MAX]); // at the ends: `lo` (higher powers), `up`
+            for _ in 0..24 {
+                let lam = (lo + up) * 0.5;
+                let mut p = [cp; MAX];
+                for ((w, &(len, c)), (&l, &u)) in p.iter_mut().zip(sec).zip(p_up.iter().zip(&p_lo)) {
+                    *w = power_at(len, c, cp, (l, u), lam);
+                }
+                let (work, _) = measure(&p);
+                if work > budget {
+                    (lo, p_lo) = (lam, p);
+                } else {
+                    (up, p_up, best) = (lam, p, p);
+                    if work >= budget * 0.995 {
+                        break; // within half a percent of the budget: enough
+                    }
+                }
             }
         }
-        lam = up;
     }
+    let (_, total) = measure(&best);
     let mut watts = [0u16; MAX];
-    let (_, total) = run(lam, Some(&mut watts));
+    for (w, &p) in watts.iter_mut().zip(&best) {
+        *w = (p + 0.5).clamp(0.0, 65_535.0) as u16;
+    }
     Plan { watts, n: n as u8, total_s: (total + 0.5).clamp(0.0, 1e9) as u32 }
 }
 
@@ -275,6 +298,18 @@ mod tests {
         }
         assert_eq!(plan(&[], &rider(1.0)), Plan::EMPTY);
         assert_eq!(plan(&[Sec::default(); 40], &rider(1.0)).n as usize, MAX);
+    }
+
+    #[test]
+    fn replan_cost() {
+        let secs: std::vec::Vec<Sec> =
+            (0..32).map(|i| Sec { len_m: 100 + i * 5, grade_x10: 20 + (i as i16 * 37) % 100 }).collect();
+        STEPS.with(|s| s.set(0));
+        let p = plan(&secs, &rider(12_000.0));
+        let steps = STEPS.with(|s| s.get());
+        // about 40 cycles a step at 200 MHz: 5 ms is 25,000 steps
+        std::println!("replan of 32 sections: {steps} Newton steps, about {} ms", steps * 40 / 200_000);
+        assert!(steps < 12_000 && p.n == 32, "{steps}");
     }
 
     #[test]

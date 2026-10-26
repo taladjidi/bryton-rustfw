@@ -26,7 +26,7 @@
   grade. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
-  when the course is loaded): its profile large, the next turn, the distance to go, distance and moving time.
+  when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
@@ -225,7 +225,7 @@ MENU
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, GAUGE POWER (the workout gauge's window)
-     +- BIKE >     WHEEL, ALTITUDE, FROM GPS (the barometer's calibration)
+     +- BIKE >     WHEEL, BIKE (its weight, 5 to 30 kg), ALTITUDE, FROM GPS (the barometer's calibration)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```
 
@@ -258,7 +258,7 @@ MENU
   An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
   that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when
   the workout ends) moves the selection to the last row left.
-- **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
+- **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, BIKE 1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
   to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, GAUGE POWER, WHEEL) goes to its next value.
 - **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
   altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
@@ -340,11 +340,14 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
-- **Climb pacer** (pacing.rs, the PACE field, on the course page): within 5 km of a climb and on it, the power to ride
-  each 200 m section to reach the top soonest, from the rider's CP and W' (the fit of the bests when the scan has
-  it, else FTP and the W' setting) and the W' balance now, planned again at each section. The 3 s power shows in
-  the workout gauge against the target's band (5 % each side); the predicted time to the top is in its title.
-  Power equation of Martin et al. 1998 for the speed; W' recovery inside the climb ignored.
+- **Climb pacer** (pacing.rs, the TOP field, on the course page in place of the distance): within 5 km of a climb
+  and on it, the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
+  rider's bests when the scan has it, else FTP and the W' setting: it also drains the W' balance) and the W' balance
+  now, planned again at each section from where the rider is, with the rider's weight plus the bike's (SETTINGS >
+  BIKE). On the climb the power (3 s, or the GAUGE POWER window) shows in the workout gauge against the target's band
+  (5 % each side, the target in numbers under the bar, or at the top right of a short box); ahead of it only the time.
+  The time to the top ("TOP 4:49", in the title) counts down between plans. Power equation of Martin et al. 1998 for
+  the speed; W' recovery inside the climb ignored; all the W' goes to the climb in hand.
 - **Turn by turn** (course/cues.rs), as Garmin's, Wahoo's and Hammerhead's: the cues the file states (a FIT
   course's course points: left, right, slight and sharp turns, U-turn, straight on, summit, water, food, danger,
   first aid; GPX waypoints or track points whose `type`, `sym` or `name` is a turn word, as BRouter and RideWithGPS

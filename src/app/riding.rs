@@ -395,7 +395,8 @@ impl App {
         if let Some(e) = self.player.as_mut().and_then(|p| p.second(steps, ticked, dist)) {
             self.workout_event(e);
         }
-        self.power.second(input.power, &self.ride, self.settings.ftp, self.settings.wprime_j);
+        let (cp, wprime) = self.cp_model();
+        self.power.second(input.power, &self.ride, cp, wprime);
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
         let (p, hr) = (&self.power, self.live.shown(Metric::Hr));
         let zones = [p.rolling(0), p.rolling(1), p.rolling(2)].map(|w| w.map(|w| ride::power_zone(w, ftp)));
@@ -408,7 +409,6 @@ impl App {
         self.history.second([input.power, input.hr, wbal, dfa, alt]);
         self.history.dist_second(self.ride.dist_m(), alt);
         // the course followed: where the rider is on it, and what to say
-        self.pace_second();
         let fix = self.pvt.filter(|p| p.good());
         let ev = match (self.courses.as_deref_mut(), fix) {
             (Some(c), Some(p)) if c.on.is_some() => c.course.follow(&mut c.at, p.lat, p.lon),
@@ -417,5 +417,6 @@ impl App {
         if let Some(ev) = ev {
             self.course_event(ev);
         }
+        self.pace_second(); // after the fix: the position is this second's
     }
 }
