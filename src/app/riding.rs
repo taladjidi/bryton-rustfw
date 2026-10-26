@@ -250,6 +250,7 @@ impl App {
             alpha1_milli: self.hrv.alpha1().filter(|_| hr).map(|a| (a * 1000.0 + 0.5).clamp(0.0, 65_534.0) as u16),
             rmssd_ms: self.hrv.rmssd().filter(|_| hr),
             ascent_m: Some(self.ride.ascent_m()),
+            indoor: self.indoors(),
         }
     }
 
@@ -281,6 +282,10 @@ impl App {
             recorder::Outcome::Resumed(words, name) => {
                 // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
                 self.ride = ride::Ride::resumed(&words);
+                // its profile from the record (an older one: ROAD), automatic again: a trainer silent for
+                // TRAINER_QUIET_S after the restart turns it back to ROAD, as in any indoor ride
+                self.profile = if self.recorder.indoor() { ride::Profile::Indoor } else { ride::Profile::Road };
+                (self.profile_by_hand, self.trainer_quiet_s) = (false, 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();

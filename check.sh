@@ -26,6 +26,7 @@ PY="${FIT_PYTHON:-python3}"
 if "$PY" -c 'import fitdecode, garmin_fit_sdk' 2>/dev/null; then
     "$PY" tools/fit_check.py target/fit/sample.fit target/fit/cut.fit target/fit/sample_full.fit
     "$PY" tools/fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
+    "$PY" tools/fit_check.py --profile target/fit/indoor.fit target/fit/older.fit
 else
     echo "fit_check: fitdecode / garmin-fit-sdk not installed, skipped (FIT_PYTHON)"
 fi

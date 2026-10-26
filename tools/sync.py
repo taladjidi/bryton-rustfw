@@ -40,8 +40,12 @@ APIs, read 2026-10-24:
   named Alpha1 (https://forum.intervals.icu/t/average-dfa-a1-and-wbal-added-to-interval-fields/7528).
 - Strava (https://developers.strava.com/docs/authentication/, https://developers.strava.com/docs/uploads/):
   OAuth2 code flow, scope activity:write, tokens from POST /oauth/token (authorization_code, then refresh_token);
-  POST /api/v3/uploads (file, data_type=fit, external_id), then GET /api/v3/uploads/{id} once a second at most until
-  activity_id or error ("... duplicate of activity N").
+  POST /api/v3/uploads (file, data_type=fit, external_id; trainer, "whether the resulting activity should be marked
+  as having been performed on a trainer": https://developers.strava.com/docs/reference/#api-Uploads-createUpload),
+  then GET /api/v3/uploads/{id} once a second at most until activity_id or error ("... duplicate of activity N").
+
+Indoor rides (the session's sub_sport indoor_cycling or virtual_activity: src/storage/fit.rs, and stock's indoor
+bike) go to Strava with trainer=1; Intervals.icu sets its trainer flag from the sub_sport itself (docs/sync.md).
 
 Python's standard library only.
 """
@@ -116,6 +120,47 @@ def fit_whole(data):
     if h == 14 and data[12:14] != b'\0\0' and fit_crc(data[:12]) != int.from_bytes(data[12:14], 'little'):
         return False
     return fit_crc(data) == 0
+
+
+def sub_sport(data):
+    """The session's sub_sport (FIT profile: message 18, field 6), None without one or on a file it cannot walk.
+    Normal and compressed timestamp headers, developer fields skipped (developer.garmin.com/fit/protocol)."""
+    try:
+        end, i, defs, sub = data[0] + int.from_bytes(data[4:8], 'little'), data[0], {}, None
+        while i < end:
+            b = data[i]
+            i += 1
+            if b & 0x80:
+                local = b >> 5 & 3  # compressed timestamp header
+            elif b & 0x40:  # a definition
+                glob = int.from_bytes(data[i + 2:i + 4], 'big' if data[i + 1] else 'little')
+                n = data[i + 4]
+                fields = [(data[i + 5 + 3 * k], data[i + 6 + 3 * k]) for k in range(n)]
+                i += 5 + 3 * n
+                size = sum(s for _, s in fields)
+                if b & 0x20:
+                    size += sum(data[i + 2 + 3 * k] for k in range(data[i]))
+                    i += 1 + 3 * data[i]
+                defs[b & 0xf] = (glob, fields, size)
+                continue
+            else:
+                local = b & 0xf
+            glob, fields, size = defs[local]
+            if glob == 18:
+                at = i
+                for num, s in fields:
+                    if num == 6 and s == 1:
+                        sub = data[at]
+                    at += s
+            i += size
+        return sub
+    except (IndexError, KeyError):
+        return None
+
+
+def indoor(data):
+    """Ridden on a trainer: sub_sport indoor_cycling (6) or virtual_activity (58) (FIT profile)."""
+    return sub_sport(data) in (6, 58)
 
 
 def same_ride(clean, full):
@@ -299,8 +344,10 @@ class Strava:
     def upload(self, name, data, poll=1.0, tries=60):
         """The activity id; a duplicate is done too ('duplicate of N')."""
         auth = {'Authorization': f'Bearer {self.token()}'}
-        st, body = request('POST', f'{STRAVA}/api/v3/uploads', auth, form={'data_type': 'fit', 'external_id': name},
-                        files={'file': (name, data)})
+        form = {'data_type': 'fit', 'external_id': name}
+        if indoor(data):
+            form['trainer'] = '1'  # Strava makes it a Ride either way (docs/sync.md); this marks it indoor
+        st, body = request('POST', f'{STRAVA}/api/v3/uploads', auth, form=form, files={'file': (name, data)})
         if st not in (200, 201):
             raise OSError(f'Strava upload {name}: HTTP {st} {body[:200]!r}')
         up = json.loads(body)
@@ -563,6 +610,10 @@ def selftest():
         vol = Path(tmp, 'vol')
         fid = lambda t: bytes([0x40, 0, 0, 0, 0, 4]) + bytes(12) + bytes([0, 4, 255, 0, 0, 0]) + t.to_bytes(4, 'little')
         clean, full = fake_fit(fid(1) + b'clean ride'), fake_fit(fid(1) + b'full ride', dev=True)
+        # a session (18) with sport (5) cycling and sub_sport (6) as given, after a compressed-header message
+        session = lambda sub: (bytes([0x41, 0, 0, 18, 0, 2, 5, 1, 0, 6, 1, 0, 0x01, 2, sub])
+                               + bytes([0x42, 0, 0, 20, 0, 1, 3, 1, 2, 0xc5, 120]))  # 0xc5: compressed, local 2
+        indoor_fit = fake_fit(session(6))  # (fid above is no walkable FIT: its fields are 0 bytes)
         other, not_its = fake_fit(fid(2) + b'clean'), fake_fit(fid(3) + b'full copy of another ride', dev=True)
         for p, data in [('Activities/261023100000.fit', clean), (f'{FULL_DIR}/261023100000.fit', full),
                         ('Activities/261022070000.fit', other), (f'{FULL_DIR}/261022070000.fit', not_its),
@@ -573,7 +624,8 @@ def selftest():
                         # discarded at the end of the ride (recorder.rs): never uploaded
                         ('Rustfw/Discarded/261024080000.fit', fake_fit(fid(4) + b'discarded')),
                         ('Rustfw/Discarded/Full/261024080000.fit', fake_fit(fid(4) + b'discarded', dev=True)),
-                        ('Activities/250101080000.fit', fake_fit(b'too old'))]:
+                        ('Activities/250101080000.fit', fake_fit(b'too old')),
+                        ('Activities/261023180000.fit', indoor_fit)]:
             Path(vol, p).parent.mkdir(parents=True, exist_ok=True)
             Path(vol, p).write_bytes(data)
         cfg = {'intervals': {'athlete_id': 'i1', 'api_key': 'k'},
@@ -592,11 +644,16 @@ def selftest():
         errors = sync(Volume(vol), cfg, state, True, 7, today, lines.append)
         assert errors == 1, lines  # the file cut short
         icu = {n: b for s, n, b in got if s == 'intervals'}
-        assert set(icu) == {'261023100000.fit', '261024090000.fit', '261020080000.fit', '261022070000.fit'}, set(icu)
+        assert set(icu) == {'261023100000.fit', '261024090000.fit', '261020080000.fit', '261022070000.fit',
+                             '261023180000.fit'}, set(icu)
         assert other in icu['261022070000.fit'] and not_its not in icu['261022070000.fit'], 'a full copy of another ride'
         assert full in icu['261023100000.fit'] and clean not in icu['261023100000.fit'], 'Intervals: the full copy'
         st = [b for s, n, b in got if s == 'strava']
-        assert len(st) == 4 and any(clean in b for b in st) and not any(full in b for b in st), 'Strava: clean only'
+        assert len(st) == 5 and any(clean in b for b in st) and not any(full in b for b in st), 'Strava: clean only'
+        trainer = [b for b in st if b'name="trainer"\r\n\r\n1\r\n' in b]
+        assert len(trainer) == 1 and indoor_fit in trainer[0], 'Strava: trainer=1 for the indoor ride only'
+        assert indoor(indoor_fit) and not indoor(clean) and not indoor(fake_fit(session(7)))
+        assert sub_sport(fake_fit(session(7))) == 7 and sub_sport(indoor_fit[:30]) is None
         assert state['uploaded']['strava']['261020080000.fit']['id'].startswith('duplicate')
         assert load('strava.json', {})['refresh_token'] == 'rt2', 'refreshed and kept'
         w = Path(vol, 'Workout/calendar/20261025/icu7.fit')

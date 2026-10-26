@@ -94,6 +94,43 @@ fn reboot(sim: &mut Sim, m: u64) -> (Sim, App) {
     (sim2, app)
 }
 
+/// An indoor ride (set by hand, no trainer: nothing but the recovery record can say so after the reset) comes back
+/// indoor after a reset, and is saved with sub_sport indoor_cycling (6) in its laps and session; its full copy too.
+#[test]
+fn an_indoor_ride_resumes_indoor_and_saves_as_indoor_cycling() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(!app.indoors(), "no trainer: a road ride");
+    app.toggle_indoor();
+    run(&mut sim, &mut app, 150_000);
+    let (mut sim2, mut app) = reboot(&mut sim, 3);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.indoors(), "indoor again, from the record");
+    app.press(&mut sim2, Press::Short(Key::Start)); // resume
+    run(&mut sim2, &mut app, 30_000); // under TRAINER_QUIET_S: still indoor
+    app.press(&mut sim2, Press::Short(Key::Start));
+    save_ride(&mut sim2, &mut app);
+    run(&mut sim2, &mut app, 2000);
+    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    let name = std::string::String::from_utf8(app.recorder.name().to_vec()).unwrap();
+    let field = crate::fit::tests::field;
+    for path in [std::format!("Activities/{name}.fit"), std::format!("Rustfw/Activities/{name}.fit")] {
+        let mut d = crate::fat::tests::Ram(sim2.emmc.image.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, &path).unwrap();
+        let mut v = std::vec![0u8; f.size as usize];
+        fat.read_at(&mut d, &f, 0, &mut v).unwrap();
+        let m = crate::fit::tests::decode(&v).unwrap();
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!((field(session, 5), field(session, 6)), (Some(2), Some(6)), "{path}: cycling, indoor_cycling");
+        assert!(m.iter().filter(|x| x.0 == 19).all(|l| field(l, 39) == Some(6)), "{path}: the laps");
+    }
+}
+
 /// The second review's R4: switching off mid-ride (the second hold of Back) used to lose up to a minute, the
 /// seconds since the last checkpoint. It checkpoints first: the ride comes back at the second it was switched off.
 #[test]
