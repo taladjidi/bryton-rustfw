@@ -576,6 +576,10 @@ impl App {
             let mut p = Panel(b, (ui::CALL_Y, ui::H));
             p.fill(0, ui::CALL_Y, ui::W, ui::H - ui::CALL_Y, ui::BLACK);
             self.draw_screen(&mut p);
+            if self.screen == Screen::Main {
+                // the clock left out under the call's banner, drawn again (its top rows come with redraw_top)
+                ui::draw_main_time(&mut Panel(b, (ui::BANNER_H, ui::CALL_Y)), self.main_digits());
+            }
             self.redraw_top(b); // the strip and the page's top, or a banner said meanwhile
         }
     }
@@ -905,7 +909,11 @@ impl App {
                     // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
                     self.banner_drawn = false;
                     self.phone.ringing = true;
-                    ui::draw_call(&mut Panel(b, (0, ui::H)), who.as_str());
+                    let mut p = Panel(b, (0, ui::H));
+                    ui::draw_call(&mut p, who.as_str());
+                    if self.screen == Screen::Main {
+                        p.fill(0, ui::BANNER_H, ui::W, ui::DATE_Y - ui::BANNER_H, ui::BLACK); // the clock's lower half
+                    }
                     self.tones.play(&BEEP_ALERT);
                 }
                 _ => {

@@ -124,6 +124,9 @@ fn incoming_calls() {
     assert!(app.phone.ringing);
     assert_consistent(&sim, &app);
     sim.save("phone_call");
+    // the big clock's lower half is not left showing under the two-line banner
+    let under = (crate::ui::BANNER_H * crate::ui::W) as usize..(crate::ui::DATE_Y * crate::ui::W) as usize;
+    assert!(sim.screen[under].iter().all(|&px| px == crate::ui::BLACK), "the clock's box is clear");
     app.input(&mut sim, Input::Select);
     run(&mut sim, &mut app, 3000);
     assert!(app.phone.ringing, "the second call");

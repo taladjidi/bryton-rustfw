@@ -267,6 +267,8 @@ impl App {
     pub(crate) fn draw_widget(&self, c: &mut impl Canvas, i: usize, bx: (u32, u32, u32, u32), w: Widget) {
         let d = self.drawn.get(i).copied().unwrap_or_default();
         match (w, d) {
+            // under a call's two-line banner the big clock would show its lower half: left out, the box cleared
+            (Widget::Clock, Drawn::Digits(_)) if self.phone.ringing => {}
             (Widget::Clock, Drawn::Digits(digits)) => ui::draw_main_time(c, digits),
             (Widget::Date, _) => ui::draw_date(c, date_text(self.date).as_str()),
             (Widget::Notices, _) => {
@@ -528,7 +530,7 @@ impl App {
                 (Widget::Clock, Drawn::Digits(was)) => {
                     let now = self.main_digits();
                     for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
-                        if d != was {
+                        if d != was && !self.phone.ringing {
                             ui::draw_main_digit(&mut Panel(b, self.area()), k, d);
                         }
                     }
