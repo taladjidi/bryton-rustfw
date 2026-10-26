@@ -59,6 +59,9 @@ pub const MAX_PASS_MS: u32 = 1000;
 /// How often the battery is read.
 pub const BATTERY_MS: u32 = 10_000;
 
+/// BATTERY LOW is said at this charge, percent, or below (not while charging).
+const LOW_BATTERY_PERCENT: u8 = 15;
+
 /// How often the barometer is read while riding (or averaging for a calibration); app/barometer.rs.
 pub const BARO_RIDE_MS: u32 = 1000;
 
@@ -70,6 +73,32 @@ pub const TOUCH_MS: u32 = 10;
 pub const LIGHT_MS: u32 = 250;
 
 impl App {
+    /// The battery, every [`BATTERY_MS`]: the charge and the charger for the strip, "BATTERY LOW" once at
+    /// [`LOW_BATTERY_PERCENT`]. True when the cell is empty and the unit was switched off.
+    pub(crate) fn poll_battery(&mut self, b: &mut impl Board, pass_ms: u32) -> bool {
+        self.battery_ms = self.battery_ms.saturating_add(pass_ms);
+        if self.battery_ms < BATTERY_MS {
+            return false;
+        }
+        self.battery_ms = 0;
+        let charging = b.charger_present();
+        let reading = b.battery_adc().and_then(|(raw, vref, cal)| battery::millivolts(raw, vref, cal));
+        if let Some(mv) = reading
+            && self.battery.update(mv, charging)
+        {
+            self.power_off(b); // empty: off before the cell is drawn too low
+            return true;
+        }
+        self.strip.battery = self.battery.percent();
+        self.strip.charging = charging;
+        let low = self.strip.battery.is_some_and(|p| p <= LOW_BATTERY_PERCENT) && !charging;
+        if low && !self.told_low {
+            self.alarm_notice("BATTERY LOW");
+        }
+        self.told_low = low;
+        false
+    }
+
     /// The computer dropped the USB device and the board reconnected it: counted (read it with `dev.py peek`) and
     /// said in a notice.
     pub fn usb_dropped(&mut self, b: &mut impl Board) {

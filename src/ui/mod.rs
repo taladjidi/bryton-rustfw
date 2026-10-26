@@ -158,9 +158,10 @@ impl Rect {
 pub const STRIP_H: u32 = 22;
 
 /// USB dev link state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UsbDot {
     /// Not plugged in: not shown.
+    #[default]
     Off,
     /// Plugged in, but the PHY or the core did not come up.
     Failed,
@@ -171,7 +172,7 @@ pub enum UsbDot {
 }
 
 /// What the status strip shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Strip {
     /// Time of day, hours and minutes.
     pub time: (u8, u8),
@@ -196,9 +197,10 @@ pub struct Strip {
 }
 
 /// The ride's state as the strip shows it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Rec {
     /// No ride running.
+    #[default]
     Idle,
     /// Recording.
     Running,
