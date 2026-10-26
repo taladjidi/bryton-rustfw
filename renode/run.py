@@ -5,7 +5,7 @@ start-up, clocks and GPIO writes, the SPI1 byte stream to the panel, no fault, n
   renode/run.py [--seconds 8] [--vbus | --off] [--renode PATH]
 
 It logs every SPI1 data write together with the D/C pin (PG9), decodes the panel protocol into a screen
-(target/renode/screen.png) and compares its fixed parts (the status strip's line, Ferris) with the simulator's preview
+(target/renode/screen.png) and compares its fixed parts (the status strip's line, the overview's empty notices area) with the simulator's preview
 (target/sim/preview.bmp, written by cargo test-host). --vbus raises PC13 first, so the USB start path runs: Renode
 models the OTG core but no host, so the dot must turn orange (or red if the core reset fails) and the clock keep
 running. --off then holds Back 10 s and lets go: the unit switches off, and the core must stay asleep in the

@@ -563,8 +563,8 @@ pub fn power_zone(w: u16, ftp: u16) -> u8 {
     POWER_ZONE_PCT.iter().filter(|&&t| pct >= t).count() as u8 + 1
 }
 
-/// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 yellow,
-/// below orange (Rogers et al.), from the zone palette.
+/// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 olive,
+/// below brown (Rogers et al.), from the zone palette.
 pub fn dfa_color(v: u16) -> u16 {
     ZONE_COLORS[if v >= 75 {
         1

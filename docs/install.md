@@ -34,7 +34,7 @@ bootloader's recovery mode, which this firmware cannot touch (it lives in the in
   restart while holding **Page** until "Engineer Mode" shows (without the cable the bootloader ignores Page).
   Then `sudo python3 tools/iaprecover.py --write out/IMG.bin`: it checks the image as `pack.py` and the updater
   do, writes it in 2 KB chunks and reads each one back. Restart.
-- Expected: the main screen (the time, Ferris), "BLE" green, then "GPS" blinking.
+- Expected: the overview (the date, today's card), "BLE" green, then "GPS" blinking.
 
 Record every write to the unit in bryton-S510-mods' FLASHLOG (AGENTS.md).
 

@@ -215,7 +215,7 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
   recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (barometric altitude, else GPS).
 - **Saved as a FIT file** (`src/storage/recorder.rs`; seen on the unit 2026-10-24, docs/status.md): the ride goes to
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
-  rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
+  rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap and per workout step), from RAM to the card
   at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
   the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). Its end card's NP, TSS and kJ
   then cover the part after the restart only (the recovery record keeps the ride's totals, not the power sums); the
@@ -294,7 +294,7 @@ MENU
   RIDE
    +- PAUSE / RESUME   as Start; PAUSE stays (END RIDE right under it), RESUME goes back to the page
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
-   +- WORKOUT >        while a step runs: NEXT STEP (no lap), STOP WORKOUT (the ride goes on)
+   +- WORKOUT >        while a step runs: NEXT STEP (makes a lap, through `step_lap`, as the Lap key does), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
    +- BRIGHTNESS       changed in place
    +- SENSORS >        the same menu as off the ride
@@ -393,7 +393,7 @@ TrainingPeaks), read only:
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
-- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, yellow within 5 %, the zone 1 colour under, the zone 5 colour over,
+- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, olive within 5 %, the zone 1 colour (teal) under, the zone 5 colour (wine) over,
   from the power over the GAUGE POWER window, the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
@@ -407,7 +407,7 @@ TrainingPeaks), read only:
   them (cadence, which has no zones: 30 % around the band), painted with the rider's zones along that scale (the zone
   palette of the power and heart-rate fields), so the band shows where the target sits among them. The band
   is a white outline over the zones; the reading is a white tick with a black outline, its ends beyond the track
-  coloured by how far it is from the band (green in it, yellow within 5 %, the zone 1 colour under, the zone 5 colour over); the number is white.
+  coloured by how far it is from the band (green in it, olive within 5 %, the zone 1 colour (teal) under, the zone 5 colour (wine) over); the number is white.
   The scale is fixed for a step, so the zones do not slide. The climb pacer's TOP field draws the same gauge. With an
   open step or no workout, the power alone. Only the number's changed characters and the tick's old and new columns
   are redrawn (about 4 400 px/s for the page with a top half box, sim).

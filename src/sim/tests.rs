@@ -2420,7 +2420,7 @@ fn back_held_3s_powers_off_after_release() {
 /// a zone must never look like a banner (UI review 2, P3).
 #[test]
 fn zone_colours_are_not_accent_or_alarm() {
-    // the owner's progression puts an orange and a red in the zones: kept apart from the menu orange and the alarm
+    // the palette's brown and wine are close to the menu orange and the alarm reds: kept apart from the menu orange and the alarm
     // reds, though close (ride::ZONE_COLORS's doc)
     let rgb = |c: u16| [(c >> 11) as i32 * 255 / 31, (c >> 5 & 63) as i32 * 255 / 63, (c & 31) as i32 * 255 / 31];
     for (i, z) in crate::ride::ZONE_COLORS.iter().enumerate() {

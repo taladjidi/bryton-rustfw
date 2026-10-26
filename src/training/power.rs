@@ -207,8 +207,8 @@ pub fn wkg_x10(w: u16, kg: u16) -> u32 {
     u32::from(w) * 10 / u32::from(kg.max(1))
 }
 
-/// The colour of a W' balance of `j` out of `wprime_j` as it drains: green over 75 %, yellow over 50 %, orange over
-/// 25 %, then red (the zone palette).
+/// The colour of a W' balance of `j` out of `wprime_j` as it drains: green over 75 %, olive over 50 %, brown over
+/// 25 %, then wine (the zone palette).
 ///
 /// ```
 /// use bryton_rustfw::{power::wbal_color, ride::ZONE_COLORS};

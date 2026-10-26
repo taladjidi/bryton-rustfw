@@ -37,7 +37,7 @@ pub(crate) enum Widget {
     Today,
     /// The date line.
     Date,
-    /// The latest notices, or Ferris when there are none.
+    /// The latest notice; nothing is drawn when there is none (Ferris lives in ABOUT).
     Notices,
     /// A ride field in its box: a value, the map or the graph.
     Field(Field),
@@ -208,8 +208,8 @@ impl App {
         }
     }
 
-    /// The boxes of the page on screen and what each holds (none on a menu or a list). The clock and Ferris place
-    /// themselves.
+    /// The boxes of the page on screen and what each holds (none on a menu or a list). The status strip is not
+    /// one.
     pub(crate) fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + use<> {
         let mut all = [((0, 0, 0, 0), Widget::Today); BOXES];
         let (page, fixed): (_, &[Widget]) = match self.screen {

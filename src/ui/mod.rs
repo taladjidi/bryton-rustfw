@@ -1,4 +1,4 @@
-//! What is on screen: colours, text styles, Ferris, the layout and the clock. Draws
+//! What is on screen: colours, text styles, the overview, the ride pages, menus and ABOUT's Ferris. Draws
 //! through [`Canvas`] only, so it knows nothing about the panel protocol (panel.rs) or the board.
 
 pub mod card;
@@ -116,12 +116,15 @@ pub fn draw_bitmap(c: &mut impl Canvas, bitmap: &[u16], x: u32, y: u32, scale: u
 
 /// Width of one character cell of the monospaced pixel font, in font pixels.
 const CELL: u32 = 6;
-/// Ferris: scale and top left corner (centred; where the overview's notices end).
-pub const CRAB_SCALE: u32 = 4;
+/// Ferris: scale and top left corner for the drawing test (the overview has none; ABOUT draws its own, larger).
+#[cfg(test)]
+const CRAB_SCALE: u32 = 4;
 /// Ferris left edge.
-pub const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
+#[cfg(test)]
+const CRAB_X: u32 = (W - 16 * CRAB_SCALE) / 2;
 /// Ferris top edge.
-pub const CRAB_Y: u32 = 272;
+#[cfg(test)]
+const CRAB_Y: u32 = 272;
 
 // ---------------------------------------------------------------------------------------------------------------
 // The status strip: a thin line at the top of every screen
@@ -444,7 +447,7 @@ impl Canvas for Row {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Ride pages: a layout of 1 to 6 fields between the bar and Ferris.
+// Ride pages: a layout of 1 to 6 fields between the strip and the bottom of the panel.
 // ---------------------------------------------------------------------------------------------------------------
 
 /// What a ride page field shows.
@@ -1954,7 +1957,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// The ride boxes tile the field area exactly, every value fits its box, and Ferris and the top line stay
+    /// The ride boxes tile the field area exactly, every value fits its box, and the top line stays
     /// clear (Frame panics on anything off screen).
     #[test]
     fn ride_layouts_tile_and_fit() {
