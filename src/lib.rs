@@ -167,7 +167,7 @@ pub struct App {
     screen: Screen,
     ble: Option<nrf::Version>,
     rx: nrf::Rx,
-    /// The Nordic link's watchdog (app/link.rs), and the keys to start ANT again with.
+    /// The Nordic link's watchdog (app/nrf_watch.rs), and the keys to start ANT again with.
     watch: Watch,
     ant_key: Option<[u8; 8]>,
     di2_key: Option<[u8; 8]>,
@@ -354,11 +354,11 @@ pub struct App {
     trash_check: bool,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
     /// file; where it is (workout.rs).
-    calendar: storage::workout::Calendar,
+    calendar: storage::workout_file::Calendar,
     calendar_day: Option<(u16, u8, u8)>,
     /// The FTP and maximum heart rate the calendar's profiles were coloured with: another pair reads it again.
     calendar_zones: (u16, u16),
-    plan: storage::workout::Workout,
+    plan: storage::workout_file::Workout,
     plan_file: Option<fat::File>,
     player: Option<workout::Player>,
     /// The ramp test being ridden, its last result, and the result screen due (app/ramp.rs).
@@ -378,7 +378,7 @@ pub struct App {
     lag_s: u8,
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
-    courses: Option<&'static mut storage::course::Courses>,
+    courses: Option<&'static mut storage::course_file::Courses>,
     /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
     /// for the whole ride.
     ride_model: Option<(u16, u16, bool)>,
@@ -431,7 +431,7 @@ impl App {
             (Some(_), Some(key)) => match nrf::ant_start(b, &mut rx, key, di2_key, &nets) {
                 Ok(di2) => (true, di2),
                 Err(e) => {
-                    refusal = rx.failed.filter(|_| matches!(e, nrf::Error::Code(_))); // an answer (link.rs)
+                    refusal = rx.failed.filter(|_| matches!(e, nrf::Error::Code(_))); // an answer (app/nrf_watch.rs)
                     (false, false)
                 }
             },
@@ -584,7 +584,7 @@ impl App {
             calendar_day: None,
             calendar_zones: (0, 0),
             plan_file: None,
-            plan: storage::workout::Workout::new(),
+            plan: storage::workout_file::Workout::new(),
             player: None,
             ramp: None,
             ramp_result: None,

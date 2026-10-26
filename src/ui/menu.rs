@@ -323,7 +323,7 @@ pub enum Row {
     Notif(usize),
     /// Past ride `n` of the history, newest first: Select opens its card.
     Past(usize),
-    /// Planned workout `n` of the calendar ([`crate::storage::workout::Calendar`]): Select shows its steps.
+    /// Planned workout `n` of the calendar ([`crate::storage::workout_file::Calendar`]): Select shows its steps.
     Workout(usize),
     /// Select starts the workout shown (and the ride, if none runs).
     WorkoutStart,
@@ -331,7 +331,7 @@ pub enum Row {
     RampTest,
     /// Step `n` of the workout shown: Select starts the workout from it.
     Step(usize),
-    /// Course `n` of the list ([`crate::storage::course::List`]): Select follows it, or stops following it.
+    /// Course `n` of the list ([`crate::storage::course_file::List`]): Select follows it, or stops following it.
     Course(usize),
     /// Group `g` of [`crate::ui::FIELD_GROUPS`]: Select lists its fields.
     Group(usize),

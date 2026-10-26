@@ -196,7 +196,7 @@ The dated findings are in [journal.md](journal.md).
   run) does not list it. A restart (`dev.py reset`) with the screen up: "RIDE RESUMED", paused. The first ride after
   this build makes `\Rustfw\Discarded\Full` at its start (the FATs compared first, a few seconds).
 
-- **The Nordic link watchdog (app/link.rs)**: `dev.py info` ends with "radio resets 0" over a normal ride and a
+- **The Nordic link watchdog (app/nrf_watch.rs)**: `dev.py info` ends with "radio resets 0" over a normal ride and a
   quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
   recording through it.

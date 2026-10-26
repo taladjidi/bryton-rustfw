@@ -499,7 +499,7 @@ fn attr(t: &[u8], name: &[u8]) -> Option<i64> {
 /// one, has more than 12 digits before the point, or does not fit an i64.
 ///
 /// ```
-/// use bryton_rustfw::storage::course::decimal;
+/// use bryton_rustfw::storage::course_file::decimal;
 /// assert_eq!(decimal(b"-12.3456789", 7), Some(-123_456_789));
 /// assert_eq!(decimal(b"+0.5", 1), Some(5));
 /// assert_eq!(decimal(b"812", 1), Some(8120));

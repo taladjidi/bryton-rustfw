@@ -1410,9 +1410,10 @@ fn make_app(board: &mut S510) -> &'static mut App {
 /// Built once on the stack and moved in, as the app is: this frame is about 36 KB (tools/stack_check.py budgets it;
 /// review 2 found the old "cleared in place" untrue).
 #[inline(never)]
-fn make_courses() -> &'static mut bryton_rustfw::storage::course::Courses {
-    static COURSES: static_cell::StaticCell<bryton_rustfw::storage::course::Courses> = static_cell::StaticCell::new();
-    COURSES.init_with(bryton_rustfw::storage::course::Courses::new)
+fn make_courses() -> &'static mut bryton_rustfw::storage::course_file::Courses {
+    static COURSES: static_cell::StaticCell<bryton_rustfw::storage::course_file::Courses> =
+        static_cell::StaticCell::new();
+    COURSES.init_with(bryton_rustfw::storage::course_file::Courses::new)
 }
 
 /// The road ahead (climbs_ahead.rs `Ahead`: the routing graph, the trace, about 110 KB), in AXI SRAM (link.x

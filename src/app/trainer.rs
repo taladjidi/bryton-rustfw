@@ -13,7 +13,7 @@
 //! most one per [`ACK_GAP_MS`]: the set-up, the commands and the course's grade changes all wait their turn. A message
 //! the chip refuses, or the trainer does not acknowledge (`EVENT_TRANSFER_TX_FAILED`, [`nrf::ant_tx_failed`]), is due
 //! again. A chip that does not answer the first one at all (the message's layout is inferred, not seen on the unit)
-//! turns the control off until the chip is started again (app/link.rs `radio_restart`), with a notice, instead of
+//! turns the control off until the chip is started again (app/nrf_watch.rs `radio_restart`), with a notice, instead of
 //! letting the link watchdog reset the chip over it. Once one was answered the layout is right: a later silence (a
 //! byte lost on the link) only has the message sent again, and the watchdog finds a broken link by its own signs.
 //!
@@ -106,7 +106,7 @@ impl App {
         let step = self.player.and_then(|p| p.step(steps));
         let erg_w = step
             .and_then(|i| steps.get(i))
-            .filter(|s| s.target.kind == storage::workout::Kind::Power)
+            .filter(|s| s.target.kind == storage::workout_file::Kind::Power)
             .and_then(|s| s.target.range(self.settings.ftp, self.settings.max_hr))
             .map(|(lo, hi)| lo.midpoint(hi));
         // % x 10 to % x 100

@@ -18,11 +18,11 @@ pub(crate) fn push_grade(l: &mut Line<8>, g: i32) {
 
 impl App {
     // -----------------------------------------------------------------------------------------------------------
-    // Courses (storage/course.rs: the files; course.rs: the model, where the rider is, the climbs)
+    // Courses (storage/course_file.rs: the files; course.rs: the model, where the rider is, the climbs)
     // -----------------------------------------------------------------------------------------------------------
 
     /// Memory for the courses (main.rs keeps it in AXI SRAM: about 70 KB); without it there are none.
-    pub fn set_course_memory(&mut self, mem: &'static mut storage::course::Courses) {
+    pub fn set_course_memory(&mut self, mem: &'static mut storage::course_file::Courses) {
         self.courses = Some(mem);
     }
 
@@ -83,7 +83,7 @@ impl App {
             return; // the lengths only while the list shows
         }
         match c.step(&mut emmc::Volume(&mut self.emmc, b), Self::COURSE_BYTES) {
-            storage::course::Progress::Loaded(true) => {
+            storage::course_file::Progress::Loaded(true) => {
                 self.say("COURSE ON");
                 // from the list, the course page (as stock's route details lead to riding); a rider who has gone
                 // elsewhere while it was read stays there
@@ -92,7 +92,7 @@ impl App {
                     self.show(b);
                 }
             }
-            storage::course::Progress::Loaded(false) => self.say("NOT A COURSE"),
+            storage::course_file::Progress::Loaded(false) => self.say("NOT A COURSE"),
             _ => {}
         }
     }

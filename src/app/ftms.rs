@@ -44,7 +44,7 @@ pub const GATT_MS: u32 = 5_000;
 pub const CP_MS: u32 = 3_000;
 /// No data from a connected trainer for this long: the link is dropped and made again (a trainer notifies its data
 /// about once a second while connected, FTMS 4.9.1; its disconnection may have been among bytes a resync of the
-/// Nordic link dropped, app/link.rs).
+/// Nordic link dropped, app/nrf_watch.rs).
 // ponytail: a trainer that goes quiet when nobody pedals is reconnected every 30 s; a longer wait if one does
 pub const QUIET_MS: u32 = 30_000;
 /// The control refused (or never answered, three times): asked again this long after, doubled each time up to

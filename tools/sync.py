@@ -18,7 +18,7 @@ from the history (`\\Rustfw\\Deleted`) are never read.
 
 Workouts: Intervals.icu's planned workouts (events of category WORKOUT) of today and the next N days, each as FIT
 (`/events/{id}/download.fit`), written to `\\Workout\\calendar\\YYYYMMDD\\icu<id>.fit`, where stock's app puts them and
-src/storage/workout.rs reads them. Only on a mounted volume: the dev link does not write.
+src/storage/workout_file.rs reads them. Only on a mounted volume: the dev link does not write.
 
 Never twice: a state file remembers each upload by ride name, with the file's name, size and CRC-32; a ride already
 uploaded to a service is not sent to it again. Intervals.icu also refuses a file it has (a hash of its bytes), and
@@ -70,7 +70,7 @@ ICU = os.environ.get('SYNC_INTERVALS_URL', 'https://intervals.icu')
 STRAVA = os.environ.get('SYNC_STRAVA_URL', 'https://www.strava.com')
 REDIRECT_PORT = 8721
 FULL_DIR = 'Rustfw/Activities'
-WORKOUT_MAX = 8192  # src/storage/workout.rs FILE_MAX: a longer file is not shown on the unit
+WORKOUT_MAX = 8192  # src/storage/workout_file.rs FILE_MAX: a longer file is not shown on the unit
 
 
 def home():

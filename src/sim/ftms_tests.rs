@@ -135,7 +135,7 @@ fn erg_workout_over_ble_is_recorded() {
 #[test]
 fn sim_follows_the_course_over_ble() {
     let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     pair(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Start));

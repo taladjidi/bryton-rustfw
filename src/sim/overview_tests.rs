@@ -3,7 +3,9 @@
 
 use super::tests::assert_consistent as consistent;
 use super::*;
-use crate::storage::workout::{Calendar, Kind as TargetKind, Length, PROF, PROF_H, Planned, Step, Target, Workout};
+use crate::storage::workout_file::{
+    Calendar, Kind as TargetKind, Length, PROF, PROF_H, Planned, Step, Target, Workout,
+};
 use crate::ui::TODAY_BOX;
 
 /// The strip catches up with the second that passed, then the screen is checked.
@@ -100,12 +102,12 @@ fn the_card_shows_todays_workout() {
     // the profile's columns are the steps' zones (FTP 200: 55 % is Z1, 90 % is Z3, 50 % Z1), column by column
     let p = app.today().unwrap().prof;
     for (k, &byte) in p.iter().enumerate() {
-        let (h, color) = crate::storage::workout::unpack_bar(byte);
+        let (h, color) = crate::storage::workout_file::unpack_bar(byte);
         let (want_h, want_c) = crate::workout::column(w.steps(), (200, 190), (PROF as u32, PROF_H), None, k as u32);
         assert_eq!((u32::from(h), color), (want_h, want_c), "column {k}");
         assert_eq!(card_pixel(&sim, k), color, "column {k} on the panel");
     }
-    assert!(p.iter().any(|&b| crate::storage::workout::unpack_bar(b).1 == ride::power_color(3)), "the 90 % steps");
+    assert!(p.iter().any(|&b| crate::storage::workout_file::unpack_bar(b).1 == ride::power_color(3)), "the 90 % steps");
     smooth(&mut sim, &mut app);
     assert_consistent(&mut sim, &mut app);
     sim.save("overview_today_smooth");

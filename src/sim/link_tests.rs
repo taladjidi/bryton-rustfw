@@ -1,4 +1,4 @@
-//! The Nordic link's watchdog (app/link.rs) against a chip that misbehaves: a stray byte, a hang, silence, a dead
+//! The Nordic link's watchdog (app/nrf_watch.rs) against a chip that misbehaves: a stray byte, a hang, silence, a dead
 //! chip. The recorder must go on whatever the radio does.
 
 use super::*;

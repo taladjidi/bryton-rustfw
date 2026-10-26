@@ -2,7 +2,7 @@
 //! and read), the recorder, the IGN map packs (read), and what the stock firmware left on the volume (its rides,
 //! settings, planned workouts and courses).
 
-pub mod course;
+pub mod course_file;
 pub mod fat;
 pub mod fit;
 pub mod fitread;
@@ -15,4 +15,4 @@ pub mod route;
 pub mod stock;
 pub mod thresholds;
 pub mod trash;
-pub mod workout;
+pub mod workout_file;

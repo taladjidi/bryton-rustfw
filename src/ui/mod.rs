@@ -12,7 +12,7 @@ pub mod tiles;
 pub mod trainer;
 
 use crate::fonts::PIXEL;
-use crate::storage::workout::{PROF_H, unpack_bar};
+use crate::storage::workout_file::{PROF_H, unpack_bar};
 use text::{Align, Style};
 
 /// Panel width in pixels (portrait).
@@ -2007,7 +2007,8 @@ pub(crate) mod tests {
             let band = (cols / 3, cols * 2 / 3);
             let titles = ("POWER 30S", "", "200-220");
             let (mut a, mut b) = (Frame::new(), Frame::new());
-            let zones = crate::workout::gauge_zones(crate::storage::workout::Kind::Power, (200, 220), cols, 200, 190);
+            let zones =
+                crate::workout::gauge_zones(crate::storage::workout_file::Kind::Power, (200, 220), cols, 200, 190);
             let bar = |m| GaugeBar { band, marker: Some((m, YELLOW)), zones };
             draw_gauge(&mut a, bx, titles, "195", YELLOW, Some(bar(0)));
             draw_gauge_marker(&mut a, bx, Some((0, YELLOW)), bar(cols - 1));

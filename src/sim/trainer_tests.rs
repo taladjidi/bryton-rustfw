@@ -192,7 +192,7 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
 #[test]
 fn sim_follows_the_course() {
     let (mut sim, mut app) = unit();
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     run(&mut sim, &mut app, 1000);
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Page));
@@ -517,7 +517,7 @@ fn not_accepted_is_for_the_command_in_force() {
 #[test]
 fn no_grade_before_the_ride_starts() {
     let (mut sim, mut app) = unit();
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     run(&mut sim, &mut app, 1000);
     app.open_courses(&mut sim);
     for _ in 0..100 {

@@ -33,7 +33,7 @@
 //! **Power source:** `Metric::Power`, the power meter's when one is heard, else the trainer's own (app/trainer.rs
 //! `fold_trainer`); a dropout holds the last reading for [`HOLD_S`] s before it counts as 0 W.
 
-use crate::storage::workout::{Kind, Length, Step, Target, Workout};
+use crate::storage::workout_file::{Kind, Length, Step, Target, Workout};
 
 /// The warm-up's length, s, and its power, % of FTP.
 pub const WARMUP_S: u32 = 300;

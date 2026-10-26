@@ -142,7 +142,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - `more.rs`: MORE, a denser variant of each ride page (swipe up shows it, swipe down or Back returns): the rider's own
     (the editor edits it, kept in `pages.bin` after the first CRC) or `Page::more_of`; "MORE" in the strip.
   - `menus.rs`: `Menu`, each menu's rows and their text, `activate` (what a row does).
-  - `link.rs`: the Nordic link's watchdog: signs of a framing out of step (garbage frames, commands without a response,
+  - `nrf_watch.rs`: the Nordic link's watchdog: signs of a framing out of step (garbage frames, commands without a response,
     a quiet link that does not answer a probe), drain and resync, else reset the chip and start ANT and the phone
     link again, with backoff; the count is in the dev link's `info`. Tests: `src/sim/link_tests.rs`.
   - `radio.rs`: the ANT+ channels (`Sensor`), `poll_nrf`, pairing. `gps.rs`: `poll_gnss`, the aiding.
@@ -294,10 +294,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   stock's `.sum` / `.csum` left as they are (module doc: why).
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).
-- `src/storage/workout.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
+- `src/storage/workout_file.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
   whole (name, steps, targets, repeats written out), the calendar from today on. `src/training/workout.rs`: the player, pure
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
-- `src/storage/course.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
+- `src/storage/course_file.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
   memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
   pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
@@ -334,6 +334,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
+- `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
+  zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,

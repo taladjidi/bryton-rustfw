@@ -1423,7 +1423,7 @@ pub(crate) mod tests {
         }
         gpx.push_str("</trkseg></trk></gpx>");
         let mut c = Course::new();
-        let mut g = crate::storage::course::Gpx::new();
+        let mut g = crate::storage::course_file::Gpx::new();
         g.push_slice(gpx.as_bytes(), &mut |it| c.take(it));
         c.finish();
         check(&turns(&c), &[(1504, Turn::Right)], 3);

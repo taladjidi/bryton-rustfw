@@ -26,12 +26,12 @@
 //!   record 0 position_lat and 1 position_long (sint32 semicircles, 2^31 per 180 degrees; invalid 0x7fffffff),
 //!   2 altitude (uint16) and 78 enhanced_altitude (uint32), both (m + 500) x 5 (the same profile); when both are
 //!   there, 78, the wider one, is taken.
-//! - **Bryton's routes** (`\PlanTrip\*.fit`, see storage/course.rs): with the position, message 249 (a route point)
+//! - **Bryton's routes** (`\PlanTrip\*.fit`, see storage/course_file.rs): with the position, message 249 (a route point)
 //!   is read as a `record`: 1 latitude and 2 longitude (sint32, degrees x 1e6, inferred), 3 altitude (uint16,
 //!   (m + 500) x 5 as FIT's, inferred).
 //!
 //! - message 32 `course_point`, with the position only: 2 position_lat, 3 position_long (sint32 semicircles), 4 distance (uint32,
-//!   1/100 m), 5 type (enum `course_point`) (the same profile; storage/course.rs reads them as cues).
+//!   1/100 m), 5 type (enum `course_point`) (the same profile; storage/course_file.rs reads them as cues).
 //!
 //! - **The full copy's `Alpha1`** (fit.rs, "developer fields"), only from a reader [`Reader::with_alpha1`]: a
 //!   record's developer field number 0 of developer data index 0, 4 bytes, read as a float32 (invalid all ones).

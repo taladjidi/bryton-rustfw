@@ -653,7 +653,7 @@ fn grade_and_dfa_colours_avoid_the_banner_and_alarm() {
 /// number when the "%" does not fit.
 #[test]
 fn long_target_and_grade_texts_are_not_cut() {
-    use crate::storage::workout::{Kind, Length, Step, Target, Workout};
+    use crate::storage::workout_file::{Kind, Length, Step, Target, Workout};
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     let power =
@@ -1275,7 +1275,7 @@ fn workout_gauge_field() {
 #[test]
 fn gauge_shows_the_zones() {
     use crate::app::GaugeShown;
-    use crate::storage::workout::Kind;
+    use crate::storage::workout_file::Kind;
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     app.settings.ftp = 200;
@@ -2161,7 +2161,7 @@ fn ride_menu() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     let hold_page = |sim: &mut Sim, app: &mut App| app.press(sim, Press::Long(Key::Page));
     let back = |sim: &mut Sim, app: &mut App, n| (0..n).for_each(|_| app.press(sim, Press::Short(Key::Back)));
     hold_page(&mut sim, &mut app);
@@ -3156,7 +3156,7 @@ fn map_zoom_ends_with_the_ride() {
     // zoomed again, then a course followed: fitted to it
     app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
     assert!(app.map_zoom.is_some());
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.open_courses(&mut sim);
     app.follow_course(hill(&app));
     assert_eq!((app.map_zoom, app.map_centre), (None, None), "a course: the map fitted");
@@ -3172,7 +3172,7 @@ fn map_zoom_with_a_course() {
     sim.gnss.route = Some(course_route);
     sim.classic_pages();
     let mut app = App::start(&mut sim, None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.open_courses(&mut sim);
     app.follow_course(hill(&app));
     for _ in 0..100 {
@@ -3876,7 +3876,7 @@ fn long_reads_spread_over_passes() {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = card.clone();
         let mut app = App::start(&mut sim, None);
-        app.set_course_memory(crate::storage::course::tests::memory());
+        app.set_course_memory(crate::storage::course_file::tests::memory());
         app.press(&mut sim, Press::Long(Key::Page));
         (sim, app)
     };
@@ -4112,7 +4112,7 @@ fn perf_budgets() {
         let mut app = App::start(&mut sim, Some(KEY));
         app.pages[..3].copy_from_slice(&pages);
         if course {
-            app.set_course_memory(crate::storage::course::tests::memory());
+            app.set_course_memory(crate::storage::course_file::tests::memory());
             app.open_courses(&mut sim);
             app.follow_course(hill(&app));
             for _ in 0..100 {
@@ -4220,7 +4220,7 @@ fn course_read_after_leaving_the_list() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -4254,7 +4254,7 @@ fn course_ride() {
     sim.gnss.route = Some(course_route);
     let mut app = App::start(&mut sim, None);
     app.set_map_memory(crate::tiles::tests::memory());
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, ClimbPace] }.into();
     app.pages[1] = PageCfg { layout: 3, fields: [Profile, Climb, ClimbGain, Time, Time, Time] }.into();
     // the map whole, set by hand (not the default page, which shows the course's fields while one is followed)
@@ -4577,7 +4577,7 @@ fn course_cues_ride() {
     sim.emmc.image = crate::fat::tests::image();
     sim.gnss.route = Some(zigzag_route);
     let mut app = App::start(&mut sim, None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.open_courses(&mut sim);
     run(&mut sim, &mut app, 1000);
     let list = &app.courses.as_deref().unwrap().list;
@@ -4702,7 +4702,7 @@ fn course_page_before_a_fix() {
     [sim.backup[17], sim.backup[18]] = aid.to_words();
     sim.gnss.route = Some(course_route);
     let mut app = App::start(&mut sim, None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -4775,7 +4775,7 @@ fn course_cues_over_any_screen() {
     sim.emmc.image = crate::fat::tests::image();
     sim.gnss.route = Some(zigzag_route);
     let mut app = App::start(&mut sim, None);
-    app.set_course_memory(crate::storage::course::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
     app.open_courses(&mut sim);
     run(&mut sim, &mut app, 1000);
     let list = &app.courses.as_deref().unwrap().list;

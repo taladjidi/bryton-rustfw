@@ -1,5 +1,5 @@
-//! A course to follow: its points (from a file, storage/course.rs), where the rider is on it, and its climbs. Pure
-//! logic, no heap; the big arrays live in one static block that main.rs hands over ([`crate::storage::course`]'s
+//! A course to follow: its points (from a file, storage/course_file.rs), where the rider is on it, and its climbs. Pure
+//! logic, no heap; the big arrays live in one static block that main.rs hands over ([`crate::storage::course_file`]'s
 //! `Courses`, in AXI SRAM: about 70 KB, too big for the app).
 //!
 //! - **Points:** at most [`POINTS`], one every `step` metres along the way; when full, every other point goes and the
@@ -149,9 +149,9 @@ pub struct Pt {
 ///   writes it, github.com/garmin/fit-csharp-sdk `Cookbook/CourseEncode`), what the planning app showed. It is
 ///   taken when it is within [`AGREE_PER_MILLE`] of the summed points: the sum here is on a flat local plane and
 ///   misses the corners the thinning cuts, so the app's figure is the better one; farther apart, the file's figure
-///   is not about these points (a truncated read past [`crate::storage::course::MAX_BYTES`], a distance from
+///   is not about these points (a truncated read past [`crate::storage::course_file::MAX_BYTES`], a distance from
 ///   another start, a broken field), and the sum, which is what the rider is placed on, stays. Bryton's routes
-///   state a length too (message 254, storage/course.rs) within 0.25 % of the sum: not read, it would change
+///   state a length too (message 254, storage/course_file.rs) within 0.25 % of the sum: not read, it would change
 ///   nothing. GPX 1.1 states none (its schema has no length; extensions differ per app).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Odometer {

@@ -60,7 +60,7 @@ pub enum Menu {
     Workouts,
     /// The steps of the workout opened from [`Menu::Workouts`].
     Steps,
-    /// The course files on the card ([`storage::course`]).
+    /// The course files on the card ([`storage::course_file`]).
     Courses,
     /// The phone link ([`menu::PHONE`]).
     Phone,

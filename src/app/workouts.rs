@@ -8,9 +8,9 @@ use crate::*;
 pub(crate) const CALENDAR_MS: u32 = 8_000;
 
 /// No step: what a workout field shows past the last one.
-pub(crate) const OPEN: storage::workout::Step = storage::workout::Step {
-    len: storage::workout::Length::Open,
-    target: storage::workout::Target::OPEN,
+pub(crate) const OPEN: storage::workout_file::Step = storage::workout_file::Step {
+    len: storage::workout_file::Length::Open,
+    target: storage::workout_file::Target::OPEN,
     intensity: 0,
 };
 
@@ -19,7 +19,7 @@ pub(crate) const OPEN: storage::workout::Step = storage::workout::Step {
 /// column, which are redrawn alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GaugeShown {
-    pub(crate) kind: storage::workout::Kind,
+    pub(crate) kind: storage::workout_file::Kind,
     pub(crate) avg: usize,
     pub(crate) band: Option<(u16, u16)>,
     pub(crate) step: bool,
@@ -54,7 +54,7 @@ impl GaugeShown {
 
 impl App {
     // -----------------------------------------------------------------------------------------------------------
-    // Planned workouts (storage/workout.rs) and the player (workout.rs)
+    // Planned workouts (storage/workout_file.rs) and the player (workout.rs)
     // -----------------------------------------------------------------------------------------------------------
 
     /// The buzzer for a step start and for the countdown's beeps: (Hz, ms). Beep, beep, beeeep: 500 ms at 2 and 1 s
@@ -68,7 +68,7 @@ impl App {
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
         let vol = &mut emmc::Volume(&mut self.emmc, b);
         let zones = (self.settings.ftp, self.settings.max_hr);
-        self.calendar = storage::workout::calendar(vol, self.date, zones).unwrap_or_default();
+        self.calendar = storage::workout_file::calendar(vol, self.date, zones).unwrap_or_default();
         (self.calendar_day, self.calendar_zones) = (Some(self.date), zones);
     }
 
@@ -84,7 +84,7 @@ impl App {
     }
 
     /// Today's planned workout, if any.
-    pub(crate) fn today(&self) -> Option<&storage::workout::Planned> {
+    pub(crate) fn today(&self) -> Option<&storage::workout_file::Planned> {
         self.calendar.iter().find(|p| p.day == self.date)
     }
 
@@ -120,7 +120,8 @@ impl App {
         }
         if !running {
             let vol = &mut emmc::Volume(&mut self.emmc, b);
-            let Some(w) = fat::Fat::mount(vol).ok().and_then(|mut fat| storage::workout::load(&mut fat, vol, &p.file))
+            let Some(w) =
+                fat::Fat::mount(vol).ok().and_then(|mut fat| storage::workout_file::load(&mut fat, vol, &p.file))
             else {
                 return self.say("UNREADABLE");
             };
@@ -182,7 +183,7 @@ impl App {
                 l.push_str(" ");
                 if let Some(s) = steps.get(i) {
                     self.push_target(&mut l, s, true);
-                    if s.len == storage::workout::Length::Open {
+                    if s.len == storage::workout_file::Length::Open {
                         l.push_str(" LAP");
                     }
                 }
@@ -193,8 +194,8 @@ impl App {
     }
 
     /// Step `s`'s target: "210-230", with its unit if `unit` ("W", "BPM", "RPM"); "OPEN" for none.
-    pub(crate) fn push_target<const N: usize>(&self, l: &mut Line<N>, s: &storage::workout::Step, unit: bool) {
-        use storage::workout::Kind;
+    pub(crate) fn push_target<const N: usize>(&self, l: &mut Line<N>, s: &storage::workout_file::Step, unit: bool) {
+        use storage::workout_file::Kind;
         let Some((lo, hi)) = s.target.range(self.settings.ftp, self.settings.max_hr) else {
             return l.push_str("OPEN");
         };
@@ -215,7 +216,7 @@ impl App {
     /// A target as a field shows it: the middle big and the half-width as a small tail ("210|+-10" for 200-220), so the
     /// value keeps the box's scale (a "200-220" dropped to 2x, the smallest text on the page); one number alone ("150"),
     /// or OPEN, as [`App::push_target`].
-    fn push_target_field(&self, l: &mut Line<8>, s: &storage::workout::Step) {
+    fn push_target_field(&self, l: &mut Line<8>, s: &storage::workout_file::Step) {
         match s.target.range(self.settings.ftp, self.settings.max_hr) {
             Some((lo, hi)) if hi > lo => {
                 let (lo, hi) = (u32::from(lo), u32::from(hi));
@@ -231,8 +232,8 @@ impl App {
 
     /// The next step as [`Field::NextStep`] shows it: the middle of its target big, its length as a small tail ("150|0:30",
     /// "210|10M", "150|2.5K", "OPEN|LAP"), in 8 characters.
-    fn push_next(&self, l: &mut Line<8>, s: &storage::workout::Step) {
-        use storage::workout::Length;
+    fn push_next(&self, l: &mut Line<8>, s: &storage::workout_file::Step) {
+        use storage::workout_file::Length;
         let mut head = Line::<8>::new();
         match s.target.range(self.settings.ftp, self.settings.max_hr) {
             Some((lo, hi)) => head.push_u32(u32::from(lo).midpoint(u32::from(hi))),
@@ -266,8 +267,8 @@ impl App {
 
     /// A step's menu row: what ends it as the label ("10:00", "2.50 KM", "LAP"), its target as the value, in the
     /// zone colour of the target's middle; the colour.
-    pub(crate) fn step_row(&self, s: &storage::workout::Step, label: &mut Line<16>, value: &mut Line<12>) -> u16 {
-        use storage::workout::Length;
+    pub(crate) fn step_row(&self, s: &storage::workout_file::Step, label: &mut Line<16>, value: &mut Line<12>) -> u16 {
+        use storage::workout_file::Length;
         match s.len {
             Length::Time(t) => push_clock(label, t),
             Length::Distance(m) => {
@@ -321,7 +322,7 @@ impl App {
     /// [`Field::StepTarget`]'s edge bar: how the reading (power over the GAUGE POWER window, heart rate, cadence) sits against the band, as the
     /// gauge's marker ([`workout::gauge_color`]); BLACK without a reading or a target.
     pub(crate) fn target_bar(&self) -> u16 {
-        use storage::workout::Kind;
+        use storage::workout_file::Kind;
         let steps = self.plan.steps();
         let Some(s) = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
         let reading = match s.target.kind {
@@ -342,7 +343,7 @@ impl App {
     /// set in the menu, heart rate, cadence), coloured by how far it is from the band ([`workout::gauge_color`]); with
     /// no band (no workout, an open step) the power in its zone's colour.
     pub(crate) fn gauge_now(&self, cols: u32) -> GaugeShown {
-        use storage::workout::Kind;
+        use storage::workout_file::Kind;
         let steps = self.plan.steps();
         let step = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i));
         let (kind, band) = workout::gauge_target(step, self.settings.ftp, self.settings.max_hr);
@@ -372,7 +373,7 @@ impl App {
     /// A gauge's title, and its tag (the pacer's target in a box too short for the target line). The pacer's: "TOP"
     /// and the time left to the top.
     fn gauge_title(g: &GaugeShown, h: u32) -> (Line<12>, Line<4>) {
-        use storage::workout::Kind;
+        use storage::workout_file::Kind;
         let (mut title, mut tag) = (Line::<12>::new(), Line::<4>::new());
         match g.kind {
             _ if g.pace.is_some() => {

@@ -112,7 +112,7 @@ impl Target {
     /// The range in W, bpm or rpm for this FTP and max heart rate; None for no target.
     ///
     /// ```
-    /// use bryton_rustfw::storage::workout::{Kind, Target};
+    /// use bryton_rustfw::storage::workout_file::{Kind, Target};
     /// let t = Target { kind: Kind::Power, lo: 88, hi: 93, pct: true };
     /// assert_eq!(t.range(250, 190), Some((220, 233)));
     /// assert_eq!(Target::OPEN.range(250, 190), None);
@@ -519,7 +519,7 @@ impl Calendar {
 /// A day folder's date, `YYYYMMDD`.
 ///
 /// ```
-/// use bryton_rustfw::storage::workout::folder_day;
+/// use bryton_rustfw::storage::workout_file::folder_day;
 /// assert_eq!(folder_day(b"20261024"), Some((2026, 10, 24)));
 /// assert_eq!([folder_day(b"2026102"), folder_day(b"20261324"), folder_day(b"2026102x")], [None; 3]);
 /// ```

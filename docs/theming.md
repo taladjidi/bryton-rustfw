@@ -113,7 +113,7 @@ meaning.
 
 Every colour is already a named constant (src/ui/mod.rs `BLACK`, `WHITE`, `ACCENT`, `RUST`, `RED`, `GREEN`, `GREY`,
 `DARK`, `YELLOW`; `map::COURSE`; `ride::ZONE_COLORS`), with one literal (the cog's `0xc618`). Pure logic returns them
-too: `ride::hr_color`, `power::wbal_color`, `workout::gauge_color`, `ui::grade_color`, and storage/workout.rs packs a
+too: `ride::hr_color`, `power::wbal_color`, `workout::gauge_color`, `ui::grade_color`, and storage/workout_file.rs packs a
 profile column's colour as its index in the palette. So a theme can be a colour lookup table, as indexed-colour
 displays do it:
 

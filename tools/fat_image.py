@@ -13,8 +13,8 @@ An empty tile is a 0 count and one 0 byte (stock's Map_WriteEmptyTileCache).
 It also holds a made-up `\Activities` (FIT rides with known power, a stop, compressed timestamps, a bad CRC, a
 cut file, stock's `tmp.fit`, a GNSS log) and `\System\*.ini` in stock's layout, for stock.rs (the values the
 tests expect are worked out next to each ride), a made-up `\Workout\calendar` of planned workouts in stock's
-layout, for storage/workout.rs, and made-up courses (`\PlanTrip` in Bryton's route layout, `\Courses` as a Garmin
-FIT course and as GPX) near 0 N 0 E, for storage/course.rs.
+layout, for storage/workout_file.rs, and made-up courses (`\PlanTrip` in Bryton's route layout, `\Courses` as a Garmin
+FIT course and as GPX) near 0 N 0 E, for storage/course_file.rs.
 
 The 1.1 GB image is mostly zeros, so it is stored sparse: records of u32 LE first sector, u32 LE sector count,
 then the sectors (fat.rs tests expand it).
@@ -216,7 +216,7 @@ def rides(m):
 
 
 def fit_workout(name, steps):
-    """A FIT workout file laid out as Bryton's app writes them (storage/workout.rs): file_id (type 5), workout
+    """A FIT workout file laid out as Bryton's app writes them (storage/workout_file.rs): file_id (type 5), workout
     (16-byte name, step count, sport cycling), then a workout_step per step: (duration type, value, target type,
     target value, custom low, custom high, intensity)."""
     U8, U16, U32, STR = 0x00, 0x84, 0x86, 0x07
@@ -291,7 +291,7 @@ def hill(step=25.0):
 
 
 def bryton_route(pts):
-    """A route as Bryton's app writes \\PlanTrip\\<name>.fit (storage/course.rs): messages 248, 254, 251 per point,
+    """A route as Bryton's app writes \\PlanTrip\\<name>.fit (storage/course_file.rs): messages 248, 254, 251 per point,
     253, 250 (a climb's start and end, types 190 and 191), 252, then 249 per point; degrees x 1e6, altitudes as FIT
     ((m + 500) x 5)."""
     U8, U16, S16, S32, U32, STR = 0x00, 0x84, 0x83, 0x85, 0x86, 0x07
@@ -392,7 +392,7 @@ def zigzag():
 
 
 def courses(m):
-    """Made-up courses (storage/course.rs, sim.rs): stock's \\PlanTrip with a route in Bryton's layout and a file that
+    """Made-up courses (storage/course_file.rs, sim.rs): stock's \\PlanTrip with a route in Bryton's layout and a file that
     is no FIT, and \\Courses (copied over USB) with the same hill as a Garmin FIT course and as GPX; and the zigzag
     as a FIT course with its turns as course points and as a GPX track (its turns found on its shape)."""
     pts = hill()

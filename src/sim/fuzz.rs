@@ -449,11 +449,11 @@ fn full_copies() {
     assert!(alpha > 100_000, "{alpha} records with alpha1");
 }
 
-/// Workout files (storage/workout.rs): a good file with bytes changed, and random messages, each behind a good
+/// Workout files (storage/workout_file.rs): a good file with bytes changed, and random messages, each behind a good
 /// header and with its CRC made right, so the decoder (not the CRC check) gets them.
 #[test]
 fn workout_files() {
-    use crate::storage::workout::{STEPS, parse, tests::intervals};
+    use crate::storage::workout_file::{STEPS, parse, tests::intervals};
     let crc = |f: &mut Vec<u8>| {
         let n = f.len() - 2;
         let c = crate::fit::crc(0, &f[..n]);
@@ -493,7 +493,7 @@ fn workout_files() {
     }
 }
 
-/// Course files (storage/course.rs into course.rs): the synthetic card's hill as Bryton's route, a Garmin course
+/// Course files (storage/course_file.rs into course.rs): the synthetic card's hill as Bryton's route, a Garmin course
 /// and GPX, the zigzag as a FIT course with course points and as GPX, with bytes changed (the FIT ones with their
 /// CRC made right, so the reader gets past it), and random text of GPX's own marks, cue elements and turn words
 /// among them; each read into a course (its cues placed, or its turns found), which is then followed from random
@@ -504,7 +504,7 @@ fn workout_files() {
 fn course_files() {
     use crate::course::{Course, Event, Item, Tracker, Turn};
     use crate::fitread::{Msg, Reader};
-    use crate::storage::course::Gpx;
+    use crate::storage::course_file::Gpx;
     let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
     let paths =
@@ -1226,7 +1226,7 @@ fn menu_tree_by_chance() {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
-        app.set_course_memory(crate::storage::course::tests::memory());
+        app.set_course_memory(crate::storage::course_file::tests::memory());
         let mut x = seed.wrapping_mul(2_654_435_761) | 1;
         let mut next = move || {
             x ^= x << 13;

@@ -1,10 +1,10 @@
-//! The workout player: which step of a planned workout ([`crate::storage::workout`]) is running and how much of
+//! The workout player: which step of a planned workout ([`crate::storage::workout_file`]) is running and how much of
 //! it is left. Pure logic, fed one second at a time: the step's clock moves only when the ride's timer moved (a
 //! pause or an auto-pause stops both), a distance step ends on the ride's distance, an open step on Lap
 //! ([`Player::skip`]). Each change comes out as an [`Event`] for the app to show and sound: a step started, the
 //! last 2 seconds of a timed step (beep, beep, then the step's longer beep: the owner's choice), the workout done.
 
-use crate::storage::workout::{Kind, Length, Step};
+use crate::storage::workout_file::{Kind, Length, Step};
 use crate::{ride, ui};
 
 /// Seconds before a timed step ends that each beep (2, 1), then the next step's longer beep.
@@ -150,7 +150,7 @@ pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
 /// `cols` once the workout is done.
 ///
 /// ```
-/// use bryton_rustfw::storage::workout::{Kind, Length, Step, Target};
+/// use bryton_rustfw::storage::workout_file::{Kind, Length, Step, Target};
 /// use bryton_rustfw::{ride, ui, workout::column};
 /// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true };
 /// let steps = [50, 160].map(|pct| Step { len: Length::Time(60), target: target(pct), intensity: 0 });
@@ -197,7 +197,7 @@ pub fn gauge_target(s: Option<&Step>, ftp: u16, max_hr: u16) -> (Kind, Option<(u
 /// under `lo` to 30 % over `hi`. Fixed for a step: the zones never slide.
 ///
 /// ```
-/// use bryton_rustfw::{storage::workout::Kind, workout::gauge_scale};
+/// use bryton_rustfw::{storage::workout_file::Kind, workout::gauge_scale};
 /// assert_eq!(gauge_scale(Kind::Power, (200, 220), 250, 190), (100, 412));
 /// assert_eq!(gauge_scale(Kind::Power, (400, 420), 250, 190), (100, 462), "widened for a band off the zones");
 /// assert_eq!(gauge_scale(Kind::Hr, (150, 160), 250, 190), (95, 190));
@@ -232,7 +232,7 @@ pub fn gauge_x(v: u16, (a, b): (u32, u32), cols: u32) -> u32 {
 /// column is in the zone the reading is in), cadence one grey. Fixed for a step: the scale does not slide.
 ///
 /// ```
-/// use bryton_rustfw::{ride::ZONE_COLORS as Z, storage::workout::Kind, workout::gauge_zones};
+/// use bryton_rustfw::{ride::ZONE_COLORS as Z, storage::workout_file::Kind, workout::gauge_zones};
 /// // 200-220 W, FTP 200: the scale is 80 to 330 W on 250 columns, a watt a column
 /// let z = gauge_zones(Kind::Power, (200, 220), 250, 200, 190);
 /// assert_eq!(z[1], (32, Z[1]), "zone 2 from 112 W");
@@ -293,7 +293,7 @@ pub fn gauge_color(v: u16, (lo, hi): (u16, u16)) -> u16 {
 mod tests {
     extern crate std;
     use super::*;
-    use crate::storage::workout::Target;
+    use crate::storage::workout_file::Target;
     use std::vec::Vec;
 
     fn st(len: Length) -> Step {

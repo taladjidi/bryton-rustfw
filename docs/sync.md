@@ -67,7 +67,7 @@ that writes developer fields, and a 3-hour save would read about 390 KB and writ
   "duplicate of activity N", which is then remembered as done.
 - Workouts: each Intervals.icu event of category `WORKOUT` from today to N days on is fetched as FIT
   (`/events/{id}/download.fit`) and written to `\Workout\calendar\YYYYMMDD\icu<id>.fit`, where stock's app puts
-  them and the WORKOUTS menu lists them (src/storage/workout.rs). A file over 8 KB is skipped, since the unit does
+  them and the WORKOUTS menu lists them (src/storage/workout_file.rs). A file over 8 KB is skipped, since the unit does
   not show those. Workouts are written only on a mounted volume, because the dev link is read only. Each is written
   to a `.tmp` beside it, flushed to the drive itself (`F_FULLFSYNC`), renamed, then read back; one deleted on the
   unit is written again at the next run. Workouts deleted or moved on Intervals.icu are not removed from the unit.

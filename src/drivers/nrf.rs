@@ -3,7 +3,7 @@
 //!
 //! Framing: a 2-byte little-endian length, then the payload `[type][op][arguments]`. A response is
 //! `[RESP][op][result u32][outputs]`. There is no marker to resync on: a lost or stray byte leaves the length framing
-//! out of step. [`Rx`] counts the signs of that (`strikes`, `timeouts`); `app/link.rs` watches them, drains and
+//! out of step. [`Rx`] counts the signs of that (`strikes`, `timeouts`); `app/nrf_watch.rs` watches them, drains and
 //! retries, and failing that resets the chip and starts it again.
 
 use crate::Board;
@@ -65,7 +65,7 @@ pub struct Rx {
     /// The last command that failed: its op and the error (`u32::MAX`: no answer). For the unit's first runs: the
     /// PHONE menu shows it when the link could not be set up.
     pub failed: Option<(u8, u32)>,
-    /// A good frame (a type the chip sends) arrived since this was last taken (`app/link.rs`).
+    /// A good frame (a type the chip sends) arrived since this was last taken (`app/nrf_watch.rs`).
     pub heard: bool,
     /// Garbage in a row since the last good frame: a length header past [`GARBAGE`], a frame of a type the chip
     /// never sends. Two in a row mean the framing is out of step.
