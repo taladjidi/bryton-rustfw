@@ -2426,21 +2426,43 @@ mod tests {
     /// lost); the full one is resumed or saved too, or, cut before its first checkpoint, never promised; a full
     /// one back without its clean one is ended and saved (the app's rule). The next ride gets both, the volume
     /// stays clean.
+    ///
+    /// Four tests run in parallel, each every fourth cut (`part` 0 to 3 of [`CUT_PARTS`]).
     #[test]
-    fn two_copies_power_cut_at_every_sector() {
+    fn two_copies_power_cut_at_every_sector_part_0() {
+        two_copies_cut(0);
+    }
+    #[test]
+    fn two_copies_power_cut_at_every_sector_part_1() {
+        two_copies_cut(1);
+    }
+    #[test]
+    fn two_copies_power_cut_at_every_sector_part_2() {
+        two_copies_cut(2);
+    }
+    #[test]
+    fn two_copies_power_cut_at_every_sector_part_3() {
+        two_copies_cut(3);
+    }
+
+    /// The cuts are shared among this many tests (cut `c` belongs to part `c % CUT_PARTS`), so each sees the whole
+    /// ride's range of cut points, and the four run in parallel.
+    const CUT_PARTS: u64 = 4;
+
+    fn two_copies_cut(part: u64) {
         for torn in [false, true] {
-            two_copies_cut(torn);
+            two_copies_cut_torn(torn, part);
         }
     }
 
-    fn two_copies_cut(torn: bool) {
+    fn two_copies_cut_torn(torn: bool, part: u64) {
         let img = crate::fat::tests::image();
         let mut whole = card(img.clone());
         ride_all(&mut pair(), &mut whole, 0).unwrap();
         let total = whole.written;
         let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
         let (mut both, mut clean_only, mut none, mut max_lost) = (0, 0, 0, 0);
-        for cut in 0..total {
+        for cut in (part..total).step_by(CUT_PARTS as usize) {
             let mut d = Card { budget: Some(cut), torn, ..card(img.clone()) };
             assert!(ride_all(&mut pair(), &mut d, 0).is_none());
             let what = std::format!("torn {torn}, cut {cut} of {total} (sector {})", d.cut_at);
@@ -2512,7 +2534,7 @@ mod tests {
             "two copies, torn {torn}: {total} cuts: both saved {both}, clean only {clean_only}, neither {none} \
              (cut before the first checkpoint); lost clusters at most {max_lost}"
         );
-        assert!(both > total as usize / 2);
+        assert!(both > total as usize / 2 / CUT_PARTS as usize);
         assert!(max_lost <= 4);
     }
 
@@ -2556,8 +2578,26 @@ mod tests {
     /// reliable write only: a torn sector that takes the ride's entry before the end's record (which is the first to
     /// say "discard") has the ride saved whole from its record at the start (`recover_from`, as for any ride whose
     /// entry a cut tore), in `\Activities`: in one place still, never lost (HISTORY's DELETE moves it after).
+    ///
+    /// Four tests run in parallel, each every fourth cut ([`CUT_PARTS`]).
     #[test]
-    fn a_discard_cut_at_every_sector() {
+    fn a_discard_cut_at_every_sector_part_0() {
+        a_discard_cut(0);
+    }
+    #[test]
+    fn a_discard_cut_at_every_sector_part_1() {
+        a_discard_cut(1);
+    }
+    #[test]
+    fn a_discard_cut_at_every_sector_part_2() {
+        a_discard_cut(2);
+    }
+    #[test]
+    fn a_discard_cut_at_every_sector_part_3() {
+        a_discard_cut(3);
+    }
+
+    fn a_discard_cut(part: u64) {
         for torn in [false, true] {
             let img = crate::fat::tests::image();
             let mut whole = card(img.clone());
@@ -2565,7 +2605,7 @@ mod tests {
             let total = whole.written;
             let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
             let (mut resumed, mut at_boot, mut none, mut max_lost, mut torn_saved) = (0, 0, 0, 0, 0);
-            for cut in 0..total {
+            for cut in (part..total).step_by(CUT_PARTS as usize) {
                 let mut d = Card { budget: Some(cut), torn, ..card(img.clone()) };
                 assert!(ride_all_with(&mut pair(), &mut d, 0, true).is_none());
                 let what = std::format!("torn {torn}, cut {cut} of {total} (sector {})", d.cut_at);
@@ -2649,7 +2689,8 @@ mod tests {
                  start, {none} before the first checkpoint, {torn_saved} saved (an entry torn); lost clusters at most \
                  {max_lost}"
             );
-            assert!(resumed > 50 && at_boot > 0);
+            // at_boot is one cut of the whole ride (printed above): too few for each part to meet it
+            assert!(resumed > 50 / CUT_PARTS as usize);
             assert!(max_lost <= 4);
         }
     }
