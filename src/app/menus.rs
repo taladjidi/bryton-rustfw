@@ -13,13 +13,15 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// The menus (the tree: docs/features.md, "Menus").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Menu {
-    /// The main menu ([`menu::MAIN`]): workouts, courses, (the trainer, when one is paired,) history, pages, sensors,
-    /// settings.
+    /// The main menu ([`menu::MAIN`]): workouts, courses, history, pages, sensors, settings: six rows, one screen.
     Main,
-    /// One row per sensor kind, then the Di2 buttons and the phone.
+    /// CALIBRATE POWER and TRAINER CONTROL first (when they apply), one row per sensor kind, BT TRAINER, the Di2
+    /// buttons and the phone.
     Sensors,
-    /// The overview, the ride pages, ADD PAGE.
+    /// The two sets of ride pages: ROAD PAGES and INDOOR PAGES, each opening its list ([`Menu::PageList`]).
     Pages,
+    /// The overview, the ride pages and ADD PAGE of one set (`true`: the indoor one).
+    PageList(bool),
     /// One menu per subject ([`menu::SETTINGS`]).
     Settings,
     /// The rider's numbers ([`menu::ME`]).
@@ -32,6 +34,9 @@ pub enum Menu {
     System,
     /// The built-in sensors' readings ([`menu::BUILT_IN`]).
     BuiltIn,
+    /// The quick panel: a swipe down on the overview opens the pre-ride actions (power meter calibration, the
+    /// trainer, the profile, the brightness, the USB drive, the notifications) from existing rows.
+    Quick,
     /// The ride menu, Page held while a ride records or is paused, over ride page `n` ([`OVERVIEW`] from the
     /// overview): RESUME or PAUSE, END RIDE, WORKOUT and COURSE while one runs, BRIGHTNESS, SENSORS, EDIT THIS PAGE,
     /// ALL SETTINGS (the main menu). Rows that do not apply are not shown.
@@ -78,12 +83,15 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Main => "MENU",
         Menu::Sensors => "SENSORS",
         Menu::Pages => "PAGES",
+        Menu::PageList(false) => "ROAD PAGES",
+        Menu::PageList(true) => "INDOOR PAGES",
         Menu::Settings => "SETTINGS",
         Menu::Me => "ME",
         Menu::Display => "DISPLAY",
         Menu::Bike => "BIKE",
         Menu::System => "SYSTEM",
         Menu::BuiltIn => "BUILT IN",
+        Menu::Quick => "QUICK",
         Menu::Ride(_) => "RIDE",
         Menu::WorkoutNow => "WORKOUT",
         Menu::CourseNow => "COURSE",
@@ -115,15 +123,17 @@ impl App {
     pub(crate) fn row(&self, menu: Menu, i: usize) -> Option<menu::Row> {
         use menu::Row;
         match menu {
-            // while a trainer is paired, TRAINER CONTROL after WORKOUTS and COURSES (what to ride)
-            Menu::Main if self.trainer_on() && i == 2 => Some(Row::Ride(menu::RideRow::Trainer)),
-            Menu::Main => menu::MAIN.get(i - usize::from(self.trainer_on() && i > 2)).copied(),
-            Menu::Pages => match i {
-                0 => Some(Row::Ride(menu::RideRow::PageSet)),
-                1 => Some(Row::Open(Menu::Page(OVERVIEW))),
-                _ if i <= self.view_count() + 1 => Some(Row::Open(Menu::Page(i - 2))),
-                _ => (i == self.view_count() + 2).then_some(Row::AddPage),
+            Menu::Main => menu::MAIN.get(i).copied(),
+            Menu::Pages => [Row::Open(Menu::PageList(false)), Row::Open(Menu::PageList(true))].get(i).copied(),
+            Menu::PageList(_) => match i {
+                0 => Some(Row::Open(Menu::Page(OVERVIEW))),
+                _ if i <= self.view_count() => Some(Row::Open(Menu::Page(i - 1))),
+                _ => (i == self.view_count() + 1).then_some(Row::AddPage),
             },
+            // DROP CHANGES last, once there is something to drop
+            Menu::Edit(_) if i == menu::EDIT_ROWS.len() => {
+                self.edit.is_some_and(|e| e.work != e.orig).then_some(Row::Edit(menu::EditRow::Drop))
+            }
             Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
             Menu::Me => menu::ME.get(i).copied(),
@@ -133,6 +143,17 @@ impl App {
             Menu::System if self.save_stuck_any() && i == 0 => Some(Row::GiveUpSave),
             Menu::System => menu::SYSTEM.get(i - usize::from(self.save_stuck_any())).copied(),
             Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
+            Menu::Quick => {
+                let rows = [
+                    (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
+                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
+                    (Row::Set(menu::Setting::BikeProfile), true),
+                    (Row::Set(menu::Setting::Light), true),
+                    (Row::Drive, self.ride.state() == ride::State::Idle && self.ride_settled()),
+                    (Row::Open(Menu::Notifs), true),
+                ];
+                rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
+            }
             Menu::Ride(n) => {
                 use menu::RideRow;
                 let rows = [
@@ -154,16 +175,22 @@ impl App {
             Menu::CourseNow => menu::COURSE_NOW.get(i).copied(),
             Menu::Fields(..) => (i < ui::FIELD_GROUPS.len()).then_some(Row::Group(i)),
             Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g)?.1.get(i).map(|&f| Row::Pick(f)),
-            Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
+            // the actions first (the rider comes here to calibrate or to control the trainer), then the sensors
             Menu::Sensors => {
-                let rows = [
-                    (Row::BtTrainer, true),
-                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
+                let top = [
                     (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
-                    (Row::Open(Menu::Remote), true),
-                    (Row::Open(Menu::Phone), true),
+                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
                 ];
-                rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i - Kind::ALL.len())
+                let top = top.into_iter().filter(|r| r.1).map(|r| r.0);
+                let n = top.clone().count();
+                let (j, kinds) = (i.checked_sub(n), Kind::ALL.len());
+                match j {
+                    None => top.clone().nth(i),
+                    Some(j) if j < kinds => Some(Row::Sensor(j)),
+                    Some(j) => {
+                        [Row::BtTrainer, Row::Open(Menu::Remote), Row::Open(Menu::Phone)].get(j - kinds).copied()
+                    }
+                }
             }
             Menu::Remote => menu::REMOTE.get(i).copied(),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
@@ -240,13 +267,9 @@ impl App {
                     RideRow::Trainer => "TRAINER CONTROL",
                     RideRow::CalPower => "CALIBRATE POWER",
                     RideRow::Indoor => "INDOOR",
-                    RideRow::PageSet => "PAGES OF",
                 });
                 if r == RideRow::Indoor {
                     value.push_str(if self.indoors() { "ON" } else { "OFF" });
-                }
-                if r == RideRow::PageSet {
-                    value.push_str(if self.view_indoor() { "INDOOR" } else { "ROAD" });
                 }
             }
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
@@ -616,7 +639,16 @@ impl App {
                 self.pages_indoor = self.indoors(); // the set on screen
                 self.edit_page(b, n, 0)
             }
+            // a set's page list: the editor works on that set (while a ride is open, on the ride's own only)
+            Some(Row::Open(Menu::PageList(indoor)))
+                if self.ride.state() != ride::State::Idle && indoor != self.indoors() =>
+            {
+                self.say("THE RIDE'S SET")
+            }
             Some(Row::Open(m)) => {
+                if let Menu::PageList(indoor) = m {
+                    self.pages_indoor = indoor;
+                }
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
                 }
@@ -638,7 +670,7 @@ impl App {
                             self.recorder(ev);
                         }
                         if self.ride.state() == ride::State::Paused {
-                            self.open(Screen::End(0));
+                            self.open(Screen::End(ui::END_SAVE));
                         }
                     }
                     RideRow::NextStep => {
@@ -661,8 +693,6 @@ impl App {
                     RideRow::Trainer => self.open(Screen::Trainer),
                     RideRow::CalPower => self.open_powercal(),
                     RideRow::Indoor => self.toggle_indoor(),
-                    RideRow::PageSet if self.ride.state() != ride::State::Idle => self.say("THE RIDE'S SET"),
-                    RideRow::PageSet => self.pages_indoor = !self.pages_indoor,
                 }
             }
             Some(Row::Past(n)) => {

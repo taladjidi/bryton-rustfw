@@ -236,16 +236,13 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_consistent(&sim, &app);
 
     let row3 = ui::LIST_Y as u16 + 3 * ui::MENU_ROW as u16 + 5; // PAGES
-    let taps = |ms: u64| (5000..5100).contains(&ms) || (5600..5700).contains(&ms);
+    let taps = |ms: u64| (5000..5100).contains(&ms);
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row3)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     let left_ms = 5500 - sim.ms;
     run(&mut sim, &mut app, left_ms);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 3), "the first tap selects row 3");
-    assert_consistent(&sim, &app);
-    run(&mut sim, &mut app, 500);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "a second tap on it acts: PAGES");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "one tap acts: PAGES");
     assert_consistent(&sim, &app);
 }
 
@@ -331,7 +328,7 @@ fn a_tap_at_the_bottom_stays_on_the_screen() {
     }
 }
 
-/// Touch in a menu: a tap on MAX HR selects it, a second one edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
+/// Touch in a menu: a tap on MAX HR edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
 #[test]
 fn touch_edits_a_number_and_goes_back() {
     let row = |r: u16| ui::LIST_Y as u16 + r * ui::MENU_ROW as u16 + 5;
@@ -345,8 +342,7 @@ fn touch_edits_a_number_and_goes_back() {
     };
     let (a, b, c, d) =
         (tap(5000, max_hr), drag(6000, (120, 250), (0, -100)), tap(7000, max_hr), drag(8000, (40, 160), (120, 0)));
-    let first = tap(4500, max_hr); // a tap selects the row the menu opened on; the next one acts
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| first(ms).or(a(ms)).or(b(ms)).or(c(ms)).or(d(ms)));
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)).or(c(ms)).or(d(ms)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr)); // in RIDER
@@ -828,7 +824,7 @@ fn ride_history() {
 }
 
 /// DELETE in the history (trash.rs) over the synthetic volume with a full copy of the 20 Oct ride: on a ride's card,
-/// Start asks (any other key drops it), Start again moves the ride into `\Rustfw\Deleted` and its full copy into
+/// Start held asks (any other key drops it; Start alone dismisses the card, as on the ride summary), Start moves the ride into `\Rustfw\Deleted` and its full copy into
 /// `\Rustfw\Deleted\Full`; the list, the totals and the power curve lose it at once (no ride read again), the list
 /// keeps its place, the scan's cache is written without it, the volume stays whole. A name taken in
 /// `\Rustfw\Deleted` gets a suffix. Refused during a ride and with a ride waiting to be resumed or saved.
@@ -878,14 +874,20 @@ fn delete_rides() {
         }
         assert_eq!(app.screen(), Screen::Past);
     };
-    // the 20 Oct ride (row 2): asked, dropped by another key, asked again, deleted
+    // the 20 Oct ride (row 2): Start dismisses; asked (Start held), dropped by another key, asked again, deleted
     open_card(&mut sim, &mut app, 2);
     app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "Start dismisses the card");
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "and deletes nothing");
+    open_card(&mut sim, &mut app, 2);
+    app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
     assert_eq!(app.confirm, Some(PAST_DELETE));
     app.press(&mut sim, Press::Short(Key::Lap));
-    app.press(&mut sim, Press::Short(Key::Start));
-    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped the first");
+    app.press(&mut sim, Press::Short(Key::Back)); // the banner, then (nothing asked) the list
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped it");
+    open_card(&mut sim, &mut app, 2);
+    app.press(&mut sim, Press::Long(Key::Start));
     let (clean, full) = (
         file(&sim.emmc.image, "Activities/261020080000.fit").unwrap(),
         file(&sim.emmc.image, "Rustfw/Activities/261020080000.fit").unwrap(),
@@ -917,10 +919,16 @@ fn delete_rides() {
     assert_eq!(size(&sim.emmc.image, "Rustfw/scan.bin"), Ok(64 + 64 * u32::from(all.rides + app.stock.out.skipped)));
     assert_consistent(&sim, &app);
 
-    // the 22 Oct ride: its name taken in \Rustfw\Deleted, a suffix
+    // the 22 Oct ride: its name taken in \Rustfw\Deleted, a suffix; this time by a tap on DELETE, then a tap on it
     open_card(&mut sim, &mut app, 1);
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    let (dx, dy, dw, dh) = ui::card::DELETE_TAP;
+    let tap_delete = |sim: &mut Sim, app: &mut App| {
+        app.input(sim, Input::Touch(Gesture::Tap((dx + dw / 2) as u16, (dy + dh / 2) as u16)))
+    };
+    tap_delete(&mut sim, &mut app);
+    assert_eq!((app.screen(), app.confirm), (Screen::Past, Some(PAST_DELETE)), "a tap asks");
+    sim.save("past_delete_asks");
+    tap_delete(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000-1.fit").is_some_and(|f| !f.is_empty()));
     assert_eq!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000.fit"), Some(Vec::new()), "the other kept");
@@ -930,14 +938,12 @@ fn delete_rides() {
     open_card(&mut sim, &mut app, 1);
     let ev = app.ride.start_pause();
     app.recorder(ev);
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.banner.as_str(), "NOT DURING A RIDE");
     assert_eq!(app.screen(), Screen::Past);
     app.ride = crate::ride::Ride::default();
     app.resume_pending = true;
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.banner.as_str(), "NOT DURING A RIDE", "a ride waiting");
     assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
@@ -1409,8 +1415,8 @@ fn back_returns_where_it_came_from() {
     delete_page_by_keys(&mut sim, &mut app); // pages 2 and 3 deleted from the editor
     delete_page_by_keys(&mut sim, &mut app);
     assert_eq!(app.page_count(), 1);
-    for _ in 0..3 {
-        back(&mut sim, &mut app); // PAGES, the menu, out
+    for _ in 0..4 {
+        back(&mut sim, &mut app); // the page's menu, ROAD PAGES, PAGES, the menu, out
     }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -1576,7 +1582,7 @@ fn pages_are_configured_from_the_menu() {
         PageCfg { layout: 4, fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time] };
     assert_eq!(app.pages()[0], want.into());
     assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(want));
-    for _ in 0..3 {
+    for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Back));
     }
     app.press(&mut sim, Press::Short(Key::Page));
@@ -1824,7 +1830,7 @@ fn overview_notices_and_fields() {
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // WEEK H
     assert_consistent(&sim, &app);
-    for _ in 0..3 {
+    for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Back));
     }
     assert_eq!(app.screen(), Screen::Main);
@@ -2053,7 +2059,9 @@ fn menu_tree_reaches_everything() {
     wanted.extend((0..app.page_count()).map(|n| Row::Field(n, 0)));
     for &row in &wanted {
         let d = level(row).unwrap_or_else(|| panic!("{row:?} not in the tree"));
-        assert!(d <= 3, "{row:?}: {d} levels down");
+        // a page's own rows are one level deeper since the two sets (item 8): MENU > PAGES > ROAD PAGES > PAGE 1 > ...
+        let page_row = matches!(row, Row::Layout(_) | Row::EditPage(_) | Row::Field(..));
+        assert!(d <= 3 + usize::from(page_row), "{row:?}: {d} levels down");
     }
     assert_eq!(level(Row::Phone(PhoneRow::Forget)), Some(3), "SENSORS > PHONE");
     // the readings (diagnostics, nothing to set): under SYSTEM
@@ -2261,16 +2269,16 @@ fn ride_menu() {
     assert_eq!(labels(&app), base);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::End(0)));
+    assert_eq!((app.ride.state(), app.screen()), (ride::State::Paused, Screen::End(1)));
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
+    app.press(&mut sim, Press::Short(Key::Lap)); // SAVE is selected: RESUME is one up
     app.press(&mut sim, Press::Short(Key::Start)); // RESUME: the page, the ride running again
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Running, Screen::Ride(0)));
     hold_page(&mut sim, &mut app);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::End));
     app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Page));
-    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // SAVE, selected
     assert_eq!((app.ride.state(), app.screen()), (ride::State::Idle, Screen::Summary));
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
@@ -2278,6 +2286,11 @@ fn ride_menu() {
     assert_eq!(app.screen(), Screen::Main, "the card, then the overview");
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no ride: the full menu again");
+}
+
+/// The index of `row` in `menu` as it is now (the sensors menu's actions come first, when they apply).
+pub(super) fn row_in(app: &App, menu: Menu, row: menu::Row) -> usize {
+    (0..app.rows(menu)).find(|&i| app.row(menu, i) == Some(row)).unwrap_or_else(|| panic!("{row:?} in {menu:?}"))
 }
 
 /// The row index of `row` in the menu that holds it (off a ride, from the main menu).

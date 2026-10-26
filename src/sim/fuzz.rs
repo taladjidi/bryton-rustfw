@@ -1260,8 +1260,7 @@ fn menu_tree_by_chance() {
             if matches!(app.screen(), Screen::End(_)) && b % 4 != 0 {
                 // SAVE most times, as Start held (or END RIDE, asked) did before the end-ride screen: a ride ended
                 // now and then leaves the walk the menus off a ride (the end-ride screen: end_ride_screen_by_chance)
-                app.input(&mut sim, Input::Next);
-                app.input(&mut sim, Input::Select);
+                app.input(&mut sim, Input::Select); // SAVE is selected when the screen opens
             }
             if stored(&sim) != before {
                 let act = matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
@@ -1308,6 +1307,7 @@ fn menu_tree_by_chance() {
         "Remote",
         "Phone",
         "Pages",
+        "PageList",
         "Page",
         "Fields",
         "Group",
@@ -1316,6 +1316,7 @@ fn menu_tree_by_chance() {
         "Workouts",
         "Steps",
         "Courses",
+        "Quick",
         "Ride",
         "WorkoutNow",
         "CourseNow",
@@ -1369,10 +1370,18 @@ fn history_by_chance() {
                 app.show(&mut sim);
             }
             let r = next();
+            // a delete asked on a card is answered with Start two times in three (else any input drops it)
             let i = match r % 100 {
+                _ if app.confirm == Some(PAST_DELETE) && r % 3 != 0 => Input::Select,
+                _ if app.screen() == Screen::Past && r % 4 == 0 => Input::End, // asks
                 0..=24 => Input::Next,
                 25..=34 => Input::Prev,
-                35..=79 => Input::Select,
+                35..=64 => Input::Select,
+                65..=74 => Input::End, // asks to delete a past ride (a card shown), as a tap on its DELETE
+                75..=79 => Input::Touch(crate::touch::Gesture::Tap(
+                    (ui::card::DELETE_TAP.0 + 10) as u16,
+                    (ui::card::DELETE_TAP.1 + 10) as u16,
+                )),
                 80..=89 => Input::Back,
                 _ => Input::Touch(crate::touch::Gesture::Tap(120, (ui::LIST_Y + 10) as u16)),
             };
@@ -1809,13 +1818,14 @@ fn end_ride_screen_by_chance() {
             }
         };
         pass(&mut sim, &mut app, 2000);
-        for round in 0..8 {
+        for round in 0..14 {
+            // (14 rounds: SAVE is selected when the screen opens, so a Start ends a round sooner than RESUME did)
             let what = std::format!("seed {seed} round {round}");
             app.press(&mut sim, Press::Short(Key::Start));
             pass(&mut sim, &mut app, 3000);
             app.press(&mut sim, Press::Short(Key::Start));
             app.input(&mut sim, Input::End);
-            assert_eq!(app.screen(), Screen::End(0), "{what}");
+            assert_eq!(app.screen(), Screen::End(ui::END_SAVE), "{what}");
             let name = app.recorder.name();
             let mut steps = 0;
             while app.ride.state() != ride::State::Idle {

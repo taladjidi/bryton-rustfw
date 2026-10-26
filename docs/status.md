@@ -210,7 +210,8 @@ The dated findings are in [journal.md](journal.md).
   overview doing nothing, the zone bars (the 8 px bar and its value margin with a real power meter and strap: legible in
   sunlight? the teal, green, olive, brown, wine, purple and slate zones by eye), the readings once a second, the 48 px map
   buttons, the targets as "210" and "+-10", the confirmations "START: YES BACK: NO".
-- **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
+- **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start held (or a tap on
+  its red DELETE), then Start: "RIDE
   DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
   for one of this firmware's rides) has it, `\Activities` not; the next start's totals the same (the cache written
   without it). Then, on stock: the ride gone from its history and nothing else changed (its `.sum` / `.csum` left in
@@ -219,7 +220,7 @@ The dated findings are in [journal.md](journal.md).
 
 - **The page editor and `\Rustfw\pages.bin` (app/editor.rs, page.rs)**, with an EMMC_WRITE=1 build: a hold on a
   ride page's box opens the editor (the frame, the hint in the strip's place, live values); SPLIT, MERGE, TALLER,
-  UNDO, a field; Back asks KEEP CHANGES?; ADD PAGE up to six, the Page key round them all; DELETE PAGE. Then
+  UNDO, a field; Back keeps, DROP CHANGES asks; ADD PAGE up to six, the Page key round them all; DELETE PAGE. Then
   `dev.py ls Rustfw`: `pages.bin`, 1024 bytes. The first write compares both FAT copies first (as the scan's cache:
   some 10 s of passes, inferred; the loop stays responsive). Restart: the pages as made (the file read 2 s after the
   start: a page shown before that is the registers' copy). Not while a ride records: no editor by a hold, no EDIT

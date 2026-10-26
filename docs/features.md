@@ -11,13 +11,17 @@
   only the rides new or changed since are read), and the newest notice on one row at the foot (a GPS fix, a
   sensor paired, the battery low; a tap opens them), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
   date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
-  44 x 44 px box opens the menu).
+  44 x 44 px box opens the menu). A swipe down on the overview, before a ride, opens the **quick panel** (QUICK:
+  CALIBRATE POWER when a meter is heard, TRAINER CONTROL when a trainer is paired, PROFILE, BRIGHTNESS, USB DRIVE,
+  NOTIFICATIONS; a swipe up or Back closes it); on a ride page a swipe down still opens the media remote.
   **TODAY card** (the owner's idea, 2026-10-26: the big clock went, the strip has the time): "TODAY" and the planned
   length (H:MM) on one line, the workout's name under it (cut to whole characters), and its profile at the bottom: a
   bar per column (56 columns of 4 px, the width of the card) in the colour of the step's zone and as high as its
   intensity (the WORKOUT GRAPH's look and scale: power up to 150 % of FTP, heart rate from half the maximum), so a
   sweet spot, a VO2 session and a long easy ride tell apart at a glance. "REST DAY" in grey when nothing is planned
-  today. A tap anywhere on the card opens WORKOUTS (not while a ride records, as every touch). Drawn once: when the
+  today. A tap anywhere on the card opens today's workout, its steps with START selected (a tap on START, or Start, plays
+  it: two inputs from the overview; Start held on the overview does the same, while no ride is open), and on a rest day
+  WORKOUTS (not while a ride records, as every touch). Drawn once: when the
   overview opens and when the calendar or the day changes; nothing per second (the overview now costs 4 px/s, the
   strip's, where the clock's digits made it 53). The calendar is read 8 s after the start (the card is not touched at
   boot; the card shows only its title until then, and a tap before reads it at once), and again at midnight and when
@@ -67,8 +71,8 @@
     level set by hand the map follows the rider: centred a little ahead of them, and centred again only when the
     arrow leaves the middle of the map (a new basemap each time, about every 26 s at 1.5 m a pixel and 29 km/h,
     35 s at 2 m). A third button, a crosshair under "-", shown whenever the zoom is set by hand, goes back to
-    fitting the whole track (and course). Kept until the unit is switched off. A hold on the map still opens the
-    menu; a map of half a page or less has no buttons. The fitted map keeps the arrow clear of the buttons.
+    fitting the whole track (and course). Kept until the unit is switched off. A hold on the map opens the page
+    editor with the map's box selected (not while a ride records, as on any box); a map of half a page or less has no buttons. The fitted map keeps the arrow clear of the buttons.
   - **Pan:** at a zoom set by hand, drag the map: it moves with the finger, redrawn once when the finger lifts
     (one new basemap, no redraw while dragging), at most two map widths past the track and the course. The map
     then stays put instead of following; "+" and "-" zoom around the centre panned to; the crosshair goes back to
@@ -79,9 +83,10 @@
   below). Only what changes is redrawn, in the smallest box.
 
 - **End of a ride:** Start held while paused (or END RIDE in the ride menu) opens the end-ride screen, which is the
-  confirmation: the ride's time and distance, and three large buttons (64 px, gloves): RESUME (selected), SAVE,
-  DISCARD. Page and Lap move, Start acts, a tap acts at once, Back is RESUME (with a banner up, it clears it first). RESUME goes back to the page, the ride
-  still paused as it was; SAVE ends and saves it (below) and shows its card. DISCARD asks once more ("DISCARD
+  confirmation: the ride's time and distance, and three large buttons (64 px, gloves): RESUME, SAVE (selected when it opens: the ride
+  is over, so Start held then Start saves it), DISCARD. Page and Lap move, Start acts, a tap acts at once, Back leaves
+  the ride paused on its page ("PAUSED"; with a banner up, it clears it first). RESUME restarts the timer and goes back to
+  the page; SAVE ends and saves it (below) and shows its card. DISCARD asks once more ("DISCARD
   RIDE?", KEEP selected, the two buttons apart so a second tap cannot hit DISCARD again; Back keeps), then ends the
   ride and moves both copies to `\Rustfw\Discarded` (the full one to `\Rustfw\Discarded\Full`): never erased, a
   computer can move it back, but in no history, totals, curve or sync ("RIDE DISCARDED"). While the screen is up
@@ -114,10 +119,10 @@
 | hold Page | the menu; during a ride (recording or paused), the ride menu | |
 | Lap | a lap (while riding), on the overview too | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
-| hold Start | a paused ride: the end-ride screen (RESUME, SAVE, DISCARD; or END RIDE in the ride menu) | |
+| hold Start | a paused ride: the end-ride screen (RESUME, SAVE, DISCARD; or END RIDE in the ride menu); the overview with no ride: today's workout; on a past ride's card: DELETE, asked | |
 | Back | on a ride page, the overview; on the overview, nothing; with a banner up, it only clears the banner | back |
 | hold Back 3 s | power off (the radio and GPS too) | power off |
-| hold Lap | the phone's music: play / pause (PHONE below) | |
+| hold Lap | the phone's music: play / pause (PHONE below); on the trainer screen while riding: the target one big step down (Page is up) | |
 | hold Back and Lap together 1 s | the touch lock on or off, on every screen: all touch is ignored and a padlock shows in the strip (until unlocked or switched off); neither key acts on its own | the same |
 
 The power button starts it again. After the backlight's time-out, any key brings it back.
@@ -149,7 +154,8 @@ The power button starts it again. After the backlight's time-out, any key brings
   page stays). An action that would leave a field too small to read says why in the banner ("TOO SMALL",
   "2 A ROW AT MOST", "5 ROWS AT MOST", "8 BOXES AT MOST") and changes nothing: a value wants five characters at 3x
   (93 x 53 px), a graph, the course profile or the workout gauge 120 x 118, the map half the page. Back leaves:
-  at once when nothing changed, else "KEEP CHANGES?" (Start keeps, Back drops).
+  keeps what was done ("CHANGES KEPT"; Back never drops). DROP CHANGES, the last row of the box's actions and there
+  only once something changed, asks ("SURE?") and puts the page back as it was.
 - **Where the pages are kept:** `\Rustfw\pages.bin`, two copies of one sector (a sequence number and a CRC each;
   a write goes over the older, so a cut leaves the other), written when the pages changed and no ride is open; then
   the first three pages in backup registers 20 to 25 as earlier builds kept them (a custom page as the layout of
@@ -160,7 +166,7 @@ The power button starts it again. After the backlight's time-out, any key brings
   of up to six pages beside the road set: the trainer (3 s power large, the trainer's target, heart rate, cadence,
   timer, work), the power numbers (average, NP, W' balance, IF, work, TSS) and the power and heart rate graphs, with
   their MORE variants; the overview is shared. The editor and PAGES work on the profile's set while a ride is open,
-  else the one PAGES > PAGES OF names. The indoor set is in `pages.bin` only (after the MORE part, a CRC of its own,
+  else the one PAGES > ROAD PAGES or INDOOR PAGES opened. The indoor set is in `pages.bin` only (after the MORE part, a CRC of its own,
   so earlier builds ignore it and a file without it gives the defaults), never in the backup registers.
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
   goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
@@ -174,9 +180,9 @@ The power button starts it again. After the backlight's time-out, any key brings
 |---|---|---|---|
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
-| swipe up / down | | the next / previous screen of rows | one step up / down |
+| swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE | the next / previous screen of rows (up closes the quick panel) | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
-| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
+| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
@@ -256,7 +262,8 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
 
 Hold Page (or tap the cog) for the menu: what to ride first, then what was ridden, then the set-up (UI review
 4.3). A row that opens a menu or a screen ends in ">"; a value sits on the right with its unit ("FTP  200 W"). Any
-setting is three levels down at most (MENU > SETTINGS > ME > FTP), the diagnostics under SYSTEM:
+setting is three levels down at most (MENU > SETTINGS > ME > FTP; a page's own rows are four: MENU > PAGES >
+ROAD PAGES > PAGE 1 > LAYOUT), the diagnostics under SYSTEM:
 
 ```
 MENU
@@ -264,8 +271,10 @@ MENU
  +- COURSES >      the course files (green: followed); Start follows or stops
  +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, EST FTP, MODEL, APPLY FTP, APPLY W', HRVT1 AET, HRVT2,
  |                 RIDES, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
- +- PAGES >        OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT, FIELD n -> group -> field), ADD PAGE
- +- SENSORS >      HEART RATE, SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING; DI2 KEYS >; PHONE >
+ +- PAGES >        ROAD PAGES >, INDOOR PAGES > -> OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT,
+ |                 FIELD n -> group -> field), ADD PAGE (a page's own rows are four levels down)
+ +- SENSORS >      CALIBRATE POWER (a meter heard) and TRAINER CONTROL (a trainer paired) first; then HEART RATE,
+                   SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING, BT TRAINER; DI2 KEYS >; PHONE >
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
@@ -280,10 +289,12 @@ MENU
   Start forgets it. DI2 KEYS: what each Di2 hood button press does. PHONE: LINK (OFF, PAIRING, WAITING, LINKED,
   SECURE; ERR and a command's code if the radio refused the set-up), PAIR, REMOTE (the media remote), NOTIFY on /
   off, MEDIA KEY on / off, FORGET (BONDED while a phone is).
+- **Taps act:** one tap on a menu row acts on it, as Start on that row (a destructive row still asks first). While the
+  ride runs and moves a tap only selects the row and a second one acts, so a bump or a wet glove does nothing.
 - **Asked first:** forgetting a sensor or the phone and IMPORT FROM STOCK show "SURE?" in the row and ask in the
   banner ("START: YES BACK: NO"); a second Start (or a tap on the row) does it, Back says no (it only cancels, the
   menu stays), any other key or touch drops it.
-- **PAGES:** the overview's four fields; the ride pages, each with EDIT ON PAGE (the page editor), LAYOUT (the next
+- **PAGES:** ROAD PAGES and INDOOR PAGES, each opening its set's list: the overview's four fields; the ride pages, each with EDIT ON PAGE (the page editor), LAYOUT (the next
   layout its fields fit) and its fields; ADD PAGE (up to six: a 2 x 2 page, the editor open on it). A field row
   opens the field groups
   (RIDE, POWER, HEART, CLIMB, GRAPHS, WORKOUT, COURSE, TOTALS, PHONE), the current field's group selected and the field
@@ -296,6 +307,8 @@ MENU
    +- END RIDE         the end-ride screen (paused first if it was running): RESUME, SAVE, DISCARD
    +- WORKOUT >        while a step runs: NEXT STEP (no lap), STOP WORKOUT (the ride goes on)
    +- COURSE >         while one is followed: STOP FOLLOWING (the ride goes on)
+   +- TRAINER CONTROL  with a trainer paired: its screen (mode, target)
+   +- INDOOR ON / OFF  the ride's profile by hand, for this ride
    +- BRIGHTNESS       changed in place
    +- SENSORS >        the same menu as off the ride
    +- EDIT THIS PAGE > paused only: the page editor on the page (the overview: its fields; the course page has none)
@@ -318,6 +331,30 @@ MENU
   HISTORY, PAGES, SENSORS (the ANT rows, DI2 KEYS) stay where they were. The settings are kept as before (same
   backup registers, same formats).
 
+## Interactions
+
+The owner's heuristic (2026-10-26): "minimize button clicks / swipes on the screen". A review counted what each task
+costs; `src/sim/interaction_tests.rs` (and the tests named here) assert the counts below, so a menu that gets deeper
+again fails a test. A key press or a tap is one, a swipe is one, Page held is one.
+
+| Task | Before | Now | Test |
+|---|---|---|---|
+| A menu row acts (PAGES from the overview, touch) | 3 (hold, tap selects, tap acts) | 2 | `one_tap_acts_on_a_row_unless_the_ride_moves` |
+| Today's workout started, touch | 5 | 2 (the card, START) | `todays_workout_in_two_inputs` |
+| Today's workout started, keys | 4 | 2 (Start held, Start) | `todays_workout_in_two_inputs` |
+| Calibrate the power meter from the overview, touch | 6 | 2 (swipe down, a tap) | `the_quick_panel_from_the_overview` |
+| The same by keys (meter heard) | 17 | 7 (SENSORS lists it first) | `sensors_actions_come_first` |
+| TRAINER CONTROL from the overview, keys | 4 (a MAIN row) | 7 (SENSORS row 0); 2 touches by the quick panel | `the_trainer_screen_is_one_step_from_the_menu_and_the_fields` |
+| The trainer's target down, riding, keys | none (a tap on "-") | 1 (Lap held) | `riding_the_long_keys_on_the_trainer_screen` |
+| The trainer's mode, riding, keys | none (a tap on MODE) | 1 (Start held) | same |
+| Save a ride by keys | 3 (Start held, Page, Start) | 2 (Start held, Start) | `end_ride_screen_by_keys` |
+| Open the indoor pages' list | 4 (a toggle first) | 4, with no state to remember | `the_indoor_page_set_is_a_row` |
+
+The rest of the rule: **a tap acts, but never by accident.** A destructive row still asks ("SURE?"); while the ride
+runs and moves a tap only selects and a second one acts; **Back always means no** (it clears a banner, declines a
+question, leaves the editor with its changes kept, leaves a ride paused), and what is destructive is an explicit row:
+DISCARD (asked twice), DELETE on a past ride, DROP CHANGES in the page editor.
+
 ## History
 
 HISTORY lists the rides in `\Activities` (stock's and this firmware's), newest first: the day ("TUE 20 OCT") and the
@@ -328,8 +365,9 @@ ascent, NP (from the ride's records), average power, average and max heart rate,
 The ride's file is read once to draw it, 96 KB a main loop pass ("READING RIDE", about 0.1 s for a 300 KB ride;
 a long ride takes a few passes, the loop never stalls); the card opens when it is read. Back returns to the list.
 
-**Delete** (storage/trash.rs): on a ride's card, Start asks "DELETE RIDE? START: YES BACK: NO" (any other key drops
-it), Start again moves the ride out of sight, never erases it: `\Activities\<name>.fit` into `\Rustfw\Deleted\`,
+**Delete** (storage/trash.rs): on a ride's card, Start dismisses the card (as on the ride just ended), and DELETE (a red
+label at the right of the title, a 88 x 44 px touch box; or Start held) asks "DELETE RIDE? START: YES BACK: NO" (any other
+input drops it), Start (or a tap on DELETE again) moves the ride out of sight, never erases it: `\Activities\<name>.fit` into `\Rustfw\Deleted\`,
 and this firmware's full copy of the same ride (`\Rustfw\Activities\<name>.fit`), if any, into
 `\Rustfw\Deleted\Full\`, under the same name (a name already there gets `-1`, `-2`...). A computer sees them
 there; moving a file back puts the ride back in both firmwares' histories. The list, the totals and the power curve
@@ -608,7 +646,7 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
   as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. SENSORS > PHONE >
-  REMOTE is a player, also opened by a swipe down on the overview or a ride page (a swipe up closes it): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
+  REMOTE is a player, also opened by a swipe down on a ride page (a swipe up closes it; on the overview a swipe down is the quick panel): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
   time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
   the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,
   Page next, Lap previous, held Page / Lap volume; swipes: left / right track; a skip the app does not take says NOT IN THIS APP; a hold takes a

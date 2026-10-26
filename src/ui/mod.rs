@@ -1686,7 +1686,11 @@ pub fn draw_call(c: &mut impl Canvas, who: &str) {
 /// px apart, under the title and the ride's numbers.
 pub const END_BUTTONS: [(u32, u32, u32, u32); 3] = [(12, 84, W - 24, 64), (12, 160, W - 24, 64), (12, 236, W - 24, 64)];
 
-/// The end-ride screen's buttons by slot: RESUME (the default), SAVE, DISCARD; or the discard's question, DISCARD
+/// The button the end-ride screen opens on: SAVE (the ride is over: one Start; RESUME is a Page up, DISCARD two
+/// questions away).
+pub const END_SAVE: usize = 1;
+
+/// The end-ride screen's buttons by slot: RESUME, SAVE (the default), DISCARD; or the discard's question, DISCARD
 /// and KEEP (the default) apart, where a second tap of the DISCARD before cannot reach DISCARD again.
 pub fn end_labels(discard: bool) -> [Option<&'static str>; 3] {
     if discard { [Some("DISCARD"), None, Some("KEEP")] } else { [Some("RESUME"), Some("SAVE"), Some("DISCARD")] }

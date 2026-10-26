@@ -12,23 +12,23 @@ entirely. Not affiliated with Bryton.
 | ![Ride card](docs/img/card.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |
 | The ride's card when it ends: map, profile, numbers (sim) | Map with the track (sim) | Sensors and built-in readings (sim) | GPS (sim) |
 | ![History](docs/img/history_list.png) | ![A past ride](docs/img/history.png) | ![Workout steps](docs/img/workout-steps.png) | ![Workout](docs/img/workout.png) |
-| History: stock's rides, newest first (sim) | A past ride's card, read from its file (sim) | A planned workout's steps, from stock's calendar (sim) | A workout running: target, step left, next (sim) |
+| History: stock's rides, newest first (sim) | A past ride's card, read from its file; DELETE in red asks first (sim) | A planned workout's steps, from stock's calendar (sim) | A workout running: target, step left, next (sim) |
 | ![Course](docs/img/course.png) | ![Course profile](docs/img/course-profile.png) | ![Course fields](docs/img/course-fields.png) | ![Courses](docs/img/courses.png) |
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead, the climb pacer's TOP field (sim) | Courses on the card: stock's routes, FIT, GPX (sim) |
 | ![Workout graph](docs/img/workout-graph.png) | ![Workout gauge](docs/img/workout-gauge.png) | ![Menu](docs/img/menu.png) | ![Field groups](docs/img/field-groups.png) |
-| The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap selects then acts (sim) | A page's field: its group, then the field (sim) |
+| The workout graph: steps by target and zone, the rider's place (sim) | The workout gauge: 3 s power on the step's band (sim) | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap acts on a row (sim) | A page's field: its group, then the field (sim) |
 | ![IGN map](docs/img/ign-map.png) | ![Media remote](docs/img/phone-media.png) | ![A call](docs/img/phone-call.png) | ![Map zoom](docs/img/map-zoom.png) |
 | The map over IGN pack tiles, "(c) IGN" in the corner (sim, synthetic tiles, not a map) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) | The map zoomed in with "+" and "-", panned by a drag, the crosshair to follow again (sim, synthetic tiles) |
 | ![Ride menu](docs/img/ride-menu.png) | ![Settings](docs/img/menu-settings.png) | ![Page editor](docs/img/page-editor.png) | ![Editor actions](docs/img/page-editor-actions.png) |
 | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS: a menu per subject, any setting three levels down at most (sim) | The page editor: a box held, framed in orange, live values, the hint in the strip's place (sim) | Start in the editor: the box's actions, SPLIT across or down by their icons (sim) |
 | ![A page made in the editor](docs/img/page-made.png) | ![Eight fields](docs/img/page-eight.png) | ![End of a ride](docs/img/end-ride.png) | ![Discard asked](docs/img/end-ride-discard.png) |
-| A page made in the editor: a graph over four values (sim) | Eight fields, four rows of two (sim) | Start held while paused: RESUME, SAVE, DISCARD, big enough for gloves (sim) | DISCARD asks once more; the ride is moved to `\Rustfw\Discarded`, never erased (sim) |
+| A page made in the editor: a graph over four values (sim) | Eight fields, four rows of two (sim) | Start held while paused: RESUME, SAVE (selected), DISCARD, big enough for gloves (sim) | DISCARD asks once more; the ride is moved to `\Rustfw\Discarded`, never erased (sim) |
 | ![Touch lock](docs/img/touch-lock.png) | ![Zone bar](docs/img/zone-bar.png) | ![No notifications](docs/img/notifs-empty.png) | ![Overview cog](docs/img/overview-cog.png) |
 | The touch lock: a padlock in the strip (sim) | A zone as an 8 px bar on the box's top edge (sim) | An empty list says so in a row: no notifications (sim) | The overview's cog opens the menu (sim) |
 | ![Overview, SMOOTH font](docs/img/overview-cog-smooth.png) | ![Target gauge](docs/img/gauge-zones.png) | ![Target gauge, half box](docs/img/gauge-zones-half.png) | ![Ramp test result](docs/img/ramp-result.png) |
 | The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | The target gauge spans every zone, power from 40 to 165 % of the FTP (sim) | The same in a half box: the climb pacer's TOP field (sim) | FTP ramp test result: FTP, best minute, APPLY / KEEP (sim) |
-| ![Rest day](docs/img/overview-rest.png) | ![WORKOUTS list](docs/img/workouts-list.png) | | |
-| The overview's TODAY card with nothing planned (sim) | WORKOUTS: each day's profile beside its date and length; tap the overview's card to get here (sim) | | |
+| ![Rest day](docs/img/overview-rest.png) | ![WORKOUTS list](docs/img/workouts-list.png) | ![Quick panel](docs/img/menu-quick.png) | |
+| The overview's TODAY card with nothing planned (sim) | WORKOUTS: each day's profile beside its date and length; a rest day's card gets here, else it opens today's workout (sim) | The quick panel, a swipe down on the overview: the pre-ride actions (sim) | |
 | ![FITNESS](docs/img/fitness.png) | ![Power meter calibration](docs/img/power-zero.png) | ![BIKE menu](docs/img/menu-bike.png) | |
 | HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | |
 

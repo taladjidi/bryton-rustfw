@@ -31,7 +31,7 @@ pub enum Input {
     /// See [`Input::NextHeld`].
     PrevHeld,
     /// A gesture on the touch panel: on a page, swipe left the next page, swipe right the previous one, hold the
-    /// menu (not while a ride records); in a menu, a tap selects a row and a second tap on it acts, the "<" is Back,
+    /// menu (not while a ride records); in a menu, a tap acts on a row (two taps while the ride moves: select, then act), the "<" is Back,
     /// swipe up or down turns a screen of rows, swipe right is Back; while a number is edited, swipe up or down steps
     /// it, a tap keeps it. None with TOUCH off.
     Touch(Gesture),
@@ -362,8 +362,6 @@ pub enum RideRow {
     CalPower,
     /// INDOOR ON / OFF: the ride's profile by hand (app/profile.rs).
     Indoor,
-    /// PAGES: which set the list and the editor show, ROAD or INDOOR (the ride's own while one is open).
-    PageSet,
 }
 
 /// The workout menu of a ride (while a step runs).
@@ -572,6 +570,8 @@ pub enum EditRow {
     AddPage,
     /// This page deleted (asked first).
     DeletePage,
+    /// The editor's changes dropped (asked first), after DELETE PAGE and only when there are some: Back keeps them.
+    Drop,
 }
 
 impl EditRow {
@@ -586,6 +586,7 @@ impl EditRow {
             EditRow::Undo => "UNDO",
             EditRow::AddPage => "ADD PAGE",
             EditRow::DeletePage => "DELETE PAGE",
+            EditRow::Drop => "DROP CHANGES",
         }
     }
 }

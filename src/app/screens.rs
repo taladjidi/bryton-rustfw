@@ -183,6 +183,7 @@ impl App {
                 let (p, h) = (&self.past, ui::card::ELEV.3);
                 let view = map::View::fit_whole(&p.track, map::area(ui::card::MAP));
                 ui::card::draw(c, &p.card, (&p.track, view, Some(&self.basemap)), &|i| p.elev(i, h));
+                ui::card::draw_delete(c);
             }
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
