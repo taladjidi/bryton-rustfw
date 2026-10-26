@@ -4203,6 +4203,102 @@ fn perf_budgets() {
     assert!(over.is_empty(), "{over:?}");
 }
 
+/// A menu's budgets in pixels (about 1 us each on the unit, SPI1 at 16 MHz): a move redraws the two rows whose
+/// selection changed, a turn to the next screen of rows only the rows (the title stays), and opening a menu clears
+/// only what its rows do not paint. Measured 2026-10-26: open 75 360 (138 720 when the page was cleared under the
+/// rows: the profiler's 161 ms longest input on the unit), a move 21 120, a turn 63 360 (138 720 as a whole show).
+#[test]
+fn menu_budgets() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    let cost = |sim: &mut Sim, app: &mut App, p: Press| {
+        let px = sim.pixels;
+        app.press(sim, p);
+        assert_consistent(sim, app);
+        sim.pixels - px
+    };
+    let open = cost(&mut sim, &mut app, Press::Long(Key::Page));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, 0)));
+    assert!(open <= 80_000, "open: {open} px");
+    app.open(Screen::Menu(Menu::Sensors, 0));
+    app.show(&mut sim);
+    assert!(app.rows(Menu::Sensors) > ui::MENU_ROWS, "a menu that turns");
+    for k in 1..=ui::MENU_ROWS {
+        let px = cost(&mut sim, &mut app, Press::Short(Key::Page));
+        let turn = k == ui::MENU_ROWS;
+        std::println!("{} to row {k}: {px} px", if turn { "turn" } else { "move" });
+        assert!(px <= if turn { 64_000 } else { 22_000 }, "row {k}: {px} px");
+    }
+    let back = cost(&mut sim, &mut app, Press::Short(Key::Lap));
+    assert!(back <= 64_000, "turn back: {back} px");
+}
+
+/// The overview shown whole (Back to it, the page round): the page cleared but for the TODAY card, which paints its
+/// own box. Measured 2026-10-26: 109 457 px (134 745 when the card's box was cleared twice: about 25 ms on the unit).
+#[test]
+fn overview_show_budget() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000); // the calendar read: the card as it stays
+    app.press(&mut sim, Press::Long(Key::Page));
+    let px = sim.pixels;
+    back(&mut sim, &mut app);
+    let px = sim.pixels - px;
+    assert_eq!(app.screen(), Screen::Main);
+    std::println!("overview shown: {px} px");
+    assert!(px <= 112_000, "{px} px");
+    assert_consistent(&sim, &app);
+}
+
+/// The overview left alone with no fix (indoors), as the profiler's idle window on the unit: 2013 px/s there
+/// (2026-10-26) was a one-off and the GPS search, nothing steady. The TODAY card is drawn again once the calendar is
+/// read (CALENDAR_MS, 8 s, after the start: 32 690 px, 36 034 with a card; inside a window that starts a few
+/// seconds after a RAM run), then the strip's "GPS" blinks, three glyphs a second, 720 px, and its clock's minute.
+/// 36 034 / 30 + 724 = 1925 px/s.
+#[test]
+fn idle_overview_searching() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 5000);
+    let px = sim.pixels;
+    run(&mut sim, &mut app, 5000);
+    let card = sim.pixels - px;
+    assert!(card <= 40_000 + 5 * 720, "the TODAY card once: {card} px");
+    let (px, win) = (sim.pixels, sim.windows);
+    run(&mut sim, &mut app, 60_000);
+    let (px, win) = ((sim.pixels - px) / 60, (sim.windows - win) / 60);
+    std::println!("idle overview, no fix: {card} px once, then {px} px/s, {win} windows/s");
+    assert!(px <= 760 && win <= 3, "{px} px/s, {win} windows/s: the GPS blink and the minute only");
+    assert_consistent(&sim, &app);
+}
+
+/// The buses the CPU polls through on every pass, idle on the overview with the automatic backlight: the GNSS
+/// receiver read every pass only while it sends (else every [`crate::GNSS_IDLE_PASSES`]), the light sensor one
+/// transaction a reading (its data, not its status first). Measured 2026-10-26: 8.8 SPI4 transfers a second (23.0
+/// when read every pass), 4.3 I2C4 transactions (8.3 with the status read).
+#[test]
+fn idle_bus_budgets() {
+    for fix in [None, Some(8000)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.fix = fix;
+        let mut app = App::start(&mut sim, None);
+        app.settings.light_level = crate::LIGHT_AUTO;
+        run(&mut sim, &mut app, 20_000);
+        let (g, l, i2c) = (sim.gnss.got.len(), sim.bus.light_reads, sim.bus.transactions);
+        run(&mut sim, &mut app, 60_000);
+        let spi = (sim.gnss.got.len() - g) as f64 / 32.0 / 60.0;
+        let (reads, i2c) = (f64::from(sim.bus.light_reads - l) / 60.0, f64::from(sim.bus.transactions - i2c) / 60.0);
+        std::println!(
+            "fix {fix:?}: {spi:.1} GNSS transfers/s, {reads:.1} light readings/s, {i2c:.1} I2C4 transactions/s"
+        );
+        assert!(spi <= 10.0, "{spi:.1} GNSS transfers/s");
+        assert!((reads - 4.0).abs() < 0.1, "the light four times a second: {reads:.1}");
+        assert!(i2c <= 4.5, "{i2c:.1} I2C4 transactions/s");
+        assert_eq!(app.pvt.is_some_and(|p| p.good()), fix.is_some(), "the fix read all the same");
+    }
+}
+
 /// The synthetic hill (tools/fat_image.py: 2 km east on the flat at 100 m, 2 km north up to 220 m, 1 km east)
 /// ridden at 8 m/s from its start, with a detour 150 m south from 60 s to 95 s.
 fn course_route(ms: u64) -> (i32, i32, i32) {

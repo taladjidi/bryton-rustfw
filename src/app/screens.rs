@@ -483,7 +483,13 @@ impl App {
             self.render_basemap(b, map::area(bx), view);
         }
         let mut p = Panel(b, self.area(), self.settings.smooth);
-        ui::clear_page(&mut p);
+        match self.screen {
+            // a menu's rows paint their whole boxes: clearing under them first doubled a menu's cost (2026-10-26)
+            Screen::Menu(..) => ui::clear_menu(&mut p),
+            // so does the TODAY card (ui::draw_today): a fifth of the overview's (25 288 of 134 745 px)
+            Screen::Main => ui::clear_page_but(&mut p, ui::TODAY_BOX),
+            _ => ui::clear_page(&mut p),
+        }
         self.draw_screen(&mut p);
         let hint = matches!(self.screen, Screen::Edit(..));
         if hint != self.hint_shown {

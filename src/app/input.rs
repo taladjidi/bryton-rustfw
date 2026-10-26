@@ -561,9 +561,9 @@ impl App {
                 let next = if down { (sel + 1).min(rows - 1) } else { sel.saturating_sub(1) };
                 self.menu_chosen = true;
                 self.screen = Screen::Menu(menu, next);
-                if menu::first_shown(next, ui::MENU_ROWS) == menu::first_shown(sel, ui::MENU_ROWS) {
-                    return self.update_menu_rows(b, menu, next);
-                }
+                // the rows that changed only, a screen of them when it turns (each row paints its whole box): the
+                // title stays (a whole show cleared the page first, 139 000 px for 69 000 drawn: 2026-10-26)
+                return self.update_menu_rows(b, menu, next);
             }
             // the quick panel is one screen: the swipe down that opened it, undone
             (Screen::Menu(Menu::Quick, _), Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
@@ -576,6 +576,7 @@ impl App {
                 }
                 self.menu_chosen = false; // turned to, not chosen
                 self.screen = Screen::Menu(menu, next);
+                return self.update_menu_rows(b, menu, next);
             }
             // the "<" left of the title: back
             (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
