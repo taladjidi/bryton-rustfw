@@ -33,8 +33,8 @@ impl Banner {
 /// What a page box holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Widget {
-    /// The big time, each digit in its own cell.
-    Clock,
+    /// The TODAY card: the workout planned for today, or REST DAY.
+    Today,
     /// The date line.
     Date,
     /// The latest notices, or Ferris when there are none.
@@ -50,8 +50,6 @@ pub(crate) enum Drawn {
     /// Nothing that changes.
     #[default]
     Fixed,
-    /// The clock's digits: H H M M.
-    Digits([u8; 4]),
     /// A fingerprint of what the box shows, redrawn whole when it changes (the date, the notices).
     Print(u32),
     /// A value, its colour and its zone bar's (BLACK: none).
@@ -211,9 +209,9 @@ impl App {
     /// The boxes of the page on screen and what each holds (none on a menu or a list). The clock and Ferris place
     /// themselves.
     pub(crate) fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + use<> {
-        let mut all = [((0, 0, 0, 0), Widget::Clock); BOXES];
+        let mut all = [((0, 0, 0, 0), Widget::Today); BOXES];
         let (page, fixed): (_, &[Widget]) = match self.screen {
-            Screen::Main => (OVERVIEW, &[Widget::Clock, Widget::Date, Widget::Notices]),
+            Screen::Main => (OVERVIEW, &[Widget::Today, Widget::Date, Widget::Notices]),
             Screen::Ride(n) => (n, &[]),
             Screen::Edit(..) => (EDITED, &[]),
             _ => return all.into_iter().take(0),
@@ -246,7 +244,7 @@ impl App {
     /// What box `bx` holding `w` would show now.
     pub(crate) fn now_drawn(&self, bx: (u32, u32, u32, u32), w: Widget) -> Drawn {
         match w {
-            Widget::Clock => Drawn::Digits(self.main_digits()),
+            Widget::Today => Drawn::Print(self.today_print()),
             Widget::Date => {
                 Drawn::Print(u32::from(self.date.0) << 16 | u32::from(self.date.1) << 8 | u32::from(self.date.2))
             }
@@ -271,9 +269,9 @@ impl App {
     pub(crate) fn draw_widget(&self, c: &mut impl Canvas, i: usize, bx: (u32, u32, u32, u32), w: Widget) {
         let d = self.drawn.get(i).copied().unwrap_or_default();
         match (w, d) {
-            // under a call's two-line banner the big clock would show its lower half: left out, the box cleared
-            (Widget::Clock, Drawn::Digits(_)) if self.phone.ringing => {}
-            (Widget::Clock, Drawn::Digits(digits)) => ui::draw_main_time(c, digits),
+            (Widget::Today, _) => self.draw_today(c),
+            // under a call's two-line banner the date row would show its lower half: left out, the box cleared
+            (Widget::Date, _) if self.phone.ringing => {}
             (Widget::Date, _) => ui::draw_date(c, date_text(self.date).as_str()),
             (Widget::Notices, _) => {
                 let mut n: [&str; ui::NOTICES] = [""; ui::NOTICES];
@@ -301,7 +299,6 @@ impl App {
                     _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -352,12 +349,6 @@ impl App {
             Some(Drawn::Map(m)) => m.view,
             _ => None,
         }
-    }
-
-    /// The overview's digits: H H M M.
-    pub(crate) fn main_digits(&self) -> [u8; 4] {
-        let (h, m) = self.strip.time;
-        [h / 10, h % 10, m / 10, m % 10]
     }
 
     /// The rows the page may be drawn in (top, bottom): under the banner while one (or a call) is up, above a call's
@@ -459,8 +450,10 @@ impl App {
             self.more_on = self.more_shown(); // MORE is up only over its own page; a menu over it keeps it
         }
         self.strip.more = self.more_shown().is_some();
-        if self.calendar_day.is_none() && self.widgets().any(|(_, w)| w == Widget::Field(Field::Workout)) {
-            self.load_calendar(b); // the overview's planned workout: the card read at first use
+        // the overview's card waits for the start-up delay; a page with a workout field reads the card at first use
+        let field = self.widgets().any(|(_, w)| w == Widget::Field(Field::Workout));
+        if field || self.screen == Screen::Main {
+            self.refresh_calendar(b, field);
         }
         for (i, (bx, w)) in self.widgets().enumerate() {
             let now = self.now_drawn(bx, w);
@@ -510,6 +503,9 @@ impl App {
     /// Redraws what changed in the page's boxes since they were drawn; in the editor, the frame again over the
     /// selected box when it changed.
     pub(crate) fn update_page(&mut self, b: &mut impl Board) {
+        if self.screen == Screen::Main {
+            self.refresh_calendar(b, false); // after the start, midnight, or new zones: the card follows
+        }
         let first = self.first_map();
         let selected = if let Screen::Edit(_, k) = self.screen { Some(k) } else { None };
         for (i, (bx, w)) in self.widgets().enumerate() {
@@ -531,15 +527,6 @@ impl App {
                 (_, Drawn::Profile(p)) => self.update_profile(b, p, bx),
                 (_, Drawn::Workout(w)) => self.update_workout_graph(b, w, bx),
                 (_, Drawn::Gauge(g)) => self.update_gauge(b, g, bx),
-                (Widget::Clock, Drawn::Digits(was)) => {
-                    let now = self.main_digits();
-                    for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
-                        if d != was && !self.phone.ringing {
-                            ui::draw_main_digit(&mut Panel(b, self.area(), self.settings.smooth), k, d);
-                        }
-                    }
-                    Drawn::Digits(now)
-                }
                 (Widget::Field(f), Drawn::Value(was, was_fg, was_bar)) => {
                     let (text, fg, bar) = (self.field_text(f), self.field_color(f), self.field_bar(f));
                     if bar != was_bar {

@@ -5,13 +5,23 @@
 - **Status strip** (every screen): BLE (green, red if the radio chip did not answer), GPS (blinking grey while
   searching, then 1 to 4 signal bars), the time, the ride's state (a red dot while it records, orange bars while paused), a USB symbol,
   the battery (green while charging, red at 15 % and under).
-- **Overview** (the main screen): the time, big (no seconds: it changes once a minute), the date, four fields chosen
-  in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
+- **Overview** (the main screen): the date, big (3x, left; the time is in the strip), under it the TODAY card
+  (below), four fields chosen in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
   only the rides new or changed since are read), and the latest notices (a GPS fix, a
   sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
   date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
   44 x 44 px box opens the menu).
+  **TODAY card** (the owner's idea, 2026-10-26: the big clock went, the strip has the time): "TODAY" and the planned
+  length (H:MM) on one line, the workout's name under it (cut to whole characters), and its profile at the bottom: a
+  bar per column (56 columns of 4 px, the width of the card) in the colour of the step's zone and as high as its
+  intensity (the WORKOUT GRAPH's look and scale: power up to 150 % of FTP, heart rate from half the maximum), so a
+  sweet spot, a VO2 session and a long easy ride tell apart at a glance. "REST DAY" in grey when nothing is planned
+  today. A tap anywhere on the card opens WORKOUTS (not while a ride records, as every touch). Drawn once: when the
+  overview opens and when the calendar or the day changes; nothing per second (the overview now costs 4 px/s, the
+  strip's, where the clock's digits made it 53). The calendar is read 8 s after the start (the card is not touched at
+  boot; the card shows only its title until then, and a tap before reads it at once), and again at midnight and when
+  FTP or the maximum heart rate changes (the profiles are recoloured).
 - **Readings at 1 Hz:** the power, speed, cadence and heart rate values on the pages are the readings of the second's
   tick, not of each 4 Hz broadcast (the digits were unreadable and each change a redraw: 8,301 px/s against 11,339 on
   six values with a power meter and a strap, windows 10 a second against 20); the recorder and the averages still take
@@ -371,7 +381,12 @@ With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides to
 The workouts Bryton's app syncs to the card (`\Workout\calendar\YYYYMMDD\*.fit`, often from intervals.icu or
 TrainingPeaks), read only:
 - **WORKOUTS** lists today's and the next days' (eight at most; only the earliest eight day folders are looked
-  into, at most 16 files read), a row each: the day and the planned time. Select
+  into, at most 16 files read), a row each: the day over the planned time on the left ("FRI 23" over "1:08"), the
+  workout's profile on the right (56 columns of 2 px, on black even when the row is selected, in the zones' colours,
+  as the TODAY card's), so a workout is recognised without opening it; the rows stay 44 px (two lines of 2x text fit
+  beside a 32 px thumbnail). The profiles are computed once, when the calendar is read (a byte a column: height and
+  colour, 56 bytes an entry, 448 bytes for the eight; the name 16 more each), so the list and the card draw without
+  the card. RAMP TEST keeps its plain row. Select
   shows the workout's steps, its name as the title: what ends each step (a time, a distance, or LAP) and its target
   (power in W from % FTP, heart rate in bpm from % max HR, cadence), coloured by zone; repeats are written out.
 - **START** (or Select on a step: from that step) starts the workout, and the ride if none runs, on page 1. The

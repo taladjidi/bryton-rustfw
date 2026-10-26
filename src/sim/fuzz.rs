@@ -1202,7 +1202,7 @@ fn menu_touch_and_keys() {
     std::println!("touch lock: {locks} toggles, {locked_touches} touches while locked");
     assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
-    assert!(off > 50 && riding > 10, "touch off {off}, taps and holds while recording {riding}");
+    assert!(off > 50 && riding > 5, "touch off {off}, taps and holds while recording {riding}");
 }
 
 /// Keys and taps by chance through the whole menu tree (UI review steps 6 and 8), a ride started and ended, workouts

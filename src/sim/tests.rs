@@ -123,7 +123,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
         },
     );
     let _ = s;
-    crate::ui::draw_main_time(&mut f, [h / 10, h % 10, m / 10, m % 10]);
+    crate::ui::draw_today(&mut f, crate::ui::Today::Pending);
     crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
     // the barometer is read a second after the start: the temperature is there by the time the tests look
     let temp = app.field_text(Field::Temp);
@@ -4145,8 +4145,8 @@ fn perf_budgets() {
     let profile = p(4, [Profile, ToGo, Climb, Time, Time, Time]);
     type Case = (&'static str, [crate::page::Page; 3], usize, Option<u32>, bool, (u64, u64));
     let cases: [Case; 11] = [
-        // measured 53 px/s, 0 windows/s (the clock's digits once a minute)
-        ("overview", [values, graph, map], PAGES, None, false, (150, 5)),
+        // measured 4 px/s, 0 windows/s (the strip; was 53 with the big clock's digits once a minute)
+        ("overview", [values, graph, map], PAGES, None, false, (30, 3)),
         // made in the editor: 2162, 6 (7101, 10 with the zone fills, 8959 at VALUE_MARGIN 2): eight values at 3x in
         // 120 x 74 boxes, the readings once a second, the zone a bar
         ("eight values", [eight, graph, map], 0, None, false, (3_500, 12)),

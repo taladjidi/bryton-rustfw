@@ -536,6 +536,13 @@ impl App {
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
                 let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
+                if let Some(menu::Row::Workout(k)) = self.row(menu, i)
+                    && let Some(p) = self.calendar.get(k)
+                {
+                    // the day over the length, and the workout's profile beside them: "SAT 24 OCT" is "SAT 24"
+                    let day = label.as_str().rsplit_once(' ').map_or(label.as_str(), |d| d.0);
+                    return ui::draw_workout_row(c, slot, (day, value.as_str()), i == sel, &p.prof);
+                }
                 ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =
                     self.row(menu, i)

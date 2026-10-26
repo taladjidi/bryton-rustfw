@@ -6,7 +6,7 @@ entirely. Not affiliated with Bryton.
 | | | | |
 |:-:|:-:|:-:|:-:|
 | ![Overview](docs/img/overview.png) | ![Ride started](docs/img/ride.png) | ![Power fields](docs/img/power.png) | ![W' balance graph](docs/img/wbal.png) |
-| Overview: time, date, four fields, notices (sim) | Start: the ride, said in a banner at the top (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot, never while recording (sim) |
+| Overview: the date, today's planned workout with its profile, four fields, notices (sim) | Start: the ride, said in a banner at the top (sim) | Power: 3 / 10 / 30 s, NP, IF, TSS (sim) | Graph of W' balance; a tap goes to the next plot, never while recording (sim) |
 | ![Power and HR graphs](docs/img/graphs.png) | ![HRV](docs/img/hrv.png) | ![Layout](docs/img/layout.png) | ![Settings](docs/img/settings.png) |
 | Power graph with its axes, over the HR graph (sim) | DFA a1 and RMSSD from the strap's beats (sim) | An uneven layout: a big box over 2 x 2 (sim) | SETTINGS > ME: values with their units, edited in place (sim) |
 | ![Ride card](docs/img/card.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |
@@ -27,6 +27,8 @@ entirely. Not affiliated with Bryton.
 | The touch lock: a padlock in the strip (sim) | A zone as an 8 px bar on the box's top edge (sim) | An empty list says so in a row: no notifications (sim) | The overview's cog opens the menu (sim) |
 | ![Overview, SMOOTH font](docs/img/overview-cog-smooth.png) | ![Target gauge](docs/img/gauge-zones.png) | ![Target gauge, half box](docs/img/gauge-zones-half.png) | ![Ramp test result](docs/img/ramp-result.png) |
 | The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | The target gauge spans every zone, power from 40 to 165 % of the FTP (sim) | The same in a half box: the climb pacer's TOP field (sim) | FTP ramp test result: FTP, best minute, APPLY / KEEP (sim) |
+| ![Rest day](docs/img/overview-rest.png) | ![WORKOUTS list](docs/img/workouts-list.png) | | |
+| The overview's TODAY card with nothing planned (sim) | WORKOUTS: each day's profile beside its date and length; tap the overview's card to get here (sim) | | |
 | ![FITNESS](docs/img/fitness.png) | ![Power meter calibration](docs/img/power-zero.png) | ![BIKE menu](docs/img/menu-bike.png) | |
 | HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | |
 

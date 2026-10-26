@@ -363,6 +363,8 @@ pub struct App {
     /// file; where it is (workout.rs).
     calendar: storage::workout::Calendar,
     calendar_day: Option<(u16, u8, u8)>,
+    /// The FTP and maximum heart rate the calendar's profiles were coloured with: another pair reads it again.
+    calendar_zones: (u16, u16),
     plan: storage::workout::Workout,
     plan_file: Option<fat::File>,
     player: Option<workout::Player>,
@@ -585,6 +587,7 @@ impl App {
             trash_check: false,
             calendar: Default::default(),
             calendar_day: None,
+            calendar_zones: (0, 0),
             plan_file: None,
             plan: storage::workout::Workout::new(),
             player: None,

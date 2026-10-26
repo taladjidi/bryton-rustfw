@@ -4,6 +4,9 @@
 
 use crate::*;
 
+/// The overview's calendar is read this long after the start, not at boot (the card is not touched then).
+pub(crate) const CALENDAR_MS: u32 = 8_000;
+
 /// No step: what a workout field shows past the last one.
 pub(crate) const OPEN: storage::workout::Step = storage::workout::Step {
     len: storage::workout::Length::Open,
@@ -64,8 +67,46 @@ impl App {
     /// Reads the workouts planned from today on (none if the card cannot be read).
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
         let vol = &mut emmc::Volume(&mut self.emmc, b);
-        self.calendar = storage::workout::calendar(vol, self.date).unwrap_or_default();
-        self.calendar_day = Some(self.date);
+        let zones = (self.settings.ftp, self.settings.max_hr);
+        self.calendar = storage::workout::calendar(vol, self.date, zones).unwrap_or_default();
+        (self.calendar_day, self.calendar_zones) = (Some(self.date), zones);
+    }
+
+    /// Reads the calendar again when it is not the one for today and the rider's zones (a new day, a new FTP or
+    /// maximum heart rate recolours the profiles); not while the computer holds the card. Not in the first
+    /// [`CALENDAR_MS`] after the start (the card is not touched then) unless `asked`.
+    pub(crate) fn refresh_calendar(&mut self, b: &mut impl Board, asked: bool) {
+        let zones = (self.settings.ftp, self.settings.max_hr);
+        let stale = self.calendar_day != Some(self.date) || self.calendar_zones != zones;
+        if stale && !self.emmc.lent() && (asked || self.gnss_ms >= CALENDAR_MS) {
+            self.load_calendar(b);
+        }
+    }
+
+    /// Today's planned workout, if any.
+    pub(crate) fn today(&self) -> Option<&storage::workout::Planned> {
+        self.calendar.iter().find(|p| p.day == self.date)
+    }
+
+    /// The overview's TODAY card whole ([`ui::draw_today`]).
+    pub(crate) fn draw_today(&self, c: &mut impl Canvas) {
+        let mut hm = Line::<8>::new();
+        match (self.today(), self.calendar_day) {
+            (Some(p), _) => {
+                push_hm(&mut hm, p.total_s);
+                let name = if p.name.as_str().is_empty() { "WORKOUT" } else { p.name.as_str() };
+                ui::draw_today(c, ui::Today::Planned(name, hm.as_str(), &p.prof));
+            }
+            (None, Some(_)) => ui::draw_today(c, ui::Today::Rest),
+            (None, None) => ui::draw_today(c, ui::Today::Pending),
+        }
+    }
+
+    /// A fingerprint of what the TODAY card shows (the date, the workout's name, length and profile).
+    pub(crate) fn today_print(&self) -> u32 {
+        let h = fnv(0x811c_9dc5, &[self.date.1, self.date.2, u8::from(self.calendar_day.is_some())]);
+        let Some(p) = self.today() else { return h };
+        fnv(fnv(fnv(h, p.name.as_str().as_bytes()), &p.total_s.to_le_bytes()), &p.prof)
     }
 
     /// Reads planned workout `k` and shows its steps. One workout at a time: while one runs, only its own steps
@@ -250,7 +291,7 @@ impl App {
                 l.push_u32(steps.len() as u32);
             }
             (Field::Workout, None) if self.player.is_some() => l.push_str("DONE"),
-            (Field::Workout, None) => match self.calendar.iter().find(|p| p.day == self.date) {
+            (Field::Workout, None) => match self.today() {
                 Some(p) => push_hm(&mut l, p.total_s),
                 None => l.push_str("--"),
             },

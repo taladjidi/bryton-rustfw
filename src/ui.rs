@@ -11,6 +11,7 @@ pub mod tiles;
 pub mod trainer;
 
 use crate::fonts::PIXEL;
+use crate::storage::workout::{PROF_H, unpack_bar};
 use text::{Align, Style};
 
 /// Panel width in pixels (portrait).
@@ -1396,18 +1397,20 @@ pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Opt
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The overview (the main screen): the time, the date, four fields of the user's choice, the notices
+// The overview (the main screen): the date, the TODAY card, four fields of the user's choice, the notices
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Hours and minutes: the pixel font at 7x, white. No seconds: the overview changes once a minute.
-pub const TIME: Style = Style { font: &PIXEL, scale: 7, fg: WHITE, bg: BLACK };
-/// Top of the hours and minutes.
-pub const TIME_Y: u32 = PAGE_Y + 6;
-/// Top of the date line.
-pub const DATE_Y: u32 = TIME_Y + PIXEL.height as u32 * TIME.scale; // the text box, not just the ink
-/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes). The date's row is as tall as the cog
-/// that ends it ([`COG`]), so the cog fits the row whole.
-pub const OVERVIEW_Y: u32 = DATE_Y + COG + 2;
+/// The date: the pixel font at 3x, one size up from the labels, white. The time is in the strip.
+pub const DATE: Style = Style { font: &PIXEL, scale: 3, fg: WHITE, bg: BLACK };
+/// Top of the date row.
+pub const DATE_Y: u32 = PAGE_Y + 1;
+/// Height of the date row: the date's text box.
+pub const DATE_H: u32 = PIXEL.height as u32 * DATE.scale;
+/// The TODAY card (left, top, width, height): a tap anywhere in it opens the calendar. Its top 4 rows are also in
+/// the cog's touch box, where the cog wins.
+pub const TODAY_BOX: (u32, u32, u32, u32) = (4, DATE_Y + DATE_H + 2, W - 8, 76);
+/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes), under the card.
+pub const OVERVIEW_Y: u32 = TODAY_BOX.1 + TODAY_BOX.3 + 2;
 /// See [`OVERVIEW_Y`].
 pub const OVERVIEW_H: u32 = NOTICES_Y - 4 - OVERVIEW_Y;
 /// Top of the notices: [`NOTICES`] rows of [`LIST_ROW`].
@@ -1415,46 +1418,103 @@ pub const NOTICES_Y: u32 = CRAB_Y - 4;
 /// Notices shown at most.
 pub const NOTICES: usize = 2;
 
-/// Left edge of "HH:MM", its ink centred (each cell ends with a blank column, the last one does not count).
-const TIME_X: u32 = (W - (5 * CELL - 1) * TIME.scale) / 2;
-
 /// Field box `i` of the overview's four.
 pub fn overview_box(i: usize) -> Option<(u32, u32, u32, u32)> {
     let (x, y, w, h) = field_box(4, OVERVIEW_H, i)?;
     Some((x, y - RIDE_Y + OVERVIEW_Y, w, h))
 }
 
-/// Overview digit `i` (H H M M) showing `d`, in its fixed cell of the monospaced font: only the digits that change
-/// are drawn, each one a SPI transfer.
-pub fn draw_main_digit(c: &mut impl Canvas, i: usize, d: u8) {
-    let col = if i < 2 { i } else { i + 1 } as u32; // the colon is column 2
-    let s = DIGITS[usize::from(d % 10)];
-    text::draw_in(c, &TIME, TIME_X + col * CELL * TIME.scale, TIME_Y, CELL * TIME.scale, Align::Left, s);
+/// The date row: the date left, white, the cog right.
+pub fn draw_date(c: &mut impl Canvas, date: &str) {
+    text::draw_in(c, &DATE, 8, DATE_Y, GEAR_AT.0 - 8 - 4, Align::Left, date);
+    draw_cog(c); // after the date: its box ends the row
 }
 
-/// The overview's time: the colon and the digits of HH MM.
-pub fn draw_main_time(c: &mut impl Canvas, digits: [u8; 4]) {
-    text::draw(c, &TIME, TIME_X + 2 * CELL * TIME.scale, TIME_Y, Align::Left, ":");
-    for (i, d) in digits.into_iter().enumerate() {
-        draw_main_digit(c, i, d);
+/// The longest start of `s` that fits `w` in `style`, whole characters.
+fn fit<'a>(style: &Style, s: &'a str, w: u32) -> &'a str {
+    let end =
+        s.char_indices().map(|(i, ch)| i + ch.len_utf8()).take_while(|&e| style.width(s.get(..e).unwrap_or("")) <= w);
+    s.get(..end.last().unwrap_or(0)).unwrap_or("")
+}
+
+/// Bars side by side from `x`, `colw` px each, on the baseline `y + h`: a bar is a byte of a workout's profile
+/// ([`unpack_bar`]: a height in 1/[`PROF_H`] of `h`, a colour), 0 for none; neighbours alike are one fill. The area
+/// is cleared before.
+pub fn draw_profile_bars(c: &mut impl Canvas, (x, y, h): (u32, u32, u32), colw: u32, bars: &[u8]) {
+    let mut i = 0;
+    while let Some(&bar) = bars.get(i) {
+        let mut j = i + 1;
+        while bars.get(j) == Some(&bar) {
+            j += 1;
+        }
+        let (level, color) = unpack_bar(bar);
+        if level > 0 {
+            let bh = (u32::from(level) * h / PROF_H).clamp(1, h);
+            c.fill(x + i as u32 * colw, y + h - bh, (j - i) as u32 * colw, bh, color);
+        }
+        i = j;
     }
 }
 
-/// The date line, centred, grey.
-pub fn draw_date(c: &mut impl Canvas, date: &str) {
-    let style = Style { fg: GREY, ..LABEL };
-    text::draw_in(c, &style, 0, DATE_Y + (COG - style.height()) / 2, W, Align::Centre, date); // level with the cog's middle
-    draw_cog(c); // after the date: its box spans the row
+/// What the TODAY card shows.
+#[derive(Clone, Copy)]
+pub enum Today<'a> {
+    /// The calendar is not read yet (it is, a few seconds after the start): the title alone.
+    Pending,
+    /// Nothing planned: REST DAY.
+    Rest,
+    /// A workout: its name, its length ("1:30") and its profile ([`draw_profile_bars`]).
+    Planned(&'a str, &'a str, &'a [u8]),
+}
+
+/// The TODAY card whole:"TODAY" and the length (H:MM) on the first line, the workout's name cut to the width on
+/// the second, its profile (a bar per column in its zone's colour, [`draw_profile_bars`]) under them; None: REST DAY in grey.
+/// Drawn once, when the overview opens and when the day or the calendar changes.
+pub fn draw_today(c: &mut impl Canvas, card: Today) {
+    let (x, y, w, h) = TODAY_BOX;
+    c.fill(x, y, w, h, BLACK);
+    for (rx, ry, rw, rh) in [(x, y, w, 1), (x, y + h - 1, w, 1), (x, y, 1, h), (x + w - 1, y, 1, h)] {
+        c.fill(rx, ry, rw, rh, DARK);
+    }
+    let (tx, tw) = (x + 6, w - 12);
+    let grey = Style { fg: GREY, ..LABEL };
+    text::draw(c, &grey, tx, y + 3, Align::Left, "TODAY");
+    match card {
+        Today::Planned(name, length, prof) => {
+            text::draw(c, &LABEL, x + w - 6, y + 3, Align::Right, length);
+            text::draw(c, &LABEL, tx, y + 23, Align::Left, fit(&LABEL, name, tw));
+            draw_profile_bars(c, (x + 4, y + 46, h - 51), (w - 8) / prof.len().max(1) as u32, prof);
+        }
+        Today::Rest => {
+            text::draw(c, &grey, tx, y + 23, Align::Left, "REST DAY");
+        }
+        Today::Pending => {}
+    }
+}
+
+/// A WORKOUTS list row in slot `slot`: the day over the length on the left, the workout's profile on the right
+/// ([`draw_profile_bars`], 2 px a column, on black even when the row is selected).
+pub fn draw_workout_row(c: &mut impl Canvas, slot: usize, (day, length): (&str, &str), selected: bool, prof: &[u8]) {
+    let y = LIST_Y + slot as u32 * MENU_ROW;
+    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
+    c.fill(0, y, W, MENU_ROW - 1, bg);
+    c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
+    let style = Style { fg, bg, ..LABEL };
+    text::draw(c, &style, NEARBY.0, y + 1, Align::Left, day);
+    text::draw(c, &style, NEARBY.0, y + 21, Align::Left, length);
+    let (bx, bw) = (W - 8 - 2 * prof.len() as u32 - 4, 2 * prof.len() as u32 + 4);
+    c.fill(bx, y + 3, bw, MENU_ROW - 7, BLACK);
+    draw_profile_bars(c, (bx + 2, y + 5, MENU_ROW - 11), 2, prof);
 }
 
 /// The menu button on the overview: a cog, [`COG`] px square.
 pub const COG: u32 = 25;
 /// Where the cog is drawn: right-aligned to the fields' margin, in the date's row, level with the date.
-pub const GEAR_AT: (u32, u32) = (W - 8 - COG, DATE_Y);
+pub const GEAR_AT: (u32, u32) = (W - 8 - COG, DATE_Y + (DATE_H - COG) / 2);
 /// The cog's centre, the middle of its touch box.
 pub const GEAR_C: (u32, u32) = (GEAR_AT.0 + COG / 2, GEAR_AT.1 + COG / 2);
-/// Where a tap opens the menu: 44 x 44 px round the cog (the menu rows' rule), over the clock's last digit and the
-/// first field's corner, where a tap does nothing else.
+/// Where a tap opens the menu: 44 x 44 px round the cog (the menu rows' rule), over the strip's bottom rows and the
+/// TODAY card's top right corner, where the cog wins.
 pub const GEAR_TAP: (u32, u32, u32, u32) = (W - 44, GEAR_C.1 - 22, 44, 44);
 
 /// Coverage (0 to 9, nine samples) of the cog's metal at pixel (`i`, `j`) of its [`COG`] square, symmetric: a ring
@@ -1918,8 +1978,9 @@ pub(crate) mod tests {
         const { assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2) };
         let strip = [STRIP_BLE, STRIP_GPS, STRIP_LOCK, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
-        assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);
-        assert!(GEAR_AT.1 + COG <= OVERVIEW_Y && GEAR_AT.0 + COG < W, "the cog in the date row");
+        assert!(DATE_Y > STRIP_H && DATE_Y + DATE_H < TODAY_BOX.1 && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y);
+        assert!(GEAR_AT.1 + COG <= TODAY_BOX.1 && GEAR_AT.0 + COG < W, "the cog in the date row");
+        assert!(DATE.width("WED 28 OCT") + 8 <= GEAR_AT.0 - 4, "the longest date clears the cog");
         assert!(GEAR_TAP.2 >= 44 && GEAR_TAP.3 >= 44 && GEAR_TAP.0 + GEAR_TAP.2 <= W, "a finger's size round the cog");
         assert!(
             NOTICES_Y + 4 + NOTICES as u32 * LIST_ROW <= H && overview_box(3).is_some_and(|b| b.1 + b.3 <= NOTICES_Y)

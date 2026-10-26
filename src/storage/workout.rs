@@ -45,6 +45,28 @@ pub const FILE_MAX: usize = 8192;
 pub const DAYS: usize = 8;
 /// Characters of a workout's name kept.
 pub const NAME: usize = 16;
+/// Columns of a planned workout's profile ([`Planned::prof`]): 4 px each on the overview's card, 2 px in the list.
+pub const PROF: usize = 56;
+/// Height of a profile column at most, the scale of [`Planned::prof`]'s heights (a nibble: 1 to 15).
+pub const PROF_H: u32 = 15;
+
+/// The colours a profile column takes: the seven zones' ([`crate::ride::ZONE_COLORS`]), grey for an open step, white
+/// for the rest ([`crate::workout::level`]).
+fn shades() -> [u16; 9] {
+    let z = crate::ride::ZONE_COLORS;
+    [z[0], z[1], z[2], z[3], z[4], z[5], z[6], crate::ui::GREY, crate::ui::WHITE]
+}
+
+/// A profile column as one byte: the height (1 to [`PROF_H`], 0 for none) over the colour's number.
+fn pack_bar((h, color): (u32, u16)) -> u8 {
+    let shade = shades().iter().position(|&c| c == color).unwrap_or(8) as u8;
+    (h.min(PROF_H) as u8) << 4 | shade
+}
+
+/// A profile column's height (of [`PROF_H`]; 0: none) and colour.
+pub fn unpack_bar(b: u8) -> (u8, u16) {
+    (b >> 4, shades().get(usize::from(b & 15)).copied().unwrap_or(crate::ui::WHITE))
+}
 
 /// What ends a step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,6 +459,24 @@ pub struct Planned {
     pub total_s: u32,
     /// Steps, repeats written out.
     pub steps: u8,
+    /// Its name, as [`Workout::name`].
+    pub name: crate::text::Line<NAME>,
+    /// Its profile, kept so the overview and the list draw without reading the card: a byte a column, its height
+    /// (1 to [`PROF_H`]; 0 past the end) and its zone colour ([`unpack_bar`]), for the FTP and maximum heart rate
+    /// it was read with ([`crate::workout::column`]). [`PROF`] bytes an entry, [`DAYS`] entries: 448 bytes.
+    pub prof: [u8; PROF],
+}
+
+impl Planned {
+    /// The entry for workout `w` of `file` on `day`, its profile coloured for these zones (FTP, maximum heart rate).
+    pub fn of(day: (u16, u8, u8), file: File, w: &Workout, zones: (u16, u16)) -> Self {
+        let mut name = crate::text::Line::new();
+        name.push_str(w.name());
+        let prof = core::array::from_fn(|k| {
+            pack_bar(crate::workout::column(w.steps(), zones, (PROF as u32, PROF_H), None, k as u32))
+        });
+        Planned { day, file, total_s: w.total_s(), steps: w.n, name, prof }
+    }
 }
 
 /// The workouts of today and the next days, earliest first ([`calendar`]).
@@ -457,7 +497,7 @@ impl Calendar {
     }
 
     /// Adds `p` in day order (after those of its day), dropping the latest when full.
-    fn add(&mut self, p: Planned) {
+    pub(crate) fn add(&mut self, p: Planned) {
         let at = self.days.iter().position(|d| d.is_none_or(|d| d.day > p.day)).unwrap_or(DAYS);
         if at < DAYS {
             self.days[at..].rotate_right(1);
@@ -503,7 +543,7 @@ pub const LOADS: usize = 2 * DAYS;
 /// no workout are left out. Bounded whatever the card holds (review 2: every future file was read): the day
 /// folders are listed first (32 bytes each), then only the earliest [`DAYS`] are looked into, earliest first, and at
 /// most [`LOADS`] files of [`FILE_MAX`] are read: about 130 KB, some 50 ms on the unit.
-pub fn calendar(d: &mut impl Disk, today: (u16, u8, u8)) -> Result<Calendar, fat::Error> {
+pub fn calendar(d: &mut impl Disk, today: (u16, u8, u8), zones: (u16, u16)) -> Result<Calendar, fat::Error> {
     let mut fat = Fat::mount(d)?;
     let dir = fat.open(d, "Workout/calendar")?;
     let mut days = fat.cursor(dir)?;
@@ -531,7 +571,7 @@ pub fn calendar(d: &mut impl Disk, today: (u16, u8, u8)) -> Result<Calendar, fat
             }
             loads += 1;
             if let Some(w) = load(&mut fat, d, &f.file) {
-                cal.add(Planned { day, file: f.file, total_s: w.total_s(), steps: w.n });
+                cal.add(Planned::of(day, f.file, &w, zones));
             }
         }
     }
@@ -682,15 +722,15 @@ pub(crate) mod tests {
     #[test]
     fn calendar_of_the_synthetic_card() {
         let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
-        let c = calendar(&mut d, (2026, 10, 23)).unwrap();
+        let c = calendar(&mut d, (2026, 10, 23), (200, 190)).unwrap();
         let got: Vec<_> = c.iter().map(|p| (p.day, p.total_s, p.steps)).collect();
         assert_eq!(got, [((2026, 10, 23), 20 + 2 * 45, 6), ((2026, 10, 25), 5400, 1)]);
         let mut fat = Fat::mount(&mut d).unwrap();
         let w = load(&mut fat, &mut d, &c.get(1).unwrap().file).unwrap();
         assert_eq!(w.name(), "LONG RIDE ? E", "15 bytes, the 3 of the dash as one mark");
         assert_eq!(w.steps()[0].target, Target { kind: Kind::Power, lo: 65, hi: 75, pct: true });
-        assert_eq!(calendar(&mut d, (2026, 10, 26)).unwrap(), Calendar::default(), "none planned");
-        assert!(calendar(&mut crate::fat::tests::Ram(Vec::new(), 0), (2026, 10, 23)).is_err(), "no volume");
+        assert_eq!(calendar(&mut d, (2026, 10, 26), (200, 190)).unwrap(), Calendar::default(), "none planned");
+        assert!(calendar(&mut crate::fat::tests::Ram(Vec::new(), 0), (2026, 10, 23), (200, 190)).is_err(), "no volume");
     }
 
     #[test]
@@ -698,7 +738,14 @@ pub(crate) mod tests {
         let f = File { cluster: 0, size: 0, dir: false };
         let mut c = Calendar::default();
         for d in [30u8, 25, 27, 25, 21, 22, 23, 24, 26, 28] {
-            c.add(Planned { day: (2026, 10, d), file: f, total_s: u32::from(d), steps: 1 });
+            c.add(Planned {
+                day: (2026, 10, d),
+                file: f,
+                total_s: u32::from(d),
+                steps: 1,
+                name: Default::default(),
+                prof: [0; PROF],
+            });
         }
         let days: Vec<_> = c.iter().map(|p| p.day.2).collect();
         assert_eq!(days, [21, 22, 23, 24, 25, 25, 26, 27]);

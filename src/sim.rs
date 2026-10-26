@@ -1485,6 +1485,8 @@ mod fecble_tests;
 #[cfg(test)]
 mod ftms_tests;
 #[cfg(test)]
+mod overview_tests;
+#[cfg(test)]
 mod powercal_tests;
 #[cfg(test)]
 mod ramp_tests;
