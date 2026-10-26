@@ -132,9 +132,10 @@
 //! cannot mend (the card full, or `Corrupt`) stops the ride's recording ([`Outcome::Stopped`]): the file is saved as
 //! its last checkpoint left it, which takes no new cluster, so a full card never leaves a ride open for good (nor the
 //! card unlendable to the computer that would free it).
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 use crate::fat::write::{Handle, dos_time};
-use crate::fat::{DiskWrite, Error, Fat, File, SECTOR};
+use crate::fat::{DiskWrite, Error, Fat, File, SECTOR, SECTOR_U32};
 use crate::fit::{self, RECORD_LEN, Sample, Sink, Writer};
 use crate::ride::RIDE_WORDS;
 
@@ -196,7 +197,18 @@ impl Kind {
 
     /// The discarded rides' folder: `\Rustfw\Discarded`, or `Full` in it.
     fn discarded_path(self) -> &'static str {
-        DISCARDED_PATHS[self as usize]
+        match self {
+            Kind::Clean => DISCARDED_PATHS[0],
+            Kind::Full => DISCARDED_PATHS[1],
+        }
+    }
+
+    /// Where GIVE UP SAVE names a stuck save's ride: `\Rustfw\Rescue`, or `Full` in it.
+    fn rescue_path(self) -> &'static str {
+        match self {
+            Kind::Clean => RESCUE_PATHS[0],
+            Kind::Full => RESCUE_PATHS[1],
+        }
     }
 
     /// Made if missing, at [`Recorder::setup`] only.
@@ -315,7 +327,7 @@ impl Rec {
         s[4..8].copy_from_slice(&self.seq.to_le_bytes());
         s[8] = self.phase as u8;
         s[9..21].copy_from_slice(&self.name);
-        s[21] = RIDE_WORDS as u8;
+        s[21] = u8::try_from(RIDE_WORDS).unwrap_or(0); // a constant under 256
         s[22] = u8::from(self.discard);
         s[24..28].copy_from_slice(&self.cluster.to_le_bytes());
         s[32..32 + RECORD_LEN].copy_from_slice(&self.fit);
@@ -334,7 +346,7 @@ impl Rec {
         {
             return None;
         }
-        let word = |i: usize| u32::from_le_bytes([s[i], s[i + 1], s[i + 2], s[i + 3]]);
+        let word = |i: usize| s.get(i..i + 4).and_then(|b| b.try_into().ok()).map_or(0, u32::from_le_bytes);
         let phase = match s[8] {
             0 => Phase::Done,
             1 => Phase::Starting,
@@ -359,8 +371,9 @@ impl Rec {
 
 /// `<name>.fit` as text.
 fn file_name<'a>(name: &[u8; 12], out: &'a mut [u8; 16]) -> Result<&'a str, Error> {
-    out[..12].copy_from_slice(name);
-    out[12..].copy_from_slice(b".fit");
+    for (o, &c) in out.iter_mut().zip(name.iter().chain(b".fit")) {
+        *o = c;
+    }
     core::str::from_utf8(out).map_err(|_| Error::Corrupt)
 }
 
@@ -371,9 +384,8 @@ fn file_name<'a>(name: &[u8; 12], out: &'a mut [u8; 16]) -> Result<&'a str, Erro
 /// ```
 pub fn ride_name((y, mo, d, h, mi, s): Local) -> [u8; 12] {
     let mut n = [b'0'; 12];
-    for (k, v) in [(y % 100) as u8, mo, d, h, mi, s].into_iter().enumerate() {
-        n[2 * k] = b'0' + (v / 10) % 10;
-        n[2 * k + 1] = b'0' + v % 10;
+    for (pair, v) in n.as_chunks_mut::<2>().0.iter_mut().zip([(y % 100) as u8, mo, d, h, mi, s]) {
+        *pair = [b'0' + (v / 10) % 10, b'0' + v % 10];
     }
     n
 }
@@ -385,7 +397,8 @@ pub fn ride_name((y, mo, d, h, mi, s): Local) -> [u8; 12] {
 /// assert_eq!(bryton_rustfw::recorder::next_name(&ride_name((2026, 1, 2, 9, 59, 59))), ride_name((2026, 1, 2, 10, 0, 0)));
 /// ```
 pub fn next_name(n: &[u8; 12]) -> [u8; 12] {
-    let v = |i: usize| n[i].saturating_sub(b'0') % 10 * 10 + n[i + 1].saturating_sub(b'0') % 10;
+    let digit = |i: usize| n.get(i).map_or(0, |c| c.saturating_sub(b'0') % 10);
+    let v = |i: usize| digit(i) * 10 + digit(i + 1);
     let (mut h, mut m, mut s) = (v(6), v(8), v(10) + 1);
     if s >= 60 {
         (s, m) = (0, m + 1);
@@ -394,9 +407,8 @@ pub fn next_name(n: &[u8; 12]) -> [u8; 12] {
         (m, h) = (0, (h + 1) % 24);
     }
     let mut out = *n;
-    for (k, x) in [h, m, s].into_iter().enumerate() {
-        out[6 + 2 * k] = b'0' + x / 10;
-        out[7 + 2 * k] = b'0' + x % 10;
+    for (pair, x) in out[6..].as_chunks_mut::<2>().0.iter_mut().zip([h, m, s]) {
+        *pair = [b'0' + x / 10, b'0' + x % 10];
     }
     out
 }
@@ -413,7 +425,7 @@ fn trailer_end(
     size: u32,
     trailer: [u8; 2],
 ) -> Result<(), Error> {
-    let (start, end) = (size.saturating_sub(2) / SECTOR as u32, size.saturating_sub(1) / SECTOR as u32);
+    let (start, end) = (size.saturating_sub(2) / SECTOR_U32, size.saturating_sub(1) / SECTOR_U32);
     if start == end {
         return Ok(());
     }
@@ -799,10 +811,9 @@ impl Recorder {
         if free.is_none_or(|n| u64::from(n) * u64::from(fat.cluster_bytes()) < FULL_RESERVE) {
             return Err(Error::Refused);
         }
-        let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
-        let mut dir = fat.ensure_dir(d, mine, "Rescue", t)?;
-        if self.kind == Kind::Full {
-            dir = fat.ensure_dir(d, dir, "Full", t)?;
+        let mut dir = fat.root();
+        for name in self.kind.rescue_path().split('/') {
+            dir = fat.ensure_dir(d, dir, name, t)?;
         }
         let mut buf = [0u8; 16];
         let mut name = self.name;
@@ -960,7 +971,7 @@ impl Recorder {
             return;
         }
         self.write_beats(true);
-        self.beats_dropped = self.beats_dropped.saturating_add(self.beats_n as u32);
+        self.beats_dropped = self.beats_dropped.saturating_add(u32::try_from(self.beats_n).unwrap_or(u32::MAX));
         self.beats_n = 0;
         let (mut sink, w) = self.ram();
         if w.end(&mut sink, time).is_err() {
@@ -1256,7 +1267,7 @@ impl Recorder {
             Err(_) => (None, false),
         };
         let whole = rides
-            && rec.is_some_and(|r| r.size >= REC_SECTORS * SECTOR as u32)
+            && rec.is_some_and(|r| r.size >= REC_SECTORS * SECTOR_U32)
             && fat.open(d, self.kind.saved()).is_ok()
             && fat.open(d, DISCARDED_PATHS[1]).is_ok();
         if !whole {
@@ -1268,9 +1279,9 @@ impl Recorder {
             Err(Error::NotFound) => fat.create(d, dir, self.kind.rec(), t)?,
             Err(e) => return Err(e),
         };
-        if rec.size < REC_SECTORS * SECTOR as u32 {
+        if rec.size < REC_SECTORS * SECTOR_U32 {
             fat.write_sectors(d, &mut rec, 0, &[0; REC_SECTORS as usize * SECTOR])?;
-            fat.set_size(d, &mut rec, REC_SECTORS * SECTOR as u32, t)?;
+            fat.set_size(d, &mut rec, REC_SECTORS * SECTOR_U32, t)?;
         }
         self.rec = Some(rec);
         let rides = fat.ensure_dir(d, dir, self.kind.rides().0, t)?;
@@ -1343,9 +1354,9 @@ impl Recorder {
             w.checkpoint(&mut sink).map_err(|_| Error::Corrupt)?;
         }
         // the sectors from the buffer's start to the end of the file, then sector 0's header, then the size
-        let n = (self.len - self.tail_off).div_ceil(SECTOR as u32) as usize;
+        let n = (self.len - self.tail_off).div_ceil(SECTOR_U32) as usize;
         let bytes = self.tail.get(..n * SECTOR).ok_or(Error::Corrupt)?;
-        fat.write_sectors(d, &mut file, self.tail_off / SECTOR as u32, bytes)?;
+        fat.write_sectors(d, &mut file, self.tail_off / SECTOR_U32, bytes)?;
         let mut first = [0u8; SECTOR];
         if self.tail_off > 0 {
             fat.read_sector(d, &file, 0, &mut first)?;
@@ -1357,7 +1368,7 @@ impl Recorder {
         fat.set_size(d, &mut file, self.len, t)?;
         self.file = Some(file);
         // the record, with the two sectors the next checkpoint rewrites in place as they are now
-        let next = (self.len - 2) / SECTOR as u32 * SECTOR as u32;
+        let next = (self.len - 2) / SECTOR_U32 * SECTOR_U32;
         let from = (next - self.tail_off) as usize;
         let mut last = [0u8; SECTOR];
         last.copy_from_slice(self.tail.get(from..from + SECTOR).ok_or(Error::Corrupt)?);
@@ -1382,7 +1393,7 @@ impl Recorder {
         let (rec, slot, size) = (self.rec.ok_or(Error::NotFound)?, 3 * (self.seq % 2), self.on_card);
         let mut s = [0u8; SECTOR];
         fat.read_sector(d, &rec, slot + 1, &mut s)?;
-        fat.write_sectors(d, &mut file, size.saturating_sub(2) / SECTOR as u32, &s)?;
+        fat.write_sectors(d, &mut file, size.saturating_sub(2) / SECTOR_U32, &s)?;
         trailer_end(fat, d, &mut file, size, self.on_card_trailer)?;
         fat.read_sector(d, &rec, slot, &mut s)?;
         fat.write_sectors(d, &mut file, 0, &s)?;
@@ -1413,7 +1424,7 @@ impl Recorder {
             };
             whole = n > 0 && (at > 0 || (n >= 14 && self.tail[4..8] == (size - 16).to_le_bytes()));
             crc = fit::crc(crc, self.tail.get(..n).unwrap_or(&[]));
-            at += n as u32;
+            at += u32::try_from(n).map_err(|_| Error::Corrupt)?;
         }
         if !whole || crc != 0 {
             return self.keep_in_rides(fat, d, t); // (named again if its entry went, at a save cut after step 4)
@@ -1601,16 +1612,18 @@ impl Recorder {
                 // were at its checkpoint (a cut while the next one rewrote them may have torn them in the file)
                 (self.writer, self.last_rec, self.skip_to) = (w, w.last_time(), w.last_time());
                 self.len = size;
-                self.tail_off = (size - 2) / SECTOR as u32 * SECTOR as u32;
+                self.tail_off = (size - 2) / SECTOR_U32 * SECTOR_U32;
                 self.tail = [0; TAIL];
                 let (rec, slot) = (self.rec.ok_or(Error::NotFound)?, 3 * (r.seq % 2));
                 let fits = fits(&file, fat.cluster_bytes());
                 let mut s = [0u8; SECTOR];
                 fat.read_sector(d, &rec, slot + 1, &mut s)?;
                 let keep = (size - self.tail_off) as usize;
-                self.tail[..keep.min(SECTOR)].copy_from_slice(&s[..keep.min(SECTOR)]);
+                for (x, &b) in self.tail.iter_mut().zip(&s).take(keep) {
+                    *x = b;
+                }
                 if entry.is_none() && fits {
-                    fat.write_sectors(d, &mut file, self.tail_off / SECTOR as u32, &s)?;
+                    fat.write_sectors(d, &mut file, self.tail_off / SECTOR_U32, &s)?;
                     trailer_end(fat, d, &mut file, size, w.trailer())?;
                 }
                 fat.read_sector(d, &rec, slot, &mut s)?;
