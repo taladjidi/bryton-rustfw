@@ -527,10 +527,7 @@ impl App {
             // today's workout: its steps with START selected; Start held does the same off a ride
             (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if inside(ui::TODAY_BOX, x, y) => self.open_today(b),
             (Screen::Main, Input::End) if self.ride.state() == ride::State::Idle => self.open_today(b),
-            (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
-                if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
-                    && (ui::GEAR_TAP.1..ui::GEAR_TAP.1 + ui::GEAR_TAP.3).contains(&u32::from(y)) =>
-            {
+            (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if inside(ui::GEAR_TAP, x, y) => {
                 self.open(Screen::Menu(self.menu_root(), 0)) // the gear: the menu by a tap, as the hold anywhere
             }
             // a hold on a ride page's box: the editor on it, that box selected (stock's long press; not while
@@ -699,8 +696,8 @@ pub(crate) fn sample_touch(
 }
 
 /// (`x`, `y`) is in box (left, top, width, height).
-pub(crate) fn inside((bx, by, w, h): (u32, u32, u32, u32), x: u16, y: u16) -> bool {
-    (bx..bx + w).contains(&u32::from(x)) && (by..by + h).contains(&u32::from(y))
+pub(crate) fn inside(r: impl Into<ui::Rect>, x: u16, y: u16) -> bool {
+    r.into().contains(x, y)
 }
 
 /// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,

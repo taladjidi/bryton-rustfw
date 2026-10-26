@@ -83,14 +83,8 @@ fn reading_boxes() -> [(u32, u32, u32, &'static str); 2] {
 
 /// The button under a touch at (`x`, `y`), if any.
 pub fn hit(x: u16, y: u16, bottom: Bottom) -> Option<Button> {
-    let (x, y) = (u32::from(x), u32::from(y));
     let row = bottom_buttons(bottom).into_iter().flatten().map(|(b, bx, w, ..)| (b, bx, BOTTOM_Y, w, BOTTOM_H));
-    BUTTONS
-        .iter()
-        .copied()
-        .chain(row)
-        .find(|&(_, bx, by, w, h)| x >= bx && x < bx + w && y >= by && y < by + h)
-        .map(|b| b.0)
+    BUTTONS.iter().copied().chain(row).find(|&(_, bx, by, w, h)| super::Rect(bx, by, w, h).contains(x, y)).map(|b| b.0)
 }
 
 /// What to show.
