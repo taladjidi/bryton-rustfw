@@ -13,7 +13,7 @@
 
 use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
-use bryton_rustfw::dev::{Effect, Host, Session, Stats};
+use bryton_rustfw::dev::{self, Effect, Host, Session, Stats};
 use bryton_rustfw::{App, Board, msc};
 use static_cell::StaticCell;
 use synopsys_usb_otg::{PhyType, UsbBus, UsbPeripheral};
@@ -428,11 +428,17 @@ impl Host for Link {
         stage_write(offset, data);
     }
 
+    // The computer's addresses reach rd / wr only here, checked again whatever the caller (dev.rs checks them too):
+    // aligned, poke in the peripheral space only (RM0399's memory map: 0x40000000 to 0x5fffffff), so it never
+    // writes RAM a Rust object lives in; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped.
     fn peek(&mut self, addr: u32) -> u32 {
-        rd(addr)
+        let ok = addr.is_multiple_of(4) && (dev::IO.contains(&addr) || dev::MEMORY.iter().any(|r| r.contains(&addr)));
+        if ok { rd(addr) } else { 0 }
     }
 
     fn poke(&mut self, addr: u32, value: u32) {
-        wr(addr, value);
+        if addr.is_multiple_of(4) && dev::IO.contains(&addr) {
+            wr(addr, value);
+        }
     }
 }

@@ -18,9 +18,11 @@
 //!   directory are too few in that sector, the entry goes into the next sector (a new cluster, zeroed, when the
 //!   directory has no next sector) and then the slots left before it are marked deleted (0xe5), which is the write
 //!   that makes it visible (the directory ends at the first 0x00 entry);
-//! - **a move:** the old entry marked deleted, then the new one written. A cut between leaves the chain lost (the
-//!   recorder's recovery record names it and finishes the move); the other order would leave two entries on one
-//!   chain, which a computer's fsck calls cross-linked and a delete of either would free under the other;
+//! - **a move:** room for the new entry made first ([`Fat::make_room`]: a zeroed cluster linked to the folder if it
+//!   needs one, so the last step takes no cluster), the old entry marked deleted, then the new one written. A cut
+//!   between leaves the chain lost (the recorder's recovery record names it and finishes the move); the other order
+//!   would leave two entries on one chain, which a computer's fsck calls cross-linked and a delete of either would
+//!   free under the other;
 //! - **a delete** only marks the entry (and its long name pieces) 0xe5: the rest of the entry, its first cluster
 //!   included, stays, so a lost file can be found by hand. Only the recorder's own entries are ever deleted, and the
 //!   old entry of a ride HISTORY's DELETE moves into `\Rustfw\Deleted` (`trash`, the second half of a move).
@@ -546,15 +548,18 @@ impl Fat {
                     return Ok((lba, (i + n - 1) as u8));
                 }
                 // too few slots left here: the entry goes first into the next sector, then the slots left here
-                // are marked deleted, which makes it visible
-                let target = if sec + 1 < self.spc {
-                    let mut t = [0u8; SECTOR];
-                    self.read(d, lba + 1, &mut t)?;
-                    put(&mut t, 0);
-                    self.write(d, lba + 1, &t)?;
-                    lba + 1
-                } else {
-                    self.extend_dir(d, cluster, entries)?
+                // are marked deleted, which makes it visible. The next sector is this cluster's, else the next
+                // cluster's when the chain has one ([`Fat::make_room`] linked it), else a new cluster
+                let next = if sec + 1 < self.spc { Some(lba + 1) } else { self.next(d, cluster)?.map(|c| self.lba(c)) };
+                let target = match next {
+                    Some(at) => {
+                        let mut t = [0u8; SECTOR];
+                        self.read(d, at, &mut t)?;
+                        put(&mut t, 0);
+                        self.write(d, at, &t)?;
+                        at
+                    }
+                    None => self.extend_dir(d, cluster, entries)?,
                 };
                 for k in i..ENTRIES {
                     s[k * 32] = 0xe5;
@@ -566,6 +571,38 @@ impl Fat {
                 Some(c) => cluster = c,
                 // every slot taken to the end of the chain: no end marker to move
                 None => return Ok((self.extend_dir(d, cluster, entries)?, (n - 1) as u8)),
+            }
+        }
+        Err(Error::Corrupt)
+    }
+
+    /// Makes sure `name`'s entries ([`Fat::link`]) go into folder `dir` without taking a cluster then: when its
+    /// chain has no room for them (the end marker too near a cluster's end, or no end marker), a zeroed cluster is
+    /// linked to it now (an empty piece of folder: valid at once, and kept). For a move: its second half must not fail
+    /// for want of a free cluster after its first ([`Fat::remove`]) made the chain nameless.
+    pub fn make_room(&mut self, d: &mut impl DiskWrite, dir: File, name: &str) -> Result<(), Error> {
+        let n = name.len().div_ceil(13).min(5) + 1; // as dir_entries
+        let mut cluster = dir.cluster;
+        for _ in 0..DIR_ENTRIES / (ENTRIES as u32) {
+            let mut end = false;
+            for sec in 0..self.spc {
+                let mut s = [0u8; SECTOR];
+                self.read(d, self.lba(cluster) + sec, &mut s)?;
+                if let Some(i) = (0..ENTRIES).find(|&i| s[i * 32] == 0) {
+                    if i + n <= ENTRIES || sec + 1 < self.spc {
+                        return Ok(()); // in this sector or the next (add_entries)
+                    }
+                    end = true; // the cluster's last sector: the next cluster's first, if there is one
+                    break;
+                }
+            }
+            match self.next(d, cluster)? {
+                Some(_) if end => return Ok(()),
+                Some(c) => cluster = c,
+                None => {
+                    self.extend_dir(d, cluster, &[])?;
+                    return Ok(());
+                }
             }
         }
         Err(Error::Corrupt)

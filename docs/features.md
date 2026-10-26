@@ -197,8 +197,10 @@ sizes) and the cue arrows stay pixel.
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
   rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
   at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
-  the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). At the end it is read back whole,
-  then moved to
+  the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). Its end card's NP, TSS and kJ
+  then cover the part after the restart only (the recovery record keeps the ride's totals, not the power sums); the
+  file holds every second's power, so the history's and a computer's numbers cover the whole ride. At the end it is
+  read back whole, then moved to
   `\Activities\YYMMDDhhmmss.fit` (stock's name and place: stock, its app, a computer and the history see it;
   "RIDE SAVED"). A card that fails shows "NOT SAVING" and the strip's dot grey, and is tried again; the ride goes
   on in RAM. A file that does not read back whole is left in `\Rustfw\Rides` ("SAVE FAILED"), never in the way of

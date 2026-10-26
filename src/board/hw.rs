@@ -111,17 +111,21 @@ fn copy_words(mut from: u32, mut to: u32, end: u32) {
 /// Reads the 32-bit word at `a`.
 #[inline(always)]
 pub fn rd(a: u32) -> u32 {
-    // SAFETY: only called with peripheral register addresses (RM0399 / BOARD.md) or, from this module, the
-    // link.x section bounds: always mapped and aligned, and no Rust reference points there while it runs, so a
-    // volatile access cannot break any.
+    // SAFETY: rd and wr are safe functions over any address, which the compiler cannot check: their soundness rests
+    // on every caller, and these are all of them. Register addresses (constants, each naming RM0399 or BOARD.md);
+    // in this module, the link.x section bounds and the fault marker; and usb.rs's peek / poke, the dev link's
+    // computer-given addresses, which they check first (aligned; poke in the peripheral space only, peek there or in
+    // the DTCM or the SDRAM: all mapped). A peek of RAM may read a value a Rust object holds (it writes nothing,
+    // and the value may be stale). A reserved address inside the peripheral space can still bus-fault: a reset
+    // (default_handler), never memory corrupted.
     unsafe { read_volatile(a as *const u32) }
 }
 
 /// Writes the 32-bit word at `a`.
 #[inline(always)]
 pub fn wr(a: u32, v: u32) {
-    // SAFETY: as rd; register writes only change hardware state, and the section copies in reset run before
-    // any Rust object exists there.
+    // SAFETY: as rd, whose callers are all of wr's: register writes only change hardware state (poke reaches only
+    // the peripheral space), and the section copies in reset run before any Rust object exists there.
     unsafe { write_volatile(a as *mut u32, v) }
 }
 

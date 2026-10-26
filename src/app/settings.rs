@@ -158,15 +158,16 @@ pub(crate) const PAGE_BKP_B: [[usize; 2]; REG_PAGES + 1] = [[19, 20], [21, 22], 
 pub(crate) const STOCK_BKP19: usize = 19;
 
 /// Where earlier builds kept the ride pages, one register each ([`PageCfg::from_word`]): read when the new ones
-/// are empty.
-pub(crate) const OLD_PAGE_BKP: [usize; REG_PAGES] = [14, 15, 16];
+/// are empty. Their page 3, in 16, is left out: 16 is [`POWER_BKP`] now, whose words carry the same tag.
+pub(crate) const OLD_PAGE_BKP: [usize; 2] = [14, 15];
 
 /// The backup register of the wheel size, the backlight, max heart rate and FTP: see [`Settings`].
 pub(crate) const WHEEL_BKP: usize = 11;
 
 /// The backup register of the rider's weight and W': see [`Settings::power_word`]. Not 12, which looks unused but
-/// holds stock's Nordic image number (BOARD.md 8, 11): 16 is ours (page 3 of earlier builds, read only to carry it
-/// over; a tagged word here is not a page, [`PageCfg::from_word`] wants tag 0xa).
+/// holds stock's Nordic image number (BOARD.md 8, 11): 16 is ours. The first builds kept page 3 there, but it is
+/// never read as a page now ([`OLD_PAGE_BKP`]): the power word's tag is 0xa too, [`PageCfg::from_word`]'s, and its
+/// bit 24 (the smooth font) would read as a layout.
 pub(crate) const POWER_BKP: usize = 16;
 
 /// The backup register of the fault marker (hw.rs default_handler): 0xfa in the top byte, the faults in a row in

@@ -18,8 +18,9 @@
 //! **Resume.** After a reset, [`Writer::from_record`] with the last record that was stored whole, then
 //! [`Writer::checkpoint`]: it writes the trailer and header from the record and cuts the file to that length,
 //! which gives the checkpoint's file back exactly (the data before it was never rewritten). Recording goes on.
-//! The caller keeps two copies of the record (old / new) and takes the valid one with the larger
-//! [`Writer::data_len`]. Doing this twice is harmless.
+//! The caller keeps two copies of the record (old / new) and takes the valid one with the larger sequence number
+//! (recorder.rs: never the larger [`Writer::data_len`], so a finished ride's record cannot pass for a new ride's).
+//! Doing this twice is harmless.
 //!
 //! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 12 (the full copy describes
 //! `ArtPct`: `ARTIFACTS`), bit 13 (the profile set by
