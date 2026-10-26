@@ -353,6 +353,9 @@ copied over USB into `\Courses`, read only:
   (5 % each side, the target in numbers under the bar, or at the top right of a short box); ahead of it only the time.
   The time to the top ("TOP 4:49", in the title) counts down between plans. Power equation of Martin et al. 1998 for
   the speed; W' recovery inside the climb ignored; all the W' goes to the climb in hand.
+  The plan is a closed form: with the budget spent above CP, every section not at a bound has the same optimal speed
+  (the optimal-control result, "constant speed"), so a plan is one bisection on that speed: about 75 us at 200 MHz
+  for 32 sections instead of about 1.9 ms (survey and sources in the module doc).
 - **Turn by turn** (course/cues.rs), as Garmin's, Wahoo's and Hammerhead's: the cues the file states (a FIT
   course's course points: left, right, slight and sharp turns, U-turn, straight on, summit, water, food, danger,
   first aid; GPX waypoints or track points whose `type`, `sym` or `name` is a turn word, as BRouter and RideWithGPS

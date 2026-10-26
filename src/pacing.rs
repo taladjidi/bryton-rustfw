@@ -11,19 +11,37 @@
 //! power against gravity, rolling resistance and air drag; no wind, no kinetic energy (steady speed per section),
 //! grade for sin(angle) and 1 for cos(angle) (3 % error at 20 %). Solved for `v` by Newton's method ([`speed`]).
 //!
-//! **Allocation.** Minimise the total time `sum t_i(P_i)` for `sum (P_i - CP) t_i <= W'`: a Lagrangian with
-//! multiplier `lambda`, section by section `t'(1 + lambda (P - CP)) + lambda t = 0` (the marginal time saved per
-//! joule of W' equal in every section): more power where the speed is low (the steep parts), as Swain 1997 ("A model
-//! for optimizing cycling performance by varying power on hills and in wind", Med Sci Sports Exerc 29(8):1104-1108)
-//! and the optimal-control studies find (Ashtiani, Vahidi et al., "Optimal pacing of a cyclist in a time trial based
-//! on experimentally calibrated models of fatigue and recovery", arXiv 2007.11393: CP is one of the four optimal
-//! modes, all-out another). `lambda` by bisection so the W' spent just fits the budget. On one constant grade this
-//! gives `P = CP + W'/T`.
+//! **Allocation.** Minimise the total time `sum L_i / v_i` for `sum (P_i - CP) L_i / v_i <= W'`, with the power of
+//! each section a function of its speed, `P = v (k + a v^2) / eta`. The stationarity condition with the multiplier
+//! `mu` is `2 a v^3 / eta + CP = 1 / mu`: it does not contain the grade, so **every section not at a bound rides at
+//! the same speed** `v` (the "constant speed" mode of the optimal-control studies: more power where it is steep,
+//! as Swain 1997 found, but the speed is one number). A section is at CP when `v` is under the speed it makes at CP,
+//! at the highest power when over the speed it makes there; those two speeds are solved once per section ([`speed`],
+//! Newton, 64 solves). The W' spent only rises with `v`, so the plan is one bisection on `v` (13 passes of 32
+//! sections for half a percent of the budget), no solver inside it. On one constant grade it gives
+//! `P = CP + W'/T`. The first version bisected `lambda` with a Newton solve for every section at every step: 9.7k
+//! Newton steps for 32 sections, about 1.9 ms at 200 MHz; now about 210 steps and 13 passes, about 75 us (the
+//! `replan_cost` test counts them), with the same or a slightly better time on the `compare_cases` cases.
 //!
-//! **Cost.** A plan of 32 sections takes a few thousand Newton steps (the `replan_cost` test counts them: about
-//! 40 cycles each on the Cortex-M7, which runs at 200 MHz here), so well under 5 ms, once per section.
+//! **Survey** (what was read, what was not; `inferred` marks a claim from a search summary only):
 //!
-//! The citations of Martin and Swain are from memory (the papers were not opened here); the arXiv one was checked.
+//! | Work | Model | Method | Gain over even power |
+//! |---|---|---|---|
+//! | Swain 1997, MSSE 29(8) | power equation, fixed mean power | numerical search | savings from varying power on hills and wind |
+//! | Atkinson, Peacock, Passfield 2007 (Eur J Appl Physiol, PubMed 17497402), Atkinson & Brunskill 2000 | Martin-type model, no W' | simulation | +-10 % power variation: 126 s (hilly) and 51 s (windy) on Swain's courses; 26 s on a 40 km flat TT |
+//! | Ashtiani, Vahidi, arXiv 2007.11393 | fatigue / recovery models fitted per rider | Pontryagin: four modes (all-out, coast, CP, constant speed), dynamic programming | 3 % in a pilot with real-time pacing; 24 % in simulation against a self-paced ride |
+//! | Gordon 2005, Cangley 2011, de Jong 2017, Wolf et al. 2019, Sundstrom, Boswell 2012 | W' / CP and variants | NLP, dynamic programming | not read here (`inferred`: all find more power on steeper parts) |
+//! | Best Bike Split, Garmin PacePro / PowerGuide, Bryton | proprietary | not documented | not documented |
+//!
+//! Decisions for a 200 MHz core replanning once a section: the model and the "constant speed on the interior" closed
+//! form above stay (it is the Pontryagin result for this budget, without recovery); dynamic programming and NLP
+//! (state: W' balance, a grid of speeds) cost thousands of times more for a gain only when W' recovery on descents
+//! inside a climb matters, which a 200 m grid on a climb rarely shows; a Cardano cube root is not needed (the cubic is
+//! avoided, not solved faster); warm starts, merged sections and an early exit on steep grades would save under 20 us
+//! of the 75 and were not done. W' recovery (Skiba) on a descent inside the climb, wind and CdA stay out: they break
+//! the one-speed form and the settings do not hold them. The top power `CP + W'/60` (what the balance would spend in a
+//! minute) is kept as the sprint limit; it binds only on very short steep sections.
+//!
 //! Constants are those of a typical road rider climbing on the hoods; a setting later if the owner asks.
 
 /// Sections a plan holds at most (the course's climbs are cut into at most this many).
@@ -44,8 +62,6 @@ const VMAX: f32 = 25.0;
 const VMIN: f32 = 0.3;
 /// Largest grade used either way (a data error beyond it).
 const GRADE_MAX: f32 = 0.4;
-/// Upper bound of the multiplier, 1/W: above it every section is at CP (t'/t is about 1/(3 P)).
-const LAMBDA_MAX: f32 = 0.1;
 
 /// A piece of the climb.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,6 +121,9 @@ fn coefs(grade_x10: i16, mass: f32) -> (f32, f32) {
 extern crate std;
 #[cfg(test)]
 std::thread_local!(static STEPS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) });
+// Passes over the sections by the plan's search (tests count them too).
+#[cfg(test)]
+std::thread_local!(static PASSES: core::cell::Cell<u32> = const { core::cell::Cell::new(0) });
 
 /// The steady speed at pedal power `p` W on a section with terms `k`, `a`, m/s: Newton's method on the wheel power
 /// `f(v) = v (k + a v^2)`, which is increasing and convex for `v` above the speed where `k + a v^2` is zero (all
@@ -133,35 +152,6 @@ pub fn speed(p: f32, k: f32, a: f32) -> f32 {
     v.clamp(VMIN, VMAX)
 }
 
-/// A section's time at `p`, s, and its derivative by power (s/W, never positive).
-fn time(len: f32, k: f32, a: f32, p: f32) -> (f32, f32) {
-    let v = speed(p, k, a);
-    let dv = if v >= VMAX { 0.0 } else { ETA / (k + 3.0 * a * v * v).max(1e-3) };
-    (len / v, -len / (v * v) * dv)
-}
-
-/// The power of one section for the multiplier `lam`, W, known to lie in `lo..=up` (bisected until the bracket is
-/// under a quarter watt: the section's power only falls as `lam` rises, so the brackets of the plan's search narrow
-/// with it and later calls take two or three steps).
-fn power_at(len: f32, (k, a): (f32, f32), cp: f32, (mut lo, mut up): (f32, f32), lam: f32) -> f32 {
-    let slope = |p: f32| {
-        let (t, dt) = time(len, k, a, p);
-        dt * (1.0 + lam * (p - cp)) + lam * t
-    };
-    for _ in 0..12 {
-        if up - lo < 0.25 {
-            break;
-        }
-        let mid = (lo + up) * 0.5;
-        if slope(mid) < 0.0 {
-            lo = mid;
-        } else {
-            up = mid;
-        }
-    }
-    (lo + up) * 0.5
-}
-
 /// The fastest way up `secs` (at most [`MAX`]) for `r`: a power for each section and the time. An empty plan for no
 /// sections or a CP that is not positive; a budget of nothing gives CP everywhere. Never NaN: inputs are clamped.
 ///
@@ -185,40 +175,53 @@ pub fn plan(secs: &[Sec], r: &Rider) -> Plan {
     let w_full = if r.w_full.is_finite() { r.w_full.max(0.0) } else { 0.0 };
     let budget = if r.budget.is_finite() { r.budget.clamp(0.0, w_full) } else { 0.0 };
     let hi = cp + w_full / 60.0;
-    let mut sec = [(0f32, (0f32, 0f32)); MAX];
+    // per section: length, k, speeds at CP and at the highest power (the clamps of the power band)
+    let mut sec = [(0f32, 0f32, 0f32, 0f32); MAX];
     for (s, i) in sec.iter_mut().zip(secs) {
-        *s = (f32::from(i.len_m), coefs(i.grade_x10, mass));
+        let (k, a) = coefs(i.grade_x10, mass);
+        *s = (f32::from(i.len_m), k, speed(cp, k, a), speed(hi, k, a));
     }
     let sec = sec.get(..n).unwrap_or(&[]);
-    // the W' spent and the time of powers `p`
-    let measure = |p: &[f32; MAX]| {
-        let (mut work, mut total) = (0f32, 0f32);
-        for (&(len, (k, a)), &w) in sec.iter().zip(p) {
-            let t = time(len, k, a, w).0;
-            (work, total) = (work + (w - cp) * t, total + t);
+    let a = 0.5 * CDA * RHO;
+    // The W' spent and the time when every section not at a clamp rides at speed `v`, and the powers. Power from speed
+    // is explicit (`P = v (k + a v^2) / eta`), so no section is solved: at or below its CP speed a section rides at
+    // CP (no W'), at or above its top-power speed at the top power, else at `v`.
+    let measure = |v: f32, p: &mut [f32; MAX]| {
+        #[cfg(test)]
+        PASSES.with(|s| s.set(s.get() + 1));
+        let (mut work, mut total, inv) = (0f32, 0f32, 1.0 / v);
+        for (&(len, k, v_cp, v_top), w) in sec.iter().zip(p.iter_mut()) {
+            let (pw, t) = if v <= v_cp {
+                (cp, len / v_cp)
+            } else if v >= v_top {
+                (hi, len / v_top)
+            } else {
+                ((v * (k + a * v * v) / ETA).clamp(cp, hi), len * inv)
+            };
+            *w = pw;
+            (work, total) = (work + (pw - cp) * t, total + t);
         }
         (work, total)
     };
+    let v_lo = sec.iter().fold(VMAX, |m, s| m.min(s.2)); // every section at CP
+    let v_up = sec.iter().fold(VMIN, |m, s| m.max(s.3)); // every section at the top power
     let mut best = [cp; MAX]; // the powers kept: the most that spends no more than the budget
-    let top = [hi; MAX];
+    let mut total = measure(v_lo, &mut best).1;
     if budget >= 1.0 {
-        if measure(&top).0 <= budget {
-            best = top; // the budget covers every section at the highest power
+        let mut p = [cp; MAX];
+        let (work, t) = measure(v_up, &mut p);
+        if work <= budget {
+            (best, total) = (p, t); // the budget covers every section at the highest power
         } else {
-            // bisect the multiplier; each section's power lies between its powers at the two ends, which narrow
-            let (mut lo, mut up) = (0.0, LAMBDA_MAX);
-            let (mut p_lo, mut p_up) = (top, [cp; MAX]); // at the ends: `lo` (higher powers), `up`
+            // bisect the speed: the W' spent only rises with it, from nothing at `v_lo`
+            let (mut lo, mut up) = (v_lo, v_up);
             for _ in 0..24 {
-                let lam = (lo + up) * 0.5;
-                let mut p = [cp; MAX];
-                for ((w, &(len, c)), (&l, &u)) in p.iter_mut().zip(sec).zip(p_up.iter().zip(&p_lo)) {
-                    *w = power_at(len, c, cp, (l, u), lam);
-                }
-                let (work, _) = measure(&p);
+                let v = (lo + up) * 0.5;
+                let (work, t) = measure(v, &mut p);
                 if work > budget {
-                    (lo, p_lo) = (lam, p);
+                    up = v;
                 } else {
-                    (up, p_up, best) = (lam, p, p);
+                    (lo, best, total) = (v, p, t);
                     if work >= budget * 0.995 {
                         break; // within half a percent of the budget: enough
                     }
@@ -226,7 +229,6 @@ pub fn plan(secs: &[Sec], r: &Rider) -> Plan {
             }
         }
     }
-    let (_, total) = measure(&best);
     let mut watts = [0u16; MAX];
     for (w, &p) in watts.iter_mut().zip(&best) {
         *w = (p + 0.5).clamp(0.0, 65_535.0) as u16;
@@ -261,7 +263,7 @@ mod tests {
         assert!(p.watts[1] > p.watts[0], "{:?}", &p.watts[..2]);
         // even pacing at the same W' (the same power on both sections)
         let (k0, k1) = (coefs(30, 84.0), coefs(100, 84.0));
-        let even = |w: f32| time(500.0, k0.0, k0.1, w).0 + time(500.0, k1.0, k1.1, w).0;
+        let even = |w: f32| 500.0 / speed(w, k0.0, k0.1) + 500.0 / speed(w, k1.0, k1.1);
         let mut w = 250.0;
         while (w - 250.0) * even(w) < 10_000.0 {
             w += 0.5;
@@ -305,11 +307,50 @@ mod tests {
         let secs: std::vec::Vec<Sec> =
             (0..32).map(|i| Sec { len_m: 100 + i * 5, grade_x10: 20 + (i as i16 * 37) % 100 }).collect();
         STEPS.with(|s| s.set(0));
+        PASSES.with(|s| s.set(0));
         let p = plan(&secs, &rider(12_000.0));
-        let steps = STEPS.with(|s| s.get());
-        // about 40 cycles a step at 200 MHz: 5 ms is 25,000 steps
-        std::println!("replan of 32 sections: {steps} Newton steps, about {} ms", steps * 40 / 200_000);
-        assert!(steps < 12_000 && p.n == 32, "{steps}");
+        let (steps, passes) = (STEPS.with(|s| s.get()), PASSES.with(|s| s.get()));
+        // about 40 cycles a Newton step and 32 x 15 cycles a pass, at 200 MHz
+        let cycles = steps * 40 + passes * 32 * 15;
+        std::println!("replan of 32 sections: {steps} Newton steps, {passes} passes, about {} us", cycles / 200);
+        assert!(steps < 600 && passes < 30 && p.n == 32, "{steps} {passes}");
+    }
+
+    /// The cases the solver is compared on: (name, sections, budget J).
+    fn cases() -> std::vec::Vec<(&'static str, std::vec::Vec<Sec>, f32)> {
+        let rep = |n: usize, len: u16, g: i16| std::vec![Sec { len_m: len, grade_x10: g }; n];
+        let mut stepped = rep(8, 500, 40);
+        stepped.extend(rep(8, 500, 100));
+        stepped.extend(rep(8, 500, 20));
+        stepped.extend(rep(8, 500, 80));
+        let mut dip = rep(10, 300, 80);
+        dip.extend(rep(3, 150, -40));
+        dip.extend(rep(10, 300, 90));
+        let mixed: std::vec::Vec<Sec> =
+            (0..32).map(|i| Sec { len_m: 100 + i * 5, grade_x10: 20 + (i as i16 * 37) % 100 }).collect();
+        std::vec![
+            ("col 10 km 7 %", rep(32, 312, 70), 15_000.0),
+            ("stepped 4/10/2/8", stepped, 15_000.0),
+            ("short descent", dip, 12_000.0),
+            ("mixed", mixed, 12_000.0),
+            ("two", std::vec![Sec { len_m: 500, grade_x10: 30 }, Sec { len_m: 500, grade_x10: 100 }], 10_000.0),
+        ]
+    }
+
+    #[test]
+    fn compare_cases() {
+        for (name, secs, budget) in cases() {
+            let p = plan(&secs, &rider(budget));
+            let spent: f32 = secs
+                .iter()
+                .zip(&p.watts)
+                .map(|(s, &w)| {
+                    let (k, a) = coefs(s.grade_x10, 84.0);
+                    (f32::from(w) - 250.0).max(0.0) * f32::from(s.len_m) / speed(f32::from(w), k, a)
+                })
+                .sum();
+            assert!(spent < budget * 1.05 && p.total_s > 0, "{name}: {spent} of {budget}");
+        }
     }
 
     #[test]
