@@ -214,7 +214,7 @@ impl App {
         // a course followed, whether or not the map can draw it yet (no fix, a ride started without one: review)
         match n {
             COURSE => self.courses.as_deref().is_some_and(|c| c.on.is_some()),
-            WORKOUT => self.player.is_some(),
+            WORKOUT => self.plan.player.is_some(),
             n => n < self.ride_count() && !(self.indoors() && self.indoor_blank(n)),
         }
     }

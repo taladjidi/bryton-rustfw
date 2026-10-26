@@ -1074,7 +1074,7 @@ pub(super) fn release_after(sim: &mut Sim, app: &mut App, how: Ends, erg: fn(&Si
             app.press(sim, Press::Long(Key::Page));
             super::tests::to_row(sim, app, Row::Ride(RideRow::StopWorkout));
             app.press(sim, Press::Short(Key::Start));
-            assert!(app.player.is_none(), "stopped");
+            assert!(app.plan.player.is_none(), "stopped");
         }
         Ends::EndRide => {
             app.press(sim, Press::Short(Key::Start)); // pause
@@ -1153,7 +1153,11 @@ fn a_restart_releases_the_trainer() {
     sim2.nordic.trainer.mode = 0x31; // the same trainer, still at the target the workout left
     sim2.nordic.trainer.target_w = 210;
     run(&mut sim2, &mut app2, 8000);
-    assert!(app2.player.is_none() && ant_free(&sim2), "let go at the first contact: {:#x}", sim2.nordic.trainer.mode);
+    assert!(
+        app2.plan.player.is_none() && ant_free(&sim2),
+        "let go at the first contact: {:#x}",
+        sim2.nordic.trainer.mode
+    );
 }
 
 /// ANT+: the ride paused (by hand, or by itself after 3 s without power or cadence) lets the trainer go; resumed, or

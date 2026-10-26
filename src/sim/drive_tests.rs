@@ -31,7 +31,7 @@ fn no_workout_while_the_card_is_lent() {
     let screen = app.screen();
     app.start_workout(0);
     assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
-    assert!(app.player.is_none() && app.ride.state() == ride::State::Idle);
+    assert!(app.plan.player.is_none() && app.ride.state() == ride::State::Idle);
     assert_eq!(app.screen(), screen);
 }
 

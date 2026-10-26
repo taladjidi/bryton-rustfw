@@ -654,12 +654,12 @@ fn long_target_and_grade_texts_are_not_cut() {
     let mut app = App::start(&mut sim, None);
     let power =
         |lo, hi| Step { len: Length::Time(60), target: Target { kind: Kind::Power, lo, hi, pct: false }, intensity: 5 };
-    app.plan = Workout::built("X", &[power(200, 220), power(950, 1050), power(995, 1005)]);
+    app.plan.workout = Workout::built("X", &[power(200, 220), power(950, 1050), power(995, 1005)]);
     for (at, want) in [(0, "210|+-10"), (1, "1000|50"), (2, "1000|+-5")] {
         let steps = app.plan.steps();
         let mut p = crate::workout::Player::start(steps, at, 0).0;
         p.second(steps, true, 0);
-        app.player = Some(p);
+        app.plan.player = Some(p);
         assert_eq!(app.field_text(Field::StepTarget).as_str(), want);
     }
     let grade = |head: &str, g| {
@@ -1010,7 +1010,7 @@ fn workout_from_the_calendar() {
     sim.save("workout_list");
 
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.screen(), app.plan.name()), (Screen::Menu(Menu::Steps, 0), "SHORT INTERVALS"));
+    assert_eq!((app.screen(), app.plan.workout.name()), (Screen::Menu(Menu::Steps, 0), "SHORT INTERVALS"));
     let steps: Vec<_> = (0..8).map(|i| row(&app, Menu::Steps, i)).collect();
     let want = ["START 0:01", "0:20 100-120W", "0:30 200-220W", "0:15 150W", "0:30 200-220W", "0:15 150W"];
     assert_eq!(steps[..6], want, "FTP 200: Bryton's 50-60 %, then % FTP, then W");
@@ -1033,7 +1033,7 @@ fn workout_from_the_calendar() {
         "210 W over 100-120: white digits, the bar says over"
     );
     let (mut ms, start) = (0, sim.ms);
-    while app.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
+    while app.plan.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
         run(&mut sim, &mut app, 50);
         ms += 50;
         assert!(ms < 30_000, "the warm-up ends");
@@ -1123,7 +1123,7 @@ fn a_workout_opens_the_page_that_shows_it() {
     assert!(!app.pages[0].fields.iter().any(|f| f.is_workout()), "the default page has no workout field");
     start(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Ride(0), "no page shows it: page 1");
-    assert!(app.player.is_some());
+    assert!(app.plan.player.is_some());
     // a new ride and workout, with the step on page 3
     let (mut sim, mut app) = {
         let mut sim = Sim::new(9, 0, 0);
@@ -1238,7 +1238,7 @@ fn workout_gauge_field() {
     sim.save("workout_gauge_over");
 
     let mut ms = 0;
-    while app.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
+    while app.plan.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
         run(&mut sim, &mut app, 100);
         ms += 100;
         assert!(ms < 30_000, "the warm-up ends");
@@ -2222,7 +2222,7 @@ fn ride_menu() {
     app.press(&mut sim, Press::Short(Key::Start)); // the first one's steps
     app.press(&mut sim, Press::Short(Key::Start)); // START
     assert_eq!(app.screen(), Screen::Ride(0));
-    let step = |app: &App| app.player.as_ref().and_then(|p| p.step(app.plan.steps()));
+    let step = |app: &App| app.plan.player.as_ref().and_then(|p| p.step(app.plan.steps()));
     assert_eq!(step(&app), Some(0));
     hold_page(&mut sim, &mut app);
     assert_eq!(labels(&app)[2], "WORKOUT");
@@ -2241,7 +2241,7 @@ fn ride_menu() {
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopWorkout));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(
-        (app.player.is_none(), app.screen(), app.notes.text.as_str()),
+        (app.plan.player.is_none(), app.screen(), app.notes.text.as_str()),
         (true, Screen::Ride(0), "WORKOUT STOPPED")
     );
     assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");

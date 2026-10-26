@@ -159,7 +159,7 @@ impl App {
                 let mut title = Line::<16>::new();
                 match menu {
                     Menu::Page(OVERVIEW) => title.push_str("OVERVIEW"),
-                    Menu::Steps if !self.plan.name().is_empty() => title.push_str(self.plan.name()),
+                    Menu::Steps if !self.plan.workout.name().is_empty() => title.push_str(self.plan.workout.name()),
                     Menu::Edit(k) => {
                         title.push_str("PAGE ");
                         title.push_u32(self.edit.map_or(0, |e| e.page) as u32 + 1);

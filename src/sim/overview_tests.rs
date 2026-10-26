@@ -79,8 +79,8 @@ fn calendar(app: &App, days: &[(u8, &Workout)]) -> Calendar {
 
 /// Puts `c` where the app has it after reading the card.
 fn plan(app: &mut App, days: &[(u8, &Workout)]) {
-    app.calendar = calendar(app, days);
-    (app.calendar_day, app.calendar_zones) = (Some(app.date), (app.settings.ftp, app.settings.max_hr));
+    app.plan.calendar = calendar(app, days);
+    (app.plan.day, app.plan.zones) = (Some(app.date), (app.settings.ftp, app.settings.max_hr));
 }
 
 /// The colour of column `k` of the TODAY card's profile, at its baseline, as the Sim's panel shows it.
@@ -136,10 +136,10 @@ fn the_card_follows_the_calendar() {
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 3000);
-    assert!(app.calendar_day.is_none(), "not at boot");
+    assert!(app.plan.day.is_none(), "not at boot");
     assert_consistent(&mut sim, &mut app);
     run(&mut sim, &mut app, 6000);
-    assert_eq!(app.calendar_day, Some(app.date));
+    assert_eq!(app.plan.day, Some(app.date));
     assert!(app.today().is_some(), "the synthetic card plans a workout today");
     assert_consistent(&mut sim, &mut app);
 }
@@ -154,7 +154,7 @@ fn a_tap_on_the_card_opens_the_calendar() {
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 1500);
-    assert!(app.calendar_day.is_none());
+    assert!(app.plan.day.is_none());
     let (x, y, w, h) = TODAY_BOX;
     let tap = |app: &mut App, sim: &mut Sim, x, y| app.input(sim, Input::Touch(Gesture::Tap(x as u16, y as u16)));
     for (tx, ty) in [(x + w / 2, y + h / 2), (x + 8, y + h - 8), (x + w - 8, y + h - 8)] {
@@ -202,7 +202,7 @@ fn todays_workout_in_two_inputs() {
     sim.save("today_steps");
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, start_row_y)));
     inputs += 1;
-    assert!(app.player.is_some() && app.ride.state() == ride::State::Running, "START started it");
+    assert!(app.plan.player.is_some() && app.ride.state() == ride::State::Running, "START started it");
     assert_eq!(inputs, 2, "was 5");
 
     // by keys
@@ -210,7 +210,7 @@ fn todays_workout_in_two_inputs() {
     app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Steps, 0), "Start held opens today's steps");
     app.press(&mut sim, Press::Short(Key::Start));
-    assert!(app.player.is_some(), "Start starts it (2 keys, was 4)");
+    assert!(app.plan.player.is_some(), "Start starts it (2 keys, was 4)");
     // a rest day
     let (mut sim, mut app) = unit();
     plan(&mut app, &[(1, &sweet_spot())]);
@@ -274,13 +274,13 @@ fn zones_and_days_read_the_calendar_again() {
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 10_000);
-    assert_eq!(app.calendar_zones.0, 200);
+    assert_eq!(app.plan.zones.0, 200);
     sim.emmc.cmds.clear();
     run(&mut sim, &mut app, 2000);
     assert!(sim.emmc.cmds.is_empty(), "nothing read while nothing changes");
     app.settings.ftp = 300;
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.calendar_zones.0, 300, "read again with the new FTP");
+    assert_eq!(app.plan.zones.0, 300, "read again with the new FTP");
     assert!(!sim.emmc.cmds.is_empty());
     assert_consistent(&mut sim, &mut app);
 }
@@ -294,9 +294,9 @@ fn midnight_reads_the_calendar_again() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 12_000);
     let day = app.date;
-    assert_eq!(app.calendar_day, Some(day));
+    assert_eq!(app.plan.day, Some(day));
     run(&mut sim, &mut app, 12_000);
     assert_ne!(app.date, day, "midnight passed");
-    assert_eq!(app.calendar_day, Some(app.date), "read again");
+    assert_eq!(app.plan.day, Some(app.date), "read again");
     assert_consistent(&mut sim, &mut app);
 }

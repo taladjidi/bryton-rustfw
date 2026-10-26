@@ -104,7 +104,7 @@ impl App {
     /// distance ridden (the trainer's speed advances the ride; no GPS indoors).
     pub(crate) fn trainer_drive(&self) -> Drive {
         let steps = self.plan.steps();
-        let step = self.player.and_then(|p| p.step(steps));
+        let step = self.plan.player.and_then(|p| p.step(steps));
         let erg_w = step
             .and_then(|i| steps.get(i))
             .filter(|s| s.target.kind == storage::workout_file::Kind::Power)

@@ -338,12 +338,12 @@ impl App {
     pub(crate) fn workout_now(&self, cols: u32) -> WorkoutShown {
         let steps = self.plan.steps();
         let total = workout::graph_total_s(steps);
-        let rider = self.player.filter(|_| total > 0).map(|p| match p.graph_at(steps, self.ride.dist_m()) {
+        let rider = self.plan.player.filter(|_| total > 0).map(|p| match p.graph_at(steps, self.ride.dist_m()) {
             at if at >= total => cols, // done: all of it dark
             at => (u64::from(at) * u64::from(cols) / u64::from(total)) as u32,
         });
         let zones = (self.settings.ftp, self.settings.max_hr);
-        WorkoutShown { file: self.plan_file.filter(|_| total > 0), zones, rider }
+        WorkoutShown { file: self.plan.file.filter(|_| total > 0), zones, rider }
     }
 
     /// The workout graph in box `bx`, whole.

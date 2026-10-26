@@ -309,13 +309,7 @@ pub struct App {
     trash_check: bool,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
     /// file; where it is (workout.rs).
-    calendar: storage::workout_file::Calendar,
-    calendar_day: Option<(u16, u8, u8)>,
-    /// The FTP and maximum heart rate the calendar's profiles were coloured with: another pair reads it again.
-    calendar_zones: (u16, u16),
-    plan: storage::workout_file::Workout,
-    plan_file: Option<fat::File>,
-    player: Option<workout::Player>,
+    plan: Plan,
     /// The ramp test being ridden, its last result, and the result screen due (app/ramp.rs).
     ramp: Option<ramp::Ramp>,
     ramp_result: Option<ramp::Outcome>,
@@ -489,12 +483,7 @@ impl App {
             dt_ms: POLL_MS,
             past: history::Past::new(),
             trash_check: false,
-            calendar: Default::default(),
-            calendar_day: None,
-            calendar_zones: (0, 0),
-            plan_file: None,
-            plan: storage::workout_file::Workout::new(),
-            player: None,
+            plan: Plan::new(),
             ramp: None,
             ramp_result: None,
             ramp_show: false,

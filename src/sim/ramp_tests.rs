@@ -42,7 +42,7 @@ fn needs_a_trainer() {
     let mut app = App::start(&mut sim, None);
     start(&mut sim, &mut app);
     assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER");
-    assert_eq!((app.ride.state(), app.player, app.ramp.is_none()), (ride::State::Idle, None, true));
+    assert_eq!((app.ride.state(), app.plan.player, app.ramp.is_none()), (ride::State::Idle, None, true));
 }
 
 /// A ramp ended by the power fading: ERG climbs the steps, the best minute is just before the fade, the result
@@ -82,7 +82,7 @@ fn fading_power_ends_the_test_and_start_applies_the_ftp() {
     assert!(o.secs > 4 * 60 && o.secs < 6 * 60, "{}", o.secs);
     sim.save("ramp_result");
     // the cool-down is playing already
-    assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
+    assert_eq!(app.plan.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
     assert!(app.ramp.is_none());
     // Back keeps the FTP set
     app.press(&mut sim, Press::Short(Key::Back));
@@ -140,7 +140,7 @@ fn cadence_ends_it_and_a_short_ramp_has_no_result() {
     assert!(app.ramp.is_some(), "4 s is not enough");
     run(&mut sim, &mut app, 4000);
     assert!(app.ramp.is_none() && app.ramp_result.is_none());
-    assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL), "cooling down");
+    assert_eq!(app.plan.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL), "cooling down");
     assert_eq!(app.screen(), Screen::Ride(crate::WORKOUT));
 }
 
@@ -171,7 +171,7 @@ fn a_rider_who_stops_dead_gets_the_cool_down_target() {
     sim.nordic.trainer.stopped = true;
     run(&mut sim, &mut app, 6000);
     assert!(app.ramp.is_none() && app.ramp_result.is_some(), "the test ended");
-    assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
+    assert_eq!(app.plan.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
     assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.resistance), (0x30, 0), "let go while paused");
     sim.nordic.trainer.stopped = false;
     run(&mut sim, &mut app, 3000);
@@ -191,7 +191,7 @@ fn stop_workout_in_the_ramp_plays_the_cool_down() {
     super::tests::to_row(&mut sim, &mut app, Row::Ride(crate::menu::RideRow::StopWorkout));
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
+    assert_eq!(app.plan.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
     assert!(sim.nordic.trainer.target_w.abs_diff((u32::from(ftp) * 45 / 100) as u16) <= 1);
     assert_eq!(app.screen(), Screen::RampResult);
 }

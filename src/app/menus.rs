@@ -202,11 +202,11 @@ impl App {
             Menu::History => self.stock.index.get(i - 1).map(|_| Row::Past(i - 1)),
             // the planned workouts (or the row that says none), then the built-in ramp test
             Menu::Workouts => {
-                let n = self.calendar.iter().count().max(1);
+                let n = self.plan.calendar.iter().count().max(1);
                 match i {
                     _ if i == n => Some(Row::RampTest),
-                    0 if self.calendar.get(0).is_none() => Some(Row::Empty("NONE PLANNED")),
-                    _ => self.calendar.get(i).map(|_| Row::Workout(i)),
+                    0 if self.plan.calendar.get(0).is_none() => Some(Row::Empty("NONE PLANNED")),
+                    _ => self.plan.calendar.get(i).map(|_| Row::Workout(i)),
                 }
             }
             // no START while the workout runs: it would play it again from the top
@@ -430,12 +430,12 @@ impl App {
                 value.push_str(hm_text(n.time).as_str());
             }
             Row::Workout(k) => {
-                let p = self.calendar.get(k)?;
+                let p = self.plan.calendar.get(k)?;
                 label.push_str(date_text(p.day).as_str());
                 push_hm(&mut value, p.total_s);
             }
             Row::WorkoutStart => {
-                push_hm(&mut value, self.plan.total_s());
+                push_hm(&mut value, self.plan.workout.total_s());
                 color = ui::GREEN;
             }
             Row::RampTest => {
@@ -526,7 +526,7 @@ impl App {
             Some((label, value, color)) => {
                 let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
                 if let Some(menu::Row::Workout(k)) = self.row(menu, i)
-                    && let Some(p) = self.calendar.get(k)
+                    && let Some(p) = self.plan.calendar.get(k)
                 {
                     // the day over the length, and the workout's profile beside them: "SAT 24 OCT" is "SAT 24"
                     let day = label.as_str().rsplit_once(' ').map_or(label.as_str(), |d| d.0);
@@ -731,7 +731,7 @@ impl App {
                 if self.ramp_running() {
                     self.finish_ramp(); // the cool-down plays, the result shows
                 } else {
-                    self.player = None;
+                    self.plan.player = None;
                     self.say("WORKOUT STOPPED");
                 }
                 self.leave_menus();

@@ -16,7 +16,7 @@ const RAMP_BUTTONS: [(u32, u32, u32, u32); 2] = [(8, 266, 108, 48), (124, 266, 1
 impl App {
     /// The ramp is being ridden (a ramp step is the player's current one).
     pub(crate) fn ramp_running(&self) -> bool {
-        self.ramp.is_some() && self.player.and_then(|p| p.step(self.plan.steps())).is_some_and(ramp::in_ramp)
+        self.ramp.is_some() && self.plan.player.and_then(|p| p.step(self.plan.steps())).is_some_and(ramp::in_ramp)
     }
 
     /// Starts the ramp test: the workout, and the ride if none runs. Indoors only: a trainer must be heard.
@@ -27,7 +27,7 @@ impl App {
         if self.workout_running() {
             return self.say("WORKOUT RUNNING");
         }
-        (self.plan, self.plan_file, self.player) = (ramp::workout(), Some(RAMP_FILE), None);
+        (self.plan.workout, self.plan.file, self.plan.player) = (ramp::workout(), Some(RAMP_FILE), None);
         (self.ramp, self.ramp_result) = (Some(ramp::Ramp::new()), None);
         self.start_workout(0);
     }
@@ -37,7 +37,7 @@ impl App {
     /// once: the trainer would hold the step's target for a rider who has stopped.
     pub(crate) fn ramp_second(&mut self, ticked: bool) {
         let steps = self.plan.steps();
-        let Some(i) = self.player.and_then(|p| p.step(steps)) else {
+        let Some(i) = self.plan.player.and_then(|p| p.step(steps)) else {
             self.ramp = None; // the workout ended or was stopped
             return;
         };
@@ -63,7 +63,7 @@ impl App {
         let Some(r) = self.ramp.take() else { return };
         self.ramp_result = r.outcome();
         let (p, ev) = workout::Player::start(self.plan.steps(), ramp::COOL, self.ride.dist_m());
-        self.player = Some(p);
+        self.plan.player = Some(p);
         self.workout_event(ev);
         match self.ramp_result {
             Some(_) => self.ramp_show = true,

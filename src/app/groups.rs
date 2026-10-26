@@ -234,3 +234,44 @@ impl TrainerLink {
         }
     }
 }
+
+/// The planned workouts (app/workouts.rs): the calendar read from the card, the workout opened or running, and the
+/// player that walks its steps.
+pub(crate) struct Plan {
+    /// The workouts planned from the day it was read on.
+    pub(crate) calendar: storage::workout_file::Calendar,
+    /// The day the calendar was read for.
+    pub(crate) day: Option<(u16, u8, u8)>,
+    /// The FTP and maximum heart rate the calendar's profiles were coloured with: another pair reads it again.
+    pub(crate) zones: (u16, u16),
+    /// The workout opened (its steps menu) or running.
+    pub(crate) workout: storage::workout_file::Workout,
+    /// Its file.
+    pub(crate) file: Option<fat::File>,
+    /// Where it is (workout.rs); None: not running.
+    pub(crate) player: Option<workout::Player>,
+}
+
+impl Plan {
+    /// Nothing planned, nothing running.
+    pub(crate) fn new() -> Self {
+        Plan {
+            calendar: Default::default(),
+            day: None,
+            zones: (0, 0),
+            workout: storage::workout_file::Workout::new(),
+            file: None,
+            player: None,
+        }
+    }
+
+    /// The opened workout's steps.
+    pub(crate) fn steps(&self) -> &[storage::workout_file::Step] {
+        self.workout.steps()
+    }
+
+    /// The player is on a step of the opened workout.
+    pub(crate) fn running(&self) -> bool {
+        self.player.as_ref().is_some_and(|p| p.step(self.steps()).is_some())
+    }
+}

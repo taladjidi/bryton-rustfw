@@ -68,8 +68,8 @@ impl App {
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
         let vol = &mut emmc::Volume(&mut self.emmc, b);
         let zones = (self.settings.ftp, self.settings.max_hr);
-        self.calendar = storage::workout_file::calendar(vol, self.date, zones).unwrap_or_default();
-        (self.calendar_day, self.calendar_zones) = (Some(self.date), zones);
+        self.plan.calendar = storage::workout_file::calendar(vol, self.date, zones).unwrap_or_default();
+        (self.plan.day, self.plan.zones) = (Some(self.date), zones);
     }
 
     /// Reads the calendar again when it is not the one for today and the rider's zones (a new day, a new FTP or
@@ -77,7 +77,7 @@ impl App {
     /// [`CALENDAR_MS`] after the start (the card is not touched then) unless `asked`.
     pub(crate) fn refresh_calendar(&mut self, b: &mut impl Board, asked: bool) {
         let zones = (self.settings.ftp, self.settings.max_hr);
-        let stale = self.calendar_day != Some(self.date) || self.calendar_zones != zones;
+        let stale = self.plan.day != Some(self.date) || self.plan.zones != zones;
         if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS) {
             self.load_calendar(b);
         }
@@ -85,13 +85,13 @@ impl App {
 
     /// Today's planned workout, if any.
     pub(crate) fn today(&self) -> Option<&storage::workout_file::Planned> {
-        self.calendar.iter().find(|p| p.day == self.date)
+        self.plan.calendar.iter().find(|p| p.day == self.date)
     }
 
     /// The overview's TODAY card whole ([`ui::draw_today`]).
     pub(crate) fn draw_today(&self, c: &mut impl Canvas) {
         let mut hm = Line::<8>::new();
-        match (self.today(), self.calendar_day) {
+        match (self.today(), self.plan.day) {
             (Some(p), _) => {
                 push_hm(&mut hm, p.total_s);
                 let name = if p.name.as_str().is_empty() { "WORKOUT" } else { p.name.as_str() };
@@ -104,7 +104,7 @@ impl App {
 
     /// A fingerprint of what the TODAY card shows (the date, the workout's name, length and profile).
     pub(crate) fn today_print(&self) -> u32 {
-        let h = fnv(0x811c_9dc5, &[self.date.1, self.date.2, u8::from(self.calendar_day.is_some())]);
+        let h = fnv(0x811c_9dc5, &[self.date.1, self.date.2, u8::from(self.plan.day.is_some())]);
         let Some(p) = self.today() else { return h };
         fnv(fnv(fnv(h, p.name.as_str().as_bytes()), &p.total_s.to_le_bytes()), &p.prof)
     }
@@ -113,9 +113,9 @@ impl App {
     /// open (Select on a step then goes to it).
     #[inline(never)] // the workout read lives in this frame, not in the main loop's
     pub(crate) fn open_workout(&mut self, b: &mut impl Board, k: usize) {
-        let Some(p) = self.calendar.get(k).copied() else { return };
-        let running = self.player.is_some_and(|pl| pl.step(self.plan.steps()).is_some());
-        if running && self.plan_file != Some(p.file) {
+        let Some(p) = self.plan.calendar.get(k).copied() else { return };
+        let running = self.plan.running();
+        if running && self.plan.file != Some(p.file) {
             return self.say("WORKOUT RUNNING");
         }
         if !running {
@@ -125,10 +125,10 @@ impl App {
             else {
                 return self.say("UNREADABLE");
             };
-            (self.plan, self.plan_file, self.player) = (w, Some(p.file), None);
+            (self.plan.workout, self.plan.file, self.plan.player) = (w, Some(p.file), None);
         }
         // running: the step playing is selected (row 0 is START only when it is not)
-        let at = self.player.and_then(|pl| pl.step(self.plan.steps())).unwrap_or(0);
+        let at = self.plan.player.and_then(|pl| pl.step(self.plan.steps())).unwrap_or(0);
         self.open(Screen::Menu(Menu::Steps, at));
     }
 
@@ -136,7 +136,7 @@ impl App {
     /// rest day WORKOUTS (the other days).
     pub(crate) fn open_today(&mut self, b: &mut impl Board) {
         self.refresh_calendar(b, true);
-        let today = self.calendar.iter().position(|p| p.day == self.date);
+        let today = self.plan.calendar.iter().position(|p| p.day == self.date);
         match today {
             Some(k) => self.open_workout(b, k),
             None => self.open(Screen::Menu(Menu::Workouts, 0)),
@@ -145,7 +145,7 @@ impl App {
 
     /// A workout is playing a step (not done): the ride menu shows WORKOUT.
     pub(crate) fn workout_running(&self) -> bool {
-        self.player.as_ref().is_some_and(|p| p.step(self.plan.steps()).is_some())
+        self.plan.running()
     }
 
     /// Starts the workout opened from step `at`, and the ride if none runs; the workout page when a trainer is heard
@@ -161,7 +161,7 @@ impl App {
         }
         self.choose_profile(); // a ride that began before the trainer was heard goes indoor here
         let (p, ev) = workout::Player::start(self.plan.steps(), at, self.ride.dist_m());
-        self.player = Some(p);
+        self.plan.player = Some(p);
         self.workout_event(ev);
         // the first page that shows the workout (the default page 1 has no field for it), else page 1
         let page = if self.indoors() || self.trainer_heard() {
@@ -298,14 +298,14 @@ impl App {
         use workout::Left;
         let mut l = Line::new();
         let steps = self.plan.steps();
-        let now = self.player.and_then(|p| p.step(steps).map(|i| (p, i)));
+        let now = self.plan.player.and_then(|p| p.step(steps).map(|i| (p, i)));
         match (f, now) {
             (Field::Workout, Some((_, i))) => {
                 l.push_u32(i as u32 + 1);
                 l.push_str("/");
                 l.push_u32(steps.len() as u32);
             }
-            (Field::Workout, None) if self.player.is_some() => l.push_str("DONE"),
+            (Field::Workout, None) if self.plan.player.is_some() => l.push_str("DONE"),
             (Field::Workout, None) => match self.today() {
                 Some(p) => push_hm(&mut l, p.total_s),
                 None => l.push_str("--"),
@@ -335,7 +335,7 @@ impl App {
     pub(crate) fn target_bar(&self) -> u16 {
         use storage::workout_file::Kind;
         let steps = self.plan.steps();
-        let Some(s) = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
+        let Some(s) = self.plan.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
         let reading = match s.target.kind {
             // the gauge's window (GAUGE POWER), so the bar and the marker agree
             Kind::Power if self.settings.wkt_avg < 3 => self.power.rolling(self.settings.wkt_avg),
@@ -356,7 +356,7 @@ impl App {
     pub(crate) fn gauge_now(&self, cols: u32) -> GaugeShown {
         use storage::workout_file::Kind;
         let steps = self.plan.steps();
-        let step = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i));
+        let step = self.plan.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i));
         let (kind, band) = workout::gauge_target(step, self.settings.ftp, self.settings.max_hr);
         let avg = self.settings.wkt_avg;
         let reading = match kind {

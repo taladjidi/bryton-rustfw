@@ -85,8 +85,8 @@ impl App {
         if self.ramp_running() {
             return self.finish_ramp(); // Lap in the ramp is its end
         }
-        let (steps, dist) = (self.plan.steps(), self.ride.dist_m());
-        if let Some(e) = self.player.as_mut().filter(|p| p.step(steps).is_some()).map(|p| p.skip(steps, dist)) {
+        let (steps, dist) = (self.plan.workout.steps(), self.ride.dist_m());
+        if let Some(e) = self.plan.player.as_mut().filter(|p| p.step(steps).is_some()).map(|p| p.skip(steps, dist)) {
             self.workout_event(e);
         }
     }
@@ -96,7 +96,7 @@ impl App {
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
         self.recorder(ev);
-        self.player = None;
+        self.plan.player = None;
         (self.depth, self.screen) = (0, Screen::Summary);
     }
 
@@ -114,7 +114,7 @@ impl App {
         if !held[1] {
             self.full.discard();
         }
-        self.player = None;
+        self.plan.player = None;
         (self.depth, self.screen) = (0, Screen::Main);
         self.say(if took { "DISCARDING" } else { "ALREADY SAVED" });
     }
@@ -478,8 +478,8 @@ impl App {
             self.alert.push(slow);
         }
         // the workout's step clock moves with the ride's timer
-        let (ticked, dist, steps) = (self.ride.timer_s() != timer, self.ride.dist_m(), self.plan.steps());
-        if let Some(e) = self.player.as_mut().and_then(|p| p.second(steps, ticked, dist)) {
+        let (ticked, dist, steps) = (self.ride.timer_s() != timer, self.ride.dist_m(), self.plan.workout.steps());
+        if let Some(e) = self.plan.player.as_mut().and_then(|p| p.second(steps, ticked, dist)) {
             self.workout_event(e);
         }
         self.ramp_second(ticked);
