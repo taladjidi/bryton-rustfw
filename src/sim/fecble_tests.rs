@@ -221,3 +221,16 @@ fn both_protocols_prefer_ftms() {
     let protos: Vec<Proto> = app.ftms.found.iter().take(app.ftms.n_found).map(|d| d.proto).collect();
     assert_eq!(protos, [Proto::Ftms, Proto::Ftms]);
 }
+
+/// A stopped workout, or its ride ended: the FE-C over BLE trainer is let go (page 48, 0 %).
+#[test]
+fn a_stopped_workout_releases_the_fec_ble_trainer() {
+    let erg = |sim: &Sim| trainer(sim).mode == 5;
+    let free = |sim: &Sim| (trainer(sim).mode, trainer(sim).resistance) == (4, 0);
+    for how in [super::trainer_tests::Ends::Stop, super::trainer_tests::Ends::EndRide] {
+        let (mut sim, mut app) = unit_with(FtmsSim::new_fec(), None);
+        pair(&mut sim, &mut app);
+        run(&mut sim, &mut app, 2000);
+        super::trainer_tests::release_after(&mut sim, &mut app, how, erg, free);
+    }
+}

@@ -113,7 +113,14 @@ fn lap_ends_the_ramp_and_apply_sets_the_ftp() {
     // other keys do nothing
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::RampResult);
+    // Start keeps its ride meaning (it pauses), whatever the screen; APPLY is a touch button
     app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    assert_eq!(app.settings.ftp, ftp, "Start did not apply");
+    assert_eq!(app.screen(), Screen::RampResult);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (x, y) = (60, 290);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
     assert_eq!(app.screen(), Screen::Ride(crate::WORKOUT));
     assert_eq!(app.settings.ftp, (o.ftp + 2) / 5 * 5, "to the setting's 5 W step");
     assert_eq!(app.banner.as_str(), "FTP SET");
@@ -149,4 +156,37 @@ fn the_trainer_screen_offers_it() {
     assert!(app.ramp.is_some() && app.ride.state() == ride::State::Running);
     app.open(Screen::Trainer);
     assert_eq!(app.trainer_bottom(), Bottom::Mode, "riding: the ride's");
+}
+
+/// The rider stops dead mid-ramp: the ride pauses itself after 3 s without power or cadence, which would freeze the
+/// stop rules while ERG held the step's target. The ramp ends at once and the cool-down target goes out.
+#[test]
+fn a_rider_who_stops_dead_gets_the_cool_down_target() {
+    let (mut sim, mut app) = unit();
+    let ftp = app.settings.ftp;
+    start(&mut sim, &mut app);
+    ride(&mut sim, &mut app, 3);
+    assert!(sim.nordic.trainer.target_w > (u32::from(ftp) * 70 / 100) as u16, "a hard step");
+    sim.nordic.trainer.stopped = true;
+    run(&mut sim, &mut app, 6000);
+    assert!(app.ramp.is_none() && app.ramp_result.is_some(), "the test ended");
+    assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
+    assert!(sim.nordic.trainer.target_w.abs_diff((u32::from(ftp) * 45 / 100) as u16) <= 1);
+    assert_eq!(app.screen(), Screen::RampResult);
+}
+
+/// STOP WORKOUT in the ramp ends the test through the same path (cool-down, result), not a bare stop.
+#[test]
+fn stop_workout_in_the_ramp_plays_the_cool_down() {
+    let (mut sim, mut app) = unit();
+    let ftp = app.settings.ftp;
+    start(&mut sim, &mut app);
+    ride(&mut sim, &mut app, 3);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Ride(crate::menu::RideRow::StopWorkout));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
+    assert!(sim.nordic.trainer.target_w.abs_diff((u32::from(ftp) * 45 / 100) as u16) <= 1);
+    assert_eq!(app.screen(), Screen::RampResult);
 }

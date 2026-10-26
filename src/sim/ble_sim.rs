@@ -921,7 +921,7 @@ impl Nordic {
             t.power = if t.mode == 5 && t.control { t.target_w.max(0) as u16 } else { t.rider_w };
             t.speed_mm_s = match t.mode {
                 0x11 => (10_000 - i32::from(t.grade_x100) * 8).clamp(1000, 20_000) as u32,
-                4 => 8000 - u32::from(t.resistance) * 20,
+                4 if t.resistance > 0 => 8000 - u32::from(t.resistance) * 20, // 0: free, the rider's own speed
                 _ => u32::from(t.power) * 42,
             };
             if !t.on(FC_NOTIFY, 1) {
@@ -968,7 +968,7 @@ impl Nordic {
                     t.power = if t.mode == 5 && t.control { t.target_w.max(0) as u16 } else { t.rider_w };
                     t.speed_mm_s = match t.mode {
                         0x11 => (10_000 - i32::from(t.grade_x100) * 8).clamp(1000, 20_000) as u32,
-                        4 => 8000 - u32::from(t.resistance) * 20,
+                        4 if t.resistance > 0 => 8000 - u32::from(t.resistance) * 20,
                         _ => u32::from(t.power) * 42,
                     };
                     if !t.on(FT_DATA, 1) {

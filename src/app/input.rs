@@ -404,12 +404,11 @@ impl App {
                 }
                 return;
             }
-            // START applies the FTP found, Back (or a swipe right) keeps the one set
-            (Screen::RampResult, Input::Select) => {
-                self.apply_ramp(b);
-                self.close()
-            }
+            // APPLY and KEEP are touch buttons; Back (or a swipe right) keeps the FTP set; Start and Lap are the ride's
+            (Screen::RampResult, Input::Touch(Gesture::Tap(x, y))) if self.ramp_tap(b, x, y) => {}
             (Screen::RampResult, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            (Screen::RampResult, Input::Select) => return self.start_key(b),
+            (Screen::RampResult, Input::Prev) => return self.lap(),
             (Screen::RampResult, _) => return,
             (Screen::Trainer, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => {
                 self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves

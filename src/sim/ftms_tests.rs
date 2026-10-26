@@ -71,7 +71,7 @@ fn the_trainer_and_the_phone_at_once() {
     let t = trainer(&sim);
     assert!(t.connected && t.control, "connected and under control");
     assert!(t.on(FT_DATA, 1) && t.on(FT_STATUS, 1) && t.on(FT_CP, 2), "subscribed");
-    assert_eq!(t.got, [vec![0x00]], "Request Control only: no target until taken over");
+    assert_eq!(t.got, [vec![0x00], vec![0x04, 0]], "Request Control, the release (resistance 0), no target");
     assert_eq!(t.violations, 0);
     assert_eq!(app.ftms.conn, Some(1));
     assert_eq!(bt_file(&sim), Some(t.peer()), "kept in the sensors file");
@@ -222,7 +222,7 @@ fn a_forgotten_subscription_and_split_records() {
     run(&mut sim, &mut app, 3000);
     let t = trainer(&sim);
     assert!(t.control && t.on(FT_CP, 2), "subscribed again and in control");
-    assert_eq!(t.got, [vec![0x00]], "the refused write is not a procedure");
+    assert_eq!(t.got, [vec![0x00], vec![0x04, 0]], "the refused write is not a procedure; then the release");
     assert_eq!(app.live.get(Metric::Cadence), Some(90), "from the first half");
     assert_eq!((app.live.get(Metric::Power), app.live.get(Metric::Speed)), (Some(150), Some(226)), "the second");
 }
@@ -475,4 +475,23 @@ fn a_nearby_scan_gives_up_the_connection_being_made() {
     sim.nordic.ftms.as_mut().unwrap().connectable = true;
     run(&mut sim, &mut app, 80_000);
     assert!(trainer(&sim).control, "the trainer's attempts went on after the scan");
+}
+
+fn erg(sim: &Sim) -> bool {
+    trainer(sim).mode == 5
+}
+
+fn free(sim: &Sim) -> bool {
+    (trainer(sim).mode, trainer(sim).resistance) == (4, 0)
+}
+
+/// A stopped workout, or its ride ended: the FTMS trainer is let go (Set Target Resistance Level 0).
+#[test]
+fn a_stopped_workout_releases_the_ftms_trainer() {
+    for how in [super::trainer_tests::Ends::Stop, super::trainer_tests::Ends::EndRide] {
+        let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+        pair(&mut sim, &mut app);
+        run(&mut sim, &mut app, 2000);
+        super::trainer_tests::release_after(&mut sim, &mut app, how, erg, free);
+    }
 }

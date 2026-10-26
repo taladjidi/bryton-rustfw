@@ -306,11 +306,18 @@ before a ride. It is a built-in workout played by the ordinary player in ERG (ra
 TrainerRoad's Ramp Test: 5 min at 50 % of the FTP set, then one-minute steps from 56 % in +6 % each (FTP 250 W:
 140 W, then +15 W a minute; the last step open), then 5 min at 45 % to cool down. A stale FTP still gives a sensible
 start. It ends when cadence is under 60 rpm for 5 s, power under half the target for 10 s (not in the ramp's first
-10 s), or Lap; the cool-down starts at once. The result screen shows FTP (75 % of the best rolling minute since the
-ramp began, 1 W), the best minute, the ramp's length, and AET (power where DFA a1 crosses 0.75 on a line through
-the ramp's points, Rogers et al. 2021; `--` without a strap's RR intervals or enough clean data; not kept). START
-applies the FTP (to the setting's 5 W step), Back keeps the one set. A ramp under a whole minute has no result. The
-ride is recorded and saved as any ride.
+10 s), Lap, STOP WORKOUT, or the ride not moving (paused by hand, or by itself after 3 s without power or cadence);
+the cool-down starts at once. The result screen shows FTP (75 % of the best rolling minute since the ramp began,
+1 W; a dropped power reading holds its last value for 3 s), the best minute, the ramp's length, and RAMP HRVT1 (where
+DFA a1 crosses 0.75 on a line through points with a1 between 0.50 and 1.00, one per 5 s, on both sides of 0.75:
+Rogers et al. 2021; the power marked "~" because it lags on a ramp, and the heart rate; `--` without a strap's RR
+intervals or enough clean data; not kept; not a steady-state zone 2 power). APPLY (touch) sets the FTP (to the
+setting's 5 W step), KEEP or Back keeps the one set; Start and Lap keep their ride meaning on the screen. A ramp under
+a whole minute has no result. The ride is recorded and saved as any ride.
+
+**Release.** When a workout or course that drove the trainer stops (STOP WORKOUT, its end, the ride's end) and the rider
+has not taken the trainer over, one free-resistance command goes out (FE-C page 48 at 0 %, FTMS Set Target Resistance
+Level 0), so ERG's last target does not stay on the trainer; the same once at the first contact after a start.
 
 ## Workouts
 

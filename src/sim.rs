@@ -619,6 +619,8 @@ pub struct SimTrainer {
     pub rider_w: u16,
     /// A ceiling on the power it makes, W (0: none): a rider who cannot hold the target in ERG.
     pub cap_w: u16,
+    /// The rider has stopped pedalling: no power, no cadence, whatever the target.
+    pub stopped: bool,
     /// The cadence it reports while there is power, rpm (0: 90).
     pub rpm: u8,
     /// The status nibble of page 25 (1 and 2 calibration, 4 user configuration), and its target flags.
@@ -699,12 +701,17 @@ impl SimTrainer {
         }
         // calibrating, the brake is off: the rider's power, whatever the mode was
         self.power = if self.mode == 0x31 && self.cal == 0 { self.target_w } else { self.rider_w };
+        if self.stopped {
+            self.power = 0;
+        }
         if self.cap_w != 0 {
             self.power = self.power.min(self.cap_w);
         }
         self.speed_mm_s = match self.mode {
             0x33 => (10_000 - self.grade_x100 * 8).clamp(1000, 20_000) as u32,
-            0x30 => 8000 - u32::from(self.resistance) * 20,
+            0x30 if self.resistance > 0 => 8000 - u32::from(self.resistance) * 20,
+            // free (the release): the rider's own speed for the power made
+            0x30 => u32::from(self.power) * 42,
             _ => u32::from(self.power) * 42,
         };
         self.dist_mm += u64::from(self.speed_mm_s) / 4;
@@ -749,7 +756,13 @@ impl SimTrainer {
             [
                 25,
                 self.events,
-                if self.power > 0 { [90, self.rpm][usize::from(self.rpm > 0)] } else { 0xff },
+                if self.power > 0 {
+                    [90, self.rpm][usize::from(self.rpm > 0)]
+                } else if self.stopped {
+                    0
+                } else {
+                    0xff
+                },
                 a0,
                 a1,
                 p0,

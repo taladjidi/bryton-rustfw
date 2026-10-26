@@ -214,6 +214,7 @@ enum Sent {
     User,
     Command,
     Cal,
+    Release,
 }
 
 /// The trainer's state: what was read, what the rider chose, what was sent last.
@@ -227,6 +228,9 @@ pub struct Trainer {
     res_half: u8,
     grade_x100: i16,
     engaged: bool,
+    /// A workout or course drove the trainer at the last pass, and the free resistance still to be sent ([`Command::Resistance`] of 0).
+    was_driven: bool,
+    release: bool,
     last: Option<Command>,
     sent_ms: u32,
     step: usize,
@@ -255,6 +259,8 @@ impl Default for Trainer {
             res_half: 40,
             grade_x100: 0,
             engaged: false,
+            was_driven: false,
+            release: true, // once at the first contact after a boot: whatever a stopped workout left is let go
             last: None,
             sent_ms: 0,
             step: 0,
@@ -364,6 +370,7 @@ impl Trainer {
         match core::mem::replace(&mut self.what, Sent::Nothing) {
             Sent::Command => self.last = None,
             Sent::Cal => self.cal_send = true,
+            Sent::Release => self.release = true,
             Sent::Caps => (self.caps_tries, self.caps_ms) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS),
             Sent::User => self.user_sent = false,
             Sent::Nothing => {}
@@ -464,6 +471,13 @@ impl Trainer {
         self.sent_ms = self.sent_ms.saturating_add(dt_ms);
         (self.user_ms, self.caps_ms) = (self.user_ms.saturating_add(dt_ms), self.caps_ms.saturating_add(dt_ms));
         self.cal_tick(dt_ms);
+        // what a workout or a course commanded stands on the trainer until something else is sent: when they stop (the
+        // workout stopped or ended, the ride ended) and the rider has not taken over, let it go
+        let driven = d.erg_w.is_some() || d.grade_x100.is_some();
+        if self.was_driven && !driven && !self.engaged {
+            (self.release, self.last) = (true, None);
+        }
+        (self.was_driven, self.release) = (driven, self.release && !driven);
         if self.calibrating() {
             // the calibration's request, and no other command until it ends
             if heard && core::mem::take(&mut self.cal_send) {
@@ -472,8 +486,15 @@ impl Trainer {
             }
             return None;
         }
-        if !heard || !self.engaged(d) {
+        if !heard {
             return None;
+        }
+        if !self.engaged(d) {
+            // the release: free resistance (FE-C page 48 basic resistance 0 %, FTMS Set Target Resistance Level 0)
+            return core::mem::take(&mut self.release).then(|| {
+                (self.sent_ms, self.what) = (0, Sent::Release);
+                Command::Resistance(0)
+            });
         }
         let c = self.command(d);
         if self.last != Some(c) || self.sent_ms >= RESEND_MS {
@@ -513,7 +534,8 @@ mod tests {
     fn nothing_until_taken_over() {
         let mut t = Trainer::default();
         let none = Drive::default();
-        assert_eq!(t.due(250, true, &none), None, "a trainer just paired keeps what it had");
+        assert_eq!(t.due(250, true, &none), Some(Command::Resistance(0)), "the release, once, at the first contact");
+        assert_eq!(t.due(250, true, &none), None, "and nothing more until taken over");
         t.step_by(&none, true, false);
         assert_eq!(t.due(250, true, &none), Some(Command::Power(420)), "105 W");
         assert_eq!(t.due(250, true, &none), None, "unchanged: not again at once");

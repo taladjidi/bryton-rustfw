@@ -627,8 +627,12 @@ impl App {
                         self.leave_menus();
                     }
                     RideRow::StopWorkout => {
-                        self.player = None;
-                        self.say("WORKOUT STOPPED");
+                        if self.ramp_running() {
+                            self.finish_ramp(); // the cool-down plays, the result shows
+                        } else {
+                            self.player = None;
+                            self.say("WORKOUT STOPPED");
+                        }
                         self.leave_menus();
                     }
                     RideRow::StopCourse => {

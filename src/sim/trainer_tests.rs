@@ -108,7 +108,7 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     assert_eq!(t.asked, [54], "capabilities asked once");
     assert_eq!(t.user.map(|p| p[1..3].to_vec()), Some((app.settings.weight_kg * 100).to_le_bytes().to_vec()));
     assert_eq!(t.user.map(|p| p[6]), Some(66), "a 2105 mm wheel is 67 cm across");
-    assert!(commands(&sim).is_empty(), "no command until taken over: {:?}", commands(&sim));
+    assert!(commands(&sim).iter().all(|p| p[0] == 0x30), "only the release until taken over: {:?}", commands(&sim));
     assert_eq!(app.field_text(Field::TrainerMode).as_str(), "ERG");
     // a power meter heard: its power and cadence, the trainer's the rest
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
@@ -133,7 +133,7 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     app.press(&mut sim, Press::Short(Key::Start)); // START
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 8000);
-    let cmds = commands(&sim);
+    let cmds: Vec<_> = commands(&sim).into_iter().filter(|p| p[0] != 0x30).collect(); // not the release at the start
     assert_eq!(cmds.first(), Some(&[0x31, 255, 255, 255, 255, 255, 0xb8, 0x01]), "110 W: 100-120 W, in 0.25 W");
     assert_eq!(sim.nordic.trainer.power, 110);
     assert!(cmds.iter().all(|p| p[0] == 0x31));
@@ -230,9 +230,9 @@ fn the_screen_changes_the_target_and_the_mode() {
     assert_eq!(app.screen(), Screen::Trainer);
     run(&mut sim, &mut app, 1100);
     sim.save("trainer_screen_idle");
-    assert!(commands(&sim).is_empty());
+    assert!(commands(&sim).iter().all(|p| p[0] == 0x30), "the release only");
     app.press(&mut sim, Press::Short(Key::Page));
-    assert_eq!(sim.nordic.trainer.mode, 0, "sent at the next pass");
+    assert_eq!(sim.nordic.trainer.mode, 0x30, "only the release so far; the mode is sent at the next pass");
     run(&mut sim, &mut app, 1100);
     assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.target_w), (0x31, 105));
     sim.save("trainer_screen_erg");
@@ -526,7 +526,7 @@ fn no_grade_before_the_ride_starts() {
     app.follow_course(super::tests::hill(&app));
     run(&mut sim, &mut app, 4000);
     assert!(app.courses.as_deref().unwrap().on.is_some());
-    assert!(commands(&sim).is_empty(), "nothing sent: {:?}", commands(&sim));
+    assert!(commands(&sim).iter().all(|p| p[0] == 0x30), "only the release sent: {:?}", commands(&sim));
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 4000);
     assert!(commands(&sim).iter().any(|p| p[0] == 0x33), "the grade goes out with the ride");
@@ -989,4 +989,78 @@ fn the_default_indoor_pages() {
     sim.save("indoor_page1_more");
     app.toggle_indoor();
     assert!(!app.indoors());
+}
+
+/// How a workout ends in [`release_after`].
+#[derive(Clone, Copy)]
+pub(super) enum Ends {
+    /// STOP WORKOUT in the ride menu.
+    Stop,
+    /// The ride ended and saved.
+    EndRide,
+}
+
+/// A planned workout in ERG on a trainer already heard (`erg`: it holds the workout's target now), ended `how`:
+/// `free` must then say the trainer was released (free resistance: FE-C page 48 or FTMS Set Target Resistance
+/// Level of 0), not left at the last ERG target.
+pub(super) fn release_after(sim: &mut Sim, app: &mut App, how: Ends, erg: fn(&Sim) -> bool, free: fn(&Sim) -> bool) {
+    app.press(sim, Press::Long(Key::Page));
+    super::tests::to_row(sim, app, Row::Open(Menu::Workouts));
+    app.press(sim, Press::Short(Key::Start));
+    app.press(sim, Press::Short(Key::Start)); // SHORT INTERVALS
+    app.press(sim, Press::Short(Key::Start)); // START
+    run(sim, app, 8000);
+    assert!(erg(sim) && !free(sim), "the workout's target is held");
+    match how {
+        Ends::Stop => {
+            app.press(sim, Press::Long(Key::Page));
+            super::tests::to_row(sim, app, Row::Ride(RideRow::StopWorkout));
+            app.press(sim, Press::Short(Key::Start));
+            assert!(app.player.is_none(), "stopped");
+        }
+        Ends::EndRide => {
+            app.press(sim, Press::Short(Key::Start)); // pause
+            save_ride(sim, app);
+        }
+    }
+    run(sim, app, 3000);
+    assert!(free(sim) && !erg(sim), "released, not left at the last target");
+}
+
+fn ant_erg(sim: &Sim) -> bool {
+    sim.nordic.trainer.mode == 0x31
+}
+
+fn ant_free(sim: &Sim) -> bool {
+    sim.nordic.trainer.mode == 0x30 && sim.nordic.trainer.resistance == 0
+}
+
+/// A workout stopped, or its ride ended: the trainer (ANT+ FE-C) is let go (page 48, 0 %), not left at the last
+/// target.
+#[test]
+fn a_stopped_workout_releases_the_trainer() {
+    for how in [Ends::Stop, Ends::EndRide] {
+        let (mut sim, mut app) = unit();
+        run(&mut sim, &mut app, 4000);
+        sim.nordic.trainer.mode = 0; // forget the release at the first contact
+        sim.nordic.trainer.resistance = 99;
+        app.trainer.resend();
+        release_after(&mut sim, &mut app, how, ant_erg, ant_free);
+    }
+}
+
+/// A restart (a fault, a power cut) after a workout: the new start has no workout and the trainer is still at the
+/// last target; the first contact lets it go.
+#[test]
+fn a_restart_releases_the_trainer() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 4000);
+    app.set_sensor(&mut sim, Kind::Trainer, Sensor::Paired(ID)); // kept in the sensors file
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sensors_file(&sim), Some(Some(ID)));
+    let (mut sim2, mut app2) = restart(&mut sim);
+    sim2.nordic.trainer.mode = 0x31; // the same trainer, still at the target the workout left
+    sim2.nordic.trainer.target_w = 210;
+    run(&mut sim2, &mut app2, 8000);
+    assert!(app2.player.is_none() && ant_free(&sim2), "let go at the first contact: {:#x}", sim2.nordic.trainer.mode);
 }

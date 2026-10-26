@@ -10,6 +10,9 @@ use crate::*;
 /// What stands for the workout's file (the graph and the menus tell workouts apart by it): no card file has cluster 0.
 const RAMP_FILE: fat::File = fat::File { cluster: 0, size: 0, dir: false };
 
+/// The result screen's touch buttons, APPLY and KEEP: (x, y, w, h).
+const RAMP_BUTTONS: [(u32, u32, u32, u32); 2] = [(8, 266, 108, 48), (124, 266, 108, 48)];
+
 impl App {
     /// The ramp is being ridden (a ramp step is the player's current one).
     pub(crate) fn ramp_running(&self) -> bool {
@@ -29,21 +32,27 @@ impl App {
         self.start_workout(0);
     }
 
-    /// One ride second, `ticked` if the timer moved: the ramp takes the readings while a ramp step runs.
+    /// One wall second, `ticked` if the ride's timer moved: the ramp takes the readings while a ramp step runs. A
+    /// ride that is not moving (paused by hand, or by itself after 3 s without power or cadence) ends the ramp at
+    /// once: the trainer would hold the step's target for a rider who has stopped.
     pub(crate) fn ramp_second(&mut self, ticked: bool) {
         let steps = self.plan.steps();
         let Some(i) = self.player.and_then(|p| p.step(steps)) else {
             self.ramp = None; // the workout ended or was stopped
             return;
         };
-        if !ticked || !ramp::in_ramp(i) {
+        if self.ramp.is_none() || !ramp::in_ramp(i) {
             return;
+        }
+        if !ticked {
+            return self.finish_ramp();
         }
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
         let target = steps.get(i).and_then(|s| s.target.range(ftp, max_hr)).map_or(0, |(lo, hi)| lo.midpoint(hi));
-        let a1 = self.hrv.alpha1().filter(|_| self.live.get(Metric::Hr).is_some()).map(|a| (a * 100.0 + 0.5) as u16);
+        let hr = self.live.get(Metric::Hr);
+        let a1 = self.hrv.alpha1().filter(|_| hr.is_some()).map(|a| (a * 100.0 + 0.5) as u16);
         let (power, cadence) = (self.live.get(Metric::Power), self.live.get(Metric::Cadence));
-        if self.ramp.as_mut().is_some_and(|r| r.second(power, cadence, target, a1)) {
+        if self.ramp.as_mut().is_some_and(|r| r.second(power, cadence, target, (a1, hr))) {
             self.finish_ramp();
         }
     }
@@ -69,7 +78,7 @@ impl App {
         ((o.ftp + 2) / 5 * 5).clamp(*r.start(), *r.end())
     }
 
-    /// START on the result screen: the FTP found becomes the setting ([`App::applied_ftp`]).
+    /// APPLY on the result screen: the FTP found becomes the setting ([`App::applied_ftp`]).
     pub(crate) fn apply_ramp(&mut self, b: &mut impl Board) {
         if let Some(o) = self.ramp_result.take() {
             self.settings.ftp = Self::applied_ftp(&o);
@@ -78,19 +87,31 @@ impl App {
         }
     }
 
-    /// The result screen, drawn whole (it does not change while it is up).
+    /// A tap on the result screen: APPLY sets the FTP, KEEP leaves it; either closes the screen.
+    pub(crate) fn ramp_tap(&mut self, b: &mut impl Board, x: u16, y: u16) -> bool {
+        let hit = RAMP_BUTTONS.iter().position(|&bx| inside(bx, x, y));
+        match hit {
+            Some(0) => self.apply_ramp(b),
+            Some(_) => {}
+            None => return false,
+        }
+        self.close();
+        true
+    }
+
+    /// The result screen, drawn whole (it does not change while it is up). The Start and Lap keys keep their ride
+    /// meaning here, so APPLY and KEEP are touch buttons (Back keeps).
     pub(crate) fn draw_ramp(&self, c: &mut impl Canvas) {
         use text::{Align, Style, draw_in};
         let Some(o) = self.ramp_result else { return };
         let grey = Style { fg: ui::GREY, ..ui::LABEL };
-        let green = Style { fg: ui::GREEN, ..ui::VALUE };
-        let mut y = ui::PAGE_Y + 4;
+        let mut y = ui::PAGE_Y + 2;
         draw_in(c, &ui::LABEL, 0, y, ui::W, Align::Centre, "RAMP TEST");
         y += 24;
         let mut ftp = Line::<8>::new();
         ftp.push_u32(u32::from(o.ftp));
         ftp.push_str(" W");
-        draw_in(c, &green, 0, y, ui::W, Align::Centre, ftp.as_str());
+        draw_in(c, &ui::VALUE, 0, y, ui::W, Align::Centre, ftp.as_str());
         y += 46;
         let mut row = |s: &Style, l: &Line<24>| {
             draw_in(c, s, 0, y, ui::W, Align::Centre, l.as_str());
@@ -99,30 +120,44 @@ impl App {
         let line = |a: &str, n: Option<u32>, unit: &str| {
             let mut l = Line::<24>::new();
             l.push_str(a);
-            match n {
-                Some(n) => {
-                    l.push_u32(n);
-                    l.push_str(unit);
-                }
-                None => l.push_str("--"),
+            if let Some(n) = n {
+                l.push_u32(n);
             }
+            l.push_str(unit);
             l
         };
         row(&ui::LABEL, &line("BEST 1 MIN ", Some(u32::from(o.best_w)), " W"));
-        let mut time = line("RAMP ", None, "");
-        time.clear();
+        let mut time = Line::<24>::new();
         time.push_str("RAMP ");
         push_clock(&mut time, o.secs);
         row(&ui::LABEL, &time);
-        row(&ui::LABEL, &line("AET ", o.aet.map(u32::from), " W"));
+        // HRVT1 from a ramp: the heart rate is the figure; the power lags and is marked "~"
+        match o.aet {
+            Some(h) => {
+                row(&ui::LABEL, &line("RAMP HRVT1 ~", Some(u32::from(h.watts)), " W"));
+                match h.bpm {
+                    Some(b) => row(&ui::LABEL, &line("AT ", Some(u32::from(b)), " BPM")),
+                    None => row(&grey, &line("NO HEART RATE", None, "")),
+                }
+            }
+            None => {
+                row(&ui::LABEL, &line("RAMP HRVT1 --", None, ""));
+                row(&grey, &line("", None, ""));
+            }
+        }
         row(&grey, &line("NOW ", Some(u32::from(self.settings.ftp)), " W"));
-        y += 6;
         let mut ask = Line::<16>::new();
         ask.push_str("APPLY ");
         ask.push_u32(u32::from(Self::applied_ftp(&o)));
         ask.push_str(" W?");
         draw_in(c, &ui::LABEL, 0, y, ui::W, Align::Centre, ask.as_str());
-        draw_in(c, &Style { fg: ui::GREEN, ..ui::LABEL }, 0, y + 26, ui::W, Align::Centre, "START: YES");
-        draw_in(c, &Style { fg: ui::RED, ..ui::LABEL }, 0, y + 52, ui::W, Align::Centre, "BACK: NO");
+        for (k, (&(bx, by, bw, bh), label)) in RAMP_BUTTONS.iter().zip(["APPLY", "KEEP"]).enumerate() {
+            let (bg, fg) = if k == 0 { (ui::ACCENT, ui::BLACK) } else { (ui::BLACK, ui::WHITE) };
+            let frame = if k == 0 { ui::ACCENT } else { ui::GREY };
+            c.fill(bx, by, bw, bh, frame);
+            c.fill(bx + 2, by + 2, bw - 4, bh - 4, bg);
+            let ty = by + (bh - ui::LABEL.height()) / 2;
+            draw_in(c, &Style { fg, bg, ..ui::LABEL }, bx + 2, ty, bw - 4, Align::Centre, label);
+        }
     }
 }

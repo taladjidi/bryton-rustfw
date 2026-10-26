@@ -2694,10 +2694,11 @@ fn ramp_results() {
                 _ if falling => Some((130 - base / 4).clamp(20, 160) + (next() % 6) as u16),
                 _ => Some(40 + (next() % 100) as u16),
             };
+            let hr = [None, Some(base / 3 + 60), Some(0), Some(u16::MAX)][(next() % 4) as usize];
             // mostly a target the rider meets, sometimes none or an absurd one
             let target = [0, base, base, base, base, u16::MAX][((s / 25 + seed) % 6) as usize]; // in blocks, so streaks happen
             top = top.max(power.unwrap_or(0));
-            if r.second(power, if (s / 7 + seed) % 5 == 0 { cadence } else { Some(90) }, target, a1) {
+            if r.second(power, if (s / 7 + seed) % 5 == 0 { cadence } else { Some(90) }, target, (a1, hr)) {
                 stopped += 1;
             }
         }
@@ -2705,9 +2706,9 @@ fn ramp_results() {
             with_result += 1;
             assert!(o.best_w <= top && o.ftp.abs_diff(o.best_w * 3 / 4) <= 1, "{o:?} top {top}");
             assert_eq!(o.secs, 1500);
-            if let Some(w) = o.aet {
+            if let Some(h) = o.aet {
                 with_aet += 1;
-                assert!(w <= top, "{w} W over the top {top}");
+                assert!(h.watts <= top, "{h:?} over the top {top}");
             }
         }
     }
