@@ -264,7 +264,8 @@ def find_volume(cfg):
 
 def request(method, url, headers=None, data=None, form=None, files=None):
     """(status, body bytes). `form` urlencoded, or `files` multipart with `form` as its other fields."""
-    headers = dict(headers or {})
+    # Intervals.icu sits behind Cloudflare, which refuses Python's default User-Agent (error 1010, seen 2026-10-26)
+    headers = {'User-Agent': 'bryton-rustfw-sync/0.1', **(headers or {})}
     if files:
         boundary = uuid.uuid4().hex
         parts = []
