@@ -38,16 +38,22 @@ The dated findings are in [journal.md](journal.md).
 - Not yet: messages' banners, skip in a podcast, the camera shutter, a re-pair after forgetting on the iPhone only,
   a stranger's phone, range loss during a ride.
 
-## Seen on the unit: fonts, rows and registers (2026-10-26, from RAM, owner present)
+## Seen on the unit: fonts, rows and registers (2026-10-26, owner present)
 
-- **FONT (SETTINGS > DISPLAY > FONT, SMOOTH):** the overview, a ride page and the menus redraw in Barlow Semi Condensed
-  Bold on the panel with no page or menu moving; back to PIXEL restores the dot matrix; the choice (register 16, bit
-  24) survives `dev.py reset`.
-- **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT (0.1 kg steps, 9.0 by default), ALTITUDE, FROM GPS, PROFILE,
-  CLIMBS AHEAD; DISPLAY shows BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER; each edits in place.
-- **Settings registers read back:** after `dev.py reset`, the bike weight, the font, the gauge window (register 16, tag
-  0xa) and the alerts and the keys' actions (register 28, tag 0x9) come back as set (`dev.py peek` of the RTC backup
-  registers).
+- **FONT (SETTINGS > DISPLAY > FONT, SMOOTH):** run from RAM (e762241): switching to SMOOTH redraws at once; the
+  overview, the indoor ride page and the DISPLAY menu draw in Barlow Semi Condensed Bold with no box moving. Register
+  16 then read 0xa15a0f30 (bit 24 set). After the flash of e762241 (FLASHLOG #80) it read 0xa05a0f30 (PIXEL): whether
+  the owner switched back or something cleared the bit is not known yet. Big "--" values look wide in SMOOTH (the
+  glyph keeps the pixel font's cell).
+- **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT, ALTITUDE, FROM GPS, PROFILE, CLIMBS AHEAD; DISPLAY shows
+  BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER. WEIGHT edited from 9.0 to 8.5 kg (five Page presses, 0.1 kg each)
+  and W' (ME) from 15.0 to 21.0 kJ by the dev link's keys.
+- **Settings registers read back** (`dev.py peek` of RTC_BKP16R / BKP28R): register 16 = 0xa0551530 (tag 0xa, rider
+  78 kg, W' 21.0 kJ, bike 8.5 kg); register 28 = 0x9280c0e0 (tag 0x9); register 11 unchanged (0xa7345b21). The
+  rider's weight and W' from the earlier layout carried over.
+- **A ride from RAM (1ba795d, FLASHLOG #81):** started (INDOOR), past its first checkpoint, the image restarted
+  mid-ride: RIDE RESUMED; END RIDE > DISCARD put both copies in `\Rustfw\Discarded` (valid FIT: indoor_cycling, 45
+  records, the full copy's three developer fields).
 
 ## Not yet seen on the unit
 
