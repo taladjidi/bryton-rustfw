@@ -570,6 +570,8 @@ pub enum EditRow {
     AddPage,
     /// This page deleted (asked first).
     DeletePage,
+    /// The editor's changes dropped (asked first), after DELETE PAGE and only when there are some: Back keeps them.
+    Drop,
 }
 
 impl EditRow {
@@ -584,6 +586,7 @@ impl EditRow {
             EditRow::Undo => "UNDO",
             EditRow::AddPage => "ADD PAGE",
             EditRow::DeletePage => "DELETE PAGE",
+            EditRow::Drop => "DROP CHANGES",
         }
     }
 }

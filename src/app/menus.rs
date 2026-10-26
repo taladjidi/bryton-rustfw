@@ -130,6 +130,10 @@ impl App {
                 _ if i <= self.view_count() => Some(Row::Open(Menu::Page(i - 1))),
                 _ => (i == self.view_count() + 1).then_some(Row::AddPage),
             },
+            // DROP CHANGES last, once there is something to drop
+            Menu::Edit(_) if i == menu::EDIT_ROWS.len() => {
+                self.edit.is_some_and(|e| e.work != e.orig).then_some(Row::Edit(menu::EditRow::Drop))
+            }
             Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
             Menu::Me => menu::ME.get(i).copied(),

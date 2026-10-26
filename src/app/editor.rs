@@ -20,7 +20,7 @@
 //! Page / Lap (or a tap) select a box, Start (or a tap on the selected one) opens its actions: FIELD (the picker by
 //! groups), SPLIT with a side-by-side icon (a second cell in its row), SPLIT with a stacked icon (a row under it),
 //! MERGE, TALLER, SHORTER, UNDO, then ADD PAGE and DELETE PAGE (asked first). Back leaves: at once when nothing
-//! changed, else "KEEP CHANGES?" (Start keeps, Back drops). The editor works on a copy ([`EDITED`]); only keeping
+//! changed, and keeps them else (DROP CHANGES, last in the actions, asks and drops them). The editor works on a copy ([`EDITED`]); only keeping
 //! it (or adding or deleting a page) changes the pages.
 //!
 //! **Storage.** The pages are written to `\Rustfw\pages.bin` when they change, between rides only (the recorder is
@@ -115,8 +115,6 @@ pub(crate) struct Editing {
     pub(crate) work: Page,
     pub(crate) orig: Page,
     pub(crate) undo: Option<Page>,
-    /// Back asked "KEEP CHANGES?": Start keeps, Back drops.
-    pub(crate) asking: bool,
 }
 
 impl App {
@@ -388,7 +386,7 @@ impl App {
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         let more = self.more_shown() == Some(n);
         let p = if more { self.more_page(n) } else { p };
-        self.edit = Some(Editing { page: n, more, work: p, orig: p, undo: None, asking: false });
+        self.edit = Some(Editing { page: n, more, work: p, orig: p, undo: None });
         self.open(Screen::Edit(n, k.min(p.cells().saturating_sub(1))));
     }
 
@@ -417,20 +415,15 @@ impl App {
         let (Screen::Edit(_, sel), Some(e)) = (self.screen, self.edit) else {
             return self.leave_editor(b, false);
         };
-        let asking = e.asking;
-        if let Some(e) = &mut self.edit {
-            e.asking = false;
-        }
         let cells = e.work.cells().max(1);
         let back = matches!(i, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)));
         match i {
-            Input::Select if asking => self.leave_editor(b, true),
-            _ if back && (asking || e.work == e.orig) => self.leave_editor(b, false),
+            // Back keeps what was done (nothing is lost: it never means "drop"); DROP CHANGES in the actions does
             _ if back => {
-                if let Some(e) = &mut self.edit {
-                    e.asking = true;
+                self.leave_editor(b, true);
+                if e.work != e.orig {
+                    self.say("CHANGES KEPT");
                 }
-                self.say("KEEP CHANGES?\nSTART: KEEP BACK: DROP");
             }
             Input::Next | Input::NextHeld => {
                 self.repeated |= i == Input::NextHeld;
@@ -521,6 +514,13 @@ impl App {
             EditRow::Shorter => w.resize(k, false).map(|p| (p, k)),
             EditRow::Undo => e.undo.map(|u| (u, k)).ok_or("NOTHING TO UNDO"),
             EditRow::AddPage => return self.add_page(b, e.page + 1),
+            EditRow::Drop => {
+                if self.confirmed(menu, sel, "DROP CHANGES") {
+                    self.leave_editor(b, false);
+                    self.say("CHANGES DROPPED");
+                }
+                return;
+            }
             EditRow::DeletePage if e.more => {
                 // in MORE this row resets the variant to its default; the page stays
                 if self.confirmed(menu, sel, "RESET THIS MORE") {

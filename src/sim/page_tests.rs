@@ -71,8 +71,8 @@ fn action(sim: &mut Sim, app: &mut App, r: menu::EditRow) {
 }
 
 /// A hold on a box opens the editor on the page as it is, live, the box framed; Page and a tap move the frame,
-/// a second tap opens the actions; SPLIT down adds a row; SPLIT across in a full row says why not; Back asks,
-/// Start keeps; the file is written between rides, with the registers after it, and read back at the next start.
+/// a second tap opens the actions; SPLIT down adds a row; SPLIT across in a full row says why not; Back
+/// keeps (item 10: it never drops); the file is written between rides, with the registers after it, and read back at the next start.
 #[test]
 fn edit_a_page_on_the_page() {
     let (mut sim, mut app) = started();
@@ -109,10 +109,8 @@ fn edit_a_page_on_the_page() {
     super::tests::back(&mut sim, &mut app);
     assert!(app.file_untouched_since_start(&sim), "nothing written while editing");
     press(&mut sim, &mut app, Key::Back);
-    assert_eq!(app.screen(), Screen::Edit(0, 3), "Back asks first");
-    assert!(app.banner.as_str().starts_with("KEEP CHANGES?"));
-    press(&mut sim, &mut app, Key::Start);
-    assert_eq!(app.screen(), Screen::Ride(0), "kept, back on the page");
+    assert_eq!(app.screen(), Screen::Ride(0), "Back keeps the changes, back on the page");
+    assert_eq!(app.banner.as_str(), "CHANGES KEPT");
     assert_eq!(app.pages()[0], e.work);
     run(&mut sim, &mut app, 1100);
     super::tests::assert_consistent(&sim, &app);
@@ -137,7 +135,8 @@ impl App {
     }
 }
 
-/// MERGE, UNDO, MERGE again, then Back and Back: dropped, the page as it was, nothing written.
+/// MERGE, UNDO, MERGE again, then DROP CHANGES (the actions' last row, only once there is something to drop; asked
+/// first): dropped, the page as it was, nothing written. Back, the other way out, keeps the same work.
 #[test]
 fn drop_and_undo() {
     let (mut sim, mut app) = started();
@@ -155,12 +154,27 @@ fn drop_and_undo() {
     press(&mut sim, &mut app, Key::Start);
     action(&mut sim, &mut app, menu::EditRow::Merge);
     super::tests::assert_consistent(&sim, &app);
-    press(&mut sim, &mut app, Key::Back);
-    press(&mut sim, &mut app, Key::Back); // drop
+    let merged = app.edit.unwrap().work;
+    press(&mut sim, &mut app, Key::Start); // the actions
+    assert_eq!(app.rows(Menu::Edit(0)), menu::EDIT_ROWS.len() + 1, "DROP CHANGES is there");
+    for _ in 0..menu::EDIT_ROWS.len() {
+        press(&mut sim, &mut app, Key::Page);
+    }
+    press(&mut sim, &mut app, Key::Start); // asks
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Edit(_), _)), "asked, not dropped yet");
+    press(&mut sim, &mut app, Key::Start); // drop
     assert_eq!((app.screen(), app.pages()[1]), (Screen::Ride(1), before));
+    assert_eq!(app.banner.as_str(), "CHANGES DROPPED");
     run(&mut sim, &mut app, 500);
     assert_eq!(file(&sim), None, "nothing to write");
     super::tests::assert_consistent(&sim, &app);
+    // nothing changed: no DROP CHANGES row; changed, Back keeps
+    app.input(&mut sim, Input::Touch(Gesture::Hold(60, 100)));
+    press(&mut sim, &mut app, Key::Start);
+    assert_eq!(app.rows(Menu::Edit(0)), menu::EDIT_ROWS.len(), "nothing to drop");
+    action(&mut sim, &mut app, menu::EditRow::Merge);
+    press(&mut sim, &mut app, Key::Back);
+    assert_eq!((app.screen(), app.pages()[1]), (Screen::Ride(1), merged), "Back kept it");
 }
 
 /// While a ride records: a hold does not open the editor, the ride menu does not offer it, and asked for it says

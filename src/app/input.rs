@@ -317,9 +317,8 @@ impl App {
         {
             self.update_menu_rows(b, menu, sel); // its "SURE?" goes
         }
-        // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines, and the
-        // editor's KEEP CHANGES? is a question that Back answers
-        if cleared && i == Input::Back && !self.phone.ringing && !matches!(self.screen, Screen::Edit(..)) {
+        // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines
+        if cleared && i == Input::Back && !self.phone.ringing {
             return;
         }
         let graph_hit = match (self.screen, i) {
