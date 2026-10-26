@@ -51,10 +51,6 @@ pub(crate) struct SensorStore {
     pub(crate) bt_fec: bool,
 }
 
-/// The bike's weight told to the trainer (its SIM mode wants it), kg.
-// ponytail: fixed; a setting when someone's bike is not about 10 kg
-const BIKE_KG: u16 = 10;
-
 impl App {
     /// A trainer is paired or searched for, over ANT+ or Bluetooth (its menu row and screen are offered).
     pub(crate) fn trainer_on(&self) -> bool {
@@ -183,7 +179,7 @@ impl App {
                     let s = &self.settings;
                     Some(fec::encode(Command::User {
                         weight_cg: s.weight_kg.saturating_mul(100),
-                        bike_50g: BIKE_KG * 20,
+                        bike_50g: s.bike_hg.saturating_mul(2),
                         wheel_mm: (u32::from(s.wheel_mm) * 1000 / 3142) as u16,
                     }))
                 }

@@ -283,13 +283,13 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   address in it.
 - This firmware uses 5, 6, 7, 8, 10 (paired ANT sensor per kind: heart rate, speed, cadence, speed and cadence,
   power), 14 (the paired shifting system, ANT+ tag 0x61 or Di2 tag 0x62; 14 held a ride page of the first builds,
-  tag 0xa, read only), 11 (wheel, backlight, max HR, FTP), 16 (weights and W', tag 0xb; 0xc1 in earlier builds, read only, and the Di2 single
-  presses' actions; the long presses' are in 28's free bits), 17, 18 (GNSS aiding: the RTC's offset
+  tag 0xa, read only), 11 (wheel, backlight, max HR, FTP), 16 (the rider's and the bike's weights and W', tag 0xa;
+  0xb and 0xc1 in earlier builds, read only, which also held the Di2 single presses' actions), 17, 18 (GNSS aiding: the RTC's offset
   from UTC and the last position) and 20..27 (the first three ride pages and the overview, two each, tags 0xd /
   0xe; all the ride pages are in `\Rustfw\pages.bin`, the registers their copy for earlier builds; bit 24 of 21 set
   while they hold page changes the file does not have yet, `PAGES_NEWER`), each behind a
   tag so an empty register reads as unset; 14, 15 and 16 held the ride pages of the first builds, and 19..26 those of
-  the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts, tag 0xc2) and 29
+  the builds of 2026-10-23 (moved off 19, which stock reads, and 19 set back to 0), 28 (the alerts and the Di2 presses' actions, tag 0x9; 0xc2 in earlier builds) and 29
   (a fault's marker, 0xfa and the faults in a row, written by hw.rs before it resets), 30 (a ride open on the card,
   0x52430001, lib.rs `RIDE_BKP`), 31 (USB drops the link recovered from, tag 0x0b, `USB_DROPS_BKP`) and 0 (what the USB drive saw last at a
   drop, tag 0xd1, `USB_LAST_BKP`; docs/usb.md). None free: the standby breadcrumbs share 0 (tag 0x5b) and 31 (the

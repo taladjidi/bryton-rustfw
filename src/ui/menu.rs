@@ -241,11 +241,11 @@ pub const FTP_RANGE: core::ops::RangeInclusive<u16> = 50..=600;
 const _: () = assert!(ride::MAX_HR >= 100 && ride::MAX_HR <= 230 && ride::FTP.is_multiple_of(5));
 /// Rider weights offered, kg.
 pub const WEIGHT_RANGE: core::ops::RangeInclusive<u16> = 30..=150;
-/// Bike weights offered, kg (5 bits in register 16: 0 there means the default).
-pub const BIKE_RANGE: core::ops::RangeInclusive<u16> = 5..=30;
+/// Bike weights offered, 100 g: 5 to 25 kg (a byte in register 16: 0 there means the default).
+pub const BIKE_RANGE: core::ops::RangeInclusive<u16> = 50..=250;
 /// W' offered, J (0.5 kJ steps).
 pub const WPRIME_RANGE: core::ops::RangeInclusive<u16> = 5000..=40_000;
-const _: () = assert!(power::BIKE_KG >= 5 && power::BIKE_KG <= 30);
+const _: () = assert!(power::BIKE_HG >= 50 && power::BIKE_HG <= 250);
 const _: () = assert!(power::WEIGHT_KG >= 30 && power::WEIGHT_KG <= 150 && power::WPRIME_J.is_multiple_of(500));
 
 /// A reading shown in a menu (nothing to change).

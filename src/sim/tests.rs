@@ -3286,7 +3286,7 @@ fn weight_and_wprime_from_the_menu() {
     assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Weight))), "WEIGHT 68 KG");
     assert_consistent(&sim, &app);
     sim.save("power_settings");
-    assert_eq!(sim.backup[16] >> 28, 0xb, "tagged");
+    assert_eq!(sim.backup[16] >> 28, 0xa, "tagged");
     let again = App::start(&mut sim, None);
     assert_eq!((again.settings.weight_kg, again.settings.wprime_j, again.settings.ftp), (68, 21_500, 200));
 }
@@ -4589,28 +4589,40 @@ fn start_and_pause_beep() {
     }
 }
 
-/// The bike's weight (BIKE > BIKE, 5 to 30 kg, 9 by default): kept in register 16 with the rider's, read from an
-/// earlier build's word as the default, and the pacer's mass.
+/// The bike's weight (BIKE > WEIGHT, 5.0 to 25.0 kg in 0.1 kg, 9.0 by default): kept in register 16 with the
+/// rider's, the single presses' actions moved to register 28 for it; earlier builds' words read; the pacer's mass and
+/// the trainer's.
 #[test]
 fn bike_weight() {
+    use menu::Remote;
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     let row = |app: &App| app.menu_row(Menu::Bike, 1).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str()));
-    assert_eq!(row(&app).as_deref(), Some("WEIGHT 9 KG"));
+    assert_eq!(row(&app).as_deref(), Some("WEIGHT 9.0 KG"));
     assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 9.0);
-    app.settings.bike_kg = 5;
+    app.settings.bike_hg = 50;
     app.settings.step(menu::Setting::BikeWeight, false);
-    assert_eq!(app.settings.bike_kg, 5, "held at the bottom of its range");
-    for _ in 0..40 {
+    assert_eq!(app.settings.bike_hg, 50, "held at the bottom of its range");
+    for _ in 0..250 {
         app.settings.step(menu::Setting::BikeWeight, true);
     }
-    assert_eq!(app.settings.bike_kg, 30);
-    app.settings.bike_kg = 12;
-    assert_eq!(row(&app).as_deref(), Some("WEIGHT 12 KG"));
-    assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 12.0);
-    let kept = Settings::from_word(0).with_power_word(app.settings.power_word());
-    assert_eq!((kept.bike_kg, kept.weight_kg, kept.wprime_j), (12, app.settings.weight_kg, app.settings.wprime_j));
-    // a stored 0 in the bike's bits (a word that never had them) is the default, an earlier build's layout too
-    assert_eq!(Settings::from_word(0).with_power_word(app.settings.power_word() & !(0x1f << 16)).bike_kg, 9);
-    assert_eq!(Settings::from_word(0).with_power_word(0xc1_00_28_46).bike_kg, 9);
+    assert_eq!(app.settings.bike_hg, 250);
+    app.settings.bike_hg = 85;
+    assert_eq!(row(&app).as_deref(), Some("WEIGHT 8.5 KG"));
+    assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 8.5);
+    // every action and the alerts kept across the two registers
+    app.settings.remote = [Remote::Lap, Remote::Play, Remote::PrevTrack, Remote::Start];
+    (app.settings.eat_min, app.settings.drink_min, app.settings.hr_alert) = (45, 20, 230);
+    let s = app.settings;
+    let kept = Settings::from_word(s.to_word()).with_power_word(s.power_word()).with_alerts_word(s.alerts_word());
+    assert_eq!(kept, s);
+    // a stored 0 in the bike's bits is the default
+    assert_eq!(Settings::from_word(0).with_power_word(s.power_word() & !(0xff << 16)).bike_hg, 90);
+    // earlier builds: 0xc1 (no bike), 0xb (whole kg, single presses in 21..26) with 0xc2 alerts (bpm)
+    assert_eq!(Settings::from_word(0).with_power_word(0xc1_00_28_46).bike_hg, 90);
+    let old_b = 0xb << 28 | (Remote::Play as u32) << 24 | (Remote::Lap as u32) << 21 | 7 << 16 | 40;
+    let old_alerts = 0xc2 << 24 | 172 << 16 | 9;
+    let old = Settings::from_word(0).with_power_word(old_b).with_alerts_word(old_alerts);
+    assert_eq!((old.bike_hg, old.weight_kg, old.hr_alert, old.eat_min), (70, 70, 172, 45));
+    assert_eq!(old.remote[..2], [Remote::Lap, Remote::Play]);
 }

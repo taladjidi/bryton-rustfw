@@ -30,8 +30,8 @@ const _: () = assert!(RING >= 30);
 
 /// W' before it is set, J (the patch project's P10 default; typical values are 10 to 30 kJ).
 pub const WPRIME_J: u16 = 20_000;
-/// Bike weight before it is set, kg (bike, bottles and kit: the climb pacer's).
-pub const BIKE_KG: u16 = 9;
+/// Bike weight before it is set, 100 g (bike, bottles and kit: the climb pacer's).
+pub const BIKE_HG: u16 = 90;
 /// Rider weight before it is set, kg (conventional).
 pub const WEIGHT_KG: u16 = 75;
 

@@ -94,7 +94,7 @@ impl App {
         let (cp, wprime) = self.cp_model();
         let w_full = f32::from(wprime);
         let budget = self.power.wbal_j().map_or(w_full, |j| j.clamp(0, i32::from(wprime)) as f32);
-        let mass = f32::from(self.settings.weight_kg) + f32::from(self.settings.bike_kg);
+        let mass = f32::from(self.settings.weight_kg) + f32::from(self.settings.bike_hg) / 10.0;
         pacing::Rider { cp: f32::from(cp), w_full, budget, mass }
     }
 
