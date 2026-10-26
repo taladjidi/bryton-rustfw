@@ -1,8 +1,9 @@
 //! The ride profile ([`ride::Profile`]): ROAD or INDOOR, chosen when the ride (or a workout) starts from the trainer
 //! heard, fixed by hand (BIKE > PROFILE, the ride menu's INDOOR row), and given up again if the trainer goes
-//! silent. What it changes so far: the round skips the map and next-turn pages indoors, and the ride file's sub_sport
-//! (indoor_cycling or road, fit.rs), which the recovery record keeps, so a ride resumed after a reset comes back with
-//! its profile (riding.rs). (The GPS power-off and the pages per profile come later: UI review 3, section 4.2.)
+//! silent. What it changes: the round skips the map and next-turn pages indoors, the GNSS receiver is off during an
+//! indoor ride (gps.rs), and the ride file's sub_sport (indoor_cycling or road, fit.rs), which the recovery record
+//! keeps with "by hand", so a ride resumed after a reset comes back with its profile, and one set by hand stays so
+//! (riding.rs). (The pages per profile come later: UI review 3, section 4.2.)
 
 use crate::*;
 

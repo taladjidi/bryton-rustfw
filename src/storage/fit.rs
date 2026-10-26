@@ -21,12 +21,18 @@
 //! The caller keeps two copies of the record (old / new) and takes the valid one with the larger
 //! [`Writer::data_len`]. Doing this twice is harmless.
 //!
-//! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 14 (this layout: lap and
-//! session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16 (developer fields), the ascent (17..30)
-//! and bit 31 (the build before sub_sport: total_ascent, no sport). A record without this layout reads as a road ride
-//! and has its lap and session defined again. This build never sets bit 31, so the build before, resuming its ride,
-//! defines its own lap and session again too; it reads bits 14 and 15 as part of the mask, which only defines the
-//! record again. A build before total_ascent reads neither bit and is not covered (as before).
+//! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 13 (the profile set by
+//! hand), bit 14 (this layout: lap and session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16
+//! (developer fields), the ascent (17..30) and bit 31 (the build before sub_sport: total_ascent, no sport). A record
+//! without this layout reads as a road ride and has its lap and session defined again. This build never sets bit
+//! 31, so the build before, resuming its ride, defines its own lap and session again too. Every build since the
+//! first reads bits 0..15 as the mask and only compares it with the next record's (`mask != self.mask`), so bits
+//! 13, 14 and 15 there only define the record message again at the next second (a later definition of a local type
+//! replaces the earlier one: FIT protocol). A build before total_ascent reads neither layout bit and is not covered
+//! (as before).
+//!
+//! The profile ([`Sample::indoor`], [`Sample::by_hand`]) is the last second's, or the one given since by
+//! [`Writer::set_profile`] (a change while paused): what the end and the record carry.
 //!
 //! **Errors.** A failed write leaves the writer where it was (the next message goes to the same offset), so a
 //! failing sink loses samples, never the file. Nothing here panics: buffers are fixed and accessed with checks.
@@ -108,6 +114,9 @@ pub struct Sample {
     /// The ride is indoors (ride::Profile::Indoor) this second: the lap's and the session's sub_sport, the last
     /// second's at the end (a ride the trainer left goes back to ROAD).
     pub indoor: bool,
+    /// The rider set that profile by hand (the app's `profile_by_hand`): only kept in the recovery record, so a
+    /// resumed ride is not given back to the automatic choice.
+    pub by_hand: bool,
 }
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
@@ -125,6 +134,8 @@ const LAYOUT_ASCENT: u32 = 1 << 31;
 const LAYOUT_SPORT: u32 = 1 << 14;
 /// Bit 15: the ride is indoors (sub_sport indoor_cycling). Records before it: 0, a road ride.
 const INDOOR: u32 = 1 << 15;
+/// Bit 13: the profile was set by hand. Records before it: 0, automatic. Older builds: as bit 14 (module doc).
+const BY_HAND: u32 = 1 << 13;
 
 const HEADER: u32 = 14;
 const WORDS: usize = 21;
@@ -305,6 +316,8 @@ pub struct Writer {
     ascent_m: u32,
     /// Indoors (the last sample's [`Sample::indoor`]).
     indoor: bool,
+    /// That profile was set by hand (the last sample's [`Sample::by_hand`]).
+    by_hand: bool,
 }
 
 impl Writer {
@@ -329,6 +342,7 @@ impl Writer {
             dev: false,
             ascent_m: 0,
             indoor: false,
+            by_hand: false,
         }
     }
 
@@ -449,7 +463,7 @@ impl Writer {
         if let Some(a) = s.ascent_m {
             self.ascent_m = self.ascent_m.max(a.min(ASCENT_MAX));
         }
-        self.indoor = s.indoor;
+        self.set_profile(s.indoor, s.by_hand);
         self.stats[0].add(s.hr.map(u32::from));
         self.stats[1].add(s.cadence.map(u32::from));
         self.stats[2].add(s.power.map(u32::from));
@@ -562,6 +576,17 @@ impl Writer {
         self.indoor
     }
 
+    /// The profile was set by hand (a record from before it: automatic).
+    pub fn by_hand(&self) -> bool {
+        self.by_hand
+    }
+
+    /// The profile in force (indoors, set by hand) from now on: the next [`Writer::end`] and record carry it, even
+    /// with no sample since (a change while paused).
+    pub fn set_profile(&mut self, indoor: bool, by_hand: bool) {
+        (self.indoor, self.by_hand) = (indoor, by_hand);
+    }
+
     /// The writer a recovery record holds, if the record is whole.
     pub fn from_record(r: &[u8; RECORD_LEN]) -> Option<Writer> {
         let (body, tail) = r.split_at(RECORD_LEN - 2);
@@ -583,8 +608,9 @@ impl Writer {
             len: w[0],
             crc: w[1] as u16,
             defined: old((w[1] >> 16) as u16),
-            mask: w[2] as u16 & 0x3ff, // the record's 10 fields; bits 14 and 15 are the layout's and the profile's
+            mask: w[2] as u16 & 0x3ff, // the record's 10 fields; bits 13..15 are the profile's and the layout's
             indoor: w[2] & INDOOR != 0,
+            by_hand: w[2] & BY_HAND != 0,
             dev: w[2] >> 16 & 1 != 0,
             ascent_m: w[2] >> 17 & ASCENT_MAX,
             start: w[3],
@@ -608,6 +634,7 @@ impl Writer {
             u32::from(self.crc) | u32::from(self.defined) << 16,
             u32::from(self.mask)
                 | if self.indoor { INDOOR } else { 0 }
+                | if self.by_hand { BY_HAND } else { 0 }
                 | LAYOUT_SPORT
                 | u32::from(self.dev) << 16
                 | self.ascent_m.min(ASCENT_MAX) << 17,
@@ -920,6 +947,7 @@ pub(crate) mod tests {
                 rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
                 ascent_m: Some(t / 10), // the ride's ascent so far: 1 m every 10 s
                 indoor: false,
+                by_hand: false,
             })
             .collect()
     }
@@ -990,7 +1018,7 @@ pub(crate) mod tests {
         let mut f = Vec::new();
         let (mut w, _) = Writer::start(&mut f, T0).unwrap();
         for s in &ride(120) {
-            w.record(&mut f, &Sample { indoor, ..*s }).unwrap();
+            w.record(&mut f, &Sample { indoor, by_hand: indoor, ..*s }).unwrap();
             if s.time == T0 + 60 {
                 w.lap(&mut f, s.time).unwrap(); // the lap defined in the file, on this build's layout here
             }
@@ -998,7 +1026,7 @@ pub(crate) mod tests {
         let mut rec = w.checkpoint(&mut f).unwrap();
         let (at, mut word) = (2 + 4 * 2, [0u8; 4]);
         word.copy_from_slice(&rec[at..at + 4]);
-        let old = u32::from_le_bytes(word) & !(LAYOUT_SPORT | INDOOR) | LAYOUT_ASCENT;
+        let old = u32::from_le_bytes(word) & !(LAYOUT_SPORT | INDOOR | BY_HAND) | LAYOUT_ASCENT;
         rec[at..at + 4].copy_from_slice(&old.to_le_bytes());
         let c = crc(0, &rec[..RECORD_LEN - 2]);
         rec[RECORD_LEN - 2..].copy_from_slice(&c.to_le_bytes());
@@ -1037,7 +1065,7 @@ pub(crate) mod tests {
         // a record of the build before (indoor rides did not exist there): road, lap and session defined again
         for indoor in [false, true] {
             let (mut w, mut f) = record_before_sub_sport(indoor);
-            assert!(!w.indoor(), "an older record reads as a road ride");
+            assert!(!w.indoor() && !w.by_hand(), "an older record reads as a road ride, automatic");
             assert_eq!(w.defined & (1 << L_LAP | 1 << L_SESSION), 0, "lap and session to be defined again");
             w.end(&mut f, T0 + 121).unwrap(); // ended from the record alone, no sample after it
             w.checkpoint(&mut f).unwrap();
@@ -1045,6 +1073,43 @@ pub(crate) mod tests {
             let session = m.iter().find(|x| x.0 == 18).unwrap();
             assert_eq!(field(session, 6), Some(7), "road");
         }
+    }
+
+    /// "By hand" kept in the record (bit 13); a profile given while paused ([`Writer::set_profile`], no sample
+    /// since) goes into the record and the end; and an older build, which reads bits 0..15 as the record mask, only
+    /// defines the record message again.
+    #[test]
+    fn the_profile_by_hand_and_set_while_paused() {
+        let mut f = Vec::new();
+        let (mut w, _) = Writer::start(&mut f, T0).unwrap();
+        let samples = ride(120);
+        for s in &samples[..60] {
+            w.record(&mut f, &Sample { indoor: true, by_hand: true, ..*s }).unwrap();
+        }
+        let r = w.checkpoint(&mut f).unwrap();
+        let back = Writer::from_record(&r).unwrap();
+        assert!(back.indoor() && back.by_hand(), "kept in the record");
+        assert_eq!(back.mask, w.mask, "bit 13 is not a record field");
+        // an older build: its mask is the word's low 16 bits, so the record is defined again, nothing else
+        let word = u32::from_le_bytes(r[10..14].try_into().unwrap());
+        assert_eq!(word & 0xfc00, BY_HAND | LAYOUT_SPORT | INDOOR, "only bits 13..15 above the mask");
+        let mut old = Writer { mask: word as u16, ..back };
+        for s in &samples[60..90] {
+            old.record(&mut f, s).unwrap();
+        }
+        assert!(!old.by_hand() && !old.indoor(), "the old build's samples: automatic road");
+        old.pause(&mut f, T0 + 91).unwrap();
+        // paused: road by hand, then the end with no sample since
+        old.set_profile(false, true);
+        let back = Writer::from_record(&old.checkpoint(&mut f).unwrap()).unwrap();
+        assert!(!back.indoor() && back.by_hand(), "set while paused: in the record");
+        old.set_profile(true, true);
+        old.end(&mut f, T0 + 100).unwrap();
+        old.checkpoint(&mut f).unwrap();
+        let m = decode(&f).unwrap();
+        assert_eq!(m.iter().filter(|x| x.0 == 20).count(), 90, "every record decodes");
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!(field(session, 6), Some(6), "indoor, set while paused");
     }
 
     #[test]

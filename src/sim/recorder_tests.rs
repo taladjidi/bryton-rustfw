@@ -510,3 +510,76 @@ fn a_reset_on_the_end_screen_resumes_the_ride() {
         assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]], "question {question}");
     }
 }
+
+/// Review of the ride profile: a ride set INDOOR by hand (no trainer heard: a dumb trainer, rollers) stays INDOOR
+/// after a reset. The recovery record keeps "by hand": without it the resumed ride, automatic again, went back to
+/// ROAD after TRAINER_QUIET_S without a trainer.
+#[test]
+fn an_indoor_ride_by_hand_stays_indoor_after_a_reset() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.toggle_indoor();
+    run(&mut sim, &mut app, 300_000);
+    assert!(app.indoors(), "by hand, before the reset: stays indoor");
+    let (mut sim2, mut app) = reboot(&mut sim, 3);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.indoors());
+    app.press(&mut sim2, Press::Short(Key::Start));
+    run(&mut sim2, &mut app, 150_000);
+    assert!(app.indoors(), "after the reset, 150 s on: {}", app.notices[0].as_str());
+}
+
+/// Review of the ride profile: samples come only on running seconds, so INDOOR set while paused, then SAVE, left
+/// the session with the last running second's profile. The profile in force goes to both copies at the end.
+#[test]
+fn a_profile_set_while_paused_is_in_the_saved_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    run(&mut sim, &mut app, 2000);
+    app.toggle_indoor();
+    assert!(app.indoors());
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let name = std::string::String::from_utf8(app.recorder.name().to_vec()).unwrap();
+    for path in [std::format!("Activities/{name}.fit"), std::format!("Rustfw/Activities/{name}.fit")] {
+        let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, &path).unwrap();
+        let mut v = std::vec![0u8; f.size as usize];
+        fat.read_at(&mut d, &f, 0, &mut v).unwrap();
+        let m = crate::fit::tests::decode(&v).unwrap();
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert_eq!(crate::fit::tests::field(session, 6), Some(6), "{path}: indoor at the end, set while paused");
+    }
+}
+
+/// The same for a ride switched off while paused: INDOOR set by hand during the pause comes back after the restart
+/// (the checkpoint at the switch off carries the profile in force, not the last running second's).
+#[test]
+fn a_profile_set_while_paused_survives_a_switch_off() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    run(&mut sim, &mut app, 2000);
+    app.toggle_indoor();
+    app.power_off(&mut sim);
+    let (mut sim2, mut app) = reboot(&mut sim, 3);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.indoors(), "indoor, set while paused, from the record");
+    app.press(&mut sim2, Press::Short(Key::Start));
+    run(&mut sim2, &mut app, 150_000);
+    assert!(app.indoors(), "and by hand: no trainer, still indoor");
+}

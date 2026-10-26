@@ -188,6 +188,7 @@ impl App {
         }
         let (local, t) = self.rec_time();
         let words = self.ride.to_words();
+        self.profile_to_recorders(); // a change while paused, before the pause's or the end's messages
         match ev {
             ride::Event::Start => {
                 // a ride the boot has not reopened yet (the card failed then) is resumed in this one's place
@@ -251,7 +252,18 @@ impl App {
             rmssd_ms: self.hrv.rmssd().filter(|_| hr),
             ascent_m: Some(self.ride.ascent_m()),
             indoor: self.indoors(),
+            by_hand: self.profile_by_hand,
         }
+    }
+
+    /// The profile in force to both copies' writers: the samples carry it only on running seconds, so a change
+    /// while paused would miss the end and the recovery record (the review of the ride profile).
+    /// The ride's own profile, not [`App::indoors`]: at the End event the ride is idle already, where that is the
+    /// next ride's choice. A recorder without a ride open ignores it.
+    fn profile_to_recorders(&mut self) {
+        let (indoor, by_hand) = (self.profile == ride::Profile::Indoor, self.profile_by_hand);
+        self.recorder.set_profile(indoor, by_hand);
+        self.full.set_profile(indoor, by_hand);
     }
 
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
@@ -261,6 +273,7 @@ impl App {
             return; // a read-only build has no ride here: [`App::recorder`] never starts one, nor is one resumed
         }
         let (local, _) = self.rec_time();
+        self.profile_to_recorders(); // before a checkpoint (a ride switched off or cut while paused)
         if self.recorder.phase() != recorder::Phase::Done {
             self.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
         }
@@ -282,10 +295,10 @@ impl App {
             recorder::Outcome::Resumed(words, name) => {
                 // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
                 self.ride = ride::Ride::resumed(&words);
-                // its profile from the record (an older one: ROAD), automatic again: a trainer silent for
-                // TRAINER_QUIET_S after the restart turns it back to ROAD, as in any indoor ride
+                // its profile from the record (an older one: ROAD, automatic), by hand if the rider set it so;
+                // automatic, a trainer silent for TRAINER_QUIET_S after the restart turns it back to ROAD
                 self.profile = if self.recorder.indoor() { ride::Profile::Indoor } else { ride::Profile::Road };
-                (self.profile_by_hand, self.trainer_quiet_s) = (false, 0);
+                (self.profile_by_hand, self.trainer_quiet_s) = (self.recorder.by_hand(), 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();

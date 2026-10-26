@@ -518,6 +518,20 @@ impl Recorder {
         self.writer.indoor()
     }
 
+    /// That profile was set by hand (kept in the recovery record too).
+    pub fn by_hand(&self) -> bool {
+        self.writer.by_hand()
+    }
+
+    /// The profile in force ([`fit::Writer::set_profile`]), for the end and the next record even with no second
+    /// recorded since (a change while paused). Only for a ride being recorded and not ended: the file's end
+    /// already says what it was.
+    pub fn set_profile(&mut self, indoor: bool, by_hand: bool) {
+        if matches!(self.phase, Phase::Starting | Phase::Recording) && !self.ended {
+            self.writer.set_profile(indoor, by_hand);
+        }
+    }
+
     /// Where it is.
     pub fn phase(&self) -> Phase {
         self.phase
@@ -1256,8 +1270,9 @@ mod tests {
     }
 
     std::thread_local! {
-        /// The test ride is indoors ([`Sample::indoor`]): set by the indoor variant of a test, on its own thread.
-        static INDOOR: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+        /// The test ride's profile ([`Sample::indoor`], [`Sample::by_hand`]): set by the indoor variants of a test,
+        /// on its own thread.
+        static PROFILE: core::cell::Cell<(bool, bool)> = const { core::cell::Cell::new((false, false)) };
     }
 
     fn sample(t: u32) -> Sample {
@@ -1273,7 +1288,8 @@ mod tests {
             alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
             rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
             ascent_m: Some(t / 10),
-            indoor: INDOOR.get(),
+            indoor: PROFILE.get().0,
+            by_hand: PROFILE.get().1,
         }
     }
 
@@ -1443,18 +1459,25 @@ mod tests {
     /// cluster, no cross-link; a lost cluster at worst).
     #[test]
     fn power_cut_at_every_sector_write() {
-        power_cut_at_every_sector(false);
+        power_cut_at_every_sector(false, false);
     }
 
     /// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)
     /// and is saved with sub_sport indoor_cycling (6), at boot too (ended from the record alone).
     #[test]
     fn an_indoor_ride_cut_at_every_sector_stays_indoor() {
-        power_cut_at_every_sector(true);
+        power_cut_at_every_sector(true, false);
     }
 
-    fn power_cut_at_every_sector(indoor: bool) {
-        INDOOR.set(indoor);
+    /// The same for an indoor ride set by hand (no trainer: a dumb trainer, rollers): it comes back by hand too, so
+    /// the app does not give it back to the automatic choice (which turns it ROAD without a trainer).
+    #[test]
+    fn an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand() {
+        power_cut_at_every_sector(true, true);
+    }
+
+    fn power_cut_at_every_sector(indoor: bool, by_hand: bool) {
+        PROFILE.set((indoor, by_hand));
         let sub = Some(if indoor { 6 } else { 7 });
         let img = crate::fat::tests::image();
         let mut full = Card { img: img.clone(), budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
@@ -1501,7 +1524,7 @@ mod tests {
             match outcome {
                 Outcome::Resumed(w, name) => {
                     assert_eq!(name, NAME);
-                    assert_eq!(r.indoor(), indoor, "{what}: the profile back from the record");
+                    assert_eq!((r.indoor(), r.by_hand()), (indoor, by_hand), "{what}: profile back");
                     resumed += 1;
                     let from = w[0] + 1;
                     let from = if (PAUSE + 1..RESUME).contains(&from) { RESUME } else { from };
