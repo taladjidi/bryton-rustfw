@@ -198,9 +198,14 @@ impl App {
             ride::Event::Start => {
                 // a ride the boot has not reopened yet (the card failed then) is resumed in this one's place
                 self.recorder.start(t, recorder::ride_name(local), self.resume_pending);
-                if self.recorder.phase() != recorder::Phase::Starting {
-                    self.alarm_notice("NOT RECORDING"); // the last ride's save is still failing
+                if !self.recorder.starting() {
+                    self.alarm_notice("NOT RECORDING");
                 } else {
+                    if self.recorder.held() {
+                        // behind the last ride's save, which the card keeps failing: tried again, this one after it
+                        self.alarm_notice("NOT RECORDING: CARD");
+                    }
+                    // (a ride started while the last one is being saved waits for that save: recorder.rs `start`)
                     // no full copy of a ride the clean one does not record
                     self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
                 }
@@ -308,6 +313,9 @@ impl App {
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
+                // the recovery record keeps the ride's totals, not power.rs's sums: the end card's NP, TSS and kJ
+                // cover the part after the restart only (the file has every second's power: the history's and a
+                // computer's cover the whole ride)
                 self.power.new_ride();
                 self.ride_model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
                 let now = self.now_s();
@@ -335,7 +343,7 @@ impl App {
             recorder::Outcome::Failed(_) => {
                 // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
                 if self.recorder.fails() % 60 == 1 {
-                    self.alarm_notice("NOT SAVING");
+                    self.alarm_notice(if self.recorder.held() { "NOT RECORDING: CARD" } else { "NOT SAVING" });
                 }
             }
         }

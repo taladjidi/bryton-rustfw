@@ -1044,3 +1044,20 @@ fn the_indoor_set_survives_a_cut_with_its_pages() {
     std::println!("indoor cut: {total} sectors, {olds} old, {news} new");
     assert!(olds > 0);
 }
+
+/// Register 16 is the power word now (tag 0xa in its top bits, the smooth font in bit 24), which the first builds'
+/// one-register pages (tag 0xa, the layout in bits 24..27) kept page 3 in: with the FONT set to SMOOTH and the
+/// registers of the pages empty, it was read as a third page (and the boot saved it as one). Never now.
+#[test]
+fn the_power_word_is_never_a_page() {
+    let boot = |smooth: bool| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        sim.backup[crate::POWER_BKP] = crate::Settings { smooth, ..crate::Settings::from_word(0) }.power_word();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, PAGES_LOAD_MS as u64 + 200);
+        (pages(&app), sim.backup[PAGE_BKP[2][0]])
+    };
+    assert_eq!(boot(true), boot(false));
+}

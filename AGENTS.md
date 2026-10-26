@@ -86,9 +86,12 @@ The point of this project is a firmware in safe Rust.
 - The binary has `#![deny(unsafe_code)]`. The exception is `src/board/hw.rs`, which holds the unavoidable unsafe
   primitives:
   - the vector table and the reset entry (section copies);
-  - `rd` / `wr` / `wr8` (volatile register access);
+  - the fault and panic handler (`default_handler`: the fault marker, then a reset);
+  - `rd` / `wr` / `wr8` (volatile register access; the dev link's `peek` / `poke` in usb.rs check the computer's
+    addresses before they get there: poke the peripheral space only);
   - `barrier`, `wfi`, `cpsid` (single CPU instructions);
   - `stage_write` and `run_staged` (the USB RAM-run);
+  - `map_memory` (`from_raw_parts_mut`: link.x MAP in SDRAM handed out once as a slice);
   - the empty critical-section implementation the USB crates need. It is sound only because interrupts are
     never unmasked: keep it that way, or replace it.
 - One other `unsafe` line: `unsafe impl UsbPeripheral` in `usb.rs`. It is the crate's marker trait, which

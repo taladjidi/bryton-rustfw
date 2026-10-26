@@ -1467,8 +1467,9 @@ fn main() -> ! {
     let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0) };
     let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
-        // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map. The basemap takes the first
-        // words; the rest (link.x MAP has room for it) is the buffer the map tiles of the road ahead are inflated into
+        // zeroes all of link.x MAP (2560 KB of SDRAM) once: about 15 to 40 ms (inferred), before the first map. The
+        // basemap takes the first words; the rest (link.x MAP has room for it) is the buffer the map tiles of the road
+        // ahead are inflated into
         match mem.split_at_mut_checked(bryton_rustfw::tiles::MEM_WORDS) {
             Some((map, rest)) if rest.len() >= bryton_rustfw::route::SCRATCH_WORDS => {
                 app.set_map_memory(map);

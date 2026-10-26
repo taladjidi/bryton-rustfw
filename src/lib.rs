@@ -643,8 +643,9 @@ impl App {
             self.save_page_registers(b);
             b.backup_write(STOCK_BKP19, 0);
         }
-        // pages kept one register each by the first builds (14 to 16), read at each boot but never saved where they
-        // are now: saved there once, before a shifting system's pairing reuses 14 (review of 571e613)
+        // pages kept one register each by the first builds (14, 15; their 16 is POWER_BKP's now), read at each boot
+        // but never saved where they are now: saved there once, before a shifting system's pairing reuses 14 (review
+        // of 571e613)
         let old = PAGE_BKP.iter().zip(OLD_PAGE_BKP).any(|(new, old)| {
             PageCfg::from_words(new.map(|r| b.backup_read(r))).is_none()
                 && PageCfg::from_word(b.backup_read(old)).is_some()

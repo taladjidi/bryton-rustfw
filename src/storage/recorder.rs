@@ -38,13 +38,23 @@
 //! 2. the file read back whole from the card: its FIT CRC must be right. A read that fails is tried again; a file
 //!    that reads but is not whole (a damaged sector) is left as it is in `\Rustfw\Rides` and the record says
 //!    "done" ([`Outcome::Kept`]): it is never tried again, so it never stops the next ride;
-//! 3. `\Activities` made if missing and a free name found (a name taken by another file: a second later);
+//! 3. `\Activities` made if missing and a free name found (a name taken by another file: a second later; the full
+//!    copy, saved after the clean one, starts from the name that one took, so the two keep one name), and room made
+//!    there for the entry ([`Fat::make_room`]: a zeroed cluster linked if the folder must grow), so that 5 takes no
+//!    cluster: a full card fails here, the ride still named where it is;
 //! 4. its entry in `\Rustfw\Rides` marked deleted (0xe5 only: `fat::write`);
 //! 5. the new entry `\Activities\YYMMDDhhmmss.fit` on the same chain;
 //! 6. a record "done".
 //!
 //! Between 4 and 5 the chain is named by no entry for a moment (a lost chain, never a cross-link); the record
-//! names it, and 5 is done again at the next start. So the ride in progress exists until the saved one does.
+//! names it, and 5 is done again at the next start. So the ride in progress exists until the saved one does. A save
+//! past 4 is never given up ([`GIVE_UP`] does not apply): it stays "saving" (the ride open: the marker kept, the
+//! drive refused) and is tried again every [`RETRY`] calls, by the same run, the boot or a Start, until the card
+//! takes it; no new ride's record goes over its record meanwhile (the review of 2026-10-26).
+//!
+//! **A Start during a save** (its retries take up to a minute, or for good past step 4): the new ride is kept and
+//! started once the save is over ([`Recorder::start`]), the seconds until then not in its file; behind a save the
+//! card keeps failing, the app says the new ride is not recorded ([`Recorder::held`]).
 //!
 //! **A discarded ride** (the end-ride screen's DISCARD: [`Recorder::discard`]) is saved the same way, step for step,
 //! into `\Rustfw\Discarded` (the full copy into `\Rustfw\Discarded\Full`) instead of the saved folder: never
@@ -89,10 +99,11 @@
 //! first, and the clean one was 22 s behind it after a reset on the unit); the full one waits for the clean one to
 //! make its file and carries on a ride left open only if it is the clean one's ([`Recorder::io_after`],
 //! [`Recorder::resumed_after`]: never a full copy of one ride carried on with another's seconds); and it stops when
-//! the card has less than [`FULL_RESERVE`] free (FSInfo's count), the rest being the clean one's. Writing both as the ride goes was chosen over making one from the other at the save:
-//! the save, the riskiest moment, stays as short as it was, and the clean file never depends on code that writes
-//! developer fields. Cost (`two_copies_cost` below, a 900 s ride): about twice the sectors written, a few more
-//! a minute; nothing near the eMMC's endurance.
+//! the card has less than [`FULL_RESERVE`] free (FSInfo's count, counted once when it is unknown; no FSInfo: no
+//! full copy), the rest being the clean one's. Writing both as the ride goes was chosen over making one from the
+//! other at the save: the save, the riskiest moment, stays as short as it was, and the clean file never depends on
+//! code that writes developer fields. Cost (`two_copies_cost` below, a 900 s ride): about twice the sectors
+//! written, a few more a minute; nothing near the eMMC's endurance.
 //!
 //! Errors: nothing here panics; a failing card leaves the data in RAM and is tried again after [`RETRY`] calls;
 //! samples that do not fit the buffer meanwhile are counted ([`Recorder::dropped`]), never the file lost. Only a
@@ -425,6 +436,18 @@ pub struct Recorder {
     pub beats_dropped: u32,
     /// Card errors so far.
     pub errors: u32,
+    /// A Start while the last ride was still being saved: (time, name, resume_old), started once the save is done
+    /// ([`Recorder::start`]).
+    pending: Option<(u32, [u8; 12], bool)>,
+    /// The last save: the ride's name and the name it was saved under (a second later when one was taken), which the
+    /// full copy's save takes too ([`Recorder::io_after`]); and that name, for this copy's save.
+    saved: Option<([u8; 12], [u8; 12])>,
+    save_as: Option<[u8; 12]>,
+    /// The save's step 4 is done and 5 is not: the ride is named by its record alone, so its save is never given up
+    /// (it stays "saving", tried again for as long as it takes) and no new ride takes the record's slots.
+    nameless: bool,
+    /// The ride's start ([`Recorder::start`]'s `time`), for a start put off behind such a save.
+    begun: u32,
 }
 
 /// The buffer as the FIT writer's [`Sink`]: no card access (a checkpoint's flush is [`Recorder::flush`]).
@@ -508,6 +531,11 @@ impl Recorder {
             dropped: 0,
             beats_dropped: 0,
             errors: 0,
+            pending: None,
+            saved: None,
+            save_as: None,
+            nameless: false,
+            begun: 0,
         }
     }
 
@@ -531,13 +559,21 @@ impl Recorder {
     /// The full copy's card work ([`Recorder::io`]), after the clean copy `clean`'s in the same pass (module doc,
     /// "Two copies"): the clean one's name while this one's file is not made (the clean one may have moved a second
     /// on, or resumed the ride left open); nothing until the clean one has made its file, so that a ride left open
-    /// is carried on only when it is the clean one's; and a save only once the clean one's has begun.
+    /// is carried on only when it is the clean one's; and a save only once the clean one's of the same ride is over,
+    /// under the name that one was saved under, so the two keep one name.
     pub fn io_after(&mut self, clean: &Recorder, d: &mut impl DiskWrite, now: Local) -> Outcome {
+        if self.phase == Phase::Starting && clean.pending.is_some() {
+            return Outcome::Nothing; // the clean one's name is still the ride being saved
+        }
         if self.phase == Phase::Starting && self.file.is_none() {
             self.name = clean.name;
         }
-        if clean.phase == Phase::Starting || (self.ended && clean.phase == Phase::Recording) {
+        let saving = matches!(clean.phase, Phase::Recording | Phase::Saving) && clean.name == self.name;
+        if clean.phase == Phase::Starting || (self.ended && saving) {
             return Outcome::Nothing;
+        }
+        if let Some((from, to)) = clean.saved.filter(|s| self.ended && s.0 == self.name) {
+            self.save_as = Some(to).filter(|&to| to != from);
         }
         self.io(d, now)
     }
@@ -609,9 +645,13 @@ impl Recorder {
     /// A new ride at FIT time `time`, named after its local start: the file's first bytes, in RAM (the file is
     /// made at the next [`Recorder::io`], after what the last run left unfinished: resumed in this one's place if
     /// `resume_old` (the boot's marker said a ride was open) or if it stopped less than [`RESUME_S`] before `time`,
-    /// else saved as it is). Ignored while a ride is still being saved.
+    /// else saved as it is). While the last ride is still being saved (its retries take up to a minute), kept and
+    /// started once that is done ([`Recorder::io`]): the seconds until then are not in the file, the rest is.
     pub fn start(&mut self, time: u32, name: [u8; 12], resume_old: bool) {
         if self.phase != Phase::Done {
+            if self.ended {
+                self.pending = Some((time, name, resume_old));
+            }
             return;
         }
         (self.tail, self.tail_off, self.len, self.head) = ([0; TAIL], 0, 0, [0; 14]);
@@ -623,6 +663,18 @@ impl Recorder {
         (self.phase, self.file, self.name, self.since, self.want, self.ended, self.stopped) =
             (Phase::Starting, None, name, 0, true, false, false);
         (self.resume_old, self.discard, self.beats_n, self.beats_ms) = (resume_old, false, 0, 0);
+        (self.pending, self.save_as, self.nameless, self.begun) = (None, None, false, time);
+    }
+
+    /// A Start waits behind a save that cannot finish (the card failed [`GIVE_UP`] times since its step 4): the
+    /// new ride is not being recorded (said), the old one's save goes on being tried.
+    pub fn held(&self) -> bool {
+        self.pending.is_some() && self.fails >= GIVE_UP
+    }
+
+    /// A ride started ([`Recorder::start`]), or waiting for the last one's save to start.
+    pub fn starting(&self) -> bool {
+        self.phase == Phase::Starting || self.pending.is_some()
     }
 
     /// A checkpoint at the next [`Recorder::io`], even while waiting after a failure (switching off: the last
@@ -732,6 +784,9 @@ impl Recorder {
 
     /// The ride ended at `time`: the end messages in RAM, the save at the next [`Recorder::io`].
     pub fn end(&mut self, time: u32, ride: [u32; RIDE_WORDS]) {
+        if self.pending.take().is_some() {
+            return; // started and ended while the last one was saved: nothing of it was recorded
+        }
         self.ride = ride;
         if !matches!(self.phase, Phase::Starting | Phase::Recording) || self.ended {
             return;
@@ -772,7 +827,7 @@ impl Recorder {
             self.wait -= 1;
             return Outcome::Nothing;
         }
-        match self.io_inner(d, now) {
+        let o = match self.io_inner(d, now) {
             Ok(o) => {
                 self.fails = 0;
                 o
@@ -806,15 +861,29 @@ impl Recorder {
                 self.wait = RETRY;
                 Outcome::Failed(e)
             }
+        };
+        if self.phase == Phase::Done
+            && let Some((time, name, resume_old)) = self.pending
+        {
+            self.start(time, name, resume_old); // the save is over: the ride started meanwhile
         }
+        o
     }
 
     fn io_inner(&mut self, d: &mut impl DiskWrite, now: Local) -> Result<Outcome, Error> {
         let t = dos_time(now);
         let mut fat = Fat::mount(d)?;
         let low = |fat: &mut Fat, d: &mut _| -> Result<bool, Error> {
-            let free = fat.free_clusters(d)?.map(|n| u64::from(n) * u64::from(fat.cluster_bytes()));
-            Ok(free.is_some_and(|b| b < FULL_RESERVE))
+            let free = match fat.free_clusters(d)? {
+                Some(n) => Some(n),
+                // FSInfo's count unknown (0xffffffff, as a formatter may leave it): counted once, which writes it
+                None => {
+                    fat.sync_fats(d)?;
+                    fat.free_clusters(d)?
+                }
+            };
+            // still unknown (no FSInfo at all): the reserve cannot be kept, so no full copy
+            Ok(free.is_none_or(|n| u64::from(n) * u64::from(fat.cluster_bytes()) < FULL_RESERVE))
         };
         if self.kind == Kind::Full && !self.ended && self.phase != Phase::Saving && low(&mut fat, d)? {
             // the card nearly full: what is left is the clean copy's. This one stops where it is (its record done:
@@ -850,6 +919,14 @@ impl Recorder {
                     }
                     Ok(o) => told = o,
                     Err(e) if self.retry(e) => return Err(e),
+                    Err(e) if old.nameless => {
+                        // its save past step 4: named by its record alone, which this ride's records would overwrite.
+                        // This recorder carries on with that save (tried again until it is done) and this ride
+                        // waits for it, as a Start during a save does
+                        (old.pending, old.fails) = (Some((self.begun, self.name, self.resume_old)), self.fails);
+                        *self = old;
+                        return Err(e);
+                    }
                     Err(_) => told = Outcome::Kept(r.name), // given up: left as it is, its record overwritten next
                 }
                 self.seq = self.seq.max(old.seq);
@@ -898,6 +975,8 @@ impl Recorder {
             let o = match saved {
                 Ok(o) => o,
                 Err(e) if self.retry(e) => return Err(e),
+                // past step 4: never given up (the record is all that names the ride), tried again for good
+                Err(e) if self.nameless => return Err(e),
                 Err(_) => {
                     // given up: the ride stays where it is; "done" if the card takes it, else the boot and the next
                     // start try it once more
@@ -1101,7 +1180,9 @@ impl Recorder {
         } else {
             self.kind.saved_dir(fat, d, t)?
         };
-        let (mut name, mut linked) = (self.name, None);
+        // the full copy, saved after the clean one, from the name that one took ([`Recorder::io_after`]): one name
+        // for both, the start having picked one free in all four folders
+        let (mut name, mut linked) = (self.save_as.unwrap_or(self.name), None);
         for _ in 0..10 {
             match fat.find(d, acts, file_name(&name, &mut buf)?) {
                 Ok(f) if f.cluster == first => linked = Some(true), // a cut after 5: done already
@@ -1114,6 +1195,11 @@ impl Recorder {
             }
         }
         let linked = linked.ok_or(Error::Refused)?; // ten names taken: never "done" without the link
+        if !linked {
+            // the entry's room before 4: a folder that must grow (a cluster) on a full card fails here, the ride still
+            // named where it is, never between 4 and 5
+            fat.make_room(d, acts, file_name(&name, &mut buf)?)?;
+        }
         // 4: the entry in the folder, if still there and still this chain
         let dir = fat.open(d, self.kind.rides().1)?;
         match fat.locate(d, dir, file_name(&self.name, &mut buf)?) {
@@ -1121,14 +1207,22 @@ impl Recorder {
             Ok(_) | Err(Error::NotFound | Error::Corrupt) => {} // gone, or its sector torn (the record is the name)
             Err(e) => return Err(e),
         }
-        // 5: the new entry
         if !linked {
+            // named by the record alone until 5: a save to finish whatever it takes, by [`Recorder::io`] (the phase,
+            // the chain and its size as the record says: whoever called this)
+            (self.nameless, self.phase, self.ended, self.stopped, self.len) = (true, Phase::Saving, true, false, size);
+            if self.file.is_none_or(|h| h.first != first) {
+                self.file = Some(Handle { first, size, ..Handle::default() });
+            }
+            // 5: the new entry
             let h = Handle { first, size, ..Handle::default() };
             fat.link(d, acts, file_name(&name, &mut buf)?, &h, t)?;
         }
-        self.name = name;
+        self.nameless = false;
+        (self.saved, self.name) = (Some((self.name, name)), name);
         // 6
         self.write_record(fat, d, Phase::Done, first)?;
+        self.phase = Phase::Done; // (made "saving" above when called from a boot's recovery)
         Ok(if self.discard { Outcome::Discarded(name) } else { Outcome::Saved(name) })
     }
 
@@ -1160,7 +1254,13 @@ impl Recorder {
                 self.fails = 0;
                 o
             }
-            Err(Error::NotFound) => Outcome::Nothing, // never recorded here
+            Err(Error::NotFound) if !self.nameless => Outcome::Nothing, // never recorded here
+            Err(e) if self.nameless => {
+                // a save past its step 4: never given up, [`Recorder::io`] tries it again (the phase is "saving")
+                self.errors = self.errors.saturating_add(1);
+                (self.fails, self.wait) = (self.fails.saturating_add(1), RETRY);
+                Outcome::Failed(e)
+            }
             Err(e) => {
                 self.phase = Phase::Done; // whatever was reopened: done again from the record
                 self.errors = self.errors.saturating_add(1);
@@ -2679,5 +2779,254 @@ mod tests {
             }
         }
         assert!(bad.is_empty(), "{} bad cuts of {}: {bad:?}", bad.len(), 2 * total);
+    }
+
+    /// `\Activities` left with `left` free slots in its directory's last sector: deleted entries (0xe5) written from
+    /// its end marker on (in its chain's last cluster) up to there, as many saves and deletes leave it.
+    fn crowd(img: &mut [u8], left: usize) {
+        let u = |img: &[u8], at: usize, n: usize| {
+            img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b))
+        };
+        let (spc, fat0, fats, fat_len) = (u(img, 13, 1), u(img, 14, 2), u(img, 16, 1), u(img, 36, 4));
+        let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut c = Fat::mount(&mut ram).unwrap().open(&mut ram, ACTIVITIES).unwrap().cluster as usize;
+        while let n @ 2..0x0fff_fff0 = u(img, fat0 * SECTOR + 4 * c, 4) & 0x0fff_ffff {
+            c = n;
+        }
+        let at = (fat0 + fats * fat_len + (c - 2) * spc) * SECTOR;
+        let end = at + spc * SECTOR - 32 * left;
+        let mut e = at;
+        while img[e] != 0 {
+            e += 32;
+        }
+        assert!(e < end, "room to crowd");
+        for k in (e..end).step_by(32) {
+            img[k] = 0xe5;
+        }
+    }
+
+    /// The ride's file is named by an entry: saved whole in `\Activities`, or where it was recorded; at most a minute
+    /// lost (its last checkpoint).
+    fn named(img: &[u8], what: &str) {
+        let (times, _) = saved(img, SAVED)
+            .or_else(|_| saved(img, "Rustfw/Rides/261023100000.fit"))
+            .unwrap_or_else(|e| panic!("{what}: the ride named by no entry ({e})"));
+        assert!(times.len() >= 400 - CHECKPOINT_S as usize, "{what}: {} s", times.len());
+    }
+
+    /// The review of 2026-10-26 (high): a save whose `\Activities` must grow for the new entry (under 3 free slots in
+    /// its last sector) on a full card removed the ride's entry (step 4), could not link the new one (5: no cluster),
+    /// then wrote the record "done": the chain named by nothing, the ride lost. The room is made before 4 now: on a
+    /// full card the ride is kept where it was, with a cluster free it is saved into the grown folder. The power cut
+    /// at every sector of the end and the save, then a reboot: the ride is always named, never more than a minute
+    /// short, the volume clean.
+    #[test]
+    fn a_save_into_a_full_folder_on_a_full_card_keeps_the_ride() {
+        let run = |keep: u32, cut: Option<u64>| -> (Card, Outcome, u64) {
+            let mut d = card(crate::fat::tests::image());
+            let (mut r, mut last) = (Recorder::new(), [Outcome::Nothing]);
+            r.start(T0 - 1, NAME, false);
+            seconds(core::slice::from_mut(&mut r), &mut d, 0, 400, &mut last);
+            crowd(&mut d.img, 2);
+            fill(&mut d.img, keep, true);
+            let from = d.written;
+            d.budget = cut.map(|k| from + k);
+            r.end(T0 + 400, words(400));
+            for _ in 0..3 {
+                pass(core::slice::from_mut(&mut r), &mut d, 400, &mut last);
+            }
+            let n = d.written - from;
+            (d, last[0], n)
+        };
+        let mut outcomes = Vec::new();
+        for keep in [0, 1, 2, 3] {
+            let (d, o, total) = run(keep, None);
+            let what = std::format!("{keep} clusters free");
+            outcomes.push(o);
+            assert!(matches!(o, Outcome::Saved(NAME) | Outcome::Kept(NAME)), "{what}: {o:?}");
+            named(&d.img, &what);
+            assert_eq!(fsck(&d.img).map_err(|e| std::format!("{what}: {e}")), Ok(0));
+            for cut in 0..total {
+                let what = std::format!("{keep} clusters free, cut {cut} of {total}");
+                let (d, _, _) = run(keep, Some(cut));
+                let mut d = card(d.img);
+                let mut r = Recorder::new();
+                if let Outcome::Resumed(..) = r.recover(&mut d, local(500)) {
+                    r.end(T0 + 400, words(400));
+                    io_all(&mut r, &mut d, 500);
+                }
+                assert_eq!(r.phase(), Phase::Done, "{what}");
+                named(&d.img, &what);
+                if let Err(e) = fsck(&d.img) {
+                    panic!("{what}: {e}");
+                }
+            }
+        }
+        assert_eq!(outcomes[0], Outcome::Kept(NAME), "a full card: kept where it was");
+        assert!(outcomes.contains(&Outcome::Saved(NAME)), "saved into the grown folder: {outcomes:?}");
+    }
+
+    /// The second half of that finding: a save given up ([`GIVE_UP`] card errors) between its steps 4 and 5 (the
+    /// writes of `\Activities`' directory failing) wrote "done" over the record, the only thing that still named the
+    /// ride, and a later Start's records could overwrite it. Such a save is never given up now: it stays "saving",
+    /// tried again for as long as the card fails, by the same run, by a boot (the marker kept) and by a Start (the
+    /// marker lost); a Start meanwhile waits behind it (`held`, its records never over the old one's), and once the
+    /// card is well the old ride is saved and the new one recorded.
+    #[test]
+    fn a_save_failing_between_steps_4_and_5_is_never_given_up() {
+        struct Bad(Card, core::ops::Range<u32>, bool);
+        impl Disk for Bad {
+            fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+                self.0.read(lba, buf)
+            }
+        }
+        impl DiskWrite for Bad {
+            fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+                if self.2 && self.1.contains(&lba) {
+                    return Err(Error::Io);
+                }
+                self.0.write(lba, buf)
+            }
+        }
+        const NEXT: [u8; 12] = *b"261023110000";
+        let failing = |o: &[Outcome]| o.len() > GIVE_UP as usize && o.iter().all(|o| *o == Outcome::Failed(Error::Io));
+        // the old ride saved first, then the new one recorded and saved
+        let finish = |r: &mut Recorder, d: &mut Bad, what: &str| {
+            d.2 = false; // the card well again
+            assert_eq!(io_all(r, d, 1001), [Outcome::Saved(NAME)], "{what}: the old save finished first");
+            assert_eq!(r.phase(), Phase::Recording, "{what}: then the new ride, its file made");
+            r.second(&sample(1001), words(1));
+            r.end(T0 + 1002, words(2));
+            assert_eq!(io_all(r, d, 1003), [Outcome::Saved(NEXT)], "{what}");
+            assert_eq!(saved(&d.0.img, SAVED).map(|s| s.1), Ok(true), "{what}");
+            assert_eq!(check_clean(&d.0.img, what), 0);
+        };
+        let mut d = card(crate::fat::tests::image());
+        let mut r = open_ride(&mut d, 200);
+        let lba = first_lba(&d.img, ACTIVITIES) as u32;
+        let mut d = Bad(d, lba..lba + 64, true);
+        r.end(T0 + 200, words(200));
+        let out = io_all(&mut r, &mut d, 201);
+        assert!(failing(&out), "{out:?}");
+        assert_eq!(r.phase(), Phase::Saving, "never given up");
+        let left = d.0.img.clone(); // the card as the failing save leaves it: the ride named by its record alone
+
+        // the same run: a Start waits behind the save, which goes on being tried
+        r.start(T0 + 1000, NEXT, false);
+        assert!(r.starting() && r.held());
+        assert!(failing(&io_all(&mut r, &mut d, 1001)));
+        finish(&mut r, &mut d, "same run");
+
+        // a boot (the marker kept): the recovery fails, the save is tried again by io, a Start waits
+        let mut d = Bad(card(left.clone()), lba..lba + 64, true);
+        let mut r = Recorder::new();
+        assert_eq!(r.recover(&mut d, local(300)), Outcome::Failed(Error::Io));
+        assert_eq!(r.phase(), Phase::Saving);
+        assert!(failing(&io_all(&mut r, &mut d, 301)));
+        r.start(T0 + 1000, NEXT, false);
+        assert!(r.held());
+        finish(&mut r, &mut d, "boot");
+
+        // the marker lost: a Start finds the save in the record, gives it its retries, then waits behind it
+        let mut d = Bad(card(left), lba..lba + 64, true);
+        let mut r = Recorder::new();
+        r.start(T0 + 1000, NEXT, false);
+        assert!(failing(&io_all(&mut r, &mut d, 1001)));
+        assert_eq!(r.phase(), Phase::Saving);
+        assert!(r.held(), "the new ride not recorded: said");
+        finish(&mut r, &mut d, "start");
+    }
+
+    /// The review of 2026-10-26: a Start while the last ride was still being saved was ignored ("NOT RECORDING"),
+    /// and the whole new ride went unrecorded. It starts once the save is done now, both copies, each saved after.
+    #[test]
+    fn a_start_during_the_last_save_is_recorded() {
+        let mut d = card(crate::fat::tests::image());
+        let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+        for r in rs.iter_mut() {
+            r.start(T0 - 1, NAME, false);
+        }
+        seconds(&mut rs, &mut d, 0, 200, &mut last);
+        const NEXT: [u8; 12] = *b"261023110000";
+        for r in rs.iter_mut() {
+            r.end(T0 + 200, words(200));
+            r.start(T0 + 3599, NEXT, false); // before the pass that saves the last one
+            assert!(r.starting());
+        }
+        seconds(&mut rs, &mut d, 3600, 3800, &mut last);
+        for r in rs.iter_mut() {
+            r.end(T0 + 3800, words(3800));
+        }
+        for _ in 0..3 {
+            pass(&mut rs, &mut d, 3800, &mut last);
+        }
+        assert_eq!(last, [Outcome::Saved(NEXT); 2]);
+        for p in [SAVED, SAVED_FULL] {
+            assert_eq!(saved(&d.img, p).map(|s| (s.0.len(), s.1)), Ok((200, true)), "{p}");
+        }
+        for p in ["Activities/261023110000.fit", "Rustfw/Activities/261023110000.fit"] {
+            let (times, session) = saved(&d.img, p).unwrap_or_else(|e| panic!("{p}: {e}"));
+            assert!(session && times.len() >= 198, "{p}: {} s", times.len());
+        }
+        assert_eq!(check_clean(&d.img, "after"), 0);
+    }
+
+    /// The review of 2026-10-26: each copy picked its saved name against its own folder only, so a name taken in
+    /// `\Activities` during the ride (stock's, a computer's) gave the two copies different names, which the sync and
+    /// HISTORY's DELETE pair by. The full copy takes the name the clean one was saved under now. (One taken in
+    /// `\Rustfw\Activities` still parts them: only this firmware writes there, never during a ride.)
+    #[test]
+    fn both_copies_keep_one_name() {
+        let mut d = card(crate::fat::tests::image());
+        let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+        for r in rs.iter_mut() {
+            r.start(T0 - 1, NAME, false);
+        }
+        seconds(&mut rs, &mut d, 0, 100, &mut last);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, ACTIVITIES).unwrap();
+        fat.create(&mut d, dir, "261023100000.fit", (0, 0)).unwrap();
+        seconds(&mut rs, &mut d, 100, 200, &mut last);
+        for r in rs.iter_mut() {
+            r.end(T0 + 200, words(200));
+        }
+        for _ in 0..3 {
+            pass(&mut rs, &mut d, 200, &mut last);
+        }
+        const ONE_ON: [u8; 12] = *b"261023100001";
+        assert_eq!(last, [Outcome::Saved(ONE_ON); 2]);
+        for p in ["Activities/261023100001.fit", "Rustfw/Activities/261023100001.fit"] {
+            assert_eq!(saved(&d.img, p).map(|s| s.1), Ok(true), "{p}");
+        }
+    }
+
+    /// The full copy's reserve ([`FULL_RESERVE`]) with FSInfo's free count unknown (0xffffffff, as a formatter may
+    /// leave it): it was skipped, the full copy then taking the clean one's last clusters. The count is made now.
+    #[test]
+    fn a_nearly_full_card_with_no_free_count_is_left_to_the_clean_copy() {
+        let img = crate::fat::tests::image();
+        let mut one = card(img.clone());
+        ride(&mut Recorder::new(), &mut one, 0).unwrap();
+        let keep = (free_counts(&img).0 - free_counts(&one.img).0) * 3 / 2;
+        let mut d = card(img);
+        let (mut rs, mut last) = (pair(), [Outcome::Nothing; 2]);
+        for r in rs.iter_mut() {
+            r.start(T0 - 1, NAME, false);
+        }
+        seconds(&mut rs, &mut d, 0, 100, &mut last); // the folders made (which counts the free clusters)
+        fill(&mut d.img, keep, false);
+        let fsinfo = (usize::from(d.img[48]) | usize::from(d.img[49]) << 8) * SECTOR;
+        d.img[fsinfo + 488..fsinfo + 492].copy_from_slice(&u32::MAX.to_le_bytes());
+        seconds(&mut rs, &mut d, 100, SECS, &mut last);
+        for r in rs.iter_mut() {
+            r.end(T0 + SECS, words(SECS));
+        }
+        for _ in 0..3 {
+            pass(&mut rs, &mut d, SECS, &mut last);
+        }
+        assert_eq!(last, [Outcome::Saved(NAME), Outcome::Kept(NAME)]);
+        assert!(saved(&d.img, SAVED).is_ok_and(|s| s.1), "the clean copy whole");
+        assert!(saved(&d.img, SAVED_FULL).is_err());
+        assert_eq!(check_clean(&d.img, "after"), 0);
     }
 }

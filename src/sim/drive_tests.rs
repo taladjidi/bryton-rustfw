@@ -220,3 +220,40 @@ fn a_delete_cut_halfway_is_finished_before_lending() {
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
+
+/// A save failing after its step 4 (recorder.rs: the ride's entry removed, the new one not written; the record alone
+/// names the ride) keeps the ride open: the marker stays, the drive is refused (a computer's fsck could free the
+/// nameless chain), a Start says the new ride waits ("NOT RECORDING: CARD"); once the card is well the old ride is
+/// saved, the new one recorded, and when it is saved the drive is lent.
+#[test]
+fn a_save_stuck_after_its_step_4_holds_the_drive() {
+    let (mut sim, mut app) = started(true);
+    let img = &sim.emmc.image;
+    let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
+    let (spc, data) = (u(13, 1), u(14, 2) + u(16, 1) * u(36, 4));
+    let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+    let c = crate::fat::Fat::mount(&mut ram).unwrap().open(&mut ram, "Activities").unwrap().cluster;
+    let acts = data + (c - 2) * spc;
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    sim.emmc.bad = Some(acts..acts + spc); // \Activities' directory cannot be written
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 120_000); // past GIVE_UP tries
+    assert_eq!(app.recorder.phase(), recorder::Phase::Saving, "never given up");
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "the marker kept");
+    assert_eq!(app.drive_on(&mut sim), Err("RIDE NOT SAVED YET"));
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert!(app.notices[0].as_str().ends_with("NOT RECORDING: CARD"), "{}", app.notices[0].as_str());
+    sim.emmc.bad = None;
+    run(&mut sim, &mut app, 30_000);
+    assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE SAVED")));
+    assert_eq!(app.recorder.phase(), recorder::Phase::Recording, "the new ride recorded");
+    assert_eq!(app.drive_on(&mut sim), Err("END THE RIDE FIRST"));
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+}
