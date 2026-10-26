@@ -433,6 +433,11 @@ impl App {
             (Screen::Trainer, Input::Prev) if self.ride.state() != ride::State::Idle => return self.lap(),
             (Screen::Trainer, Input::PrevHeld) if self.ride.state() != ride::State::Idle => return,
             (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => self.open(Screen::End(0)),
+            // riding, the long presses are the trainer's: Lap held steps the target down (Page is up), Start held
+            // cycles the mode; the short ones stay a lap and a pause
+            (Screen::Trainer, Input::Media | Input::End) if self.ride.state() == ride::State::Running => {
+                return self.trainer_long(b, i);
+            }
             (Screen::Trainer, _) => return self.trainer_input(b, i),
             (Screen::Edit(..), _) => return self.editor_input(b, i),
             (Screen::End(_) | Screen::Discard(_), _) => return self.end_input(b, i),

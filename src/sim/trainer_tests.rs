@@ -498,6 +498,50 @@ fn riding_the_keys_on_the_trainer_screen_are_the_rides() {
     assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "RES", "MODE changes it");
 }
 
+/// Item 5 of the interaction review: riding on the trainer screen with the keys only, Page was the one key that
+/// moved the target (up) and nothing changed the mode (a tap on MODE). Now Lap held (2 s) steps the target down and
+/// Start held cycles the mode with a banner; a short Lap is still a lap and a short Start a pause. The keys are
+/// held for real (timed), so the repeat flag and the long press are the unit's.
+#[test]
+fn riding_the_long_keys_on_the_trainer_screen() {
+    // Lap held from 6 s for 2.3 s, Start held from 12 s for 2.3 s, Lap tapped at 16 s
+    let keys = |ms: u64| match ms {
+        6000..8300 => Key::Lap as u8,
+        12_000..14_300 => Key::Start as u8,
+        16_000..16_150 => Key::Lap as u8,
+        _ => 0,
+    };
+    let (sim, mut app) = unit();
+    let mut sim = sim.keys(keys);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    app.press(&mut sim, Press::Short(Key::Page)); // ERG, taken over: 105 W (the unit's 100 W + 5)
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 600);
+    let target = |sim: &Sim| sim.nordic.trainer.target_w;
+    assert_eq!(target(&sim), 110);
+    let laps = app.ride.lap_s();
+    let left = 7000 - sim.ms;
+    run(&mut sim, &mut app, left); // Lap down 1 s: a repeat, ignored riding
+    assert_eq!(target(&sim), 110, "not yet long");
+    run(&mut sim, &mut app, 2500);
+    assert_eq!(target(&sim), 100, "Lap held: one big step down");
+    assert!(app.ride.lap_s() > laps, "and no lap at its release");
+    assert_eq!(app.screen(), Screen::Trainer);
+    let left = 12_000 - sim.ms;
+    run(&mut sim, &mut app, left);
+    run(&mut sim, &mut app, 2600);
+    assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "RES", "Start held: the next mode");
+    assert_eq!(app.banner.as_str(), "MODE RES", "named in the banner");
+    assert_eq!(app.ride.state(), ride::State::Running, "not paused by its release");
+    let left = 16_000 - sim.ms;
+    run(&mut sim, &mut app, left);
+    run(&mut sim, &mut app, 400);
+    assert_eq!(app.ride.lap_s(), 0, "a short Lap is a lap");
+}
+
 /// A refusal of another command page is not "NOT ACCEPTED" for the command in force.
 #[test]
 fn not_accepted_is_for_the_command_in_force() {
@@ -669,9 +713,10 @@ fn no_spin_down_while_riding() {
     app.start_key(&mut sim);
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 1500);
-    app.press(&mut sim, Press::Long(Key::Start));
-    assert!(app.notices[0].as_str().contains("NO CALIBRATION"), "{}", app.notices[0].as_str());
+    app.press(&mut sim, Press::Long(Key::Start)); // riding, Start held is the mode (item 5), not a calibration
+    assert!(!app.notices[0].as_str().contains("NO CALIBRATION"));
     tap(&mut sim, &mut app, Button::Calibrate);
+    assert!(app.notices[0].as_str().contains("NO CALIBRATION"), "{}", app.notices[0].as_str());
     run(&mut sim, &mut app, 2000);
     assert!(sim.nordic.trainer.cal_requests.is_empty());
     assert!(!app.trainer.calibrating());
