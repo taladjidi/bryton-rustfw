@@ -994,8 +994,8 @@ fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s:
 }
 
 /// Height of a zone bar along the top of a box (above the label, a pixel apart from it: the labels of the value fields
-/// start 5 px down).
-pub const ZONE_BAR_H: u32 = 4;
+/// start 9 px down). 8 px: 4 was too thin to see on the bike (owner, 2026-10-26).
+pub const ZONE_BAR_H: u32 = 8;
 
 /// The zone bar of box `bx` in `color` (BLACK clears it): the box's full width less its right rule.
 pub fn draw_zone_bar(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), color: u16) {
