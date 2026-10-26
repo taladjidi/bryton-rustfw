@@ -179,6 +179,9 @@ impl Nordic {
             self.drop_gattc = None;
             return;
         }
+        if self.mute_gattc == Some((conn, id)) {
+            return;
+        }
         let mut p = conn.to_le_bytes().to_vec();
         p.extend(status.to_le_bytes());
         p.extend([0, 0]);
@@ -658,6 +661,8 @@ pub struct FtmsSim {
     pub lose_control_at: Option<u64>,
     pub drop_at: Option<u64>,
     pub refuse_control: bool,
+    /// The Control Point's responses never sent.
+    pub mute_cp: bool,
     /// A write while a procedure was in progress, or an indication sent before the last was confirmed: client
     /// errors (FTMS 4.16.3), counted.
     pub violations: u32,
@@ -726,6 +731,7 @@ impl FtmsSim {
             lose_control_at: None,
             drop_at: None,
             refuse_control: false,
+            mute_cp: false,
             violations: 0,
             fec: false,
             sum: false,
@@ -953,6 +959,9 @@ impl Nordic {
                 t.hang_up();
                 self.evt(0x11, &[1, 0, 0x08]); // supervision time-out
             } else {
+                if t.mute_cp {
+                    t.pending = None;
+                }
                 if !t.unconfirmed
                     && t.on(FT_CP, 2)
                     && let Some(r) = t.pending.take()

@@ -472,11 +472,16 @@ pub fn ant_tx_failed(p: &[u8]) -> Option<u8> {
 /// p[0] = 8;
 /// (p[42], p[43]) = (5, 7);
 /// assert_eq!(bryton_rustfw::nrf::ant_tx_completed(&p), Some(7));
+/// let mut q = [0u8; 44];
+/// q[..6].copy_from_slice(&[8, 1, 0x40, 3, 1, 5]); // the embedded message: [0x40, ch, 0x01, code]
+/// assert_eq!(bryton_rustfw::nrf::ant_tx_completed(&q), Some(3));
 /// assert_eq!(bryton_rustfw::nrf::ant_tx_completed(&[8, 5, 7]), None, "short");
 /// ```
 pub fn ant_tx_completed(p: &[u8]) -> Option<u8> {
     match p {
         [ANT_EVT, .., EVENT_TRANSFER_TX_COMPLETED, ch] if p.len() == 44 => Some(*ch),
+        // the channel event message itself (ANT Message Protocol 9.5.6.1: 0x40, channel, 0x01, the event code)
+        [ANT_EVT, _, 0x40, ch, 1, EVENT_TRANSFER_TX_COMPLETED, ..] if p.len() == 44 => Some(*ch),
         _ => None,
     }
 }

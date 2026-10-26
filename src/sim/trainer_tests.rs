@@ -1037,7 +1037,7 @@ pub(super) fn release_after(sim: &mut Sim, app: &mut App, how: Ends, erg: fn(&Si
 }
 
 /// Starts the planned workout SHORT INTERVALS (ERG) on a trainer already heard; `erg` says the trainer holds it.
-fn start_workout(sim: &mut Sim, app: &mut App, erg: fn(&Sim) -> bool) {
+pub(super) fn start_workout(sim: &mut Sim, app: &mut App, erg: fn(&Sim) -> bool) {
     app.press(sim, Press::Long(Key::Page));
     super::tests::to_row(sim, app, Row::Open(Menu::Workouts));
     app.press(sim, Press::Short(Key::Start));
@@ -1207,4 +1207,44 @@ fn the_receiver_is_off_at_idle_with_indoor_fixed() {
     app.settings.profile = None; // AUTO
     run(&mut sim, &mut app, 5000);
     assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "AUTO: on, configured, a fix");
+}
+
+/// The rider's own ERG (250 W by hand) during a ride, the trainer silent when the ride is saved: the hold ends with
+/// the ride all the same, so the next ride does not put 250 W back on the trainer when it is heard again.
+#[test]
+fn a_hold_by_hand_ends_with_the_ride_while_the_trainer_is_silent() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.open(Screen::Trainer);
+    for _ in 0..30 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    run(&mut sim, &mut app, 1000);
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.target_w), (0x31, 250));
+    app.press(&mut sim, Press::Short(Key::Back));
+    let sensors = core::mem::take(&mut sim.nordic.sensors);
+    run(&mut sim, &mut app, 8000);
+    assert!(!app.trainer_heard());
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    app.start_pause(); // the next ride
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 1000);
+    sim.nordic.sensors = sensors;
+    run(&mut sim, &mut app, 8000);
+    assert!(app.trainer_heard());
+    assert!(ant_free(&sim), "not 250 W again: {:#x} {} W", sim.nordic.trainer.mode, sim.nordic.trainer.target_w);
+}
+
+/// The boot's release (the first contact) is tried once: a trainer another controller drives (an app) is not forced
+/// free again and again when nothing confirms it.
+#[test]
+fn the_boot_release_is_tried_once() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.ack_lost = 1000; // nothing confirmed, nothing taken
+    run(&mut sim, &mut app, 30_000);
+    let releases = sim.nordic.got.iter().filter(|p| p.get(1) == Some(&0xc8) && p.get(4) == Some(&0x30)).count();
+    assert_eq!(releases, 1);
 }

@@ -586,6 +586,8 @@ pub struct Nordic {
     pub ack_lost: u32,
     /// The next GATT client event of this id on this connection is lost (conn, id): an answer that never comes.
     pub drop_gattc: Option<(u16, u16)>,
+    /// Every GATT client event of this id on this connection is lost (conn, id).
+    pub mute_gattc: Option<(u16, u16)>,
     /// The network keys set (`06 cc [net] [key]`), by network.
     pub keys: [Option<[u8; 8]>; 2],
     /// The BLE peripheral side (ble_sim.rs), and the phone in range.

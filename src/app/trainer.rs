@@ -36,6 +36,10 @@ use ui::trainer::{Bottom, Now};
 /// The least time between two acknowledged messages on the trainer's channel, ms: its period (8192 / 32768 s).
 pub const ACK_GAP_MS: u32 = 250;
 
+/// At the switch-off, the wait after the release for it to go on air before the chip is switched off, ms: more than
+/// the FE-C channel's period (8192 / 32768 s), whose next slot carries it.
+pub const OFF_WAIT_MS: u32 = 330;
+
 /// The sensors file is read this long after the start (the GNSS clock, as the barometer's file).
 pub const SENSORS_LOAD_MS: u32 = 3500;
 
@@ -161,6 +165,10 @@ impl App {
             if core::mem::take(&mut self.trainer_up) {
                 self.trainer.lost();
             }
+            if self.trainer_on() {
+                // the clocks and what holds it run on: a ride ended meanwhile ends the rider's hold too
+                self.trainer.due(self.dt_ms, false, &self.trainer_drive());
+            }
             return;
         }
         self.trainer_up = true;
@@ -216,8 +224,9 @@ impl App {
 
     /// At the switch-off: a trainer heard that may still be held (ERG, SIM, a release not known to have arrived) is let
     /// go, one free resistance, so it does not stay at the last target until its own time-out. Bounded: two tries
-    /// over ANT+ a channel period apart (the chip refuses one while the last is queued), and a period for it to go on
-    /// air before the chip is switched off.
+    /// over ANT+ [`OFF_WAIT_MS`] apart (the chip refuses one while the last is queued), and as long for it to go on air
+    /// before the chip is switched off; over Bluetooth the answer to a write still out is waited for, [`CP_MS`]
+    /// at most.
     pub(crate) fn release_trainer(&mut self, b: &mut impl Board) {
         if !self.trainer_heard() || !self.trainer.holding() || self.trainer.calibrating() {
             return;
@@ -227,19 +236,30 @@ impl App {
             if self.ant && !self.trainer_no_control {
                 for _ in 0..2 {
                     let sent = nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page).is_ok();
-                    b.delay_ms(ACK_GAP_MS);
+                    b.delay_ms(OFF_WAIT_MS);
                     if sent {
                         break;
                     }
                 }
             }
-        } else if self.ftms.ready() {
+            return;
+        }
+        // a write still out (the 4 s resend, a step's target): its answer first, one write at a time
+        for _ in 0..CP_MS / 10 {
+            if self.ftms.ready() && self.ack_gap_ms >= ACK_GAP_MS {
+                break;
+            }
+            self.poll_nrf(b);
+            b.delay_ms(10);
+            self.ack_gap_ms = self.ack_gap_ms.saturating_add(10);
+        }
+        if self.ftms.ready() {
             if self.sensors_store.bt_fec {
                 self.ftms_fec_send(b, page);
             } else {
                 self.ftms_command(b, Command::Resistance(0));
             }
-            b.delay_ms(ACK_GAP_MS); // the write goes at the next connection event
+            b.delay_ms(OFF_WAIT_MS); // the write goes at the next connection event
         }
     }
 

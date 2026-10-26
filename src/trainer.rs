@@ -16,8 +16,9 @@
 //! **Let go** (free resistance, [`Command::Resistance`] of 0) whenever what held it stops: the workout stopped or
 //! ended, the course left, the ride ended (saved or discarded: the rider's own take-over ends with it), ERG while the
 //! ride is paused or auto-paused (the rider would restart at 0 rpm against the target; SIM brakes by the speed, so it
-//! stands), and once at the first contact after a boot. The release is sent again until the trainer is known to
-//! have it ([`Trainer::acked`]), [`RELEASE_TRIES`] times at most.
+//! stands), and once at the first contact after a boot. A release after our own hold is sent again until the trainer
+//! is known to have it ([`Trainer::acked`]), [`RELEASE_TRIES`] times at most; the boot's is tried once (a unit switched
+//! on beside another controller, an app driving the trainer, does not keep forcing it free).
 
 /// How long a command stands before it is sent again, ms. A trainer keeps the last command for as long as it hears
 /// from the head unit; sending again every few seconds also puts right a command it never took (the radio is not
@@ -249,6 +250,8 @@ pub struct Trainer {
     release: bool,
     release_out: bool,
     release_tries: u8,
+    /// The release follows our own hold (not the boot's).
+    release_ours: bool,
     last: Option<Command>,
     sent_ms: u32,
     step: usize,
@@ -281,7 +284,8 @@ impl Default for Trainer {
             was_riding: false,
             release: true, // once at the first contact after a boot: whatever a stopped workout left is let go
             release_out: false,
-            release_tries: 0,
+            release_tries: RELEASE_TRIES - 1, // the boot's: one try
+            release_ours: false,
             last: None,
             sent_ms: 0,
             step: 0,
@@ -360,7 +364,7 @@ impl Trainer {
     /// What was sent may still hold the trainer: it was engaged at the last pass, or its release is not known to
     /// have arrived (the switch-off lets it go).
     pub fn holding(&self) -> bool {
-        self.was_engaged || self.release
+        self.was_engaged || (self.release && self.release_ours)
     }
 
     /// Start: the next mode (the adjustment made on a workout step is dropped). Not while a workout or a course drives
@@ -399,7 +403,7 @@ impl Trainer {
         match core::mem::replace(&mut self.what, Sent::Nothing) {
             Sent::Command => self.last = None,
             Sent::Cal => self.cal_send = true,
-            Sent::Release => (self.release_out, self.release_tries) = (false, self.release_tries.saturating_sub(1)),
+            Sent::Release => self.release_out = false, // again at the next free slot, a try still
             Sent::Caps => (self.caps_tries, self.caps_ms) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS),
             Sent::User => self.user_sent = false,
             Sent::Nothing => {}
@@ -517,6 +521,7 @@ impl Trainer {
         let engaged = self.engaged(d);
         if self.was_engaged && !engaged {
             (self.release, self.release_out, self.release_tries, self.last) = (true, false, 0, None);
+            self.release_ours = true;
         }
         if engaged {
             (self.release, self.release_out) = (false, false);
@@ -752,9 +757,13 @@ mod tests {
         assert_eq!(t.due(RESEND_MS, true, &idle), Some(Command::Resistance(0)), "until it is known to arrive");
         t.acked();
         assert_eq!(t.due(RESEND_MS, true, &idle), None);
-        let mut t = Trainer::default();
+        t.step_by(&idle, true, false);
+        t.due(250, true, &riding);
         let n = (0..20).filter(|_| t.due(RESEND_MS, true, &idle).is_some()).count();
         assert_eq!(n, usize::from(RELEASE_TRIES), "bounded when nothing confirms it");
+        let mut t = Trainer::default();
+        let n = (0..20).filter(|_| t.due(RESEND_MS, true, &idle).is_some()).count();
+        assert_eq!(n, 1, "the boot's release: once (another controller may drive the trainer)");
     }
 
     #[test]

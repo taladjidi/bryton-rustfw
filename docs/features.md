@@ -326,12 +326,14 @@ what held it stops, so ERG's last target does not stay on it:
 - **pause:** ERG while the ride is paused or auto-paused (3 s without power or cadence indoors), so the rider never
   restarts at 0 rpm against the target; the trainer screen says PAUSED: FREE, and the target goes out again on
   resume. SIM and RESISTANCE stand (SIM brakes by the speed, like the road from a standstill);
-- **switch-off:** one free resistance before the radio chip goes off (bounded: two tries over ANT+, then a channel
-  period for it to go on air);
-- **boot:** once at the first contact after a start.
+- **switch-off:** one free resistance before the radio chip goes off (bounded: two tries over ANT+ 330 ms apart, then
+  as long for it to go on air; over Bluetooth the answer to a write still out is waited for, 3 s at most);
+- **boot:** one try at the first contact after a start (a unit switched on beside another controller, an app, does
+  not keep forcing the trainer free).
 
-The release goes again every 4 s until it is known to have arrived (ANT+ TX_COMPLETED, the BLE write's answer, the
-FTMS response), five times at most. A chip that never answers the first acknowledged message turns the ANT+ control off
+A release after our own hold goes again every 4 s until it is known to have arrived (ANT+ TX_COMPLETED, the BLE write's
+answer, the FTMS response), five times at most. The rider's own hold ends with the ride even when the trainer was
+silent at its end. A chip that never answers the first acknowledged message turns the ANT+ control off
 until the chip is started again; once one was answered, a later silence only has the message sent again. An FTMS
 trainer that refused the control is asked again 10 s later, then less often (up to a minute apart), while it is driven.
 With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too (AUTO keeps it on).
