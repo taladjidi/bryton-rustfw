@@ -44,8 +44,23 @@ on the road ahead without a course, the phone as a Bluetooth accessory, a PIXEL 
 Rides are saved to `\Activities` as stock does (seen on the unit), in two copies, and survive a reset or a power cut.
 The newest features are seen in the simulator only so far (docs/status.md). It shares the storage with Bryton's firmware, so the two can be swapped.
 
-**Key figures (measured on the unit with `tools/profile.py`):** *to be filled in: CPU awake on the overview, on a
-ride page with sensors, riding; the costliest sections.*
+## Key figures
+
+Measured on the unit (2026-10-27, `tools/profile.py` from RAM, 30 s windows; the CPU sleeps between 50 ms passes):
+
+| | |
+|---|---|
+| CPU awake, overview idle | 1.55 % |
+| CPU awake, a ride page | 1.32 % |
+| CPU awake, menus (a key every 0.5 s) | 1.82 % |
+| A menu move | 4 ms mean (two rows redrawn; the panel's SPI link, about 1 us a pixel, sets it) |
+| Panel traffic, a ride page | about 740 pixels a second (only what changed, in the smallest box) |
+| Climb pacer, one plan | about 75 us (estimated from operation counts) |
+| A map tile for climbs ahead | at most about 3 ms a slice (estimated; one tile took 238 ms in one go before) |
+| Image | 605 KB (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
+| Code | about 79,000 lines of Rust, `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
+| Tests | 748 host and simulator tests, 143 doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+
 
 | Read | For |
 |---|---|
