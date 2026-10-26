@@ -83,7 +83,7 @@ impl App {
         self.player.as_ref().is_some_and(|p| p.step(self.plan.steps()).is_some())
     }
 
-    /// Starts the workout opened from step `at`, and the ride if none runs; the first ride page.
+    /// Starts the workout opened from step `at`, and the ride if none runs; the first ride page that holds a workout field, else page 1.
     pub(crate) fn start_workout(&mut self, at: usize) {
         self.ftms_retry(); // a Bluetooth trainer given up is tried again
         if self.ride.state() == ride::State::Idle {
@@ -93,7 +93,11 @@ impl App {
         let (p, ev) = workout::Player::start(self.plan.steps(), at, self.ride.dist_m());
         self.player = Some(p);
         self.workout_event(ev);
-        (self.depth, self.screen) = (0, Screen::Ride(0));
+        // the first page that shows the workout (the default page 1 has no field for it), else page 1
+        let page = (0..self.page_count)
+            .find(|&n| self.pages.get(n).is_some_and(|p| p.fields.iter().take(p.cells()).any(|f| f.is_workout())))
+            .unwrap_or(0);
+        (self.depth, self.screen) = (0, Screen::Ride(page));
     }
 
     /// Shows and sounds what the player said: a banner and a long tone for a new step ("3/14 210-230W"), a short

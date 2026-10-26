@@ -911,6 +911,45 @@ fn workout_from_the_calendar() {
     assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");
 }
 
+/// WORKOUTS > START opens the first page that holds a workout field, page 1 when none does.
+#[test]
+fn a_workout_opens_the_page_that_shows_it() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.page_count = 3;
+    let start = |sim: &mut Sim, app: &mut App| {
+        app.press(sim, Press::Long(Key::Page));
+        to_row(sim, app, menu::Row::Open(Menu::Workouts));
+        app.press(sim, Press::Short(Key::Start));
+        app.press(sim, Press::Short(Key::Start)); // the first workout's steps
+        app.press(sim, Press::Short(Key::Start)); // START
+    };
+    assert!(!app.pages[0].fields.iter().any(|f| f.is_workout()), "the default page has no workout field");
+    start(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Ride(0), "no page shows it: page 1");
+    assert!(app.player.is_some());
+    // a new ride and workout, with the step on page 3
+    let (mut sim, mut app) = {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        let mut app = App::start(&mut sim, Some(KEY));
+        app.page_count = 3;
+        (sim, app)
+    };
+    app.pages[2] = PageCfg {
+        layout: 6,
+        fields: [Field::StepTarget, Field::StepTime, Field::NextStep, Field::Workout, Field::Power3s, Field::Timer],
+    }
+    .into();
+    start(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Ride(2), "the page with the step");
+    run(&mut sim, &mut app, 1000);
+    assert_consistent(&sim, &app);
+}
+
 /// The workout graph field: the synthetic card's SHORT INTERVALS over the whole box, each step as high as its target
 /// in its zone colour; once started, the rider's column moves right with the step clock, the part done dark, and
 /// only the columns it leaves and reaches are sent (not the whole graph each second).

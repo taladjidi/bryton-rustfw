@@ -753,6 +753,19 @@ impl Field {
         )
     }
 
+    /// A field of the workout player (the step, its target, what is left, the next step, the graph, the gauge).
+    pub fn is_workout(self) -> bool {
+        matches!(
+            self,
+            Field::Workout
+                | Field::StepTarget
+                | Field::StepTime
+                | Field::NextStep
+                | Field::WorkoutGraph
+                | Field::WktPower
+        )
+    }
+
     /// Its group in [`FIELD_GROUPS`] (every field is in one: a test checks).
     pub fn group(self) -> usize {
         FIELD_GROUPS.iter().position(|(_, g)| g.contains(&self)).unwrap_or(0)
