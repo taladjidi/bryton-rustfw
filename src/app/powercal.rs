@@ -96,7 +96,7 @@ impl App {
                     y += 26;
                 }
                 let asking = self.powercal.asking();
-                (ui::YELLOW, if asking { "ASKING..." } else { "" })
+                (ui::GREY, if asking { "ASKING..." } else { "" })
             }
             Phase::Done(offset, before) => {
                 let mut l = Line::<12>::new();
@@ -105,7 +105,7 @@ impl App {
                 }
                 l.push_u32(u32::from(offset.unsigned_abs()));
                 draw_in(c, &grey, 8, y, w, Align::Centre, "ZERO OFFSET");
-                draw_in(c, &Style { fg: ui::GREEN, ..ui::VALUE }, 8, y + 26, w, Align::Centre, l.as_str());
+                draw_in(c, &Style { fg: ui::WHITE, ..ui::VALUE }, 8, y + 26, w, Align::Centre, l.as_str());
                 if let Some(p) = before {
                     let mut l = Line::<20>::new();
                     l.push_str("WAS ");
@@ -115,12 +115,12 @@ impl App {
                     l.push_u32(u32::from(p.unsigned_abs()));
                     draw_in(c, &grey, 8, y + 76, w, Align::Centre, l.as_str());
                 }
-                (ui::GREEN, "")
+                (ui::WHITE, "")
             }
             Phase::Failed => (ui::RED, "FAILED"),
             Phase::NoAnswer => (ui::RED, "NO ANSWER"),
             Phase::AutoSet => {
-                (ui::GREEN, if self.powercal.auto() == Some(AutoZero::On) { "AUTO ZERO ON" } else { "AUTO ZERO OFF" })
+                (ui::WHITE, if self.powercal.auto() == Some(AutoZero::On) { "AUTO ZERO ON" } else { "AUTO ZERO OFF" })
             }
         };
         if !status.is_empty() {
@@ -133,9 +133,9 @@ impl App {
             draw_in(c, &grey, 8, AUTO_BTN.1 + 14, w, Align::Centre, "NO AUTO ZERO");
         }
         if self.powercal.asking() {
-            btn(c, MAIN_BTN, ui::RED, ui::WHITE, "CANCEL");
+            btn(c, MAIN_BTN, ui::DARK, ui::WHITE, "CANCEL");
         } else {
-            btn(c, MAIN_BTN, ui::YELLOW, ui::BLACK, "CALIBRATE");
+            btn(c, MAIN_BTN, ui::ACCENT, ui::BLACK, "CALIBRATE");
         }
     }
 }
