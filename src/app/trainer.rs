@@ -437,6 +437,27 @@ impl App {
         l
     }
 
+    /// [`Field::ErgTarget`]'s text: the watts the trainer is told, the rider's adjust as a small tail ("225|+15");
+    /// "--" outside ERG or without a trainer.
+    pub(crate) fn erg_field(&self) -> Line<8> {
+        let mut l = Line::new();
+        let d = self.trainer_drive();
+        if !self.trainer_heard() || self.trainer.mode(&d) != Mode::Erg {
+            l.push_str("--");
+            return l;
+        }
+        l.push_u32(u32::from(self.trainer.target_w(&d)));
+        let adj = self.trainer.adjust_w();
+        let mut tail = Line::<6>::new();
+        tail.push_str(if adj < 0 { "-" } else { "+" });
+        tail.push_u32(u32::from(adj.unsigned_abs()));
+        if adj != 0 && l.as_str().len() + 1 + tail.as_str().len() <= 8 {
+            l.push_str("|");
+            l.push_str(tail.as_str());
+        }
+        l
+    }
+
     /// The whole trainer screen.
     pub(crate) fn draw_trainer(&self, c: &mut impl Canvas) {
         self.with_trainer_now(|n| {

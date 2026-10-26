@@ -531,7 +531,7 @@ pub enum Field {
     StepTarget,
     /// What is left of the step: time, km, or LAP.
     StepTime,
-    /// The next step's target range (END on the last step).
+    /// The next step's target (its middle) and its length as a small tail ("150|0:30"; END on the last step).
     NextStep,
     // the course followed (course.rs)
     /// What is left of the course, km.
@@ -572,12 +572,17 @@ pub enum Field {
     TrainerMode,
     /// Its target: watts (ERG), percent (RES) or grade (SIM).
     TrainerTarget,
+    /// What the trainer is told now in ERG, watts, the rider's adjust included ("225|+15"); "--" outside ERG or without
+    /// a trainer (the plan's band is [`Field::StepTarget`]).
+    ErgTarget,
+    /// The time left in the whole workout (the steps after the one running, and what is left of it).
+    WorkoutLeft,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 62] = {
+    pub const ALL: [Field; 64] = {
         use Field::*;
         [
             Time,
@@ -642,6 +647,8 @@ impl Field {
             NextTurn,     // the trainer:
             TrainerMode,
             TrainerTarget,
+            ErgTarget,
+            WorkoutLeft,
         ]
     };
 
@@ -715,6 +722,8 @@ impl Field {
             // the trainer
             "MODE",
             "TRG",
+            "ERG W",
+            "WKT LEFT",
         ];
         LABELS[self as usize]
     }
@@ -734,6 +743,7 @@ impl Field {
             "8-88", "8888", "GOOD",   // the course followed again:
             "888.8K", // the trainer:
             "ERG", "-10.0%", // the widest target: a grade (a power is "2000W")
+            "888|+88", "88:88|88", // the workout and ERG again
         ];
         WIDEST[self as usize]
     }
@@ -762,6 +772,7 @@ impl Field {
                 | Field::StepTarget
                 | Field::StepTime
                 | Field::NextStep
+                | Field::WorkoutLeft
                 | Field::WorkoutGraph
                 | Field::WktPower
         )
@@ -790,12 +801,12 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
         ("HEART", &[Hr, AvgHr, MaxHr, Dfa, Rmssd]),
         ("CLIMB", &[Ascent, Vam, Grade]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
-        ("WORKOUT", &[Workout, StepTarget, StepTime, NextStep, WorkoutGraph, WktPower]),
+        ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
         ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
-        ("TRAINER", &[TrainerMode, TrainerTarget]),
+        ("TRAINER", &[TrainerMode, TrainerTarget, ErgTarget]),
     ]
 };
 

@@ -293,6 +293,11 @@ impl Trainer {
         w.clamp(0, i32::from(MAX_W)) as u16
     }
 
+    /// The rider's adjust of the ERG target, W (+-5 a press).
+    pub fn adjust_w(&self) -> i16 {
+        self.adjust_w
+    }
+
     /// The resistance, percent.
     pub fn resistance_pct(&self) -> u8 {
         self.res_half / 2

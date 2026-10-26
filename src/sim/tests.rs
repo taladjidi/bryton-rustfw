@@ -848,7 +848,9 @@ fn workout_from_the_calendar() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running));
     let fields = |app: &App| [StepTarget, StepTime, NextStep, Workout].map(|f| text(app, f));
-    assert_eq!(fields(&app), ["110|+-10", "0:20", "210|+-10", "1/6"]);
+    assert_eq!(fields(&app), ["110|+-10", "0:20", "210|0:30", "1/6"]);
+    assert_eq!(text(&app, WorkoutLeft), "6:50", "20 + 30 + 15 + 30 + 15 s and the open cool-down (graph width 5 min)");
+    assert_eq!(text(&app, ErgTarget), "--", "no trainer");
     run(&mut sim, &mut app, 5000);
     assert_eq!(
         (app.field_color(StepTarget), app.field_bar(StepTarget)),
@@ -869,7 +871,7 @@ fn workout_from_the_calendar() {
     );
     assert_eq!(app.banner.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
-    assert_eq!(fields(&app), ["210|+-10", "0:25", "150", "2/6"]);
+    assert_eq!(fields(&app), ["210|+-10", "0:25", "150|0:15", "2/6"]);
     assert_eq!(
         (app.field_color(StepTarget), app.field_bar(StepTarget)),
         (ui::WHITE, crate::ride::ZONE_COLORS[2]),

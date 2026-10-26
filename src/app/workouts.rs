@@ -160,6 +160,41 @@ impl App {
         }
     }
 
+    /// The next step as [`Field::NextStep`] shows it: the middle of its target big, its length as a small tail ("150|0:30",
+    /// "210|10M", "150|2.5K", "OPEN|LAP"), in 8 characters.
+    fn push_next(&self, l: &mut Line<8>, s: &storage::workout::Step) {
+        use storage::workout::Length;
+        let mut head = Line::<8>::new();
+        match s.target.range(self.settings.ftp, self.settings.max_hr) {
+            Some((lo, hi)) => head.push_u32(u32::from(lo).midpoint(u32::from(hi))),
+            None => head.push_str("OPEN"),
+        }
+        let mut tail = Line::<8>::new();
+        match s.len {
+            Length::Time(t) if t < 600 => push_clock(&mut tail, t),
+            Length::Time(t) if t < 3600 => {
+                tail.push_u32(t / 60);
+                tail.push_str("M");
+            }
+            Length::Time(t) => {
+                tail.push_u32(t / 3600);
+                tail.push_str("H");
+            }
+            Length::Distance(m) => {
+                tail.push_u32(m / 1000);
+                tail.push_str(".");
+                tail.push_str(ui::DIGITS[(m / 100 % 10) as usize]);
+                tail.push_str("K");
+            }
+            Length::Open => tail.push_str("LAP"),
+        }
+        l.push_str(head.as_str());
+        if head.as_str().len() + 1 + tail.as_str().len() <= 8 {
+            l.push_str("|");
+            l.push_str(tail.as_str());
+        }
+    }
+
     /// A step's menu row: what ends it as the label ("10:00", "2.50 KM", "LAP"), its target as the value, in the
     /// zone colour of the target's middle; the colour.
     pub(crate) fn step_row(&self, s: &storage::workout::Step, label: &mut Line<16>, value: &mut Line<12>) -> u16 {
@@ -196,9 +231,13 @@ impl App {
             },
             (Field::StepTarget, Some((_, i))) => self.push_target_field(&mut l, steps.get(i).unwrap_or(&OPEN)),
             (Field::NextStep, Some((_, i))) => match steps.get(i + 1) {
-                Some(s) => self.push_target_field(&mut l, s),
+                Some(s) => self.push_next(&mut l, s),
                 None => l.push_str("END"),
             },
+            (Field::WorkoutLeft, Some((p, _))) => {
+                let total = workout::graph_total_s(steps);
+                push_duration(&mut l, total.saturating_sub(p.graph_at(steps, self.ride.dist_m())), false);
+            }
             (Field::StepTime, Some((p, _))) => match p.left(steps, self.ride.dist_m()) {
                 Left::Time(t) => push_duration(&mut l, t, false),
                 Left::Distance(m) => push_km(&mut l, m),

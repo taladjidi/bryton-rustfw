@@ -138,6 +138,7 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     assert_eq!(sim.nordic.trainer.power, 110);
     assert!(cmds.iter().all(|p| p[0] == 0x31));
     assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "110W");
+    assert_eq!(app.field_text(Field::ErgTarget).as_str(), "110", "no adjust: the watts alone");
     assert_eq!(app.field_text(Field::Power).as_str(), "110");
     // the first step lasts 20 s; then 200-220 W
     run(&mut sim, &mut app, 14_000);
@@ -151,6 +152,7 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 500);
     assert_eq!(sim.nordic.trainer.target_w, 215);
+    assert_eq!(app.field_text(Field::ErgTarget).as_str(), "215|+5", "what the trainer is told, the adjust small");
     app.press(&mut sim, Press::Short(Key::Back));
     // end and save
     run(&mut sim, &mut app, 5000);
