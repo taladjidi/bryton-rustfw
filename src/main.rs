@@ -1421,6 +1421,14 @@ fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
     CACHE.take()
 }
 
+/// The reading of the recent rides for FITNESS's heart rate variability thresholds (storage/thresholds.rs `Scan`,
+/// about 3 KB), beside the app in AXI SRAM (link.x `.axibss`): built once on the stack and moved in, as the courses.
+#[inline(never)]
+fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
+    static SCAN: static_cell::StaticCell<bryton_rustfw::thresholds::Scan> = static_cell::StaticCell::new();
+    SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
+}
+
 /// The dev link's `bench`: `count` reads of `n` sectors from `lba`, timed, in microseconds. Its buffer in its own
 /// frame, not main's.
 #[inline(never)]
@@ -1472,6 +1480,7 @@ fn main() -> ! {
     }
     app.set_course_memory(make_courses());
     app.set_scan_cache(make_scan_cache());
+    app.set_threshold_memory(make_thresholds());
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
     let mut usb_tried = false;

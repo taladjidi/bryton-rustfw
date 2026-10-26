@@ -34,12 +34,18 @@ impl PaceState {
 }
 
 impl App {
-    /// The critical power (W) and W' (J, at most 65 kJ) in force: the fit of the rider's bests when the scan has one,
-    /// else the settings' FTP and W'. W' balance and the pacer both use it, so the budget is the balance of the model
-    /// that drained it.
+    /// The critical power (W) and W' (J, at most 65 kJ) in force: during a ride the pair it took at its start, else
+    /// the one a ride would take now ([`App::model_now`], app/fitness.rs: the trusted fit of the rider's bests, else
+    /// the settings' FTP and W'). W' balance and the pacer both use it, so the budget is the balance of the model
+    /// that drained it, the same for the whole ride.
     pub(crate) fn cp_model(&self) -> (u16, u16) {
-        let fit = if self.stock.ready() { power_curve::fit_cp(&self.stock.out.curve) } else { None };
-        fit.map_or((self.settings.ftp, self.settings.wprime_j), |c| (c.cp, c.w_prime.min(u32::from(u16::MAX)) as u16))
+        match self.ride_model {
+            Some((cp, wp, _)) if self.ride.state() != ride::State::Idle => (cp, wp),
+            _ => {
+                let (cp, wp, _) = self.model_now();
+                (cp, wp)
+            }
+        }
     }
 
     /// Once a second: makes the plan again when the rider changes section (or 30 s pass before the climb); nothing

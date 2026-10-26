@@ -223,7 +223,8 @@ setting is three levels down at most (MENU > SETTINGS > ME > FTP), the diagnosti
 MENU
  +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step; last row RAMP TEST
  +- COURSES >      the course files (green: followed); Start follows or stops
- +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
+ +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, EST FTP, MODEL, APPLY FTP, APPLY W', HRVT1 AET, HRVT2,
+ |                 HRV RIDES, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
  +- PAGES >        OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT, FIELD n -> group -> field), ADD PAGE
  +- SENSORS >      HEART RATE, SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING; DI2 KEYS >; PHONE >
  +- SETTINGS >
@@ -370,7 +371,8 @@ copied over USB into `\Courses`, read only:
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
 - **Climb pacer** (pacing.rs, the TOP field, on the course page in place of the distance): within 5 km of a climb
   and on it, the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
-  rider's bests when the scan has it, else FTP and the W' setting: it also drains the W' balance) and the W' balance
+  rider's bests when it is trusted, else FTP and the W' setting, taken at the ride's start and kept to its end: it
+  also drains the W' balance) and the W' balance
   now, planned again at each section from where the rider is, with the rider's weight plus the bike's (SETTINGS >
   BIKE). On the climb the power (3 s, or the GAUGE POWER window) shows in the workout gauge against the target's band
   (5 % each side, the target in numbers under the bar, or at the top right of a short box); ahead of it only the time.
@@ -439,9 +441,24 @@ STOCK):
   the totals from it at once and reads only the rides that are new or changed (name, size, first cluster), and drops
   those deleted. A new day counts the week, the year and the 90 days again from it. A cache that does not check out
   (a cut while it was written) is ignored whole and rebuilt. The menu then shows:
-  - **CP and W'** from the best powers of the last 90 days (1 s to 60 min), fitted with the 2-parameter model
-    on the 2 to 20 minute bests, and **CP FIT**: the points used and the model's largest error. A stop or a
-    power dropout ends an effort (a best never spans a cafe stop);
+  - **CP and W'** from the best powers of the last 90 days (1 s to 60 min), the 2-parameter model fitted as an
+    envelope (power_curve.rs: Golden Cheetah's default fit, and Intervals.icu's 2-parameter model through a 3 to 5
+    minute and a 10 to 30 minute effort): the line through one best of 2 to 5 minutes and one of 12 to 30 that no
+    best rises above, so 2 and 3 minute bests never ridden all-out do not pull W' down as a least-squares fit did.
+    **CP FIT** ("4/7 PTS 2%"): the bests of 2 to 30 minutes within 3 % of the model, of those there are, and the
+    largest gap. The fit is trusted from 3 bests on it within 5 %. A stop or a power dropout ends an effort (a best
+    never spans a cafe stop);
+  - **EST FTP**: CP when the fit is trusted ("CP"), else HRVT2 when three recent rides gave one ("HRV");
+    **MODEL**: which CP and W' a ride takes (CP FIT, or SETTINGS: the FTP and W' settings), chosen at the ride's
+    start and kept to its end (during a ride: the ride's); **APPLY FTP** and **APPLY W'** copy the estimates into
+    the settings (Start twice);
+  - **HRVT1 AET, HRVT2, HRV RIDES**: the power at DFA alpha1 0.75 and 0.5 (Rogers et al. 2021) from the full copies
+    of the last 42 days (`\Rustfw\Activities`, read when FITNESS first shows, a bounded amount a pass), each ride a
+    linear fit of power on alpha1 (up to 1.0) over 2-minute windows every 5 s (Andriolo et al. 2024, the AI
+    Endurance method), gated (5 minutes of points, half of them in alpha1's dynamic range, a spread of 0.3, a
+    falling slope, r^2 0.3), then the median of the rides; HRV RIDES: how many gave HRVT1, of those read. A guide
+    within some 20 to 40 W (hrvt.rs). The share of beats hrv.rs drops as artifacts is not recorded yet, so the
+    studies' 5 % artifact gate is not applied;
   - **distance and riding time** of this week (from Monday), this year and all rides.
 - **IMPORT** applies stock's settings where this firmware has them: FTP, max heart rate, weight and W'
   (UserProfile.ini), the wheel (a speed sensor's, Sensor.ini), the paired ANT+ sensors (Sensor.ini), the

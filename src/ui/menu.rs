@@ -415,8 +415,22 @@ pub enum StockRow {
     Cp,
     /// W'.
     WPrime,
-    /// How well the 2-parameter model fits: points used, largest error.
+    /// How well the 2-parameter model fits: bests it rests on of those of 2 to 30 minutes, largest gap.
     Fit,
+    /// The FTP the estimates give: CP when its fit is trusted, else HRVT2 when trusted (app/fitness.rs).
+    EstFtp,
+    /// Which CP and W' a ride started now takes: the fit's, or the settings' FTP and W'.
+    Model,
+    /// Select (asked twice) copies the estimated FTP into the FTP setting.
+    ApplyFtp,
+    /// Select (asked twice) copies the fit's W' into the W' setting.
+    ApplyWPrime,
+    /// The first heart rate variability threshold (DFA alpha1 0.75, about the aerobic threshold) from recent rides.
+    Hrvt1,
+    /// The second (alpha1 0.5).
+    Hrvt2,
+    /// How many recent rides gave HRVT1, of those read.
+    HrvRides,
     /// Distance this week.
     WeekKm,
     /// Riding time this week.
@@ -441,6 +455,13 @@ impl StockRow {
             StockRow::Cp => "CP",
             StockRow::WPrime => "W'",
             StockRow::Fit => "CP FIT",
+            StockRow::EstFtp => "EST FTP",
+            StockRow::Model => "MODEL",
+            StockRow::ApplyFtp => "APPLY FTP",
+            StockRow::ApplyWPrime => "APPLY W'",
+            StockRow::Hrvt1 => "HRVT1 AET",
+            StockRow::Hrvt2 => "HRVT2",
+            StockRow::HrvRides => "HRV RIDES",
             StockRow::WeekKm => "WEEK KM",
             StockRow::WeekH => "WEEK H",
             StockRow::YearKm => "YEAR KM",
@@ -453,9 +474,27 @@ impl StockRow {
 }
 
 /// The fitness menu (HISTORY > FITNESS): what stock's rides give. Their settings' import is in SYSTEM.
-pub const FITNESS: [StockRow; 10] = {
+pub const FITNESS: [StockRow; 17] = {
     use StockRow::*;
-    [Scan, Cp, WPrime, Fit, WeekKm, WeekH, YearKm, YearH, AllKm, AllH]
+    [
+        Scan,
+        Cp,
+        WPrime,
+        Fit,
+        EstFtp,
+        Model,
+        ApplyFtp,
+        ApplyWPrime,
+        Hrvt1,
+        Hrvt2,
+        HrvRides,
+        WeekKm,
+        WeekH,
+        YearKm,
+        YearH,
+        AllKm,
+        AllH,
+    ]
 };
 
 /// The main menu (off a ride): what to ride, what was ridden, then the set-up; six rows, one screen.

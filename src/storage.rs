@@ -13,5 +13,6 @@ pub mod ini;
 pub mod recorder;
 pub mod route;
 pub mod stock;
+pub mod thresholds;
 pub mod trash;
 pub mod workout;
