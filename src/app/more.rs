@@ -20,9 +20,10 @@ impl App {
         }
     }
 
-    /// Ride page `n`'s MORE variant: the rider's, else the page's default.
+    /// Ride page `n`'s MORE variant of the set in force: the rider's, else the page's default.
     pub(crate) fn more_page(&self, n: usize) -> Page {
-        match (self.more.get(n).copied().flatten(), self.pages.get(n)) {
+        let (pages, _, more) = self.set_ref(self.indoors());
+        match (more.get(n).copied().flatten(), pages.get(n)) {
             (Some(m), _) => m,
             (None, Some(p)) => p.more_of(),
             (None, None) => BLANK,
@@ -31,11 +32,13 @@ impl App {
 
     /// An editor's work kept: the page's, or its MORE variant.
     pub(crate) fn keep_edit(&mut self, e: &Editing) {
+        let indoor = self.view_indoor();
+        let (pages, _, more) = self.set_mut(indoor);
         if e.more {
-            if let Some(m) = self.more.get_mut(e.page) {
+            if let Some(m) = more.get_mut(e.page) {
                 *m = Some(e.work);
             }
-        } else if let Some(p) = self.pages.get_mut(e.page) {
+        } else if let Some(p) = pages.get_mut(e.page) {
             *p = e.work;
         }
     }

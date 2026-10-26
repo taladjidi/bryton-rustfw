@@ -1283,11 +1283,18 @@ fn page_edits() {
 fn pages_file() {
     use crate::page::{Page, Saved};
     use crate::ui::Field;
-    let (mut good, mut bad, mut more_read) = (0u32, 0u32, 0usize);
+    let (mut good, mut bad, mut more_read, mut indoor_read) = (0u32, 0u32, 0usize, 0usize);
     let p = Page::preset(5, [Field::Hr; 8]).unwrap();
-    let whole =
-        Saved { seq: 9, pages: [p; crate::PAGES], count: 3, words: [1; 6], was: [2; 6], more: [None; crate::PAGES] }
-            .to_sector();
+    let whole = Saved {
+        seq: 9,
+        pages: [p; crate::PAGES],
+        count: 3,
+        words: [1; 6],
+        was: [2; 6],
+        more: [None; crate::PAGES],
+        indoor: Some(crate::page::Set::indoor_default()),
+    }
+    .to_sector();
     let mut sim = super::Sim::new(9, 0, 0);
     let mut app = crate::App::start(&mut sim, None);
     let mut drawn = 0;
@@ -1339,6 +1346,31 @@ fn pages_file() {
             let end = more + 1 + crate::PAGES * 13;
             let crc = crate::fit::crc(crate::fit::crc(0, &s[..at]), &s[more..end]);
             s[end..end + 2].copy_from_slice(&crc.to_le_bytes());
+            // and the indoor set behind that: a count, pages, MORE flags and variants as random, a CRC chained to
+            // the MORE part's (now and then left wrong, now and then the count out of range)
+            let ind = end + 2;
+            s[ind] = if seed % 7 == 0 { s[ind] } else { 1 + (seed % 2) as u8 };
+            let flags = ind + 1 + crate::PAGES * 13;
+            s[flags] |= 1;
+            let (a, b) = s[ind + 1..flags + 1 + crate::PAGES * 13].split_at_mut(flags - ind);
+            for page in a[..flags - ind - 1].chunks_exact_mut(13).chain(b.chunks_exact_mut(13)) {
+                let used = 1 + usize::from(page[12] % 5);
+                for (r, b) in page[..5].iter_mut().enumerate() {
+                    *b = if r < used { (1 + *b % 3) << 4 | (1 + *b / 4 % 2) } else { 0 };
+                }
+                for b in &mut page[5..] {
+                    *b %= Field::ALL.len() as u8 + 2;
+                }
+            }
+            if seed % 3 != 0 {
+                // mostly the pages and variants above again (so the indoor set reads as often as they do)
+                s.copy_within(60..60 + crate::PAGES * 13, ind + 1);
+                s.copy_within(more + 1..more + 1 + crate::PAGES * 13, flags + 1);
+            }
+            let ind_end = flags + 1 + crate::PAGES * 13;
+            let crc = crate::fit::crc(crc, &s[ind..ind_end]);
+            let crc = if seed % 11 == 0 { crc ^ 1 } else { crc };
+            s[ind_end..ind_end + 2].copy_from_slice(&crc.to_le_bytes());
         }
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&s);
@@ -1348,6 +1380,23 @@ fn pages_file() {
                 assert!(saved.pages[..saved.count].iter().all(|p| p.well_formed() && p.roomy()));
                 assert!(saved.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
                 more_read += saved.more.iter().flatten().count();
+                if let Some(i) = saved.indoor {
+                    assert!((1..=crate::PAGES).contains(&i.count));
+                    assert!(i.pages[..i.count].iter().all(|p| p.well_formed() && p.roomy()));
+                    assert!(i.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
+                    indoor_read += 1;
+                    if seed % 2 == 1 {
+                        // the indoor pages, each drawn as the ride's pages (a profile fixed in BIKE)
+                        app.indoor = i;
+                        app.settings.profile = Some(crate::ride::Profile::Indoor);
+                        for k in 0..i.count {
+                            app.screen = crate::Screen::Ride(k);
+                            app.show(&mut sim);
+                            drawn += 1;
+                        }
+                        app.settings.profile = None;
+                    }
+                }
                 good += 1;
                 if seed % 2 == 1 {
                     // random pages: each drawn
@@ -1371,8 +1420,11 @@ fn pages_file() {
             None => bad += 1,
         }
     }
-    std::println!("pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn; {more_read} MORE read");
+    std::println!(
+        "pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn; {more_read} MORE read; {indoor_read} indoor sets read"
+    );
     assert!(good > 20 && bad > 1000 && drawn > 20 && more_read > 20, "{good} {bad} {drawn} {more_read}");
+    assert!(indoor_read > 20, "the indoor part reached: {indoor_read}");
 }
 
 /// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at
@@ -1383,6 +1435,7 @@ fn page_editor_inputs() {
     use super::*;
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
     let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
+    let (mut indoor_edits, mut indoor_changed) = (0, 0);
     for seed in 1..=24u32 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
@@ -1399,8 +1452,10 @@ fn page_editor_inputs() {
             {
                 // back into the editor, on a page by chance
                 app.leave_menus();
-                app.screen = Screen::Ride(usize::from(b) % app.page_count());
-                app.edit_page(&mut sim, usize::from(b) % app.page_count(), usize::from(next()) % 8);
+                app.pages_indoor = next() % 2 == 0; // the indoor set now and then (a ride's own while it is open)
+                let n = app.view_count();
+                app.screen = Screen::Ride(usize::from(b) % n);
+                app.edit_page(&mut sim, usize::from(b) % n, usize::from(next()) % 8);
                 app.show(&mut sim);
             }
             let i = match a % 16 {
@@ -1420,15 +1475,18 @@ fn page_editor_inputs() {
                 }
                 _ => Input::Touch(Gesture::Hold(u16::from(b) % 240, u16::from(next()) % 320)),
             };
-            let (count, cells) = (app.page_count(), app.edit.map(|e| e.work.cells()));
+            let (count, cells) = (app.view_count(), app.edit.map(|e| e.work.cells()));
+            let indoor = app.indoor;
             let was_more = app.edit.is_some_and(|e| e.more);
             app.input(&mut sim, i);
             for _ in 0..1 + usize::from(b % 3) {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
             }
-            added += usize::from(app.page_count() > count);
-            deleted += usize::from(app.page_count() < count);
+            added += usize::from(app.view_count() > count);
+            deleted += usize::from(app.view_count() < count);
+            indoor_edits += usize::from(app.edit.is_some() && app.view_indoor());
+            indoor_changed += usize::from(app.indoor != indoor);
             if let (Some(c), Some(e)) = (cells, app.edit) {
                 splits += usize::from(e.work.cells() > c);
                 merges += usize::from(e.work.cells() < c);
@@ -1436,6 +1494,9 @@ fn page_editor_inputs() {
             assert!((1..=PAGES).contains(&app.page_count()));
             assert!(app.pages()[..app.page_count()].iter().all(|p| p.well_formed()));
             assert!(app.more.iter().flatten().all(|p| p.well_formed()));
+            assert!((1..=PAGES).contains(&app.indoor.count));
+            assert!(app.indoor.pages[..app.indoor.count].iter().all(|p| p.well_formed()));
+            assert!(app.indoor.more.iter().flatten().all(|p| p.well_formed()));
             assert_eq!(app.strip.more, app.more_shown().is_some(), "{:?}", app.screen());
             if let Some(n) = app.more_shown() {
                 assert!(n < app.page_count(), "MORE up over page {n}");
@@ -1454,6 +1515,8 @@ fn page_editor_inputs() {
     }
     std::println!("editor reached: {splits} splits, {merges} merges, {added} pages added, {deleted} deleted");
     std::println!("MORE reached: {mores} passes up, {more_edits} in the editor, {more_kept} kept");
+    std::println!("indoor set reached: {indoor_edits} passes in its editor, {indoor_changed} changes");
+    assert!(indoor_edits > 50 && indoor_changed > 5, "{indoor_edits} {indoor_changed}");
     assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
     assert!(mores > 50 && more_edits > 5 && more_kept > 0, "{mores} {more_edits} {more_kept}");
 }

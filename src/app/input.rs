@@ -211,7 +211,7 @@ impl App {
         match n {
             COURSE => self.courses.as_deref().is_some_and(|c| c.on.is_some()),
             WORKOUT => self.player.is_some(),
-            n => n < self.page_count && !(self.indoors() && self.indoor_blank(n)),
+            n => n < self.ride_count() && !(self.indoors() && self.indoor_blank(n)),
         }
     }
 
@@ -509,6 +509,7 @@ impl App {
             // a hold on a ride page's box: the editor on it, that box selected (stock's long press; not while
             // recording, above)
             (Screen::Ride(n), Input::Touch(Gesture::Hold(x, y))) if n < PAGES => {
+                self.pages_indoor = self.indoors(); // the set on screen
                 let k = self.widgets().position(|(bx, _)| inside(bx, x, y)).unwrap_or(0);
                 self.edit_page(b, n, k)
             }

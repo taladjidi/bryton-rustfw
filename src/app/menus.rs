@@ -119,9 +119,10 @@ impl App {
             Menu::Main if self.trainer_on() && i == 2 => Some(Row::Ride(menu::RideRow::Trainer)),
             Menu::Main => menu::MAIN.get(i - usize::from(self.trainer_on() && i > 2)).copied(),
             Menu::Pages => match i {
-                0 => Some(Row::Open(Menu::Page(OVERVIEW))),
-                _ if i <= self.page_count => Some(Row::Open(Menu::Page(i - 1))),
-                _ => (i == self.page_count + 1).then_some(Row::AddPage),
+                0 => Some(Row::Ride(menu::RideRow::PageSet)),
+                1 => Some(Row::Open(Menu::Page(OVERVIEW))),
+                _ if i <= self.view_count() + 1 => Some(Row::Open(Menu::Page(i - 2))),
+                _ => (i == self.view_count() + 2).then_some(Row::AddPage),
             },
             Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
@@ -224,9 +225,13 @@ impl App {
                     RideRow::StopCourse => "STOP FOLLOWING",
                     RideRow::Trainer => "TRAINER CONTROL",
                     RideRow::Indoor => "INDOOR",
+                    RideRow::PageSet => "PAGES OF",
                 });
                 if r == RideRow::Indoor {
                     value.push_str(if self.indoors() { "ON" } else { "OFF" });
+                }
+                if r == RideRow::PageSet {
+                    value.push_str(if self.view_indoor() { "INDOOR" } else { "ROAD" });
                 }
             }
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
@@ -238,7 +243,7 @@ impl App {
             Row::EditPage(_) => label.push_str("EDIT ON PAGE"),
             Row::AddPage => {
                 label.push_str("ADD PAGE");
-                value.push_u32(self.page_count as u32);
+                value.push_u32(self.view_count() as u32);
                 value.push_str("/");
                 value.push_u32(PAGES as u32);
             }
@@ -575,7 +580,10 @@ impl App {
             }
             Some(Row::Open(Menu::Courses)) => self.open_courses(b),
             // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
-            Some(Row::Open(Menu::Page(n))) if matches!(menu, Menu::Ride(_)) && n < PAGES => self.edit_page(b, n, 0),
+            Some(Row::Open(Menu::Page(n))) if matches!(menu, Menu::Ride(_)) && n < PAGES => {
+                self.pages_indoor = self.indoors(); // the set on screen
+                self.edit_page(b, n, 0)
+            }
             Some(Row::Open(m)) => {
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
@@ -616,6 +624,8 @@ impl App {
                     }
                     RideRow::Trainer => self.open(Screen::Trainer),
                     RideRow::Indoor => self.toggle_indoor(),
+                    RideRow::PageSet if self.ride.state() != ride::State::Idle => self.say("THE RIDE'S SET"),
+                    RideRow::PageSet => self.pages_indoor = !self.pages_indoor,
                 }
             }
             Some(Row::Past(n)) => {

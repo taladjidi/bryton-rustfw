@@ -3,7 +3,14 @@
 //! silent. What it changes: the round skips the map and next-turn pages indoors, the GNSS receiver is off during an
 //! indoor ride (gps.rs), and the ride file's sub_sport (indoor_cycling or road, fit.rs), which the recovery record
 //! keeps with "by hand", so a ride resumed after a reset comes back with its profile, and one set by hand stays so
-//! (riding.rs). (The pages per profile come later: UI review 3, section 4.2.)
+//! (riding.rs).
+//!
+//! **Pages per profile** (UI review 3, 2.3): an INDOOR ride takes its pages from the indoor set
+//! ([`page::Set::indoor_default`]: the trainer, the power numbers, the graphs), a ROAD ride from the road set; the
+//! overview is shared. The editor and PAGES work on one set ([`App::view_indoor`]): the profile's while a ride is
+//! open, else the one PAGES > SET names. The road set is the one the backup registers keep (three pages); the indoor
+//! set lives in `\Rustfw\pages.bin` only (page.rs), so a change to it made while the file must wait is lost to a
+//! switch-off.
 
 use crate::*;
 
@@ -12,6 +19,71 @@ use crate::*;
 pub const TRAINER_QUIET_S: u16 = 120;
 
 impl App {
+    /// The set PAGES and the editor show: the profile's while a ride is open, else the one chosen in PAGES.
+    pub(crate) fn view_indoor(&self) -> bool {
+        if self.ride.state() == ride::State::Idle { self.pages_indoor } else { self.profile == ride::Profile::Indoor }
+    }
+
+    /// A set's pages, how many are used, and their MORE variants: the indoor one or the road one.
+    pub(crate) fn set_ref(&self, indoor: bool) -> (&[page::Page], usize, &[Option<page::Page>; PAGES]) {
+        if indoor {
+            (&self.indoor.pages, self.indoor.count, &self.indoor.more)
+        } else {
+            (self.pages.get(..PAGES).unwrap_or(&[]), self.page_count, &self.more)
+        }
+    }
+
+    /// [`App::set_ref`], to change.
+    pub(crate) fn set_mut(
+        &mut self,
+        indoor: bool,
+    ) -> (&mut [page::Page], &mut usize, &mut [Option<page::Page>; PAGES]) {
+        if indoor {
+            (&mut self.indoor.pages, &mut self.indoor.count, &mut self.indoor.more)
+        } else {
+            (self.pages.get_mut(..PAGES).unwrap_or(&mut []), &mut self.page_count, &mut self.more)
+        }
+    }
+
+    /// How many ride pages the set in force (for the ride on screen) has.
+    pub(crate) fn ride_count(&self) -> usize {
+        self.set_ref(self.indoors()).1
+    }
+
+    /// Ride page `n` of the set in force; the overview.
+    pub(crate) fn ride_page_ref(&self, n: usize) -> Option<&page::Page> {
+        match n {
+            OVERVIEW => self.pages.get(OVERVIEW),
+            n => {
+                let (pages, count, _) = self.set_ref(self.indoors());
+                pages.get(n).filter(|_| n < count)
+            }
+        }
+    }
+
+    /// Each pass: when the profile in force changed (a trainer heard or lost, by hand), the ride pages on screen
+    /// come from the other set: a page the set lacks goes to the first one it has, and the page is drawn anew.
+    /// Held while the editor is open (it works on a copy of one set).
+    pub(crate) fn settle_set(&mut self, b: &mut impl Board) {
+        let now = self.indoors();
+        if now == self.set_shown || self.edit.is_some() {
+            return;
+        }
+        self.set_shown = now;
+        self.plot_taps = [[None; page::CELLS]; PAGES + 1];
+        let fix = |app: &Self, s: Screen| match s {
+            Screen::Ride(n) if n < PAGES && !app.page_on(n) => app.ride_page(0, 1),
+            s => s,
+        };
+        self.screen = fix(self, self.screen);
+        for k in 0..self.depth.min(self.under.len()) {
+            self.under[k] = fix(self, self.under[k]);
+        }
+        if matches!(self.screen, Screen::Ride(_)) {
+            self.show(b);
+        }
+    }
+
     /// The profile Start would take now: the one fixed in BIKE, else indoor when a trainer is heard.
     pub(crate) fn chosen_profile(&self) -> ride::Profile {
         match self.settings.profile {
@@ -55,6 +127,7 @@ impl App {
             || self.profile != ride::Profile::Indoor
             || self.profile_by_hand
             || self.settings.profile.is_some()
+            || self.edit.is_some()
         {
             return;
         }
@@ -71,8 +144,7 @@ impl App {
 
     /// Page `n` is one an indoor ride has no use for: it holds the map or the next turn.
     pub(crate) fn indoor_blank(&self, n: usize) -> bool {
-        self.pages
-            .get(n)
+        self.ride_page_ref(n)
             .is_some_and(|p| p.fields.iter().take(p.cells()).any(|&f| matches!(f, Field::Map | Field::NextTurn)))
     }
 }

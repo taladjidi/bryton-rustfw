@@ -43,6 +43,12 @@
 //! A MORE variant is not in the registers at all: a MORE edit made then is lost the same way, and where the registers
 //! win over the file's page, that page's MORE goes back to its default (it may belong to another page).
 //!
+//! **Two sets** (UI review 3, 4.2.7): the ROAD pages above and the INDOOR set ([`page::Set`], app/profile.rs), in the file
+//! only, after the MORE part with a CRC of its own (page.rs). The editor, LAYOUT, the picker and PAGES work on the
+//! set of the profile in force while a ride is open, else the one PAGES > PAGES OF names (a hold on a ride page or
+//! the ride menu's EDIT THIS PAGE take the set on screen). The registers never hold the indoor set: an indoor edit
+//! made while the file must wait (a paused ride, the drive lent) is lost to a switch-off, like pages 4 to 6.
+//!
 //! **No change before the file is read**: the editor, LAYOUT and the picker read it first, and refuse while it
 //! cannot be ("USB DRIVE ON", "PAGES NOT READ"), so the registers' three pages are never written over the file's six.
 //! A failed read is tried again ([`LOAD_TRIES`] times by the passes, then at each change asked for); a write never
@@ -119,9 +125,16 @@ impl App {
         match n {
             EDITED => self.edit.as_ref().map(|e| &e.work),
             OVERVIEW => self.pages.get(OVERVIEW),
-            n if n < self.page_count => self.pages.get(n),
-            _ => None,
+            n => {
+                let (pages, count, _) = self.set_ref(self.view_indoor());
+                pages.get(n).filter(|_| n < count)
+            }
         }
+    }
+
+    /// How many ride pages the set PAGES and the editor show has.
+    pub(crate) fn view_count(&self) -> usize {
+        self.set_ref(self.view_indoor()).1
     }
 
     /// The first ride pages and the overview written to their backup registers, marked [`PAGES_NEWER`] while the
@@ -280,6 +293,9 @@ impl App {
         } else if boot != s.words {
             self.save_page_registers_from(b, &s); // cut between the file and the registers: put right
         }
+        self.indoor = s.indoor.unwrap_or_else(page::Set::indoor_default);
+        self.set_shown = self.indoors(); // the pages on screen are drawn below
+        self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         let mut n = 0;
         let mut more = [None; PAGES];
         for (p, m) in list.into_iter().zip(more_in) {
@@ -295,7 +311,7 @@ impl App {
         self.page_count = n;
         self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if let Screen::Ride(k) = self.screen {
-            if k >= n && k < PAGES {
+            if k < PAGES && !self.page_on(k) {
                 self.screen = Screen::Main;
             }
             self.show(b);
@@ -325,6 +341,7 @@ impl App {
             words: register_words(&self.pages, self.page_count),
             was,
             more: self.more,
+            indoor: Some(self.indoor),
         };
         let slot = (s.seq % 2) as usize;
         let sector = s.to_sector();
@@ -507,7 +524,8 @@ impl App {
             EditRow::DeletePage if e.more => {
                 // in MORE this row resets the variant to its default; the page stays
                 if self.confirmed(menu, sel, "RESET THIS MORE") {
-                    if let Some(m) = self.more.get_mut(e.page) {
+                    let indoor = self.view_indoor();
+                    if let Some(m) = self.set_mut(indoor).2.get_mut(e.page) {
                         *m = None;
                     }
                     self.pages_changed(b);
@@ -516,7 +534,7 @@ impl App {
                 }
                 return;
             }
-            EditRow::DeletePage if self.page_count <= 1 => Err("ONE PAGE AT LEAST"),
+            EditRow::DeletePage if self.view_count() <= 1 => Err("ONE PAGE AT LEAST"),
             EditRow::DeletePage => {
                 if self.confirmed(menu, sel, "DELETE THIS PAGE") {
                     self.delete_page(b);
@@ -542,7 +560,8 @@ impl App {
         if !self.pages_ready(b) {
             return;
         }
-        if self.page_count >= PAGES {
+        let indoor = self.view_indoor();
+        if self.view_count() >= PAGES {
             return self.say("6 PAGES AT MOST");
         }
         if let Some(e) = self.edit.take() {
@@ -555,14 +574,16 @@ impl App {
             }
             self.close();
         }
-        let at = at.min(self.page_count);
         use Field::*;
         let new = Page::preset(4, [Speed, Timer, Dist, Hr, Time, Time, Time, Time]).unwrap_or(BLANK);
-        self.pages.copy_within(at..PAGES - 1, at + 1);
-        self.more.copy_within(at..PAGES - 1, at + 1);
-        self.pages[at] = new;
-        self.more[at] = None;
-        self.page_count += 1;
+        let (pages, count, more) = self.set_mut(indoor);
+        let at = at.min(*count);
+        pages.copy_within(at..PAGES - 1, at + 1);
+        more.copy_within(at..PAGES - 1, at + 1);
+        if let (Some(p), Some(m)) = (pages.get_mut(at), more.get_mut(at)) {
+            (*p, *m) = (new, None);
+        }
+        *count += 1;
         self.pages_changed(b);
         let mut l = Line::<20>::new();
         l.push_str("PAGE ");
@@ -575,11 +596,13 @@ impl App {
     /// The edited page deleted, out of the editor.
     pub(crate) fn delete_page(&mut self, b: &mut impl Board) {
         let Some(e) = self.edit.take() else { return };
-        if e.page < self.page_count && self.page_count > 1 {
-            self.pages.copy_within(e.page + 1..PAGES, e.page);
-            self.more.copy_within(e.page + 1..PAGES, e.page);
-            self.more[PAGES - 1] = None;
-            self.page_count -= 1;
+        let indoor = self.view_indoor();
+        let (pages, count, more) = self.set_mut(indoor);
+        if e.page < *count && *count > 1 {
+            pages.copy_within(e.page + 1..PAGES, e.page);
+            more.copy_within(e.page + 1..PAGES, e.page);
+            more[PAGES - 1] = None;
+            *count -= 1;
             self.pages_changed(b);
         }
         self.leave_editor(b, false);
@@ -597,7 +620,8 @@ impl App {
         let next = (1..=order.len())
             .filter_map(|d| Page::preset(order[(at + d) % order.len()], p.fields))
             .find(|q| q.misfits() == 0);
-        if let (Some(q), Some(slot)) = (next, self.pages.get_mut(n)) {
+        let indoor = self.view_indoor();
+        if let (Some(q), Some(slot)) = (next, self.set_mut(indoor).0.get_mut(n)) {
             *slot = q;
             self.pages_changed(b);
         }
@@ -635,7 +659,8 @@ impl App {
                 save_page(b, OVERVIEW, &q);
             }
             _ => {
-                if let Some(slot) = self.pages.get_mut(n) {
+                let indoor = self.view_indoor();
+                if let Some(slot) = self.set_mut(indoor).0.get_mut(n) {
                     *slot = q;
                 }
                 self.pages_changed(b);
@@ -658,7 +683,7 @@ impl App {
                 *color = ui::GREY;
             }
             EditRow::AddPage => {
-                v.push_u32(self.page_count as u32);
+                v.push_u32(self.view_count() as u32);
                 v.push_str("/");
                 v.push_u32(PAGES as u32);
             }

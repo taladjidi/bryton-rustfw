@@ -99,8 +99,10 @@ impl App {
         let page = if self.indoors() || self.trainer_heard() {
             WORKOUT
         } else {
-            (0..self.page_count)
-                .find(|&n| self.pages.get(n).is_some_and(|p| p.fields.iter().take(p.cells()).any(|f| f.is_workout())))
+            (0..self.ride_count())
+                .find(|&n| {
+                    self.ride_page_ref(n).is_some_and(|p| p.fields.iter().take(p.cells()).any(|f| f.is_workout()))
+                })
                 .unwrap_or(0)
         };
         (self.depth, self.screen) = (0, Screen::Ride(page));

@@ -256,6 +256,12 @@ pub struct App {
     page_count: usize,
     /// Each ride page's MORE variant when the rider made one, else [`page::Page::more_of`] (app/more.rs).
     more: [Option<page::Page>; PAGES],
+    /// The INDOOR profile's pages with their MORE variants, in the file only (app/profile.rs, app/editor.rs).
+    indoor: page::Set,
+    /// The set PAGES and the editor show while no ride is open: false ROAD, true INDOOR (app/profile.rs).
+    pages_indoor: bool,
+    /// The set the ride pages on screen were taken from at the last pass ([`App::indoors`] then).
+    set_shown: bool,
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
@@ -501,6 +507,9 @@ impl App {
             pages,
             page_count,
             more: [None; PAGES],
+            indoor: page::Set::indoor_default(),
+            pages_indoor: false,
+            set_shown: false,
             more_on: None,
             store,
             edit: None,
@@ -644,6 +653,7 @@ impl App {
             }
             self.lag_s = 0;
         }
+        self.settle_set(b);
         if let Some(a) = self.alert.take() {
             self.say_as(
                 a.text(),

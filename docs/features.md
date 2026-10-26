@@ -142,6 +142,12 @@ The power button starts it again. After the backlight's time-out, any key brings
   its field count, six fields at most). At a start the registers give the pages at once, the file 2 s later (the
   card is not touched at boot) and wins, unless another build changed the registers since: then its pages there
   win, the file's others kept. A build that may not write the card keeps its pages (three) in the registers only.
+- **Pages per profile:** an INDOOR ride (a trainer heard at Start, or INDOOR set by hand or in BIKE) has its own set
+  of up to six pages beside the road set: the trainer (3 s power large, the trainer's target, heart rate, cadence,
+  timer, work), the power numbers (average, NP, W' balance, IF, work, TSS) and the power and heart rate graphs, with
+  their MORE variants; the overview is shared. The editor and PAGES work on the profile's set while a ride is open,
+  else the one PAGES > PAGES OF names. The indoor set is in `pages.bin` only (after the MORE part, a CRC of its own,
+  so earlier builds ignore it and a file without it gives the defaults), never in the backup registers.
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
   goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
   graph between the last minutes and the whole ride; neither while a ride records (below).

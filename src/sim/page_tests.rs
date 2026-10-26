@@ -570,7 +570,8 @@ fn a_tiny_row_is_refused_and_drawn_safely() {
     let rows = [(1, 2), (3, 1), (3, 1), (3, 1), (3, 1)];
     let tiny = Page { rows, fields: [Speed, Hr, Power, Cadence, Dist, Time, Time, Time] };
     assert!(tiny.well_formed() && !tiny.roomy());
-    let s = Saved { seq: 3, pages: [tiny; PAGES], count: 1, words: [0; 6], was: [0; 6], more: [None; PAGES] };
+    let s =
+        Saved { seq: 3, pages: [tiny; PAGES], count: 1, words: [0; 6], was: [0; 6], more: [None; PAGES], indoor: None };
     assert_eq!(Saved::from_sector(&s.to_sector()), None);
     let (mut sim, mut app) = started();
     app.pages[0] = tiny;
@@ -887,4 +888,159 @@ fn review_reset_more_in_the_more_editor() {
     assert!(app.more[1].is_some(), "asked first");
     app.activate(&mut sim, m, r);
     assert_eq!((app.more[1], app.page_count()), (None, n), "MORE reset, the page kept");
+}
+
+// ---- the INDOOR set (UI review 3, 4.2.7) ----
+
+/// The first field of the page on screen.
+fn first_field(app: &App) -> Option<Field> {
+    app.widgets().find_map(|(_, w)| if let Widget::Field(f) = w { Some(f) } else { None })
+}
+
+/// The round takes the pages of the profile in force: the road set (here four pages) or the indoor one (three); a
+/// switch while a page the other set lacks is up moves to its first page; a ride's view follows its profile.
+#[test]
+fn the_round_takes_the_profiles_pages() {
+    let (mut sim, mut app) = started();
+    assert_eq!(app.indoor, crate::page::Set::indoor_default(), "no file yet: the defaults");
+    app.pages[3] = app.pages[0];
+    app.page_count = 4;
+    press(&mut sim, &mut app, Key::Page);
+    assert_eq!((app.screen(), first_field(&app)), (Screen::Ride(0), Some(Speed)));
+    app.settings.profile = Some(crate::ride::Profile::Indoor);
+    run(&mut sim, &mut app, 100);
+    assert_eq!((app.screen(), first_field(&app)), (Screen::Ride(0), Some(Power3s)), "the trainer page, drawn anew");
+    super::tests::assert_consistent(&sim, &app);
+    let mut round = Vec::new();
+    for _ in 0..4 {
+        press(&mut sim, &mut app, Key::Page);
+        round.push(app.screen());
+    }
+    assert_eq!(round, [1, 2, 0, 1].map(Screen::Ride), "three indoor pages");
+    // road again with its fourth page up: the indoor set has no such page, so it goes to the first
+    app.settings.profile = Some(crate::ride::Profile::Road);
+    run(&mut sim, &mut app, 100);
+    app.screen = Screen::Ride(3);
+    app.show(&mut sim);
+    app.settings.profile = Some(crate::ride::Profile::Indoor);
+    run(&mut sim, &mut app, 100);
+    assert_eq!(app.screen(), Screen::Ride(0));
+    super::tests::assert_consistent(&sim, &app);
+    // a ride open: PAGES shows the ride's set whatever was chosen there
+    press(&mut sim, &mut app, Key::Start);
+    run(&mut sim, &mut app, 1500);
+    app.pages_indoor = false;
+    assert!(app.view_indoor());
+    app.settings.profile = Some(crate::ride::Profile::Road);
+    app.toggle_indoor(); // by hand: ROAD
+    run(&mut sim, &mut app, 100);
+    assert!(!app.view_indoor());
+}
+
+/// PAGES > PAGES OF names the set the list and the editor show; ADD PAGE there grows the indoor set only, which is
+/// written to the file (the registers keep the road pages) and read back at the next start.
+#[test]
+fn the_pages_menu_edits_the_set_it_names() {
+    let (mut sim, mut app) = started();
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Ride(menu::RideRow::PageSet));
+    let label = |app: &App| app.menu_row(Menu::Pages, 0).map(|(l, v, _)| std::format!("{}/{}", l.as_str(), v.as_str()));
+    assert_eq!(label(&app), Some("PAGES OF/ROAD".into()));
+    assert_eq!(app.rows(Menu::Pages), 2 + 3 + 1);
+    press(&mut sim, &mut app, Key::Start);
+    assert_eq!(label(&app), Some("PAGES OF/INDOOR".into()));
+    sim.save("pages_menu_indoor");
+    super::tests::assert_consistent(&sim, &app);
+    to_row(&mut sim, &mut app, menu::Row::AddPage);
+    press(&mut sim, &mut app, Key::Start);
+    assert_eq!((app.screen(), app.indoor.count, app.page_count()), (Screen::Edit(3, 0), 4, 3), "the indoor set grew");
+    app.leave_editor(&mut sim, false);
+    run(&mut sim, &mut app, 300);
+    let f = file(&sim).unwrap();
+    assert_eq!((f.count, f.indoor.map(|i| i.count)), (3, Some(4)));
+    assert_eq!(f.indoor.unwrap().pages[3], app.indoor.pages[3]);
+    let (_, app2) = reboot(&mut sim);
+    assert_eq!((app2.indoor, app2.page_count()), (app.indoor, 3));
+    // PAGES OF is the ride's while one is open
+    let (mut sim, mut app) = started();
+    press(&mut sim, &mut app, Key::Start);
+    run(&mut sim, &mut app, 1500);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Ride(menu::RideRow::PageSet));
+    press(&mut sim, &mut app, Key::Start);
+    assert_eq!((app.banner.as_str(), app.pages_indoor), ("THE RIDE'S SET", false));
+}
+
+/// A hold on a box of an indoor page edits the indoor set (the page is indoor's), kept it is written, the road pages
+/// untouched; a MORE variant and LAYOUT reach the same set.
+#[test]
+fn a_hold_edits_the_set_on_screen() {
+    let (mut sim, mut app) = started();
+    app.settings.profile = Some(crate::ride::Profile::Indoor);
+    run(&mut sim, &mut app, 100);
+    press(&mut sim, &mut app, Key::Page);
+    let road = app.pages()[0];
+    let (x, y) = centre(&app, 1);
+    app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
+    let e = app.edit.unwrap();
+    assert_eq!((e.page, e.more, e.work, app.pages_indoor), (0, false, app.indoor.pages[0], true));
+    sim.save("indoor_editor");
+    let w = e.work.with_field(1, Dist).unwrap();
+    app.edit.as_mut().unwrap().work = w;
+    app.leave_editor(&mut sim, true);
+    assert_eq!((app.indoor.pages[0], app.pages()[0]), (w, road));
+    run(&mut sim, &mut app, 300);
+    let f = file(&sim).unwrap();
+    assert_eq!((f.indoor.unwrap().pages[0], f.pages[0]), (w, road));
+    // a MORE variant of an indoor page
+    swipe(&mut sim, &mut app, Dir::Up);
+    let (x, y) = centre(&app, 2);
+    app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
+    let m = app.edit.unwrap().work.with_field(2, Wbal).unwrap();
+    app.edit.as_mut().unwrap().work = m;
+    app.leave_editor(&mut sim, true);
+    assert_eq!((app.indoor.more[0], app.more[0]), (Some(m), None));
+    run(&mut sim, &mut app, 300);
+    let (mut sim, mut app) = reboot(&mut sim);
+    assert_eq!((app.indoor.pages[0], app.indoor.more[0]), (w, Some(m)));
+    // LAYOUT on the indoor set
+    let (indoor1, road1) = (app.indoor.pages[1], app.pages()[1]);
+    app.pages_indoor = true;
+    app.next_layout(&mut sim, 1);
+    assert_ne!(app.indoor.pages[1], indoor1);
+    assert_eq!(app.pages()[1], road1, "the road page untouched");
+}
+
+/// The indoor set and the road pages from one copy: a cut after every sector of a write that changes both.
+#[test]
+fn the_indoor_set_survives_a_cut_with_its_pages() {
+    let w = |f| Page::preset(1, [f; 8]).unwrap();
+    let change = |app: &mut App, sim: &mut Sim, f| {
+        app.indoor.pages[1] = w(f);
+        app.pages[0] = Page::preset(2, [f, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
+        app.pages_changed(sim);
+        run(sim, app, 200);
+    };
+    let (mut sim, mut app) = started();
+    change(&mut app, &mut sim, Hr);
+    let base = sim.emmc.sectors_written;
+    change(&mut app, &mut sim, Cadence);
+    let total = sim.emmc.sectors_written - base;
+    assert!(total > 0);
+    let (mut olds, mut news) = (0, 0);
+    for cut in 0..total {
+        let (mut sim, mut app) = started();
+        change(&mut app, &mut sim, Hr);
+        let backup = sim.backup;
+        sim.emmc.cut_after = Some(sim.emmc.sectors_written + cut);
+        change(&mut app, &mut sim, Cadence);
+        sim.backup = backup;
+        let (_, app2) = reboot(&mut sim);
+        let new = app2.indoor.pages[1] == w(Cadence);
+        assert!(new || app2.indoor.pages[1] == w(Hr), "cut {cut}: {:?}", app2.indoor.pages[1]);
+        assert_eq!(new, app2.pages()[0].fields[0] == Cadence, "cut {cut}: pages and indoor set from one copy");
+        if new { news += 1 } else { olds += 1 }
+    }
+    std::println!("indoor cut: {total} sectors, {olds} old, {news} new");
+    assert!(olds > 0);
 }

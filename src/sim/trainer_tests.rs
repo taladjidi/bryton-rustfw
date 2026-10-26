@@ -766,6 +766,7 @@ fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
         fields: [Field::TrainerMode, Field::TrainerTarget, Field::Power, Field::Cadence, Field::Speed, Field::Timer],
     }
     .into();
+    app.indoor.pages[0] = app.pages[0]; // the trainer is heard: the ride is indoors, with its own pages
     app.press(&mut sim, Press::Short(Key::Page)); // the first page
     assert_eq!(app.screen(), Screen::Ride(0));
     let at = |app: &App, f: Field| {
@@ -812,6 +813,7 @@ fn the_map_page_is_skipped_indoors() {
     sim.nordic.sensors.push(trainer_sensor());
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 3000);
+    app.indoor.pages[2] = app.pages[2]; // a rider who put the map in the indoor set too
     assert!(app.trainer_heard(), "the trainer is heard");
     assert!(!app.pvt.is_some_and(|p| p.good()), "no fix");
     let round = |sim: &mut Sim, app: &mut App| {
@@ -964,4 +966,27 @@ fn the_receiver_stays_on_for_a_road_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 30_000);
     assert!(!app.indoors() && sim.gnss.powered, "a road ride");
+}
+
+/// A trainer heard: the ride takes the INDOOR pages (the trainer, the power numbers, the graphs), shown with live
+/// values for the README; MORE of each is its default; the road pages come back when the profile is fixed to ROAD.
+#[test]
+fn the_default_indoor_pages() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000);
+    assert!(app.indoors());
+    for n in 0..3 {
+        assert_eq!(app.screen(), Screen::Ride(n));
+        super::tests::assert_consistent(&sim, &app);
+        sim.save(&format!("indoor_page{}", n + 1));
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    assert_eq!(app.screen(), Screen::Ride(0), "three indoor pages");
+    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Swipe(crate::touch::Dir::Up)));
+    run(&mut sim, &mut app, 1100);
+    sim.save("indoor_page1_more");
+    app.toggle_indoor();
+    assert!(!app.indoors());
 }

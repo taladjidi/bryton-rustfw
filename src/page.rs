@@ -407,6 +407,54 @@ fn more_crc(s: &[u8; 512]) -> u16 {
     crate::fit::crc(crate::fit::crc(0, &s[..CRC_AT]), &s[MORE_AT..MORE_CRC_AT])
 }
 
+/// The indoor set, after the MORE part's CRC where earlier builds do not look: its page count (zero in a file of an
+/// earlier build: the defaults), its pages, the MORE flags and variants as above, and a CRC-16 of these continuing
+/// the MORE part's CRC (so a copy torn anywhere before it mixes nothing: the older indoor set fails against the newer
+/// pages). A bad one leaves the indoor defaults, everything above it untouched. Ends at byte 381 of 512.
+const INDOOR_AT: usize = MORE_CRC_AT + 2;
+const INDOOR_MORE_AT: usize = INDOOR_AT + 1 + crate::PAGES * PAGE_BYTES;
+const INDOOR_CRC_AT: usize = INDOOR_MORE_AT + 1 + crate::PAGES * PAGE_BYTES;
+
+/// The indoor part's CRC.
+fn indoor_crc(s: &[u8; 512]) -> u16 {
+    crate::fit::crc(more_crc(s), &s[INDOOR_AT..INDOOR_CRC_AT])
+}
+
+/// A set of ride pages with their MORE variants: the indoor profile's (the road set lives in the app's own fields,
+/// where the backup registers can reach its first pages).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Set {
+    /// The pages, the first `count` used.
+    pub pages: [Page; crate::PAGES],
+    /// How many (1 to [`crate::PAGES`]).
+    pub count: usize,
+    /// Each page's MORE variant, if the rider made one (else [`Page::more_of`]).
+    pub more: [Option<Page>; crate::PAGES],
+}
+
+impl Set {
+    /// The indoor pages until the rider edits them, from existing fields: the trainer (3 s power large, the
+    /// trainer's target, heart rate, cadence, time, work), the power numbers, and the power and heart rate graphs.
+    ///
+    /// ```
+    /// let s = bryton_rustfw::page::Set::indoor_default();
+    /// assert!(s.count == 3 && s.pages.iter().take(s.count).all(|p| p.valid() && p.roomy()));
+    /// ```
+    pub fn indoor_default() -> Set {
+        use Field::*;
+        let mut pages = [BLANK; crate::PAGES];
+        let sets: [(u8, [Field; CELLS]); 3] = [
+            (12, [Power3s, TrainerTarget, Hr, Cadence, Timer, Kj, Time, Time]),
+            (6, [AvgPower, Np, Wbal, If, Kj, Tss, Time, Time]),
+            (preset_of(2).unwrap_or(1), [Graph, HrGraph, Time, Time, Time, Time, Time, Time]),
+        ];
+        for (slot, (id, f)) in pages.iter_mut().zip(sets) {
+            *slot = Page::preset(id, f).unwrap_or(BLANK);
+        }
+        Set { pages, count: 3, more: [None; crate::PAGES] }
+    }
+}
+
 /// The ride pages as the file keeps them: two copies, one a sector, the newer whole one (the larger `seq`) the one
 /// read; a write goes over the older, so a power cut while writing one leaves the other (the recorder's two
 /// records). Each copy also keeps the backup registers' words written with it (`words`) and those they held before
@@ -426,6 +474,8 @@ pub struct Saved {
     pub was: [u32; 6],
     /// Each page's MORE variant, if the rider made one (else [`Page::more_of`]).
     pub more: [Option<Page>; crate::PAGES],
+    /// The indoor profile's set, if the copy has a good one (else [`Set::indoor_default`]).
+    pub indoor: Option<Set>,
 }
 
 /// `p` as a copy keeps it.
@@ -454,12 +504,13 @@ fn read_page(b: &[u8]) -> Option<Page> {
 }
 
 impl Saved {
-    /// The sector: tag, seq, count, the words, the pages, a CRC-16 of all before it.
+    /// The sector: tag, seq, count, the words, the pages, a CRC-16 of all before it; then the MORE part and the indoor
+    /// part, each with a CRC-16 of its own.
     ///
     /// ```
     /// use bryton_rustfw::{page::*, ui::Field};
     /// let p = Page::preset(4, [Field::Hr; 8]).unwrap();
-    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6] };
+    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6], indoor: None };
     /// let mut sector = s.to_sector();
     /// assert_eq!(Saved::from_sector(&sector), Some(s));
     /// sector[70] ^= 1;
@@ -489,7 +540,48 @@ impl Saved {
         s[MORE_AT] = flags;
         let crc = more_crc(&s);
         s[MORE_CRC_AT..MORE_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        if let Some(i) = &self.indoor {
+            s[INDOOR_AT] = i.count as u8;
+            for (p, out) in i.pages.iter().zip(s[INDOOR_AT + 1..INDOOR_MORE_AT].chunks_exact_mut(PAGE_BYTES)) {
+                write_page(p, out);
+            }
+            let mut flags = 0u8;
+            let outs = s[INDOOR_MORE_AT + 1..INDOOR_CRC_AT].chunks_exact_mut(PAGE_BYTES);
+            for (k, (m, out)) in i.more.iter().zip(outs).enumerate() {
+                if let Some(p) = m {
+                    flags |= 1 << k;
+                    write_page(p, out);
+                }
+            }
+            s[INDOOR_MORE_AT] = flags;
+            let crc = indoor_crc(&s);
+            s[INDOOR_CRC_AT..INDOOR_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        }
         s
+    }
+
+    /// The indoor part of a sector: None where it is not there (a file of an earlier build), damaged, or holds a page
+    /// not well formed (the whole set then goes to its defaults, never part of one).
+    fn read_indoor(s: &[u8; 512]) -> Option<Set> {
+        let count = usize::from(s[INDOOR_AT]);
+        let good = s.get(INDOOR_CRC_AT..INDOOR_CRC_AT + 2)? == indoor_crc(s).to_le_bytes();
+        if !good || !(1..=crate::PAGES).contains(&count) {
+            return None;
+        }
+        let mut set = Set { pages: [BLANK; crate::PAGES], count, more: [None; crate::PAGES] };
+        let chunks = s.get(INDOOR_AT + 1..INDOOR_MORE_AT)?.chunks_exact(PAGE_BYTES);
+        for (k, (p, b)) in set.pages.iter_mut().zip(chunks).enumerate() {
+            *p = read_page(b)?;
+            if k < count && !(p.well_formed() && p.roomy()) {
+                return None;
+            }
+        }
+        let flags = s[INDOOR_MORE_AT];
+        let chunks = s.get(INDOOR_MORE_AT + 1..INDOOR_CRC_AT)?.chunks_exact(PAGE_BYTES);
+        for (k, (m, b)) in set.more.iter_mut().zip(chunks).enumerate() {
+            *m = read_page(b).filter(|p| flags & 1 << k != 0 && p.well_formed() && p.roomy());
+        }
+        Some(set)
     }
 
     /// From a sector [`Saved::to_sector`] wrote; None if it is not one (never written, damaged, a page not well
@@ -523,6 +615,7 @@ impl Saved {
             words: core::array::from_fn(word),
             was: core::array::from_fn(|k| word(6 + k)),
             more,
+            indoor: Self::read_indoor(s),
         })
     }
 
@@ -625,7 +718,15 @@ mod tests {
     #[test]
     fn the_newer_whole_copy_wins() {
         let p = |id| Page::preset(id, F).unwrap();
-        let a = Saved { seq: 3, pages: [p(1); crate::PAGES], count: 1, words: [0; 6], was: [0; 6], more: [None; 6] };
+        let a = Saved {
+            seq: 3,
+            pages: [p(1); crate::PAGES],
+            count: 1,
+            words: [0; 6],
+            was: [0; 6],
+            more: [None; 6],
+            indoor: None,
+        };
         let b = Saved { seq: 4, pages: [p(4); crate::PAGES], count: 3, ..a };
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&b.to_sector());
@@ -664,6 +765,7 @@ mod tests {
             words: [1; 6],
             was: [2; 6],
             more: [None, Some(m), None, None, None, Some(p)],
+            indoor: None,
         };
         let sector = s.to_sector();
         assert_eq!(Saved::from_sector(&sector), Some(s));
@@ -687,7 +789,15 @@ mod tests {
         let p = Page::preset(4, [Speed, Hr, Dist, Timer, Time, Time, Time, Time]).unwrap();
         let q = Page::preset(2, [Ascent, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
         let w = Page::preset(14, [Wbal, Np, Hr, Power, Cadence, Dist, Timer, Ascent]).unwrap();
-        let mk = |seq, pg, more| Saved { seq, pages: [pg; crate::PAGES], count: 3, words: [0; 6], was: [0; 6], more };
+        let mk = |seq, pg, more| Saved {
+            seq,
+            pages: [pg; crate::PAGES],
+            count: 3,
+            words: [0; 6],
+            was: [0; 6],
+            more,
+            indoor: None,
+        };
         let old = mk(4, p, [None, Some(w), None, None, None, None]).to_sector();
         let new = mk(6, q, [None; crate::PAGES]).to_sector();
         let mut torn = old;
@@ -695,5 +805,56 @@ mod tests {
         let s = Saved::from_sector(&torn).unwrap();
         assert_eq!(s.pages[0], q);
         assert_eq!(s.more, [None; crate::PAGES], "new pages with an older copy's MORE");
+    }
+
+    /// The indoor part goes to the file and back; a file of an earlier build (zeros after the MORE part), a damaged
+    /// indoor part, a page of it this build cannot read and a copy torn between the parts give the indoor defaults
+    /// (None), every part above it intact; a torn copy never mixes pages with another copy's indoor set.
+    #[test]
+    fn the_indoor_set_in_the_file() {
+        let p = Page::preset(4, F).unwrap();
+        let m = Page::preset(14, F).unwrap();
+        let mut set = Set::indoor_default();
+        set.count = 4;
+        set.pages[3] = p;
+        set.more[1] = Some(m);
+        let s = Saved {
+            seq: 5,
+            pages: [p; crate::PAGES],
+            count: 3,
+            words: [1; 6],
+            was: [2; 6],
+            more: [None, Some(m), None, None, None, None],
+            indoor: Some(set),
+        };
+        let sector = s.to_sector();
+        const { assert!(INDOOR_CRC_AT + 2 <= 512) } // fits the sector
+        assert_eq!(Saved::from_sector(&sector), Some(s));
+        let plain = Saved { indoor: None, ..s };
+        let mut old = sector;
+        old[INDOOR_AT..].fill(0); // as an earlier build wrote it
+        assert_eq!(Saved::from_sector(&old), Some(plain));
+        for at in [INDOOR_AT, INDOOR_AT + 5, INDOOR_MORE_AT + 3, INDOOR_CRC_AT] {
+            let mut bad = sector;
+            bad[at] ^= 0x10;
+            assert_eq!(Saved::from_sector(&bad), Some(plain), "damaged at {at}");
+        }
+        let mut bad = sector;
+        bad[INDOOR_AT + 1 + ROWS] = 250; // a field this build lacks, CRC made right
+        let crc = indoor_crc(&bad);
+        bad[INDOOR_CRC_AT..INDOOR_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(Saved::from_sector(&bad), Some(plain));
+        // the MORE part damaged: the indoor part (chained to it) goes too, the pages stay
+        let mut bad = sector;
+        bad[MORE_AT + 3] ^= 0x10;
+        assert_eq!(Saved::from_sector(&bad), Some(Saved { more: [None; crate::PAGES], ..plain }));
+        // torn before a part: the pages (or MORE) of the newer copy, the older copy's indoor set refused
+        let q = Page::preset(2, [Ascent, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
+        let new = Saved { seq: 6, pages: [q; crate::PAGES], ..s }.to_sector();
+        for (at, what) in [(INDOOR_AT, "the indoor part"), (MORE_AT, "the MORE part")] {
+            let mut torn = sector;
+            torn[..at].copy_from_slice(&new[..at]);
+            assert_eq!(Saved::from_sector(&torn).map(|t| t.indoor), Some(None), "torn before {what}");
+        }
     }
 }
