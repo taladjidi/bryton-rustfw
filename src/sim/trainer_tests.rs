@@ -138,6 +138,17 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     assert_eq!(sim.nordic.trainer.power, 110);
     assert!(cmds.iter().all(|p| p[0] == 0x31));
     assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "110W");
+    // the workout page opens with a trainer heard, first in the round
+    assert_eq!(app.screen(), Screen::Ride(crate::WORKOUT));
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("workout_page");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(0), "the next place in the round is the first page");
+    // in ERG the cadence box's edge bar goes red under 60 rpm (and only then)
+    app.live.set(Metric::Cadence, 55);
+    assert_eq!(app.field_bar(Field::Cadence), ui::RED);
+    app.live.set(Metric::Cadence, 85);
+    assert_eq!(app.field_bar(Field::Cadence), ui::BLACK);
     assert_eq!(app.field_text(Field::ErgTarget).as_str(), "110", "no adjust: the watts alone");
     assert_eq!(app.field_text(Field::Power).as_str(), "110");
     // the first step lasts 20 s; then 200-220 W

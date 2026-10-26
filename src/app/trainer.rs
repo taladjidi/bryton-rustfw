@@ -437,12 +437,17 @@ impl App {
         l
     }
 
+    /// The trainer is heard and holds the watts (ERG).
+    pub(crate) fn erg_on(&self) -> bool {
+        self.trainer_heard() && self.trainer.mode(&self.trainer_drive()) == Mode::Erg
+    }
+
     /// [`Field::ErgTarget`]'s text: the watts the trainer is told, the rider's adjust as a small tail ("225|+15");
     /// "--" outside ERG or without a trainer.
     pub(crate) fn erg_field(&self) -> Line<8> {
         let mut l = Line::new();
         let d = self.trainer_drive();
-        if !self.trainer_heard() || self.trainer.mode(&d) != Mode::Erg {
+        if !self.erg_on() {
             l.push_str("--");
             return l;
         }

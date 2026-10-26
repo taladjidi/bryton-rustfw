@@ -83,7 +83,8 @@ impl App {
         self.player.as_ref().is_some_and(|p| p.step(self.plan.steps()).is_some())
     }
 
-    /// Starts the workout opened from step `at`, and the ride if none runs; the first ride page that holds a workout field, else page 1.
+    /// Starts the workout opened from step `at`, and the ride if none runs; the workout page when a trainer is heard
+    /// (the bike is on it), else the first ride page that holds a workout field, else page 1.
     pub(crate) fn start_workout(&mut self, at: usize) {
         self.ftms_retry(); // a Bluetooth trainer given up is tried again
         if self.ride.state() == ride::State::Idle {
@@ -94,9 +95,13 @@ impl App {
         self.player = Some(p);
         self.workout_event(ev);
         // the first page that shows the workout (the default page 1 has no field for it), else page 1
-        let page = (0..self.page_count)
-            .find(|&n| self.pages.get(n).is_some_and(|p| p.fields.iter().take(p.cells()).any(|f| f.is_workout())))
-            .unwrap_or(0);
+        let page = if self.trainer_heard() {
+            WORKOUT
+        } else {
+            (0..self.page_count)
+                .find(|&n| self.pages.get(n).is_some_and(|p| p.fields.iter().take(p.cells()).any(|f| f.is_workout())))
+                .unwrap_or(0)
+        };
         (self.depth, self.screen) = (0, Screen::Ride(page));
     }
 

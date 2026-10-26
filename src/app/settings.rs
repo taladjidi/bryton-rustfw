@@ -81,6 +81,10 @@ pub const OVERVIEW: usize = PAGES;
 /// after the ride pages in their round while a course is followed.
 pub const COURSE: usize = PAGES + 1;
 
+/// [`Screen::Ride`]'s number for the workout page (fixed like the course page), first in the round while a workout is
+/// loaded.
+pub const WORKOUT: usize = PAGES + 2;
+
 // The RTC backup registers (32 words, kept in standby and through a reset; BOARD.md 8 has stock's side), all named
 // here, each word behind a tag so an empty or foreign one reads as unset:
 //
@@ -542,6 +546,15 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; REG_PAGES + 1] = {
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
     PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, Dist, Timer, AvgSpeed] }
+};
+
+/// The workout page, first in the round while a workout runs ([`WORKOUT`]): the reading the step targets in its gauge
+/// (digits white, the marker says above / in / below), the whole workout's graph with the rider's place, the step's
+/// time left and what the trainer is told in ERG (the adjust small), the next step with its length, and the cadence
+/// (its edge bar red under 60 rpm in ERG: the resistance climbs when the rider slows). Not configurable.
+pub(crate) const WORKOUT_PAGE: PageCfg = {
+    use Field::*;
+    PageCfg { layout: 12, fields: [WktPower, WorkoutGraph, StepTime, ErgTarget, NextStep, Cadence] }
 };
 
 /// The backup registers of the GNSS aiding (the RTC's offset from UTC, the last position).

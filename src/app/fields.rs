@@ -3,6 +3,9 @@
 
 use crate::*;
 
+/// Cadence under this, rpm, in ERG turns the cadence box's edge bar red.
+pub(crate) const ERG_LOW_RPM: u16 = 60;
+
 /// `v / 10^shift` with `decimals` decimals (truncated): `push_fixed(l, 51234561, 7, 5)` gives "5.12345".
 pub(crate) fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
     if v < 0 {
@@ -334,6 +337,15 @@ impl App {
                 self.ride.max_hr().map_or(ui::BLACK, |v| ride::hr_color(ride::hr_zone(v, self.settings.max_hr)))
             }
             Field::Wbal => p.wbal_j().map_or(ui::BLACK, |j| power::wbal_color(j, self.settings.wprime_j)),
+            // in ERG the trainer sets the watts: what the rider controls is cadence, and under 60 rpm the resistance
+            // climbs (an alarm, so red)
+            Field::Cadence
+                if self.ride.state() != ride::State::Idle
+                    && self.erg_on()
+                    && self.live.get(Metric::Cadence).is_some_and(|c| c < ERG_LOW_RPM) =>
+            {
+                ui::RED
+            }
             Field::StepTarget => self.target_bar(),
             Field::Climb => self.course_bar(f),
             _ => ui::BLACK,

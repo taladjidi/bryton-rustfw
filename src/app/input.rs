@@ -148,17 +148,25 @@ pub enum Screen {
     Notif(usize, usize),
 }
 
-/// Places in the round of the ride pages: the pages, then the course page.
-const ROUND: usize = PAGES + 1;
+/// Places in the round of the ride pages: the workout page, the pages, then the course page.
+const ROUND: usize = PAGES + 2;
 
 /// Ride page `n`'s place in the round.
 fn place(n: usize) -> usize {
-    if n == COURSE { PAGES } else { n }
+    match n {
+        WORKOUT => 0,
+        COURSE => PAGES + 1,
+        n => n + 1,
+    }
 }
 
 /// The ride page at place `k` in the round.
 fn page_at(k: usize) -> usize {
-    if k == PAGES { COURSE } else { k }
+    match k {
+        0 => WORKOUT,
+        k if k > PAGES => COURSE,
+        k => k - 1,
+    }
 }
 
 /// During a ride, holding Back a second time within this long switches off (the first hold only warns).
@@ -169,7 +177,7 @@ pub(crate) const PAST_DELETE: (Menu, usize) = (Menu::History, usize::MAX);
 
 impl App {
     /// The first ride page that is on from place `from` in the round (taken round), going forward by `step` (1, or
-    /// [`ROUND`] - 1 for backward): the ride pages, then the course page while a course is followed; page 1 is never
+    /// [`ROUND`] - 1 for backward): the workout page while one runs, the ride pages, then the course page while a course is followed; page 1 is never
     /// off.
     pub(crate) fn ride_page(&self, from: usize, step: usize) -> Screen {
         let n = (0..ROUND).map(|k| page_at((from + k * step) % ROUND)).find(|&n| self.page_on(n)).unwrap_or(0);
@@ -196,13 +204,14 @@ impl App {
         }
     }
 
-    /// Ride page `n` is in the round: a page not off, the course page while a course is followed.
+    /// Ride page `n` is in the round: a page not off, the course page while a course is followed, the workout page
+    /// while a workout is loaded.
     pub(crate) fn page_on(&self, n: usize) -> bool {
         // a course followed, whether or not the map can draw it yet (no fix, a ride started without one: review)
-        if n == COURSE {
-            self.courses.as_deref().is_some_and(|c| c.on.is_some())
-        } else {
-            n < self.page_count && !self.blank_map(n)
+        match n {
+            COURSE => self.courses.as_deref().is_some_and(|c| c.on.is_some()),
+            WORKOUT => self.player.is_some(),
+            n => n < self.page_count && !self.blank_map(n),
         }
     }
 
