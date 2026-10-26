@@ -223,7 +223,7 @@ impl App {
             Menu::Notifs if self.phone.inbox.is_empty() => (i == 0).then_some(Row::Empty("NO NOTIFICATIONS")),
             Menu::Notifs => self.phone.inbox.get(i).map(|_| Row::Notif(i)),
             Menu::BtTrainers if self.ftms.n_found == 0 => {
-                (i == 0).then_some(Row::Empty(if self.scanning { "SEARCHING" } else { "NONE FOUND" }))
+                (i == 0).then_some(Row::Empty(if self.radio.scanning { "SEARCHING" } else { "NONE FOUND" }))
             }
             Menu::BtTrainers => (i < self.ftms.n_found).then_some(Row::BtFound(i)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
@@ -340,14 +340,14 @@ impl App {
             Row::Sensor(k) => {
                 let kind = *Kind::ALL.get(k)?;
                 label.push_str(kind.name());
-                match (self.ant, self.sensors.get(k)?) {
+                match (self.ant, self.radio.sensors.get(k)?) {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),
                     (true, Sensor::Off) => value.push_str("OFF"),
                     (true, Sensor::Search) => value.push_str("SEARCH"),
                     (true, Sensor::Paired(id)) => value.push_u32(u32::from(id.device)),
                 }
-                if self.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS) {
+                if self.radio.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS) {
                     color = ui::GREEN;
                 }
             }
@@ -624,9 +624,9 @@ impl App {
             Some(Row::BtTrainer) => self.ftms_search(b),
             Some(Row::BtFound(k)) => self.ftms_pair(b, k),
             Some(Row::Nearby) => {
-                if self.ble.is_some() && !self.scanning {
+                if self.ble.is_some() && !self.radio.scanning {
                     self.ftms_hold(b);
-                    self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
+                    self.radio.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
                 }
                 self.open(Screen::Nearby);
             }
@@ -773,8 +773,8 @@ impl App {
     /// Select on an ANT+ sensor: pair, stop, search again, forget.
     fn activate_sensor(&mut self, b: &mut impl Board, menu: Menu, sel: usize, k: usize) {
         let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };
-        let heard = self.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
-        match self.sensors.get(k).copied() {
+        let heard = self.radio.heard_ms.get(k).is_some_and(|&ms| ms < sensors::STALE_MS);
+        match self.radio.sensors.get(k).copied() {
             Some(Sensor::Off) => self.set_sensor(b, kind, Sensor::Search),
             Some(Sensor::Search) => self.set_sensor(b, kind, Sensor::Off),
             // paired but silent: Select searches for it again now (not after its rest); Select once more

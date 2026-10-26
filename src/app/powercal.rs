@@ -17,8 +17,8 @@ impl App {
     /// The power meter is paired and heard (the CALIBRATE POWER row is offered).
     pub(crate) fn power_heard(&self) -> bool {
         let i = Kind::Power as usize;
-        matches!(self.sensors.get(i), Some(Sensor::Paired(_)))
-            && self.heard_ms.get(i).is_some_and(|&ms| ms < sensors::STALE_MS)
+        matches!(self.radio.sensors.get(i), Some(Sensor::Paired(_)))
+            && self.radio.heard_ms.get(i).is_some_and(|&ms| ms < sensors::STALE_MS)
     }
 
     /// Opens the calibration screen, unless a ride runs.

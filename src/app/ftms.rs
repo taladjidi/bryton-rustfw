@@ -277,7 +277,7 @@ impl Ftms {
 impl App {
     /// The Bluetooth trainer is the one used: paired, and no ANT+ trainer is (ANT+ first).
     pub(crate) fn ftms_on(&self) -> bool {
-        self.sensors_store.bt.is_some() && self.sensors.get(Kind::Trainer as usize) == Some(&Sensor::Off)
+        self.sensors_store.bt.is_some() && self.radio.sensors.get(Kind::Trainer as usize) == Some(&Sensor::Off)
     }
 
     /// A BLE event that belongs to the trainer's link: on its connection, a connection made as a central, or the
@@ -293,7 +293,7 @@ impl App {
         let fails = self.ftms.fails;
         self.ftms.unlink();
         (self.ftms.wait_ms, self.ftms.fails, self.ftms.vs) = (0, fails, 0); // the chip forgets the UUID base too
-        self.heard_ms[Kind::Trainer as usize] = u32::MAX;
+        self.radio.heard_ms[Kind::Trainer as usize] = u32::MAX;
     }
 
     /// After a resync of the Nordic link, whose dropped bytes may have held the trainer's DISCONNECTED: a link the
@@ -329,8 +329,8 @@ impl App {
         (self.ftms.searching, self.ftms.n_found) = (true, 0);
         self.ftms_retry();
         self.ftms_hold(b);
-        if !self.scanning {
-            self.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
+        if !self.radio.scanning {
+            self.radio.scanning = nrf::scan_start(b, &mut self.rx, SCAN_S).is_ok();
         }
         self.open(Screen::Menu(Menu::BtTrainers, 0));
     }
@@ -340,7 +340,7 @@ impl App {
     pub(crate) fn ftms_pair(&mut self, b: &mut impl Board, i: usize) {
         let Some(peer) = self.ftms.found.get(i).filter(|_| i < self.ftms.n_found).map(|d| d.peer) else { return };
         let fec = self.ftms.found.get(i).is_some_and(|d| d.proto == Proto::Fec);
-        if self.sensors[Kind::Trainer as usize] != Sensor::Off {
+        if self.radio.sensors[Kind::Trainer as usize] != Sensor::Off {
             self.set_sensor(b, Kind::Trainer, Sensor::Off);
         }
         let changed = self.sensors_store.bt != Some(peer) || self.sensors_store.bt_fec != fec;
@@ -349,9 +349,9 @@ impl App {
         }
         self.sensors_store.dirty |= changed;
         (self.sensors_store.bt, self.sensors_store.bt_fec) = (Some(peer), fec);
-        if self.scanning {
+        if self.radio.scanning {
             let _ = ble::scan_stop(b, &mut self.rx);
-            self.scanning = false;
+            self.radio.scanning = false;
         }
         self.ftms.searching = false;
         self.ftms_retry();
@@ -365,7 +365,7 @@ impl App {
         self.sensors_store.dirty |= self.sensors_store.bt.is_some();
         self.sensors_store.bt = None;
         self.ftms_drop(b);
-        self.heard_ms[Kind::Trainer as usize] = u32::MAX;
+        self.radio.heard_ms[Kind::Trainer as usize] = u32::MAX;
     }
 
     /// Ends the link (or the connection being made) from this side: forgotten at once, its last events going to
@@ -386,7 +386,7 @@ impl App {
         self.ftms.fails = self.ftms.fails.saturating_add(u8::from(!had)); // a connection not made
         self.ftms.unlink();
         if had && self.ftms_on() {
-            self.heard_ms[Kind::Trainer as usize] = u32::MAX; // its readings stop now, not 5 s later
+            self.radio.heard_ms[Kind::Trainer as usize] = u32::MAX; // its readings stop now, not 5 s later
         }
     }
 
@@ -439,7 +439,7 @@ impl App {
             return;
         }
         f.wait_ms = f.wait_ms.saturating_sub(dt);
-        if !want || self.scanning || f.wait_ms > 0 || (f.fails >= MAX_FAILS && !f.kept) {
+        if !want || self.radio.scanning || f.wait_ms > 0 || (f.fails >= MAX_FAILS && !f.kept) {
             return; // a scan running (a search, BLE NEARBY) would hold the connection up
         }
         let peer = self.sensors_store.bt.unwrap_or_default();
@@ -730,12 +730,12 @@ impl App {
             }
         } else if handle == 0 {
         } else if handle == f.handle(BIKE_DATA) {
-            if self.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
+            if self.radio.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
                 self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
             }
             ftms::bike_data(data, &mut self.trainer.reading);
             self.trainer.reading.modes = self.ftms.modes;
-            self.heard_ms[Kind::Trainer as usize] = 0;
+            self.radio.heard_ms[Kind::Trainer as usize] = 0;
             self.ftms.quiet_ms = 0;
             self.fold_trainer();
         } else if handle == f.handle(STATUS) {
@@ -780,12 +780,12 @@ impl App {
     /// another shape or with a wrong checksum is dropped).
     fn fec_message(&mut self, data: &[u8]) {
         let Some((page, sum)) = fecble::parse(data) else { return };
-        if self.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
+        if self.radio.heard_ms[Kind::Trainer as usize] >= sensors::STALE_MS {
             self.trainer.lost(); // back after a drop-out: what was sent is not known to stand
         }
         (self.ftms.fec_sum, self.ftms.quiet_ms) = (sum, 0);
         fec::decode(page, &mut self.trainer.reading);
-        self.heard_ms[Kind::Trainer as usize] = 0;
+        self.radio.heard_ms[Kind::Trainer as usize] = 0;
         self.fold_trainer();
     }
 }

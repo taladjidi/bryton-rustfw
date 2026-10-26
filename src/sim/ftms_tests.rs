@@ -300,7 +300,7 @@ fn one_trainer_at_a_time_and_kept_across_restarts() {
     assert_eq!(sim.nordic.connects, connects);
     pair(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.sensors[Kind::Trainer as usize], Sensor::Off, "the ANT+ one forgotten");
+    assert_eq!(app.radio.sensors[Kind::Trainer as usize], Sensor::Off, "the ANT+ one forgotten");
     assert!(trainer(&sim).control);
     assert_eq!(super::trainer_tests::sensors_file(&sim), Some(None));
     // a restart on the same card
@@ -478,7 +478,7 @@ fn a_nearby_scan_gives_up_the_connection_being_made() {
     app.activate(&mut sim, Menu::System, 3); // BLE NEARBY
     let ops: Vec<u8> = sim.nordic.got[mark..].iter().map(|p| p[1]).collect();
     assert_eq!(ops.first(), Some(&0x8d), "connect cancel first: {ops:x?}");
-    assert!(ops.contains(&0x8a) && app.scanning, "the scan runs: {ops:x?}");
+    assert!(ops.contains(&0x8a) && app.radio.scanning, "the scan runs: {ops:x?}");
     sim.nordic.ftms.as_mut().unwrap().connectable = true;
     run(&mut sim, &mut app, 80_000);
     assert!(trainer(&sim).control, "the trainer's attempts went on after the scan");

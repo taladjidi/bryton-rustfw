@@ -63,7 +63,8 @@ pub(crate) struct SensorStore {
 impl App {
     /// A trainer is paired or searched for, over ANT+ or Bluetooth (its menu row and screen are offered).
     pub(crate) fn trainer_on(&self) -> bool {
-        self.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off) || self.sensors_store.bt.is_some()
+        self.radio.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off)
+            || self.sensors_store.bt.is_some()
     }
 
     /// A trainer is paired and a TRAINER MODE or TARGET field of the page shown is at (`x`, `y`).
@@ -79,7 +80,7 @@ impl App {
 
     /// The trainer sent something lately.
     pub(crate) fn trainer_heard(&self) -> bool {
-        self.heard_ms.get(Kind::Trainer as usize).is_some_and(|&ms| ms < sensors::STALE_MS)
+        self.radio.heard_ms.get(Kind::Trainer as usize).is_some_and(|&ms| ms < sensors::STALE_MS)
     }
 
     /// Keeps `kind`'s paired sensor: in its backup register, the trainer's in the sensors file (written between
@@ -124,7 +125,7 @@ impl App {
     /// The trainer's readings into the live values, where nothing better is heard: power from a power meter, cadence
     /// from the meter or a cadence sensor, speed from a speed sensor, heart rate from a strap.
     pub(crate) fn fold_trainer(&mut self) {
-        let heard = |k: Kind| self.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS);
+        let heard = |k: Kind| self.radio.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS);
         let r = self.trainer.reading;
         if let (Some(p), false) = (r.power, heard(Kind::Power)) {
             self.live.set(Metric::Power, p);
@@ -294,7 +295,7 @@ impl App {
         if !self.sensors_store.applied && self.ant {
             self.sensors_store.applied = true;
             if let Some(id) = self.sensors_store.trainer
-                && self.sensors[Kind::Trainer as usize] == Sensor::Off
+                && self.radio.sensors[Kind::Trainer as usize] == Sensor::Off
             {
                 self.set_sensor(b, Kind::Trainer, Sensor::Paired(id));
             }

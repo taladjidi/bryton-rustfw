@@ -67,7 +67,7 @@ fn a_hung_chip_is_reset() {
     assert_eq!(said(&app), 1);
     run(&mut sim, &mut app, 10_000);
     assert_eq!(app.live.get(Metric::Hr), Some(72), "the strap is back");
-    assert_eq!(app.sensors[Kind::Hr as usize], Sensor::Paired(STRAP));
+    assert_eq!(app.radio.sensors[Kind::Hr as usize], Sensor::Paired(STRAP));
     ride_ok(&app, t0, &sim);
 }
 
@@ -148,9 +148,9 @@ fn a_damaged_stream_is_recovered_from() {
             app.live.get(Metric::Hr),
             Some(72),
             "seed {seed}: the strap is heard again; sensor {:?} resting {} heard {} ant {} ble {} resets {} resyncs {} ch {:?}",
-            app.sensors[i],
-            app.resting_ms[i],
-            app.heard_ms[i],
+            app.radio.sensors[i],
+            app.radio.resting_ms[i],
+            app.radio.heard_ms[i],
             app.ant,
             app.ble.is_some(),
             w.resets,

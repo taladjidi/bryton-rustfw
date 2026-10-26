@@ -157,3 +157,47 @@ impl Gps {
         self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 })
     }
 }
+
+/// The ANT+ side of the radio (app/radio.rs): the paired sensors, how long since each was heard, the search and the
+/// shifting system's counts.
+pub(crate) struct Radio {
+    /// The sensors, by kind: off or paired with a device.
+    pub(crate) sensors: [Sensor; Kind::ALL.len()],
+    /// Since each sensor's last broadcast.
+    pub(crate) heard_ms: [u32; Kind::ALL.len()],
+    /// Since each sensor's channel was closed by its search time-out (`u32::MAX`: not resting).
+    pub(crate) resting_ms: [u32; Kind::ALL.len()],
+    /// Channels that sent data while searching: ask the chip which sensor it found.
+    pub(crate) ask: u8,
+    /// The sensors heard in the NEARBY search.
+    pub(crate) nearby: nrf::Nearby,
+    /// The NEARBY search is running.
+    pub(crate) scanning: bool,
+    /// The gear last heard (front, rear: [`Metric::Gear`]), to count the shifts and record them.
+    pub(crate) gear: Option<u16>,
+    /// Gear changes in this ride.
+    pub(crate) shifts: u16,
+}
+
+impl Radio {
+    /// None heard, with the sensors that were paired at start-up.
+    pub(crate) fn new(sensors: [Sensor; Kind::ALL.len()]) -> Self {
+        Radio {
+            sensors,
+            heard_ms: [u32::MAX; Kind::ALL.len()],
+            resting_ms: [u32::MAX; Kind::ALL.len()],
+            ask: 0,
+            nearby: nrf::Nearby::new(),
+            scanning: false,
+            gear: None,
+            shifts: 0,
+        }
+    }
+
+    /// A pass of `pass_ms` has gone by: every sensor's silence grows.
+    pub(crate) fn tick(&mut self, pass_ms: u32) {
+        for h in &mut self.heard_ms {
+            *h = h.saturating_add(pass_ms);
+        }
+    }
+}

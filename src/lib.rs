@@ -164,30 +164,19 @@ pub struct App {
     watch: Watch,
     ant_key: Option<[u8; 8]>,
     di2_key: Option<[u8; 8]>,
-    nearby: nrf::Nearby,
-    scanning: bool,
+    /// The ANT+ sensors and the search.
+    radio: Radio,
     redraw_ms: u32,
     list_dirty: bool,
     /// ANT started (needs BLE and a built-in ANT+ key).
     ant: bool,
     /// Shimano's network up (its key built in): the Di2 channel can open.
     di2: bool,
-    sensors: [Sensor; Kind::ALL.len()],
-    /// Since each sensor's last broadcast.
-    heard_ms: [u32; Kind::ALL.len()],
-    /// Since each sensor's channel was closed by its search time-out (`u32::MAX`: not resting).
-    resting_ms: [u32; Kind::ALL.len()],
-    /// The gear last heard (front, rear: [`Metric::Gear`]), to count the shifts and record them.
-    gear: Option<u16>,
-    /// Gear changes in this ride.
-    shifts: u16,
     /// This ride's profile (app/profile.rs), whether the rider set it by hand (the trainer's silence no longer
     /// changes it), and the seconds the trainer has been silent while it is indoor and automatic.
     profile: ride::Profile,
     profile_by_hand: bool,
     trainer_quiet_s: u16,
-    /// Channels that sent data while searching: ask the chip which sensor it found.
-    ask: u8,
     /// The home trainer (trainer.rs, app/trainer.rs), the trainer screen as drawn, and whether it was heard last pass.
     trainer: trainer::Trainer,
     trainer_shown: ui::trainer::Shown,
@@ -442,21 +431,14 @@ impl App {
             watch: Watch::new(ble.is_some() && (ant || ant_key.is_none()), refusal),
             ant_key,
             di2_key,
-            nearby: nrf::Nearby::new(),
-            scanning: false,
+            radio: Radio::new(sensors),
             redraw_ms: 0,
             list_dirty: false,
             ant,
             di2,
-            sensors,
-            heard_ms: [u32::MAX; Kind::ALL.len()],
-            resting_ms: [u32::MAX; Kind::ALL.len()],
-            gear: None,
-            shifts: 0,
             profile: ride::Profile::Road,
             profile_by_hand: false,
             trainer_quiet_s: 0,
-            ask: 0,
             live: Live::default(),
             zones: [ride::ZoneHold::default(); 5],
             decoders: Decoders::default(),
@@ -683,10 +665,10 @@ impl App {
         self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
         t = self.timed(b, Sec::Strip, t);
         for kind in Kind::ALL {
-            if self.ask & 1 << kind.channel() != 0
+            if self.radio.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
             {
-                self.sensors[kind as usize] = Sensor::Paired(id);
+                self.radio.sensors[kind as usize] = Sensor::Paired(id);
                 self.keep_pairing(b, kind, id);
                 let mut l = Line::<20>::new();
                 l.push_str(kind.name());
@@ -694,11 +676,9 @@ impl App {
                 self.notice(l.as_str());
             }
         }
-        self.ask = 0;
+        self.radio.ask = 0;
         self.live.tick(pass_ms);
-        for h in &mut self.heard_ms {
-            *h = h.saturating_add(pass_ms);
-        }
+        self.radio.tick(pass_ms);
         self.reopen_rested(b, pass_ms);
         t = self.timed(b, Sec::Radio, t);
         if !self.emmc.lent() {
@@ -754,7 +734,7 @@ impl App {
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, self.area(), self.settings.smooth), &self.nearby);
+                ui::draw_list(&mut Panel(b, self.area(), self.settings.smooth), &self.radio.nearby);
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }

@@ -210,7 +210,7 @@ impl App {
                 }
                 return l;
             }
-            Field::Shifts => (Some(u32::from(self.shifts)), false),
+            Field::Shifts => (Some(u32::from(self.radio.shifts)), false),
             Field::ShiftBattery => {
                 match self.live.get(Metric::ShiftBattery) {
                     Some(s) if s >= sensors::SHIFT_STATUS => {

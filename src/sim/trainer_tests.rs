@@ -398,8 +398,8 @@ fn the_trainer_is_kept_beside_a_di2_across_restarts() {
     sim.backup[14] = Kind::Di2.to_word(di2);
     let (mut sim2, mut app2) = restart(&mut sim);
     run(&mut sim2, &mut app2, 6000);
-    assert_eq!(app2.sensors[Kind::Trainer as usize], Sensor::Paired(ID), "the trainer is back");
-    assert_eq!(app2.sensors[Kind::Di2 as usize], Sensor::Paired(di2), "and the Di2");
+    assert_eq!(app2.radio.sensors[Kind::Trainer as usize], Sensor::Paired(ID), "the trainer is back");
+    assert_eq!(app2.radio.sensors[Kind::Di2 as usize], Sensor::Paired(di2), "and the Di2");
     assert_eq!(sim2.backup[14], Kind::Di2.to_word(di2));
     // forgetting it is kept too
     app2.set_sensor(&mut sim2, Kind::Trainer, Sensor::Off);
@@ -407,7 +407,7 @@ fn the_trainer_is_kept_beside_a_di2_across_restarts() {
     assert_eq!(sensors_file(&sim2), Some(None));
     let (mut sim3, mut app3) = restart(&mut sim2);
     run(&mut sim3, &mut app3, 6000);
-    assert_eq!(app3.sensors[Kind::Trainer as usize], Sensor::Off);
+    assert_eq!(app3.radio.sensors[Kind::Trainer as usize], Sensor::Off);
     assert_eq!(sim3.backup[14], Kind::Di2.to_word(di2));
 }
 
@@ -451,7 +451,7 @@ fn a_cut_at_every_sector_of_the_pairing_reads_old_or_new() {
             run(&mut sim, &mut app, 500);
             let (mut sim2, mut app2) = restart(&mut sim);
             run(&mut sim2, &mut app2, 6000);
-            let got = app2.sensors[Kind::Trainer as usize];
+            let got = app2.radio.sensors[Kind::Trainer as usize];
             assert!(got == old || got == new, "second {second}, cut {cut}: {got:?}");
             // the next write (the FAT copies compared first when the file was not whole) leaves a clean volume
             app2.set_sensor(&mut sim2, Kind::Trainer, Sensor::Paired(SensorId { device: 1, trans: 1 }));

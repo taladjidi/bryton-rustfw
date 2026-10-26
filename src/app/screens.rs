@@ -196,9 +196,9 @@ impl App {
             Screen::Nearby => {
                 ui::draw_back(c); // the title itself is drawn again as the count changes, the "<" once
                 if self.ble.is_some() {
-                    ui::draw_nearby(c, self.nearby.count(), self.scanning);
+                    ui::draw_nearby(c, self.radio.nearby.count(), self.radio.scanning);
                 }
-                ui::draw_list(c, &self.nearby);
+                ui::draw_list(c, &self.radio.nearby);
             }
         }
         if self.notes.ms.is_some() && self.notes.drawn {

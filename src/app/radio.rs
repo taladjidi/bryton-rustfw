@@ -27,17 +27,17 @@ impl App {
     pub(crate) fn reopen_rested(&mut self, b: &mut impl Board, pass_ms: u32) {
         for kind in Kind::ALL {
             let i = kind as usize;
-            if self.resting_ms[i] == u32::MAX {
+            if self.radio.resting_ms[i] == u32::MAX {
                 continue;
             }
-            self.resting_ms[i] = self.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
-            if self.resting_ms[i] >= SEARCH_REST_MS {
-                let id = match self.sensors[i] {
+            self.radio.resting_ms[i] = self.radio.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
+            if self.radio.resting_ms[i] >= SEARCH_REST_MS {
+                let id = match self.radio.sensors[i] {
                     Sensor::Paired(id) => Some(id),
                     _ => None, // still pairing: search for any
                 };
                 let ok = nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok();
-                self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
+                self.radio.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
             }
         }
     }
@@ -55,18 +55,19 @@ impl App {
             Kind::Di2 => Some(Kind::Shifting),
             _ => None,
         };
-        if let Some(other) = other.filter(|&o| want != Sensor::Off && self.sensors[o as usize] != Sensor::Off) {
+        if let Some(other) = other.filter(|&o| want != Sensor::Off && self.radio.sensors[o as usize] != Sensor::Off) {
             self.set_sensor(b, other, Sensor::Off);
         }
         let i = kind as usize;
         self.watch.owed[i] = Sensor::Off; // what the rider asks for now is what is wanted
-        let resting = self.resting_ms[i] != u32::MAX;
-        if self.sensors[i] != Sensor::Off && !resting && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err() {
+        let resting = self.radio.resting_ms[i] != u32::MAX;
+        if self.radio.sensors[i] != Sensor::Off && !resting && nrf::ant_close(b, &mut self.rx, kind.channel()).is_err()
+        {
             return; // still open: leave it as it was
         }
-        self.resting_ms[i] = u32::MAX;
-        self.sensors[i] = Sensor::Off;
-        self.heard_ms[i] = u32::MAX;
+        self.radio.resting_ms[i] = u32::MAX;
+        self.radio.sensors[i] = Sensor::Off;
+        self.radio.heard_ms[i] = u32::MAX;
         let id = match want {
             Sensor::Off => None,
             Sensor::Search => None,
@@ -83,7 +84,7 @@ impl App {
         if want != Sensor::Off
             && nrf::ant_open(b, &mut self.rx, kind.channel(), kind.device_type(), kind.period(), id).is_ok()
         {
-            self.sensors[i] = want;
+            self.radio.sensors[i] = want;
         }
     }
 
@@ -98,13 +99,13 @@ impl App {
                 let Some(p) = self.rx.push(byte) else { continue };
                 let mut phone = false;
                 if let Some(r) = nrf::adv_report(p) {
-                    title |= self.nearby.add(&r);
+                    title |= self.radio.nearby.add(&r);
                     self.list_dirty = true;
                     self.list_dirty |= self.ftms.found(&r);
                 } else if let Some((ch, data)) = nrf::ant_broadcast(p)
                     && let Some(kind) = Kind::from_channel(ch)
                 {
-                    if self.heard_ms[kind as usize] >= sensors::STALE_MS {
+                    if self.radio.heard_ms[kind as usize] >= sensors::STALE_MS {
                         // back after a drop-out: its counters may have moved on by any amount; the beats before it
                         // are not part of this series (and the beat time may have wrapped, a false interval)
                         self.decoders.restart(kind);
@@ -130,12 +131,12 @@ impl App {
                     if matches!(kind, Kind::Shifting | Kind::Di2) {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)
                     }
-                    self.heard_ms[kind as usize] = 0;
-                    if self.sensors[kind as usize] == Sensor::Search {
-                        self.ask |= 1 << ch;
+                    self.radio.heard_ms[kind as usize] = 0;
+                    if self.radio.sensors[kind as usize] == Sensor::Search {
+                        self.radio.ask |= 1 << ch;
                     }
                 } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
-                    self.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
+                    self.radio.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
                     self.powercal.unsent(); // a calibration request the meter did not take: sent again
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
@@ -143,7 +144,7 @@ impl App {
                 } else if nrf::ant_tx_completed(p) == Some(Kind::Trainer.channel()) {
                     self.trainer.acked(); // a release taken is not sent again
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {
-                    self.scanning = false; // the scan's (source 1)
+                    self.radio.scanning = false; // the scan's (source 1)
                     title = true;
                 } else {
                     phone = nrf::event_id(p).is_some();
@@ -164,7 +165,11 @@ impl App {
             self.phone_event(b, ev.get(..n).unwrap_or(&[]));
         }
         if title && self.screen == Screen::Nearby {
-            ui::draw_nearby(&mut Panel(b, self.area(), self.settings.smooth), self.nearby.count(), self.scanning);
+            ui::draw_nearby(
+                &mut Panel(b, self.area(), self.settings.smooth),
+                self.radio.nearby.count(),
+                self.radio.scanning,
+            );
         }
         // a shifter's presses, once the stream is read (a media key sends a command): one per side
         for p in core::mem::take(&mut self.decoders.press).into_iter().flatten() {
@@ -176,11 +181,11 @@ impl App {
     /// front or the rear one; recorder.rs takes it into RAM, never waiting on the card).
     fn shifted(&mut self) {
         let Some(now) = self.live.get(Metric::Gear) else { return };
-        let Some(was) = self.gear.replace(now).filter(|&g| g != now) else { return };
+        let Some(was) = self.radio.gear.replace(now).filter(|&g| g != now) else { return };
         if self.ride.state() != ride::State::Running {
             return;
         }
-        self.shifts = self.shifts.saturating_add(1);
+        self.radio.shifts = self.radio.shifts.saturating_add(1);
         let (_, t) = self.rec_time();
         let front = now >> 8 != was >> 8;
         let [rear_n, front_n] = now.to_le_bytes();

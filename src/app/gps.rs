@@ -75,7 +75,7 @@ impl App {
                     // off) must not leave the ride without one: then the GPS's
                     let sensor = [Kind::Speed, Kind::SpeedCadence, Kind::Trainer]
                         .iter()
-                        .any(|&k| self.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS));
+                        .any(|&k| self.radio.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS));
                     if pvt.good() {
                         self.track.add(pvt.lat, pvt.lon, pvt.heading);
                     }

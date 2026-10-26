@@ -1366,13 +1366,13 @@ fn menu_lists_the_devices_nearby() {
     assert_eq!(app.screen(), Screen::Nearby);
     assert_eq!(sim.nordic.got.last().unwrap()[..2], [0, 0x8a], "the scan starts with the list");
     run(&mut sim, &mut app, 1500);
-    let names: Vec<_> = app.nearby.strongest().map(|d| (d.rssi, std::string::String::from(d.name()))).collect();
+    let names: Vec<_> = app.radio.nearby.strongest().map(|d| (d.rssi, std::string::String::from(d.name()))).collect();
     assert_eq!(names, [(-42, "Bike".into()), (-70, "".into())], "last RSSI kept, the name from the first report");
-    assert!(app.scanning);
+    assert!(app.radio.scanning);
     assert_consistent(&sim, &app);
     sim.save("nearby");
     run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
-    assert!(!app.scanning);
+    assert!(!app.radio.scanning);
     assert_consistent(&sim, &app);
     // the "<" of the title bar goes back, as on the menus
     let (x, y) = (ui::BACK_TAP.0 as u16 + 4, ui::BACK_TAP.1 as u16 + 4);

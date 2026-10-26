@@ -172,17 +172,17 @@ impl App {
     /// phone link set up again. What the sensors showed goes stale by itself ("--") and comes back with their data.
     #[inline(never)] // its buffers in its own frame
     pub(crate) fn radio_restart(&mut self, b: &mut impl Board) {
-        let mut open = self.sensors;
+        let mut open = self.radio.sensors;
         for (s, owed) in open.iter_mut().zip(self.watch.owed) {
             if *s == Sensor::Off {
                 *s = owed;
             }
         }
         self.watch.owed = open;
-        (self.scanning, self.ask) = (false, 0);
-        self.resting_ms = [u32::MAX; Kind::ALL.len()];
-        self.heard_ms = [u32::MAX; Kind::ALL.len()]; // a sensor back counts as after a drop-out (decoders restart)
-        self.sensors = [Sensor::Off; Kind::ALL.len()];
+        (self.radio.scanning, self.radio.ask) = (false, 0);
+        self.radio.resting_ms = [u32::MAX; Kind::ALL.len()];
+        self.radio.heard_ms = [u32::MAX; Kind::ALL.len()]; // a sensor back counts as after a drop-out (decoders restart)
+        self.radio.sensors = [Sensor::Off; Kind::ALL.len()];
         let pairing = self.phone.pairing();
         self.phone_down(b);
         self.ftms_down(); // connected again once the chip is back (app/ftms.rs)
@@ -219,7 +219,7 @@ impl App {
                     Err(_) => continue, // owed: asked for again
                 };
             if opened {
-                self.sensors[kind as usize] = want;
+                self.radio.sensors[kind as usize] = want;
             }
             // opened, refused or impossible (no Shimano key): not owed. Only a link that does not answer is.
             if self.ant || self.watch.refused {
