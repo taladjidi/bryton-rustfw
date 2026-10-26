@@ -122,7 +122,7 @@ def check(path, finished, full=False):
     assert names[0] == "file_id" and names[1] == "event", names[:3]
     fid = values(msgs[0])
     print("  file_id", fid)
-    assert fid["type"] == "activity" and fid["manufacturer"] == "development"
+    assert fid["type"] == "activity" and fid["manufacturer"] == "bryton" and fid["product"] == 2404, fid
     for t in (0, 100, 205):
         r = records[t]
         print(f"  record {t}", r)

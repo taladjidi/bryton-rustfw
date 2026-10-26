@@ -151,6 +151,13 @@ Activities Intervals.icu imported from Strava are "not available via the API" (S
 that read Intervals.icu's API (Domestique, for one) only see rides uploaded as files, which is what `sync.py` does.
 `sync.py` also sends a User-Agent: Cloudflare, in front of Intervals.icu, refused Python's default (error 1010).
 
+## The device the files name
+
+Both copies carry FIT manufacturer 267 (Bryton) and product 2404 (the Rider S510), as stock's own ride files do, so
+Intervals.icu, Strava and Domestique show the rides as from a Bryton Rider S510 ("BRYTON 2404" on Intervals.icu) and
+treat its altitude as barometric. Rides recorded before 2026-10-26 carry manufacturer 255 (development) and show as
+"DEVELOPMENT".
+
 ## Not yet seen
 
 - Not yet run against the real Intervals.icu and Strava, nor with the unit's drive (docs/status.md).

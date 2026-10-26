@@ -224,6 +224,10 @@ const DEV_MESSAGES: [u8; 108] = {
 /// The developer fields of a full copy's record: (field_definition_number, size, developer_data_index).
 const DEV_RECORD: [Field; 3] = [(0, 4, 0), (1, 2, 0), (2, 1, 0)];
 
+/// FIT manufacturer and product of the ride files: Bryton (267), the Rider S510 (2404), as stock's own files.
+pub const MANUFACTURER: u32 = 267;
+/// See [`MANUFACTURER`].
+pub const PRODUCT: u32 = 2404;
 const FILE_ID: [Field; 4] = [(0, 1, ENUM), (1, 2, U16), (2, 2, U16), (4, 4, U32)];
 const EVENT: [Field; 3] = [(253, 4, U32), (0, 1, ENUM), (1, 1, ENUM)];
 /// [`EVENT`] with its data field (3, gear_change_data: rear_gear_num in bits 0..7, rear_gear (teeth) 8..15,
@@ -397,8 +401,10 @@ impl Writer {
     /// Like `Writer::begin`, with developer fields when `dev` (the full copy: module doc).
     pub fn begin_with(sink: &mut impl Sink, time: u32, dev: bool) -> Result<Writer, Error> {
         let mut w = Writer { start: time, last: time, lap_start: time, dev, art: dev, ..Writer::default() };
-        // 255: development (not a registered manufacturer: this is not Bryton's firmware)
-        w.message(sink, L_FILE_ID, 0, &FILE_ID, &[4, 255, 0, time])?;
+        // the hardware as it is: manufacturer 267 (bryton, garmin_fit_sdk profile.py), product 2404 (the Rider S510:
+        // what stock R039's ride files carry; Intervals.icu shows them as "BRYTON 2404"). Was 255 (development),
+        // which services showed as "DEVELOPMENT" and do not trust for barometric altitude (owner's ask, 2026-10-26)
+        w.message(sink, L_FILE_ID, 0, &FILE_ID, &[4, MANUFACTURER, PRODUCT, time])?;
         if dev {
             w.put(sink, &DEV_MESSAGES)?;
         }
