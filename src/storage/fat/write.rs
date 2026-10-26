@@ -238,6 +238,7 @@ impl Fat {
     }
 
     /// FSInfo's free count and next free hint, if the sector has its signatures.
+    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
     fn fsinfo_read(&mut self, d: &mut impl Disk) -> Result<Option<(u32, u32, [u8; SECTOR])>, Error> {
         if self.fsinfo == 0 {
             return Ok(None);
@@ -512,6 +513,7 @@ impl Fat {
     }
 
     /// Writes cluster `c` whole: sector 0 is `first`, the others zeros.
+    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
     fn fill_cluster(&mut self, d: &mut impl DiskWrite, c: u32, first: &[u8; SECTOR]) -> Result<(), Error> {
         self.write(d, self.lba(c), first)?;
         let zero = [0u8; 8 * SECTOR]; // 8 sectors a command: 4 commands for the unit's 32-sector clusters

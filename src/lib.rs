@@ -10,6 +10,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![warn(clippy::needless_pass_by_ref_mut)]
 
 mod app;
 pub mod drivers;

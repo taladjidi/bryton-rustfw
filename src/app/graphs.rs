@@ -246,7 +246,7 @@ impl App {
 
     /// A graph in box `bx`, drawn as `old`, after a new bar: each column changes by the difference between its old
     /// bar and its new one (the chart scrolls left by `STEP` bars), all of it if the graph changed metric.
-    pub(crate) fn update_graph(&mut self, b: &mut impl Board, old: GraphShown, bx: (u32, u32, u32, u32)) -> Drawn {
+    pub(crate) fn update_graph(&self, b: &mut impl Board, old: GraphShown, bx: (u32, u32, u32, u32)) -> Drawn {
         // Bars scroll in this many at a time (10 s): nearly every column changes on a scroll, so this sends a fifth
         // of the panel windows of a scroll per bar, and fewer pixels (sim graph_field: 1812 px/s in 33 windows/s,
         // against 1987 in 113). The whole ride grows to the right instead: a new bar changes one column.
@@ -319,7 +319,7 @@ impl App {
 
     /// The profile field drawn as `old`: whole when it shows another part of the course, else only the columns
     /// between the rider's old place and the new one.
-    pub(crate) fn update_profile(&mut self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
+    pub(crate) fn update_profile(&self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let a = ui::plot_area(bx);
         let now = self.profile_now(a.2);
         let mut p = Panel(b, self.area(), self.settings.smooth);
@@ -364,7 +364,7 @@ impl App {
     /// The workout graph drawn as `old`: whole for another workout or other zones, else only the columns between the
     /// rider's old place and the new one (one or two a step of the plan's width: most seconds, none).
     pub(crate) fn update_workout_graph(
-        &mut self,
+        &self,
         b: &mut impl Board,
         old: WorkoutShown,
         bx: (u32, u32, u32, u32),

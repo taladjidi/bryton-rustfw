@@ -421,6 +421,7 @@ impl App {
 
     /// The workout gauge drawn as `old`: whole for another step, window or reading kind; else only the number's
     /// characters that changed (all of it in a new colour) and the marker's old and new columns.
+    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
     pub(crate) fn update_gauge(&mut self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let cols = ui::gauge_cols(bx);
         let now = if old.pace.is_some() { self.pace_now(cols) } else { self.gauge_now(cols) };

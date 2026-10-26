@@ -193,6 +193,7 @@ impl Fat {
         cluster >= 2 && cluster - 2 < self.clusters
     }
 
+    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
     fn read(&mut self, d: &mut impl Disk, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
         let n = (buf.len() / SECTOR) as u32;
         if lba.checked_add(n).is_none_or(|end| end > self.total) {

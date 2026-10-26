@@ -1026,7 +1026,7 @@ impl Maps {
         self.absent(g, x, y)
     }
 
-    fn absent(&mut self, g: &mut Graph, x: u32, y: u32) -> Loaded {
+    fn absent(&self, g: &mut Graph, x: u32, y: u32) -> Loaded {
         if g.mark_absent(x, y) { Loaded::No } else { Loaded::Full }
     }
 }
