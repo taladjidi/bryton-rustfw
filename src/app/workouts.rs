@@ -39,7 +39,10 @@ impl GaugeShown {
     fn bar(&self, cols: u32, (ftp, max_hr): (u16, u16)) -> Option<ui::GaugeBar> {
         let band = self.band?;
         Some(ui::GaugeBar {
-            band: (workout::gauge_x(band.0, band, cols), workout::gauge_x(band.1, band, cols)),
+            band: {
+                let scale = workout::gauge_scale(self.kind, band, ftp, max_hr);
+                (workout::gauge_x(band.0, scale, cols), workout::gauge_x(band.1, scale, cols))
+            },
             marker: self.marker.map(|m| (m, self.color)),
             zones: workout::gauge_zones(self.kind, band, cols, ftp, max_hr),
         })
@@ -307,7 +310,9 @@ impl App {
             (Some(w), None) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
             (None, _) => ui::WHITE,
         };
-        let marker = reading.zip(band).map(|(v, b)| workout::gauge_x(v, b, cols));
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let marker =
+            reading.zip(band).map(|(v, b)| workout::gauge_x(v, workout::gauge_scale(kind, b, ftp, max_hr), cols));
         GaugeShown { kind, avg, band, step: step.is_some(), pace: None, value, color, marker }
     }
 

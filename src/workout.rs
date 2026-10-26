@@ -191,23 +191,37 @@ pub fn gauge_target(s: Option<&Step>, ftp: u16, max_hr: u16) -> (Kind, Option<(u
     }
 }
 
-/// The gauge's scale around a band (`lo`, `hi`): from 30 % under `lo` to 30 % over `hi`, so the band takes about
-/// the middle third (less for a wide one) and a reading far off still shows which way it is.
-pub fn gauge_scale((lo, hi): (u16, u16)) -> (u32, u32) {
+/// The gauge's scale for a band (`lo`, `hi`) of `kind`: every zone, so the band shows where it sits among them (the
+/// owner's ask, 2026-10-26). Power from 40 % to 165 % of `ftp` (Coggan's Z1 under 56 %, Z7 over 150 %), heart rate
+/// from 50 % to 100 % of `max_hr`, each widened to keep 10 % around a band that falls outside; cadence (no zones) 30 %
+/// under `lo` to 30 % over `hi`. Fixed for a step: the zones never slide.
+///
+/// ```
+/// use bryton_rustfw::{storage::workout::Kind, workout::gauge_scale};
+/// assert_eq!(gauge_scale(Kind::Power, (200, 220), 250, 190), (100, 412));
+/// assert_eq!(gauge_scale(Kind::Power, (400, 420), 250, 190), (100, 462), "widened for a band off the zones");
+/// assert_eq!(gauge_scale(Kind::Hr, (150, 160), 250, 190), (95, 190));
+/// assert_eq!(gauge_scale(Kind::Cadence, (150, 160), 250, 190), (105, 208));
+/// ```
+pub fn gauge_scale(kind: Kind, (lo, hi): (u16, u16), ftp: u16, max_hr: u16) -> (u32, u32) {
     let (lo, hi) = (u32::from(lo), u32::from(hi));
-    (lo * 7 / 10, (hi * 13 / 10).max(lo * 7 / 10 + 1))
+    let (a, b) = match kind {
+        Kind::Power => (u32::from(ftp) * 40 / 100, u32::from(ftp) * 165 / 100),
+        Kind::Hr => (u32::from(max_hr) / 2, u32::from(max_hr)),
+        _ => (lo * 7 / 10, hi * 13 / 10),
+    };
+    let a = a.min(lo * 9 / 10);
+    (a, b.max(hi * 11 / 10).max(a + 1))
 }
 
-/// The column of reading `v` on a gauge `cols` wide around `band` ([`gauge_scale`]), held at its ends.
+/// The column of reading `v` on a gauge `cols` wide over `scale` ([`gauge_scale`]), held at its ends.
 ///
 /// ```
 /// use bryton_rustfw::workout::gauge_x;
-/// // 200-220 W: the scale is 140 to 286 W
-/// assert_eq!([0, 140, 200, 220, 286, 999].map(|w| gauge_x(w, (200, 220), 146)), [0, 0, 60, 80, 145, 145]);
+/// assert_eq!([0, 140, 200, 220, 286, 999].map(|w| gauge_x(w, (140, 286), 146)), [0, 0, 60, 80, 145, 145]);
 /// ```
-pub fn gauge_x(v: u16, band: (u16, u16), cols: u32) -> u32 {
-    let (a, b) = gauge_scale(band);
-    let x = u64::from(u32::from(v).saturating_sub(a)) * u64::from(cols) / u64::from(b - a);
+pub fn gauge_x(v: u16, (a, b): (u32, u32), cols: u32) -> u32 {
+    let x = u64::from(u32::from(v).saturating_sub(a)) * u64::from(cols) / u64::from(b.saturating_sub(a).max(1));
     (x.min(u64::from(cols.saturating_sub(1)))) as u32
 }
 
@@ -219,15 +233,15 @@ pub fn gauge_x(v: u16, band: (u16, u16), cols: u32) -> u32 {
 ///
 /// ```
 /// use bryton_rustfw::{ride::ZONE_COLORS as Z, storage::workout::Kind, workout::gauge_zones};
-/// // 200-220 W, FTP 200: the scale is 140 to 286 W on 146 columns
-/// let z = gauge_zones(Kind::Power, (200, 220), 146, 200, 190);
-/// assert_eq!(z[1], (0, Z[1]), "zone 2 (from 112 W) starts under the scale");
-/// assert_eq!(z[2], (12, Z[2]), "zone 3 from 152 W");
-/// assert_eq!(z[4], (72, Z[4]), "zone 5 from 212 W");
-/// assert_eq!(z[6].0, u32::MAX, "zone 7 (above 302 W) is off the scale");
+/// // 200-220 W, FTP 200: the scale is 80 to 330 W on 250 columns, a watt a column
+/// let z = gauge_zones(Kind::Power, (200, 220), 250, 200, 190);
+/// assert_eq!(z[1], (32, Z[1]), "zone 2 from 112 W");
+/// assert_eq!(z[2], (72, Z[2]), "zone 3 from 152 W");
+/// assert_eq!(z[4], (132, Z[4]), "zone 5 from 212 W");
+/// assert_eq!(z[6], (222, Z[6]), "zone 7 from 302 W, on the scale too");
 /// ```
 pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, ftp: u16, max_hr: u16) -> [(u32, u16); 7] {
-    let (a, b) = gauge_scale(band);
+    let (a, b) = gauge_scale(kind, band, ftp, max_hr);
     let (pcts, base): (&[u32], u32) = match kind {
         Kind::Power => (&[56, 76, 91, 106, 121, 151], u32::from(ftp.max(1))),
         Kind::Hr => (&[60, 70, 80, 90], u32::from(max_hr.max(1))),
@@ -380,26 +394,26 @@ mod tests {
     }
 
     /// The zones behind the gauge follow the FTP (and the maximum heart rate): every watt of the scale is in the zone
-    /// `ride::power_zone` gives it, whatever the FTP, and the scale itself does not move with it.
+    /// `ride::power_zone` gives it, whatever the FTP, and every zone is on it.
     #[test]
     fn gauge_zones_follow_ftp_and_max_hr() {
         let band = (200, 220);
-        let (a, b) = gauge_scale(band);
-        let cols = (b - a) * 2; // a watt is two columns: no two edges share one
         for ftp in [120, 200, 250, 310] {
+            let (a, b) = gauge_scale(Kind::Power, band, ftp, 190);
+            let cols = (b - a) * 2; // a watt is two columns: no two edges share one
             let z = gauge_zones(Kind::Power, band, cols, ftp, 190);
+            assert!(z.iter().all(|z| z.0 != u32::MAX), "all seven zones on the scale at FTP {ftp}");
             for v in a..b {
-                let col = gauge_x(v as u16, band, cols);
+                let col = gauge_x(v as u16, (a, b), cols);
                 let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
                 assert_eq!(zone, ride::power_color(ride::power_zone(v as u16, ftp)), "{v} W at FTP {ftp}");
             }
         }
-        assert_ne!(gauge_zones(Kind::Power, band, cols, 200, 190), gauge_zones(Kind::Power, band, cols, 250, 190));
-        let (a, b) = gauge_scale((150, 160));
         for max in [170, 190] {
+            let (a, b) = gauge_scale(Kind::Hr, (150, 160), 200, max);
             let z = gauge_zones(Kind::Hr, (150, 160), (b - a) * 2, 200, max);
             for v in a..b {
-                let col = gauge_x(v as u16, (150, 160), (b - a) * 2);
+                let col = gauge_x(v as u16, (a, b), (b - a) * 2);
                 let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
                 assert_eq!(zone, ride::hr_color(ride::hr_zone(v as u16, max)), "{v} bpm at {max}");
             }
@@ -420,13 +434,13 @@ mod tests {
         let swapped = step(t(Kind::Power, 220, 200, false));
         assert_eq!(gauge_target(Some(&swapped), 200, 190).1, Some((200, 220)), "a band written high to low");
 
-        // heart rate 150-160: 105 to 208 bpm over 103 columns, a column a bpm
-        assert_eq!(gauge_scale((150, 160)), (105, 208));
-        assert_eq!([100, 150, 160, 250].map(|v| gauge_x(v, (150, 160), 103)), [0, 45, 55, 102], "held at the ends");
+        // cadence 150-160: 105 to 208 over 103 columns, a column a unit
+        assert_eq!(gauge_scale(Kind::Cadence, (150, 160), 200, 190), (105, 208));
+        assert_eq!([100, 150, 160, 250].map(|v| gauge_x(v, (105, 208), 103)), [0, 45, 55, 102], "held at the ends");
         let c = [140, 145, 155, 167, 170].map(|v| gauge_color(v, (150, 160)));
         let z = ride::ZONE_COLORS;
         assert_eq!(c, [z[1], z[3], z[2], z[3], z[5]], "5 % off: 142 and 168 bpm");
-        assert_eq!(gauge_x(5, (0, 0), 50), 49, "a band of 0: no division by zero");
-        assert_eq!(gauge_x(0, (200, 220), 0), 0, "no columns");
+        assert_eq!(gauge_x(5, gauge_scale(Kind::Cadence, (0, 0), 0, 0), 50), 49, "a band of 0: no division by zero");
+        assert_eq!(gauge_x(0, (140, 286), 0), 0, "no columns");
     }
 }

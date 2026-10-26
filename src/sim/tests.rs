@@ -1212,7 +1212,8 @@ fn gauge_shows_the_zones() {
         let mut value = crate::text::Line::new();
         value.push_u32(u32::from(w));
         let color = crate::workout::gauge_color(w, band);
-        let marker = Some(crate::workout::gauge_x(w, band, ui::gauge_cols(bx)));
+        let scale = crate::workout::gauge_scale(Kind::Power, band, 200, 190);
+        let marker = Some(crate::workout::gauge_x(w, scale, ui::gauge_cols(bx)));
         GaugeShown { kind: Kind::Power, avg: 0, band: Some(band), step: true, pace, value, color, marker }
     };
     let cases = [((160, 180), 140), ((160, 180), 210), ((215, 235), 190), ((215, 235), 260)];
@@ -1238,16 +1239,25 @@ fn gauge_shows_the_zones() {
     }
     sim.save("gauge_zones_half");
 
-    // the zones follow the FTP: column 5 of the first gauge (about 115 W) is zone 2 of 200 W, zone 1 of 400 W
+    // every zone on the gauge, and they follow the FTP: 130 W is zone 2 of 200 W, under the scale (zone 1) at 400 W
     let bx = full[0];
-    Panel(&mut sim, (0, ui::H), false).fill(0, 0, ui::W, ui::H, ui::BLACK);
-    let column = |sim: &Sim| (0..bx.3).map(|y| sim.screen[((bx.1 + y) * ui::W + 8 + 5) as usize]).collect::<Vec<_>>();
     let z = crate::ride::power_color;
-    app.draw_gauge(&mut Panel(&mut sim, (0, ui::H), false), bx, shown((160, 180), 140, bx, None));
-    assert!(column(&sim).contains(&z(2)), "FTP 200: zone 2");
+    let screen_of = |sim: &mut Sim, app: &App| {
+        Panel(&mut *sim, (0, ui::H), false).fill(0, 0, ui::W, ui::H, ui::BLACK);
+        app.draw_gauge(&mut Panel(&mut *sim, (0, ui::H), false), bx, shown((160, 180), 140, bx, None));
+        sim.screen.clone()
+    };
+    let column = |screen: &[u16], ftp: u16| {
+        let scale = crate::workout::gauge_scale(Kind::Power, (160, 180), ftp, 190);
+        let x = 8 + crate::workout::gauge_x(130, scale, ui::gauge_cols(bx));
+        (0..bx.3).map(|y| screen[((bx.1 + y) * ui::W + x) as usize]).collect::<Vec<_>>()
+    };
+    let s = screen_of(&mut sim, &app);
+    assert!((1..=7).all(|k| s.contains(&z(k))), "FTP 200: all seven zones on the gauge");
+    assert!(column(&s, 200).contains(&z(2)), "FTP 200: 130 W in zone 2");
     app.settings.ftp = 400;
-    app.draw_gauge(&mut Panel(&mut sim, (0, ui::H), false), bx, shown((160, 180), 140, bx, None));
-    assert!(column(&sim).contains(&z(1)) && !column(&sim).contains(&z(2)), "FTP 400: zone 1");
+    let s = screen_of(&mut sim, &app);
+    assert!(column(&s, 400).contains(&z(1)) && !column(&s, 400).contains(&z(2)), "FTP 400: zone 1");
 }
 
 /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in

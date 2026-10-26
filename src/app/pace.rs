@@ -124,7 +124,9 @@ impl App {
             (Some(w), None) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
             (None, _) => ui::WHITE,
         };
-        let marker = reading.zip(band).map(|(v, b)| workout::gauge_x(v, b, cols));
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let scale = |b| workout::gauge_scale(storage::workout::Kind::Power, b, ftp, max_hr);
+        let marker = reading.zip(band).map(|(v, b)| workout::gauge_x(v, scale(b), cols));
         let ridden = if self.pace.on { self.ride.timer_s().saturating_sub(self.pace.made_s) } else { 0 };
         let pace = Some(plan.total_s.saturating_sub(ridden).min(u32::from(u16::MAX)) as u16);
         GaugeShown {
