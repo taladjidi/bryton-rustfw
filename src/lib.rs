@@ -11,35 +11,24 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod alerts;
-pub mod altitude;
 mod app;
-pub mod climbs_ahead;
-pub mod course;
-pub mod dev;
 pub mod drivers;
-pub mod hrv;
-pub mod hrvt;
-pub mod msc;
-pub mod pacing;
-pub mod page;
-pub mod phone;
-pub mod power;
-pub mod power_curve;
-pub mod powercal;
-pub mod ramp;
+pub mod link;
+pub mod nav;
 pub mod ride;
 #[cfg(test)]
 mod sim;
 pub mod storage;
-pub mod trainer;
+pub mod training;
 pub mod ui;
-pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
-pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, sensors, touch};
+pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
+pub use link::{dev, msc, phone};
+pub use nav::{altitude, climbs_ahead, course};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
-pub use ui::{fonts, map, menu, text, tiles};
+pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, ramp, trainer, workout};
+pub use ui::{fonts, map, menu, page, text, tiles};
 // the app's parts (app.rs), at the root as before the split
 pub use app::*;
 

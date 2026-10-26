@@ -209,7 +209,7 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
   values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
-- Power (src/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
+- Power (src/training/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
   recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (barometric altitude, else GPS).
@@ -552,7 +552,7 @@ STOCK):
   loses it) and waits 10 s for the meter: ZERO OFFSET with the number (and WAS, the offset before it this session),
   FAILED, or NO ANSWER. Once the meter has said it supports auto zero, an AUTO ZERO ON / OFF button (Page or Lap
   too) sends the configuration and shows the state the meter confirms. Not while a ride runs (a notice; paused is
-  fine). Layouts and sources: src/powercal.rs.
+  fine). Layouts and sources: src/drivers/powercal.rs.
 - **Electronic shifting** (not yet seen on the unit): **DI2** (Shimano's own ANT channel, as stock and the patched
   stock firmware's P12 use it; needs Shimano's network key, copied from your stock image with the ANT+ one by
   `tools/ant_key.py`) and **SHIFTING** (the public ANT+ Shifting profile: SRAM AXS, Campagnolo), paired from the
@@ -571,7 +571,7 @@ STOCK):
   for a faster fix.
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
-- **Barometric altitude** (`src/altitude.rs`, `src/app/barometer.rs`): the international barometric formula on the
+- **Barometric altitude** (`src/nav/altitude.rs`, `src/app/barometer.rs`): the international barometric formula on the
   LPS22HH's pressure, smoothed (a median of 5 readings, then an average of 1/6: the median takes out gusts whole), calibrated by SETTINGS > BIKE > ALTITUDE (type the altitude, 1 m steps, a held key repeats),
   FROM GPS (30 s of 3D fix, six satellites), or by itself at a ride's start when the last calibration is over 3 hours
   old; kept in `\Rustfw\altcal.bin` between rides; stock's `Alt_P0` imported (not trusted). The ride, its graphs and the
