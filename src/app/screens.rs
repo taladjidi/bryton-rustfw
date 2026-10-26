@@ -402,7 +402,8 @@ impl App {
         l.push_str(text);
         self.notices[0] = l;
         // over the overview the notice is in its own box already; the banner without the time (the strip has it)
-        if self.screen != Screen::Main {
+        // and not over a ride's card, whose title the banner would cover (an alarm still must be seen)
+        if self.screen != Screen::Main && (self.screen != Screen::Summary || kind == Banner::Alarm) {
             self.say_as(text, kind);
         }
     }

@@ -1422,6 +1422,29 @@ fn start_from_the_overview() {
     assert_eq!(app.screen(), Screen::Main, "Back: the overview");
 }
 
+/// "RIDE SAVED" is said without covering the ride card's title (the date under the strip): the banner's 44 px are the
+/// strip and the title row, so over the card the notice goes to the notices list (the overview shows it) only.
+#[test]
+fn ride_saved_leaves_the_cards_title() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    assert_eq!(app.screen(), Screen::Summary);
+    run(&mut sim, &mut app, 1500);
+    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert_consistent(&sim, &app);
+    sim.save("ride_saved_card");
+    // the title row (under the strip's line) still has the card's grey date, not the banner's orange fill
+    let y = (ui::PAGE_Y + 12) as usize;
+    let orange = sim.screen[y * W as usize + 2];
+    assert_ne!(orange, ui::ACCENT, "the title row is not the banner's");
+    assert!(app.banner_ms.is_none(), "no banner over the card");
+}
+
 /// The card at the end of a ride: its track, its elevation profile, its numbers.
 #[test]
 fn ride_card_at_the_end() {
