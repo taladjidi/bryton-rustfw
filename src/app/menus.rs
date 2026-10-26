@@ -13,7 +13,8 @@ pub const LIST_REDRAW_MS: u32 = 1000;
 /// The menus (the tree: docs/features.md, "Menus").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Menu {
-    /// The main menu ([`menu::MAIN`]): workouts, courses, history, pages, sensors, settings.
+    /// The main menu ([`menu::MAIN`]): workouts, courses, (the trainer, when one is paired,) history, pages, sensors,
+    /// settings.
     Main,
     /// One row per sensor kind, then the Di2 buttons and the phone.
     Sensors,
@@ -114,7 +115,9 @@ impl App {
     pub(crate) fn row(&self, menu: Menu, i: usize) -> Option<menu::Row> {
         use menu::Row;
         match menu {
-            Menu::Main => menu::MAIN.get(i).copied(),
+            // while a trainer is paired, TRAINER CONTROL after WORKOUTS and COURSES (what to ride)
+            Menu::Main if self.trainer_on() && i == 2 => Some(Row::Ride(menu::RideRow::Trainer)),
+            Menu::Main => menu::MAIN.get(i - usize::from(self.trainer_on() && i > 2)).copied(),
             Menu::Pages => match i {
                 0 => Some(Row::Open(Menu::Page(OVERVIEW))),
                 _ if i <= self.page_count => Some(Row::Open(Menu::Page(i - 1))),

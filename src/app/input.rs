@@ -450,6 +450,11 @@ impl App {
                 }
                 return;
             }
+            // a tap on a TRAINER MODE / TARGET field opens the trainer screen, even while recording (the touch lock
+            // above is what stops a stray touch)
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.trainer_field_at(x, y) => {
+                self.open(Screen::Trainer)
+            }
             // while recording, touch on a page only turns pages and works the map: no menu by a hold or the gear, no
             // field changed by a tap (a wet glove, a drop of rain; the keys still do all of it)
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..))) if recording => return,

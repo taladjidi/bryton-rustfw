@@ -715,3 +715,66 @@ fn the_trainer_screen_has_a_title_bar_and_the_ride_timer() {
     app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(x, y)));
     assert_ne!(app.screen(), Screen::Trainer, "the \"<\" goes back");
 }
+
+/// TRAINER CONTROL is in the main menu while a trainer is paired (not otherwise), and a tap on a TRAINER MODE /
+/// TARGET field opens the screen: while riding too, but not with the touch lock on.
+#[test]
+fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
+    let label = |app: &App, i| app.menu_row(Menu::Main, i).map(|(l, ..)| l.as_str().to_string());
+    assert_eq!(label(&app, 2).as_deref(), Some("TRAINER CONTROL"));
+    assert_eq!(label(&app, 3).as_deref(), Some("HISTORY"), "the rest follows");
+    assert_eq!(app.rows(Menu::Main), crate::menu::MAIN.len() + 1);
+    run(&mut sim, &mut app, 1000);
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("main_menu_trainer");
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main);
+
+    // the fields
+    app.pages[0] = PageCfg {
+        layout: 6,
+        fields: [Field::TrainerMode, Field::TrainerTarget, Field::Power, Field::Cadence, Field::Speed, Field::Timer],
+    }
+    .into();
+    app.press(&mut sim, Press::Short(Key::Page)); // the first page
+    assert_eq!(app.screen(), Screen::Ride(0));
+    let at = |app: &App, f: Field| {
+        app.widgets()
+            .find_map(|((x, y, w, h), wd)| {
+                matches!(wd, crate::Widget::Field(g) if g == f).then_some((x + w / 2, y + h / 2))
+            })
+            .map(|(x, y)| Input::Touch(crate::touch::Gesture::Tap(x as u16, y as u16)))
+            .unwrap()
+    };
+    app.strip.locked = true;
+    app.input(&mut sim, at(&app, Field::TrainerTarget));
+    assert_eq!(app.screen(), Screen::Ride(0), "the touch lock holds");
+    app.strip.locked = false;
+    app.input(&mut sim, at(&app, Field::Power));
+    assert_eq!(app.screen(), Screen::Ride(0), "another field: nothing");
+    app.input(&mut sim, at(&app, Field::TrainerMode));
+    assert_eq!(app.screen(), Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride
+    run(&mut sim, &mut app, 1000);
+    app.input(&mut sim, at(&app, Field::TrainerTarget));
+    assert_eq!(app.screen(), Screen::Trainer, "riding too");
+    run(&mut sim, &mut app, 1100);
+    super::tests::assert_consistent(&sim, &app);
+
+    // no trainer: no row
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let app = App::start(&mut sim, Some(KEY));
+    assert_eq!(app.rows(Menu::Main), crate::menu::MAIN.len());
+    assert_eq!(label(&app, 2).as_deref(), Some("HISTORY"));
+}

@@ -61,6 +61,17 @@ impl App {
         self.sensors.get(Kind::Trainer as usize).is_some_and(|s| *s != Sensor::Off) || self.sensors_store.bt.is_some()
     }
 
+    /// A trainer is paired and a TRAINER MODE or TARGET field of the page shown is at (`x`, `y`).
+    pub(crate) fn trainer_field_at(&self, x: u16, y: u16) -> bool {
+        let (x, y) = (u32::from(x), u32::from(y));
+        self.trainer_on()
+            && self.widgets().any(|((bx, by, bw, bh), w)| {
+                matches!(w, Widget::Field(Field::TrainerMode | Field::TrainerTarget))
+                    && (bx..bx + bw).contains(&x)
+                    && (by..by + bh).contains(&y)
+            })
+    }
+
     /// The trainer sent something lately.
     pub(crate) fn trainer_heard(&self) -> bool {
         self.heard_ms.get(Kind::Trainer as usize).is_some_and(|&ms| ms < sensors::STALE_MS)
