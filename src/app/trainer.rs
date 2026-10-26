@@ -267,7 +267,7 @@ impl App {
     /// earlier build kept in backup register 14 is moved here, and 14 is left to the shifting system.
     #[inline(never)]
     fn sensors_storage(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() || self.gnss_ms < SENSORS_LOAD_MS {
+        if !self.card_writable || self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS {
             return;
         }
         if !self.sensors_store.loaded {

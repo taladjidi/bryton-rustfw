@@ -22,7 +22,7 @@ impl App {
             self.shifts = 0;
             self.pace = PaceState::new(); // the last ride's plan: its TOP time and W' budget
             let mut track = map::Track::new();
-            if let Some(p) = self.pvt.filter(|p| p.good()) {
+            if let Some(p) = self.gps.pvt.filter(|p| p.good()) {
                 track.seed(p.lat, p.lon);
             }
             self.track = track;
@@ -302,13 +302,13 @@ impl App {
     pub(crate) fn rec_time(&self) -> (recorder::Local, u32) {
         let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
         let local = (y, mo, d, h, mi, self.seconds);
-        let offset = i64::from(self.aid.offset_15min.unwrap_or(0)) * 900 + i64::from(self.lag_s);
+        let offset = i64::from(self.gps.aid.offset_15min.unwrap_or(0)) * 900 + i64::from(self.lag_s);
         (local, fit::fit_time(from_epoch_s(epoch_s(local) - offset)))
     }
 
     /// This second's record: the fix, the sensors, the barometer's temperature.
     pub(crate) fn sample(&self, time: u32) -> fit::Sample {
-        let fix = self.pvt.filter(|p| p.good());
+        let fix = self.gps.pvt.filter(|p| p.good());
         let byte = |m| self.live.get(m).map(|v| v.min(254) as u8);
         let hr = self.live.get(Metric::Hr).is_some();
         fit::Sample {
@@ -502,7 +502,7 @@ impl App {
         self.history.second([input.power, input.hr, wbal, dfa, alt]);
         self.history.dist_second(self.ride.dist_m(), alt);
         // the course followed: where the rider is on it, and what to say
-        let fix = self.pvt.filter(|p| p.good());
+        let fix = self.gps.pvt.filter(|p| p.good());
         let ev = match (self.courses.as_deref_mut(), fix) {
             (Some(c), Some(p)) if c.on.is_some() => c.course.follow(&mut c.at, p.lat, p.lon),
             _ => None,

@@ -78,7 +78,7 @@ impl App {
     pub(crate) fn refresh_calendar(&mut self, b: &mut impl Board, asked: bool) {
         let zones = (self.settings.ftp, self.settings.max_hr);
         let stale = self.calendar_day != Some(self.date) || self.calendar_zones != zones;
-        if stale && !self.emmc.lent() && (asked || self.gnss_ms >= CALENDAR_MS) {
+        if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS) {
             self.load_calendar(b);
         }
     }

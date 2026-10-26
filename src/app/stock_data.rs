@@ -116,7 +116,7 @@ impl App {
         self.stock.new_day(self.date);
         // read once by itself, a while after start-up and not during a ride, for the totals on the overview
         if self.stock.status() == stock::Status::Idle
-            && self.gnss_ms >= STOCK_SCAN_MS
+            && self.gps.ms >= STOCK_SCAN_MS
             && self.ride.state() == ride::State::Idle
         {
             self.stock.start(self.date);

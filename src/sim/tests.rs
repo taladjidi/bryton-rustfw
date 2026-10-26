@@ -2020,7 +2020,7 @@ fn menu_tree_reaches_everything() {
     sim.gnss.fix = Some(8000);
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 3000);
-    assert!(app.pvt.is_some(), "the GPS rows all shown");
+    assert!(app.gps.pvt.is_some(), "the GPS rows all shown");
     let mut menus = Vec::new();
     menus_under(&app, Menu::Main, 1, &mut menus);
     // every row of every menu, with its level
@@ -4298,7 +4298,7 @@ fn idle_bus_budgets() {
         assert!(spi <= 10.0, "{spi:.1} GNSS transfers/s");
         assert!((reads - 4.0).abs() < 0.1, "the light four times a second: {reads:.1}");
         assert!(i2c <= 4.5, "{i2c:.1} I2C4 transactions/s");
-        assert_eq!(app.pvt.is_some_and(|p| p.good()), fix.is_some(), "the fix read all the same");
+        assert_eq!(app.gps.pvt.is_some_and(|p| p.good()), fix.is_some(), "the fix read all the same");
     }
 }
 

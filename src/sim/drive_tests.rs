@@ -62,7 +62,7 @@ fn lent_to_the_computer_one_owner_at_a_time() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 60_000);
     assert_eq!(app.ride.state(), ride::State::Idle, "no ride while lent");
-    assert!(app.gnss_ms >= STOCK_SCAN_MS && app.stock.status() == crate::stock::Status::Idle, "the scan waits");
+    assert!(app.gps.ms >= STOCK_SCAN_MS && app.stock.status() == crate::stock::Status::Idle, "the scan waits");
     assert_eq!(app.emmc().card(&mut sim), Err(crate::emmc::Error::Lent), "the dev link refused");
     assert!(sim.emmc.cmds.is_empty(), "the app sent the card nothing: {:?}", sim.emmc.cmds);
 

@@ -215,23 +215,10 @@ pub struct App {
     battery: battery::Battery,
     /// Since the last battery reading.
     battery_ms: u32,
-    gnss: gnss::Parser,
-    /// The last fix, and its age.
-    pvt: Option<gnss::Pvt>,
-    pvt_ms: u32,
-    /// Since the app's first step: the receiver is powered at [`GNSS_ON_MS`], its configuration and aiding sent
-    /// once from [`GNSS_CONFIG_MS`].
-    gnss_ms: u32,
+    /// The GNSS receiver.
+    gps: Gps,
     /// Time run since the start, ms (saturating): a minute of it clears the fault count.
     up_ms: u32,
-    /// Messages sent to the receiver so far: configuration, time, position.
-    gnss_sent: u8,
-    /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
-    gnss_wait: u8,
-    /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
-    gnss_off: bool,
-    /// The RTC's offset from UTC and the last position, as kept in backup registers.
-    aid: gnss::Aid,
     /// Wheel, backlight, max heart rate, FTP.
     settings: Settings,
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
@@ -275,8 +262,7 @@ pub struct App {
     date: (u16, u8, u8),
     /// The notices and the banner over the screen.
     notes: Notices,
-    /// The GPS had a good fix since power-on; the battery was reported low.
-    had_fix: bool,
+    /// The battery was reported low.
     told_low: bool,
     /// A ride was just started from a key: the page is drawn again (its map and graphs start over).
     new_ride: bool,
@@ -477,15 +463,8 @@ impl App {
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),
             battery_ms: BATTERY_MS, // read at the first step
-            gnss: gnss::Parser::new(),
-            pvt: None,
-            pvt_ms: 0,
-            gnss_ms: 0,
+            gps: Gps::new(gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r)))),
             up_ms: 0,
-            gnss_sent: 0,
-            gnss_wait: 0,
-            gnss_off: false,
-            aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
             settings: misc,
             editing: false,
             menu_chosen: false,
@@ -506,7 +485,6 @@ impl App {
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
             notes: Notices::new(),
-            had_fix: false,
             told_low: false,
             graph_whole: false,
             plot_taps: [[None; page::CELLS]; PAGES + 1],
@@ -588,7 +566,7 @@ impl App {
         if self.chips.baro {
             ambient::baro_start(b); // read at the first step
         }
-        if let Some((lat, lon)) = self.aid.pos {
+        if let Some((lat, lon)) = self.gps.aid.pos {
             self.track.seed(lat, lon); // the map shows where the unit last was until the first fix
         }
         let fault = b.backup_read(FAULT_BKP);
@@ -690,9 +668,7 @@ impl App {
         if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
         }
-        if !self.had_fix && self.pvt.is_some_and(|p| p.good()) {
-            self.had_fix = true; // no notice: the strip's GPS says it, and a notice stayed after the fix was lost
-        }
+        self.gps.note_fix();
         self.strip.rec = match self.ride.state() {
             ride::State::Idle => Rec::Idle,
             _ if !self.card_writable

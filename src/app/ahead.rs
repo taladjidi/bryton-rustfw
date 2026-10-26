@@ -37,7 +37,7 @@ impl App {
     /// Once a second: the rider on the trace, a new trace when needed, a climb to say.
     pub(crate) fn ahead_second(&mut self) {
         let on = self.ahead_on();
-        let fix = self.pvt.filter(|p| p.good()).map(|p| climbs_ahead::Fix {
+        let fix = self.gps.pvt.filter(|p| p.good()).map(|p| climbs_ahead::Fix {
             lat: p.lat,
             lon: p.lon,
             heading_e5: p.heading,

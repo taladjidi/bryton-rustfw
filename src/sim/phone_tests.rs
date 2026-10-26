@@ -56,7 +56,7 @@ fn pairing_from_the_menu() {
     assert_eq!(ph.subscribed, [0x18, 0x13, 0x23, 0x26, 0x33], "Data Source first, then NS, AMS, the time");
     assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
     assert_eq!(rtc_date_from_dr(sim.rtc().1), (2026, 10, 25));
-    assert_eq!(app.aid.offset_15min, Some(4), "UTC + 1 h from Local Time Information");
+    assert_eq!(app.gps.aid.offset_15min, Some(4), "UTC + 1 h from Local Time Information");
 
     let s = stored(&sim).expect("the bond on the card");
     let bond = s.bond.unwrap();
@@ -273,7 +273,7 @@ fn no_clock_change_during_a_ride() {
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.phone.link(), Link::Secure);
-    assert_eq!((sim.rtc_sets, app.aid.offset_15min), (0, None));
+    assert_eq!((sim.rtc_sets, app.gps.aid.offset_15min), (0, None));
 }
 
 /// A chip that refuses a set-up command: the link is off, and the PHONE menu names the command and its error (for

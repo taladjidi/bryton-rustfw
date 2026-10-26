@@ -481,7 +481,7 @@ impl App {
     /// ([`Board::emmc_writable`]) does not touch it at all (as the rest of the app; its writes would be refused by
     /// `emmc::Card::write` anyway): the bond lasts until the unit is switched off.
     fn phone_storage(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() || !self.phone.ready || self.gnss_ms < BOND_LOAD_MS {
+        if !self.card_writable || self.emmc.lent() || !self.phone.ready || self.gps.ms < BOND_LOAD_MS {
             return;
         }
         if !self.phone.loaded {
@@ -986,10 +986,10 @@ impl App {
             self.seconds = t.5;
         }
         if let Some(offset) = local.and_then(ph::local_offset)
-            && self.aid.offset_15min != Some(offset)
+            && self.gps.aid.offset_15min != Some(offset)
         {
-            self.aid.offset_15min = Some(offset);
-            for (r, w) in AID_BKP.into_iter().zip(self.aid.to_words()) {
+            self.gps.aid.offset_15min = Some(offset);
+            for (r, w) in AID_BKP.into_iter().zip(self.gps.aid.to_words()) {
                 b.backup_write(r, w);
             }
         }

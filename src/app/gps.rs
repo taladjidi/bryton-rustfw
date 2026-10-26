@@ -32,24 +32,24 @@ impl App {
         if self.gnss_switch(b) {
             // off: the start's clock still runs (the files read a few seconds after the start wait on it); the
             // receiver's sequence starts over from 0 when it is switched on
-            self.gnss_ms = self.gnss_ms.saturating_add(self.dt_ms);
+            self.gps.ms = self.gps.ms.saturating_add(self.dt_ms);
             return;
         }
-        if self.gnss_ms < GNSS_ON_MS && self.gnss_ms.saturating_add(self.dt_ms) >= GNSS_ON_MS {
+        if self.gps.ms < GNSS_ON_MS && self.gps.ms.saturating_add(self.dt_ms) >= GNSS_ON_MS {
             b.gnss_power(true);
         }
-        self.gnss_ms = self.gnss_ms.saturating_add(self.dt_ms);
-        self.pvt_ms = self.pvt_ms.saturating_add(self.dt_ms);
-        let mut send = if self.gnss_ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
-        if send.is_none() && self.gnss_wait > 0 {
-            self.gnss_wait -= 1;
+        self.gps.ms = self.gps.ms.saturating_add(self.dt_ms);
+        self.gps.pvt_ms = self.gps.pvt_ms.saturating_add(self.dt_ms);
+        let mut send = if self.gps.ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
+        if send.is_none() && self.gps.wait > 0 {
+            self.gps.wait -= 1;
         } else {
             self.read_gnss(b, send.take());
         }
-        if self.pvt_ms > PVT_STALE_MS {
-            self.pvt = None;
+        if self.gps.pvt_ms > PVT_STALE_MS {
+            self.gps.pvt = None;
         }
-        self.strip.gps = self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 });
+        self.strip.gps = self.gps.bars();
         // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
         self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
     }
@@ -57,18 +57,18 @@ impl App {
     /// One read of the receiver: up to [`GNSS_READ`] bytes (`send` goes out with the first 32), the fixes in them
     /// taken. Found idle, the next reads wait [`GNSS_IDLE_PASSES`].
     fn read_gnss(&mut self, b: &mut impl Board, mut send: Option<[u8; 32]>) {
-        self.gnss_wait = 0;
+        self.gps.wait = 0;
         for _ in 0..GNSS_READ / 32 {
             let mut buf = send.take().unwrap_or([0xff; 32]);
             b.gnss_transfer(&mut buf);
-            if buf == [0xff; 32] && self.gnss.idle() {
-                self.gnss_wait = GNSS_IDLE_PASSES - 1;
+            if buf == [0xff; 32] && self.gps.parser.idle() {
+                self.gps.wait = GNSS_IDLE_PASSES - 1;
                 break; // nothing waiting in the receiver
             }
             for &byte in &buf {
-                if let Some(pvt) = self.gnss.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
-                    self.pvt = Some(pvt);
-                    self.pvt_ms = 0;
+                if let Some(pvt) = self.gps.parser.push(byte).and_then(|(c, i, p)| gnss::pvt(c, i, p)) {
+                    self.gps.pvt = Some(pvt);
+                    self.gps.pvt_ms = 0;
                     self.learn_aid(b, pvt);
                     // a speed sensor or a trainer heard lately gives the speed (indoors a fix through a window says
                     // 0 km/h and would stop the ride); a paired one that is silent (a dead battery, a magnet knocked
@@ -103,19 +103,19 @@ impl App {
         } else {
             self.profile == ride::Profile::Indoor
         };
-        if want_off && !self.gnss_off {
+        if want_off && !self.gps.off {
             b.gnss_power(false);
-            self.gnss_off = true;
-            self.pvt = None;
-            self.gnss = gnss::Parser::new();
+            self.gps.off = true;
+            self.gps.pvt = None;
+            self.gps.parser = gnss::Parser::new();
             self.strip.gps = None; // off: not searching
             self.strip.blink = true;
-        } else if !want_off && self.gnss_off {
-            self.gnss_off = false;
-            self.gnss_ms = 0; // powered again at GNSS_ON_MS, then configured and aided as at boot
-            self.gnss_sent = 0;
+        } else if !want_off && self.gps.off {
+            self.gps.off = false;
+            self.gps.ms = 0; // powered again at GNSS_ON_MS, then configured and aided as at boot
+            self.gps.sent = 0;
         }
-        self.gnss_off
+        self.gps.off
     }
 
     /// The next message for the receiver after power-up, one per pass: the configuration, the time (UTC from the
@@ -123,20 +123,20 @@ impl App {
     /// None.
     pub(crate) fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
         loop {
-            self.gnss_sent = self.gnss_sent.saturating_add(1);
-            match self.gnss_sent {
+            self.gps.sent = self.gps.sent.saturating_add(1);
+            match self.gps.sent {
                 1 => return Some(gnss::config()),
                 2 => {
                     // the RTC holds local time: with the offset learnt at a fix, UTC within a couple of seconds;
                     // without it, the RTC as is, within 14 h (any time zone): the date still helps
-                    let (offset, acc_s) = self.aid.offset_15min.map_or((0, 14 * 3600), |o| (o, 2));
+                    let (offset, acc_s) = self.gps.aid.offset_15min.map_or((0, 14 * 3600), |o| (o, 2));
                     let (tr, dr) = b.rtc();
                     let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
                     let utc = epoch_s((y, mo, d, h, m, s)) - i64::from(offset) * 900;
                     return Some(gnss::mga_time(from_epoch_s(utc), acc_s));
                 }
                 3 => {
-                    let Some((lat, lon)) = self.aid.pos else { continue };
+                    let Some((lat, lon)) = self.gps.aid.pos else { continue };
                     return Some(gnss::mga_pos(lat, lon, 10_000)); // where it was: within 10 km, most rides
                 }
                 _ => return None,
@@ -147,7 +147,7 @@ impl App {
     /// Keeps what the next power-up needs from a fix: the RTC's offset from UTC (once the receiver's time is
     /// valid), the position (a good fix); written to the backup registers when it changes.
     pub(crate) fn learn_aid(&mut self, b: &mut impl Board, pvt: gnss::Pvt) {
-        let mut aid = self.aid;
+        let mut aid = self.gps.aid;
         if pvt.time_ok {
             let (tr, dr) = b.rtc();
             let ((h, m, s), (y, mo, d)) = (rtc_time_from_tr(tr), rtc_date_from_dr(dr));
@@ -161,8 +161,8 @@ impl App {
             // to the 1e-4 degrees kept: moving within 11 m does not rewrite the registers each second
             aid.pos = Some((pvt.lat / 1000 * 1000, pvt.lon / 1000 * 1000));
         }
-        if aid != self.aid {
-            self.aid = aid;
+        if aid != self.gps.aid {
+            self.gps.aid = aid;
             for (r, w) in AID_BKP.into_iter().zip(aid.to_words()) {
                 b.backup_write(r, w);
             }

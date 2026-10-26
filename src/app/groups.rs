@@ -106,3 +106,54 @@ impl Light {
         self.idle_ms = if held { 0 } else { self.idle_ms.saturating_add(pass_ms) };
     }
 }
+
+/// The GNSS receiver's state (app/gps.rs): the parser, the last fix, the start-up sequence and the aiding.
+pub(crate) struct Gps {
+    /// The receiver's UBX framing.
+    pub(crate) parser: gnss::Parser,
+    /// The last fix, and its age.
+    pub(crate) pvt: Option<gnss::Pvt>,
+    /// Since the last fix, ms.
+    pub(crate) pvt_ms: u32,
+    /// Since the app's first step: the receiver is powered at [`GNSS_ON_MS`], its configuration and aiding sent
+    /// once from [`GNSS_CONFIG_MS`].
+    pub(crate) ms: u32,
+    /// Messages sent to the receiver so far: configuration, time, position.
+    pub(crate) sent: u8,
+    /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
+    pub(crate) wait: u8,
+    /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
+    pub(crate) off: bool,
+    /// The RTC's offset from UTC and the last position, as kept in backup registers.
+    pub(crate) aid: gnss::Aid,
+    /// The GPS had a good fix since power-on.
+    pub(crate) had_fix: bool,
+}
+
+impl Gps {
+    /// Nothing heard yet, with the aid read from the backup registers.
+    pub(crate) fn new(aid: gnss::Aid) -> Self {
+        Gps {
+            parser: gnss::Parser::new(),
+            pvt: None,
+            pvt_ms: 0,
+            ms: 0,
+            sent: 0,
+            wait: 0,
+            off: false,
+            aid,
+            had_fix: false,
+        }
+    }
+
+    /// Remembers that a good fix was seen (no notice: the strip's GPS says it, and a notice stayed after the fix was
+    /// lost).
+    pub(crate) fn note_fix(&mut self) {
+        self.had_fix |= self.pvt.is_some_and(|p| p.good());
+    }
+
+    /// The strip's bars: None without a fix, 0 for a poor one.
+    pub(crate) fn bars(&self) -> Option<u8> {
+        self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 })
+    }
+}

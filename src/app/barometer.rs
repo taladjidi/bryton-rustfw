@@ -43,19 +43,19 @@ impl App {
     /// The receiver's altitude when it is good enough to calibrate by: a valid 3D fix with six satellites or more
     /// (a 2D fix holds its last altitude).
     fn alt_for_cal(&self) -> Option<i32> {
-        self.pvt.filter(|p| p.fix_ok && p.fix == 3 && p.sats >= 6).map(|p| p.alt_mm)
+        self.gps.pvt.filter(|p| p.fix_ok && p.fix == 3 && p.sats >= 6).map(|p| p.alt_mm)
     }
 
     /// The altitude of the ride this second and its reference ([`altitude::Altimeter::source`]): the ride, its
     /// graphs and the file's records all take it from here.
     pub(crate) fn alt_now(&self) -> (Option<i32>, u8) {
-        self.alt.source(self.pvt.filter(|p| p.good()).map(|p| p.alt_mm))
+        self.alt.source(self.gps.pvt.filter(|p| p.good()).map(|p| p.alt_mm))
     }
 
     /// Once a second while a ride is open: the altitude of the ride goes on from its last value when the source
     /// changes (altitude.rs `follow`).
     pub(crate) fn alt_follow(&mut self) {
-        let gps = self.pvt.filter(|p| p.good()).map(|p| p.alt_mm);
+        let gps = self.gps.pvt.filter(|p| p.good()).map(|p| p.alt_mm);
         self.alt.follow(gps);
     }
 
@@ -158,7 +158,7 @@ impl App {
     /// The calibration file: read once, written when the calibration changed, between rides.
     #[inline(never)]
     fn alt_storage(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() || self.gnss_ms < ALT_LOAD_MS {
+        if !self.card_writable || self.emmc.lent() || self.gps.ms < ALT_LOAD_MS {
             return;
         }
         // the read is allowed while a ride is open (a resumed ride has its calibration back); the write is not

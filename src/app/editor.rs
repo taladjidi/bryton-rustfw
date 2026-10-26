@@ -187,7 +187,7 @@ impl App {
         if self.emmc.lent() {
             return;
         }
-        let due = self.screen != Screen::Main || self.gnss_ms >= PAGES_LOAD_MS || self.store.dirty;
+        let due = self.screen != Screen::Main || self.gps.ms >= PAGES_LOAD_MS || self.store.dirty;
         if !self.store.loaded && self.store.tries < LOAD_TRIES && due {
             self.load_pages(b);
         }

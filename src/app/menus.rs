@@ -193,7 +193,7 @@ impl App {
                 }
             }
             Menu::Remote => menu::REMOTE.get(i).copied(),
-            Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),
+            Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.gps.pvt.is_some()).map(|&r| Row::Read(r)),
             Menu::Stock => menu::FITNESS.get(i).map(|&r| Row::Stock(r)),
             Menu::Alerts => menu::ALERTS.get(i).copied(),
             // FITNESS first, then the rides; none yet: the scan's row, which shows how far it is
@@ -367,7 +367,7 @@ impl App {
                         l.push_str(ui::DIGITS[usize::from(d)]);
                     }
                 };
-                let p = self.pvt;
+                let p = self.gps.pvt;
                 match (r, p) {
                     (Reading::Fix, None) => value.push_str("NO GPS"),
                     (Reading::Fix, Some(p)) => {

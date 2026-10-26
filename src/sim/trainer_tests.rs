@@ -866,7 +866,7 @@ fn the_map_page_is_skipped_indoors() {
     run(&mut sim, &mut app, 3000);
     app.indoor.pages[2] = app.pages[2]; // a rider who put the map in the indoor set too
     assert!(app.trainer_heard(), "the trainer is heard");
-    assert!(!app.pvt.is_some_and(|p| p.good()), "no fix");
+    assert!(!app.gps.pvt.is_some_and(|p| p.good()), "no fix");
     let round = |sim: &mut Sim, app: &mut App| {
         let mut seen = std::vec::Vec::new();
         for _ in 0..6 {
@@ -878,7 +878,7 @@ fn the_map_page_is_skipped_indoors() {
     assert!(!round(&mut sim, &mut app).contains(&Screen::Ride(2)), "no fix, a trainer: no map page");
     sim.gnss.fix = Some(500);
     run(&mut sim, &mut app, 30_000);
-    assert!(app.pvt.is_some_and(|p| p.good()));
+    assert!(app.gps.pvt.is_some_and(|p| p.good()));
     assert!(!round(&mut sim, &mut app).contains(&Screen::Ride(2)), "a fix too: the bike is on a trainer");
     // ROAD fixed in BIKE: the map is back
     app.settings.profile = Some(crate::ride::Profile::Road);
@@ -967,11 +967,11 @@ fn indoor_unit() -> (Sim, App) {
 #[test]
 fn the_receiver_is_off_for_an_indoor_ride_and_back_after_it() {
     let (mut sim, mut app) = indoor_unit();
-    assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "on and fixed before the ride");
+    assert!(sim.gnss.powered && app.gps.pvt.is_some_and(|p| p.good()), "on and fixed before the ride");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 2000);
     assert!(app.indoors() && !sim.gnss.powered, "off after Start");
-    assert_eq!((app.strip.gps, app.pvt.is_none()), (None, true));
+    assert_eq!((app.strip.gps, app.gps.pvt.is_none()), (None, true));
     run(&mut sim, &mut app, 30_000);
     assert!(!sim.gnss.powered, "stays off");
     app.press(&mut sim, Press::Short(Key::Start)); // paused
@@ -980,7 +980,7 @@ fn the_receiver_is_off_for_an_indoor_ride_and_back_after_it() {
     run(&mut sim, &mut app, 5000);
     assert!(sim.gnss.powered, "on again at the end");
     assert!(sim.gnss.got.iter().filter(|&&b| b == 0xb5).count() >= frames + 2, "configured and timed again");
-    assert!(app.pvt.is_some_and(|p| p.good()) && app.strip.gps.is_some_and(|g| g > 0), "a fix again");
+    assert!(app.gps.pvt.is_some_and(|p| p.good()) && app.strip.gps.is_some_and(|g| g > 0), "a fix again");
 }
 
 /// The safety net back to ROAD, the rider's toggle and a discarded ride switch it on again too.
@@ -998,7 +998,7 @@ fn the_receiver_returns_on_road_and_on_discard() {
     assert!(!sim.gnss.powered, "INDOOR by hand: off");
     app.toggle_indoor();
     run(&mut sim, &mut app, 5000);
-    assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "ROAD by hand: on, with a fix");
+    assert!(sim.gnss.powered && app.gps.pvt.is_some_and(|p| p.good()), "ROAD by hand: on, with a fix");
     app.toggle_indoor();
     run(&mut sim, &mut app, 2000);
     assert!(!sim.gnss.powered);
@@ -1253,11 +1253,11 @@ fn the_receiver_is_off_at_idle_with_indoor_fixed() {
     app.settings.profile = Some(crate::ride::Profile::Indoor);
     app.set_sensor(&mut sim, Kind::Trainer, Sensor::Paired(ID));
     run(&mut sim, &mut app, 10_000);
-    assert!(!sim.gnss.powered && app.pvt.is_none(), "off at idle");
+    assert!(!sim.gnss.powered && app.gps.pvt.is_none(), "off at idle");
     assert_eq!(sensors_file(&sim), Some(Some(ID)), "the pairing file written: the start's clock ran");
     app.settings.profile = None; // AUTO
     run(&mut sim, &mut app, 5000);
-    assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "AUTO: on, configured, a fix");
+    assert!(sim.gnss.powered && app.gps.pvt.is_some_and(|p| p.good()), "AUTO: on, configured, a fix");
 }
 
 /// The rider's own ERG (250 W by hand) during a ride, the trainer silent when the ride is saved: the hold ends with
