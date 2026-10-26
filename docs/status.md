@@ -55,7 +55,24 @@ The dated findings are in [journal.md](journal.md).
   mid-ride: RIDE RESUMED; END RIDE > DISCARD put both copies in `\Rustfw\Discarded` (valid FIT: indoor_cycling, 45
   records, the full copy's three developer fields).
 
+## Seen on the unit: palette, altitude and the data of a real ride (2026-10-26, owner present)
+
+- **The new palette and the zone bars on the panel** (from RAM): Intervals.icu's teal, green, olive, brown, wine,
+  purple and slate, brightened x 1.5, and the bars following their numbers at once.
+- **ALTITUDE** calibrated with the dev link's keys in 1 m steps.
+- **The RAM ride check of fe7776bbc83c:** a start, a restart mid-ride, a discard.
+- **A real ride's data:** 52,480 beats recorded as `hrv` messages in the full copy and read back. Our DFA a1 against
+  an independent implementation of the published method on the same beats: medians 1.05 and 1.05, r = 0.57 window
+  by window, a typical difference of +-0.07.
+
 ## Not yet seen on the unit
+
+- **The ascent filter on a ride (altitude.rs, ride.rs)**: the median of 5, the 1/6 average, the slewed reference and the
+  3 m hysteresis are tuned on the records of one real ride (341 m became 123 m on a real 60 km ride, offline); on the
+  unit, a ride's ascent against a known climb and against stock's, with a calibration made at the start.
+- **The sliced tile load (climbs_ahead.rs, storage/inflate.rs, storage/route.rs, app/ahead.rs)**: before the change one
+  tile took up to 238 ms in one pass on a ride; the longest slice is estimated at about 3 ms (host instruction counts,
+  scaled). On a ride, `dev.py info` ends with "climb tile us last N max M slice max S": S is to be seen under a few ms.
 
 - **The ramp test (ramp.rs, app/ramp.rs, WORKOUTS > RAMP TEST)**: only on the simulator. On the unit with the D500 or
   another trainer: the 5 min at 50 %, the one-minute steps in ERG, the stop on cadence under 60 rpm, on power under half
@@ -178,15 +195,15 @@ The dated findings are in [journal.md](journal.md).
   quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
   recording through it.
-- **Barometric altitude (src/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 2 m
+- **Barometric altitude (src/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 3 m
   ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SETTINGS > BIKE against a known
   height, the ride start's own calibration, `\Rustfw\altcal.bin` kept over a restart, the chip's current at a reading
   a second (datasheet, not measured), `Alt_P0` of a real DeviceData.ini.
 
 - **UI review 2, step A (sim only so far):** the touch lock (Back and Lap held together 1 s: the padlock in the strip,
   a tap on the gear ignored, again to unlock; try it with a glove: the two keys are on opposite sides), Back on the
-  overview doing nothing, the zone bars (the 8 px bar and its 3 s hold with a real power meter and strap: legible in
-  sunlight? the lemon yellow, magenta, violet and cyan zones by eye), the readings once a second, the 48 px map
+  overview doing nothing, the zone bars (the 8 px bar and its value margin with a real power meter and strap: legible in
+  sunlight? the teal, green, olive, brown, wine, purple and slate zones by eye), the readings once a second, the 48 px map
   buttons, the targets as "210" and "+-10", the confirmations "START: YES BACK: NO".
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
   DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`

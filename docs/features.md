@@ -24,7 +24,7 @@
   ascent, a zone graph; heart rate variability from a strap's beats: DFA a1 (the aerobic threshold marker, about
   0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute); and
   from the power meter and the ride: 3, 10 and 30 s power, NP, IF, TSS, kJ, kcal, W/kg, W' balance (kJ, green,
-  yellow, orange, red as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
+  the zone colours as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
   grade. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
@@ -156,7 +156,7 @@ The power button starts it again. After the backlight's time-out, any key brings
   goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
   graph between the last minutes and the whole ride; neither while a ride records (below).
   Each has its scale on the left and its time span under it; power and heart rate are coloured by zone, W' balance as
-  it drains, DFA alpha1 against the aerobic threshold (green above 0.75, yellow to 0.5, magenta under).
+  it drains, DFA alpha1 against the aerobic threshold (the zone 2 green above 0.75, the zone 3 olive to 0.5, the zone 4 brown under).
 
 ## Touch
 
@@ -184,13 +184,18 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
 
 ## Ride
 
-- Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from the barometric altitude (2 m hysteresis, a reading a
-  second while riding), else from GPS altitude (5 m).
-- Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette for grey, blue and green,
-  then lemon yellow, magenta, violet and cyan: never the menu's orange (selection, info banners) or the alarms' red.
+- Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from the barometric altitude (a median of 5 readings, then an average of 1/6; 3 m hysteresis; a reading a
+  second while riding), else from GPS altitude (5 m). A new calibration or source never steps the ride's altitude: it
+  is let go at 0.5 m/s at most and that part is never counted as climbing, and a calibration being made at the start
+  leaves the barometer on its old one. On a real 60 km ride this took the ascent from 341 m to 123 m.
+- Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in Intervals.icu's palette (teal, green, olive, brown,
+  wine, purple, slate), each channel x 1.5 for the black panel; heart rate's five take the first five, so a colour
+  means the same zone on both, and none is the menu's orange (selection, info banners) or the alarms' red. The
+  gauge, W' balance, grade and DFA a1 colours follow by zone.
   The plain power fields (POWER, 3S, 10S, 30S W) and HR show their zone as an 8 px bar along the top of the box,
-  the number white (POWER's bar takes its 3 s average's zone); the zone changes after three seconds in the new
-  one, so a value on an edge does not flip it, and the bar is all that is redrawn. NP, max and the other derived
+  the number white; each bar follows the number in its own box at once (live power, 3, 10, 30 s, heart rate each
+  zoned on their own value), with a margin on the value (2 % of FTP, 1 % of max HR) so a value on an edge does not
+  flip it, and the bar is all that is redrawn. NP, max and the other derived
   values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
@@ -327,7 +332,7 @@ power after every sector written).
 
 ## FTP ramp test
 
-Indoors, with a trainer heard: **WORKOUTS > RAMP TEST** (last row), or RAMP TEST beside MODE on the trainer screen
+Indoors, with a trainer heard: **WORKOUTS > RAMP TEST** (last row, its FTP in white), or RAMP TEST beside MODE on the trainer screen
 before a ride. It is a built-in workout played by the ordinary player in ERG (ramp.rs, app/ramp.rs), as
 TrainerRoad's Ramp Test: 5 min at 50 % of the FTP set, then one-minute steps from 56 % in +6 % each (FTP 250 W:
 140 W, then +15 W a minute; the last step open), then 5 min at 45 % to cool down. A stale FTP still gives a sensible
@@ -373,7 +378,7 @@ TrainingPeaks), read only:
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
-- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, yellow within 5 %, blue under, violet over,
+- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, yellow within 5 %, the zone 1 colour under, the zone 5 colour over,
   from the power over the GAUGE POWER window, the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
@@ -387,7 +392,7 @@ TrainingPeaks), read only:
   them (cadence, which has no zones: 30 % around the band), painted with the rider's zones along that scale (the zone
   palette of the power and heart-rate fields), so the band shows where the target sits among them. The band
   is a white outline over the zones; the reading is a white tick with a black outline, its ends beyond the track
-  coloured by how far it is from the band (green in it, yellow within 5 %, blue under, violet over); the number is white.
+  coloured by how far it is from the band (green in it, yellow within 5 %, the zone 1 colour under, the zone 5 colour over); the number is white.
   The scale is fixed for a step, so the zones do not slide. The climb pacer's TOP field draws the same gauge. With an
   open step or no workout, the power alone. Only the number's changed characters and the tick's old and new columns
   are redrawn (about 4 400 px/s for the page with a top half box, sim).
@@ -455,7 +460,9 @@ Hammerhead's Climber do.
 - **The road ahead:** the nearest road within 150 m (one in the direction of travel wins over a nearer one across it),
   then forward node by node for 4 km: the same road, else a road of the same class, else the smallest turn, never
   back, never a turn over 110 degrees; a dead end or a hairpin ends it. The tiles it crosses are read one a pass
-  (about 5 KB each on the card).
+  (about 5 KB each on the card), and a tile is loaded in slices (inflate resumed, then the decode and the sort, about
+  3 ms a slice at most, estimated), where one tile took up to 238 ms in a single pass on the unit, so keys and touch
+  keep answering.
 - **Elevation:** the map's, a whole metre a node, smoothed over about 560 m of road by stock's 9-point filter (the
   steps of whole metres would show as grades of 7 %); a trace under 630 m is not smoothed.
 - **Climbs:** the same rule as a course's (Garmin's: 500 m at 3 % at least), so a hill is one thing whether a course
@@ -550,7 +557,7 @@ STOCK):
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
 - **Barometric altitude** (`src/altitude.rs`, `src/app/barometer.rs`): the international barometric formula on the
-  LPS22HH's pressure, smoothed, calibrated by SETTINGS > BIKE > ALTITUDE (type the altitude, 5 m steps),
+  LPS22HH's pressure, smoothed (a median of 5 readings, then an average of 1/6: the median takes out gusts whole), calibrated by SETTINGS > BIKE > ALTITUDE (type the altitude, 1 m steps, a held key repeats),
   FROM GPS (30 s of 3D fix, six satellites), or by itself at a ride's start when the last calibration is over 3 hours
   old; kept in `\Rustfw\altcal.bin` between rides; stock's `Alt_P0` imported (not trusted). The ride, its graphs and the
   FIT records take the barometer's altitude when it reads, the receiver's otherwise. No drift correction in a ride

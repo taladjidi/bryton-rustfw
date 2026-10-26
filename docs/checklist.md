@@ -32,7 +32,7 @@ the code; [features.md](features.md) says how each one works.
 - [ ] Day and night colour modes (stock Meter Color Mode, Garmin)
 - [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock SPD / CAD / HR / PW Ring and Bar)
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation, by tap; whole ride by hold (stock, ours): sim
-- [x] Values in zone colours (stock): sim, an 8 px zone bar on the box's top edge, held 3 s
+- [x] Values in zone colours (stock): sim, an 8 px zone bar on the box's top edge, following its number (Intervals.icu's palette); seen on the unit from RAM
 - [x] Font choice for every text, PIXEL or SMOOTH (Barlow Semi Condensed Bold, OFL) (ours): unit, SETTINGS > DISPLAY > FONT seen on the panel, kept through a restart
 - [x] Cog on the overview opens the menu (ours): sim, 44 px touch box, anti-aliased, level with the date (PIXEL and SMOOTH)
 - [ ] Auto scroll through pages (stock, Garmin)
@@ -67,8 +67,8 @@ Time
 
 Altitude and climbing
 
-- [x] Ascent (stock Alt. Gain, all): sim, from the barometric altitude, GPS as the fallback
-- [x] Altitude (stock, all): sim, barometric, calibrated
+- [x] Ascent (stock Alt. Gain, all): sim, from the barometric altitude (median, 1/6 average, 3 m hysteresis, no step on a new calibration), GPS as the fallback
+- [x] Altitude (stock, all): sim, barometric, calibrated (typed in 1 m steps: unit)
 - [ ] Descent, max altitude (stock Alt. Loss, Max Altitude, all)
 - [ ] Lap ascent and descent (stock)
 - [ ] Uphill and downhill distance (stock)

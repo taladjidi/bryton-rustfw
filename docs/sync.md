@@ -145,6 +145,12 @@ indoor ride (session sub_sport 6, read past a compressed header) goes to Strava 
 doc), `--pair` checks the recorder's two copies against each other, and `--profile` the sport and sub_sport of an
 indoor ride cut and resumed (indoor_cycling) and of a ride resumed from an older recovery record (road).
 
+## Intervals.icu and Strava activities
+
+Activities Intervals.icu imported from Strava are "not available via the API" (Strava's November 2024 terms), so apps
+that read Intervals.icu's API (Domestique, for one) only see rides uploaded as files, which is what `sync.py` does.
+`sync.py` also sends a User-Agent: Cloudflare, in front of Intervals.icu, refused Python's default (error 1010).
+
 ## Not yet seen
 
 - Not yet run against the real Intervals.icu and Strava, nor with the unit's drive (docs/status.md).
