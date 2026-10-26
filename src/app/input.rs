@@ -514,10 +514,9 @@ impl App {
             }
             (Screen::Ride(_), Input::Back) => (self.screen, self.more_on) = (Screen::Main, None),
             // the TODAY card: the calendar
-            (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if inside(ui::TODAY_BOX, x, y) => {
-                self.refresh_calendar(b, true);
-                self.open(Screen::Menu(Menu::Workouts, 0))
-            }
+            // today's workout: its steps with START selected; Start held does the same off a ride
+            (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if inside(ui::TODAY_BOX, x, y) => self.open_today(b),
+            (Screen::Main, Input::End) if self.ride.state() == ride::State::Idle => self.open_today(b),
             (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
                 if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
                     && (ui::GEAR_TAP.1..ui::GEAR_TAP.1 + ui::GEAR_TAP.3).contains(&u32::from(y)) =>

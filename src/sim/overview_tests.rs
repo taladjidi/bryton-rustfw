@@ -142,8 +142,9 @@ fn the_card_follows_the_calendar() {
     assert_consistent(&mut sim, &mut app);
 }
 
-/// A tap anywhere on the card opens WORKOUTS (Back returns to the overview); a tap on the cog still opens the menu;
-/// before the calendar is read the tap reads it; while riding, touch does nothing.
+/// A tap anywhere on the card opens today's workout, its steps with START selected (Back returns to the overview);
+/// a tap on the cog still opens the menu; before the calendar is read the tap reads it; while riding, touch does
+/// nothing.
 #[test]
 fn a_tap_on_the_card_opens_the_calendar() {
     let mut sim = Sim::new(9, 0, 0);
@@ -156,20 +157,68 @@ fn a_tap_on_the_card_opens_the_calendar() {
     let tap = |app: &mut App, sim: &mut Sim, x, y| app.input(sim, Input::Touch(Gesture::Tap(x as u16, y as u16)));
     for (tx, ty) in [(x + w / 2, y + h / 2), (x + 8, y + h - 8), (x + w - 8, y + h - 8)] {
         tap(&mut app, &mut sim, tx, ty);
-        assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0), "({tx}, {ty})");
+        assert_eq!(app.screen(), Screen::Menu(Menu::Steps, 0), "({tx}, {ty})");
+        assert_eq!(app.row(Menu::Steps, 0), Some(menu::Row::WorkoutStart), "START selected");
         assert!(app.today().is_some(), "read by the tap");
         assert_consistent(&mut sim, &mut app);
         app.input(&mut sim, Input::Back);
         assert_eq!(app.screen(), Screen::Main);
     }
     tap(&mut app, &mut sim, ui::GEAR_C.0, ui::GEAR_C.1);
-    assert!(matches!(app.screen(), Screen::Menu(m, _) if m != Menu::Workouts), "the cog wins its corner");
+    assert!(matches!(app.screen(), Screen::Menu(m, _) if m != Menu::Steps), "the cog wins its corner");
     app.input(&mut sim, Input::Back);
     tap(&mut app, &mut sim, 10, ui::OVERVIEW_Y + 10);
     assert_eq!(app.screen(), Screen::Main, "a field is not the card");
     app.press(&mut sim, Press::Short(Key::Start)); // recording
     tap(&mut app, &mut sim, x + w / 2, y + h / 2);
-    assert_ne!(app.screen(), Screen::Menu(Menu::Workouts, 0), "touch is off while recording");
+    assert_ne!(app.screen(), Screen::Menu(Menu::Steps, 0), "touch is off while recording");
+}
+
+/// Today's workout from the overview: before, the card (or Page held, WORKOUTS), a row to select and act, then START
+/// (select, act): 5 taps. Now the card opens the steps with START selected, and one tap on START starts it (2 taps);
+/// by keys, Start held then Start (2), as Page held, Start, Start, Start (4) was. A rest day opens WORKOUTS.
+#[test]
+fn todays_workout_in_two_inputs() {
+    let (x, y, w, h) = TODAY_BOX;
+    let start_row_y = (ui::LIST_Y + ui::MENU_ROW / 2) as u16;
+    let card = || {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.own_settings();
+        sim.emmc.image = crate::fat::tests::image(); // plans a workout today
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 1500);
+        (sim, app)
+    };
+    let (mut sim, mut app) = card();
+    let mut inputs = 0;
+    app.input(&mut sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    inputs += 1;
+    assert_eq!(app.screen(), Screen::Menu(Menu::Steps, 0));
+    assert_eq!(app.row(Menu::Steps, 0), Some(menu::Row::WorkoutStart));
+    run(&mut sim, &mut app, 300);
+    assert_consistent(&mut sim, &mut app);
+    sim.save("today_steps");
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, start_row_y)));
+    inputs += 1;
+    assert!(app.player.is_some() && app.ride.state() == ride::State::Running, "START started it");
+    assert_eq!(inputs, 2, "was 5");
+
+    // by keys
+    let (mut sim, mut app) = card();
+    app.press(&mut sim, Press::Long(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Steps, 0), "Start held opens today's steps");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.player.is_some(), "Start starts it (2 keys, was 4)");
+    // a rest day
+    let (mut sim, mut app) = unit();
+    plan(&mut app, &[(1, &sweet_spot())]);
+    app.press(&mut sim, Press::Long(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0), "a rest day: the other days");
+    // a ride in progress: Start held is the end-ride key, not this
+    let (mut sim, mut app) = card();
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
+    assert_ne!(app.screen(), Screen::Menu(Menu::Steps, 0));
 }
 
 /// The list: a profile thumbnail in each day's row beside the day and the length; the ramp test row stays plain.

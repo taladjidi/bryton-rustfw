@@ -131,6 +131,17 @@ impl App {
         self.open(Screen::Menu(Menu::Steps, at));
     }
 
+    /// The TODAY card's tap and Start held on the overview: today's workout, its steps with START selected; on a
+    /// rest day WORKOUTS (the other days).
+    pub(crate) fn open_today(&mut self, b: &mut impl Board) {
+        self.refresh_calendar(b, true);
+        let today = self.calendar.iter().position(|p| p.day == self.date);
+        match today {
+            Some(k) => self.open_workout(b, k),
+            None => self.open(Screen::Menu(Menu::Workouts, 0)),
+        }
+    }
+
     /// A workout is playing a step (not done): the ride menu shows WORKOUT.
     pub(crate) fn workout_running(&self) -> bool {
         self.player.as_ref().is_some_and(|p| p.step(self.plan.steps()).is_some())
