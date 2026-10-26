@@ -225,6 +225,8 @@ pub struct App {
     /// Since the app's first step: the receiver is powered at [`GNSS_ON_MS`], its configuration and aiding sent
     /// once from [`GNSS_CONFIG_MS`].
     gnss_ms: u32,
+    /// Time run since the start, ms (saturating): a minute of it clears the fault count.
+    up_ms: u32,
     /// Messages sent to the receiver so far: configuration, time, position.
     gnss_sent: u8,
     /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
@@ -485,6 +487,7 @@ impl App {
             pvt: None,
             pvt_ms: 0,
             gnss_ms: 0,
+            up_ms: 0,
             gnss_sent: 0,
             gnss_off: false,
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
@@ -622,6 +625,8 @@ impl App {
         let work_us = now.wrapping_sub(core::mem::replace(&mut self.awake_at, now)).saturating_sub(sleep_work_us);
         let pass_ms = (sleep_ms + (work_us / 1000)).min(MAX_PASS_MS);
         self.dt_ms = pass_ms;
+        let up_before = self.up_ms;
+        self.up_ms = self.up_ms.saturating_add(pass_ms);
         let (tr, dr) = b.rtc();
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
@@ -672,9 +677,9 @@ impl App {
             self.poll_nrf(b);
         }
         self.watch_radio(b);
-        let gnss_before = self.gnss_ms;
         self.poll_gnss(b);
-        if gnss_before < FAULT_CLEAR_MS && self.gnss_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
+        // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)
+        if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
         }
         if !self.had_fix && self.pvt.is_some_and(|p| p.good()) {
