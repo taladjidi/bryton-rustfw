@@ -43,8 +43,11 @@
 //! (sim.rs `recorder_tests` cut the power after every sector). `fatfs` needs `std` or nightly `core_io`. This is
 //! about 450 lines with no heap, every loop bounded by the volume's cluster count or FAT's 65536 entries a
 //! directory.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
-use super::{DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, lfn_eq, short_eq, short_sum, u32_at};
+use super::{
+    DIR_ENTRIES, Disk, DiskWrite, Error, Fat, File, NAME, SECTOR, SECTOR_U32, lfn_eq, short_eq, short_sum, u32_at,
+};
 
 /// End of chain, as written.
 const EOC: u32 = 0x0fff_ffff;
@@ -90,8 +93,7 @@ pub struct Handle {
 /// Marks deleted (0xe5) the long name pieces before entry `slot` of directory sector `s` that carry checksum
 /// `sum`, back to the first piece (its 0x40 bit); true if the name goes on in the sector before.
 fn mark_long_name(s: &mut [u8; SECTOR], slot: usize, sum: u8) -> bool {
-    for k in (0..slot).rev() {
-        let e = &mut s[k * 32..k * 32 + 32];
+    for e in s.as_chunks_mut::<32>().0.iter_mut().take(slot).rev() {
         if e[11] != 0x0f || e[13] != sum || e[0] == 0xe5 || e[0] == 0 {
             return false;
         }
@@ -104,13 +106,18 @@ fn mark_long_name(s: &mut [u8; SECTOR], slot: usize, sum: u8) -> bool {
     true
 }
 
+/// The slot of the last of `n` entries put from slot 0 of a sector: [`Fat::add_entries`]'s result.
+fn last_slot(n: usize) -> Result<u8, Error> {
+    n.checked_sub(1).and_then(|k| u8::try_from(k).ok()).ok_or(Error::Corrupt)
+}
+
 /// A name this writer gives: 1 to [`NAME`] printable ASCII characters, none that FAT forbids, no leading or
 /// trailing space or dot.
 fn valid_name(name: &str) -> bool {
     let b = name.as_bytes();
     (1..=NAME).contains(&b.len())
         && b.iter().all(|&c| (0x20..0x7f).contains(&c) && !b"\"*/:<>?\\|".contains(&c))
-        && ![b' ', b'.'].contains(&b[0])
+        && b.first().is_some_and(|c| ![b' ', b'.'].contains(c))
         && b.last().is_some_and(|c| ![b' ', b'.'].contains(c))
 }
 
@@ -135,38 +142,47 @@ fn dir_entries(
     for (k, e) in out.iter_mut().take(pieces).enumerate() {
         // entry k holds piece (pieces - k): the last piece first
         let n = pieces - k;
-        e[0] = n as u8 | if k == 0 { 0x40 } else { 0 };
+        e[0] = u8::try_from(n).unwrap_or(0) | if k == 0 { 0x40 } else { 0 }; // n: 1 to 5
         e[11] = 0x0f;
         e[13] = sum;
         for (i, &a) in AT.iter().enumerate() {
             let u = units.get((n - 1) * 13 + i).copied().unwrap_or(0xffff);
-            e[a..a + 2].copy_from_slice(&u.to_le_bytes());
+            if let Some(at) = e.get_mut(a..a + 2) {
+                at.copy_from_slice(&u.to_le_bytes());
+            }
         }
     }
-    let e = &mut out[pieces];
-    e[..11].copy_from_slice(&short);
-    e[11] = attr;
-    let (date, t) = time;
-    for at in [14, 22] {
-        e[at..at + 2].copy_from_slice(&t.to_le_bytes());
+    // pieces: 5 at most, so its 8.3 entry is one of out's 6
+    if let Some(e) = out.get_mut(pieces) {
+        e[..11].copy_from_slice(&short);
+        e[11] = attr;
+        let (date, t) = (time.0.to_le_bytes(), time.1.to_le_bytes());
+        e[14..16].copy_from_slice(&t);
+        e[22..24].copy_from_slice(&t);
+        e[16..18].copy_from_slice(&date);
+        e[18..20].copy_from_slice(&date);
+        e[24..26].copy_from_slice(&date);
+        set_cluster(e, cluster);
+        e[28..32].copy_from_slice(&size.to_le_bytes());
     }
-    for at in [16, 18, 24] {
-        e[at..at + 2].copy_from_slice(&date.to_le_bytes());
-    }
-    e[20..22].copy_from_slice(&((cluster >> 16) as u16).to_le_bytes());
-    e[26..28].copy_from_slice(&(cluster as u16).to_le_bytes());
-    e[28..32].copy_from_slice(&size.to_le_bytes());
     (out, pieces + 1)
+}
+
+/// Puts `cluster` into 8.3 entry `e`: its high half at 20, its low half at 26.
+fn set_cluster(e: &mut [u8; 32], cluster: u32) {
+    let [a, b, c, d] = cluster.to_le_bytes();
+    e[20..22].copy_from_slice(&[c, d]);
+    e[26..28].copy_from_slice(&[a, b]);
 }
 
 impl Fat {
     /// Bytes per cluster.
     pub fn cluster_bytes(&self) -> u32 {
-        self.spc * SECTOR as u32
+        self.spc * SECTOR_U32
     }
 
     fn write(&self, d: &mut impl DiskWrite, lba: u32, buf: &[u8]) -> Result<(), Error> {
-        let n = (buf.len() / SECTOR) as u32;
+        let n = u32::try_from(buf.len() / SECTOR).map_err(|_| Error::Corrupt)?;
         if lba.checked_add(n).is_none_or(|end| end > self.total) || lba < self.fat_start {
             return Err(Error::Corrupt); // never the boot sector, FSInfo or past the volume
         }
@@ -180,7 +196,7 @@ impl Fat {
             if !self.valid(c) {
                 return Err(Error::Corrupt);
             }
-            let lba = self.fat_start + c / (SECTOR as u32 / 4);
+            let lba = self.fat_start + c / (SECTOR_U32 / 4);
             if self.cached != Some(lba) {
                 if dirty {
                     self.flush_fat(d)?;
@@ -212,8 +228,8 @@ impl Fat {
     /// A free cluster from `from` on (wrapping), the volume's clusters at most, the FAT read [`FREE_RUN`] sectors a
     /// command (the eMMC's multi-block read): on a nearly full volume one per sector was thousands of commands.
     /// Reads the first FAT, as [`Fat::entry`] does; its cached sector is never dirty here (`set_entries` flushes).
-    fn find_free(&mut self, d: &mut impl Disk, from: u32) -> Result<u32, Error> {
-        let per = SECTOR as u32 / 4;
+    fn find_free(&self, d: &mut impl Disk, from: u32) -> Result<u32, Error> {
+        let per = SECTOR_U32 / 4;
         let end = self.clusters + 2; // clusters 2..end
         let mut c = if self.valid(from) { from } else { 2 };
         let mut left = self.clusters;
@@ -238,8 +254,7 @@ impl Fat {
     }
 
     /// FSInfo's free count and next free hint, if the sector has its signatures.
-    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
-    fn fsinfo_read(&mut self, d: &mut impl Disk) -> Result<Option<(u32, u32, [u8; SECTOR])>, Error> {
+    fn fsinfo_read(&self, d: &mut impl Disk) -> Result<Option<(u32, u32, [u8; SECTOR])>, Error> {
         if self.fsinfo == 0 {
             return Ok(None);
         }
@@ -251,13 +266,7 @@ impl Fat {
 
     /// FSInfo after `taken` clusters were allocated (negative: freed): the free count moved (unless unknown,
     /// 0xffffffff) and the hint set to `next`. `exact` replaces the count.
-    fn fsinfo_update(
-        &mut self,
-        d: &mut impl DiskWrite,
-        taken: i64,
-        next: u32,
-        exact: Option<u32>,
-    ) -> Result<(), Error> {
+    fn fsinfo_update(&self, d: &mut impl DiskWrite, taken: i64, next: u32, exact: Option<u32>) -> Result<(), Error> {
         let Some((free, _, mut s)) = self.fsinfo_read(d)? else {
             if let (Some(n), 1) = (exact, self.fsinfo) {
                 // signatures lost (a cut tore the sector): made again where every formatter puts it, sector 1
@@ -274,7 +283,7 @@ impl Fat {
         let free = match exact {
             Some(n) => n,
             None if free == u32::MAX => free,
-            None => (i64::from(free) - taken).clamp(0, i64::from(self.clusters)) as u32,
+            None => u32::try_from((i64::from(free) - taken).clamp(0, i64::from(self.clusters))).unwrap_or(0),
         };
         s[488..492].copy_from_slice(&free.to_le_bytes());
         s[492..496].copy_from_slice(&(if self.valid(next) { next } else { 2 }).to_le_bytes());
@@ -287,7 +296,7 @@ impl Fat {
     }
 
     /// The hint where to look for a free cluster: FSInfo's, else the start.
-    fn hint(&mut self, d: &mut impl Disk) -> Result<u32, Error> {
+    fn hint(&self, d: &mut impl Disk) -> Result<u32, Error> {
         Ok(self.fsinfo_read(d)?.map_or(2, |(_, next, _)| next))
     }
 
@@ -336,13 +345,11 @@ impl Fat {
     }
 
     /// Writes `h`'s first cluster into its entry.
-    fn set_first(&mut self, d: &mut impl DiskWrite, h: &Handle) -> Result<(), Error> {
+    fn set_first(&self, d: &mut impl DiskWrite, h: &Handle) -> Result<(), Error> {
         let mut s = [0u8; SECTOR];
         self.read(d, h.entry_lba, &mut s)?;
-        let at = usize::from(h.slot) * 32;
-        let e = s.get_mut(at..at + 32).ok_or(Error::Corrupt)?;
-        e[20..22].copy_from_slice(&((h.first >> 16) as u16).to_le_bytes());
-        e[26..28].copy_from_slice(&(h.first as u16).to_le_bytes());
+        let e = s.as_chunks_mut::<32>().0.get_mut(usize::from(h.slot)).ok_or(Error::Corrupt)?;
+        set_cluster(e, h.first);
         self.write(d, h.entry_lba, &s)
     }
 
@@ -355,7 +362,7 @@ impl Fat {
         sector: u32,
         buf: &[u8],
     ) -> Result<(), Error> {
-        let n = (buf.len() / SECTOR) as u32;
+        let n = u32::try_from(buf.len() / SECTOR).map_err(|_| Error::Corrupt)?;
         if n == 0 || !buf.len().is_multiple_of(SECTOR) {
             return Err(Error::Corrupt);
         }
@@ -398,14 +405,13 @@ impl Fat {
         size: u32,
         time: (u16, u16),
     ) -> Result<(), Error> {
-        let need = size.div_ceil(self.spc * SECTOR as u32).max(1);
+        let need = size.div_ceil(self.spc * SECTOR_U32).max(1);
         if need > h.clusters {
             return Err(Error::Corrupt);
         }
         let mut s = [0u8; SECTOR];
         self.read(d, h.entry_lba, &mut s)?;
-        let at = usize::from(h.slot) * 32;
-        let e = s.get_mut(at..at + 32).ok_or(Error::Corrupt)?;
+        let e = s.as_chunks_mut::<32>().0.get_mut(usize::from(h.slot)).ok_or(Error::Corrupt)?;
         e[22..24].copy_from_slice(&time.1.to_le_bytes());
         e[24..26].copy_from_slice(&time.0.to_le_bytes());
         e[18..20].copy_from_slice(&time.0.to_le_bytes());
@@ -418,7 +424,7 @@ impl Fat {
     /// Cuts `h`'s chain after the clusters `size` bytes need (at least one) and frees the rest: its size already
     /// that, or no entry at all ([`Fat::chain`]).
     pub fn trim(&mut self, d: &mut impl DiskWrite, h: &mut Handle, size: u32) -> Result<(), Error> {
-        let need = size.div_ceil(self.spc * SECTOR as u32).max(1);
+        let need = size.div_ceil(self.spc * SECTOR_U32).max(1);
         if need < h.clusters {
             let keep = self.nth(d, h.first, need - 1)?;
             let mut rest = self.next(d, keep)?;
@@ -455,7 +461,7 @@ impl Fat {
                     return Err(Error::Refused);
                 }
                 let (last, clusters) = self.chain_end(d, f.cluster)?;
-                let slot = c.entry.checked_sub(1).ok_or(Error::Corrupt)? as u8;
+                let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
                 let entry_lba = self.lba(c.cluster) + c.sector;
                 let (first, size) = (f.cluster, f.size);
                 return Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster });
@@ -488,7 +494,7 @@ impl Fat {
         for salt in 0..16u64 {
             let mut h = fnv ^ salt.wrapping_mul(0x9e37_79b9_7f4a_7c15);
             for s in short[..8].iter_mut() {
-                *s = b"0123456789ABCDEFGHIJKLMNOPQRSTUV"[(h & 31) as usize];
+                *s = b"0123456789ABCDEFGHIJKLMNOPQRSTUV".get((h & 31) as usize).copied().unwrap_or(b'0');
                 h >>= 5;
             }
             let mut text = [0u8; 12];
@@ -498,11 +504,13 @@ impl Fat {
                 text[8] = b'.';
                 n = 9;
                 for &c in short[8..].iter().filter(|&&c| c != b' ') {
-                    text[n] = c;
-                    n += 1;
+                    if let Some(t) = text.get_mut(n) {
+                        *t = c;
+                        n += 1;
+                    }
                 }
             }
-            let text = core::str::from_utf8(&text[..n]).map_err(|_| Error::Corrupt)?;
+            let text = core::str::from_utf8(text.get(..n).unwrap_or_default()).map_err(|_| Error::Corrupt)?;
             match self.find(d, dir, text) {
                 Err(Error::NotFound) => return Ok(short),
                 Ok(_) => continue,
@@ -513,8 +521,7 @@ impl Fat {
     }
 
     /// Writes cluster `c` whole: sector 0 is `first`, the others zeros.
-    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
-    fn fill_cluster(&mut self, d: &mut impl DiskWrite, c: u32, first: &[u8; SECTOR]) -> Result<(), Error> {
+    fn fill_cluster(&self, d: &mut impl DiskWrite, c: u32, first: &[u8; SECTOR]) -> Result<(), Error> {
         self.write(d, self.lba(c), first)?;
         let zero = [0u8; 8 * SECTOR]; // 8 sectors a command: 4 commands for the unit's 32-sector clusters
         let mut k = 1;
@@ -538,16 +545,16 @@ impl Fat {
             }
         };
         let mut cluster = dir.cluster;
-        for _ in 0..DIR_ENTRIES / (ENTRIES as u32) {
+        for _ in 0..DIR_ENTRIES / (SECTOR_U32 / 32) {
             for sec in 0..self.spc {
                 let lba = self.lba(cluster) + sec;
                 let mut s = [0u8; SECTOR];
                 self.read(d, lba, &mut s)?;
-                let Some(i) = (0..ENTRIES).find(|&i| s[i * 32] == 0) else { continue };
+                let Some(i) = s.as_chunks::<32>().0.iter().position(|e| e[0] == 0) else { continue };
                 if i + n <= ENTRIES {
                     put(&mut s, i);
                     self.write(d, lba, &s)?;
-                    return Ok((lba, (i + n - 1) as u8));
+                    return Ok((lba, u8::try_from(i + n - 1).map_err(|_| Error::Corrupt)?));
                 }
                 // too few slots left here: the entry goes first into the next sector, then the slots left here
                 // are marked deleted, which makes it visible. The next sector is this cluster's, else the next
@@ -563,16 +570,16 @@ impl Fat {
                     }
                     None => self.extend_dir(d, cluster, entries)?,
                 };
-                for k in i..ENTRIES {
-                    s[k * 32] = 0xe5;
+                for e in s.as_chunks_mut::<32>().0.iter_mut().skip(i) {
+                    e[0] = 0xe5;
                 }
                 self.write(d, lba, &s)?;
-                return Ok((target, (n - 1) as u8));
+                return Ok((target, last_slot(n)?));
             }
             match self.next(d, cluster)? {
                 Some(c) => cluster = c,
                 // every slot taken to the end of the chain: no end marker to move
-                None => return Ok((self.extend_dir(d, cluster, entries)?, (n - 1) as u8)),
+                None => return Ok((self.extend_dir(d, cluster, entries)?, last_slot(n)?)),
             }
         }
         Err(Error::Corrupt)
@@ -585,12 +592,12 @@ impl Fat {
     pub fn make_room(&mut self, d: &mut impl DiskWrite, dir: File, name: &str) -> Result<(), Error> {
         let n = name.len().div_ceil(13).min(5) + 1; // as dir_entries
         let mut cluster = dir.cluster;
-        for _ in 0..DIR_ENTRIES / (ENTRIES as u32) {
+        for _ in 0..DIR_ENTRIES / (SECTOR_U32 / 32) {
             let mut end = false;
             for sec in 0..self.spc {
                 let mut s = [0u8; SECTOR];
                 self.read(d, self.lba(cluster) + sec, &mut s)?;
-                if let Some(i) = (0..ENTRIES).find(|&i| s[i * 32] == 0) {
+                if let Some(i) = s.as_chunks::<32>().0.iter().position(|e| e[0] == 0) {
                     if i + n <= ENTRIES || sec + 1 < self.spc {
                         return Ok(()); // in this sector or the next (add_entries)
                     }
@@ -702,9 +709,9 @@ impl Fat {
         let mut s = [0u8; SECTOR];
         self.read(d, h.entry_lba, &mut s)?;
         let slot = usize::from(h.slot);
-        let short: [u8; 32] = s.get(slot * 32..slot * 32 + 32).and_then(|e| e.try_into().ok()).ok_or(Error::Corrupt)?;
-        let sum = short_sum(&short);
-        s[slot * 32] = 0xe5;
+        let short = s.as_chunks_mut::<32>().0.get_mut(slot).ok_or(Error::Corrupt)?;
+        let sum = short_sum(short);
+        short[0] = 0xe5;
         let mut more = mark_long_name(&mut s, slot, sum);
         self.write(d, h.entry_lba, &s)?;
         // stock's and computers' long names cross sectors (this writer's never do): the first pieces in the sectors
@@ -748,8 +755,8 @@ impl Fat {
     /// sector torn by a cut mid-write (garbage, which a card without reliable write may leave: emmc.rs) almost
     /// never is: one entry in 2^28 values is a cluster of a 470 k cluster volume, and 128 entries a sector.
     fn sane(&self, first: u32, s: &[u8]) -> bool {
-        s.chunks_exact(4).enumerate().all(|(i, e)| {
-            let (c, v) = (first + i as u32, u32::from_le_bytes([e[0], e[1], e[2], e[3]]) & 0x0fff_ffff);
+        s.as_chunks::<4>().0.iter().zip(0u32..).all(|(e, i)| {
+            let (c, v) = (first + i, u32::from_le_bytes(*e) & 0x0fff_ffff);
             !self.valid(c) || v == 0 || self.valid(v) || v >= 0x0fff_fff7
         })
     }
@@ -792,24 +799,24 @@ impl Fat {
             for copy in 1..self.fats {
                 let lba = self.fat_start + copy * self.fat_size + sector;
                 self.read(d, lba, b)?;
-                for (j, (x, y)) in a.chunks_exact_mut(SECTOR).zip(b.chunks_exact(SECTOR)).enumerate() {
+                for ((x, y), j) in a.chunks_exact_mut(SECTOR).zip(b.chunks_exact(SECTOR)).zip(0u32..) {
                     if x == y {
                         continue;
                     }
-                    let first = (sector + j as u32) * (SECTOR as u32 / 4);
+                    let first = (sector + j) * (SECTOR_U32 / 4);
                     if !self.sane(first, x) && self.sane(first, y) {
                         // the first FAT's sector torn by a cut while it was written: the copy is the one before it
-                        self.write(d, self.fat_start + sector + j as u32, y)?;
+                        self.write(d, self.fat_start + sector + j, y)?;
                         x.copy_from_slice(y);
                         self.cached = None;
                     } else {
-                        self.write(d, lba + j as u32, x)?;
+                        self.write(d, lba + j, x)?;
                     }
                 }
             }
-            for (i, e) in a.chunks_exact(4).enumerate() {
-                let c = sector * (SECTOR as u32 / 4) + i as u32;
-                if self.valid(c) && u32::from_le_bytes([e[0], e[1], e[2], e[3]]) & 0x0fff_ffff == 0 {
+            for (e, i) in a.as_chunks::<4>().0.iter().zip(0u32..) {
+                let c = sector * (SECTOR_U32 / 4) + i;
+                if self.valid(c) && u32::from_le_bytes(*e) & 0x0fff_ffff == 0 {
                     free += 1;
                 }
             }
@@ -1068,7 +1075,7 @@ pub(crate) mod tests {
         };
         let look = |img: &Vec<u8>, from: u32| {
             let mut d = Ram(img.clone(), 0);
-            let mut fat = Fat::mount(&mut d).unwrap();
+            let fat = Fat::mount(&mut d).unwrap();
             d.1 = 0;
             (fat.find_free(&mut d, from), d.1)
         };

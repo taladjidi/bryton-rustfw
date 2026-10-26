@@ -39,7 +39,8 @@ fn pair(sim: &mut Sim, app: &mut App) {
     assert_eq!((label.as_str(), value.as_str()), ("SIM BIKE", "FTMS -56"));
     sim.save("ftms_search");
     app.press(sim, Press::Short(Key::Start));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, Kind::ALL.len()), "back to SENSORS");
+    // (TRAINER CONTROL joined the top of the list: the selection keeps its place in it, not its row)
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Sensors, _)), "back to SENSORS");
     app.leave_menus();
 }
 
@@ -81,7 +82,8 @@ fn the_trainer_and_the_phone_at_once() {
         [Some(150), Some(90), Some(226)]
     );
     assert_eq!(app.trainer.reading.modes, Some(7), "its Feature: resistance, power, simulation");
-    let row = app.menu_row(Menu::Sensors, Kind::ALL.len()).unwrap();
+    let row =
+        app.menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::BtTrainer)).unwrap();
     assert_eq!((row.0.as_str(), row.1.as_str()), ("BT TRAINER", "LINKED"));
     // the phone's media keys and the trainer's data together: a notification still reaches the phone's code
     app.media(&mut sim, crate::phone::Media::PlayPause, false);
@@ -240,7 +242,8 @@ fn no_control_reads_on() {
     run(&mut sim, &mut app, 3000);
     assert_eq!(trainer(&sim).got, [vec![0x00]]);
     assert_eq!(app.live.get(Metric::Power), Some(150));
-    let row = app.menu_row(Menu::Sensors, Kind::ALL.len()).unwrap();
+    let row =
+        app.menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::BtTrainer)).unwrap();
     assert_eq!(row.1.as_str(), "NO CONTROL");
 }
 
@@ -268,9 +271,12 @@ fn a_chip_without_room_for_two_links_keeps_the_phone() {
         run(&mut sim, &mut app, 2000);
         assert_eq!(app.phone.link(), Link::Secure, "the phone works");
         assert_eq!(sim.nordic.got.iter().rfind(|p| p[..2] == [0, 0x73]).map(|p| p[11]), Some(0), "tag 0");
-        let row = app.menu_row(Menu::Sensors, Kind::ALL.len()).unwrap();
+        let row = app
+            .menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::BtTrainer))
+            .unwrap();
         assert_eq!(row.1.as_str(), "NO LINK");
-        app.activate(&mut sim, Menu::Sensors, Kind::ALL.len());
+        let bt = super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::BtTrainer);
+        app.activate(&mut sim, Menu::Sensors, bt);
         run(&mut sim, &mut app, 3000);
         assert_eq!(sim.nordic.connects, 0);
         assert_eq!(app.radio_resets(), 0, "and the link watchdog is content");
@@ -306,8 +312,9 @@ fn one_trainer_at_a_time_and_kept_across_restarts() {
     run(&mut sim2, &mut app2, 8000);
     assert!(trainer(&sim2).control, "connected again from the file");
     // forgotten: disconnected, and not again
-    app2.activate(&mut sim2, Menu::Sensors, Kind::ALL.len());
-    app2.activate(&mut sim2, Menu::Sensors, Kind::ALL.len());
+    let bt = super::tests::row_in(&app2, Menu::Sensors, crate::menu::Row::BtTrainer);
+    app2.activate(&mut sim2, Menu::Sensors, bt);
+    app2.activate(&mut sim2, Menu::Sensors, bt);
     run(&mut sim2, &mut app2, 10_000);
     assert!(!trainer(&sim2).connected);
     assert_eq!(bt_file(&sim2), None);

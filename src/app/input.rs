@@ -317,9 +317,8 @@ impl App {
         {
             self.update_menu_rows(b, menu, sel); // its "SURE?" goes
         }
-        // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines, and the
-        // editor's KEEP CHANGES? is a question that Back answers
-        if cleared && i == Input::Back && !self.phone.ringing && !matches!(self.screen, Screen::Edit(..)) {
+        // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines
+        if cleared && i == Input::Back && !self.phone.ringing {
             return;
         }
         let graph_hit = match (self.screen, i) {
@@ -355,7 +354,11 @@ impl App {
             (Screen::Ride(_), Input::Back | Input::Touch(Gesture::Swipe(Dir::Down))) if self.more_shown().is_some() => {
                 self.more_on = None
             }
-            // a swipe down on a page opens the remote, without the menus
+            // a swipe down on the overview before a ride opens the quick panel; on a page (or the overview of a ride)
+            // it opens the remote, without the menus
+            (Screen::Main, Input::Touch(Gesture::Swipe(Dir::Down))) if self.ride.state() == ride::State::Idle => {
+                self.open(Screen::Menu(Menu::Quick, 0))
+            }
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
             // Back, or a swipe up (the swipe down that opened it, undone)
             (Screen::Media, Input::Back | Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
@@ -428,7 +431,14 @@ impl App {
             (Screen::Trainer, Input::Select) if self.ride.state() != ride::State::Idle => return self.start_key(b),
             (Screen::Trainer, Input::Prev) if self.ride.state() != ride::State::Idle => return self.lap(),
             (Screen::Trainer, Input::PrevHeld) if self.ride.state() != ride::State::Idle => return,
-            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => self.open(Screen::End(0)),
+            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => {
+                self.open(Screen::End(ui::END_SAVE))
+            }
+            // riding, the long presses are the trainer's: Lap held steps the target down (Page is up), Start held
+            // cycles the mode; the short ones stay a lap and a pause
+            (Screen::Trainer, Input::Media | Input::End) if self.ride.state() == ride::State::Running => {
+                return self.trainer_long(b, i);
+            }
             (Screen::Trainer, _) => return self.trainer_input(b, i),
             (Screen::Edit(..), _) => return self.editor_input(b, i),
             (Screen::End(_) | Screen::Discard(_), _) => return self.end_input(b, i),
@@ -514,10 +524,9 @@ impl App {
             }
             (Screen::Ride(_), Input::Back) => (self.screen, self.more_on) = (Screen::Main, None),
             // the TODAY card: the calendar
-            (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if inside(ui::TODAY_BOX, x, y) => {
-                self.refresh_calendar(b, true);
-                self.open(Screen::Menu(Menu::Workouts, 0))
-            }
+            // today's workout: its steps with START selected; Start held does the same off a ride
+            (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if inside(ui::TODAY_BOX, x, y) => self.open_today(b),
+            (Screen::Main, Input::End) if self.ride.state() == ride::State::Idle => self.open_today(b),
             (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
                 if (ui::GEAR_TAP.0..ui::GEAR_TAP.0 + ui::GEAR_TAP.2).contains(&u32::from(x))
                     && (ui::GEAR_TAP.1..ui::GEAR_TAP.1 + ui::GEAR_TAP.3).contains(&u32::from(y)) =>
@@ -538,7 +547,7 @@ impl App {
             // Prev marks a lap (on the overview too)
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
             (Screen::Main | Screen::Ride(_), Input::End) if self.ride.state() == ride::State::Paused => {
-                self.open(Screen::End(0))
+                self.open(Screen::End(ui::END_SAVE))
             }
             // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
             (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,
@@ -556,6 +565,8 @@ impl App {
                     return self.update_menu_rows(b, menu, next);
                 }
             }
+            // the quick panel is one screen: the swipe down that opened it, undone
+            (Screen::Menu(Menu::Quick, _), Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down)))) => {
                 // a screen of rows at a time: up shows the next, down the previous
                 let (first, rows) = (menu::first_shown(sel, ui::MENU_ROWS), self.rows(menu));
@@ -568,7 +579,8 @@ impl App {
             }
             // the "<" left of the title: back
             (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
-            // a tap selects the row; a tap on the row chosen already acts on it (as Start)
+            // a tap acts on the row (as Start on it); while the ride is moving, a tap selects and a second one on the
+            // row chosen acts (a wet glove or a bump must not do something)
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Tap(_, y))) => {
                 // the bottom rows under the last slot (316 to 319) are the last slot's, not the next screen's
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y))
@@ -577,16 +589,24 @@ impl App {
                     Some(row) if self.row(menu, row).is_some() => row,
                     _ => return self.update_menu_rows(b, menu, sel), // a row's "SURE?" goes
                 };
-                if row != sel || !self.menu_chosen {
+                if self.ride.moving() && (row != sel || !self.menu_chosen) {
                     self.menu_chosen = true;
                     self.screen = Screen::Menu(menu, row);
                     return self.update_menu_rows(b, menu, row);
                 }
-                return self.select_row(b, menu, sel, armed);
+                self.menu_chosen = true;
+                return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
-            // a past ride's card: Start asks to delete it, Start again deletes it (moved, kept: trash.rs)
-            (Screen::Past, Input::Select) => {
+            // a past ride's card: Start dismisses it, as the ride summary. DELETE asks (a tap on its label, or Start
+            // held), and the answer is Start, a tap on it again or Start held again; Back says no (moved, kept:
+            // trash.rs)
+            (Screen::Past, Input::Select) if armed != Some(PAST_DELETE) => self.close(),
+            (Screen::Past, Input::Select | Input::End) => {
+                self.confirm = armed;
+                self.delete_past(b);
+            }
+            (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::DELETE_TAP, x, y) => {
                 self.confirm = armed;
                 self.delete_past(b);
             }

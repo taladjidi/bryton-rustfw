@@ -20,9 +20,13 @@
 //! - `fatfs` (rafalh): the last release (0.3.6, January 2023) needs `std`, or the nightly-only `core_io`, and 0.4
 //!   is unreleased (git only).
 //! - This reader is about 300 lines with its tests, read only by construction, no `unsafe`.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 /// Bytes per sector: the only size this reader takes (the unit's, BOARD.md 15).
 pub const SECTOR: usize = 512;
+/// [`SECTOR`] as a `u32`, for sector and byte counts on the volume.
+pub const SECTOR_U32: u32 = 512;
+const _: () = assert!(SECTOR_U32 as usize == SECTOR);
 /// Directory entries a FAT directory may hold at most.
 const DIR_ENTRIES: u32 = 65_536;
 /// Characters of a long name (20 entries of 13).
@@ -151,7 +155,7 @@ impl Fat {
         let (reserved, fats) = (u32::from(u16_at(&s, 14)), u32::from(s[16]));
         let (total, fat_size, root) = (u32_at(&s, 32), u32_at(&s, 36), u32_at(&s, 44));
         let fat32 = u16_at(&s, 510) == 0xaa55
-            && u16_at(&s, 11) == SECTOR as u16
+            && u32::from(u16_at(&s, 11)) == SECTOR_U32
             && spc.is_power_of_two()
             && reserved > 0
             && (1..=2).contains(&fats)
@@ -163,7 +167,7 @@ impl Fat {
             return Err(Error::NotFat32);
         }
         // the FAT must hold an entry for every cluster
-        let clusters = ((total - data_start) / spc).min(fat_size.saturating_mul(SECTOR as u32 / 4).saturating_sub(2));
+        let clusters = ((total - data_start) / spc).min(fat_size.saturating_mul(SECTOR_U32 / 4).saturating_sub(2));
         let fsinfo = u32::from(u16_at(&s, 48)).min(reserved.saturating_sub(1));
         let fat = Fat {
             fat_start: reserved,
@@ -193,9 +197,8 @@ impl Fat {
         cluster >= 2 && cluster - 2 < self.clusters
     }
 
-    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
-    fn read(&mut self, d: &mut impl Disk, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
-        let n = (buf.len() / SECTOR) as u32;
+    fn read(&self, d: &mut impl Disk, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+        let n = u32::try_from(buf.len() / SECTOR).map_err(|_| Error::Corrupt)?;
         if lba.checked_add(n).is_none_or(|end| end > self.total) {
             return Err(Error::Corrupt);
         }
@@ -218,7 +221,7 @@ impl Fat {
 
     /// The FAT entry of `cluster` (28 bits), from the first FAT, through the one sector kept.
     fn entry(&mut self, d: &mut impl Disk, cluster: u32) -> Result<u32, Error> {
-        let lba = self.fat_start + cluster / (SECTOR as u32 / 4);
+        let lba = self.fat_start + cluster / (SECTOR_U32 / 4);
         if self.cached != Some(lba) {
             self.cached = None;
             let mut s = [0u8; SECTOR];
@@ -336,17 +339,17 @@ impl Fat {
             };
             if long {
                 for &ch in c.lfn.iter().take_while(|&&ch| ch != 0 && ch != 0xffff) {
-                    put(if ch < 0x80 { ch as u8 } else { b'?' });
+                    put(u8::try_from(ch).ok().filter(u8::is_ascii).unwrap_or(b'?'));
                 }
             } else {
                 let trim = |b: &[u8]| b.iter().rposition(|&ch| ch != b' ').map_or(0, |i| i + 1);
                 // byte 12: Windows NT's lower case flags (0x08 the name, 0x10 the extension), which macOS sets too
                 let lower = |b: u8, bit: u8| if e[12] & bit != 0 { b.to_ascii_lowercase() } else { b };
                 let (base, ext) = (&e[..8], &e[8..11]);
-                base[..trim(base)].iter().for_each(|&b| put(lower(b, 0x08)));
+                base.iter().take(trim(base)).for_each(|&b| put(lower(b, 0x08)));
                 if trim(ext) > 0 {
                     put(b'.');
-                    ext[..trim(ext)].iter().for_each(|&b| put(lower(b, 0x10)));
+                    ext.iter().take(trim(ext)).for_each(|&b| put(lower(b, 0x10)));
                 }
             }
             return Ok(Some(out));
@@ -396,9 +399,9 @@ impl Fat {
         buf: &mut [u8],
         seek: &mut Seek,
     ) -> Result<usize, Error> {
-        let n = (f.size.saturating_sub(offset) as usize).min(buf.len());
-        let cluster_bytes = self.spc * SECTOR as u32;
-        let mut done = 0;
+        let n = f.size.saturating_sub(offset).min(u32::try_from(buf.len()).unwrap_or(u32::MAX));
+        let cluster_bytes = self.spc * SECTOR_U32;
+        let mut done = 0u32;
         let mut index = offset / cluster_bytes;
         let mut cluster = match (n, *seek) {
             (0, _) => 0,
@@ -406,36 +409,37 @@ impl Fat {
             _ => self.nth(d, f.cluster, index)?,
         };
         while done < n {
-            let pos = offset + done as u32;
+            let pos = offset + done;
             if done > 0 && pos.is_multiple_of(cluster_bytes) {
                 cluster = self.next(d, cluster)?.ok_or(Error::Corrupt)?;
                 index += 1;
             }
             *seek = Seek { index, cluster };
             let in_cluster = pos % cluster_bytes;
-            let lba = self.lba(cluster) + in_cluster / SECTOR as u32;
+            let lba = self.lba(cluster) + in_cluster / SECTOR_U32;
             let left = n - done;
-            let rest = buf.get_mut(done..n).ok_or(Error::Corrupt)?;
-            if in_cluster.is_multiple_of(SECTOR as u32) && left >= SECTOR {
-                let sectors = ((left / SECTOR) as u32).min(self.spc - in_cluster / SECTOR as u32);
-                let len = sectors as usize * SECTOR;
-                self.read(d, lba, rest.get_mut(..len).ok_or(Error::Corrupt)?)?;
+            let rest = buf.get_mut(done as usize..n as usize).ok_or(Error::Corrupt)?;
+            if in_cluster.is_multiple_of(SECTOR_U32) && left >= SECTOR_U32 {
+                let sectors = (left / SECTOR_U32).min(self.spc - in_cluster / SECTOR_U32);
+                let len = sectors * SECTOR_U32;
+                self.read(d, lba, rest.get_mut(..len as usize).ok_or(Error::Corrupt)?)?;
                 done += len;
             } else {
                 let mut s = [0u8; SECTOR];
                 self.read(d, lba, &mut s)?;
-                let at = (in_cluster % SECTOR as u32) as usize;
-                let len = (SECTOR - at).min(left);
-                rest.get_mut(..len).ok_or(Error::Corrupt)?.copy_from_slice(s.get(at..at + len).ok_or(Error::Corrupt)?);
+                let at = in_cluster % SECTOR_U32;
+                let len = (SECTOR_U32 - at).min(left);
+                let (at, k) = (at as usize, len as usize);
+                rest.get_mut(..k).ok_or(Error::Corrupt)?.copy_from_slice(s.get(at..at + k).ok_or(Error::Corrupt)?);
                 done += len;
             }
         }
-        Ok(n)
+        Ok(n as usize)
     }
 }
 
 /// Puts long name entry `e` (sequence `ord`) into `lfn`; the checksum while the pieces so far are whole.
-fn lfn_piece(lfn: &mut [u16; LFN], e: &[u8], ord: u8, sum: Option<u8>) -> Option<u8> {
+fn lfn_piece(lfn: &mut [u16; LFN], e: &[u8; 32], ord: u8, sum: Option<u8>) -> Option<u8> {
     let n = usize::from(ord & 0x1f);
     if n == 0 || n * 13 > LFN {
         return None;
@@ -446,8 +450,8 @@ fn lfn_piece(lfn: &mut [u16; LFN], e: &[u8], ord: u8, sum: Option<u8>) -> Option
         return None;
     }
     const AT: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
-    for (i, &a) in AT.iter().enumerate() {
-        lfn[(n - 1) * 13 + i] = u16_at(e, a);
+    for (slot, a) in lfn.iter_mut().skip((n - 1) * 13).zip(AT) {
+        *slot = u16_at(e, a);
     }
     Some(e[13])
 }
@@ -469,10 +473,10 @@ fn fold(c: u16) -> u16 {
 }
 
 /// The 8.3 name of entry `e` ("NAME.EXT", padding dropped) equals `name`, ASCII case ignored.
-fn short_eq(e: &[u8], name: &str) -> bool {
+fn short_eq(e: &[u8; 32], name: &str) -> bool {
     let trim = |b: &[u8]| b.iter().rposition(|&c| c != b' ').map_or(0, |i| i + 1);
     let (base, ext) = (&e[..8], &e[8..11]);
-    let (base, ext) = (&base[..trim(base)], &ext[..trim(ext)]);
+    let (base, ext) = (base.get(..trim(base)).unwrap_or_default(), ext.get(..trim(ext)).unwrap_or_default());
     let mut first = base.first().copied();
     if first == Some(0x05) {
         first = Some(0xe5); // a name starting with 0xe5 is stored as 0x05

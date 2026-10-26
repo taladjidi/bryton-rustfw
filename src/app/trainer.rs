@@ -539,6 +539,22 @@ impl App {
         self.trainer_shown = shown;
     }
 
+    /// Riding, on the trainer screen, a long press: Lap held ([`Input::Media`]) the target one big step down, Start held
+    /// ([`Input::End`]) the next mode, the banner naming the mode now (a workout or a course keeps its own).
+    pub(crate) fn trainer_long(&mut self, b: &mut impl Board, i: Input) {
+        let d = self.trainer_drive();
+        if i == Input::End {
+            self.trainer.cycle_mode(&d);
+            let mut l = Line::<16>::new();
+            l.push_str("MODE ");
+            l.push_str(self.trainer.mode(&d).name());
+            self.say(l.as_str());
+        } else {
+            self.trainer.step_by(&d, false, true);
+        }
+        self.update_trainer(b);
+    }
+
     /// An input on the trainer screen: Page and Lap (held: twice the step) change the target, Start the mode, Back
     /// leaves; the touch buttons do the same. During a ride Start and Lap keep their ride meaning (input.rs): the
     /// mode changes by the MODE button only, the target down by "-".

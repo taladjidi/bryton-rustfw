@@ -334,6 +334,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
+  `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
@@ -352,6 +353,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
   after `dev.py reset`): a firmware that reads the link takes the bytes first.
+- `tools/s810_probe.py`: what an S810 owner sends back (docs/s810.md, section 3): read only, the stock drive's
+  versions, file shapes and the debug logs' hardware lines in one zip, nothing personal; `selftest` (check.sh).
 - `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
   SHA256SUMS.

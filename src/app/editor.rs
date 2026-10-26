@@ -20,7 +20,7 @@
 //! Page / Lap (or a tap) select a box, Start (or a tap on the selected one) opens its actions: FIELD (the picker by
 //! groups), SPLIT with a side-by-side icon (a second cell in its row), SPLIT with a stacked icon (a row under it),
 //! MERGE, TALLER, SHORTER, UNDO, then ADD PAGE and DELETE PAGE (asked first). Back leaves: at once when nothing
-//! changed, else "KEEP CHANGES?" (Start keeps, Back drops). The editor works on a copy ([`EDITED`]); only keeping
+//! changed, and keeps them else (DROP CHANGES, last in the actions, asks and drops them). The editor works on a copy ([`EDITED`]); only keeping
 //! it (or adding or deleting a page) changes the pages.
 //!
 //! **Storage.** The pages are written to `\Rustfw\pages.bin` when they change, between rides only (the recorder is
@@ -45,7 +45,7 @@
 //!
 //! **Two sets** (UI review 3, 4.2.7): the ROAD pages above and the INDOOR set ([`page::Set`], app/profile.rs), in the file
 //! only, after the MORE part with a CRC of its own (page.rs). The editor, LAYOUT, the picker and PAGES work on the
-//! set of the profile in force while a ride is open, else the one PAGES > PAGES OF names (a hold on a ride page or
+//! set of the profile in force while a ride is open, else the one PAGES > ROAD PAGES or INDOOR PAGES opened (a hold on a ride page or
 //! the ride menu's EDIT THIS PAGE take the set on screen). The registers never hold the indoor set: an indoor edit
 //! made while the file must wait (a paused ride, the drive lent) is lost to a switch-off, like pages 4 to 6.
 //!
@@ -115,8 +115,6 @@ pub(crate) struct Editing {
     pub(crate) work: Page,
     pub(crate) orig: Page,
     pub(crate) undo: Option<Page>,
-    /// Back asked "KEEP CHANGES?": Start keeps, Back drops.
-    pub(crate) asking: bool,
 }
 
 impl App {
@@ -388,7 +386,7 @@ impl App {
         let Some(&p) = self.page_ref(n).filter(|_| n < PAGES) else { return };
         let more = self.more_shown() == Some(n);
         let p = if more { self.more_page(n) } else { p };
-        self.edit = Some(Editing { page: n, more, work: p, orig: p, undo: None, asking: false });
+        self.edit = Some(Editing { page: n, more, work: p, orig: p, undo: None });
         self.open(Screen::Edit(n, k.min(p.cells().saturating_sub(1))));
     }
 
@@ -417,20 +415,15 @@ impl App {
         let (Screen::Edit(_, sel), Some(e)) = (self.screen, self.edit) else {
             return self.leave_editor(b, false);
         };
-        let asking = e.asking;
-        if let Some(e) = &mut self.edit {
-            e.asking = false;
-        }
         let cells = e.work.cells().max(1);
         let back = matches!(i, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)));
         match i {
-            Input::Select if asking => self.leave_editor(b, true),
-            _ if back && (asking || e.work == e.orig) => self.leave_editor(b, false),
+            // Back keeps what was done (nothing is lost: it never means "drop"); DROP CHANGES in the actions does
             _ if back => {
-                if let Some(e) = &mut self.edit {
-                    e.asking = true;
+                self.leave_editor(b, true);
+                if e.work != e.orig {
+                    self.say("CHANGES KEPT");
                 }
-                self.say("KEEP CHANGES?\nSTART: KEEP BACK: DROP");
             }
             Input::Next | Input::NextHeld => {
                 self.repeated |= i == Input::NextHeld;
@@ -521,6 +514,13 @@ impl App {
             EditRow::Shorter => w.resize(k, false).map(|p| (p, k)),
             EditRow::Undo => e.undo.map(|u| (u, k)).ok_or("NOTHING TO UNDO"),
             EditRow::AddPage => return self.add_page(b, e.page + 1),
+            EditRow::Drop => {
+                if self.confirmed(menu, sel, "DROP CHANGES") {
+                    self.leave_editor(b, false);
+                    self.say("CHANGES DROPPED");
+                }
+                return;
+            }
             EditRow::DeletePage if e.more => {
                 // in MORE this row resets the variant to its default; the page stays
                 if self.confirmed(menu, sel, "RESET THIS MORE") {

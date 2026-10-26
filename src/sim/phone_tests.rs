@@ -84,10 +84,12 @@ fn media_keys_and_now_playing() {
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 3000);
     app.input(&mut sim, Input::Media); // Lap held on the overview
-    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Down))); // from the overview
+    app.screen = Screen::Ride(0); // the overview's swipe down is the quick panel (before a ride)
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Down)));
     assert_eq!(app.screen, Screen::Media);
     app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
-    assert_eq!(app.screen, Screen::Main, "a swipe up closes it");
+    assert_eq!(app.screen, Screen::Ride(0), "a swipe up closes it");
+    app.screen = Screen::Main;
     app.activate(&mut sim, Menu::Phone, 2); // REMOTE
     assert_eq!(app.screen, Screen::Media);
     app.show(&mut sim);
@@ -426,10 +428,8 @@ fn notifications_list_and_detail() {
     assert_eq!(text(3), None);
     sim.save("notifs_list");
 
-    // a tap selects the row, a second one opens it
+    // one tap opens the row
     let y = (ui::LIST_Y + ui::MENU_ROW + 10) as u16;
-    app.input(&mut sim, Input::Touch(Gesture::Tap(120, y)));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 1));
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, y)));
     assert_eq!(app.screen(), Screen::Notif(1, 0));
     let lines: Vec<_> = app.notif_text(1).collect();

@@ -132,6 +132,17 @@ impl App {
         self.open(Screen::Menu(Menu::Steps, at));
     }
 
+    /// The TODAY card's tap and Start held on the overview: today's workout, its steps with START selected; on a
+    /// rest day WORKOUTS (the other days).
+    pub(crate) fn open_today(&mut self, b: &mut impl Board) {
+        self.refresh_calendar(b, true);
+        let today = self.calendar.iter().position(|p| p.day == self.date);
+        match today {
+            Some(k) => self.open_workout(b, k),
+            None => self.open(Screen::Menu(Menu::Workouts, 0)),
+        }
+    }
+
     /// A workout is playing a step (not done): the ride menu shows WORKOUT.
     pub(crate) fn workout_running(&self) -> bool {
         self.player.as_ref().is_some_and(|p| p.step(self.plan.steps()).is_some())
@@ -361,7 +372,7 @@ impl App {
         }
         let color = match (reading, band) {
             (Some(v), Some(b)) => workout::gauge_color(v, b),
-            (Some(w), None) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
+            (Some(w), None) => ride::power_zone_color(w, self.settings.ftp),
             (None, _) => ui::WHITE,
         };
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
@@ -421,8 +432,7 @@ impl App {
 
     /// The workout gauge drawn as `old`: whole for another step, window or reading kind; else only the number's
     /// characters that changed (all of it in a new colour) and the marker's old and new columns.
-    #[allow(clippy::needless_pass_by_ref_mut)] // TODO (another agent's file): `&self`
-    pub(crate) fn update_gauge(&mut self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
+    pub(crate) fn update_gauge(&self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let cols = ui::gauge_cols(bx);
         let now = if old.pace.is_some() { self.pace_now(cols) } else { self.gauge_now(cols) };
         let mut p = Panel(b, self.area(), self.settings.smooth);

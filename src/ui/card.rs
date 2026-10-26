@@ -16,6 +16,15 @@ const STAT_H: u32 = 20;
 /// Numbers on a card.
 pub const STATS: usize = 10;
 
+/// The touch box of a past ride's DELETE (44 px tall for a glove, over the map's top corner: a card has no other touch).
+pub const DELETE_TAP: (u32, u32, u32, u32) = (W - 88, PAGE_Y, 88, 44);
+
+/// "DELETE" in red at the right end of a past ride's title line; a tap in [`DELETE_TAP`] (or Start held) asks.
+pub fn draw_delete(c: &mut impl Canvas) {
+    let red = Style { fg: super::RED, scale: 1, ..LABEL };
+    text::draw_in(c, &red, W - 44, PAGE_Y + 8, 42, Align::Right, "DELETE");
+}
+
 /// What a card shows besides its map and profile.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Card {

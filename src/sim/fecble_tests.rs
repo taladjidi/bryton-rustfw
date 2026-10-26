@@ -59,7 +59,8 @@ fn the_d500_is_paired_and_read() {
         [Metric::Power, Metric::Cadence, Metric::Speed].map(|m| app.live.get(m)),
         [Some(150), Some(90), Some(226)]
     );
-    let row = app.menu_row(Menu::Sensors, Kind::ALL.len()).unwrap();
+    let row =
+        app.menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::BtTrainer)).unwrap();
     assert_eq!((row.0.as_str(), row.1.as_str()), ("BT TRAINER", "LINKED"));
     // the trainer screen, taken over: 105 W, as a page 49
     app.open(Screen::Trainer);
