@@ -300,7 +300,7 @@ fn every_write_is_reliable_when_the_card_offers_it() {
 // The end-ride screen (app/riding.rs `end_input`): RESUME, SAVE, DISCARD
 // ---------------------------------------------------------------------------------------------------------------
 
-/// A ride of 70 s (a checkpoint on the card), paused, and Start held: the end-ride screen, RESUME selected, the ride
+/// A ride of 70 s (a checkpoint on the card), paused, and Start held: the end-ride screen, SAVE selected, the ride
 /// paused.
 fn to_end_screen(sim: &mut Sim, app: &mut App) {
     app.press(sim, Press::Short(Key::Start));
@@ -308,7 +308,7 @@ fn to_end_screen(sim: &mut Sim, app: &mut App) {
     app.press(sim, Press::Short(Key::Start));
     run(sim, app, 1000);
     app.press(sim, Press::Long(Key::Start));
-    assert_eq!((app.screen(), app.ride.state()), (Screen::End(0), ride::State::Paused), "the end-ride screen");
+    assert_eq!((app.screen(), app.ride.state()), (Screen::End(1), ride::State::Paused), "the end-ride screen");
 }
 
 /// The ride's file `dir/<name>.fit` on the simulated card, if any.
@@ -361,15 +361,15 @@ fn end_ride_screen_by_keys() {
     run(&mut sim, &mut app, 5000);
     assert_eq!(app.ride.timer_s(), timer, "still paused");
     app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Lap)); // SAVE is the default; RESUME is one up
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running), "the default: RESUME");
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running), "RESUME");
     app.press(&mut sim, Press::Short(Key::Start)); // paused again
     // SAVE
     let name = app.recorder.name();
     app.press(&mut sim, Press::Long(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "SAVE: the card");
+    assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "SAVE: the card, 2 keys, was 3");
     run(&mut sim, &mut app, 2000);
     sim.save("summary");
     assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
@@ -397,7 +397,6 @@ fn discard_by_keys_moves_both_copies() {
     let before = scanned(&mut sim, &mut app);
     to_end_screen(&mut sim, &mut app);
     let name = app.recorder.name();
-    app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Discard(2), "asked, KEEP selected");
@@ -448,7 +447,7 @@ fn end_ride_screen_by_touch() {
     to_end_screen(&mut sim, &mut app);
     let name = app.recorder.name();
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, (ui::END_BUTTONS[1].1 - 6) as u16)));
-    assert_eq!(app.screen(), Screen::End(0), "between two buttons: nothing");
+    assert_eq!(app.screen(), Screen::End(1), "between two buttons: nothing");
     tap(&mut sim, &mut app, 0);
     assert_eq!((app.screen(), app.ride.state()), (Screen::Ride(0), ride::State::Running), "RESUME: the timer again");
     app.press(&mut sim, Press::Short(Key::Start)); // paused again

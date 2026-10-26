@@ -657,7 +657,7 @@ impl App {
                             self.recorder(ev);
                         }
                         if self.ride.state() == ride::State::Paused {
-                            self.open(Screen::End(0));
+                            self.open(Screen::End(ui::END_SAVE));
                         }
                     }
                     RideRow::NextStep => {

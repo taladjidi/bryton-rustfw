@@ -432,7 +432,9 @@ impl App {
             (Screen::Trainer, Input::Select) if self.ride.state() != ride::State::Idle => return self.start_key(b),
             (Screen::Trainer, Input::Prev) if self.ride.state() != ride::State::Idle => return self.lap(),
             (Screen::Trainer, Input::PrevHeld) if self.ride.state() != ride::State::Idle => return,
-            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => self.open(Screen::End(0)),
+            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => {
+                self.open(Screen::End(ui::END_SAVE))
+            }
             // riding, the long presses are the trainer's: Lap held steps the target down (Page is up), Start held
             // cycles the mode; the short ones stay a lap and a pause
             (Screen::Trainer, Input::Media | Input::End) if self.ride.state() == ride::State::Running => {
@@ -546,7 +548,7 @@ impl App {
             // Prev marks a lap (on the overview too)
             (Screen::Main | Screen::Ride(_), Input::Select) => return self.start_key(b),
             (Screen::Main | Screen::Ride(_), Input::End) if self.ride.state() == ride::State::Paused => {
-                self.open(Screen::End(0))
+                self.open(Screen::End(ui::END_SAVE))
             }
             // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
             (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,

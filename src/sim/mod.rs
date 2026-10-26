@@ -175,10 +175,9 @@ impl Default for EmmcCard {
     }
 }
 
-/// Start held on a paused ride, then SAVE on the end-ride screen (Page to it, Start): today's end and save.
+/// Start held on a paused ride, then SAVE on the end-ride screen (selected when it opens: Start): the end and save.
 pub(crate) fn save_ride(sim: &mut Sim, app: &mut App) {
     app.press(sim, Press::Long(Key::Start));
-    app.press(sim, Press::Short(Key::Page));
     app.press(sim, Press::Short(Key::Start));
 }
 
