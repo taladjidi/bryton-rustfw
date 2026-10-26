@@ -10,7 +10,7 @@ entirely. Not affiliated with Bryton.
 | ![Power and HR graphs](docs/img/graphs.png) | ![HRV](docs/img/hrv.png) | ![Layout](docs/img/layout.png) | ![Settings](docs/img/settings.png) |
 | Power graph with its axes, over the HR graph (sim) | DFA a1 and RMSSD from the strap's beats (sim) | An uneven layout: a big box over 2 x 2 (sim) | SETTINGS > ME: values with their units, edited in place (sim) |
 | ![Ride card](docs/img/card.png) | ![Map](docs/img/map.png) | ![Sensors](docs/img/sensors.png) | ![GPS](docs/img/gps.png) |
-| The ride's card when it ends: map, profile, numbers (sim) | Map with the track (sim) | Sensors and built-in readings (unit) | GPS (sim) |
+| The ride's card when it ends: map, profile, numbers (sim) | Map with the track (sim) | Sensors and built-in readings (sim) | GPS (sim) |
 | ![History](docs/img/history_list.png) | ![A past ride](docs/img/history.png) | ![Workout steps](docs/img/workout-steps.png) | ![Workout](docs/img/workout.png) |
 | History: stock's rides, newest first (sim) | A past ride's card, read from its file (sim) | A planned workout's steps, from stock's calendar (sim) | A workout running: target, step left, next (sim) |
 | ![Course](docs/img/course.png) | ![Course profile](docs/img/course-profile.png) | ![Course fields](docs/img/course-fields.png) | ![Courses](docs/img/courses.png) |
@@ -23,8 +23,8 @@ entirely. Not affiliated with Bryton.
 | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS: a menu per subject, any setting three levels down at most (sim) | The page editor: a box held, framed in orange, live values, the hint in the strip's place (sim) | Start in the editor: the box's actions, SPLIT across or down by their icons (sim) |
 | ![A page made in the editor](docs/img/page-made.png) | ![Eight fields](docs/img/page-eight.png) | ![End of a ride](docs/img/end-ride.png) | ![Discard asked](docs/img/end-ride-discard.png) |
 | A page made in the editor: a graph over four values (sim) | Eight fields, four rows of two (sim) | Start held while paused: RESUME, SAVE, DISCARD, big enough for gloves (sim) | DISCARD asks once more; the ride is moved to `\Rustfw\Discarded`, never erased (sim) |
-| ![Touch lock](docs/img/touch-lock.png) | ![Zone bar](docs/img/zone-bar.png) | ![No workout planned](docs/img/workouts-empty.png) | ![Overview cog](docs/img/overview-cog.png) |
-| The touch lock: a padlock in the strip (sim) | A zone as an 8 px bar on the box's top edge (sim) | An empty list says so in a row (sim) | The overview's cog opens the menu (sim) |
+| ![Touch lock](docs/img/touch-lock.png) | ![Zone bar](docs/img/zone-bar.png) | ![No notifications](docs/img/notifs-empty.png) | ![Overview cog](docs/img/overview-cog.png) |
+| The touch lock: a padlock in the strip (sim) | A zone as an 8 px bar on the box's top edge (sim) | An empty list says so in a row: no notifications (sim) | The overview's cog opens the menu (sim) |
 | ![Overview, SMOOTH font](docs/img/overview-cog-smooth.png) | ![Target gauge](docs/img/gauge-zones.png) | ![Target gauge, half box](docs/img/gauge-zones-half.png) | ![Ramp test result](docs/img/ramp-result.png) |
 | The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | The target gauge spans every zone, power from 40 to 165 % of the FTP (sim) | The same in a half box: the climb pacer's TOP field (sim) | FTP ramp test result: FTP, best minute, APPLY / KEEP (sim) |
 | ![FITNESS](docs/img/fitness.png) | ![Power meter calibration](docs/img/power-zero.png) | ![BIKE menu](docs/img/menu-bike.png) | |

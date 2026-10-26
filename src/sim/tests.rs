@@ -810,7 +810,7 @@ fn ride_history() {
     let bars: Vec<u32> = (0..ui::card::ELEV.2).map(|i| app.past.elev(i, h).0).collect();
     assert!(bars.iter().all(|&b| b >= 1) && bars.iter().any(|&b| b > h / 2), "two hills over the profile");
     assert!(bars[0] < h / 4 && bars[bars.len() / 4] > h / 2, "low at the start, a top a quarter in");
-    run(&mut sim, &mut app, 500);
+    run(&mut sim, &mut app, 5000); // long enough for the banner to go
     assert_consistent(&sim, &app);
     sim.save("history_card");
 
