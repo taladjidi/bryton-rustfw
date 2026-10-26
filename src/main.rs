@@ -20,6 +20,7 @@ mod board;
 use board::{hw, usb};
 use bryton_rustfw::dev::{self, Effect, Host, Session, Stats};
 use bryton_rustfw::emmc::BusError;
+use bryton_rustfw::prof::Sec;
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, TOUCH_MS, standby_flags_word};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -1234,6 +1235,9 @@ struct S510 {
     cycles: u64,
     /// The last sleep between passes: ms, and the work in it (USB), us ([`Board::last_sleep`]).
     sleep: (u32, u32),
+    /// For the profiler (`App::prof`), since the main loop last took them: pixels to the panel, eMMC sectors read,
+    /// written.
+    io: (u32, u32, u32),
 }
 
 impl Board for S510 {
@@ -1244,9 +1248,11 @@ impl Board for S510 {
         lcd_cmd(cmd, params);
     }
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
+        self.io.0 = self.io.0.wrapping_add(count);
         lcd_ram_write(count, next);
     }
     fn panel_fill(&mut self, count: u32, color: u16) {
+        self.io.0 = self.io.0.wrapping_add(count);
         lcd_fill(count, color);
     }
     fn backlight(&mut self, level: u8) {
@@ -1273,6 +1279,9 @@ impl Board for S510 {
         let now = cycles();
         self.cycles += u64::from(now.wrapping_sub(core::mem::replace(&mut self.cycles_at, now)));
         (self.cycles / u64::from(CPU_HZ / 1_000_000)) as u32
+    }
+    fn cycles(&mut self) -> u32 {
+        cycles()
     }
     fn last_sleep(&mut self) -> (u32, u32) {
         self.sleep
@@ -1320,6 +1329,7 @@ impl Board for S510 {
         emmc_cmd(index, arg, resp, false)
     }
     fn emmc_read(&mut self, index: u8, arg: u32, buf: &mut [u8]) -> Result<u32, BusError> {
+        self.io.1 = self.io.1.wrapping_add((buf.len() / bryton_rustfw::emmc::SECTOR) as u32);
         emmc_read(index, arg, buf)
     }
     fn emmc_writable(&self) -> bool {
@@ -1327,6 +1337,7 @@ impl Board for S510 {
     }
     fn emmc_write(&mut self, index: u8, arg: u32, buf: &[u8]) -> Result<u32, BusError> {
         // a build without EMMC_WRITE=1 never gets here: emmc::Card::write refuses first (emmc_writable)
+        self.io.2 = self.io.2.wrapping_add((buf.len() / bryton_rustfw::emmc::SECTOR) as u32);
         emmc_write(index, arg, buf)
     }
     fn i2c_read(&mut self, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
@@ -1464,8 +1475,19 @@ fn main() -> ! {
     i2c_init();
     sleep_power_init();
     checkpoint(4);
-    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0) };
+    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), io: (0, 0, 0) };
     let app = make_app(&mut board);
+    // what one profiler section costs (link/prof.rs): two counter reads and an add, the second time (the first
+    // fills the I-cache from SDRAM)
+    let mut overhead = 0;
+    for _ in 0..2 {
+        let t = cycles();
+        let from = board.cycles();
+        app.prof().span(Sec::Usb, from, board.cycles());
+        overhead = cycles().wrapping_sub(t);
+    }
+    app.prof().reset();
+    app.prof().overhead = overhead;
     if let Some(mem) = hw::map_memory() {
         // zeroes all of link.x MAP (2560 KB of SDRAM) once: about 15 to 40 ms (inferred), before the first map. The
         // basemap takes the first words; the rest (link.x MAP has room for it) is the buffer the map tiles of the road
@@ -1492,6 +1514,7 @@ fn main() -> ! {
     loop {
         let t0 = cycles();
         app.step(&mut board);
+        app.prof().span(Sec::Step, t0, cycles());
         checkpoint(6);
         let vbus = !pin_low(VBUS.0, VBUS.1);
         if vbus && !usb_tried {
@@ -1521,10 +1544,12 @@ fn main() -> ! {
             let slice = if app.touching() { left.min(TOUCH_MS) } else { left };
             timer_start(slice);
             let (edge, done) = loop {
+                let usb_at = cycles();
                 if let Some(l) = &mut link {
                     match l.poll(&mut session, app, &mut board, stats) {
                         Effect::None => {}
                         Effect::Key(p) => press = Some(p),
+                        Effect::ProfReset => app.prof().reset(),
                         Effect::Reset => {
                             l.linger(50);
                             system_reset();
@@ -1617,6 +1642,7 @@ fn main() -> ! {
                     woke |= l.worked();
                     let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
                     app.set_usb(&mut board, dot);
+                    app.prof().span(Sec::Usb, usb_at, cycles());
                 }
                 let (edge, done) = (touch_edge(), timer_done());
                 if edge || done || press.is_some() || woke {
@@ -1633,7 +1659,9 @@ fn main() -> ! {
             // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
             if edge || app.touching() {
                 // a gesture acts after the sleep: acting may sleep too (delay_ms), which takes over SysTick
+                let t = cycles();
                 touched = app.touch(&mut board, core::mem::take(&mut since_touch));
+                app.prof().span(Sec::Touch, t, cycles());
                 if touched.is_some() {
                     break 'sleep;
                 }
@@ -1645,11 +1673,14 @@ fn main() -> ! {
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
         board.sleep = (slept, sleep_cycles / (CPU_HZ / 1_000_000));
         let t1 = cycles();
-        if let Some(p) = press {
-            app.press(&mut board, p);
-        }
-        if let Some(i) = touched {
-            app.input(&mut board, i);
+        if press.is_some() || touched.is_some() {
+            if let Some(p) = press {
+                app.press(&mut board, p);
+            }
+            if let Some(i) = touched {
+                app.input(&mut board, i);
+            }
+            app.prof().span(Sec::Input, t1, cycles());
         }
         checkpoint(7);
         // the app's work (step and keys), not the USB polls: those happen only while a cable is in
@@ -1663,5 +1694,7 @@ fn main() -> ! {
             (awake, window_ms) = (0, 0);
         }
         stats.uptime_ms = stats.uptime_ms.wrapping_add(pass_ms);
+        app.prof().pass(pass_ms, slept);
+        app.prof().io(core::mem::take(&mut board.io));
     }
 }

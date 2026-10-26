@@ -324,7 +324,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
-  `Host` trait.
+  `Host` trait. `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from
+  `Board::cycles`); `tools/profile.py`: scripted scenarios on the unit, a `prof` window each.
 - `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
@@ -512,7 +513,17 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     ./dev.py peek 0x40013014 2    # read registers, or DTCM / SDRAM (read only); poke ADDR VALUE writes a register
     ./dev.py key page [--long]    # press or hold a key (page, lap, start, back): scripted tests
     ./dev.py emmc                 # eMMC layout; sector N [COUNT] [-o F] reads sectors (read only)
+    ./dev.py prof [--watch 5]     # the profiler: per section of the pass, calls/s, mean / max us, % of wall time
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)
+    tools/profile.py --run        # run a build from RAM, then scripted scenarios (idle, pages, menu, a ride
+                                  # discarded), a markdown table each
+
+- **The profiler** (`src/link/prof.rs`, always on): `App::step`'s sections (`App::timed`, one DWT read each) and the
+  main loop's own (touch, input, USB), each its calls, cycles and longest run; the panel's pixels and the eMMC's
+  sectors; `prof reset` starts a window. A section costs a few tens of cycles (inferred; `prof` reports the overhead
+  measured at start-up), well under 0.1 % of the CPU. A build run from RAM is the same code and memory as an installed
+  one (the image runs from SDRAM either way): only the USB link differs, and it is its own row. A new costly part of
+  the pass gets its section (`Sec`, its name, `App::timed` around it).
 
 - **`run`** stages the image in SDRAM (0xd0800000), checks it as `pack.py` does, and starts it. The start goes
   through a trampoline in ITCM, which copies the image over 0xd0000000 and jumps as the bootloader does.

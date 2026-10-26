@@ -141,3 +141,43 @@ fn bench_map() {
     crate::dev::send_bench_map(&mut pc, None);
     assert_eq!(pc.got, b"err nofix\n");
 }
+
+/// The profiler on the Sim: each pass times its sections end to end (each read of the counter ends one section and
+/// begins the next), right across the counter's wrap; `prof` answers them, `prof reset` asks for a new window.
+#[test]
+fn prof_times_the_sections_and_answers() {
+    let (mut sim, mut app) = app_at(1, 2, 3);
+    app.prof().reset();
+    sim.cycles_step = 1000;
+    sim.cycles = u32::MAX - 2500; // wraps in the first pass
+    for _ in 0..4 {
+        app.step(&mut sim);
+    }
+    let p = app.prof_figures().clone();
+    let slot = |s: crate::prof::Sec| p.slots[s as usize];
+    use crate::prof::Sec;
+    // every pass runs these, each one counter read long (no other read between two laps on an idle overview)
+    for s in [Sec::Second, Sec::Battery, Sec::Gnss, Sec::Strip, Sec::Draw, Sec::Keys, Sec::Recorder, Sec::Phone] {
+        assert_eq!(slot(s).count, 4, "{s:?}");
+        assert!(slot(s).total >= 4000 && slot(s).max >= 1000, "{s:?}: {:?}", slot(s));
+        assert!(slot(s).max < 1 << 20, "{s:?}: no wrap mistaken for a 21 s run");
+    }
+    assert_eq!(slot(Sec::Light).count, 8, "light twice a pass");
+    assert_eq!(slot(Sec::Step).count, 0, "the main loop times the whole step");
+    let mut pc = Pc::default();
+    let mut s = Session::new();
+    assert_eq!(s.feed(b"prof\n", &app, Stats::default(), &mut pc), Effect::None);
+    let text = std::string::String::from_utf8(pc.got.clone()).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "prof 0 0 0 0 0 0");
+    assert_eq!(lines.len(), 2 + crate::prof::SECTIONS);
+    assert_eq!(lines.last(), Some(&"end"));
+    let draw = slot(Sec::Draw);
+    assert!(lines.contains(&format!("draw 4 {} {}", draw.total, draw.max).as_str()), "{text}");
+    pc.got.clear();
+    assert_eq!(s.feed(b"prof reset\n", &app, Stats::default(), &mut pc), Effect::ProfReset);
+    assert_eq!(pc.got, b"ok\n");
+    pc.got.clear();
+    s.feed(b"prof now\n", &app, Stats::default(), &mut pc);
+    assert!(pc.got.starts_with(b"err usage"));
+}

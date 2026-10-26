@@ -15,6 +15,10 @@ plugged in: the dot at the top right turns green when the link is ready.
   dev.py sector N [COUNT] [-o F]  read eMMC sectors N.. (read only): a hex dump, or the raw bytes into F
   dev.py drivelog                 the USB drive's last 32 commands, oldest first
   dev.py wtest LBA                write test on one sector (in free space): changed, read back, restored
+  dev.py prof [--reset] [--watch N]   the profiler (src/link/prof.rs): per section of the main loop, calls/s,
+                                  mean and max us, % of wall time; panel pixels and eMMC sectors a second.
+                                  --reset starts a new window; --watch N prints a fresh N-second window, again
+                                  and again (tools/profile.py runs scripted scenarios)
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
@@ -24,6 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 VID, PID = 0x1209, 0x0001          # src/board/usb.rs
 W, H = 240, 320
+CPU_HZ = 200_000_000               # src/main.rs CPU_HZ: the profiler counts these cycles
+# sections that hold others (src/link/prof.rs): left out of the sums
+INCLUSIVE = ('step', 'tiles')
+# the main loop's own sections, outside App::step
+OUTSIDE = ('touch', 'input', 'usb')
 
 
 def find_port(timeout=10.0):
@@ -166,6 +175,49 @@ def get(s, path, progress=False):
             print(f'{len(data) // 1024} KB...', file=sys.stderr)
 
 
+def prof_read(s):
+    """The profiler's window: {'wall_ms', 'slept_ms', 'overhead', 'pixels', 'read', 'written', 'sections':
+    [(name, calls, cycles, max cycles)]}."""
+    rows = [command(s, 'prof')]
+    if not rows[0].startswith('prof '):
+        sys.exit(f'dev.py: {rows[0]} (a build without the profiler?)')
+    while rows[-1] != 'end':
+        rows.append(line(s))
+    return prof_parse(rows)
+
+
+def prof_parse(rows):
+    head = rows[0].split()
+    if head[0] != 'prof' or len(head) != 7 or rows[-1] != 'end':
+        sys.exit(f'dev.py: unexpected answer {rows[0]!r}')
+    keys = ('wall_ms', 'slept_ms', 'overhead', 'pixels', 'read', 'written')
+    p = dict(zip(keys, map(int, head[1:])))
+    p['sections'] = [(n, int(c), int(t), int(m)) for n, c, t, m in (r.split() for r in rows[1:-1])]
+    return p
+
+
+def prof_table(p, title=None):
+    """The window as a markdown table: per section calls/s, mean and max us, % of wall time."""
+    wall = max(p['wall_ms'], 1) / 1000
+    us = lambda cycles: cycles / (CPU_HZ / 1e6)
+    out = [f'### {title}', ''] if title else []
+    out += [f'window {wall:.1f} s, asleep {100 * p["slept_ms"] / 1000 / wall:.1f} %, '
+            f'{p["pixels"] / wall:.0f} px/s to the panel, eMMC {p["read"] / wall:.1f} sectors/s read, '
+            f'{p["written"] / wall:.1f} written; a section costs {p["overhead"]} cycles', '',
+            '| section | calls/s | mean us | max us | % wall |', '|---|---:|---:|---:|---:|']
+    sections = {n: (c, t, m) for n, c, t, m in p['sections']}
+    for n, (c, t, m) in sections.items():
+        if c:
+            note = ' (holds the others)' if n == 'step' else ' (inside draw or input)' if n == 'tiles' else ''
+            out.append(f'| {n}{note} | {c / wall:.1f} | {us(t) / c:.1f} | {us(m):.0f} | {100 * us(t) / 1e6 / wall:.3f} |')
+    inner = sum(t for n, (c, t, m) in sections.items() if n not in INCLUSIVE + OUTSIDE)
+    other = sections.get('step', (0, 0, 0))[1] - inner
+    awake = sections.get('step', (0, 0, 0))[1] + sum(sections.get(n, (0, 0, 0))[1] for n in OUTSIDE)
+    out.append(f'| step, not in a section | | | | {100 * us(other) / 1e6 / wall:.3f} |')
+    out.append(f'| **awake** | | | | **{100 * us(awake) / 1e6 / wall:.2f}** |')
+    return '\n'.join(out)
+
+
 def selftest():
     p = png(bytes(range(256)) * 600)                    # 2 * 240 * 320 bytes
     assert p.startswith(b'\x89PNG') and p[12:16] == b'IHDR'
@@ -176,6 +228,13 @@ def selftest():
         data, total = image_payload(packed)
         assert struct.unpack_from('<I', data, 0x98)[0] == len(data) and total == sum(data) & 0xffffffff
     assert sector_bytes('00ff' * 256) == b'\x00\xff' * 256
+    # a window of 2 s: step 4 ms of work, draw 1 ms of it, usb 2 ms outside it
+    p = prof_parse(['prof 2000 1990 24 4800 3 0', 'step 40 800000 30000', 'draw 40 200000 9000', 'tiles 0 0 0',
+                    'usb 100 400000 8000', 'end'])
+    t = prof_table(p)
+    assert '| draw | 20.0 | 25.0 | 45 | 0.050 |' in t, t
+    assert '| step, not in a section | | | | 0.150 |' in t and '**0.30**' in t and 'tiles' not in t, t
+    assert '2400 px/s' in t and '1.5 sectors/s' in t, t
     print('dev.py selftest ok')
 
 
@@ -223,6 +282,9 @@ def main():
     p.add_argument('n', type=lambda x: int(x, 0))
     p.add_argument('count', nargs='?', type=lambda x: int(x, 0), default=1)
     p.add_argument('-o', help='write the raw bytes here instead of a hex dump')
+    p = sub.add_parser('prof', help='the profiler: per section of the main loop, calls/s, mean / max us, %% of wall')
+    p.add_argument('--reset', action='store_true', help='start a new window')
+    p.add_argument('--watch', type=float, metavar='N', help='a fresh N-second window, again and again (Ctrl-C)')
     sub.add_parser('drivelog', help="the USB drive's last 32 commands (op, lba, count, status, residue)")
     p = sub.add_parser('wtest', help='write test on one eMMC sector (pick one in free space; needs EMMC_WRITE=1)')
     p.add_argument('lba', type=lambda x: int(x, 0))
@@ -244,6 +306,16 @@ def main():
                 for i, r in enumerate(rows):
                     mv, *charging = r.split()
                     print(f'{i - len(rows) + 1:5d} min  {mv} mV{"  charging" if charging else ""}')
+            elif a.cmd == 'prof' and a.watch:
+                try:
+                    while True:
+                        command(s, 'prof reset')
+                        time.sleep(a.watch)
+                        print(prof_table(prof_read(s)) + '\n', flush=True)
+                except KeyboardInterrupt:
+                    pass
+            elif a.cmd == 'prof':
+                print(command(s, 'prof reset') if a.reset else prof_table(prof_read(s)))
             elif a.cmd == 'key':
                 print(command(s, f'key {a.name}' + (' long' if a.long else '')))
             elif a.cmd == 'drivelog':

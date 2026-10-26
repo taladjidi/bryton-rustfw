@@ -23,7 +23,7 @@ pub mod ui;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
-pub use link::{dev, msc, phone};
+pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
 pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, ramp, ride, trainer, workout};
@@ -69,6 +69,11 @@ pub trait Board {
     /// work took, so the app can bound its background work by time and count a key's hold in real time (a long
     /// pass is longer than [`POLL_MS`]). The DWT cycle counter on the unit. 0 always: work is not timed.
     fn awake_us(&mut self) -> u32 {
+        0
+    }
+    /// The DWT cycle counter (CYCCNT, 32 bits, wrapping; stopped in WFI): the profiler's clock ([`prof`]). 0 always:
+    /// nothing is timed.
+    fn cycles(&mut self) -> u32 {
         0
     }
     /// The main loop's last sleep between passes: how long it lasted, ms (wall time), and the work done in it, us
@@ -388,6 +393,8 @@ pub struct App {
     ahead_us: (u32, u32, u32),
     /// The time spent so far on the tile being loaded, us.
     ahead_acc: u32,
+    /// Where the CPU's time goes, by section of the pass (link/prof.rs; the dev link's `prof`).
+    prof: prof::Prof,
     /// The USB drive (msc.rs): the medium is in while the card is lent ([`emmc::Emmc::lend`], app/drive.rs).
     drive: msc::Drive,
     /// A system reset is wanted (after the computer wrote to the volume: app/drive.rs).
@@ -609,6 +616,7 @@ impl App {
             trainer_no_control: false,
             trainer_acked: false,
             ftms: Ftms::default(),
+            prof: prof::Prof::default(),
         }
     }
 
@@ -663,6 +671,8 @@ impl App {
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
     /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
+        use prof::Sec;
+        let mut t = b.cycles(); // each section's start (link/prof.rs): the end of the one before
         // the time since the last pass: its sleep and the work of that pass (bounded: a first pass, a stall); the
         // work done during the sleep (USB) is in the sleep's length already (2026-10-25 review: counted twice)
         let now = b.awake_us();
@@ -707,6 +717,7 @@ impl App {
         self.play_tones(b);
         self.off_armed_ms = self.off_armed_ms.saturating_sub(pass_ms);
         self.seconds = sec;
+        t = self.timed(b, Sec::Second, t);
         self.battery_ms = self.battery_ms.saturating_add(pass_ms);
         if self.battery_ms >= BATTERY_MS {
             self.battery_ms = 0;
@@ -725,12 +736,16 @@ impl App {
             }
             self.told_low = low;
         }
+        t = self.timed(b, Sec::Battery, t);
         self.poll_light(b);
+        t = self.timed(b, Sec::Light, t);
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
         self.watch_radio(b);
+        t = self.timed(b, Sec::Radio, t);
         self.poll_gnss(b);
+        t = self.timed(b, Sec::Gnss, t);
         // the app's own run time, not the receiver's (switched off on an indoor ride, its clock starts again)
         if up_before < FAULT_CLEAR_MS && self.up_ms >= FAULT_CLEAR_MS && b.backup_read(FAULT_BKP) >> 24 == 0xfa {
             b.backup_write(FAULT_BKP, 0); // a minute of running: the next fault is the first in a row again
@@ -750,6 +765,7 @@ impl App {
             _ => Rec::Paused,
         };
         self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
+        t = self.timed(b, Sec::Strip, t);
         for kind in Kind::ALL {
             if self.ask & 1 << kind.channel() != 0
                 && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
@@ -782,14 +798,19 @@ impl App {
                 self.resting_ms[i] = if ok { u32::MAX } else { 0 }; // failed: another rest
             }
         }
+        t = self.timed(b, Sec::Radio, t);
         if !self.emmc.lent() {
             // the card is the computer's (the USB drive): the app's card work waits
             self.step_stock(b);
+            t = self.timed(b, Sec::Scan, t);
             self.step_courses(b);
+            t = self.timed(b, Sec::Files, t);
             self.step_ahead(b);
+            t = self.timed(b, Sec::Ahead, t);
             self.step_past(b);
             self.step_thresholds(b);
             self.step_pages(b);
+            t = self.timed(b, Sec::Files, t);
         }
         if self.edit.is_some() && self.ride.state() == ride::State::Running {
             self.leave_editor(b, true); // recording again (by no key of the editor's): its work kept, never lost
@@ -854,6 +875,7 @@ impl App {
             }
             _ => {}
         }
+        t = self.timed(b, Sec::Draw, t);
         let mask = b.keys_down();
         // a key stuck since the start is no use: it does not keep the light on either
         self.idle_ms = if self.keys.live(mask) != 0 { 0 } else { self.idle_ms.saturating_add(pass_ms) };
@@ -863,10 +885,14 @@ impl App {
         if mask == 0 {
             self.repeated = false;
         }
+        t = self.timed(b, Sec::Keys, t);
         self.step_recorder(b);
+        t = self.timed(b, Sec::Recorder, t);
         self.step_altitude(b);
+        t = self.timed(b, Sec::Altitude, t);
         self.step_trainer(b);
         self.step_powercal(b);
+        t = self.timed(b, Sec::Trainer, t);
         if self.ble.is_some() {
             self.step_phone(b);
         }
@@ -874,7 +900,9 @@ impl App {
             self.update_media(b);
             self.redraw_ms = 0;
         }
+        t = self.timed(b, Sec::Phone, t);
         self.update_light(b);
+        self.timed(b, Sec::Light, t);
     }
 }
 

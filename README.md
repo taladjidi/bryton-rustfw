@@ -44,6 +44,9 @@ on the road ahead without a course, the phone as a Bluetooth accessory, a PIXEL 
 Rides are saved to `\Activities` as stock does (seen on the unit), in two copies, and survive a reset or a power cut.
 The newest features are seen in the simulator only so far (docs/status.md). It shares the storage with Bryton's firmware, so the two can be swapped.
 
+**Key figures (measured on the unit with `tools/profile.py`):** *to be filled in: CPU awake on the overview, on a
+ride page with sensors, riding; the costliest sections.*
+
 | Read | For |
 |---|---|
 | [docs/features.md](docs/features.md) | what it does, screen by screen |
