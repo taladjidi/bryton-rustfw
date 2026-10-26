@@ -426,10 +426,8 @@ fn notifications_list_and_detail() {
     assert_eq!(text(3), None);
     sim.save("notifs_list");
 
-    // a tap selects the row, a second one opens it
+    // one tap opens the row
     let y = (ui::LIST_Y + ui::MENU_ROW + 10) as u16;
-    app.input(&mut sim, Input::Touch(Gesture::Tap(120, y)));
-    assert_eq!(app.screen(), Screen::Menu(Menu::Notifs, 1));
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, y)));
     assert_eq!(app.screen(), Screen::Notif(1, 0));
     let lines: Vec<_> = app.notif_text(1).collect();

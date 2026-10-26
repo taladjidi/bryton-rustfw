@@ -568,7 +568,8 @@ impl App {
             }
             // the "<" left of the title: back
             (Screen::Menu(..), Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
-            // a tap selects the row; a tap on the row chosen already acts on it (as Start)
+            // a tap acts on the row (as Start on it); while the ride is moving, a tap selects and a second one on the
+            // row chosen acts (a wet glove or a bump must not do something)
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Tap(_, y))) => {
                 // the bottom rows under the last slot (316 to 319) are the last slot's, not the next screen's
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y))
@@ -577,12 +578,13 @@ impl App {
                     Some(row) if self.row(menu, row).is_some() => row,
                     _ => return self.update_menu_rows(b, menu, sel), // a row's "SURE?" goes
                 };
-                if row != sel || !self.menu_chosen {
+                if self.ride.moving() && (row != sel || !self.menu_chosen) {
                     self.menu_chosen = true;
                     self.screen = Screen::Menu(menu, row);
                     return self.update_menu_rows(b, menu, row);
                 }
-                return self.select_row(b, menu, sel, armed);
+                self.menu_chosen = true;
+                return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
             // a past ride's card: Start asks to delete it, Start again deletes it (moved, kept: trash.rs)

@@ -31,7 +31,7 @@ pub enum Input {
     /// See [`Input::NextHeld`].
     PrevHeld,
     /// A gesture on the touch panel: on a page, swipe left the next page, swipe right the previous one, hold the
-    /// menu (not while a ride records); in a menu, a tap selects a row and a second tap on it acts, the "<" is Back,
+    /// menu (not while a ride records); in a menu, a tap acts on a row (two taps while the ride moves: select, then act), the "<" is Back,
     /// swipe up or down turns a screen of rows, swipe right is Back; while a number is edited, swipe up or down steps
     /// it, a tap keeps it. None with TOUCH off.
     Touch(Gesture),

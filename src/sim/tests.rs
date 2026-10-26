@@ -236,16 +236,13 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_consistent(&sim, &app);
 
     let row3 = ui::LIST_Y as u16 + 3 * ui::MENU_ROW as u16 + 5; // PAGES
-    let taps = |ms: u64| (5000..5100).contains(&ms) || (5600..5700).contains(&ms);
+    let taps = |ms: u64| (5000..5100).contains(&ms);
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row3)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     let left_ms = 5500 - sim.ms;
     run(&mut sim, &mut app, left_ms);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Main, 3), "the first tap selects row 3");
-    assert_consistent(&sim, &app);
-    run(&mut sim, &mut app, 500);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "a second tap on it acts: PAGES");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Pages, 0), "one tap acts: PAGES");
     assert_consistent(&sim, &app);
 }
 
@@ -331,7 +328,7 @@ fn a_tap_at_the_bottom_stays_on_the_screen() {
     }
 }
 
-/// Touch in a menu: a tap on MAX HR selects it, a second one edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
+/// Touch in a menu: a tap on MAX HR edits it, a swipe up adds one, a tap keeps it, a swipe right goes back.
 #[test]
 fn touch_edits_a_number_and_goes_back() {
     let row = |r: u16| ui::LIST_Y as u16 + r * ui::MENU_ROW as u16 + 5;
@@ -345,8 +342,7 @@ fn touch_edits_a_number_and_goes_back() {
     };
     let (a, b, c, d) =
         (tap(5000, max_hr), drag(6000, (120, 250), (0, -100)), tap(7000, max_hr), drag(8000, (40, 160), (120, 0)));
-    let first = tap(4500, max_hr); // a tap selects the row the menu opened on; the next one acts
-    let mut sim = Sim::new(9, 0, 0).finger(move |ms| first(ms).or(a(ms)).or(b(ms)).or(c(ms)).or(d(ms)));
+    let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)).or(c(ms)).or(d(ms)));
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr)); // in RIDER

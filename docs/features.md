@@ -176,7 +176,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
-| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
+| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
