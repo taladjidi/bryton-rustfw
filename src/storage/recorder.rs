@@ -56,7 +56,9 @@
 //! [`Outcome::Kept`]. Whoever gives up (the same run, the boot, a Start finding the save in the record) does it
 //! that way. Only if that fails too is the save stuck ([`Recorder::stuck`]): it stays "saving" (the ride open: the
 //! marker kept, the drive lent read only), tried again with a back-off up to 160 s, and no new ride's record goes
-//! over its record. The read-back (2) is done once a run, not at every retry.
+//! over its record. The read-back (2) is done once a run, not at every retry. A boot that cannot read the record
+//! (the card not mounting) never concludes either: it may name a save cut after 4, so it is tried again, stuck
+//! past its retries; and a ride left open whose entry is gone is a save from the moment that is seen.
 //!
 //! **A Start during a save** (its retries take up to a minute, or for good when stuck): the new ride is kept and
 //! started once the save is over ([`Recorder::start`]), its timer stopped from its start to its first second
@@ -579,6 +581,12 @@ impl Recorder {
     /// is carried on only when it is the clean one's; and a save only once the clean one's of the same ride is over,
     /// under the name that one was saved under, so the two keep one name.
     pub fn io_after(&mut self, clean: &Recorder, d: &mut impl DiskWrite, now: Local) -> Outcome {
+        if self.phase == Phase::Done && self.pending.is_some() {
+            if clean.pending.is_some() {
+                return Outcome::Nothing; // held with the clean copy ([`Recorder::start_after`])
+            }
+            self.start_pending();
+        }
         if self.phase == Phase::Starting && clean.pending.is_some() {
             return Outcome::Nothing; // the clean one's name is still the ride being saved
         }
@@ -855,7 +863,30 @@ impl Recorder {
 
     /// The card has work to do ([`Recorder::io`]).
     pub fn due(&self) -> bool {
-        (self.want && self.phase != Phase::Done) || self.phase == Phase::Saving // a save is due until done
+        (self.want && self.phase != Phase::Done)
+            || self.phase == Phase::Saving // a save is due until done
+            || (self.phase == Phase::Done && self.pending.is_some()) // a full copy's start held (start_after)
+    }
+
+    /// The full copy's [`Recorder::start`]: held as well while the clean copy `clean` holds the ride behind its last
+    /// save (never a full copy of a ride the clean one does not record); started by [`Recorder::io_after`] once the
+    /// clean one has started.
+    pub fn start_after(&mut self, clean: &Recorder, time: u32, name: [u8; 12], resume_old: bool) {
+        if clean.pending.is_some() && self.phase == Phase::Done {
+            self.pending = Some((time, name, resume_old));
+        } else {
+            self.start(time, name, resume_old);
+        }
+    }
+
+    /// The start put off ([`Recorder::start`]) now: its timer stopped from its start until the first second recorded
+    /// (the file says when it was not recorded).
+    fn start_pending(&mut self) {
+        if let Some((time, name, resume_old)) = self.pending {
+            self.start(time, name, resume_old);
+            self.put(16, |w, sink| w.pause(sink, time));
+            self.gap = true;
+        }
     }
 
     /// Does the card work that is due: make the file, a checkpoint, the save. Call it from the main loop (it takes
@@ -904,14 +935,8 @@ impl Recorder {
                 Outcome::Failed(e)
             }
         };
-        if self.phase == Phase::Done
-            && let Some((time, name, resume_old)) = self.pending
-        {
-            // the save is over: the ride started meanwhile, its timer stopped from its start until the first second
-            // recorded (the file says when it was not recorded)
-            self.start(time, name, resume_old);
-            self.put(16, |w, sink| w.pause(sink, time));
-            self.gap = true;
+        if self.phase == Phase::Done {
+            self.start_pending(); // the save is over: the ride started meanwhile
         }
         o
     }
@@ -1050,6 +1075,9 @@ impl Recorder {
     /// entries on one chain: a folder that cannot be read is an error, tried again.
     fn keep_in_rides(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Outcome, Error> {
         let (first, size) = (self.file.map_or(0, |h| h.first), self.len);
+        if first < 2 {
+            return Err(Error::Corrupt); // no chain to name (cluster 0 or 1): never an entry on it
+        }
         let mut buf = [0u8; 16];
         let target = if self.discard { self.kind.discarded_path() } else { self.kind.saved() };
         match fat.open(d, target) {
@@ -1341,17 +1369,19 @@ impl Recorder {
             return Outcome::Nothing;
         }
         let t = dos_time(now);
-        let run = |s: &mut Self, d: &mut _| -> Result<Outcome, Error> {
+        let mut read = false;
+        let mut run = |s: &mut Self, d: &mut _| -> Result<Outcome, Error> {
             let mut fat = Fat::mount(d)?;
             fat.sync_fats(d)?; // first: a FAT sector torn by the cut would break the chains read next
             let dir = fat.open(d, DIR)?;
             s.rec = Some(fat.locate(d, dir, s.kind.rec())?);
             let best = s.read_records(&mut fat, d)?;
+            read = true;
             s.recover_from(&mut fat, d, best, t, true)
         };
         match run(self, d) {
             Ok(o) => {
-                self.fails = 0;
+                (self.fails, self.stuck) = (0, false);
                 o
             }
             Err(e) if self.phase == Phase::Saving => {
@@ -1373,6 +1403,16 @@ impl Recorder {
                 Outcome::Failed(e)
             }
             Err(Error::NotFound) => Outcome::Nothing, // never recorded here
+            Err(e) if !read => {
+                // the record not read (the card not mounted, or failing): what it says is unknown, a save cut after
+                // its step 4 perhaps, whose chain only the record names. Never concluded: tried again (the boot's
+                // marker kept, the ride not settled) and, past its retries, stuck (the drive lent read only)
+                self.errors = self.errors.saturating_add(1);
+                self.stuck |= !self.retry(e);
+                self.fails = self.fails.saturating_add(1);
+                self.wait = self.backoff();
+                Outcome::Failed(e)
+            }
             Err(e) => {
                 self.phase = Phase::Done; // whatever was reopened: done again from the record
                 self.errors = self.errors.saturating_add(1);
@@ -1432,7 +1472,12 @@ impl Recorder {
                 };
                 let mut file = match entry {
                     Some(h) => h,
-                    None => fat.chain(d, r.cluster)?,
+                    None => {
+                        // named by the record alone: a save from here, never given up as a ride left open
+                        self.writer = w;
+                        self.saving(r.cluster, size);
+                        fat.chain(d, r.cluster)?
+                    }
                 };
                 // the buffer from the sector the trailer starts in, and sector 0: from the record's copies, as they
                 // were at its checkpoint (a cut while the next one rewrote them may have torn them in the file)
@@ -3277,5 +3322,91 @@ mod tests {
         assert!(saved(&d.img, SAVED).is_ok_and(|s| s.1), "the clean copy whole");
         assert!(saved(&d.img, SAVED_FULL).is_err());
         assert_eq!(check_clean(&d.img, "after"), 0);
+    }
+
+    /// The final review (medium): a cut after the save's step 4, then a boot whose card cannot be mounted (a flaky
+    /// card, a slow identification) [`GIVE_UP`] times: the boot's recovery concluded `Kept` without having read the
+    /// record (the boot's marker cleared, the drive lent writable over a nameless chain). It never concludes now
+    /// while the record is unread: failing, stuck past its retries (the drive lent read only), until the card mounts;
+    /// then the save is finished.
+    #[test]
+    fn a_boot_that_cannot_read_the_record_never_concludes() {
+        let mut d = card(crate::fat::tests::image());
+        let mut r = open_ride(&mut d, 200);
+        let bad = std::vec![dir_lbas(&d.img, ACTIVITIES)];
+        let mut d = Bad { card: d, bad, unread: Vec::new(), on: true };
+        r.end(T0 + 200, words(200));
+        r.io(&mut d, local(201)); // steps 1 to 4 done, 5 failed: the unit off now
+        let mut d = Bad { card: card(d.card.img), bad: Vec::new(), unread: std::vec![0..1], on: true };
+        let mut r = Recorder::new();
+        let mut out = Vec::new();
+        for _ in 0..100 * RETRY {
+            match r.recover(&mut d, local(300)) {
+                Outcome::Nothing => {}
+                o => out.push(o),
+            }
+        }
+        assert!(out.len() > GIVE_UP as usize && out.iter().all(|o| *o == Outcome::Failed(Error::Io)), "{out:?}");
+        assert!(r.stuck() && r.waiting(), "stuck, tried again (backed off)");
+        d.on = false; // the card mounts
+        let mut o = Outcome::Nothing;
+        for _ in 0..64 * RETRY {
+            o = r.recover(&mut d, local(400));
+            if o != Outcome::Nothing {
+                break;
+            }
+        }
+        assert_eq!((o, r.stuck()), (Outcome::Saved(NAME), false));
+        assert_eq!(saved(&d.card.img, SAVED).map(|s| s.1), Ok(true));
+    }
+
+    /// The final review: a ride left open whose entry in `\Rustfw\Rides` is gone (a torn directory sector), its
+    /// recovery failing (here the record's copy of its last sector unreadable): it was given up as a ride left open
+    /// (`Kept`, its record overwritten by the next ride's), its chain then named by nothing. It is a save from the
+    /// moment its entry is found gone: given up, it is named again in its folder first.
+    #[test]
+    fn a_ride_left_open_without_its_entry_is_never_lost() {
+        let mut d = card(crate::fat::tests::image());
+        let _ = open_ride(&mut d, 200); // the unit off with the ride open
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let rides = fat.open(&mut d, "Rustfw/Rides").unwrap();
+        let h = fat.locate(&mut d, rides, "261023100000.fit").unwrap();
+        fat.remove(&mut d, &h).unwrap(); // its entry gone, as a torn sector leaves it
+        let rec = first_lba(&d.img, "Rustfw/ride.rec") as u32;
+        let unread = std::vec![rec + 1..rec + 2, rec + 4..rec + 5];
+        let mut d = Bad { card: d, bad: Vec::new(), unread, on: true };
+        const NEXT: [u8; 12] = *b"261023110000";
+        let mut r = Recorder::new();
+        r.start(T0 + 1000, NEXT, false);
+        let out = io_all(&mut r, &mut d, 1001);
+        assert_eq!(out.last(), Some(&Outcome::Kept(NAME)), "{out:?}");
+        d.on = false;
+        r.second(&sample(1001), words(1));
+        r.end(T0 + 1002, words(2));
+        assert_eq!(io_all(&mut r, &mut d, 1003), [Outcome::Saved(NEXT)]);
+        let (times, _) = saved(&d.card.img, "Rustfw/Rides/261023100000.fit").expect("named in its folder");
+        assert!(times.len() >= 200 - CHECKPOINT_S as usize, "{}", times.len());
+        assert_eq!(check_clean(&d.card.img, "after"), 0);
+    }
+
+    /// The final review: while the clean copy holds a ride behind its last save, the full copy started it all the
+    /// same (a full copy of a ride said "NOT RECORDING", saved and synced). It is held with the clean one now, and
+    /// starts once the clean one has.
+    #[test]
+    fn the_full_copy_is_held_with_the_clean_one() {
+        let mut d = card(crate::fat::tests::image());
+        let mut clean = Recorder::new();
+        clean.pending = Some((T0, NAME, false)); // held behind a stuck save
+        let mut full = Recorder::of(Kind::Full);
+        full.start_after(&clean, T0, NAME, false);
+        assert_eq!((full.phase(), full.pending()), (Phase::Done, true), "held");
+        assert_eq!(full.io_after(&clean, &mut d, local(0)), Outcome::Nothing);
+        assert_eq!(full.phase(), Phase::Done, "still held");
+        clean.pending = None;
+        clean.start(T0, NAME, false); // the stuck save done: the clean copy starts
+        assert_eq!(clean.io(&mut d, local(1)), Outcome::Nothing);
+        assert!(full.due());
+        full.io_after(&clean, &mut d, local(1));
+        assert_eq!((full.phase(), full.pending()), (Phase::Recording, false), "started after the clean one");
     }
 }

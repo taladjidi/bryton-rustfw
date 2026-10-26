@@ -212,7 +212,8 @@ impl App {
                     }
                     // (a ride started while the last one is being saved waits for that save: recorder.rs `start`)
                     // no full copy of a ride the clean one does not record
-                    self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
+                    let resume = self.resume_pending || self.full_pending;
+                    self.full.start_after(&self.recorder, t, recorder::ride_name(local), resume);
                 }
             }
             ride::Event::Second => {
