@@ -824,7 +824,7 @@ fn ride_history() {
 }
 
 /// DELETE in the history (trash.rs) over the synthetic volume with a full copy of the 20 Oct ride: on a ride's card,
-/// Start asks (any other key drops it), Start again moves the ride into `\Rustfw\Deleted` and its full copy into
+/// Start held asks (any other key drops it; Start alone dismisses the card, as on the ride summary), Start moves the ride into `\Rustfw\Deleted` and its full copy into
 /// `\Rustfw\Deleted\Full`; the list, the totals and the power curve lose it at once (no ride read again), the list
 /// keeps its place, the scan's cache is written without it, the volume stays whole. A name taken in
 /// `\Rustfw\Deleted` gets a suffix. Refused during a ride and with a ride waiting to be resumed or saved.
@@ -874,14 +874,20 @@ fn delete_rides() {
         }
         assert_eq!(app.screen(), Screen::Past);
     };
-    // the 20 Oct ride (row 2): asked, dropped by another key, asked again, deleted
+    // the 20 Oct ride (row 2): Start dismisses; asked (Start held), dropped by another key, asked again, deleted
     open_card(&mut sim, &mut app, 2);
     app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "Start dismisses the card");
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "and deletes nothing");
+    open_card(&mut sim, &mut app, 2);
+    app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
     assert_eq!(app.confirm, Some(PAST_DELETE));
     app.press(&mut sim, Press::Short(Key::Lap));
-    app.press(&mut sim, Press::Short(Key::Start));
-    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped the first");
+    app.press(&mut sim, Press::Short(Key::Back)); // the banner, then (nothing asked) the list
+    assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "only asked: Lap dropped it");
+    open_card(&mut sim, &mut app, 2);
+    app.press(&mut sim, Press::Long(Key::Start));
     let (clean, full) = (
         file(&sim.emmc.image, "Activities/261020080000.fit").unwrap(),
         file(&sim.emmc.image, "Rustfw/Activities/261020080000.fit").unwrap(),
@@ -913,10 +919,16 @@ fn delete_rides() {
     assert_eq!(size(&sim.emmc.image, "Rustfw/scan.bin"), Ok(64 + 64 * u32::from(all.rides + app.stock.out.skipped)));
     assert_consistent(&sim, &app);
 
-    // the 22 Oct ride: its name taken in \Rustfw\Deleted, a suffix
+    // the 22 Oct ride: its name taken in \Rustfw\Deleted, a suffix; this time by a tap on DELETE, then a tap on it
     open_card(&mut sim, &mut app, 1);
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    let (dx, dy, dw, dh) = ui::card::DELETE_TAP;
+    let tap_delete = |sim: &mut Sim, app: &mut App| {
+        app.input(sim, Input::Touch(Gesture::Tap((dx + dw / 2) as u16, (dy + dh / 2) as u16)))
+    };
+    tap_delete(&mut sim, &mut app);
+    assert_eq!((app.screen(), app.confirm), (Screen::Past, Some(PAST_DELETE)), "a tap asks");
+    sim.save("past_delete_asks");
+    tap_delete(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000-1.fit").is_some_and(|f| !f.is_empty()));
     assert_eq!(file(&sim.emmc.image, "Rustfw/Deleted/261022100000.fit"), Some(Vec::new()), "the other kept");
@@ -926,14 +938,12 @@ fn delete_rides() {
     open_card(&mut sim, &mut app, 1);
     let ev = app.ride.start_pause();
     app.recorder(ev);
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.banner.as_str(), "NOT DURING A RIDE");
     assert_eq!(app.screen(), Screen::Past);
     app.ride = crate::ride::Ride::default();
     app.resume_pending = true;
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Start));
     assert_eq!(app.banner.as_str(), "NOT DURING A RIDE", "a ride waiting");
     assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));

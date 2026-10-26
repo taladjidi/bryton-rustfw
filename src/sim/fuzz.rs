@@ -1369,10 +1369,18 @@ fn history_by_chance() {
                 app.show(&mut sim);
             }
             let r = next();
+            // a delete asked on a card is answered with Start two times in three (else any input drops it)
             let i = match r % 100 {
+                _ if app.confirm == Some(PAST_DELETE) && r % 3 != 0 => Input::Select,
+                _ if app.screen() == Screen::Past && r % 4 == 0 => Input::End, // asks
                 0..=24 => Input::Next,
                 25..=34 => Input::Prev,
-                35..=79 => Input::Select,
+                35..=64 => Input::Select,
+                65..=74 => Input::End, // asks to delete a past ride (a card shown), as a tap on its DELETE
+                75..=79 => Input::Touch(crate::touch::Gesture::Tap(
+                    (ui::card::DELETE_TAP.0 + 10) as u16,
+                    (ui::card::DELETE_TAP.1 + 10) as u16,
+                )),
                 80..=89 => Input::Back,
                 _ => Input::Touch(crate::touch::Gesture::Tap(120, (ui::LIST_Y + 10) as u16)),
             };

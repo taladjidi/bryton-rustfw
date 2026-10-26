@@ -184,7 +184,7 @@ impl App {
         }
     }
 
-    /// DELETE on a past ride's card (Start, then Start again: [`PAST_DELETE`]): the ride moved into
+    /// DELETE on a past ride's card (a tap on it or Start held asks, Start or a tap again does: [`PAST_DELETE`]): the ride moved into
     /// `\Rustfw\Deleted` ([`trash::delete`]: kept, never erased), its full copy too; the history, the totals and the
     /// power curve without it at once; back to the list. Never while a ride runs or waits to be saved or resumed.
     pub(crate) fn delete_past(&mut self, b: &mut impl Board) {

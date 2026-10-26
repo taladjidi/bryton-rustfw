@@ -599,8 +599,15 @@ impl App {
                 return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
-            // a past ride's card: Start asks to delete it, Start again deletes it (moved, kept: trash.rs)
-            (Screen::Past, Input::Select) => {
+            // a past ride's card: Start dismisses it, as the ride summary. DELETE asks (a tap on its label, or Start
+            // held), and the answer is Start, a tap on it again or Start held again; Back says no (moved, kept:
+            // trash.rs)
+            (Screen::Past, Input::Select) if armed != Some(PAST_DELETE) => self.close(),
+            (Screen::Past, Input::Select | Input::End) => {
+                self.confirm = armed;
+                self.delete_past(b);
+            }
+            (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::DELETE_TAP, x, y) => {
                 self.confirm = armed;
                 self.delete_past(b);
             }
