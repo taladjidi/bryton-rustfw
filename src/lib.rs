@@ -233,6 +233,8 @@ pub struct App {
     up_ms: u32,
     /// Messages sent to the receiver so far: configuration, time, position.
     gnss_sent: u8,
+    /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
+    gnss_wait: u8,
     /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
     gnss_off: bool,
     /// The RTC's offset from UTC and the last position, as kept in backup registers.
@@ -523,6 +525,7 @@ impl App {
             gnss_ms: 0,
             up_ms: 0,
             gnss_sent: 0,
+            gnss_wait: 0,
             gnss_off: false,
             aid: gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r))),
             settings: misc,

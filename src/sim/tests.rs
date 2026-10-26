@@ -4234,6 +4234,32 @@ fn menu_budgets() {
     assert!(back <= 64_000, "turn back: {back} px");
 }
 
+/// The buses the CPU polls through on every pass, idle on the overview with the automatic backlight: the GNSS
+/// receiver read every pass only while it sends (else every [`crate::GNSS_IDLE_PASSES`]), the light sensor one
+/// transaction a reading (its data, not its status first). Measured 2026-10-26: 8.8 SPI4 transfers a second (23.0
+/// when read every pass), 4.3 I2C4 transactions (8.3 with the status read).
+#[test]
+fn idle_bus_budgets() {
+    for fix in [None, Some(8000)] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.gnss.fix = fix;
+        let mut app = App::start(&mut sim, None);
+        app.settings.light_level = crate::LIGHT_AUTO;
+        run(&mut sim, &mut app, 20_000);
+        let (g, l, i2c) = (sim.gnss.got.len(), sim.bus.light_reads, sim.bus.transactions);
+        run(&mut sim, &mut app, 60_000);
+        let spi = (sim.gnss.got.len() - g) as f64 / 32.0 / 60.0;
+        let (reads, i2c) = (f64::from(sim.bus.light_reads - l) / 60.0, f64::from(sim.bus.transactions - i2c) / 60.0);
+        std::println!(
+            "fix {fix:?}: {spi:.1} GNSS transfers/s, {reads:.1} light readings/s, {i2c:.1} I2C4 transactions/s"
+        );
+        assert!(spi <= 10.0, "{spi:.1} GNSS transfers/s");
+        assert!((reads - 4.0).abs() < 0.1, "the light four times a second: {reads:.1}");
+        assert!(i2c <= 4.5, "{i2c:.1} I2C4 transactions/s");
+        assert_eq!(app.pvt.is_some_and(|p| p.good()), fix.is_some(), "the fix read all the same");
+    }
+}
+
 /// The synthetic hill (tools/fat_image.py: 2 km east on the flat at 100 m, 2 km north up to 220 m, 1 km east)
 /// ridden at 8 m/s from its start, with a detour 150 m south from 60 s to 95 s.
 fn course_route(ms: u64) -> (i32, i32, i32) {

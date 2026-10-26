@@ -26,12 +26,9 @@ const MAIN_CTRL: u8 = 0x00;
 const MEAS_RATE: u8 = 0x04;
 const GAIN: u8 = 0x05;
 const PART_ID: u8 = 0x06;
-const MAIN_STATUS: u8 = 0x07;
 const ALS_DATA: u8 = 0x0d;
 /// MAIN_CTRL: ALS_EN. 0 is standby.
 const ALS_EN: u8 = 0x02;
-/// MAIN_STATUS: a new reading is waiting.
-const ALS_NEW: u8 = 0x08;
 /// PART_ID as the light sensor answers it (stock checks it).
 pub const LIGHT_ID: u8 = 0xb1;
 
@@ -77,12 +74,11 @@ pub fn light_start(b: &mut impl Board) -> bool {
     b.i2c_write(LIGHT_ADDR, MAIN_CTRL, &[ALS_EN])
 }
 
-/// The ambient light in tenths of a lux if a measurement is ready (None: not yet, or no answer). Does not stop the
-/// sensor: [`light_stop`] does.
+/// The ambient light in tenths of a lux (None: no answer): the last conversion. Called at least 100 ms after
+/// [`light_start`] and every [`crate::LIGHT_MS`] after, so there always is a new one: MAIN_STATUS (ALS_NEW) is not
+/// read first, which halves the bus time (two transactions of about 200 us each, the CPU polling I2C4: 2026-10-26).
+/// Does not stop the sensor: [`light_stop`] does.
 pub fn light_read(b: &mut impl Board) -> Option<u32> {
-    if reg(b, LIGHT_ADDR, MAIN_STATUS)? & ALS_NEW == 0 {
-        return None;
-    }
     let mut d = [0; 3];
     b.i2c_read(LIGHT_ADDR, ALS_DATA, &mut d).then(|| lux10(u32::from_le_bytes([d[0], d[1], d[2], 0])))
 }

@@ -383,6 +383,8 @@ pub struct Bus {
     pub light_on_ms: u64,
     /// Light readings taken.
     pub light_reads: u32,
+    /// Transactions on the bus (reads and writes, any chip): each one the CPU polls through on the unit.
+    pub transactions: u32,
     /// The barometer's pressure and temperature (hPa x 10, C x 100); None: no barometer.
     pub baro: Option<(u32, i16)>,
     /// The barometer follows this altitude (mm, a function of the time in ms) on the sea-level pressure `baro_p0`
@@ -404,6 +406,7 @@ pub struct Bus {
 impl Bus {
     fn read(&mut self, now: u64, addr: u8, reg: u8, buf: &mut [u8]) -> bool {
         use crate::ambient::*;
+        self.transactions += 1;
         match addr {
             LIGHT_ADDR => {
                 let Some(lux10) = self.lux10 else { return false };
@@ -456,6 +459,7 @@ impl Bus {
 
     fn write(&mut self, now: u64, addr: u8, reg: u8, data: &[u8]) -> bool {
         use crate::ambient::*;
+        self.transactions += 1;
         match addr {
             LIGHT_ADDR if self.lux10.is_some() => {
                 for (i, &v) in data.iter().enumerate() {
@@ -526,7 +530,9 @@ impl Gnss {
         if !self.powered || now < self.next_ms {
             return;
         }
-        self.next_ms = now + 1000;
+        // its own 1 Hz clock, not the reads' (a read every 200 ms would stretch it to 1.2 s); late by a second or
+        // more (powered, or not read for a while): from now
+        self.next_ms = if now >= self.next_ms + 1000 { now + 1000 } else { self.next_ms + 1000 };
         let mut p = [0u8; 92];
         p[4..12].copy_from_slice(&[0xe5, 0x07, 3, 7, 0, 0, 0, 0xf0]);
         if let Some(speed) = self.fix {
@@ -1125,6 +1131,7 @@ impl Sim {
                 light_on_since: None,
                 light_on_ms: 0,
                 light_reads: 0,
+                transactions: 0,
                 baro: Some((10_132, 2150)),
                 baro_alt: None,
                 baro_p0: crate::altitude::P_STD,

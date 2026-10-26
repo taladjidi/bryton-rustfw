@@ -19,6 +19,12 @@ pub const PVT_STALE_MS: u32 = 3000;
 /// the first 32 bytes of idle fill between frames, so most passes read 32.
 pub(crate) const GNSS_READ: usize = 128;
 
+/// While the receiver has nothing to send (idle fill), it is read every this many passes (200 ms), not every pass:
+/// its output is NAV-PVT once a second (and the answers to the configuration), which then waits at most a pass or
+/// three in its buffer; a read that finds bytes keeps reading every pass until the fill comes back. Each read is a
+/// 32-byte SPI4 transfer the CPU polls (113 us a pass on the unit, 0.24 % of the time: 2026-10-26).
+pub const GNSS_IDLE_PASSES: u8 = 4;
+
 impl App {
     /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
     /// and the speed when no speed sensor is paired.
@@ -35,10 +41,28 @@ impl App {
         self.gnss_ms = self.gnss_ms.saturating_add(self.dt_ms);
         self.pvt_ms = self.pvt_ms.saturating_add(self.dt_ms);
         let mut send = if self.gnss_ms >= GNSS_CONFIG_MS { self.next_gnss_message(b) } else { None };
+        if send.is_none() && self.gnss_wait > 0 {
+            self.gnss_wait -= 1;
+        } else {
+            self.read_gnss(b, send.take());
+        }
+        if self.pvt_ms > PVT_STALE_MS {
+            self.pvt = None;
+        }
+        self.strip.gps = self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 });
+        // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
+        self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
+    }
+
+    /// One read of the receiver: up to [`GNSS_READ`] bytes (`send` goes out with the first 32), the fixes in them
+    /// taken. Found idle, the next reads wait [`GNSS_IDLE_PASSES`].
+    fn read_gnss(&mut self, b: &mut impl Board, mut send: Option<[u8; 32]>) {
+        self.gnss_wait = 0;
         for _ in 0..GNSS_READ / 32 {
             let mut buf = send.take().unwrap_or([0xff; 32]);
             b.gnss_transfer(&mut buf);
             if buf == [0xff; 32] && self.gnss.idle() {
+                self.gnss_wait = GNSS_IDLE_PASSES - 1;
                 break; // nothing waiting in the receiver
             }
             for &byte in &buf {
@@ -62,12 +86,6 @@ impl App {
                 }
             }
         }
-        if self.pvt_ms > PVT_STALE_MS {
-            self.pvt = None;
-        }
-        self.strip.gps = self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 });
-        // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
-        self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
     }
 
     /// Switches the receiver off for an indoor ride (a ride running with the INDOOR profile: its speed is the
