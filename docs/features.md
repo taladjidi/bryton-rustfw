@@ -5,11 +5,11 @@
 - **Status strip** (every screen): BLE (green, red if the radio chip did not answer), GPS (blinking grey while
   searching, then 1 to 4 signal bars), the time, the ride's state (a red dot while it records, orange bars while paused), a USB symbol,
   the battery (green while charging, red at 15 % and under).
-- **Overview** (the main screen): the date, big (3x, left; the time is in the strip), under it the TODAY card
-  (below), four fields chosen in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
+- **Overview** (the main screen): the date, big (3x, centred left of the cog; the time is in the strip), under it the TODAY card
+  (below, as tall as the rest allows: about 110 px), four fields in two rows of 60 px chosen in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
-  only the rides new or changed since are read), and the latest notices (a GPS fix, a
-  sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
+  only the rides new or changed since are read), and the newest notice on one row at the foot (a GPS fix, a
+  sensor paired, the battery low; a tap opens them), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
   date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
   44 x 44 px box opens the menu).
   **TODAY card** (the owner's idea, 2026-10-26: the big clock went, the strip has the time): "TODAY" and the planned
