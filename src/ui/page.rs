@@ -7,11 +7,8 @@
 //! never leaves a field in a box too small to read ([`min_size`]). Pure logic, and the format of
 //! `\Rustfw\pages.bin` ([`Saved`]).
 
-use crate::ui::{self, Field};
+use crate::ui::{self, Field, Rect};
 use crate::{BLANK, PageCfg};
-
-/// A box: left, top, width, height.
-pub type Rect = (u32, u32, u32, u32);
 
 /// Rows a page has at most.
 pub const ROWS: usize = 5;
@@ -118,7 +115,7 @@ impl Page {
 
     /// Box of cell `k` on a ride page.
     pub fn cell_box(&self, k: usize) -> Option<Rect> {
-        ui::rows_box(self.used(), ui::RIDE_H, k).filter(|_| k < self.cells())
+        ui::rows_box(self.used(), ui::RIDE_H, k).filter(|_| k < self.cells()).map(Rect::from)
     }
 
     /// Cell `k`'s field is not readable in its box ([`fits`]).
@@ -327,7 +324,7 @@ impl Page {
     pub fn more_of(&self) -> Page {
         use Field::*;
         let Some(dense) = preset_of(CELLS).and_then(|id| Page::preset(id, [Time; CELLS])) else { return *self };
-        let room = dense.cell_box(0).unwrap_or((0, 0, 0, 0));
+        let room = dense.cell_box(0).unwrap_or(Rect(0, 0, 0, 0));
         let mut fields = [Time; CELLS];
         let mut n = 0;
         for f in self.fields.iter().take(self.cells()).copied().filter(|&f| fits(f, room)) {
@@ -647,7 +644,7 @@ mod tests {
             assert!(p.valid(), "layout {id}");
             assert_eq!((p.preset_id(), p.cells()), (Some(id), ui::field_count(id)));
             for k in 0..p.cells() {
-                assert_eq!(p.cell_box(k), ui::field_box(id, ui::RIDE_H, k), "layout {id} box {k}");
+                assert_eq!(p.cell_box(k).map(Into::into), ui::field_box(id, ui::RIDE_H, k), "layout {id} box {k}");
             }
             if id <= OLD_LAYOUTS {
                 let back = Page::from_cfg(p.to_cfg()).unwrap();

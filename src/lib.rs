@@ -868,6 +868,7 @@ mod tests {
     /// temporary copy at start-up is on the stack.
     #[test]
     fn app_size_budget() {
+        std::println!("App is {} B", core::mem::size_of::<App>());
         assert!(core::mem::size_of::<App>() < 56 * 1024, "App is {} B", core::mem::size_of::<App>());
     }
 

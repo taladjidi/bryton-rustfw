@@ -141,6 +141,12 @@ impl From<(u32, u32, u32, u32)> for Rect {
     }
 }
 
+impl From<Rect> for (u32, u32, u32, u32) {
+    fn from(Rect(x, y, w, h): Rect) -> Self {
+        (x, y, w, h)
+    }
+}
+
 impl Rect {
     /// The touch at (`x`, `y`) is in the box.
     pub fn contains(self, x: u16, y: u16) -> bool {

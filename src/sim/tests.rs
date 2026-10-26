@@ -80,7 +80,7 @@ fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: bool) -> Vec
     );
     let page = app.pages()[n];
     for (i, v) in values.iter().enumerate() {
-        let bx = page.cell_box(i).unwrap();
+        let bx = <(u32, u32, u32, u32)>::from(page.cell_box(i).unwrap());
         // heart rate and power show their zone as a bar along the box's top, the number white (steady test
         // sensors: the 3 s average the power's box takes equals the live value)
         crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v));
