@@ -353,7 +353,7 @@ impl App {
             }
             Row::Read(r @ (Reading::Lux | Reading::TempC | Reading::Hpa)) => {
                 let present = if r == Reading::Lux { self.chips.light } else { self.chips.baro };
-                match (r, self.auto.lux10(), self.baro) {
+                match (r, self.light.auto.lux10(), self.baro) {
                     _ if !present => value.push_str("NONE"),
                     (Reading::Lux, Some(l), _) => value.push_u32(l / 10),
                     (Reading::TempC, _, Some((_, t))) => push_fixed(&mut value, i32::from(t), 2, 1),

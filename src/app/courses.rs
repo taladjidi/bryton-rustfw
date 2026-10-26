@@ -104,7 +104,7 @@ impl App {
     /// climb starting ("CLIMB 3.4 KM 7%", a beep).
     pub(crate) fn course_event(&mut self, ev: course::Event) {
         // seen whatever the screen: the light comes on as for a key, even after its time-out
-        self.idle_ms = 0;
+        self.light.idle_ms = 0;
         match ev {
             course::Event::Off => {
                 self.alarm("OFF COURSE");

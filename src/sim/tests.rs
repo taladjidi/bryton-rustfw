@@ -4910,8 +4910,8 @@ fn course_cues_over_any_screen() {
                 app.open(s);
                 app.show(&mut sim);
             }
-            None if i == 2 => {}          // the light timed out on its own (10 s, no key)
-            None => app.idle_ms = 60_000, // the light timed out (well past the 10 s)
+            None if i == 2 => {}                // the light timed out on its own (10 s, no key)
+            None => app.light.idle_ms = 60_000, // the light timed out (well past the 10 s)
         }
         run(&mut sim, &mut app, 3000);
         if screen.is_none() {
@@ -5055,9 +5055,9 @@ fn timers_count_real_time_in_long_passes() {
     app.settings.light_level = 2;
     app.settings.light_timeout = 1;
     run_passes(&mut sim, &mut app, 1, PASS);
-    assert_ne!(app.light_shown, 0);
+    assert_ne!(app.light.shown, 0);
     let t0 = sim.ms;
-    while app.light_shown != 0 && sim.ms < t0 + 30_000 {
+    while app.light.shown != 0 && sim.ms < t0 + 30_000 {
         run_passes(&mut sim, &mut app, 1, PASS);
     }
     let on = sim.ms - t0;

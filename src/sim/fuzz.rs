@@ -1975,7 +1975,7 @@ fn random_pass_lengths() {
             let t = sim.ms - t0;
             banner_gone |= t > 5000 && app.notes.ms.is_none();
             tone_done |= t > 2000 && sim.tones.last() == Some(&0);
-            dark |= app.light_shown == 0;
+            dark |= app.light.shown == 0;
             opens = sim.nordic.got.iter().filter(|p| p.starts_with(&[6, 0xc4, 0])).count();
             // on time, whatever the passes: never early, never later than a few passes
             if t < 3900 {
@@ -1985,7 +1985,7 @@ fn random_pass_lengths() {
                 assert!(opens <= 1, "seed {seed}: the rest cut short at {t} ms");
             }
             if t < 9900 {
-                assert_ne!(app.light_shown, 0, "seed {seed}: backlight off early at {t} ms");
+                assert_ne!(app.light.shown, 0, "seed {seed}: backlight off early at {t} ms");
             }
         }
         assert!(banner_gone && tone_done && dark, "seed {seed}: {banner_gone} {tone_done} {dark}");

@@ -118,14 +118,14 @@ impl App {
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
         let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;
-        let on = timeout_ms == 0 || self.idle_ms < timeout_ms;
+        let on = timeout_ms == 0 || self.light.idle_ms < timeout_ms;
         let level = match LIGHT_LEVELS.get(self.settings.light_level) {
             _ if !on => 0,
             Some(&l) => l,
-            None => self.auto_level,
+            None => self.light.auto_level,
         };
-        if level != self.light_shown {
-            self.light_shown = level;
+        if level != self.light.shown {
+            self.light.shown = level;
             b.backlight(level);
         }
     }
@@ -172,23 +172,23 @@ impl App {
         if !self.chips.light {
             return;
         }
-        self.light_ms = self.light_ms.saturating_add(self.dt_ms);
-        let wanted = (self.settings.light_level == LIGHT_AUTO && self.light_shown != 0)
+        self.light.ms = self.light.ms.saturating_add(self.dt_ms);
+        let wanted = (self.settings.light_level == LIGHT_AUTO && self.light.shown != 0)
             || matches!(self.screen, Screen::Menu(Menu::BuiltIn, _));
-        match (wanted, self.measuring) {
+        match (wanted, self.light.measuring) {
             (true, false) => {
-                self.measuring = ambient::light_start(b);
-                self.light_ms = 0;
+                self.light.measuring = ambient::light_start(b);
+                self.light.ms = 0;
             }
-            (true, true) if self.light_ms >= LIGHT_MS => {
+            (true, true) if self.light.ms >= LIGHT_MS => {
                 if let Some(lux10) = ambient::light_read(b) {
-                    self.auto_level = self.auto.update(lux10);
-                    self.light_ms = 0;
+                    self.light.auto_level = self.light.auto.update(lux10);
+                    self.light.ms = 0;
                 }
             }
             (false, true) => {
                 ambient::light_stop(b);
-                self.measuring = false;
+                self.light.measuring = false;
             }
             _ => {}
         }
@@ -209,7 +209,7 @@ impl App {
         }
         b.gnss_power(false);
         play(b, &BEEP_OFF);
-        if self.measuring {
+        if self.light.measuring {
             ambient::light_stop(b);
         }
         b.backlight(0);

@@ -142,18 +142,10 @@ pub trait Board {
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
-    /// The level the backlight is at (0: off).
-    light_shown: u8,
-    /// Since the last key press.
-    idle_ms: u32,
+    /// The backlight.
+    light: Light,
     /// The chips found on the sensor bus.
     chips: ambient::Chips,
-    /// The automatic backlight's state, and the level it asks for.
-    auto: ambient::Auto,
-    auto_level: u8,
-    /// Since the last light measurement started; whether it is still running.
-    light_ms: u32,
-    measuring: bool,
     /// The barometer's last reading: hPa x 10, C x 100.
     baro: Option<(u32, i16)>,
     /// The barometric altitude and its calibration (altitude.rs); since the barometer was last read; the file.
@@ -449,13 +441,8 @@ impl App {
         let store = PageStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
-            light_shown: 0,
-            idle_ms: 0,
+            light: Light::new(),
             chips: ambient::init(b),
-            auto: ambient::Auto::default(),
-            auto_level: LIGHT_LEVELS[1], // until the first reading
-            light_ms: LIGHT_MS,          // a measurement at the first step
-            measuring: false,
             baro: None,
             alt: altitude::Altimeter::new(),
             baro_ms: BATTERY_MS - BARO_RIDE_MS, // the first reading a second after the start (the conversion's)
@@ -818,7 +805,7 @@ impl App {
         t = self.timed(b, Sec::Draw, t);
         let mask = b.keys_down();
         // a key stuck since the start is no use: it does not keep the light on either
-        self.idle_ms = if self.keys.live(mask) != 0 { 0 } else { self.idle_ms.saturating_add(pass_ms) };
+        self.light.idle(self.keys.live(mask) != 0, pass_ms);
         if let Some(p) = self.keys.poll(mask, pass_ms) {
             self.press(b, p);
         }

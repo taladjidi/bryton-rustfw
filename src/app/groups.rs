@@ -71,3 +71,38 @@ impl Notices {
         }
     }
 }
+
+/// The backlight (app/device.rs): what it shows, the automatic level and the measurement behind it.
+pub(crate) struct Light {
+    /// The level the backlight is at (0: off).
+    pub(crate) shown: u8,
+    /// Since the last key press.
+    pub(crate) idle_ms: u32,
+    /// The automatic backlight's state (ambient.rs).
+    pub(crate) auto: ambient::Auto,
+    /// The level it asks for.
+    pub(crate) auto_level: u8,
+    /// Since the last light measurement started.
+    pub(crate) ms: u32,
+    /// The measurement is still running.
+    pub(crate) measuring: bool,
+}
+
+impl Light {
+    /// Off, a measurement due at the first step, the automatic level at its middle until the first reading.
+    pub(crate) fn new() -> Self {
+        Light {
+            shown: 0,
+            idle_ms: 0,
+            auto: ambient::Auto::default(),
+            auto_level: LIGHT_LEVELS[1],
+            ms: LIGHT_MS,
+            measuring: false,
+        }
+    }
+
+    /// A key was held (or not) for a pass of `pass_ms`: the idle time restarts or grows.
+    pub(crate) fn idle(&mut self, held: bool, pass_ms: u32) {
+        self.idle_ms = if held { 0 } else { self.idle_ms.saturating_add(pass_ms) };
+    }
+}

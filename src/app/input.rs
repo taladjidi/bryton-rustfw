@@ -294,8 +294,8 @@ impl App {
         let (before, more_before) = (self.screen, self.more_on);
         self.clamp_menu(); // a row gone while the menu showed (drawn again below if the screen of rows changed)
         let recording = self.ride.state() == ride::State::Running;
-        let woke = self.light_shown == 0;
-        self.idle_ms = 0;
+        let woke = self.light.shown == 0;
+        self.light.idle_ms = 0;
         if woke {
             self.update_light(b); // an input after the time-out: the light comes back (and the input acts)
             if i == Input::Back {
@@ -720,7 +720,7 @@ impl App {
     /// The gesture waiting, or the one this sample ends ([`App::touch`]).
     fn touch_gesture(&mut self, b: &mut impl Board, dt_ms: u32) -> Option<Input> {
         if let Some(i) = self.touch_pending.take() {
-            self.idle_ms = 0;
+            self.light.idle_ms = 0;
             return Some(i);
         }
         // after a drive command sampled the panel, the sleep since the main loop's last read is time counted already:
@@ -731,7 +731,7 @@ impl App {
             return None; // locked: a finger neither acts nor keeps the light on
         }
         if finger {
-            self.idle_ms = 0;
+            self.light.idle_ms = 0;
         }
         g.map(Input::Touch)
     }

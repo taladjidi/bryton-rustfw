@@ -205,8 +205,8 @@ impl App {
             _ => {}
         }
         // a press is as a key for the light: it comes back after the time-out
-        self.idle_ms = 0;
-        if self.light_shown == 0 {
+        self.light.idle_ms = 0;
+        if self.light.shown == 0 {
             self.update_light(b);
         }
         match action {
