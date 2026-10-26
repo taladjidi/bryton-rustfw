@@ -358,6 +358,7 @@ impl App {
             power: self.live.get(Metric::Power),
             alt_mm: alt.0,
             alt_ref: alt.1,
+            indoor: self.indoors(),
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {

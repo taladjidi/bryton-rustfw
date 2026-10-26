@@ -55,6 +55,9 @@ pub struct Input {
     /// Which altitude that is: 0 the receiver's, else the barometer on one calibration (`altitude.rs`). A change
     /// forgets the low point and the climb window (the two are not on the same level).
     pub alt_ref: u8,
+    /// An indoor ride ([`Profile::Indoor`]): auto-paused on no power and no cadence, not on speed (a trainer's
+    /// flywheel speed lags, and some trainers report a speed at 0 rpm: inferred).
+    pub indoor: bool,
 }
 
 /// Words of [`Ride::to_words`].
@@ -62,6 +65,9 @@ pub const RIDE_WORDS: usize = 16;
 
 /// Under this speed (km/h x 10) the ride is auto-paused: the timer stops, nothing is added.
 pub const AUTO_PAUSE_X10: u16 = 20;
+
+/// An indoor ride is auto-paused after this many seconds with no power and no cadence.
+pub const INDOOR_PAUSE_S: u8 = 3;
 
 /// Altitude gain is counted once it exceeds the last low point by this much (GPS altitude is noisy).
 pub const ASCENT_HYSTERESIS_MM: i32 = 5000;
@@ -95,6 +101,8 @@ impl Avg {
 pub struct Ride {
     state: State,
     moving: bool,
+    /// Seconds in a row with no power and no cadence (indoor auto-pause).
+    still_s: u8,
     timer_s: u32,
     dist9: u64,
     max_speed: u16,
@@ -122,6 +130,7 @@ impl Ride {
         Ride {
             state: State::Idle,
             moving: false,
+            still_s: 0,
             timer_s: 0,
             dist9: 0,
             max_speed: 0,
@@ -177,8 +186,17 @@ impl Ride {
         if self.state != State::Running {
             return None;
         }
-        // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
-        self.moving = i.speed_x10.is_none_or(|v| v >= AUTO_PAUSE_X10);
+        if i.indoor {
+            // pedalling is power or cadence; neither reported at all (no sensor) keeps the timer running
+            let still = i.power.is_none_or(|p| p == 0) && i.cadence.is_none_or(|c| c == 0);
+            let heard = i.power.is_some() || i.cadence.is_some();
+            self.still_s = if still && heard { self.still_s.saturating_add(1) } else { 0 };
+            self.moving = self.still_s < INDOOR_PAUSE_S;
+        } else {
+            self.still_s = 0;
+            // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
+            self.moving = i.speed_x10.is_none_or(|v| v >= AUTO_PAUSE_X10);
+        }
         if self.moving {
             self.timer_s = self.timer_s.saturating_add(1);
             let v = i.speed_x10.unwrap_or(0);
@@ -812,7 +830,15 @@ mod tests {
     use super::*;
 
     fn at(speed: u16) -> Input {
-        Input { speed_x10: Some(speed), hr: Some(140), cadence: Some(90), power: Some(200), alt_mm: None, alt_ref: 0 }
+        Input {
+            speed_x10: Some(speed),
+            hr: Some(140),
+            cadence: Some(90),
+            power: Some(200),
+            alt_mm: None,
+            alt_ref: 0,
+            indoor: false,
+        }
     }
 
     /// A change of altitude source is not a climb, and the barometer's hysteresis is finer than the receiver's.
@@ -842,6 +868,44 @@ mod tests {
             g.second(&alt(100_000 + s * 500, 0)); // the same climb on the receiver: under its 5 m
         }
         assert_eq!(g.ascent_m(), 0);
+    }
+
+    /// Indoors the ride pauses itself on no power and no cadence for 3 s, whatever the speed says, and goes on at the
+    /// first pedal stroke; on the road it is the speed.
+    #[test]
+    fn indoor_auto_pause_follows_power_and_cadence() {
+        let indoor = |speed, power, cadence| Input { speed_x10: Some(speed), power, cadence, indoor: true, ..at(0) };
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..10 {
+            r.second(&indoor(0, Some(180), Some(85))); // no speed, but pedalling: the timer runs
+        }
+        assert_eq!(r.timer_s(), 10);
+        for _ in 0..2 {
+            r.second(&indoor(300, Some(0), Some(0))); // the flywheel still turns
+        }
+        assert!(r.moving(), "two seconds: not yet");
+        r.second(&indoor(300, Some(0), Some(0)));
+        assert!(!r.moving(), "the third: paused, speed or not");
+        let t = r.timer_s();
+        for _ in 0..5 {
+            r.second(&indoor(300, Some(0), Some(0)));
+        }
+        assert_eq!(r.timer_s(), t, "the timer waits");
+        r.second(&indoor(0, Some(0), Some(60))); // one pedal stroke of cadence: back
+        assert!(r.moving());
+        // no power or cadence reported at all keeps it running
+        for _ in 0..10 {
+            r.second(&indoor(0, None, None));
+        }
+        assert!(r.moving());
+        // on the road the speed decides, as before
+        let mut road = Ride::new();
+        road.start_pause();
+        for _ in 0..5 {
+            road.second(&Input { power: Some(0), cadence: Some(0), ..at(0) });
+        }
+        assert!(!road.moving(), "road: no speed");
     }
 
     #[test]
