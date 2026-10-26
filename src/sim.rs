@@ -131,7 +131,7 @@ pub struct EmmcCard {
     pub sectors_written: u64,
     pub cut_after: Option<u64>,
     /// Writes touching these sectors fail (a CRC error), nothing of them landing: a card failing in one place.
-    pub bad: Option<core::ops::Range<u32>>,
+    pub bad: Vec<core::ops::Range<u32>>,
     /// Bytes of sectors read so far (the cost of a pass: [`crate::App::SCAN_IDLE`]).
     pub bytes_read: u64,
     /// A cut tears the sector being written (garbage in it, as JEDEC allows for a plain write); a reliable write's
@@ -159,7 +159,7 @@ impl Default for EmmcCard {
             image: Vec::new(),
             sectors_written: 0,
             cut_after: None,
-            bad: None,
+            bad: Vec::new(),
             bytes_read: 0,
             tear: false,
             rel_param: 0,
@@ -328,7 +328,7 @@ impl EmmcCard {
         }
         let end = u64::from(arg) + (buf.len() / 512) as u64;
         assert!(end <= u64::from(EMMC_SECTORS - crate::emmc::RESERVED), "a write at or past B: {arg:#x}");
-        if self.bad.as_ref().is_some_and(|b| u64::from(b.start) < end && arg < b.end) {
+        if self.bad.iter().any(|b| u64::from(b.start) < end && arg < b.end) {
             return Err(crate::emmc::BusError::Crc);
         }
         assert!(!self.image.is_empty(), "a write to the card without an image");

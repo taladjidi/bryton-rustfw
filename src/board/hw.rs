@@ -117,15 +117,17 @@ pub fn rd(a: u32) -> u32 {
     // computer-given addresses, which they check first (aligned; poke in the peripheral space only, peek there or in
     // the DTCM or the SDRAM: all mapped). A peek of RAM may read a value a Rust object holds (it writes nothing,
     // and the value may be stale). A reserved address inside the peripheral space can still bus-fault: a reset
-    // (default_handler), never memory corrupted.
+    // (default_handler). What a poke cannot be checked for: a register that makes the hardware write memory (DMA,
+    // MDMA, FMC): the dev link trusts its operator there (usb.rs).
     unsafe { read_volatile(a as *const u32) }
 }
 
 /// Writes the 32-bit word at `a`.
 #[inline(always)]
 pub fn wr(a: u32, v: u32) {
-    // SAFETY: as rd, whose callers are all of wr's: register writes only change hardware state (poke reaches only
-    // the peripheral space), and the section copies in reset run before any Rust object exists there.
+    // SAFETY: as rd, whose callers are all of wr's: register writes change hardware state (the firmware's own never
+    // point a DMA at memory a Rust object holds; the dev link's poke: see rd), and the section copies in reset run
+    // before any Rust object exists there.
     unsafe { write_volatile(a as *mut u32, v) }
 }
 

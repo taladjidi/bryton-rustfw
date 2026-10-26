@@ -211,12 +211,12 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
   on in RAM. A file that does not read back whole is left in `\Rustfw\Rides` ("SAVE FAILED"), never in the way of
   the next ride. The save makes room for the new entry in the target folder before it removes the ride's old one
   (`Fat::make_room`: a zeroed cluster linked when the folder must grow), so a full card fails with the ride still
-  named, and a save given up is never marked done while the entry still names the ride. A save the card fails once
-  the ride's old entry is gone (its record alone names it) is never given up: the ride stays open (the marker kept: no
-  USB drive, no HISTORY delete) and is tried again every few calls until the card takes it, after a boot or a Start
-  too. A Start meanwhile is held behind it (the pending start: "NOT RECORDING: CARD") and begins once the save ends,
-  both copies; the full copy saves after the clean one, under the name that one took. A ride discarded goes through the same steps into `\Rustfw\Discarded` instead, its records
-  saying so from the end on, so a cut during it finishes there at the next start (never in `\Activities`).
+  named. A save the card keeps failing puts the ride back in `\Rustfw\Rides` ("SAVE FAILED: KEPT IN RUSTFW/RIDES");
+  if even that fails, the ride stays open and is tried again (backing off up to 160 s) until the card takes it, the
+  USB drive lent read only meanwhile, and a ride started meanwhile waits for it ("NOT RECORDING: CARD"). Both copies
+  share one name: the full copy saves after the clean one, under the name that one took. A ride discarded goes
+  through the same steps into `\Rustfw\Discarded` instead, its records saying so from the end on, so a cut during it
+  finishes there at the next start (never in `\Activities`).
 - **A full copy of each ride** (seen on the unit without a strap; with one, docs/status.md): `\Rustfw\Activities\YYMMDDhhmmss.fit` has the same records,
   each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads), `RMSSD` and
   `ArtPct` (the share of beats the live DFA a1 dropped), from the strap's beats; and every beat itself, raw, in

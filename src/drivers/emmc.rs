@@ -298,19 +298,28 @@ impl Card {
 pub struct Emmc {
     card: Option<Card>,
     lent: bool,
+    /// Lent write protected ([`Emmc::lend_read_only`]).
+    read_only: bool,
 }
 
 impl Emmc {
     /// Not identified yet.
     pub const fn new() -> Self {
-        Emmc { card: None, lent: false }
+        Emmc { card: None, lent: false, read_only: false }
     }
 
     /// Lends the card to the computer (the USB drive, msc.rs), or takes it back. While lent, every use but
     /// [`Lent`]'s fails with [`Error::Lent`]: one owner at a time, whoever the caller (the recorder, the scans,
     /// the basemap, the dev link).
     pub fn lend(&mut self, on: bool) {
-        self.lent = on;
+        (self.lent, self.read_only) = (on, false);
+    }
+
+    /// Lends the card write protected (MODE SENSE says so, a write fails before any command): while a ride's save
+    /// cannot finish (recorder.rs, stuck), for the owner to copy what is on the card without a computer's fsck
+    /// touching the ride's chain.
+    pub fn lend_read_only(&mut self) {
+        (self.lent, self.read_only) = (true, true);
     }
 
     /// The card is lent to the computer.
@@ -372,7 +381,7 @@ impl<B: Board> crate::msc::Media for Lent<'_, B> {
         r.ok()
     }
     fn writable(&self) -> bool {
-        self.1.emmc_writable()
+        self.1.emmc_writable() && !self.0.read_only
     }
     fn read(&mut self, lba: u32, buf: &mut [u8]) -> bool {
         let e = &mut *self.0;
@@ -388,7 +397,7 @@ impl<B: Board> crate::msc::Media for Lent<'_, B> {
     fn write(&mut self, lba: u32, buf: &[u8]) -> bool {
         let e = &mut *self.0;
         let r = match e.identify(self.1) {
-            Ok(c) if e.lent => c.write(self.1, lba, buf),
+            Ok(c) if e.lent && !e.read_only => c.write(self.1, lba, buf),
             Ok(_) => Err(Error::Lent),
             Err(x) => Err(x),
         };
