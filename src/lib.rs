@@ -311,9 +311,7 @@ pub struct App {
     /// file; where it is (workout.rs).
     plan: Plan,
     /// The ramp test being ridden, its last result, and the result screen due (app/ramp.rs).
-    ramp: Option<ramp::Ramp>,
-    ramp_result: Option<ramp::Outcome>,
-    ramp_show: bool,
+    ramp: RampState,
     /// The ride recorder (FIT file, checkpoints, save), and a ride to look for on the card at the first step.
     /// The card may be written ([`Board::emmc_writable`]); without, the recorder is not used at all.
     card_writable: bool,
@@ -484,9 +482,7 @@ impl App {
             past: history::Past::new(),
             trash_check: false,
             plan: Plan::new(),
-            ramp: None,
-            ramp_result: None,
-            ramp_show: false,
+            ramp: RampState::default(),
             recorder: recorder::Recorder::new(),
             card_writable: false,
             resume_pending: false,
@@ -592,7 +588,7 @@ impl App {
             self.lag_s = 0;
         }
         self.settle_set(b);
-        if core::mem::take(&mut self.ramp_show) {
+        if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);
         }

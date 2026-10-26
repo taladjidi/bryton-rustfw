@@ -275,3 +275,14 @@ impl Plan {
         self.player.as_ref().is_some_and(|p| p.step(self.steps()).is_some())
     }
 }
+
+/// The ramp test (app/ramp.rs): the one being ridden, its last result, and the result screen due.
+#[derive(Default)]
+pub(crate) struct RampState {
+    /// The test being ridden.
+    pub(crate) run: Option<ramp::Ramp>,
+    /// The last result.
+    pub(crate) result: Option<ramp::Outcome>,
+    /// The result screen is due (shown at the next pass).
+    pub(crate) show: bool,
+}

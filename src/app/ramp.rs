@@ -16,7 +16,7 @@ const RAMP_BUTTONS: [(u32, u32, u32, u32); 2] = [(8, 266, 108, 48), (124, 266, 1
 impl App {
     /// The ramp is being ridden (a ramp step is the player's current one).
     pub(crate) fn ramp_running(&self) -> bool {
-        self.ramp.is_some() && self.plan.player.and_then(|p| p.step(self.plan.steps())).is_some_and(ramp::in_ramp)
+        self.ramp.run.is_some() && self.plan.player.and_then(|p| p.step(self.plan.steps())).is_some_and(ramp::in_ramp)
     }
 
     /// Starts the ramp test: the workout, and the ride if none runs. Indoors only: a trainer must be heard.
@@ -28,7 +28,7 @@ impl App {
             return self.say("WORKOUT RUNNING");
         }
         (self.plan.workout, self.plan.file, self.plan.player) = (ramp::workout(), Some(RAMP_FILE), None);
-        (self.ramp, self.ramp_result) = (Some(ramp::Ramp::new()), None);
+        (self.ramp.run, self.ramp.result) = (Some(ramp::Ramp::new()), None);
         self.start_workout(0);
     }
 
@@ -38,10 +38,10 @@ impl App {
     pub(crate) fn ramp_second(&mut self, ticked: bool) {
         let steps = self.plan.steps();
         let Some(i) = self.plan.player.and_then(|p| p.step(steps)) else {
-            self.ramp = None; // the workout ended or was stopped
+            self.ramp.run = None; // the workout ended or was stopped
             return;
         };
-        if self.ramp.is_none() || !ramp::in_ramp(i) {
+        if self.ramp.run.is_none() || !ramp::in_ramp(i) {
             return;
         }
         if !ticked {
@@ -52,7 +52,7 @@ impl App {
         let hr = self.live.get(Metric::Hr);
         let a1 = self.hrv.alpha1().filter(|_| hr.is_some()).map(|a| (a * 100.0 + 0.5) as u16);
         let (power, cadence) = (self.live.get(Metric::Power), self.live.get(Metric::Cadence));
-        if self.ramp.as_mut().is_some_and(|r| r.second(power, cadence, target, (a1, hr))) {
+        if self.ramp.run.as_mut().is_some_and(|r| r.second(power, cadence, target, (a1, hr))) {
             self.finish_ramp();
         }
     }
@@ -60,13 +60,13 @@ impl App {
     /// The test is over (a stop rule, Lap): the result kept, the cool-down played, the result screen due. Under a
     /// whole minute there is no result, and it says so.
     pub(crate) fn finish_ramp(&mut self) {
-        let Some(r) = self.ramp.take() else { return };
-        self.ramp_result = r.outcome();
+        let Some(r) = self.ramp.run.take() else { return };
+        self.ramp.result = r.outcome();
         let (p, ev) = workout::Player::start(self.plan.steps(), ramp::COOL, self.ride.dist_m());
         self.plan.player = Some(p);
         self.workout_event(ev);
-        match self.ramp_result {
-            Some(_) => self.ramp_show = true,
+        match self.ramp.result {
+            Some(_) => self.ramp.show = true,
             None => self.say("TEST TOO SHORT"),
         }
     }
@@ -80,7 +80,7 @@ impl App {
 
     /// APPLY on the result screen: the FTP found becomes the setting ([`App::applied_ftp`]).
     pub(crate) fn apply_ramp(&mut self, b: &mut impl Board) {
-        if let Some(o) = self.ramp_result.take() {
+        if let Some(o) = self.ramp.result.take() {
             self.settings.ftp = Self::applied_ftp(&o);
             self.save_misc(b);
             self.say("FTP SET");
@@ -103,7 +103,7 @@ impl App {
     /// meaning here, so APPLY and KEEP are touch buttons (Back keeps).
     pub(crate) fn draw_ramp(&self, c: &mut impl Canvas) {
         use text::{Align, Style, draw_in};
-        let Some(o) = self.ramp_result else { return };
+        let Some(o) = self.ramp.result else { return };
         let grey = Style { fg: ui::GREY, ..ui::LABEL };
         let mut y = ui::PAGE_Y + 2;
         draw_in(c, &ui::LABEL, 0, y, ui::W, Align::Centre, "RAMP TEST");
