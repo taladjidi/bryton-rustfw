@@ -20,6 +20,7 @@ python3 tools/stack_check.py
 python3 pack.py
 python3 -I dev.py selftest
 python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1: no network
+python3 -I tools/s810_probe.py selftest  # the S810 owner's probe on a made-up volume: nothing personal comes out
 python3 -I tools/route_pack.py selftest  # the synthetic map file (test-data/route) built and read back by an independent reader
 # the test rides decoded by independent readers (fitdecode, Garmin's FIT SDK): FIT_PYTHON may name a Python that has
 # them (a venv); skipped when neither has them
