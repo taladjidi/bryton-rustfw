@@ -4768,3 +4768,86 @@ fn bike_weight() {
     assert_eq!((old.bike_hg, old.weight_kg, old.hr_alert, old.eat_min), (70, 70, 172, 45));
     assert_eq!(old.remote[..2], [Remote::Lap, Remote::Play]);
 }
+
+/// The whole screen as the screenshot path draws it, in the font the settings choose.
+fn render_all(app: &App) -> Vec<u16> {
+    (0..H).flat_map(|y| app.render_row(y).px).collect()
+}
+
+/// FONT in DISPLAY: Start switches to SMOOTH at once (the screen drawn whole, the panel equal to the screenshot),
+/// the choice is kept in register 16's bit 24, and back to PIXEL brings the old screen back exactly. On a
+/// ride page the smooth text is inside the same boxes: nothing differs outside the fields and the strip.
+#[test]
+fn font_smooth_keeps_layouts() {
+    let toggle = |sim: &mut Sim, app: &mut App| {
+        app.press(sim, Press::Long(Key::Page));
+        to_row(sim, app, menu::Row::Set(Setting::Font));
+        app.press(sim, Press::Short(Key::Start));
+        run(sim, app, 100);
+        assert_consistent(sim, app);
+        let shot = sim.screen.clone();
+        while matches!(app.screen(), Screen::Menu(..)) {
+            back(sim, app);
+        }
+        run(sim, app, 100);
+        assert_consistent(sim, app);
+        shot
+    };
+    for ride_page in [false, true] {
+        let mut sim = Sim::new(12, 34, 56);
+        let mut app = App::start(&mut sim, None);
+        if ride_page {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        run(&mut sim, &mut app, 200);
+        assert!(!sim.smooth && !app.settings.smooth, "PIXEL by default");
+        let pixel = render_all(&app);
+        let menu_shot = toggle(&mut sim, &mut app);
+        assert!(sim.smooth && app.settings.smooth);
+        assert_ne!(sim.backup[POWER_BKP] & 1 << 24, 0, "kept");
+        assert!(Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).smooth);
+        let smooth = render_all(&app);
+        let diff: Vec<usize> = (0..pixel.len()).filter(|&i| pixel[i] != smooth[i]).collect();
+        assert!(diff.len() > 1000, "the text changed: {} pixels", diff.len());
+        if ride_page {
+            let page = app.pages()[0];
+            let boxes: Vec<_> = (0..6).map(|i| page.cell_box(i).unwrap()).collect();
+            for i in diff {
+                let (x, y) = ((i % W as usize) as u32, (i / W as usize) as u32);
+                assert!(
+                    y < ui::STRIP_H + 2 || boxes.iter().any(|b| x >= b.0 && x < b.0 + b.2 && y >= b.1 && y < b.1 + b.3),
+                    "({x}, {y}) is outside the strip and the fields"
+                );
+            }
+            sim.save("font_smooth_ride");
+        } else {
+            sim.save("font_smooth_overview");
+        }
+        if !ride_page {
+            std::fs::write(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/sim/font_smooth_menu.bmp"),
+                crate::sim::bmp(&menu_shot),
+            )
+            .unwrap();
+        }
+        toggle(&mut sim, &mut app);
+        assert!(!sim.smooth && sim.backup[POWER_BKP] & 1 << 24 == 0);
+        let again = render_all(&app);
+        assert!(again.iter().zip(&pixel).filter(|(a, b)| a != b).count() < 200, "PIXEL back (only the clock moved)");
+    }
+}
+
+/// The font choice in register 16: bit 24 of the tag 0xa word; words written before have it clear (PIXEL).
+#[test]
+fn font_choice_register_round_trip() {
+    let s = Settings { smooth: true, ..Settings::from_word(0) };
+    assert_eq!(s.power_word() >> 24, 0xa1);
+    assert!(Settings::from_word(0).with_power_word(s.power_word()).smooth);
+    assert!(!Settings::from_word(0).with_power_word(Settings::from_word(0).power_word()).smooth);
+    assert!(!Settings::from_word(0).with_power_word(0xa0_00_00_00).smooth, "an earlier word: PIXEL");
+    let mut a = Settings::from_word(0);
+    a.cycle(Setting::Font);
+    let mut l = crate::text::Line::<12>::new();
+    a.text(Setting::Font, &mut l);
+    assert_eq!((a.smooth, l.as_str()), (true, "SMOOTH"));
+}

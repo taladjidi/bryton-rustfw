@@ -103,6 +103,20 @@ impl Style {
     }
 }
 
+/// The font, glyph and scale `ch` is drawn with in `style`: with `smooth` (the FONT setting) and a smooth font for
+/// the style's scale that has the glyph ([`crate::fonts::smooth`]), that glyph 1:1, else the style's own glyph at its
+/// scale. Both have the same cell, so layouts do not depend on the choice.
+fn pick(style: &Style, smooth: bool, ch: char) -> (&'static Font, &'static Glyph, u32) {
+    let scale = style.scale.max(1);
+    if smooth && let Some(f) = crate::fonts::smooth(scale) {
+        let g = f.glyph(ch);
+        if g.advance != 0 {
+            return (f, g, 1);
+        }
+    }
+    (style.font, style.font.glyph(ch), scale)
+}
+
 /// Where a string goes, relative to the `x` given to [`draw`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Align {
@@ -116,8 +130,8 @@ pub enum Align {
 
 /// Draws `s` in `style` with its cells' top at `y`, and returns its width. Callers keep it on screen.
 pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s: &str) -> u32 {
-    let Style { font, scale, fg, bg } = *style;
-    let scale = scale.max(1);
+    let Style { fg, bg, .. } = *style;
+    let smooth = c.smooth();
     let width = style.width(s);
     let mut x = match align {
         Align::Left => x,
@@ -129,9 +143,9 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
         *p = blend(fg, bg, a as u8);
     }
     for ch in s.chars() {
-        let g = font.glyph(ch);
-        let w = u32::from(g.advance) * scale;
-        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / scale, py / scale))]);
+        let (font, g, k) = pick(style, smooth, ch);
+        let w = u32::from(g.advance) * k;
+        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
         x += w;
     }
     width
@@ -140,20 +154,20 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
 /// Draws `s` from `x` as [`draw`] does, but nothing at or right of `right`: the last glyph's cell is cut there (its
 /// blank columns, when the text was laid out by its ink). Returns where the text drawn ends.
 pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str) -> u32 {
-    let Style { font, scale, fg, bg } = *style;
-    let scale = scale.max(1);
+    let Style { fg, bg, .. } = *style;
+    let smooth = c.smooth();
     let mut palette = [bg; 16];
     for (a, p) in palette.iter_mut().enumerate() {
         *p = blend(fg, bg, a as u8);
     }
     let mut x = x;
     for ch in s.chars() {
-        let g = font.glyph(ch);
-        let w = (u32::from(g.advance) * scale).min(right.saturating_sub(x));
+        let (font, g, k) = pick(style, smooth, ch);
+        let w = (u32::from(g.advance) * k).min(right.saturating_sub(x));
         if w == 0 {
             break;
         }
-        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / scale, py / scale))]);
+        c.blit(x, y, w, style.height(), &mut |px, py| palette[usize::from(font.coverage(g, px / k, py / k))]);
         x += w;
     }
     x
@@ -163,27 +177,29 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
 /// not the whole cell (the rest of the cell is the background in both). A digit of the pixel font is 5 x 7 of its
 /// 6 x 10 cell: 58 % of the pixels. Nothing at or right of `right`.
 pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32, u32), old: char, new: char) {
-    let Style { font, scale, fg, bg } = *style;
-    let scale = scale.max(1);
-    let (a, g) = (font.glyph(old), font.glyph(new));
-    let boxes = [a, g].map(|k| (u32::from(k.x), u32::from(k.y), u32::from(k.x + k.w), u32::from(k.y + k.h)));
+    let Style { fg, bg, .. } = *style;
+    let smooth = c.smooth();
+    let ((_, a, ka), (font, g, k)) = (pick(style, smooth, old), pick(style, smooth, new));
+    // each glyph's ink box in screen pixels from the cell's corner (the two may be drawn at different factors)
+    let boxes = [(a, ka), (g, k)]
+        .map(|(g, k)| (u32::from(g.x) * k, u32::from(g.y) * k, u32::from(g.x + g.w) * k, u32::from(g.y + g.h) * k));
     let inked = boxes.iter().filter(|b| b.2 > b.0 && b.3 > b.1);
     let (x0, y0, x1, y1) =
         inked.fold((u32::MAX, u32::MAX, 0, 0), |u, b| (u.0.min(b.0), u.1.min(b.1), u.2.max(b.2), u.3.max(b.3)));
     if x0 >= x1 {
         return; // neither has ink: nothing changes
     }
-    let left = x + x0 * scale;
-    let w = ((x1 - x0) * scale).min(right.saturating_sub(left));
+    let left = x + x0;
+    let w = (x1 - x0).min(right.saturating_sub(left));
     if w == 0 {
         return;
     }
     let mut palette = [bg; 16];
-    for (k, p) in palette.iter_mut().enumerate() {
-        *p = blend(fg, bg, k as u8);
+    for (a, p) in palette.iter_mut().enumerate() {
+        *p = blend(fg, bg, a as u8);
     }
-    c.blit(left, y + y0 * scale, w, (y1 - y0) * scale, &mut |px, py| {
-        palette[usize::from(font.coverage(g, px / scale + x0, py / scale + y0))]
+    c.blit(left, y + y0, w, y1 - y0, &mut |px, py| {
+        palette[usize::from(font.coverage(g, (px + x0) / k, (py + y0) / k))]
     });
 }
 
@@ -338,31 +354,55 @@ mod tests {
         assert!((x0..x0 + w).any(|x| (10..10 + h).any(|y| f.at(x, y) == WHITE)), "no fully covered pixel");
     }
 
-    /// Every character of every font into target/sim/fonts.bmp: a sheet to judge sizes and spacing on the host.
+    /// Every character of every font into target/sim/fonts.bmp (pixel) and fonts_smooth.bmp (the FONT setting's
+    /// smooth set at the same scales): a sheet to judge sizes and spacing on the host.
     #[test]
     fn font_sheet() {
         extern crate std;
-        let mut f = Frame::new();
         let ascii: std::string::String = (0x20u8..0x7f).map(char::from).collect();
-        let mut y = 0;
-        // All of ASCII in the pixel font at 2x; a sample at 4x (all would not fit), and the cue arrows.
-        let arrows = "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a";
-        for (style, sample) in [(&PIX2, ascii.as_str()), (&PIX4, "25.4km/h"), (&PIX4, arrows)] {
-            let mut line = std::string::String::new();
-            for c in sample.chars() {
-                if style.width(&line) + u32::from(style.font.glyph(c).advance) * style.scale > 236 {
-                    draw(&mut f, style, 2, y, Align::Left, &line);
-                    y += style.height();
-                    line.clear();
-                }
-                line.push(c);
-            }
-            draw(&mut f, style, 2, y, Align::Left, &line);
-            y += style.height() + 4;
-        }
+        let arrows = "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a"; // smooth: the pixel font's, same cells
+        let px7 = Style { scale: 7, ..PIX2 };
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/sim");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("fonts.bmp"), crate::sim::bmp(&f.px)).unwrap();
+        for (smooth, name) in [(false, "fonts.bmp"), (true, "fonts_smooth.bmp")] {
+            let mut f = Frame::new();
+            f.smooth = smooth;
+            let mut y = 0;
+            // All of ASCII at 2x; samples at 4x and 7x (all would not fit), and the cue arrows.
+            for (style, sample) in [(&PIX2, ascii.as_str()), (&PIX4, "25.4km/h"), (&px7, "12:34"), (&PIX4, arrows)] {
+                let mut line = std::string::String::new();
+                for c in sample.chars() {
+                    if style.width(&line) + u32::from(style.font.glyph(c).advance) * style.scale > 236 {
+                        draw(&mut f, style, 2, y, Align::Left, &line);
+                        y += style.height();
+                        line.clear();
+                    }
+                    line.push(c);
+                }
+                draw(&mut f, style, 2, y, Align::Left, &line);
+                y += style.height() + 4;
+            }
+            std::fs::write(dir.join(name), crate::sim::bmp(&f.px)).unwrap();
+        }
+    }
+
+    /// The smooth set has the pixel font's cells: the same advance for every character (so every width in the UI
+    /// holds), ink inside the cell, at most 5 cells of the scale wide (the blank column the layouts count on).
+    #[test]
+    fn smooth_fonts_share_the_pixel_cells() {
+        for scale in 2..=8 {
+            let sf = crate::fonts::smooth(scale).unwrap();
+            assert_eq!(u32::from(sf.height), 10 * scale);
+            for (i, g) in sf.glyphs.iter().enumerate() {
+                let p = &PIXEL.glyphs[i];
+                assert!(g.advance == 0 || u32::from(g.advance) == u32::from(p.advance) * scale, "glyph {i} at {scale}");
+                assert!(
+                    u32::from(g.x + g.w) <= 5 * scale && u32::from(g.y + g.h) <= 10 * scale,
+                    "glyph {i} at {scale}"
+                );
+            }
+        }
+        assert!(crate::fonts::smooth(1).is_none() && crate::fonts::smooth(9).is_none());
     }
 
     /// A shorter value in the same box leaves nothing of the longer one; the box is the only thing touched.

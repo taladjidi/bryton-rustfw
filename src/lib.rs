@@ -104,6 +104,11 @@ pub trait Board {
     fn gnss_transfer(&mut self, buf: &mut [u8]);
     /// USB power (charger) present.
     fn charger_present(&mut self) -> bool;
+    /// Whether text is drawn in the smooth font (the FONT setting): what [`Canvas::smooth`] of the panel answers.
+    /// Kept by the board only to hand to the drawing code; the app sets it ([`Board::set_smooth_text`]).
+    fn smooth_text(&self) -> bool;
+    /// Sets [`Board::smooth_text`].
+    fn set_smooth_text(&mut self, on: bool);
     /// RTC backup register `n` (0..32): kept through resets and power off (BOARD.md 8).
     fn backup_read(&mut self, n: usize) -> u32;
     /// Writes RTC backup register `n`.
@@ -629,6 +634,7 @@ impl App {
         if self.ble.is_some() {
             self.phone_setup(b);
         }
+        b.set_smooth_text(self.settings.smooth);
         self.strip_shown = self.strip;
         ui::draw_strip(&mut Panel(b, (0, ui::H)), &self.strip);
         self.show(b);

@@ -103,6 +103,8 @@ pub enum Setting {
     BikeProfile,
     /// Climbs found on the road ahead when no course is followed, on or off (`climbs_ahead`).
     ClimbsAhead,
+    /// The font of every text: PIXEL (dot matrix, the default) or SMOOTH ([`crate::fonts::smooth`]).
+    Font,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -195,6 +197,7 @@ impl Setting {
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
+            Setting::Font => "FONT",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -479,9 +482,14 @@ pub const ME: [Row; 4] =
 /// ALERTS: the reminders and the heart rate alert.
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
-/// DISPLAY: the backlight, the touch panel, the power the workout gauge shows.
-pub const DISPLAY: [Row; 4] =
-    [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::WktAvg)];
+/// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
+pub const DISPLAY: [Row; 5] = [
+    Row::Set(Setting::Light),
+    Row::Set(Setting::LightOff),
+    Row::Set(Setting::Touch),
+    Row::Set(Setting::Font),
+    Row::Set(Setting::WktAvg),
+];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), and the climbs ahead.

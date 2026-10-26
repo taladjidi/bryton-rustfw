@@ -572,6 +572,7 @@ impl App {
     /// Row `y` of the screen as the app drew it: the screenshot source.
     pub fn render_row(&self, y: u32) -> Row {
         let mut row = Row::new(y);
+        row.smooth = self.settings.smooth;
         self.draw_top(&mut row);
         self.draw_screen(&mut row);
         row

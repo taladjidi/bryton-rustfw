@@ -27,6 +27,8 @@ type KeyScript = Box<dyn Fn(u64) -> u8>;
 type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 
 pub struct Sim {
+    /// The FONT setting as the app told the board ([`Board::smooth_text`]).
+    pub smooth: bool,
     pub screen: Vec<u16>,
     window: (u32, u32, u32, u32),
     /// Every panel command, in order.
@@ -992,6 +994,7 @@ impl Sim {
     /// A unit whose RTC reads `h:m:s` at reset, no key pressed.
     pub fn new(h: u64, m: u64, s: u64) -> Self {
         Sim {
+            smooth: false,
             screen: vec![0x1234; (W * H) as usize], // panel RAM is garbage until cleared
             window: (0, W - 1, 0, H - 1),
             cmds: Vec::new(),
@@ -1102,6 +1105,12 @@ fn span(p: &[u8], limit: u32) -> (u32, u32) {
 }
 
 impl Board for Sim {
+    fn smooth_text(&self) -> bool {
+        self.smooth
+    }
+    fn set_smooth_text(&mut self, on: bool) {
+        self.smooth = on;
+    }
     fn panel_power_on(&mut self) {
         self.powered = true;
         self.ms += 150;

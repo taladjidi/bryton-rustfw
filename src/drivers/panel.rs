@@ -113,4 +113,8 @@ impl<B: Board> Canvas for Panel<'_, B> {
     fn clip(&self) -> (u32, u32, u32, u32) {
         (0, self.1.0, crate::ui::W, self.1.1 - self.1.0)
     }
+
+    fn smooth(&self) -> bool {
+        self.0.smooth_text()
+    }
 }

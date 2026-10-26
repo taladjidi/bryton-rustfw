@@ -170,6 +170,13 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/ui/fonts.rs`: glyph data, **generated** by `tools/font.py` (4 bits per pixel); never edit it by hand.
   - `PIXEL`, the UI font: this project's own 5 x 7 dot matrix (`tools/pixel_font.py`, one text grid per glyph),
     drawn at 2x or 4x (`Style::scale`) so it matches Ferris.
+  - `SMOOTH2` to `SMOOTH8`, the FONT setting (SETTINGS > DISPLAY, PIXEL by default, `Settings::smooth`, register 16
+    bit 24): Barlow Semi Condensed Bold (SIL OFL 1.1, `tools/fonts/`, licence beside it) rasterized into the pixel
+    font's own cell at each scale (advance 6 x scale, height 10 x scale, ink within 5 x scale columns), drawn 1:1.
+    Scale 1 stays PIXEL, and from scale 5 only the characters a value shows are smooth (the rest, and the cue arrows,
+    fall back to PIXEL at that scale: `fonts::smooth`, `text::pick`), so no layout depends on the choice: keep it so
+    (`smooth_fonts_share_the_pixel_cells`). `Canvas::smooth` carries the choice to every draw (the panel asks
+    `Board::smooth_text`, set by the app; screenshot rows carry it in `Row`), so the screenshot equals the panel.
   - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL).
 - `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
 - `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).

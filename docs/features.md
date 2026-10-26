@@ -172,6 +172,11 @@ glove, rain); swipes still turn pages and the keys do everything. TOUCH in SETTI
 altogether, for rain: the keys only, the call's buttons included; the touch lock (Back and Lap held together 1 s) is the
 quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent one.
 
+**Font.** FONT in SETTINGS > DISPLAY chooses the look of every text: PIXEL (the dot matrix of Ferris and the Game Boy
+era, the default) or SMOOTH (Barlow Semi Condensed Bold, anti-aliased). The cells are the same size, so no page or menu
+moves; the screen is redrawn at once and the choice is kept through a restart (register 16). Small text (the 1x
+sizes) and the cue arrows stay pixel.
+
 ## Ride
 
 - Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from the barometric altitude (2 m hysteresis, a reading a
@@ -224,7 +229,7 @@ MENU
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
-     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, GAUGE POWER (the workout gauge's window)
+     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, GAUGE POWER (the workout gauge's window)
      +- BIKE >     WHEEL, BIKE (its weight, 5 to 30 kg), ALTITUDE, FROM GPS (the barometer's calibration)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```

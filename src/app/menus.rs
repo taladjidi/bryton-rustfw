@@ -673,6 +673,13 @@ impl App {
                 self.settings.cycle(s);
                 self.save_misc(b);
                 self.update_light(b);
+                if s == menu::Setting::Font {
+                    // every text changes at once: the strip and the screen drawn whole
+                    b.set_smooth_text(self.settings.smooth);
+                    self.strip_shown = self.strip;
+                    ui::draw_strip(&mut Panel(b, (0, ui::H)), &self.strip);
+                    self.show(b);
+                }
             }
             Some(Row::Sensor(k)) => {
                 let Some(&kind) = Kind::ALL.get(k).filter(|_| self.ant) else { return };

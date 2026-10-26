@@ -245,6 +245,8 @@ pub struct Settings {
     /// register 11's tag: 0xa7 to 0xa9 on, 0xaa to 0xac off (the same three profiles; an earlier build reads those
     /// as an empty word: defaults).
     pub ahead: bool,
+    /// The smooth font for text (the FONT setting, SMOOTH) instead of the pixel font; kept in register 16, bit 24.
+    pub smooth: bool,
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -287,6 +289,7 @@ impl Settings {
             alt_m: 500,
             profile: None,
             ahead: true,
+            smooth: false,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -384,7 +387,7 @@ impl Settings {
     /// These settings with the weight, W', the bike's weight, the workout gauge's window and the single presses' actions
     /// kept in `w` (RTC backup register 16). Tag 0xa in bits 28..31 (this layout), then the rider's weight less 30 kg in
     /// 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the bike's weight in 100 g in 16..23 (0:
-    /// [`power::BIKE_HG`]); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
+    /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; clear in earlier words: PIXEL); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
     /// from earlier builds: tag 0xb in bits 28..31, the same up to the window, the bike's kg in 16..20, the single
     /// presses' actions in 21..23 and 24..26; tag 0xc1 in bits 24..31, the weight in kg in 0..7, W' in 0.5 kJ in
     /// 8..15, the window in 16..17, the actions in 18..23, no bike weight.
@@ -407,6 +410,7 @@ impl Settings {
                 weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
                 wkt_avg: (w >> 14 & 3) as usize,
+                smooth: w >> 24 & 1 != 0,
                 bike_hg: match (w >> 16 & 0xff) as u16 {
                     0 => power::BIKE_HG,
                     b => b.clamp(*bike.start(), *bike.end()),
@@ -436,7 +440,7 @@ impl Settings {
             _ => {
                 let remote = [menu::Remote::None, menu::Remote::None, s2, s3];
                 let (weight_kg, wprime_j, bike_hg) = (power::WEIGHT_KG, power::WPRIME_J, power::BIKE_HG);
-                Settings { weight_kg, wprime_j, bike_hg, wkt_avg: 0, remote, ..self }
+                Settings { weight_kg, wprime_j, bike_hg, wkt_avg: 0, remote, smooth: false, ..self }
             }
         }
     }
@@ -445,6 +449,7 @@ impl Settings {
     /// ([`Settings::with_power_word`]).
     pub fn power_word(self) -> u32 {
         (0xa << 28)
+            | u32::from(self.smooth) << 24
             | (u32::from(self.bike_hg) & 0xff) << 16
             | (self.wkt_avg as u32 & 3) << 14
             | (u32::from(self.wprime_j / 500) & 0x7f) << 7
@@ -479,6 +484,7 @@ impl Settings {
             },
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
+            Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
             Setting::LightOff => match LIGHT_TIMEOUTS_S.get(self.light_timeout) {
                 Some(0) | None => l.push_str("NEVER"),
                 Some(&t) => {
@@ -544,6 +550,7 @@ impl Settings {
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
+            Setting::Font => self.smooth = !self.smooth,
             Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             Setting::BikeProfile => {
                 self.profile = match self.profile {

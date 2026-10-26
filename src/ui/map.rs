@@ -558,6 +558,10 @@ impl Canvas for Clip<'_> {
     fn clip(&self) -> (u32, u32, u32, u32) {
         self.r
     }
+
+    fn smooth(&self) -> bool {
+        self.c.smooth()
+    }
 }
 
 /// `r` cut to `k` (empty: zero width or height).

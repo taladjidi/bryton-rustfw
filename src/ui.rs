@@ -70,6 +70,11 @@ pub trait Canvas {
     fn clip(&self) -> (u32, u32, u32, u32) {
         (0, 0, W, H)
     }
+    /// Whether text takes the smooth font where there is one (the FONT setting, [`crate::text`]); the pixel font
+    /// otherwise.
+    fn smooth(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -400,12 +405,14 @@ pub struct Row {
     pub y: u32,
     /// Its pixels, RGB565.
     pub px: [u16; W as usize],
+    /// Text takes the smooth font ([`Canvas::smooth`]).
+    pub smooth: bool,
 }
 
 impl Row {
     /// Row `y`, all black.
     pub fn new(y: u32) -> Self {
-        Row { y, px: [BLACK; W as usize] }
+        Row { y, px: [BLACK; W as usize], smooth: false }
     }
 }
 
@@ -425,6 +432,10 @@ impl Canvas for Row {
 
     fn clip(&self) -> (u32, u32, u32, u32) {
         (0, self.y, W, 1)
+    }
+
+    fn smooth(&self) -> bool {
+        self.smooth
     }
 }
 
@@ -1729,11 +1740,13 @@ pub(crate) mod tests {
         pub px: Vec<u16>,
         fills: usize,
         painted: usize,
+        /// Text in the smooth font ([`Canvas::smooth`]).
+        pub smooth: bool,
     }
 
     impl Frame {
         pub fn new() -> Self {
-            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0 }
+            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0, smooth: false }
         }
         pub fn at(&self, x: u32, y: u32) -> u16 {
             self.px[(y * W + x) as usize]
@@ -1761,6 +1774,10 @@ pub(crate) mod tests {
                     self.px[((y + dy) * W + x + dx) as usize] = px(dx, dy);
                 }
             }
+        }
+
+        fn smooth(&self) -> bool {
+            self.smooth
         }
     }
 
