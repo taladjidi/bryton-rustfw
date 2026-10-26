@@ -14,7 +14,7 @@
 //!   first (Malik et al. 1989's rule, the usual correction for ectopic beats), so a missed or extra beat drops
 //!   its two differences instead of inflating the value.
 //!
-//! - **Artifacts** ([`Hrv::artifacts`]): the share of the DFA window's beats that the 5 % rule dropped. Rogers,
+//! - **Artifacts** ([`Hrv::artifacts`]): the share of the DFA window's beats that the 5 % rule dropped, rounded up. Rogers,
 //!   Giles, Draper, Mourot and Gronwald 2021 (Sensors 21:821, pmc.ncbi.nlm.nih.gov/articles/PMC7865269) found DFA
 //!   a1 biased from 1 to 3 % of missed beats on, up to 19 % at 6 % even after correction; FatMaxxer and AlphaHRV
 //!   show the share and warn above 5 % (inferred from their documentation), the gate the thresholds take
@@ -133,7 +133,8 @@ impl Hrv {
                 dropped += 1;
             }
         }
-        let share = (seen > 0).then(|| (dropped * 100 / seen) as u8);
+        // rounded up, so a share just over 5 % (5.9) fails the thresholds' gate of 5
+        let share = (seen > 0).then(|| (dropped * 100).div_ceil(seen) as u8);
         // a1 of 0 or less is no physiology (a stretch of equal intervals, a strap's glitch: two such records seen on
         // the owner's ride, 2026-10-25), and would read as an all-out effort: no value
         (x.get_mut(..n).and_then(dfa_a1).filter(|a| *a > 0.01 && a.is_finite()), share)
@@ -270,6 +271,6 @@ mod tests {
         assert_eq!(h.rmssd(), Some(29), "the ectopic beat left out; the 815s add two zeros");
         assert!(h.alpha1().is_some_and(|a| a < 0.5), "alternation: anti-correlated");
         // the 800 / 830 alternation is within 5 %; of the window's 105 beats, the 500 and the 1130 were dropped
-        assert_eq!(h.artifacts(), Some(1), "2 of 105 beats, rounded down");
+        assert_eq!(h.artifacts(), Some(2), "2 of 105 beats (1.9 %), rounded up");
     }
 }

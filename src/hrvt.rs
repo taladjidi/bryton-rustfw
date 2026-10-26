@@ -21,7 +21,7 @@
 //! used only when at least half its points are in alpha1's dynamic range (below 1.0); a linear fit of power on
 //! alpha1, `P = m a1 + q` (their equation: power the dependent variable), read at 0.75 and 0.5. Their 5 % artifact
 //! gate is applied per point, not per workout: a record whose DFA window had more than 5 % of its beats dropped (the
-//! full copy's `Artifact` field) gives no alpha1 (fitread.rs, `MAX_ARTIFACTS`; full copies from before that field:
+//! full copy's `ArtPct` field) gives no alpha1 (fitread.rs, `MAX_ARTIFACTS`; full copies from before that field:
 //! every point). Not here: pedalling under 90 % of the time (outdoors that would drop most rides; the 120 s mean
 //! counts coasting).
 //!

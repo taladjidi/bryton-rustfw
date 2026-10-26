@@ -22,7 +22,7 @@
 //! [`Writer::data_len`]. Doing this twice is harmless.
 //!
 //! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 12 (the full copy describes
-//! `Artifact`: `ARTIFACTS`), bit 13 (the profile set by
+//! `ArtPct`: `ARTIFACTS`), bit 13 (the profile set by
 //! hand), bit 14 (this layout: lap and session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16
 //! (developer fields), the ascent (17..30) and bit 31 (the build before sub_sport: total_ascent, no sport). A record
 //! without this layout reads as a road ride and has its lap and session defined again. This build never sets bit
@@ -42,23 +42,28 @@
 //! CRC to the running data CRC in about 400 steps, whatever the file length, so a checkpoint never reads the file.
 //!
 //! **Developer fields** ([`Writer::begin_with`] `dev`): the full copy of a ride (recorder.rs) is protocol 2.0 with,
-//! after file_id, a `developer_data_id` (207: application_id, developer_data_index 0) and two `field_description`s
+//! after file_id, a `developer_data_id` (207: application_id, developer_data_index 0) and three `field_description`s
 //! (206: developer_data_index, field_definition_number, fit_base_type_id, field_name, units, native_mesg_num 20),
 //! `Alpha1` (float32, no units: the name Intervals.icu reads DFA a1 from, as AlphaHRV writes it,
 //! forum.intervals.icu/t/average-dfa-a1-and-wbal-added-to-interval-fields/7528), `RMSSD` (uint16, ms) and
-//! `Artifact` (uint8, %: the share of beats hrv.rs's 5 % rule dropped over the DFA window); every record then
+//! `ArtPct` (uint8, %: the share of beats hrv.rs's 5 % rule dropped over the DFA window); every record then
 //! carries them (invalid when not known), its definition with the developer flag (header bit 5) and (field number,
-//! size, developer data index) per field. A full copy begun by a build before `Artifact` (its recovery record
+//! size, developer data index) per field. A full copy begun by a build before `ArtPct` (its recovery record
 //! without `ARTIFACTS`) goes on with two fields: its file has no description of the third.
 //!
-//! **Beat to beat** ([`Writer::hrv`], the full copy only): every RR interval the strap sent, raw (before hrv.rs's
-//! artifact rule), in standard `hrv` messages (global 78, field 0 `time`: an array of uint16, scale 1000, units s,
-//! so the value is ms; 0xffff invalid: garmin_fit_sdk/profile.py 21.218, `hrv`), five to a message with the unused
-//! slots invalid, written between the records as the beats come, as Garmin's units and bryton-S510-mods' `P8` write
-//! them (its docs/how-it-works.md, "HRV recording"). Tools that compute DFA a1 offline (Domestique, Runalyze,
-//! Kubios) read the beats from there. The messages carry no time: readers line them up from the ride's start. The
-//! clean copy has none (Strava and Bryton: no file seen to show they take them). Message and field numbers: `garmin_fit_sdk/profile.py`
-//! 21.218 (github.com/garmin/fit-python-sdk), the protocol: developer.garmin.com/fit/protocol. Without `dev` the
+//! **Beat to beat** ([`Writer::hrv`], the full copy only): every RR interval the strap's decoder gives, raw (before
+//! hrv.rs's artifact rule) but within its range (`sensors::Beats::RANGE`, 250 to 2000 ms: a value outside is a
+//! glitch and is not written), in standard `hrv` messages (global 78, field 0 `time`: an array of uint16, scale
+//! 1000, units s, so the value is ms; 0xffff invalid: garmin_fit_sdk/profile.py 21.218, `hrv`), five to a message
+//! with the unused slots invalid, written between the records as the beats come, as Garmin's units and
+//! bryton-S510-mods' `P8` write them (its docs/how-it-works.md, "HRV recording"). Tools that compute DFA a1 offline
+//! (Domestique, Runalyze, Kubios) read the beats from there. The messages carry no time: readers line them up from
+//! the ride's start, and a beat the decoder could not time (a broadcast missed with more than one beat in it) or the
+//! strap's restarts (silent, then back) leave gaps, not filled, where that sum drifts. The clean copy has none
+//! (Strava and Bryton: no file seen to show they take them).
+//!
+//! Message and field numbers (developer data and hrv): `garmin_fit_sdk/profile.py` 21.218
+//! (github.com/garmin/fit-python-sdk), the protocol: developer.garmin.com/fit/protocol. Without `dev` the
 //! file is byte for byte what it was: Bryton's server refuses developer fields in records (bryton-S510-mods
 //! docs/how-it-works.md, "Such rides do not sync to Bryton").
 //!
@@ -120,7 +125,7 @@ pub struct Sample {
     pub alpha1_milli: Option<u16>,
     /// RMSSD, ms (hrv.rs): the full copy's `RMSSD` developer field only.
     pub rmssd_ms: Option<u16>,
-    /// Beats dropped by hrv.rs's artifact rule over its DFA window, % (hrv.rs): the full copy's `Artifact` only.
+    /// Beats dropped by hrv.rs's artifact rule over its DFA window, % (hrv.rs): the full copy's `ArtPct` only.
     pub artifacts_pct: Option<u8>,
     /// The ride's ascent so far, m (ride.rs): the lap's and the session's total_ascent.
     pub ascent_m: Option<u32>,
@@ -184,11 +189,11 @@ pub const HRV_PER_MESSAGE: usize = 5;
 /// Bytes an `hrv` message takes at most, its definition with it.
 pub const HRV_MAX: usize = 9 + 1 + 2 * HRV_PER_MESSAGE;
 /// Bit 12 of the recovery record's third word (the record mask's bits 10..12 were never used): the full copy's
-/// file describes `Artifact` (module doc).
+/// file describes `ArtPct` (module doc).
 const ARTIFACTS: u32 = 1 << 12;
 
 /// The full copy's developer data, after file_id (module doc): developer_data_id, then a field_description each
-/// for `Alpha1`, `RMSSD` and `Artifact`, definitions included.
+/// for `Alpha1`, `RMSSD` and `ArtPct`, definitions included.
 const DEV_MESSAGES: [u8; 108] = {
     const APP: &[u8; 16] = b"bryton-rustfw-01"; // application_id: any 16 bytes that name this firmware
     let mut m = [0u8; 108];
@@ -198,7 +203,7 @@ const DEV_MESSAGES: [u8; 108] = {
     // index, number, base type, name (8), units (4), native_mesg_num record (20)
     let alpha: [u8; 18] = [L_FIELD_DESC, 0, 0, F32, b'A', b'l', b'p', b'h', b'a', b'1', 0, 0, 0, 0, 0, 0, 20, 0];
     let rmssd: [u8; 18] = [L_FIELD_DESC, 0, 1, U16, b'R', b'M', b'S', b'S', b'D', 0, 0, 0, b'm', b's', 0, 0, 20, 0];
-    let art: [u8; 18] = [L_FIELD_DESC, 0, 2, U8, b'A', b'r', b't', b'i', b'f', b'a', b'c', b't', b'%', 0, 0, 0, 20, 0];
+    let art: [u8; 18] = [L_FIELD_DESC, 0, 2, U8, b'A', b'r', b't', b'P', b'c', b't', 0, 0, b'%', 0, 0, 0, 20, 0];
     let mut i = 0;
     while i < 108 {
         m[i] = match i {
@@ -335,7 +340,7 @@ pub struct Writer {
     paused_at: u32,
     /// The full copy: protocol 2.0, developer fields in the records (module doc).
     dev: bool,
-    /// Its file describes `Artifact` (a full copy begun by a build before it does not: module doc).
+    /// Its file describes `ArtPct` (a full copy begun by a build before it does not: module doc).
     art: bool,
     /// The ride's ascent so far, m (the samples' [`Sample::ascent_m`]).
     ascent_m: u32,
@@ -701,7 +706,7 @@ impl Writer {
         let [a, b, c] = self.stats;
         let w: [u32; WORDS] = [
             self.len,
-            // a full copy with `Artifact` stores its record message as not defined: a build before it, resuming
+            // a full copy with `ArtPct` stores its record message as not defined: a build before it, resuming
             // the ride, defines its own two-field record again instead of writing it on this three-field one (this
             // build's resume costs one definition)
             u32::from(self.crc) | u32::from(self.defined & if self.art { !(1 << L_RECORD) } else { !0 }) << 16,
@@ -1423,7 +1428,7 @@ pub(crate) mod tests {
         let a = f32::from_bits(field(records[100], 230).unwrap() as u32);
         assert!((a - (500 + 100) as f32 / 1000.0).abs() < 1e-6, "{a}");
         assert_eq!(field(records[100], 231), Some(20 + 100 % 40));
-        assert_eq!((field(records[10], 232), field(records[100], 232)), (Some(0xff), Some(100 % 9)), "Artifact");
+        assert_eq!((field(records[10], 232), field(records[100], 232)), (Some(0xff), Some(100 % 9)), "ArtPct");
         // the beats: every one, in order, five to a message with the slots after them invalid
         let rr: Vec<u64> = m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1)).collect();
         let fed: Vec<u64> = samples.iter().flat_map(|s| beats(s.time)).map(u64::from).collect();

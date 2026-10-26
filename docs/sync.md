@@ -13,7 +13,7 @@ rides do not sync to Bryton": tested on 2026-10-24). Intervals.icu reads DFA a1 
 | File | Format | Goes to |
 |---|---|---|
 | `\Activities\YYMMDDhhmmss.fit` | FIT protocol 1.0, no developer data, byte for byte what the recorder wrote before | stock, the Bryton app, Strava |
-| `\Rustfw\Activities\YYMMDDhhmmss.fit` | FIT protocol 2.0: the same messages, plus `developer_data_id`, three `field_description`s and in every record `Alpha1` (float32, DFA a1), `RMSSD` (uint16, ms) and `Artifact` (uint8, %), invalid while the strap gives no beats; and every beat the strap sent in standard `hrv` messages | Intervals.icu |
+| `\Rustfw\Activities\YYMMDDhhmmss.fit` | FIT protocol 2.0: the same messages, plus `developer_data_id`, three `field_description`s and in every record `Alpha1` (float32, DFA a1), `RMSSD` (uint16, ms) and `ArtPct` (uint8, %), invalid while the strap gives no beats; and every beat the strap sent in standard `hrv` messages | Intervals.icu |
 
 Both are recorded as the ride goes, each by its own recorder with its own checkpoints, recovery records
 (`\Rustfw\ride.rec`, `\Rustfw\full.rec`) and save (src/storage/recorder.rs, "Two copies"). The clean one is
@@ -24,7 +24,8 @@ first). A full copy goes on only with the clean copy's ride, and stops when the 
 rest is the clean copy's.
 
 **Beat to beat.** The full copy also holds every RR interval the strap sent, raw (before the live DFA a1's 5 %
-artifact rule), as Garmin's units write them: standard `hrv` messages (global 78, field `time`, five intervals a
+artifact rule) but within 250 to 2000 ms (the decoder drops what is outside as glitches; beats it could not time,
+over several missed broadcasts, and a strap's drop-outs leave gaps), as Garmin's units write them: standard `hrv` messages (global 78, field `time`, five intervals a
 message in ms, the unused slots invalid), between the records as the beats come (src/storage/fit.rs, "Beat to
 beat"). Intervals.icu keeps the original file, so tools that compute DFA a1 from a ride's beats (Domestique,
 Runalyze, Kubios) can check the live value against theirs. They go through the same buffer, checkpoints and
@@ -34,7 +35,7 @@ recovery records as the records (a checkpoint after a minute of beats while paus
 messages from this firmware (P8 wrote them into stock's files; bryton-S510-mods' docs do not say whether those
 synced to Bryton or Strava), so it stays as it was.
 
-**Artifacts.** `Artifact` is the share of the beats in the live DFA a1's 2-minute window that its 5 % rule dropped.
+**Artifacts.** `ArtPct` is the share of the beats in the live DFA a1's 2-minute window that its 5 % rule dropped.
 FITNESS's HRVT1 / HRVT2 leave out a record over 5 % (src/hrvt.rs; Rogers et al. 2021, Sensors 21:821: DFA a1
 biased from 1 to 3 % of missed beats on).
 
@@ -149,6 +150,6 @@ indoor ride cut and resumed (indoor_cycling) and of a ride resumed from an older
 - Not yet run against the real Intervals.icu and Strava, nor with the unit's drive (docs/status.md).
 - Stock's app puts a `<name>.json` beside each workout `.fit`. This firmware does not read it; whether stock does
   without it has not been checked.
-- Whether Intervals.icu charts `RMSSD` or `Artifact` from the developer fields is not known; `Alpha1` is the
+- Whether Intervals.icu charts `RMSSD` or `ArtPct` from the developer fields is not known; `Alpha1` is the
   documented one. Its use of the hrv messages (its own HRV charts) has not been seen either.
 - An indoor ride on Strava (a Ride with the trainer mark) and on Intervals.icu (the indoor flag) (docs/status.md).

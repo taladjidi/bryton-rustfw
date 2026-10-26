@@ -263,7 +263,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/recorder.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw\Rides` from RAM to the card at
   each checkpoint (a minute at most), two recovery records in `\Rustfw\ride.rec` (3 KB), resume at boot, the save to
   `\Activities\YYMMDDhhmmss.fit`. Its tests cut the power after every sector of a whole ride and of the reboot.
-  Two recorders run per ride (`Kind`): the clean copy above, and the full one (`Alpha1` / `RMSSD` / `Artifact`
+  Two recorders run per ride (`Kind`): the clean copy above, and the full one (`Alpha1` / `RMSSD` / `ArtPct`
   developer fields and the strap's beats in `hrv` messages, `Recorder::beat`, `\Rustfw\Full`, `\Rustfw\full.rec`,
   saved to `\Rustfw\Activities`), which never holds the clean one up
   (`App::step_full`, docs/sync.md). A ride discarded at its end goes through the same save into

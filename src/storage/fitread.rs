@@ -37,7 +37,7 @@
 //!   record's developer field number 0 of developer data index 0, 4 bytes, read as a float32 (invalid all ones).
 //!   Only this firmware's own full copies (`\Rustfw\Activities`) are read so: they define that field as `Alpha1`
 //!   (its `field_description` is not checked; another app's file may use number 0 for something else). Its
-//!   developer field number 2 (1 byte, `Artifact`, %) gates it: a record whose window had more than
+//!   developer field number 2 (1 byte, `ArtPct`, %) gates it: a record whose window had more than
 //!   [`MAX_ARTIFACTS`] % of its beats dropped gives no alpha1 (hrv.rs, "Artifacts"); a file without that field, all.
 //!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
@@ -120,7 +120,7 @@ const SLOTS: usize = 8;
 const PICKED: usize = 8;
 /// A record's slot for the full copy's `Alpha1` (a reader never reads it and the position both).
 const ALPHA1_SLOT: u8 = 4;
-/// Its slot for the full copy's `Artifact` share.
+/// Its slot for the full copy's `ArtPct` share.
 const ART_SLOT: u8 = 5;
 /// Artifacts (%) over which a record's alpha1 is not given (module doc).
 pub const MAX_ARTIFACTS: u32 = 5;
@@ -458,7 +458,7 @@ impl Reader {
             return;
         }
         self.at = 0;
-        // (number, size, developer data index): only the size matters, but for the full copy's Alpha1 and Artifact
+        // (number, size, developer data index): only the size matters, but for the full copy's Alpha1 and ArtPct
         let (num, size, index) = (self.tmp[0], self.tmp[1], self.tmp[2]);
         let d = &mut self.building;
         let slot = match (d.global, num, size, index) {

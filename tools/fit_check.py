@@ -3,7 +3,7 @@
 no warnings, and the sample ride's values (the synthetic ride of fit.rs's tests). Usage (src/storage/fit.rs, module doc):
     fit_check.py target/fit/sample.fit target/fit/cut.fit [target/fit/sample_full.fit]
 The third, the full copy (developer fields, recorder.rs "Two copies"), is the same ride with Alpha1, RMSSD and
-Artifact in each record and the strap's beats in hrv messages: checked with both decoders, Garmin's SDK naming the
+ArtPct in each record and the strap's beats in hrv messages: checked with both decoders, Garmin's SDK naming the
 developer fields from their descriptions, the beats of both equal to the ones the test fed (count and values). The
 recorder's saved pair (target/fit/recorded.fit, recorded_full.fit, from `cargo test-host two_copies_cost`):
     fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
@@ -20,7 +20,7 @@ import fitdecode
 
 T0 = 1_161_676_800 + 631_065_600  # FIT 0 is 1989-12-31 00:00 UTC; this is 2026-10-23 08:00 UTC
 DEV = ("developer_data_id", "field_description")
-DEV_FIELDS = ("Alpha1", "RMSSD", "Artifact")
+DEV_FIELDS = ("Alpha1", "RMSSD", "ArtPct")
 
 # The beats each test fed, ms (fit.rs tests `beats`: the sample ride's records are seconds 1 to 1200; recorder.rs
 # tests `beats`: one a second through the 900 s ride, paused too)
@@ -62,7 +62,7 @@ def garmin(path, full=False):
     print("  garmin-fit-sdk:", {k: len(v) for k, v in msgs.items()})
     if full:
         names = {d["field_definition_number"]: d["field_name"] for d in msgs["field_description_mesgs"]}
-        assert names == {0: "Alpha1", 1: "RMSSD", 2: "Artifact"}, names
+        assert names == {0: "Alpha1", 1: "RMSSD", 2: "ArtPct"}, names
         alpha = [r.get("developer_fields", {}).get(0) for r in msgs["record_mesgs"]]
         known = [a for a in alpha if a is not None and a == a]  # invalid (all ones) reads as NaN here
         print(f"  garmin-fit-sdk: Alpha1 in {len(known)} of {len(alpha)} records, e.g. {known[:3]}")
@@ -105,10 +105,10 @@ def read_checked(path, full):
     assert names[:5] == ["file_id", "developer_data_id"] + ["field_description"] * 3, names[:5]
     rec = [values(m) for m in msgs if m.name == "record"]
     with_alpha = [r for r in rec if "Alpha1" in r]
-    assert all("RMSSD" in r and "Artifact" in r for r in with_alpha)
+    assert all("RMSSD" in r and "ArtPct" in r for r in with_alpha)
     if with_alpha:
         print(f"  fitdecode: Alpha1 in {len(with_alpha)} of {len(rec)} records, e.g. {with_alpha[0]['Alpha1']:.3f}, "
-              f"RMSSD {with_alpha[0]['RMSSD']} ms, Artifact {with_alpha[0]['Artifact']} %")
+              f"RMSSD {with_alpha[0]['RMSSD']} ms, ArtPct {with_alpha[0]['ArtPct']} %")
     else:
         print(f"  fitdecode: no valid Alpha1 in {len(rec)} records (no strap)")
     return msgs
@@ -135,7 +135,7 @@ def check(path, finished, full=False):
         if full:
             assert ("Alpha1" in r) == (t >= 60)
             assert t < 60 or abs(r["Alpha1"] - (500 + t % 700) / 1000) < 1e-6
-            assert ("Artifact" in r) == (t >= 60) and (t < 60 or r["Artifact"] == t % 9)
+            assert ("ArtPct" in r) == (t >= 60) and (t < 60 or r["ArtPct"] == t % 9)
     if full and finished:
         beats(path, SAMPLE_BEATS)
     if finished:

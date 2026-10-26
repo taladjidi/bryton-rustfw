@@ -80,7 +80,7 @@
 //! and Intervals.icu reads DFA a1 from one (`Alpha1`), so one file cannot serve both. Two recorders run side by side
 //! ([`Kind`]), each with everything above of its own: the clean one (protocol 1.0, no developer data: what stock,
 //! Bryton and Strava take, byte for byte what it was) in `\Rustfw\Rides`, `\Rustfw\ride.rec` and `\Activities`; the
-//! full one (`fit::Writer::begin_with` `dev`: `Alpha1`, `RMSSD` and `Artifact` in every record, the strap's beats
+//! full one (`fit::Writer::begin_with` `dev`: `Alpha1`, `RMSSD` and `ArtPct` in every record, the strap's beats
 //! in `hrv` messages: [`Recorder::beat`]) in `\Rustfw\Full`,
 //! `\Rustfw\full.rec` and `\Rustfw\Activities`, same name. The app drives the clean one first in each pass, so the
 //! full one never stands between the clean one and the card, and a failing full one is only said
@@ -520,7 +520,10 @@ impl Recorder {
     /// the two copies checkpoint together, so at a cut neither holds seconds the other lost (the full copy's buffer
     /// runs low first, its records being bigger). Before each pass's card work.
     pub fn keep_up(&mut self, other: &Recorder) {
-        if other.want && other.fails == 0 && matches!(self.phase, Phase::Starting | Phase::Recording) {
+        // a checkpoint the full copy wants only for a minute of beats while paused: the clean one has nothing new
+        let beats_only =
+            other.writer.paused() && other.beats_ms >= CHECKPOINT_S * 1000 && other.room() >= LOW + Writer::END_BYTES;
+        if other.want && !beats_only && other.fails == 0 && matches!(self.phase, Phase::Starting | Phase::Recording) {
             self.want = true;
         }
     }
@@ -1855,6 +1858,53 @@ mod tests {
         r.second(&sample(1001), words(1));
         r.end(T0 + 1002, words(2));
         assert_eq!(io_all(&mut r, &mut d, 1003), [Outcome::Saved(*b"261023110000")]);
+    }
+
+    /// A checkpoint that fails as `Corrupt` at the size, after its data sectors, when the last checkpoint's trailer
+    /// straddled two sectors (its length % 512 == 1): the next checkpoint's data went over the trailer's second byte,
+    /// and the save as it is writes it again ([`trailer_end`]), so the ride is saved, not kept.
+    #[test]
+    fn a_ride_stopped_with_its_trailer_across_two_sectors_is_saved() {
+        struct Bad(Card, core::ops::Range<u32>, bool);
+        impl Disk for Bad {
+            fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+                self.0.read(lba, buf)
+            }
+        }
+        impl DiskWrite for Bad {
+            fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+                if self.2 && self.1.contains(&lba) {
+                    return Err(Error::Corrupt); // the ride's directory: its size
+                }
+                self.0.write(lba, buf)
+            }
+        }
+        let d = card(crate::fat::tests::image());
+        let mut r = Recorder::new();
+        r.start(T0 - 1, NAME, false);
+        let mut d = Bad(d, 0..0, false);
+        // a checkpoint every second, a gear change (odd size) now and then, until the file is 512 n + 1 long
+        let mut t = 0;
+        while r.on_card % SECTOR as u32 != 1 {
+            assert!(t < 3000, "no length 512 n + 1");
+            r.second(&sample(t), words(t));
+            if t % 3 == 0 {
+                r.gear(T0 + t, false, 1, (t % 11) as u8 + 1);
+            }
+            r.checkpoint_now();
+            assert_eq!(io_all(&mut r, &mut d, t), [], "t {t}");
+            t += 1;
+        }
+        let saved_len = r.on_card;
+        let dir = first_lba(&d.0.img, "Rustfw/Rides") as u32;
+        (d.1, d.2) = (dir..dir + 64, true);
+        r.second(&sample(t), words(t)); // over the trailer's second byte, in the next sector
+        r.checkpoint_now();
+        assert_eq!(r.io(&mut d, local(t)), Outcome::Stopped(Error::Corrupt));
+        d.2 = false; // the save's own writes go through
+        assert_eq!(io_all(&mut r, &mut d, t), [Outcome::Saved(NAME)]);
+        let (times, _) = saved(&d.0.img, SAVED).unwrap();
+        assert_eq!((times.len() as u32, saved_len % SECTOR as u32), (t, 1));
     }
 
     /// The second review's R2: Start pressed while the boot's recovery was still pending (the card failed at boot)
