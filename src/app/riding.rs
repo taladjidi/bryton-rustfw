@@ -68,6 +68,18 @@ impl App {
         self.next_step();
     }
 
+    /// A lap at a workout's step change (and at its start and end), as Garmin and Wahoo record them, so each interval
+    /// is a lap in the file (Intervals.icu, Domestique). None if the ride is not running, or if a lap began less than
+    /// a second ago: Lap's own lap, which moves the workout on, is not doubled, nor a workout started with its ride.
+    pub(crate) fn step_lap(&mut self) {
+        if self.ride.lap_s() == 0 {
+            return;
+        }
+        if let Some(ev) = self.ride.lap() {
+            self.recorder(ev);
+        }
+    }
+
     /// The workout's next step, if one runs (Lap, or NEXT STEP in the ride menu).
     pub(crate) fn next_step(&mut self) {
         if self.ramp_running() {

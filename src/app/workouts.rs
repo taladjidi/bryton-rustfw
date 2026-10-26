@@ -167,6 +167,9 @@ impl App {
     /// Shows and sounds what the player said: a banner and a long tone for a new step ("3/14 210-230W"), a short
     /// beep for each of the last 2 seconds.
     pub(crate) fn workout_event(&mut self, ev: workout::Event) {
+        if matches!(ev, workout::Event::Step(_) | workout::Event::Done) {
+            self.step_lap(); // each interval a lap in the file
+        }
         let steps = self.plan.steps();
         let mut l = Line::<20>::new();
         match ev {

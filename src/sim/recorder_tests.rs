@@ -683,3 +683,57 @@ fn the_strap_beats_go_into_the_full_copy() {
     assert!((100..250).contains(&got.len()), "{} beats", got.len());
     std::println!("{} beats in runs of {runs:?}", got.len());
 }
+
+/// The lap messages (FIT global 19) in a ride file: a walk of its records (definitions, data, developer fields).
+fn lap_count(file: &[u8]) -> usize {
+    let (mut i, mut laps) = (usize::from(file[0]), 0);
+    let mut defs: [(u16, usize); 16] = [(0, 0); 16];
+    while i + 2 < file.len() {
+        let h = file[i];
+        let local = usize::from(h & 15);
+        if h & 0x40 != 0 {
+            let global = u16::from_le_bytes([file[i + 3], file[i + 4]]);
+            let n = usize::from(file[i + 5]);
+            let mut size: usize = (0..n).map(|k| usize::from(file[i + 6 + 3 * k + 1])).sum();
+            let mut next = i + 6 + 3 * n;
+            if h & 0x20 != 0 {
+                let d = usize::from(file[next]);
+                size += (0..d).map(|k| usize::from(file[next + 1 + 3 * k + 1])).sum::<usize>();
+                next += 1 + 3 * d;
+            }
+            defs[local] = (global, size);
+            i = next;
+        } else {
+            let (global, size) = defs[local];
+            laps += usize::from(global == 19);
+            i += 1 + size;
+        }
+    }
+    laps
+}
+
+/// A workout started during a ride: a lap at its start (the ride before it), one at each step change and at its end,
+/// as Garmin and Wahoo record them; Lap during the workout moves it on with a single lap, not two.
+#[test]
+fn a_workout_records_a_lap_per_step() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride, before any workout
+    run(&mut sim, &mut app, 10_000);
+    app.load_calendar(&mut sim);
+    app.open_workout(&mut sim, 0); // 20, 30, 15, 30, 15 s, then an open cool-down
+    app.start_workout(0);
+    run(&mut sim, &mut app, 115_000); // through the five timed steps, into the cool-down
+    app.press(&mut sim, Press::Short(Key::Lap)); // ends the open cool-down: the workout done, one lap
+    run(&mut sim, &mut app, 5000);
+    let name = app.recorder.name();
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    let file = ride_file(&sim, "Activities", name).expect("saved");
+    // before the workout, the five timed steps, the cool-down up to Lap, after it to the end
+    assert_eq!(lap_count(&file), 8);
+}
