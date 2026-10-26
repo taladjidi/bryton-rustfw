@@ -3990,8 +3990,11 @@ fn course_ride() {
     rows.sort();
     assert_eq!(
         rows,
-        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
+        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
     );
+    // a long name is whole: its row drops the unit rather than cut the name
+    let (name, value, _) = app.menu_row(Menu::Courses, 2).unwrap();
+    assert!(ui::LABEL.width(name.as_str()) <= ui::menu_label_w(name.as_str(), value.as_str()), "{}", name.as_str());
     assert_consistent(&sim, &app);
     sim.save("courses_menu");
 

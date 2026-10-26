@@ -225,7 +225,16 @@ impl App {
             _ if !e.measured => value.push_str("..."),
             Some(m) => {
                 ui::card::push_km(value, m.saturating_add(50)); // to the nearest 100 m
-                value.push_str(" KM");
+                // a long name is whole: the unit goes first, then the distance (the label is cut before the value)
+                let whole =
+                    |v: &Line<12>| ui::LABEL.width(label.as_str()) <= ui::menu_label_w(label.as_str(), v.as_str());
+                let mut with_unit = *value;
+                with_unit.push_str(" KM");
+                if whole(&with_unit) {
+                    *value = with_unit;
+                } else if !whole(value) {
+                    *value = Line::new();
+                }
             }
             None => value.push_str("--"),
         }
