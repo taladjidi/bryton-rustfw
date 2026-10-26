@@ -214,6 +214,8 @@ impl Session {
                 h.send(decimal(app.ahead_tile_us().0, &mut [0; 10]));
                 h.send(b" max ");
                 h.send(decimal(app.ahead_tile_us().1, &mut [0; 10]));
+                h.send(b" slice max ");
+                h.send(decimal(app.ahead_tile_us().2, &mut [0; 10]));
                 h.send(b"\n");
             }
             Some(b"bat") => {

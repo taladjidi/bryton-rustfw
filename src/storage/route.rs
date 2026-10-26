@@ -28,7 +28,7 @@
 
 use crate::fat::{self, Disk, Fat, File, Seek};
 use crate::ign::Bytes;
-use crate::inflate::{self, Scratch};
+use crate::inflate::{Inflater, Scratch};
 use crate::text::Line;
 
 /// Nodes the graph holds at most (20 bytes each). A real tile has 445 at the median and 2868 at most in the
@@ -193,33 +193,78 @@ impl Reader<'_, '_> {
     }
 }
 
-/// `nodes` sorted by position: a heapsort in place (core's `sort_unstable` is 3.5 KB of image for this one use).
-fn sort_nodes(v: &mut [Node]) {
-    fn down(v: &mut [Node], mut root: usize, end: usize) {
-        let key = |v: &[Node], i: usize| v.get(i).map(|n| (n.lat, n.lon));
+/// A heapsort of nodes by position, in place (core's `sort_unstable` is 3.5 KB of image for this one use), that
+/// can stop between two sifts and go on: where it is.
+#[derive(Clone, Copy, Default)]
+pub struct Sort {
+    phase: u8,
+    i: usize,
+    end: usize,
+}
+
+impl Sort {
+    /// Sorts `v` for at most `steps` sifts (each a dozen compares at most); true when it is sorted. Call again with
+    /// the same `v` until true.
+    pub fn step(&mut self, v: &mut [Node], mut steps: usize) -> bool {
+        fn down(v: &mut [Node], mut root: usize, end: usize) {
+            let key = |v: &[Node], i: usize| v.get(i).map(|n| (n.lat, n.lon));
+            loop {
+                let mut child = 2 * root + 1;
+                if child >= end {
+                    return;
+                }
+                if child + 1 < end && key(v, child) < key(v, child + 1) {
+                    child += 1;
+                }
+                if key(v, root) >= key(v, child) {
+                    return;
+                }
+                v.swap(root, child); // both below `end`, which is at most v.len()
+                root = child;
+            }
+        }
+        let n = v.len();
         loop {
-            let mut child = 2 * root + 1;
-            if child >= end {
-                return;
+            match self.phase {
+                0 => (self.i, self.phase) = (n / 2, 1),
+                1 if self.i == 0 => (self.end, self.phase) = (n, 2),
+                1 => {
+                    self.i -= 1;
+                    down(v, self.i, n);
+                    steps = steps.saturating_sub(1);
+                }
+                2 if self.end <= 1 => self.phase = 3,
+                2 => {
+                    self.end -= 1;
+                    v.swap(0, self.end); // end < n
+                    down(v, 0, self.end);
+                    steps = steps.saturating_sub(1);
+                }
+                _ => return true,
             }
-            if child + 1 < end && key(v, child) < key(v, child + 1) {
-                child += 1;
+            if steps == 0 {
+                return self.phase == 3;
             }
-            if key(v, root) >= key(v, child) {
-                return;
-            }
-            v.swap(root, child); // both below `end`, which is at most v.len()
-            root = child;
         }
     }
-    let n = v.len();
-    for i in (0..n / 2).rev() {
-        down(v, i, n);
-    }
-    for end in (1..n).rev() {
-        v.swap(0, end);
-        down(v, 0, end);
-    }
+}
+
+/// How much of a tile one call of [`Maps::step`] does at most (the caller also watches the clock between calls).
+#[derive(Clone, Copy, Debug)]
+pub struct Slice {
+    /// Bytes inflated (a copy of up to 258 more may follow).
+    pub inflate: usize,
+    /// Nodes decoded.
+    pub nodes: usize,
+    /// Sifts of the sort.
+    pub sort: usize,
+}
+
+impl Slice {
+    /// The slice of a main loop pass: about a millisecond or two on the unit each (sim.rs counts the operations).
+    pub const PASS: Slice = Slice { inflate: 1024, nodes: 48, sort: 200 };
+    /// The whole tile in one call.
+    pub const ALL: Slice = Slice { inflate: usize::MAX, nodes: usize::MAX, sort: usize::MAX };
 }
 
 /// A tile's header: the base, deltaBits and the transport count; `seen` has bit 0 to 2 set for each of the first three.
@@ -407,6 +452,25 @@ impl Graph {
 
     /// Ends the tile: its nodes sorted by position, the tile loaded. With `ok` false, everything it added is dropped.
     pub(crate) fn end_tile(&mut self, ok: bool) {
+        if ok {
+            let mut sort = Sort::default();
+            self.sort_tile(&mut sort, usize::MAX);
+        }
+        self.finish_tile(ok);
+    }
+
+    /// Sorts the tile being built, `steps` sifts at most; true when done (then [`Graph::finish_tile`]).
+    pub(crate) fn sort_tile(&mut self, sort: &mut Sort, steps: usize) -> bool {
+        let Some(s) = self.slots.get(self.n_slots).copied() else { return true };
+        match self.nodes.get_mut(usize::from(s.start)..usize::from(s.end)) {
+            Some(r) => sort.step(r, steps),
+            None => true,
+        }
+    }
+
+    /// Closes the tile being built: loaded (its nodes sorted by [`Graph::sort_tile`]), or with `ok` false dropped
+    /// with its nodes and edges.
+    pub(crate) fn finish_tile(&mut self, ok: bool) {
         let Some(s) = self.slots.get_mut(self.n_slots).copied() else { return };
         if !ok {
             // the nodes it added go, and their edges (from the first one's first edge)
@@ -417,9 +481,6 @@ impl Graph {
             }
             return;
         }
-        if let Some(r) = self.nodes.get_mut(usize::from(s.start)..usize::from(s.end)) {
-            sort_nodes(r);
-        }
         if let Some(slot) = self.slots.get_mut(self.n_slots) {
             slot.loaded = true;
         }
@@ -429,36 +490,55 @@ impl Graph {
     /// Decodes z14 tile (`x`, `y`)'s protobuf, `buf[..len]`, into the graph. On an error the graph is as it was.
     pub fn decode(&mut self, x: u32, y: u32, buf: &Scratch<'_>, len: usize) -> Result<usize, Error> {
         self.begin_tile(x, y)?;
-        let r = self.decode_nodes(buf, len);
+        let mut st = Dec::new();
+        let r = loop {
+            match self.decode_step(buf, len, &mut st, usize::MAX) {
+                Ok(Some(n)) => break Ok(n),
+                Ok(None) => {}
+                Err(e) => break Err(e),
+            }
+        };
         self.end_tile(r.is_ok());
         r
     }
 
-    fn decode_nodes(&mut self, buf: &Scratch<'_>, len: usize) -> Result<usize, Error> {
+    /// Decodes on from where `st` is, at most `max` nodes; Some(nodes added in all) at the end of the message.
+    /// The tile must have been begun; on an error the caller drops it ([`Graph::finish_tile`]).
+    pub(crate) fn decode_step(
+        &mut self,
+        buf: &Scratch<'_>,
+        len: usize,
+        st: &mut Dec,
+        max: usize,
+    ) -> Result<Option<usize>, Error> {
         let len = len.min(buf.len());
         // One pass: in every tile of a real file (1014 of 1014) the base, deltaBits and transport come before the
         // first node; a tile that has them later, or none, is scanned for them first (the slow path)
-        let mut h = Hdr { lat0: 0, lon0: 0, bits: 0, transport: 2, seen: 0 };
-        let mut ready = false;
-        let mut top = Reader { s: buf, pos: 0, end: len };
-        let mut nodes = 0;
-        while let Some((f, v)) = top.next()? {
-            if ready || f != 5 {
-                if !ready {
-                    h.take(f, &v);
+        let mut top = Reader { s: buf, pos: st.pos, end: len };
+        let mut added = 0;
+        loop {
+            st.pos = top.pos;
+            if added >= max {
+                return Ok(None);
+            }
+            let Some((f, v)) = top.next()? else { break };
+            if st.ready || f != 5 {
+                if !st.ready {
+                    st.h.take(f, &v);
                 }
                 if f != 5 {
                     continue;
                 }
-            } else if h.seen & 7 != 7 {
-                h = Hdr::scan(buf, len)?;
+            } else if st.h.seen & 7 != 7 {
+                st.h = Hdr::scan(buf, len)?;
             }
-            if !ready {
-                if !h.valid() {
+            if !st.ready {
+                if !st.h.valid() {
                     return Err(Error::Bad);
                 }
-                ready = true;
+                st.ready = true;
             }
+            let h = st.h;
             let Val::Bytes(a, b) = v else { continue };
             let mut r = top.sub(a, b);
             let (mut key, mut elev, mut ways, mut edges) = (None, NO_ELEV, [0u16; 2], [(0i32, 0i32, 0u8); MAX_EDGES]);
@@ -498,17 +578,37 @@ impl Graph {
             }
             let Some((lat, lon)) = key else { continue };
             self.add_node((lat, lon, elev), ways, edges.get(..n_edges).unwrap_or(&[]))?;
-            nodes += 1;
+            st.nodes += 1;
+            added += 1;
         }
-        if !ready {
-            if h.seen & 7 != 7 {
-                h = Hdr::scan(buf, len)?;
+        if !st.ready {
+            if st.h.seen & 7 != 7 {
+                st.h = Hdr::scan(buf, len)?;
             }
-            if !h.valid() {
+            if !st.h.valid() {
                 return Err(Error::Bad);
             }
         }
-        Ok(nodes)
+        Ok(Some(st.nodes))
+    }
+}
+
+/// Where the protobuf of a tile is read: the next field's place, the header so far, the nodes added.
+pub(crate) struct Dec {
+    pos: usize,
+    h: Hdr,
+    ready: bool,
+    nodes: usize,
+}
+
+impl Dec {
+    /// All zero (a static of it stays in .bss); [`Dec::new`] is the real start.
+    const ZERO: Dec =
+        Dec { pos: 0, h: Hdr { lat0: 0, lon0: 0, bits: 0, transport: 0, seen: 0 }, ready: false, nodes: 0 };
+
+    /// At the start of a message.
+    pub(crate) const fn new() -> Dec {
+        Dec { pos: 0, h: Hdr { lat0: 0, lon0: 0, bits: 0, transport: 2, seen: 0 }, ready: false, nodes: 0 }
     }
 }
 
@@ -653,10 +753,48 @@ impl Found {
     const ZERO: Found = Found { used: false, usable: false, z9: (0, 0), dat: Dat::ZERO };
 }
 
+/// Where a tile being loaded is: read and inflated, then decoded, then sorted ([`Maps::step`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Idle,
+    Inflate,
+    Decode,
+    Sort,
+}
+
+/// A tile loaded a slice at a time: the stream's place in the file, the inflater and the readers of what it made.
+struct Job {
+    stage: Stage,
+    tile: (u32, u32),
+    file: File,
+    /// The gzip stream: where it starts in the file and how long it is.
+    blob: (u32, u32),
+    seek: Seek,
+    inf: Inflater,
+    len: usize,
+    dec: Dec,
+    sort: Sort,
+}
+
+impl Job {
+    const NONE: Job = Job {
+        stage: Stage::Idle,
+        tile: (0, 0),
+        file: File { cluster: 0, size: 0, dir: false },
+        blob: (0, 0),
+        seek: Seek::new(),
+        inf: Inflater::new(),
+        len: 0,
+        dec: Dec::ZERO,
+        sort: Sort { phase: 0, i: 0, end: 0 },
+    };
+}
+
 /// The map files in use: the last two z9 tiles' (a ride crosses a boundary now and then), found once.
 pub struct Maps {
     found: [Found; 2],
     next: usize,
+    job: Job,
     /// Tiles read and decoded, and bytes read from the card (for the cost, sim.rs).
     pub tiles: u32,
     /// See `tiles`.
@@ -672,7 +810,7 @@ impl Default for Maps {
 impl Maps {
     /// No file looked for yet.
     pub const fn new() -> Maps {
-        Maps { found: [Found::ZERO; 2], next: 0, tiles: 0, bytes: 0 }
+        Maps { found: [Found::ZERO; 2], next: 0, job: Job::NONE, tiles: 0, bytes: 0 }
     }
 
     /// Looks for the files again (a card changed, or a retry).
@@ -711,18 +849,70 @@ impl Maps {
         Ok(None)
     }
 
-    /// Reads z14 tile (`x`, `y`) into `g`: the file looked for (the first time), the tile read and inflated into
-    /// `scratch`, decoded. An unusable tile is marked absent, so it is not asked for again. Reads a tile's bytes
-    /// and no more; a card error is returned as it is, nothing remembered.
-    #[inline(never)]
+    /// The tile being loaded, if a load is half done: [`Maps::step`] must be called for it (or [`Maps::abort`]).
+    pub fn pending(&self) -> Option<(u32, u32)> {
+        (self.job.stage != Stage::Idle).then_some(self.job.tile)
+    }
+
+    /// Gives up a load half done; the graph is as it was before the tile.
+    pub fn abort(&mut self, g: &mut Graph) {
+        if matches!(self.job.stage, Stage::Decode | Stage::Sort) {
+            g.finish_tile(false);
+        }
+        self.job.stage = Stage::Idle;
+    }
+
+    /// Reads z14 tile (`x`, `y`) into `g` in one go (tests, tools): [`Maps::step`] with the whole tile as the slice.
     pub fn load(
         &mut self,
         fat: &mut Fat,
         d: &mut impl Disk,
         g: &mut Graph,
         scratch: &mut Scratch<'_>,
-        (x, y): (u32, u32),
+        t: (u32, u32),
     ) -> Result<Loaded, fat::Error> {
+        loop {
+            if let Some(l) = self.step(fat, d, g, scratch, t, Slice::ALL)? {
+                return Ok(l);
+            }
+        }
+    }
+
+    /// Reads z14 tile `t` into `g` a slice at a time. The first call looks for the file and the tile's place in it;
+    /// then a call reads the stream a sector or two and inflates [`Slice::inflate`] bytes, then decodes
+    /// [`Slice::nodes`] nodes a call, then sorts [`Slice::sort`] sifts a call: None while there is more (call again
+    /// with the same `t`: [`Maps::pending`]), the answer at the end. An unusable tile is marked absent, so it is not
+    /// asked for again. A card error is returned as it is, nothing remembered and the load dropped.
+    #[inline(never)]
+    pub fn step(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        g: &mut Graph,
+        scratch: &mut Scratch<'_>,
+        t: (u32, u32),
+        slice: Slice,
+    ) -> Result<Option<Loaded>, fat::Error> {
+        let r = match self.job.stage {
+            Stage::Idle => self.start(fat, d, g, t),
+            Stage::Inflate => self.inflate(fat, d, g, scratch, slice),
+            Stage::Decode => self.decode(g, scratch, slice),
+            Stage::Sort => Ok(self.sort(g, slice)),
+        };
+        if r.is_err() {
+            self.abort(g);
+        }
+        r
+    }
+
+    /// Finds the tile in its file; absent when there is none. Else the load is begun.
+    fn start(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        g: &mut Graph,
+        (x, y): (u32, u32),
+    ) -> Result<Option<Loaded>, fat::Error> {
         let z9 = ((x >> Z9_SHIFT) as u16, (y >> Z9_SHIFT) as u16);
         let k = match self.found.iter().position(|f| f.used && f.z9 == z9) {
             Some(k) => k,
@@ -740,28 +930,98 @@ impl Maps {
             }
         };
         let Some(Found { usable: true, dat, .. }) = self.found.get(k).copied() else {
-            return Ok(self.absent(g, x, y));
+            return Ok(Some(self.absent(g, x, y)));
         };
-        let Some((at, len)) = dat.blob(fat, d, x, y)? else { return Ok(self.absent(g, x, y)) };
-        let mut io = [0u8; 2048];
-        let mut seek = Seek::new();
-        let mut src = Bytes::new(fat, d, dat.file, &mut seek, (at, len), &mut io);
-        let r = inflate::gunzip(&mut src, scratch);
-        self.bytes = self.bytes.saturating_add(src.read);
+        let Some(blob) = dat.blob(fat, d, x, y)? else { return Ok(Some(self.absent(g, x, y))) };
+        let j = &mut self.job;
+        (j.tile, j.file, j.blob, j.seek, j.inf, j.stage) =
+            ((x, y), dat.file, blob, Seek::new(), Inflater::new(), Stage::Inflate);
+        Ok(None)
+    }
+
+    /// The stream on from where the inflater is, a slice of output; at its end the tile's graph part is begun.
+    fn inflate(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl Disk,
+        g: &mut Graph,
+        scratch: &mut Scratch<'_>,
+        slice: Slice,
+    ) -> Result<Option<Loaded>, fat::Error> {
+        let (x, y) = self.job.tile;
+        let (at, len) = self.job.blob;
+        let used = self.job.inf.taken;
+        // a sector at a time: the part of a read the slice does not use is read again by the next
+        let mut io = [0u8; fat::SECTOR];
+        let mut src = Bytes::new(
+            fat,
+            d,
+            self.job.file,
+            &mut self.job.seek,
+            (at.saturating_add(used), len.saturating_sub(used)),
+            &mut io,
+        );
+        let r = self.job.inf.step(&mut src, scratch, slice.inflate);
         if src.error == Some(fat::Error::Io) {
             return Err(fat::Error::Io);
         }
-        let Ok(n) = r else { return Ok(self.absent(g, x, y)) };
-        match g.decode(x, y, scratch, n) {
-            Ok(_) => {
-                self.tiles = self.tiles.saturating_add(1);
-                Ok(Loaded::Yes)
+        self.bytes = self.bytes.saturating_add(self.job.inf.taken.saturating_sub(used));
+        let n = match r {
+            Ok(None) => return Ok(None),
+            Ok(Some(n)) => n,
+            Err(_) => {
+                self.job.stage = Stage::Idle;
+                return Ok(Some(self.absent(g, x, y)));
             }
-            // a tile that does not fit an empty graph never will: absent, not asked for again
-            Err(Error::Full) if g.is_empty() => Ok(self.absent(g, x, y)),
-            Err(Error::Full) => Ok(Loaded::Full),
-            Err(_) => Ok(self.absent(g, x, y)),
+        };
+        match g.begin_tile(x, y) {
+            Ok(()) => {
+                (self.job.len, self.job.dec, self.job.sort, self.job.stage) =
+                    (n, Dec::new(), Sort::default(), Stage::Decode);
+                Ok(None)
+            }
+            Err(Error::Full) if g.is_empty() => Ok(Some(self.end_job_absent(g))),
+            Err(Error::Full) => Ok(Some(self.end_job(Loaded::Full))),
+            Err(_) => Ok(Some(self.end_job_absent(g))),
         }
+    }
+
+    fn decode(&mut self, g: &mut Graph, scratch: &Scratch<'_>, slice: Slice) -> Result<Option<Loaded>, fat::Error> {
+        match g.decode_step(scratch, self.job.len, &mut self.job.dec, slice.nodes) {
+            Ok(None) => Ok(None),
+            Ok(Some(_)) => {
+                self.job.stage = Stage::Sort;
+                Ok(None)
+            }
+            Err(e) => {
+                g.finish_tile(false);
+                // a tile that does not fit an empty graph never will: absent, not asked for again
+                Ok(Some(match e {
+                    Error::Full if !g.is_empty() => self.end_job(Loaded::Full),
+                    _ => self.end_job_absent(g),
+                }))
+            }
+        }
+    }
+
+    fn sort(&mut self, g: &mut Graph, slice: Slice) -> Option<Loaded> {
+        if !g.sort_tile(&mut self.job.sort, slice.sort) {
+            return None;
+        }
+        g.finish_tile(true);
+        self.tiles = self.tiles.saturating_add(1);
+        Some(self.end_job(Loaded::Yes))
+    }
+
+    fn end_job(&mut self, l: Loaded) -> Loaded {
+        self.job.stage = Stage::Idle;
+        l
+    }
+
+    fn end_job_absent(&mut self, g: &mut Graph) -> Loaded {
+        let (x, y) = self.job.tile;
+        self.job.stage = Stage::Idle;
+        self.absent(g, x, y)
     }
 
     fn absent(&mut self, g: &mut Graph, x: u32, y: u32) -> Loaded {
@@ -892,6 +1152,115 @@ pub(crate) mod tests {
         assert!(c.common_way(m).is_none(), "the branch and the bend are different ways");
     }
 
+    /// A xorshift step (seeded: failures reproduce).
+    fn next(x: &mut u32) -> u32 {
+        *x ^= *x << 13;
+        *x ^= *x >> 17;
+        *x ^= *x << 5;
+        *x
+    }
+
+    /// Tile `t` loaded in slices of random sizes (1 to `most` of each kind); the answer and the calls it took.
+    pub fn load_sliced(
+        maps: &mut Maps,
+        fat: &mut Fat,
+        d: &mut Ram,
+        g: &mut Graph,
+        mem: &mut [u16],
+        t: (u32, u32),
+        (seed, most): (&mut u32, u32),
+    ) -> (Result<Loaded, fat::Error>, u32) {
+        for calls in 1.. {
+            let mut r = |m: u32| (next(seed) % m + 1) as usize;
+            let slice = Slice { inflate: r(most * 40), nodes: r(most), sort: r(most * 3) };
+            match maps.step(fat, d, g, &mut Scratch(mem), t, slice) {
+                Ok(None) => assert_eq!(maps.pending(), Some(t)),
+                Ok(Some(l)) => return (Ok(l), calls),
+                Err(e) => return (Err(e), calls),
+            }
+        }
+        unreachable!()
+    }
+
+    /// The same nodes, edges and tile states.
+    pub fn same(a: &Graph, b: &Graph) {
+        assert_eq!(a.nodes(), b.nodes());
+        assert_eq!(a.to[..a.n_edges], b.to[..b.n_edges]);
+        assert_eq!(a.attr[..a.n_edges], b.attr[..b.n_edges]);
+        assert_eq!(a.n_slots, b.n_slots);
+        for (x, y) in a.slots[..a.n_slots].iter().zip(&b.slots[..b.n_slots]) {
+            assert_eq!((x.x, x.y, x.start, x.end, x.loaded, x.bbox), (y.x, y.y, y.start, y.end, y.loaded, y.bbox));
+        }
+    }
+
+    /// A tile loaded in many slices of random sizes is the tile loaded in one go, whatever the cut points: the
+    /// same graph and the same bytes counted, with more than one call, the inflate, the decode and the sort each
+    /// cut.
+    #[test]
+    fn slices_make_the_same_graph() {
+        let mut seed = 0x1234_5678u32;
+        for most in [1, 3, 20, 200] {
+            let mut d = Ram(image_with_map(), 0);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let (mut g1, mut m1, mut mem) = (Graph::new(), Maps::new(), scratch());
+            let (mut g2, mut m2) = (Graph::new(), Maps::new());
+            let mut calls = 0;
+            for t in FIXTURE_TILES.into_iter().chain([EMPTY]) {
+                let one = m1.load(&mut fat, &mut d, &mut g1, &mut Scratch(&mut mem), t);
+                let (many, n) = load_sliced(&mut m2, &mut fat, &mut d, &mut g2, &mut mem, t, (&mut seed, most));
+                assert_eq!(one, many, "{t:?}");
+                assert_eq!(m2.pending(), None);
+                same(&g1, &g2);
+                calls += n;
+            }
+            assert_eq!((m1.tiles, m1.bytes), (m2.tiles, m2.bytes));
+            assert!(calls > 9 * 3 || most > 20, "{calls} calls for 9 tiles with slices up to {most}");
+        }
+    }
+
+    /// A damaged file gives the same answer sliced or whole, and a load given up half done ([`Maps::abort`], at
+    /// every call of a tile) leaves the graph as it was.
+    #[test]
+    fn slices_agree_on_damage_and_abort() {
+        let img = image_with_map();
+        let mut d = Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let f = fat.open(&mut d, "Map/MapData/Test/9-49-342.dat").unwrap();
+        let (base, size) = (fat.lba(f.cluster) as usize * fat::SECTOR, f.size as usize);
+        let mut seed = 99u32;
+        let mut mem = scratch();
+        for k in 0..400 {
+            let mut d = Ram(img.clone(), 0);
+            let at = (next(&mut seed) as usize) % size;
+            d.0[base + at] ^= 1 << (k % 8);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let (mut g1, mut m1, mut g2, mut m2) = (Graph::new(), Maps::new(), Graph::new(), Maps::new());
+            for t in FIXTURE_TILES {
+                let one = m1.load(&mut fat, &mut d, &mut g1, &mut Scratch(&mut mem), t);
+                let (many, _) = load_sliced(&mut m2, &mut fat, &mut d, &mut g2, &mut mem, t, (&mut seed, 5));
+                assert_eq!(one, many, "flip at {at}");
+                same(&g1, &g2);
+            }
+        }
+        // abort after each number of calls: nothing of the tile stays in the graph
+        let mut d = Ram(img, 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let t = FIXTURE_TILES[2];
+        for stop in 0..30 {
+            let (mut g, mut maps) = (Graph::new(), Maps::new());
+            let slice = Slice { inflate: 100, nodes: 4, sort: 10 };
+            for _ in 0..stop {
+                if maps.step(&mut fat, &mut d, &mut g, &mut Scratch(&mut mem), t, slice).unwrap().is_some() {
+                    break;
+                }
+            }
+            maps.abort(&mut g);
+            assert!(maps.pending().is_none() && g.is_empty() && g.state(t.0, t.1) == TileState::Unknown, "{stop}");
+            // and the tile loads whole afterwards
+            assert_eq!(maps.load(&mut fat, &mut d, &mut g, &mut Scratch(&mut mem), t), Ok(Loaded::Yes));
+        }
+    }
+
     /// One tile alone: the edges that leave it lead to nodes not found (the next tile is not loaded yet).
     #[test]
     fn a_neighbour_in_a_tile_not_loaded() {
@@ -1006,7 +1375,7 @@ pub(crate) mod tests {
             gz.extend((!(c.len() as u16)).to_le_bytes());
             gz.extend_from_slice(c);
         }
-        gz.extend(inflate::crc32(msg.iter().copied()).to_le_bytes());
+        gz.extend(crate::inflate::crc32(msg.iter().copied()).to_le_bytes());
         gz.extend((msg.len() as u32).to_le_bytes());
         // the container: header, zoom table, zoom header, one index entry, the tile
         let (x, y) = FIXTURE_TILES[0];
@@ -1113,7 +1482,8 @@ pub(crate) mod tests {
         let mut mem = std::vec![0u16; SCRATCH_WORDS]; // the unit's own size
         let (mut g, mut maps) = (Graph::new(), Maps::new());
         let (mut ok, mut absent, mut full, mut nodes) = (0, 0, 0, 0);
-        let mut largest = (0, 0, 0);
+        let mut largest = (0, 0, 0, 0, 0);
+        let (mut g2, mut m2, mut seed) = (Graph::new(), Maps::new(), 7u32);
         let t0 = std::time::Instant::now();
         for x in z[0] << 5..(z[0] + 1) << 5 {
             for y in z[1] << 5..(z[1] + 1) << 5 {
@@ -1123,7 +1493,13 @@ pub(crate) mod tests {
                     Loaded::Yes => {
                         (ok, nodes) = (ok + 1, nodes + g.len());
                         let edges: usize = (0..g.len()).map(|i| g.edges(i).count()).sum();
-                        largest = largest.max((g.len(), edges, maps.bytes - b0));
+                        largest = largest.max((g.len(), edges, maps.bytes - b0, x, y));
+                        // the same tile in slices cut at random places: the same graph
+                        g2.clear();
+                        let (r, _) =
+                            load_sliced(&mut m2, &mut fat, &mut d, &mut g2, &mut mem, (x, y), (&mut seed, 200));
+                        assert_eq!(r, Ok(Loaded::Yes));
+                        same(&g, &g2);
                     }
                     Loaded::No => absent += 1,
                     Loaded::Full => full += 1,
@@ -1136,5 +1512,46 @@ pub(crate) mod tests {
         );
         std::println!("largest tile loaded: {} nodes, {} edges, {} compressed bytes", largest.0, largest.1, largest.2);
         assert!(ok > 900);
+
+        // The largest tile in the slices of a main loop pass: what each call does, and the time on the unit
+        // estimated from the instructions each kind of work takes (a bit decoded 25, a byte out 30 with its CRC, a
+        // node 900, a sift 400) scaled so that the whole tile costs what the unit measured for its slowest one
+        // (237.5 ms for a tile load in one go, 2026-10-26, dev.py info).
+        let t = (largest.3, largest.4);
+        g.clear();
+        let mut calls = std::vec::Vec::new(); // (instructions, kind)
+        loop {
+            let (stage, n0, in0, nodes0) =
+                (maps.job.stage, maps.job.inf.written(), maps.job.inf.taken, maps.job.dec.nodes);
+            let r = maps.step(&mut fat, &mut d, &mut g, &mut Scratch(&mut mem), t, Slice::PASS).unwrap();
+            let j = &maps.job;
+            let instr = match stage {
+                Stage::Inflate => (j.inf.written() - n0) * 30 + (j.inf.taken - in0) as usize * 200,
+                Stage::Decode => (j.dec.nodes - nodes0) * 900,
+                Stage::Sort => Slice::PASS.sort * 400,
+                Stage::Idle => 2000,
+            };
+            calls.push((instr, stage as u8));
+            if r.is_some() {
+                break;
+            }
+        }
+        same(&g, &{
+            let mut one = Graph::new();
+            Maps::new().load(&mut fat, &mut d, &mut one, &mut Scratch(&mut mem), t).unwrap();
+            one
+        });
+        let total: usize = calls.iter().map(|c| c.0).sum();
+        let us_per_instr = 237_500.0 / total as f64;
+        let worst = calls.iter().map(|c| c.0).max().unwrap();
+        std::println!(
+            "largest tile {t:?}: {} nodes, {} calls, {total} instructions, {:.2} cycles an instruction at the measured 237.5 ms; \
+             a call at most {worst} instructions = {:.1} ms, {} calls over 5 ms",
+            largest.0,
+            calls.len(),
+            us_per_instr * 200.0,
+            worst as f64 * us_per_instr / 1000.0,
+            calls.iter().filter(|c| c.0 as f64 * us_per_instr > 5000.0).count()
+        );
     }
 }

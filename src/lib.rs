@@ -392,8 +392,10 @@ pub struct App {
     pace: PaceState,
     /// The road ahead: climbs found with no course followed (memory from main.rs: [`App::set_ahead_memory`]).
     ahead: Option<(&'static mut climbs_ahead::Ahead, &'static mut [u16])>,
-    /// The last and the longest tile load of the road ahead, us ([`App::ahead_tile_us`]).
-    ahead_us: (u32, u32),
+    /// The last and the longest tile load of the road ahead, and the longest slice, us ([`App::ahead_tile_us`]).
+    ahead_us: (u32, u32, u32),
+    /// The time spent so far on the tile being loaded, us.
+    ahead_acc: u32,
     /// The USB drive (msc.rs): the medium is in while the card is lent ([`emmc::Emmc::lend`], app/drive.rs).
     drive: msc::Drive,
     /// A system reset is wanted (after the computer wrote to the volume: app/drive.rs).
@@ -597,7 +599,8 @@ impl App {
             ride_model: None,
             thresholds: None,
             ahead: None,
-            ahead_us: (0, 0),
+            ahead_us: (0, 0, 0),
+            ahead_acc: 0,
             drive: msc::Drive::new(),
             restart: false,
             phone: Phone::default(),

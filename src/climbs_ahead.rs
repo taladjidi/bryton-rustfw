@@ -28,7 +28,7 @@
 //! - **When:** the app runs it outdoors with no course followed, moving with a fix ([`Ahead::second`]); it traces
 //!   again when the rider leaves the traced road ([`OFF_S`] seconds farther than [`OFF_PATH_M`]) or nears the end
 //!   of a trace that stopped at its length ([`NEAR_END_M`]), at most every [`RETRACE_S`] seconds, and the work is
-//!   spread over the main loop's passes (a tile read, inflated and decoded is the longest step).
+//!   spread over the main loop's passes (a slice of a tile read, inflated or decoded is the longest step).
 //! - **Output:** the climbs on the trace (`start_m` from where the trace starts, [`Ahead::along_m`] the rider's
 //!   place on it), the profile ([`Ahead::alt_at`], [`Ahead::grade_ahead`], as a [`Course`]'s), and the announcement
 //!   of the next climb as the rider reaches it ([`ANNOUNCE_M`] before its start, or inside it), once.
@@ -40,7 +40,7 @@ use crate::course::{CLIMBS, Climb, Course, step_mm};
 use crate::fat::{Disk, Fat};
 use crate::inflate::Scratch;
 use crate::map::cos_q16;
-use crate::route::{Graph, Loaded, Maps, NO_ELEV, NODES, TileState, tile_of};
+use crate::route::{Graph, Loaded, Maps, NO_ELEV, NODES, Slice, TileState, tile_of};
 
 /// The nearest road within this of the fix is the rider's, m.
 pub const SNAP_M: u32 = 150;
@@ -272,6 +272,7 @@ impl Ahead {
 
     /// Forgets the trace and what it found, and the climb said (a new ride); the tiles held stay.
     pub fn reset(&mut self) {
+        self.maps.abort(&mut self.graph);
         (self.phase, self.n, self.have, self.n_climbs, self.said) = (Phase::Idle, 0, false, 0, false);
         self.in_said = false;
         (self.off_s, self.seg, self.along_m, self.retry_s) = (0, 0, 0, 0);
@@ -295,6 +296,11 @@ impl Ahead {
     /// A trace is being made (tiles being read).
     pub fn busy(&self) -> bool {
         self.phase != Phase::Idle
+    }
+
+    /// A tile is half loaded (its next slice is the next unit of work).
+    pub fn loading(&self) -> bool {
+        self.maps.pending().is_some()
     }
 
     /// The trace's length, m.
@@ -452,12 +458,13 @@ impl Ahead {
 
     /// One step of the trace being made: a tile read, or the snap, or the trace up to the next tile it needs, or
     /// the smoothing and the climbs. True while there is more to do (call again if the pass has time); false when
-    /// idle. Never more than one tile read a call.
+    /// idle. Never more than a slice of a tile ([`Slice::PASS`]) a call: a tile takes several, the next call goes on.
     pub fn work(&mut self, d: &mut impl Disk, mem: &mut [u16]) -> bool {
         if self.phase == Phase::Idle {
             return false;
         }
         let want = match self.phase {
+            _ if self.maps.pending().is_some() => self.maps.pending(),
             Phase::Snap => self.snap_tiles(),
             _ => match self.trace() {
                 Step::Need(t) => Some(t),
@@ -498,14 +505,14 @@ impl Ahead {
     /// positions) and the tile asked for again, [`MAX_CLEARS`] times; a card error gives up for [`RETRY_S`].
     fn load(&mut self, d: &mut impl Disk, mem: &mut [u16], t: (u32, u32)) {
         let Ok(mut fat) = Fat::mount(d) else { return self.fail() };
-        match self.maps.load(&mut fat, d, &mut self.graph, &mut Scratch(mem), t) {
-            Ok(Loaded::Yes | Loaded::No) => {}
-            Ok(Loaded::Full) if self.clears < MAX_CLEARS => {
+        match self.maps.step(&mut fat, d, &mut self.graph, &mut Scratch(mem), t, Slice::PASS) {
+            Ok(None | Some(Loaded::Yes | Loaded::No)) => {}
+            Ok(Some(Loaded::Full)) if self.clears < MAX_CLEARS => {
                 self.clears += 1;
                 self.graph.clear();
                 self.cleared = true;
             }
-            Ok(Loaded::Full) => self.fail(),
+            Ok(Some(Loaded::Full)) => self.fail(),
             Err(_) => {
                 self.maps.forget();
                 self.fail();
@@ -515,6 +522,7 @@ impl Ahead {
 
     /// Gives up this try: no trace, the next one after [`RETRY_S`].
     fn fail(&mut self) {
+        self.maps.abort(&mut self.graph);
         (self.phase, self.have, self.n, self.n_climbs) = (Phase::Idle, false, 0, 0);
         self.retry_s = self.now_s.saturating_add(RETRY_S);
     }
