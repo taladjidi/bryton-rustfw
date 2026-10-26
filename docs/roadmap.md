@@ -54,6 +54,7 @@ lower awake time (`dev.py info`).
 
 ## 2. Power
 
+- **USB high speed** for the drive: the drops after 15 to 40 MB (docs/status.md); full speed works.
 - **Stop mode** between seconds, woken by the RTC, the keys, the touch interrupt, the radio chip's UART and USB:
   the largest gain left. A core change: with the owner present.
 - **SPI by DMA** for the panel: the CPU sleeps while a map (about 130 ms at 8 MHz) goes out. The format of what is
@@ -89,7 +90,8 @@ The golden rule (AGENTS.md) depends on this whole phase.
    with DFA a1 (`Alpha1`) and RMSSD as developer fields for Intervals.icu (docs/sync.md, "Why two files").
    `tools/sync.py` uploads them from the computer and brings the planned workouts back. Next: a run against the
    real services; the iOS app (phase 8).
-4. Settings file (phase 1's store moves here).
+4. Settings file (phase 1's store moves here). Open, and now wanted: the 32 backup registers are full (docs/status.md,
+   features.md "Settings registers"), so a setting added needs a file to free them, two copies with a CRC.
 5. USB mass storage: rides off and courses, workouts and maps on, with no phone app. The recorder and the FAT
    writer stop while the computer owns the volume.
 
@@ -98,14 +100,20 @@ The golden rule (AGENTS.md) depends on this whole phase.
 - Done (src/power.rs, ride.rs): NP, IF, TSS, kJ, kcal, W/kg, 3, 10 and 30 s power (patch P6), W' balance (the
   planned P10, differential model, CP = FTP), max power and heart rate, average cadence, pedal balance, grade, VAM,
   temperature. Weight and W' in the menu (RTC backup register 16).
-- Next: a CP setting apart from FTP if riders
-  want one; torque pages (0x11, 0x12) and torque effectiveness / pedal smoothness (page 0x13).
+- Done since: CP and W' fitted as an envelope from the power curve with EST FTP / APPLY (HISTORY > FITNESS), the
+  ride's CP / W' latched at its start, the power meter's calibration (zero offset, auto zero), the bike weight.
+- Next: torque pages (0x11, 0x12) and torque effectiveness / pedal smoothness (page 0x13). One FTP only: a CP setting
+  apart from it, and indoor-only copies of the FTP, are dropped.
 - Alerts on the buzzer and a banner: HR and power limits, eat and drink reminders by time, distance or kJ (stock
   has six kinds).
 - Auto lap; a ride summary at the end; ride history and totals for the overview.
 - From the patch project: HRV recording (P8: the RR intervals as FIT hrv messages, and DFA a1 as the `Alpha1`
   developer field, as P9 does), W' balance (planned P10), power smoothing (P5). Done: the live DFA a1 and RMSSD
-  fields (P9's algorithm, hrv.rs).
+  fields (P9's algorithm, hrv.rs); every RR interval raw as FIT `hrv` messages and `ArtPct` in the full copy;
+  HRVT1 / HRVT2 from the full copies (hrvt.rs).
+- **Open: the DFA a1 artifact filter.** The live filter drops a beat more than 5 % from the previous kept one (hrv.rs). Compare it
+  with Domestique's method (median of the neighbours, a 20 % rule, an R^2 >= 0.95 gate on the window) on a ride
+  with raw beats recorded: pending a real ride with the strap (docs/status.md).
 
 ## 4b. History and training load
 
@@ -163,9 +171,14 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
   `\Courses`: the line on the map, where the rider is on it (a moving window, a bounded search when lost),
   off-course alert, distance to go, ascent left; the course's elevation profile coloured by grade; **climb
   detection** (Garmin ClimbPro's definition: each climb's length, grade, what is left, a banner at its start).
+- **Done (sim):** climbs without a course, from stock's routing maps (climbs_ahead.rs, BIKE > CLIMBS AHEAD); the
+  climb pacer on a followed course (pacing.rs, the TOP field: constant-speed closed form from CP, W' and the weights).
 - **Next:** the way back to the course drawn, navigate to the start, reverse a course; a climb page that opens by
-  itself; climbs without a course from the barometer and the map's contours; pacing on a climb from FTP and W'
-  balance.
+  itself.
+- **Open: live segments without Strava**, from the rider's own rides: a segment found in a past ride (a climb, a
+  stretch ridden often), the time against the best, on a field, with no service in between.
+- **Open: stock's Climb Challenge**, compared with our climbs ahead on the same ride (the climbs found, their
+  starts, the grades), to tune the rule or to say where they differ.
 - Turn-by-turn cues (stock's `voiceTrip.fit` holds them: message 250 with street names); rerouting on the unit
   later.
 
@@ -173,7 +186,8 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
 
 - Structured workouts from FIT workout files, with step targets, the 3-2-1 beeps and the next-step strip (patches
   P1, P3). ZWO, ERG and MRC files are converted to FIT on the computer.
-- Smart trainer control (ANT+ FE-C) for workouts indoors.
+- Smart trainer control (ANT+ FE-C, and over Bluetooth: FTMS, FE-C over BLE) for workouts indoors. Done (sim): ERG,
+  SIM, release rules, spin-down calibration, the FTP ramp test.
 
 ## 8. Radios and the phone
 

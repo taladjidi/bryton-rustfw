@@ -32,7 +32,9 @@ the code; [features.md](features.md) says how each one works.
 - [ ] Day and night colour modes (stock Meter Color Mode, Garmin)
 - [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock SPD / CAD / HR / PW Ring and Bar)
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation, by tap; whole ride by hold (stock, ours): sim
-- [x] Values in zone colours (stock): sim
+- [x] Values in zone colours (stock): sim, an 8 px zone bar on the box's top edge, held 3 s
+- [x] Font choice for every text, PIXEL or SMOOTH (Barlow Semi Condensed Bold, OFL) (ours): unit, SETTINGS > DISPLAY > FONT seen on the panel, kept through a restart
+- [x] Cog on the overview opens the menu (ours): sim, 44 px touch box, anti-aliased, level with the date (PIXEL and SMOOTH)
 - [ ] Auto scroll through pages (stock, Garmin)
 - [x] Screen lock (stock power key press, Garmin): sim, Back and Lap held 1 s lock the touch, a padlock in the strip
 - [ ] Ready-to-ride dashboard: sensors, battery, GPS before the start (Wahoo Roam 3)
@@ -125,7 +127,7 @@ Others
 - [x] ANT+ beat-to-beat intervals for HRV (patch P8, Garmin): sim, from a strap (HR seen on the unit)
 - [x] ANT+ speed, cadence, speed and cadence (stock, all): sim (decoders checked against openant)
 - [x] ANT+ power (stock, all): sim
-- [~] Power meter calibration (zero offset, auto zero) (stock, Garmin, Wahoo, Karoo): sim; the page 0x01 layouts are from open implementations, not yet seen on the unit (Sigeyi AXO spider)
+- [~] Power meter calibration (zero offset, auto zero) (stock, Garmin, Wahoo, Karoo): sim; the page 0x01 layouts are from open implementations, SENSORS > CALIBRATE POWER with its screen, the sim meter and tests; not yet seen on the unit (Sigeyi AXO spider)
 - [~] Sensor pairing menu: pair, forget (stock, all): one sensor per kind; no ID typed in, no names
 - [ ] Sensor pool: several of a kind, switch when another is found (stock, Garmin)
 - [ ] Sensor battery levels (ANT+ common page 82) (stock Quick Status, all)
@@ -136,7 +138,8 @@ Others
 - [~] Shimano Di2 gears and hood buttons (private ANT channel) (stock, patch P12 ten actions, Garmin, Wahoo, Karoo): sim
 - [~] SRAM AXS / ANT+ Shifting gears and buttons (stock e-shifting, Garmin, Wahoo, Karoo): sim
 - [ ] E-bike: Shimano STEPS and ANT+ LEV (stock, Garmin, Wahoo, Karoo)
-- [~] Smart trainer, ANT+ FE-C (stock, all): unit, paired and read (Van Rysel D500); ERG not yet seen on the trainer
+- [~] Smart trainer, ANT+ FE-C (stock, all): unit, paired and read (Van Rysel D500); ERG not yet seen on the trainer; sim, released at stop, end, pause, switch-off and once at boot, the release resent until TX_COMPLETED
+- [x] Trainer let go when a workout, a course or the ride ends or pauses (ours): sim; on the D500 not yet seen
 - [~] Smart trainer over BLE FTMS (Garmin, Wahoo, Karoo, Coros): sim, beside the phone; the two links accepted by the chip on the unit
 - [~] Smart trainer over BLE without FTMS, FE-C over BLE (Tacx scheme; Van Rysel D500): unit, linked and read; commands not yet seen applied
 - [ ] Remote buttons (Bryton ESS, Garmin Edge remote) (stock, Garmin)
@@ -164,7 +167,7 @@ Others
 - [~] Rides saved to \Activities, readable by stock and the computer (stock, all): sim (stock's name, the history lists them)
 - [x] Discard a ride (stock, all): sim, moved into `\Rustfw\Discarded`, never erased
 - [ ] Recording rate: 1 s or smart (stock, Garmin)
-- [~] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin): sim, every beat raw in the full copy
+- [~] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin): sim, every beat raw in the full copy, with `ArtPct` on its records; not yet on a real ride with the strap
   (`\Rustfw\Activities`, five a message), cut at every sector, checked with fitdecode and Garmin's SDK; with the
   `ArtPct` share per record
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ): sim, in a full copy beside the clean one (`\Rustfw\Activities`, with RMSSD), checked with Garmin's SDK
@@ -215,7 +218,7 @@ Others
 - [x] Power zones from FTP (Coggan, 7) (stock, all): sim; FTP in the menu
 - [ ] Power zones edited one by one (stock, Garmin)
 - [x] Weight and W' settings (Garmin, ours): sim
-- [x] Bike weight setting, 5 to 30 kg, for the climb pacer (ours): sim
+- [x] Bike weight setting (BIKE > WEIGHT), 5.0 to 25.0 kg in 0.1 kg, for the climb pacer and the trainer (ours): unit (the row seen, kept in register 16); the pacer on a real climb not yet
 - [ ] Rider profile: sex, birthday, height (stock, Garmin)
 - [x] Structured workouts from FIT files, step targets (stock, all): sim, from stock's \Workout\calendar
 - [x] Countdown beeps before a step ends: 500 ms at 2 and 1 s left, 1 s at the change (patch P1's 3-2-1, Garmin, Wahoo; the owner's choice): sim
@@ -240,7 +243,8 @@ Others
 - [ ] Training status, training readiness, recovery time (Garmin)
 - [ ] Load focus, aerobic / anaerobic split (Garmin, Coros)
 - [ ] Power curve and rider profile (stock app Rider's Insight, Garmin cycling ability, Karoo)
-- [~] VO2max and FTP estimates from rides (Garmin): sim, CP and W' fitted from stock's rides; no VO2max
+- [~] VO2max and FTP estimates from rides (Garmin): sim, CP and W' fitted as an envelope from stock's rides, EST FTP and APPLY (estimates only raise the settings); no VO2max
+- [x] Aerobic and anaerobic thresholds from DFA a1 over recent rides (HRVT1, HRVT2: Rogers 2021, Deming fit, 42-day median) (ours, AI Endurance's method): sim, from the full copies; not yet on real rides
 - [ ] Heat and altitude acclimation (Garmin)
 - [ ] hrTSS when there is no power meter (ours, intervals.icu)
 - [ ] DFA a1 against the aerobic threshold during a ride (patch P9): field done, no alert
@@ -253,7 +257,7 @@ Others
 - [~] Climbs without a course, predicted from the road ahead (stock Climb Challenge 2.0, Karoo Climber, Garmin 1050): sim, the routing graph and elevations of stock's map files traced 4 km ahead, Garmin's definition as a course's, a banner and a beep, the CLIMB fields, BIKE > CLIMBS AHEAD; not seen on the unit
 - [ ] Climb filter: all or medium and above (stock)
 - [x] Gradient-coloured climb profile in sections (stock, all): sim, the PROFILE field
-- [ ] Pacing on a climb from FTP and W' balance (ours, Garmin Power Guide)
+- [x] Pacing on a climb from FTP and W' balance (ours, Garmin Power Guide): sim, the TOP field on the course page, a constant-speed plan from CP, W' and the weights; not yet on a real climb
 - [ ] Summit segments / climb challenges with others (Wahoo, Garmin 1050)
 - [ ] Completed climbs listed with their times (Karoo: a climb counts once 250 m of it is done)
 - [ ] Climb detection on or off per profile, descents too (Garmin 32.20, Karoo: off / routes only / everything)
@@ -280,7 +284,7 @@ Others
 ## Phone and connectivity
 
 - [x] Pair with a phone (BLE bonding) (stock, all): sim; Just Works, one bond in `\Rustfw\ble.bin`
-- [x] Call, text and e-mail notifications: iOS through ANCS with no app (stock app, all): sim; answer / decline
+- [x] Call, text and e-mail notifications: iOS through ANCS with no app (stock app, all): unit (a call, answered); sim (messages, decline); a call shows over every screen, queued alerts say all
 - [ ] Android notifications (stock app, all): need a companion app
 - [x] Media remote: play, pause, next, previous, volume (patch P7, Garmin, Wahoo, Karoo): sim; AMS or HID
 - [x] Now playing: title, artist, elapsed (ours, AMS): sim

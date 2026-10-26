@@ -38,9 +38,44 @@ The dated findings are in [journal.md](journal.md).
 - Not yet: messages' banners, skip in a podcast, the camera shutter, a re-pair after forgetting on the iPhone only,
   a stranger's phone, range loss during a ride.
 
+## Seen on the unit: fonts, rows and registers (2026-10-26, from RAM, owner present)
+
+- **FONT (SETTINGS > DISPLAY > FONT, SMOOTH):** the overview, a ride page and the menus redraw in Barlow Semi Condensed
+  Bold on the panel with no page or menu moving; back to PIXEL restores the dot matrix; the choice (register 16, bit
+  24) survives `dev.py reset`.
+- **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT (0.1 kg steps, 9.0 by default), ALTITUDE, FROM GPS, PROFILE,
+  CLIMBS AHEAD; DISPLAY shows BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER; each edits in place.
+- **Settings registers read back:** after `dev.py reset`, the bike weight, the font, the gauge window (register 16, tag
+  0xa) and the alerts and the keys' actions (register 28, tag 0x9) come back as set (`dev.py peek` of the RTC backup
+  registers).
+
 ## Not yet seen on the unit
 
-- **Power meter calibration (src/powercal.rs, app/powercal.rs)**: only on the simulator. The page 0x01 layouts (ids
+- **The ramp test (ramp.rs, app/ramp.rs, WORKOUTS > RAMP TEST)**: only on the simulator. On the unit with the D500 or
+  another trainer: the 5 min at 50 %, the one-minute steps in ERG, the stop on cadence under 60 rpm, on power under half
+  the target, on Lap and on STOP WORKOUT (the cool-down target at once), the result (FTP at 75 % of the best minute,
+  HRVT1 with a strap), APPLY and KEEP by touch, and the trainer released afterwards.
+- **The climb pacer on a real climb (pacing.rs, app/pace.rs)**: only on the simulator. A course followed with a climb
+  of 5 minutes or more: the TOP field within 5 km of it, the plan's power against what the rider can hold, the time to
+  the top counting down, the W' balance staying above 0 at the top, the bike weight added; the replan's cost at
+  200 MHz (about 75 us for 32 sections, computed on the host).
+- **Raw RR intervals in a real ride's full copy (storage/fit.rs `Writer::hrv`, recorder.rs `Recorder::beat`)**: only on
+  the simulator and the host tests. A ride with the owner's strap: the `hrv` messages in `\Rustfw\Activities` (about
+  20 KB an hour), `ArtPct` on the records, `tools/fit_check.py` decoding them, and the beats offline in Domestique,
+  Runalyze or Kubios (roadmap: the artifact filter comparison).
+- **HRVT1 / HRVT2 and EST FTP from real full copies (hrvt.rs, storage/thresholds.rs, app/fitness.rs)**: on the
+  simulator and fuzz only; FITNESS on the unit after a few rides with the strap: the thresholds against the rider's
+  own, the time the 96 KB a pass reading takes, and the 3 KB in AXI SRAM.
+- **The overview cog, the target gauge over all zones and the 8 px zone bars:** drawn in the simulator only; the 44 px touch box
+  with a glove, the gauge's zones by eye in sunlight, and the bars' height on the bike.
+- **The save fixes (fat/write.rs `make_room`, recorder.rs)**: host tests with a cut at every sector and a card with
+  failing sectors; on the unit a save on a card with a full `\Activities` folder, and a Start while the last ride is
+  saved ("NOT RECORDING: CARD", then the ride starting once the save ends).
+- **The trainer's release (app/trainer.rs, nrf.rs `ant_tx_completed`)** on the Van Rysel D500: the release at stop, end,
+  pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D500 free
+  in the next seconds with the ride saved (ANT+ and over Bluetooth), the 330 ms wait enough. `TX_COMPLETED`'s layout
+  (`[0x40, ch, 0x01, 5]`, ANT Message Protocol 9.5.6.1) is read from the document, not seen.
+- **Power meter calibration (src/powercal.rs, app/powercal.rs, SENSORS > CALIBRATE POWER)**: only on the simulator. The page 0x01 layouts (ids
   0xAA, 0xAB, 0xAC, 0xAF, 0x12; offset in bytes 6 and 7) are from the Nordic SDK and GoldenCheetah, the request
   bytes and the acknowledged send on the power channel (the same op as the trainer's, itself not yet confirmed) are
   inferred, and the 10 s time-out is ours. On the unit with the Sigeyi AXO spider: does it answer 0xAA with 0xAC (and
@@ -75,8 +110,8 @@ The dated findings are in [journal.md](journal.md).
   takes pages 49 (ERG under a workout), 48 and 51 (SIM on a course; the trainer's speed advances the ride), 55; and
   its page 71 answers pass. The pairing is kept in `\Rustfw\sensors.bin` (with the Bluetooth trainer's); backup
   register 14 is the shifting systems', and a trainer an earlier build kept there is only moved to the file. Not seen
-  yet: the chip's EVENT_TRANSFER_TX_COMPLETED (code 5, its layout inferred as TX_FAILED's), which stops the release
-  being sent again (five times at most without it).
+  yet: the chip's EVENT_TRANSFER_TX_COMPLETED (code 5; the layout `[0x40, ch, 0x01, 5]` is from the ANT Message
+  Protocol document), which stops the release being sent again (five times at most without it).
 - **Spin-down calibration of the ANT+ FE-C trainer (trainer.rs `Cal`, drivers/fec.rs pages 1 and 2, app/trainer.rs,
   ui/trainer.rs)**: only against the simulator's trainer. On the Van Rysel D500 showing CALIBRATE: CALIBRATE beside
   MODE (or Start held) sends page 1 with the spin-down bit (0x80), and the trainer answers with page 2 (the layout is
@@ -140,7 +175,7 @@ The dated findings are in [journal.md](journal.md).
 
 - **UI review 2, step A (sim only so far):** the touch lock (Back and Lap held together 1 s: the padlock in the strip,
   a tap on the gear ignored, again to unlock; try it with a glove: the two keys are on opposite sides), Back on the
-  overview doing nothing, the zone bars (the 4 px bar and its 3 s hold with a real power meter and strap: legible in
+  overview doing nothing, the zone bars (the 8 px bar and its 3 s hold with a real power meter and strap: legible in
   sunlight? the lemon yellow, magenta, violet and cyan zones by eye), the readings once a second, the 48 px map
   buttons, the targets as "210" and "+-10", the confirmations "START: YES BACK: NO".
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start, Start: "RIDE
@@ -305,8 +340,6 @@ The dated findings are in [journal.md](journal.md).
 
 1. **Stop mode** between seconds (woken by the RTC, the keys, the radio chip's UART, USB): the largest battery
    gain left. A core change, tried with the owner present.
-2. **Writes to the eMMC and saving rides** on the unit, with the owner (written and tested in the simulator:
-   docs/journal.md 2026-10-24).
-3. **A basemap** under the map, from stock's tile cache, rendered only when the view changes (in progress).
-4. BLE sensors (stock's connect / discovery / notification encodings are traced, BOARD.md 11).
-5. USB mass storage, so files and updates work from inside the firmware.
+2. **USB high speed** for the drive: the drops after 15 to 40 MB (above); full speed works.
+3. **A settings file** to free the backup registers (docs/roadmap.md).
+4. The new features above, on the unit, as the owner rides them.

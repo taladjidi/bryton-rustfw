@@ -9,7 +9,9 @@
   in the menu (OVERVIEW; by default this week's distance and time, the total distance, the temperature: the totals come from the
   rides on the card, shown at once from the scan's cache, `\Rustfw\scan.bin`, and checked 30 s after start-up, when
   only the rides new or changed since are read), and the latest notices (a GPS fix, a
-  sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT).
+  sensor paired, the battery low), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
+  date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
+  44 x 44 px box opens the menu).
 - **Readings at 1 Hz:** the power, speed, cadence and heart rate values on the pages are the readings of the second's
   tick, not of each 4 Hz broadcast (the digits were unreadable and each change a redraw: 8,301 px/s against 11,339 on
   six values with a power meter and a strap, windows 10 a second against 20); the recorder and the averages still take
@@ -63,7 +65,8 @@
     the fit. While the zoom is set by hand, a drag on the map pans instead of changing page or opening the media
     remote; the keys still change pages. Fitted, swipes keep their meanings. A new ride, or a course followed or
     dropped, fits the map again.
-- Everything is in the project's own dot-matrix font. Only what changes is redrawn, in the smallest box.
+- Everything is in the project's own dot-matrix font, or in Barlow Semi Condensed Bold with FONT = SMOOTH (Touch,
+  below). Only what changes is redrawn, in the smallest box.
 
 - **End of a ride:** Start held while paused (or END RIDE in the ride menu) opens the end-ride screen, which is the
   confirmation: the ride's time and distance, and three large buttons (64 px, gloves): RESUME (selected), SAVE,
@@ -81,7 +84,8 @@
 - **Reminders and alerts** (menu ALERTS, each off by default): eat and drink every so many minutes of ride time
   (5 min steps), heart rate over a limit (after 10 s over it; again only once it has come 5 bpm under it, at most
   once a minute). Each is a banner ("EAT REMINDER", "DRINK REMINDER", "HEART RATE HIGH" in red) and three beeps,
-  played without stopping the loop; nothing while paused.
+  played without stopping the loop; nothing while paused. Alerts due in the same second, or a catch-up after a busy
+  pass, are queued (one bit each) and said one after the other, the heart rate first, none lost to the one up.
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
@@ -174,8 +178,9 @@ quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent o
 
 **Font.** FONT in SETTINGS > DISPLAY chooses the look of every text: PIXEL (the dot matrix of Ferris and the Game Boy
 era, the default) or SMOOTH (Barlow Semi Condensed Bold, anti-aliased). The cells are the same size, so no page or menu
-moves; the screen is redrawn at once and the choice is kept through a restart (register 16). Small text (the 1x
-sizes) and the cue arrows stay pixel.
+moves; the screen is redrawn at once and the choice is kept through a restart (register 16, bit 24). Scale 1 (small
+text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
+Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
 ## Ride
 
@@ -183,7 +188,7 @@ sizes) and the cue arrows stay pixel.
   second while riding), else from GPS altitude (5 m).
 - Zones: heart rate (5, from MAX HR) and power (7, Coggan, from FTP), in stock's palette for grey, blue and green,
   then lemon yellow, magenta, violet and cyan: never the menu's orange (selection, info banners) or the alarms' red.
-  The plain power fields (POWER, 3S, 10S, 30S W) and HR show their zone as a 4 px bar along the top of the box,
+  The plain power fields (POWER, 3S, 10S, 30S W) and HR show their zone as an 8 px bar along the top of the box,
   the number white (POWER's bar takes its 3 s average's zone); the zone changes after three seconds in the new
   one, so a value on an edge does not flip it, and the bar is all that is redrawn. NP, max and the other derived
   values are white too, with their state in an edge bar. The graph shows the last
@@ -193,7 +198,7 @@ sizes) and the cue arrows stay pixel.
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
   recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (barometric altitude, else GPS).
-- **Saved as a FIT file** (`src/storage/recorder.rs`; simulator only so far, docs/status.md): the ride goes to
+- **Saved as a FIT file** (`src/storage/recorder.rs`; seen on the unit 2026-10-24, docs/status.md): the ride goes to
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
   rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap), from RAM to the card
   at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
@@ -204,11 +209,15 @@ sizes) and the cue arrows stay pixel.
   `\Activities\YYMMDDhhmmss.fit` (stock's name and place: stock, its app, a computer and the history see it;
   "RIDE SAVED"). A card that fails shows "NOT SAVING" and the strip's dot grey, and is tried again; the ride goes
   on in RAM. A file that does not read back whole is left in `\Rustfw\Rides` ("SAVE FAILED"), never in the way of
-  the next ride. A save the card fails once the ride's old entry is gone (its record alone names it) is never given
-  up: the ride stays open (no USB drive) until the card takes it, and a ride started meanwhile waits for it ("NOT
-  RECORDING: CARD"). A ride discarded goes through the same steps into `\Rustfw\Discarded` instead, its records
+  the next ride. The save makes room for the new entry in the target folder before it removes the ride's old one
+  (`Fat::make_room`: a zeroed cluster linked when the folder must grow), so a full card fails with the ride still
+  named, and a save given up is never marked done while the entry still names the ride. A save the card fails once
+  the ride's old entry is gone (its record alone names it) is never given up: the ride stays open (the marker kept: no
+  USB drive, no HISTORY delete) and is tried again every few calls until the card takes it, after a boot or a Start
+  too. A Start meanwhile is held behind it (the pending start: "NOT RECORDING: CARD") and begins once the save ends,
+  both copies; the full copy saves after the clean one, under the name that one took. A ride discarded goes through the same steps into `\Rustfw\Discarded` instead, its records
   saying so from the end on, so a cut during it finishes there at the next start (never in `\Activities`).
-- **A full copy of each ride** (simulator only so far): `\Rustfw\Activities\YYMMDDhhmmss.fit` has the same records,
+- **A full copy of each ride** (seen on the unit without a strap; with one, docs/status.md): `\Rustfw\Activities\YYMMDDhhmmss.fit` has the same records,
   each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads), `RMSSD` and
   `ArtPct` (the share of beats the live DFA a1 dropped), from the strap's beats; and every beat itself, raw, in
   standard `hrv` messages as Garmin's units write them (about 20 KB an hour), for tools that compute DFA a1
@@ -237,7 +246,8 @@ MENU
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, GAUGE POWER (the workout gauge's window)
-     +- BIKE >     WHEEL, BIKE (its weight, 5 to 30 kg), ALTITUDE, FROM GPS (the barometer's calibration)
+     +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
+     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```
 
@@ -270,7 +280,7 @@ MENU
   An action row (RESUME, NEXT STEP, STOP...) goes back to the page it was opened over (the first ride page when
   that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when
   the workout ends) moves the selection to the last row left.
-- **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, BIKE 1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
+- **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, the bike's WEIGHT 0.1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
   to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, GAUGE POWER, WHEEL) goes to its next value.
 - **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
   altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
@@ -397,7 +407,7 @@ copied over USB into `\Courses`, read only:
   rider's bests when it is trusted, else FTP and the W' setting, taken at the ride's start and kept to its end: it
   also drains the W' balance) and the W' balance
   now, planned again at each section from where the rider is, with the rider's weight plus the bike's (SETTINGS >
-  BIKE). On the climb the power (3 s, or the GAUGE POWER window) shows in the workout gauge against the target's band
+  BIKE > WEIGHT, 9.0 kg by default, also told to the trainer; a new ride forgets the plan). On the climb the power (3 s, or the GAUGE POWER window) shows in the workout gauge against the target's band
   (5 % each side, the target in numbers under the bar, or at the top right of a short box); ahead of it only the time.
   The time to the top ("TOP 4:49", in the title) counts down between plans. Power equation of Martin et al. 1998 for
   the speed; W' recovery inside the climb ignored; all the W' goes to the climb in hand.
@@ -540,6 +550,23 @@ STOCK):
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.
 
+## Settings registers
+
+The settings live in the RTC backup registers (32 words kept through standby and a reset; the table is in
+`src/app/settings.rs`), each word behind a tag so an empty or foreign one reads as unset, and earlier tags are still
+read. All 32 are taken (the two diagnostics share 0 and 31), so a new setting needs the settings file (roadmap 3.4).
+- **11:** wheel, backlight, max HR, FTP, touch, ride profile, climbs ahead; tag 0xa7 (AUTO), 0xa8 (ROAD), 0xa9 (INDOOR),
+  0xaa to 0xac the same with CLIMBS AHEAD off.
+- **16, tag 0xa:** the rider's weight less 30 kg in bits 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the
+  bike's weight in 100 g in 16..23 (0: the 9.0 kg default), the smooth font in bit 24. Read from earlier builds: tag
+  0xb (bike in kg, the single presses' actions), tag 0xc1 (weight in kg, W', window, actions; no bike weight, read as
+  the default).
+- **28, tag 0x9:** the eat and drink reminders in 5 min steps (bits 0..4 and 8..12), the long presses' actions (5..7,
+  13..15), the heart rate alert in 5 bpm steps (16..21), the single presses' actions (22..24, 25..27). Read from earlier
+  builds: tag 0xc2 (the heart rate in bpm, the single presses in register 16).
+- **Others:** 5..8 and 10 the paired ANT+ sensors, 14 the shifting system, 17 and 18 the GNSS aiding, 20..27 the ride
+  pages and the overview (0xd / 0xe), 29 the fault marker, 30 a ride open on the card.
+
 ## Phone (BLE, no app)
 
 The unit pairs with a phone as a Bluetooth accessory, with nothing to install on the phone:
@@ -560,7 +587,7 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
 - **Notifications** (iPhone, ANCS): new ones in the banner and the overview's notices, "sender: text" (as much as
   two banner lines hold; accents folded to plain letters). Those already on the phone when it connects are not shown. NOTIFY
   OFF stops them.
-- **Calls:** "INCOMING CALL" and the caller in the banner at the top, a red decline and a green answer button
+- **Calls:** over every screen (a page, a menu, the media remote, MORE): "INCOMING CALL" and the caller in the banner at the top, a red decline and a green answer button
   at the bottom, each with a handset and its key's name (BACK, START); the page between keeps going. Start or the
   green button answers, Back or the red one declines; a call answered or ended on the phone takes them away. No call time and no hang-up: iOS removes the
   call's notification at the answer (seen on the unit), so nothing tells the unit when the call ends.

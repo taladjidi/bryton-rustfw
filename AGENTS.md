@@ -209,11 +209,15 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   source the ride takes (barometer or GPS, with a reference number that makes the ride forget its low point when it
   changes). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
 - `src/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
-  rider has left (Martin's power equation for the speed, a Lagrange multiplier on W' spent above CP). Pure logic;
+  rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
+  rides at one speed, so a plan is one bisection on it). Pure logic;
   `src/app/pace.rs` cuts the followed course's climb into sections, plans again at each one, and draws the TOP gauge
   (`Field::ClimbPace`, the workout gauge's widget).
 - `src/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
-  at a time. Pure logic.
+  at a time, and `Queue`, which keeps several due at once to be said one after the other. Pure logic.
+- `src/powercal.rs`: the power meter's calibration over ANT+ (Bicycle Power page 0x01: the zero offset, the auto zero
+  switch, the meter's answers). Pure logic. `src/app/powercal.rs`: SENSORS > CALIBRATE POWER, its screen and the
+  request sent as an acknowledged message on the power channel.
 - `src/ramp.rs`: the FTP ramp test: its workout, the stop rules, the best minute and FTP, HRVT1 from DFA a1. Pure logic.
   `src/app/ramp.rs`: it played through the workout player, and the result screen (APPLY).
 - `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
@@ -314,6 +318,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   same class, else the smallest turn under 110 degrees, tiles asked for as it goes), stock's 9-tap smoothing, and the
   climbs by the course's own Garmin definition (`Course::climbs_of`), the rider placed on the trace each second, the
   climb said once. About 105 KB in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
+  `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
+  beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
