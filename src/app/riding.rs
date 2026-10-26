@@ -416,5 +416,6 @@ impl App {
         if let Some(ev) = ev {
             self.course_event(ev);
         }
+        self.ahead_second();
     }
 }

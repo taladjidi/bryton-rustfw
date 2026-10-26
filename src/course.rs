@@ -755,10 +755,16 @@ impl Course {
     // ponytail: made for the smooth profiles of planned courses (the apps take altitudes from a terrain model); on a
     // noisy recorded track a climb may start early. Smooth first (a moving average) if that shows.
     fn find_climbs(&self) -> ([Climb; CLIMBS], usize) {
+        Self::climbs_of(self.len_m(), |d| self.alt_at(d))
+    }
+
+    /// The climbs of any profile `total` m long whose altitude (dm) at a distance (m) is `alt_at`, by the same
+    /// definition: a course's own, and the road ahead's (`climbs_ahead`).
+    pub(crate) fn climbs_of(total: u32, alt_at: impl Fn(u32) -> Option<i32>) -> ([Climb; CLIMBS], usize) {
         let (mut out, mut n) = ([Climb::default(); CLIMBS], 0);
         let mut accept = |from: u32, top: u32| {
             let len = top.saturating_sub(from);
-            let gain = self.alt_at(top).zip(self.alt_at(from)).map_or(0, |(t, f)| (t - f).max(0) as u32);
+            let gain = alt_at(top).zip(alt_at(from)).map_or(0, |(t, f)| (t - f).max(0) as u32);
             if len >= MIN_LEN_M
                 && gain * 100 / len >= MIN_GRADE_X10
                 && let Some(slot) = out.get_mut(n)
@@ -767,14 +773,13 @@ impl Course {
                 n += 1;
             }
         };
-        let total = self.len_m();
         // wider steps past BINS of them (over 1600 km): a crafted file's length alone cannot make the loop long
         let bin = BIN_M.max(total.div_ceil(BINS));
         // the climb being followed: its start, its top (m, dm)
         let mut cur: Option<(u32, u32, i32)> = None;
         for b in 0..total.div_ceil(bin) {
             let (d0, d1) = (b.saturating_mul(bin), (b + 1).saturating_mul(bin).min(total));
-            let (Some(a0), Some(a1)) = (self.alt_at(d0), self.alt_at(d1)) else { break };
+            let (Some(a0), Some(a1)) = (alt_at(d0), alt_at(d1)) else { break };
             let up = (a1 - a0) * 100 / (d1 - d0).max(1) as i32 >= UP_X10;
             cur = match cur {
                 None if up => Some((d0, d1, a1)),

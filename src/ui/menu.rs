@@ -99,6 +99,8 @@ pub enum Setting {
     Altitude,
     /// The ride profile: AUTO (indoor when a trainer is heard at Start), ROAD or INDOOR ([`crate::ride::Profile`]).
     BikeProfile,
+    /// Climbs found on the road ahead when no course is followed, on or off (`climbs_ahead`).
+    ClimbsAhead,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -189,6 +191,7 @@ impl Setting {
             Setting::WktAvg => "GAUGE POWER",
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
+            Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -475,8 +478,13 @@ pub const DISPLAY: [Row; 4] =
 
 /// BIKE: the wheel, the ride profile, and the barometer's altitude with its calibration from the GPS (a ride setting,
 /// not a diagnostic).
-pub const BIKE: [Row; 4] =
-    [Row::Set(Setting::Wheel), Row::Set(Setting::Altitude), Row::AltGps, Row::Set(Setting::BikeProfile)];
+pub const BIKE: [Row; 5] = [
+    Row::Set(Setting::Wheel),
+    Row::Set(Setting::Altitude),
+    Row::AltGps,
+    Row::Set(Setting::BikeProfile),
+    Row::Set(Setting::ClimbsAhead),
+];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
 pub const SYSTEM: [Row; 6] =

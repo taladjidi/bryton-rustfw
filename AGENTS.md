@@ -58,13 +58,16 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `pack.py` prints: about 310 KB (2026-10-25; stock's is over 3 MB). Size costs little here
+  - watch the image size `pack.py` prints: about 390 KB (2026-10-26, with the road ahead; stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it was held in main's frame several times over (111 KB) and opening a workout overflowed the
   stack (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
-  buffers in their own non-inlined function, never in main's.
+  buffers in their own non-inlined function, never in main's. AXI SRAM (512 KB) holds the app, the courses, the scan's
+  cache and the road ahead (2026-10-26: about 28 KB left; link.x says what is where); a static there must start as all
+  zeros (an `Option` of a reference or a struct with a bool niche does not) or it lands in `.data`, in DTCM.
+  The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road ahead inflates tiles into.
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
   high, and unplugging resets the unit, which brings it up without USB.
 - **Measure before and after** a change that could cost: image size, and on the unit, time awake per loop
@@ -145,6 +148,11 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
     notices, or PHONE in the menu) and a notification's detail.
   - `riding.rs`: Start / pause, the end-ride screen (RESUME, SAVE, DISCARD), the second tick, the recorder glue.
     `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
+  - `ahead.rs`: climbs ahead, with no course followed: the memory (main.rs), the second's step (the rider on the trace,
+    the banner and beep at a climb's start through `course_event`), the work spread over the passes (`step_ahead`: a
+    tile, the snap, the trace, at most 12 ms or 6 units a pass), and the CLIMB fields fed from the trace when no course
+    is on (`ahead_text`, `ahead_bar`, called from `course_text` and `course_bar`). BIKE > CLIMBS AHEAD turns it off
+    (`Settings::ahead`, register 11's tag 0xaa to 0xac).
   - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
     use refused), when it may be (no ride running or unsaved), taken back on eject, a restart after the computer
@@ -273,6 +281,18 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/ign.rs`: the IGN map packs (`\Rustfw\Maps\IGN<z>_<bx>_<by>.PAK`, the format in its module doc),
   made on the computer by `tools/ign_pack.py` (fetch, pack, the synthetic `fixture` in `test-data/ign`); the LZ4
   block decoder. Real IGN tiles never enter the repository.
+- `src/storage/route.rs`: stock's routing graph from its map files (`\Map\Update` then `\Map\MapData\<Region>\9-<x>-<y>.dat`,
+  section 1, zoom 14): the container, a tile's gzip stream, its protobuf decoded into a `Graph` (a few tiles at once, nodes
+  sorted by position, 100 KB), `Maps` (the files found once, one tile a call, into the inflate buffer main.rs takes from
+  the map's SDRAM). The node keys are sign and magnitude, not two's complement (module doc: how it was found).
+  `src/storage/inflate.rs`: gzip and deflate (RFC 1951, puff.c's method) over an iterator, into a `Scratch` of 16-bit
+  words, CRC checked; its own code rather than `miniz_oxide` (module doc: licence, memory, size). `tools/route_pack.py`
+  makes the synthetic map file in `test-data/route` (a made-up road in the open South Pacific) and reads real files to check.
+- `src/climbs_ahead.rs`: climbs on the road ahead without a course (pure logic against a `Graph`; stock's Climb Challenge
+  2.0, ghidra/recovered_src/ride/route_climb.c): the snap to the nearest road (heading-aware), the trace (same way, else
+  same class, else the smallest turn under 110 degrees, tiles asked for as it goes), stock's 9-tap smoothing, and the
+  climbs by the course's own Garmin definition (`Course::climbs_of`), the rider placed on the trace each second, the
+  climb said once. About 105 KB in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
 - `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
 - `src/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
@@ -422,6 +442,11 @@ libraries that already do it; use or adapt them when they fit (no_std, no heap, 
   - Each new one needs a reason and must be a well-known embedded crate (embassy, heapless, embedded-hal).
   - Its own `unsafe` is part of what we trust.
   - `cargo deny check` in check.sh (when installed) checks advisories, licences and duplicates.
+  - **gzip is our own** (`src/storage/inflate.rs`, 2026-10-26): `miniz_oxide` (default features off, no alloc) was
+    looked at first and not taken: its licence line carries Zlib, which `deny.toml` does not allow, it needs `adler2`,
+    its decoder wants the whole compressed tile in one slice (47 KB more RAM) and an 11 KB state, and the measured
+    need is one small reader (about 2 KB of image, tested against Python's gzip and fuzzed) that pulls bytes from the
+    card as `ign::lz4` does.
 - **No `usbd-serial::SerialPort`:** it is hardcoded to 64-byte packets, which is full speed only. On this
   high-speed link, `usb.rs` uses `CdcAcmClass` with 512-byte packets.
 - Release profile: `opt-level = "s"`, LTO, `panic = "abort"`, debug info kept in the ELF only.

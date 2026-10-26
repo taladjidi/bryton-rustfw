@@ -21,6 +21,17 @@ fn bytes(seed: u32, n: usize) -> impl Iterator<Item = u8> {
     })
 }
 
+/// Uniform xorshift32 (`bytes` leans on markers): for generators that draw numbers, not bytes.
+fn xorshift(seed: u32) -> impl FnMut() -> u32 {
+    let mut x = seed.max(1);
+    move || {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        x
+    }
+}
+
 #[test]
 fn nordic_packets() {
     let mut rx = crate::nrf::Rx::new();
@@ -2240,4 +2251,380 @@ fn fecble_link_events() {
     assert!(frames.iter().all(|&n| n > 50), "accepted with each checksum, refused: {frames:?}");
     assert_eq!(seen & 0x3f, 0x3f, "every page decoded");
     assert!(listed.iter().all(|&n| n > 5), "FE-C trainers listed, advertising without the service: {listed:?}");
+}
+
+/// The map files' tiles (storage/route.rs, inflate.rs): the real gzip streams of the synthetic file with bytes
+/// changed and cut, and random bytes behind a valid gzip header, into the inflater. Whatever comes out is the
+/// original or an error; the errors seen are every kind of them (the fuzz reaches the inflater's checks).
+#[test]
+fn gzip_streams() {
+    use crate::inflate::{Error, Scratch, gunzip};
+    let file = crate::route::tests::fixture();
+    let starts: Vec<usize> = (0..file.len() - 3).filter(|&i| file[i..i + 3] == [0x1f, 0x8b, 8]).collect();
+    assert_eq!(starts.len(), 8, "a stream a tile");
+    let mut noise = bytes(77, 1 << 22);
+    let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    let mut mem = std::vec![0u16; 48 * 1024];
+    let mut small = std::vec![0u16; 64];
+    let (mut ok, mut kinds) = (0, [0u32; 4]);
+    let run = |gz: &[u8], mem: &mut Vec<u16>, want: Option<&[u8]>| -> Result<usize, Error> {
+        let mut out = Scratch(mem);
+        let r = gunzip(&mut gz.iter().copied(), &mut out);
+        if let (Ok(n), Some(w)) = (&r, want) {
+            assert!((0..*n).map(|i| out.get(i).unwrap()).eq(w.iter().copied()), "an answer that is not the original");
+        }
+        r
+    };
+    for (k, &a) in starts.iter().enumerate() {
+        let end = starts.get(k + 1).copied().unwrap_or(file.len());
+        let good = &file[a..end];
+        let n = run(good, &mut mem, None).expect("the real stream");
+        let want: Vec<u8> = (0..n).map(|i| Scratch(&mut mem).get(i).unwrap()).collect();
+        ok += 1;
+        for _ in 0..300 {
+            let mut bad = good.to_vec();
+            for _ in 0..1 + next() % 6 {
+                let at = next() as usize % bad.len();
+                bad[at] = next() as u8;
+            }
+            if next().is_multiple_of(3) {
+                let cut = next() as usize % (bad.len() + 1);
+                bad.truncate(cut);
+            }
+            let m = if next().is_multiple_of(4) { &mut small } else { &mut mem };
+            if let Err(e) = run(&bad, m, Some(&want)) {
+                kinds[match e {
+                    Error::Truncated => 0,
+                    Error::Bad => 1,
+                    Error::TooBig => 2,
+                    Error::Crc => 3,
+                }] += 1;
+            }
+        }
+    }
+    // random deflate behind a valid header, in a small buffer too
+    for _ in 0..4000 {
+        let mut gz = std::vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+        gz.extend((0..next() % 300).map(|_| next() as u8));
+        let m = if next().is_multiple_of(2) { &mut mem } else { &mut small };
+        if let Err(e) = run(&gz, m, None) {
+            kinds[match e {
+                Error::Truncated => 0,
+                Error::Bad => 1,
+                Error::TooBig => 2,
+                Error::Crc => 3,
+            }] += 1;
+        }
+    }
+    std::println!("gzip fuzz: {ok} real streams, errors truncated / bad / too big / crc: {kinds:?}");
+    assert!(kinds.iter().all(|&n| n > 20), "{kinds:?}");
+}
+
+/// Tile messages built from random parts (the base, deltaBits, transport, nodes with random keys, elevations, ways and
+/// edges, unknown fields, wire types that do not exist), whole, damaged and cut, into the tile decoder, several into
+/// one graph until it is full. A tile is whole or refused (the graph as it was), the nodes of a tile found where
+/// they are, and the fuzz reaches nodes, edges, refusals and a full graph.
+#[test]
+fn route_tiles() {
+    use crate::inflate::Scratch;
+    use crate::route::{Error, Graph, NODES};
+    let mut next = xorshift(91);
+    fn varint(v: u64, out: &mut Vec<u8>) {
+        let mut v = v;
+        loop {
+            out.push((v & 0x7f) as u8 | if v >> 7 != 0 { 0x80 } else { 0 });
+            v >>= 7;
+            if v == 0 {
+                return;
+            }
+        }
+    }
+    fn field(f: u32, wire: u32, out: &mut Vec<u8>) {
+        varint(u64::from(f << 3 | wire), out);
+    }
+    let zz = |v: i32| (((v << 1) ^ (v >> 31)) as u32).into();
+    let mut mem = std::vec![0u16; 160 * 1024]; // room for a tile of 3000 nodes
+    let (mut tiles_ok, mut nodes_in, mut refused, mut fulls, mut edges_in) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut g = std::boxed::Box::new(Graph::new());
+    for round in 0..600u32 {
+        if round % 6 == 0 {
+            g.clear();
+        }
+        let bits = match next() % 10 {
+            0 => next() % 40,
+            1 => 2 + next() % 30,
+            _ => 20,
+        };
+        let (lat0, lon0) = ((next() % 2_000_000) as i32 - 1_000_000, (next() % 2_000_000) as i32 - 1_000_000);
+        let mut m = Vec::new();
+        let corrupt = next().is_multiple_of(6); // some messages have fields of wire types that do not exist
+        let near = |next: &mut dyn FnMut() -> u32| -> u64 {
+            let half = u64::from(next()) & ((1u64 << bits.clamp(2, 31)) - 1);
+            let small = u64::from(next() % 3000) | (u64::from(next() % 2) << (bits.clamp(2, 31) - 1));
+            let (hi, lo) =
+                if next().is_multiple_of(2) { (half, u64::from(next())) } else { (small, u64::from(next() % 3000)) };
+            ((hi << bits.clamp(2, 31)) | (lo & ((1u64 << bits.clamp(2, 31)) - 1)))
+                & if next().is_multiple_of(40) { u64::MAX } else { (1u64 << (2 * bits.clamp(1, 31))) - 1 }
+        };
+        for (f, v) in
+            [(1, zz(lat0)), (2, zz(lon0)), (3, u64::from(bits)), (4, if next().is_multiple_of(20) { 3 } else { 2 })]
+        {
+            if !next().is_multiple_of(30) {
+                field(f, 0, &mut m);
+                varint(v, &mut m);
+            }
+        }
+        let n = match next() % 12 {
+            0 => NODES as u32 / 2 + next() % 2000,
+            1 => 0,
+            _ => 1 + next() % 120,
+        };
+        for _ in 0..n {
+            let mut node = Vec::new();
+            if !next().is_multiple_of(50) {
+                field(1, 0, &mut node);
+                varint(near(&mut next), &mut node);
+            }
+            if !next().is_multiple_of(8) {
+                field(2, 0, &mut node);
+                varint(
+                    if next().is_multiple_of(10) { u64::from(next()) << 20 } else { u64::from(next() % 40_000) },
+                    &mut node,
+                );
+            }
+            let mut ways = Vec::new();
+            for _ in 0..next() % 5 {
+                varint(
+                    if next().is_multiple_of(4) { u64::MAX - u64::from(next()) } else { u64::from(next()) },
+                    &mut ways,
+                );
+            }
+            if !next().is_multiple_of(6) {
+                field(3, 2, &mut node);
+                varint(ways.len() as u64, &mut node);
+                node.extend(ways);
+            }
+            for _ in 0..next() % 5 {
+                let mut e = Vec::new();
+                field(1, 0, &mut e);
+                varint(near(&mut next), &mut e);
+                field(2, 0, &mut e);
+                varint(u64::from(next() % 256), &mut e);
+                if next().is_multiple_of(20) {
+                    field(9, 5, &mut e);
+                    e.extend([1, 2, 3, 4]);
+                }
+                field(4, 2, &mut node);
+                varint(e.len() as u64, &mut node);
+                node.extend(e);
+                edges_in += 1;
+            }
+            if next().is_multiple_of(25) {
+                let wire = [0, 1, 2, 5, 3, 4, 6, 7][next() as usize % if corrupt { 8 } else { 4 }];
+                field(40 + next() % 20, wire, &mut node);
+                match wire {
+                    0 => varint(u64::from(next()), &mut node),
+                    1 => node.extend((0..8).map(|_| next() as u8)),
+                    2 => {
+                        let k = next() % 10;
+                        varint(u64::from(k), &mut node);
+                        node.extend((0..k).map(|_| next() as u8));
+                    }
+                    5 => node.extend((0..4).map(|_| next() as u8)),
+                    _ => node.extend((0..next() % 12).map(|_| next() as u8)),
+                }
+            }
+            field(5, 2, &mut m);
+            varint(node.len() as u64, &mut m);
+            m.extend(node);
+        }
+        if next().is_multiple_of(5) {
+            let at = next() as usize % (m.len() + 1);
+            m.truncate(at);
+        }
+        if next().is_multiple_of(5) && !m.is_empty() {
+            for _ in 0..1 + next() % 4 {
+                let at = next() as usize % m.len();
+                m[at] = next() as u8;
+            }
+        }
+        if m.len() > 2 * mem.len() {
+            continue;
+        }
+        let mut s = Scratch(&mut mem);
+        for (i, &b) in m.iter().enumerate() {
+            assert!(s.set(i, b));
+        }
+        let before = (g.len(), g.nodes().to_vec());
+        let (x, y) = (round % 12, round / 12 % 12);
+        match g.decode(x, y, &s, m.len()) {
+            Ok(k) => {
+                tiles_ok += 1;
+                nodes_in += k as u32;
+                assert_eq!(g.len(), before.0 + k);
+                for node in g.nodes().iter().skip(before.0) {
+                    let i = g.find(node.lat, node.lon).expect("a node of a tile is found");
+                    let at = g.node(i).unwrap();
+                    assert_eq!((at.lat, at.lon), (node.lat, node.lon));
+                }
+            }
+            Err(e) => {
+                refused += 1;
+                fulls += u32::from(e == Error::Full);
+                assert_eq!((g.len(), g.nodes()), (before.0, &before.1[..]), "refused whole: the graph as it was");
+            }
+        }
+    }
+    std::println!(
+        "route fuzz: {tiles_ok} tiles, {nodes_in} nodes, {edges_in} edges made, {refused} refused, {fulls} full"
+    );
+    assert!(tiles_ok > 100 && nodes_in > 3000 && refused > 50 && fulls > 3, "{tiles_ok} {nodes_in} {refused} {fulls}");
+}
+
+/// The whole chain on damaged map files: the synthetic file with random bytes changed (and sometimes cut off by a
+/// short file size), a rider along its road, the tiles read from the card, snapped, traced, smoothed, climbs found.
+/// Nothing panics; the fuzz reaches traces made, climbs found and said, and tries that fail.
+#[test]
+fn damaged_maps_under_a_ride() {
+    use crate::climbs_ahead::{Ahead, tests::fix};
+    use crate::fat::Fat;
+    use crate::route::tests::{image_with_map, metres};
+    let img = image_with_map();
+    let mut d0 = crate::fat::tests::Ram(img.clone(), 0);
+    let mut fat = Fat::mount(&mut d0).unwrap();
+    let f = fat.open(&mut d0, "Map/MapData/Test/9-49-342.dat").unwrap();
+    let base = fat.lba(f.cluster) as usize * crate::fat::SECTOR;
+    let _ = metres(0.0, 0.0);
+    let mut noise = bytes(5, 1 << 24);
+    let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    let mut mem = std::vec![0u16; 48 * 1024];
+    let (mut traces, mut climbs, mut said, mut tiles, mut quiet) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut a = std::boxed::Box::new(Ahead::new());
+    for round in 0..120 {
+        let mut d = crate::fat::tests::Ram(img.clone(), 0);
+        if round > 0 {
+            for _ in 0..1 + next() % 6 {
+                let at =
+                    if next().is_multiple_of(2) { next() as usize % 400 } else { next() as usize % f.size as usize };
+                d.0[base + at] = next() as u8;
+            }
+        }
+        *a = Ahead::new();
+        // along the road east, a little off it now and then, sometimes the other way or somewhere else
+        let (mut x, mut y, mut h) = (100.0 + f64::from(next() % 400), 0.0, 90.0);
+        for t in 0..150 {
+            x += 8.0 * if h < 180.0 { 1.0 } else { -1.0 };
+            if next().is_multiple_of(50) {
+                y += f64::from(next() % 200) - 100.0;
+            }
+            if next().is_multiple_of(200) {
+                h = f64::from(next() % 360);
+            }
+            let fx = if next().is_multiple_of(40) {
+                fix(f64::from(next() % 9000), f64::from(next() % 400) - 200.0, h)
+            } else {
+                fix(x, y, h)
+            };
+            if a.second(true, Some(fx)).is_some() {
+                said += 1;
+            }
+            let mut steps = 0;
+            while a.work(&mut d, &mut mem) && steps < 20 {
+                steps += 1;
+            }
+            let _ = (a.alt_at(next() % 5000), a.grade_ahead(next() % 5000), a.climb_at(next() % 5000), t);
+        }
+        traces += a.traces;
+        climbs += a.climbs().len() as u32;
+        tiles += a.io().0;
+        quiet += u32::from(!a.on_road());
+    }
+    std::println!(
+        "damaged maps: {traces} traces, {climbs} climbs, {said} said, {tiles} tiles read, {quiet} rides off the trace"
+    );
+    assert!(
+        traces > 100 && climbs > 20 && said > 10 && tiles > 300 && quiet > 5,
+        "{traces} {climbs} {said} {tiles} {quiet}"
+    );
+}
+
+/// Random road networks (random walks that branch, loop, end, with random elevations, ways and classes) and random
+/// riders on them, in many tiles, the graph emptied now and then: snap, trace, smoothing and climbs on whatever they
+/// are. Reaches traces, climbs, ends of both kinds.
+#[test]
+fn random_road_networks() {
+    use crate::climbs_ahead::{
+        Ahead, End,
+        tests::{fix, net},
+    };
+    /// A card that does not answer: the tiles the graph lacks cannot be read, and that try fails.
+    struct Dead;
+    impl crate::fat::Disk for Dead {
+        fn read(&mut self, _: u32, _: &mut [u8]) -> Result<(), crate::fat::Error> {
+            Err(crate::fat::Error::Io)
+        }
+    }
+    let mut next = xorshift(404);
+    let mut mem = std::vec![0u16; 48 * 1024];
+    let (mut traces, mut climbs, mut stops, mut lengths, mut sent) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut a = std::boxed::Box::new(Ahead::new());
+    for round in 0..150 {
+        *a = Ahead::new();
+        type Road = (u16, u8, Vec<(f64, f64, i16)>);
+        let mut roads: Vec<Road> = Vec::new();
+        for r in 0..1 + next() % 5 {
+            let (mut x, mut y) = (f64::from(next() % 3000) - 1500.0, f64::from(next() % 3000) - 1500.0);
+            let (mut dir, mut z) = (f64::from(next() % 360).to_radians(), 100 + (next() % 300) as i16);
+            let wild = if next().is_multiple_of(4) { 1.0 } else { 0.2 };
+            let mut pts = Vec::new();
+            for _ in 0..20 + next() % 220 {
+                pts.push((x, y, if next().is_multiple_of(40) { crate::route::NO_ELEV } else { z }));
+                let step = 3.0 + f64::from(next() % 60);
+                dir +=
+                    (f64::from(next() % 90) - 45.0).to_radians() * if next().is_multiple_of(30) { 3.0 } else { wild };
+                (x, y) = (x + step * dir.sin(), y + step * dir.cos());
+                z += (next() % 7) as i16 - 3 + if next().is_multiple_of(3) { 3 } else { 0 };
+                if next().is_multiple_of(90) {
+                    break;
+                }
+            }
+            roads.push((1 + (r % 3) as u16, [0xee, 0x99, 0x55][next() as usize % 3], pts));
+        }
+        let borrowed: Vec<_> = roads.iter().map(|(w, c, p)| (*w, *c, &p[..])).collect();
+        net(&mut a, &borrowed);
+        for _ in 0..20 {
+            // a rider on a random point of a random road, or off them
+            let r = &roads[next() as usize % roads.len()].2;
+            let p = r[next() as usize % r.len()];
+            let (jx, jy) = (f64::from(next() % 80) - 40.0, f64::from(next() % 80) - 40.0);
+            let f = if next().is_multiple_of(6) {
+                fix(f64::from(next() % 6000) - 3000.0, f64::from(next() % 6000) - 3000.0, 0.0)
+            } else {
+                fix(p.0 + jx, p.1 + jy, f64::from(next() % 360))
+            };
+            for _ in 0..8 {
+                if a.second(true, Some(f)).is_some() {
+                    sent += 1;
+                }
+                let mut guard = 0;
+                while a.work(&mut Dead, &mut mem) && guard < 30 {
+                    guard += 1;
+                }
+                if a.on_road() && next().is_multiple_of(2) {
+                    break;
+                }
+            }
+            climbs += a.climbs().len() as u32;
+            stops += u32::from(a.on_road() && a.end() == End::Stop);
+            lengths += u32::from(a.on_road() && a.end() == End::Length);
+            let _ = (a.alt_at(next() % 6000), a.grade_ahead(next() % 6000));
+            a.reset();
+        }
+        traces += a.traces;
+        let _ = round;
+    }
+    std::println!(
+        "random networks: {traces} traces, {climbs} climbs, {stops} stopped, {lengths} at length, {sent} said"
+    );
+    assert!(traces > 300 && climbs > 20 && stops > 20 && lengths > 20, "{traces} {climbs} {stops} {lengths}");
 }

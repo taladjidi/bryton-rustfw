@@ -1404,6 +1404,15 @@ fn make_courses() -> &'static mut bryton_rustfw::storage::course::Courses {
     COURSES.init_with(bryton_rustfw::storage::course::Courses::new)
 }
 
+/// The road ahead (climbs_ahead.rs `Ahead`: the routing graph, the trace, about 110 KB), in AXI SRAM (link.x
+/// `.axibss`). A const cell of all zeros (no `Option`, no non-zero start: the compiler keeps it in `.bss`), never
+/// built on the stack.
+fn make_ahead() -> &'static mut bryton_rustfw::climbs_ahead::Ahead {
+    static AHEAD: static_cell::ConstStaticCell<bryton_rustfw::climbs_ahead::Ahead> =
+        static_cell::ConstStaticCell::new(bryton_rustfw::climbs_ahead::Ahead::new());
+    AHEAD.take()
+}
+
 /// The scan's cache of stock's rides (storage/stock.rs `Cache`, 256 KB), in AXI SRAM (link.x `.axibss`). A const
 /// cell: zeroed with the section at reset, never built on the stack.
 fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
@@ -1450,7 +1459,15 @@ fn main() -> ! {
     let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0) };
     let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
-        app.set_map_memory(mem); // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map
+        // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map. The basemap takes the first
+        // words; the rest (link.x MAP has room for it) is the buffer the map tiles of the road ahead are inflated into
+        match mem.split_at_mut_checked(bryton_rustfw::tiles::MEM_WORDS) {
+            Some((map, rest)) if rest.len() >= bryton_rustfw::route::SCRATCH_WORDS => {
+                app.set_map_memory(map);
+                app.set_ahead_memory(make_ahead(), rest);
+            }
+            _ => {}
+        }
     }
     app.set_course_memory(make_courses());
     app.set_scan_cache(make_scan_cache());
