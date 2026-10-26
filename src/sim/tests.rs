@@ -1405,8 +1405,8 @@ fn back_returns_where_it_came_from() {
     delete_page_by_keys(&mut sim, &mut app); // pages 2 and 3 deleted from the editor
     delete_page_by_keys(&mut sim, &mut app);
     assert_eq!(app.page_count(), 1);
-    for _ in 0..3 {
-        back(&mut sim, &mut app); // PAGES, the menu, out
+    for _ in 0..4 {
+        back(&mut sim, &mut app); // the page's menu, ROAD PAGES, PAGES, the menu, out
     }
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -1572,7 +1572,7 @@ fn pages_are_configured_from_the_menu() {
         PageCfg { layout: 4, fields: [Field::Power, Field::Hr, Field::Cadence, Field::Time, Field::Time, Field::Time] };
     assert_eq!(app.pages()[0], want.into());
     assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(want));
-    for _ in 0..3 {
+    for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Back));
     }
     app.press(&mut sim, Press::Short(Key::Page));
@@ -1820,7 +1820,7 @@ fn overview_notices_and_fields() {
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // WEEK H
     assert_consistent(&sim, &app);
-    for _ in 0..3 {
+    for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Back));
     }
     assert_eq!(app.screen(), Screen::Main);
@@ -2049,7 +2049,9 @@ fn menu_tree_reaches_everything() {
     wanted.extend((0..app.page_count()).map(|n| Row::Field(n, 0)));
     for &row in &wanted {
         let d = level(row).unwrap_or_else(|| panic!("{row:?} not in the tree"));
-        assert!(d <= 3, "{row:?}: {d} levels down");
+        // a page's own rows are one level deeper since the two sets (item 8): MENU > PAGES > ROAD PAGES > PAGE 1 > ...
+        let page_row = matches!(row, Row::Layout(_) | Row::EditPage(_) | Row::Field(..));
+        assert!(d <= 3 + usize::from(page_row), "{row:?}: {d} levels down");
     }
     assert_eq!(level(Row::Phone(PhoneRow::Forget)), Some(3), "SENSORS > PHONE");
     // the readings (diagnostics, nothing to set): under SYSTEM

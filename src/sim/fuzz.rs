@@ -1306,6 +1306,7 @@ fn menu_tree_by_chance() {
         "Remote",
         "Phone",
         "Pages",
+        "PageList",
         "Page",
         "Fields",
         "Group",

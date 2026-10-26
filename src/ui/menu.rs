@@ -362,8 +362,6 @@ pub enum RideRow {
     CalPower,
     /// INDOOR ON / OFF: the ride's profile by hand (app/profile.rs).
     Indoor,
-    /// PAGES: which set the list and the editor show, ROAD or INDOOR (the ride's own while one is open).
-    PageSet,
 }
 
 /// The workout menu of a ride (while a step runs).

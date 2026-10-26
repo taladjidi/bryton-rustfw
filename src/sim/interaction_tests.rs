@@ -149,3 +149,23 @@ fn sensors_actions_come_first() {
     let (_sim, app) = unit();
     assert_eq!(app.row(Menu::Sensors, 0), Some(menu::Row::Sensor(0)));
 }
+
+/// Item 8: the indoor page set is a row (INDOOR PAGES), not a toggle to set first. From the overview to an indoor
+/// page's menu: Page held, PAGES, INDOOR PAGES, PAGE 1 = 4 inputs (it was Page held, PAGES, the PAGES OF toggle, PAGE
+/// 1 = 4: the same count, but the state a toggle left is gone, so the two sets cannot be mixed up).
+#[test]
+fn the_indoor_page_set_is_a_row() {
+    let (mut sim, mut app) = unit();
+    let mut n = Count(0);
+    n.key(&mut sim, &mut app, Press::Long(Key::Page));
+    for (menu, row) in [
+        (Menu::Main, menu::Row::Open(Menu::Pages)),
+        (Menu::Pages, menu::Row::Open(Menu::PageList(true))),
+        (Menu::PageList(true), menu::Row::Open(Menu::Page(0))),
+    ] {
+        let i = at(&app, menu, row);
+        n.tap_row(&mut sim, &mut app, i);
+    }
+    assert_eq!((app.screen(), n.0), (Screen::Menu(Menu::Page(0), 0), 4));
+    assert!(app.view_indoor(), "the indoor set");
+}

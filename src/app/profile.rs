@@ -8,7 +8,7 @@
 //! **Pages per profile** (UI review 3, 2.3): an INDOOR ride takes its pages from the indoor set
 //! ([`page::Set::indoor_default`]: the trainer, the power numbers, the graphs), a ROAD ride from the road set; the
 //! overview is shared. The editor and PAGES work on one set ([`App::view_indoor`]): the profile's while a ride is
-//! open, else the one PAGES > SET names. The road set is the one the backup registers keep (three pages); the indoor
+//! open, else the one PAGES > ROAD PAGES or INDOOR PAGES opened. The road set is the one the backup registers keep (three pages); the indoor
 //! set lives in `\Rustfw\pages.bin` only (page.rs), so a change to it made while the file must wait is lost to a
 //! switch-off.
 

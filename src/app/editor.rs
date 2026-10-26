@@ -45,7 +45,7 @@
 //!
 //! **Two sets** (UI review 3, 4.2.7): the ROAD pages above and the INDOOR set ([`page::Set`], app/profile.rs), in the file
 //! only, after the MORE part with a CRC of its own (page.rs). The editor, LAYOUT, the picker and PAGES work on the
-//! set of the profile in force while a ride is open, else the one PAGES > PAGES OF names (a hold on a ride page or
+//! set of the profile in force while a ride is open, else the one PAGES > ROAD PAGES or INDOOR PAGES opened (a hold on a ride page or
 //! the ride menu's EDIT THIS PAGE take the set on screen). The registers never hold the indoor set: an indoor edit
 //! made while the file must wait (a paused ride, the drive lent) is lost to a switch-off, like pages 4 to 6.
 //!
