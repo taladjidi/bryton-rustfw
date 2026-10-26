@@ -205,8 +205,10 @@ sizes) and the cue arrows stay pixel.
   the next ride. A ride discarded goes through the same steps into `\Rustfw\Discarded` instead, its records saying
   so from the end on, so a cut during it finishes there at the next start (never in `\Activities`).
 - **A full copy of each ride** (simulator only so far): `\Rustfw\Activities\YYMMDDhhmmss.fit` has the same records,
-  each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads) and `RMSSD`, from the
-  strap's beats. It is a second file because Bryton's server refuses developer fields, and the `\Activities` file
+  each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads), `RMSSD` and
+  `Artifact` (the share of beats the live DFA a1 dropped), from the strap's beats; and every beat itself, raw, in
+  standard `hrv` messages as Garmin's units write them (about 20 KB an hour), for tools that compute DFA a1
+  offline. It is a second file because Bryton's server refuses developer fields, and the `\Activities` file
   stays exactly as before. It is recorded beside the clean one with its own checkpoints and resume, and it never
   holds the clean one up: if it fails, the ride is saved all the same and the banner says "NO FULL COPY".
 - **Sync on the computer** (`tools/sync.py`, docs/sync.md): new rides go to Strava (the clean copy) and to
@@ -463,8 +465,8 @@ STOCK):
     thresholds toward the ride's mean power), from the power where alpha1's mean falls under 1.0, gated (half the
     points under 1.0, 5 minutes of points over 40 W of power, a falling slope, r^2 0.3, at most 10 % above the
     ride's hardest 2 minutes), then the median of the 32 most recent rides that gave one; RIDES: "3/2 OF 7", the
-    rides that gave HRVT1, HRVT2, of those read. A guide within some 20 to 40 W (hrvt.rs). The share of beats
-    hrv.rs drops as artifacts is not recorded yet, so the studies' 5 % artifact gate is not applied;
+    rides that gave HRVT1, HRVT2, of those read. A guide within some 20 to 40 W (hrvt.rs). A point whose
+    2-minute window had over 5 % of its beats dropped as artifacts (the full copy's `Artifact`) is left out;
   - **distance and riding time** of this week (from Monday), this year and all rides.
 - **IMPORT** applies stock's settings where this firmware has them: FTP, max heart rate, weight and W'
   (UserProfile.ini), the wheel (a speed sensor's, Sensor.ini), the paired ANT+ sensors (Sensor.ini), the

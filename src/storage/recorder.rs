@@ -80,7 +80,8 @@
 //! and Intervals.icu reads DFA a1 from one (`Alpha1`), so one file cannot serve both. Two recorders run side by side
 //! ([`Kind`]), each with everything above of its own: the clean one (protocol 1.0, no developer data: what stock,
 //! Bryton and Strava take, byte for byte what it was) in `\Rustfw\Rides`, `\Rustfw\ride.rec` and `\Activities`; the
-//! full one (`fit::Writer::begin_with` `dev`: `Alpha1` and `RMSSD` in every record) in `\Rustfw\Full`,
+//! full one (`fit::Writer::begin_with` `dev`: `Alpha1`, `RMSSD` and `Artifact` in every record, the strap's beats
+//! in `hrv` messages: [`Recorder::beat`]) in `\Rustfw\Full`,
 //! `\Rustfw\full.rec` and `\Rustfw\Activities`, same name. The app drives the clean one first in each pass, so the
 //! full one never stands between the clean one and the card, and a failing full one is only said
 //! (`App::step_recorder`). Three rules keep the full one from ever costing the clean one (the review of 2026-10-24):
@@ -200,7 +201,9 @@ pub const LOW: usize = 512;
 /// Calls of [`Recorder::io`] to wait after an error before trying the card again.
 pub const RETRY: u32 = 100;
 /// Bytes a record message takes at most, with a new definition (and its developer fields) and the trailer after it.
-const RECORD_MAX: usize = 6 + 3 * 10 + 7 + 1 + 27 + 6 + 2;
+const RECORD_MAX: usize = 6 + 3 * 10 + 10 + 1 + 27 + 7 + 2;
+/// RR intervals waiting for an `hrv` message ([`Recorder::beat`]): 16 s at 150 bpm, while the buffer has no room.
+pub const BEATS_QUEUED: usize = 40;
 /// Record tag and layout version: change it with any change of [`Rec`]'s layout or of `ride::Ride::to_words`
 /// (the record also holds [`RIDE_WORDS`], byte 21, checked).
 const TAG: [u8; 4] = *b"RFR2";
@@ -351,6 +354,28 @@ pub fn next_name(n: &[u8; 12]) -> [u8; 12] {
     out
 }
 
+/// The file's trailer (FIT CRC), `size` bytes long, written again where it ends in the sector after the one a
+/// record keeps (the sector its trailer starts in): that sector was the next checkpoint's, and a cut after it
+/// leaves the next data there. Found by the beats' power-cut test (a torn directory sector, a file of 4609 bytes):
+/// the ride was kept unsaved, its CRC wrong by that byte. A resume rewrites the trailer anyway (its checkpoint);
+/// this is for the saves from the chain as it is.
+fn trailer_end(
+    fat: &mut Fat,
+    d: &mut impl DiskWrite,
+    file: &mut Handle,
+    size: u32,
+    trailer: [u8; 2],
+) -> Result<(), Error> {
+    let (start, end) = (size.saturating_sub(2) / SECTOR as u32, size.saturating_sub(1) / SECTOR as u32);
+    if start == end {
+        return Ok(());
+    }
+    let mut s = [0u8; SECTOR];
+    fat.read_sector(d, file, end, &mut s)?;
+    s[0] = trailer[1];
+    fat.write_sectors(d, file, end, &s)
+}
+
 /// The ride being recorded: the FIT writer, the RAM buffer of the file's tail, and where the file is.
 pub struct Recorder {
     kind: Kind,
@@ -365,9 +390,10 @@ pub struct Recorder {
     tail: [u8; TAIL],
     tail_off: u32,
     len: u32,
-    /// The file's length at the last checkpoint (what the card holds); the card refused a checkpoint
-    /// ([`Outcome::Stopped`]): the save is of that length.
+    /// The file's length at the last checkpoint (what the card holds), and its trailer then; the card refused a
+    /// checkpoint ([`Outcome::Stopped`]): the save is of that length.
     on_card: u32,
+    on_card_trailer: [u8; 2],
     stopped: bool,
     /// The FIT header (bytes 0..14), kept for rewriting sector 0.
     head: [u8; 14],
@@ -388,8 +414,15 @@ pub struct Recorder {
     resume_old: bool,
     /// The ride ended is discarded: saved into `\Rustfw\Discarded` (module doc).
     discard: bool,
+    /// The full copy's RR intervals not yet in an `hrv` message, oldest first ([`Recorder::beat`]).
+    beats: [u16; BEATS_QUEUED],
+    beats_n: usize,
+    /// The beats written since the last checkpoint, ms: a minute of them wants one, paused too (no records then).
+    beats_ms: u32,
     /// Samples (or laps, pauses) that did not fit in the buffer.
     pub dropped: u32,
+    /// RR intervals dropped: the queue full (the buffer without room for long), or left at the end.
+    pub beats_dropped: u32,
     /// Card errors so far.
     pub errors: u32,
 }
@@ -456,6 +489,7 @@ impl Recorder {
             tail_off: 0,
             len: 0,
             on_card: 0,
+            on_card_trailer: [0; 2],
             stopped: false,
             head: [0; 14],
             since: 0,
@@ -468,7 +502,11 @@ impl Recorder {
             fails: 0,
             resume_old: false,
             discard: false,
+            beats: [0; BEATS_QUEUED],
+            beats_n: 0,
+            beats_ms: 0,
             dropped: 0,
+            beats_dropped: 0,
             errors: 0,
         }
     }
@@ -581,7 +619,7 @@ impl Recorder {
         self.len = 14 + w.data_len();
         (self.phase, self.file, self.name, self.since, self.want, self.ended, self.stopped) =
             (Phase::Starting, None, name, 0, true, false, false);
-        (self.resume_old, self.discard) = (resume_old, false);
+        (self.resume_old, self.discard, self.beats_n, self.beats_ms) = (resume_old, false, 0, 0);
     }
 
     /// A checkpoint at the next [`Recorder::io`], even while waiting after a failure (switching off: the last
@@ -647,12 +685,57 @@ impl Recorder {
         self.put(32, |w, sink| w.gear(sink, time, front, front_n, rear_n));
     }
 
+    /// One RR interval from the strap, ms, as it came (the full copy only; nothing without a ride being recorded):
+    /// queued, written as an `hrv` message ([`fit::Writer::hrv`]) once there are five, between the records. RAM
+    /// only, like the rest: when the buffer has no room (a card failing) they wait in a bounded queue, and when that
+    /// is full the newest is dropped and counted ([`Recorder::beats_dropped`]); never more than that.
+    pub fn beat(&mut self, ms: u16) {
+        if self.kind != Kind::Full || !matches!(self.phase, Phase::Starting | Phase::Recording) || self.ended {
+            return;
+        }
+        match self.beats.get_mut(self.beats_n) {
+            Some(slot) => {
+                *slot = ms;
+                self.beats_n += 1;
+            }
+            None => self.beats_dropped = self.beats_dropped.saturating_add(1),
+        }
+        self.write_beats(false);
+    }
+
+    /// The queued beats into `hrv` messages of five while there is room, and the last few too if `all` (the end).
+    fn write_beats(&mut self, all: bool) {
+        while self.beats_n >= fit::HRV_PER_MESSAGE || (all && self.beats_n > 0) {
+            let k = self.beats_n.min(fit::HRV_PER_MESSAGE);
+            let mut batch = [0u16; fit::HRV_PER_MESSAGE];
+            batch.copy_from_slice(self.beats.get(..fit::HRV_PER_MESSAGE).unwrap_or(&[0; fit::HRV_PER_MESSAGE]));
+            let ok = self.room() >= fit::HRV_MAX + Writer::END_BYTES && {
+                let (mut sink, w) = self.ram();
+                w.hrv(&mut sink, batch.get(..k).unwrap_or(&[])).is_ok()
+            };
+            if !ok {
+                return; // they wait (a checkpoint is wanted already: the room is under LOW)
+            }
+            self.beats.copy_within(k.., 0);
+            self.beats_n -= k;
+            self.len = self.len.max(14 + self.writer.data_len());
+            let ms: u32 = batch.get(..k).unwrap_or(&[]).iter().map(|&b| u32::from(b)).sum();
+            self.beats_ms = self.beats_ms.saturating_add(ms);
+            if self.room() < LOW + Writer::END_BYTES || self.beats_ms >= CHECKPOINT_S * 1000 {
+                self.want = true;
+            }
+        }
+    }
+
     /// The ride ended at `time`: the end messages in RAM, the save at the next [`Recorder::io`].
     pub fn end(&mut self, time: u32, ride: [u32; RIDE_WORDS]) {
         self.ride = ride;
         if !matches!(self.phase, Phase::Starting | Phase::Recording) || self.ended {
             return;
         }
+        self.write_beats(true);
+        self.beats_dropped = self.beats_dropped.saturating_add(self.beats_n as u32);
+        self.beats_n = 0;
         let (mut sink, w) = self.ram();
         if w.end(&mut sink, time).is_err() {
             self.dropped = self.dropped.saturating_add(1); // cannot happen: END_BYTES are kept
@@ -951,7 +1034,8 @@ impl Recorder {
         if let Some(rest) = self.tail.get_mut(keep..) {
             rest.fill(0);
         }
-        (self.tail_off, self.since, self.want, self.on_card) = (next, 0, false, self.len);
+        (self.tail_off, self.since, self.want, self.on_card, self.beats_ms) = (next, 0, false, self.len, 0);
+        self.on_card_trailer = self.writer.trailer();
         Ok(())
     }
 
@@ -965,6 +1049,7 @@ impl Recorder {
         let mut s = [0u8; SECTOR];
         fat.read_sector(d, &rec, slot + 1, &mut s)?;
         fat.write_sectors(d, &mut file, size.saturating_sub(2) / SECTOR as u32, &s)?;
+        trailer_end(fat, d, &mut file, size, self.on_card_trailer)?;
         fat.read_sector(d, &rec, slot, &mut s)?;
         fat.write_sectors(d, &mut file, 0, &s)?;
         self.save(fat, d, t, file.first, size)
@@ -1147,6 +1232,7 @@ impl Recorder {
                 self.tail[..keep.min(SECTOR)].copy_from_slice(&s[..keep.min(SECTOR)]);
                 if entry.is_none() && fits {
                     fat.write_sectors(d, &mut file, self.tail_off / SECTOR as u32, &s)?;
+                    trailer_end(fat, d, &mut file, size, w.trailer())?;
                 }
                 fat.read_sector(d, &rec, slot, &mut s)?;
                 self.head.copy_from_slice(&s[..14]);
@@ -1287,10 +1373,26 @@ mod tests {
             temp_c: Some(12),
             alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
             rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
+            artifacts_pct: (t >= 60).then_some((t % 9) as u8),
             ascent_m: Some(t / 10),
             indoor: PROFILE.get().0,
             by_hand: PROFILE.get().1,
         }
+    }
+
+    /// The strap's beat in second `t` of the test ride, ms: 250 + t, so a file's beats tell which were lost or
+    /// written twice, and they add up to less than the ride's time, as a strap's do.
+    fn beats(t: u32) -> [u16; 1] {
+        [250 + t as u16]
+    }
+
+    /// The beats (`hrv` messages) of the saved file `name`, the invalid slots left out.
+    fn saved_beats(img: &[u8], name: &str) -> Vec<u64> {
+        let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let v = crate::fat::tests::read_all(&mut fat, &mut d, name).unwrap();
+        let m = crate::fit::tests::decode(&v).unwrap();
+        m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1)).filter(|&v| v != 0xffff).collect()
     }
 
     fn words(t: u32) -> [u32; RIDE_WORDS] {
@@ -1332,6 +1434,13 @@ mod tests {
                 }
                 if recorded(t) {
                     r.second(&sample(t), words(t));
+                }
+                // the beats come paused or not; a full copy resumed already has those up to its own checkpoint
+                // (on the unit, beats after a reset are new ones: the test's clock goes back to the clean copy's)
+                if T0 + t > r.skip_to {
+                    for b in beats(t) {
+                        r.beat(b);
+                    }
                 }
                 match t {
                     PAUSE => r.pause(T0 + t, words(t)),
@@ -1832,7 +1941,8 @@ mod tests {
         let mut one = card(img.clone());
         ride(&mut Recorder::new(), &mut one, 0).unwrap();
         let mut d = card(img);
-        assert_eq!(ride_all(&mut pair(), &mut d, 0), Some(std::vec![Outcome::Saved(NAME); 2]));
+        let mut rs = pair();
+        assert_eq!(ride_all(&mut rs, &mut d, 0), Some(std::vec![Outcome::Saved(NAME); 2]));
         let read = |img: &[u8], path: &str| {
             let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
             let mut fat = Fat::mount(&mut ram).unwrap();
@@ -1846,6 +1956,11 @@ mod tests {
         let (times, session) = saved(&d.img, SAVED_FULL).unwrap();
         assert_eq!((times, session), saved(&d.img, SAVED).unwrap());
         assert!(full.windows(6).any(|w| w == b"Alpha1"));
+        // every beat, in order, five to a message: none in the clean copy
+        let fed: Vec<u64> = (0..SECS).flat_map(beats).map(u64::from).collect();
+        assert_eq!(saved_beats(&d.img, SAVED_FULL), fed);
+        assert!(saved_beats(&d.img, SAVED).is_empty());
+        assert_eq!(rs[1].beats_dropped, 0);
         assert_eq!(check_clean(&d.img, "two copies"), 0);
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/fit");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1903,6 +2018,7 @@ mod tests {
             assert!(ride_all(&mut pair(), &mut d, 0).is_none());
             let what = std::format!("torn {torn}, cut {cut} of {total} (sector {})", d.cut_at);
             let had = all.iter().filter(|&&a| a <= T0 + d.now).count();
+            let d_now = d.now;
             let mut d = card(d.img);
             let mut rs = pair();
             let o = [rs[0].recover(&mut d, local(SECS + 5)), rs[1].recover(&mut d, local(SECS + 5))];
@@ -1933,6 +2049,23 @@ mod tests {
                     let kept = times.iter().filter(|&&t| t <= all[had.max(1) - 1]).count();
                     assert!(had - kept <= CHECKPOINT_S as usize, "{what}: {kind}: {} s lost", had - kept);
                 }
+            }
+            if saved(&d.img, SAVED_FULL).is_ok() {
+                // the beats: in order, none twice (values rise), at most a checkpoint's worth lost before the cut
+                // (a minute of records, or paused a minute of beats; and the four of an unfinished message),
+                // whatever the resume
+                let rr = saved_beats(&d.img, SAVED_FULL);
+                assert!(rr.windows(2).all(|p| p[0] < p[1]), "{what}: beats out of order or twice");
+                let lost: Vec<u32> = (0..=d_now.min(SECS - 1))
+                    .filter(|&t| !rr.contains(&u64::from(beats(t)[0])))
+                    .map(|t| u32::from(beats(t)[0]))
+                    .collect();
+                let ms: u32 = lost.iter().sum();
+                assert!(
+                    lost.len() <= CHECKPOINT_S as usize + 4 || ms <= CHECKPOINT_S * 1000 + 4 * 1150,
+                    "{what}: {} beats lost, {ms} ms",
+                    lost.len()
+                );
             }
             match (saved(&d.img, SAVED).is_ok(), saved(&d.img, SAVED_FULL).is_ok()) {
                 (true, true) => both += 1,

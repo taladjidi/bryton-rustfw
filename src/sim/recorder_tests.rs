@@ -620,3 +620,66 @@ fn a_resumed_ride_takes_the_model_available_at_resume() {
     assert!(app.cp_fit().is_some_and(|c| c.trusted()));
     assert_eq!(app.cp_model(), settings, "kept to the ride's end");
 }
+
+/// A strap beating through a ride (reset mid-ride, resumed, saved): the full copy holds its beats as the strap sent
+/// them, in `hrv` messages, each run of them unbroken and in the strap's order; the clean copy none.
+#[test]
+fn the_strap_beats_go_into_the_full_copy() {
+    use super::tests::{KEY, STRAP, beat_ticks, strap_beats};
+    let strap = |sim: &mut Sim| {
+        sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+        sim.nordic.sensors.push(AntSensor {
+            device_type: 0x78,
+            id: STRAP.device,
+            data: strap_beats,
+            network: 0,
+            ack: &[],
+        });
+    };
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    strap(&mut sim);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 20_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 150_000);
+    assert_eq!(app.full.beats_dropped, 0);
+    let name = app.recorder.name();
+
+    let mut sim2 = Sim::new(9, 3, 0); // a reset
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    strap(&mut sim2);
+    let mut app = App::start(&mut sim2, Some(KEY));
+    run(&mut sim2, &mut app, 1000);
+    app.press(&mut sim2, Press::Short(Key::Start));
+    run(&mut sim2, &mut app, 30_000);
+    app.press(&mut sim2, Press::Short(Key::Start));
+    save_ride(&mut sim2, &mut app);
+    run(&mut sim2, &mut app, 3000);
+    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+
+    let rr = |dir| {
+        let f = ride_file(&sim2, dir, name).unwrap();
+        let m = crate::fit::tests::decode(&f).unwrap();
+        m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1 as u16)).collect::<Vec<_>>()
+    };
+    assert!(rr("Activities").is_empty(), "the clean copy has no beats");
+    let got = rr("Rustfw/Activities");
+    // the strap's beats in ms (the simulated strap starts again from its first after the reset); the file's are runs
+    // of them, unbroken and in order: the longest run from each point, two at most (before and after the reset)
+    let sent: Vec<u16> = (1..2000).map(|k| ((beat_ticks(k) * 1000 + 512) >> 10) as u16).collect();
+    let got: Vec<u16> = got.into_iter().filter(|&v| v != 0xffff).collect();
+    let (mut p, mut runs) = (0, Vec::new());
+    while p < got.len() {
+        let run = |s: usize| sent[s..].iter().zip(&got[p..]).take_while(|(a, b)| a == b).count();
+        let longest = (0..sent.len()).map(run).max().unwrap();
+        assert!(longest > 0, "beat {p} not the strap's");
+        runs.push(longest);
+        p += longest;
+    }
+    assert!(runs.len() <= 2 && runs.iter().all(|&r| r >= 20), "{runs:?}"); // the strap beats from 10 s
+    // about 150 s before the reset (less the minute at most after its last checkpoint) and 30 s after, at 0.8 s
+    assert!((100..250).contains(&got.len()), "{} beats", got.len());
+    std::println!("{} beats in runs of {runs:?}", got.len());
+}

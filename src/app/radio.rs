@@ -103,6 +103,7 @@ impl App {
                     }
                     for &rr in self.decoders.beats.rr() {
                         self.hrv.push(rr);
+                        self.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: recorder.rs)
                     }
                     if matches!(kind, Kind::Shifting | Kind::Di2) {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)

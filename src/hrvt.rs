@@ -19,10 +19,11 @@
 //! here: alpha1 on a 120 s window every 5 s (hrv.rs: 2 minutes of beats, recomputed every 5), power as the mean
 //! over the same 120 s; the first 5 minutes left out (the strap settling); points with no power left out; a ride
 //! used only when at least half its points are in alpha1's dynamic range (below 1.0); a linear fit of power on
-//! alpha1, `P = m a1 + q` (their equation: power the dependent variable), read at 0.75 and 0.5. Their other gates,
-//! not here: workouts with more than 5 % artifacts (the full copy does not record the share hrv.rs dropped, only
-//! alpha1), and with pedalling under 90 % of the time (outdoors that would drop most rides; the 120 s mean counts
-//! coasting).
+//! alpha1, `P = m a1 + q` (their equation: power the dependent variable), read at 0.75 and 0.5. Their 5 % artifact
+//! gate is applied per point, not per workout: a record whose DFA window had more than 5 % of its beats dropped (the
+//! full copy's `Artifact` field) gives no alpha1 (fitread.rs, `MAX_ARTIFACTS`; full copies from before that field:
+//! every point). Not here: pedalling under 90 % of the time (outdoors that would drop most rides; the 120 s mean
+//! counts coasting).
 //!
 //! **Which points.** The ramp studies fit alpha1's linear part, about 1.0 to 0.5 (Schaffarczyk et al. 2024); above
 //! 1.0 (easy riding) it scatters up to 1.5 or 2 with little change in power. Cutting the points by their own alpha1

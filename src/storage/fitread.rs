@@ -36,7 +36,9 @@
 //! - **The full copy's `Alpha1`** (fit.rs, "developer fields"), only from a reader [`Reader::with_alpha1`]: a
 //!   record's developer field number 0 of developer data index 0, 4 bytes, read as a float32 (invalid all ones).
 //!   Only this firmware's own full copies (`\Rustfw\Activities`) are read so: they define that field as `Alpha1`
-//!   (its `field_description` is not checked; another app's file may use number 0 for something else).
+//!   (its `field_description` is not checked; another app's file may use number 0 for something else). Its
+//!   developer field number 2 (1 byte, `Artifact`, %) gates it: a record whose window had more than
+//!   [`MAX_ARTIFACTS`] % of its beats dropped gives no alpha1 (hrv.rs, "Artifacts"); a file without that field, all.
 //!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
 //! small state machine one step (fuzzed in sim.rs `fuzz`).
@@ -118,6 +120,10 @@ const SLOTS: usize = 8;
 const PICKED: usize = 8;
 /// A record's slot for the full copy's `Alpha1` (a reader never reads it and the position both).
 const ALPHA1_SLOT: u8 = 4;
+/// Its slot for the full copy's `Artifact` share.
+const ART_SLOT: u8 = 5;
+/// Artifacts (%) over which a record's alpha1 is not given (module doc).
+pub const MAX_ARTIFACTS: u32 = 5;
 
 /// The slot of field `num` of global message `global`, if it is one this reader keeps (the position and altitude
 /// only with `position`).
@@ -452,15 +458,20 @@ impl Reader {
             return;
         }
         self.at = 0;
-        // (number, size, developer data index): only the size matters, but for the full copy's Alpha1
+        // (number, size, developer data index): only the size matters, but for the full copy's Alpha1 and Artifact
         let (num, size, index) = (self.tmp[0], self.tmp[1], self.tmp[2]);
         let d = &mut self.building;
+        let slot = match (d.global, num, size, index) {
+            (20, 0, 4, 0) => Some(ALPHA1_SLOT),
+            (20, 2, 1, 0) => Some(ART_SLOT),
+            _ => None,
+        };
         if self.alpha1
-            && (d.global, num, size, index) == (20, 0, 4, 0)
+            && let Some(slot) = slot
             && let Ok(off) = u16::try_from(d.size)
             && let Some(p) = d.picked.get_mut(usize::from(d.n))
         {
-            *p = (off, 4, ALPHA1_SLOT);
+            *p = (off, size, slot);
             d.n += 1;
         }
         d.size += u32::from(size);
@@ -591,6 +602,8 @@ impl Reader {
                 let alt_dm = get(7).or(get(6)).map(|v| (i64::from(v) * 2 - 5000) as i32);
                 let alpha1_milli = get(usize::from(ALPHA1_SLOT))
                     .filter(|_| self.alpha1 && global == 20)
+                    // too many artifacts in its window (0xff: not known, as a file without the field)
+                    .filter(|_| get(usize::from(ART_SLOT)).is_none_or(|p| p <= MAX_ARTIFACTS || p == 0xff))
                     .map(f32::from_bits)
                     .filter(|a| *a > 0.0 && *a < 10.0) // NaN and the infinities fail too
                     .map(|a| (a * 1000.0 + 0.5) as u16);
@@ -621,6 +634,29 @@ mod tests {
     use super::*;
     use crate::fit::{Sample, Writer};
     use std::vec::Vec;
+
+    /// The full copy's alpha1 is given only when its window had at most 5 % artifacts (or the share is not known),
+    /// and the beats' `hrv` messages between the records are skipped.
+    #[test]
+    fn alpha1_gated_on_artifacts() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin_with(&mut f, 1000, true).unwrap();
+        let shares = [None, Some(0), Some(5), Some(6), Some(40)];
+        for (t, &artifacts_pct) in shares.iter().enumerate() {
+            let s = Sample { time: 1001 + t as u32, alpha1_milli: Some(750), artifacts_pct, ..Default::default() };
+            w.record(&mut f, &s).unwrap();
+            w.hrv(&mut f, &[800, 810, 790]).unwrap();
+        }
+        w.finish(&mut f, 1010).unwrap();
+        let mut got = Vec::new();
+        let mut r = Reader::with_alpha1();
+        r.push_slice(&f, |m| {
+            if let Msg::Record(x) = m {
+                got.push(x.alpha1_milli);
+            }
+        });
+        assert_eq!(got, [Some(750), Some(750), Some(750), None, None]);
+    }
 
     fn read(f: &[u8]) -> (Vec<Msg>, Option<Result<(), Error>>) {
         let mut r = Reader::new();

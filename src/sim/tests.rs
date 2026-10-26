@@ -5,7 +5,7 @@ use super::*;
 use crate::ui::tests::Frame;
 use crate::ui::{Field, Rec, Strip, UsbDot};
 /// A stand-in for the ANT+ network key (the real one is never in the repository).
-const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+pub(super) const KEY: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 /// The owner's strap, as the unit paired it.
 pub(super) const STRAP: SensorId = SensorId { device: 25126, trans: 0xf1 };
 
@@ -1511,7 +1511,7 @@ fn pages_are_configured_from_the_menu() {
 const BEAT_START: u64 = 10_000;
 /// The strap's interval before beat `k`, 1/1024 s: 820 plus or minus 16 (about 800 ms), scrambled (murmur3's
 /// finaliser).
-fn beat_ticks(k: u32) -> u64 {
+pub(super) fn beat_ticks(k: u32) -> u64 {
     let mut x = k.wrapping_mul(0x9e37_79b9);
     x ^= x >> 16;
     x = x.wrapping_mul(0x85eb_ca6b);
@@ -1519,7 +1519,7 @@ fn beat_ticks(k: u32) -> u64 {
     804 + u64::from(x >> 27)
 }
 /// A strap beating from [`BEAT_START`]: page 4, the last beat's time, the one before, the count.
-fn strap_beats(ms: u64) -> [u8; 8] {
+pub(super) fn strap_beats(ms: u64) -> [u8; 8] {
     let now = ms * 1024 / 1000;
     let (mut t, mut prev, mut k) = (BEAT_START * 1024 / 1000, 0, 0u32);
     while t + beat_ticks(k + 1) <= now {

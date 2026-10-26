@@ -254,6 +254,7 @@ impl App {
             // the strap's beats: only while it is in (hrv.rs keeps its last values)
             alpha1_milli: self.hrv.alpha1().filter(|_| hr).map(|a| (a * 1000.0 + 0.5).clamp(0.0, 65_534.0) as u16),
             rmssd_ms: self.hrv.rmssd().filter(|_| hr),
+            artifacts_pct: self.hrv.artifacts().filter(|_| hr),
             ascent_m: Some(self.ride.ascent_m()),
             indoor: self.indoors(),
             by_hand: self.profile_by_hand,

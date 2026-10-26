@@ -126,6 +126,80 @@ fn heart_rate_beats() {
     }
 }
 
+/// Random beat streams (gaps, bursts, zeros, 0xffff, very long intervals) into the full copy's `hrv` messages
+/// between records and checkpoints: the file decodes strictly at every checkpoint and at the end, its beats are the
+/// ones fed (0xffff, FIT's invalid, aside), in order. Then into a full copy's recorder with no card: the buffer
+/// fills, the beats wait in their queue, and past it are dropped and counted, never a panic.
+#[test]
+fn beat_streams_into_the_full_copy() {
+    use crate::fit::{Sample, Writer, tests::decode};
+    use crate::recorder::{Kind, Recorder};
+    let (mut messages, mut dropped) = (0, 0);
+    for seed in 1..=40u32 {
+        let mut rnd = xorshift(seed);
+        let beat = |rnd: &mut dyn FnMut() -> u32| match rnd() % 10 {
+            0 => 0,
+            1 => 0xffff,
+            2 => 0xfffe,
+            3 => (rnd() % 60_000) as u16, // up to a minute: a strap lost and found
+            _ => 300 + (rnd() % 1700) as u16,
+        };
+        let (mut f, t0) = (Vec::new(), 1_000_000);
+        let mut w = Writer::begin_with(&mut f, t0, true).unwrap();
+        let mut fed = Vec::new();
+        let mut t = t0;
+        for _ in 0..200 {
+            t += 1 + rnd() % 3 * (rnd() % 2); // a second, or a gap
+            w.record(
+                &mut f,
+                &Sample { time: t, hr: Some(150), artifacts_pct: Some(rnd() as u8), ..Default::default() },
+            )
+            .unwrap();
+            let n = match rnd() % 8 {
+                0 => 0,
+                1 => 6 + rnd() % 15, // a burst: several messages at once
+                _ => rnd() % 5,
+            };
+            let mut k = 0;
+            while k < n {
+                let batch: Vec<u16> = (0..(1 + rnd() % 5).min(n - k)).map(|_| beat(&mut rnd)).collect();
+                k += batch.len() as u32;
+                w.hrv(&mut f, &batch).unwrap();
+                fed.extend(batch.iter().copied().filter(|&v| v != 0xffff));
+                messages += 1;
+            }
+            if rnd().is_multiple_of(30) {
+                w.checkpoint(&mut f).unwrap();
+                decode(&f).unwrap();
+            }
+        }
+        w.finish(&mut f, t + 1).unwrap();
+        let m = decode(&f).unwrap();
+        let rr: Vec<u16> = m
+            .iter()
+            .filter(|x| x.0 == 78)
+            .flat_map(|x| x.1.iter().map(|v| v.1 as u16))
+            .filter(|&v| v != 0xffff)
+            .collect();
+        assert_eq!(rr, fed, "seed {seed}");
+
+        // the recorder, no card: its buffer fills, its queue too
+        let mut r = Recorder::of(Kind::Full);
+        r.start(t0, *b"261023100000", false);
+        for s in 0..400 {
+            r.second(&Sample { time: t0 + 1 + s, ..Default::default() }, [0; crate::ride::RIDE_WORDS]);
+            for _ in 0..rnd() % 8 {
+                r.beat(beat(&mut rnd));
+            }
+        }
+        dropped += r.beats_dropped;
+    }
+    assert!(
+        messages > 10_000 && dropped > 1000,
+        "the writer and the queue reached: {messages} messages, {dropped} dropped"
+    );
+}
+
 /// Random broadcasts into every ANT decoder (speed, cadence, both, power, heart rate, the two shifting ones), with
 /// restarts: no panic (a u32 overflow did panic here), speeds and cadences within what a bike does. Half the
 /// messages carry a page the shifting decoders read (random bytes would rarely), and the test checks they were

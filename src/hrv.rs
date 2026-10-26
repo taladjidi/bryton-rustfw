@@ -14,6 +14,12 @@
 //!   first (Malik et al. 1989's rule, the usual correction for ectopic beats), so a missed or extra beat drops
 //!   its two differences instead of inflating the value.
 //!
+//! - **Artifacts** ([`Hrv::artifacts`]): the share of the DFA window's beats that the 5 % rule dropped. Rogers,
+//!   Giles, Draper, Mourot and Gronwald 2021 (Sensors 21:821, pmc.ncbi.nlm.nih.gov/articles/PMC7865269) found DFA
+//!   a1 biased from 1 to 3 % of missed beats on, up to 19 % at 6 % even after correction; FatMaxxer and AlphaHRV
+//!   show the share and warn above 5 % (inferred from their documentation), the gate the thresholds take
+//!   (fitread.rs, `Record::alpha1_milli`).
+//!
 //! Both are recomputed every [`EVERY`] beats (about every 3 to 5 s while riding): the cost is bounded by the
 //! window, about 4 n multiply-adds per box size for n beats.
 
@@ -41,11 +47,12 @@ pub struct Hrv {
     since: u8,
     alpha1: Option<f32>,
     rmssd: Option<u16>,
+    artifacts: Option<u8>,
 }
 
 impl Default for Hrv {
     fn default() -> Self {
-        Hrv { rr: [0; BEATS], head: 0, len: 0, since: 0, alpha1: None, rmssd: None }
+        Hrv { rr: [0; BEATS], head: 0, len: 0, since: 0, alpha1: None, rmssd: None, artifacts: None }
     }
 }
 
@@ -60,7 +67,7 @@ impl Hrv {
         self.since += 1;
         if self.since >= EVERY {
             self.since = 0;
-            self.alpha1 = self.dfa_now();
+            (self.alpha1, self.artifacts) = self.dfa_now();
             self.rmssd = self.rmssd_now();
         }
     }
@@ -68,6 +75,11 @@ impl Hrv {
     /// DFA alpha1, once there are enough clean beats.
     pub fn alpha1(&self) -> Option<f32> {
         self.alpha1
+    }
+
+    /// The share of the DFA window's beats the 5 % rule dropped, % (module doc), once there are beats.
+    pub fn artifacts(&self) -> Option<u8> {
+        self.artifacts
     }
 
     /// RMSSD, ms, once there are enough clean pairs.
@@ -98,14 +110,16 @@ impl Hrv {
         (pairs >= MIN_PAIRS).then(|| (sum / u64::from(pairs)).isqrt() as u16)
     }
 
-    fn dfa_now(&self) -> Option<f32> {
+    /// DFA alpha1 and the artifacts' share, %.
+    fn dfa_now(&self) -> (Option<f32>, Option<u8>) {
         let mut x = [0f32; BEATS];
-        let (mut n, mut total, mut drops, mut kept) = (0, 0u32, 0, 0f32);
+        let (mut n, mut total, mut drops, mut kept, mut seen, mut dropped) = (0, 0u32, 0, 0f32, 0u32, 0u32);
         for rr in self.newest() {
             if total >= DFA_MS {
                 break;
             }
             total += u32::from(rr);
+            seen += 1;
             let v = f32::from(rr);
             if kept == 0.0 || drops == 3 || (v > kept * 0.95 && v < kept * 1.05) {
                 if let Some(s) = x.get_mut(n) {
@@ -116,11 +130,13 @@ impl Hrv {
                 drops = 0;
             } else {
                 drops += 1;
+                dropped += 1;
             }
         }
+        let share = (seen > 0).then(|| (dropped * 100 / seen) as u8);
         // a1 of 0 or less is no physiology (a stretch of equal intervals, a strap's glitch: two such records seen on
         // the owner's ride, 2026-10-25), and would read as an all-out effort: no value
-        dfa_a1(x.get_mut(..n)?).filter(|a| *a > 0.01 && a.is_finite())
+        (x.get_mut(..n).and_then(dfa_a1).filter(|a| *a > 0.01 && a.is_finite()), share)
     }
 }
 
@@ -253,5 +269,7 @@ mod tests {
         }
         assert_eq!(h.rmssd(), Some(29), "the ectopic beat left out; the 815s add two zeros");
         assert!(h.alpha1().is_some_and(|a| a < 0.5), "alternation: anti-correlated");
+        // the 800 / 830 alternation is within 5 %; of the window's 105 beats, the 500 and the 1130 were dropped
+        assert_eq!(h.artifacts(), Some(1), "2 of 105 beats, rounded down");
     }
 }

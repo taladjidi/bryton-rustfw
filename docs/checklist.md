@@ -163,7 +163,9 @@ Others
 - [~] Rides saved to \Activities, readable by stock and the computer (stock, all): sim (stock's name, the history lists them)
 - [x] Discard a ride (stock, all): sim, moved into `\Rustfw\Discarded`, never erased
 - [ ] Recording rate: 1 s or smart (stock, Garmin)
-- [ ] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin)
+- [~] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin): sim, every beat raw in the full copy
+  (`\Rustfw\Activities`, five a message), cut at every sector, checked with fitdecode and Garmin's SDK; with the
+  `Artifact` share per record
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ): sim, in a full copy beside the clean one (`\Rustfw\Activities`, with RMSSD), checked with Garmin's SDK
 - [~] Laps, session and activity messages at the end (stock, all): sim (a lap message per Lap, timer events at pauses)
 - [ ] Power off during a stop, resume at power on (stock Auto Power Off, Garmin)

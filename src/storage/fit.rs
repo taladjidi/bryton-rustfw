@@ -21,7 +21,8 @@
 //! The caller keeps two copies of the record (old / new) and takes the valid one with the larger
 //! [`Writer::data_len`]. Doing this twice is harmless.
 //!
-//! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 13 (the profile set by
+//! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 12 (the full copy describes
+//! `Artifact`: `ARTIFACTS`), bit 13 (the profile set by
 //! hand), bit 14 (this layout: lap and session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16
 //! (developer fields), the ascent (17..30) and bit 31 (the build before sub_sport: total_ascent, no sport). A record
 //! without this layout reads as a road ride and has its lap and session defined again. This build never sets bit
@@ -44,9 +45,19 @@
 //! after file_id, a `developer_data_id` (207: application_id, developer_data_index 0) and two `field_description`s
 //! (206: developer_data_index, field_definition_number, fit_base_type_id, field_name, units, native_mesg_num 20),
 //! `Alpha1` (float32, no units: the name Intervals.icu reads DFA a1 from, as AlphaHRV writes it,
-//! forum.intervals.icu/t/average-dfa-a1-and-wbal-added-to-interval-fields/7528) and `RMSSD` (uint16, ms); every
-//! record then carries both (invalid when not known), its definition with the developer flag (header bit 5) and
-//! (field number, size, developer data index) per field. Message and field numbers: `garmin_fit_sdk/profile.py`
+//! forum.intervals.icu/t/average-dfa-a1-and-wbal-added-to-interval-fields/7528), `RMSSD` (uint16, ms) and
+//! `Artifact` (uint8, %: the share of beats hrv.rs's 5 % rule dropped over the DFA window); every record then
+//! carries them (invalid when not known), its definition with the developer flag (header bit 5) and (field number,
+//! size, developer data index) per field. A full copy begun by a build before `Artifact` (its recovery record
+//! without `ARTIFACTS`) goes on with two fields: its file has no description of the third.
+//!
+//! **Beat to beat** ([`Writer::hrv`], the full copy only): every RR interval the strap sent, raw (before hrv.rs's
+//! artifact rule), in standard `hrv` messages (global 78, field 0 `time`: an array of uint16, scale 1000, units s,
+//! so the value is ms; 0xffff invalid: garmin_fit_sdk/profile.py 21.218, `hrv`), five to a message with the unused
+//! slots invalid, written between the records as the beats come, as Garmin's units and bryton-S510-mods' `P8` write
+//! them (its docs/how-it-works.md, "HRV recording"). Tools that compute DFA a1 offline (Domestique, Runalyze,
+//! Kubios) read the beats from there. The messages carry no time: readers line them up from the ride's start. The
+//! clean copy has none (Strava and Bryton: no file seen to show they take them). Message and field numbers: `garmin_fit_sdk/profile.py`
 //! 21.218 (github.com/garmin/fit-python-sdk), the protocol: developer.garmin.com/fit/protocol. Without `dev` the
 //! file is byte for byte what it was: Bryton's server refuses developer fields in records (bryton-S510-mods
 //! docs/how-it-works.md, "Such rides do not sync to Bryton").
@@ -109,6 +120,8 @@ pub struct Sample {
     pub alpha1_milli: Option<u16>,
     /// RMSSD, ms (hrv.rs): the full copy's `RMSSD` developer field only.
     pub rmssd_ms: Option<u16>,
+    /// Beats dropped by hrv.rs's artifact rule over its DFA window, % (hrv.rs): the full copy's `Artifact` only.
+    pub artifacts_pct: Option<u8>,
     /// The ride's ascent so far, m (ride.rs): the lap's and the session's total_ascent.
     pub ascent_m: Option<u32>,
     /// The ride is indoors (ride::Profile::Indoor) this second: the lap's and the session's sub_sport, the last
@@ -165,20 +178,29 @@ const L_ACTIVITY: u8 = 5;
 const L_DEV_ID: u8 = 6;
 const L_FIELD_DESC: u8 = 7;
 const L_GEAR: u8 = 8;
+const L_HRV: u8 = 9;
+/// RR intervals per `hrv` message (module doc).
+pub const HRV_PER_MESSAGE: usize = 5;
+/// Bytes an `hrv` message takes at most, its definition with it.
+pub const HRV_MAX: usize = 9 + 1 + 2 * HRV_PER_MESSAGE;
+/// Bit 12 of the recovery record's third word (the record mask's bits 10..12 were never used): the full copy's
+/// file describes `Artifact` (module doc).
+const ARTIFACTS: u32 = 1 << 12;
 
 /// The full copy's developer data, after file_id (module doc): developer_data_id, then a field_description each
-/// for `Alpha1` and `RMSSD`, definitions included.
-const DEV_MESSAGES: [u8; 90] = {
+/// for `Alpha1`, `RMSSD` and `Artifact`, definitions included.
+const DEV_MESSAGES: [u8; 108] = {
     const APP: &[u8; 16] = b"bryton-rustfw-01"; // application_id: any 16 bytes that name this firmware
-    let mut m = [0u8; 90];
+    let mut m = [0u8; 108];
     let head: [u8; 12] = [0x40 | L_DEV_ID, 0, 0, 207, 0, 2, 1, 16, BYTE, 3, 1, U8];
     let def: [u8; 24] =
         [0x40 | L_FIELD_DESC, 0, 0, 206, 0, 6, 0, 1, U8, 1, 1, U8, 2, 1, U8, 3, 8, STRING, 8, 4, STRING, 14, 2, U16];
     // index, number, base type, name (8), units (4), native_mesg_num record (20)
     let alpha: [u8; 18] = [L_FIELD_DESC, 0, 0, F32, b'A', b'l', b'p', b'h', b'a', b'1', 0, 0, 0, 0, 0, 0, 20, 0];
     let rmssd: [u8; 18] = [L_FIELD_DESC, 0, 1, U16, b'R', b'M', b'S', b'S', b'D', 0, 0, 0, b'm', b's', 0, 0, 20, 0];
+    let art: [u8; 18] = [L_FIELD_DESC, 0, 2, U8, b'A', b'r', b't', b'i', b'f', b'a', b'c', b't', b'%', 0, 0, 0, 20, 0];
     let mut i = 0;
-    while i < 90 {
+    while i < 108 {
         m[i] = match i {
             0..12 => head[i],
             12 => L_DEV_ID,
@@ -186,14 +208,15 @@ const DEV_MESSAGES: [u8; 90] = {
             29 => 0, // developer_data_index
             30..54 => def[i - 30],
             54..72 => alpha[i - 54],
-            _ => rmssd[i - 72],
+            72..90 => rmssd[i - 72],
+            _ => art[i - 90],
         };
         i += 1;
     }
     m
 };
 /// The developer fields of a full copy's record: (field_definition_number, size, developer_data_index).
-const DEV_RECORD: [Field; 2] = [(0, 4, 0), (1, 2, 0)];
+const DEV_RECORD: [Field; 3] = [(0, 4, 0), (1, 2, 0), (2, 1, 0)];
 
 const FILE_ID: [Field; 4] = [(0, 1, ENUM), (1, 2, U16), (2, 2, U16), (4, 4, U32)];
 const EVENT: [Field; 3] = [(253, 4, U32), (0, 1, ENUM), (1, 1, ENUM)];
@@ -312,6 +335,8 @@ pub struct Writer {
     paused_at: u32,
     /// The full copy: protocol 2.0, developer fields in the records (module doc).
     dev: bool,
+    /// Its file describes `Artifact` (a full copy begun by a build before it does not: module doc).
+    art: bool,
     /// The ride's ascent so far, m (the samples' [`Sample::ascent_m`]).
     ascent_m: u32,
     /// Indoors (the last sample's [`Sample::indoor`]).
@@ -340,6 +365,7 @@ impl Writer {
             paused_s: 0,
             paused_at: 0,
             dev: false,
+            art: false,
             ascent_m: 0,
             indoor: false,
             by_hand: false,
@@ -364,7 +390,7 @@ impl Writer {
 
     /// Like `Writer::begin`, with developer fields when `dev` (the full copy: module doc).
     pub fn begin_with(sink: &mut impl Sink, time: u32, dev: bool) -> Result<Writer, Error> {
-        let mut w = Writer { start: time, last: time, lap_start: time, dev, ..Writer::default() };
+        let mut w = Writer { start: time, last: time, lap_start: time, dev, art: dev, ..Writer::default() };
         // 255: development (not a registered manufacturer: this is not Bryton's firmware)
         w.message(sink, L_FILE_ID, 0, &FILE_ID, &[4, 255, 0, time])?;
         if dev {
@@ -492,12 +518,45 @@ impl Writer {
         if self.dev {
             // invalid: float32 all ones, uint16 0xffff
             let alpha = s.alpha1_milli.map_or(u32::MAX, |a| (f32::from(a) / 1000.0).to_bits());
-            let dev = [alpha, s.rmssd_ms.map_or(0xffff, u32::from)];
-            self.message_dev(sink, L_RECORD, 20, fields, values, &DEV_RECORD, &dev)?;
+            let dev =
+                [alpha, s.rmssd_ms.map_or(0xffff, u32::from), s.artifacts_pct.map_or(0xff, |p| u32::from(p.min(100)))];
+            let n = if self.art { 3 } else { 2 };
+            let (df, dv) = (DEV_RECORD.get(..n).unwrap_or(&[]), dev.get(..n).unwrap_or(&[]));
+            self.message_dev(sink, L_RECORD, 20, fields, values, df, dv)?;
         } else {
             self.message(sink, L_RECORD, 20, fields, values)?;
         }
         self.mask = mask;
+        Ok(())
+    }
+
+    /// An `hrv` message (module doc) with up to [`HRV_PER_MESSAGE`] RR intervals `rr`, ms, oldest first (more are
+    /// left out; the slots after them invalid); its definition first if the file does not have it yet. The full copy
+    /// only, and only with a beat: the clean one, or no beat, writes nothing.
+    pub fn hrv(&mut self, sink: &mut impl Sink, rr: &[u16]) -> Result<(), Error> {
+        if !self.dev || rr.is_empty() {
+            return Ok(());
+        }
+        let mut b = [0u8; HRV_MAX];
+        let mut n = 0;
+        if self.defined & (1 << L_HRV) == 0 {
+            // global 78, one field: 0 `time`, 10 bytes of uint16 (an array of 5)
+            b[..9].copy_from_slice(&[0x40 | L_HRV, 0, 0, 78, 0, 1, 0, 2 * HRV_PER_MESSAGE as u8, U16]);
+            n = 9;
+        }
+        if let Some(h) = b.get_mut(n) {
+            *h = L_HRV;
+        }
+        n += 1;
+        for k in 0..HRV_PER_MESSAGE {
+            let v = rr.get(k).copied().unwrap_or(0xffff);
+            if let Some(s) = b.get_mut(n..n + 2) {
+                s.copy_from_slice(&v.to_le_bytes());
+            }
+            n += 2;
+        }
+        self.put(sink, b.get(..n).unwrap_or(&[]))?;
+        self.defined |= 1 << L_HRV;
         Ok(())
     }
 
@@ -539,6 +598,17 @@ impl Writer {
     /// Makes the file on the sink valid as it stands (CRC after the data, header with its size), flushes it, and
     /// returns the recovery record to store (only once this returns Ok). Also the resume step (module doc).
     pub fn checkpoint(&mut self, sink: &mut impl Sink) -> Result<[u8; RECORD_LEN], Error> {
+        let h = self.header();
+        let end = HEADER + self.len;
+        sink.write_at(end, &self.trailer())?;
+        sink.write_at(0, &h)?;
+        sink.set_len(end + 2)?;
+        sink.flush()?;
+        Ok(self.to_record())
+    }
+
+    /// The file header for the data so far.
+    fn header(&self) -> [u8; HEADER as usize] {
         let mut h = [0u8; HEADER as usize];
         h[0] = HEADER as u8;
         h[1] = if self.dev { 0x20 } else { 0x10 }; // protocol 2.0 for developer fields, else 1.0
@@ -547,13 +617,12 @@ impl Writer {
         h[8..12].copy_from_slice(b".FIT");
         let hc = crc(0, &h[..12]);
         h[12..14].copy_from_slice(&hc.to_le_bytes());
-        let file_crc = crc_combine(crc(0, &h), self.crc, self.len);
-        let end = HEADER + self.len;
-        sink.write_at(end, &file_crc.to_le_bytes())?;
-        sink.write_at(0, &h)?;
-        sink.set_len(end + 2)?;
-        sink.flush()?;
-        Ok(self.to_record())
+        h
+    }
+
+    /// The file CRC a checkpoint now writes after the data (its last two bytes).
+    pub fn trailer(&self) -> [u8; 2] {
+        crc_combine(crc(0, &self.header()), self.crc, self.len).to_le_bytes()
     }
 
     /// Bytes of messages in the file (grows with every write).
@@ -612,6 +681,7 @@ impl Writer {
             indoor: w[2] & INDOOR != 0,
             by_hand: w[2] & BY_HAND != 0,
             dev: w[2] >> 16 & 1 != 0,
+            art: w[2] & ARTIFACTS != 0,
             ascent_m: w[2] >> 17 & ASCENT_MAX,
             start: w[3],
             last: w[4],
@@ -631,12 +701,16 @@ impl Writer {
         let [a, b, c] = self.stats;
         let w: [u32; WORDS] = [
             self.len,
-            u32::from(self.crc) | u32::from(self.defined) << 16,
+            // a full copy with `Artifact` stores its record message as not defined: a build before it, resuming
+            // the ride, defines its own two-field record again instead of writing it on this three-field one (this
+            // build's resume costs one definition)
+            u32::from(self.crc) | u32::from(self.defined & if self.art { !(1 << L_RECORD) } else { !0 }) << 16,
             u32::from(self.mask)
                 | if self.indoor { INDOOR } else { 0 }
                 | if self.by_hand { BY_HAND } else { 0 }
                 | LAYOUT_SPORT
                 | u32::from(self.dev) << 16
+                | if self.art { ARTIFACTS } else { 0 }
                 | self.ascent_m.min(ASCENT_MAX) << 17,
             self.start,
             self.last,
@@ -689,7 +763,7 @@ impl Writer {
         df: &[Field],
         dv: &[u32],
     ) -> Result<(), Error> {
-        let mut buf = [0u8; 128]; // the largest, session with its definition: 109; a full record: 87
+        let mut buf = [0u8; 128]; // the largest, session with its definition: 109; a full record: 91
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             if let Some(s) = buf.get_mut(n..n + bytes.len()) {
@@ -912,6 +986,17 @@ pub(crate) mod tests {
             } else {
                 let (g, fields) = defs[local].as_ref().ok_or("no definition")?;
                 let mut m = Vec::new();
+                if *g == 78 {
+                    // hrv: each uint16 of the array as its own (0, value)
+                    for &(_, size) in fields {
+                        m.extend(
+                            f[i..i + usize::from(size)].chunks(2).map(|c| (0, u64::from(c[0]) | u64::from(c[1]) << 8)),
+                        );
+                        i += usize::from(size);
+                    }
+                    out.push((*g, m));
+                    continue;
+                }
                 for &(num, size) in fields {
                     let mut v = [0u8; 8];
                     let k = usize::from(size).min(8); // a byte array or a string: its first 8 bytes
@@ -945,6 +1030,7 @@ pub(crate) mod tests {
                 temp_c: Some((t % 30) as i8 - 5),
                 alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
                 rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
+                artifacts_pct: (t >= 60).then_some((t % 9) as u8),
                 ascent_m: Some(t / 10), // the ride's ascent so far: 1 m every 10 s
                 indoor: false,
                 by_hand: false,
@@ -958,10 +1044,20 @@ pub(crate) mod tests {
         (t % 45 == 7).then_some((t % 135 == 7, (t / 135 % 2 + 1) as u8, (t / 45 % 11 + 1) as u8))
     }
 
-    /// Writes `samples` from `w`, a checkpoint every 60 s; the last record stored whole, None if the sink failed.
+    /// The test ride's beats after the record at `time`, ms: none for the first 10 s, then 2 or 3 a second.
+    pub(crate) fn beats(time: u32) -> Vec<u16> {
+        let t = time - T0;
+        if t < 10 { Vec::new() } else { (0..2 + t % 2).map(|k| (600 + (t * 37 + k * 11) % 400) as u16).collect() }
+    }
+
+    /// Writes `samples` from `w`, each second's beats after its record (the full copy), a checkpoint every 60 s; the
+    /// last record stored whole, None if the sink failed.
     fn write(sink: &mut impl Sink, w: &mut Writer, samples: &[Sample], rec: &mut [u8; RECORD_LEN]) -> Option<()> {
         for s in samples {
             w.record(sink, s).ok()?;
+            if w.dev {
+                w.hrv(sink, &beats(s.time)).ok()?;
+            }
             if let Some((front, f, r)) = shift(s.time) {
                 w.gear(sink, s.time, front, f, r).ok()?;
             }
@@ -1241,6 +1337,9 @@ pub(crate) mod tests {
         at_checkpoint.insert(w.data_len(), full.clone());
         for s in &samples {
             w.record(&mut full, s).unwrap();
+            if dev {
+                w.hrv(&mut full, &beats(s.time)).unwrap(); // the beats cut and resumed too
+            }
             if let Some((front, f, r)) = shift(s.time) {
                 w.gear(&mut full, s.time, front, f, r).unwrap(); // the gear events cut and resumed too
             }
@@ -1280,7 +1379,14 @@ pub(crate) mod tests {
             if !next.is_empty() {
                 let mut r = [0; RECORD_LEN];
                 write(&mut disk, &mut w, &next, &mut r).unwrap();
-                assert_eq!(decode(&disk).unwrap().iter().filter(|x| x.0 == 20).count(), 200, "cut at {budget}");
+                let m = decode(&disk).unwrap();
+                assert_eq!(m.iter().filter(|x| x.0 == 20).count(), 200, "cut at {budget}");
+                if dev {
+                    // the beats of every second the file has, after a resume too: none lost, none twice
+                    let rr = m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1));
+                    let fed = samples.iter().flat_map(|s| beats(s.time)).map(u64::from);
+                    assert!(rr.filter(|&v| v != 0xffff).eq(fed), "cut at {budget}");
+                }
             }
             resumed += 1;
         }
@@ -1292,7 +1398,8 @@ pub(crate) mod tests {
     #[test]
     fn developer_fields_only_in_the_full_copy() {
         let samples = ride(300);
-        let bare: Vec<Sample> = samples.iter().map(|s| Sample { alpha1_milli: None, rmssd_ms: None, ..*s }).collect();
+        let bare: Vec<Sample> =
+            samples.iter().map(|s| Sample { alpha1_milli: None, rmssd_ms: None, artifacts_pct: None, ..*s }).collect();
         let file = |dev: bool, samples: &[Sample]| {
             let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
             let (mut w, _) = start(&mut f, dev).unwrap();
@@ -1307,8 +1414,8 @@ pub(crate) mod tests {
         let full = file(true, &samples);
         assert_eq!(full[1], 0x20);
         let m = decode(&full).unwrap();
-        let globals: Vec<u16> = m.iter().map(|x| x.0).take(5).collect();
-        assert_eq!(globals, [0, 207, 206, 206, 21], "file_id, developer data, timer start");
+        let globals: Vec<u16> = m.iter().map(|x| x.0).take(6).collect();
+        assert_eq!(globals, [0, 207, 206, 206, 206, 21], "file_id, developer data, timer start");
         let records: Vec<&Msg> = m.iter().filter(|x| x.0 == 20).collect();
         assert_eq!(records.len(), 300);
         assert_eq!(field(records[10], 230), Some(0xffff_ffff), "no DFA a1 yet: invalid");
@@ -1316,12 +1423,39 @@ pub(crate) mod tests {
         let a = f32::from_bits(field(records[100], 230).unwrap() as u32);
         assert!((a - (500 + 100) as f32 / 1000.0).abs() < 1e-6, "{a}");
         assert_eq!(field(records[100], 231), Some(20 + 100 % 40));
+        assert_eq!((field(records[10], 232), field(records[100], 232)), (Some(0xff), Some(100 % 9)), "Artifact");
+        // the beats: every one, in order, five to a message with the slots after them invalid
+        let rr: Vec<u64> = m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1)).collect();
+        let fed: Vec<u64> = samples.iter().flat_map(|s| beats(s.time)).map(u64::from).collect();
+        assert_eq!(rr.iter().copied().filter(|&v| v != 0xffff).collect::<Vec<_>>(), fed);
+        assert!(m.iter().filter(|x| x.0 == 78).all(|x| x.1.len() == 5));
         // the same records otherwise: the clean file's fields, in the same order
         let cm = decode(&clean).unwrap();
         let cr: Vec<&Msg> = cm.iter().filter(|x| x.0 == 20).collect();
         for (c, f) in cr.iter().zip(&records) {
-            assert_eq!(c.1[..], f.1[..f.1.len() - 2]);
+            assert_eq!(c.1[..], f.1[..f.1.len() - 3]);
         }
+    }
+
+    /// The beats' cost: an hour at 150 bpm is 9000 beats, 1800 messages of 11 bytes, 19.8 KB (and the definition).
+    #[test]
+    fn an_hour_of_beats() {
+        let size = |beats: bool| {
+            let mut f = Vec::new();
+            let mut w = Writer::begin_with(&mut f, T0, true).unwrap();
+            let rr = [400u16; 5]; // 150 bpm
+            for t in 0..3600u32 {
+                w.record(&mut f, &Sample { time: T0 + 1 + t, hr: Some(150), ..Default::default() }).unwrap();
+                if beats && t % 2 == 1 {
+                    w.hrv(&mut f, &rr).unwrap(); // five every two seconds
+                }
+            }
+            w.finish(&mut f, T0 + 3601).unwrap();
+            f.len()
+        };
+        let (with, without) = (size(true), size(false));
+        assert_eq!(with - without, 9 + 1800 * 11);
+        std::println!("an hour at 150 bpm: {without} B without the beats, {with} B with them");
     }
 
     #[test]
