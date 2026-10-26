@@ -36,7 +36,7 @@ messages from this firmware (P8 wrote them into stock's files; bryton-S510-mods'
 synced to Bryton or Strava), so it stays as it was.
 
 **Artifacts.** `ArtPct` is the share of the beats in the live DFA a1's 2-minute window that its 5 % rule dropped.
-FITNESS's HRVT1 / HRVT2 leave out a record over 5 % (src/hrvt.rs; Rogers et al. 2021, Sensors 21:821: DFA a1
+FITNESS's HRVT1 / HRVT2 leave out a record over 5 % (src/training/hrvt.rs; Rogers et al. 2021, Sensors 21:821: DFA a1
 biased from 1 to 3 % of missed beats on).
 
 **Why not make one file from the other at the save?** The numbers come from `cargo test-host two_copies_cost`, a

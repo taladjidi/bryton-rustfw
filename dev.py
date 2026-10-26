@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The computer side of the USB dev link (firmware side: src/dev.rs). Needs the firmware running with the cable
+"""The computer side of the USB dev link (firmware side: src/link/dev.rs). Needs the firmware running with the cable
 plugged in: the dot at the top right turns green when the link is ready.
 
   dev.py info                     version and uptime

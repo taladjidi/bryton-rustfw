@@ -395,7 +395,7 @@ Climbs without a course:
 - **Garmin ClimbPro** in free ride (Edge 540 and newer) and **Karoo Climber** (Predictive Path) do the same from the
   map: Karoo leaves out climbs under 400 m or under 3 % and filters by size; Garmin's thresholds are not published
   (500 m and 3 % is the forum's reading).
-- **Here (built 2026-10-26, src/climbs_ahead.rs):** the elevation is a node field of the routing graph (`field / 5 - 500`
+- **Here (built 2026-10-26, src/nav/climbs_ahead.rs):** the elevation is a node field of the routing graph (`field / 5 - 500`
   m, STORAGE_AND_MAPS.md 4.9), and the graph's keys are sign and magnitude (found on a real file, storage/route.rs); the
   climb finder of `course.rs` runs on the traced road as on a course (Garmin's definition: one rule for both, rather
   than stock's, which the notes above keep for a comparison on the unit).

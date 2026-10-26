@@ -102,13 +102,13 @@ The dated findings are in [journal.md](journal.md).
   pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D500 free
   in the next seconds with the ride saved (ANT+ and over Bluetooth), the 330 ms wait enough. `TX_COMPLETED`'s layout
   (`[0x40, ch, 0x01, 5]`, ANT Message Protocol 9.5.6.1) is read from the document, not seen.
-- **Power meter calibration (src/powercal.rs, app/powercal.rs, SENSORS > CALIBRATE POWER)**: only on the simulator. The page 0x01 layouts (ids
+- **Power meter calibration (src/drivers/powercal.rs, app/powercal.rs, SENSORS > CALIBRATE POWER)**: only on the simulator. The page 0x01 layouts (ids
   0xAA, 0xAB, 0xAC, 0xAF, 0x12; offset in bytes 6 and 7) are from the Nordic SDK and GoldenCheetah, the request
   bytes and the acknowledged send on the power channel (the same op as the trainer's, itself not yet confirmed) are
   inferred, and the 10 s time-out is ours. On the unit with the Sigeyi AXO spider: does it answer 0xAA with 0xAC (and
   which offset), does it report auto zero (byte 2), does a message to a sleeping meter fail cleanly; Sigeyi's own
   documentation of this was not found (retailers list auto zero and a manual zero offset only).
-- **Climbs ahead (src/climbs_ahead.rs, storage/route.rs, storage/inflate.rs, app/ahead.rs)**: only on the simulator,
+- **Climbs ahead (src/nav/climbs_ahead.rs, storage/route.rs, storage/inflate.rs, app/ahead.rs)**: only on the simulator,
   the host tests, the fuzz, and a real region file read on the computer (1009 of 1014 tiles decode, 5 are over the
   graph's 2560 nodes; traces from 199 random places: 194 made, median 4 km, 111 climbs). On the unit, with a map file
   of the region copied to `\Map\MapData\<Region>` (stock's own has them): a ride shows CLIMB and CLIMB M after the first
@@ -129,7 +129,7 @@ The dated findings are in [journal.md](journal.md).
   restart mid-ride that comes back INDOOR, then a save; the file's laps and session with sport cycling and sub_sport
   indoor_cycling (6). Then synced: a Ride marked trainer on Strava, the indoor flag on Intervals.icu (docs/sync.md,
   "Indoor rides").
-- **The home trainer, ANT+ FE-C (src/trainer.rs, drivers/fec.rs, app/trainer.rs; phase 1)**: only against the
+- **The home trainer, ANT+ FE-C (src/training/trainer.rs, drivers/fec.rs, app/trainer.rs; phase 1)**: only against the
   simulator's model of a trainer. On the unit with a smart trainer: SENSORS > TRAINER finds it (channel 7, type 17,
   8192, which is not stock's channel 8), its power, cadence and speed on the pages; the acknowledged send
   (`sd_ant_acknowledge_message_tx`, op 0xc8, `[6 c8 ch 8 data]`, inferred from stock's encoder, Ghidra notes
@@ -195,7 +195,7 @@ The dated findings are in [journal.md](journal.md).
   quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
   recording through it.
-- **Barometric altitude (src/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 3 m
+- **Barometric altitude (src/nav/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 3 m
   ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SETTINGS > BIKE against a known
   height, the ride start's own calibration, `\Rustfw\altcal.bin` kept over a restart, the chip's current at a reading
   a second (datasheet, not measured), `Alt_P0` of a real DeviceData.ini.

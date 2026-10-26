@@ -111,14 +111,19 @@ The point of this project is a firmware in safe Rust.
 ## Layout: logic in the library, transport in the board
 
 Folders sort the files; the modules keep their own names (`crate::ambient`, re-exported from lib.rs):
-- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `power.rs`, `dev.rs`, `sim.rs` (tests);
+- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `sim.rs` (tests), and the module roots below;
 - `src/app/`: the app's parts, one `impl App` per concern;
 - `src/drivers/`: each chip's or radio's protocol against `Board`;
-- `src/ui/`: what is drawn and the menus;
+- `src/ui/`: what is drawn, the menus and the ride pages' layout (`page.rs`);
+- `src/training/`: power metrics and curve, pacing, ramp test, HRV, workouts, reminders, the home trainer (pure logic);
+- `src/nav/`: the course and its cues, the climbs ahead, the barometric altitude (pure logic);
+- `src/link/`: the USB dev link, USB mass storage and the phone link's formats;
 - `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
 - `src/drivers.rs`: the module root of `src/drivers/`.
 - `src/storage.rs`: the module root of `src/storage/`.
+- `src/ui.rs`, `src/training.rs`, `src/nav.rs`, `src/link.rs`, `src/app.rs`: the module roots of their folders (no `mod.rs`); lib.rs re-exports the
+  modules of `drivers`, `storage`, `ui`, `training`, `nav` and `link` at the crate root.
 - `src/board.rs`: the module root of `src/board/`.
 
 - `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
@@ -187,10 +192,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
   colours, the history behind the graph field. Pure logic, one tick a second; each change comes out as an `Event`
   for the recorder (`App::recorder`, the one place the FIT writer will plug in).
-- `src/page.rs`: a ride page as rows of cells (up to 5 rows of 1 or 2, 8 fields), the layouts as presets, the edits
+- `src/ui/page.rs`: a ride page as rows of cells (up to 5 rows of 1 or 2, 8 fields), the layouts as presets, the edits
   (split across or down, merge, taller, shorter, a field) that never leave a field too small to read, and the
   format of `pages.bin` (two copies, seq and CRC). Pure logic.
-- `src/power.rs`: power metrics once a second (3 / 10 / 30 s averages, NP, IF, TSS, kJ, kcal, W' balance), running
+- `src/training/power.rs`: power metrics once a second (3 / 10 / 30 s averages, NP, IF, TSS, kJ, kcal, W' balance), running
   sums over a ring, integers only; ride.rs keeps max heart rate and the climbing (VAM, grade). Pure logic.
 - `src/ui/card.rs`: a ride's card once it has ended, and for each past ride: its map, elevation profile and ten
   numbers. Drawn once, when shown.
@@ -204,27 +209,27 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/drivers/touch.rs`: the touch controller (Sitronix, I2C1) against the `Board` primitives `touch_read` / `touch_reset` /
   `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `sim.rs`
   has a model of the chip (`TouchChip`) with a scripted finger. `tools/i2c.py --touch` reads it from the computer.
-- `src/altitude.rs`: the barometric altitude: the international barometric formula as an integer table, the
+- `src/nav/altitude.rs`: the barometric altitude: the international barometric formula as an integer table, the
   smoothing (a median of 5 readings, then an average of 1/6), the calibration (typed, from the receiver, at a ride's
   start; `\Rustfw\altcal.bin`'s sector), and which source the ride takes (barometer or GPS, with a reference number);
   a new reference never steps the ride's altitude: shifted, then let go at 0.5 m/s, that part (`corr`) taken out of
   the ascent (ride.rs, 3 m hysteresis on the barometer). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
-- `src/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
+- `src/training/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;
   `src/app/pace.rs` cuts the followed course's climb into sections, plans again at each one, and draws the TOP gauge
   (`Field::ClimbPace`, the workout gauge's widget).
-- `src/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
+- `src/training/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
   at a time, and `Queue`, which keeps several due at once to be said one after the other. Pure logic.
-- `src/powercal.rs`: the power meter's calibration over ANT+ (Bicycle Power page 0x01: the zero offset, the auto zero
+- `src/drivers/powercal.rs`: the power meter's calibration over ANT+ (Bicycle Power page 0x01: the zero offset, the auto zero
   switch, the meter's answers). Pure logic. `src/app/powercal.rs`: SENSORS > CALIBRATE POWER, its screen and the
   request sent as an acknowledged message on the power channel.
-- `src/ramp.rs`: the FTP ramp test: its workout, the stop rules, the best minute and FTP, HRVT1 from DFA a1. Pure logic.
+- `src/training/ramp.rs`: the FTP ramp test: its workout, the stop rules, the best minute and FTP, HRVT1 from DFA a1. Pure logic.
   `src/app/ramp.rs`: it played through the workout player, and the result screen (APPLY).
-- `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
+- `src/training/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
-- `src/trainer.rs`: the home trainer whatever the link (what is read, what is commanded: ERG, resistance, SIM; when to
+- `src/training/trainer.rs`: the home trainer whatever the link (what is read, what is commanded: ERG, resistance, SIM; when to
   send again; nothing is sent until the rider or a workout or course takes it over). Pure logic.
   `src/drivers/fec.rs`: ANT+ FE-C pages as bytes, sources in its module doc; `src/drivers/ftms.rs`: its Bluetooth
   sibling, FTMS (advertising, Indoor Bike Data, Control Point, status) as bytes.
@@ -251,7 +256,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   central's (connect, cancel, scan stop) and their events, each with its connection, serialized as the nRF5 SDK's
   codecs do (sources in the module doc); `nrf::start` configures two links (`sd_ble_cfg_set`) and falls back to the
   defaults when refused; `sim/ble_sim.rs` models the chip's side, a scripted phone and a trainer (FTMS or FE-C over BLE).
-- `src/phone.rs`: the phone link's formats, pure logic: the HID report map, ANCS, AMS, CTS, the bond's sector.
+- `src/link/phone.rs`: the phone link's formats, pure logic: the HID report map, ANCS, AMS, CTS, the bond's sector.
 - `src/storage/fit.rs`: the ride file (FIT activity), written as it goes against a `Sink` (write at an offset, set the
   length, flush); a checkpoint leaves a valid file and returns the recovery record, which resumes it after a reset.
   `tools/fit_check.py` decodes the test ride with independent decoders (fitdecode, Garmin's FIT SDK), the full copy's
@@ -281,9 +286,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
   over the main loop's passes, each pass bounded by `Board::awake_us`) and the import of its settings. Its cache
   (`Cache`, `\Rustfw\scan.bin`, 256 KB in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
-  (totals, history, best powers), so each ride is decoded once ever and a start reads only new or changed rides. `src/power_curve.rs`: best powers per duration in
+  (totals, history, best powers), so each ride is decoded once ever and a start reads only new or changed rides. `src/training/power_curve.rs`: best powers per duration in
   one pass, merged across rides, and the 2-parameter CP / W' fit (an envelope, the reference tools in its module
-  doc). Pure logic. `src/hrvt.rs`: HRVT1 / HRVT2 (DFA alpha1 0.75 / 0.5) from a ride's alpha1 and power, the median
+  doc). Pure logic. `src/training/hrvt.rs`: HRVT1 / HRVT2 (DFA alpha1 0.75 / 0.5) from a ride's alpha1 and power, the median
   over recent rides, pure logic; `src/storage/thresholds.rs` reads the recent full copies for it (memory from
   main.rs `make_thresholds`); `src/app/fitness.rs`: FITNESS's estimates, EST FTP, APPLY, and the ride's CP / W'
   (`model_now`, latched at the ride's start for W' balance and the pacer).
@@ -293,13 +298,13 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).
 - `src/storage/workout.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
-  whole (name, steps, targets, repeats written out), the calendar from today on. `src/workout.rs`: the player, pure
+  whole (name, steps, targets, repeats written out), the calendar from today on. `src/training/workout.rs`: the player, pure
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
 - `src/storage/course.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
-  memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/course.rs`: the course model,
+  memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course.rs`: the course model,
   pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
-  off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns. `src/course/cues.rs`:
+  off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns. `src/nav/course/cues.rs`:
   turn-by-turn cues (FIT course points, GPX turn words, else the turns of the course's shape), the next one said.
 - `src/ui/tiles.rs`: the basemap: stock's cached map tiles (`\Map\Data\Temp\Zoom<z>`) read from the FAT volume,
   drawn once per view into a pixel buffer in SDRAM (`hw::map_memory`), which map.rs copies to the panel and
@@ -314,16 +319,16 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `src/storage/inflate.rs`: gzip and deflate (RFC 1951, puff.c's method) over an iterator, into a `Scratch` of 16-bit
   words, CRC checked; its own code rather than `miniz_oxide` (module doc: licence, memory, size). `tools/route_pack.py`
   makes the synthetic map file in `test-data/route` (a made-up road in the open South Pacific) and reads real files to check.
-- `src/climbs_ahead.rs`: climbs on the road ahead without a course (pure logic against a `Graph`; stock's Climb Challenge
+- `src/nav/climbs_ahead.rs`: climbs on the road ahead without a course (pure logic against a `Graph`; stock's Climb Challenge
   2.0, ghidra/recovered_src/ride/route_climb.c): the snap to the nearest road (heading-aware), the trace (same way, else
   same class, else the smallest turn under 110 degrees, tiles asked for as it goes), stock's 9-tap smoothing, and the
   climbs by the course's own Garmin definition (`Course::climbs_of`), the rider placed on the trace each second, the
   climb said once. About 105 KB in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
-- `src/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
+- `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait.
-- `src/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
+- `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:

@@ -6,6 +6,7 @@ pub mod fonts;
 pub mod map;
 pub mod media;
 pub mod menu;
+pub mod page;
 pub mod text;
 pub mod tiles;
 pub mod trainer;

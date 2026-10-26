@@ -97,7 +97,7 @@ The golden rule (AGENTS.md) depends on this whole phase.
 
 ## 4. Ride data
 
-- Done (src/power.rs, ride.rs): NP, IF, TSS, kJ, kcal, W/kg, 3, 10 and 30 s power (patch P6), W' balance (the
+- Done (src/training/power.rs, ride.rs): NP, IF, TSS, kJ, kcal, W/kg, 3, 10 and 30 s power (patch P6), W' balance (the
   planned P10, differential model, CP = FTP), max power and heart rate, average cadence, pedal balance, grade, VAM,
   temperature. Weight and W' in the menu (RTC backup register 16).
 - Done since: CP and W' fitted as an envelope from the power curve with EST FTP / APPLY (HISTORY > FITNESS), the

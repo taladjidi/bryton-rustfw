@@ -12,5 +12,6 @@ pub mod ftms;
 pub mod gnss;
 pub mod nrf;
 pub mod panel;
+pub mod powercal;
 pub mod sensors;
 pub mod touch;

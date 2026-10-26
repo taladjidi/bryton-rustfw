@@ -30,7 +30,7 @@ This page has what is known, what was tried, and what to ask or try next. Last u
   - CPU caches: I-cache on, D-cache off;
   - the code runs from SDRAM.
 - **Stack:** usb-device 0.3, synopsys-usb-otg 0.5. A composite device: CDC ACM (the dev link) and Bulk-Only mass
-  storage (src/msc.rs), 512-byte bulk packets at high speed.
+  storage (src/link/msc.rs), 512-byte bulk packets at high speed.
 - **FIFOs: the crate sizes them to the minimum.**
   - **This firmware:** the receive FIFO is the endpoints' total plus 30 words (about 300 words), and each transmit
     FIFO is one packet (128 words for a 512-byte bulk endpoint).
