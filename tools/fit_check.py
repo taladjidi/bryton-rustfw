@@ -6,7 +6,11 @@ The third, the full copy (developer fields, recorder.rs "Two copies"), is the sa
 each record: checked with both decoders, Garmin's SDK naming the developer fields from their descriptions. The
 recorder's saved pair (target/fit/recorded.fit, recorded_full.fit, from `cargo test-host two_copies_cost`):
     fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
-same records in both, developer fields only in the full one.
+same records in both, developer fields only in the full one. The ride profile (fit.rs `Sample::indoor`, from
+`cargo test-host fit_sample`):
+    fit_check.py --profile target/fit/indoor.fit target/fit/older.fit
+an indoor ride cut and resumed (sport cycling, sub_sport indoor_cycling in every lap and the session), and a ride
+resumed from a record of the build before sub_sport (road).
 """
 import sys
 import warnings
@@ -108,6 +112,7 @@ def check(path, finished, full=False):
         s = values(next(m for m in msgs if m.name == "session"))
         dist = records[-1]["distance"]
         assert s["sport"] == "cycling" and s["total_distance"] == dist and s["max_heart_rate"] == 159
+        assert s["sub_sport"] == "road", s.get("sub_sport")
         assert abs(s["total_elapsed_time"] - len(records) - 1) < 1e-9
 
 
@@ -130,9 +135,33 @@ def check_pair(clean, full):
     print(f"{clean}, {full}: {len(rc)} records each, the same; developer fields only in the full copy")
 
 
+def check_profile(path, sub):
+    """A finished ride whose laps and session say cycling, `sub` (sub_sport, its fitdecode name): with both
+    decoders, Garmin's SDK giving the names its profile has (what Strava and Intervals.icu read)."""
+    msgs = read(path)
+    laps = [values(m) for m in msgs if m.name == "lap"]
+    s = values(next(m for m in msgs if m.name == "session"))
+    assert laps and all(l["sport"] == "cycling" and l["sub_sport"] == sub for l in laps), laps
+    assert s["sport"] == "cycling" and s["sub_sport"] == sub, s
+    try:
+        from garmin_fit_sdk import Decoder, Stream
+    except ImportError:
+        print("  garmin-fit-sdk: not installed, skipped")
+    else:
+        g, errors = Decoder(Stream.from_file(path)).read()
+        assert errors == [], errors
+        gs = g["session_mesgs"][0]
+        assert (gs["sport"], gs["sub_sport"]) == ("cycling", sub), (gs["sport"], gs["sub_sport"])
+        assert all((l["sport"], l["sub_sport"]) == ("cycling", sub) for l in g["lap_mesgs"])
+    print(f"{path}: {len(laps)} laps and the session: cycling, {sub} (fitdecode, garmin-fit-sdk)")
+
+
 args = sys.argv[1:]
 if args[:1] == ["--pair"]:
     check_pair(args[1], args[2])
+elif args[:1] == ["--profile"]:
+    check_profile(args[1], "indoor_cycling")
+    check_profile(args[2], "road")
 else:
     check(args[0], True)
     check(args[1], False)

@@ -56,6 +56,23 @@ that writes developer fields, and a 3-hour save would read about 390 KB and writ
   to a `.tmp` beside it, flushed to the drive itself (`F_FULLFSYNC`), renamed, then read back; one deleted on the
   unit is written again at the next run. Workouts deleted or moved on Intervals.icu are not removed from the unit.
 
+## Indoor rides
+
+A ride recorded with the INDOOR profile (src/app/profile.rs: chosen at Start when a trainer is heard, or set by
+hand) has sport cycling (2) and sub_sport indoor_cycling (6) in its laps and session; a road ride has road (7), as
+stock does with its bike type (`Fit_MapBikeTypeToSubSport`, Ghidra notes agent_r9.md). Not virtual_activity (58):
+this is a ride on a trainer, not in a virtual world.
+
+- **Strava** makes a FIT ride with sub_sport indoor_cycling a Ride, not a VirtualRide (only virtual_activity, 58,
+  gives a VirtualRide: forum.intervals.icu/t/indoor-outdoor-ftp-usage/6328, a user who tried both; not documented by
+  Strava, which says only that the sport is detected from the file). So sync.py reads the session's sub_sport and
+  sends indoor_cycling (and virtual_activity) rides with the upload's `trainer=1`, "whether the resulting activity
+  should be marked as having been performed on a trainer" (developers.strava.com/docs/reference, createUpload).
+  Without a position, such a ride is matched to no segment.
+- **Intervals.icu** sets an activity's trainer (indoor) flag itself when the sub_sport's name contains INDOOR, or
+  the type is virtual, or a ride has no GPS; virtual_activity makes it a VirtualRide (its developer's code quoted
+  in the same forum thread, 2022-01-24). Its indoor FTP then applies. Nothing to send: the file says it.
+
 ## Setup (once)
 
 1. **Intervals.icu:** Settings, then "Developer Settings": copy the athlete id (`i12345`) and generate an API key.
@@ -106,9 +123,11 @@ tools/sync.py status     # what is configured, how many rides were uploaded
 `tools/sync.py selftest` runs a fake Intervals.icu and Strava on 127.0.0.1 against a fake volume of synthetic FIT
 files, with no network, and check.sh runs it. It checks that a dry run sends and writes nothing; the full copy goes
 to Intervals.icu and the clean one to Strava; a file cut short is refused; a Strava duplicate counts as done; the
-token is refreshed and kept 0600; the workout is written in stock's layout; and a second run sends nothing.
+token is refreshed and kept 0600; the workout is written in stock's layout; a second run sends nothing; and only the
+indoor ride (session sub_sport 6, read past a compressed header) goes to Strava with `trainer=1`.
 `tools/fit_check.py` decodes both copies of a ride with fitdecode and Garmin's FIT SDK (src/storage/fit.rs, module
-doc), and `--pair` checks the recorder's two copies against each other.
+doc), `--pair` checks the recorder's two copies against each other, and `--profile` the sport and sub_sport of an
+indoor ride cut and resumed (indoor_cycling) and of a ride resumed from an older recovery record (road).
 
 ## Not yet seen
 
@@ -116,3 +135,4 @@ doc), and `--pair` checks the recorder's two copies against each other.
 - Stock's app puts a `<name>.json` beside each workout `.fit`. This firmware does not read it; whether stock does
   without it has not been checked.
 - Whether Intervals.icu charts `RMSSD` from the developer field is not known; `Alpha1` is the documented one.
+- An indoor ride on Strava (a Ride with the trainer mark) and on Intervals.icu (the indoor flag) (docs/status.md).

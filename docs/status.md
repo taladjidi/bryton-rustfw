@@ -40,6 +40,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **An indoor ride saved (src/storage/fit.rs sub_sport, recorder.rs)**: only on the simulator and the host tests
+  (every sector cut). On the unit: an INDOOR ride (a trainer heard at Start, or the ride menu's INDOOR row), a
+  restart mid-ride that comes back INDOOR, then a save; the file's laps and session with sport cycling and sub_sport
+  indoor_cycling (6). Then synced: a Ride marked trainer on Strava, the indoor flag on Intervals.icu (docs/sync.md,
+  "Indoor rides").
 - **The home trainer, ANT+ FE-C (src/trainer.rs, drivers/fec.rs, app/trainer.rs; phase 1)**: only against the
   simulator's model of a trainer. On the unit with a smart trainer: SENSORS > TRAINER finds it (channel 7, type 17,
   8192, which is not stock's channel 8), its power, cadence and speed on the pages; the acknowledged send

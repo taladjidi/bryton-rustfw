@@ -513,6 +513,11 @@ impl Recorder {
         }
     }
 
+    /// The ride is indoors (its FIT writer's profile: kept in the recovery record, so a resumed ride has it).
+    pub fn indoor(&self) -> bool {
+        self.writer.indoor()
+    }
+
     /// Where it is.
     pub fn phase(&self) -> Phase {
         self.phase
@@ -1250,6 +1255,11 @@ mod tests {
         (2026, 10, 23, 10 + (t / 3600) as u8, (t / 60 % 60) as u8, (t % 60) as u8)
     }
 
+    std::thread_local! {
+        /// The test ride is indoors ([`Sample::indoor`]): set by the indoor variant of a test, on its own thread.
+        static INDOOR: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+
     fn sample(t: u32) -> Sample {
         Sample {
             time: T0 + t,
@@ -1263,6 +1273,7 @@ mod tests {
             alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
             rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
             ascent_m: Some(t / 10),
+            indoor: INDOOR.get(),
         }
     }
 
@@ -1415,12 +1426,36 @@ mod tests {
         assert_eq!(check_clean(&d2.img, "two rides"), 0);
     }
 
+    /// The saved ride's session sub_sport (FIT profile: session field 6), if it has one.
+    fn sub_sport(img: &[u8], name: &str) -> Option<u64> {
+        let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+        let mut fat = Fat::mount(&mut d).ok()?;
+        let f = fat.open(&mut d, name).ok()?;
+        let mut v = std::vec![0u8; f.size as usize];
+        fat.read_at(&mut d, &f, 0, &mut v).ok()?;
+        let m = crate::fit::tests::decode(&v).ok()?;
+        m.iter().find(|x| x.0 == 18).and_then(|s| crate::fit::tests::field(s, 6))
+    }
+
     /// The golden rule: the power cut after every sector of a whole ride, its start (folders made) and its save
     /// included. After each, the boot's recovery gives back the ride at its last checkpoint (at most a minute
     /// lost), it goes on and is saved, and the volume is clean (FATs equal, FSInfo exact, no chain into a free
     /// cluster, no cross-link; a lost cluster at worst).
     #[test]
     fn power_cut_at_every_sector_write() {
+        power_cut_at_every_sector(false);
+    }
+
+    /// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)
+    /// and is saved with sub_sport indoor_cycling (6), at boot too (ended from the record alone).
+    #[test]
+    fn an_indoor_ride_cut_at_every_sector_stays_indoor() {
+        power_cut_at_every_sector(true);
+    }
+
+    fn power_cut_at_every_sector(indoor: bool) {
+        INDOOR.set(indoor);
+        let sub = Some(if indoor { 6 } else { 7 });
         let img = crate::fat::tests::image();
         let mut full = Card { img: img.clone(), budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
         ride(&mut Recorder::new(), &mut full, 0).unwrap();
@@ -1466,12 +1501,14 @@ mod tests {
             match outcome {
                 Outcome::Resumed(w, name) => {
                     assert_eq!(name, NAME);
+                    assert_eq!(r.indoor(), indoor, "{what}: the profile back from the record");
                     resumed += 1;
                     let from = w[0] + 1;
                     let from = if (PAUSE + 1..RESUME).contains(&from) { RESUME } else { from };
                     assert!(ride(&mut r, &mut d, from).is_some(), "{what}");
                     let (times, session) = saved(&d.img, SAVED).unwrap_or_else(|e| panic!("{what}: {e}"));
                     assert!(session, "{what}");
+                    assert_eq!(sub_sport(&d.img, SAVED), sub, "{what}");
                     assert!(times.windows(2).all(|p| p[0] < p[1]), "{what}: times in order");
                     let lost = all.len() - times.len();
                     assert!(lost <= CHECKPOINT_S as usize, "{what}: {lost} s lost");
@@ -1482,6 +1519,7 @@ mod tests {
                     saved_at_boot += 1;
                     let (times, session) = saved(&d.img, SAVED).unwrap_or_else(|e| panic!("{what}: {e}"));
                     assert!(session && times == all, "{what}: the whole ride");
+                    assert_eq!(sub_sport(&d.img, SAVED), sub, "{what}");
                 }
                 Outcome::Nothing => {
                     nothing += 1;

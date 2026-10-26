@@ -5,7 +5,9 @@
 //! file CRC. Messages: file_id, event (timer start, stop at a pause, start at a resume), one record a second (only
 //! the fields that are present: a new record definition goes out when that set changes), a lap at each Lap key,
 //! a gear change event at each shift of an electronic groupset ([`Writer::gear`]), and at the end the last lap,
-//! session and activity.
+//! session and activity. Laps and session carry sport cycling (2) and sub_sport indoor_cycling (6) for an indoor
+//! ride ([`Sample::indoor`]), road (7) else (FIT profile; stock maps its bike type the same way,
+//! `Fit_MapBikeTypeToSubSport` 0xd021a704); no sport message.
 //!
 //! **Checkpoints.** [`Writer`] holds no file data, only where it is: the data length, the running CRC of the data
 //! bytes, what is defined, and the ride totals. [`Writer::checkpoint`] writes the file CRC after the data and the
@@ -18,6 +20,13 @@
 //! which gives the checkpoint's file back exactly (the data before it was never rewritten). Recording goes on.
 //! The caller keeps two copies of the record (old / new) and takes the valid one with the larger
 //! [`Writer::data_len`]. Doing this twice is harmless.
+//!
+//! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 14 (this layout: lap and
+//! session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16 (developer fields), the ascent (17..30)
+//! and bit 31 (the build before sub_sport: total_ascent, no sport). A record without this layout reads as a road ride
+//! and has its lap and session defined again. This build never sets bit 31, so the build before, resuming its ride,
+//! defines its own lap and session again too; it reads bits 14 and 15 as part of the mask, which only defines the
+//! record again. A build before total_ascent reads neither bit and is not covered (as before).
 //!
 //! **Errors.** A failed write leaves the writer where it was (the next message goes to the same offset), so a
 //! failing sink loses samples, never the file. Nothing here panics: buffers are fixed and accessed with checks.
@@ -96,6 +105,9 @@ pub struct Sample {
     pub rmssd_ms: Option<u16>,
     /// The ride's ascent so far, m (ride.rs): the lap's and the session's total_ascent.
     pub ascent_m: Option<u32>,
+    /// The ride is indoors (ride::Profile::Indoor) this second: the lap's and the session's sub_sport, the last
+    /// second's at the end (a ride the trainer left goes back to ROAD).
+    pub indoor: bool,
 }
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
@@ -103,8 +115,16 @@ pub const RECORD_LEN: usize = 4 * WORDS + 4;
 
 /// The ride's ascent in a recovery record: bits 17..30 of its third word, m (16383 m at most).
 const ASCENT_MAX: u32 = 0x3fff;
-/// Bit 31 of that word: the record's file has lap and session with total_ascent (records before it: 0).
+/// Bit 31 of that word: the record's file has lap and session with total_ascent and no sport (the build before
+/// sub_sport sets it; this one never does, so that build, resuming this one's ride, defines its lap and session
+/// again instead of writing them on this layout).
 const LAYOUT_ASCENT: u32 = 1 << 31;
+/// Bit 14 of that word (the record mask's bits 10..15 are never used): the record's file has lap and session with
+/// total_ascent, sport and sub_sport. A build before reads it as part of the mask, which only defines the record
+/// again at the next second.
+const LAYOUT_SPORT: u32 = 1 << 14;
+/// Bit 15: the ride is indoors (sub_sport indoor_cycling). Records before it: 0, a road ride.
+const INDOOR: u32 = 1 << 15;
 
 const HEADER: u32 = 14;
 const WORDS: usize = 21;
@@ -184,9 +204,10 @@ const RECORD: [Field; 10] = [
     (13, 1, S8),
 ];
 /// timestamp, start_time, total_elapsed_time, total_timer_time, total_distance, avg / max speed, heart rate,
-/// cadence, power, event, event_type, total_ascent (m). Lap and session take the same values; the field numbers
-/// differ (FIT profile: lap 21, session 22).
-const LAP: [Field; 16] = [
+/// cadence, power, event, event_type, total_ascent (m), sport, sub_sport. Lap and session take the same values;
+/// the field numbers differ (FIT profile: total_ascent lap 21, session 22; sport lap 25, session 5; sub_sport lap
+/// 39, session 6; garmin_fit_sdk/profile.py 21.218).
+const LAP: [Field; 18] = [
     (253, 4, U32),
     (2, 4, U32),
     (7, 4, U32),
@@ -203,9 +224,11 @@ const LAP: [Field; 16] = [
     (0, 1, ENUM),
     (1, 1, ENUM),
     (21, 2, U16),
+    (25, 1, ENUM),
+    (39, 1, ENUM),
 ];
-/// [`LAP`]'s fields, then sport, first_lap_index, num_laps.
-const SESSION: [Field; 19] = [
+/// [`LAP`]'s fields, then first_lap_index, num_laps.
+const SESSION: [Field; 20] = [
     (253, 4, U32),
     (2, 4, U32),
     (7, 4, U32),
@@ -223,6 +246,7 @@ const SESSION: [Field; 19] = [
     (1, 1, ENUM),
     (22, 2, U16),
     (5, 1, ENUM),
+    (6, 1, ENUM),
     (25, 2, U16),
     (26, 2, U16),
 ];
@@ -279,6 +303,8 @@ pub struct Writer {
     dev: bool,
     /// The ride's ascent so far, m (the samples' [`Sample::ascent_m`]).
     ascent_m: u32,
+    /// Indoors (the last sample's [`Sample::indoor`]).
+    indoor: bool,
 }
 
 impl Writer {
@@ -302,6 +328,7 @@ impl Writer {
             paused_at: 0,
             dev: false,
             ascent_m: 0,
+            indoor: false,
         }
     }
 
@@ -377,7 +404,7 @@ impl Writer {
 
     /// [`LAP`]'s values for the lap from `lap_start` to `last`: elapsed and timer time and distance, with the
     /// ride's averages and maxima (the lap's when it is the only one).
-    fn lap_values(&self) -> [u32; 16] {
+    fn lap_values(&self) -> [u32; 18] {
         let pausing =
             if self.paused_at != 0 { self.last.saturating_sub(self.paused_at.max(self.lap_start)) } else { 0 };
         let elapsed = self.last.saturating_sub(self.lap_start);
@@ -405,6 +432,8 @@ impl Writer {
             9, // event lap
             1, // stop
             self.ascent_m.min(0xfffe),
+            2,                               // cycling
+            if self.indoor { 6 } else { 7 }, // indoor_cycling, road (FIT profile, sub_sport)
         ]
     }
 
@@ -420,6 +449,7 @@ impl Writer {
         if let Some(a) = s.ascent_m {
             self.ascent_m = self.ascent_m.max(a.min(ASCENT_MAX));
         }
+        self.indoor = s.indoor;
         self.stats[0].add(s.hr.map(u32::from));
         self.stats[1].add(s.cadence.map(u32::from));
         self.stats[2].add(s.power.map(u32::from));
@@ -482,10 +512,10 @@ impl Writer {
         self.message(sink, L_LAP, 19, &LAP, &lap)?;
         // the ride as one lap: the session's values
         let whole = Writer { lap_start: self.start, lap_dist: 0, ..*self }.lap_values();
-        // session: event session (8), stop (1), cycling (2), first lap 0, the laps
-        let mut v = [0u32; 19];
-        v[..16].copy_from_slice(&whole);
-        (v[13], v[16], v[17], v[18]) = (8, 2, 0, self.laps + 1);
+        // session: event session (8), stop (1), the lap's sport and sub_sport, first lap 0, the laps
+        let mut v = [0u32; 20];
+        v[..18].copy_from_slice(&whole);
+        (v[13], v[18], v[19]) = (8, 0, self.laps + 1);
         self.message(sink, L_SESSION, 18, &SESSION, &v)?;
         // activity: one session, manual (0), event activity (26), stop (1)
         self.message(sink, L_ACTIVITY, 34, &ACTIVITY, &[self.last, whole[3], 1, 0, 26, 1])?;
@@ -527,6 +557,11 @@ impl Writer {
         self.paused_at != 0
     }
 
+    /// The ride is indoors (the last sample's [`Sample::indoor`]; a record from before it: a road ride).
+    pub fn indoor(&self) -> bool {
+        self.indoor
+    }
+
     /// The writer a recovery record holds, if the record is whole.
     pub fn from_record(r: &[u8; RECORD_LEN]) -> Option<Writer> {
         let (body, tail) = r.split_at(RECORD_LEN - 2);
@@ -538,14 +573,18 @@ impl Writer {
             *x = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
         }
         let s = |i: usize| Stat { sum: w[i], n: w[i + 1], max: w[i + 2] };
-        // a record from a build before total_ascent: its file defines lap and session without it, so they are
-        // defined again (a later definition of a local type replaces the earlier one: FIT protocol)
-        let old = |d: u16| if w[2] & LAYOUT_ASCENT == 0 { d & !(1 << L_LAP | 1 << L_SESSION) } else { d };
+        // a record from a build before sub_sport (or before total_ascent): its file defines lap and session
+        // without them, so they are defined again (a later definition of a local type replaces the earlier one:
+        // FIT protocol). That build sets bit 31, and may have checkpointed this build's ride (bit 14 kept in its
+        // mask) after defining its own lap: only bit 14 without bit 31 is this layout
+        let ours = w[2] & (LAYOUT_SPORT | LAYOUT_ASCENT) == LAYOUT_SPORT;
+        let old = |d: u16| if ours { d } else { d & !(1 << L_LAP | 1 << L_SESSION) };
         Some(Writer {
             len: w[0],
             crc: w[1] as u16,
             defined: old((w[1] >> 16) as u16),
-            mask: w[2] as u16,
+            mask: w[2] as u16 & 0x3ff, // the record's 10 fields; bits 14 and 15 are the layout's and the profile's
+            indoor: w[2] & INDOOR != 0,
             dev: w[2] >> 16 & 1 != 0,
             ascent_m: w[2] >> 17 & ASCENT_MAX,
             start: w[3],
@@ -567,7 +606,11 @@ impl Writer {
         let w: [u32; WORDS] = [
             self.len,
             u32::from(self.crc) | u32::from(self.defined) << 16,
-            u32::from(self.mask) | u32::from(self.dev) << 16 | self.ascent_m.min(ASCENT_MAX) << 17 | LAYOUT_ASCENT,
+            u32::from(self.mask)
+                | if self.indoor { INDOOR } else { 0 }
+                | LAYOUT_SPORT
+                | u32::from(self.dev) << 16
+                | self.ascent_m.min(ASCENT_MAX) << 17,
             self.start,
             self.last,
             self.dist_mm,
@@ -730,7 +773,7 @@ pub fn crc_combine(a: u16, b: u16, mut len_b: u32) -> u16 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
     use super::*;
 
@@ -797,11 +840,11 @@ mod tests {
     }
 
     /// A data message: global number, then (field number, raw little-endian value) per field.
-    type Msg = (u16, Vec<(u8, u64)>);
+    pub(crate) type Msg = (u16, Vec<(u8, u64)>);
 
     /// A strict FIT reader for what this writer writes: header and its CRC, data size, file CRC, normal headers,
     /// every data message on a definition. Developer fields come out as field 230 + their number.
-    fn decode(f: &[u8]) -> Result<Vec<Msg>, &'static str> {
+    pub(crate) fn decode(f: &[u8]) -> Result<Vec<Msg>, &'static str> {
         if f.len() < 16 || f[0] != 14 || &f[8..12] != b".FIT" {
             return Err("header");
         }
@@ -855,7 +898,7 @@ mod tests {
         if i == 14 + size { Ok(out) } else { Err("message past the data") }
     }
 
-    fn field(m: &Msg, num: u8) -> Option<u64> {
+    pub(crate) fn field(m: &Msg, num: u8) -> Option<u64> {
         m.1.iter().find(|f| f.0 == num).map(|f| f.1)
     }
 
@@ -876,6 +919,7 @@ mod tests {
                 alpha1_milli: (t >= 60).then_some(500 + (t % 700) as u16),
                 rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
                 ascent_m: Some(t / 10), // the ride's ascent so far: 1 m every 10 s
+                indoor: false,
             })
             .collect()
     }
@@ -925,7 +969,7 @@ mod tests {
         // the record as the earlier build wrote it: bit 31 of its third word clear, the CRC made again
         let (at, mut word) = (2 + 4 * 2, [0u8; 4]);
         word.copy_from_slice(&rec[at..at + 4]);
-        let old = u32::from_le_bytes(word) & !LAYOUT_ASCENT;
+        let old = u32::from_le_bytes(word) & !(LAYOUT_ASCENT | LAYOUT_SPORT);
         rec[at..at + 4].copy_from_slice(&old.to_le_bytes());
         let c = crc(0, &rec[..RECORD_LEN - 2]);
         rec[RECORD_LEN - 2..].copy_from_slice(&c.to_le_bytes());
@@ -937,6 +981,70 @@ mod tests {
         let m = decode(&f).unwrap();
         let session = m.iter().rev().find(|x| x.0 == 18).unwrap();
         assert_eq!(field(session, 22), Some(23), "the session's total_ascent after the resume");
+        assert_eq!((field(session, 5), field(session, 6)), (Some(2), Some(7)), "a road ride: cycling, road");
+    }
+
+    /// The record as the build before sub_sport wrote it (bit 31 set, bits 14 and 15 clear), `indoor` or not: the
+    /// writer it gives, and the file it is for.
+    fn record_before_sub_sport(indoor: bool) -> (Writer, Vec<u8>) {
+        let mut f = Vec::new();
+        let (mut w, _) = Writer::start(&mut f, T0).unwrap();
+        for s in &ride(120) {
+            w.record(&mut f, &Sample { indoor, ..*s }).unwrap();
+            if s.time == T0 + 60 {
+                w.lap(&mut f, s.time).unwrap(); // the lap defined in the file, on this build's layout here
+            }
+        }
+        let mut rec = w.checkpoint(&mut f).unwrap();
+        let (at, mut word) = (2 + 4 * 2, [0u8; 4]);
+        word.copy_from_slice(&rec[at..at + 4]);
+        let old = u32::from_le_bytes(word) & !(LAYOUT_SPORT | INDOOR) | LAYOUT_ASCENT;
+        rec[at..at + 4].copy_from_slice(&old.to_le_bytes());
+        let c = crc(0, &rec[..RECORD_LEN - 2]);
+        rec[RECORD_LEN - 2..].copy_from_slice(&c.to_le_bytes());
+        (Writer::from_record(&rec).unwrap(), f)
+    }
+
+    /// The ride profile in the file: cycling (2) in the lap and the session, sub_sport indoor_cycling (6) for an
+    /// indoor ride, road (7) else (FIT profile; stock maps its bike type the same way, `Fit_MapBikeTypeToSubSport`);
+    /// kept in the recovery record, so a resumed ride stays indoor; a record from before it reads as a road ride
+    /// and defines lap and session again (its file's have no sport).
+    #[test]
+    fn the_profile_goes_into_the_file_and_the_record() {
+        for indoor in [false, true] {
+            let (mut f, mut rec) = (Vec::new(), [0; RECORD_LEN]);
+            let (mut w, _) = Writer::start(&mut f, T0).unwrap();
+            let samples: Vec<Sample> = ride(240).iter().map(|s| Sample { indoor, ..*s }).collect();
+            for s in &samples[..120] {
+                w.record(&mut f, s).unwrap();
+            }
+            w.lap(&mut f, T0 + 120).unwrap();
+            let r = w.checkpoint(&mut f).unwrap();
+            let mut w = Writer::from_record(&r).unwrap();
+            assert_eq!(w.indoor(), indoor, "kept in the record");
+            assert_ne!(w.defined & 1 << L_LAP, 0, "this build's lap definition kept");
+            // the record's word: never bit 31 (the build before would write its lap on this layout)
+            assert_eq!(u32::from_le_bytes(r[10..14].try_into().unwrap()) & LAYOUT_ASCENT, 0);
+            write(&mut f, &mut w, &samples[120..], &mut rec).unwrap();
+            let m = decode(&f).unwrap();
+            let sub = if indoor { 6 } else { 7 };
+            for lap in m.iter().filter(|x| x.0 == 19) {
+                assert_eq!((field(lap, 25), field(lap, 39)), (Some(2), Some(sub)), "lap: cycling, {sub}");
+            }
+            let session = m.iter().find(|x| x.0 == 18).unwrap();
+            assert_eq!((field(session, 5), field(session, 6)), (Some(2), Some(sub)), "session: cycling, {sub}");
+        }
+        // a record of the build before (indoor rides did not exist there): road, lap and session defined again
+        for indoor in [false, true] {
+            let (mut w, mut f) = record_before_sub_sport(indoor);
+            assert!(!w.indoor(), "an older record reads as a road ride");
+            assert_eq!(w.defined & (1 << L_LAP | 1 << L_SESSION), 0, "lap and session to be defined again");
+            w.end(&mut f, T0 + 121).unwrap(); // ended from the record alone, no sample after it
+            w.checkpoint(&mut f).unwrap();
+            let m = decode(&f).unwrap();
+            let session = m.iter().find(|x| x.0 == 18).unwrap();
+            assert_eq!(field(session, 6), Some(7), "road");
+        }
     }
 
     #[test]
@@ -1180,5 +1288,20 @@ mod tests {
         let mut w = Writer::from_record(&rec).unwrap();
         w.checkpoint(&mut sink.disk).unwrap();
         std::fs::write(dir.join("cut.fit"), &sink.disk).unwrap();
+
+        // indoor.fit: an indoor ride cut mid-ride, resumed from its record and finished (sub_sport
+        // indoor_cycling); older.fit: a ride resumed from a record of the build before sub_sport (road)
+        let indoor: Vec<Sample> = ride(1200).iter().map(|s| Sample { indoor: true, ..*s }).collect();
+        let mut sink = Cut { disk: Vec::new(), budget: f.len() / 2 };
+        let (mut w, mut rec) = Writer::start(&mut sink, T0).unwrap();
+        assert!(write(&mut sink, &mut w, &indoor, &mut rec).is_none());
+        let (mut disk, mut w) = (sink.disk, Writer::from_record(&rec).unwrap());
+        w.checkpoint(&mut disk).unwrap();
+        let next: Vec<Sample> = indoor.iter().filter(|s| s.time > w.last).copied().collect();
+        write(&mut disk, &mut w, &next, &mut rec).unwrap();
+        std::fs::write(dir.join("indoor.fit"), &disk).unwrap();
+        let (mut w, mut f) = record_before_sub_sport(false);
+        w.finish(&mut f, T0 + 121).unwrap();
+        std::fs::write(dir.join("older.fit"), &f).unwrap();
     }
 }
