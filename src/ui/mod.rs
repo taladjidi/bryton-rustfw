@@ -365,6 +365,14 @@ pub fn clear_page(c: &mut impl Canvas) {
     c.fill(0, PAGE_Y, W, H - PAGE_Y, BLACK);
 }
 
+/// The page under a menu, but for its rows ([`draw_menu_row`] paints the whole of each): the title's band and what
+/// is left under the last row.
+pub fn clear_menu(c: &mut impl Canvas) {
+    c.fill(0, PAGE_Y, W, LIST_Y - PAGE_Y, BLACK);
+    let end = LIST_Y + MENU_ROWS as u32 * MENU_ROW;
+    c.fill(0, end, W, H - end, BLACK);
+}
+
 /// The devices heard, strongest first, one per row: the name (white); for one that sent none (phones, laptops),
 /// what kind of device it is from its manufacturer data, else its address (grey); and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
 pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {

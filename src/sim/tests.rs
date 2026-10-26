@@ -4203,6 +4203,37 @@ fn perf_budgets() {
     assert!(over.is_empty(), "{over:?}");
 }
 
+/// A menu's budgets in pixels (about 1 us each on the unit, SPI1 at 16 MHz): a move redraws the two rows whose
+/// selection changed, a turn to the next screen of rows only the rows (the title stays), and opening a menu clears
+/// only what its rows do not paint. Measured 2026-10-26: open 75 360 (138 720 when the page was cleared under the
+/// rows: the profiler's 161 ms longest input on the unit), a move 21 120, a turn 63 360 (138 720 as a whole show).
+#[test]
+fn menu_budgets() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    let cost = |sim: &mut Sim, app: &mut App, p: Press| {
+        let px = sim.pixels;
+        app.press(sim, p);
+        assert_consistent(sim, app);
+        sim.pixels - px
+    };
+    let open = cost(&mut sim, &mut app, Press::Long(Key::Page));
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, 0)));
+    assert!(open <= 80_000, "open: {open} px");
+    app.open(Screen::Menu(Menu::Sensors, 0));
+    app.show(&mut sim);
+    assert!(app.rows(Menu::Sensors) > ui::MENU_ROWS, "a menu that turns");
+    for k in 1..=ui::MENU_ROWS {
+        let px = cost(&mut sim, &mut app, Press::Short(Key::Page));
+        let turn = k == ui::MENU_ROWS;
+        std::println!("{} to row {k}: {px} px", if turn { "turn" } else { "move" });
+        assert!(px <= if turn { 64_000 } else { 22_000 }, "row {k}: {px} px");
+    }
+    let back = cost(&mut sim, &mut app, Press::Short(Key::Lap));
+    assert!(back <= 64_000, "turn back: {back} px");
+}
+
 /// The synthetic hill (tools/fat_image.py: 2 km east on the flat at 100 m, 2 km north up to 220 m, 1 km east)
 /// ridden at 8 m/s from its start, with a detour 150 m south from 60 s to 95 s.
 fn course_route(ms: u64) -> (i32, i32, i32) {
