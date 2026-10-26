@@ -33,7 +33,7 @@ fn ride_ok(app: &App, since_ms: u64, sim: &Sim) {
 }
 
 fn said(app: &App) -> usize {
-    app.notices.iter().filter(|n| n.as_str().ends_with("RADIO RESET")).count()
+    app.notes.list.iter().filter(|n| n.as_str().ends_with("RADIO RESET")).count()
 }
 
 /// One stray byte between two frames puts the framing out of step. The link is read again from a frame boundary

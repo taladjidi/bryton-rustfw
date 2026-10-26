@@ -66,7 +66,7 @@ fn pairing_from_the_menu() {
 
     // a message: its title and text in the banner and the notices (as much as two banner lines hold), at the phone's time
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.notices[0].as_str(), "09:41 Bob: Lunch at 1?");
+    assert_eq!(app.notes.list[0].as_str(), "09:41 Bob: Lunch at 1?");
 
     // the phone walks away: the unit advertises slowly again, for it to come back
     run(&mut sim, &mut app, 3000);
@@ -100,7 +100,7 @@ fn media_keys_and_now_playing() {
     app.input(&mut sim, Input::Touch(Gesture::Hold(120, 160))); // the shutter
     run(&mut sim, &mut app, 3000);
     app.media(&mut sim, crate::phone::Media::SkipFwd, false);
-    assert_eq!(app.banner.as_str(), "NOT IN THIS APP", "not in the phone's list: not sent");
+    assert_eq!(app.notes.text.as_str(), "NOT IN THIS APP", "not in the phone's list: not sent");
     let ph = sim.nordic.phone.as_ref().unwrap();
     assert_eq!(ph.commands, [2, 3, 4, 5], "toggle, next, previous, volume up: AMS");
     assert_eq!(ph.reports, [0x08, 0], "volume up pressed and released: HID");
@@ -151,7 +151,7 @@ fn incoming_calls() {
     assert_consistent(&sim, &app);
     run(&mut sim, &mut app, 4000);
     assert!(!app.phone.ringing, "ended on the phone: closed");
-    assert!(app.banner.as_str() == "< LEFT 200 M" && app.banner_drawn, "then the cue");
+    assert!(app.notes.text.as_str() == "< LEFT 200 M" && app.notes.drawn, "then the cue");
     assert_consistent(&sim, &app);
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
 }
@@ -216,7 +216,7 @@ fn the_bonded_phone_comes_back() {
     assert_eq!(sim2.nordic.phone.as_ref().unwrap().reports, [0x01, 0], "play / pause over HID");
 
     app.activate(&mut sim2, Menu::Phone, 5); // FORGET: asked first
-    assert!(app.banner.as_str().starts_with("FORGET THE PHONE?") && app.phone.bonded());
+    assert!(app.notes.text.as_str().starts_with("FORGET THE PHONE?") && app.phone.bonded());
     app.activate(&mut sim2, Menu::Phone, 5); // confirmed
     run(&mut sim2, &mut app, 500);
     assert_eq!(app.phone.link(), Link::Off);
@@ -305,7 +305,7 @@ fn ant_alongside_the_phone() {
     run(&mut sim, &mut app, 5000);
     assert_eq!(app.phone.link(), Link::Secure);
     assert_eq!(app.live.get(crate::sensors::Metric::Hr), Some(72));
-    assert!(app.notices[0].as_str().ends_with("Mail: Hi"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("Mail: Hi"), "{}", app.notes.list[0].as_str());
 }
 
 /// Paired with one phone, PAIR lets another pair (or the same one after it forgot the unit): the window is the

@@ -935,7 +935,7 @@ impl App {
                     *who = a.title;
                     let who = *who;
                     // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
-                    self.banner_drawn = false;
+                    self.notes.drawn = false;
                     self.phone.ringing = true;
                     let mut p = Panel(b, (0, ui::H), self.settings.smooth);
                     ui::draw_call(&mut p, who.as_str());

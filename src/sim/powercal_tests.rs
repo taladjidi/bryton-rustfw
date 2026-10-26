@@ -137,7 +137,7 @@ fn refused_while_riding() {
     assert_eq!(app.ride.state(), ride::State::Running);
     app.open_powercal();
     assert_ne!(app.screen(), Screen::PowerCal);
-    assert_eq!(app.banner.as_str(), "NO CALIBRATION RIDING");
+    assert_eq!(app.notes.text.as_str(), "NO CALIBRATION RIDING");
     assert!(requests(&sim).is_empty());
     app.press(&mut sim, Press::Short(Key::Start)); // paused
     app.open_powercal();

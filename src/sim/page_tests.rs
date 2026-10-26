@@ -104,13 +104,13 @@ fn edit_a_page_on_the_page() {
     press(&mut sim, &mut app, Key::Lap); // the last box: cadence
     press(&mut sim, &mut app, Key::Start);
     action(&mut sim, &mut app, menu::EditRow::SplitAcross);
-    assert!(app.banner.as_str().contains("2 A ROW"), "{}", app.banner.as_str());
+    assert!(app.notes.text.as_str().contains("2 A ROW"), "{}", app.notes.text.as_str());
     assert_eq!(app.screen(), Screen::Menu(Menu::Edit(3), 1), "refused: the actions stay");
     super::tests::back(&mut sim, &mut app);
     assert!(app.file_untouched_since_start(&sim), "nothing written while editing");
     press(&mut sim, &mut app, Key::Back);
     assert_eq!(app.screen(), Screen::Ride(0), "Back keeps the changes, back on the page");
-    assert_eq!(app.banner.as_str(), "CHANGES KEPT");
+    assert_eq!(app.notes.text.as_str(), "CHANGES KEPT");
     assert_eq!(app.pages()[0], e.work);
     run(&mut sim, &mut app, 1100);
     super::tests::assert_consistent(&sim, &app);
@@ -164,7 +164,7 @@ fn drop_and_undo() {
     assert!(matches!(app.screen(), Screen::Menu(Menu::Edit(_), _)), "asked, not dropped yet");
     press(&mut sim, &mut app, Key::Start); // drop
     assert_eq!((app.screen(), app.pages()[1]), (Screen::Ride(1), before));
-    assert_eq!(app.banner.as_str(), "CHANGES DROPPED");
+    assert_eq!(app.notes.text.as_str(), "CHANGES DROPPED");
     run(&mut sim, &mut app, 500);
     assert_eq!(file(&sim), None, "nothing to write");
     super::tests::assert_consistent(&sim, &app);
@@ -190,7 +190,7 @@ fn never_while_recording() {
     app.press(&mut sim, Press::Long(Key::Page));
     assert!(!(0..app.rows(Menu::Ride(0))).any(|i| app.row(Menu::Ride(0), i) == Some(menu::Row::Open(Menu::Page(0)))));
     app.edit_page(&mut sim, 0, 0);
-    assert_eq!(app.banner.as_str(), "PAUSE TO EDIT");
+    assert_eq!(app.notes.text.as_str(), "PAUSE TO EDIT");
     press(&mut sim, &mut app, Key::Start); // PAUSE (the ride menu's first row)
     assert_eq!(app.ride.state(), ride::State::Paused);
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(0)));
@@ -229,7 +229,7 @@ fn pages_added_and_deleted() {
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::AddPage);
     press(&mut sim, &mut app, Key::Start);
-    assert_eq!((app.page_count(), app.banner.as_str()), (6, "6 PAGES AT MOST"));
+    assert_eq!((app.page_count(), app.notes.text.as_str()), (6, "6 PAGES AT MOST"));
     app.leave_menus();
     app.show(&mut sim);
     let mut round = Vec::new();
@@ -263,7 +263,7 @@ fn pages_added_and_deleted() {
     app.edit_page(&mut sim, 0, 0);
     app.open(Screen::Menu(Menu::Edit(0), 8));
     app.input(&mut sim, Input::Select);
-    assert_eq!((app.page_count(), app.banner.as_str()), (1, "ONE PAGE AT LEAST"));
+    assert_eq!((app.page_count(), app.notes.text.as_str()), (1, "ONE PAGE AT LEAST"));
 }
 
 /// Pages made in the editor, saved, for the README: three rows of two, a big graph over four values.
@@ -546,7 +546,7 @@ fn no_change_before_the_file_is_read() {
     app.screen = Screen::Ride(0);
     let before = app.pages()[0];
     app.next_layout(&mut sim2, 0);
-    assert_eq!((app.banner.as_str(), app.pages()[0]), ("USB DRIVE ON", before), "refused");
+    assert_eq!((app.notes.text.as_str(), app.pages()[0]), ("USB DRIVE ON", before), "refused");
     app.edit_page(&mut sim2, 0, 0);
     assert_eq!(app.edit, None);
     run(&mut sim2, &mut app, 500);
@@ -992,7 +992,7 @@ fn the_pages_menu_edits_the_set_it_names() {
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(true)));
     press(&mut sim, &mut app, Key::Start);
-    assert_eq!((app.banner.as_str(), app.pages_indoor), ("THE RIDE'S SET", false));
+    assert_eq!((app.notes.text.as_str(), app.pages_indoor), ("THE RIDE'S SET", false));
 }
 
 /// A hold on a box of an indoor page edits the indoor set (the page is indoor's), kept it is written, the road pages

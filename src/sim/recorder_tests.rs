@@ -24,7 +24,7 @@ fn a_ride_reset_resumed_and_saved() {
     sim2.backup = sim.backup;
     let mut app = App::start(&mut sim2, None);
     run(&mut sim2, &mut app, 1000);
-    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
     assert_eq!(app.ride.state(), ride::State::Paused);
     let back = app.ride.timer_s();
     assert!(back <= timer && back + 60 >= timer, "timer {back} of {timer}");
@@ -35,7 +35,7 @@ fn a_ride_reset_resumed_and_saved() {
     app.press(&mut sim2, Press::Short(Key::Start)); // pause
     save_ride(&mut sim2, &mut app); // end
     run(&mut sim2, &mut app, 2000);
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     assert_eq!(sim2.backup[RIDE_BKP], 0);
     let lost = crate::fat::write::tests::fsck(&sim2.emmc.image).unwrap();
     assert_eq!(lost, 0);
@@ -63,7 +63,7 @@ fn read_only_build_does_not_touch_the_card() {
     let cmds = sim.emmc.cmds.len();
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 20_000);
-    assert!(app.notices[0].as_str().ends_with("NOT RECORDING"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("NOT RECORDING"), "{}", app.notes.list[0].as_str());
     assert_eq!(sim.emmc.cmds.len(), cmds, "no card work during the ride");
 }
 
@@ -108,14 +108,14 @@ fn an_indoor_ride_resumes_indoor_and_saves_as_indoor_cycling() {
     run(&mut sim, &mut app, 150_000);
     let (mut sim2, mut app) = reboot(&mut sim, 3);
     run(&mut sim2, &mut app, 1000);
-    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
     assert!(app.indoors(), "indoor again, from the record");
     app.press(&mut sim2, Press::Short(Key::Start)); // resume
     run(&mut sim2, &mut app, 30_000); // under TRAINER_QUIET_S: still indoor
     app.press(&mut sim2, Press::Short(Key::Start));
     save_ride(&mut sim2, &mut app);
     run(&mut sim2, &mut app, 2000);
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     let name = std::string::String::from_utf8(app.recorder.name().to_vec()).unwrap();
     let field = crate::fit::tests::field;
     for path in [std::format!("Activities/{name}.fit"), std::format!("Rustfw/Activities/{name}.fit")] {
@@ -147,7 +147,7 @@ fn off_mid_ride_keeps_every_second() {
     assert!(sim.standby);
     let (mut sim, mut app) = reboot(&mut sim, 5);
     run(&mut sim, &mut app, 1000);
-    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
     assert!(app.ride.timer_s().abs_diff(timer) <= 1, "timer {} of {timer}", app.ride.timer_s());
 }
 
@@ -191,12 +191,12 @@ fn a_full_copy_that_fails_never_stops_the_ride() {
     app.press(&mut sim, Press::Short(Key::Start));
     let name = crate::recorder::ride_name(app.rec_time().0);
     run(&mut sim, &mut app, 90_000);
-    assert!(app.notices.iter().any(|n| n.as_str().ends_with("NO FULL COPY")));
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("NO FULL COPY")));
     assert_ne!(app.strip.rec, Rec::NotSaving);
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     assert_eq!(sim.backup[RIDE_BKP], 0, "nothing left open");
     let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
     assert!(record_times(&sim.emmc.image, &path).len() >= 89);
@@ -218,7 +218,7 @@ fn a_failing_recorder_shows() {
     sim.emmc.dead = true; // the card stops answering
     run(&mut sim, &mut app, 70_000); // the checkpoint at 60 s fails
     assert_eq!(app.strip.rec, Rec::NotSaving);
-    assert!(app.notices[0].as_str().ends_with("NOT SAVING"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("NOT SAVING"), "{}", app.notes.list[0].as_str());
     sim.emmc.dead = false;
     run(&mut sim, &mut app, 10_000); // tried again after 5 s
     assert_ne!(app.strip.rec, Rec::NotSaving);
@@ -244,12 +244,12 @@ fn start_while_the_card_failed_at_boot() {
     run(&mut sim, &mut app, 3000);
     sim.emmc.dead = false;
     run(&mut sim, &mut app, 10_000);
-    assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")), "{:?}", app.notices[0].as_str());
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")), "{:?}", app.notes.list[0].as_str());
     assert_eq!((app.ride.state(), app.ride_started), (ride::State::Paused, ((2026, 10, 23), (9, 0))));
     assert!(app.ride.timer_s() + 60 >= timer);
     save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
@@ -280,7 +280,7 @@ fn every_write_is_reliable_when_the_card_offers_it() {
         let (mut sim, _) = start(Some(cut));
         let (mut sim, mut app) = reboot(&mut sim, 2);
         run(&mut sim, &mut app, 1000);
-        let back = app.notices[0].as_str().ends_with("RIDE RESUMED");
+        let back = app.notes.list[0].as_str().ends_with("RIDE RESUMED");
         resumed += usize::from(back);
         // once the ride's first checkpoint is on the card, every later cut resumes it: a cut that does not is a
         // ride lost (a cut before it finds no ride to resume, which is right: nothing was saved yet)
@@ -372,7 +372,7 @@ fn end_ride_screen_by_keys() {
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "SAVE: the card, 2 keys, was 3");
     run(&mut sim, &mut app, 2000);
     sim.save("summary");
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     assert_eq!(places(&sim, name), [["Activities"], ["Rustfw/Activities"]]);
     assert_eq!(sim.backup[RIDE_BKP], 0);
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
@@ -416,7 +416,7 @@ fn discard_by_keys_moves_both_copies() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!((app.screen(), app.ride.state()), (Screen::Main, ride::State::Idle), "discarded");
     run(&mut sim, &mut app, 2000);
-    assert!(app.notices[0].as_str().ends_with("RIDE DISCARDED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE DISCARDED"), "{}", app.notes.list[0].as_str());
     assert_eq!(places(&sim, name), [["Rustfw/Discarded"], ["Rustfw/Discarded/Full"]]);
     assert_eq!(sim.backup[RIDE_BKP], 0);
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
@@ -501,7 +501,7 @@ fn a_reset_on_the_end_screen_resumes_the_ride() {
         assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "the ride open");
         let (mut sim, mut app) = reboot(&mut sim, 5);
         run(&mut sim, &mut app, 1000);
-        assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+        assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
         assert_eq!(app.ride.state(), ride::State::Paused);
         assert_eq!(app.ride.timer_s(), timer, "every second: the pause was a checkpoint");
         save_ride(&mut sim, &mut app);
@@ -528,7 +528,7 @@ fn an_indoor_ride_by_hand_stays_indoor_after_a_reset() {
     assert!(app.indoors());
     app.press(&mut sim2, Press::Short(Key::Start));
     run(&mut sim2, &mut app, 150_000);
-    assert!(app.indoors(), "after the reset, 150 s on: {}", app.notices[0].as_str());
+    assert!(app.indoors(), "after the reset, 150 s on: {}", app.notes.list[0].as_str());
 }
 
 /// Review of the ride profile: samples come only on running seconds, so INDOOR set while paused, then SAVE, left
@@ -576,7 +576,7 @@ fn a_profile_set_while_paused_survives_a_switch_off() {
     app.power_off(&mut sim);
     let (mut sim2, mut app) = reboot(&mut sim, 3);
     run(&mut sim2, &mut app, 1000);
-    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
     assert!(app.indoors(), "indoor, set while paused, from the record");
     app.press(&mut sim2, Press::Short(Key::Start));
     run(&mut sim2, &mut app, 150_000);
@@ -609,7 +609,7 @@ fn a_resumed_ride_takes_the_model_available_at_resume() {
     sim2.backup = sim.backup;
     let mut app = App::start(&mut sim2, None);
     run(&mut sim2, &mut app, 1000);
-    assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
     assert_eq!(app.ride_model, Some((settings.0, settings.1, false)), "what this start had at the resume");
     app.stock.start(app.date);
     while app.stock.status() == crate::stock::Status::Running {
@@ -656,7 +656,7 @@ fn the_strap_beats_go_into_the_full_copy() {
     app.press(&mut sim2, Press::Short(Key::Start));
     save_ride(&mut sim2, &mut app);
     run(&mut sim2, &mut app, 3000);
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
 
     let rr = |dir| {
         let f = ride_file(&sim2, dir, name).unwrap();

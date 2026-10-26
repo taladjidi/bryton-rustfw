@@ -43,7 +43,7 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 
 /// Back, after the banner up (if one is) is cleared: a Back with a banner up only clears it.
 pub(super) fn back(sim: &mut Sim, app: &mut App) {
-    if app.banner_ms.is_some() {
+    if app.notes.ms.is_some() {
         app.press(sim, Press::Short(Key::Back));
     }
     app.press(sim, Press::Short(Key::Back));
@@ -278,7 +278,7 @@ fn usb_drops_are_counted() {
     app.usb_dropped(&mut sim);
     app.usb_dropped(&mut sim);
     assert_eq!(sim.backup[USB_DROPS_BKP], 0x0b00_0002);
-    assert_eq!(app.notices[0].as_str(), "09:00 USB RECONNECT");
+    assert_eq!(app.notes.list[0].as_str(), "09:00 USB RECONNECT");
 }
 
 /// The two diagnostics that share registers 0 and 31 (settings.rs) never read each other's words as their own: the
@@ -563,7 +563,7 @@ fn stock_data_menu() {
     assert_eq!((p[0].cells(), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
     assert_eq!((p[1].cells(), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
     assert_eq!((app.settings.weight_kg, app.settings.wprime_j), (73, 21_000), "72.5 kg rounded, W' in J");
-    assert!(app.notices[0].as_str().ends_with("IMPORTED 8"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("IMPORTED 8"), "{}", app.notes.list[0].as_str());
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
 }
 
@@ -697,7 +697,7 @@ fn first_start_imports_stock_settings() {
     assert_eq!((p[0].cells(), &p[0].fields[..4]), (4, &[Power, Hr, Cadence, Speed][..]));
     assert_eq!((p[1].cells(), &p[1].fields[..2]), (2, &[Dist, Timer][..]), "ActBike=1: Bike2");
     assert_eq!(p[2], crate::DEFAULT_PAGES[2].into(), "stock had two data pages: the third as it was");
-    assert!(app.notices[0].as_str().ends_with("IMPORTED 8"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("IMPORTED 8"), "{}", app.notes.list[0].as_str());
     assert_eq!(sim.backup[Kind::Hr.backup()], crate::nrf::SensorId { device: 1234, trans: 0 }.to_word());
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
     sim.save("first_start");
@@ -717,7 +717,7 @@ fn first_start_imports_stock_settings() {
     let mut sim = Sim::new(9, 0, 0);
     let app = App::start(&mut sim, None);
     assert_eq!((app.settings.ftp, app.pages()[0]), (crate::ride::FTP, crate::DEFAULT_PAGES[0].into()));
-    assert!(app.notices.iter().all(|n| !n.as_str().contains("IMPORTED")));
+    assert!(app.notes.list.iter().all(|n| !n.as_str().contains("IMPORTED")));
     assert_eq!(sim.backup[WHEEL_BKP] >> 24, 0xa7, "this firmware's settings from now on");
 
     // a strap paired and a page set here, no setting ever changed (register 11 never written): not a first start
@@ -767,7 +767,7 @@ fn ride_history() {
     app.press(&mut sim, Press::Short(Key::Page));
     let (cmds0, t0) = (sim.emmc.cmds.len(), sim.ms);
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "READING RIDE");
+    assert_eq!(app.notes.text.as_str(), "READING RIDE");
     while app.screen() != Screen::Past {
         run(&mut sim, &mut app, u64::from(POLL_MS));
         assert!(sim.ms - t0 < 5000, "the card opens");
@@ -881,7 +881,7 @@ fn delete_rides() {
     assert!(file(&sim.emmc.image, "Activities/261020080000.fit").is_some(), "and deletes nothing");
     open_card(&mut sim, &mut app, 2);
     app.press(&mut sim, Press::Long(Key::Start));
-    assert_eq!(app.banner.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
+    assert_eq!(app.notes.text.as_str(), "DELETE RIDE?\nSTART: YES BACK: NO");
     assert_eq!(app.confirm, Some(PAST_DELETE));
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Back)); // the banner, then (nothing asked) the list
@@ -894,7 +894,7 @@ fn delete_rides() {
     );
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::History, 2), "back to the list, in its place");
-    assert_eq!(app.banner.as_str(), "RIDE DELETED");
+    assert_eq!(app.notes.text.as_str(), "RIDE DELETED");
     let img = &sim.emmc.image;
     assert_eq!(file(img, "Activities/261020080000.fit"), None);
     assert_eq!(file(img, "Rustfw/Activities/261020080000.fit"), None);
@@ -939,12 +939,12 @@ fn delete_rides() {
     let ev = app.ride.start_pause();
     app.recorder(ev);
     app.press(&mut sim, Press::Long(Key::Start));
-    assert_eq!(app.banner.as_str(), "NOT DURING A RIDE");
+    assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE");
     assert_eq!(app.screen(), Screen::Past);
     app.ride = crate::ride::Ride::default();
     app.resume_pending = true;
     app.press(&mut sim, Press::Long(Key::Start));
-    assert_eq!(app.banner.as_str(), "NOT DURING A RIDE", "a ride waiting");
+    assert_eq!(app.notes.text.as_str(), "NOT DURING A RIDE", "a ride waiting");
     assert!(file(&sim.emmc.image, "Activities/261001070000.fit").is_some());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
@@ -1044,7 +1044,7 @@ fn workout_from_the_calendar() {
         [1800, 2600, 0, 2500, 0, 2000, 0, 2000, 0, 2500],
         "the ride's start, the step's start, beep at 2 and 1 s left, the next step"
     );
-    assert_eq!(app.banner.as_str(), "2/6 200-220W");
+    assert_eq!(app.notes.text.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
     assert_eq!(fields(&app), ["210|+-10", "0:25", "150|0:15", "2/6"]);
     assert_eq!(
@@ -1065,7 +1065,7 @@ fn workout_from_the_calendar() {
 
     // Lap: the next step; the open cool-down waits for Lap; then done
     app.press(&mut sim, Press::Short(Key::Lap));
-    assert_eq!((text(&app, Workout), app.banner.as_str()), ("3/6".into(), "3/6 150W"));
+    assert_eq!((text(&app, Workout), app.notes.text.as_str()), ("3/6".into(), "3/6 150W"));
     assert_eq!(
         (app.field_color(StepTarget), app.field_bar(StepTarget)),
         (ui::WHITE, crate::ride::ZONE_COLORS[4]),
@@ -1078,7 +1078,7 @@ fn workout_from_the_calendar() {
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Menu(Menu::Workouts, 1), "WORKOUT RUNNING"));
+    assert_eq!((app.screen(), app.notes.text.as_str()), (Screen::Menu(Menu::Workouts, 1), "WORKOUT RUNNING"));
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
     // running: no START row (it would restart the workout, and Start is the ride's pause key), the step playing
@@ -1096,9 +1096,9 @@ fn workout_from_the_calendar() {
     }
     run(&mut sim, &mut app, 3000);
     assert_eq!(fields(&app), ["OPEN", "LAP", "END", "6/6"]);
-    assert_eq!(app.banner.as_str(), "6/6 OPEN LAP");
+    assert_eq!(app.notes.text.as_str(), "6/6 OPEN LAP");
     app.press(&mut sim, Press::Short(Key::Lap));
-    assert_eq!((text(&app, Workout), app.banner.as_str()), ("DONE".into(), "WORKOUT DONE"));
+    assert_eq!((text(&app, Workout), app.notes.text.as_str()), ("DONE".into(), "WORKOUT DONE"));
     assert_eq!(fields(&app)[..3], ["--", "--", "--"]);
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
@@ -1510,7 +1510,7 @@ fn keeps_the_paired_sensor_until_forgotten() {
     let closes = |sim: &Sim| sim.nordic.got.iter().filter(|p| p[..2] == [6, 0xc5]).count();
     assert_eq!(closes(&sim), 1, "closed and opened for it again");
     assert_eq!(sim.backup[Kind::Hr.backup()], STRAP.to_word(), "still paired");
-    assert_eq!(app.banner.as_str(), "SEARCHING AGAIN\nSTART: FORGET");
+    assert_eq!(app.notes.text.as_str(), "SEARCHING AGAIN\nSTART: FORGET");
     assert_eq!(app.menu_row(Menu::Sensors, 0).unwrap().1.as_str(), "SURE?");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
@@ -1666,11 +1666,11 @@ fn start_from_the_overview() {
     assert_eq!(app.screen(), Screen::Ride(0));
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 200);
-    assert_eq!(app.banner.as_str(), "RIDE STARTED");
+    assert_eq!(app.notes.text.as_str(), "RIDE STARTED");
     assert_consistent(&sim, &app);
     sim.save("ride_started");
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "PAUSED: HOLD START TO END");
+    assert_eq!(app.notes.text.as_str(), "PAUSED: HOLD START TO END");
     save_ride(&mut sim, &mut app);
     assert_eq!((app.screen(), app.ride.state()), (Screen::Summary, ride::State::Idle), "the ride's card");
     run(&mut sim, &mut app, 200);
@@ -1692,14 +1692,14 @@ fn ride_saved_leaves_the_cards_title() {
     save_ride(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Summary);
     run(&mut sim, &mut app, 1500);
-    assert!(app.notices[0].as_str().ends_with("RIDE SAVED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     assert_consistent(&sim, &app);
     sim.save("ride_saved_card");
     // the title row (under the strip's line) still has the card's grey date, not the banner's orange fill
     let y = (ui::PAGE_Y + 12) as usize;
     let orange = sim.screen[y * W as usize + 2];
     assert_ne!(orange, ui::ACCENT, "the title row is not the banner's");
-    assert!(app.banner_ms.is_none(), "no banner over the card");
+    assert!(app.notes.ms.is_none(), "no banner over the card");
 }
 
 /// The card at the end of a ride: its track, its elevation profile, its numbers.
@@ -1791,17 +1791,17 @@ fn notice_banner_over_a_ride_page() {
     run(&mut sim, &mut app, 3000);
     app.notice("STRAP PAIRED");
     run(&mut sim, &mut app, 1500);
-    assert!(app.banner_ms.is_some());
+    assert!(app.notes.ms.is_some());
     assert_consistent(&sim, &app);
     sim.save("banner");
     run(&mut sim, &mut app, u64::from(BANNER_MS));
-    assert!(app.banner_ms.is_none(), "gone by itself");
+    assert!(app.notes.ms.is_none(), "gone by itself");
     assert_consistent(&sim, &app);
     app.notice("TEST");
     run(&mut sim, &mut app, 100);
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(1), "the key dismissed it and acted");
-    assert!(app.banner_ms.is_none());
+    assert!(app.notes.ms.is_none());
     assert_consistent(&sim, &app);
 }
 
@@ -1815,7 +1815,7 @@ fn overview_notices_and_fields() {
     run(&mut sim, &mut app, 3000);
     sim.gnss.fix = Some(7000);
     run(&mut sim, &mut app, 2000);
-    assert_eq!(app.notices[0].as_str(), "", "no notice for the fix");
+    assert_eq!(app.notes.list[0].as_str(), "", "no notice for the fix");
     app.notice("RIDE SAVED");
     app.notice("A Long Caller Name Here");
     run(&mut sim, &mut app, 100);
@@ -2109,7 +2109,7 @@ fn menu_tree_reaches_everything() {
         }
         if app.screen() != Screen::Menu(m, 0) {
             // COURSES without a card: said, not opened
-            assert_eq!((m, app.banner.as_str()), (Menu::Courses, "NO COURSE"));
+            assert_eq!((m, app.notes.text.as_str()), (Menu::Courses, "NO COURSE"));
             while app.screen() != Screen::Main {
                 app.press(&mut sim, Press::Short(Key::Back));
             }
@@ -2236,11 +2236,14 @@ fn ride_menu() {
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Short(Key::Start)); // NEXT STEP
     assert_eq!((step(&app), app.screen()), (Some(1), Screen::Ride(0)));
-    assert!(app.banner.as_str().starts_with("2/"), "the step said, no lap: {:?}", app.banner.as_str());
+    assert!(app.notes.text.as_str().starts_with("2/"), "the step said, no lap: {:?}", app.notes.text.as_str());
     hold_page(&mut sim, &mut app);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopWorkout));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.player.is_none(), app.screen(), app.banner.as_str()), (true, Screen::Ride(0), "WORKOUT STOPPED"));
+    assert_eq!(
+        (app.player.is_none(), app.screen(), app.notes.text.as_str()),
+        (true, Screen::Ride(0), "WORKOUT STOPPED")
+    );
     assert_eq!(app.ride.state(), ride::State::Running, "the ride goes on");
 
     // a course from ALL SETTINGS > COURSES: on its page, COURSE > STOP FOLLOWING, and no EDIT THIS PAGE
@@ -2253,14 +2256,14 @@ fn ride_menu() {
     }
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
-    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(COURSE), "COURSE ON"));
+    assert_eq!((app.screen(), app.notes.text.as_str()), (Screen::Ride(COURSE), "COURSE ON"));
     hold_page(&mut sim, &mut app);
     assert_eq!(app.screen(), Screen::Menu(Menu::Ride(COURSE), 0));
     assert_eq!(labels(&app), ["PAUSE", "END RIDE", "COURSE", "INDOOR", "BRIGHTNESS", "SENSORS", "ALL SETTINGS"]);
     to_row(&mut sim, &mut app, Row::Ride(RideRow::StopCourse));
     app.press(&mut sim, Press::Short(Key::Start));
     assert!(app.courses.as_deref().unwrap().on.is_none(), "not followed");
-    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(0), "COURSE OFF"), "its page gone: the first");
+    assert_eq!((app.screen(), app.notes.text.as_str()), (Screen::Ride(0), "COURSE OFF"), "its page gone: the first");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
 
@@ -2551,7 +2554,7 @@ fn empty_workouts_say_so_in_a_row() {
     let (label, _, color) = app.menu_row(Menu::Workouts, 0).unwrap();
     assert_eq!((label.as_str(), color), ("NONE PLANNED", ui::GREY));
     run(&mut sim, &mut app, 6000);
-    assert!(app.banner_ms.is_none(), "no banner");
+    assert!(app.notes.ms.is_none(), "no banner");
     assert_consistent(&sim, &app);
     sim.save("menu_workouts_empty");
     app.press(&mut sim, Press::Short(Key::Start));
@@ -2617,7 +2620,7 @@ fn back_says_no_to_a_confirmation() {
     assert_eq!(app.screen(), Screen::Menu(Menu::System, import), "the menu stays");
     assert_eq!(app.menu_row(Menu::System, import).unwrap().1.as_str(), "FROM STOCK");
     run(&mut sim, &mut app, 200);
-    assert!(app.banner_ms.is_none());
+    assert!(app.notes.ms.is_none());
     assert_consistent(&sim, &app);
     app.input(&mut sim, Input::Select);
     app.input(&mut sim, Input::Back);
@@ -2636,13 +2639,13 @@ fn lap_on_the_overview_marks_a_lap() {
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Short(Key::Lap));
     run(&mut sim, &mut app, 200);
-    assert_ne!(app.banner.as_str(), "LAP", "no ride: no lap");
+    assert_ne!(app.notes.text.as_str(), "LAP", "no ride: no lap");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 5000);
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Main);
     app.press(&mut sim, Press::Short(Key::Lap));
-    assert_eq!(app.banner.as_str(), "LAP");
+    assert_eq!(app.notes.text.as_str(), "LAP");
     run(&mut sim, &mut app, 200);
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);
@@ -2661,7 +2664,7 @@ fn back_clearing_a_banner_only_clears_it() {
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Ride(0), "the banner cleared, the page kept");
     run(&mut sim, &mut app, 300);
-    assert!(app.banner_ms.is_none());
+    assert!(app.notes.ms.is_none());
     assert_consistent(&sim, &app);
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Main, "no banner: Back goes back");
@@ -2686,7 +2689,7 @@ fn back_and_lap_together_lock_the_touch() {
     run(&mut sim, &mut app, left);
     assert!(!app.strip.locked, "not yet: held 0.5 s");
     run(&mut sim, &mut app, 1000);
-    assert!(app.strip.locked && app.banner.as_str() == "TOUCH LOCKED");
+    assert!(app.strip.locked && app.notes.text.as_str() == "TOUCH LOCKED");
     run(&mut sim, &mut app, 500);
     assert_eq!(app.screen(), Screen::Main, "neither key acted at its release");
     assert!(sim.backlight, "Back did not toggle the light");
@@ -2705,7 +2708,7 @@ fn back_and_lap_together_lock_the_touch() {
     app.press(&mut sim, Press::Short(Key::Back));
     let left = 15_800u64.saturating_sub(sim.ms);
     run(&mut sim, &mut app, left);
-    assert!(!app.strip.locked && app.banner.as_str() == "TOUCH UNLOCKED");
+    assert!(!app.strip.locked && app.notes.text.as_str() == "TOUCH UNLOCKED");
     run(&mut sim, &mut app, 2500);
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "unlocked: the gear's tap at 17 s works");
     assert_consistent(&sim, &app);
@@ -3660,7 +3663,7 @@ fn restart_after_a_fault() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[FAULT_BKP] = 0xfa00_0001;
     let mut app = App::start(&mut sim, None);
-    assert_eq!(app.notices[0].as_str(), "09:00 FAULT RESET 1");
+    assert_eq!(app.notes.list[0].as_str(), "09:00 FAULT RESET 1");
     run(&mut sim, &mut app, u64::from(FAULT_CLEAR_MS) - 2000);
     assert_eq!(sim.backup[FAULT_BKP], 0xfa00_0001, "kept a while");
     run(&mut sim, &mut app, 4000);
@@ -3687,7 +3690,7 @@ fn off_during_a_ride_asks_twice() {
     let mut app = App::start(&mut sim, None);
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Back));
-    assert!(!sim.standby && app.banner.as_str() == "HOLD BACK AGAIN TO SWITCH OFF", "warned");
+    assert!(!sim.standby && app.notes.text.as_str() == "HOLD BACK AGAIN TO SWITCH OFF", "warned");
     run(&mut sim, &mut app, 12_000);
     app.press(&mut sim, Press::Long(Key::Back));
     assert!(!sim.standby, "the warning ran out: warned again");
@@ -3784,7 +3787,7 @@ fn eat_reminder_on_a_ride() {
     run(&mut sim, &mut app, 298_500);
     assert_eq!(sim.tones.len(), tones0, "not yet");
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.banner.as_str(), "EAT REMINDER");
+    assert_eq!(app.notes.text.as_str(), "EAT REMINDER");
     let beeps: std::vec::Vec<u32> = sim.tones[tones0..].to_vec();
     assert_eq!(beeps, [2500, 0, 2500, 0, 2500, 0], "three beeps, then off");
     assert!(sim.ms - steps0 >= 300_000, "{}", sim.ms - steps0);
@@ -3952,7 +3955,7 @@ fn banners_wait_their_turn() {
     let shown = |sim: &mut Sim, app: &mut App, ms| {
         run(sim, app, ms);
         assert_consistent(sim, app);
-        app.banner_ms.map(|_| std::string::String::from(app.banner.as_str()))
+        app.notes.ms.map(|_| std::string::String::from(app.notes.text.as_str()))
     };
     app.say_as("2/6 200-220W", Banner::Ride); // the workout's step and a turn, in one second
     app.say_as("< LEFT NOW", Banner::Now);
@@ -3979,7 +3982,7 @@ fn banners_replaced_do_not_come_back() {
     let shown = |sim: &mut Sim, app: &mut App, ms| {
         run(sim, app, ms);
         assert_consistent(sim, app);
-        app.banner_ms.map(|_| std::string::String::from(app.banner.as_str()))
+        app.notes.ms.map(|_| std::string::String::from(app.notes.text.as_str()))
     };
     app.say_as("< LEFT NOW", Banner::Now);
     assert_eq!(shown(&mut sim, &mut app, 1000).as_deref(), Some("< LEFT NOW"));
@@ -4047,7 +4050,7 @@ fn import_asks_first() {
     app.settings.ftp = 55; // stock's is another: an import shows
     app.input(&mut sim, Input::Select);
     assert_eq!((app.menu_row(Menu::System, import).unwrap().1.as_str(), app.settings.ftp), ("SURE?", 55));
-    assert_eq!(app.banner.as_str(), "IMPORT SETTINGS?\nSTART: YES BACK: NO");
+    assert_eq!(app.notes.text.as_str(), "IMPORT SETTINGS?\nSTART: YES BACK: NO");
     run(&mut sim, &mut app, 200);
     assert_consistent(&sim, &app);
     sim.save("import_sure");
@@ -4089,12 +4092,12 @@ fn two_alerts_in_one_second_are_both_said() {
     app.alert.push(Some(alerts::Alert::CadenceLow));
     app.alert.push(Some(alerts::Alert::HrHigh));
     run(&mut sim, &mut app, 200);
-    assert_eq!(app.banner.as_str(), "HEART RATE HIGH");
+    assert_eq!(app.notes.text.as_str(), "HEART RATE HIGH");
     let mut said = std::vec::Vec::new();
     for _ in 0..200 {
         run(&mut sim, &mut app, 50);
-        if said.last().is_none_or(|l| l != app.banner.as_str()) {
-            said.push(std::string::String::from(app.banner.as_str()));
+        if said.last().is_none_or(|l| l != app.notes.text.as_str()) {
+            said.push(std::string::String::from(app.notes.text.as_str()));
         }
     }
     assert!(said.iter().any(|b| b == "CADENCE LOW"), "{said:?}");
@@ -4342,7 +4345,7 @@ fn course_read_after_leaving_the_list() {
     let left = app.screen();
     assert!(!matches!(left, Screen::Menu(Menu::Courses, _) | Screen::Ride(_)), "{left:?}");
     run(&mut sim, &mut app, 200);
-    assert_eq!((app.screen(), app.banner.as_str()), (left, "COURSE ON"));
+    assert_eq!((app.screen(), app.notes.text.as_str()), (left, "COURSE ON"));
     assert!(app.courses.as_deref().unwrap().on.is_some());
     assert_consistent(&sim, &app);
 }
@@ -4396,9 +4399,9 @@ fn course_ride() {
         app.press(&mut sim, Press::Short(Key::Page));
     }
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "READING COURSE");
+    assert_eq!(app.notes.text.as_str(), "READING COURSE");
     run(&mut sim, &mut app, 200);
-    assert_eq!((app.screen(), app.banner.as_str()), (Screen::Ride(crate::COURSE), "COURSE ON"), "the course page");
+    assert_eq!((app.screen(), app.notes.text.as_str()), (Screen::Ride(crate::COURSE), "COURSE ON"), "the course page");
     assert_consistent(&sim, &app);
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(0), "then round to page 1");
@@ -4422,10 +4425,10 @@ fn course_ride() {
     let tones = sim.tones.len();
     while sim.ms < 63_500 {
         run(&mut sim, &mut app, 500);
-        assert_ne!(app.banner.as_str(), "OFF COURSE", "not before 5 s off: {}", sim.ms);
+        assert_ne!(app.notes.text.as_str(), "OFF COURSE", "not before 5 s off: {}", sim.ms);
     }
     run(&mut sim, &mut app, 1500);
-    assert_eq!(app.banner.as_str(), "OFF COURSE");
+    assert_eq!(app.notes.text.as_str(), "OFF COURSE");
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.tones[tones..tones + 3], [2500, 0, 2500], "the alert's beeps");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap().abs_diff(150) <= 2 && app.field_color(OffCourse) == ui::RED);
@@ -4434,16 +4437,16 @@ fn course_ride() {
         run(&mut sim, &mut app, 500);
     }
     run(&mut sim, &mut app, 1500);
-    assert_eq!(app.banner.as_str(), "BACK ON COURSE");
+    assert_eq!(app.notes.text.as_str(), "BACK ON COURSE");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2 && app.field_color(OffCourse) == ui::WHITE);
 
     // the climb: a banner at its start, then what is left of it
     while sim.ms < 249_000 {
         run(&mut sim, &mut app, 1000);
-        assert!(!app.banner.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms);
+        assert!(!app.notes.text.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms);
     }
     run(&mut sim, &mut app, 3000);
-    assert_eq!(app.banner.as_str(), "CLIMB 2.0 KM 6%");
+    assert_eq!(app.notes.text.as_str(), "CLIMB 2.0 KM 6%");
     run(&mut sim, &mut app, 47_000); // 400 m up
     let f = fields(&app);
     assert_eq!(f[2], "1.6K|6%", "1.6 km left: {f:?}");
@@ -4510,7 +4513,7 @@ fn course_ride() {
         app.press(&mut sim, Press::Short(Key::Page));
     }
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!(app.banner.as_str(), "COURSE OFF");
+    assert_eq!(app.notes.text.as_str(), "COURSE OFF");
     assert_eq!(fields(&app), ["--", "--", "--", "--", "--"]);
 }
 
@@ -4561,14 +4564,14 @@ fn climbs_ahead_ride() {
     // the banner at the climb's start (about x = 950: 106 s), a beep, nothing before
     while sim.ms - t0 < 98_000 {
         run(&mut sim, &mut app, 1000);
-        assert!(!app.banner.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms - t0);
+        assert!(!app.notes.text.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms - t0);
     }
     let tones = sim.tones.len();
     run(&mut sim, &mut app, 12_000);
     assert!(
-        app.banner.as_str().starts_with("CLIMB 2.") && app.banner.as_str().ends_with("KM 6%"),
+        app.notes.text.as_str().starts_with("CLIMB 2.") && app.notes.text.as_str().ends_with("KM 6%"),
         "{}",
-        app.banner.as_str()
+        app.notes.text.as_str()
     );
     assert_eq!(sim.tones[tones..], [2000, 0], "the beep of a climb");
     // on the climb: what is left of it and the grade ahead
@@ -4720,8 +4723,8 @@ fn course_cues_ride() {
     while sim.ms < end {
         let px = sim.pixels;
         run(&mut sim, &mut app, 500);
-        let b = std::string::String::from(app.banner.as_str());
-        if app.banner_ms.is_some() && b != last {
+        let b = std::string::String::from(app.notes.text.as_str());
+        if app.notes.ms.is_some() && b != last {
             said.push((sim.ms as f64 * 0.008, b.clone()));
             banner_px.push(sim.pixels - px);
             if b.ends_with("NOW") && said.len() == 2 {
@@ -4915,10 +4918,10 @@ fn course_cues_over_any_screen() {
             assert!(!sim.backlight, "cue {i}: the light off before the cue");
         }
         let until = sim.ms + 12_000;
-        while sim.ms < until && !app.banner.as_str().ends_with("200 M") {
+        while sim.ms < until && !app.notes.text.as_str().ends_with("200 M") {
             run(&mut sim, &mut app, 250);
         }
-        assert!(app.banner.as_str().ends_with("200 M"), "cue {i} said: {:?}", app.banner.as_str());
+        assert!(app.notes.text.as_str().ends_with("200 M"), "cue {i} said: {:?}", app.notes.text.as_str());
         run(&mut sim, &mut app, 250);
         assert!(sim.backlight, "cue {i}: the light on for it");
         assert_consistent(&sim, &app);
@@ -5027,8 +5030,8 @@ fn timers_count_real_time_in_long_passes() {
     app.notice("STRAP PAIRED");
     let t0 = sim.ms;
     run_passes(&mut sim, &mut app, u64::from(BANNER_MS) - 2 * u64::from(PASS), PASS);
-    assert!(app.banner_ms.is_some(), "still there before its time");
-    while app.banner_ms.is_some() {
+    assert!(app.notes.ms.is_some(), "still there before its time");
+    while app.notes.ms.is_some() {
         run_passes(&mut sim, &mut app, 1, PASS);
     }
     let shown = sim.ms - t0;

@@ -41,7 +41,7 @@ fn needs_a_trainer() {
     sim.own_settings();
     let mut app = App::start(&mut sim, None);
     start(&mut sim, &mut app);
-    assert_eq!(app.banner.as_str(), "NEEDS TRAINER");
+    assert_eq!(app.notes.text.as_str(), "NEEDS TRAINER");
     assert_eq!((app.ride.state(), app.player, app.ramp.is_none()), (ride::State::Idle, None, true));
 }
 
@@ -123,7 +123,7 @@ fn lap_ends_the_ramp_and_apply_sets_the_ftp() {
     app.input(&mut sim, Input::Touch(Gesture::Tap(x, y)));
     assert_eq!(app.screen(), Screen::Ride(crate::WORKOUT));
     assert_eq!(app.settings.ftp, (o.ftp + 2) / 5 * 5, "to the setting's 5 W step");
-    assert_eq!(app.banner.as_str(), "FTP SET");
+    assert_eq!(app.notes.text.as_str(), "FTP SET");
     // kept through a restart (the settings are saved at once)
     assert_eq!(crate::Settings::from_word(sim.backup[crate::WHEEL_BKP]).ftp, app.settings.ftp);
 }

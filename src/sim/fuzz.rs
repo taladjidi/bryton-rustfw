@@ -1193,7 +1193,7 @@ fn menu_touch_and_keys() {
             }
             // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
             // (a banner said by this input is drawn by the next pass: skipped until it is)
-            let waiting = app.banner_ms.is_some() && !app.banner_drawn;
+            let waiting = app.notes.ms.is_some() && !app.notes.drawn;
             if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) && !waiting {
                 super::tests::assert_consistent(&sim, &app);
             }
@@ -1401,7 +1401,7 @@ fn history_by_chance() {
                 assert_eq!(app.stock.index.len() + 1, rows, "seed {seed} step {k}: the list at once");
                 deletes += 1;
             }
-            refused += u32::from(riding && app.banner.as_str() == "NOT DURING A RIDE");
+            refused += u32::from(riding && app.notes.text.as_str() == "NOT DURING A RIDE");
             if app.ride.state() != crate::ride::State::Idle && r % 5 == 0 {
                 app.ride = crate::ride::Ride::default();
             }
@@ -1973,13 +1973,13 @@ fn random_pass_lengths() {
             sim.delay_ms(pass);
             worst = worst.max(u64::from(pass));
             let t = sim.ms - t0;
-            banner_gone |= t > 5000 && app.banner_ms.is_none();
+            banner_gone |= t > 5000 && app.notes.ms.is_none();
             tone_done |= t > 2000 && sim.tones.last() == Some(&0);
             dark |= app.light_shown == 0;
             opens = sim.nordic.got.iter().filter(|p| p.starts_with(&[6, 0xc4, 0])).count();
             // on time, whatever the passes: never early, never later than a few passes
             if t < 3900 {
-                assert!(app.banner_ms.is_some(), "seed {seed}: banner early at {t} ms");
+                assert!(app.notes.ms.is_some(), "seed {seed}: banner early at {t} ms");
             }
             if t < SEARCH_REST_MS as u64 / 2 {
                 assert!(opens <= 1, "seed {seed}: the rest cut short at {t} ms");

@@ -306,7 +306,7 @@ impl App {
             self.strip.locked = !self.strip.locked; // the strip shows it; the banner says it
             return self.say(if self.strip.locked { "TOUCH LOCKED" } else { "TOUCH UNLOCKED" });
         }
-        let cleared = self.banner_ms.take().is_some();
+        let cleared = self.notes.ms.take().is_some();
         if cleared {
             self.unbanner(b); // and the input acts, except Back (below)
         }

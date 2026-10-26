@@ -155,9 +155,9 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     sim.nordic.trainer.rpm = 40;
     for s in 0..8 {
         run(&mut sim, &mut app, 1000);
-        assert!(s >= 4 || app.banner.as_str() != "CADENCE LOW", "second {s}: not before 5 s");
+        assert!(s >= 4 || app.notes.text.as_str() != "CADENCE LOW", "second {s}: not before 5 s");
     }
-    assert_eq!(app.banner.as_str(), "CADENCE LOW");
+    assert_eq!(app.notes.text.as_str(), "CADENCE LOW");
     sim.nordic.trainer.rpm = 0;
     assert_eq!(app.field_text(Field::ErgTarget).as_str(), "110", "no adjust: the watts alone");
     assert_eq!(app.field_text(Field::Power).as_str(), "110");
@@ -371,7 +371,7 @@ fn a_chip_that_never_answers_an_ack_turns_the_control_off() {
     sim.nordic.ack_silent = true;
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.rx.timeouts, 0, "the link watchdog does not count it");
-    assert!(app.notices[0].as_str().contains("TRAINER CONTROL FAILED"), "{:?}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().contains("TRAINER CONTROL FAILED"), "{:?}", app.notes.list[0].as_str());
     app.open(Screen::Trainer);
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 20_000);
@@ -534,7 +534,7 @@ fn riding_the_long_keys_on_the_trainer_screen() {
     run(&mut sim, &mut app, left);
     run(&mut sim, &mut app, 2600);
     assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "RES", "Start held: the next mode");
-    assert_eq!(app.banner.as_str(), "MODE RES", "named in the banner");
+    assert_eq!(app.notes.text.as_str(), "MODE RES", "named in the banner");
     assert_eq!(app.ride.state(), ride::State::Running, "not paused by its release");
     let left = 16_000 - sim.ms;
     run(&mut sim, &mut app, left);
@@ -714,9 +714,9 @@ fn no_spin_down_while_riding() {
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 1500);
     app.press(&mut sim, Press::Long(Key::Start)); // riding, Start held is the mode (item 5), not a calibration
-    assert!(!app.notices[0].as_str().contains("NO CALIBRATION"));
+    assert!(!app.notes.list[0].as_str().contains("NO CALIBRATION"));
     tap(&mut sim, &mut app, Button::Calibrate);
-    assert!(app.notices[0].as_str().contains("NO CALIBRATION"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().contains("NO CALIBRATION"), "{}", app.notes.list[0].as_str());
     run(&mut sim, &mut app, 2000);
     assert!(sim.nordic.trainer.cal_requests.is_empty());
     assert!(!app.trainer.calibrating());
@@ -886,8 +886,8 @@ fn the_map_page_is_skipped_indoors() {
     app.settings.profile = None;
     // the ride starts indoors; the rider says ROAD by hand; the trainer going silent does not change that
     app.press(&mut sim, Press::Short(Key::Start));
-    assert!(app.indoors(), "{:?}", app.banner.as_str());
-    assert_eq!(app.banner.as_str(), "INDOOR RIDE");
+    assert!(app.indoors(), "{:?}", app.notes.text.as_str());
+    assert_eq!(app.notes.text.as_str(), "INDOOR RIDE");
     app.toggle_indoor();
     assert!(!app.indoors() && round(&mut sim, &mut app).contains(&Screen::Ride(2)));
     app.toggle_indoor();
@@ -912,7 +912,7 @@ fn a_silent_trainer_ends_the_indoor_ride() {
     assert!(app.indoors(), "not yet: the trainer was heard until the sensor's time-out, then under two minutes");
     run(&mut sim, &mut app, 60_000);
     assert!(!app.indoors(), "two minutes of silence: back to ROAD");
-    assert_eq!(app.banner.as_str(), "TRAINER LOST: ROAD RIDE");
+    assert_eq!(app.notes.text.as_str(), "TRAINER LOST: ROAD RIDE");
 }
 
 /// BIKE > PROFILE: AUTO, ROAD, INDOOR round; each is kept (register 11's tag: AUTO keeps the tag earlier builds read),
@@ -1195,7 +1195,7 @@ fn a_lost_answer_after_the_first_does_not_turn_the_control_off() {
     sim.nordic.ack_silent = false;
     run(&mut sim, &mut app, 2000);
     assert_eq!(sim.nordic.trainer.target_w, 110, "sent again");
-    assert!(app.notices.iter().all(|n| !n.as_str().contains("TRAINER CONTROL FAILED")));
+    assert!(app.notes.list.iter().all(|n| !n.as_str().contains("TRAINER CONTROL FAILED")));
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.nordic.trainer.target_w, 115, "and the control goes on");

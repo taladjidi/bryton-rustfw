@@ -762,7 +762,7 @@ impl App {
             self.update_light(b);
             if s == menu::Setting::Font {
                 // every text changes at once: the strip and the screen drawn whole
-                self.banner_drawn = false; // the banner too, if one is up
+                self.notes.drawn = false; // the banner too, if one is up
                 self.strip_shown = self.strip;
                 ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
                 self.show(b);

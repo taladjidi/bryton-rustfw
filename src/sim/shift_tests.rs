@@ -145,7 +145,7 @@ fn di2_buttons_do_their_actions() {
     let mut said = std::vec::Vec::new();
     while sim.ms < 31_500 {
         run(&mut sim, &mut app, POLL_MS.into());
-        if app.banner.as_str() == "LAP" && said.last() != Some(&(sim.ms >= 30_000)) {
+        if app.notes.text.as_str() == "LAP" && said.last() != Some(&(sim.ms >= 30_000)) {
             said.push(sim.ms >= 30_000);
         }
     }
@@ -253,7 +253,7 @@ fn hood_lap_on_the_overview() {
     let mut lap = false;
     while sim.ms < 9_000 {
         run(&mut sim, &mut app, POLL_MS.into());
-        lap |= app.banner.as_str() == "LAP";
+        lap |= app.notes.text.as_str() == "LAP";
     }
     assert!(lap, "a lap at the press");
     assert_eq!(app.screen(), Screen::Main);

@@ -294,7 +294,7 @@ fn a_resumed_ride_has_no_step() {
     sim2.bus.baro_alt = Some(truth);
     let mut app = App::start(&mut sim2, None);
     run(&mut sim2, &mut app, u64::from(ALT_LOAD_MS) + 6000);
-    assert!(app.notices[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notices[0].as_str());
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
     app.start_pause();
     let a = app.alt_now().0.unwrap();
     let climbed = 90_000 / 2 + 2000; // mm

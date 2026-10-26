@@ -281,16 +281,8 @@ pub struct App {
     hint_shown: bool,
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
-    /// The latest notices, newest first (empty lines: none); the overview shows the first [`ui::NOTICES`].
-    notices: [Line<40>; 2],
-    /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
-    /// redrawn meanwhile; when it goes, the screen is drawn again.
-    banner_ms: Option<u32>,
-    /// What the banner says (two lines at most) and its kind (an alarm white on red); the one waiting for it to go.
-    banner: Line<40>,
-    banner_kind: Banner,
-    banner_next: Option<(Line<40>, Banner)>,
-    banner_drawn: bool,
+    /// The notices and the banner over the screen.
+    notes: Notices,
     /// The GPS had a good fix since power-on; the battery was reported low.
     had_fix: bool,
     told_low: bool,
@@ -526,12 +518,7 @@ impl App {
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
-            notices: Default::default(),
-            banner_ms: None,
-            banner: Line::new(),
-            banner_kind: Banner::Info,
-            banner_next: None,
-            banner_drawn: false,
+            notes: Notices::new(),
             had_fix: false,
             told_low: false,
             graph_whole: false,
@@ -687,7 +674,7 @@ impl App {
             self.show(b);
         }
         // one at a time: the next waits for the banner of the one before to go
-        if !(self.banner_ms.is_some() && alerts::Alert::is_text(self.banner.as_str()))
+        if !(self.notes.ms.is_some() && alerts::Alert::is_text(self.notes.text.as_str()))
             && let Some(a) = self.alert.pop()
         {
             self.say_as(
@@ -769,16 +756,16 @@ impl App {
         }
         self.redraw_ms = self.redraw_ms.saturating_add(pass_ms);
         // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
-        if let Some(ms) = self.banner_ms.filter(|_| !self.phone.ringing) {
-            if !core::mem::replace(&mut self.banner_drawn, true) {
+        if let Some(ms) = self.notes.ms.filter(|_| !self.phone.ringing) {
+            if !core::mem::replace(&mut self.notes.drawn, true) {
                 ui::draw_banner(
                     &mut Panel(b, (0, ui::H), self.settings.smooth),
-                    self.banner.as_str(),
-                    self.banner_kind == Banner::Alarm,
+                    self.notes.text.as_str(),
+                    self.notes.kind == Banner::Alarm,
                 );
             }
-            self.banner_ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < BANNER_MS);
-            if self.banner_ms.is_none() {
+            self.notes.ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < BANNER_MS);
+            if self.notes.ms.is_none() {
                 self.unbanner(b);
             }
         }

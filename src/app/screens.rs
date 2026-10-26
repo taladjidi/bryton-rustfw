@@ -25,7 +25,7 @@ pub(crate) enum Banner {
 
 impl Banner {
     /// A turn cue, ahead or now: good for its moment only.
-    fn is_cue(self) -> bool {
+    pub(crate) fn is_cue(self) -> bool {
         matches!(self, Banner::Cue | Banner::Now)
     }
 }
@@ -201,8 +201,8 @@ impl App {
                 ui::draw_list(c, &self.nearby);
             }
         }
-        if self.banner_ms.is_some() && self.banner_drawn {
-            ui::draw_banner(c, self.banner.as_str(), self.banner_kind == Banner::Alarm);
+        if self.notes.ms.is_some() && self.notes.drawn {
+            ui::draw_banner(c, self.notes.text.as_str(), self.notes.kind == Banner::Alarm);
         }
         if self.phone.ringing {
             ui::draw_call(c, self.phone.call.as_ref().map_or("", |(_, who)| who.as_str()));
@@ -252,7 +252,7 @@ impl App {
                 Drawn::Print(u32::from(self.date.0) << 16 | u32::from(self.date.1) << 8 | u32::from(self.date.2))
             }
             Widget::Notices => {
-                Drawn::Print(self.notices.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
+                Drawn::Print(self.notes.list.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
             }
             Widget::Field(Field::Map) => {
                 Drawn::Map(map::Shown::of(&self.track, map::area(bx), self.route().as_ref(), self.zoom()))
@@ -278,10 +278,10 @@ impl App {
             (Widget::Date, _) => ui::draw_date(c, date_text(self.date).as_str()),
             (Widget::Notices, _) => {
                 let mut n: [&str; ui::NOTICES] = [""; ui::NOTICES];
-                for (slot, line) in n.iter_mut().zip(&self.notices) {
+                for (slot, line) in n.iter_mut().zip(&self.notes.list) {
                     *slot = line.as_str();
                 }
-                let shown = self.notices.iter().take_while(|l| !l.as_str().is_empty()).count().min(ui::NOTICES);
+                let shown = self.notes.list.iter().take_while(|l| !l.as_str().is_empty()).count().min(ui::NOTICES);
                 ui::draw_notices(c, n.get(..shown).unwrap_or(&[]));
             }
             (Widget::Field(f), d) => {
@@ -358,18 +358,15 @@ impl App {
     /// The rows the page may be drawn in (top, bottom): under the banner while one (or a call) is up, above a call's
     /// buttons.
     pub(crate) fn area(&self) -> (u32, u32) {
-        let top = if self.phone.ringing || self.banner_ms.is_some() { ui::BANNER_H } else { 0 };
+        let top = if self.phone.ringing || self.notes.ms.is_some() { ui::BANNER_H } else { 0 };
         (top, if self.phone.ringing { ui::CALL_Y } else { ui::H })
     }
 
     /// The banner is gone: what is under it (the strip, the page's top) drawn again, from what the screen shows.
     pub(crate) fn unbanner(&mut self, b: &mut impl Board) {
-        self.banner_ms = None;
+        self.notes.ms = None;
         self.redraw_top(b);
-        if let Some((text, kind)) = self.banner_next.take() {
-            (self.banner, self.banner_kind) = (text, kind); // the one that waited, next
-            (self.banner_ms, self.banner_drawn) = (Some(0), false);
-        }
+        self.notes.show_waiting();
     }
 
     /// The banner's rows drawn again from what the screen shows: the strip, the page's top, the banner if one is up.
@@ -396,12 +393,11 @@ impl App {
 
     /// A notice, its banner of `kind`.
     fn notice_as(&mut self, text: &str, kind: Banner) {
-        self.notices.rotate_right(1);
         let mut l = Line::new();
         l.push_str(hm_text(self.strip.time).as_str());
         l.push_str(" ");
         l.push_str(text);
-        self.notices[0] = l;
+        self.notes.push(l);
         // over the overview the notice is in its own box already; the banner without the time (the strip has it)
         // and not over a ride's card, whose title the banner would cover (an alarm still must be seen)
         if self.screen != Screen::Main && (self.screen != Screen::Summary || kind == Banner::Alarm) {
@@ -426,26 +422,7 @@ impl App {
     /// moment only: one waiting, or one up pushed off, goes when another cue is said. An incoming call is above
     /// them all: a banner waits under it ([`App::area`]).
     pub(crate) fn say_as(&mut self, text: &str, kind: Banner) {
-        let mut l = Line::<40>::new();
-        l.push_str(text);
-        if kind.is_cue() && self.banner_next.is_some_and(|n| n.1.is_cue()) {
-            self.banner_next = None;
-        }
-        let up = self.banner_ms.is_some().then_some((self.banner, self.banner_kind));
-        let (show, wait) = match up {
-            Some(up) if up.1 > kind => (up, Some((l, kind))),
-            Some(up) if up.1 < kind && !(up.1.is_cue() && kind.is_cue()) => ((l, kind), Some(up)),
-            _ => ((l, kind), None),
-        };
-        if let Some(w) = wait
-            && self.banner_next.is_none_or(|n| n.1 <= w.1)
-        {
-            self.banner_next = Some(w);
-        }
-        if up != Some(show) {
-            (self.banner, self.banner_kind) = show;
-            (self.banner_ms, self.banner_drawn) = (Some(0), false);
-        }
+        self.notes.say(text, kind);
     }
 
     /// Clears the page area and draws the current screen.
