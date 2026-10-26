@@ -104,7 +104,7 @@ The dated findings are in [journal.md](journal.md).
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
   recording through it.
 - **Barometric altitude (src/altitude.rs)**: the sign and size of the pressure swings from wind at speed (the 2 m
-  ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SYSTEM > BUILT IN against a known
+  ascent hysteresis is inferred, BARO_HYSTERESIS_MM), ALTITUDE and FROM GPS in SETTINGS > BIKE against a known
   height, the ride start's own calibration, `\Rustfw\altcal.bin` kept over a restart, the chip's current at a reading
   a second (datasheet, not measured), `Alt_P0` of a real DeviceData.ini.
 

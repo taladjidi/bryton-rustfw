@@ -466,8 +466,8 @@ pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), 
 pub const DISPLAY: [Row; 4] =
     [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::WktAvg)];
 
-/// BIKE: the wheel.
-pub const BIKE: [Row; 1] = [Row::Set(Setting::Wheel)];
+/// BIKE: the wheel, and the barometer's altitude with its calibration from the GPS (a ride setting, not a diagnostic).
+pub const BIKE: [Row; 3] = [Row::Set(Setting::Wheel), Row::Set(Setting::Altitude), Row::AltGps];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
 pub const SYSTEM: [Row; 6] =

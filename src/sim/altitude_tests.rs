@@ -111,7 +111,7 @@ fn a_ride_start_calibrates_and_it_is_kept() {
     assert_ne!(app.alt_now().1, 0, "and used from the first second");
 }
 
-/// A typed altitude in SYSTEM > BUILT IN, then the ride takes the barometer's altitude although the receiver says
+/// A typed altitude in SETTINGS > BIKE, then the ride takes the barometer's altitude although the receiver says
 /// otherwise; FROM GPS averages 30 s and says so.
 #[test]
 fn typed_and_from_gps() {
@@ -120,24 +120,22 @@ fn typed_and_from_gps() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 12_000);
     app.press(&mut sim, Press::Long(Key::Page));
-    super::tests::to_row(&mut sim, &mut app, menu::Row::Open(Menu::BuiltIn));
+    super::tests::to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
     app.press(&mut sim, Press::Short(Key::Start));
     let row = |app: &App, i| {
-        let (l, v, _) = app.menu_row(Menu::BuiltIn, i).unwrap();
+        let (l, v, _) = app.menu_row(Menu::Bike, i).unwrap();
         std::format!("{} {}", l.as_str(), v.as_str())
     };
-    assert_eq!(row(&app, 3), "ALTITUDE 0 M", "the standard day's sea-level pressure until calibrated");
-    for _ in 0..3 {
-        app.press(&mut sim, Press::Short(Key::Page));
-    }
+    assert_eq!(row(&app, 1), "ALTITUDE 0 M", "the standard day's sea-level pressure until calibrated");
+    app.press(&mut sim, Press::Short(Key::Page)); // WHEEL, then ALTITUDE
     app.press(&mut sim, Press::Short(Key::Start)); // edit
     for _ in 0..24 {
         app.press(&mut sim, Press::Short(Key::Lap)); // up, 5 m a press
     }
-    assert_eq!(row(&app, 3), "ALTITUDE < 120 >");
+    assert_eq!(row(&app, 1), "ALTITUDE < 120 >");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
-    assert_eq!(row(&app, 3), "ALTITUDE 120 M");
+    assert_eq!(row(&app, 1), "ALTITUDE 120 M");
     assert_eq!(app.alt.cal().map(|c| c.by), Some(By::Typed));
     assert_ne!(app.alt_now().1, 0, "the barometer, though the receiver says 300 m");
     assert!(app.alt_now().0.unwrap().abs_diff(120_000) < 1500);
@@ -146,12 +144,12 @@ fn typed_and_from_gps() {
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 10_000);
-    let v = row(&app, 4);
+    let v = row(&app, 2);
     assert!(v.starts_with("FROM GPS ") && v.contains('/'), "{v}");
     run(&mut sim, &mut app, 30_000);
     assert_eq!(app.alt.cal().map(|c| c.by), Some(By::Gps));
     assert!(app.alt.alt_mm().unwrap().abs_diff(300_000) < 1000);
-    assert_eq!(row(&app, 4), "FROM GPS ");
+    assert_eq!(row(&app, 2), "FROM GPS ");
 }
 
 /// The barometer silent, from the start or in the middle of a ride: the receiver's altitude, and the ascent goes on.
@@ -164,7 +162,7 @@ fn the_receiver_when_the_barometer_is_silent() {
     run(&mut sim, &mut app, 20_000);
     assert_eq!(app.alt_now().1, 0);
     assert!(app.alt_now().0.is_some());
-    assert_eq!(app.menu_row(Menu::BuiltIn, 3).unwrap().1.as_str(), "NONE");
+    assert_eq!(app.menu_row(Menu::Bike, 1).unwrap().1.as_str(), "NONE");
 
     let mut sim = unit(0);
     sim.gnss.alt = Some(truth);
@@ -308,11 +306,9 @@ fn back_leaves_the_altitude_as_it_was() {
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 12_000);
     app.press(&mut sim, Press::Long(Key::Page));
-    super::tests::to_row(&mut sim, &mut app, menu::Row::Open(Menu::BuiltIn));
+    super::tests::to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
     app.press(&mut sim, Press::Short(Key::Start));
-    for _ in 0..3 {
-        app.press(&mut sim, Press::Short(Key::Page));
-    }
+    app.press(&mut sim, Press::Short(Key::Page)); // WHEEL, then ALTITUDE
     app.press(&mut sim, Press::Short(Key::Start)); // edit
     for _ in 0..5 {
         app.press(&mut sim, Press::Short(Key::Lap));

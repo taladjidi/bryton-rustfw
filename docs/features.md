@@ -219,7 +219,7 @@ MENU
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, GAUGE POWER (the workout gauge's window)
-     +- BIKE >     WHEEL
+     +- BIKE >     WHEEL, ALTITUDE, FROM GPS (the barometer's calibration)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```
 
@@ -408,7 +408,7 @@ STOCK):
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind
   ("iPhone/Mac", "Find My", "Windows PC"), since they advertise no name.
 - **Barometric altitude** (`src/altitude.rs`, `src/app/barometer.rs`): the international barometric formula on the
-  LPS22HH's pressure, smoothed, calibrated by SETTINGS > SYSTEM > BUILT IN > ALTITUDE (type the altitude, 5 m steps),
+  LPS22HH's pressure, smoothed, calibrated by SETTINGS > BIKE > ALTITUDE (type the altitude, 5 m steps),
   FROM GPS (30 s of 3D fix, six satellites), or by itself at a ride's start when the last calibration is over 3 hours
   old; kept in `\Rustfw\altcal.bin` between rides; stock's `Alt_P0` imported (not trusted). The ride, its graphs and the
   FIT records take the barometer's altitude when it reads, the receiver's otherwise. No drift correction in a ride

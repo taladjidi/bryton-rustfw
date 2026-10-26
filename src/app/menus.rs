@@ -129,11 +129,7 @@ impl App {
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
             Menu::System => menu::SYSTEM.get(i).copied(),
-            Menu::BuiltIn => match menu::BUILT_IN.get(i) {
-                Some(&r) => Some(Row::Read(r)),
-                // the barometer's altitude and its calibration, after its readings
-                None => [Row::Set(menu::Setting::Altitude), Row::AltGps].get(i - menu::BUILT_IN.len()).copied(),
-            },
+            Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
             Menu::Ride(n) => {
                 use menu::RideRow;
                 let rows = [
