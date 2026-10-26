@@ -129,7 +129,9 @@ impl App {
             Menu::Me => menu::ME.get(i).copied(),
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
-            Menu::System => menu::SYSTEM.get(i).copied(),
+            // GIVE UP SAVE first, only while a save is stuck (app/riding.rs)
+            Menu::System if self.save_stuck_any() && i == 0 => Some(Row::GiveUpSave),
+            Menu::System => menu::SYSTEM.get(i - usize::from(self.save_stuck_any())).copied(),
             Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
             Menu::Ride(n) => {
                 use menu::RideRow;
@@ -296,6 +298,11 @@ impl App {
                 value.push_u32(u32::from(d.rssi.unsigned_abs()));
             }
             Row::About => label.push_str("ABOUT"),
+            Row::GiveUpSave => {
+                label.push_str("GIVE UP SAVE");
+                value.push_str("STUCK");
+                color = ui::RED;
+            }
             Row::Drive => {
                 label.push_str("USB DRIVE");
                 value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
@@ -667,6 +674,7 @@ impl App {
                 let _ = self.drive_on(b); // why not is in the banner
             }
             Some(Row::About) => self.open(Screen::About),
+            Some(Row::GiveUpSave) => self.give_up_save(b, menu, sel),
             Some(Row::Notif(k)) => self.open(Screen::Notif(k, 0)),
             // paired and in use: forgotten; behind an ANT+ trainer (ANT FIRST): searched again, to take its place
             Some(Row::BtTrainer) if self.ftms_on() => {

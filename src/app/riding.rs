@@ -107,6 +107,51 @@ impl App {
         self.say(if took { "DISCARDING" } else { "ALREADY SAVED" });
     }
 
+    /// GIVE UP SAVE (SYSTEM, only while a save is stuck: recorder.rs, "GIVE UP SAVE"): two banners of explanation,
+    /// then asked twice, each Start on the row going on and anything else (Back) dropping it; then both copies'
+    /// stuck saves given up, the outcome said. Refused while the card is lent (the recorder cannot reach it), and
+    /// while a ride runs that is recorded: one held behind the stuck save has nothing recorded, so it is let
+    /// through and starts recording here (the rider's way to record the ride under way on a failing card).
+    pub(crate) fn give_up_save(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
+        const ASK: [&str; 4] = [
+            "THE RIDE STAYS ON\nTHE CARD, UNNAMED.",
+            "COPY THE CARD FIRST\n(USB, READ ONLY).",
+            "GIVE UP SAVE?\nSTART: YES BACK: NO",
+            "SURE: GIVE UP SAVE?\nSTART: YES BACK: NO",
+        ];
+        if self.emmc.lent() {
+            return self.say("USB DRIVE ON");
+        }
+        if self.ride.state() != ride::State::Idle && !self.recorder.held() {
+            return self.say("END THE RIDE FIRST");
+        }
+        let step = if self.confirm.take() == Some((menu, sel)) { usize::from(self.give_up_step) + 1 } else { 0 };
+        if let Some(text) = ASK.get(step) {
+            (self.confirm, self.give_up_step) = (Some((menu, sel)), step as u8);
+            return self.say(text);
+        }
+        self.give_up_step = 0;
+        let (local, _) = self.rec_time();
+        let clean = self.recorder.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
+        let full = self.full.give_up_save(&mut emmc::Volume(&mut self.emmc, b), local);
+        // the boot's recovery over too: the record read by the next ride's first card work (one writer, one ride)
+        if self.recorder.phase() == recorder::Phase::Done {
+            self.resume_pending = false;
+        }
+        if self.full.phase() == recorder::Phase::Done {
+            self.full_pending = false;
+        }
+        use recorder::{GaveUp, Outcome};
+        match clean.or(full) {
+            Some(GaveUp::Named(Outcome::Saved(_))) => self.notice("RIDE SAVED"),
+            Some(GaveUp::Named(Outcome::Discarded(_))) => self.notice("RIDE DISCARDED"),
+            Some(GaveUp::Named(_)) => self.notice("KEPT IN RUSTFW/RIDES"),
+            Some(GaveUp::Rescue(_)) => self.notice("KEPT IN RUSTFW/RESCUE"),
+            Some(GaveUp::Lost) => self.alarm_notice("GIVEN UP: COPY THE CARD"),
+            None => {}
+        }
+    }
+
     /// The end-ride screen's numbers: the timer and the distance.
     pub(crate) fn end_stats(&self) -> Line<24> {
         let mut l = Line::new();

@@ -77,6 +77,10 @@ The dated findings are in [journal.md](journal.md).
 - **The save fixes (fat/write.rs `make_room`, recorder.rs)**: host tests with a cut at every sector and a card with
   failing sectors; on the unit a save on a card with a full `\Activities` folder, and a Start while the last ride is
   saved ("NOT RECORDING: CARD", then the ride starting once the save ends).
+- **GIVE UP SAVE (recorder.rs `give_up_save`, app/riding.rs)**: only on the simulator and the host tests (a card whose
+  directory sectors fail to write or read). On the unit it needs a card that really fails, so it may never be seen:
+  the row appearing in SYSTEM while stuck, the four banners, and `\Rustfw\Rescue` or the lost chain checked from a
+  computer (fsck's `FILE0000.CHK`).
 - **The trainer's release (app/trainer.rs, nrf.rs `ant_tx_completed`)** on the Van Rysel D500: the release at stop, end,
   pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D500 free
   in the next seconds with the ride saved (ANT+ and over Bluetooth), the 330 ms wait enough. `TX_COMPLETED`'s layout

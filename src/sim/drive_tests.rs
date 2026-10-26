@@ -338,3 +338,83 @@ fn a_held_ride_is_said_once_the_save_is_stuck() {
     assert!(app.recorder.held());
     assert_eq!(said(&app), 1, "said when it became so");
 }
+
+/// GIVE UP SAVE (app/riding.rs, recorder.rs "GIVE UP SAVE"): no such row while no save is stuck; on a save stuck
+/// after its step 4 (as above), a ride held behind it, first in SYSTEM. Two banners of explanation, then asked
+/// twice; Back drops it at any step (from the start again). Then the ride is named in `\Rustfw\Rescue` (the rides
+/// folder failing to write), or, on a card under the full copy's reserve (no folder made there), given up: its
+/// chain lost, which the volume's fsck finds as lost clusters (a computer's fsck may make them FILE0000.CHK), nothing
+/// cross-linked. Either way the held ride is recorded and saved, and the drive lent writable again.
+#[test]
+fn give_up_save_frees_a_stuck_save() {
+    for nearly_full in [false, true] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        if nearly_full {
+            crate::fat::write::tests::fill(&mut sim.emmc.image, 300, true);
+        }
+        let mut app = App::start(&mut sim, None);
+        app.set_usb(&mut sim, UsbDot::Ready);
+        run(&mut sim, &mut app, 1000);
+        let rows = |app: &App| (0..app.rows(Menu::System)).filter_map(|i| app.row(Menu::System, i)).collect::<Vec<_>>();
+        assert!(!rows(&app).contains(&menu::Row::GiveUpSave), "not stuck: no row");
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 30_000);
+        app.press(&mut sim, Press::Short(Key::Start)); // pause
+        let dirs = ["Activities", "Rustfw/Rides"].map(|p| dir_sectors(&sim.emmc.image, p));
+        sim.emmc.bad = std::vec![dirs[0].clone()];
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 1000); // step 4 done, 5 failed
+        sim.emmc.bad = dirs.to_vec();
+        run(&mut sim, &mut app, 300_000);
+        assert!(app.recorder.stuck());
+        app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
+        app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
+        assert!(app.recorder.held() && app.ride.state() == ride::State::Running);
+        assert_eq!(rows(&app)[0], menu::Row::GiveUpSave);
+
+        app.open(Screen::Menu(Menu::System, 0));
+        app.show(&mut sim);
+        const ASK: [&str; 4] = [
+            "THE RIDE STAYS ON\nTHE CARD, UNNAMED.",
+            "COPY THE CARD FIRST\n(USB, READ ONLY).",
+            "GIVE UP SAVE?\nSTART: YES BACK: NO",
+            "SURE: GIVE UP SAVE?\nSTART: YES BACK: NO",
+        ];
+        for back_at in 1..=ASK.len() {
+            for text in &ASK[..back_at] {
+                app.input(&mut sim, Input::Select);
+                assert_eq!(app.banner.as_str(), *text);
+            }
+            app.input(&mut sim, Input::Back); // NO
+            assert!(app.recorder.stuck(), "asked {back_at} times, then Back: nothing done");
+        }
+        for text in ASK {
+            app.input(&mut sim, Input::Select);
+            assert_eq!(app.banner.as_str(), text);
+        }
+        app.input(&mut sim, Input::Select); // the second YES
+        assert!(!app.recorder.stuck() && !rows(&app).contains(&menu::Row::GiveUpSave));
+        let said = if nearly_full { "GIVEN UP: COPY THE CARD" } else { "KEPT IN RUSTFW/RESCUE" };
+        assert!(app.notices[0].as_str().ends_with(said), "{}", app.notices[0].as_str());
+        let fsck = crate::fat::write::tests::fsck(&sim.emmc.image);
+        if nearly_full {
+            assert!(fsck.as_ref().is_ok_and(|&lost| lost > 0), "the ride's chain lost, nothing cross-linked: {fsck:?}");
+        } else {
+            assert_eq!(fsck, Ok(0), "named once in \\Rustfw\\Rescue");
+            assert_eq!(fits_in(&sim.emmc.image, "Rustfw/Rescue"), 1);
+        }
+
+        sim.emmc.bad.clear(); // the card well again: the held ride records
+        run(&mut sim, &mut app, 10_000);
+        assert_eq!(app.recorder.phase(), recorder::Phase::Recording, "the held ride recorded");
+        app.leave_menus();
+        app.show(&mut sim);
+        app.press(&mut sim, Press::Short(Key::Start)); // pause
+        save_ride(&mut sim, &mut app);
+        run(&mut sim, &mut app, 3000);
+        assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE SAVED")));
+        assert_eq!(app.drive_on(&mut sim), Ok(()));
+        assert_eq!(app.banner.as_str(), "USB DRIVE ON", "writable again");
+    }
+}
