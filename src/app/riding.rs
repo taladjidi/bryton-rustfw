@@ -38,6 +38,8 @@ impl App {
         });
         if ev == ride::Event::Start {
             self.power.new_ride();
+            (self.profile_by_hand, self.profile) = (false, ride::Profile::Road);
+            self.choose_profile(); // after the banner above: INDOOR RIDE replaces it
         }
         self.recorder(ev);
     }
@@ -342,6 +344,7 @@ impl App {
     /// Once a second (the RTC's second changed): the ride and the history take the readings.
     pub(crate) fn second(&mut self) {
         self.alt_second();
+        self.profile_second();
         if self.ride.state() != ride::State::Idle {
             self.alt_follow();
         }

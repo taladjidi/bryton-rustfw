@@ -190,6 +190,11 @@ pub struct App {
     gear: Option<u16>,
     /// Gear changes in this ride.
     shifts: u16,
+    /// This ride's profile (app/profile.rs), whether the rider set it by hand (the trainer's silence no longer
+    /// changes it), and the seconds the trainer has been silent while it is indoor and automatic.
+    profile: ride::Profile,
+    profile_by_hand: bool,
+    trainer_quiet_s: u16,
     /// Channels that sent data while searching: ask the chip which sensor it found.
     ask: u8,
     /// The home trainer (trainer.rs, app/trainer.rs), the trainer screen as drawn, and whether it was heard last pass.
@@ -464,6 +469,9 @@ impl App {
             resting_ms: [u32::MAX; Kind::ALL.len()],
             gear: None,
             shifts: 0,
+            profile: ride::Profile::Road,
+            profile_by_hand: false,
+            trainer_quiet_s: 0,
             ask: 0,
             live: Live::default(),
             zones: [ride::ZoneHold::default(); 4],

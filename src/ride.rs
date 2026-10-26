@@ -438,6 +438,18 @@ impl Climb {
 /// heart rate zone 4 was exactly the banner orange). Tested: no zone colour is near either.
 pub const ZONE_COLORS: [u16; 7] = [0xb5b6, 0x537f, 0x7fe3, 0xffe0, 0xf81f, 0x901f, 0x07ff];
 
+/// What kind of ride this is: on the road, or indoors on a trainer (the bike is on it, the GPS has nothing to say).
+/// Chosen at Start from the trainer heard, or set by hand (app/profile.rs); the indoor one skips the map pages in
+/// the round.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Profile {
+    /// Outdoors: today's behaviour.
+    #[default]
+    Road,
+    /// On a trainer.
+    Indoor,
+}
+
 /// A zone shown with hysteresis, so a value on a zone's edge does not flip the bar every second: the zone shown
 /// changes only after the new one has held for [`ZoneHold::HOLD_S`] seconds in a row (the first zone, and the loss of
 /// the reading, at once).

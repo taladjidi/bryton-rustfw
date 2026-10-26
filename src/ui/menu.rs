@@ -97,6 +97,8 @@ pub enum Setting {
     Remote(u8),
     /// The barometric altitude (a number, m): typing it calibrates the barometer to it (altitude.rs).
     Altitude,
+    /// The ride profile: AUTO (indoor when a trainer is heard at Start), ROAD or INDOOR ([`crate::ride::Profile`]).
+    BikeProfile,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -186,6 +188,7 @@ impl Setting {
             Setting::HrAlert => "HR ABOVE",
             Setting::WktAvg => "GAUGE POWER",
             Setting::Altitude => "ALTITUDE",
+            Setting::BikeProfile => "PROFILE",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -338,6 +341,8 @@ pub enum RideRow {
     StopCourse,
     /// Opens the trainer screen (app/trainer.rs).
     Trainer,
+    /// INDOOR ON / OFF: the ride's profile by hand (app/profile.rs).
+    Indoor,
 }
 
 /// The workout menu of a ride (while a step runs).
@@ -466,8 +471,10 @@ pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), 
 pub const DISPLAY: [Row; 4] =
     [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::WktAvg)];
 
-/// BIKE: the wheel, and the barometer's altitude with its calibration from the GPS (a ride setting, not a diagnostic).
-pub const BIKE: [Row; 3] = [Row::Set(Setting::Wheel), Row::Set(Setting::Altitude), Row::AltGps];
+/// BIKE: the wheel, the ride profile, and the barometer's altitude with its calibration from the GPS (a ride setting,
+/// not a diagnostic).
+pub const BIKE: [Row; 4] =
+    [Row::Set(Setting::Wheel), Row::Set(Setting::Altitude), Row::AltGps, Row::Set(Setting::BikeProfile)];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
 pub const SYSTEM: [Row; 6] =

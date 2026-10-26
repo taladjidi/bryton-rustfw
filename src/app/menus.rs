@@ -138,6 +138,7 @@ impl App {
                     (Row::Open(Menu::WorkoutNow), self.workout_running()),
                     (Row::Open(Menu::CourseNow), self.page_on(COURSE)),
                     (Row::Ride(RideRow::Trainer), self.trainer_on()),
+                    (Row::Ride(RideRow::Indoor), true),
                     (Row::Set(menu::Setting::Light), true),
                     (Row::Open(Menu::Sensors), true),
                     // the course page has no settings; no page edited while recording (UI review 2, 5.2 point 8)
@@ -222,7 +223,11 @@ impl App {
                     RideRow::StopWorkout => "STOP WORKOUT",
                     RideRow::StopCourse => "STOP FOLLOWING",
                     RideRow::Trainer => "TRAINER CONTROL",
+                    RideRow::Indoor => "INDOOR",
                 });
+                if r == RideRow::Indoor {
+                    value.push_str(if self.indoors() { "ON" } else { "OFF" });
+                }
             }
             Row::Open(Menu::Page(OVERVIEW)) => label.push_str("OVERVIEW"),
             Row::Open(Menu::Page(n)) => {
@@ -610,6 +615,7 @@ impl App {
                         self.leave_menus();
                     }
                     RideRow::Trainer => self.open(Screen::Trainer),
+                    RideRow::Indoor => self.toggle_indoor(),
                 }
             }
             Some(Row::Past(n)) => {

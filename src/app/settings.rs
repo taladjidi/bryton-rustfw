@@ -188,7 +188,7 @@ pub(crate) const RIDE_BKP: usize = 30;
 pub(crate) const RIDE_OPEN: u32 = 0x5243_0001;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
-/// - tag 0xa7 (this layout): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
+/// - tag 0xa7 (this layout; 0xa8 and 0xa9 the same with the ride profile fixed, [`Settings::profile`]): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
 ///   [`LIGHT_LEVELS`], or [`LIGHT_AUTO`]), 6..7 its time-out (an index in [`LIGHT_TIMEOUTS_S`]), 8..15 max heart
 ///   rate less 100, 16..22 FTP in 5 W (at most 120), 23 the touch panel off ([`Settings::touch`]: 0 in words written
 ///   before it, on);
@@ -233,6 +233,10 @@ pub struct Settings {
     /// The altitude being edited (ALTITUDE in SYSTEM > BUILT IN), m + [`ALT_MENU_OFFSET`]. Not kept: the
     /// calibration is (altitude.rs).
     pub alt_m: u16,
+    /// The ride profile the rider fixed (BIKE > PROFILE); None: AUTO, indoor when a trainer is heard at Start. Kept in
+    /// register 11's tag: 0xa7 for AUTO (the tag every build knows), 0xa8 ROAD, 0xa9 INDOOR (an earlier build reads
+    /// those two as an empty word: defaults).
+    pub profile: Option<ride::Profile>,
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -272,9 +276,15 @@ impl Settings {
             touch: true,
             remote: [menu::Remote::None; 4],
             alt_m: 500,
+            profile: None,
         };
         match w >> 24 {
-            0xa7 => Settings {
+            0xa7..=0xa9 => Settings {
+                profile: match w >> 24 {
+                    0xa8 => Some(ride::Profile::Road),
+                    0xa9 => Some(ride::Profile::Indoor),
+                    _ => None,
+                },
                 wheel_mm: index(w & 7),
                 max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end()),
                 ftp: (5 * (w >> 16 & 0x7f) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
@@ -377,10 +387,14 @@ impl Settings {
             | u32::from(self.weight_kg) & 0xff
     }
 
-    /// As kept (tag 0xa7).
+    /// As kept (tag 0xa7, or 0xa8 / 0xa9 for a profile fixed by hand).
     pub fn to_word(self) -> u32 {
         let wheel = WHEELS.iter().position(|&w| w == self.wheel_mm).unwrap_or(1) as u32;
-        (0xa7 << 24)
+        (match self.profile {
+            None => 0xa7,
+            Some(ride::Profile::Road) => 0xa8,
+            Some(ride::Profile::Indoor) => 0xa9,
+        } << 24)
             | u32::from(!self.touch) << 23 // ponytail: the bit FTP / 5 (120 at most) leaves free in a full word
             | (u32::from(self.ftp / 5) & 0x7f) << 16
             | (u32::from(self.max_hr.saturating_sub(100)) & 0xff) << 8
@@ -431,6 +445,11 @@ impl Settings {
                 l.push_u32(m.unsigned_abs());
             }
             Setting::WktAvg => l.push_str(WKT_AVGS.get(self.wkt_avg).copied().unwrap_or("")),
+            Setting::BikeProfile => l.push_str(match self.profile {
+                None => "AUTO",
+                Some(ride::Profile::Road) => "ROAD",
+                Some(ride::Profile::Indoor) => "INDOOR",
+            }),
             Setting::Remote(n) => l.push_str(self.remote.get(usize::from(n)).map_or("", |a| a.name())),
         }
     }
@@ -455,6 +474,13 @@ impl Settings {
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
             Setting::Touch => self.touch = !self.touch,
             Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
+            Setting::BikeProfile => {
+                self.profile = match self.profile {
+                    None => Some(ride::Profile::Road),
+                    Some(ride::Profile::Road) => Some(ride::Profile::Indoor),
+                    Some(ride::Profile::Indoor) => None,
+                }
+            }
             Setting::Remote(n) => {
                 if let Some(a) = self.remote.get_mut(usize::from(n)) {
                     *a = menu::Remote::from_bits(*a as u32 + 1);

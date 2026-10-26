@@ -18,6 +18,7 @@ mod menus;
 mod more;
 mod notifs;
 mod phone;
+mod profile;
 mod radio;
 mod riding;
 mod screens;

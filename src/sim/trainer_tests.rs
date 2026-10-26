@@ -792,9 +792,10 @@ fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
     assert_eq!(label(&app, 2).as_deref(), Some("HISTORY"));
 }
 
-/// A trainer heard and no fix: the map page (an arrow on black) is out of the round; with a fix it is back.
+/// A trainer heard, the ride indoors (the profile chosen at Start, or set by hand): the map page (an arrow on black) is
+/// out of the round, fix or not; a ride fixed to ROAD keeps it.
 #[test]
-fn the_map_page_is_skipped_on_a_trainer_without_a_fix() {
+fn the_map_page_is_skipped_indoors() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     sim.own_settings();
@@ -817,5 +818,71 @@ fn the_map_page_is_skipped_on_a_trainer_without_a_fix() {
     sim.gnss.fix = Some(500);
     run(&mut sim, &mut app, 30_000);
     assert!(app.pvt.is_some_and(|p| p.good()));
-    assert!(round(&mut sim, &mut app).contains(&Screen::Ride(2)), "a fix: the map page is back");
+    assert!(!round(&mut sim, &mut app).contains(&Screen::Ride(2)), "a fix too: the bike is on a trainer");
+    // ROAD fixed in BIKE: the map is back
+    app.settings.profile = Some(crate::ride::Profile::Road);
+    assert!(round(&mut sim, &mut app).contains(&Screen::Ride(2)), "ROAD: the map page");
+    app.settings.profile = None;
+    // the ride starts indoors; the rider says ROAD by hand; the trainer going silent does not change that
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.indoors(), "{:?}", app.banner.as_str());
+    assert_eq!(app.banner.as_str(), "INDOOR RIDE");
+    app.toggle_indoor();
+    assert!(!app.indoors() && round(&mut sim, &mut app).contains(&Screen::Ride(2)));
+    app.toggle_indoor();
+    assert!(app.indoors());
+}
+
+/// An automatic indoor ride whose trainer goes silent for two minutes goes back to ROAD; one fixed to INDOOR stays.
+#[test]
+fn a_silent_trainer_ends_the_indoor_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.classic_pages();
+    sim.backup[14] = Kind::Trainer.to_word(ID);
+    sim.nordic.sensors.push(trainer_sensor());
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.indoors());
+    sim.nordic.sensors.clear(); // the trainer's power is cut
+    run(&mut sim, &mut app, 100_000);
+    assert!(app.indoors(), "not yet: the trainer was heard until the sensor's time-out, then under two minutes");
+    run(&mut sim, &mut app, 60_000);
+    assert!(!app.indoors(), "two minutes of silence: back to ROAD");
+    assert_eq!(app.banner.as_str(), "TRAINER LOST: ROAD RIDE");
+}
+
+/// BIKE > PROFILE: AUTO, ROAD, INDOOR round; each is kept (register 11's tag: AUTO keeps the tag earlier builds read),
+/// and a forced INDOOR is the profile at Start without a trainer.
+#[test]
+fn the_profile_setting_is_kept() {
+    let mut s = crate::Settings::from_word(0);
+    let mut seen = std::vec::Vec::new();
+    for _ in 0..3 {
+        let mut l = crate::Line::<12>::new();
+        s.text(crate::menu::Setting::BikeProfile, &mut l);
+        seen.push((
+            std::string::String::from(l.as_str()),
+            s.to_word() >> 24,
+            crate::Settings::from_word(s.to_word()) == s,
+        ));
+        s.cycle(crate::menu::Setting::BikeProfile);
+    }
+    assert_eq!(
+        seen,
+        [("AUTO".to_string(), 0xa7, true), ("ROAD".to_string(), 0xa8, true), ("INDOOR".to_string(), 0xa9, true)]
+    );
+    assert_eq!(s.profile, None, "round");
+
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 1000);
+    app.settings.profile = Some(crate::ride::Profile::Indoor);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.indoors(), "fixed to INDOOR: indoor with no trainer heard");
+    run(&mut sim, &mut app, 130_000);
+    assert!(app.indoors(), "a profile fixed by hand stays when no trainer is heard");
 }

@@ -91,11 +91,12 @@ impl App {
             self.start_pause();
             self.new_ride = false; // the page is drawn anew anyway
         }
+        self.choose_profile(); // a ride that began before the trainer was heard goes indoor here
         let (p, ev) = workout::Player::start(self.plan.steps(), at, self.ride.dist_m());
         self.player = Some(p);
         self.workout_event(ev);
         // the first page that shows the workout (the default page 1 has no field for it), else page 1
-        let page = if self.trainer_heard() {
+        let page = if self.indoors() || self.trainer_heard() {
             WORKOUT
         } else {
             (0..self.page_count)
