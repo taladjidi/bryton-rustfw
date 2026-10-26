@@ -125,6 +125,7 @@ Others
 - [x] ANT+ beat-to-beat intervals for HRV (patch P8, Garmin): sim, from a strap (HR seen on the unit)
 - [x] ANT+ speed, cadence, speed and cadence (stock, all): sim (decoders checked against openant)
 - [x] ANT+ power (stock, all): sim
+- [~] Power meter calibration (zero offset, auto zero) (stock, Garmin, Wahoo, Karoo): sim; the page 0x01 layouts are from open implementations, not yet seen on the unit (Sigeyi AXO spider)
 - [~] Sensor pairing menu: pair, forget (stock, all): one sensor per kind; no ID typed in, no names
 - [ ] Sensor pool: several of a kind, switch when another is found (stock, Garmin)
 - [ ] Sensor battery levels (ANT+ common page 82) (stock Quick Status, all)

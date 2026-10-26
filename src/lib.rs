@@ -26,6 +26,7 @@ pub mod page;
 pub mod phone;
 pub mod power;
 pub mod power_curve;
+pub mod powercal;
 pub mod ramp;
 pub mod ride;
 #[cfg(test)]
@@ -211,6 +212,10 @@ pub struct App {
     sensors_store: SensorStore,
     ack_gap_ms: u32,
     trainer_second: bool,
+    /// The power meter calibration (app/powercal.rs).
+    powercal: powercal::Cal,
+    /// What the calibration screen shows (phase, auto zero state); None: not drawn yet.
+    powercal_shown: Option<(powercal::Phase, Option<powercal::AutoZero>)>,
     trainer_no_control: bool,
     trainer_acked: bool,
     /// The Bluetooth trainer's link (app/ftms.rs).
@@ -602,6 +607,8 @@ impl App {
             sensors_store: SensorStore::default(),
             ack_gap_ms: 0,
             trainer_second: false,
+            powercal: powercal::Cal::default(),
+            powercal_shown: None,
             trainer_no_control: false,
             trainer_acked: false,
             ftms: Ftms::default(),
@@ -861,6 +868,7 @@ impl App {
         self.step_recorder(b);
         self.step_altitude(b);
         self.step_trainer(b);
+        self.step_powercal(b);
         if self.ble.is_some() {
             self.step_phone(b);
         }

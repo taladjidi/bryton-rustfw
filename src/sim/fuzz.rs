@@ -239,6 +239,40 @@ fn ant_decoders() {
     assert!(gears > 1000 && batteries > 1000 && presses > 100, "reached: {gears} {batteries} {presses}");
 }
 
+/// Random calibration pages (power meter page 0x01, ids mixed in so the replies are reached) into the reply decoder
+/// and the calibration state machine, with requests, retries and time passing: no panic, and every reply kind seen.
+#[test]
+fn power_calibration_pages() {
+    use crate::powercal::{Cal, Reply, reply};
+    let (mut zero, mut auto, mut done) = (0, 0, 0);
+    for seed in 9..=12u32 {
+        let mut c = Cal::default();
+        let v: std::vec::Vec<u8> = bytes(seed, 1 << 16).collect();
+        for ch in v.chunks_exact(9) {
+            let mut d: [u8; 8] = core::array::from_fn(|i| ch[i]);
+            if ch[8] & 1 == 0 {
+                d[0] = 1;
+                d[1] = [0xac, 0xaf, 0x12, 0xaa, 0xab, ch[1]][usize::from(ch[8] >> 1) % 6];
+            }
+            match ch[8] >> 4 {
+                0 => c.start_zero(),
+                1 => c.toggle_auto(),
+                2 => c.unsent(),
+                3 => c.reset(),
+                _ => {}
+            }
+            let r = reply(d);
+            zero += usize::from(matches!(r, Some(Reply::Zero { .. })));
+            auto += usize::from(matches!(r, Some(Reply::Auto(_))));
+            if let Some(r) = r {
+                done += usize::from(c.heard(r));
+            }
+            let _ = (c.due(), c.tick(u32::from(ch[0]) * 40));
+        }
+    }
+    assert!(zero > 500 && auto > 500 && done > 50, "reached: {zero} {auto} {done}");
+}
+
 /// Random bytes from the computer, with command words mixed in, into the dev link protocol.
 #[test]
 fn dev_link_input() {

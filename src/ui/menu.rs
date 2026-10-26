@@ -356,6 +356,8 @@ pub enum RideRow {
     StopCourse,
     /// Opens the trainer screen (app/trainer.rs).
     Trainer,
+    /// Opens the power meter calibration screen (app/powercal.rs).
+    CalPower,
     /// INDOOR ON / OFF: the ride's profile by hand (app/profile.rs).
     Indoor,
     /// PAGES: which set the list and the editor show, ROAD or INDOOR (the ride's own while one is open).

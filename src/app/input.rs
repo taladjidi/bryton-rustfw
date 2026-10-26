@@ -142,6 +142,8 @@ pub enum Screen {
     Media,
     /// The trainer: mode and target (app/trainer.rs).
     Trainer,
+    /// The power meter calibration (app/powercal.rs).
+    PowerCal,
     /// The ramp test's result, APPLY or keep (app/ramp.rs).
     RampResult,
     /// ABOUT: the version, the commit, Ferris.
@@ -410,6 +412,9 @@ impl App {
             (Screen::RampResult, Input::Select) => return self.start_key(b),
             (Screen::RampResult, Input::Prev) => return self.lap(),
             (Screen::RampResult, _) => return,
+            (Screen::PowerCal, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.powercal_leave(),
+            (Screen::PowerCal, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.powercal_leave(),
+            (Screen::PowerCal, _) => return self.powercal_input(i),
             (Screen::Trainer, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => {
                 self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
                 self.close()

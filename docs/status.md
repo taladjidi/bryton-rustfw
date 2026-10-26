@@ -40,6 +40,12 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **Power meter calibration (src/powercal.rs, app/powercal.rs)**: only on the simulator. The page 0x01 layouts (ids
+  0xAA, 0xAB, 0xAC, 0xAF, 0x12; offset in bytes 6 and 7) are from the Nordic SDK and GoldenCheetah, the request
+  bytes and the acknowledged send on the power channel (the same op as the trainer's, itself not yet confirmed) are
+  inferred, and the 10 s time-out is ours. On the unit with the Sigeyi AXO spider: does it answer 0xAA with 0xAC (and
+  which offset), does it report auto zero (byte 2), does a message to a sleeping meter fail cleanly; Sigeyi's own
+  documentation of this was not found (retailers list auto zero and a manual zero offset only).
 - **Climbs ahead (src/climbs_ahead.rs, storage/route.rs, storage/inflate.rs, app/ahead.rs)**: only on the simulator,
   the host tests, the fuzz, and a real region file read on the computer (1009 of 1014 tiles decode, 5 are over the
   graph's 2560 nodes; traces from 199 random places: 194 made, median 4 km, 111 climbs). On the unit, with a map file

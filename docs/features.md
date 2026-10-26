@@ -501,6 +501,13 @@ STOCK):
   power, on stock's channels. A paired sensor is kept
   through power off, so a friend's is never taken. A silent sensor searches 30 s, then rests a minute. Needs the
   ANT+ key from your own stock firmware ([install.md](install.md)).
+- **Power meter calibration** (SENSORS > CALIBRATE POWER, offered while the power meter is paired and heard; not
+  yet seen on the unit): the screen says UNCLIP, CRANKS VERTICAL, NO PRESSURE; Start (or the CALIBRATE button) sends
+  the ANT+ Bicycle Power calibration request (page 0x01, id 0xAA, as an acknowledged message, sent again if the air
+  loses it) and waits 10 s for the meter: ZERO OFFSET with the number (and WAS, the offset before it this session),
+  FAILED, or NO ANSWER. Once the meter has said it supports auto zero, an AUTO ZERO ON / OFF button (Page or Lap
+  too) sends the configuration and shows the state the meter confirms. Not while a ride runs (a notice; paused is
+  fine). Layouts and sources: src/powercal.rs.
 - **Electronic shifting** (not yet seen on the unit): **DI2** (Shimano's own ANT channel, as stock and the patched
   stock firmware's P12 use it; needs Shimano's network key, copied from your stock image with the ANT+ one by
   `tools/ant_key.py`) and **SHIFTING** (the public ANT+ Shifting profile: SRAM AXS, Campagnolo), paired from the

@@ -570,6 +570,8 @@ pub struct Nordic {
     pub channels: [Channel; 8],
     /// The FE-C trainer (device type 0x11) among `sensors` is this model: its pages instead of the sensor's `data`.
     pub trainer: SimTrainer,
+    /// The power meter's (device type 0x0b) answers to calibration requests (page 0x01).
+    pub meter: SimMeter,
     /// The chip refuses an acknowledged message (op 0xc8) with TRANSFER_IN_PROGRESS for 250 ms (a channel period)
     /// after one went out, as the real one does while the last is still queued (review of ecbe541); the count of
     /// those refusals, and when the chip is free again.
@@ -780,6 +782,28 @@ impl SimTrainer {
     }
 }
 
+/// How the simulated power meter answers a manual zero request.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub enum MeterAnswer {
+    /// Not at all.
+    #[default]
+    Silent,
+    /// 0xAC with this offset.
+    Zero(i16),
+    /// 0xAF.
+    Fail,
+}
+
+/// The power meter's calibration side: the pages it received, how it answers, its auto zero status byte (0xff: none),
+/// and the answer being broadcast (page, broadcasts left).
+#[derive(Default)]
+pub struct SimMeter {
+    pub got: Vec<[u8; 8]>,
+    pub answer: MeterAnswer,
+    pub auto: Option<u8>,
+    pub reply: Option<([u8; 8], u8)>,
+}
+
 /// An ANT sensor in range: its device type and number, its 8 data bytes as a function of the time (ms), the
 /// network it is on (0 ANT+, 1 Shimano's: heard only by a channel assigned to it once that network has a key), and
 /// the pages it sends as acknowledged data (message 0x4f, as a Di2 sends its button page) rather than broadcast.
@@ -858,8 +882,15 @@ impl Nordic {
                 continue;
             };
             self.channels[ch].found = Some(i);
-            let data =
+            let mut data =
                 if self.sensors[i].device_type == 0x11 { self.trainer.page() } else { (self.sensors[i].data)(now) };
+            if let (0x0b, Some((page, n))) = (self.sensors[i].device_type, &mut self.meter.reply) {
+                data = *page; // the calibration answer, a few broadcasts
+                *n -= 1;
+                if *n == 0 {
+                    self.meter.reply = None;
+                }
+            }
             let id = if self.sensors[i].ack.contains(&data[0]) { 0x4f } else { 0x4e };
             self.ant_event(&[&[9, id, ch as u8][..], &data].concat(), 0x80, ch as u8); // EVENT_RX
         }
@@ -939,6 +970,33 @@ impl Nordic {
                 (0xc8, [8, ..]) if self.ack_model && now < self.ack_busy_until => {
                     self.ack_refused += 1;
                     self.queue(&[1, 0xc8, 0x1f, 0x40, 0, 0]); // NRF_ERROR_... TRANSFER_IN_PROGRESS (0x401f)
+                    return;
+                }
+                (0xc8, [8, d @ ..]) if d.len() == 8 && self.channels[ch].device_type == 0x0b => {
+                    self.ack_busy_until = now + 250;
+                    if self.ack_fail > 0 {
+                        self.ack_fail -= 1;
+                        self.queue(&[1, 0xc8, 0, 0, 0, 0]);
+                        self.ant_event(&[1, 0x40, ch as u8, 1, 6], 6, ch as u8); // EVENT_TRANSFER_TX_FAILED
+                        return;
+                    }
+                    let d: [u8; 8] = d.try_into().unwrap_or([0; 8]);
+                    self.meter.got.push(d);
+                    let st = self.meter.auto.unwrap_or(0xff);
+                    self.meter.reply = match (d[0], d[1], self.meter.answer) {
+                        (1, 0xaa, MeterAnswer::Zero(o)) => {
+                            let [o0, o1] = o.to_le_bytes();
+                            Some(([1, 0xac, st, 0xff, 0xff, 0xff, o0, o1], 3))
+                        }
+                        (1, 0xaa, MeterAnswer::Fail) => Some(([1, 0xaf, st, 0xff, 0xff, 0xff, 0, 0], 3)),
+                        (1, 0xab, _) if self.meter.auto.is_some() => {
+                            self.meter.auto = Some(d[2]);
+                            Some(([1, 0x12, 2 | d[2], 0xff, 0xff, 0xff, 0xff, 0xff], 3))
+                        }
+                        _ => None,
+                    };
+                    self.queue(&[1, 0xc8, 0, 0, 0, 0]);
+                    self.ant_event(&[1, 0x40, ch as u8, 1, 5], 5, ch as u8); // EVENT_TRANSFER_TX_COMPLETED
                     return;
                 }
                 (0xc8, [8, d @ ..]) if d.len() == 8 && self.channels[ch].device_type == 0x11 => {
@@ -1232,6 +1290,7 @@ impl Board for Sim {
         let no_mem = self.nordic.no_mem;
         let (dead, refuse, ant_refuse) = (self.nordic.dead, self.nordic.refuse, self.nordic.ant_refuse);
         let trainer = std::mem::take(&mut self.nordic.trainer);
+        let meter = std::mem::take(&mut self.nordic.meter);
         let (ack_model, ack_silent) = (self.nordic.ack_model, self.nordic.ack_silent);
         let (mut resets, chaos) = (std::mem::take(&mut self.nordic.resets), self.nordic.chaos);
         resets.push(self.ms);
@@ -1241,6 +1300,7 @@ impl Board for Sim {
             ant_refuse,
             sensors,
             trainer,
+            meter,
             ack_model,
             ack_silent,
             phone,
@@ -1418,6 +1478,8 @@ mod altitude_tests;
 mod fecble_tests;
 #[cfg(test)]
 mod ftms_tests;
+#[cfg(test)]
+mod powercal_tests;
 #[cfg(test)]
 mod ramp_tests;
 #[cfg(test)]
