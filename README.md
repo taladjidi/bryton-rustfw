@@ -1,4 +1,4 @@
-# bryton-rustfw
+# bryton-rustfw 🦀
 
 An open, from-scratch firmware in safe Rust for the **Bryton Rider S510** bike computer. It replaces Bryton's OS
 entirely. Not affiliated with Bryton.
