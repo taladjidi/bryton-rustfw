@@ -264,6 +264,7 @@ impl Slice {
     /// The slice of a main loop pass: about a millisecond or two on the unit each (sim.rs counts the operations).
     pub const PASS: Slice = Slice { inflate: 1024, nodes: 48, sort: 200 };
     /// The whole tile in one call.
+    #[cfg(test)]
     pub const ALL: Slice = Slice { inflate: usize::MAX, nodes: usize::MAX, sort: usize::MAX };
 }
 
@@ -863,6 +864,7 @@ impl Maps {
     }
 
     /// Reads z14 tile (`x`, `y`) into `g` in one go (tests, tools): [`Maps::step`] with the whole tile as the slice.
+    #[cfg(test)]
     pub fn load(
         &mut self,
         fat: &mut Fat,

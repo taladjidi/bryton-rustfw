@@ -201,6 +201,7 @@ impl Track {
     }
 
     /// The position shown is the last one known, not a fix.
+    #[cfg(test)]
     pub fn stale(&self) -> bool {
         self.stale
     }
@@ -248,6 +249,7 @@ impl Track {
     }
 
     /// The last position, metres east and north of the first fix.
+    #[cfg(test)]
     pub fn pos(&self) -> Option<(i32, i32)> {
         self.pos
     }
@@ -421,11 +423,6 @@ impl Shown {
     /// The view is at a zoom set by hand (a drag pans it).
     pub fn zoomed(&self) -> bool {
         self.zoomed && self.view.is_some()
-    }
-
-    /// The view is panned.
-    pub fn panned(&self) -> bool {
-        self.panned
     }
 }
 

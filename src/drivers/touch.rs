@@ -35,15 +35,6 @@ fn xy(b: [u8; 3]) -> (u16, u16) {
     (u16::from(b[0] & 0x70) << 4 | u16::from(b[1]), u16::from(b[0] & 0x07) << 8 | u16::from(b[2]))
 }
 
-/// The resolution (width, height) from register 0x04's 3 bytes.
-///
-/// ```
-/// assert_eq!(bryton_rustfw::touch::resolution([0x01, 0xf0, 0x40]), (240, 320));
-/// ```
-pub fn resolution(b: [u8; 3]) -> (u16, u16) {
-    xy(b)
-}
-
 /// A point slot's 3 bytes: the point if its valid bit (byte 0 bit 7) is set.
 ///
 /// ```

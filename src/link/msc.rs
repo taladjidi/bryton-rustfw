@@ -187,6 +187,7 @@ impl Drive {
     }
 
     /// The medium is in.
+    #[cfg(test)]
     pub fn present(&self) -> bool {
         self.present
     }

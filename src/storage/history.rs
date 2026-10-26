@@ -134,11 +134,6 @@ impl Acc {
         }
     }
 
-    /// The session, once read.
-    pub fn session(&self) -> Option<Session> {
-        self.session
-    }
-
     /// The ride in `file`, started at `start`; None without a session (not a whole ride).
     pub fn ride(&self, file: File, start: Start) -> Option<Ride> {
         let s = self.session?;
@@ -182,6 +177,7 @@ impl Index {
     }
 
     /// Rides kept.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.len
     }

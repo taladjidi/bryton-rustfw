@@ -103,7 +103,7 @@ pub fn lux10(raw: u32) -> u32 {
     raw & 0x3_ffff
 }
 
-/// Starts one barometer conversion (one-shot); [`baro_read`] gets it once done (tens of ms).
+/// Starts one barometer conversion (one-shot); [`baro_read_raw`] gets it once done (tens of ms).
 pub fn baro_start(b: &mut impl Board) -> bool {
     b.i2c_write(BARO_ADDR, CTRL_REG2, &[0x11]) // IF_ADD_INC (its reset value), ONE_SHOT
 }
@@ -120,11 +120,6 @@ pub fn baro_read_raw(b: &mut impl Board) -> Option<(u32, i16)> {
     }
     let p = i32::from_le_bytes([0, d[0], d[1], d[2]]) >> 8; // 24-bit two's complement, 4096 per hPa
     Some((p.max(0) as u32, i16::from_le_bytes([d[3], d[4]])))
-}
-
-/// The last conversion: (pressure in hPa x 10, temperature in C x 100); None if not ready or no answer.
-pub fn baro_read(b: &mut impl Board) -> Option<(u32, i16)> {
-    baro_read_raw(b).map(|(p, t)| ((p * 10 + 2048) / 4096, t))
 }
 
 /// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each:

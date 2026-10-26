@@ -106,11 +106,6 @@ impl Battery {
         })
     }
 
-    /// The smoothed voltage, mV.
-    pub fn millivolts(&self) -> Option<u16> {
-        self.mv
-    }
-
     /// The charge estimate, percent.
     pub fn percent(&self) -> Option<u8> {
         self.mv.map(percent)

@@ -462,11 +462,6 @@ impl Altimeter {
         self.dirty = false;
         c
     }
-
-    /// The calibration is to be written again (a write that failed).
-    pub fn mark_dirty(&mut self) {
-        self.dirty = self.cal.is_some();
-    }
 }
 
 #[cfg(test)]

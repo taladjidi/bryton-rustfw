@@ -81,8 +81,6 @@ pub const NO_ACCESS: u8 = 0x00;
 pub const READ: u8 = 0x02;
 /// Write without response.
 pub const WRITE_CMD: u8 = 0x04;
-/// Write with response.
-pub const WRITE: u8 = 0x08;
 /// Notify.
 pub const NOTIFY: u8 = 0x10;
 /// Indicate.
@@ -96,8 +94,6 @@ pub const TAG: u8 = 1;
 pub const UUID_BLE: u8 = 1;
 /// No connection.
 pub const NO_CONN: u16 = 0xffff;
-/// GATT status: attribute not found (the end of a discovery).
-pub const ATTRIBUTE_NOT_FOUND: u16 = 0x010a;
 /// The CCCD's UUID.
 pub const CCCD: u16 = 0x2902;
 
@@ -618,7 +614,7 @@ pub enum Event<'a> {
     Services {
         /// Connection handle.
         conn: u16,
-        /// GATT status (0 or [`ATTRIBUTE_NOT_FOUND`]...).
+        /// GATT status (0, or 0x010a: attribute not found, the end of a discovery).
         status: u16,
         /// The entries.
         list: &'a [u8],
