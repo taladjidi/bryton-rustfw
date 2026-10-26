@@ -71,6 +71,10 @@ pub struct Sim {
     pub work_ns_per_byte: u64,
     /// Work done so far, ns.
     pub awake_ns: u64,
+    /// The cycle counter ([`Board::cycles`]): each read moves it on by [`Sim::cycles_step`], wrapping as CYCCNT does.
+    pub cycles: u32,
+    /// What each read of the cycle counter adds (0, the default: the counter stands still).
+    pub cycles_step: u32,
     /// What [`Board::last_sleep`] says: ms, and the work in it, us. Default: [`POLL_MS`], none.
     pub sleep: (u32, u32),
 }
@@ -1133,6 +1137,8 @@ impl Sim {
             touch: TouchChip { run_since: None, finger: Box::new(|_| None), reads: 0 },
             work_ns_per_byte: 0,
             awake_ns: 0,
+            cycles: 0,
+            cycles_step: 0,
             sleep: (POLL_MS, 0),
         }
     }
@@ -1407,6 +1413,11 @@ impl Board for Sim {
 
     fn awake_us(&mut self) -> u32 {
         (self.awake_ns / 1000) as u32
+    }
+
+    fn cycles(&mut self) -> u32 {
+        self.cycles = self.cycles.wrapping_add(self.cycles_step);
+        self.cycles
     }
 
     fn last_sleep(&mut self) -> (u32, u32) {

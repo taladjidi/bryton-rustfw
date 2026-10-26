@@ -279,7 +279,7 @@ fn dev_link_input() {
     use crate::dev::{Session, Stats};
     let mut sim = super::Sim::new(9, 0, 0);
     let app = crate::App::start(&mut sim, None);
-    let words: [&[u8]; 12] = [
+    let words: [&[u8]; 13] = [
         b"peek ",
         b"poke ",
         b"load ",
@@ -291,6 +291,7 @@ fn dev_link_input() {
         b"sector ",
         b"emmc\n",
         b"bench map ",
+        b"prof ",
         b" -",
     ];
     let mut maps = 0;

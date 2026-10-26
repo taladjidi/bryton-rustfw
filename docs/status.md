@@ -67,6 +67,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The profiler (link/prof.rs, `dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the
+  counter's wrap, the `prof` answer). On the unit: `tools/profile.py --run` through its scenarios; the overhead `prof`
+  reports (a few tens of cycles a section expected), the sum of the rows near `dev.py info`'s awake permille, and the key
+  figures in README.md filled in from it.
+
 - **The ascent filter on a ride (altitude.rs, ride.rs)**: the median of 5, the 1/6 average, the slewed reference and the
   3 m hysteresis are tuned on the records of one real ride (341 m became 123 m on a real 60 km ride, offline); on the
   unit, a ride's ascent against a known climb and against stock's, with a calibration made at the start.

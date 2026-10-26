@@ -89,7 +89,9 @@ impl App {
     /// Draws the basemap of `view` in `area` into its buffer, unless it holds it already.
     pub(crate) fn render_basemap(&mut self, b: &mut impl Board, area: map::Rect, view: Option<map::View>) {
         if let (Some(v), Some(o), false) = (view, self.track.origin(), self.emmc.lent()) {
+            let t = b.cycles();
             self.basemap.render(&mut emmc::Volume(&mut self.emmc, b), area, v, o);
+            self.timed(b, crate::prof::Sec::Tiles, t);
         }
     }
 
@@ -469,7 +471,9 @@ impl App {
         }
         if let (Some((v, o)), false) = (self.card_view(), self.emmc.lent()) {
             // a card's map over the basemap too (the owner, 2026-10-24); the page's is drawn again when it shows
+            let t = b.cycles();
             self.basemap.render(&mut emmc::Volume(&mut self.emmc, b), map::area(ui::card::MAP), v, o);
+            self.timed(b, crate::prof::Sec::Tiles, t);
         }
         if let Some(i) = self.first_map()
             && let (Some((bx, _)), Some(Drawn::Map(m))) = (self.widgets().nth(i), self.drawn.get(i))

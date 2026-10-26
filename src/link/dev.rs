@@ -37,6 +37,9 @@
 //!   or `err <why>` (no ride may run or wait to be saved). The computer's eject gives it back.
 //! - `drivelog`: the USB drive's last 32 commands, oldest first, a line each: `op lba count status residue` in hex
 //!   (op 0xff a bus reset, 0xfe a Bulk-Only reset, 0xfd a CBW not valid); then `end`.
+//! - `prof`: the profiler's window (link/prof.rs): `prof <wall ms> <slept ms> <overhead cycles> <pixels> <sectors
+//!   read> <sectors written>`, then a line per section `<name> <calls> <cycles> <max cycles>`, then `end`; all in
+//!   decimal. `prof reset`: `ok`, and a new window starts ([`Effect::ProfReset`]).
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
@@ -111,6 +114,8 @@ pub enum Effect {
     BenchMap(u32, i32, i32),
     /// Lend the card to the computer ([`App::drive_on`]); answer `ok` or `err <why>`.
     Drive,
+    /// Start a new profiler window ([`crate::prof::Prof::reset`]).
+    ProfReset,
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -346,6 +351,14 @@ impl Session {
                     _ => h.send(b"err usage: bench <lba> <sectors 1..32> <count>\n"),
                 }
             }
+            Some(b"prof") => match words.next() {
+                None => send_prof(h, app.prof_figures()),
+                Some(b"reset") => {
+                    h.send(b"ok\n");
+                    return Effect::ProfReset;
+                }
+                Some(_) => h.send(b"err usage: prof [reset]\n"),
+            },
             Some(b"reset") => {
                 h.send(b"ok\n");
                 return Effect::Reset;
@@ -570,6 +583,26 @@ fn send_error(h: &mut impl Host, e: emmc::Error) {
     }
 }
 
+/// The profiler's window, as `prof` answers it.
+fn send_prof(h: &mut impl Host, p: &crate::prof::Prof) {
+    // each number after a space
+    let nums = |h: &mut dyn Host, vs: &[u64]| {
+        for &v in vs {
+            h.send(b" ");
+            h.send(decimal64(v, &mut [0; 20]));
+        }
+        h.send(b"\n");
+    };
+    h.send(b"prof");
+    let (wall, slept, overhead) = (u64::from(p.wall_ms), u64::from(p.slept_ms), u64::from(p.overhead));
+    nums(h, &[wall, slept, overhead, p.pixels, u64::from(p.read), u64::from(p.written)]);
+    for (s, slot) in crate::prof::Sec::ALL.iter().zip(&p.slots) {
+        h.send(s.name().as_bytes());
+        nums(h, &[u64::from(slot.count), slot.total, u64::from(slot.max)]);
+    }
+    h.send(b"end\n");
+}
+
 /// A decimal or `0x` hex number.
 fn parse(w: &[u8]) -> Option<u32> {
     let (digits, base) = match w {
@@ -589,6 +622,18 @@ fn hex(v: u32) -> [u8; 9] {
         *d = b"0123456789abcdef"[(v >> (28 - 4 * i)) as usize & 0xf];
     }
     out
+}
+
+fn decimal64(mut v: u64, buf: &mut [u8; 20]) -> &[u8] {
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            return &buf[i..];
+        }
+    }
 }
 
 fn decimal(mut v: u32, buf: &mut [u8; 10]) -> &[u8] {
