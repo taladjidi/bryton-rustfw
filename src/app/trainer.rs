@@ -12,8 +12,13 @@
 //! channel (250 ms) and refuses the next while the last is queued, so [`step_trainer`](App::step_trainer) sends at
 //! most one per [`ACK_GAP_MS`]: the set-up, the commands and the course's grade changes all wait their turn. A message
 //! the chip refuses, or the trainer does not acknowledge (`EVENT_TRANSFER_TX_FAILED`, [`nrf::ant_tx_failed`]), is due
-//! again. A chip that does not answer at all (the message's layout is inferred, not seen on the unit) turns the
-//! control off for the power-up, with a notice, instead of letting the link watchdog reset the chip over it.
+//! again. A chip that does not answer the first one at all (the message's layout is inferred, not seen on the unit)
+//! turns the control off until the chip is started again (app/link.rs `radio_restart`), with a notice, instead of
+//! letting the link watchdog reset the chip over it. Once one was answered the layout is right: a later silence (a
+//! byte lost on the link) only has the message sent again, and the watchdog finds a broken link by its own signs.
+//!
+//! **Let go** (trainer.rs): at a workout's or a course's end, a ride's end, a pause in ERG, the switch-off
+//! ([`App::release_trainer`]), and the first contact after a boot.
 //!
 //! **Calibration** (spin-down, FE-C pages 1 and 2, trainer.rs [`Cal`]): the trainer screen offers CALIBRATE beside MODE
 //! while the trainer's status asks for it, and Start held does the same; not during a ride (a notice). While it runs
@@ -30,6 +35,10 @@ use ui::trainer::{Bottom, Now};
 
 /// The least time between two acknowledged messages on the trainer's channel, ms: its period (8192 / 32768 s).
 pub const ACK_GAP_MS: u32 = 250;
+
+/// At the switch-off, the wait after the release for it to go on air before the chip is switched off, ms: more than
+/// the FE-C channel's period (8192 / 32768 s), whose next slot carries it.
+pub const OFF_WAIT_MS: u32 = 330;
 
 /// The sensors file is read this long after the start (the GNSS clock, as the barometer's file).
 pub const SENSORS_LOAD_MS: u32 = 3500;
@@ -108,7 +117,8 @@ impl App {
             .filter(|c| c.on.is_some() && self.ride.state() != ride::State::Idle)
             .and_then(|c| c.course.grade_ahead(self.ride.dist_m()))
             .map(|g| (g * 10).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16);
-        Drive { erg_w, step: step.unwrap_or(0), grade_x100 }
+        let riding = self.ride.state() != ride::State::Idle;
+        Drive { erg_w, step: step.unwrap_or(0), grade_x100, riding, paused: riding && !self.ride.moving() }
     }
 
     /// The trainer's readings into the live values, where nothing better is heard: power from a power meter, cadence
@@ -155,6 +165,10 @@ impl App {
             if core::mem::take(&mut self.trainer_up) {
                 self.trainer.lost();
             }
+            if self.trainer_on() {
+                // the clocks and what holds it run on: a ride ended meanwhile ends the rider's hold too
+                self.trainer.due(self.dt_ms, false, &self.trainer_drive());
+            }
             return;
         }
         self.trainer_up = true;
@@ -195,15 +209,57 @@ impl App {
             return;
         }
         match nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page) {
-            Ok(()) => {}
+            Ok(()) => self.trainer_acked = true,
+            Err(nrf::Error::Timeout) if self.trainer_acked => self.trainer.unsent(), // a byte lost: sent again
             Err(nrf::Error::Timeout) => {
-                // no answer at all: the message's layout is a guess. Not tried again this power-up, and the chip
-                // is not reset over it (ant_ack keeps the watchdog's count)
+                // no answer to the first one: the message's layout is a guess. Not tried again until the chip starts
+                // again, and the chip is not reset over it (ant_ack keeps the watchdog's count)
                 self.trainer.unsent();
                 self.trainer_no_control = true;
                 self.notice("TRAINER CONTROL FAILED");
             }
             Err(nrf::Error::Code(_)) => self.trainer.unsent(), // refused: due again at the next free slot
+        }
+    }
+
+    /// At the switch-off: a trainer heard that may still be held (ERG, SIM, a release not known to have arrived) is let
+    /// go, one free resistance, so it does not stay at the last target until its own time-out. Bounded: two tries
+    /// over ANT+ [`OFF_WAIT_MS`] apart (the chip refuses one while the last is queued), and as long for it to go on air
+    /// before the chip is switched off; over Bluetooth the answer to a write still out is waited for, [`CP_MS`]
+    /// at most.
+    pub(crate) fn release_trainer(&mut self, b: &mut impl Board) {
+        if !self.trainer_heard() || !self.trainer.holding() || self.trainer.calibrating() {
+            return;
+        }
+        let page = fec::encode(Command::Resistance(0));
+        if !self.ftms_on() {
+            if self.ant && !self.trainer_no_control {
+                for _ in 0..2 {
+                    let sent = nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page).is_ok();
+                    b.delay_ms(OFF_WAIT_MS);
+                    if sent {
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+        // a write still out (the 4 s resend, a step's target): its answer first, one write at a time
+        for _ in 0..CP_MS / 10 {
+            if self.ftms.ready() && self.ack_gap_ms >= ACK_GAP_MS {
+                break;
+            }
+            self.poll_nrf(b);
+            b.delay_ms(10);
+            self.ack_gap_ms = self.ack_gap_ms.saturating_add(10);
+        }
+        if self.ftms.ready() {
+            if self.sensors_store.bt_fec {
+                self.ftms_fec_send(b, page);
+            } else {
+                self.ftms_command(b, Command::Resistance(0));
+            }
+            b.delay_ms(OFF_WAIT_MS); // the write goes at the next connection event
         }
     }
 
@@ -317,6 +373,8 @@ impl App {
             (if text.is_empty() { stat.as_str() } else { text }, color)
         } else if r.needs_calibration() {
             ("CALIBRATE", ui::trainer::WARN)
+        } else if d.paused && t.mode(&d) == Mode::Erg {
+            ("PAUSED: FREE", ui::GREY)
         } else if !engaged {
             ("PAGE / LAP: SET", ui::GREY)
         } else if matches!(r.last_cmd, Some((page, 1..=3)) if page == fec::encode(t.command(&d))[0]) {

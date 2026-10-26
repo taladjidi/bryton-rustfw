@@ -495,3 +495,117 @@ fn a_stopped_workout_releases_the_ftms_trainer() {
         super::trainer_tests::release_after(&mut sim, &mut app, how, erg, free);
     }
 }
+
+/// The ride paused: the FTMS trainer is let go; resumed, the target again.
+#[test]
+fn a_paused_ride_releases_the_ftms_trainer() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    super::trainer_tests::pause_releases(&mut sim, &mut app, erg, free);
+}
+
+/// The switch-off lets the FTMS trainer go.
+#[test]
+fn the_switch_off_releases_the_ftms_trainer() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    super::trainer_tests::off_releases(&mut sim, &mut app, erg, free);
+}
+
+/// A command's write answer lost (among bytes a resync dropped): it no longer holds Request Control up when the
+/// control is lost, so the target is set again (review: the link's control was wedged for the connection).
+#[test]
+fn a_lost_write_answer_does_not_wedge_the_control() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    sim.nordic.drop_gattc = Some((1, 0x38));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.drop_gattc, None, "the write's answer was lost");
+    assert_eq!((trainer(&sim).mode, trainer(&sim).target_w), (5, 105));
+    let t = sim.nordic.ftms.as_mut().unwrap();
+    (t.lose_control_at, t.mode, t.target_w) = (Some(sim.ms), 0, 0);
+    run(&mut sim, &mut app, 6000);
+    let t = trainer(&sim);
+    assert_eq!(t.got.iter().filter(|w| w[..] == [0x00]).count(), 2, "control asked again: {:?}", t.got);
+    assert_eq!((t.control, t.mode, t.target_w), (true, 5, 105), "and the target set again");
+}
+
+/// A trainer that refused the control is asked again later while the rider drives it (review: never again for the
+/// link), and the target goes out once it is given.
+#[test]
+fn a_refused_control_is_asked_again() {
+    let mut t = FtmsSim::new();
+    t.refuse_control = true;
+    let (mut sim, mut app) = unit_with(t, None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 3000);
+    assert!(!trainer(&sim).control && !app.ftms.control);
+    sim.nordic.ftms.as_mut().unwrap().refuse_control = false;
+    run(&mut sim, &mut app, 25_000);
+    let t = trainer(&sim);
+    assert!(t.got.iter().filter(|w| w[..] == [0x00]).count() >= 2, "asked again: {:?}", t.got);
+    assert_eq!((t.control, t.mode, t.target_w), (true, 5, 105), "given: the target");
+    assert_eq!(t.violations, 0);
+}
+
+/// The switch-off right after a command's write (the 4 s resend): its answer is waited for, then the release goes.
+#[test]
+fn the_switch_off_with_a_write_in_flight_releases_the_ftms_trainer() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    assert!(erg(&sim));
+    app.ftms_command(&mut sim, crate::trainer::Command::Power(420)); // its answer not read yet
+    app.power_off(&mut sim);
+    assert!(free(&sim), "released: {:?}", trainer(&sim).got);
+    assert_eq!(trainer(&sim).violations, 0);
+}
+
+/// A release the trainer never answers is sent again, a few times at most (and once when answered).
+#[test]
+fn the_ftms_release_is_resent_a_few_times_at_most() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    super::trainer_tests::start_workout(&mut sim, &mut app, erg);
+    let release = |sim: &Sim| trainer(sim).got.iter().filter(|w| w[..] == [0x04, 0]).count();
+    let before = release(&sim);
+    sim.nordic.ftms.as_mut().unwrap().mute_cp = true;
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, crate::menu::Row::Ride(crate::menu::RideRow::StopWorkout));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 60_000);
+    assert_eq!(release(&sim) - before, usize::from(crate::trainer::RELEASE_TRIES));
+}
+
+/// The link lost and made again while the ride is paused: the trainer stays free; the target comes back on resume.
+#[test]
+fn a_reconnect_during_a_pause_keeps_the_trainer_free() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    super::trainer_tests::start_workout(&mut sim, &mut app, erg);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    run(&mut sim, &mut app, 2000);
+    assert!(free(&sim));
+    let t = sim.nordic.ftms.as_mut().unwrap();
+    t.drop_at = Some(sim.ms);
+    run(&mut sim, &mut app, 15_000);
+    assert!(trainer(&sim).connected && trainer(&sim).control, "linked again");
+    assert!(sim.nordic.connects >= 2);
+    assert!(!erg(&sim), "still free while paused");
+    app.press(&mut sim, Press::Short(Key::Start)); // resume
+    run(&mut sim, &mut app, 3000);
+    assert!(erg(&sim), "the target on resume");
+}

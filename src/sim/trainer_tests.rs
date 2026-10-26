@@ -1011,6 +1011,13 @@ pub(super) fn release_after(sim: &mut Sim, app: &mut App, how: Ends, erg: fn(&Si
     app.press(sim, Press::Short(Key::Start)); // START
     run(sim, app, 8000);
     assert!(erg(sim) && !free(sim), "the workout's target is held");
+    // +5 W on the step: an adjustment of the workout's target, not a take-over by the rider (review: it kept the
+    // trainer at the manual 100 W after the workout)
+    app.open(Screen::Trainer);
+    app.press(sim, Press::Short(Key::Page));
+    run(sim, app, 1000);
+    app.press(sim, Press::Short(Key::Back));
+    assert!(erg(sim));
     match how {
         Ends::Stop => {
             app.press(sim, Press::Long(Key::Page));
@@ -1025,6 +1032,39 @@ pub(super) fn release_after(sim: &mut Sim, app: &mut App, how: Ends, erg: fn(&Si
     }
     run(sim, app, 3000);
     assert!(free(sim) && !erg(sim), "released, not left at the last target");
+    run(sim, app, 10_000);
+    assert!(free(sim) && !erg(sim), "and nothing holds it after");
+}
+
+/// Starts the planned workout SHORT INTERVALS (ERG) on a trainer already heard; `erg` says the trainer holds it.
+pub(super) fn start_workout(sim: &mut Sim, app: &mut App, erg: fn(&Sim) -> bool) {
+    app.press(sim, Press::Long(Key::Page));
+    super::tests::to_row(sim, app, Row::Open(Menu::Workouts));
+    app.press(sim, Press::Short(Key::Start));
+    app.press(sim, Press::Short(Key::Start)); // SHORT INTERVALS
+    app.press(sim, Press::Short(Key::Start)); // START
+    run(sim, app, 8000);
+    assert!(erg(sim), "the workout's target is held");
+}
+
+/// A planned workout in ERG: the ride paused, the trainer is let go (no target to restart against at 0 rpm);
+/// resumed, the step's target goes out again.
+pub(super) fn pause_releases(sim: &mut Sim, app: &mut App, erg: fn(&Sim) -> bool, free: fn(&Sim) -> bool) {
+    start_workout(sim, app, erg);
+    app.press(sim, Press::Short(Key::Start)); // pause
+    run(sim, app, 2000);
+    assert!(free(sim) && !erg(sim), "paused: let go");
+    assert!(app.with_trainer_now(|n| n.status == "PAUSED: FREE"), "the trainer screen says so");
+    app.press(sim, Press::Short(Key::Start)); // resume
+    run(sim, app, 2000);
+    assert!(erg(sim) && !free(sim), "resumed: the target again");
+}
+
+/// A workout in ERG, then the switch-off: the trainer is let go before the radio chip goes off.
+pub(super) fn off_releases(sim: &mut Sim, app: &mut App, erg: fn(&Sim) -> bool, free: fn(&Sim) -> bool) {
+    start_workout(sim, app, erg);
+    app.power_off(sim);
+    assert!(sim.standby && free(sim) && !erg(sim), "let go at the switch-off");
 }
 
 fn ant_erg(sim: &Sim) -> bool {
@@ -1063,4 +1103,148 @@ fn a_restart_releases_the_trainer() {
     sim2.nordic.trainer.target_w = 210;
     run(&mut sim2, &mut app2, 8000);
     assert!(app2.player.is_none() && ant_free(&sim2), "let go at the first contact: {:#x}", sim2.nordic.trainer.mode);
+}
+
+/// ANT+: the ride paused (by hand, or by itself after 3 s without power or cadence) lets the trainer go; resumed, or
+/// pedalling again, the step's target goes out again.
+#[test]
+fn a_paused_ride_releases_the_trainer() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 4000);
+    pause_releases(&mut sim, &mut app, ant_erg, ant_free);
+    sim.nordic.trainer.stopped = true; // the rider stops dead: auto-pause
+    run(&mut sim, &mut app, 6000);
+    assert!(app.ride.state() == ride::State::Running && !app.ride.moving() && ant_free(&sim), "auto-paused: let go");
+    sim.nordic.trainer.stopped = false;
+    run(&mut sim, &mut app, 3000);
+    assert!(ant_erg(&sim), "pedalling again: the target");
+}
+
+/// ANT+: the switch-off lets the trainer go.
+#[test]
+fn the_switch_off_releases_the_trainer() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 4000);
+    off_releases(&mut sim, &mut app, ant_erg, ant_free);
+}
+
+/// The chip answered acknowledged messages, then one goes unanswered (a byte lost on the link): it is sent again,
+/// and the control stays on (review: one stray byte left the trainer at its last ERG target for the power-up).
+#[test]
+fn a_lost_answer_after_the_first_does_not_turn_the_control_off() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.trainer.target_w, 105);
+    sim.nordic.ack_silent = true;
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 600);
+    sim.nordic.ack_silent = false;
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(sim.nordic.trainer.target_w, 110, "sent again");
+    assert!(app.notices.iter().all(|n| !n.as_str().contains("TRAINER CONTROL FAILED")));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.trainer.target_w, 115, "and the control goes on");
+}
+
+/// A chip that never answered the first acknowledged message: control off, until the chip is started again (the
+/// link watchdog's restart), when it is tried again.
+#[test]
+fn the_control_is_tried_again_after_a_chip_restart() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.ack_silent = true;
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 3000);
+    assert_ne!(sim.nordic.trainer.mode, 0x31, "control off");
+    sim.nordic.ack_silent = false;
+    app.radio_restart(&mut sim);
+    run(&mut sim, &mut app, 8000);
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.target_w), (0x31, 105), "tried again on the new chip");
+}
+
+/// The release's TX_FAILED never reaches the unit (read while another command waited, or among bytes a resync
+/// dropped): the release is sent again until the chip says it went through, so a stopped workout does not leave the
+/// trainer at its target.
+#[test]
+fn a_release_whose_failure_is_lost_is_sent_again() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 4000);
+    start_workout(&mut sim, &mut app, ant_erg);
+    sim.nordic.ack_lost = 1;
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Ride(RideRow::StopWorkout));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.ack_lost, 0, "the release went and was lost");
+    assert!(ant_erg(&sim));
+    run(&mut sim, &mut app, 5000);
+    assert!(ant_free(&sim), "sent again");
+    let n = commands(&sim).len();
+    run(&mut sim, &mut app, 20_000);
+    assert_eq!(commands(&sim).len(), n, "and not again once it went through");
+}
+
+/// BIKE > PROFILE fixed to INDOOR: the receiver stays off between rides too (AUTO keeps it on), and the start's
+/// files are still read and written (the trainer's pairing).
+#[test]
+fn the_receiver_is_off_at_idle_with_indoor_fixed() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.nordic.sensors.push(trainer_sensor());
+    sim.gnss.fix = Some(500);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.profile = Some(crate::ride::Profile::Indoor);
+    app.set_sensor(&mut sim, Kind::Trainer, Sensor::Paired(ID));
+    run(&mut sim, &mut app, 10_000);
+    assert!(!sim.gnss.powered && app.pvt.is_none(), "off at idle");
+    assert_eq!(sensors_file(&sim), Some(Some(ID)), "the pairing file written: the start's clock ran");
+    app.settings.profile = None; // AUTO
+    run(&mut sim, &mut app, 5000);
+    assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "AUTO: on, configured, a fix");
+}
+
+/// The rider's own ERG (250 W by hand) during a ride, the trainer silent when the ride is saved: the hold ends with
+/// the ride all the same, so the next ride does not put 250 W back on the trainer when it is heard again.
+#[test]
+fn a_hold_by_hand_ends_with_the_ride_while_the_trainer_is_silent() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.open(Screen::Trainer);
+    for _ in 0..30 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    run(&mut sim, &mut app, 1000);
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.target_w), (0x31, 250));
+    app.press(&mut sim, Press::Short(Key::Back));
+    let sensors = core::mem::take(&mut sim.nordic.sensors);
+    run(&mut sim, &mut app, 8000);
+    assert!(!app.trainer_heard());
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    app.start_pause(); // the next ride
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 1000);
+    sim.nordic.sensors = sensors;
+    run(&mut sim, &mut app, 8000);
+    assert!(app.trainer_heard());
+    assert!(ant_free(&sim), "not 250 W again: {:#x} {} W", sim.nordic.trainer.mode, sim.nordic.trainer.target_w);
+}
+
+/// The boot's release (the first contact) is tried once: a trainer another controller drives (an app) is not forced
+/// free again and again when nothing confirms it.
+#[test]
+fn the_boot_release_is_tried_once() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.ack_lost = 1000; // nothing confirmed, nothing taken
+    run(&mut sim, &mut app, 30_000);
+    let releases = sim.nordic.got.iter().filter(|p| p.get(1) == Some(&0xc8) && p.get(4) == Some(&0x30)).count();
+    assert_eq!(releases, 1);
 }

@@ -206,11 +206,13 @@ pub struct App {
     trainer_shown: ui::trainer::Shown,
     trainer_up: bool,
     /// The pairing file's state, the time since the last acknowledged message, whether the second ticked since the
-    /// screen was drawn, and whether the chip never answered one (control off for this power-up).
+    /// screen was drawn, whether the chip never answered the first one (control off until it starts again), and
+    /// whether it answered one since it started.
     sensors_store: SensorStore,
     ack_gap_ms: u32,
     trainer_second: bool,
     trainer_no_control: bool,
+    trainer_acked: bool,
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -296,7 +298,7 @@ pub struct App {
     /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
     /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
-    alert: Option<alerts::Alert>,
+    alert: alerts::Queue,
     tones: Tones,
     /// A first hold of Back during a ride armed switching off for this long ([`OFF_CONFIRM_MS`]).
     off_armed_ms: u32,
@@ -548,7 +550,7 @@ impl App {
             ride_started: ((2000, 1, 1), (0, 0)),
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,
-            alert: None,
+            alert: alerts::Queue::default(),
             tones: Tones::default(),
             summary: None,
             new_ride: false,
@@ -601,6 +603,7 @@ impl App {
             ack_gap_ms: 0,
             trainer_second: false,
             trainer_no_control: false,
+            trainer_acked: false,
             ftms: Ftms::default(),
         }
     }
@@ -687,7 +690,10 @@ impl App {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);
         }
-        if let Some(a) = self.alert.take() {
+        // one at a time: the next waits for the banner of the one before to go
+        if !(self.banner_ms.is_some() && alerts::Alert::is_text(self.banner.as_str()))
+            && let Some(a) = self.alert.pop()
+        {
             self.say_as(
                 a.text(),
                 if a == alerts::Alert::HrHigh || a == alerts::Alert::CadenceLow { Banner::Alarm } else { Banner::Ride },

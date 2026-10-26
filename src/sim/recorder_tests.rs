@@ -597,7 +597,7 @@ fn a_resumed_ride_takes_the_model_available_at_resume() {
         run(&mut sim, &mut app, u64::from(POLL_MS));
         assert!(sim.ms < 60_000);
     }
-    app.settings.ftp = 250; // the fit's CP is 250 W: under 95 % of stock's 265 W it would not be taken
+    app.settings.ftp = 250; // the fit's CP is 250 W: under stock's 265 W it would not be taken
     app.save_misc(&mut sim);
     let settings = (app.settings.ftp, app.settings.wprime_j);
     app.press(&mut sim, Press::Short(Key::Start));

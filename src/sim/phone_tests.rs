@@ -154,6 +154,43 @@ fn incoming_calls() {
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
 }
 
+/// A call over the media remote: Start answers, Back declines, the remote stays.
+#[test]
+fn a_call_beats_the_media_remote() {
+    let script = std::vec![(3000, Act::Notify(1, 9, "Mum", "")), (6000, Act::Notify(1, 10, "Unknown", ""))];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    app.open(Screen::Media);
+    run(&mut sim, &mut app, 2500);
+    assert!(app.phone.ringing);
+    app.input(&mut sim, Input::Select);
+    assert!(!app.phone.ringing, "answered, not play / pause");
+    assert!(app.screen == Screen::Media);
+    run(&mut sim, &mut app, 3500);
+    assert!(app.phone.ringing);
+    app.input(&mut sim, Input::Back);
+    assert!(!app.phone.ringing, "declined");
+    assert!(app.screen == Screen::Media, "the remote stays");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
+}
+
+/// Back on a MORE page declines a call instead of only hiding MORE.
+#[test]
+fn a_call_on_a_more_page() {
+    let script = std::vec![(3000, Act::Notify(1, 9, "Mum", ""))];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    app.open(Screen::Ride(0));
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(crate::Dir::Up)));
+    assert!(app.more_shown().is_some());
+    run(&mut sim, &mut app, 2500);
+    assert!(app.phone.ringing);
+    app.input(&mut sim, Input::Back);
+    assert!(!app.phone.ringing, "declined");
+    assert!(app.more_shown().is_some(), "MORE untouched");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 1)]);
+}
+
 /// After a restart the bond is read from the card, the unit advertises slowly, the phone encrypts with its key and
 /// the HID report works at once (its CCCD given back). FORGET erases it; a phone with another key is refused.
 #[test]
@@ -515,4 +552,19 @@ fn the_longest_message_arrives_whole() {
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 8000);
     assert_eq!(app.phone.inbox.len(), 1, "the answer was dropped");
+}
+
+/// A discovery answer lost (here the first service's, ANCS): the discovery goes on after its deadline, so AMS and
+/// the time still come (review: a dropped answer left them off for the link).
+#[test]
+fn a_lost_discovery_answer_does_not_stop_it() {
+    let (mut sim, mut app) = unit(iphone(Vec::new()));
+    sim.nordic.drop_gattc = Some((0, 0x30));
+    app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    run(&mut sim, &mut app, 10_000);
+    assert_eq!(sim.nordic.drop_gattc, None, "the answer was lost");
+    assert_eq!(app.phone.link(), Link::Secure);
+    let ph = sim.nordic.phone.as_ref().unwrap();
+    assert!(ph.subscribed.contains(&0x23) && ph.subscribed.contains(&0x33), "AMS and the time: {:?}", ph.subscribed);
+    assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
 }

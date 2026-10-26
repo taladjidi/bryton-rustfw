@@ -266,7 +266,7 @@ fn zone_color(kind: Kind, z: u8) -> u16 {
 }
 
 /// How far a reading `v` is from `band`, as a colour: the zone palette's green in it, its yellow within 5 % of it
-/// (nearly there), its blue further under and its red further over. The same colours the zones give easy and hard
+/// (nearly there), its blue further under and its violet ([`ride::ZONE_COLORS`] 5) further over. The same colours the zones give easy and hard
 /// efforts ([`ride::ZONE_COLORS`]), so the gauge reads as the power and heart-rate fields do.
 ///
 /// ```

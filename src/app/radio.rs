@@ -116,6 +116,8 @@ impl App {
                     self.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
                     self.trainer.unsent(); // an acknowledged message the trainer did not take: sent again
+                } else if nrf::ant_tx_completed(p) == Some(Kind::Trainer.channel()) {
+                    self.trainer.acked(); // a release taken is not sent again
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {
                     self.scanning = false; // the scan's (source 1)
                     title = true;

@@ -93,11 +93,7 @@ impl App {
                     l.push_u32(m / 1000);
                 }
                 l.push_str("K|");
-                if g < 0 {
-                    l.push_str("-");
-                }
-                l.push_u32((g.unsigned_abs() + 5) / 10);
-                l.push_str("%");
+                push_grade(&mut l, g);
             }
             (Field::ClimbGain, Some((a, (k, true)))) => {
                 let d = a.along_m();

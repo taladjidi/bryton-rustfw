@@ -517,13 +517,24 @@ fn stock_data_menu() {
     assert_eq!(app.settings.ftp, 265);
     assert_eq!(value(&app, at(S::EstFtp)), std::format!(">={} W CP", cp.cp));
     assert_eq!(value(&app, at(S::ApplyFtp)), "--");
-    assert_eq!(value(&app, at(S::Model)), "SETTINGS", "CP under 95 % of the FTP setting");
+    assert_eq!(value(&app, at(S::Model)), "SETTINGS", "CP under the FTP setting");
     assert_eq!(value(&app, at(S::Hrvt1)), "--", "no full copy on this volume");
     assert_eq!(value(&app, at(S::HrvRides)), "0/0 OF 0");
     app.settings.ftp = 200; // a setting under what the bests show
     assert_eq!(value(&app, at(S::EstFtp)), std::format!("{} W CP", cp.cp));
     assert_eq!(value(&app, at(S::ApplyFtp)), std::format!("{} W", (cp.cp + 2) / 5 * 5));
     assert_eq!(value(&app, at(S::Model)), "CP FIT");
+
+    // estimates only raise the settings: a CP just under the FTP setting keeps the settings' pair, and a W'
+    // setting above the fit's is not offered (and not lowered)
+    app.settings.ftp = cp.cp + 3;
+    assert_eq!(value(&app, at(S::Model)), "SETTINGS", "CP under the FTP setting");
+    app.settings.ftp = 200;
+    app.settings.wprime_j = *menu::WPRIME_RANGE.end();
+    assert_eq!(value(&app, at(S::ApplyWPrime)), "--", "the fit's W' is under the setting");
+    app.settings.wprime_j = (cp.w_prime as u16).saturating_sub(5000).max(*menu::WPRIME_RANGE.start());
+    assert!(value(&app, at(S::ApplyWPrime)).ends_with(" KJ"), "above the setting: offered");
+    app.settings.wprime_j = *menu::WPRIME_RANGE.start(); // under the fit's, so APPLY W' has something to apply
 
     // APPLY FTP, then APPLY W': asked, then the estimate into the setting, saved
     for (row, want) in [(S::ApplyFtp, (cp.cp + 2) / 5 * 5), (S::ApplyWPrime, ((cp.w_prime + 250) / 500 * 500) as u16)] {
@@ -591,7 +602,7 @@ fn ride_model_latched_at_start() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    app.settings.ftp = 250; // stock's 265 W would keep the settings (the fit's CP under 95 % of it)
+    app.settings.ftp = 250; // stock's 265 W would keep the settings (the fit's CP under it)
     let settings = (app.settings.ftp, app.settings.wprime_j);
     app.stock.start(app.date); // READ RIDES
     app.start_pause(); // a ride, before the curve is read
@@ -620,6 +631,60 @@ fn ride_model_latched_at_start() {
     run(&mut sim, &mut app, 3000);
     app.start_pause(); // the next ride
     assert_eq!(app.cp_model(), want);
+}
+
+/// The owner's colour rule: no status colour is the banner orange or the alarm red (the CLIMB bar, the course
+/// profile, the DFA graph use the zone palette).
+#[test]
+fn grade_and_dfa_colours_avoid_the_banner_and_alarm() {
+    for x10 in -200..400 {
+        let c = ui::grade_color(x10);
+        assert!(c != ui::ACCENT && c != ui::RED, "grade {x10}");
+    }
+    for v in 0..200 {
+        let c = ride::dfa_color(v);
+        assert!(c != ui::ACCENT && c != ui::RED, "alpha1 {v}");
+    }
+    assert!(ride::dfa_color(80) != ride::dfa_color(60) && ride::dfa_color(60) != ride::dfa_color(30));
+}
+
+/// A 1000 W target's half-width is whole ("1000|50", not "1000|+-5" cut from 50), and a grade keeps its sign and
+/// number when the "%" does not fit.
+#[test]
+fn long_target_and_grade_texts_are_not_cut() {
+    use crate::storage::workout::{Kind, Length, Step, Target, Workout};
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    let power =
+        |lo, hi| Step { len: Length::Time(60), target: Target { kind: Kind::Power, lo, hi, pct: false }, intensity: 5 };
+    app.plan = Workout::built("X", &[power(200, 220), power(950, 1050), power(995, 1005)]);
+    for (at, want) in [(0, "210|+-10"), (1, "1000|50"), (2, "1000|+-5")] {
+        let steps = app.plan.steps();
+        let mut p = crate::workout::Player::start(steps, at, 0).0;
+        p.second(steps, true, 0);
+        app.player = Some(p);
+        assert_eq!(app.field_text(Field::StepTarget).as_str(), want);
+    }
+    let grade = |head: &str, g| {
+        let mut l = Line::<8>::new();
+        l.push_str(head);
+        push_grade(&mut l, g);
+        std::string::String::from(l.as_str())
+    };
+    assert_eq!(
+        [grade("12K|", -100), grade("1.2K|", -100), grade("1.2K|", 57), grade("1.2K|", -57)],
+        ["12K|-10%", "1.2K|-10", "1.2K|6%", "1.2K|-6%"]
+    );
+}
+
+/// A new ride forgets the last one's climb plan (a frozen TOP time, the old W' budget).
+#[test]
+fn a_new_ride_forgets_the_pace_plan() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.pace.key = Some((1000, 3, 0));
+    app.start_pause();
+    assert_eq!(app.pace.key, None);
 }
 
 /// The first start over a volume stock used (the synthetic one, tools/fat_image.py) takes stock's settings and
@@ -1009,7 +1074,12 @@ fn workout_from_the_calendar() {
     assert_eq!((app.screen(), app.banner.as_str()), (Screen::Menu(Menu::Workouts, 1), "WORKOUT RUNNING"));
     app.press(&mut sim, Press::Short(Key::Lap));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((app.screen(), text(&app, Workout)), (Screen::Menu(Menu::Steps, 0), "3/6".into()));
+    // running: no START row (it would restart the workout, and Start is the ride's pause key), the step playing
+    // selected
+    assert_eq!((app.screen(), text(&app, Workout)), (Screen::Menu(Menu::Steps, 2), "3/6".into()));
+    assert_eq!(row(&app, Menu::Steps, 0), "0:20 100-120W");
+    assert_eq!(row(&app, Menu::Steps, 5), "LAP OPEN");
+    assert_eq!(row(&app, Menu::Steps, 6), "");
     for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Back)); // WORKOUTS, ALL SETTINGS, the ride menu, out
     }
@@ -3981,9 +4051,28 @@ fn tones_do_not_cut_each_other() {
     let mut app = App::start(&mut sim, None);
     let t0 = sim.tones.len();
     app.workout_event(workout::Event::Done);
-    app.alert = Some(alerts::Alert::Eat);
+    app.alert.push(Some(alerts::Alert::Eat));
     run(&mut sim, &mut app, 2000);
     assert_eq!(sim.tones[t0..], [2500, 0, 2500, 0, 2500, 0, 2500, 0], "the step's tone, then the alert's three");
+}
+
+/// Two alerts due in the same second are both said, one after the other (the second was thrown away).
+#[test]
+fn two_alerts_in_one_second_are_both_said() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.alert.push(Some(alerts::Alert::CadenceLow));
+    app.alert.push(Some(alerts::Alert::HrHigh));
+    run(&mut sim, &mut app, 200);
+    assert_eq!(app.banner.as_str(), "HEART RATE HIGH");
+    let mut said = std::vec::Vec::new();
+    for _ in 0..200 {
+        run(&mut sim, &mut app, 50);
+        if said.last().is_none_or(|l| l != app.banner.as_str()) {
+            said.push(std::string::String::from(app.banner.as_str()));
+        }
+    }
+    assert!(said.iter().any(|b| b == "CADENCE LOW"), "{said:?}");
 }
 
 /// Performance budgets: in steady state, each kind of screen sends at most so many pixels and panel windows a

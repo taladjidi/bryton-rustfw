@@ -37,6 +37,11 @@ pub const BOND_LOAD_MS: u32 = 3000;
 /// A link not encrypted after this long, outside a pairing, is dropped: a stranger's phone (which cannot pair
 /// without PAIR) must not hold the one link the owner's phone needs.
 pub const UNSECURED_MS: u32 = 30_000;
+
+/// A discovery request (a service, its characteristics or descriptors, a subscription, a read) not answered in this
+/// long is given up and the discovery goes on with the next step: an answer lost (among bytes a resync of the Nordic
+/// link dropped) must not leave ANCS, AMS and the time off for the whole link.
+pub const DISC_MS: u32 = 5_000;
 /// The file the bond is kept in, in [`recorder::DIR`].
 pub const BOND_FILE: &str = "ble.bin";
 
@@ -90,6 +95,21 @@ enum Disc {
     Done,
 }
 
+impl Disc {
+    /// The step after this one when it has nothing to ask, or its answer did not come (the CCCDs: the next one is
+    /// tried, its bit being set).
+    fn skipped(self) -> Disc {
+        match self {
+            Disc::Service(n) => Disc::Service(n + 1),
+            Disc::Chars(n, _) => Disc::Descs(n),
+            Disc::Subscribe(i) => Disc::Subscribe(i + 1),
+            Disc::Register(i) => Disc::Register(i + 1),
+            Disc::Read(i) => Disc::Read(i + 1),
+            d => d,
+        }
+    }
+}
+
 /// A GATT write queued until the client is free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Op {
@@ -124,6 +144,8 @@ pub struct Phone {
     /// The vendor UUID types the stack gave [`ph::VS`] (0: not registered).
     types: [u8; 8],
     disc: Disc,
+    /// Since the discovery's last request ([`DISC_MS`]).
+    disc_ms: u32,
     /// The service being discovered: its last handle, its characteristics' declaration handles.
     svc_end: u16,
     decls: [u16; 8],
@@ -178,6 +200,7 @@ impl Default for Phone {
             battery: (0, 0),
             types: [0; 8],
             disc: Disc::Idle,
+            disc_ms: 0,
             svc_end: 0,
             decls: [0; 8],
             n_decls: 0,
@@ -522,6 +545,15 @@ impl App {
         if self.phone.busy && self.phone.busy_ms >= 3000 {
             self.phone.busy = false; // an answer that never came: the queue goes on
         }
+        if !matches!(self.phone.disc, Disc::Idle | Disc::Done) {
+            self.phone.disc_ms = self.phone.disc_ms.saturating_add(self.dt_ms);
+            if self.phone.disc_ms >= DISC_MS {
+                // the discovery's answer never came: on with the next step (a late one is taken for its answer, or
+                // not the one awaited, and the deadline moves it on again)
+                (self.phone.disc, self.phone.disc_ms) = (self.phone.disc.skipped(), 0);
+                self.discover(b, conn);
+            }
+        }
         if self.phone.release {
             // the key's release: one notification queued at a time (the stack's default), so a pass after the press;
             // tried for at most RELEASE_TRIES passes (review finding 9: not every pass until the link drops)
@@ -857,17 +889,10 @@ impl App {
                 Disc::Idle | Disc::Done => return,
             };
             if sent {
+                p.disc_ms = 0;
                 return;
             }
-            // nothing to ask (or the chip refused): the next step
-            p.disc = match p.disc {
-                Disc::Service(n) => Disc::Service(n + 1),
-                Disc::Chars(n, _) => Disc::Descs(n),
-                Disc::Subscribe(i) => Disc::Subscribe(i + 1),
-                Disc::Register(i) => Disc::Register(i + 1),
-                Disc::Read(i) => Disc::Read(i + 1),
-                d => d, // Descs: its bit is set, the next one is tried
-            };
+            p.disc = p.disc.skipped(); // nothing to ask (or the chip refused): the next step
         }
     }
 

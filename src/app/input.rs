@@ -334,6 +334,16 @@ impl App {
                 return self.alarm("HOLD BACK AGAIN TO SWITCH OFF");
             }
             (_, Input::Off) => return self.power_off(b),
+            // an incoming call, over any screen: Start or the green button answers, Back or the red one declines
+            (_, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..)))
+                if self.phone.ringing && call_choice(i).is_some() =>
+            {
+                let accept = call_choice(i) == Some(true);
+                self.answer(b, accept);
+                self.end_ring(b);
+                self.say(if accept { "ANSWERED" } else { "DECLINED" });
+                return;
+            }
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
             // MORE: a swipe up on a ride page shows its denser variant, a swipe down or Back the page again
@@ -373,16 +383,6 @@ impl App {
                 };
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 return self.media(b, key, false);
-            }
-            // an incoming call, over any screen: Start or the green button answers, Back or the red one declines
-            (_, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..)))
-                if self.phone.ringing && call_choice(i).is_some() =>
-            {
-                let accept = call_choice(i) == Some(true);
-                self.answer(b, accept);
-                self.end_ring(b);
-                self.say(if accept { "ANSWERED" } else { "DECLINED" });
-                return;
             }
             // a tap on the overview's notices opens their list, even while recording (it only reads; the touch lock
             // returns before this)

@@ -587,6 +587,13 @@ pub struct Nordic {
     /// Acknowledged messages that fail on air: EVENT_TRANSFER_TX_FAILED (code 6) after each, instead of
     /// TX_COMPLETED, while this is non-zero (counted down); the trainer does not get them.
     pub ack_fail: u32,
+    /// Acknowledged messages that fail on air and whose TX_FAILED never reaches the unit (read during another
+    /// command's wait, or among bytes a resync dropped), counted down.
+    pub ack_lost: u32,
+    /// The next GATT client event of this id on this connection is lost (conn, id): an answer that never comes.
+    pub drop_gattc: Option<(u16, u16)>,
+    /// Every GATT client event of this id on this connection is lost (conn, id).
+    pub mute_gattc: Option<(u16, u16)>,
     /// The network keys set (`06 cc [net] [key]`), by network.
     pub keys: [Option<[u8; 8]>; 2],
     /// The BLE peripheral side (ble_sim.rs), and the phone in range.
@@ -948,7 +955,15 @@ impl Nordic {
                         self.ant_event(&[1, 0x40, ch as u8, 1, 6], 6, ch as u8); // EVENT_TRANSFER_TX_FAILED
                         return;
                     }
+                    if self.ack_lost > 0 {
+                        self.ack_lost -= 1;
+                        self.queue(&[1, 0xc8, 0, 0, 0, 0]);
+                        return;
+                    }
                     self.trainer.command(d.try_into().unwrap_or([0; 8]));
+                    self.queue(&[1, 0xc8, 0, 0, 0, 0]);
+                    self.ant_event(&[1, 0x40, ch as u8, 1, 5], 5, ch as u8); // EVENT_TRANSFER_TX_COMPLETED
+                    return;
                 }
                 (0xc5, _) => {
                     self.channels[ch].open = false;

@@ -12,6 +12,13 @@
 //!
 //! Nothing is sent until the rider takes the trainer over ([`Trainer::engaged`]: a key on the trainer screen, a
 //! workout step with a power target, a course followed): a trainer just paired keeps the resistance it had.
+//!
+//! **Let go** (free resistance, [`Command::Resistance`] of 0) whenever what held it stops: the workout stopped or
+//! ended, the course left, the ride ended (saved or discarded: the rider's own take-over ends with it), ERG while the
+//! ride is paused or auto-paused (the rider would restart at 0 rpm against the target; SIM brakes by the speed, so it
+//! stands), and once at the first contact after a boot. A release after our own hold is sent again until the trainer
+//! is known to have it ([`Trainer::acked`]), [`RELEASE_TRIES`] times at most; the boot's is tried once (a unit switched
+//! on beside another controller, an app driving the trainer, does not keep forcing it free).
 
 /// How long a command stands before it is sent again, ms. A trainer keeps the last command for as long as it hears
 /// from the head unit; sending again every few seconds also puts right a command it never took (the radio is not
@@ -21,6 +28,10 @@ pub const RESEND_MS: u32 = 4000;
 /// Longest target power, W (page 49's field is 0.25 W units in 16 bits, so it could say 16383 W; no trainer goes
 /// past 2000).
 pub const MAX_W: u16 = 2000;
+
+/// How many times the release is sent without a sign that it arrived ([`Trainer::acked`]: the chip's
+/// TX_COMPLETED, whose layout is inferred; the FTMS response; the BLE write's answer), [`RESEND_MS`] apart.
+pub const RELEASE_TRIES: u8 = 5;
 
 /// How many times the capabilities are asked for before giving up (a trainer that never answers page 70), and the
 /// wait between two asks, ms.
@@ -195,6 +206,10 @@ pub struct Drive {
     pub step: usize,
     /// The course's grade at the distance ridden, % x 100.
     pub grade_x100: Option<i16>,
+    /// A ride is open (Start to SAVE or DISCARD).
+    pub riding: bool,
+    /// The ride is paused or auto-paused: ERG lets go.
+    pub paused: bool,
 }
 
 /// What to send once after the trainer is heard.
@@ -228,9 +243,15 @@ pub struct Trainer {
     res_half: u8,
     grade_x100: i16,
     engaged: bool,
-    /// A workout or course drove the trainer at the last pass, and the free resistance still to be sent ([`Command::Resistance`] of 0).
-    was_driven: bool,
+    /// The trainer was held at the last pass ([`Trainer::engaged`]), a ride was open; the free resistance still to
+    /// be sent ([`Command::Resistance`] of 0), sent and not known to have arrived, how many times.
+    was_engaged: bool,
+    was_riding: bool,
     release: bool,
+    release_out: bool,
+    release_tries: u8,
+    /// The release follows our own hold (not the boot's).
+    release_ours: bool,
     last: Option<Command>,
     sent_ms: u32,
     step: usize,
@@ -259,8 +280,12 @@ impl Default for Trainer {
             res_half: 40,
             grade_x100: 0,
             engaged: false,
-            was_driven: false,
+            was_engaged: false,
+            was_riding: false,
             release: true, // once at the first contact after a boot: whatever a stopped workout left is let go
+            release_out: false,
+            release_tries: RELEASE_TRIES - 1, // the boot's: one try
+            release_ours: false,
             last: None,
             sent_ms: 0,
             step: 0,
@@ -330,9 +355,16 @@ impl Trainer {
         }
     }
 
-    /// The rider took the trainer over (or the workout or the course did): commands go out.
+    /// The rider took the trainer over (or the workout or the course did): commands go out. Not ERG while the ride
+    /// is paused.
     pub fn engaged(&self, d: &Drive) -> bool {
-        self.engaged || d.erg_w.is_some() || d.grade_x100.is_some()
+        (self.engaged || d.erg_w.is_some() || d.grade_x100.is_some()) && !(d.paused && self.mode(d) == Mode::Erg)
+    }
+
+    /// What was sent may still hold the trainer: it was engaged at the last pass, or its release is not known to
+    /// have arrived (the switch-off lets it go).
+    pub fn holding(&self) -> bool {
+        self.was_engaged || (self.release && self.release_ours)
     }
 
     /// Start: the next mode (the adjustment made on a workout step is dropped). Not while a workout or a course drives
@@ -346,9 +378,10 @@ impl Trainer {
     }
 
     /// Page or Lap on the trainer screen: the target one step up or down (`big`: a held key, twice the step): 5 W,
-    /// 5 % of resistance or 0.5 % of grade. Under a workout step the adjustment is added to the step's target.
+    /// 5 % of resistance or 0.5 % of grade. Under a workout step the adjustment is added to the step's target, and
+    /// under a workout or a course the trainer stays theirs: it is let go when they stop.
     pub fn step_by(&mut self, d: &Drive, up: bool, big: bool) {
-        self.engaged = true;
+        self.engaged |= d.erg_w.is_none() && d.grade_x100.is_none();
         let n = if big { 2 } else { 1 };
         let n = if up { n } else { -n };
         match self.mode(d) {
@@ -370,10 +403,18 @@ impl Trainer {
         match core::mem::replace(&mut self.what, Sent::Nothing) {
             Sent::Command => self.last = None,
             Sent::Cal => self.cal_send = true,
-            Sent::Release => self.release = true,
+            Sent::Release => self.release_out = false, // again at the next free slot, a try still
             Sent::Caps => (self.caps_tries, self.caps_ms) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS),
             Sent::User => self.user_sent = false,
             Sent::Nothing => {}
+        }
+    }
+
+    /// The last message is known to have arrived (the chip's TX_COMPLETED, a write's answer, a response): a release
+    /// is not sent again.
+    pub fn acked(&mut self) {
+        if self.what == Sent::Release {
+            (self.release, self.release_out, self.what) = (false, false, Sent::Nothing);
         }
     }
 
@@ -471,13 +512,21 @@ impl Trainer {
         self.sent_ms = self.sent_ms.saturating_add(dt_ms);
         (self.user_ms, self.caps_ms) = (self.user_ms.saturating_add(dt_ms), self.caps_ms.saturating_add(dt_ms));
         self.cal_tick(dt_ms);
-        // what a workout or a course commanded stands on the trainer until something else is sent: when they stop (the
-        // workout stopped or ended, the ride ended) and the rider has not taken over, let it go
-        let driven = d.erg_w.is_some() || d.grade_x100.is_some();
-        if self.was_driven && !driven && !self.engaged {
-            (self.release, self.last) = (true, None);
+        // what was commanded stands on the trainer until something else is sent: when what held it stops (the workout
+        // stopped or ended, the ride paused in ERG or ended: the rider's own take-over ends with the ride), let it go
+        if self.was_riding && !d.riding {
+            self.engaged = false;
         }
-        (self.was_driven, self.release) = (driven, self.release && !driven);
+        self.was_riding = d.riding;
+        let engaged = self.engaged(d);
+        if self.was_engaged && !engaged {
+            (self.release, self.release_out, self.release_tries, self.last) = (true, false, 0, None);
+            self.release_ours = true;
+        }
+        if engaged {
+            (self.release, self.release_out) = (false, false);
+        }
+        self.was_engaged = engaged;
         if self.calibrating() {
             // the calibration's request, and no other command until it ends
             if heard && core::mem::take(&mut self.cal_send) {
@@ -489,12 +538,16 @@ impl Trainer {
         if !heard {
             return None;
         }
-        if !self.engaged(d) {
-            // the release: free resistance (FE-C page 48 basic resistance 0 %, FTMS Set Target Resistance Level 0)
-            return core::mem::take(&mut self.release).then(|| {
-                (self.sent_ms, self.what) = (0, Sent::Release);
-                Command::Resistance(0)
-            });
+        if !engaged {
+            // the release: free resistance (FE-C page 48 basic resistance 0 %, FTMS Set Target Resistance Level 0),
+            // again until it is known to have arrived (a TX_FAILED read late, or lost, names no message)
+            let again = !self.release_out || self.sent_ms >= RESEND_MS;
+            if !(self.release && again && self.release_tries < RELEASE_TRIES) {
+                return None;
+            }
+            (self.sent_ms, self.what, self.release_out) = (0, Sent::Release, true);
+            self.release_tries += 1;
+            return Some(Command::Resistance(0));
         }
         let c = self.command(d);
         if self.last != Some(c) || self.sent_ms >= RESEND_MS {
@@ -680,6 +733,37 @@ mod tests {
         t.start_calibration();
         t.lost();
         assert_eq!(t.cal(), Cal::NoAnswer, "the trainer went silent");
+    }
+
+    /// An adjustment under a course is not a take-over: the course left, the trainer is let go. The rider's own take-over
+    /// during a ride ends with the ride. The release goes again until it is known to have arrived, a few times at most.
+    #[test]
+    fn what_holds_the_trainer_lets_it_go() {
+        let mut t = Trainer::default();
+        let course = Drive { grade_x100: Some(300), riding: true, ..Drive::default() };
+        assert_eq!(t.due(250, true, &course), Some(Command::Track { grade_x100: 300, crr: CRR }));
+        t.step_by(&course, true, false);
+        let riding = Drive { riding: true, ..Drive::default() };
+        assert_eq!(t.due(250, true, &riding), Some(Command::Resistance(0)), "the course left: let go");
+        t.acked();
+        t.step_by(&riding, true, false); // the rider's own ERG during the ride
+        assert_eq!(t.due(250, true, &riding), Some(Command::Power(420)));
+        let paused = Drive { paused: true, ..riding };
+        assert_eq!(t.due(250, true, &paused), Some(Command::Resistance(0)), "paused in ERG: let go");
+        assert_eq!(t.due(250, true, &riding), Some(Command::Power(420)), "resumed: at once");
+        let idle = Drive::default();
+        assert_eq!(t.due(250, true, &idle), Some(Command::Resistance(0)), "the ride ended: let go");
+        assert_eq!(t.due(250, true, &idle), None);
+        assert_eq!(t.due(RESEND_MS, true, &idle), Some(Command::Resistance(0)), "until it is known to arrive");
+        t.acked();
+        assert_eq!(t.due(RESEND_MS, true, &idle), None);
+        t.step_by(&idle, true, false);
+        t.due(250, true, &riding);
+        let n = (0..20).filter(|_| t.due(RESEND_MS, true, &idle).is_some()).count();
+        assert_eq!(n, usize::from(RELEASE_TRIES), "bounded when nothing confirms it");
+        let mut t = Trainer::default();
+        let n = (0..20).filter(|_| t.due(RESEND_MS, true, &idle).is_some()).count();
+        assert_eq!(n, 1, "the boot's release: once (another controller may drive the trainer)");
     }
 
     #[test]

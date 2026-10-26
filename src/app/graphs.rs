@@ -182,10 +182,7 @@ impl App {
             Plot::Power => ride::power_color(ride::power_zone(v, self.settings.ftp)),
             Plot::Hr => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
             Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.cp_model().1),
-            // above the aerobic threshold's 0.75, between it and 0.5, below (Rogers et al.)
-            Plot::Dfa if v >= 75 => ui::GREEN,
-            Plot::Dfa if v >= 50 => ui::ACCENT,
-            Plot::Dfa => ui::RED,
+            Plot::Dfa => ride::dfa_color(v),
             Plot::Alt => ui::GREY,
         };
         let (low, high) = g.scale;

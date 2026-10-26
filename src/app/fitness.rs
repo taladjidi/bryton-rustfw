@@ -6,14 +6,14 @@
 //! and a CP, under what they can do. So the estimates only ever raise the settings, never lower them:
 //! - **The ride's model** ([`App::model_now`]): the fit's CP and W' when it is trusted ([`power_curve::Cp::trusted`]:
 //!   at least 3 bests of 2 to 30 minutes on the model within 5 %, two of them of 2 to 5 minutes, CP and W' in the
-//!   settings' ranges, from the last 90 days) and its CP is at least [`MODEL_MIN_PCT`] % of the FTP setting; else the
+//!   settings' ranges, from the last 90 days) and its CP is at least the FTP setting; else the
 //!   settings' FTP and W' (soft data never makes the W' balance drain faster). Taken at a ride's start and kept until
 //!   it ends ([`App::cp_model`]): the live W' balance and the climb pacer use that pair for the whole ride, even if
 //!   the ride scan ends or the curve changes meanwhile. **A ride resumed after a restart** takes the pair available
 //!   at its resume (the backup registers have no room left to keep the pair the ride had), and keeps it from there
 //!   to the ride's end.
 //! - **EST FTP** below the FTP setting shows as a floor (">=236 W"): the rider is at least that. APPLY FTP offers it
-//!   only when it is above the setting.
+//!   only when it is above the setting, and so does APPLY W' ([`App::wprime_offer`]).
 //!
 //! **EST FTP** ([`App::est_ftp`]): CP when its fit is trusted; else HRVT2 when [`hrvt::MIN_RIDES`] recent rides gave
 //! one. CP wins: it comes from maximal efforts, the rider's own performance, where HRVT2 is a physiological marker
@@ -25,9 +25,6 @@
 //! 10.1007/s40279-020-01314-8; both checked by their abstracts only).
 
 use crate::*;
-
-/// The fit sets a ride's CP and W' only when its CP is at least this share of the FTP setting, percent.
-pub const MODEL_MIN_PCT: u32 = 95;
 
 impl App {
     /// Gives the reading of the recent rides its memory (main.rs, AXI SRAM): without, the HRVT rows show "--".
@@ -42,8 +39,7 @@ impl App {
 
     /// The CP (W) and W' (J) a ride started now takes, and whether they are the fit's (module doc).
     pub(crate) fn model_now(&self) -> (u16, u16, bool) {
-        let ftp = u32::from(self.settings.ftp);
-        let fit = self.cp_fit().filter(|c| c.trusted() && u32::from(c.cp) * 100 >= ftp * MODEL_MIN_PCT);
+        let fit = self.cp_fit().filter(|c| c.trusted() && c.cp >= self.settings.ftp);
         match fit.and_then(|c| Some((c.cp, u16::try_from(c.w_prime).ok()?))) {
             Some((cp, wp)) => (cp, wp, true),
             None => (self.settings.ftp, self.settings.wprime_j, false),
@@ -60,6 +56,12 @@ impl App {
     /// The FTP APPLY FTP offers: the estimate, to the setting's steps, only when above the setting.
     pub(crate) fn ftp_offer(&self) -> Option<(u16, &'static str)> {
         self.est_ftp().map(|(w, from)| (round_ftp(w), from)).filter(|&(w, _)| w > self.settings.ftp)
+    }
+
+    /// The W' APPLY W' offers: the fit's, to the setting's steps, only when above the setting.
+    pub(crate) fn wprime_offer(&self) -> Option<u16> {
+        let c = self.cp_fit().filter(power_curve::Cp::trusted)?;
+        Some(round_wprime(c.w_prime)).filter(|&w| w > self.settings.wprime_j)
     }
 
     /// The value of a FITNESS row this file owns (nothing for the others: [`App::stock_value`]).
@@ -96,9 +98,9 @@ impl App {
                 v.push_str(if from_fit { "CP FIT" } else { "SETTINGS" });
             }
             S::ApplyFtp => watts(v, self.ftp_offer().map(|(w, _)| w)),
-            S::ApplyWPrime => match self.cp_fit().filter(power_curve::Cp::trusted) {
-                Some(c) => {
-                    push_fixed(v, i32::from(round_wprime(c.w_prime)), 3, 1);
+            S::ApplyWPrime => match self.wprime_offer() {
+                Some(w) => {
+                    push_fixed(v, i32::from(w), 3, 1);
                     v.push_str(" KJ");
                 }
                 None => v.push_str("--"),
@@ -121,13 +123,9 @@ impl App {
     /// Select on APPLY FTP or APPLY W' (asked twice, as IMPORT): the estimate into the setting, saved.
     pub(crate) fn apply_estimate(&mut self, b: &mut impl Board, menu: Menu, sel: usize, r: menu::StockRow) {
         let ftp = matches!(r, menu::StockRow::ApplyFtp);
-        let value = if ftp {
-            self.ftp_offer()
-        } else {
-            self.cp_fit().filter(power_curve::Cp::trusted).map(|c| (round_wprime(c.w_prime), "FIT"))
-        };
+        let value = if ftp { self.ftp_offer() } else { self.wprime_offer().map(|w| (w, "FIT")) };
         let Some((value, from)) = value else {
-            return self.notice(if ftp { "NO ESTIMATE ABOVE FTP" } else { "NO ESTIMATE YET" });
+            return self.notice(if ftp { "NO ESTIMATE ABOVE FTP" } else { "NO ESTIMATE ABOVE W'" });
         };
         // "SET FTP 240 W (CP)", "SET W' 23.5 KJ (FIT)": the source named
         let mut what = Line::<24>::new();

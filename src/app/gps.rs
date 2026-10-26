@@ -24,6 +24,9 @@ impl App {
     /// and the speed when no speed sensor is paired.
     pub(crate) fn poll_gnss(&mut self, b: &mut impl Board) {
         if self.gnss_switch(b) {
+            // off: the start's clock still runs (the files read a few seconds after the start wait on it); the
+            // receiver's sequence starts over from 0 when it is switched on
+            self.gnss_ms = self.gnss_ms.saturating_add(self.dt_ms);
             return;
         }
         if self.gnss_ms < GNSS_ON_MS && self.gnss_ms.saturating_add(self.dt_ms) >= GNSS_ON_MS {
@@ -68,14 +71,20 @@ impl App {
     }
 
     /// Switches the receiver off for an indoor ride (a ride running with the INDOOR profile: its speed is the
-    /// trainer's, no track is kept) and back on for anything else, saving about 7 to 8 mA. Returns true while off.
+    /// trainer's, no track is kept), and between rides while BIKE > PROFILE is fixed to INDOOR (AUTO keeps it on
+    /// between rides: a ride may start outdoors), and back on for anything else, saving about 7 to 8 mA. Returns true
+    /// while off.
     /// Back on is a cold start of the sequence above: the line has been low for over a second by then
     /// ([`GNSS_ON_MS`]), the configuration, the time and the last position are sent again. The supply is cut rather
     /// than the receiver's backup mode (UBX-RXM-PMREQ): its wake source (EXTINT or SPI CS, u-blox M10 interface
     /// description) and the V_BCKP wiring are not known here (BOARD.md 13), and a receiver that does not wake would
     /// stay dead until the next boot. Cost: no ephemeris kept, a warm start after the ride, helped by the aiding.
     fn gnss_switch(&mut self, b: &mut impl Board) -> bool {
-        let want_off = self.ride.state() != ride::State::Idle && self.profile == ride::Profile::Indoor;
+        let want_off = if self.ride.state() == ride::State::Idle {
+            self.settings.profile == Some(ride::Profile::Indoor)
+        } else {
+            self.profile == ride::Profile::Indoor
+        };
         if want_off && !self.gnss_off {
             b.gnss_power(false);
             self.gnss_off = true;

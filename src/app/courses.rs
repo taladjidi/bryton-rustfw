@@ -4,6 +4,18 @@
 
 use crate::*;
 
+/// The grade (% x 10) after a climb field's "K|", whole percent, with its "%" when the 8 characters hold it ("1.2K|-10"
+/// at -10 %: the sign and the number are what count).
+pub(crate) fn push_grade(l: &mut Line<8>, g: i32) {
+    if g < 0 {
+        l.push_str("-");
+    }
+    l.push_u32((g.unsigned_abs() + 5) / 10);
+    if l.as_str().len() < 8 {
+        l.push_str("%");
+    }
+}
+
 impl App {
     // -----------------------------------------------------------------------------------------------------------
     // Courses (storage/course.rs: the files; course.rs: the model, where the rider is, the climbs)
@@ -180,11 +192,7 @@ impl App {
                     l.push_u32(m / 1000);
                 }
                 l.push_str("K|"); // the grade small after the length: the box's scale for the length
-                if g < 0 {
-                    l.push_str("-");
-                }
-                l.push_u32((g.unsigned_abs() + 5) / 10);
-                l.push_str("%");
+                push_grade(&mut l, g);
             }
             (Field::ClimbGain, Some((k, true))) => {
                 let top = c.alt_at(k.end_m()).zip(c.alt_at(d)).map_or(0, |(t, h)| (t - h).max(0) / 10);

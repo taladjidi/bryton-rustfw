@@ -15,8 +15,9 @@
 //!   written; a GATT request with no answer in [`GATT_MS`] drops the link (the next connection starts over);
 //! - **driven** from trainer.rs, as the ANT+ one: the command due ([`crate::trainer::Trainer::due`]) is written to the
 //!   Control Point once the response to the last one came (one procedure at a time); a write refused, or not answered
-//!   in [`CP_MS`], is due again; a status "control lost" (or a reset, or a response "not permitted") asks for the
-//!   control again.
+//!   in [`CP_MS`], is due again (and a write whose answer was lost no longer holds the next one up); a status
+//!   "control lost" (or a reset, or a response "not permitted") asks for the control again, and a trainer that
+//!   refused it is asked again [`REGAIN_MS`] later, then less often, while a workout, a course or the rider drives it.
 //!
 //! Its readings go where the ANT+ trainer's go (`heard_ms` and `Reading` of the trainer kind): the same fields,
 //! screen and priority (a power meter or a speed sensor heard wins, app/trainer.rs `fold_trainer`).
@@ -46,6 +47,9 @@ pub const CP_MS: u32 = 3_000;
 /// Nordic link dropped, app/link.rs).
 // ponytail: a trainer that goes quiet when nobody pedals is reconnected every 30 s; a longer wait if one does
 pub const QUIET_MS: u32 = 30_000;
+/// The control refused (or never answered, three times): asked again this long after, doubled each time up to
+/// [`MAX_WAIT_MS`], while the trainer is driven.
+pub const REGAIN_MS: u32 = 10_000;
 /// The chip's `NRF_ERROR_BUSY`: another GATT procedure is out.
 const NRF_ERROR_BUSY: u32 = 17;
 /// Times the subscription or Request Control is tried again on one link (a trainer that refuses for ever is then
@@ -141,6 +145,9 @@ pub(crate) struct Ftms {
     tries: u8,
     /// The trainer granted the control.
     pub(crate) control: bool,
+    /// The control refused: since then, and the wait before it is asked again.
+    regain_ms: u32,
+    regain_wait: u32,
     /// A command's op code whose response is awaited, for so long.
     cp_wait: Option<u8>,
     cp_ms: u32,
@@ -177,6 +184,8 @@ impl Default for Ftms {
             quiet_ms: 0,
             tries: 0,
             control: false,
+            regain_ms: 0,
+            regain_wait: REGAIN_MS,
             cp_wait: None,
             cp_ms: 0,
             resistance: (0, 100), // without the range read: 0 to 10.0
@@ -295,6 +304,7 @@ impl App {
         {
             self.ftms_lost();
         }
+        self.ftms.cp_inflight = false; // its answer may have been among the bytes dropped
     }
 
     /// The rider asks for the trainer (TRAINER CONTROL, the BT TRAINER row, a workout started): the connection is
@@ -386,6 +396,14 @@ impl App {
         let dt = self.dt_ms;
         let want = self.ftms_on() && self.ble.is_some_and(|v| v.central);
         let riding = self.ride.state() != ride::State::Idle;
+        // refused (a trainer without a Control Point or its CCCD has nothing to ask with), and driven: asked again
+        let f = &self.ftms;
+        let regain = f.step == Step::Ready
+            && !f.control
+            && !f.fec
+            && f.handle(CONTROL) != 0
+            && f.cccd[2] != 0
+            && self.trainer.engaged(&self.trainer_drive());
         // the list left without pairing: the reports of a scan still running (BLE NEARBY) are not listed
         self.ftms.searching &= matches!(self.screen, Screen::Menu(Menu::BtTrainers, _));
         let f = &mut self.ftms;
@@ -400,9 +418,20 @@ impl App {
             if !want || stuck || connecting.is_some_and(|ms| ms >= CONNECT_MS) {
                 return self.ftms_drop(b);
             }
-            if f.cp_wait.is_some() && f.cp_ms >= CP_MS {
-                f.cp_wait = None;
-                self.trainer.unsent();
+            if (f.cp_wait.is_some() || f.cp_inflight) && f.cp_ms >= CP_MS {
+                // no answer: due again, and a write answer lost does not hold the next write (or Request Control) up
+                if f.cp_wait.take().is_some() {
+                    self.trainer.unsent();
+                }
+                f.cp_inflight = false;
+            }
+            if regain {
+                // later, then less often: a trainer that says no is not asked every pass
+                f.regain_ms = f.regain_ms.saturating_add(dt);
+                if f.regain_ms >= f.regain_wait {
+                    (f.regain_ms, f.regain_wait) = (0, (f.regain_wait * 2).min(MAX_WAIT_MS));
+                    (f.step, f.tries) = (Step::Control, 0);
+                }
             }
             if !f.waiting && !f.cp_inflight && f.step == Step::Control {
                 self.ftms_next(b); // Request Control again (refused, or the control lost)
@@ -593,8 +622,8 @@ impl App {
             (Step::Ready, Event::Written { status, .. }) => {
                 if status != 0 && f.cp_wait.take().is_some() {
                     self.trainer.unsent(); // refused: due again
-                } else if f.fec {
-                    f.cp_wait = None; // written: the answer, if any, is a page 71 among the notifications
+                } else if f.fec && f.cp_wait.take().is_some() {
+                    self.trainer.acked(); // written: the answer, if any, is a page 71 among the notifications
                 }
                 return;
             }
@@ -657,6 +686,9 @@ impl App {
                     let cp = f.handle(CONTROL);
                     if cp == 0 || f.cccd[2] == 0 || f.tries >= TRIES {
                         f.step = Step::Ready; // read only: no Control Point, or no control given
+                        if f.regain_wait != REGAIN_MS {
+                            return; // said when it was first refused
+                        }
                         return self.notice("BT TRAINER: NO CONTROL");
                     }
                     if f.cp_inflight {
@@ -723,13 +755,16 @@ impl App {
             if op == ftms::REQUEST_CONTROL[0] && f.step == Step::Control {
                 (f.waiting, f.step, f.control) = (false, Step::Ready, result == 1);
                 if result == 1 {
-                    (f.tries, f.backoff_ms) = (0, FIRST_WAIT_MS);
+                    (f.tries, f.backoff_ms, f.regain_wait) = (0, FIRST_WAIT_MS, REGAIN_MS);
                     self.trainer.resend(); // what stood before is sent again, under this control
-                } else {
-                    self.notice("BT TRAINER: NO CONTROL");
+                } else if f.regain_wait == REGAIN_MS {
+                    self.notice("BT TRAINER: NO CONTROL"); // the first refusal: asked again later, quietly
                 }
             } else if f.cp_wait == Some(op) {
                 f.cp_wait = None;
+                if result == 1 {
+                    self.trainer.acked();
+                }
                 self.trainer.reading.last_cmd = ftms::as_fec((op, result));
                 if result == 5 && f.step == Step::Ready {
                     // not permitted: the control is not ours any more

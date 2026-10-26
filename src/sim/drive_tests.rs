@@ -23,6 +23,18 @@ fn started(writable: bool) -> (Sim, App) {
     (sim, app)
 }
 
+/// A workout started while the card is lent: the ride refuses, so no player runs and no workout page shows.
+#[test]
+fn no_workout_while_the_card_is_lent() {
+    let (mut sim, mut app) = started(true);
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    let screen = app.screen();
+    app.start_workout(0);
+    assert_eq!(app.banner.as_str(), "USB DRIVE ON");
+    assert!(app.player.is_none() && app.ride.state() == ride::State::Idle);
+    assert_eq!(app.screen(), screen);
+}
+
 /// Refused without the dev link up, during a ride and while its save is pending, each with the banner saying why;
 /// then lent: the card gets no command from the app for a minute (past the start of the scan of stock's rides),
 /// Start starts no ride, the dev link's card commands are refused; the computer reads the volume, writes two

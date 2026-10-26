@@ -152,7 +152,7 @@ The power button starts it again. After the backlight's time-out, any key brings
   goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
   graph between the last minutes and the whole ride; neither while a ride records (below).
   Each has its scale on the left and its time span under it; power and heart rate are coloured by zone, W' balance as
-  it drains, DFA alpha1 against the aerobic threshold (green above 0.75, orange to 0.5, red under).
+  it drains, DFA alpha1 against the aerobic threshold (green above 0.75, yellow to 0.5, magenta under).
 
 ## Touch
 
@@ -186,7 +186,7 @@ sizes) and the cue arrows stay pixel.
   The plain power fields (POWER, 3S, 10S, 30S W) and HR show their zone as a 4 px bar along the top of the box,
   the number white (POWER's bar takes its 3 s average's zone); the zone changes after three seconds in the new
   one, so a value on an edge does not flip it, and the bar is all that is redrawn. NP, max and the other derived
-  values keep a coloured number. The graph shows the last
+  values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
 - Power (src/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
@@ -322,9 +322,25 @@ intervals or enough clean data; not kept; not a steady-state zone 2 power). APPL
 setting's 5 W step), KEEP or Back keeps the one set; Start and Lap keep their ride meaning on the screen. A ramp under
 a whole minute has no result. The ride is recorded and saved as any ride.
 
-**Release.** When a workout or course that drove the trainer stops (STOP WORKOUT, its end, the ride's end) and the rider
-has not taken the trainer over, one free-resistance command goes out (FE-C page 48 at 0 %, FTMS Set Target Resistance
-Level 0), so ERG's last target does not stay on the trainer; the same once at the first contact after a start.
+**Release.** The trainer is let go (free resistance: FE-C page 48 at 0 %, FTMS Set Target Resistance Level 0) whenever
+what held it stops, so ERG's last target does not stay on it:
+- **stop:** STOP WORKOUT, the workout's end, a course no longer followed (a +/- on the trainer screen under a workout
+  or a course adjusts its target, it does not take the trainer over);
+- **end:** the ride saved or discarded, the rider's own take-over (MODE, +/- with nothing driving) included;
+- **pause:** ERG while the ride is paused or auto-paused (3 s without power or cadence indoors), so the rider never
+  restarts at 0 rpm against the target; the trainer screen says PAUSED: FREE, and the target goes out again on
+  resume. SIM and RESISTANCE stand (SIM brakes by the speed, like the road from a standstill);
+- **switch-off:** one free resistance before the radio chip goes off (bounded: two tries over ANT+ 330 ms apart, then
+  as long for it to go on air; over Bluetooth the answer to a write still out is waited for, 3 s at most);
+- **boot:** one try at the first contact after a start (a unit switched on beside another controller, an app, does
+  not keep forcing the trainer free).
+
+A release after our own hold goes again every 4 s until it is known to have arrived (ANT+ TX_COMPLETED, the BLE write's
+answer, the FTMS response), five times at most. The rider's own hold ends with the ride even when the trainer was
+silent at its end. A chip that never answers the first acknowledged message turns the ANT+ control off
+until the chip is started again; once one was answered, a later silence only has the message sent again. An FTMS
+trainer that refused the control is asked again 10 s later, then less often (up to a minute apart), while it is driven.
+With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too (AUTO keeps it on).
 
 ## Workouts
 
@@ -338,8 +354,8 @@ TrainingPeaks), read only:
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
-- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: green in it, orange under, red over, from the 3 s power,
-  the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
+- **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, yellow within 5 %, blue under, violet over,
+  from the power over the GAUGE POWER window, the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
   from 0 to 150 % of FTP, heart rate from half the max to it, a quarter for an open target) in its zone colour; a
@@ -347,11 +363,12 @@ TrainingPeaks), read only:
   Only the columns the line leaves and reaches are redrawn (about 300 px/s in a full-page box, sim).
 - **WKT POWER**, a gauge field: the reading the step targets big (power over the window set by DISPLAY > GAUGE
   POWER: 3 s, 10 s, 30 s or each second, "POWER 3S" in its title; heart rate for a heart-rate step, cadence for
-  a cadence one), a bar 3 times as thick as it was (as thick as the box leaves room for the number) from 30 % under the target band
-  to 30 % over it, painted with the rider's zones along that scale (power: Coggan's seven from FTP; heart rate: the
-  five from max HR; the zone palette of the power and heart-rate fields), so the target is seen in context. The band
+  a cadence one), a bar 3 times as thick as it was (as thick as the box leaves room for the number) spanning every zone: power from
+  40 to 165 % of FTP (Z1 to Z7), heart rate from 50 to 100 % of max HR, widened to keep 10 % around a band outside
+  them (cadence, which has no zones: 30 % around the band), painted with the rider's zones along that scale (the zone
+  palette of the power and heart-rate fields), so the band shows where the target sits among them. The band
   is a white outline over the zones; the reading is a white tick with a black outline, its ends beyond the track
-  coloured by how far it is from the band (green in it, yellow within 5 %, blue under, red over); the number is white.
+  coloured by how far it is from the band (green in it, yellow within 5 %, blue under, violet over); the number is white.
   The scale is fixed for a step, so the zones do not slide. The climb pacer's TOP field draws the same gauge. With an
   open step or no workout, the power alone. Only the number's changed characters and the tick's old and new columns
   are redrawn (about 4 400 px/s for the page with a top half box, sim).
@@ -457,9 +474,9 @@ STOCK):
     never spans a cafe stop);
   - **A curve's bests are lower bounds**, so the estimates only raise the settings: **EST FTP** is CP when the fit
     is trusted ("CP"), else HRVT2 when three recent rides gave one ("HRV"), shown as a floor (">=236 W CP") when
-    under the FTP setting; **APPLY FTP** offers it only above the setting, **APPLY W'** the fit's W' (Start twice,
+    under the FTP setting; **APPLY FTP** offers it only above the setting, **APPLY W'** the fit's W' only above the setting too (Start twice,
     the source named: "SET FTP 240 W (CP)?"); **MODEL**: which CP and W' a ride takes, CP FIT (the trusted fit, its
-    CP at least 95 % of the FTP setting) or SETTINGS (the FTP and W' settings), chosen at the ride's start and kept
+    CP at least the FTP setting) or SETTINGS (the FTP and W' settings), chosen at the ride's start and kept
     to its end (during a ride: the ride's). A ride resumed after a restart takes what is there at its resume
     (usually the settings: no room is left in the backup registers to keep its pair);
   - **HRVT1 AET, HRVT2, RIDES**: the power at DFA alpha1 0.75 and 0.5 (Rogers et al. 2021) from the full copies

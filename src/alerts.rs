@@ -33,6 +33,11 @@ pub enum Alert {
 }
 
 impl Alert {
+    /// Whether `text` is one of the banners of an alert.
+    pub fn is_text(text: &str) -> bool {
+        [Alert::Eat, Alert::Drink, Alert::HrHigh, Alert::CadenceLow].iter().any(|a| a.text() == text)
+    }
+
     /// The banner's text.
     pub fn text(self) -> &'static str {
         match self {
@@ -41,6 +46,27 @@ impl Alert {
             Alert::HrHigh => "HEART RATE HIGH",
             Alert::CadenceLow => "CADENCE LOW",
         }
+    }
+}
+
+/// Alerts due and not said yet: one bit each, so two in the same second (or a catch-up of several) are not lost to
+/// the one the banner shows; said one at a time, the heart rate first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Queue(u8);
+
+impl Queue {
+    /// Adds `a` (nothing for `None`).
+    pub fn push(&mut self, a: Option<Alert>) {
+        self.0 |= a.map_or(0, |a| 1 << a as u8);
+    }
+
+    /// Takes the next to say: the heart rate, the cadence, eat, drink.
+    pub fn pop(&mut self) -> Option<Alert> {
+        let a = [Alert::HrHigh, Alert::CadenceLow, Alert::Eat, Alert::Drink]
+            .into_iter()
+            .find(|&a| self.0 & 1 << a as u8 != 0)?;
+        self.0 &= !(1 << a as u8);
+        Some(a)
     }
 }
 
@@ -173,6 +199,20 @@ mod tests {
         // off
         let mut b = Alerts::new();
         assert!((1..100).all(|t| b.second(t, Some(200), 0, 0, 0).is_none()));
+    }
+
+    #[test]
+    fn the_queue_keeps_what_is_due_together() {
+        let mut q = Queue::default();
+        q.push(Some(Alert::Drink));
+        q.push(Some(Alert::CadenceLow));
+        q.push(Some(Alert::HrHigh));
+        q.push(None);
+        q.push(Some(Alert::Drink));
+        assert_eq!(
+            [q.pop(), q.pop(), q.pop(), q.pop()],
+            [Some(Alert::HrHigh), Some(Alert::CadenceLow), Some(Alert::Drink), None]
+        );
     }
 
     #[test]

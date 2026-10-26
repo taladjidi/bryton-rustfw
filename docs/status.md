@@ -67,7 +67,10 @@ The dated findings are in [journal.md](journal.md).
   (`sd_ant_acknowledge_message_tx`, op 0xc8, `[6 c8 ch 8 data]`, inferred from stock's encoder, Ghidra notes
   agent_b2.md) is accepted by the chip; the capabilities page (54) comes after the request (page 70); the trainer
   takes pages 49 (ERG under a workout), 48 and 51 (SIM on a course; the trainer's speed advances the ride), 55; and
-  its page 71 answers pass. Pairing is kept in backup register 14 only while no shifting system is (no register free).
+  its page 71 answers pass. The pairing is kept in `\Rustfw\sensors.bin` (with the Bluetooth trainer's); backup
+  register 14 is the shifting systems', and a trainer an earlier build kept there is only moved to the file. Not seen
+  yet: the chip's EVENT_TRANSFER_TX_COMPLETED (code 5, its layout inferred as TX_FAILED's), which stops the release
+  being sent again (five times at most without it).
 - **Spin-down calibration of the ANT+ FE-C trainer (trainer.rs `Cal`, drivers/fec.rs pages 1 and 2, app/trainer.rs,
   ui/trainer.rs)**: only against the simulator's trainer. On the Van Rysel D500 showing CALIBRATE: CALIBRATE beside
   MODE (or Start held) sends page 1 with the spin-down bit (0x80), and the trainer answers with page 2 (the layout is
