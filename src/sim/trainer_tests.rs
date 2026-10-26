@@ -149,6 +149,14 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     assert_eq!(app.field_bar(Field::Cadence), ui::RED);
     app.live.set(Metric::Cadence, 85);
     assert_eq!(app.field_bar(Field::Cadence), ui::BLACK);
+    // under 50 rpm for 5 s in ERG: the warning, once
+    sim.nordic.trainer.rpm = 40;
+    for s in 0..8 {
+        run(&mut sim, &mut app, 1000);
+        assert!(s >= 4 || app.banner.as_str() != "CADENCE LOW", "second {s}: not before 5 s");
+    }
+    assert_eq!(app.banner.as_str(), "CADENCE LOW");
+    sim.nordic.trainer.rpm = 0;
     assert_eq!(app.field_text(Field::ErgTarget).as_str(), "110", "no adjust: the watts alone");
     assert_eq!(app.field_text(Field::Power).as_str(), "110");
     // the first step lasts 20 s; then 200-220 W

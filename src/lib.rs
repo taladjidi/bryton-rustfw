@@ -637,7 +637,10 @@ impl App {
             self.lag_s = 0;
         }
         if let Some(a) = self.alert.take() {
-            self.say_as(a.text(), if a == alerts::Alert::HrHigh { Banner::Alarm } else { Banner::Ride });
+            self.say_as(
+                a.text(),
+                if a == alerts::Alert::HrHigh || a == alerts::Alert::CadenceLow { Banner::Alarm } else { Banner::Ride },
+            );
             self.tones.play(&BEEP_ALERT);
         }
         self.play_tones(b);

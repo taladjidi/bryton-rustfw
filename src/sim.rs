@@ -617,6 +617,8 @@ pub struct SimTrainer {
     pub grade_x100: i32,
     /// The power the rider makes when the trainer does not hold a target, W.
     pub rider_w: u16,
+    /// The cadence it reports while there is power, rpm (0: 90).
+    pub rpm: u8,
     /// The status nibble of page 25 (1 and 2 calibration, 4 user configuration), and its target flags.
     pub status: u8,
     pub limits: u8,
@@ -742,7 +744,7 @@ impl SimTrainer {
             [
                 25,
                 self.events,
-                if self.power > 0 { 90 } else { 0xff },
+                if self.power > 0 { [90, self.rpm][usize::from(self.rpm > 0)] } else { 0xff },
                 a0,
                 a1,
                 p0,

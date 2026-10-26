@@ -368,6 +368,9 @@ impl App {
             let s = &self.settings;
             let due = self.alerts.second(self.ride.timer_s(), input.hr, s.eat_min, s.drink_min, s.hr_alert);
             self.alert = self.alert.or(due);
+            // ERG: the trainer holds the watts, the resistance climbs as the rider slows
+            let slow = self.alerts.cadence(input.cadence, self.erg_on());
+            self.alert = self.alert.or(slow);
         }
         // the workout's step clock moves with the ride's timer
         let (ticked, dist, steps) = (self.ride.timer_s() != timer, self.ride.dist_m(), self.plan.steps());

@@ -12,6 +12,13 @@ pub const HR_REARM_BPM: u16 = 5;
 /// At most one heart-rate alert this often.
 pub const HR_EVERY_S: u32 = 60;
 
+/// Cadence under this, rpm, in ERG is too slow: the trainer keeps the watts, so the resistance climbs.
+pub const CADENCE_LOW_RPM: u16 = 50;
+/// Seconds under it before the warning.
+pub const CADENCE_LOW_S: u32 = 5;
+/// At most one cadence warning this often.
+pub const CADENCE_EVERY_S: u32 = 60;
+
 /// What to say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alert {
@@ -21,6 +28,8 @@ pub enum Alert {
     Drink,
     /// Heart rate over the limit.
     HrHigh,
+    /// Cadence under [`CADENCE_LOW_RPM`] in ERG.
+    CadenceLow,
 }
 
 impl Alert {
@@ -30,6 +39,7 @@ impl Alert {
             Alert::Eat => "EAT REMINDER",
             Alert::Drink => "DRINK REMINDER",
             Alert::HrHigh => "HEART RATE HIGH",
+            Alert::CadenceLow => "CADENCE LOW",
         }
     }
 }
@@ -44,12 +54,48 @@ pub struct Alerts {
     last_timer_s: u32,
     /// Reminders due and not said yet (one a second): bit 0 eat, bit 1 drink.
     pending: u8,
+    /// Seconds in a row under [`CADENCE_LOW_RPM`] in ERG, and since the last warning.
+    slow_s: u32,
+    since_cadence_s: u32,
 }
 
 impl Alerts {
     /// A new ride: everything armed.
     pub fn new() -> Self {
-        Alerts { over_s: 0, armed: true, since_hr_s: HR_EVERY_S, last_timer_s: 0, pending: 0 }
+        Alerts {
+            over_s: 0,
+            armed: true,
+            since_hr_s: HR_EVERY_S,
+            last_timer_s: 0,
+            pending: 0,
+            slow_s: 0,
+            since_cadence_s: CADENCE_EVERY_S,
+        }
+    }
+
+    /// One second of a moving ride: the cadence under [`CADENCE_LOW_RPM`] for [`CADENCE_LOW_S`] seconds with `erg` on
+    /// (the trainer holds the watts) gives [`Alert::CadenceLow`], at most once in [`CADENCE_EVERY_S`]. No reading is
+    /// not slow (no sensor), and a pause or no ERG starts the count again.
+    ///
+    /// ```
+    /// use bryton_rustfw::alerts::{Alert, Alerts};
+    /// let mut a = Alerts::new();
+    /// let fired: Vec<_> = (1..=130).filter_map(|t| a.cadence(Some(40), true).map(|x| (t, x))).collect();
+    /// assert_eq!(fired, [(5, Alert::CadenceLow), (65, Alert::CadenceLow), (125, Alert::CadenceLow)]);
+    /// assert_eq!((1..=100).find_map(|_| a.cadence(Some(40), false)), None, "not in ERG");
+    /// ```
+    pub fn cadence(&mut self, rpm: Option<u16>, erg: bool) -> Option<Alert> {
+        self.since_cadence_s = self.since_cadence_s.saturating_add(1);
+        if erg && rpm.is_some_and(|c| c < CADENCE_LOW_RPM) {
+            self.slow_s = self.slow_s.saturating_add(1);
+        } else {
+            self.slow_s = 0;
+        }
+        if self.slow_s >= CADENCE_LOW_S && self.since_cadence_s >= CADENCE_EVERY_S {
+            self.since_cadence_s = 0;
+            return Some(Alert::CadenceLow);
+        }
+        None
     }
 
     /// One second of a moving ride: `timer_s` the ride's timer after it, `hr` the heart rate; the settings `eat_min`
@@ -127,6 +173,23 @@ mod tests {
         // off
         let mut b = Alerts::new();
         assert!((1..100).all(|t| b.second(t, Some(200), 0, 0, 0).is_none()));
+    }
+
+    #[test]
+    fn cadence_warning_waits_five_seconds_and_does_not_nag() {
+        let mut a = Alerts::new();
+        // pedalling fine, then slow: the count starts when it goes slow, 4 s are not enough
+        assert!((1..=10).all(|_| a.cadence(Some(85), true).is_none()));
+        assert!((1..=4).all(|_| a.cadence(Some(45), true).is_none()));
+        assert_eq!(a.cadence(Some(80), true), None, "back up: the count starts again");
+        assert!((1..=4).all(|_| a.cadence(Some(0), true).is_none()));
+        assert_eq!(a.cadence(Some(0), true), Some(Alert::CadenceLow), "5 s at 0 rpm");
+        // still slow: not again before a minute
+        assert!((1..60).all(|_| a.cadence(Some(0), true).is_none()));
+        assert_eq!(a.cadence(Some(0), true), Some(Alert::CadenceLow));
+        // no reading, or ERG off: nothing
+        let mut b = Alerts::new();
+        assert!((1..=100).all(|_| b.cadence(None, true).is_none() && b.cadence(Some(0), false).is_none()));
     }
 
     #[test]
