@@ -4234,6 +4234,28 @@ fn menu_budgets() {
     assert!(back <= 64_000, "turn back: {back} px");
 }
 
+/// The overview left alone with no fix (indoors), as the profiler's idle window on the unit: 2013 px/s there
+/// (2026-10-26) was a one-off and the GPS search, nothing steady. The TODAY card is drawn again once the calendar is
+/// read (CALENDAR_MS, 8 s, after the start: 32 690 px, 36 034 with a card; inside a window that starts a few
+/// seconds after a RAM run), then the strip's "GPS" blinks, three glyphs a second, 720 px, and its clock's minute.
+/// 36 034 / 30 + 724 = 1925 px/s.
+#[test]
+fn idle_overview_searching() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 5000);
+    let px = sim.pixels;
+    run(&mut sim, &mut app, 5000);
+    let card = sim.pixels - px;
+    assert!(card <= 40_000 + 5 * 720, "the TODAY card once: {card} px");
+    let (px, win) = (sim.pixels, sim.windows);
+    run(&mut sim, &mut app, 60_000);
+    let (px, win) = ((sim.pixels - px) / 60, (sim.windows - win) / 60);
+    std::println!("idle overview, no fix: {card} px once, then {px} px/s, {win} windows/s");
+    assert!(px <= 760 && win <= 3, "{px} px/s, {win} windows/s: the GPS blink and the minute only");
+    assert_consistent(&sim, &app);
+}
+
 /// The buses the CPU polls through on every pass, idle on the overview with the automatic backlight: the GNSS
 /// receiver read every pass only while it sends (else every [`crate::GNSS_IDLE_PASSES`]), the light sensor one
 /// transaction a reading (its data, not its status first). Measured 2026-10-26: 8.8 SPI4 transfers a second (23.0
