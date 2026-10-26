@@ -138,6 +138,8 @@ use crate::fat::write::{Handle, dos_time};
 use crate::fat::{DiskWrite, Error, Fat, File, SECTOR, SECTOR_U32};
 use crate::fit::{self, RECORD_LEN, Sample, Sink, Writer};
 use crate::ride::RIDE_WORDS;
+// the record keeps the count of ride words in a byte (byte 21)
+const _: () = assert!(RIDE_WORDS < 256);
 
 /// This firmware's folder, its recovery records, the folder of the ride in progress in it, stock's rides folder.
 pub const DIR: &str = "Rustfw";

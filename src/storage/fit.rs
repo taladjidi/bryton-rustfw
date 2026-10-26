@@ -158,6 +158,8 @@ const INDOOR: u32 = 1 << 15;
 const BY_HAND: u32 = 1 << 13;
 
 const HEADER: u32 = 14;
+// written as a byte (the header's size field): a larger header fails the build, never the file
+const _: () = assert!(HEADER < 256);
 const WORDS: usize = 21;
 const TAG: u16 = 0xf17f; // first two bytes of a recovery record (and a version: change it with the layout)
 
@@ -188,6 +190,8 @@ const L_GEAR: u8 = 8;
 const L_HRV: u8 = 9;
 /// RR intervals per `hrv` message (module doc).
 pub const HRV_PER_MESSAGE: usize = 5;
+// the hrv message's field size, 2 bytes a value, is written as a byte
+const _: () = assert!(2 * HRV_PER_MESSAGE < 256);
 /// Bytes an `hrv` message takes at most, its definition with it.
 pub const HRV_MAX: usize = 9 + 1 + 2 * HRV_PER_MESSAGE;
 /// Bit 12 of the recovery record's third word (the record mask's bits 10..12 were never used): the full copy's
