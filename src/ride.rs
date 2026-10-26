@@ -53,8 +53,11 @@ pub struct Input {
     /// Altitude, mm: the barometer's (calibrated) when it reads, else a good fix's.
     pub alt_mm: Option<i32>,
     /// Which altitude that is: 0 the receiver's, else the barometer on one calibration (`altitude.rs`). A change
-    /// forgets the low point and the climb window (the two are not on the same level).
+    /// forgets the low point and the climb window (the two may not be on the same level).
     pub alt_ref: u8,
+    /// The part of this second's altitude change that is a correction (a calibration's shift let go:
+    /// `altitude::Altimeter::corr`), not a climb: moved out of the low point and the climb window, paused too.
+    pub alt_corr_mm: i32,
     /// An indoor ride ([`Profile::Indoor`]): auto-paused on no power and no cadence, not on speed (a trainer's
     /// flywheel speed lags, and some trainers report a speed at 0 rpm: inferred).
     pub indoor: bool,
@@ -72,9 +75,12 @@ pub const INDOOR_PAUSE_S: u8 = 3;
 /// Altitude gain is counted once it exceeds the last low point by this much (GPS altitude is noisy).
 pub const ASCENT_HYSTERESIS_MM: i32 = 5000;
 
-/// The same for the barometer: its noise after smoothing is a few decimetres (wind, speed changes at the case's
-/// vent, inferred; the chip's own is 5 cm), so 2 m keeps small climbs and counts no noise.
-pub const BARO_HYSTERESIS_MM: i32 = 2000;
+/// The same for the barometer. Measured on a real 2 h ride (2026-10-26, altitude.rs's filter on its readings): the
+/// filtered altitude stays within -1.4 to +1.3 m of a 31 s centred mean (0.5 % to 99.5 %), so 3 m is over that noise
+/// from crest to trough; 2 m counted 150 m on that ride where 3 m counted 120 m and the smoothed profile about 120 m.
+/// Golden Cheetah's default elevation hysteresis is 3 m too (its wiki, UG_Preferences_General); Strava counts 2 m
+/// with barometric data after its own smoothing (support.strava.com/hc/en-us/articles/216919447).
+pub const BARO_HYSTERESIS_MM: i32 = 3000;
 
 /// A sum and a count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -183,6 +189,12 @@ impl Ride {
 
     /// One second: the timer and the totals move if the ride runs and is moving. [`Event::Second`] while running.
     pub fn second(&mut self, i: &Input) -> Option<Event> {
+        if self.state != State::Idle && i.alt_corr_mm != 0 {
+            if let Some(low) = &mut self.alt_low {
+                *low = low.saturating_add(i.alt_corr_mm);
+            }
+            self.climb.shift(i.alt_corr_mm);
+        }
         if self.state != State::Running {
             return None;
         }
@@ -376,6 +388,13 @@ pub struct Climb {
 impl Climb {
     const fn new() -> Self {
         Climb { alt_mm: [0; CLIMB_N], dist9: [0; CLIMB_N], n: 0, i: 0, secs: 0 }
+    }
+
+    /// A correction of the altitude (not a climb): the samples move with it.
+    fn shift(&mut self, d: i32) {
+        for a in &mut self.alt_mm {
+            *a = a.saturating_add(d);
+        }
     }
 
     /// One moving second: the altitude (None: no fix, which starts again) and the ride's distance.
@@ -843,6 +862,7 @@ mod tests {
             power: Some(200),
             alt_mm: None,
             alt_ref: 0,
+            alt_corr_mm: 0,
             indoor: false,
         }
     }
@@ -865,15 +885,37 @@ mod tests {
         }
         assert_eq!(r.ascent_m(), 0);
         for s in 0..10 {
-            r.second(&alt(140_000 + s * 500, 1)); // 4.5 m climbed: counted past 2 m
+            r.second(&alt(140_000 + s * 500, 1)); // 4.5 m climbed: 3 m counted past 3 m, 1.5 m waiting
         }
-        assert_eq!(r.ascent_m(), 4);
+        assert_eq!(r.ascent_m(), 3);
         let mut g = Ride::new();
         g.start_pause();
         for s in 0..10 {
             g.second(&alt(100_000 + s * 500, 0)); // the same climb on the receiver: under its 5 m
         }
         assert_eq!(g.ascent_m(), 0);
+    }
+
+    /// A correction let go a second at a time (altitude.rs `corr`) is no climb, running or paused, and no VAM.
+    #[test]
+    fn a_correction_is_not_a_climb() {
+        let mut r = Ride::new();
+        r.start_pause();
+        let alt = |mm, corr| Input { alt_mm: Some(mm), alt_ref: 1, alt_corr_mm: corr, ..at(200) };
+        r.second(&alt(100_000, 0));
+        for s in 1..=60 {
+            r.second(&alt(100_000 + s * 500, 500)); // 30 m up, all of it the correction
+        }
+        assert_eq!((r.ascent_m(), r.vam()), (0, Some(0)));
+        r.start_pause(); // paused: the correction goes on
+        for s in 61..=80 {
+            r.second(&alt(100_000 + s * 500, 500));
+        }
+        r.start_pause();
+        for s in 0..=8 {
+            r.second(&alt(140_000 + s * 500, 0)); // then 4 m climbed: counted
+        }
+        assert_eq!(r.ascent_m(), 3);
     }
 
     /// Indoors the ride pauses itself on no power and no cadence for 3 s, whatever the speed says, and goes on at the

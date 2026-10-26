@@ -450,6 +450,7 @@ impl App {
             power: self.live.get(Metric::Power),
             alt_mm: alt.0,
             alt_ref: alt.1,
+            alt_corr_mm: self.alt.corr(),
             indoor: self.indoors(),
         };
         let timer = self.ride.timer_s();

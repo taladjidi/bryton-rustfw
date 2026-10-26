@@ -92,6 +92,10 @@ fn a_ride_start_calibrates_and_it_is_kept() {
     let cal = app.alt.cal().expect("calibrated at the start");
     assert_eq!(cal.by, By::Auto);
     let (alt, r) = app.alt_now();
+    assert!(r != 0 && alt.unwrap() < 20_000, "the standard day's level still, let go slowly: {alt:?}");
+    run(&mut sim, &mut app, 600_000); // 0.5 m a second: the 294 m to the receiver's level in 10 min
+    assert_eq!(app.ride.ascent_m(), 0, "a correction, not a climb");
+    let (alt, r) = app.alt_now();
     assert!(r != 0 && alt.unwrap().abs_diff(300_000) < 1000, "{alt:?} {r}");
     assert_eq!(stored(&sim), None, "nothing written during a ride");
     app.start_pause(); // paused

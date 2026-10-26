@@ -14,8 +14,15 @@
 //!
 //! **Pressure** is the LPS22HH's own unit, 1/4096 hPa (0.24 Pa): [`crate::ambient::baro_read_raw`].
 //!
-//! **Smoothing**: an exponential average of 1/4 per reading (4 s at the ride's 1 Hz). The chip's noise is 0.65 Pa
-//! (5 cm), so this is for the wind and the case's own pressure swings, not the chip.
+//! **Smoothing**: the median of the last [`MEDIAN`] readings, then an exponential average of 1/[`SMOOTH`] per reading
+//! (about 7 s of lag at the ride's 1 Hz). The chip's noise is 0.65 Pa (5 cm), so this is for the air at the case's
+//! vent, not the chip. Measured on a real 2 h ride (2026-10-26, 1 Hz, the records' altitude turned back into
+//! readings): still, the readings sit within about 0.5 m; riding at 30 km/h they spread +-2 m (5 % to 95 %), and 149
+//! single readings stood 4 to 15 m off their neighbours, either sign, often a pair of opposite signs (gusts, the case
+//! pressed: inferred). The median takes those out whole, which no average does: with the old average of 1/4 alone
+//! the altitude moved over 1 m in a second 121 times, over 0.5 m 917 times; with this filter none over 1 m, 44 over
+//! 0.5 m (descents at 40 km/h among them). Strava does the same in its way: it drops outliers and smooths before
+//! counting a gain, less for barometric data (support.strava.com/hc/en-us/articles/216919447, "Elevation").
 //!
 //! **Calibration** ([`Cal`]): found by bisection on `p0` (the altitude rises with `p0`), so no inverse table.
 //! Set by a typed altitude ([`Altimeter::calibrate`]), by the receiver's altitude averaged over [`WINDOW_S`] seconds
@@ -26,14 +33,18 @@
 //! its Baro_CheckAltCalibrationAtLocation sets the altitude from a saved place (ghidra/notes agent_a2.md, agent_b1.md).
 //!
 //! **Which altitude** ([`Altimeter::source`]): the barometer's when it reads and its calibration is *trusted* (made
-//! in the last [`FRESH_S`], or this power-up); the receiver's otherwise, while it has a fix; with no fix the
-//! barometer on whatever calibration it has (the standard day if none): a ride's ascent wants only differences. Each
-//! calibration, and each change of source, is a new *reference* (a number the ride sees): the ride forgets its low
-//! point and its climb window then, so a correction of 10 m never counts as 10 m of climbing. Trust ends with the
-//! calibration's age ([`FRESH_S`], checked at each ride's start, also within one power-up). The records' altitude
-//! stays continuous: while a ride is open [`Altimeter::follow`] shifts a new source (barometer to receiver or back)
-//! to continue from the last value; a typed or averaged calibration of the same source is a correction, not
-//! shifted. A resumed ride reads `altcal.bin` (a read, allowed during a ride) so it keeps its source.
+//! in the last [`FRESH_S`], or this power-up, or being made at the ride's start); the receiver's otherwise, while it
+//! has a fix; with no fix the barometer on whatever calibration it has (the standard day if none): a ride's ascent
+//! wants only differences. While the ride's start averages a calibration, the barometer on its old one is used, not
+//! the receiver: the receiver's altitude moved 10 to 17 m a second in the first 28 s of the 2026-10-26 ride, and
+//! counted 26 m of ascent there. Each calibration, and each change of source, is a new *reference* (a number the
+//! ride sees). Trust ends with the calibration's age ([`FRESH_S`], checked at each ride's start, also within one
+//! power-up). The ride's altitude never steps: while a ride is open [`Altimeter::follow`] shifts a new reference
+//! (a calibration, or the barometer to the receiver or back) to continue from the last value, then lets the shift go
+//! by [`SLEW_MM`] a second at most, so the records move to the right level with no step; the part of a second's
+//! change that is that slew is [`Altimeter::corr`], which the ride's ascent and climb window take out (ride.rs), so a
+//! correction of 10 m never counts as 10 m of climbing. A resumed ride reads `altcal.bin` (a read, allowed during a
+//! ride) so it keeps its source.
 //!
 //! **No drift correction during a ride.** Weather moves the pressure about 1 hPa in 3 hours at most on a normal day
 //! (8 m in 3 h, 3 m an hour): over a ride the ascent counts differences over minutes, so it is untouched, and only
@@ -194,11 +205,23 @@ enum Want {
 /// Readings missed in a row after which the barometer counts as silent.
 const MISSES: u8 = 3;
 
+/// Readings the median is taken over (module doc: a reading 15 m off, or two in a row, is dropped).
+pub const MEDIAN: usize = 5;
+
+/// The exponential average's divisor, per reading.
+pub const SMOOTH: i64 = 6;
+
+/// How fast a new reference's shift is let go, mm a second (module doc): 0.5 m/s, a 50 m correction in under 2 min.
+pub const SLEW_MM: i32 = 500;
+
 /// The barometer's smoothed pressure, the calibration and the average toward a new one.
 #[derive(Clone, Copy, Debug)]
 pub struct Altimeter {
     /// Smoothed pressure x 16 (1/65536 hPa).
     smooth: Option<u32>,
+    /// The last readings, the newest last, and how many of them are valid (from the end).
+    recent: [u32; MEDIAN],
+    n_recent: u8,
     misses: u8,
     cal: Option<Cal>,
     /// The calibration may be used for the ride's altitude.
@@ -215,6 +238,8 @@ pub struct Altimeter {
     last: Option<(u8, i32)>,
     /// Added to a source's altitude so a change of source continues from the last value (the records show no step).
     off: i32,
+    /// The part of the last second's change that was the shift let go ([`Altimeter::corr`]).
+    corr: i32,
 }
 
 impl Default for Altimeter {
@@ -228,6 +253,8 @@ impl Altimeter {
     pub const fn new() -> Self {
         Altimeter {
             smooth: None,
+            recent: [0; MEDIAN],
+            n_recent: 0,
             misses: 0,
             cal: None,
             trusted: false,
@@ -239,6 +266,7 @@ impl Altimeter {
             dirty: false,
             last: None,
             off: 0,
+            corr: 0,
         }
     }
 
@@ -248,16 +276,25 @@ impl Altimeter {
         let Some(p) = raw.filter(|p| P_RANGE.contains(p)) else {
             self.misses = self.misses.saturating_add(1);
             if self.misses >= MISSES {
-                self.smooth = None;
+                (self.smooth, self.n_recent) = (None, 0);
             }
             return;
         };
         self.misses = 0;
-        let x = p * 16;
+        // a jump of 5 hPa is not weather (the first reading, a gap): start again from it
+        if self.smooth.is_some_and(|s| s.abs_diff(p * 16) >= 5 * 4096 * 16) {
+            (self.smooth, self.n_recent) = (None, 0);
+        }
+        self.recent.rotate_left(1);
+        self.recent[MEDIAN - 1] = p;
+        self.n_recent = (self.n_recent + 1).min(MEDIAN as u8);
+        let mut w = self.recent;
+        let w = &mut w[MEDIAN - usize::from(self.n_recent)..];
+        w.sort_unstable();
+        let x = w[w.len() / 2] * 16;
         self.smooth = Some(match self.smooth {
-            // a jump of 5 hPa is not weather (the first reading, a gap): start again from it
-            Some(s) if s.abs_diff(x) < 5 * 4096 * 16 => (i64::from(s) + (i64::from(x) - i64::from(s)) / 4) as u32,
-            _ => x,
+            Some(s) => (i64::from(s) + (i64::from(x) - i64::from(s)) / SMOOTH) as u32,
+            None => x,
         });
     }
 
@@ -282,7 +319,7 @@ impl Altimeter {
             self.cal = Some(cal);
             self.trusted = cal.fresh(now_s);
             self.bump();
-            (self.last, self.off) = (None, 0); // start-up (or a resume): what was followed so far is not the ride's
+            (self.last, self.off, self.corr) = (None, 0, 0); // start-up (or a resume): what was followed so far is not the ride's
             if self.trusted && self.want == Want::Auto {
                 (self.want, self.n, self.alt_sum, self.p_sum) = (Want::None, 0, 0, 0); // a ride's start waited for it
             }
@@ -329,7 +366,7 @@ impl Altimeter {
     /// A ride starts (or is resumed): if the calibration is not fresh at `now_s` (3 h, also within one power-up),
     /// average the receiver's altitude for one (module doc). The ride's altitude starts from the source's own.
     pub fn ride_start(&mut self, now_s: u32) {
-        (self.last, self.off) = (None, 0);
+        (self.last, self.off, self.corr) = (None, 0, 0);
         if !self.cal.is_some_and(|c| c.fresh(now_s)) {
             self.trusted = false;
         }
@@ -390,31 +427,33 @@ impl Altimeter {
     /// since the last [`Altimeter::follow`] calls for (so a reading between two seconds is shifted too).
     fn pick(&self, gps: Option<i32>) -> (Option<i32>, u8, i32) {
         let (a, r) = match self.alt_mm() {
-            Some(a) if self.trusted || gps.is_none() => (Some(a), self.epoch),
+            // the ride's start averaging a calibration: the barometer on its old one (module doc)
+            Some(a) if self.trusted || gps.is_none() || self.want == Want::Auto => (Some(a), self.epoch),
             _ => (gps, 0),
         };
         let off = match (a, self.last) {
-            (Some(a), Some((lr, last))) if lr != r => {
-                if (lr == 0) != (r == 0) {
-                    last.saturating_sub(a)
-                } else {
-                    0
-                }
-            }
+            (Some(a), Some((lr, last))) if lr != r => last.saturating_sub(a),
             _ => self.off,
         };
         (a, r, off)
     }
 
-    /// Once a second while a ride is open, before [`Altimeter::source`]: when the source changes between the
-    /// barometer and the receiver, the new one is shifted to continue from the last value (a ride started before
-    /// a fix, a calibration made on the way). A new calibration of the same source is a correction and not shifted.
-    /// The ride's ascent does not depend on it (the reference changes anyway).
+    /// Once a second while a ride is open, before [`Altimeter::source`]: a new reference (a calibration, the
+    /// barometer to the receiver or back) is shifted to continue from the last value, and the shift is let go by
+    /// [`SLEW_MM`] a second (module doc).
     pub fn follow(&mut self, gps: Option<i32>) {
+        self.corr = 0;
         if let (Some(a), r, off) = self.pick(gps) {
-            self.off = off;
-            self.last = Some((r, a.saturating_add(off)));
+            self.corr = -off.clamp(-SLEW_MM, SLEW_MM);
+            self.off = off + self.corr;
+            self.last = Some((r, a.saturating_add(self.off)));
         }
+    }
+
+    /// How much of the ride's altitude change in the last [`Altimeter::follow`] was a correction let go, not a climb
+    /// (mm, signed): the ride takes it out of its ascent.
+    pub fn corr(&self) -> i32 {
+        self.corr
     }
 
     /// The calibration to write, once (None when the file has it).
@@ -482,7 +521,9 @@ mod tests {
         }
         assert!(a.calibrate(1_200_000, 5));
         assert!(a.alt_mm().unwrap().abs_diff(1_200_000) < 100);
-        a.feed(Some(899 * 4096)); // 1 hPa lower: about 9 m higher, smoothed a quarter of the way
+        for _ in 0..3 {
+            a.feed(Some(899 * 4096)); // 1 hPa lower: about 9 m higher, once the median has it, smoothed a sixth
+        }
         let h = a.alt_mm().unwrap();
         assert!((1_200_000..1_205_000).contains(&h), "{h}");
         assert_eq!(a.take_dirty().map(|c| c.by), Some(By::Typed));
@@ -517,7 +558,7 @@ mod tests {
         a.load(Cal { p0: P_STD, when_s: day - 4 * 3600, by: By::Typed }, day);
         a.ride_start(day);
         assert_eq!(a.progress(), Some(0), "four hours old: a new one");
-        assert_eq!(a.source(Some(500_000)), (Some(500_000), 0), "the receiver's meanwhile");
+        assert_ne!(a.source(Some(500_000)).1, 0, "the barometer meanwhile, on its old calibration");
         assert!(a.source(None).0.is_some() && a.source(None).1 != 0, "no fix: the barometer, as it is");
         for _ in 0..WINDOW_S {
             a.second(Some(500_000), day);
@@ -563,7 +604,7 @@ mod tests {
             a.feed(Some(p as u32));
             if s > 20 {
                 let h = f64::from(a.alt_mm().unwrap()) / 1000.0;
-                assert!((h - f64::from(s)).abs() < 5.0, "{s}: {h}"); // lag of the filter: 3 s of climb
+                assert!((h - f64::from(s)).abs() < 8.5, "{s}: {h}"); // lag of the filter: 2 + 5 s of climb
             }
         }
     }
@@ -579,7 +620,7 @@ mod tests {
         assert_eq!(a.progress(), None, "ten minutes: kept");
         a.ride_start(1_000_000 + 6 * 3600);
         assert_eq!(a.progress(), Some(0), "6 h later in the same power-up: made again");
-        assert_eq!(a.source(Some(5)), (Some(5), 0), "and the receiver's meanwhile");
+        assert_ne!(a.source(Some(5)).1, 0, "and the barometer meanwhile");
     }
 
     #[test]
@@ -604,26 +645,179 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_change_of_source_continues_from_the_last_value() {
+    /// The pressure at `m` metres on the standard day, 1/4096 hPa.
+    fn p_at(m: f64) -> u32 {
+        (f64::from(P_STD) * (1.0 - m / 44307.694).powf(1.0 / 0.190284)) as u32
+    }
+
+    /// A trusted barometer at `at_m` and a ride started at `now`.
+    fn riding(at_m: f64, now: u32) -> Altimeter {
         let mut a = Altimeter::new();
-        for _ in 0..10 {
-            a.feed(Some(P_STD - 4096 * 12));
+        for _ in 0..MEDIAN {
+            a.feed(Some(p_at(at_m)));
         }
-        // no calibration, no fix: the barometer on the standard day
-        a.ride_start(0);
+        assert!(a.calibrate((at_m * 1000.0) as i32, now));
+        a.ride_start(now);
+        assert_eq!(a.progress(), None);
+        a
+    }
+
+    #[test]
+    fn a_change_of_source_continues_then_moves_over_slowly() {
+        let mut a = riding(100.0, 1000);
         a.follow(None);
-        let (v0, _) = a.source(None);
-        // a fix 40 m higher: the receiver's, shifted to the last value
-        a.follow(Some(v0.unwrap() + 40_000));
-        let (v1, r) = a.source(Some(v0.unwrap() + 40_000));
-        assert_eq!(r, 0);
-        assert_eq!(v1, v0, "no step");
-        // the receiver climbs 1 m: 1 m in the records
-        a.follow(Some(v0.unwrap() + 41_000));
-        assert_eq!(a.source(Some(v0.unwrap() + 41_000)).0, Some(v0.unwrap() + 1000));
+        let (v0, r0) = a.source(None);
+        let v0 = v0.unwrap();
+        assert_ne!(r0, 0);
+        // the barometer goes silent, a fix 40 m higher: the receiver's, shifted to the last value, then let go
+        for _ in 0..MISSES {
+            a.feed(None);
+        }
+        let (mut last, mut corr) = (v0, 0);
+        for s in 0..120 {
+            a.follow(Some(v0 + 40_000));
+            let (v, r) = a.source(Some(v0 + 40_000));
+            assert_eq!(r, 0);
+            let v = v.unwrap();
+            assert!((v - last).abs() <= SLEW_MM, "{s}: a step of {} mm", v - last);
+            assert_eq!(v - last, a.corr(), "{s}: all of the change is the correction");
+            (last, corr) = (v, corr + a.corr());
+        }
+        assert_eq!((last, corr), (v0 + 40_000, 40_000), "at the receiver's level, the 40 m all correction");
+        // the receiver climbs 1 m: 1 m in the records, no correction
+        a.follow(Some(v0 + 41_000));
+        assert_eq!((a.source(Some(v0 + 41_000)).0, a.corr()), (Some(v0 + 41_000), 0));
         // a new ride starts from the source's own
         a.ride_start(0);
         assert_eq!(a.source(Some(7)).0, Some(7));
+    }
+
+    /// A ride through the barometer: `alt(s)` the true altitude (m) at second s, `extra(s)` the pressure added at
+    /// the vent (Pa), and a calibration typed `cal_m` off at second `cal_at`. The ride's ascent (m) and the largest
+    /// step of its altitude in a second (mm).
+    fn ride_through(
+        secs: u32,
+        alt: impl Fn(u32) -> f64,
+        extra: impl Fn(u32) -> f64,
+        cal_at: u32,
+        cal_m: f64,
+    ) -> (u32, i32) {
+        let mut a = riding(alt(0), 1000);
+        let mut r = crate::ride::Ride::new();
+        r.start_pause();
+        let (mut prev, mut step): (Option<i32>, i32) = (None, 0);
+        for s in 0..secs {
+            let p = f64::from(p_at(alt(s))) + extra(s) * 40.96; // 1 Pa is 40.96 of the chip's counts
+            a.feed(Some(p as u32));
+            if s == cal_at {
+                let now = a.alt_mm().unwrap();
+                assert!(a.calibrate(now + (cal_m * 1000.0) as i32, 1000 + s));
+            }
+            a.follow(None);
+            let (h, alt_ref) = a.source(None);
+            if let (Some(h), Some(p)) = (h, prev) {
+                step = step.max((h - p).abs());
+            }
+            prev = h;
+            let i = Input { speed_x10: Some(300), alt_mm: h, alt_ref, alt_corr_mm: a.corr(), ..Input::default() };
+            r.second(&i);
+        }
+        (r.ascent_m(), step)
+    }
+
+    use crate::ride::Input;
+
+    /// Pseudo-random in -1..1, seeded by the second.
+    fn noise(s: u32) -> f64 {
+        let x = s.wrapping_mul(2_654_435_761).wrapping_add(12345);
+        let x = x ^ (x >> 15);
+        f64::from(x % 2001) / 1000.0 - 1.0
+    }
+
+    /// The air at the vent as the 2026-10-26 ride showed it: about +-25 Pa of gusts riding (+-2 m), speed changes
+    /// of 10 km/h every 40 s, and a reading 150 Pa off every 50 s, every other one followed by one of the opposite
+    /// sign. The vent sees 0.3 of the dynamic pressure 0.5 rho v^2 (30 to 40 km/h: 32 Pa, 10 Pa of it): the ride's
+    /// altitude against its speed changes gave a slope of 0.28 of it, an upper bound since descents speed the bike up
+    /// too (inferred; three stops on that ride rose 1 to 3 m). The full 32 Pa would count 2.7 m each change: if a
+    /// ride shows that, compensate for the speed.
+    fn vent(s: u32) -> f64 {
+        let q = |kmh: f64| 0.5 * 1.2 * (kmh / 3.6) * (kmh / 3.6);
+        let speed = if (s / 40).is_multiple_of(2) { 30.0 } else { 40.0 };
+        let spike = match s % 100 {
+            7 | 57 => 150.0,
+            8 => -150.0,
+            _ => 0.0,
+        };
+        25.0 * noise(s) + 0.3 * q(speed) + spike
+    }
+
+    #[test]
+    fn a_flat_road_with_the_air_at_the_vent_climbs_nothing() {
+        let (ascent, step) = ride_through(3600, |_| 250.0, vent, u32::MAX, 0.0);
+        assert!(ascent <= 3, "{ascent} m on a flat road");
+        assert!(step < 1000, "the altitude moved {step} mm in a second");
+    }
+
+    #[test]
+    fn a_calibration_mid_ride_climbs_nothing() {
+        for cal_m in [30.0, -30.0] {
+            let (ascent, step) = ride_through(1200, |_| 250.0, |_| 0.0, 300, cal_m);
+            assert_eq!(ascent, 0, "a calibration of {cal_m} m");
+            assert!(step <= SLEW_MM + 50, "no step: {step} mm");
+        }
+    }
+
+    #[test]
+    fn a_known_climb_counts_within_a_few_percent() {
+        // flat, 200 m up at 0.4 m/s (8 % at 18 km/h), flat, 50 m down, 60 m up: 260 m, with the air at the vent
+        let alt = |s: u32| {
+            let s = f64::from(s);
+            match s {
+                _ if s < 300.0 => 100.0,
+                _ if s < 800.0 => 100.0 + (s - 300.0) * 0.4,
+                _ if s < 1000.0 => 300.0,
+                _ if s < 1100.0 => 300.0 - (s - 1000.0) * 0.5,
+                _ if s < 1400.0 => 250.0 + (s - 1100.0) * 0.2,
+                _ => 310.0,
+            }
+        };
+        let (ascent, _) = ride_through(1700, alt, vent, u32::MAX, 0.0);
+        assert!(ascent.abs_diff(260) <= 8, "{ascent} m for 260");
+    }
+
+    #[test]
+    fn the_start_rides_on_the_barometer_while_it_calibrates() {
+        // a calibration four hours old: the start averages a new one, the barometer carries the ride meanwhile, and
+        // the receiver's metres of noise never reach the ride; the new level comes in with no step and no ascent
+        let mut a = riding(250.0, 1000);
+        let day = 1000 + 4 * 3600;
+        a.ride_start(day);
+        assert_eq!(a.progress(), Some(0));
+        let mut r = crate::ride::Ride::new();
+        r.start_pause();
+        let mut prev: Option<i32> = None;
+        for s in 0..300 {
+            a.feed(Some(p_at(250.0)));
+            let gps = 262_000 + (noise(s) * 15_000.0) as i32; // 12 m higher, +-15 m
+            a.second(Some(gps), day + s);
+            a.follow(Some(gps));
+            let (h, alt_ref) = a.source(Some(gps));
+            let h = h.unwrap();
+            assert_ne!(alt_ref, 0, "{s}: the barometer");
+            if let Some(p) = prev {
+                assert!((h - p).abs() <= SLEW_MM, "{s}: a step of {} mm", h - p);
+            }
+            prev = Some(h);
+            r.second(&Input {
+                speed_x10: Some(300),
+                alt_mm: Some(h),
+                alt_ref,
+                alt_corr_mm: a.corr(),
+                ..Input::default()
+            });
+        }
+        assert_eq!(a.progress(), None, "calibrated");
+        assert_eq!(r.ascent_m(), 0);
+        assert!(prev.unwrap().abs_diff(262_000) < 3000, "at the receiver's level now: {prev:?}");
     }
 }

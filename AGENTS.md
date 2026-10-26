@@ -205,9 +205,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `sim.rs`
   has a model of the chip (`TouchChip`) with a scripted finger. `tools/i2c.py --touch` reads it from the computer.
 - `src/altitude.rs`: the barometric altitude: the international barometric formula as an integer table, the
-  smoothing, the calibration (typed, from the receiver, at a ride's start; `\Rustfw\altcal.bin`'s sector), and which
-  source the ride takes (barometer or GPS, with a reference number that makes the ride forget its low point when it
-  changes). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
+  smoothing (a median of 5 readings, then an average of 1/6), the calibration (typed, from the receiver, at a ride's
+  start; `\Rustfw\altcal.bin`'s sector), and which source the ride takes (barometer or GPS, with a reference number);
+  a new reference never steps the ride's altitude: shifted, then let go at 0.5 m/s, that part (`corr`) taken out of
+  the ascent (ride.rs, 3 m hysteresis on the barometer). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
 - `src/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;
