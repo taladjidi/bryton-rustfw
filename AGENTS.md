@@ -133,7 +133,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
   read; a method another file calls is `pub(crate)`.
   - `settings.rs`: `Settings`, `PageCfg`, every backup register of the app (`*_BKP`), saving them.
-  - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input`, `touch`.
+  - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
@@ -141,7 +141,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
     formatting. `graphs.rs`: the graph fields and the course profile.
   - `more.rs`: MORE, a denser variant of each ride page (swipe up shows it, swipe down or Back returns): the rider's own
     (the editor edits it, kept in `pages.bin` after the first CRC) or `Page::more_of`; "MORE" in the strip.
-  - `menus.rs`: `Menu`, each menu's rows and their text, `activate` (what a row does).
+  - `menus.rs`: `Menu`, each menu's rows and the text that depends on state (the fixed text is `Row::label` in ui/menu.rs), `activate` (what a
+    row does, one helper per kind of row).
   - `nrf_watch.rs`: the Nordic link's watchdog: signs of a framing out of step (garbage frames, commands without a response,
     a quiet link that does not answer a probe), drain and resync, else reset the chip and start ANT and the phone
     link again, with backoff; the count is in the dev link's `info`. Tests: `src/sim/link_tests.rs`.

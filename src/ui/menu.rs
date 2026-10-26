@@ -343,6 +343,69 @@ pub enum Row {
     Ride(RideRow),
 }
 
+impl Row {
+    /// The row's text when it does not depend on the app's state (the table's half of a row; the app adds the values and
+    /// the labels that change). None for the rows named by what they hold: a page's number, a sensor, a ride, a trainer
+    /// found, a step, a field group, PAUSE / RESUME.
+    pub fn label(self) -> Option<&'static str> {
+        use RideRow as R;
+        Some(match self {
+            Row::Open(Menu::Main) => "ALL SETTINGS",
+            Row::Open(Menu::Page(crate::OVERVIEW)) => "OVERVIEW",
+            Row::Open(Menu::Page(_)) => return None,
+            Row::Open(m) => crate::menu_title(m),
+            Row::Empty(text) => text,
+            Row::Nearby => "BLE NEARBY",
+            Row::BtTrainer => "BT TRAINER",
+            Row::About => "ABOUT",
+            Row::AltGps => "FROM GPS",
+            Row::Drive => "USB DRIVE",
+            Row::GiveUpSave => "GIVE UP SAVE",
+            Row::Set(s) => s.label(),
+            Row::Read(r) => match r {
+                Reading::Lux => "LUX",
+                Reading::TempC => "TEMP C",
+                Reading::Hpa => "HPA",
+                Reading::Fix => "FIX",
+                Reading::Sats => "SATS",
+                Reading::Lat => "LAT",
+                Reading::Lon => "LON",
+                Reading::Alt => "ALT M",
+                Reading::Utc => "UTC",
+                Reading::Date => "DATE",
+            },
+            Row::Layout(_) => "LAYOUT",
+            Row::EditPage(_) => "EDIT ON PAGE",
+            Row::AddPage => "ADD PAGE",
+            Row::Edit(r) => r.label(),
+            Row::Stock(r) => r.label(),
+            Row::WorkoutStart => "START",
+            Row::RampTest => "RAMP TEST",
+            Row::Phone(r) => r.label(),
+            Row::Pick(field) => field.label(),
+            Row::Ride(r) => match r {
+                R::Pause => return None,
+                R::End => "END RIDE",
+                R::NextStep => "NEXT STEP",
+                R::StopWorkout => "STOP WORKOUT",
+                R::StopCourse => "STOP FOLLOWING",
+                R::Trainer => "TRAINER CONTROL",
+                R::CalPower => "CALIBRATE POWER",
+                R::Indoor => "INDOOR",
+            },
+            Row::BtFound(_)
+            | Row::Sensor(_)
+            | Row::Field(..)
+            | Row::Past(_)
+            | Row::Notif(_)
+            | Row::Workout(_)
+            | Row::Step(_)
+            | Row::Course(_)
+            | Row::Group(_) => return None,
+        })
+    }
+}
+
 /// What the ride menu's own rows do ([`crate::Menu::Ride`]); its other rows open a menu or change a setting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RideRow {

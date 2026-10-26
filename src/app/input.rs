@@ -345,6 +345,41 @@ impl App {
                 self.say(if accept { "ANSWERED" } else { "DECLINED" });
                 return;
             }
+            _ => {}
+        }
+        let shown = (before, more_before);
+        match self.screen {
+            Screen::Main | Screen::Ride(_) => self.input_page(b, i, recording, graph_hit, shown),
+            Screen::Media => self.input_media(b, i, shown),
+            Screen::Notif(..) => self.input_notif(b, i),
+            Screen::RampResult => self.input_ramp(b, i, shown),
+            Screen::PowerCal => self.input_powercal(b, i, shown),
+            Screen::Trainer => self.input_trainer(b, i, shown),
+            Screen::Edit(..) => self.editor_input(b, i),
+            Screen::End(_) | Screen::Discard(_) => self.end_input(b, i),
+            Screen::Menu(..) => self.input_menu(b, i, armed, shown),
+            Screen::Summary | Screen::Past | Screen::Nearby | Screen::About => self.input_card(b, i, armed, shown),
+        }
+    }
+
+    /// The screen shown again if the input changed it (or the page's variant): the arms that do not draw themselves.
+    fn reshow(&mut self, b: &mut impl Board, (screen, more): Seen) {
+        if self.screen != screen || self.more_on != more {
+            self.show(b);
+        }
+    }
+
+    /// The overview and the ride pages: the pages round, MORE, the map, the graphs, the editor, the menu, the
+    /// ride's keys.
+    fn input_page(
+        &mut self,
+        b: &mut impl Board,
+        i: Input,
+        recording: bool,
+        graph_hit: Option<(usize, Field)>,
+        shown: Seen,
+    ) {
+        match (self.screen, i) {
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
             // MORE: a swipe up on a ride page shows its denser variant, a swipe down or Back the page again
@@ -360,111 +395,10 @@ impl App {
                 self.open(Screen::Menu(Menu::Quick, 0))
             }
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
-            // Back, or a swipe up (the swipe down that opened it, undone)
-            (Screen::Media, Input::Back | Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
-            (Screen::Media, Input::Touch(Gesture::Tap(x, y))) => {
-                use ui::media::Button;
-                let (key, photo) = match ui::media::hit(x, y) {
-                    Some(Button::Prev) => (Media::Prev, false),
-                    Some(Button::Play) => (Media::PlayPause, false),
-                    Some(Button::Next) => (Media::Next, false),
-                    Some(Button::VolDown) => (Media::VolDown, false),
-                    Some(Button::VolUp) => (Media::VolUp, false),
-                    Some(Button::SkipBack) => (Media::SkipBack, false),
-                    Some(Button::SkipFwd) => (Media::SkipFwd, false),
-                    None => return,
-                };
-                return self.media(b, key, photo);
-            }
-            (Screen::Media, _) => {
-                let key = match i {
-                    Input::Select => Media::PlayPause,
-                    Input::Next | Input::Touch(Gesture::Swipe(Dir::Left)) => Media::Next,
-                    Input::Prev | Input::Touch(Gesture::Swipe(Dir::Right)) => Media::Prev,
-                    Input::NextHeld => Media::VolDown,
-                    Input::PrevHeld => Media::VolUp,
-                    Input::Touch(Gesture::Hold(..)) => return self.media(b, Media::VolUp, true),
-                    _ => return,
-                };
-                self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
-                return self.media(b, key, false);
-            }
             // a tap on the overview's notices opens their list, even while recording (it only reads; the touch lock
             // returns before this)
             (Screen::Main, Input::Touch(Gesture::Tap(_, y))) if u32::from(y) >= ui::NOTICES_Y => {
                 self.open(Screen::Menu(Menu::Notifs, 0))
-            }
-            (Screen::Notif(k, top), _) => {
-                let top = match i {
-                    Input::Next | Input::Touch(Gesture::Swipe(Dir::Up)) => top + 1,
-                    Input::Prev | Input::Touch(Gesture::Swipe(Dir::Down)) => top.saturating_sub(1),
-                    Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => return self.leave_notif(b),
-                    Input::Touch(Gesture::Tap(x, y)) if inside(ui::BACK_TAP, x, y) => return self.leave_notif(b),
-                    _ => return,
-                };
-                let top = top.min(self.notif_lines(k).saturating_sub(ui::NOTIF_LINES));
-                if self.screen != Screen::Notif(k, top) {
-                    self.screen = Screen::Notif(k, top);
-                    self.show(b);
-                }
-                return;
-            }
-            // APPLY and KEEP are touch buttons; Back (or a swipe right) keeps the FTP set; Start and Lap are the ride's
-            (Screen::RampResult, Input::Touch(Gesture::Tap(x, y))) if self.ramp_tap(b, x, y) => {}
-            (Screen::RampResult, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
-            (Screen::RampResult, Input::Select) => return self.start_key(b),
-            (Screen::RampResult, Input::Prev) => return self.lap(),
-            (Screen::RampResult, _) => return,
-            (Screen::PowerCal, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.powercal_leave(),
-            (Screen::PowerCal, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.powercal_leave(),
-            (Screen::PowerCal, _) => return self.powercal_input(i),
-            (Screen::Trainer, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => {
-                self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
-                self.close()
-            }
-            (Screen::Trainer, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => {
-                self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
-                self.close()
-            }
-            // riding, Start and Lap are the ride's (pause, lap) as on any ride page: a key meant for the ride must
-            // not change the trainer's mode; the touch buttons change the mode and the target down
-            (Screen::Trainer, Input::Select) if self.ride.state() != ride::State::Idle => return self.start_key(b),
-            (Screen::Trainer, Input::Prev) if self.ride.state() != ride::State::Idle => return self.lap(),
-            (Screen::Trainer, Input::PrevHeld) if self.ride.state() != ride::State::Idle => return,
-            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => {
-                self.open(Screen::End(ui::END_SAVE))
-            }
-            // riding, the long presses are the trainer's: Lap held steps the target down (Page is up), Start held
-            // cycles the mode; the short ones stay a lap and a pause
-            (Screen::Trainer, Input::Media | Input::End) if self.ride.state() == ride::State::Running => {
-                return self.trainer_long(b, i);
-            }
-            (Screen::Trainer, _) => return self.trainer_input(b, i),
-            (Screen::Edit(..), _) => return self.editor_input(b, i),
-            (Screen::End(_) | Screen::Discard(_), _) => return self.end_input(b, i),
-            (Screen::Menu(menu, sel), _) if self.editing => {
-                let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
-                    self.editing = false;
-                    return;
-                };
-                match i {
-                    Input::Next | Input::Prev => self.settings.step(s, i == Input::Prev),
-                    Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down))) => self.settings.step(s, d == Dir::Up),
-                    Input::NextHeld | Input::PrevHeld => {
-                        self.repeated = true;
-                        self.settings.step(s, i == Input::PrevHeld);
-                    }
-                    Input::Select | Input::Back | Input::Touch(Gesture::Tap(..) | Gesture::Swipe(Dir::Right)) => {
-                        self.editing = false;
-                        // Back (and a swipe back) leaves the altitude as it was; Select or a tap sets it
-                        if s == menu::Setting::Altitude && matches!(i, Input::Select | Input::Touch(Gesture::Tap(..))) {
-                            self.alt_typed();
-                        }
-                        self.save_misc(b);
-                    }
-                    _ => {}
-                }
-                return self.update_menu_rows(b, menu, sel);
             }
             // the overview is apart from the ride pages, as on stock: Page goes to them, then round them; Back
             // comes back
@@ -546,10 +480,145 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::End) if self.ride.state() == ride::State::Paused => {
                 self.open(Screen::End(ui::END_SAVE))
             }
-            // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
-            (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,
-            (Screen::Summary, _) => return,
             (Screen::Main | Screen::Ride(_), Input::Prev) => return self.lap(),
+            _ => return,
+        }
+        self.reshow(b, shown);
+    }
+
+    /// The media player screen.
+    fn input_media(&mut self, b: &mut impl Board, i: Input, shown: Seen) {
+        match (self.screen, i) {
+            // Back, or a swipe up (the swipe down that opened it, undone)
+            (Screen::Media, Input::Back | Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
+            (Screen::Media, Input::Touch(Gesture::Tap(x, y))) => {
+                use ui::media::Button;
+                let (key, photo) = match ui::media::hit(x, y) {
+                    Some(Button::Prev) => (Media::Prev, false),
+                    Some(Button::Play) => (Media::PlayPause, false),
+                    Some(Button::Next) => (Media::Next, false),
+                    Some(Button::VolDown) => (Media::VolDown, false),
+                    Some(Button::VolUp) => (Media::VolUp, false),
+                    Some(Button::SkipBack) => (Media::SkipBack, false),
+                    Some(Button::SkipFwd) => (Media::SkipFwd, false),
+                    None => return,
+                };
+                return self.media(b, key, photo);
+            }
+            (Screen::Media, _) => {
+                let key = match i {
+                    Input::Select => Media::PlayPause,
+                    Input::Next | Input::Touch(Gesture::Swipe(Dir::Left)) => Media::Next,
+                    Input::Prev | Input::Touch(Gesture::Swipe(Dir::Right)) => Media::Prev,
+                    Input::NextHeld => Media::VolDown,
+                    Input::PrevHeld => Media::VolUp,
+                    Input::Touch(Gesture::Hold(..)) => return self.media(b, Media::VolUp, true),
+                    _ => return,
+                };
+                self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
+                return self.media(b, key, false);
+            }
+            _ => return,
+        }
+        self.reshow(b, shown);
+    }
+
+    /// A notification's detail: scrolled by Page and the swipes, left by Back.
+    fn input_notif(&mut self, b: &mut impl Board, i: Input) {
+        let Screen::Notif(k, top) = self.screen else {
+            return;
+        };
+        let top = match i {
+            Input::Next | Input::Touch(Gesture::Swipe(Dir::Up)) => top + 1,
+            Input::Prev | Input::Touch(Gesture::Swipe(Dir::Down)) => top.saturating_sub(1),
+            Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => return self.leave_notif(b),
+            Input::Touch(Gesture::Tap(x, y)) if inside(ui::BACK_TAP, x, y) => return self.leave_notif(b),
+            _ => return,
+        };
+        let top = top.min(self.notif_lines(k).saturating_sub(ui::NOTIF_LINES));
+        if self.screen != Screen::Notif(k, top) {
+            self.screen = Screen::Notif(k, top);
+            self.show(b);
+        }
+    }
+
+    /// The FTP test's result: APPLY and KEEP.
+    fn input_ramp(&mut self, b: &mut impl Board, i: Input, shown: Seen) {
+        match (self.screen, i) {
+            // APPLY and KEEP are touch buttons; Back (or a swipe right) keeps the FTP set; Start and Lap are the ride's
+            (Screen::RampResult, Input::Touch(Gesture::Tap(x, y))) if self.ramp_tap(b, x, y) => {}
+            (Screen::RampResult, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            (Screen::RampResult, Input::Select) => return self.start_key(b),
+            (Screen::RampResult, Input::Prev) => return self.lap(),
+            (Screen::RampResult, _) => return,
+            _ => return,
+        }
+        self.reshow(b, shown);
+    }
+
+    /// The power meter calibration screen.
+    fn input_powercal(&mut self, b: &mut impl Board, i: Input, shown: Seen) {
+        match (self.screen, i) {
+            (Screen::PowerCal, _) if is_back(i) => self.powercal_leave(),
+            (Screen::PowerCal, _) => return self.powercal_input(i),
+            _ => {}
+        }
+        self.reshow(b, shown);
+    }
+
+    /// The trainer screen: Back leaves it (and gives up a calibration), a riding rider keeps the ride's keys.
+    fn input_trainer(&mut self, b: &mut impl Board, i: Input, shown: Seen) {
+        match (self.screen, i) {
+            (Screen::Trainer, _) if is_back(i) => {
+                self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
+                self.close()
+            }
+            // riding, Start and Lap are the ride's (pause, lap) as on any ride page: a key meant for the ride must
+            // not change the trainer's mode; the touch buttons change the mode and the target down
+            (Screen::Trainer, Input::Select) if self.ride.state() != ride::State::Idle => return self.start_key(b),
+            (Screen::Trainer, Input::Prev) if self.ride.state() != ride::State::Idle => return self.lap(),
+            (Screen::Trainer, Input::PrevHeld) if self.ride.state() != ride::State::Idle => return,
+            (Screen::Trainer, Input::End) if self.ride.state() == ride::State::Paused => {
+                self.open(Screen::End(ui::END_SAVE))
+            }
+            // riding, the long presses are the trainer's: Lap held steps the target down (Page is up), Start held
+            // cycles the mode; the short ones stay a lap and a pause
+            (Screen::Trainer, Input::Media | Input::End) if self.ride.state() == ride::State::Running => {
+                return self.trainer_long(b, i);
+            }
+            (Screen::Trainer, _) => return self.trainer_input(b, i),
+            _ => {}
+        }
+        self.reshow(b, shown);
+    }
+
+    /// A menu: a number being edited, the rows (Page and Prev, the swipes, a tap, Start) and Back.
+    fn input_menu(&mut self, b: &mut impl Board, i: Input, armed: Option<(Menu, usize)>, shown: Seen) {
+        match (self.screen, i) {
+            (Screen::Menu(menu, sel), _) if self.editing => {
+                let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
+                    self.editing = false;
+                    return;
+                };
+                match i {
+                    Input::Next | Input::Prev => self.settings.step(s, i == Input::Prev),
+                    Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down))) => self.settings.step(s, d == Dir::Up),
+                    Input::NextHeld | Input::PrevHeld => {
+                        self.repeated = true;
+                        self.settings.step(s, i == Input::PrevHeld);
+                    }
+                    Input::Select | Input::Back | Input::Touch(Gesture::Tap(..) | Gesture::Swipe(Dir::Right)) => {
+                        self.editing = false;
+                        // Back (and a swipe back) leaves the altitude as it was; Select or a tap sets it
+                        if s == menu::Setting::Altitude && matches!(i, Input::Select | Input::Touch(Gesture::Tap(..))) {
+                            self.alt_typed();
+                        }
+                        self.save_misc(b);
+                    }
+                    _ => {}
+                }
+                return self.update_menu_rows(b, menu, sel);
+            }
             (Screen::Menu(menu, sel), Input::Next | Input::Prev | Input::NextHeld | Input::PrevHeld) => {
                 self.repeated |= matches!(i, Input::NextHeld | Input::PrevHeld);
                 let rows = self.rows(menu).max(1);
@@ -596,6 +665,18 @@ impl App {
                 return self.select_row(b, menu, row, armed.filter(|&a| a == (menu, row)));
             }
             (Screen::Menu(menu, sel), Input::Select) => return self.select_row(b, menu, sel, armed),
+            (Screen::Menu(..), Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            _ => return,
+        }
+        self.reshow(b, shown);
+    }
+
+    /// The cards and lists with a single way out: the ride's summary, a past ride (DELETE asks first), the nearby list, About.
+    fn input_card(&mut self, b: &mut impl Board, i: Input, armed: Option<(Menu, usize)>, shown: Seen) {
+        match (self.screen, i) {
+            // the ride's card stays until Back or Start: a key, a swipe or a raindrop does not throw it away
+            (Screen::Summary, Input::Back | Input::Select) => self.screen = Screen::Main,
+            (Screen::Summary, _) => return,
             // a past ride's card: Start dismisses it, as the ride summary. DELETE asks (a tap on its label, or Start
             // held), and the answer is Start, a tap on it again or Start held again; Back says no (moved, kept:
             // trash.rs)
@@ -608,16 +689,13 @@ impl App {
                 self.confirm = armed;
                 self.delete_past(b);
             }
-            (
-                Screen::Menu(..) | Screen::Nearby | Screen::Past | Screen::About,
-                Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
-            ) => self.close(),
             (Screen::Nearby, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
+            (Screen::Past | Screen::Nearby | Screen::About, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => {
+                self.close()
+            }
             _ => return,
         }
-        if self.screen != before || self.more_on != more_before {
-            self.show(b);
-        }
+        self.reshow(b, shown);
     }
 
     /// The touch panel, called by the main loop as soon as INT falls and then every [`TOUCH_MS`] while a finger is
@@ -699,6 +777,18 @@ pub(crate) fn sample_touch(
 pub(crate) fn inside(r: impl Into<ui::Rect>, x: u16, y: u16) -> bool {
     r.into().contains(x, y)
 }
+
+/// The input leaves a screen that has a "<": Back, a swipe right, a tap on the "<".
+fn is_back(i: Input) -> bool {
+    match i {
+        Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => true,
+        Input::Touch(Gesture::Tap(x, y)) => inside(ui::BACK_TAP, x, y),
+        _ => false,
+    }
+}
+
+/// The screen and the page variant before an input: `reshow` draws again if they changed.
+type Seen = (Screen, Option<usize>);
 
 /// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,
 /// the red one); None for a tap elsewhere.
