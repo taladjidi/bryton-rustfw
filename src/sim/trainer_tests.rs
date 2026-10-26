@@ -692,3 +692,26 @@ fn a_failed_spin_down_can_be_tried_again() {
     assert_eq!(lines(&app).0, "CALIBRATED");
     assert_eq!(sim.nordic.trainer.cal_requests, [0x80, 0x80]);
 }
+
+/// The trainer screen has the "<" title bar like a menu (a tap on it goes back), and the ride's timer in its title
+/// line while a ride runs, drawn again on each second.
+#[test]
+fn the_trainer_screen_has_a_title_bar_and_the_ride_timer() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 2000);
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    assert!(app.with_trainer_now(|n| n.timer.is_empty()), "no ride, no timer");
+    app.close();
+    app.press(&mut sim, Press::Short(Key::Start)); // Start on the screen itself is the mode while idle
+    app.open(Screen::Trainer);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 5000);
+    let timer = app.with_trainer_now(|n| n.timer.to_string());
+    assert!(timer.starts_with("0:0"), "{timer}");
+    super::tests::assert_consistent(&sim, &app); // the panel shows what the screen says, the timer included
+    sim.save("trainer_screen_timer");
+    let (x, y) = (crate::ui::BACK_TAP.0 as u16 + 4, crate::ui::BACK_TAP.1 as u16 + 4);
+    app.input(&mut sim, Input::Touch(crate::touch::Gesture::Tap(x, y)));
+    assert_ne!(app.screen(), Screen::Trainer, "the \"<\" goes back");
+}

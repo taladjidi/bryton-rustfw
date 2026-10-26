@@ -32,6 +32,8 @@ pub enum Bottom {
 
 // The text styles are 20 px (LABEL) and 40 px (VALUE) high: each box under the one above.
 const TITLE_Y: u32 = PAGE_Y + 4;
+/// Left edge of the timer's box in the title line: past the title "TRAINER" (it ends at 162).
+const TIMER_X: u32 = 168;
 const MODE_Y: u32 = TITLE_Y + 22;
 const SOURCE_Y: u32 = MODE_Y + 42;
 const TARGET_Y: u32 = SOURCE_Y + 22;
@@ -102,11 +104,13 @@ pub struct Now<'a> {
     pub status_color: u16,
     /// The bottom row.
     pub bottom: Bottom,
+    /// The ride's timer ("12:34", "1:05" from an hour) in the title line while a ride runs, else empty.
+    pub timer: &'a str,
 }
 
 /// What is on screen: one fingerprint per box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Shown([u32; 7]);
+pub struct Shown([u32; 8]);
 
 fn fnv(h: u32, s: &str) -> u32 {
     s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
@@ -114,7 +118,7 @@ fn fnv(h: u32, s: &str) -> u32 {
 
 /// The whole screen: the title, the buttons, then every box.
 pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
-    text::draw_in(c, &LABEL, 8, TITLE_Y, W - 16, Align::Left, "TRAINER");
+    super::draw_title(c, "TRAINER");
     for &(b, x, y, w, h) in &BUTTONS {
         c.fill(x, y, w, h, DARK);
         let st = Style { fg: WHITE, bg: DARK, ..VALUE };
@@ -161,6 +165,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         fnv(5, cadence.as_str()),
         fnv(u32::from(now.status_color) + 6, now.status),
         fnv(7, ["MODE", "BOTH", "CANCEL"][now.bottom as usize]),
+        fnv(8, now.timer),
     ];
     let bold = Style { fg: ACCENT, ..VALUE };
     let grey = Style { fg: GREY, ..LABEL };
@@ -194,6 +199,10 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
             }
             5 => {
                 text::draw_in(c, &Style { fg: now.status_color, ..LABEL }, 8, STATUS_Y, w, Align::Centre, now.status);
+            }
+            7 => {
+                // right of the centred title: five characters ("59:59"), which is also "1:05" and "12:05"
+                text::draw_in(c, &LABEL, TIMER_X, TITLE_Y, W - 8 - TIMER_X, Align::Right, now.timer);
             }
             _ => {
                 // the whole row: it changes only when the buttons do

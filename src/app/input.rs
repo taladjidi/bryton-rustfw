@@ -393,6 +393,10 @@ impl App {
                 self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
                 self.close()
             }
+            (Screen::Trainer, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => {
+                self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
+                self.close()
+            }
             // riding, Start and Lap are the ride's (pause, lap) as on any ride page: a key meant for the ride must
             // not change the trainer's mode; the touch buttons change the mode and the target down
             (Screen::Trainer, Input::Select) if self.ride.state() != ride::State::Idle => return self.start_key(b),
@@ -553,6 +557,7 @@ impl App {
                 Screen::Menu(..) | Screen::Nearby | Screen::Past | Screen::About,
                 Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)),
             ) => self.close(),
+            (Screen::Nearby, Input::Touch(Gesture::Tap(x, y))) if inside(ui::BACK_TAP, x, y) => self.close(),
             _ => return,
         }
         if self.screen != before || self.more_on != more_before {

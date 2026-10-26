@@ -1564,9 +1564,14 @@ pub const MENU_ROWS: usize = ((H - LIST_Y) / MENU_ROW) as usize;
 /// the first row.
 pub const BACK_TAP: (u32, u32, u32, u32) = (0, PAGE_Y, 48, LIST_Y - PAGE_Y);
 
+/// The "<" at the left of a title line ([`BACK_TAP`]).
+pub fn draw_back(c: &mut impl Canvas) {
+    text::draw_in(c, &LABEL, 4, NEARBY.1, NEARBY.0 - 4, Align::Left, "<");
+}
+
 /// The title line of a menu, with the "<" that goes back ([`BACK_TAP`]).
 pub fn draw_title(c: &mut impl Canvas, title: &str) {
-    text::draw_in(c, &LABEL, 4, NEARBY.1, NEARBY.0 - 4, Align::Left, "<");
+    draw_back(c);
     text::draw_in(c, &LABEL, NEARBY.0, NEARBY.1, NEARBY.2, Align::Centre, title);
 }
 

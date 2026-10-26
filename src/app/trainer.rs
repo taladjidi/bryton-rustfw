@@ -332,7 +332,13 @@ impl App {
             (Some(_), text) => text,
             _ => source,
         };
+        let mut timer = Line::<8>::new();
+        if self.ride.state() != ride::State::Idle {
+            let s = self.ride.timer_s();
+            if s >= 3600 { push_hm(&mut timer, s) } else { push_clock(&mut timer, s) }
+        }
         f(&Now {
+            timer: timer.as_str(),
             mode: t.mode(&d).name(),
             source,
             bottom: self.trainer_bottom(),

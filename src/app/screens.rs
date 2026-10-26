@@ -191,6 +191,7 @@ impl App {
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
             Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
             Screen::Nearby => {
+                ui::draw_back(c); // the title itself is drawn again as the count changes, the "<" once
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.nearby.count(), self.scanning);
                 }

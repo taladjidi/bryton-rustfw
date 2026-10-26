@@ -1078,8 +1078,10 @@ fn menu_lists_the_devices_nearby() {
     run(&mut sim, &mut app, u64::from(SCAN_S) * 1000);
     assert!(!app.scanning);
     assert_consistent(&sim, &app);
-    app.press(&mut sim, Press::Short(Key::Back));
-    assert_eq!(app.screen(), Screen::Menu(Menu::System, nearby));
+    // the "<" of the title bar goes back, as on the menus
+    let (x, y) = (ui::BACK_TAP.0 as u16 + 4, ui::BACK_TAP.1 as u16 + 4);
+    app.input(&mut sim, Input::Touch(touch::Gesture::Tap(x, y)));
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, nearby), "a tap on the \"<\"");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Menu(Menu::Settings, row_of(menu::Row::Open(Menu::System))));
     app.press(&mut sim, Press::Short(Key::Back));
