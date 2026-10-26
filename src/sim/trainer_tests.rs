@@ -894,3 +894,74 @@ fn the_profile_setting_is_kept() {
     run(&mut sim, &mut app, 130_000);
     assert!(app.indoors(), "a profile fixed by hand stays when no trainer is heard");
 }
+
+/// The unit with a trainer heard and a good receiver fix, 5 s in.
+fn indoor_unit() -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.classic_pages();
+    sim.backup[14] = Kind::Trainer.to_word(ID);
+    sim.nordic.sensors.push(trainer_sensor());
+    sim.gnss.fix = Some(500);
+    let mut app = App::start(&mut sim, Some(KEY));
+    run(&mut sim, &mut app, 5000);
+    (sim, app)
+}
+
+/// An indoor ride switches the GNSS receiver off (the strip says off, no search) and the end of the ride (saved)
+/// brings it back with a fix, configured and timed again.
+#[test]
+fn the_receiver_is_off_for_an_indoor_ride_and_back_after_it() {
+    let (mut sim, mut app) = indoor_unit();
+    assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "on and fixed before the ride");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    assert!(app.indoors() && !sim.gnss.powered, "off after Start");
+    assert_eq!((app.strip.gps, app.pvt.is_none()), (None, true));
+    run(&mut sim, &mut app, 30_000);
+    assert!(!sim.gnss.powered, "stays off");
+    app.press(&mut sim, Press::Short(Key::Start)); // paused
+    app.end_ride();
+    let frames = sim.gnss.got.iter().filter(|&&b| b == 0xb5).count();
+    run(&mut sim, &mut app, 5000);
+    assert!(sim.gnss.powered, "on again at the end");
+    assert!(sim.gnss.got.iter().filter(|&&b| b == 0xb5).count() >= frames + 2, "configured and timed again");
+    assert!(app.pvt.is_some_and(|p| p.good()) && app.strip.gps.is_some_and(|g| g > 0), "a fix again");
+}
+
+/// The safety net back to ROAD, the rider's toggle and a discarded ride switch it on again too.
+#[test]
+fn the_receiver_returns_on_road_and_on_discard() {
+    let (mut sim, mut app) = indoor_unit();
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    assert!(!sim.gnss.powered);
+    sim.nordic.sensors.clear(); // the trainer goes silent: ROAD after the sensor time-out and two minutes
+    run(&mut sim, &mut app, 160_000);
+    assert!(!app.indoors() && sim.gnss.powered, "ROAD again: the receiver is back");
+    app.toggle_indoor(); // by hand
+    run(&mut sim, &mut app, 2000);
+    assert!(!sim.gnss.powered, "INDOOR by hand: off");
+    app.toggle_indoor();
+    run(&mut sim, &mut app, 5000);
+    assert!(sim.gnss.powered && app.pvt.is_some_and(|p| p.good()), "ROAD by hand: on, with a fix");
+    app.toggle_indoor();
+    run(&mut sim, &mut app, 2000);
+    assert!(!sim.gnss.powered);
+    app.press(&mut sim, Press::Short(Key::Start)); // paused
+    app.discard_ride();
+    run(&mut sim, &mut app, 3000);
+    assert!(sim.gnss.powered, "on after DISCARD");
+}
+
+/// A road ride, and no ride at all with a trainer heard, never switch the receiver off.
+#[test]
+fn the_receiver_stays_on_for_a_road_ride() {
+    let (mut sim, mut app) = indoor_unit();
+    assert!(app.indoors() && sim.gnss.powered, "idle with a trainer heard: still on");
+    app.settings.profile = Some(crate::ride::Profile::Road);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    assert!(!app.indoors() && sim.gnss.powered, "a road ride");
+}

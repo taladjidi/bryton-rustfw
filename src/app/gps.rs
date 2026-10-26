@@ -23,6 +23,9 @@ impl App {
     /// Reads what the GNSS receiver has (sending its configuration once): the latest fix, its state in the strip,
     /// and the speed when no speed sensor is paired.
     pub(crate) fn poll_gnss(&mut self, b: &mut impl Board) {
+        if self.gnss_switch(b) {
+            return;
+        }
         if self.gnss_ms < GNSS_ON_MS && self.gnss_ms.saturating_add(self.dt_ms) >= GNSS_ON_MS {
             b.gnss_power(true);
         }
@@ -62,6 +65,30 @@ impl App {
         self.strip.gps = self.pvt.map(|p| if p.good() { gnss::bars(p.sats) } else { 0 });
         // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
         self.strip.blink = self.strip.gps != Some(0) || self.seconds.is_multiple_of(2);
+    }
+
+    /// Switches the receiver off for an indoor ride (a ride running with the INDOOR profile: its speed is the
+    /// trainer's, no track is kept) and back on for anything else, saving about 7 to 8 mA. Returns true while off.
+    /// Back on is a cold start of the sequence above: the line has been low for over a second by then
+    /// ([`GNSS_ON_MS`]), the configuration, the time and the last position are sent again. The supply is cut rather
+    /// than the receiver's backup mode (UBX-RXM-PMREQ): its wake source (EXTINT or SPI CS, u-blox M10 interface
+    /// description) and the V_BCKP wiring are not known here (BOARD.md 13), and a receiver that does not wake would
+    /// stay dead until the next boot. Cost: no ephemeris kept, a warm start after the ride, helped by the aiding.
+    fn gnss_switch(&mut self, b: &mut impl Board) -> bool {
+        let want_off = self.ride.state() != ride::State::Idle && self.profile == ride::Profile::Indoor;
+        if want_off && !self.gnss_off {
+            b.gnss_power(false);
+            self.gnss_off = true;
+            self.pvt = None;
+            self.gnss = gnss::Parser::new();
+            self.strip.gps = None; // off: not searching
+            self.strip.blink = true;
+        } else if !want_off && self.gnss_off {
+            self.gnss_off = false;
+            self.gnss_ms = 0; // powered again at GNSS_ON_MS, then configured and aided as at boot
+            self.gnss_sent = 0;
+        }
+        self.gnss_off
     }
 
     /// The next message for the receiver after power-up, one per pass: the configuration, the time (UTC from the

@@ -566,6 +566,12 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
      polled         64 bytes per 50 ms pass (2 x 32-byte transfers)
 
 - **Indoors:** no fix, 0 satellites (seen). A fix: to see.
+- **Switched off for an indoor ride (app/gps.rs `gnss_switch`):** PI6 low while a ride runs with the INDOOR profile
+  (a u-blox M10 draws about 7 to 8 mA tracking), high again at the ride's end or when the profile goes to ROAD, 1 s
+  later like the cold start (the line has been low over 1 s), then the configuration, the time and the position are
+  sent again. The supply is cut, not UBX-RXM-PMREQ backup mode: its wake sources (EXTINT, SPI CS; u-blox M10
+  interface description) and the V_BCKP wiring are not known here, and a receiver that never woke would stay dead.
+  Inferred: a warm start after the ride, no ephemeris kept.
 - **Aiding at power-up, as stock's minimum** (stock also feeds AssistNow Offline data from `\System\mgaoffline.ubx`,
   which the phone app downloads; libMga, `GPS_AssistNow_Offline_Host`): after the configuration, this firmware
   sends UBX-MGA-INI-TIME_UTC (UTC from the RTC, which holds local time, minus an offset learnt at the first fix

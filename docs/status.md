@@ -40,6 +40,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **The GNSS receiver off for an indoor ride (app/gps.rs `gnss_switch`, BOARD.md 13)**: only against the simulator.
+  On the unit: with a trainer heard, Start switches the receiver off (strip GPS blank), and after SAVE or DISCARD,
+  or once the profile goes to ROAD, it is powered again 1 s later and gives a fix outdoors (how long, with the time
+  and position aiding); the current saved to measure.
+
 - **The home trainer, ANT+ FE-C (src/trainer.rs, drivers/fec.rs, app/trainer.rs; phase 1)**: only against the
   simulator's model of a trainer. On the unit with a smart trainer: SENSORS > TRAINER finds it (channel 7, type 17,
   8192, which is not stock's channel 8), its power, cadence and speed on the pages; the acknowledged send
