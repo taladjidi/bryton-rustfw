@@ -185,6 +185,7 @@ impl App {
                 return self.workout_text(f);
             }
             Field::WktPower => return self.gauge_now(0).value,
+            Field::ClimbPace => return self.pace_now(0).value,
             Field::TrainerMode | Field::TrainerTarget => return self.trainer_field(f),
             Field::ErgTarget => return self.erg_field(),
             Field::Music if self.phone.now.title.as_str().is_empty() => (None, false),

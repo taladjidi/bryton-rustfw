@@ -2241,3 +2241,35 @@ fn fecble_link_events() {
     assert_eq!(seen & 0x3f, 0x3f, "every page decoded");
     assert!(listed.iter().all(|&n| n > 5), "FE-C trainers listed, advertising without the service: {listed:?}");
 }
+
+/// Random sections and riders into the climb planner (pacing.rs): it never panics, never gives a power outside CP to
+/// CP + W' / 60 or a time that is not finite, and the seeds do reach the solver (plans that spend W', plans with
+/// sections of every sign of grade).
+#[test]
+fn climb_planner() {
+    let (mut solved, mut spent) = (0, 0);
+    for seed in 1..400u32 {
+        let b: Vec<u8> = bytes(seed, 8 * crate::pacing::MAX + 16).collect();
+        let w = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+        let n = usize::from(b[0]) % (crate::pacing::MAX + 4);
+        let secs: Vec<crate::pacing::Sec> = (0..n)
+            .map(|k| crate::pacing::Sec { len_m: w(2 + 4 * k) % 1500, grade_x10: (w(4 + 4 * k) % 400) as i16 - 150 })
+            .collect();
+        let r = crate::pacing::Rider {
+            cp: f32::from(w(4) % 500),
+            w_full: f32::from(w(6)) * 0.4,
+            budget: f32::from(w(8)) * 0.6,
+            mass: f32::from(b[10]) - 20.0,
+        };
+        let p = crate::pacing::plan(&secs, &r);
+        if r.cp < 1.0 {
+            assert_eq!(p.n, 0, "seed {seed}");
+        } else if n > 0 {
+            solved += 1;
+            let hi = r.cp + r.w_full / 60.0 + 1.0;
+            assert!(p.watts[..usize::from(p.n)].iter().all(|&x| f32::from(x) >= r.cp - 1.0 && f32::from(x) <= hi));
+            spent += usize::from(p.watts[..usize::from(p.n)].iter().any(|&x| f32::from(x) > r.cp + 1.0));
+        }
+    }
+    assert!(solved > 150 && spent > 50, "reached the solver: {solved} plans, {spent} spending W'");
+}

@@ -257,6 +257,7 @@ impl App {
             Widget::Field(Field::Profile) => Drawn::Profile(self.profile_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WorkoutGraph) => Drawn::Workout(self.workout_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
+            Widget::Field(Field::ClimbPace) => Drawn::Gauge(self.pace_now(ui::gauge_cols(bx))),
             Widget::Field(f) => match graph_plot(f) {
                 Some(plot) => Drawn::Graph(self.graph_now(plot, ui::graph_area(bx).2)),
                 None => Drawn::Value(self.field_text(f), self.field_color(f), self.field_bar(f)),

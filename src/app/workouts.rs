@@ -16,19 +16,21 @@ pub(crate) const OPEN: storage::workout::Step = storage::workout::Step {
 /// column, which are redrawn alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GaugeShown {
-    kind: storage::workout::Kind,
-    avg: usize,
-    band: Option<(u16, u16)>,
-    step: bool,
+    pub(crate) kind: storage::workout::Kind,
+    pub(crate) avg: usize,
+    pub(crate) band: Option<(u16, u16)>,
+    pub(crate) step: bool,
+    /// The climb pacer's gauge ([`Field::ClimbPace`]): the predicted time to the top, s (0: no plan).
+    pub(crate) pace: Option<u16>,
     pub(crate) value: Line<8>,
     pub(crate) color: u16,
-    marker: Option<u32>,
+    pub(crate) marker: Option<u32>,
 }
 
 impl GaugeShown {
     /// The same field with only the number or the marker moved.
     fn same_frame(&self, o: &GaugeShown) -> bool {
-        (self.kind, self.avg, self.band, self.step) == (o.kind, o.avg, o.band, o.step)
+        (self.kind, self.avg, self.band, self.step, self.pace) == (o.kind, o.avg, o.band, o.step, o.pace)
     }
 
     /// Its bar for a gauge `cols` wide: the band's columns, the marker in the number's colour.
@@ -301,7 +303,7 @@ impl App {
             (None, _) => ui::WHITE,
         };
         let marker = reading.zip(band).map(|(v, b)| workout::gauge_x(v, b, cols));
-        GaugeShown { kind, avg, band, step: step.is_some(), value, color, marker }
+        GaugeShown { kind, avg, band, step: step.is_some(), pace: None, value, color, marker }
     }
 
     /// The workout gauge in box `bx` whole, showing `g`: the title says what and over which window ("POWER 3S",
@@ -310,6 +312,13 @@ impl App {
         use storage::workout::Kind;
         let mut title = Line::<12>::new();
         match g.kind {
+            _ if g.pace.is_some() => {
+                title.push_str("PACE");
+                if let Some(s) = g.pace.filter(|&s| s > 0) {
+                    title.push_str(" ");
+                    push_duration(&mut title, u32::from(s), false);
+                }
+            }
             Kind::Hr => title.push_str("HR"),
             Kind::Cadence => title.push_str("RPM"),
             _ => {
@@ -337,7 +346,7 @@ impl App {
     /// characters that changed (all of it in a new colour) and the marker's old and new columns.
     pub(crate) fn update_gauge(&mut self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let cols = ui::gauge_cols(bx);
-        let now = self.gauge_now(cols);
+        let now = if old.pace.is_some() { self.pace_now(cols) } else { self.gauge_now(cols) };
         let mut p = Panel(b, self.area());
         if !now.same_frame(&old) {
             self.draw_gauge(&mut p, bx, now);

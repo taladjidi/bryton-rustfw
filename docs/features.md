@@ -340,6 +340,11 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
+- **Climb pacer** (pacing.rs, the PACE field, on the course page): within 5 km of a climb and on it, the power to ride
+  each 200 m section to reach the top soonest, from the rider's CP and W' (the fit of the bests when the scan has
+  it, else FTP and the W' setting) and the W' balance now, planned again at each section. The 3 s power shows in
+  the workout gauge against the target's band (5 % each side); the predicted time to the top is in its title.
+  Power equation of Martin et al. 1998 for the speed; W' recovery inside the climb ignored.
 - **Turn by turn** (course/cues.rs), as Garmin's, Wahoo's and Hammerhead's: the cues the file states (a FIT
   course's course points: left, right, slight and sharp turns, U-turn, straight on, summit, water, food, danger,
   first aid; GPX waypoints or track points whose `type`, `sym` or `name` is a turn word, as BRouter and RideWithGPS

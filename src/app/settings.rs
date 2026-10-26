@@ -568,10 +568,10 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; REG_PAGES + 1] = {
 
 /// The course page, an extra page while a course is followed ([`COURSE`]; Garmin and Wahoo add theirs the same
 /// way): the course's profile large, the next turn across the width, then the owner's list: the distance to go, the
-/// distance, the moving time and the average speed. Not configurable.
+/// climb pacer ([`Field::ClimbPace`]), the moving time and the average speed. Not configurable.
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, Dist, Timer, AvgSpeed] }
+    PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, ClimbPace, Timer, AvgSpeed] }
 };
 
 /// The workout page, first in the round while a workout runs ([`WORKOUT`]): the reading the step targets in its gauge

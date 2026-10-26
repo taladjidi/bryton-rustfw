@@ -3988,7 +3988,7 @@ fn course_ride() {
     let mut app = App::start(&mut sim, None);
     app.set_map_memory(crate::tiles::tests::memory());
     app.set_course_memory(crate::storage::course::tests::memory());
-    app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, Timer] }.into();
+    app.pages[0] = PageCfg { layout: 6, fields: [ToGo, OffCourse, Climb, ClimbGain, UpToGo, ClimbPace] }.into();
     app.pages[1] = PageCfg { layout: 3, fields: [Profile, Climb, ClimbGain, Time, Time, Time] }.into();
     // the map whole, set by hand (not the default page, which shows the course's fields while one is followed)
     app.pages[2] = PageCfg { layout: 1, fields: [Map, Speed, Time, Time, Time, Time] }.into();
@@ -4035,6 +4035,11 @@ fn course_ride() {
     assert!((to_go - (5000.0 - s) / 1000.0).abs() <= 0.15, "{to_go} km to go after {s} m");
     assert!(text(&app, OffCourse).parse::<u32>().unwrap() <= 2, "on the course");
     assert_eq!(fields(&app)[2..], ["2.0K|6%", "120", "120"], "the climb ahead: 2 km at 6 %, 120 m");
+    // the pacer: a plan for the climb ahead, above FTP (W' to spend) and a plausible time for 2 km at 6 %
+    let g = app.pace_now(100);
+    let (w, t) = (app.pace.plan.watts[0], app.pace.plan.total_s);
+    assert!(w > app.settings.ftp && w < app.settings.ftp * 2 && (200..1000).contains(&t), "{w} W {t} s");
+    assert_eq!((g.band.is_some(), g.pace), (true, Some(t as u16)));
     assert_consistent(&sim, &app);
 
     // the detour: off course after 5 s beyond 50 m, said once; back
@@ -4070,6 +4075,14 @@ fn course_ride() {
     assert!(m(3).abs_diff(96) <= 2 && m(4).abs_diff(96) <= 6, "96 m left to climb: {f:?}");
     assert_eq!((app.field_color(Climb), app.field_bar(Climb)), (ui::WHITE, ui::YELLOW), "6 %");
     assert_consistent(&sim, &app);
+    let (w, t) = (app.pace.plan.watts[0], app.pace.plan.total_s);
+    let top = app.pace.plan.watts.iter().copied().max().unwrap_or(0); // the steeper sections get the W'
+    assert!(
+        w >= app.settings.ftp && top > app.settings.ftp && (100..800).contains(&t),
+        "on the climb: {w} W, {t} s to the top, ftp {}",
+        app.settings.ftp
+    );
+    assert!(app.pace.plan.n < 10, "sections left only: {}", app.pace.plan.n);
     sim.save("course_fields");
 
     app.press(&mut sim, Press::Short(Key::Page));

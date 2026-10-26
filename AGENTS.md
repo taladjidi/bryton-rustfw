@@ -190,6 +190,10 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   smoothing, the calibration (typed, from the receiver, at a ride's start; `\Rustfw\altcal.bin`'s sector), and which
   source the ride takes (barometer or GPS, with a reference number that makes the ride forget its low point when it
   changes). Pure logic. `src/app/barometer.rs`: its readings (a second while riding), the menu rows and the file.
+- `src/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
+  rider has left (Martin's power equation for the speed, a Lagrange multiplier on W' spent above CP). Pure logic;
+  `src/app/pace.rs` cuts the followed course's climb into sections, plans again at each one, and draws the PACE gauge
+  (`Field::ClimbPace`, the workout gauge's widget).
 - `src/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
   at a time. Pure logic.
 - `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's

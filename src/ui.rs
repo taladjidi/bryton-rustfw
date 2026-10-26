@@ -577,12 +577,16 @@ pub enum Field {
     ErgTarget,
     /// The time left in the whole workout (the steps after the one running, and what is left of it).
     WorkoutLeft,
+    /// On a climb of the followed course (or within 5 km of one), the power to ride now for the fastest climb with the
+    /// W' left ([`crate::pacing`]), in the workout gauge: the 3 s power against a band around the target; "PACE" and the
+    /// time to the top in its title.
+    ClimbPace,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 64] = {
+    pub const ALL: [Field; 65] = {
         use Field::*;
         [
             Time,
@@ -649,6 +653,7 @@ impl Field {
             TrainerTarget,
             ErgTarget,
             WorkoutLeft,
+            ClimbPace,
         ]
     };
 
@@ -724,6 +729,7 @@ impl Field {
             "TRG",
             "ERG W",
             "WKT LEFT",
+            "PACE",
         ];
         LABELS[self as usize]
     }
@@ -743,7 +749,7 @@ impl Field {
             "8-88", "8888", "GOOD",   // the course followed again:
             "888.8K", // the trainer:
             "ERG", "-10.0%", // the widest target: a grade (a power is "2000W")
-            "888|+88", "88:88|88", // the workout and ERG again
+            "888|+88", "88:88|88", "", // the workout and ERG again, the climb pacer
         ];
         WIDEST[self as usize]
     }
@@ -761,6 +767,7 @@ impl Field {
                 | Field::Profile
                 | Field::WorkoutGraph
                 | Field::WktPower
+                | Field::ClimbPace
         )
     }
 
@@ -802,7 +809,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
         ("CLIMB", &[Ascent, Vam, Grade]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
-        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile]),
+        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile, ClimbPace]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),

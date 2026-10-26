@@ -19,6 +19,7 @@ pub mod dev;
 pub mod drivers;
 pub mod hrv;
 pub mod msc;
+pub mod pacing;
 pub mod page;
 pub mod phone;
 pub mod power;
@@ -367,6 +368,8 @@ pub struct App {
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course::Courses>,
+    /// The climb pacer's plan (app/pace.rs).
+    pace: PaceState,
     /// The USB drive (msc.rs): the medium is in while the card is lent ([`emmc::Emmc::lend`], app/drive.rs).
     drive: msc::Drive,
     /// A system reset is wanted (after the computer wrote to the volume: app/drive.rs).
@@ -563,6 +566,7 @@ impl App {
             full_pending: false,
             lag_s: 0,
             courses: None,
+            pace: PaceState::new(),
             drive: msc::Drive::new(),
             restart: false,
             phone: Phone::default(),
