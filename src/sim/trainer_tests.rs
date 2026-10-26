@@ -784,8 +784,9 @@ fn the_trainer_screen_has_a_title_bar_and_the_ride_timer() {
     assert_ne!(app.screen(), Screen::Trainer, "the \"<\" goes back");
 }
 
-/// TRAINER CONTROL is in the main menu while a trainer is paired (not otherwise), and a tap on a TRAINER MODE /
-/// TARGET field opens the screen: while riding too, but not with the touch lock on.
+/// The main menu stays six rows with a trainer paired (item 6: TRAINER CONTROL left it); the screen is the first row of
+/// SENSORS, and in the quick panel, and a tap on a TRAINER MODE / TARGET field opens it: while riding too, but not
+/// with the touch lock on.
 #[test]
 fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
     let (mut sim, mut app) = unit();
@@ -793,18 +794,21 @@ fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
     app.press(&mut sim, Press::Long(Key::Page));
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
     let label = |app: &App, i| app.menu_row(Menu::Main, i).map(|(l, ..)| l.as_str().to_string());
-    assert_eq!(label(&app, 2).as_deref(), Some("TRAINER CONTROL"));
-    assert_eq!(label(&app, 3).as_deref(), Some("HISTORY"), "the rest follows");
-    assert_eq!(app.rows(Menu::Main), crate::menu::MAIN.len() + 1);
+    assert_eq!(label(&app, 2).as_deref(), Some("HISTORY"), "no TRAINER CONTROL in MAIN");
+    assert_eq!(app.rows(Menu::Main), crate::menu::MAIN.len(), "one screen of six");
     run(&mut sim, &mut app, 1000);
     super::tests::assert_consistent(&sim, &app);
     sim.save("main_menu_trainer");
-    app.press(&mut sim, Press::Short(Key::Page));
-    app.press(&mut sim, Press::Short(Key::Page));
+    for _ in 0..4 {
+        app.press(&mut sim, Press::Short(Key::Page)); // SENSORS
+    }
     app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, 0));
+    app.press(&mut sim, Press::Short(Key::Start)); // TRAINER CONTROL, its first row
     assert_eq!(app.screen(), Screen::Trainer);
-    app.press(&mut sim, Press::Short(Key::Back));
-    app.press(&mut sim, Press::Short(Key::Back));
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Back));
+    }
     assert_eq!(app.screen(), Screen::Main);
 
     // the fields
