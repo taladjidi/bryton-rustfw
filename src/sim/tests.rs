@@ -254,7 +254,8 @@ fn touch_swipes_pages_and_taps_menu_rows() {
 fn gear_on_the_overview_opens_the_menu() {
     let (gx, gy) = (ui::GEAR_C.0 as u16, ui::GEAR_C.1 as u16);
     let tap = move |t0: u64, p: (u16, u16)| move |ms: u64| (t0..t0 + 80).contains(&ms).then_some(p);
-    let (a, b) = (tap(5000, (40, 160)), tap(6000, (gx, gy)));
+    let field = ui::overview_box(0).map_or((40, 200), |b| ((b.0 + b.2 / 2) as u16, (b.1 + b.3 / 2) as u16));
+    let (a, b) = (tap(5000, field), tap(6000, (gx, gy)));
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)));
     let mut app = App::start(&mut sim, None);
     sim.save("overview_gear");

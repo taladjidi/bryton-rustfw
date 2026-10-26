@@ -1407,16 +1407,17 @@ pub const DATE_Y: u32 = PAGE_Y + 1;
 /// Height of the date row: the date's text box.
 pub const DATE_H: u32 = PIXEL.height as u32 * DATE.scale;
 /// The TODAY card (left, top, width, height): a tap anywhere in it opens the calendar. Its top 4 rows are also in
-/// the cog's touch box, where the cog wins.
-pub const TODAY_BOX: (u32, u32, u32, u32) = (4, DATE_Y + DATE_H + 2, W - 8, 76);
-/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes), under the card.
-pub const OVERVIEW_Y: u32 = TODAY_BOX.1 + TODAY_BOX.3 + 2;
-/// See [`OVERVIEW_Y`].
-pub const OVERVIEW_H: u32 = NOTICES_Y - 4 - OVERVIEW_Y;
-/// Top of the notices: [`NOTICES`] rows of [`LIST_ROW`].
-pub const NOTICES_Y: u32 = CRAB_Y - 4;
-/// Notices shown at most.
-pub const NOTICES: usize = 2;
+/// the cog's touch box, where the cog wins. It takes all the height the fields leave (owner, 2026-10-26: a taller
+/// profile).
+pub const TODAY_BOX: (u32, u32, u32, u32) = (4, DATE_Y + DATE_H + 2, W - 8, OVERVIEW_Y - 2 - (DATE_Y + DATE_H + 2));
+/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes), right above the notices.
+pub const OVERVIEW_Y: u32 = NOTICES_Y - 4 - OVERVIEW_H;
+/// See [`OVERVIEW_Y`]: two rows of 60 px, the 4x digits clear of their label.
+pub const OVERVIEW_H: u32 = 120;
+/// Top of the notices: [`NOTICES`] rows of [`LIST_ROW`] at the screen's foot.
+pub const NOTICES_Y: u32 = H - 8 - NOTICES as u32 * LIST_ROW;
+/// Notices shown at most: the newest (a tap opens them all); one, so the TODAY card has the height (owner, 2026-10-26).
+pub const NOTICES: usize = 1;
 
 /// Field box `i` of the overview's four.
 pub fn overview_box(i: usize) -> Option<(u32, u32, u32, u32)> {
@@ -1424,9 +1425,10 @@ pub fn overview_box(i: usize) -> Option<(u32, u32, u32, u32)> {
     Some((x, y - RIDE_Y + OVERVIEW_Y, w, h))
 }
 
-/// The date row: the date left, white, the cog right.
+/// The date row: the date centred in the row left of the cog (the screen's centre would run a 10-character date at
+/// 3x into it), white, the cog right.
 pub fn draw_date(c: &mut impl Canvas, date: &str) {
-    text::draw_in(c, &DATE, 8, DATE_Y, GEAR_AT.0 - 8 - 4, Align::Left, date);
+    text::draw_in(c, &DATE, 4, DATE_Y, GEAR_AT.0 - 4 - 4, Align::Centre, date);
     draw_cog(c); // after the date: its box ends the row
 }
 
@@ -1509,8 +1511,8 @@ pub fn draw_workout_row(c: &mut impl Canvas, slot: usize, (day, length): (&str, 
 
 /// The menu button on the overview: a cog, [`COG`] px square.
 pub const COG: u32 = 25;
-/// Where the cog is drawn: right-aligned to the fields' margin, in the date's row, level with the date.
-pub const GEAR_AT: (u32, u32) = (W - 8 - COG, DATE_Y + (DATE_H - COG) / 2);
+/// Where the cog is drawn: 6 px from the right edge, in the date's row, level with the date.
+pub const GEAR_AT: (u32, u32) = (W - 6 - COG, DATE_Y + (DATE_H - COG) / 2);
 /// The cog's centre, the middle of its touch box.
 pub const GEAR_C: (u32, u32) = (GEAR_AT.0 + COG / 2, GEAR_AT.1 + COG / 2);
 /// Where a tap opens the menu: 44 x 44 px round the cog (the menu rows' rule), over the strip's bottom rows and the
@@ -1995,7 +1997,8 @@ pub(crate) mod tests {
         let rides = (1..LAYOUTS.len() as u8)
             .flat_map(|n| (0..6).filter_map(move |i| field_box(n, RIDE_H, i)))
             .filter(|b| b.3 >= 64);
-        for bx in rides.chain((0..4).filter_map(overview_box)) {
+        // the overview's boxes are 60 px since the TODAY card grew: the same rule as a ride page's small boxes
+        for bx in rides.chain((0..4).filter_map(overview_box).filter(|b| b.3 >= 64)) {
             let cols = gauge_cols(bx);
             let band = (cols / 3, cols * 2 / 3);
             let titles = ("POWER 30S", "", "200-220");

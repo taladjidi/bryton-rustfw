@@ -285,8 +285,8 @@ pub struct App {
     hint_shown: bool,
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
-    /// The latest notices, newest first (empty lines: none).
-    notices: [Line<40>; ui::NOTICES],
+    /// The latest notices, newest first (empty lines: none); the overview shows the first [`ui::NOTICES`].
+    notices: [Line<40>; 2],
     /// The banner over the screen (the latest notice) and how long it has been up; drawn yet. Nothing under it is
     /// redrawn meanwhile; when it goes, the screen is drawn again.
     banner_ms: Option<u32>,

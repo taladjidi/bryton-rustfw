@@ -278,7 +278,8 @@ impl App {
                 for (slot, line) in n.iter_mut().zip(&self.notices) {
                     *slot = line.as_str();
                 }
-                ui::draw_notices(c, &n[..self.notices.iter().take_while(|l| !l.as_str().is_empty()).count()]);
+                let shown = self.notices.iter().take_while(|l| !l.as_str().is_empty()).count().min(ui::NOTICES);
+                ui::draw_notices(c, n.get(..shown).unwrap_or(&[]));
             }
             (Widget::Field(f), d) => {
                 ui::draw_field_frame_bar(c, bx, f, if let Drawn::Value(_, _, bar) = d { bar } else { ui::BLACK });
