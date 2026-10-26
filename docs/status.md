@@ -42,8 +42,8 @@ The dated findings are in [journal.md](journal.md).
 
 - **FONT (SETTINGS > DISPLAY > FONT, SMOOTH):** run from RAM (e762241): switching to SMOOTH redraws at once; the
   overview, the indoor ride page and the DISPLAY menu draw in Barlow Semi Condensed Bold with no box moving. Register
-  16 then read 0xa15a0f30 (bit 24 set). After the flash of e762241 (FLASHLOG #80) it read 0xa05a0f30 (PIXEL): whether
-  the owner switched back or something cleared the bit is not known yet. Big "--" values look wide in SMOOTH (the
+  16 then read 0xa15a0f30 (bit 24 set). After the flash of e762241 (FLASHLOG #80) it read 0xa05a0f30 (PIXEL): the owner
+  had switched back to PIXEL by hand (the choice kept as set). Big "--" values look wide in SMOOTH (the
   glyph keeps the pixel font's cell).
 - **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT, ALTITUDE, FROM GPS, PROFILE, CLIMBS AHEAD; DISPLAY shows
   BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER. WEIGHT edited from 9.0 to 8.5 kg (five Page presses, 0.1 kg each)
