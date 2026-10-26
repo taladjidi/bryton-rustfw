@@ -373,7 +373,7 @@ impl App {
                 // its profile from the record (an older one: ROAD, automatic), by hand if the rider set it so;
                 // automatic, a trainer silent for TRAINER_QUIET_S after the restart turns it back to ROAD
                 self.profile = if self.recorder.indoor() { ride::Profile::Indoor } else { ride::Profile::Road };
-                (self.profile_by_hand, self.trainer_quiet_s) = (self.recorder.by_hand(), 0);
+                (self.profile_by_hand, self.tlink.quiet_s) = (self.recorder.by_hand(), 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
@@ -454,7 +454,7 @@ impl App {
         }
         let alt = self.alt_now();
         self.live.snapshot(); // the pages show this second's readings, not each broadcast's
-        self.trainer_second = true; // and the trainer screen
+        self.tlink.second = true; // and the trainer screen
         let input = ride::Input {
             speed_x10: self.live.get(Metric::Speed),
             hr: self.live.get(Metric::Hr),

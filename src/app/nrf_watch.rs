@@ -187,7 +187,7 @@ impl App {
         self.phone_down(b);
         self.ftms_down(); // connected again once the chip is back (app/ftms.rs)
         // the trainer's acknowledged messages are tried again on the new chip (app/trainer.rs)
-        (self.trainer_no_control, self.trainer_acked) = (false, false);
+        (self.tlink.no_control, self.tlink.acked) = (false, false);
         self.ble = nrf::start(b).ok();
         self.rx.reset();
         self.strip.radio = self.ble.is_some();

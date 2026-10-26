@@ -104,7 +104,7 @@ impl App {
 
     /// At Start and at a workout's start: takes the chosen profile unless the rider set this ride's by hand.
     pub(crate) fn choose_profile(&mut self) {
-        self.trainer_quiet_s = 0;
+        self.tlink.quiet_s = 0;
         let p = self.chosen_profile();
         if self.profile_by_hand || p == self.profile {
             return;
@@ -117,7 +117,7 @@ impl App {
     pub(crate) fn toggle_indoor(&mut self) {
         self.profile = if self.indoors() { ride::Profile::Road } else { ride::Profile::Indoor };
         self.profile_by_hand = true;
-        self.trainer_quiet_s = 0;
+        self.tlink.quiet_s = 0;
     }
 
     /// Once a second: an automatic indoor ride whose trainer has been silent for [`TRAINER_QUIET_S`] goes back to ROAD
@@ -132,10 +132,10 @@ impl App {
             return;
         }
         if self.trainer_heard() {
-            self.trainer_quiet_s = 0;
+            self.tlink.quiet_s = 0;
         } else {
-            self.trainer_quiet_s = self.trainer_quiet_s.saturating_add(1);
-            if self.trainer_quiet_s >= TRAINER_QUIET_S {
+            self.tlink.quiet_s = self.tlink.quiet_s.saturating_add(1);
+            if self.tlink.quiet_s >= TRAINER_QUIET_S {
                 self.profile = ride::Profile::Road;
                 self.say("TRAINER LOST: ROAD RIDE");
             }

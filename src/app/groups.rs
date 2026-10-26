@@ -201,3 +201,36 @@ impl Radio {
         }
     }
 }
+
+/// The ANT+ home trainer link's bookkeeping (app/trainer.rs): what was heard and acknowledged, and the screen's state.
+pub(crate) struct TrainerLink {
+    /// The trainer screen as drawn.
+    pub(crate) shown: ui::trainer::Shown,
+    /// The trainer was heard last pass.
+    pub(crate) up: bool,
+    /// The time since the last acknowledged message, ms.
+    pub(crate) ack_gap_ms: u32,
+    /// The second ticked since the screen was drawn.
+    pub(crate) second: bool,
+    /// The chip never answered the first message (control off until it starts again).
+    pub(crate) no_control: bool,
+    /// The chip answered a message since it started.
+    pub(crate) acked: bool,
+    /// The seconds the trainer has been silent while the profile is indoor and automatic.
+    pub(crate) quiet_s: u16,
+}
+
+impl TrainerLink {
+    /// Nothing heard, nothing sent.
+    pub(crate) fn new() -> Self {
+        TrainerLink {
+            shown: ui::trainer::Shown::default(),
+            up: false,
+            ack_gap_ms: 0,
+            second: false,
+            no_control: false,
+            acked: false,
+            quiet_s: 0,
+        }
+    }
+}

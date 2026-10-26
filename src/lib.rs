@@ -172,27 +172,20 @@ pub struct App {
     ant: bool,
     /// Shimano's network up (its key built in): the Di2 channel can open.
     di2: bool,
-    /// This ride's profile (app/profile.rs), whether the rider set it by hand (the trainer's silence no longer
-    /// changes it), and the seconds the trainer has been silent while it is indoor and automatic.
+    /// This ride's profile (app/profile.rs), and whether the rider set it by hand (the trainer's silence no longer
+    /// changes it).
     profile: ride::Profile,
     profile_by_hand: bool,
-    trainer_quiet_s: u16,
-    /// The home trainer (trainer.rs, app/trainer.rs), the trainer screen as drawn, and whether it was heard last pass.
+    /// What the ANT+ trainer link heard and acknowledged, and the trainer screen as drawn.
+    tlink: TrainerLink,
+    /// The home trainer (trainer.rs, app/trainer.rs).
     trainer: trainer::Trainer,
-    trainer_shown: ui::trainer::Shown,
-    trainer_up: bool,
-    /// The pairing file's state, the time since the last acknowledged message, whether the second ticked since the
-    /// screen was drawn, whether the chip never answered the first one (control off until it starts again), and
-    /// whether it answered one since it started.
+    /// The pairing file's state.
     sensors_store: SensorStore,
-    ack_gap_ms: u32,
-    trainer_second: bool,
     /// The power meter calibration (app/powercal.rs).
     powercal: powercal::Cal,
     /// What the calibration screen shows (phase, auto zero state); None: not drawn yet.
     powercal_shown: Option<(powercal::Phase, Option<powercal::AutoZero>)>,
-    trainer_no_control: bool,
-    trainer_acked: bool,
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -438,7 +431,7 @@ impl App {
             di2,
             profile: ride::Profile::Road,
             profile_by_hand: false,
-            trainer_quiet_s: 0,
+            tlink: TrainerLink::new(),
             live: Live::default(),
             zones: [ride::ZoneHold::default(); 5],
             decoders: Decoders::default(),
@@ -522,15 +515,9 @@ impl App {
             restart: false,
             phone: Phone::default(),
             trainer: trainer::Trainer::default(),
-            trainer_shown: ui::trainer::Shown::default(),
-            trainer_up: false,
             sensors_store: SensorStore::default(),
-            ack_gap_ms: 0,
-            trainer_second: false,
             powercal: powercal::Cal::default(),
             powercal_shown: None,
-            trainer_no_control: false,
-            trainer_acked: false,
             ftms: Ftms::default(),
             prof: prof::Prof::default(),
         }

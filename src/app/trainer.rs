@@ -148,7 +148,7 @@ impl App {
             self.step_ftms(b);
         }
         self.send_trainer(b);
-        if core::mem::take(&mut self.trainer_second) && self.screen == Screen::Trainer {
+        if core::mem::take(&mut self.tlink.second) && self.screen == Screen::Trainer {
             self.update_trainer(b); // power and cadence are the second's snapshot: nothing new between two ticks
         }
     }
@@ -163,7 +163,7 @@ impl App {
         let fec_ble = bt && self.sensors_store.bt_fec;
         let heard = self.trainer_heard() && (self.ant || bt);
         if !heard {
-            if core::mem::take(&mut self.trainer_up) {
+            if core::mem::take(&mut self.tlink.up) {
                 self.trainer.lost();
             }
             if self.trainer_on() {
@@ -172,7 +172,7 @@ impl App {
             }
             return;
         }
-        self.trainer_up = true;
+        self.tlink.up = true;
         let d = self.trainer_drive();
         if bt && !fec_ble {
             // FTMS: the set-up is the link's (app/ftms.rs); a command once the last one's response came
@@ -183,8 +183,8 @@ impl App {
             return;
         }
         // ANT+, or FE-C over BLE (the same pages, one message per slot; over BLE once the link is ready)
-        self.ack_gap_ms = self.ack_gap_ms.saturating_add(self.dt_ms);
-        let page = if self.trainer_no_control || self.ack_gap_ms < ACK_GAP_MS || (bt && !self.ftms.ready()) {
+        self.tlink.ack_gap_ms = self.tlink.ack_gap_ms.saturating_add(self.dt_ms);
+        let page = if self.tlink.no_control || self.tlink.ack_gap_ms < ACK_GAP_MS || (bt && !self.ftms.ready()) {
             self.trainer.due(self.dt_ms, false, &d); // the clocks run, nothing goes out
             None
         } else {
@@ -202,7 +202,7 @@ impl App {
             }
         };
         let Some(page) = page else { return };
-        self.ack_gap_ms = 0;
+        self.tlink.ack_gap_ms = 0;
         if bt {
             if !self.ftms_fec_send(b, page) {
                 self.trainer.unsent(); // not written: due again at the next free slot
@@ -210,13 +210,13 @@ impl App {
             return;
         }
         match nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page) {
-            Ok(()) => self.trainer_acked = true,
-            Err(nrf::Error::Timeout) if self.trainer_acked => self.trainer.unsent(), // a byte lost: sent again
+            Ok(()) => self.tlink.acked = true,
+            Err(nrf::Error::Timeout) if self.tlink.acked => self.trainer.unsent(), // a byte lost: sent again
             Err(nrf::Error::Timeout) => {
                 // no answer to the first one: the message's layout is a guess. Not tried again until the chip starts
                 // again, and the chip is not reset over it (ant_ack keeps the watchdog's count)
                 self.trainer.unsent();
-                self.trainer_no_control = true;
+                self.tlink.no_control = true;
                 self.notice("TRAINER CONTROL FAILED");
             }
             Err(nrf::Error::Code(_)) => self.trainer.unsent(), // refused: due again at the next free slot
@@ -234,7 +234,7 @@ impl App {
         }
         let page = fec::encode(Command::Resistance(0));
         if !self.ftms_on() {
-            if self.ant && !self.trainer_no_control {
+            if self.ant && !self.tlink.no_control {
                 for _ in 0..2 {
                     let sent = nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page).is_ok();
                     b.delay_ms(OFF_WAIT_MS);
@@ -247,12 +247,12 @@ impl App {
         }
         // a write still out (the 4 s resend, a step's target): its answer first, one write at a time
         for _ in 0..CP_MS / 10 {
-            if self.ftms.ready() && self.ack_gap_ms >= ACK_GAP_MS {
+            if self.ftms.ready() && self.tlink.ack_gap_ms >= ACK_GAP_MS {
                 break;
             }
             self.poll_nrf(b);
             b.delay_ms(10);
-            self.ack_gap_ms = self.ack_gap_ms.saturating_add(10);
+            self.tlink.ack_gap_ms = self.tlink.ack_gap_ms.saturating_add(10);
         }
         if self.ftms.ready() {
             if self.sensors_store.bt_fec {
@@ -529,15 +529,15 @@ impl App {
 
     /// What the trainer screen shows, as drawn (set when the screen is shown).
     pub(crate) fn trainer_printed(&mut self) {
-        self.trainer_shown = self.with_trainer_now(ui::trainer::shown);
+        self.tlink.shown = self.with_trainer_now(ui::trainer::shown);
     }
 
     /// Redraws the trainer screen's boxes that changed.
     pub(crate) fn update_trainer(&mut self, b: &mut impl Board) {
-        let mut shown = self.trainer_shown;
+        let mut shown = self.tlink.shown;
         let area = self.area();
         self.with_trainer_now(|n| ui::trainer::update(&mut Panel(b, area, self.settings.smooth), n, &mut shown));
-        self.trainer_shown = shown;
+        self.tlink.shown = shown;
     }
 
     /// Riding, on the trainer screen, a long press: Lap held ([`Input::Media`]) the target one big step down, Start held
