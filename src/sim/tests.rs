@@ -2276,6 +2276,11 @@ fn ride_menu() {
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0), "no ride: the full menu again");
 }
 
+/// The index of `row` in `menu` as it is now (the sensors menu's actions come first, when they apply).
+pub(super) fn row_in(app: &App, menu: Menu, row: menu::Row) -> usize {
+    (0..app.rows(menu)).find(|&i| app.row(menu, i) == Some(row)).unwrap_or_else(|| panic!("{row:?} in {menu:?}"))
+}
+
 /// The row index of `row` in the menu that holds it (off a ride, from the main menu).
 fn row_of(row: menu::Row) -> usize {
     let mut sim = Sim::new(9, 0, 0);

@@ -94,7 +94,9 @@ fn pairs_reads_and_waits_to_be_taken_over() {
     run(&mut sim, &mut app, 4000);
     assert_eq!(sensors_file(&sim), Some(Some(ID)), "paired and kept in the sensors file");
     assert_eq!(sim.backup[14], 0, "and not in the register the shifting systems use");
-    let (label, value, _) = app.menu_row(Menu::Sensors, Kind::Trainer as usize).unwrap();
+    let (label, value, _) = app
+        .menu_row(Menu::Sensors, super::tests::row_in(&app, Menu::Sensors, Row::Sensor(Kind::Trainer as usize)))
+        .unwrap();
     assert_eq!((label.as_str(), value.as_str()), ("TRAINER", "5555"));
     let live = |app: &App, m| app.live.get(m);
     assert_eq!(

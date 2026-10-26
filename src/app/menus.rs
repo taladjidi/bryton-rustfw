@@ -16,7 +16,8 @@ pub enum Menu {
     /// The main menu ([`menu::MAIN`]): workouts, courses, (the trainer, when one is paired,) history, pages, sensors,
     /// settings.
     Main,
-    /// One row per sensor kind, then the Di2 buttons and the phone.
+    /// CALIBRATE POWER and TRAINER CONTROL first (when they apply), one row per sensor kind, BT TRAINER, the Di2
+    /// buttons and the phone.
     Sensors,
     /// The overview, the ride pages, ADD PAGE.
     Pages,
@@ -169,16 +170,22 @@ impl App {
             Menu::CourseNow => menu::COURSE_NOW.get(i).copied(),
             Menu::Fields(..) => (i < ui::FIELD_GROUPS.len()).then_some(Row::Group(i)),
             Menu::Group(_, _, g) => ui::FIELD_GROUPS.get(g)?.1.get(i).map(|&f| Row::Pick(f)),
-            Menu::Sensors if i < Kind::ALL.len() => Some(Row::Sensor(i)),
+            // the actions first (the rider comes here to calibrate or to control the trainer), then the sensors
             Menu::Sensors => {
-                let rows = [
-                    (Row::BtTrainer, true),
-                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
+                let top = [
                     (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
-                    (Row::Open(Menu::Remote), true),
-                    (Row::Open(Menu::Phone), true),
+                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
                 ];
-                rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i - Kind::ALL.len())
+                let top = top.into_iter().filter(|r| r.1).map(|r| r.0);
+                let n = top.clone().count();
+                let (j, kinds) = (i.checked_sub(n), Kind::ALL.len());
+                match j {
+                    None => top.clone().nth(i),
+                    Some(j) if j < kinds => Some(Row::Sensor(j)),
+                    Some(j) => {
+                        [Row::BtTrainer, Row::Open(Menu::Remote), Row::Open(Menu::Phone)].get(j - kinds).copied()
+                    }
+                }
             }
             Menu::Remote => menu::REMOTE.get(i).copied(),
             Menu::Gps => menu::GPS.get(i).filter(|_| i == 0 || self.pvt.is_some()).map(|&r| Row::Read(r)),

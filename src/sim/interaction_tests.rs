@@ -132,3 +132,20 @@ fn the_quick_panel_from_the_overview() {
     swipe(&mut app, &mut sim, Dir::Down);
     assert_eq!(app.screen(), Screen::Media);
 }
+
+/// Item 4: SENSORS puts its actions first. With a meter heard and a trainer paired, CALIBRATE POWER was row
+/// ALL + 2 (a second screen of rows, that many Page presses) and TRAINER CONTROL row ALL + 1, ALL being the number
+/// of sensor kinds; now rows 0 and 1, so the first one is selected when the menu opens.
+#[test]
+fn sensors_actions_come_first() {
+    let (_sim, app) = with_meter_and_trainer();
+    let cal = at(&app, Menu::Sensors, menu::Row::Ride(menu::RideRow::CalPower));
+    let trainer = at(&app, Menu::Sensors, menu::Row::Ride(menu::RideRow::Trainer));
+    assert_eq!((cal, trainer), (0, 1), "were {} and {}", Kind::ALL.len() + 2, Kind::ALL.len() + 1);
+    assert_eq!(app.row(Menu::Sensors, 2), Some(menu::Row::Sensor(0)), "then the sensors");
+    let last = app.rows(Menu::Sensors) - 1;
+    assert_eq!(app.row(Menu::Sensors, last), Some(menu::Row::Open(Menu::Phone)));
+    // without them the menu is as it was
+    let (_sim, app) = unit();
+    assert_eq!(app.row(Menu::Sensors, 0), Some(menu::Row::Sensor(0)));
+}
