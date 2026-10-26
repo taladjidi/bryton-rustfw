@@ -134,8 +134,8 @@ fn typed_and_from_gps() {
     app.press(&mut sim, Press::Short(Key::Page)); // WHEEL, BIKE, then ALTITUDE
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // edit
-    for _ in 0..24 {
-        app.press(&mut sim, Press::Short(Key::Lap)); // up, 5 m a press
+    for _ in 0..120 {
+        app.press(&mut sim, Press::Short(Key::Lap)); // up, 1 m a press (a held key repeats on the unit)
     }
     assert_eq!(row(&app, 2), "ALTITUDE < 120 >");
     app.press(&mut sim, Press::Short(Key::Start));

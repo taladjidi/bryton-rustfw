@@ -233,8 +233,8 @@ impl Setting {
             Setting::BikeWeight => Some((BIKE_RANGE, 1)),
             Setting::Eat | Setting::Drink => Some((0..=120, 5)),
             Setting::HrAlert => Some((0..=230, 5)),
-            // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 5 m steps
-            Setting::Altitude => Some((0..=9500, 5)),
+            // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 1 m steps (a known height to the metre; a held key repeats)
+            Setting::Altitude => Some((0..=9500, 1)),
             _ => None,
         }
     }
