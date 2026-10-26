@@ -324,7 +324,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
-  `Host` trait. `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from
+  `Host` trait; `App::serve` there answers the effects that need the app and the card (main.rs keeps the keys, the reset
+  and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from
   `Board::cycles`); `tools/profile.py`: scripted scenarios on the unit, a `prof` window each.
 - `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
