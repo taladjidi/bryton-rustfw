@@ -365,6 +365,14 @@ pub fn clear_page(c: &mut impl Canvas) {
     c.fill(0, PAGE_Y, W, H - PAGE_Y, BLACK);
 }
 
+/// The page area but box `(x, y, w, h)` (inside it), which its widget paints whole: above it, beside it, below it.
+pub fn clear_page_but(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32)) {
+    c.fill(0, PAGE_Y, W, y - PAGE_Y, BLACK);
+    c.fill(0, y, x, h, BLACK);
+    c.fill(x + w, y, W - x - w, h, BLACK);
+    c.fill(0, y + h, W, H - y - h, BLACK);
+}
+
 /// The page under a menu, but for its rows ([`draw_menu_row`] paints the whole of each): the title's band and what
 /// is left under the last row.
 pub fn clear_menu(c: &mut impl Canvas) {

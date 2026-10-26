@@ -4234,6 +4234,23 @@ fn menu_budgets() {
     assert!(back <= 64_000, "turn back: {back} px");
 }
 
+/// The overview shown whole (Back to it, the page round): the page cleared but for the TODAY card, which paints its
+/// own box. Measured 2026-10-26: 109 457 px (134 745 when the card's box was cleared twice: about 25 ms on the unit).
+#[test]
+fn overview_show_budget() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 10_000); // the calendar read: the card as it stays
+    app.press(&mut sim, Press::Long(Key::Page));
+    let px = sim.pixels;
+    back(&mut sim, &mut app);
+    let px = sim.pixels - px;
+    assert_eq!(app.screen(), Screen::Main);
+    std::println!("overview shown: {px} px");
+    assert!(px <= 112_000, "{px} px");
+    assert_consistent(&sim, &app);
+}
+
 /// The overview left alone with no fix (indoors), as the profiler's idle window on the unit: 2013 px/s there
 /// (2026-10-26) was a one-off and the GPS search, nothing steady. The TODAY card is drawn again once the calendar is
 /// read (CALENDAR_MS, 8 s, after the start: 32 690 px, 36 034 with a card; inside a window that starts a few

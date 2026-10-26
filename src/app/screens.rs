@@ -486,6 +486,8 @@ impl App {
         match self.screen {
             // a menu's rows paint their whole boxes: clearing under them first doubled a menu's cost (2026-10-26)
             Screen::Menu(..) => ui::clear_menu(&mut p),
+            // so does the TODAY card (ui::draw_today): a fifth of the overview's (25 288 of 134 745 px)
+            Screen::Main => ui::clear_page_but(&mut p, ui::TODAY_BOX),
             _ => ui::clear_page(&mut p),
         }
         self.draw_screen(&mut p);
