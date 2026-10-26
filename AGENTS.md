@@ -279,7 +279,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   what the recorder needs (create with a long name, write sectors, set the size, move by delete + link, mark
   deleted with 0xe5 only, sync the FATs and FSInfo), each write ordered so a power cut leaves a volume stock and a
   computer accept; `fsck` in its tests checks that.
-- `src/storage/recorder.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw\Rides` from RAM to the card at
+- `src/storage/recorder/mod.rs`: the ride recorder (the golden rule): the FIT file in `\Rustfw\Rides` from RAM to the card at
   each checkpoint (a minute at most), two recovery records in `\Rustfw\ride.rec` (3 KB), resume at boot, the save to
   `\Activities\YYMMDDhhmmss.fit`. Its tests cut the power after every sector of a whole ride and of the reboot.
   Two recorders run per ride (`Kind`): the clean copy above, and the full one (`Alpha1` / `RMSSD` / `ArtPct`
@@ -287,6 +287,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   saved to `\Rustfw\Activities`), which never holds the clean one up
   (`App::step_full`, docs/sync.md). A ride discarded at its end goes through the same save into
   `\Rustfw\Discarded` (`Discarded\Full`), its records saying so, so no cut puts it in `\Activities`.
+  `recorder/rec.rs`: the recovery record (`Rec`, one sector of `ride.rec`) and the ride names; `recorder/tests.rs`: its tests.
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
