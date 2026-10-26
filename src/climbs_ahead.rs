@@ -119,6 +119,15 @@ pub enum End {
     Stop,
 }
 
+/// Speed index 1 of an edge's attribute byte (factor 0.3 in stock's table): inferred to be paths and steps.
+const SLOW: u8 = 1;
+
+/// An edge stock routes: the high nibble of its attribute indexes the speed table (STORAGE_AND_MAPS.md 4.7), which
+/// has -1 (not routable) at 0 and 6 and 15 entries (0 to 14).
+fn routable(attr: u8) -> bool {
+    !matches!(attr >> 4, 0 | 6 | 15)
+}
+
 /// The edge a trace takes at a node: its rank (road class, cosine of the turn in thousandths), the neighbour's
 /// place, the edge's class byte and the neighbour's place in the graph.
 type Pick = ((u8, i64), (i32, i32), u8, usize);
@@ -159,7 +168,11 @@ pub struct Ahead {
     seg: usize,
     off_s: u8,
     said: bool,
+    /// The rider is inside the climb said (a new trace of it is the same climb, whatever its top).
+    in_said: bool,
     said_top: (i32, i32),
+    /// The graph was emptied during this trace: its node numbers mean nothing, the path is searched instead.
+    cleared: bool,
     /// Traces made and tiles asked for in all (the cost, sim.rs).
     pub traces: u32,
 }
@@ -250,7 +263,9 @@ impl Ahead {
             seg: 0,
             off_s: 0,
             said: false,
+            in_said: false,
             said_top: (0, 0),
+            cleared: false,
             traces: 0,
         }
     }
@@ -258,6 +273,7 @@ impl Ahead {
     /// Forgets the trace and what it found, and the climb said (a new ride); the tiles held stay.
     pub fn reset(&mut self) {
         (self.phase, self.n, self.have, self.n_climbs, self.said) = (Phase::Idle, 0, false, 0, false);
+        self.in_said = false;
         (self.off_s, self.seg, self.along_m, self.retry_s) = (0, 0, 0, 0);
     }
 
@@ -371,6 +387,7 @@ impl Ahead {
         let last = self.n.saturating_sub(1);
         let (from, to) = (self.seg.saturating_sub(WINDOW.0), (self.seg + WINDOW.1).min(last));
         let mut best: Option<(u64, usize, u32)> = None;
+        let (hx, hy) = heading_vec(f.heading_e5);
         for i in from..to {
             let (Some(a), Some(b)) = (self.path.get(i), self.path.get(i + 1)) else { break };
             let (va, vb) = (vec2(here, (a.lat, a.lon), cos), vec2(here, (b.lat, b.lon), cos));
@@ -381,9 +398,20 @@ impl Ahead {
                 best = Some((d, i, along));
             }
         }
+        // going against the trace (a U-turn): off it too, through the same count; [`Ahead::second`] has the speed floor
+        let against = |i: usize| match (self.path.get(i), self.path.get(i + 1)) {
+            (Some(a), Some(b)) => {
+                let v = vec2((a.lat, a.lon), (b.lat, b.lon), cos);
+                v.0 * hx + v.1 * hy < 0
+            }
+            _ => false,
+        };
         match best {
-            Some((d, i, along)) if units_m(d) <= u64::from(OFF_PATH_M) => {
+            Some((d, i, along)) if units_m(d) <= u64::from(OFF_PATH_M) && !against(i) => {
                 (self.seg, self.along_m, self.off_s) = (i, along, 0);
+            }
+            Some((_, i, along)) if against(i) => {
+                (self.seg, self.along_m, self.off_s) = (i, along, self.off_s.saturating_add(1));
             }
             Some(_) | None => self.off_s = self.off_s.saturating_add(1),
         }
@@ -395,15 +423,26 @@ impl Ahead {
         if !self.on_road() {
             return None;
         }
-        let (c, _) = self.climb_at(self.along_m)?;
+        let Some((c, on)) = self.climb_at(self.along_m) else {
+            self.in_said = false;
+            return None;
+        };
+        let top = self.point_at(c.end_m())?;
+        // the same climb: its top is where the one said had it, or the rider is inside the one said (a longer trace
+        // of a long climb moves its top, and its start is then the rider's place: it reads as what is left)
+        if self.said && (step_mm(self.said_top, top) < SAME_CLIMB_M * 1000 || (self.in_said && on)) {
+            if on {
+                (self.said_top, self.in_said) = (top, true);
+            }
+            return None;
+        }
+        if !on {
+            self.in_said = false;
+        }
         if self.along_m.saturating_add(ANNOUNCE_M) < c.start_m {
             return None;
         }
-        let top = self.point_at(c.end_m())?;
-        if self.said && step_mm(self.said_top, top) < SAME_CLIMB_M * 1000 {
-            return None;
-        }
-        (self.said, self.said_top) = (true, top);
+        (self.said, self.said_top, self.in_said) = (true, top, true);
         Some(c)
     }
 
@@ -464,9 +503,10 @@ impl Ahead {
             Ok(Loaded::Full) if self.clears < MAX_CLEARS => {
                 self.clears += 1;
                 self.graph.clear();
-                self.visited = [0; NODES.div_ceil(32)];
+                self.cleared = true;
             }
-            Ok(Loaded::Full) | Err(_) => {
+            Ok(Loaded::Full) => self.fail(),
+            Err(_) => {
                 self.maps.forget();
                 self.fail();
             }
@@ -488,7 +528,10 @@ impl Ahead {
         let mut best: Option<(u64, usize, (i32, i32), u64)> = None; // score (units), node, the far end, t
         for (i, a) in self.graph.nodes().iter().enumerate() {
             let va = vec2(here, (a.lat, a.lon), cos);
-            for (to, _) in self.graph.edges(i) {
+            for (to, attr) in self.graph.edges(i) {
+                if !routable(attr) {
+                    continue;
+                }
                 let vb = vec2(here, to, cos);
                 let (foot, t) = foot_of(va, vb);
                 let d = norm(foot);
@@ -499,7 +542,8 @@ impl Ahead {
                 let len = norm(ab).max(1) as i64;
                 let along = ((ab.0 * hx + ab.1 * hy).abs() * 1000) / (len * 16384);
                 // a metre is 89.8 units
-                let score = d + turn_penalty_m(along) * 1_000_000 / 11_132;
+                let slow = if attr >> 4 == SLOW { u64::from(SNAP_M) * 1_000_000 / 11_132 } else { 0 };
+                let score = d + turn_penalty_m(along) * 1_000_000 / 11_132 + slow;
                 if best.is_none_or(|b| score < b.0) {
                     best = Some((score, i, to, t));
                 }
@@ -524,6 +568,7 @@ impl Ahead {
         };
         self.n = 0;
         self.visited = [0; NODES.div_ceil(32)];
+        self.cleared = false;
         self.push(foot, elev, 0);
         self.dist_mm = 0;
         self.prev = from;
@@ -540,7 +585,12 @@ impl Ahead {
         }
     }
 
-    fn seen(&self, i: usize) -> bool {
+    /// The node `i` at `pos` is on the trace already. After the graph was emptied its numbers mean nothing, and the
+    /// trace is searched for the place (a few hundred points, once per step: only then).
+    fn seen(&self, i: usize, pos: (i32, i32)) -> bool {
+        if self.cleared {
+            return self.path.get(..self.n).is_some_and(|p| p.iter().any(|q| (q.lat, q.lon) == pos));
+        }
         self.visited.get(i / 32).is_some_and(|w| w >> (i % 32) & 1 == 1)
     }
 
@@ -579,13 +629,17 @@ impl Ahead {
             let cos = cos_q16(cur.0);
             let u = vec2(self.prev, cur, cos);
             let mut pick: Option<Pick> = None;
+            let on_slow = self.attr >> 4 == SLOW;
             for (pos, attr) in self.graph.edges(ci) {
-                if pos == self.prev {
+                // stock marks an edge not routable by its speed index (0, 6, over 14: -1 in the table at 0xd0293898);
+                // index 1 (factor 0.3) is inferred to be paths and steps: only on the way already on one, and last
+                let slow = attr >> 4 == SLOW;
+                if pos == self.prev || !routable(attr) || (slow && !on_slow) {
                     continue;
                 }
                 let Some(ni) = self.graph.find(pos.0, pos.1) else { continue };
                 let Some(next) = self.graph.node(ni) else { continue };
-                if self.seen(ni) {
+                if self.seen(ni, pos) {
                     continue;
                 }
                 let v = vec2(cur, pos, cos);
@@ -597,7 +651,7 @@ impl Ahead {
                 if c < TURN_COS_MILLI {
                     continue;
                 }
-                let class = if next.on_way(self.way) { 2 } else { u8::from(attr == self.attr) };
+                let class = if next.on_way(self.way) { 2 } else { u8::from(attr == self.attr) } + 4 * u8::from(!slow);
                 if pick.is_none_or(|(k, ..)| (class, c) > k) {
                     pick = Some(((class, c), pos, attr, ni));
                 }
@@ -657,7 +711,7 @@ impl Ahead {
         let raw: [i16; PATH] = core::array::from_fn(|i| self.path.get(i).map_or(0, |p| p.elev));
         for (i, p) in self.path.iter_mut().take(n).enumerate() {
             p.smooth = raw.get(i).copied().unwrap_or(0).saturating_mul(10);
-            if k == 0 || i < 4 * k || i + 4 * k >= count {
+            if k == 0 || i < 4 * k || i + 4 * k > count {
                 continue;
             }
             let mut acc = 0i32;
@@ -806,7 +860,7 @@ pub(crate) mod tests {
         a.n = 100;
         a.smooth();
         let s = |i: usize| a.path[i].smooth;
-        assert_eq!((s(45), s(28), s(27), s(10), s(70), s(71), s(99)), (372, -91, 0, 0, 1030, 1000, 1000));
+        assert_eq!((s(45), s(28), s(27), s(10), s(70), s(71), s(72), s(99)), (372, -91, 0, 0, 1030, 1091, 1000, 1000));
         // the filter keeps a straight slope as it is
         for i in 0..100 {
             a.path[i].elev = (i * 2) as i16;
@@ -1090,6 +1144,104 @@ pub(crate) mod tests {
         assert!(said[0].0 < said[1].0 && said[1].0 > 2800.0, "{said:?}");
     }
 
+    /// A climb longer than a trace: the next trace, made inside it, is the same climb (its start is the rider's
+    /// place, its top is farther on): not said again.
+    #[test]
+    fn a_long_climb_is_said_once() {
+        let (a, mem) = (memory(), scratch());
+        net(a, &[(1, 0xee, &east(0.0, 9000.0, 0.0, |x| 100.0 + 0.05 * (x - 600.0).clamp(0.0, 7000.0)))]);
+        let (mut said, mut x) = (0, 100.0);
+        for _ in 0..900 {
+            x += 8.0;
+            said += u32::from(a.second(true, Some(fix(x, 0.0, 90.0))).is_some());
+            while a.work(&mut NoDisk, mem) {}
+        }
+        assert!(a.traces >= 3, "traced again inside the climb: {}", a.traces);
+        assert_eq!(said, 1);
+    }
+
+    /// A U-turn: the rider is on the road traced but going back along it: off the trace after 3 seconds, and a new
+    /// one begins (5 seconds after the last). A wobble at a standstill is not a U-turn (the speed floor).
+    #[test]
+    fn a_u_turn_is_off_the_trace() {
+        let (a, mem) = (memory(), scratch());
+        net(a, &[(1, 0xee, &east(0.0, 6000.0, 0.0, |_| 100.0))]);
+        a.second(true, Some(fix(500.0, 0.0, 90.0)));
+        while a.work(&mut NoDisk, mem) {}
+        for k in 0..3 {
+            a.second(true, Some(fix(540.0 + f64::from(k), 0.0, 90.0)));
+        }
+        assert!(a.on_road());
+        // the same place, heading west: the second 3 is off, and the trace is made again
+        for _ in 0..2 {
+            a.second(true, Some(fix(550.0, 0.0, 270.0)));
+        }
+        assert!(a.on_road() && a.phase == Phase::Idle);
+        a.second(true, Some(fix(550.0, 0.0, 270.0)));
+        assert!(!a.on_road());
+        for _ in 0..5 {
+            a.second(true, Some(fix(550.0, 0.0, 270.0)));
+        }
+        assert_eq!(a.phase, Phase::Snap);
+        while a.work(&mut NoDisk, mem) {}
+        assert!(a.on_road() && points(a).last().unwrap().0 < 550.0, "traced west now");
+        // slower than the floor: heading means nothing
+        let b = &mut Ahead::new();
+        net(b, &[(1, 0xee, &east(0.0, 6000.0, 0.0, |_| 100.0))]);
+        assert!(run(b, fix(500.0, 0.0, 90.0)));
+        for _ in 0..10 {
+            b.second(true, Some(Fix { speed_mm_s: 500, ..fix(520.0, 0.0, 270.0) }));
+        }
+        assert!(b.on_road() && b.phase == Phase::Idle);
+    }
+
+    /// Edges stock does not route (speed index 0, 6 or over 14) are not taken, nor snapped to; the slow class (index
+    /// 1, inferred paths) only when the rider is on one already.
+    #[test]
+    fn unroutable_and_slow_edges() {
+        let (c, s) = (40f64.to_radians().cos(), 40f64.to_radians().sin());
+        let bend: Vec<_> = (0..=40).map(|k| (500.0 + 25.0 * f64::from(k) * c, 25.0 * f64::from(k) * s, 100)).collect();
+        // no class or way in common: the smallest turn would take the straight road, unless it is filtered out
+        for (attr, straight_taken) in [(0x0eu8, false), (0x6e, false), (0xfe, false), (0x1e, false), (0x4e, true)] {
+            let a = &mut Ahead::new();
+            net(
+                a,
+                &[
+                    (1, 0x2e, &east(0.0, 500.0, 0.0, |_| 100.0)),
+                    (2, 0x3e, &bend),
+                    (3, attr, &east(500.0, 1500.0, 0.0, |_| 100.0)),
+                ],
+            );
+            assert!(run(a, fix(100.0, 0.0, 90.0)));
+            let straight = points(a).last().unwrap().1.abs() < 1.0;
+            assert_eq!(straight, straight_taken, "class {attr:x}");
+        }
+        // snapping: the nearer road is a path (0x0e): the road 8 m farther is the rider's
+        let a = &mut Ahead::new();
+        net(a, &[(1, 0xee, &east(-500.0, 500.0, 8.0, |_| 100.0)), (2, 0x0e, &east(-500.0, 500.0, 0.0, |_| 100.0))]);
+        assert!(run(a, fix(0.0, 1.0, 90.0)));
+        assert!(points(a).iter().all(|p| (p.1 - 8.0).abs() < 1.0), "on the road at y = 8");
+        // on a slow edge already, the trace goes on along it
+        let a = &mut Ahead::new();
+        net(a, &[(1, 0x1e, &east(0.0, 3000.0, 0.0, |_| 100.0))]);
+        assert!(run(a, fix(100.0, 0.0, 90.0)) && a.len_m() > 2000);
+    }
+
+    /// After the graph is emptied mid-trace its node numbers mean nothing: a place already on the trace is found
+    /// by the trace itself.
+    #[test]
+    fn passed_places_after_a_clear() {
+        let a = &mut Ahead::new();
+        net(a, &[(1, 0xee, &east(0.0, 1000.0, 0.0, |_| 100.0))]);
+        assert!(run(a, fix(100.0, 0.0, 90.0)));
+        let p = (a.path[3].lat, a.path[3].lon);
+        let i = a.graph.find(p.0, p.1).unwrap();
+        assert!(a.seen(i, p));
+        a.cleared = true;
+        a.visited = [0; NODES.div_ceil(32)];
+        assert!(a.seen(0, p) && !a.seen(0, (p.0 + 5, p.1)));
+    }
+
     /// What one trace costs on the computer (the unit is a few tens of times slower: inferred from 400 MHz against
     /// 3 GHz and an in-order core): a tile read, inflated and decoded; the snap; the trace; the smoothing and the
     /// climbs. Printed with `--nocapture`; the bounds are loose.
@@ -1142,7 +1294,7 @@ pub(crate) mod tests {
         let name = std::string::String::from(std::path::Path::new(&path).file_name().unwrap().to_str().unwrap());
         let mut d = Ram(crate::route::tests::image_with_file(&name, &bytes), 0);
         let z: Vec<u32> = name.trim_end_matches(".dat").split('-').skip(1).map(|s| s.parse::<u32>().unwrap()).collect();
-        let mut mem = std::vec![0u16; 48 * 1024];
+        let mut mem = std::vec![0u16; crate::route::SCRATCH_WORDS]; // the unit's own size
         let mut a = std::boxed::Box::new(Ahead::new());
         // riders: the centre of random tiles' first node, found by loading the tile alone
         let mut x = 12345u32;

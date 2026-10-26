@@ -1464,7 +1464,8 @@ fn main() -> ! {
         match mem.split_at_mut_checked(bryton_rustfw::tiles::MEM_WORDS) {
             Some((map, rest)) if rest.len() >= bryton_rustfw::route::SCRATCH_WORDS => {
                 app.set_map_memory(map);
-                app.set_ahead_memory(make_ahead(), rest);
+                // exactly the size the tests use (route::SCRATCH_WORDS): a tile too big for it is absent there too
+                app.set_ahead_memory(make_ahead(), rest.split_at_mut(bryton_rustfw::route::SCRATCH_WORDS).0);
             }
             _ => {}
         }

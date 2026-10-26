@@ -150,7 +150,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
     `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
   - `ahead.rs`: climbs ahead, with no course followed: the memory (main.rs), the second's step (the rider on the trace,
     the banner and beep at a climb's start through `course_event`), the work spread over the passes (`step_ahead`: a
-    tile, the snap, the trace, at most 12 ms or 6 units a pass), and the CLIMB fields fed from the trace when no course
+    tile, the snap, the trace, at most 12 ms or 6 units a pass, and a pass ends after a unit that read a tile; paused: no work), and the CLIMB fields fed from the trace when no course
     is on (`ahead_text`, `ahead_bar`, called from `course_text` and `course_bar`). BIKE > CLIMBS AHEAD turns it off
     (`Settings::ahead`, register 11's tag 0xaa to 0xac).
   - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.

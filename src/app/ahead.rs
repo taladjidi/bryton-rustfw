@@ -12,16 +12,23 @@ impl App {
     /// Units of work per pass at most (where the CPU time is not measured, as in the simulation).
     const AHEAD_STEPS: u32 = 6;
 
+    /// The last tile of the road ahead read, inflated and decoded, and the longest so far, in microseconds of CPU
+    /// ([`Board::awake_us`]; `dev.py info`).
+    pub fn ahead_tile_us(&self) -> (u32, u32) {
+        self.ahead_us
+    }
+
     /// Gives the road ahead its memory (main.rs: about 110 KB in AXI SRAM) and the buffer map tiles are inflated
     /// into (64 KB or more of the map's SDRAM); without them there are no climbs ahead.
     pub fn set_ahead_memory(&mut self, mem: &'static mut climbs_ahead::Ahead, scratch: &'static mut [u16]) {
         self.ahead = Some((mem, scratch));
     }
 
-    /// Climbs ahead run: switched on, riding (not paused), outdoors, no course followed, the card not lent.
+    /// Climbs ahead are on: switched on, a ride (paused too: the trace and the climb said are kept, the work waits),
+    /// outdoors, no course followed, the card not lent.
     fn ahead_on(&self) -> bool {
         self.settings.ahead
-            && self.ride.state() == ride::State::Running
+            && self.ride.state() != ride::State::Idle
             && !self.indoors()
             && self.courses.as_deref().is_none_or(|c| c.on.is_none())
             && !self.emmc.lent()
@@ -46,10 +53,21 @@ impl App {
     /// tile, the snap, the trace up to the next tile it needs.
     #[inline(never)]
     pub(crate) fn step_ahead(&mut self, b: &mut impl Board) {
+        if self.ride.state() != ride::State::Running {
+            return; // paused: what is half done waits
+        }
         let Some((a, mem)) = self.ahead.as_mut().filter(|(a, _)| a.busy()) else { return };
         let t0 = b.awake_us();
         for _ in 0..Self::AHEAD_STEPS {
-            if !a.work(&mut emmc::Volume(&mut self.emmc, b), mem) || b.awake_us().wrapping_sub(t0) >= Self::AHEAD_US {
+            let (tiles, t1) = (a.io().0, b.awake_us());
+            let more = a.work(&mut emmc::Volume(&mut self.emmc, b), mem);
+            let spent = b.awake_us().wrapping_sub(t1);
+            if a.io().0 != tiles {
+                // a tile was read, inflated and decoded: the longest unit; the pass ends here (dev.py info says how long)
+                self.ahead_us = (spent, self.ahead_us.1.max(spent));
+                break;
+            }
+            if !more || b.awake_us().wrapping_sub(t0) >= Self::AHEAD_US {
                 break;
             }
         }

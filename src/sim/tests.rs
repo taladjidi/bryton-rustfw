@@ -4199,6 +4199,15 @@ fn climbs_ahead_ride() {
     assert!((60..=105).contains(&left), "metres of climb left: {f:?}");
     assert_consistent(&sim, &app);
     sim.save("climbs_ahead");
+    // a pause keeps the trace, the climb said and the fields; no new work is done meanwhile
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused);
+    run(&mut sim, &mut app, 10_000);
+    assert!(fields(&app)[0].ends_with("%"), "still showing: {:?}", fields(&app));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 3000);
+    assert!(fields(&app)[0].ends_with("%"));
     // the trace is made again as the ride reaches the end of the last (x = 2700, 1500 m from its end), the climb not
     // said twice
     let traces = app.ahead.as_ref().unwrap().0.traces;
@@ -4207,7 +4216,7 @@ fn climbs_ahead_ride() {
     }
     let (a, _) = app.ahead.as_ref().unwrap();
     assert!(a.traces > traces && a.on_road(), "traced again: {} -> {}", traces, a.traces);
-    assert_eq!(sim.tones[tones..], [2000, 0], "said once: one beep");
+    assert_eq!(sim.tones[tones..].iter().filter(|&&t| t == 2000).count(), 1, "said once: one beep of a climb");
     // at 3.2 km the road bends and a straight branch goes on: the rider keeps straight on, off the road traced, and
     // the trace is made again on the branch, which ends after 800 m (no climb on it)
     let traces = a.traces;

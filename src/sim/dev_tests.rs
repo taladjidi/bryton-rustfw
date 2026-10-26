@@ -64,7 +64,7 @@ fn info_answers() {
     assert_eq!(
         pc.got,
         format!(
-            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, radio resets 0\n",
+            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, radio resets 0, climb tile us last 0 max 0\n",
             env!("CARGO_PKG_VERSION"),
             env!("GIT_DESCRIBE")
         )

@@ -47,7 +47,9 @@ The dated findings are in [journal.md](journal.md).
   seconds (the tiles read one a pass: how long a pass takes with a 445-node tile, inflated 16 KB into the SDRAM
   buffer, is to measure with `dev.py info`; inferred 20 to 50 ms), the banner and the beep 50 m before a climb the
   road ahead has, the trace made again when the road bends away from the one traced; the climbs against what stock
-  shows for the same ride; the AXI SRAM cell stays in `.bss` (`nm`: `make_ahead`, about 105 KB) and the unit
+  shows for the same ride; `dev.py info` ends with "climb tile us last N max M": the time of the last and the longest tile read, inflated and
+  decoded (estimated 15 ms at the median, about 80 ms for the largest tile that fits the 96 KB buffer, 2080 nodes);
+  the AXI SRAM cell stays in `.bss` (`nm`: `make_ahead`, about 105 KB) and the unit
   boots (a new static in `.axibss` is a core-level change: Renode, then `DIAG_STOP`).
 - **The GNSS receiver off for an indoor ride (app/gps.rs `gnss_switch`, BOARD.md 13)**: only against the simulator.
   On the unit: with a trainer heard, Start switches the receiver off (strip GPS blank), and after SAVE or DISCARD,

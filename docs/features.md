@@ -389,7 +389,11 @@ Hammerhead's Climber do.
   and gain), coloured by grade; "--" while the road ahead has no climb.
 - **Again:** when the rider leaves the road traced (3 s more than 40 m from it), or nears the end of a trace that
   stopped at its length (1.5 km), at most every 5 s; after a failure (no map file, no road within 150 m) every 30 s.
-  Only while riding (not paused, not slower than 7 km/h), never indoors, never while a course is followed.
+  A U-turn (heading against the trace at 7 km/h or more) counts as leaving it. Only while riding (a pause keeps
+  the trace, the climb said and the fields, and does the work no more; nothing happens slower than 7 km/h), never
+  indoors, never while a course is followed. A long climb is said once, not again by the trace made inside it.
+- **Roads:** edges stock marks not routable (speed index 0, 6 or over 14) are never taken or snapped to, and the slow
+  class (index 1, inferred paths and steps) only when the rider is on one already.
 - **BIKE > CLIMBS AHEAD** turns it off (ON by default; kept in register 11's tag).
 
 ## Stock data

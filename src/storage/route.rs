@@ -222,6 +222,58 @@ fn sort_nodes(v: &mut [Node]) {
     }
 }
 
+/// A tile's header: the base, deltaBits and the transport count; `seen` has bit 0 to 2 set for each of the first three.
+#[derive(Clone, Copy)]
+struct Hdr {
+    lat0: i64,
+    lon0: i64,
+    bits: u32,
+    transport: u64,
+    seen: u8,
+}
+
+impl Hdr {
+    fn take(&mut self, f: u32, v: &Val) {
+        match (f, v) {
+            (1, Val::Varint(z)) => (self.lat0, self.seen) = (zigzag(*z), self.seen | 1),
+            (2, Val::Varint(z)) => (self.lon0, self.seen) = (zigzag(*z), self.seen | 2),
+            (3, Val::Varint(b)) => (self.bits, self.seen) = (u32::try_from(*b).unwrap_or(0), self.seen | 4),
+            (4, Val::Varint(t)) => self.transport = *t,
+            _ => {}
+        }
+    }
+
+    /// The header of the whole message, wherever its fields are.
+    fn scan(buf: &Scratch<'_>, len: usize) -> Result<Hdr, Error> {
+        let mut h = Hdr { lat0: 0, lon0: 0, bits: 0, transport: 2, seen: 0 };
+        let mut top = Reader { s: buf, pos: 0, end: len };
+        while let Some((f, v)) = top.next()? {
+            h.take(f, &v);
+        }
+        Ok(h)
+    }
+
+    fn valid(&self) -> bool {
+        (2..=31).contains(&self.bits) && self.transport == 2
+    }
+
+    /// A key's halves: sign and magnitude (module doc), added to the base; None outside the world.
+    fn place(&self, key: u64) -> Option<(i32, i32)> {
+        let bits = self.bits;
+        if key >> (2 * bits) != 0 {
+            return None;
+        }
+        let half = |h: u64| {
+            let m = (h & ((1 << (bits - 1)) - 1)) as i64;
+            if h >> (bits - 1) & 1 == 1 { -m } else { m }
+        };
+        let mask = (1u64 << bits) - 1;
+        let (lat, lon) = (self.lat0 + half(key >> bits & mask), self.lon0 + half(key & mask));
+        ((-900_000_000..=900_000_000).contains(&lat) && (-1_800_000_000..=1_800_000_000).contains(&lon))
+            .then_some((lat as i32, lon as i32))
+    }
+}
+
 fn zigzag(v: u64) -> i64 {
     let v = v as u32;
     i64::from((v >> 1) as i32 ^ -((v & 1) as i32))
@@ -384,44 +436,36 @@ impl Graph {
 
     fn decode_nodes(&mut self, buf: &Scratch<'_>, len: usize) -> Result<usize, Error> {
         let len = len.min(buf.len());
-        let mut top = Reader { s: buf, pos: 0, end: len };
-        let (mut lat0, mut lon0, mut bits, mut transport) = (0i64, 0i64, 0u32, 2u64);
-        while let Some((f, v)) = top.next()? {
-            match (f, v) {
-                (1, Val::Varint(z)) => lat0 = zigzag(z),
-                (2, Val::Varint(z)) => lon0 = zigzag(z),
-                (3, Val::Varint(b)) => bits = u32::try_from(b).unwrap_or(0),
-                (4, Val::Varint(t)) => transport = t,
-                _ => {}
-            }
-        }
-        if !(2..=31).contains(&bits) || transport != 2 {
-            return Err(Error::Bad);
-        }
-        // a key's halves: sign and magnitude (module doc), added to the base
-        let place = |key: u64| -> Option<(i32, i32)> {
-            if key >> (2 * bits) != 0 {
-                return None;
-            }
-            let half = |h: u64| {
-                let m = (h & ((1 << (bits - 1)) - 1)) as i64;
-                if h >> (bits - 1) & 1 == 1 { -m } else { m }
-            };
-            let mask = (1u64 << bits) - 1;
-            let (lat, lon) = (lat0 + half(key >> bits & mask), lon0 + half(key & mask));
-            ((-900_000_000..=900_000_000).contains(&lat) && (-1_800_000_000..=1_800_000_000).contains(&lon))
-                .then_some((lat as i32, lon as i32))
-        };
+        // One pass: in every tile of a real file (1014 of 1014) the base, deltaBits and transport come before the
+        // first node; a tile that has them later, or none, is scanned for them first (the slow path)
+        let mut h = Hdr { lat0: 0, lon0: 0, bits: 0, transport: 2, seen: 0 };
+        let mut ready = false;
         let mut top = Reader { s: buf, pos: 0, end: len };
         let mut nodes = 0;
         while let Some((f, v)) = top.next()? {
-            let (5, Val::Bytes(a, b)) = (f, v) else { continue };
+            if ready || f != 5 {
+                if !ready {
+                    h.take(f, &v);
+                }
+                if f != 5 {
+                    continue;
+                }
+            } else if h.seen & 7 != 7 {
+                h = Hdr::scan(buf, len)?;
+            }
+            if !ready {
+                if !h.valid() {
+                    return Err(Error::Bad);
+                }
+                ready = true;
+            }
+            let Val::Bytes(a, b) = v else { continue };
             let mut r = top.sub(a, b);
             let (mut key, mut elev, mut ways, mut edges) = (None, NO_ELEV, [0u16; 2], [(0i32, 0i32, 0u8); MAX_EDGES]);
             let mut n_edges = 0;
             while let Some((f, v)) = r.next()? {
                 match (f, v) {
-                    (1, Val::Varint(k)) => key = place(k),
+                    (1, Val::Varint(k)) => key = h.place(k),
                     (2, Val::Varint(e)) => elev = ((e / 5) as i64 - 500).clamp(-32_000, 32_000) as i16,
                     (3, Val::Bytes(a, b)) => {
                         let mut w = top.sub(a, b);
@@ -439,7 +483,7 @@ impl Graph {
                         let (mut to, mut attr) = (None, 0u8);
                         while let Some((f, v)) = e.next()? {
                             match (f, v) {
-                                (1, Val::Varint(k)) => to = place(k),
+                                (1, Val::Varint(k)) => to = h.place(k),
                                 (2, Val::Varint(a)) => attr = a as u8,
                                 _ => {}
                             }
@@ -455,6 +499,14 @@ impl Graph {
             let Some((lat, lon)) = key else { continue };
             self.add_node((lat, lon, elev), ways, edges.get(..n_edges).unwrap_or(&[]))?;
             nodes += 1;
+        }
+        if !ready {
+            if h.seen & 7 != 7 {
+                h = Hdr::scan(buf, len)?;
+            }
+            if !h.valid() {
+                return Err(Error::Bad);
+            }
         }
         Ok(nodes)
     }
@@ -705,6 +757,8 @@ impl Maps {
                 self.tiles = self.tiles.saturating_add(1);
                 Ok(Loaded::Yes)
             }
+            // a tile that does not fit an empty graph never will: absent, not asked for again
+            Err(Error::Full) if g.is_empty() => Ok(self.absent(g, x, y)),
             Err(Error::Full) => Ok(Loaded::Full),
             Err(_) => Ok(self.absent(g, x, y)),
         }
@@ -922,6 +976,65 @@ pub(crate) mod tests {
         assert_eq!((g.len(), g.state(1, 1)), (0, TileState::Unknown));
     }
 
+    /// A tile with more nodes than the graph holds, asked for on an empty graph: absent, and not read again (it was
+    /// asked for every 30 s).
+    #[test]
+    fn a_tile_too_big_for_the_graph_is_absent() {
+        fn varint(mut v: u64, out: &mut Vec<u8>) {
+            loop {
+                out.push((v & 0x7f) as u8 | if v >> 7 != 0 { 0x80 } else { 0 });
+                v >>= 7;
+                if v == 0 {
+                    return;
+                }
+            }
+        }
+        let mut msg = std::vec![0x08, 0, 0x10, 0, 0x18, 20, 0x20, 2];
+        for i in 0..NODES as u64 + 50 {
+            let mut node = std::vec![0x08];
+            varint(i << 20, &mut node);
+            msg.push(0x2a);
+            msg.push(node.len() as u8);
+            msg.extend(node);
+        }
+        // gzip, stored blocks
+        let mut gz = std::vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3];
+        let chunks: Vec<&[u8]> = msg.chunks(60_000).collect();
+        for (k, c) in chunks.iter().enumerate() {
+            gz.push(u8::from(k + 1 == chunks.len()));
+            gz.extend((c.len() as u16).to_le_bytes());
+            gz.extend((!(c.len() as u16)).to_le_bytes());
+            gz.extend_from_slice(c);
+        }
+        gz.extend(inflate::crc32(msg.iter().copied()).to_le_bytes());
+        gz.extend((msg.len() as u32).to_le_bytes());
+        // the container: header, zoom table, zoom header, one index entry, the tile
+        let (x, y) = FIXTURE_TILES[0];
+        let mut file = std::vec![0u8; 0x12];
+        file[0x0e..0x12].copy_from_slice(&0x12u32.to_le_bytes());
+        let mut ztab = [0u32; 20];
+        ztab[14] = 80;
+        file.extend(ztab.iter().flat_map(|z| z.to_le_bytes()));
+        let mut zh = [0u8; 100];
+        zh[..6].copy_from_slice(b"BRYTON");
+        for (k, v) in [x, x, y, y].into_iter().enumerate() {
+            zh[0x10 + 4 * k..0x14 + 4 * k].copy_from_slice(&v.to_le_bytes());
+        }
+        (zh[0x20], zh[0x21]) = (4, 4);
+        zh[0x22..0x26].copy_from_slice(&104u32.to_le_bytes());
+        file.extend(zh);
+        file.extend(0u32.to_le_bytes());
+        file.extend((gz.len() as u32).to_le_bytes());
+        file.extend(gz);
+        let mut d = Ram(image_with_file(NAME, &file), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let (mut g, mut maps, mut mem) = (Graph::new(), Maps::new(), std::vec![0u16; SCRATCH_WORDS]);
+        let mut s = Scratch(&mut mem);
+        assert_eq!(maps.load(&mut fat, &mut d, &mut g, &mut s, (x, y)), Ok(Loaded::No));
+        assert_eq!((g.state(x, y), g.len()), (TileState::Absent, 0));
+        assert!(maps.bytes > 20_000, "it was read once");
+    }
+
     /// Tile messages that are not: a wrong transport count, deltaBits out of range, a field cut short. Refused whole.
     #[test]
     fn refuses_bad_messages() {
@@ -997,15 +1110,21 @@ pub(crate) mod tests {
         let mut d = Ram(image_with_file(&name, &bytes), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let z: Vec<u32> = name.trim_end_matches(".dat").split('-').skip(1).map(|s| s.parse::<u32>().unwrap()).collect();
-        let mut mem = std::vec![0u16; 96 * 1024 / 2 * 2];
+        let mut mem = std::vec![0u16; SCRATCH_WORDS]; // the unit's own size
         let (mut g, mut maps) = (Graph::new(), Maps::new());
         let (mut ok, mut absent, mut full, mut nodes) = (0, 0, 0, 0);
+        let mut largest = (0, 0, 0);
         let t0 = std::time::Instant::now();
         for x in z[0] << 5..(z[0] + 1) << 5 {
             for y in z[1] << 5..(z[1] + 1) << 5 {
                 g.clear();
+                let b0 = maps.bytes;
                 match maps.load(&mut fat, &mut d, &mut g, &mut Scratch(&mut mem), (x, y)).unwrap() {
-                    Loaded::Yes => (ok, nodes) = (ok + 1, nodes + g.len()),
+                    Loaded::Yes => {
+                        (ok, nodes) = (ok + 1, nodes + g.len());
+                        let edges: usize = (0..g.len()).map(|i| g.edges(i).count()).sum();
+                        largest = largest.max((g.len(), edges, maps.bytes - b0));
+                    }
                     Loaded::No => absent += 1,
                     Loaded::Full => full += 1,
                 }
@@ -1015,6 +1134,7 @@ pub(crate) mod tests {
             "{ok} tiles loaded ({nodes} nodes), {absent} absent or too big, {full} full; {} us a tile",
             t0.elapsed().as_micros() / 1024
         );
+        std::println!("largest tile loaded: {} nodes, {} edges, {} compressed bytes", largest.0, largest.1, largest.2);
         assert!(ok > 900);
     }
 }

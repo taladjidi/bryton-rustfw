@@ -36,6 +36,15 @@ impl Scratch<'_> {
         Some(if i.is_multiple_of(2) { w as u8 } else { (w >> 8) as u8 })
     }
 
+    /// Appends byte `i`, the one after the last written (sequential output): an even byte is a whole new word, so
+    /// only an odd one reads its word first: half the accesses of [`Scratch::set`] to uncached SDRAM. False when out
+    /// of range.
+    pub fn put(&mut self, i: usize, b: u8) -> bool {
+        let Some(w) = self.0.get_mut(i / 2) else { return false };
+        *w = if i.is_multiple_of(2) { u16::from(b) } else { *w & 0x00ff | u16::from(b) << 8 };
+        true
+    }
+
     /// Sets byte `i`; false when it is out of range.
     pub fn set(&mut self, i: usize, b: u8) -> bool {
         let Some(w) = self.0.get_mut(i / 2) else { return false };
@@ -143,7 +152,7 @@ const DIST_EXTRA: [u8; 30] =
     [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
 
 /// Inflates the deflate blocks of `b` into `out`; the bytes written.
-fn inflate<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>, out: &mut Scratch<'_>) -> Result<usize, Error> {
+fn inflate<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>, out: &mut Scratch<'_>, crc: &mut u32) -> Result<usize, Error> {
     let mut n = 0usize;
     loop {
         let last = b.take(1)?;
@@ -157,15 +166,16 @@ fn inflate<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>, out: &mut Scratch<'_>) -
                 }
                 for _ in 0..len {
                     let v = b.take(8)? as u8;
-                    if !out.set(n, v) {
+                    if !out.put(n, v) {
                         return Err(Error::TooBig);
                     }
+                    *crc = crc_byte(*crc, v);
                     n += 1;
                 }
             }
             t @ (1 | 2) => {
                 let (lit, dist) = if t == 1 { fixed()? } else { dynamic(b)? };
-                n = codes(b, out, n, &lit, &dist)?;
+                n = codes(b, out, crc, n, &lit, &dist)?;
             }
             _ => return Err(Error::Bad),
         }
@@ -234,6 +244,7 @@ fn dynamic<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>) -> Result<(Huffman, Huff
 fn codes<I: Iterator<Item = u8>>(
     b: &mut Bits<'_, I>,
     out: &mut Scratch<'_>,
+    crc: &mut u32,
     mut n: usize,
     lit: &Huffman,
     dist: &Huffman,
@@ -241,9 +252,10 @@ fn codes<I: Iterator<Item = u8>>(
     loop {
         let sym = lit.decode(b)? as usize;
         if sym < 256 {
-            if !out.set(n, sym as u8) {
+            if !out.put(n, sym as u8) {
                 return Err(Error::TooBig);
             }
+            *crc = crc_byte(*crc, sym as u8);
             n += 1;
         } else if sym == 256 {
             return Ok(n);
@@ -257,9 +269,10 @@ fn codes<I: Iterator<Item = u8>>(
             }
             for _ in 0..len {
                 let v = out.get(n - back).ok_or(Error::Bad)?;
-                if !out.set(n, v) {
+                if !out.put(n, v) {
                     return Err(Error::TooBig);
                 }
+                *crc = crc_byte(*crc, v);
                 n += 1;
             }
         }
@@ -289,13 +302,15 @@ const CRC_NIBBLE: [u32; 16] = {
 /// assert_eq!(bryton_rustfw::inflate::crc32(b"123456789".iter().copied()), 0xcbf4_3926);
 /// ```
 pub fn crc32(bytes: impl Iterator<Item = u8>) -> u32 {
-    let mut c = !0u32;
-    for b in bytes {
-        c ^= u32::from(b);
-        c = CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4);
-        c = CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4);
-    }
-    !c
+    !bytes.fold(!0u32, crc_byte)
+}
+
+/// One byte into a running CRC-32 (start at `!0`, finish with `!`): computed as the bytes are written, so the
+/// output is not read back a second time (it lives in uncached SDRAM).
+fn crc_byte(c: u32, b: u8) -> u32 {
+    let c = c ^ u32::from(b);
+    let c = CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4);
+    CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4)
 }
 
 /// Inflates the gzip member in `src` into `out`: the length written. The trailer's CRC and size are checked.
@@ -324,7 +339,8 @@ pub fn gunzip(src: &mut impl Iterator<Item = u8>, out: &mut Scratch<'_>) -> Resu
         byte(src)?;
     }
     let mut bits = Bits { src, buf: 0, cnt: 0 };
-    let n = inflate(&mut bits, out)?;
+    let mut crc = !0u32;
+    let n = inflate(&mut bits, out, &mut crc)?;
     // the trailer starts at a byte boundary: whole bytes the bit buffer still holds come first
     let mut t = [0u8; 8];
     for v in t.iter_mut() {
@@ -336,8 +352,8 @@ pub fn gunzip(src: &mut impl Iterator<Item = u8>, out: &mut Scratch<'_>) -> Resu
             bits.src.next().ok_or(Error::Truncated)?
         };
     }
-    let (crc, size) = (u32::from_le_bytes([t[0], t[1], t[2], t[3]]), u32::from_le_bytes([t[4], t[5], t[6], t[7]]));
-    if size as usize != n || crc != crc32((0..n).filter_map(|i| out.get(i))) {
+    let (t_crc, size) = (u32::from_le_bytes([t[0], t[1], t[2], t[3]]), u32::from_le_bytes([t[4], t[5], t[6], t[7]]));
+    if size as usize != n || t_crc != !crc {
         return Err(Error::Crc);
     }
     Ok(n)

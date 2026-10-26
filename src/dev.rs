@@ -210,6 +210,10 @@ impl Session {
                 h.send(decimal(stats.awake_permille, &mut [0; 10]));
                 h.send(b" permille, radio resets ");
                 h.send(decimal(u32::from(app.radio_resets()), &mut [0; 10]));
+                h.send(b", climb tile us last ");
+                h.send(decimal(app.ahead_tile_us().0, &mut [0; 10]));
+                h.send(b" max ");
+                h.send(decimal(app.ahead_tile_us().1, &mut [0; 10]));
                 h.send(b"\n");
             }
             Some(b"bat") => {
