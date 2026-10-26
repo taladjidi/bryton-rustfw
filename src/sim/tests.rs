@@ -2435,14 +2435,21 @@ fn zone_colours_are_not_accent_or_alarm() {
 /// good from 20 s.
 fn hr_edge(ms: u64) -> [u8; 8] {
     let s = ms / 1000;
-    let bpm = if (14..16).contains(&s) || s >= 24 { 135 } else { 125 };
+    // 133 bpm is 1 bpm into zone 3 of 190 (70 % = 133): within the 1 % margin, so zone 2 stays; 136 is clearly in
+    let bpm = if (14..16).contains(&s) {
+        133
+    } else if s >= 24 {
+        136
+    } else {
+        125
+    };
     [4, 0, 0, 0, 0, 0, 0, bpm]
 }
 
-/// The heart rate's zone bar changes only after three seconds in the new zone (a value on an edge does not flip it
-/// every second), and the bar is all that is redrawn when it does: the number, white, has not changed.
+/// The heart rate's zone bar follows its number at once, but a value on a zone's edge (within 1 % of max HR) does not
+/// flip it, and the bar is all that is redrawn when it does change: the number, white, is redrawn on its own.
 #[test]
-fn the_zone_bar_holds_three_seconds_and_is_all_that_is_redrawn() {
+fn the_zone_bar_follows_its_number_and_is_all_that_is_redrawn() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_edge, network: 0, ack: &[] });
@@ -2473,12 +2480,14 @@ fn the_zone_bar_holds_three_seconds_and_is_all_that_is_redrawn() {
         }
         assert_consistent(&sim, &app);
     }
-    assert_eq!(flips.len(), 1, "one change, the 2 s of 135 bpm did not flip it: {flips:?}");
+    assert_eq!(flips.len(), 1, "one change, the 2 s of 133 bpm on the edge did not flip it: {flips:?}");
     let (at, colour, px) = flips[0];
     assert_eq!(colour, z3);
-    // 135 bpm from 24 s on the sensor's clock, the run began about 6 s in: shown 3 s later
-    assert!((18_000..22_000).contains(&at), "{at} ms");
-    assert_eq!(px, u64::from(bx.2) * u64::from(ui::ZONE_BAR_H), "only the bar: {px} px");
+    // 136 bpm from 24 s on the sensor's clock, the run began about 6 s in: shown with the number, no hold
+    assert!((16_000..20_000).contains(&at), "{at} ms");
+    // the bar changes with its number now: the bar and the digits that changed, never the box whole
+    let bar = u64::from(bx.2) * u64::from(ui::ZONE_BAR_H);
+    assert!(px >= bar && px < u64::from(bx.2) * u64::from(bx.3) / 2, "the bar and the changed digits only: {px} px");
     sim.save("zone_bar");
 }
 
@@ -3380,8 +3389,8 @@ fn a_ride_with_laps_and_pauses() {
     run(&mut sim, &mut app, 60_000);
     let px_s = (sim.pixels - px0) * 1000 / (sim.ms - t0);
     std::println!("ride page (HR, power changing every second, max km/h, lap time, lap km, ascent): {px_s} px/s");
-    // the zones: a bar along the top of the heart rate and power boxes in the zone shown (held 3 s), the number white
-    let (hr_bar, w_bar) = (crate::ride::hr_color(app.zones[3].shown()), crate::ride::power_color(app.zones[0].shown()));
+    // the zones: a bar along the top of the heart rate and power boxes in their numbers' zones, the number white
+    let (hr_bar, w_bar) = (crate::ride::hr_color(app.zones[4].shown()), crate::ride::power_color(app.zones[0].shown()));
     let (hr_box, w_box) = (colors_in(&sim, bx(0)), colors_in(&sim, bx(1)));
     assert!(hr_box.contains(&hr_bar) && w_box.contains(&w_bar), "zone bars");
     assert!(hr_box.contains(&crate::ui::WHITE) && w_box.contains(&crate::ui::WHITE), "white numbers");

@@ -468,42 +468,36 @@ pub enum Profile {
     Indoor,
 }
 
-/// A zone shown with hysteresis, so a value on a zone's edge does not flip the bar every second: the zone shown
-/// changes only after the new one has held for [`ZoneHold::HOLD_S`] seconds in a row (the first zone, and the loss of
-/// the reading, at once).
+/// A zone shown with hysteresis on the value, not on time: the bar follows the number it sits on at once, but a value
+/// on a zone's edge does not flip it every second: the zone shown stays while the value is within `margin` of it
+/// (the owner saw time-held bars lag their numbers, 2026-10-26).
 ///
 /// ```
-/// use bryton_rustfw::ride::ZoneHold;
-/// let mut z = ZoneHold::default();
-/// assert_eq!(z.second(Some(3)), 3, "the first zone at once");
-/// let seen: Vec<u8> = [4, 3, 4, 4, 3, 4, 4, 4, 4].map(|n| z.second(Some(n))).to_vec();
-/// assert_eq!(seen, [3, 3, 3, 3, 3, 3, 3, 4, 4], "4 shown after three in a row; flicker changes nothing");
-/// assert_eq!(z.second(None), 0, "no reading: no zone");
+/// use bryton_rustfw::ride::{ZoneHold, power_zone};
+/// let (mut z, zone) = (ZoneHold::default(), |w| power_zone(w, 200)); // zone 3 from 152 W, zone 4 from 182 W
+/// assert_eq!(z.update(Some(170), 4, zone), 3, "the first zone at once");
+/// assert_eq!(z.update(Some(183), 4, zone), 3, "1 W into zone 4: within 4 W of zone 3, kept");
+/// assert_eq!(z.update(Some(186), 4, zone), 4, "4 W in: zone 4");
+/// assert_eq!(z.update(Some(180), 4, zone), 4, "back 2 W under the edge: kept");
+/// assert_eq!(z.update(Some(300), 4, zone), 6, "a jump far away: at once");
+/// assert_eq!(z.update(None, 4, zone), 0, "no reading: no zone");
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ZoneHold {
     shown: u8,
-    cand: u8,
-    held: u8,
 }
 
 impl ZoneHold {
-    /// Seconds in a row in a new zone before it is shown.
-    pub const HOLD_S: u8 = 3;
-
-    /// This second's zone (None: no reading); the zone to show, 0 for none.
-    pub fn second(&mut self, zone: Option<u8>) -> u8 {
-        let z = zone.unwrap_or(0);
-        if z == self.shown || z == 0 || self.shown == 0 {
-            (self.shown, self.cand, self.held) = (z, z, 0);
-        } else if z == self.cand {
-            self.held += 1;
-            if self.held >= Self::HOLD_S {
-                (self.shown, self.held) = (z, 0);
+    /// This second's value `v` (None: no reading), zoned by `zone`; the zone to show, 0 for none.
+    pub fn update(&mut self, v: Option<u16>, margin: u16, zone: impl Fn(u16) -> u8) -> u8 {
+        self.shown = match v {
+            None => 0,
+            Some(v) => {
+                let near =
+                    |s: u8| s != 0 && (zone(v.saturating_sub(margin)) == s || zone(v.saturating_add(margin)) == s);
+                if near(self.shown) { self.shown } else { zone(v) }
             }
-        } else {
-            (self.cand, self.held) = (z, 1);
-        }
+        };
         self.shown
     }
 

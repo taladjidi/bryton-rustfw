@@ -428,10 +428,15 @@ impl App {
         let (cp, wprime) = self.cp_model();
         self.power.second(input.power, &self.ride, cp, wprime);
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
-        let (p, hr) = (&self.power, self.live.shown(Metric::Hr));
-        let zones = [p.rolling(0), p.rolling(1), p.rolling(2)].map(|w| w.map(|w| ride::power_zone(w, ftp)));
-        for (hold, z) in self.zones.iter_mut().zip(zones.into_iter().chain([hr.map(|v| ride::hr_zone(v, max_hr))])) {
-            hold.second(z);
+        // each bar zones exactly the number its box shows: live power, the 3, 10 and 30 s averages, heart rate
+        let p = &self.power;
+        let watts = [self.live.shown(Metric::Power), p.rolling(0), p.rolling(1), p.rolling(2)];
+        let (pm, hm) = ((ftp / 50).max(1), (max_hr / 100).max(1)); // 2 % of FTP, 1 % of max HR
+        for (hold, w) in self.zones.iter_mut().zip(watts) {
+            hold.update(w, pm, |w| ride::power_zone(w, ftp));
+        }
+        if let Some(hold) = self.zones.get_mut(4) {
+            hold.update(self.live.shown(Metric::Hr), hm, |v| ride::hr_zone(v, max_hr));
         }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);

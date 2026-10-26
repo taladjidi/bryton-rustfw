@@ -315,9 +315,8 @@ impl App {
 
     /// The edge bar of field `f` along the box's top, BLACK for none. One rule: the digits are white and the state is
     /// the bar's: the power fields (live, 3, 10, 30 s, NP, max) and the heart rate (live, max) in their zone, W' balance as
-    /// it drains, the step target by how the reading sits against the band, CLIMB by its grade. POWER takes the 3 s
-    /// average's zone (live power crosses a zone's edge all the time); the live zones change after three seconds in the
-    /// new one ([`ride::ZoneHold`]).
+    /// it drains, the step target by how the reading sits against the band, CLIMB by its grade. Each bar zones exactly
+    /// the number in its box, with a margin on the value against flicker at a zone's edge ([`ride::ZoneHold`]).
     pub(crate) fn field_bar(&self, f: Field) -> u16 {
         let zone = |z: u8, power: bool| match (z, power) {
             (0, _) => ui::BLACK,
@@ -327,11 +326,11 @@ impl App {
         let held = |i: usize| self.zones.get(i).map_or(0, ride::ZoneHold::shown);
         let (p, ftp) = (&self.power, self.settings.ftp);
         match f {
-            Field::Power if self.live.shown(Metric::Power).is_some() => zone(held(0), true),
-            Field::Power3s => zone(held(0), true),
-            Field::Power10s => zone(held(1), true),
-            Field::Power30s => zone(held(2), true),
-            Field::Hr => zone(held(3), false),
+            Field::Power => zone(held(0), true),
+            Field::Power3s => zone(held(1), true),
+            Field::Power10s => zone(held(2), true),
+            Field::Power30s => zone(held(3), true),
+            Field::Hr => zone(held(4), false),
             Field::Np => p.np().map_or(ui::BLACK, |w| ride::power_color(ride::power_zone(w, ftp))),
             Field::MaxPower => p.max().map_or(ui::BLACK, |w| ride::power_color(ride::power_zone(w, ftp))),
             Field::MaxHr => {

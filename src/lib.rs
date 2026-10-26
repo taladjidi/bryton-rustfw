@@ -222,7 +222,7 @@ pub struct App {
     ftms: Ftms,
     live: Live,
     /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
-    zones: [ride::ZoneHold; 4],
+    zones: [ride::ZoneHold; 5],
     decoders: Decoders,
     /// RMSSD and DFA alpha1 from the strap's beats.
     hrv: hrv::Hrv,
@@ -511,7 +511,7 @@ impl App {
             trainer_quiet_s: 0,
             ask: 0,
             live: Live::default(),
-            zones: [ride::ZoneHold::default(); 4],
+            zones: [ride::ZoneHold::default(); 5],
             decoders: Decoders::default(),
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),
