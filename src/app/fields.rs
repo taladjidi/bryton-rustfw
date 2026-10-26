@@ -306,68 +306,46 @@ impl App {
         l
     }
 
-    /// The zone bar of field `f`, BLACK for none: the plain power fields (live, 3, 10 and 30 s) and the live heart rate
-    /// show their zone as a colour bar along the box's top, the number white (the zone at a glance without a filled
-    /// box, which made colour meaningless). POWER takes the 3 s average's zone (live power crosses a zone's edge all
-    /// the time). The zone changes after three seconds in the new one ([`ride::ZoneHold`]).
+    /// The edge bar of field `f` along the box's top, BLACK for none. One rule: the digits are white and the state is
+    /// the bar's: the power fields (live, 3, 10, 30 s, NP, max) and the heart rate (live, max) in their zone, W' balance as
+    /// it drains, the step target by how the reading sits against the band, CLIMB by its grade. POWER takes the 3 s
+    /// average's zone (live power crosses a zone's edge all the time); the live zones change after three seconds in the
+    /// new one ([`ride::ZoneHold`]).
     pub(crate) fn field_bar(&self, f: Field) -> u16 {
-        let (i, power) = match f {
-            Field::Power if self.live.shown(Metric::Power).is_some() => (0, true),
-            Field::Power3s => (0, true),
-            Field::Power10s => (1, true),
-            Field::Power30s => (2, true),
-            Field::Hr => (3, false),
-            _ => return ui::BLACK,
-        };
-        match (self.zones.get(i).map_or(0, ride::ZoneHold::shown), power) {
+        let zone = |z: u8, power: bool| match (z, power) {
             (0, _) => ui::BLACK,
             (z, true) => ride::power_color(z),
             (z, false) => ride::hr_color(z),
+        };
+        let held = |i: usize| self.zones.get(i).map_or(0, ride::ZoneHold::shown);
+        let (p, ftp) = (&self.power, self.settings.ftp);
+        match f {
+            Field::Power if self.live.shown(Metric::Power).is_some() => zone(held(0), true),
+            Field::Power3s => zone(held(0), true),
+            Field::Power10s => zone(held(1), true),
+            Field::Power30s => zone(held(2), true),
+            Field::Hr => zone(held(3), false),
+            Field::Np => p.np().map_or(ui::BLACK, |w| ride::power_color(ride::power_zone(w, ftp))),
+            Field::MaxPower => p.max().map_or(ui::BLACK, |w| ride::power_color(ride::power_zone(w, ftp))),
+            Field::MaxHr => {
+                self.ride.max_hr().map_or(ui::BLACK, |v| ride::hr_color(ride::hr_zone(v, self.settings.max_hr)))
+            }
+            Field::Wbal => p.wbal_j().map_or(ui::BLACK, |j| power::wbal_color(j, self.settings.wprime_j)),
+            Field::StepTarget => self.target_bar(),
+            Field::Climb => self.course_bar(f),
+            _ => ui::BLACK,
         }
     }
 
-    /// The colour of ride field `f`'s value: NP, max power and max heart rate in their zone's colour (the plain power
-    /// and heart rate fields are white, their zone a bar: [`App::field_bar`]),
-    /// W' balance as it drains ([`power::wbal_color`]), the rest white.
+    /// The colour of ride field `f`'s value: white, except the alarms in red (a shifting battery low, off course): the
+    /// state is the edge bar's ([`App::field_bar`]).
     pub(crate) fn field_color(&self, f: Field) -> u16 {
-        if f == Field::StepTarget {
-            return self.target_color();
-        }
-        if matches!(f, Field::Power | Field::Power3s | Field::Power10s | Field::Power30s | Field::Hr) {
-            return ui::WHITE; // the zone is the bar's ([`App::field_bar`])
-        }
-        if f == Field::WktPower {
-            return self.gauge_now(0).color;
-        }
-        if let Some(c) = self.course_color(f) {
-            return c;
-        }
         // a shifting battery low (20 % or less, or the ANT+ status low or critical): red, to charge before the ride
         let low = |s: u16| if s >= sensors::SHIFT_STATUS { s >= sensors::SHIFT_STATUS + 4 } else { s <= 20 };
         if f == Field::ShiftBattery && self.live.get(Metric::ShiftBattery).is_some_and(low) {
             return ui::RED;
         }
-        let p = &self.power;
-        let power = match f {
-            Field::Power => self.live.shown(Metric::Power),
-            Field::Power3s => p.rolling(0),
-            Field::Power10s => p.rolling(1),
-            Field::Power30s => p.rolling(2),
-            Field::Np => p.np(),
-            Field::MaxPower => p.max(),
-            _ => None,
-        };
-        let hr = match f {
-            Field::Hr => self.live.shown(Metric::Hr),
-            Field::MaxHr => self.ride.max_hr(),
-            _ => None,
-        };
-        match (power, hr, p.wbal_j()) {
-            (Some(w), _, _) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
-            (_, Some(v), _) => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
-            (_, _, Some(j)) if f == Field::Wbal => power::wbal_color(j, self.settings.wprime_j),
-            _ => ui::WHITE,
-        }
+        self.course_color(f).unwrap_or(ui::WHITE)
     }
 }
 

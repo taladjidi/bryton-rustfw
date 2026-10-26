@@ -199,21 +199,20 @@ impl App {
         l
     }
 
-    /// A course field's colour: OFF COURSE red once off course was said, CLIMB by its grade; None for the others.
+    /// A course field's colour: OFF COURSE red once off course was said (an alarm); None for the others.
     pub(crate) fn course_color(&self, f: Field) -> Option<u16> {
-        let (c, at) = self.on_course()?;
-        match f {
-            Field::OffCourse if at.off_course() => Some(ui::RED),
-            Field::Climb => {
-                let (k, on) = c.climb_at(at.along_m)?;
-                let g = match on {
-                    true => c.grade_ahead(at.along_m)?,
-                    false => c.climbs().get(k)?.grade_x10() as i32,
-                };
-                Some(ui::grade_color(g))
-            }
-            _ => None,
-        }
+        let (_, at) = self.on_course()?;
+        (f == Field::OffCourse && at.off_course()).then_some(ui::RED)
+    }
+
+    /// CLIMB's edge bar, by the grade of the climb (the one running, else the next); BLACK elsewhere.
+    pub(crate) fn course_bar(&self, f: Field) -> u16 {
+        let Some((c, at)) = self.on_course().filter(|_| f == Field::Climb) else { return ui::BLACK };
+        let grade = c.climb_at(at.along_m).and_then(|(k, on)| match on {
+            true => c.grade_ahead(at.along_m),
+            false => c.climbs().get(k).map(|k| k.grade_x10() as i32),
+        });
+        grade.map_or(ui::BLACK, ui::grade_color)
     }
 
     /// A course's menu row: its name, its length; green when followed.

@@ -210,12 +210,12 @@ impl App {
         l
     }
 
-    /// [`Field::StepTarget`]'s colour: green in the range, orange under, red over (3 s power, heart rate, cadence);
-    /// white without a reading or a target.
-    pub(crate) fn target_color(&self) -> u16 {
+    /// [`Field::StepTarget`]'s edge bar: how the reading (3 s power, heart rate, cadence) sits against the band, as the
+    /// gauge's marker ([`workout::gauge_color`]); BLACK without a reading or a target.
+    pub(crate) fn target_bar(&self) -> u16 {
         use storage::workout::Kind;
         let steps = self.plan.steps();
-        let Some(s) = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::WHITE };
+        let Some(s) = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
         let reading = match s.target.kind {
             Kind::Power => self.power.rolling(0),
             Kind::Hr => self.live.get(Metric::Hr),
@@ -223,10 +223,8 @@ impl App {
             Kind::Open => None,
         };
         match (reading, s.target.range(self.settings.ftp, self.settings.max_hr)) {
-            (Some(v), Some((lo, _))) if v < lo => ui::ACCENT,
-            (Some(v), Some((_, hi))) if v > hi => ui::RED,
-            (Some(_), Some(_)) => ui::GREEN,
-            _ => ui::WHITE,
+            (Some(v), Some(band)) => workout::gauge_color(v, band),
+            _ => ui::BLACK,
         }
     }
 
@@ -285,7 +283,7 @@ impl App {
             None => {}
         }
         let bar = g.bar(ui::gauge_cols(bx));
-        ui::draw_gauge(c, bx, (title.as_str(), target.as_str()), g.value.as_str(), g.color, bar);
+        ui::draw_gauge(c, bx, (title.as_str(), target.as_str()), g.value.as_str(), ui::WHITE, bar);
     }
 
     /// The workout gauge drawn as `old`: whole for another step, window or reading kind; else only the number's
@@ -298,9 +296,8 @@ impl App {
             self.draw_gauge(&mut p, bx, now);
             return Drawn::Gauge(now);
         }
-        if (now.value, now.color) != (old.value, old.color) {
-            let was = if now.color == old.color { old.value.as_str() } else { "" };
-            ui::draw_gauge_value(&mut p, bx, was, now.value.as_str(), now.color);
+        if now.value != old.value {
+            ui::draw_gauge_value(&mut p, bx, old.value.as_str(), now.value.as_str(), ui::WHITE); // the marker has the state
         }
         if let Some(bar) = now.bar(cols).filter(|_| (now.marker, now.color) != (old.marker, old.color)) {
             ui::draw_gauge_marker(&mut p, bx, old.bar(cols).and_then(|b| b.1), bar);

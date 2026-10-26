@@ -850,7 +850,11 @@ fn workout_from_the_calendar() {
     let fields = |app: &App| [StepTarget, StepTime, NextStep, Workout].map(|f| text(app, f));
     assert_eq!(fields(&app), ["110|+-10", "0:20", "210|+-10", "1/6"]);
     run(&mut sim, &mut app, 5000);
-    assert_eq!(app.field_color(StepTarget), ui::RED, "210 W over 100-120");
+    assert_eq!(
+        (app.field_color(StepTarget), app.field_bar(StepTarget)),
+        (ui::WHITE, crate::ride::ZONE_COLORS[5]),
+        "210 W over 100-120: white digits, the bar says over"
+    );
     let (mut ms, start) = (0, sim.ms);
     while app.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
         run(&mut sim, &mut app, 50);
@@ -866,7 +870,11 @@ fn workout_from_the_calendar() {
     assert_eq!(app.banner.as_str(), "2/6 200-220W");
     run(&mut sim, &mut app, 5000);
     assert_eq!(fields(&app), ["210|+-10", "0:25", "150", "2/6"]);
-    assert_eq!(app.field_color(StepTarget), ui::GREEN, "210 W in 200-220");
+    assert_eq!(
+        (app.field_color(StepTarget), app.field_bar(StepTarget)),
+        (ui::WHITE, crate::ride::ZONE_COLORS[2]),
+        "210 W in 200-220"
+    );
     assert_consistent(&sim, &app);
     sim.save("workout_ride");
 
@@ -881,7 +889,11 @@ fn workout_from_the_calendar() {
     // Lap: the next step; the open cool-down waits for Lap; then done
     app.press(&mut sim, Press::Short(Key::Lap));
     assert_eq!((text(&app, Workout), app.banner.as_str()), ("3/6".into(), "3/6 150W"));
-    assert_eq!(app.field_color(StepTarget), ui::RED, "210 W over 150 W");
+    assert_eq!(
+        (app.field_color(StepTarget), app.field_bar(StepTarget)),
+        (ui::WHITE, crate::ride::ZONE_COLORS[5]),
+        "210 W over 150 W"
+    );
 
     // one workout at a time: while it runs, another one's steps do not open, its own do
     app.press(&mut sim, Press::Long(Key::Page));
@@ -3218,8 +3230,12 @@ fn derived_power_and_climb_fields() {
     let wbal = app.power.wbal_j().unwrap();
     assert!((7900..=8100).contains(&wbal), "W' bal {wbal} J: 20 kJ - 120 s x 100 W");
     assert_eq!(text(&app, Wbal), format!("{}.{}", wbal / 1000, wbal % 1000 / 100));
-    assert_eq!(app.field_color(Wbal), crate::ride::ZONE_COLORS[4], "40 %: orange");
-    assert_eq!(app.field_color(Np), crate::ride::power_color(6), "150 % of FTP");
+    assert_eq!(
+        (app.field_color(Wbal), app.field_bar(Wbal)),
+        (ui::WHITE, crate::ride::ZONE_COLORS[4]),
+        "40 %: orange bar"
+    );
+    assert_eq!((app.field_color(Np), app.field_bar(Np)), (ui::WHITE, crate::ride::power_color(6)), "150 % of FTP");
     assert_eq!((text(&app, AvgCadence), text(&app, Balance)), ("85".into(), "52/48".into()));
     let max_hr = app.ride.max_hr().unwrap();
     assert_eq!(text(&app, MaxHr), format!("{max_hr}"));
@@ -4050,7 +4066,7 @@ fn course_ride() {
     assert_eq!(f[2], "1.6K|6%", "1.6 km left: {f:?}");
     let m = |i: usize| f[i].parse::<u32>().unwrap();
     assert!(m(3).abs_diff(96) <= 2 && m(4).abs_diff(96) <= 6, "96 m left to climb: {f:?}");
-    assert_eq!(app.field_color(Climb), ui::YELLOW, "6 %");
+    assert_eq!((app.field_color(Climb), app.field_bar(Climb)), (ui::WHITE, ui::YELLOW), "6 %");
     assert_consistent(&sim, &app);
     sim.save("course_fields");
 
