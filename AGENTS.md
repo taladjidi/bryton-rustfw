@@ -111,7 +111,7 @@ The point of this project is a firmware in safe Rust.
 ## Layout: logic in the library, transport in the board
 
 Folders sort the files; the modules keep their own names (`crate::ambient`, re-exported from lib.rs):
-- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), `ride.rs`, `sim.rs` (tests), and the module roots below;
+- `src/`: `lib.rs` (the app), `main.rs` (the board and the loop), and nothing else: every other file is in a folder;
 - `src/app/`: the app's parts, one `impl App` per concern;
 - `src/drivers/`: each chip's or radio's protocol against `Board`;
 - `src/ui/`: what is drawn, the menus and the ride pages' layout (`page.rs`);
@@ -120,18 +120,15 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/link/`: the USB dev link, USB mass storage and the phone link's formats;
 - `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
-- `src/drivers.rs`: the module root of `src/drivers/`.
-- `src/storage.rs`: the module root of `src/storage/`.
-- `src/ui.rs`, `src/training.rs`, `src/nav.rs`, `src/link.rs`, `src/app.rs`: the module roots of their folders (no `mod.rs`); lib.rs re-exports the
-  modules of `drivers`, `storage`, `ui`, `training`, `nav` and `link` at the crate root.
-- `src/board.rs`: the module root of `src/board/`.
+- Each folder's module root is its `mod.rs` (`src/drivers/mod.rs`, ...); lib.rs re-exports the modules of `drivers`, `storage`, `ui`,
+  `training`, `nav` and `link` at the crate root, so paths stay `crate::ride`. `src/sim/` is the tests' simulator (`Sim`).
 
 - `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
   to that: a new concern goes in its own file in `src/app/`.
   - `Board` is the only way to reach hardware. Each method is a primitive: send a panel command, read RTC_TR,
     read the keys, sleep.
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
-- `src/app.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
+- `src/app/mod.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
   read; a method another file calls is `pub(crate)`.
@@ -165,7 +162,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
     use refused), when it may be (no ride running or unsaved), taken back on eject, a restart after the computer
     wrote.
-- `src/ui.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
+- `src/ui/mod.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
 - `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
   `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
@@ -189,14 +186,14 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
 - `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
-- `src/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
+- `src/training/ride.rs`: the ride (Start / pause / lap / end, auto-pause, totals), the heart-rate and power zones and their
   colours, the history behind the graph field. Pure logic, one tick a second; each change comes out as an `Event`
   for the recorder (`App::recorder`, the one place the FIT writer will plug in).
 - `src/ui/page.rs`: a ride page as rows of cells (up to 5 rows of 1 or 2, 8 fields), the layouts as presets, the edits
   (split across or down, merge, taller, shorter, a field) that never leave a field too small to read, and the
   format of `pages.bin` (two copies, seq and CRC). Pure logic.
 - `src/training/power.rs`: power metrics once a second (3 / 10 / 30 s averages, NP, IF, TSS, kJ, kcal, W' balance), running
-  sums over a ring, integers only; ride.rs keeps max heart rate and the climbing (VAM, grade). Pure logic.
+  sums over a ring, integers only; `training/ride.rs` keeps max heart rate and the climbing (VAM, grade). Pure logic.
 - `src/ui/card.rs`: a ride's card once it has ended, and for each past ride: its map, elevation profile and ten
   numbers. Drawn once, when shown.
 - `src/ui/media.rs`: the media player screen: what the phone says is playing (AMS), a progress bar, touch buttons,
@@ -267,7 +264,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
   basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at the first main loop pass, for the scan's cache of
   stock's rides; at boot at the first start, for stock's settings, or when a ride is open).
-- `src/storage/fat.rs`: a FAT32 reader: boot sector, chains, 8.3 and long names, files at an offset, directory
+- `src/storage/fat/mod.rs`: a FAT32 reader: boot sector, chains, 8.3 and long names, files at an offset, directory
   listings; every loop bounded. Tested on `test-data/fat32.sparse`, a volume macOS made (`tools/fat_image.py`,
   which also puts made-up stock rides and settings files on it). `src/storage/fat/write.rs`: the write path, only
   what the recorder needs (create with a long name, write sectors, set the size, move by delete + link, mark
@@ -302,7 +299,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
 - `src/storage/course.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
-  memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course.rs`: the course model,
+  memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
   pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
   off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns. `src/nav/course/cues.rs`:
   turn-by-turn cues (FIT course points, GPX turn words, else the turns of the course's shape), the next one said.
@@ -331,7 +328,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/link/msc.rs`: USB mass storage, SCSI over Bulk-Only Transport (the commands a computer needs to mount the FAT
   volume, the 13 cases by padding IN and taking all of OUT, sense data), against the `Pipe` (bulk endpoints) and
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
-- `src/sim.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
+- `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),

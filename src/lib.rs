@@ -5,7 +5,7 @@
 //! `cargo test-host`. Rule: logic goes here, `main.rs` only moves bytes and reads pins (AGENTS.md).
 //!
 //! This file holds the [`Board`] trait and [`App`]: its state, [`App::start`] and the main loop's pass
-//! ([`App::step`]). The rest of the app is in `app/`, one `impl App` per concern (app.rs lists them).
+//! ([`App::step`]). The rest of the app is in `app/`, one `impl App` per concern (app/mod.rs lists them).
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -15,7 +15,6 @@ mod app;
 pub mod drivers;
 pub mod link;
 pub mod nav;
-pub mod ride;
 #[cfg(test)]
 mod sim;
 pub mod storage;
@@ -27,9 +26,9 @@ pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, pan
 pub use link::{dev, msc, phone};
 pub use nav::{altitude, climbs_ahead, course};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
-pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, ramp, trainer, workout};
+pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, ramp, ride, trainer, workout};
 pub use ui::{fonts, map, menu, page, text, tiles};
-// the app's parts (app.rs), at the root as before the split
+// the app's parts (app/mod.rs), at the root as before the split
 pub use app::*;
 
 use menu::{Input, Setting};
