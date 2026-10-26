@@ -21,6 +21,7 @@ mod more;
 mod notifs;
 mod pace;
 mod phone;
+mod powercal;
 mod profile;
 mod radio;
 mod ramp;

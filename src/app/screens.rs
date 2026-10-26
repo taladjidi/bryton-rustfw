@@ -189,6 +189,7 @@ impl App {
             }
             Screen::Trainer => self.draw_trainer(c),
             Screen::RampResult => self.draw_ramp(c),
+            Screen::PowerCal => self.draw_powercal(c),
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
             Screen::About => ui::draw_about(c, env!("CARGO_PKG_VERSION"), env!("GIT_DESCRIBE"), env!("GIT_DATE")),
             Screen::Nearby => {

@@ -532,6 +532,16 @@ impl Decoders {
 mod tests {
     use super::*;
 
+    /// The calibration page (0x01, and its offset bytes that look like power) gives no power, cadence or balance.
+    #[test]
+    fn calibration_page_is_no_power() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Power, [1, 0xac, 1, 0xff, 0xff, 0xff, 0x2c, 0x01], 2105, &mut live);
+        assert_eq!([Metric::Power, Metric::Cadence, Metric::Balance].map(|m| live.get(m)), [None; 3]);
+        dec.decode(Kind::Power, [0x10, 1, 0xff, 85, 0, 0, 210, 0], 2105, &mut live);
+        assert_eq!(live.get(Metric::Power), Some(210));
+    }
+
     /// A counter that jumped (a battery change, a sensor back after minutes) gives no reading, not an overflow
     /// or a huge speed.
     #[test]

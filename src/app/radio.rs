@@ -97,6 +97,9 @@ impl App {
                         }
                     }
                     self.decoders.decode(kind, data, self.settings.wheel_mm, &mut self.live);
+                    if let (Kind::Power, Some(r)) = (kind, powercal::reply(data)) {
+                        self.powercal.heard(r); // page 0x01: the calibration's answer (decode ignores it)
+                    }
                     if kind == Kind::Trainer {
                         fec::decode(data, &mut self.trainer.reading);
                         self.fold_trainer();
@@ -114,6 +117,8 @@ impl App {
                     }
                 } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
                     self.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
+                } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
+                    self.powercal.unsent(); // a calibration request the meter did not take: sent again
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
                     self.trainer.unsent(); // an acknowledged message the trainer did not take: sent again
                 } else if nrf::ant_tx_completed(p) == Some(Kind::Trainer.channel()) {

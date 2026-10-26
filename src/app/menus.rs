@@ -157,6 +157,7 @@ impl App {
                 let rows = [
                     (Row::BtTrainer, true),
                     (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
+                    (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
                     (Row::Open(Menu::Remote), true),
                     (Row::Open(Menu::Phone), true),
                 ];
@@ -235,6 +236,7 @@ impl App {
                     RideRow::StopWorkout => "STOP WORKOUT",
                     RideRow::StopCourse => "STOP FOLLOWING",
                     RideRow::Trainer => "TRAINER CONTROL",
+                    RideRow::CalPower => "CALIBRATE POWER",
                     RideRow::Indoor => "INDOOR",
                     RideRow::PageSet => "PAGES OF",
                 });
@@ -644,6 +646,7 @@ impl App {
                         self.leave_menus();
                     }
                     RideRow::Trainer => self.open(Screen::Trainer),
+                    RideRow::CalPower => self.open_powercal(),
                     RideRow::Indoor => self.toggle_indoor(),
                     RideRow::PageSet if self.ride.state() != ride::State::Idle => self.say("THE RIDE'S SET"),
                     RideRow::PageSet => self.pages_indoor = !self.pages_indoor,
