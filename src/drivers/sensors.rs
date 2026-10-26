@@ -63,6 +63,9 @@ pub enum Kind {
     Trainer,
 }
 
+// `App::ask` is a u8 mask with one bit per channel (`1 << kind.channel()`): a ninth kind needs a wider mask.
+const _: () = assert!(Kind::ALL.len() <= u8::BITS as usize);
+
 impl Kind {
     /// Every kind, in channel order.
     pub const ALL: [Kind; 8] = [
