@@ -121,7 +121,7 @@ impl App {
         }
         let color = match (reading, band) {
             (Some(v), Some(b)) => workout::gauge_color(v, b),
-            (Some(w), None) => ride::power_color(ride::power_zone(w, self.settings.ftp)),
+            (Some(w), None) => ride::power_zone_color(w, self.settings.ftp),
             (None, _) => ui::WHITE,
         };
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);

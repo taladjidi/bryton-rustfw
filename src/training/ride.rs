@@ -534,6 +534,12 @@ pub const MAX_HR: u16 = 190;
 /// FTP before it is set, W (conventional).
 pub const FTP: u16 = 200;
 
+/// Where power zones 2 to 7 start, % of FTP (Coggan's 55, 75, 90, 105, 120, 150, rounded up so a whole-percent
+/// reading falls in the zone above the edge). The one copy: zones, gauge and workout files read it.
+pub const POWER_ZONE_PCT: [u32; 6] = [56, 76, 91, 106, 121, 151];
+/// Where heart-rate zones 2 to 5 start, % of the maximum.
+pub const HR_ZONE_PCT: [u32; 4] = [60, 70, 80, 90];
+
 /// Heart-rate zone 1 to 5 of `bpm` for a maximum of `max`: under 60, 70, 80, 90 % of it, then above
 /// (conventional percent-of-max zones; stock's own default is seven zones).
 ///
@@ -543,7 +549,7 @@ pub const FTP: u16 = 200;
 /// ```
 pub fn hr_zone(bpm: u16, max: u16) -> u8 {
     let pct = u32::from(bpm) * 100 / u32::from(max.max(1));
-    [60, 70, 80, 90].iter().filter(|&&t| pct >= t).count() as u8 + 1
+    HR_ZONE_PCT.iter().filter(|&&t| pct >= t).count() as u8 + 1
 }
 
 /// Power zone 1 to 7 of `w` for an FTP of `ftp` (Coggan's: 55, 75, 90, 105, 120, 150 % of FTP).
@@ -554,7 +560,7 @@ pub fn hr_zone(bpm: u16, max: u16) -> u8 {
 /// ```
 pub fn power_zone(w: u16, ftp: u16) -> u8 {
     let pct = u32::from(w) * 100 / u32::from(ftp.max(1));
-    [56, 76, 91, 106, 121, 151].iter().filter(|&&t| pct >= t).count() as u8 + 1
+    POWER_ZONE_PCT.iter().filter(|&&t| pct >= t).count() as u8 + 1
 }
 
 /// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 yellow,
@@ -577,6 +583,16 @@ pub fn hr_color(z: u8) -> u16 {
 /// The colour of power zone `z` (1 to 7): teal, green, olive, brown, wine, purple, slate (Intervals.icu's).
 pub fn power_color(z: u8) -> u16 {
     ZONE_COLORS[usize::from(z.clamp(1, 7) - 1)]
+}
+
+/// The colour of the power zone of `w` watts at an FTP of `ftp`.
+pub fn power_zone_color(w: u16, ftp: u16) -> u16 {
+    power_color(power_zone(w, ftp))
+}
+
+/// The colour of the heart-rate zone of `bpm` at a maximum of `max`.
+pub fn hr_zone_color(bpm: u16, max: u16) -> u16 {
+    hr_color(hr_zone(bpm, max))
 }
 
 // ---------------------------------------------------------------------------------------------------------------

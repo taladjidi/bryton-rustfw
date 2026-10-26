@@ -331,11 +331,9 @@ impl App {
             Field::Power10s => zone(held(2), true),
             Field::Power30s => zone(held(3), true),
             Field::Hr => zone(held(4), false),
-            Field::Np => p.np().map_or(ui::BLACK, |w| ride::power_color(ride::power_zone(w, ftp))),
-            Field::MaxPower => p.max().map_or(ui::BLACK, |w| ride::power_color(ride::power_zone(w, ftp))),
-            Field::MaxHr => {
-                self.ride.max_hr().map_or(ui::BLACK, |v| ride::hr_color(ride::hr_zone(v, self.settings.max_hr)))
-            }
+            Field::Np => p.np().map_or(ui::BLACK, |w| ride::power_zone_color(w, ftp)),
+            Field::MaxPower => p.max().map_or(ui::BLACK, |w| ride::power_zone_color(w, ftp)),
+            Field::MaxHr => self.ride.max_hr().map_or(ui::BLACK, |v| ride::hr_zone_color(v, self.settings.max_hr)),
             Field::Wbal => p.wbal_j().map_or(ui::BLACK, |j| power::wbal_color(j, self.cp_model().1)),
             // in ERG the trainer sets the watts: what the rider controls is cadence, and under 60 rpm the resistance
             // climbs (an alarm, so red)

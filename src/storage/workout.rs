@@ -407,8 +407,18 @@ fn expand(w: &mut Workout, raw: &[Raw]) {
 
 /// Power zones 1 to 7 as % FTP (ride.rs `power_zone`), heart rate zones 1 to 5 as % max (`hr_zone`): zone z is
 /// from entry z - 1 to entry z.
-const POWER_ZONES: [u16; 8] = [0, 56, 76, 91, 106, 121, 151, 200];
-const HR_ZONES: [u16; 6] = [50, 60, 70, 80, 90, 100];
+const POWER_ZONES: [u16; 8] = zone_table([0, 0, 0, 0, 0, 0, 0, 200], &crate::ride::POWER_ZONE_PCT);
+const HR_ZONES: [u16; 6] = zone_table([50, 0, 0, 0, 0, 100], &crate::ride::HR_ZONE_PCT);
+
+/// `ends` with the zone edges `pct` written between its first and last entries.
+const fn zone_table<const N: usize>(mut ends: [u16; N], pct: &[u32]) -> [u16; N] {
+    let mut i = 0;
+    while i < pct.len() {
+        ends[i + 1] = pct[i] as u16;
+        i += 1;
+    }
+    ends
+}
 
 fn step(r: &Raw) -> Step {
     let len = match (r.dt, r.dv) {

@@ -179,8 +179,8 @@ impl App {
             return (0, ui::BLACK);
         }
         let color = match g.plot {
-            Plot::Power => ride::power_color(ride::power_zone(v, self.settings.ftp)),
-            Plot::Hr => ride::hr_color(ride::hr_zone(v, self.settings.max_hr)),
+            Plot::Power => ride::power_zone_color(v, self.settings.ftp),
+            Plot::Hr => ride::hr_zone_color(v, self.settings.max_hr),
             Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.cp_model().1),
             Plot::Dfa => ride::dfa_color(v),
             Plot::Alt => ui::GREY,

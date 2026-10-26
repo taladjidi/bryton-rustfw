@@ -134,11 +134,11 @@ pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
     match (s.target.kind, s.target.range(ftp, max_hr)) {
         (Kind::Power, Some((lo, hi))) => {
             let mid = lo.midpoint(hi);
-            (per_mille(mid.into(), 0, ftp32 * 3 / 2), ride::power_color(ride::power_zone(mid, ftp)))
+            (per_mille(mid.into(), 0, ftp32 * 3 / 2), ride::power_zone_color(mid, ftp))
         }
         (Kind::Hr, Some((lo, hi))) => {
             let mid = lo.midpoint(hi);
-            (per_mille(mid.into(), max32 / 2, max32), ride::hr_color(ride::hr_zone(mid, max_hr)))
+            (per_mille(mid.into(), max32 / 2, max32), ride::hr_zone_color(mid, max_hr))
         }
         (Kind::Open, _) => (250, ui::GREY),
         _ => (250, ui::WHITE),
@@ -243,8 +243,8 @@ pub fn gauge_x(v: u16, (a, b): (u32, u32), cols: u32) -> u32 {
 pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, ftp: u16, max_hr: u16) -> [(u32, u16); 7] {
     let (a, b) = gauge_scale(kind, band, ftp, max_hr);
     let (pcts, base): (&[u32], u32) = match kind {
-        Kind::Power => (&[56, 76, 91, 106, 121, 151], u32::from(ftp.max(1))),
-        Kind::Hr => (&[60, 70, 80, 90], u32::from(max_hr.max(1))),
+        Kind::Power => (&ride::POWER_ZONE_PCT, u32::from(ftp.max(1))),
+        Kind::Hr => (&ride::HR_ZONE_PCT, u32::from(max_hr.max(1))),
         _ => (&[], 1),
     };
     let col_of = |w: u32| match w {
@@ -373,7 +373,7 @@ mod tests {
         let col = |rider, k| column(&steps, (200, 180), (9, 60), rider, k);
         let bars: Vec<_> = (0..9).map(|k| col(None, k)).collect();
         let z2 = ride::power_color(2); // 130 W of 200
-        let hr = ride::hr_color(ride::hr_zone(162, 180));
+        let hr = ride::hr_zone_color(162, 180);
         assert_eq!(bars[..3], [(25, z2); 3], "130 W of 0 to 300 W: 60 x 0.433");
         assert_eq!(bars[3..6], [(48, hr); 3], "162 bpm between 90 and 180: 60 x 0.8");
         assert_eq!(bars[6..], [(15, ui::GREY); 3], "open: a quarter");
@@ -406,7 +406,7 @@ mod tests {
             for v in a..b {
                 let col = gauge_x(v as u16, (a, b), cols);
                 let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
-                assert_eq!(zone, ride::power_color(ride::power_zone(v as u16, ftp)), "{v} W at FTP {ftp}");
+                assert_eq!(zone, ride::power_zone_color(v as u16, ftp), "{v} W at FTP {ftp}");
             }
         }
         for max in [170, 190] {
@@ -415,7 +415,7 @@ mod tests {
             for v in a..b {
                 let col = gauge_x(v as u16, (a, b), (b - a) * 2);
                 let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
-                assert_eq!(zone, ride::hr_color(ride::hr_zone(v as u16, max)), "{v} bpm at {max}");
+                assert_eq!(zone, ride::hr_zone_color(v as u16, max), "{v} bpm at {max}");
             }
             assert_eq!(z[5].0, u32::MAX, "only five heart-rate zones");
         }
