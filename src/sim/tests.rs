@@ -503,12 +503,36 @@ fn stock_data_menu() {
     let reads = sim.emmc.cmds[cmds0..].iter().filter(|c| c.0 == 17 || c.0 == 18).count();
     std::println!("scan: {} bytes, {} reads, {} passes", app.stock.out.bytes, reads, (sim.ms - t0) / 50);
     assert_eq!(app.stock.status(), crate::stock::Status::Done);
-    assert_eq!([0, 4, 8].map(|i| value(&app, i)), ["4", "19", "37"].map(std::string::String::from));
+    let at = |r| menu::FITNESS.iter().position(|&x| x == r).unwrap();
+    use menu::StockRow as S;
+    let rows = [S::Scan, S::WeekKm, S::AllKm].map(at);
+    assert_eq!(rows.map(|i| value(&app, i)), ["4", "19", "37"].map(std::string::String::from));
     let cp = crate::power_curve::fit_cp(&app.stock.out.curve).unwrap();
     assert_eq!(value(&app, 1), std::format!("{} W", cp.cp));
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
     sim.save("stock");
+    assert!(cp.trusted());
+    assert_eq!(value(&app, at(S::EstFtp)), std::format!("{} W CP", cp.cp));
+    assert_eq!(value(&app, at(S::Model)), "CP FIT");
+    assert_eq!(value(&app, at(S::Hrvt1)), "--", "no full copy on this volume");
+
+    // APPLY FTP, then APPLY W': asked, then the estimate into the setting, saved
+    for (row, want) in [(S::ApplyFtp, (cp.cp + 2) / 5 * 5), (S::ApplyWPrime, ((cp.w_prime + 250) / 500 * 500) as u16)] {
+        back(&mut sim, &mut app); // HISTORY
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Stock));
+        app.press(&mut sim, Press::Short(Key::Start));
+        to_row(&mut sim, &mut app, menu::Row::Stock(row));
+        let got = |app: &App| if row == S::ApplyFtp { app.settings.ftp } else { app.settings.wprime_j };
+        let before = got(&app);
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(got(&app), before, "asked first");
+        app.press(&mut sim, Press::Short(Key::Start));
+        assert_eq!(got(&app), want);
+    }
+    let saved = Settings::from_word(sim.backup[WHEEL_BKP]).with_power_word(sim.backup[POWER_BKP]);
+    assert_eq!((saved.ftp, saved.wprime_j), (app.settings.ftp, app.settings.wprime_j), "saved");
+    run(&mut sim, &mut app, 5000); // the banner gone
 
     app.press(&mut sim, Press::Short(Key::Back)); // HISTORY
     app.press(&mut sim, Press::Short(Key::Back)); // MENU
@@ -525,6 +549,43 @@ fn stock_data_menu() {
     assert_eq!((app.settings.weight_kg, app.settings.wprime_j), (73, 21_000), "72.5 kg rounded, W' in J");
     assert!(app.notices[0].as_str().ends_with("IMPORTED 8"), "{}", app.notices[0].as_str());
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
+}
+
+/// The ride's CP and W' are taken at its start and kept (app/fitness.rs): a ride started while the scan reads keeps
+/// the settings' pair after the scan has the curve, for W' balance and the pacer alike; the next ride takes the fit's.
+#[test]
+fn ride_model_latched_at_start() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    let settings = (app.settings.ftp, app.settings.wprime_j);
+    app.stock.start(app.date); // READ RIDES
+    app.start_pause(); // a ride, before the curve is read
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert_eq!(app.cp_model(), settings);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 120_000);
+    }
+    let fit = app.cp_fit().unwrap();
+    assert!(fit.trusted() && (fit.cp, fit.w_prime as u16) != settings, "{fit:?}");
+    assert_eq!(app.cp_model(), settings, "kept for the whole ride");
+    let r = app.pace_rider();
+    assert_eq!((r.cp, r.w_full), (f32::from(settings.0), f32::from(settings.1)), "the pacer too");
+    let value = |app: &App, r| {
+        let i = menu::FITNESS.iter().position(|&x| x == r).unwrap();
+        std::string::String::from(app.menu_row(Menu::Stock, i).unwrap().1.as_str())
+    };
+    assert_eq!(value(&app, menu::StockRow::Model), "SETTINGS", "the ride's");
+    app.start_pause(); // pause
+    app.end_ride();
+    assert_eq!(app.ride.state(), ride::State::Idle);
+    let want = (fit.cp, fit.w_prime as u16);
+    assert_eq!(app.cp_model(), want, "between rides: what a ride would take now");
+    assert_eq!(value(&app, menu::StockRow::Model), "CP FIT");
+    run(&mut sim, &mut app, 3000);
+    app.start_pause(); // the next ride
+    assert_eq!(app.cp_model(), want);
 }
 
 /// The first start over a volume stock used (the synthetic one, tools/fat_image.py) takes stock's settings and

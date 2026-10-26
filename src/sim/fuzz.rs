@@ -282,6 +282,62 @@ fn fit_files() {
     }
 }
 
+/// Random power curves into the critical power fit (power_curve.rs `fit_cp`): bests from 0 to 2000 W, some missing,
+/// some shaped like a rider's; the fit must get past its checks often (the envelope found) and give a CP, W' and
+/// quality in range, never a panic.
+#[test]
+fn power_curves() {
+    use crate::power_curve::{Curve, DURATIONS, N, fit_cp};
+    let mut next = xorshift(17);
+    let (mut fits, mut trusted) = (0, 0);
+    for _ in 0..200_000 {
+        let mut c = Curve::default();
+        let (cp, wp) = (next() % 450 + 50, next() % 40_000 + 1);
+        for (w, &t) in c.watts.iter_mut().zip(&DURATIONS) {
+            *w = match next() % 8 {
+                0 => 0,                      // no best that long
+                1 => (next() % 2001) as u16, // anything
+                _ => {
+                    let model = cp + wp / u32::from(t);
+                    (model - model * (next() % 12) / 100).min(2000) as u16 // a best up to 11 % under the model
+                }
+            };
+        }
+        let Some(f) = fit_cp(&c) else { continue };
+        fits += 1;
+        trusted += usize::from(f.trusted());
+        assert!(f.cp > 0 && f.cp < 2000 && f.w_prime > 0 && f.w_prime < 200_000, "{f:?} {c:?}");
+        assert!(f.points <= f.of && usize::from(f.of) <= N, "{f:?}");
+    }
+    assert!(fits > 50_000 && trusted > 10_000, "{fits} fits, {trusted} trusted");
+}
+
+/// Full copies (alpha1 in a developer field) with bytes changed, through the reader with alpha1 and the threshold
+/// fit (hrvt.rs) as FITNESS reads them (storage/thresholds.rs): never a panic, and the alpha1 path reached.
+#[test]
+fn full_copies() {
+    use crate::fitread::{Msg, Reader};
+    let good = crate::storage::thresholds::tests::full_copy(1_000_000, 900, |t| (140 + t / 5) as u16, true);
+    let (mut noise, mut alpha) = (bytes(23, 1 << 20), 0usize);
+    for k in 0..3000 {
+        let mut bad = good.clone();
+        for _ in 0..k % 5 {
+            let at = (usize::from(noise.next().unwrap_or(0)) << 8 | usize::from(noise.next().unwrap_or(0))) % bad.len();
+            bad[at] = noise.next().unwrap_or(0);
+        }
+        let (mut r, mut fit) = (Reader::with_alpha1(), crate::hrvt::RideFit::new());
+        r.push_slice(&bad, |m| {
+            if let Msg::Record(x) = m {
+                alpha += usize::from(x.alpha1_milli.is_some());
+                fit.sample(x.time, x.power, x.alpha1_milli);
+            }
+        });
+        let t = fit.thresholds();
+        assert!(t.vt1.is_none_or(|w| w < 2000) && t.vt2.is_none_or(|w| w < 2000), "{t:?}");
+    }
+    assert!(alpha > 100_000, "{alpha} records with alpha1");
+}
+
 /// Workout files (storage/workout.rs): a good file with bytes changed, and random messages, each behind a good
 /// header and with its CRC made right, so the decoder (not the CRC check) gets them.
 #[test]

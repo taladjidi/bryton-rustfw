@@ -38,6 +38,7 @@ impl App {
         });
         if ev == ride::Event::Start {
             self.power.new_ride();
+            self.ride_model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
             (self.profile_by_hand, self.profile) = (false, ride::Profile::Road);
             self.choose_profile(); // after the banner above: INDOOR RIDE replaces it
         }
@@ -303,12 +304,16 @@ impl App {
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
                 self.power.new_ride();
+                self.ride_model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
                 let now = self.now_s();
                 self.alt.ride_start(now);
                 self.notice("RIDE RESUMED");
             }
             recorder::Outcome::Saved(_) => {
                 self.notice("RIDE SAVED");
+                if let Some(t) = self.thresholds.as_deref_mut() {
+                    t.reset(); // its full copy read too, when FITNESS next shows
+                }
                 if self.stock.status() != stock::Status::Idle {
                     self.stock.start(self.date); // the history again, with this ride
                 }

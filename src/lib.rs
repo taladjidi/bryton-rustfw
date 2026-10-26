@@ -19,6 +19,7 @@ pub mod course;
 pub mod dev;
 pub mod drivers;
 pub mod hrv;
+pub mod hrvt;
 pub mod msc;
 pub mod pacing;
 pub mod page;
@@ -35,7 +36,7 @@ pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, trash};
+pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
 pub use app::*;
@@ -369,6 +370,12 @@ pub struct App {
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course::Courses>,
+    /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
+    /// for the whole ride.
+    ride_model: Option<(u16, u16, bool)>,
+    /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
+    /// main.rs: [`App::set_threshold_memory`], 3 KB the app has no room for).
+    thresholds: Option<&'static mut thresholds::Scan>,
     /// The climb pacer's plan (app/pace.rs).
     pace: PaceState,
     /// The road ahead: climbs found with no course followed (memory from main.rs: [`App::set_ahead_memory`]).
@@ -572,6 +579,8 @@ impl App {
             lag_s: 0,
             courses: None,
             pace: PaceState::new(),
+            ride_model: None,
+            thresholds: None,
             ahead: None,
             ahead_us: (0, 0),
             drive: msc::Drive::new(),
@@ -756,6 +765,7 @@ impl App {
             self.step_courses(b);
             self.step_ahead(b);
             self.step_past(b);
+            self.step_thresholds(b);
             self.step_pages(b);
         }
         if self.edit.is_some() && self.ride.state() == ride::State::Running {

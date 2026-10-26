@@ -737,6 +737,9 @@ impl App {
                 self.import_stock(b, false)
             }
             Some(Row::Stock(menu::StockRow::Import)) => {}
+            Some(Row::Stock(r @ (menu::StockRow::ApplyFtp | menu::StockRow::ApplyWPrime))) => {
+                self.apply_estimate(b, menu, sel, r)
+            }
             Some(Row::Phone(r)) => {
                 use menu::PhoneRow;
                 match r {

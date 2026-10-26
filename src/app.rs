@@ -10,6 +10,7 @@ mod device;
 mod drive;
 mod editor;
 mod fields;
+mod fitness;
 mod ftms;
 mod gps;
 mod graphs;

@@ -33,8 +33,11 @@ impl App {
     pub(crate) fn stock_value(&self, r: menu::StockRow, v: &mut Line<12>) {
         use menu::StockRow as S;
         let o = &self.stock.out;
-        let cp = power_curve::fit_cp(&o.curve);
+        let cp = self.cp_fit();
         match (r, self.stock.status()) {
+            (S::EstFtp | S::Model | S::ApplyFtp | S::ApplyWPrime | S::Hrvt1 | S::Hrvt2 | S::HrvRides, _) => {
+                self.fitness_value(r, v)
+            }
             (S::Scan, stock::Status::Idle) => v.push_str("GO"),
             (S::Scan, stock::Status::Running) => v.push_u32(u32::from(self.stock.listed)),
             (S::Scan, stock::Status::Done) => v.push_u32(u32::from(o.all.rides)),
@@ -52,10 +55,13 @@ impl App {
                 v.push_str(" KJ");
             }
             (S::Fit, _) => {
-                let c = cp.map_or((0, 0), |c| (c.points, c.err_pct));
+                // "4/7 PTS 2%": bests on the model of those of 2 to 30 minutes, the largest gap
+                let c = cp.map_or((0, 0, 0), |c| (c.points, c.of, c.err_pct));
                 v.push_u32(u32::from(c.0));
-                v.push_str(" PTS ");
+                v.push_str("/");
                 v.push_u32(u32::from(c.1));
+                v.push_str(" PTS ");
+                v.push_u32(u32::from(c.2));
                 v.push_str("%");
             }
             (S::WeekKm, _) => v.push_u32(o.week.dist_m / 1000),

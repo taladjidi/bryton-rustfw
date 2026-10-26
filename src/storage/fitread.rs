@@ -33,6 +33,11 @@
 //! - message 32 `course_point`, with the position only: 2 position_lat, 3 position_long (sint32 semicircles), 4 distance (uint32,
 //!   1/100 m), 5 type (enum `course_point`) (the same profile; storage/course.rs reads them as cues).
 //!
+//! - **The full copy's `Alpha1`** (fit.rs, "developer fields"), only from a reader [`Reader::with_alpha1`]: a
+//!   record's developer field number 0 of developer data index 0, 4 bytes, read as a float32 (invalid all ones).
+//!   Only this firmware's own full copies (`\Rustfw\Activities`) are read so: they define that field as `Alpha1`
+//!   (its `field_description` is not checked; another app's file may use number 0 for something else).
+//!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
 //! small state machine one step (fuzzed in sim.rs `fuzz`).
 
@@ -53,6 +58,8 @@ pub struct Record {
     pub pos: Option<(i32, i32)>,
     /// Altitude, decimetres (only from a reader [`Reader::with_position`]).
     pub alt_dm: Option<i32>,
+    /// DFA alpha1 x 1000, the full copy's `Alpha1` developer field (only from a reader [`Reader::with_alpha1`]).
+    pub alpha1_milli: Option<u16>,
 }
 
 /// The ride's totals as its `session` message gives them.
@@ -109,6 +116,8 @@ pub enum Error {
 const SLOTS: usize = 8;
 /// Picked fields per definition at most.
 const PICKED: usize = 8;
+/// A record's slot for the full copy's `Alpha1` (a reader never reads it and the position both).
+const ALPHA1_SLOT: u8 = 4;
 
 /// The slot of field `num` of global message `global`, if it is one this reader keeps (the position and altitude
 /// only with `position`).
@@ -197,6 +206,8 @@ pub struct Reader {
     table: [u16; 256],
     /// The position and altitude are read too ([`Reader::with_position`]).
     position: bool,
+    /// The full copy's `Alpha1` is read too ([`Reader::with_alpha1`]).
+    alpha1: bool,
 }
 
 impl Default for Reader {
@@ -229,12 +240,18 @@ impl Reader {
             result: None,
             table: crate::fit::CRC_TABLE,
             position: false,
+            alpha1: false,
         }
     }
 
     /// A reader that also gives each record's position and altitude ([`Record::pos`], [`Record::alt_dm`]).
     pub const fn with_position() -> Self {
         Reader { position: true, ..Self::new() }
+    }
+
+    /// A reader that also gives each record's alpha1 from a full copy ([`Record::alpha1_milli`], module doc).
+    pub const fn with_alpha1() -> Self {
+        Reader { alpha1: true, ..Self::new() }
     }
 
     /// Ok once the file ended with a good CRC; an error as soon as one is found; None while it goes on.
@@ -427,14 +444,26 @@ impl Reader {
     }
 
     fn dev_field(&mut self, b: u8, left: u8) {
-        self.at += 1;
-        if self.at == 2 {
-            self.building.size += u32::from(b); // (number, size, developer data index): only the size matters
+        if let Some(t) = self.tmp.get_mut(self.at as usize) {
+            *t = b;
         }
+        self.at += 1;
         if self.at < 3 {
             return;
         }
         self.at = 0;
+        // (number, size, developer data index): only the size matters, but for the full copy's Alpha1
+        let (num, size, index) = (self.tmp[0], self.tmp[1], self.tmp[2]);
+        let d = &mut self.building;
+        if self.alpha1
+            && (d.global, num, size, index) == (20, 0, 4, 0)
+            && let Ok(off) = u16::try_from(d.size)
+            && let Some(p) = d.picked.get_mut(usize::from(d.n))
+        {
+            *p = (off, 4, ALPHA1_SLOT);
+            d.n += 1;
+        }
+        d.size += u32::from(size);
         if left > 1 {
             self.state = State::DevFields(left - 1);
         } else {
@@ -560,7 +589,13 @@ impl Reader {
                 let pos = if global == 249 { pos.map(|(a, b)| (semi(a), semi(b))) } else { pos };
                 // (m + 500) x 5 to decimetres; a uint16 altitude given in 4 bytes still reads as its value
                 let alt_dm = get(7).or(get(6)).map(|v| (i64::from(v) * 2 - 5000) as i32);
-                Some(Msg::Record(Record { time, hr: u8_(1), dist_cm: get(2), power: u16_(3), pos, alt_dm }))
+                let alpha1_milli = get(usize::from(ALPHA1_SLOT))
+                    .filter(|_| self.alpha1 && global == 20)
+                    .map(f32::from_bits)
+                    .filter(|a| *a > 0.0 && *a < 10.0) // NaN and the infinities fail too
+                    .map(|a| (a * 1000.0 + 0.5) as u16);
+                let (power, hr, dist_cm) = (u16_(3), u8_(1), get(2));
+                Some(Msg::Record(Record { time, hr, dist_cm, power, pos, alt_dm, alpha1_milli }))
             }
             32 => {
                 let pos = get(4).zip(get(5)).map(|(a, b)| (a as i32, b as i32));
