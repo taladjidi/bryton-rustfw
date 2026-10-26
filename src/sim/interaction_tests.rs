@@ -91,7 +91,7 @@ fn swipe(app: &mut App, sim: &mut Sim, d: crate::touch::Dir) {
 }
 
 /// Item 3: the quick panel. Calibrating the power meter from the overview: before, Page held, SENSORS (tap, tap),
-/// a swipe to its second screen and CALIBRATE POWER (tap, tap) = 7 touches (5 with one-tap rows); now a swipe down
+/// a swipe to its second screen and CALIBRATE POWER (tap, tap) = 6 touches (4 with one-tap rows); now a swipe down
 /// and a tap = 2. The panel lists only what applies, closes with a swipe up or Back, and a ride page keeps the
 /// media remote on a swipe down.
 #[test]
@@ -110,7 +110,7 @@ fn the_quick_panel_from_the_overview() {
     super::tests::assert_consistent(&sim, &app);
     sim.save("quick_panel");
     n.tap_row(&mut sim, &mut app, 0);
-    assert_eq!((app.screen(), n.0), (Screen::PowerCal, 2), "was 7");
+    assert_eq!((app.screen(), n.0), (Screen::PowerCal, 2), "was 6");
     app.input(&mut sim, Input::Back);
     assert_eq!(app.screen(), Screen::Menu(Menu::Quick, 0), "Back returns to the panel");
     swipe(&mut app, &mut sim, Dir::Up);
