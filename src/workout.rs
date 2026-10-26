@@ -211,6 +211,46 @@ pub fn gauge_x(v: u16, band: (u16, u16), cols: u32) -> u32 {
     (x.min(u64::from(cols.saturating_sub(1)))) as u32
 }
 
+/// The zones a gauge shows behind its band: for each of up to seven zones, the column where it starts on a gauge
+/// `cols` wide around `band` ([`gauge_scale`]) and its colour; a zone above the scale starts at `u32::MAX`, one below
+/// it at column 0 (the last zone starting at or before a column is that column's). Power gets Coggan's seven zones of
+/// `ftp`, heart rate the five of `max_hr` ([`ride::power_zone`], [`ride::hr_zone`]: the same edges, so the marker's
+/// column is in the zone the reading is in), cadence one grey. Fixed for a step: the scale does not slide.
+///
+/// ```
+/// use bryton_rustfw::{ride::ZONE_COLORS as Z, storage::workout::Kind, workout::gauge_zones};
+/// // 200-220 W, FTP 200: the scale is 140 to 286 W on 146 columns
+/// let z = gauge_zones(Kind::Power, (200, 220), 146, 200, 190);
+/// assert_eq!(z[1], (0, Z[1]), "zone 2 (from 112 W) starts under the scale");
+/// assert_eq!(z[2], (12, Z[2]), "zone 3 from 152 W");
+/// assert_eq!(z[4], (72, Z[4]), "zone 5 from 212 W");
+/// assert_eq!(z[6].0, u32::MAX, "zone 7 (above 302 W) is off the scale");
+/// ```
+pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, ftp: u16, max_hr: u16) -> [(u32, u16); 7] {
+    let (a, b) = gauge_scale(band);
+    let (pcts, base): (&[u32], u32) = match kind {
+        Kind::Power => (&[56, 76, 91, 106, 121, 151], u32::from(ftp.max(1))),
+        Kind::Hr => (&[60, 70, 80, 90], u32::from(max_hr.max(1))),
+        _ => (&[], 1),
+    };
+    let col_of = |w: u32| match w {
+        w if w <= a => 0,
+        w if w >= b => u32::MAX,
+        w => (u64::from(w - a) * u64::from(cols) / u64::from(b - a)) as u32,
+    };
+    let mut z = [(u32::MAX, ui::DARK); 7];
+    z[0] = (0, if pcts.is_empty() { ui::DARK } else { zone_color(kind, 1) });
+    for (k, pct) in pcts.iter().enumerate() {
+        z[k + 1] = (col_of((pct * base).div_ceil(100)), zone_color(kind, k as u8 + 2));
+    }
+    z
+}
+
+/// Zone `z` of a reading's kind as a colour.
+fn zone_color(kind: Kind, z: u8) -> u16 {
+    if kind == Kind::Hr { ride::hr_color(z) } else { ride::power_color(z) }
+}
+
 /// How far a reading `v` is from `band`, as a colour: the zone palette's green in it, its yellow within 5 % of it
 /// (nearly there), its blue further under and its red further over. The same colours the zones give easy and hard
 /// efforts ([`ride::ZONE_COLORS`]), so the gauge reads as the power and heart-rate fields do.
@@ -308,7 +348,6 @@ mod tests {
 
     #[test]
     fn graph_columns_and_the_riders_place() {
-        use crate::storage::workout::Kind;
         let t = |kind, lo, hi| Target { kind, lo, hi, pct: true };
         let steps = [
             Step { len: Length::Time(300), target: t(Kind::Power, 60, 70), intensity: 2 },
@@ -340,9 +379,37 @@ mod tests {
         assert_eq!(p.graph_at(&steps, 0), 900, "done");
     }
 
+    /// The zones behind the gauge follow the FTP (and the maximum heart rate): every watt of the scale is in the zone
+    /// `ride::power_zone` gives it, whatever the FTP, and the scale itself does not move with it.
+    #[test]
+    fn gauge_zones_follow_ftp_and_max_hr() {
+        let band = (200, 220);
+        let (a, b) = gauge_scale(band);
+        let cols = (b - a) * 2; // a watt is two columns: no two edges share one
+        for ftp in [120, 200, 250, 310] {
+            let z = gauge_zones(Kind::Power, band, cols, ftp, 190);
+            for v in a..b {
+                let col = gauge_x(v as u16, band, cols);
+                let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
+                assert_eq!(zone, ride::power_color(ride::power_zone(v as u16, ftp)), "{v} W at FTP {ftp}");
+            }
+        }
+        assert_ne!(gauge_zones(Kind::Power, band, cols, 200, 190), gauge_zones(Kind::Power, band, cols, 250, 190));
+        let (a, b) = gauge_scale((150, 160));
+        for max in [170, 190] {
+            let z = gauge_zones(Kind::Hr, (150, 160), (b - a) * 2, 200, max);
+            for v in a..b {
+                let col = gauge_x(v as u16, (150, 160), (b - a) * 2);
+                let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
+                assert_eq!(zone, ride::hr_color(ride::hr_zone(v as u16, max)), "{v} bpm at {max}");
+            }
+            assert_eq!(z[5].0, u32::MAX, "only five heart-rate zones");
+        }
+        assert_eq!(gauge_zones(Kind::Cadence, (85, 95), 100, 200, 190)[1].0, u32::MAX, "cadence: one grey");
+    }
+
     #[test]
     fn gauge_follows_the_steps_target() {
-        use crate::storage::workout::Kind;
         let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct };
         let step = |target| Step { len: Length::Time(60), target, intensity: 0 };
         let (power, hr) = (step(t(Kind::Power, 100, 110, true)), step(t(Kind::Hr, 150, 160, false)));

@@ -252,12 +252,17 @@ fn touch_swipes_pages_and_taps_menu_rows() {
 /// The gear right of the overview's date: a tap opens the menu; a tap elsewhere on the overview does not.
 #[test]
 fn gear_on_the_overview_opens_the_menu() {
-    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    let (gx, gy) = (ui::GEAR_C.0 as u16, ui::GEAR_C.1 as u16);
     let tap = move |t0: u64, p: (u16, u16)| move |ms: u64| (t0..t0 + 80).contains(&ms).then_some(p);
     let (a, b) = (tap(5000, (40, 160)), tap(6000, (gx, gy)));
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)));
     let mut app = App::start(&mut sim, None);
     sim.save("overview_gear");
+    app.settings.smooth = true;
+    app.show(&mut sim);
+    sim.save("overview_gear_smooth");
+    app.settings.smooth = false;
+    app.show(&mut sim);
     let left = 5500 - sim.ms;
     run(&mut sim, &mut app, left);
     assert_eq!(app.screen(), Screen::Main, "a tap on a field: nothing");
@@ -1092,6 +1097,59 @@ fn workout_gauge_field() {
     let want = app.power.rolling(2).map(u32::from).unwrap_or_default();
     assert_eq!(app.field_text(Field::WktPower).as_str(), std::format!("{want}"));
     assert_consistent(&sim, &app);
+}
+
+/// The gauge's bar, 3 times as thick, with the rider's power zones behind the target band (white outline) and the
+/// reading as a white tick: full width and half width (the pacer's cell), a target in zone 3 and in zone 5 of an FTP
+/// of 200 W, the reading under it and over it. The zones follow the FTP; the marker's move repaints the zones under
+/// the old tick (what is sent equals the gauge drawn whole). Screenshots: `gauge_zones_full`, `gauge_zones_half`.
+#[test]
+fn gauge_shows_the_zones() {
+    use crate::app::GaugeShown;
+    use crate::storage::workout::Kind;
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.ftp = 200;
+    let shown = |band: (u16, u16), w: u16, bx: (u32, u32, u32, u32), pace: Option<u16>| {
+        let mut value = crate::text::Line::new();
+        value.push_u32(u32::from(w));
+        let color = crate::workout::gauge_color(w, band);
+        let marker = Some(crate::workout::gauge_x(w, band, ui::gauge_cols(bx)));
+        GaugeShown { kind: Kind::Power, avg: 0, band: Some(band), step: true, pace, value, color, marker }
+    };
+    let cases = [((160, 180), 140), ((160, 180), 210), ((215, 235), 190), ((215, 235), 260)];
+    // full width: two gauges on top of each other, then the half-width ones side by side
+    let mut p = Panel(&mut sim, (0, ui::H), false);
+    p.fill(0, 0, ui::W, ui::H, ui::BLACK);
+    let full = [(0, 24, 240, 118), (0, 160, 240, 118)];
+    let half = [(0, 24, 120, 100), (120, 24, 120, 100), (0, 160, 120, 100), (120, 160, 120, 100)];
+    for (bx, (band, w)) in full.into_iter().zip([cases[0], cases[2]]) {
+        app.draw_gauge(&mut p, bx, shown(band, w, bx, None));
+    }
+    sim.save("gauge_zones_full_a");
+    let mut p = Panel(&mut sim, (0, ui::H), false);
+    p.fill(0, 0, ui::W, ui::H, ui::BLACK);
+    for (bx, (band, w)) in full.into_iter().zip([cases[1], cases[3]]) {
+        app.draw_gauge(&mut p, bx, shown(band, w, bx, None));
+    }
+    sim.save("gauge_zones_full_b");
+    let mut p = Panel(&mut sim, (0, ui::H), false);
+    p.fill(0, 0, ui::W, ui::H, ui::BLACK);
+    for (bx, (band, w)) in half.into_iter().zip(cases) {
+        app.draw_gauge(&mut p, bx, shown(band, w, bx, Some(754)));
+    }
+    sim.save("gauge_zones_half");
+
+    // the zones follow the FTP: column 5 of the first gauge (about 115 W) is zone 2 of 200 W, zone 1 of 400 W
+    let bx = full[0];
+    Panel(&mut sim, (0, ui::H), false).fill(0, 0, ui::W, ui::H, ui::BLACK);
+    let column = |sim: &Sim| (0..bx.3).map(|y| sim.screen[((bx.1 + y) * ui::W + 8 + 5) as usize]).collect::<Vec<_>>();
+    let z = crate::ride::power_color;
+    app.draw_gauge(&mut Panel(&mut sim, (0, ui::H), false), bx, shown((160, 180), 140, bx, None));
+    assert!(column(&sim).contains(&z(2)), "FTP 200: zone 2");
+    app.settings.ftp = 400;
+    app.draw_gauge(&mut Panel(&mut sim, (0, ui::H), false), bx, shown((160, 180), 140, bx, None));
+    assert!(column(&sim).contains(&z(1)) && !column(&sim).contains(&z(2)), "FTP 400: zone 1");
 }
 
 /// Holding Page opens the menu; Page / Lap move, Start on NEARBY BLE opens the list and scans: two devices in
@@ -2414,7 +2472,7 @@ fn back_clearing_a_banner_only_clears_it() {
 #[test]
 fn back_and_lap_together_lock_the_touch() {
     let both = |ms: u64| (5000..6300).contains(&ms) || (14_000..15_300).contains(&ms);
-    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    let (gx, gy) = (ui::GEAR_C.0 as u16, ui::GEAR_C.1 as u16);
     let tap = move |t0: u64| move |ms: u64| (t0..t0 + 80).contains(&ms).then_some((gx, gy));
     let (a, b) = (tap(8000), tap(17_000));
     let mut sim = Sim::new(9, 0, 0)
@@ -3764,7 +3822,7 @@ fn touch_can_be_switched_off() {
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Back));
     }
-    let (gx, gy) = (ui::GEAR_AT.0 as u16 + 9, ui::GEAR_AT.1 as u16 + 9);
+    let (gx, gy) = (ui::GEAR_C.0 as u16, ui::GEAR_C.1 as u16);
     app.input(&mut sim, Input::Touch(Gesture::Tap(gx, gy)));
     assert_eq!(app.screen(), Screen::Main, "not the gear either");
     app.press(&mut sim, Press::Long(Key::Page)); // the keys: back to TOUCH, on again

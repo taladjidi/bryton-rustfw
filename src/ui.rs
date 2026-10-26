@@ -1227,25 +1227,39 @@ pub fn draw_graph(c: &mut impl Canvas, area: (u32, u32, u32, u32), bar: &dyn Fn(
 // band in numbers under it
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The marker's width, columns, centred on the reading's column.
+/// The marker's white core, columns, centred on the reading's column; a black column each side outlines it.
 const MARK_W: u32 = 3;
-/// The inside of the target band: a dark green, so a green marker in it still shows.
-const BAND: u16 = 0x0320;
+/// Rows of the bar above and below the track at most, where the marker reaches out of it.
+const OVERSHOOT: u32 = 4;
+/// Rows of the white outline round the target band, and columns at its two edges.
+const BRACKET: u32 = 2;
 
-/// A gauge's bar: the band's first and last columns, and the marker's column and colour (None: no reading).
-pub type GaugeBar = ((u32, u32), Option<(u32, u16)>);
+/// A gauge's bar: the target band's first and last columns, the marker's column and the colour of its caps (None: no
+/// reading), and the zones behind the track (each one's first column and colour, [`crate::workout::gauge_zones`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GaugeBar {
+    /// The band's first and last columns.
+    pub band: (u32, u32),
+    /// The marker's column and the colour of its ends.
+    pub marker: Option<(u32, u16)>,
+    /// The zones: first column and colour, in order; `u32::MAX` for one off the scale.
+    pub zones: [(u32, u16); 7],
+}
 
 /// A gauge bar's place: left, top, columns, height.
 type GaugeArea = (u32, u32, u32, u32);
 
 /// The gauge field's parts in box `bx`: the bar (left, top, columns, height), the number's top and style, the
 /// target line's top and style (none in a box under 100 high: its 2x text would leave the number no room; the band shows
-/// on the bar). Fixed for a box, so the number and the marker are redrawn in place.
+/// on the bar). Fixed for a box, so the number and the marker are redrawn in place. The track is three times what it was
+/// (6 to 12 rows), as thick as the box leaves the number room for 2x text.
 fn gauge_parts(bx: (u32, u32, u32, u32)) -> (GaugeArea, u32, Style, (u32, Style)) {
     let (x, y, w, h) = bx;
     let small = Style { fg: GREY, ..LABEL };
     let target_y = (y + h).saturating_sub(2 + if h < 100 { 0 } else { small.height() }).max(y);
-    let gh = (h / 8).clamp(12, 24); // the bar's height: a quarter of it above and below the track is the marker's
+    let wanted = 3 * ((h / 8).clamp(12, 24) / 2) + 2 * OVERSHOOT;
+    let room_2x = target_y.saturating_sub(y + FIELD_LABEL_H + 2 + LABEL.height() + 2 + 2);
+    let gh = wanted.min(room_2x).max(12);
     let bar = (x + 8, target_y.saturating_sub(2 + gh).max(y), w.saturating_sub(16), gh);
     let top = y + FIELD_LABEL_H;
     let room = bar.1.saturating_sub(top + 2);
@@ -1264,21 +1278,33 @@ pub fn gauge_cols(bx: (u32, u32, u32, u32)) -> u32 {
     gauge_parts(bx).0.2
 }
 
-/// Pixel (`i`, `dy`) of a gauge bar `h` high: the marker over all of it; else black in the quarters above and below
-/// the track (so the marker stands out of it), the band's edges in the zone palette's green, its inside dark green, the
-/// rest of the track dark grey.
-fn gauge_px((band, marker): GaugeBar, h: u32, i: u32, dy: u32) -> u16 {
-    match marker {
-        Some((m, color)) if i + MARK_W / 2 >= m && i <= m + MARK_W / 2 => color,
-        _ if dy < h / 4 || dy + h / 4 >= h => BLACK,
-        _ if i == band.0 || i == band.1 => crate::ride::ZONE_COLORS[2],
-        _ if band.0 < i && i < band.1 => BAND,
-        _ => DARK,
+/// Pixel (`i`, `dy`) of a gauge bar `h` high: the marker (a white tick through the track with a black column each
+/// side, its ends out of the track in the state's colour) over all; else black above and below the track, the target
+/// band's white outline (its inside shows the zones), and the zone's colour.
+fn gauge_px(g: &GaugeBar, h: u32, i: u32, dy: u32) -> u16 {
+    let over = (h / 4).min(OVERSHOOT);
+    let track = dy >= over && dy + over < h;
+    if let Some((m, color)) = g.marker.filter(|&(m, _)| i + MARK_W / 2 + 1 >= m && i <= m + MARK_W / 2 + 1) {
+        let core = i + MARK_W / 2 >= m && i <= m + MARK_W / 2;
+        return match (core, track) {
+            (true, true) => WHITE,
+            (true, false) => color,
+            _ => BLACK,
+        };
     }
+    if !track {
+        return BLACK;
+    }
+    let (a, b) = g.band;
+    let edge = dy < over + BRACKET || dy + over + BRACKET >= h;
+    if (a..=b).contains(&i) && (edge || i < a + BRACKET || i + BRACKET > b) {
+        return WHITE;
+    }
+    g.zones.iter().rev().find(|z| z.0 <= i).map_or(DARK, |z| z.1)
 }
 
 /// Columns `from` to `to` (included) of the gauge bar `bar` showing `g`.
-fn draw_gauge_columns(c: &mut impl Canvas, bar: (u32, u32, u32, u32), g: GaugeBar, from: u32, to: u32) {
+fn draw_gauge_columns(c: &mut impl Canvas, bar: (u32, u32, u32, u32), g: &GaugeBar, from: u32, to: u32) {
     let to = to.min(bar.2.saturating_sub(1));
     if from <= to {
         c.blit(bar.0 + from, bar.1, to - from + 1, bar.3, &mut |i, dy| gauge_px(g, bar.3, from + i, dy));
@@ -1338,7 +1364,7 @@ pub fn draw_gauge(
     draw_gauge_title(c, bx, title, tag);
     draw_gauge_value(c, bx, "", value, fg);
     match g {
-        Some(g) => draw_gauge_columns(c, bar, g, 0, bar.2),
+        Some(g) => draw_gauge_columns(c, bar, &g, 0, bar.2),
         None => c.fill(bar.0, bar.1, bar.2, bar.3, BLACK),
     }
     if h >= 100 {
@@ -1362,8 +1388,8 @@ pub fn draw_gauge_value(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: &str
 /// The gauge's marker moved from `old` to where `g` has it: only the old marker's columns and the new one's.
 pub fn draw_gauge_marker(c: &mut impl Canvas, bx: (u32, u32, u32, u32), old: Option<(u32, u16)>, g: GaugeBar) {
     let bar = gauge_parts(bx).0;
-    for (m, _) in [old, g.1].into_iter().flatten() {
-        draw_gauge_columns(c, bar, g, m.saturating_sub(MARK_W / 2), m + MARK_W / 2);
+    for (m, _) in [old, g.marker].into_iter().flatten() {
+        draw_gauge_columns(c, bar, &g, m.saturating_sub(MARK_W / 2 + 1), m + MARK_W / 2 + 1);
     }
 }
 
@@ -1377,8 +1403,9 @@ pub const TIME: Style = Style { font: &PIXEL, scale: 7, fg: WHITE, bg: BLACK };
 pub const TIME_Y: u32 = PAGE_Y + 6;
 /// Top of the date line.
 pub const DATE_Y: u32 = TIME_Y + PIXEL.height as u32 * TIME.scale; // the text box, not just the ink
-/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes).
-pub const OVERVIEW_Y: u32 = DATE_Y + PIXEL.height as u32 * LABEL.scale + 2;
+/// The overview's fields: top and height (a 2 x 2 grid of [`field_box`] boxes). The date's row is as tall as the cog
+/// that ends it ([`COG`]), so the cog fits the row whole.
+pub const OVERVIEW_Y: u32 = DATE_Y + COG + 2;
 /// See [`OVERVIEW_Y`].
 pub const OVERVIEW_H: u32 = NOTICES_Y - 4 - OVERVIEW_Y;
 /// Top of the notices: [`NOTICES`] rows of [`LIST_ROW`].
@@ -1413,17 +1440,55 @@ pub fn draw_main_time(c: &mut impl Canvas, digits: [u8; 4]) {
 
 /// The date line, centred, grey.
 pub fn draw_date(c: &mut impl Canvas, date: &str) {
-    text::draw_in(c, &Style { fg: GREY, ..LABEL }, 0, DATE_Y, W, Align::Centre, date);
-    draw_bitmap(c, &GEAR, GEAR_AT.0, GEAR_AT.1, 2, GREY); // after the date: its box spans the row
+    let style = Style { fg: GREY, ..LABEL };
+    text::draw_in(c, &style, 0, DATE_Y + (COG - style.height()) / 2, W, Align::Centre, date); // level with the cog's middle
+    draw_cog(c); // after the date: its box spans the row
 }
 
-/// The menu button on the overview, right of the date: a gear, 9 x 9 bitmap pixels.
-pub const GEAR: [u16; 9] = [0x1400, 0x7f00, 0x6300, 0x4100, 0xc180, 0x4100, 0x6300, 0x7f00, 0x1400];
-/// Where [`GEAR`] is drawn (at scale 2: 18 x 18 px), in the date's row: under the clock's digit cells, which a
-/// second's redraw paints whole.
-pub const GEAR_AT: (u32, u32) = (W - 30, DATE_Y);
-/// Where a tap opens the menu: around the gear, wider than it, a finger's size (above the overview's fields).
-pub const GEAR_TAP: (u32, u32, u32, u32) = (W - 64, DATE_Y - 24, 64, OVERVIEW_Y - (DATE_Y - 24));
+/// The menu button on the overview: a cog, [`COG`] px square.
+pub const COG: u32 = 25;
+/// Where the cog is drawn: right-aligned to the fields' margin, in the date's row, level with the date.
+pub const GEAR_AT: (u32, u32) = (W - 8 - COG, DATE_Y);
+/// The cog's centre, the middle of its touch box.
+pub const GEAR_C: (u32, u32) = (GEAR_AT.0 + COG / 2, GEAR_AT.1 + COG / 2);
+/// Where a tap opens the menu: 44 x 44 px round the cog (the menu rows' rule), over the clock's last digit and the
+/// first field's corner, where a tap does nothing else.
+pub const GEAR_TAP: (u32, u32, u32, u32) = (W - 44, GEAR_C.1 - 22, 44, 44);
+
+/// Coverage (0 to 9, nine samples) of the cog's metal at pixel (`i`, `j`) of its [`COG`] square, symmetric: a ring
+/// (two thirds of the radius) with a round hole (3/10) and eight square teeth (7/20 of the radius wide) at the compass points, each sample taken in sixths of a pixel.
+fn cog_coverage(i: u32, j: u32) -> u32 {
+    const C: i32 = COG as i32 * 3; // the centre, in sixths
+    const ROOT: i32 = C * 2 / 3; // the ring's outside, a third of the way in from the teeth's tips
+    const HOLE: i32 = C * 3 / 10;
+    const TOOTH: i32 = C - 3; // the tips, half a pixel from the edge
+    const HALF: i32 = C * 7 / 40; // half a tooth's width
+    let mut n = 0;
+    for sy in 0..3 {
+        for sx in 0..3 {
+            let (dx, dy) = ((i * 6 + 1 + 2 * sx) as i32 - C, (j * 6 + 1 + 2 * sy) as i32 - C);
+            let (u, v) = ((dx - dy).abs() * 5, (dx + dy).abs() * 5); // the diagonals' axes, times 5 / sqrt 2 ~ 7 / 2
+            let tooth = (dy.abs() <= HALF && dx.abs() <= TOOTH)
+                || (dx.abs() <= HALF && dy.abs() <= TOOTH)
+                || (u <= HALF * 7 && v <= TOOTH * 7)
+                || (v <= HALF * 7 && u <= TOOTH * 7);
+            let r2 = dx * dx + dy * dy;
+            n += u32::from((r2 <= ROOT * ROOT || tooth) && r2 > HOLE * HOLE);
+        }
+    }
+    n
+}
+
+/// RGB565 `color` at `n` ninths over black.
+fn dim(color: u16, n: u32) -> u16 {
+    let ch = |shift: u32, max: u32| ((u32::from(color) >> shift & max) * n / 9) << shift;
+    (ch(11, 31) | ch(5, 63) | ch(0, 31)) as u16
+}
+
+/// The cog at [`GEAR_AT`], anti-aliased over black.
+fn draw_cog(c: &mut impl Canvas) {
+    c.blit(GEAR_AT.0, GEAR_AT.1, COG, COG, &mut |i, j| dim(0xc618, cog_coverage(i, j)));
+}
 
 /// The notices, newest first; with none, the area stays black.
 pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
@@ -1852,7 +1917,8 @@ pub(crate) mod tests {
         let strip = [STRIP_BLE, STRIP_GPS, STRIP_LOCK, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);
-        assert!(GEAR_AT.1 >= DATE_Y && GEAR_AT.1 + 18 <= OVERVIEW_Y && GEAR_AT.0 + 18 <= W, "the gear in the date row");
+        assert!(GEAR_AT.1 + COG <= OVERVIEW_Y && GEAR_AT.0 + COG < W, "the cog in the date row");
+        assert!(GEAR_TAP.2 >= 44 && GEAR_TAP.3 >= 44 && GEAR_TAP.0 + GEAR_TAP.2 <= W, "a finger's size round the cog");
         assert!(
             NOTICES_Y + 4 + NOTICES as u32 * LIST_ROW <= H && overview_box(3).is_some_and(|b| b.1 + b.3 <= NOTICES_Y)
         );
@@ -1871,9 +1937,11 @@ pub(crate) mod tests {
             let band = (cols / 3, cols * 2 / 3);
             let titles = ("POWER 30S", "", "200-220");
             let (mut a, mut b) = (Frame::new(), Frame::new());
-            draw_gauge(&mut a, bx, titles, "195", YELLOW, Some((band, Some((0, YELLOW)))));
-            draw_gauge_marker(&mut a, bx, Some((0, YELLOW)), (band, Some((cols - 1, YELLOW))));
-            draw_gauge(&mut b, bx, titles, "195", YELLOW, Some((band, Some((cols - 1, YELLOW)))));
+            let zones = crate::workout::gauge_zones(crate::storage::workout::Kind::Power, (200, 220), cols, 200, 190);
+            let bar = |m| GaugeBar { band, marker: Some((m, YELLOW)), zones };
+            draw_gauge(&mut a, bx, titles, "195", YELLOW, Some(bar(0)));
+            draw_gauge_marker(&mut a, bx, Some((0, YELLOW)), bar(cols - 1));
+            draw_gauge(&mut b, bx, titles, "195", YELLOW, Some(bar(cols - 1)));
             assert!(a.px == b.px, "{bx:?}");
             assert!(gauge_parts(bx).2.scale >= 2, "{bx:?}: the number readable");
         }
