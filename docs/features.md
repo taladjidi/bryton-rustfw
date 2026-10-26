@@ -443,7 +443,7 @@ copied over USB into `\Courses`, read only:
   (red while off course), CLIMB (on a climb what is left and the grade of the next
   200 m, "1.6K 6%"; before it the next climb's length and grade; coloured by grade), CLIMB M (the climb's gain left,
   or the next climb's), UP LEFT M (the course's ascent left), and PROFILE: the course's elevation from the eighth of
-  it the rider is in to the end, the rider's place, the ridden part dark, the climbs green, yellow, orange or red by
+  it the rider is in to the end, the rider's place, the ridden part dark, the climbs in the zone 2 to 5 colours by
   grade.
 
 ## Climbs ahead (no course)

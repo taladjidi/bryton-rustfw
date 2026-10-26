@@ -468,12 +468,12 @@ impl Climb {
 // Zones
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Zone colours, RGB565, in the progression the owner asked for (2026-10-26), the usual one of training apps: Z1 blue,
-/// Z2 green, Z3 yellow, Z4 orange, Z5 red, Z6 violet, Z7 magenta; heart rate's five zones take the first five, so a
-/// colour means the same zone on both. The orange and red are kept apart from the menu orange (`ui::ACCENT`) and the
-/// alarm red (`ui::RED`) by hue and value (tested), though they are close: an earlier choice (UI review 2, P3) had
-/// left orange and red out of the zones for that reason; the owner prefers the familiar progression.
-pub const ZONE_COLORS: [u16; 7] = [0x537f, 0x7fe3, 0xffe0, 0xfbe0, 0xe0e3, 0x901f, 0xf81f];
+/// Zone colours, RGB565: Intervals.icu's zone palette (the owner's choice, 2026-10-26: teal, green, olive, brown,
+/// wine, purple, slate, RGB (47, 98, 89), (47, 98, 35), (148, 125, 49), (143, 87, 42), (124, 32, 59), (68, 45, 124),
+/// (60, 55, 72)), each channel x 1.5 so the 8 px bars read on the black panel. Heart rate's five zones take the first
+/// five, so a colour means the same zone on both. Kept apart from the menu orange (`ui::ACCENT`) and the alarm red
+/// (`ui::RED`) (tested).
+pub const ZONE_COLORS: [u16; 7] = [0x4c90, 0x4c86, 0xddc9, 0xd408, 0xb98b, 0x6237, 0x5a8d];
 
 /// What kind of ride this is: on the road, or indoors on a trainer (the bike is on it, the GPS has nothing to say).
 /// Chosen at Start from the trainer heard, or set by hand (app/profile.rs); the indoor one skips the map pages in
@@ -569,12 +569,12 @@ pub fn dfa_color(v: u16) -> u16 {
     }]
 }
 
-/// The colour of heart-rate zone `z` (1 to 5): blue, green, yellow, orange, red, as power's first five.
+/// The colour of heart-rate zone `z` (1 to 5): teal, green, olive, brown, wine, as power's first five.
 pub fn hr_color(z: u8) -> u16 {
     ZONE_COLORS[usize::from(z.clamp(1, 5) - 1)]
 }
 
-/// The colour of power zone `z` (1 to 7): blue, green, yellow, orange, red, violet, magenta.
+/// The colour of power zone `z` (1 to 7): teal, green, olive, brown, wine, purple, slate (Intervals.icu's).
 pub fn power_color(z: u8) -> u16 {
     ZONE_COLORS[usize::from(z.clamp(1, 7) - 1)]
 }

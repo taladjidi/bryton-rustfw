@@ -4339,7 +4339,11 @@ fn course_ride() {
     assert_eq!(f[2], "1.6K|6%", "1.6 km left: {f:?}");
     let m = |i: usize| f[i].parse::<u32>().unwrap();
     assert!(m(3).abs_diff(96) <= 2 && m(4).abs_diff(96) <= 6, "96 m left to climb: {f:?}");
-    assert_eq!((app.field_color(Climb), app.field_bar(Climb)), (ui::WHITE, ui::YELLOW), "6 %");
+    assert_eq!(
+        (app.field_color(Climb), app.field_bar(Climb)),
+        (ui::WHITE, ui::grade_color(60)),
+        "6 %: the zone 3 colour"
+    );
     assert_consistent(&sim, &app);
     let (w, t) = (app.pace.plan.watts[0], app.pace.plan.total_s);
     let top = app.pace.plan.watts.iter().copied().max().unwrap_or(0); // the steeper sections get the W'
