@@ -211,6 +211,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   (`Field::ClimbPace`, the workout gauge's widget).
 - `src/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
   at a time. Pure logic.
+- `src/ramp.rs`: the FTP ramp test: its workout, the stop rules, the best minute and FTP, HRVT1 from DFA a1. Pure logic.
+  `src/app/ramp.rs`: it played through the workout player, and the result screen (APPLY).
 - `src/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.

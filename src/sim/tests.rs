@@ -834,7 +834,10 @@ fn workout_from_the_calendar() {
     let row = |app: &App, m, i| {
         app.menu_row(m, i).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str())).unwrap_or_default()
     };
-    assert_eq!([0, 1, 2].map(|i| row(&app, Menu::Workouts, i)), ["FRI 23 OCT 0:01", "SUN 25 OCT 1:30", ""]);
+    assert_eq!(
+        [0, 1, 2].map(|i| row(&app, Menu::Workouts, i)),
+        ["FRI 23 OCT 0:01", "SUN 25 OCT 1:30", "RAMP TEST FTP 200"]
+    );
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);
     sim.save("workout_list");
@@ -2344,7 +2347,7 @@ fn empty_workouts_say_so_in_a_row() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
-    assert_eq!(app.rows(Menu::Workouts), 1);
+    assert_eq!(app.rows(Menu::Workouts), 2, "the row that says none, and the ramp test");
     let (label, _, color) = app.menu_row(Menu::Workouts, 0).unwrap();
     assert_eq!((label.as_str(), color), ("NONE PLANNED", ui::GREY));
     run(&mut sim, &mut app, 6000);

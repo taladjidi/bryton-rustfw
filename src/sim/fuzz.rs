@@ -2660,3 +2660,56 @@ fn random_road_networks() {
     );
     assert!(traces > 300 && climbs > 20 && stops > 20 && lengths > 20, "{traces} {climbs} {stops} {lengths}");
 }
+
+/// The ramp test's arithmetic (ramp.rs) on random power, cadence and DFA a1 series: missing readings, spikes, a1 out
+/// of range, targets of 0 and of 65535 W. Never a panic; the FTP is 75 % of the best minute and the best minute never
+/// more than the highest power; a threshold lies among the powers ridden. Half the series have a1 fall as power
+/// climbs, so the threshold is found (asserted over the seeds), and many stop on a rule.
+#[test]
+fn ramp_results() {
+    use crate::ramp::Ramp;
+    let (mut with_aet, mut stopped, mut with_result) = (0, 0, 0);
+    for seed in 1..=300u32 {
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x >> 8
+        };
+        let falling = seed % 2 == 0;
+        let (mut r, mut top) = (Ramp::new(), 0u16);
+        for s in 0..1500u32 {
+            let base = (80 + s / 5) as u16;
+            let power = match next() % 40 {
+                0 | 1 => None,
+                2 => Some(u16::MAX),
+                3 => Some((next() * 7) as u16),
+                _ => Some(base + (next() % 30) as u16),
+            };
+            let cadence = [None, Some(0), Some(59), Some(60), Some(90), Some(255)][(next() % 6) as usize];
+            let a1 = match next() % 20 {
+                0 => None,
+                1 => Some((next() * 5) as u16),
+                _ if falling => Some((130 - base / 4).clamp(20, 160) + (next() % 6) as u16),
+                _ => Some(40 + (next() % 100) as u16),
+            };
+            // mostly a target the rider meets, sometimes none or an absurd one
+            let target = [0, base, base, base, base, u16::MAX][((s / 25 + seed) % 6) as usize]; // in blocks, so streaks happen
+            top = top.max(power.unwrap_or(0));
+            if r.second(power, if (s / 7 + seed) % 5 == 0 { cadence } else { Some(90) }, target, a1) {
+                stopped += 1;
+            }
+        }
+        if let Some(o) = r.outcome() {
+            with_result += 1;
+            assert!(o.best_w <= top && o.ftp.abs_diff(o.best_w * 3 / 4) <= 1, "{o:?} top {top}");
+            assert_eq!(o.secs, 1500);
+            if let Some(w) = o.aet {
+                with_aet += 1;
+                assert!(w <= top, "{w} W over the top {top}");
+            }
+        }
+    }
+    assert!(with_result > 250 && with_aet > 20 && stopped > 100, "{with_result} {with_aet} {stopped}");
+}

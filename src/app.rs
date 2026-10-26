@@ -22,6 +22,7 @@ mod pace;
 mod phone;
 mod profile;
 mod radio;
+mod ramp;
 mod riding;
 mod screens;
 mod settings;

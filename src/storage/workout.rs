@@ -159,6 +159,18 @@ impl Workout {
         self.steps().iter().map(|s| if let Length::Time(t) = s.len { t } else { 0 }).fold(0, u32::saturating_add)
     }
 
+    /// A workout made in the firmware (the ramp test, ramp.rs): `name` cut to [`NAME`] characters, `steps` cut to
+    /// [`STEPS`].
+    pub fn built(name: &str, steps: &[Step]) -> Self {
+        let mut w = Workout::new();
+        for (d, b) in w.name.iter_mut().zip(name.bytes()) {
+            *d = b;
+            w.name_len += 1;
+        }
+        steps.iter().for_each(|&s| w.push(s));
+        w
+    }
+
     fn push(&mut self, s: Step) {
         match self.steps.get_mut(usize::from(self.n)) {
             Some(slot) => {

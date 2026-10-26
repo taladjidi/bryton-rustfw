@@ -226,7 +226,7 @@ Others
 - [~] ERG mode to the workout target (stock Smart Workout, all): sim, Page / Lap adjust it; not yet seen on the trainer
 - [~] Trainer resistance and power modes, by hand (stock): sim, the trainer screen (ERG, resistance, SIM); stock's level mode not done
 - [~] Trainer slope from the course grade (Garmin, Wahoo, Karoo): sim
-- [ ] FTP, max HR and LTHR tests (stock Bryton Test, Garmin, Coros)
+- [~] FTP, max HR and LTHR tests (stock Bryton Test, Garmin, Coros): FTP ramp test indoors (TrainerRoad's: 1 min steps from the FTP set, FTP 75 % of the best minute, HRVT1 from DFA a1 shown beside it): sim; no max HR or LTHR test, not yet on the trainer
 - [ ] Trainer level mode (stock CourseLevelPlay) and a virtual course turned into a workout (stock VirtualToSmartWorkout)
 - [ ] AI Coach / Pace Pilot on the unit: pacing sections and grams of carbohydrate along a course (stock AICoach, from the app)
 - [ ] Progress Planner: seven-day plan that adapts to load and fatigue (stock app, S810)

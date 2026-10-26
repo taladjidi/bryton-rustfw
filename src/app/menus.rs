@@ -170,8 +170,15 @@ impl App {
             Menu::History if i == 0 => Some(Row::Open(Menu::Stock)),
             Menu::History if self.stock.index.is_empty() => (i == 1).then_some(Row::Stock(menu::StockRow::Scan)),
             Menu::History => self.stock.index.get(i - 1).map(|_| Row::Past(i - 1)),
-            Menu::Workouts if self.calendar.get(0).is_none() => (i == 0).then_some(Row::Empty("NONE PLANNED")),
-            Menu::Workouts => self.calendar.get(i).map(|_| Row::Workout(i)),
+            // the planned workouts (or the row that says none), then the built-in ramp test
+            Menu::Workouts => {
+                let n = self.calendar.iter().count().max(1);
+                match i {
+                    _ if i == n => Some(Row::RampTest),
+                    0 if self.calendar.get(0).is_none() => Some(Row::Empty("NONE PLANNED")),
+                    _ => self.calendar.get(i).map(|_| Row::Workout(i)),
+                }
+            }
             Menu::Steps if i == 0 => Some(Row::WorkoutStart),
             Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
             Menu::Courses => self.courses.as_deref()?.list.get(i).map(|_| Row::Course(i)),
@@ -426,6 +433,12 @@ impl App {
                 push_hm(&mut value, self.plan.total_s());
                 color = ui::GREEN;
             }
+            Row::RampTest => {
+                label.push_str("RAMP TEST");
+                value.push_str("FTP ");
+                value.push_u32(u32::from(self.settings.ftp));
+                color = ui::GREEN;
+            }
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
             Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,
             Row::Group(g) => {
@@ -636,6 +649,7 @@ impl App {
             Some(Row::Workout(k)) => self.open_workout(b, k),
             Some(Row::Course(k)) => self.follow_course(k),
             Some(Row::WorkoutStart) => self.start_workout(0),
+            Some(Row::RampTest) => self.start_ramp(),
             Some(Row::Step(k)) => self.start_workout(k),
             Some(Row::Drive) if self.emmc.lent() => self.drive_off(),
             Some(Row::Drive) => {

@@ -142,6 +142,8 @@ pub enum Screen {
     Media,
     /// The trainer: mode and target (app/trainer.rs).
     Trainer,
+    /// The ramp test's result, APPLY or keep (app/ramp.rs).
+    RampResult,
     /// ABOUT: the version, the commit, Ferris.
     About,
     /// Notification `k` of the inbox in full (app/notifs.rs), its first line shown `top`.
@@ -402,6 +404,13 @@ impl App {
                 }
                 return;
             }
+            // START applies the FTP found, Back (or a swipe right) keeps the one set
+            (Screen::RampResult, Input::Select) => {
+                self.apply_ramp(b);
+                self.close()
+            }
+            (Screen::RampResult, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => self.close(),
+            (Screen::RampResult, _) => return,
             (Screen::Trainer, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right))) => {
                 self.trainer.cancel_calibration(); // Back gives up a calibration, then leaves
                 self.close()

@@ -68,6 +68,9 @@ impl App {
 
     /// The workout's next step, if one runs (Lap, or NEXT STEP in the ride menu).
     pub(crate) fn next_step(&mut self) {
+        if self.ramp_running() {
+            return self.finish_ramp(); // Lap in the ramp is its end
+        }
         let (steps, dist) = (self.plan.steps(), self.ride.dist_m());
         if let Some(e) = self.player.as_mut().filter(|p| p.step(steps).is_some()).map(|p| p.skip(steps, dist)) {
             self.workout_event(e);
@@ -395,6 +398,7 @@ impl App {
         if let Some(e) = self.player.as_mut().and_then(|p| p.second(steps, ticked, dist)) {
             self.workout_event(e);
         }
+        self.ramp_second(ticked);
         let (cp, wprime) = self.cp_model();
         self.power.second(input.power, &self.ride, cp, wprime);
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);

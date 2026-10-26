@@ -25,6 +25,7 @@ pub mod page;
 pub mod phone;
 pub mod power;
 pub mod power_curve;
+pub mod ramp;
 pub mod ride;
 #[cfg(test)]
 mod sim;
@@ -355,6 +356,10 @@ pub struct App {
     plan: storage::workout::Workout,
     plan_file: Option<fat::File>,
     player: Option<workout::Player>,
+    /// The ramp test being ridden, its last result, and the result screen due (app/ramp.rs).
+    ramp: Option<ramp::Ramp>,
+    ramp_result: Option<ramp::Outcome>,
+    ramp_show: bool,
     /// The ride recorder (FIT file, checkpoints, save), and a ride to look for on the card at the first step.
     /// The card may be written ([`Board::emmc_writable`]); without, the recorder is not used at all.
     card_writable: bool,
@@ -564,6 +569,9 @@ impl App {
             plan_file: None,
             plan: storage::workout::Workout::new(),
             player: None,
+            ramp: None,
+            ramp_result: None,
+            ramp_show: false,
             recorder: recorder::Recorder::new(),
             card_writable: false,
             resume_pending: false,
@@ -665,6 +673,10 @@ impl App {
             self.lag_s = 0;
         }
         self.settle_set(b);
+        if core::mem::take(&mut self.ramp_show) {
+            self.open(Screen::RampResult); // the test ended this pass: its result over the page
+            self.show(b);
+        }
         if let Some(a) = self.alert.take() {
             self.say_as(
                 a.text(),

@@ -221,7 +221,7 @@ setting is three levels down at most (MENU > SETTINGS > ME > FTP), the diagnosti
 
 ```
 MENU
- +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step
+ +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step; last row RAMP TEST
  +- COURSES >      the course files (green: followed); Start follows or stops
  +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
  +- PAGES >        OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT, FIELD n -> group -> field), ADD PAGE
@@ -298,6 +298,19 @@ lose it at once (the scan's cache drops its entry, no ride read again), and the 
 built from the FIT files it finds, so the ride goes from it too (inferred). A power cut during the move loses
 nothing: `\Rustfw\delete.rec` says what is being moved, and the next start finishes it (tested by cutting the
 power after every sector written).
+
+## FTP ramp test
+
+Indoors, with a trainer heard: **WORKOUTS > RAMP TEST** (last row), or RAMP TEST beside MODE on the trainer screen
+before a ride. It is a built-in workout played by the ordinary player in ERG (ramp.rs, app/ramp.rs), as
+TrainerRoad's Ramp Test: 5 min at 50 % of the FTP set, then one-minute steps from 56 % in +6 % each (FTP 250 W:
+140 W, then +15 W a minute; the last step open), then 5 min at 45 % to cool down. A stale FTP still gives a sensible
+start. It ends when cadence is under 60 rpm for 5 s, power under half the target for 10 s (not in the ramp's first
+10 s), or Lap; the cool-down starts at once. The result screen shows FTP (75 % of the best rolling minute since the
+ramp began, 1 W), the best minute, the ramp's length, and AET (power where DFA a1 crosses 0.75 on a line through
+the ramp's points, Rogers et al. 2021; `--` without a strap's RR intervals or enough clean data; not kept). START
+applies the FTP (to the setting's 5 W step), Back keeps the one set. A ramp under a whole minute has no result. The
+ride is recorded and saved as any ride.
 
 ## Workouts
 

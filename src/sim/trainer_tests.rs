@@ -624,7 +624,7 @@ fn a_spin_down_by_the_keys() {
     assert_eq!(sim.nordic.trainer.status & 3, 0, "the trainer stopped asking");
     run(&mut sim, &mut app, 11_000);
     assert_eq!(app.trainer.cal(), crate::trainer::Cal::Idle);
-    assert_eq!((lines(&app).0.as_str(), app.with_trainer_now(|n| n.bottom)), ("OK", Bottom::Mode));
+    assert_eq!((lines(&app).0.as_str(), app.with_trainer_now(|n| n.bottom)), ("OK", Bottom::ModeRamp));
     super::tests::assert_consistent(&sim, &app);
 }
 

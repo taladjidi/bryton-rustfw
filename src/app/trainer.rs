@@ -359,12 +359,14 @@ impl App {
 
     /// The bottom row of the trainer screen: CALIBRATE beside MODE while the trainer asks for it or a result is shown,
     /// CANCEL while it runs. ANT+ only (the calibration pages are FE-C's).
-    fn trainer_bottom(&self) -> Bottom {
+    pub(crate) fn trainer_bottom(&self) -> Bottom {
         let t = &self.trainer;
         if t.calibrating() {
             Bottom::Cancel
         } else if self.trainer_heard() && !self.ftms_on() && (t.reading.needs_calibration() || t.cal() != Cal::Idle) {
             Bottom::Both
+        } else if self.trainer_heard() && self.ride.state() == ride::State::Idle {
+            Bottom::ModeRamp
         } else {
             Bottom::Mode
         }
@@ -499,6 +501,7 @@ impl App {
                 Some(Button::Minus) => self.trainer.step_by(&d, false, false),
                 Some(Button::Mode) => self.trainer.cycle_mode(&d),
                 Some(Button::Calibrate) => self.calibrate_action(),
+                Some(Button::Ramp) => return self.start_ramp(),
                 None => return,
             },
             _ => return,

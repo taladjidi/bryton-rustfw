@@ -325,6 +325,8 @@ pub enum Row {
     Workout(usize),
     /// Select starts the workout shown (and the ride, if none runs).
     WorkoutStart,
+    /// The FTP ramp test (ramp.rs, app/ramp.rs): Select starts it, with a trainer heard.
+    RampTest,
     /// Step `n` of the workout shown: Select starts the workout from it.
     Step(usize),
     /// Course `n` of the list ([`crate::storage::course::List`]): Select follows it, or stops following it.

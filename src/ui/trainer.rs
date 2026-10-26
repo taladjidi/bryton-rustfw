@@ -16,6 +16,8 @@ pub enum Button {
     Mode,
     /// Start the calibration, or cancel the one running.
     Calibrate,
+    /// Start the FTP ramp test.
+    Ramp,
 }
 
 /// The bottom row of buttons.
@@ -26,6 +28,8 @@ pub enum Bottom {
     Mode,
     /// MODE and CALIBRATE side by side (the trainer asks for a calibration, or a result is shown).
     Both,
+    /// MODE and RAMP TEST side by side (no ride yet, nothing to calibrate).
+    ModeRamp,
     /// CANCEL, the whole width (a calibration runs).
     Cancel,
 }
@@ -56,6 +60,10 @@ fn bottom_buttons(b: Bottom) -> [Option<BottomButton>; 2] {
         Bottom::Both => [
             Some((Button::Mode, 8, 104, "MODE", ACCENT, super::BLACK)),
             Some((Button::Calibrate, 116, 116, "CALIBRATE", YELLOW, super::BLACK)),
+        ],
+        Bottom::ModeRamp => [
+            Some((Button::Mode, 8, 104, "MODE", ACCENT, super::BLACK)),
+            Some((Button::Ramp, 116, 116, "RAMP TEST", GREEN, super::BLACK)),
         ],
         Bottom::Cancel => [Some((Button::Calibrate, 8, 224, "CANCEL", RED, WHITE)), None],
     }
@@ -164,7 +172,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         fnv(4, power.as_str()),
         fnv(5, cadence.as_str()),
         fnv(u32::from(now.status_color) + 6, now.status),
-        fnv(7, ["MODE", "BOTH", "CANCEL"][now.bottom as usize]),
+        fnv(7, ["MODE", "BOTH", "RAMP", "CANCEL"][now.bottom as usize]),
         fnv(8, now.timer),
     ];
     let bold = Style { fg: ACCENT, ..VALUE };

@@ -617,6 +617,8 @@ pub struct SimTrainer {
     pub grade_x100: i32,
     /// The power the rider makes when the trainer does not hold a target, W.
     pub rider_w: u16,
+    /// A ceiling on the power it makes, W (0: none): a rider who cannot hold the target in ERG.
+    pub cap_w: u16,
     /// The cadence it reports while there is power, rpm (0: 90).
     pub rpm: u8,
     /// The status nibble of page 25 (1 and 2 calibration, 4 user configuration), and its target flags.
@@ -697,6 +699,9 @@ impl SimTrainer {
         }
         // calibrating, the brake is off: the rider's power, whatever the mode was
         self.power = if self.mode == 0x31 && self.cal == 0 { self.target_w } else { self.rider_w };
+        if self.cap_w != 0 {
+            self.power = self.power.min(self.cap_w);
+        }
         self.speed_mm_s = match self.mode {
             0x33 => (10_000 - self.grade_x100 * 8).clamp(1000, 20_000) as u32,
             0x30 => 8000 - u32::from(self.resistance) * 20,
@@ -1385,6 +1390,8 @@ mod altitude_tests;
 mod fecble_tests;
 #[cfg(test)]
 mod ftms_tests;
+#[cfg(test)]
+mod ramp_tests;
 #[cfg(test)]
 mod shift_tests;
 #[cfg(test)]
