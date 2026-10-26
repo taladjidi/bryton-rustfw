@@ -14,6 +14,7 @@
 pub mod alerts;
 pub mod altitude;
 mod app;
+pub mod climbs_ahead;
 pub mod course;
 pub mod dev;
 pub mod drivers;
@@ -34,7 +35,7 @@ pub mod workout;
 
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, sensors, touch};
-pub use storage::{fat, fit, fitread, history, ign, ini, recorder, stock, trash};
+pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, trash};
 pub use ui::{fonts, map, menu, text, tiles};
 // the app's parts (app.rs), at the root as before the split
 pub use app::*;
@@ -370,6 +371,8 @@ pub struct App {
     courses: Option<&'static mut storage::course::Courses>,
     /// The climb pacer's plan (app/pace.rs).
     pace: PaceState,
+    /// The road ahead: climbs found with no course followed (memory from main.rs: [`App::set_ahead_memory`]).
+    ahead: Option<(&'static mut climbs_ahead::Ahead, &'static mut [u16])>,
     /// The USB drive (msc.rs): the medium is in while the card is lent ([`emmc::Emmc::lend`], app/drive.rs).
     drive: msc::Drive,
     /// A system reset is wanted (after the computer wrote to the volume: app/drive.rs).
@@ -567,6 +570,7 @@ impl App {
             lag_s: 0,
             courses: None,
             pace: PaceState::new(),
+            ahead: None,
             drive: msc::Drive::new(),
             restart: false,
             phone: Phone::default(),
@@ -747,6 +751,7 @@ impl App {
             // the card is the computer's (the USB drive): the app's card work waits
             self.step_stock(b);
             self.step_courses(b);
+            self.step_ahead(b);
             self.step_past(b);
             self.step_pages(b);
         }

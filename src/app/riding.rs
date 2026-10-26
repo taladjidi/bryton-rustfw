@@ -417,6 +417,7 @@ impl App {
         if let Some(ev) = ev {
             self.course_event(ev);
         }
+        self.ahead_second();
         self.pace_second(); // after the fix: the position is this second's
     }
 }

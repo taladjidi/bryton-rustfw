@@ -247,7 +247,7 @@ Others
 - [x] Elevation profile graph of the ride (Garmin, Karoo): sim
 - [x] Climb detection on a course: each climb's length, grade, what is left (stock Climb Challenge 2.0, Garmin ClimbPro, Wahoo Summit, Karoo Climber): sim, Garmin's definition (500 m, 3 %), a banner and a beep at each start
 - [ ] Climb page that opens by itself near a climb, can be turned off (stock Climb Page Switch, Garmin)
-- [ ] Climbs without a course, predicted from the road ahead (stock Climb Challenge 2.0, Karoo Climber, Garmin 1050)
+- [~] Climbs without a course, predicted from the road ahead (stock Climb Challenge 2.0, Karoo Climber, Garmin 1050): sim, the routing graph and elevations of stock's map files traced 4 km ahead, Garmin's definition as a course's, a banner and a beep, the CLIMB fields, BIKE > CLIMBS AHEAD; not seen on the unit
 - [ ] Climb filter: all or medium and above (stock)
 - [x] Gradient-coloured climb profile in sections (stock, all): sim, the PROFILE field
 - [ ] Pacing on a climb from FTP and W' balance (ours, Garmin Power Guide)
@@ -388,9 +388,10 @@ Climbs without a course:
 - **Garmin ClimbPro** in free ride (Edge 540 and newer) and **Karoo Climber** (Predictive Path) do the same from the
   map: Karoo leaves out climbs under 400 m or under 3 % and filters by size; Garmin's thresholds are not published
   (500 m and 3 % is the forum's reading).
-- **Here:** the routing graph's format is known (STORAGE_AND_MAPS.md 4.7); where the per-node elevation comes from is
-  not (a node field, or the Topo folder: to find in Ghidra). With it, the climb finder of `course.rs` could run on the
-  traced road as on a course. Without it, a DEM made on the computer (open data, like the IGN packs) would serve.
+- **Here (built 2026-10-26, src/climbs_ahead.rs):** the elevation is a node field of the routing graph (`field / 5 - 500`
+  m, STORAGE_AND_MAPS.md 4.9), and the graph's keys are sign and magnitude (found on a real file, storage/route.rs); the
+  climb finder of `course.rs` runs on the traced road as on a course (Garmin's definition: one rule for both, rather
+  than stock's, which the notes above keep for a comparison on the unit).
 
 Live segments:
 - **Stock** has the whole feature (pages, a ghost that follows each target's real splits point by point: KOM, QOM,

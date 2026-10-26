@@ -217,7 +217,7 @@ impl App {
     pub(crate) fn first_start(&mut self, b: &mut impl Board) {
         // [`WHEEL_BKP`] alone is not enough: it is written only when a setting is changed, and a unit can have its
         // sensors paired and pages set without that (review of ecb8b98: stock's then replaced them)
-        let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xa7)
+        let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xac)
             || Kind::ALL.iter().any(|k| k.from_word(b.backup_read(k.backup())).is_some())
             || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some());
         if own || self.resume_pending {

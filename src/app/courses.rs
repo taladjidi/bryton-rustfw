@@ -137,10 +137,7 @@ impl App {
     /// The course fields' text: "--" without a course followed and a fix on it.
     pub(crate) fn course_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
-        let Some((c, at)) = self.on_course() else {
-            l.push_str("--");
-            return l;
-        };
+        let Some((c, at)) = self.on_course() else { return self.ahead_text(f) };
         let d = at.along_m;
         let climb = c.climb_at(d).and_then(|(k, on)| Some((*c.climbs().get(k)?, on)));
         match (f, climb) {
@@ -207,7 +204,7 @@ impl App {
 
     /// CLIMB's edge bar, by the grade of the climb (the one running, else the next); BLACK elsewhere.
     pub(crate) fn course_bar(&self, f: Field) -> u16 {
-        let Some((c, at)) = self.on_course().filter(|_| f == Field::Climb) else { return ui::BLACK };
+        let Some((c, at)) = self.on_course().filter(|_| f == Field::Climb) else { return self.ahead_bar(f) };
         let grade = c.climb_at(at.along_m).and_then(|(k, on)| match on {
             true => c.grade_ahead(at.along_m),
             false => c.climbs().get(k).map(|k| k.grade_x10() as i32),

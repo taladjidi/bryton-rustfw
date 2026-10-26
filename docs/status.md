@@ -40,6 +40,15 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **Climbs ahead (src/climbs_ahead.rs, storage/route.rs, storage/inflate.rs, app/ahead.rs)**: only on the simulator,
+  the host tests, the fuzz, and a real region file read on the computer (1009 of 1014 tiles decode, 5 are over the
+  graph's 2560 nodes; traces from 199 random places: 194 made, median 4 km, 111 climbs). On the unit, with a map file
+  of the region copied to `\Map\MapData\<Region>` (stock's own has them): a ride shows CLIMB and CLIMB M after the first
+  seconds (the tiles read one a pass: how long a pass takes with a 445-node tile, inflated 16 KB into the SDRAM
+  buffer, is to measure with `dev.py info`; inferred 20 to 50 ms), the banner and the beep 50 m before a climb the
+  road ahead has, the trace made again when the road bends away from the one traced; the climbs against what stock
+  shows for the same ride; the AXI SRAM cell stays in `.bss` (`nm`: `make_ahead`, about 105 KB) and the unit
+  boots (a new static in `.axibss` is a core-level change: Renode, then `DIAG_STOP`).
 - **The GNSS receiver off for an indoor ride (app/gps.rs `gnss_switch`, BOARD.md 13)**: only against the simulator.
   On the unit: with a trainer heard, Start switches the receiver off (strip GPS blank), and after SAVE or DISCARD,
   or once the profile goes to ROAD, it is powered again 1 s later and gives a fix outdoors (how long, with the time

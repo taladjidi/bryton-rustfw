@@ -940,7 +940,7 @@ impl Frame {
 }
 
 /// Floating point without libm: series accurate to about 1e-13 in the ranges used here (|x| <= pi/2).
-fn sin(x: f64) -> f64 {
+pub(crate) fn sin(x: f64) -> f64 {
     let (mut term, mut sum) = (x, x);
     for k in 1..10 {
         term *= -x * x / f64::from((2 * k) * (2 * k + 1));
@@ -977,7 +977,7 @@ pub(crate) fn ln(x: f64) -> f64 {
 }
 
 /// The Mercator ordinate of a latitude whose sine is `s`.
-fn atanh(s: f64) -> f64 {
+pub(crate) fn atanh(s: f64) -> f64 {
     0.5 * ln((1.0 + s) / (1.0 - s))
 }
 
@@ -1370,7 +1370,8 @@ pub(crate) mod tests {
         let link = include_str!("../../link.x");
         let line = link.lines().find(|l| l.trim_start().starts_with("MAP (rw)")).unwrap();
         let k: usize = line.rsplit("LENGTH = ").next().unwrap().trim_end_matches('K').trim().parse().unwrap();
-        assert!(k * 1024 >= MEM_WORDS * 2, "MAP {k} KB, the basemap needs {} B", MEM_WORDS * 2);
+        let need = (MEM_WORDS + crate::route::SCRATCH_WORDS) * 2; // the basemap, then the road ahead's tile buffer
+        assert!(k * 1024 >= need, "MAP {k} KB, the basemap and the route buffer need {need} B");
     }
 
     /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m,

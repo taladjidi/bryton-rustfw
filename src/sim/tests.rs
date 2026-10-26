@@ -4134,6 +4134,139 @@ fn course_ride() {
     assert_eq!(fields(&app), ["--", "--", "--", "--", "--"]);
 }
 
+/// The made-up road of the synthetic map file (tools/route_pack.py, `\Map\MapData\Test` on the test volume): ridden
+/// east at 8 m/s from 100 m along it.
+fn ahead_route(ms: u64) -> (i32, i32, i32) {
+    let (lat, lon) = crate::route::tests::metres(100.0 + ms as f64 * 0.008, 0.0);
+    (lat, lon, 9_000_000)
+}
+
+/// Climbs ahead: no course, a ride along the road of a map file on the card. The tiles are read as the ride needs
+/// them, the climb fields say what is coming ("--" before the trace), the banner and the beep come at the climb's
+/// start, as a course's, the fields follow the climb, and the trace is made again as the ride reaches its end. BIKE >
+/// CLIMBS AHEAD turns it off, and the setting is kept.
+#[test]
+fn climbs_ahead_ride() {
+    use Field::*;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::route::tests::image_with_map();
+    sim.gnss.route = Some(ahead_route);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    app.pages[0] = PageCfg { layout: 6, fields: [Climb, ClimbGain, Speed, Time, Time, Time] }.into();
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    let fields = |app: &App| [Climb, ClimbGain].map(|f| text(app, f));
+    assert!(app.settings.ahead, "on by default");
+
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(fields(&app), ["--", "--"], "not riding yet");
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.ms;
+    assert_eq!(fields(&app), ["--", "--"], "no trace yet");
+    // the first seconds: a fix, then the tiles read one a pass, the snap, the trace
+    run(&mut sim, &mut app, 12_000);
+    let f = fields(&app);
+    assert!(f[0].ends_with("K|6%") && f[0].starts_with("2."), "the climb ahead: {f:?}");
+    let gain: u32 = f[1].parse().unwrap();
+    assert!((115..=125).contains(&gain), "its gain: {f:?}");
+    assert_eq!((app.field_bar(Climb), app.field_color(Climb)), (ui::grade_color(57), ui::WHITE), "5.7 %");
+    let (tiles, bytes) = app.ahead.as_ref().unwrap().0.io();
+    std::println!("climbs ahead: {tiles} tiles read, {bytes} bytes, at {} s", (sim.ms - t0) / 1000);
+    assert!(tiles >= 3 && bytes > 1000, "the tiles of the first km: {tiles}");
+    assert_consistent(&sim, &app);
+
+    // the banner at the climb's start (about x = 950: 106 s), a beep, nothing before
+    while sim.ms - t0 < 98_000 {
+        run(&mut sim, &mut app, 1000);
+        assert!(!app.banner.as_str().starts_with("CLIMB"), "not before the climb: {}", sim.ms - t0);
+    }
+    let tones = sim.tones.len();
+    run(&mut sim, &mut app, 12_000);
+    assert!(
+        app.banner.as_str().starts_with("CLIMB 2.") && app.banner.as_str().ends_with("KM 6%"),
+        "{}",
+        app.banner.as_str()
+    );
+    assert_eq!(sim.tones[tones..], [2000, 0], "the beep of a climb");
+    // on the climb: what is left of it and the grade ahead
+    run(&mut sim, &mut app, 40_000);
+    let f = fields(&app);
+    assert!(f[0].ends_with("K|6%") && f[0].starts_with("1."), "{f:?}");
+    let left: u32 = f[1].parse().unwrap();
+    assert!((60..=105).contains(&left), "metres of climb left: {f:?}");
+    assert_consistent(&sim, &app);
+    sim.save("climbs_ahead");
+    // the trace is made again as the ride reaches the end of the last (x = 2700, 1500 m from its end), the climb not
+    // said twice
+    let traces = app.ahead.as_ref().unwrap().0.traces;
+    while sim.ms - t0 < 330_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    let (a, _) = app.ahead.as_ref().unwrap();
+    assert!(a.traces > traces && a.on_road(), "traced again: {} -> {}", traces, a.traces);
+    assert_eq!(sim.tones[tones..], [2000, 0], "said once: one beep");
+    // at 3.2 km the road bends and a straight branch goes on: the rider keeps straight on, off the road traced, and
+    // the trace is made again on the branch, which ends after 800 m (no climb on it)
+    let traces = a.traces;
+    while sim.ms - t0 < 430_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    let (a, _) = app.ahead.as_ref().unwrap();
+    assert!(
+        a.traces > traces && a.on_road() && a.end() == crate::climbs_ahead::End::Stop,
+        "on the branch: {}",
+        a.traces
+    );
+    assert_eq!(fields(&app), ["--", "--"], "no climb on the branch");
+    assert_consistent(&sim, &app);
+
+    // off: the fields go, and the setting is kept
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::ClimbsAhead));
+    sim.save("bike_menu_ahead");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(!app.settings.ahead);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(fields(&app), ["--", "--"]);
+    assert_eq!(sim.backup[WHEEL_BKP] >> 24, 0xaa, "kept in register 11's tag");
+    assert!(!Settings::from_word(sim.backup[WHEEL_BKP]).ahead);
+}
+
+/// Without the map file (or before it is copied): nothing is found, nothing breaks, and the card is looked at a few
+/// times, not every pass: the ride reads about what it reads with the setting off.
+#[test]
+fn climbs_ahead_without_a_map() {
+    use Field::*;
+    let ride = |ahead: bool| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.gnss.route = Some(ahead_route);
+        let mut app = App::start(&mut sim, None);
+        app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+        app.settings.ahead = ahead;
+        app.pages[0] = PageCfg { layout: 6, fields: [Climb, ClimbGain, Speed, Time, Time, Time] }.into();
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 3000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let b0 = sim.emmc.bytes_read;
+        run(&mut sim, &mut app, 100_000);
+        assert_eq!(app.field_text(Climb).as_str(), "--");
+        assert_eq!(app.ahead.as_ref().unwrap().0.io(), (0, 0));
+        assert_consistent(&sim, &app);
+        sim.emmc.bytes_read - b0
+    };
+    let (on, off) = (ride(true), ride(false));
+    std::println!("no map: {on} bytes read in 100 s, {off} with climbs ahead off");
+    assert!(on <= off + 40_000, "{on} bytes against {off}");
+}
+
 /// The zigzag (course/cues.rs `zigzag`, tools/fat_image.py's `Zigzag.gpx`) ridden at 8 m/s from its start.
 fn zigzag_route(ms: u64) -> (i32, i32, i32) {
     let pts = crate::course::cues::tests::zigzag();

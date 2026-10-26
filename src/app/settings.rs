@@ -188,7 +188,8 @@ pub(crate) const RIDE_BKP: usize = 30;
 pub(crate) const RIDE_OPEN: u32 = 0x5243_0001;
 
 /// The small settings kept in RTC backup register 11, as one word behind a tag byte:
-/// - tag 0xa7 (this layout; 0xa8 and 0xa9 the same with the ride profile fixed, [`Settings::profile`]): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
+/// - tag 0xa7 (this layout; 0xa8 and 0xa9 the same with the ride profile fixed, [`Settings::profile`]; 0xaa to 0xac the
+///   same three with climbs ahead off, [`Settings::ahead`]): bits 0..2 the wheel's index in [`WHEELS`], 3..5 the backlight level (an index in
 ///   [`LIGHT_LEVELS`], or [`LIGHT_AUTO`]), 6..7 its time-out (an index in [`LIGHT_TIMEOUTS_S`]), 8..15 max heart
 ///   rate less 100, 16..22 FTP in 5 W (at most 120), 23 the touch panel off ([`Settings::touch`]: 0 in words written
 ///   before it, on);
@@ -240,6 +241,10 @@ pub struct Settings {
     /// register 11's tag: 0xa7 for AUTO (the tag every build knows), 0xa8 ROAD, 0xa9 INDOOR (an earlier build reads
     /// those two as an empty word: defaults).
     pub profile: Option<ride::Profile>,
+    /// Climbs found on the road ahead when no course is followed (BIKE > CLIMBS AHEAD, `climbs_ahead`). Kept in
+    /// register 11's tag: 0xa7 to 0xa9 on, 0xaa to 0xac off (the same three profiles; an earlier build reads those
+    /// as an empty word: defaults).
+    pub ahead: bool,
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -281,14 +286,17 @@ impl Settings {
             remote: [menu::Remote::None; 4],
             alt_m: 500,
             profile: None,
+            ahead: true,
         };
         match w >> 24 {
-            0xa7..=0xa9 => Settings {
-                profile: match w >> 24 {
-                    0xa8 => Some(ride::Profile::Road),
-                    0xa9 => Some(ride::Profile::Indoor),
+            0xa7..=0xac => Settings {
+                profile: match (w >> 24) % 3 {
+                    // 0xa8, 0xab: ROAD; 0xa9, 0xac: INDOOR; 0xa7, 0xaa: AUTO
+                    0 => Some(ride::Profile::Road),
+                    1 => Some(ride::Profile::Indoor),
                     _ => None,
                 },
+                ahead: w >> 24 < 0xaa,
                 wheel_mm: index(w & 7),
                 max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end()),
                 ftp: (5 * (w >> 16 & 0x7f) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
@@ -450,7 +458,7 @@ impl Settings {
             None => 0xa7,
             Some(ride::Profile::Road) => 0xa8,
             Some(ride::Profile::Indoor) => 0xa9,
-        } << 24)
+        } + 3 * u32::from(!self.ahead)) << 24
             | u32::from(!self.touch) << 23 // ponytail: the bit FTP / 5 (120 at most) leaves free in a full word
             | (u32::from(self.ftp / 5) & 0x7f) << 16
             | (u32::from(self.max_hr.saturating_sub(100)) & 0xff) << 8
@@ -470,6 +478,7 @@ impl Settings {
                 None => l.push_str("AUTO"),
             },
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
+            Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
             Setting::LightOff => match LIGHT_TIMEOUTS_S.get(self.light_timeout) {
                 Some(0) | None => l.push_str("NEVER"),
                 Some(&t) => {
@@ -534,6 +543,7 @@ impl Settings {
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
             Setting::Touch => self.touch = !self.touch,
+            Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             Setting::BikeProfile => {
                 self.profile = match self.profile {

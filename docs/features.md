@@ -371,6 +371,27 @@ copied over USB into `\Courses`, read only:
   it the rider is in to the end, the rider's place, the ridden part dark, the climbs green, yellow, orange or red by
   grade.
 
+## Climbs ahead (no course)
+
+Riding outdoors with no course followed, the unit finds the climbs on the road ahead from the routing graph and
+elevations of Bryton's own map files (`\Map\MapData\<Region>` or `\Map\Update\<Region>`, copied by the owner as for
+stock: the maps are not in this repository), as Bryton's Climb Challenge 2.0, Garmin's ClimbPro in free ride and
+Hammerhead's Climber do.
+- **The road ahead:** the nearest road within 150 m (one in the direction of travel wins over a nearer one across it),
+  then forward node by node for 4 km: the same road, else a road of the same class, else the smallest turn, never
+  back, never a turn over 110 degrees; a dead end or a hairpin ends it. The tiles it crosses are read one a pass
+  (about 5 KB each on the card).
+- **Elevation:** the map's, a whole metre a node, smoothed over about 560 m of road by stock's 9-point filter (the
+  steps of whole metres would show as grades of 7 %); a trace under 630 m is not smoothed.
+- **Climbs:** the same rule as a course's (Garmin's: 500 m at 3 % at least), so a hill is one thing whether a course
+  or the road ahead says so. At a climb's start (50 m before) the banner ("CLIMB 2.1 KM 6%") and the beep, once.
+- **Fields:** CLIMB and CLIMB M as with a course (what is left of the climb and its grade; before it, its length, grade
+  and gain), coloured by grade; "--" while the road ahead has no climb.
+- **Again:** when the rider leaves the road traced (3 s more than 40 m from it), or nears the end of a trace that
+  stopped at its length (1.5 km), at most every 5 s; after a failure (no map file, no road within 150 m) every 30 s.
+  Only while riding (not paused, not slower than 7 km/h), never indoors, never while a course is followed.
+- **BIKE > CLIMBS AHEAD** turns it off (ON by default; kept in register 11's tag).
+
 ## Stock data
 
 What Bryton's firmware left on the card, read only (nothing of stock's is ever written; HISTORY's DELETE moves a ride's file, above), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM

@@ -101,6 +101,8 @@ pub enum Setting {
     Altitude,
     /// The ride profile: AUTO (indoor when a trainer is heard at Start), ROAD or INDOOR ([`crate::ride::Profile`]).
     BikeProfile,
+    /// Climbs found on the road ahead when no course is followed, on or off (`climbs_ahead`).
+    ClimbsAhead,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -192,6 +194,7 @@ impl Setting {
             Setting::WktAvg => "GAUGE POWER",
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
+            Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -480,14 +483,15 @@ pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), 
 pub const DISPLAY: [Row; 4] =
     [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::WktAvg)];
 
-/// BIKE: the wheel, the bike's weight, the ride profile, and the barometer's altitude with its calibration from the GPS
-/// (a ride setting, not a diagnostic).
-pub const BIKE: [Row; 5] = [
+/// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
+/// ride setting, not a diagnostic), and the climbs ahead.
+pub const BIKE: [Row; 6] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
     Row::AltGps,
     Row::Set(Setting::BikeProfile),
+    Row::Set(Setting::ClimbsAhead),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
