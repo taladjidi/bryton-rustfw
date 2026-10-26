@@ -28,6 +28,12 @@ fn git(args: &[&str]) -> String {
 }
 
 fn main() {
+    // the linker script, for the firmware's binary only (not the host tests); here rather than in .cargo/config.toml,
+    // whose rustflags cargo joins across nested checkouts (a worktree under this one linked with it twice)
+    if std::env::var("TARGET").is_ok_and(|t| t.starts_with("thumb")) {
+        println!("cargo::rustc-link-arg-bins=-Tlink.x");
+        println!("cargo::rerun-if-changed=link.x");
+    }
     // the commit moves with HEAD and with what it points to; -dirty with the index (a worktree's .git is a file:
     // these paths are then missing, which only means fewer rebuilds)
     for p in [".git/HEAD", ".git/index", ".git/refs/heads"] {
