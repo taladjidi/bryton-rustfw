@@ -466,11 +466,11 @@ impl App {
         let area = self.area();
         if let Some((bx, w)) = self.widgets().nth(old) {
             let (x, y, wd, h) = ui::box_inside(bx);
-            let mut p = Panel(b, area);
+            let mut p = Panel(b, area, self.settings.smooth);
             p.fill(x, y, wd, h, ui::BLACK);
             self.draw_widget(&mut p, old, bx, w);
         }
-        self.draw_edit_frame(&mut Panel(b, area));
+        self.draw_edit_frame(&mut Panel(b, area, self.settings.smooth));
     }
 
     /// In the editor, the frame round the selected box.

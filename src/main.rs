@@ -1234,17 +1234,9 @@ struct S510 {
     cycles: u64,
     /// The last sleep between passes: ms, and the work in it (USB), us ([`Board::last_sleep`]).
     sleep: (u32, u32),
-    /// The FONT setting ([`Board::smooth_text`]).
-    smooth: bool,
 }
 
 impl Board for S510 {
-    fn smooth_text(&self) -> bool {
-        self.smooth
-    }
-    fn set_smooth_text(&mut self, on: bool) {
-        self.smooth = on;
-    }
     fn panel_power_on(&mut self) {
         lcd_power_on();
     }
@@ -1464,7 +1456,7 @@ fn main() -> ! {
     i2c_init();
     sleep_power_init();
     checkpoint(4);
-    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), smooth: false };
+    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0) };
     let app = make_app(&mut board);
     if let Some(mem) = hw::map_memory() {
         // zeroes 2.1 MB of SDRAM once: about 15 to 40 ms (inferred), before the first map. The basemap takes the first

@@ -4800,10 +4800,10 @@ fn font_smooth_keeps_layouts() {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         run(&mut sim, &mut app, 200);
-        assert!(!sim.smooth && !app.settings.smooth, "PIXEL by default");
+        assert!(!app.settings.smooth, "PIXEL by default");
         let pixel = render_all(&app);
         let menu_shot = toggle(&mut sim, &mut app);
-        assert!(sim.smooth && app.settings.smooth);
+        assert!(app.settings.smooth);
         assert_ne!(sim.backup[POWER_BKP] & 1 << 24, 0, "kept");
         assert!(Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).smooth);
         let smooth = render_all(&app);
@@ -4831,7 +4831,7 @@ fn font_smooth_keeps_layouts() {
             .unwrap();
         }
         toggle(&mut sim, &mut app);
-        assert!(!sim.smooth && sim.backup[POWER_BKP] & 1 << 24 == 0);
+        assert!(!app.settings.smooth && sim.backup[POWER_BKP] & 1 << 24 == 0);
         let again = render_all(&app);
         assert!(again.iter().zip(&pixel).filter(|(a, b)| a != b).count() < 200, "PIXEL back (only the clock moved)");
     }

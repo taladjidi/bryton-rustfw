@@ -104,11 +104,6 @@ pub trait Board {
     fn gnss_transfer(&mut self, buf: &mut [u8]);
     /// USB power (charger) present.
     fn charger_present(&mut self) -> bool;
-    /// Whether text is drawn in the smooth font (the FONT setting): what [`Canvas::smooth`] of the panel answers.
-    /// Kept by the board only to hand to the drawing code; the app sets it ([`Board::set_smooth_text`]).
-    fn smooth_text(&self) -> bool;
-    /// Sets [`Board::smooth_text`].
-    fn set_smooth_text(&mut self, on: bool);
     /// RTC backup register `n` (0..32): kept through resets and power off (BOARD.md 8).
     fn backup_read(&mut self, n: usize) -> u32;
     /// Writes RTC backup register `n`.
@@ -634,9 +629,8 @@ impl App {
         if self.ble.is_some() {
             self.phone_setup(b);
         }
-        b.set_smooth_text(self.settings.smooth);
         self.strip_shown = self.strip;
-        ui::draw_strip(&mut Panel(b, (0, ui::H)), &self.strip);
+        ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
         self.show(b);
         self.update_light(b);
     }
@@ -771,7 +765,11 @@ impl App {
         // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
         if let Some(ms) = self.banner_ms.filter(|_| !self.phone.ringing) {
             if !core::mem::replace(&mut self.banner_drawn, true) {
-                ui::draw_banner(&mut Panel(b, (0, ui::H)), self.banner.as_str(), self.banner_kind == Banner::Alarm);
+                ui::draw_banner(
+                    &mut Panel(b, (0, ui::H), self.settings.smooth),
+                    self.banner.as_str(),
+                    self.banner_kind == Banner::Alarm,
+                );
             }
             self.banner_ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < BANNER_MS);
             if self.banner_ms.is_none() {
@@ -785,14 +783,22 @@ impl App {
                 let area = self.area();
                 if let Some((m, _)) = &mut self.summary {
                     let (base, view) = (Some(&self.basemap), m.view);
-                    map::update(&mut Panel(b, area), map::area(ui::card::MAP), &self.track, m, base, None, None);
+                    map::update(
+                        &mut Panel(b, area, self.settings.smooth),
+                        map::area(ui::card::MAP),
+                        &self.track,
+                        m,
+                        base,
+                        None,
+                        None,
+                    );
                     if m.view != view {
                         self.show(b); // refitted: the basemap of the new view under it (else black; review)
                     }
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, self.area()), &self.nearby);
+                ui::draw_list(&mut Panel(b, self.area(), self.settings.smooth), &self.nearby);
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }

@@ -573,12 +573,12 @@ impl App {
     /// The call's overlay goes (answered, declined, missed, the link lost): what was under it drawn again.
     pub(crate) fn end_ring(&mut self, b: &mut impl Board) {
         if core::mem::take(&mut self.phone.ringing) {
-            let mut p = Panel(b, (ui::CALL_Y, ui::H));
+            let mut p = Panel(b, (ui::CALL_Y, ui::H), self.settings.smooth);
             p.fill(0, ui::CALL_Y, ui::W, ui::H - ui::CALL_Y, ui::BLACK);
             self.draw_screen(&mut p);
             if self.screen == Screen::Main {
                 // the clock left out under the call's banner, drawn again (its top rows come with redraw_top)
-                ui::draw_main_time(&mut Panel(b, (ui::BANNER_H, ui::CALL_Y)), self.main_digits());
+                ui::draw_main_time(&mut Panel(b, (ui::BANNER_H, ui::CALL_Y), self.settings.smooth), self.main_digits());
             }
             self.redraw_top(b); // the strip and the page's top, or a banner said meanwhile
         }
@@ -909,7 +909,7 @@ impl App {
                     // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
                     self.banner_drawn = false;
                     self.phone.ringing = true;
-                    let mut p = Panel(b, (0, ui::H));
+                    let mut p = Panel(b, (0, ui::H), self.settings.smooth);
                     ui::draw_call(&mut p, who.as_str());
                     if self.screen == Screen::Main {
                         p.fill(0, ui::BANNER_H, ui::W, ui::DATE_Y - ui::BANNER_H, ui::BLACK); // the clock's lower half
@@ -983,7 +983,7 @@ impl App {
     /// Redraws what changed on the media screen (the time and the bar's new columns, a second).
     pub(crate) fn update_media(&mut self, b: &mut impl Board) {
         let mut shown = self.phone.shown;
-        ui::media::update(&mut Panel(b, self.area()), &self.media_now(), &mut shown, false);
+        ui::media::update(&mut Panel(b, self.area(), self.settings.smooth), &self.media_now(), &mut shown, false);
         self.phone.shown = shown;
     }
 }

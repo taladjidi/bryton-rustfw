@@ -377,7 +377,7 @@ impl App {
 
     /// The banner's rows drawn again from what the screen shows: the strip, the page's top, the banner if one is up.
     pub(crate) fn redraw_top(&mut self, b: &mut impl Board) {
-        let mut p = Panel(b, (0, ui::BANNER_H));
+        let mut p = Panel(b, (0, ui::BANNER_H), self.settings.smooth);
         p.fill(0, 0, ui::W, ui::BANNER_H, ui::BLACK);
         if !self.hint_shown {
             self.strip_shown = self.strip; // not drawn while covered (update_strip)
@@ -481,7 +481,7 @@ impl App {
             let view = m.view;
             self.render_basemap(b, map::area(bx), view);
         }
-        let mut p = Panel(b, self.area());
+        let mut p = Panel(b, self.area(), self.settings.smooth);
         ui::clear_page(&mut p);
         self.draw_screen(&mut p);
         let hint = matches!(self.screen, Screen::Edit(..));
@@ -489,7 +489,7 @@ impl App {
             // into the editor or out of it: its hint in the strip's place, or the strip back
             self.hint_shown = hint;
             self.strip_shown = self.strip;
-            self.draw_top(&mut Panel(b, self.area()));
+            self.draw_top(&mut Panel(b, self.area(), self.settings.smooth));
         }
         if let Screen::Menu(menu, sel) = self.screen {
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
@@ -521,7 +521,7 @@ impl App {
                         self.render_basemap(b, area, view);
                     }
                     let (base, route) = ((first == Some(i)).then_some(&self.basemap), self.route());
-                    let mut p = Panel(b, self.area());
+                    let mut p = Panel(b, self.area(), self.settings.smooth);
                     map::update(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom);
                     Drawn::Map(m)
                 }
@@ -533,7 +533,7 @@ impl App {
                     let now = self.main_digits();
                     for (k, (d, was)) in now.into_iter().zip(was).enumerate() {
                         if d != was && !self.phone.ringing {
-                            ui::draw_main_digit(&mut Panel(b, self.area()), k, d);
+                            ui::draw_main_digit(&mut Panel(b, self.area(), self.settings.smooth), k, d);
                         }
                     }
                     Drawn::Digits(now)
@@ -541,11 +541,17 @@ impl App {
                 (Widget::Field(f), Drawn::Value(was, was_fg, was_bar)) => {
                     let (text, fg, bar) = (self.field_text(f), self.field_color(f), self.field_bar(f));
                     if bar != was_bar {
-                        ui::draw_zone_bar(&mut Panel(b, self.area()), bx, bar); // a zone changed: the bar only
+                        ui::draw_zone_bar(&mut Panel(b, self.area(), self.settings.smooth), bx, bar); // a zone changed: the bar only
                     }
                     if (was, was_fg) != (text, fg) {
                         let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
-                        ui::draw_field_value_changes(&mut Panel(b, self.area()), bx, old, text.as_str(), fg);
+                        ui::draw_field_value_changes(
+                            &mut Panel(b, self.area(), self.settings.smooth),
+                            bx,
+                            old,
+                            text.as_str(),
+                            fg,
+                        );
                     }
                     Drawn::Value(text, fg, bar)
                 }
@@ -555,7 +561,7 @@ impl App {
                         if let Some(d) = self.drawn.get_mut(i) {
                             *d = now;
                         }
-                        self.draw_widget(&mut Panel(b, self.area()), i, bx, w);
+                        self.draw_widget(&mut Panel(b, self.area(), self.settings.smooth), i, bx, w);
                     }
                     now
                 }
@@ -564,7 +570,7 @@ impl App {
                 *d = now;
             }
             if selected == Some(i) && now != old {
-                ui::draw_cell_frame(&mut Panel(b, self.area()), bx, ui::ACCENT);
+                ui::draw_cell_frame(&mut Panel(b, self.area(), self.settings.smooth), bx, ui::ACCENT);
             }
         }
     }

@@ -3,7 +3,7 @@ name = "bryton-rustfw"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-license = "MIT"
+license = "MIT AND OFL-1.1"
 publish = false
 description = "Minimal from-scratch firmware for the Bryton Rider S510: shows the RTC time"
 

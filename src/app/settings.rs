@@ -387,7 +387,8 @@ impl Settings {
     /// These settings with the weight, W', the bike's weight, the workout gauge's window and the single presses' actions
     /// kept in `w` (RTC backup register 16). Tag 0xa in bits 28..31 (this layout), then the rider's weight less 30 kg in
     /// 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the bike's weight in 100 g in 16..23 (0:
-    /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; clear in earlier words: PIXEL); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
+    /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; clear in earlier words: PIXEL); the single
+    /// presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
     /// from earlier builds: tag 0xb in bits 28..31, the same up to the window, the bike's kg in 16..20, the single
     /// presses' actions in 21..23 and 24..26; tag 0xc1 in bits 24..31, the weight in kg in 0..7, W' in 0.5 kJ in
     /// 8..15, the window in 16..17, the actions in 18..23, no bike weight.

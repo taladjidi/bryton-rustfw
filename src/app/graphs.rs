@@ -257,7 +257,7 @@ impl App {
         let a = ui::graph_area(bx);
         let now = self.graph_now(old.plot, a.2);
         let step = if now.whole { 1 } else { STEP };
-        let mut p = Panel(b, self.area());
+        let mut p = Panel(b, self.area(), self.settings.smooth);
         let same = GraphShown { n: old.n, stats: old.stats, ..now } == old;
         if same && now.stats != old.stats {
             self.draw_graph_stats(&mut p, bx, now, Some(old));
@@ -325,7 +325,7 @@ impl App {
     pub(crate) fn update_profile(&mut self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let a = ui::plot_area(bx);
         let now = self.profile_now(a.2);
-        let mut p = Panel(b, self.area());
+        let mut p = Panel(b, self.area(), self.settings.smooth);
         if (ProfileShown { rider: old.rider, ..now }) != old {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), ui::plot_area(bx).1 - bx.1, ui::BLACK);
             self.draw_profile(&mut p, bx, now);
@@ -374,7 +374,7 @@ impl App {
     ) -> Drawn {
         let a = ui::plot_area(bx);
         let now = self.workout_now(a.2);
-        let mut p = Panel(b, self.area());
+        let mut p = Panel(b, self.area(), self.settings.smooth);
         if (WorkoutShown { rider: old.rider, ..now }) != old {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), a.1 - bx.1, ui::BLACK);
             self.draw_workout_graph(&mut p, bx, now);

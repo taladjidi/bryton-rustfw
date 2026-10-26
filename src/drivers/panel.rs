@@ -58,7 +58,7 @@ pub fn init(b: &mut impl Board) {
             b.delay_ms(wait);
         }
     }
-    Panel(b, (0, H)).fill(0, 0, W, H, BLACK);
+    Panel(b, (0, H), false).fill(0, 0, W, H, BLACK);
     b.panel_cmd(DISPON, &[]);
 }
 
@@ -70,8 +70,8 @@ pub fn off(b: &mut impl Board) {
 
 /// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels. Only
 /// rows from the second field's first to before its second are drawn (not what a banner covers, or only what it
-/// covered): `(0, H)` for the whole screen.
-pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32));
+/// covered): `(0, H)` for the whole screen. The last field is the FONT setting ([`Canvas::smooth`]).
+pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32), pub bool);
 
 impl<B: Board> Panel<'_, B> {
     /// CASET / RASET: the window the next RAMWR fills.
@@ -115,6 +115,6 @@ impl<B: Board> Canvas for Panel<'_, B> {
     }
 
     fn smooth(&self) -> bool {
-        self.0.smooth_text()
+        self.2
     }
 }

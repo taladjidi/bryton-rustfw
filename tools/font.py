@@ -44,7 +44,8 @@ def pixel_glyphs():
 SMOOTH_TTF = Path(__file__).resolve().parent / 'fonts' / 'BarlowSemiCondensed-Bold.ttf'
 SMOOTH_EM = 9.5    # px per em for each unit of scale: the ascenders then fill the 7 rows above the baseline
 SMOOTH_SCALES = range(2, 9)
-BIG_SCALE, BIG_CHARS = 5, '0123456789.:-+/%\' '    # from scale 5 only what a value shows: 250 KB of letters otherwise    # scale 1 stays the pixel font: 6 x 10 px is too small for a smooth glyph
+# from scale 5 only what a value shows (digits, capitals, punctuation): lower case would add 250 KB
+BIG_SCALE, BIG_CHARS = 5, "0123456789.:-+/%' ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def smooth_glyphs(scale):
@@ -112,12 +113,11 @@ def main():
         for i in range(0, len(data), 24):
             lines.append('    ' + ' '.join(f'0x{b:02x},' for b in data[i:i + 24]))
         lines += ['];', '']
-    names = [n for n in SMOOTH_SCALES]
     lines += ['/// The smooth font for text the pixel font draws at `scale` (the same cell, drawn 1:1), if there is one: scale 1',
               '/// stays the pixel font.',
               'pub fn smooth(scale: u32) -> Option<&\'static Font> {',
               '    match scale {',
-              *[f'        {n} => Some(&SMOOTH{n}),' for n in names],
+              *[f'        {n} => Some(&SMOOTH{n}),' for n in SMOOTH_SCALES],
               '        _ => None,',
               '    }',
               '}', '']
