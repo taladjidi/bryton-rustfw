@@ -76,6 +76,7 @@
 //! python3 -m venv /tmp/fitvenv && /tmp/fitvenv/bin/pip install fitdecode garmin-fit-sdk
 //! /tmp/fitvenv/bin/python tools/fit_check.py target/fit/sample.fit target/fit/cut.fit target/fit/sample_full.fit
 //! ```
+#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]
 
 use crate::epoch_s;
 
@@ -100,7 +101,7 @@ pub trait Sink {
 /// assert_eq!(bryton_rustfw::fit::fit_time((2026, 10, 23, 8, 0, 0)), 1_161_676_800);
 /// ```
 pub fn fit_time(utc: (u16, u8, u8, u8, u8, u8)) -> u32 {
-    (epoch_s(utc) - 631_065_600).clamp(0, i64::from(u32::MAX)) as u32
+    u32::try_from((epoch_s(utc) - 631_065_600).clamp(0, i64::from(u32::MAX))).unwrap_or(0)
 }
 
 /// One second of ride, as the record message takes it. None: not available (the field is left out).
@@ -195,6 +196,7 @@ const ARTIFACTS: u32 = 1 << 12;
 
 /// The full copy's developer data, after file_id (module doc): developer_data_id, then a field_description each
 /// for `Alpha1`, `RMSSD` and `ArtPct`, definitions included.
+#[allow(clippy::indexing_slicing)] // evaluated by the compiler: an index out of range fails the build, never the unit
 const DEV_MESSAGES: [u8; 108] = {
     const APP: &[u8; 16] = b"bryton-rustfw-01"; // application_id: any 16 bytes that name this firmware
     let mut m = [0u8; 108];
@@ -553,7 +555,8 @@ impl Writer {
         let mut n = 0;
         if self.defined & (1 << L_HRV) == 0 {
             // global 78, one field: 0 `time`, 10 bytes of uint16 (an array of 5)
-            b[..9].copy_from_slice(&[0x40 | L_HRV, 0, 0, 78, 0, 1, 0, 2 * HRV_PER_MESSAGE as u8, U16]);
+            let size = u8::try_from(2 * HRV_PER_MESSAGE).unwrap_or(0); // a constant: 10
+            b[..9].copy_from_slice(&[0x40 | L_HRV, 0, 0, 78, 0, 1, 0, size, U16]);
             n = 9;
         }
         if let Some(h) = b.get_mut(n) {
@@ -622,7 +625,7 @@ impl Writer {
     /// The file header for the data so far.
     fn header(&self) -> [u8; HEADER as usize] {
         let mut h = [0u8; HEADER as usize];
-        h[0] = HEADER as u8;
+        h[0] = u8::try_from(HEADER).unwrap_or(0); // a constant: 14
         h[1] = if self.dev { 0x20 } else { 0x10 }; // protocol 2.0 for developer fields, else 1.0
         h[2..4].copy_from_slice(&2140u16.to_le_bytes()); // profile 21.40
         h[4..8].copy_from_slice(&self.len.to_le_bytes());
@@ -675,10 +678,10 @@ impl Writer {
             return None;
         }
         let mut w = [0u32; WORDS];
-        for (x, c) in w.iter_mut().zip(body.get(2..)?.chunks_exact(4)) {
-            *x = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+        for (x, c) in w.iter_mut().zip(body.get(2..)?.as_chunks::<4>().0) {
+            *x = u32::from_le_bytes(*c);
         }
-        let s = |i: usize| Stat { sum: w[i], n: w[i + 1], max: w[i + 2] };
+        let s = |[sum, n, max]: [u32; 3]| Stat { sum, n, max };
         // a record from a build before sub_sport (or before total_ascent): its file defines lap and session
         // without them, so they are defined again (a later definition of a local type replaces the earlier one:
         // FIT protocol). That build sets bit 31, and may have checkpointed this build's ride (bit 14 kept in its
@@ -687,9 +690,9 @@ impl Writer {
         let old = |d: u16| if ours { d } else { d & !(1 << L_LAP | 1 << L_SESSION) };
         Some(Writer {
             len: w[0],
-            crc: w[1] as u16,
+            crc: (w[1] & 0xffff) as u16,
             defined: old((w[1] >> 16) as u16),
-            mask: w[2] as u16 & 0x3ff, // the record's 10 fields; bits 13..15 are the profile's and the layout's
+            mask: (w[2] & 0x3ff) as u16, // the record's 10 fields; bits 13..15 are the profile's and the layout's
             indoor: w[2] & INDOOR != 0,
             by_hand: w[2] & BY_HAND != 0,
             dev: w[2] >> 16 & 1 != 0,
@@ -699,7 +702,7 @@ impl Writer {
             last: w[4],
             dist_mm: w[5],
             max_speed: w[6],
-            stats: [s(7), s(10), s(13)],
+            stats: [s([w[7], w[8], w[9]]), s([w[10], w[11], w[12]]), s([w[13], w[14], w[15]])],
             lap_start: w[16],
             lap_dist: w[17],
             laps: w[18],
@@ -786,12 +789,12 @@ impl Writer {
         if self.defined & (1 << local) == 0 {
             let [g0, g1] = global.to_le_bytes();
             let flag = if df.is_empty() { 0 } else { 0x20 }; // developer fields follow the definition
-            put(&[0x40 | flag | local, 0, 0, g0, g1, f.len() as u8]);
+            put(&[0x40 | flag | local, 0, 0, g0, g1, u8::try_from(f.len()).map_err(|_| Error)?]);
             for &(num, size, ty) in f {
                 put(&[num, size, ty]);
             }
             if !df.is_empty() {
-                put(&[df.len() as u8]);
+                put(&[u8::try_from(df.len()).map_err(|_| Error)?]);
                 for &(num, size, index) in df {
                     put(&[num, size, index]);
                 }
@@ -808,8 +811,9 @@ impl Writer {
 
     /// Appends `bytes` (whole messages) to the data.
     fn put(&mut self, sink: &mut impl Sink, bytes: &[u8]) -> Result<(), Error> {
+        let len = u32::try_from(bytes.len()).map_err(|_| Error)?;
         sink.write_at(HEADER + self.len, bytes)?;
-        self.len += bytes.len() as u32;
+        self.len += len;
         self.crc = crc(self.crc, bytes);
         Ok(())
     }
@@ -817,7 +821,9 @@ impl Writer {
 
 /// Degrees x 1e-7 to FIT semicircles (2^31 per 180 degrees).
 fn semicircles(deg_e7: i32) -> u32 {
-    (i64::from(deg_e7) * (1 << 31) / 1_800_000_000) as i32 as u32
+    // the low 32 bits (two's complement), as `as i32 as u32` gives
+    let [a, b, c, d, ..] = (i64::from(deg_e7) * (1 << 31) / 1_800_000_000).to_le_bytes();
+    u32::from_le_bytes([a, b, c, d])
 }
 
 /// FIT's CRC-16 (CRC-16/ARC: reflected polynomial 0xa001), continued from `crc` over `data`, a byte a step from a
@@ -828,13 +834,15 @@ fn semicircles(deg_e7: i32) -> u32 {
 /// ```
 pub fn crc(mut crc: u16, data: &[u8]) -> u16 {
     for &b in data {
-        crc = (crc >> 8) ^ CRC_TABLE[usize::from((crc as u8) ^ b)];
+        // a u8 index into 256 entries: the compiler drops the check
+        crc = (crc >> 8) ^ CRC_TABLE.get(usize::from(crc.to_le_bytes()[0] ^ b)).copied().unwrap_or(0);
     }
     crc
 }
 
 /// [`crc`]'s table: the CRC of each byte from 0. In the image, so in the SDRAM, which is read uncached (the D-cache is
 /// off): a reader that runs it over megabytes keeps a copy where it lives ([`crate::fitread::Reader`]).
+#[allow(clippy::indexing_slicing, clippy::cast_possible_truncation)] // evaluated by the compiler; i < 256
 pub const CRC_TABLE: [u16; 256] = {
     let mut t = [0u16; 256];
     let mut i = 0;
@@ -859,18 +867,10 @@ pub const CRC_TABLE: [u16; 256] = {
 /// assert_eq!(crc_combine(crc(0, b"1234"), crc(0, b"56789"), 5), crc(0, b"123456789"));
 /// ```
 pub fn crc_combine(a: u16, b: u16, mut len_b: u32) -> u16 {
-    fn times(m: &[u16; 16], mut v: u16) -> u16 {
-        let (mut s, mut i) = (0, 0);
-        while v != 0 {
-            if v & 1 != 0 {
-                s ^= m[i & 15];
-            }
-            v >>= 1;
-            i += 1;
-        }
-        s
+    fn times(m: &[u16; 16], v: u16) -> u16 {
+        m.iter().enumerate().filter(|&(i, _)| v >> i & 1 != 0).fold(0, |s, (_, &x)| s ^ x)
     }
-    let square = |m: &[u16; 16]| core::array::from_fn(|i| times(m, m[i]));
+    let square = |m: &[u16; 16]| m.map(|x| times(m, x));
     // one zero bit: the reflected polynomial, then a shift
     let one: [u16; 16] = core::array::from_fn(|i| if i == 0 { 0xa001 } else { 1 << (i - 1) });
     let mut op = square(&square(&square(&one))); // one zero byte
