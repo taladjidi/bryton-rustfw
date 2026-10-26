@@ -443,7 +443,6 @@ impl App {
                 label.push_str("RAMP TEST");
                 value.push_str("FTP ");
                 value.push_u32(u32::from(self.settings.ftp));
-                color = ui::GREEN;
             }
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
             Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,

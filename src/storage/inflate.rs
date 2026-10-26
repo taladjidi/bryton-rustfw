@@ -72,6 +72,8 @@ struct Bits<'a, I: Iterator<Item = u8>> {
     src: &'a mut I,
     buf: u32,
     cnt: u32,
+    /// Bytes pulled from `src` through this reader.
+    taken: u32,
 }
 
 impl<I: Iterator<Item = u8>> Bits<'_, I> {
@@ -79,6 +81,7 @@ impl<I: Iterator<Item = u8>> Bits<'_, I> {
     fn take(&mut self, n: u32) -> Result<u32, Error> {
         while self.cnt < n {
             self.buf |= u32::from(self.src.next().ok_or(Error::Truncated)?) << self.cnt;
+            self.taken += 1;
             self.cnt += 8;
         }
         let v = self.buf & ((1 << n) - 1);
@@ -94,6 +97,8 @@ struct Huffman {
 }
 
 impl Huffman {
+    const EMPTY: Huffman = Huffman { count: [0; 16], symbol: [0; 288] };
+
     /// The code of `lens` (a length per symbol, 0: unused). Over-subscribed is an error; incomplete is allowed
     /// (decoding a code that was never assigned then fails).
     fn new(lens: &[u8]) -> Result<Huffman, Error> {
@@ -151,40 +156,6 @@ const DIST_BASE: [u16; 30] = [
 const DIST_EXTRA: [u8; 30] =
     [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
 
-/// Inflates the deflate blocks of `b` into `out`; the bytes written.
-fn inflate<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>, out: &mut Scratch<'_>, crc: &mut u32) -> Result<usize, Error> {
-    let mut n = 0usize;
-    loop {
-        let last = b.take(1)?;
-        match b.take(2)? {
-            0 => {
-                // stored: to the byte boundary, LEN, NLEN, then LEN bytes
-                (b.buf, b.cnt) = (0, 0);
-                let len = b.take(16)?;
-                if b.take(16)? != !len & 0xffff {
-                    return Err(Error::Bad);
-                }
-                for _ in 0..len {
-                    let v = b.take(8)? as u8;
-                    if !out.put(n, v) {
-                        return Err(Error::TooBig);
-                    }
-                    *crc = crc_byte(*crc, v);
-                    n += 1;
-                }
-            }
-            t @ (1 | 2) => {
-                let (lit, dist) = if t == 1 { fixed()? } else { dynamic(b)? };
-                n = codes(b, out, crc, n, &lit, &dist)?;
-            }
-            _ => return Err(Error::Bad),
-        }
-        if last == 1 {
-            return Ok(n);
-        }
-    }
-}
-
 /// The fixed codes (RFC 1951, 3.2.6).
 fn fixed() -> Result<(Huffman, Huffman), Error> {
     let mut l = [0u8; 288];
@@ -240,45 +211,6 @@ fn dynamic<I: Iterator<Item = u8>>(b: &mut Bits<'_, I>) -> Result<(Huffman, Huff
     ))
 }
 
-/// One block's symbols: literals, and (length, distance) copies from what is already in `out`.
-fn codes<I: Iterator<Item = u8>>(
-    b: &mut Bits<'_, I>,
-    out: &mut Scratch<'_>,
-    crc: &mut u32,
-    mut n: usize,
-    lit: &Huffman,
-    dist: &Huffman,
-) -> Result<usize, Error> {
-    loop {
-        let sym = lit.decode(b)? as usize;
-        if sym < 256 {
-            if !out.put(n, sym as u8) {
-                return Err(Error::TooBig);
-            }
-            *crc = crc_byte(*crc, sym as u8);
-            n += 1;
-        } else if sym == 256 {
-            return Ok(n);
-        } else {
-            let s = sym - 257;
-            let len = usize::from(*LEN_BASE.get(s).ok_or(Error::Bad)?) + b.take(u32::from(LEN_EXTRA[s]))? as usize;
-            let d = dist.decode(b)? as usize;
-            let back = usize::from(*DIST_BASE.get(d).ok_or(Error::Bad)?) + b.take(u32::from(DIST_EXTRA[d]))? as usize;
-            if back > n {
-                return Err(Error::Bad);
-            }
-            for _ in 0..len {
-                let v = out.get(n - back).ok_or(Error::Bad)?;
-                if !out.put(n, v) {
-                    return Err(Error::TooBig);
-                }
-                *crc = crc_byte(*crc, v);
-                n += 1;
-            }
-        }
-    }
-}
-
 /// CRC-32 (the gzip one, polynomial 0xedb88320) a nibble at a time: 16 words of table.
 const CRC_NIBBLE: [u32; 16] = {
     let mut t = [0u32; 16];
@@ -313,50 +245,224 @@ fn crc_byte(c: u32, b: u8) -> u32 {
     CRC_NIBBLE[(c & 15) as usize] ^ (c >> 4)
 }
 
-/// Inflates the gzip member in `src` into `out`: the length written. The trailer's CRC and size are checked.
+/// Where an [`Inflater`] is in the gzip member.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum St {
+    /// The gzip header.
+    Head,
+    /// A deflate block's header.
+    Block,
+    /// A stored block with this many bytes left.
+    Stored(u32),
+    /// A coded block's symbols.
+    Codes,
+    /// The CRC-32 and size.
+    Trailer,
+    Done,
+}
+
+/// A gzip member inflated in slices: [`Inflater::step`] stops at a symbol boundary once `budget` bytes came out and
+/// the next call goes on, with the input from [`Inflater::taken`] bytes on (the caller may open it afresh: a sector
+/// a pass). The state is the bit buffer, the block and its two codes (about 1.2 KB each); the window is `out`.
+pub struct Inflater {
+    st: St,
+    buf: u32,
+    cnt: u32,
+    n: usize,
+    crc: u32,
+    last: bool,
+    lit: Huffman,
+    dist: Huffman,
+    /// Input bytes used so far (the bit buffer's included): where to read on from.
+    pub taken: u32,
+}
+
+impl Default for Inflater {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Inflater {
+    /// At the start of a member.
+    pub const fn new() -> Inflater {
+        Inflater {
+            st: St::Head,
+            buf: 0,
+            cnt: 0,
+            n: 0,
+            crc: 0, // set to !0 by the header: all-zero, so a static of it stays in .bss
+            last: false,
+            lit: Huffman::EMPTY,
+            dist: Huffman::EMPTY,
+            taken: 0,
+        }
+    }
+
+    /// Bytes written so far.
+    pub fn written(&self) -> usize {
+        self.n
+    }
+
+    /// Goes on with `src` (the bytes after [`Inflater::taken`]), at least one symbol and until `budget` more bytes
+    /// are in `out`: Some(length) when the member is whole and its trailer right, None when there is more. After an
+    /// error the inflater is of no more use.
+    pub fn step(
+        &mut self,
+        src: &mut impl Iterator<Item = u8>,
+        out: &mut Scratch<'_>,
+        budget: usize,
+    ) -> Result<Option<usize>, Error> {
+        let mut b = Bits { src, buf: self.buf, cnt: self.cnt, taken: 0 };
+        let r = self.run(&mut b, out, self.n.saturating_add(budget));
+        (self.buf, self.cnt, self.taken) = (b.buf, b.cnt, self.taken.saturating_add(b.taken));
+        r
+    }
+
+    fn run<I: Iterator<Item = u8>>(
+        &mut self,
+        b: &mut Bits<'_, I>,
+        out: &mut Scratch<'_>,
+        stop: usize,
+    ) -> Result<Option<usize>, Error> {
+        loop {
+            match self.st {
+                St::Head => {
+                    self.crc = !0;
+                    let (id1, id2, cm, flags) = (b.take(8)?, b.take(8)?, b.take(8)?, b.take(8)?);
+                    if (id1, id2, cm) != (0x1f, 0x8b, 8) || flags & 0xe0 != 0 {
+                        return Err(Error::Bad);
+                    }
+                    for _ in 0..6 {
+                        b.take(8)?; // mtime, xfl, os
+                    }
+                    if flags & 4 != 0 {
+                        let len = b.take(8)? | b.take(8)? << 8;
+                        for _ in 0..len {
+                            b.take(8)?;
+                        }
+                    }
+                    for bit in [8, 16] {
+                        if flags & bit != 0 {
+                            while b.take(8)? != 0 {} // a zero-terminated name or comment (the input is finite)
+                        }
+                    }
+                    if flags & 2 != 0 {
+                        b.take(16)?;
+                    }
+                    self.st = St::Block;
+                }
+                St::Block => {
+                    self.last = b.take(1)? == 1;
+                    match b.take(2)? {
+                        0 => {
+                            // stored: to the byte boundary, LEN, NLEN, then LEN bytes
+                            (b.buf, b.cnt) = (0, 0);
+                            let len = b.take(16)?;
+                            if b.take(16)? != !len & 0xffff {
+                                return Err(Error::Bad);
+                            }
+                            self.st = St::Stored(len);
+                        }
+                        t @ (1 | 2) => {
+                            (self.lit, self.dist) = if t == 1 { fixed()? } else { dynamic(b)? };
+                            self.st = St::Codes;
+                        }
+                        _ => return Err(Error::Bad),
+                    }
+                }
+                St::Stored(left) => {
+                    let mut left = left;
+                    while left > 0 && self.n < stop {
+                        let v = b.take(8)? as u8;
+                        if !out.put(self.n, v) {
+                            return Err(Error::TooBig);
+                        }
+                        self.crc = crc_byte(self.crc, v);
+                        (self.n, left) = (self.n + 1, left - 1);
+                    }
+                    self.st = if left > 0 {
+                        St::Stored(left)
+                    } else if self.last {
+                        St::Trailer
+                    } else {
+                        St::Block
+                    };
+                    if left > 0 {
+                        return Ok(None);
+                    }
+                }
+                St::Codes => {
+                    // at least one symbol, so a budget of 0 still goes on
+                    loop {
+                        let sym = self.lit.decode(b)? as usize;
+                        if sym < 256 {
+                            if !out.put(self.n, sym as u8) {
+                                return Err(Error::TooBig);
+                            }
+                            self.crc = crc_byte(self.crc, sym as u8);
+                            self.n += 1;
+                        } else if sym == 256 {
+                            self.st = if self.last { St::Trailer } else { St::Block };
+                            break;
+                        } else {
+                            let s = sym - 257;
+                            let len = usize::from(*LEN_BASE.get(s).ok_or(Error::Bad)?)
+                                + b.take(u32::from(*LEN_EXTRA.get(s).ok_or(Error::Bad)?))? as usize;
+                            let d = self.dist.decode(b)? as usize;
+                            let back = usize::from(*DIST_BASE.get(d).ok_or(Error::Bad)?)
+                                + b.take(u32::from(*DIST_EXTRA.get(d).ok_or(Error::Bad)?))? as usize;
+                            if back > self.n {
+                                return Err(Error::Bad);
+                            }
+                            for _ in 0..len {
+                                let v = out.get(self.n - back).ok_or(Error::Bad)?;
+                                if !out.put(self.n, v) {
+                                    return Err(Error::TooBig);
+                                }
+                                self.crc = crc_byte(self.crc, v);
+                                self.n += 1;
+                            }
+                        }
+                        if self.n >= stop {
+                            return Ok(None);
+                        }
+                    }
+                }
+                St::Trailer => {
+                    // starts at a byte boundary: whole bytes the bit buffer still holds come first
+                    let mut t = [0u8; 8];
+                    for v in t.iter_mut() {
+                        *v = if b.cnt >= 8 {
+                            let v = b.buf as u8;
+                            (b.buf, b.cnt) = (b.buf >> 8, b.cnt - 8);
+                            v
+                        } else {
+                            b.taken += 1;
+                            b.src.next().ok_or(Error::Truncated)?
+                        };
+                    }
+                    let (crc, size) =
+                        (u32::from_le_bytes([t[0], t[1], t[2], t[3]]), u32::from_le_bytes([t[4], t[5], t[6], t[7]]));
+                    if size as usize != self.n || crc != !self.crc {
+                        return Err(Error::Crc);
+                    }
+                    self.st = St::Done;
+                }
+                St::Done => return Ok(Some(self.n)),
+            }
+        }
+    }
+}
+
+/// Inflates the gzip member in `src` into `out` in one go: the length written. The trailer's CRC and size are checked.
 pub fn gunzip(src: &mut impl Iterator<Item = u8>, out: &mut Scratch<'_>) -> Result<usize, Error> {
-    let byte = |src: &mut dyn Iterator<Item = u8>| src.next().ok_or(Error::Truncated);
-    let (id1, id2, cm, flags) = (byte(src)?, byte(src)?, byte(src)?, byte(src)?);
-    if (id1, id2, cm) != (0x1f, 0x8b, 8) || flags & 0xe0 != 0 {
-        return Err(Error::Bad);
-    }
-    for _ in 0..6 {
-        byte(src)?; // mtime, xfl, os
-    }
-    if flags & 4 != 0 {
-        let len = usize::from(byte(src)?) | usize::from(byte(src)?) << 8;
-        for _ in 0..len {
-            byte(src)?;
+    let mut inf = Inflater::new();
+    loop {
+        if let Some(n) = inf.step(src, out, usize::MAX)? {
+            return Ok(n);
         }
     }
-    for bit in [8, 16] {
-        if flags & bit != 0 {
-            while byte(src)? != 0 {} // a zero-terminated name or comment (the input is finite)
-        }
-    }
-    if flags & 2 != 0 {
-        byte(src)?;
-        byte(src)?;
-    }
-    let mut bits = Bits { src, buf: 0, cnt: 0 };
-    let mut crc = !0u32;
-    let n = inflate(&mut bits, out, &mut crc)?;
-    // the trailer starts at a byte boundary: whole bytes the bit buffer still holds come first
-    let mut t = [0u8; 8];
-    for v in t.iter_mut() {
-        *v = if bits.cnt >= 8 {
-            let v = bits.buf as u8;
-            (bits.buf, bits.cnt) = (bits.buf >> 8, bits.cnt - 8);
-            v
-        } else {
-            bits.src.next().ok_or(Error::Truncated)?
-        };
-    }
-    let (t_crc, size) = (u32::from_le_bytes([t[0], t[1], t[2], t[3]]), u32::from_le_bytes([t[4], t[5], t[6], t[7]]));
-    if size as usize != n || t_crc != !crc {
-        return Err(Error::Crc);
-    }
-    Ok(n)
 }
 
 #[cfg(test)]
@@ -461,7 +567,7 @@ mod tests {
         assert!(Huffman::new(&[16]).is_err(), "longer than 15 bits");
         let h = Huffman::new(&[2, 1, 0, 2]).unwrap(); // codes 10, 0, 11 in the canonical order of the lengths
         let mut it = [0b0000_0110u8].into_iter(); // bits, least significant first: 0, 1, 1, 0
-        let mut b = Bits { src: &mut it, buf: 0, cnt: 0 };
+        let mut b = Bits { src: &mut it, buf: 0, cnt: 0, taken: 0 };
         assert_eq!((h.decode(&mut b), h.decode(&mut b), h.decode(&mut b)), (Ok(1), Ok(3), Ok(1)));
     }
 }

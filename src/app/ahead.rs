@@ -8,13 +8,13 @@ use crate::*;
 impl App {
     /// Work per pass at most, in microseconds of CPU ([`Board::awake_us`]): a tile read, inflated and decoded is the
     /// unit, so one may go over it; the next waits for the next pass.
-    const AHEAD_US: u32 = 12_000;
+    const AHEAD_US: u32 = 6_000;
     /// Units of work per pass at most (where the CPU time is not measured, as in the simulation).
     const AHEAD_STEPS: u32 = 6;
 
-    /// The last tile of the road ahead read, inflated and decoded, and the longest so far, in microseconds of CPU
-    /// ([`Board::awake_us`]; `dev.py info`).
-    pub fn ahead_tile_us(&self) -> (u32, u32) {
+    /// The last tile of the road ahead read, inflated and decoded (all its slices), the longest so far, and the
+    /// longest single call on a tile, in microseconds of CPU ([`Board::awake_us`]; `dev.py info`).
+    pub fn ahead_tile_us(&self) -> (u32, u32, u32) {
         self.ahead_us
     }
 
@@ -59,13 +59,18 @@ impl App {
         let Some((a, mem)) = self.ahead.as_mut().filter(|(a, _)| a.busy()) else { return };
         let t0 = b.awake_us();
         for _ in 0..Self::AHEAD_STEPS {
-            let (tiles, t1) = (a.io().0, b.awake_us());
+            let (tiles, loading, t1) = (a.io().0, a.loading(), b.awake_us());
             let more = a.work(&mut emmc::Volume(&mut self.emmc, b), mem);
             let spent = b.awake_us().wrapping_sub(t1);
-            if a.io().0 != tiles {
-                // a tile was read, inflated and decoded: the longest unit; the pass ends here (dev.py info says how long)
-                self.ahead_us = (spent, self.ahead_us.1.max(spent));
-                break;
+            if loading || a.loading() || a.io().0 != tiles {
+                // a slice of a tile: the longest one, and the tile's whole (dev.py info says how long)
+                let (total, max, slice) = (self.ahead_acc.saturating_add(spent), self.ahead_us.1, self.ahead_us.2);
+                self.ahead_us.2 = slice.max(spent);
+                self.ahead_acc = total;
+                if !a.loading() {
+                    self.ahead_us = (total, max.max(total), self.ahead_us.2);
+                    self.ahead_acc = 0;
+                }
             }
             if !more || b.awake_us().wrapping_sub(t0) >= Self::AHEAD_US {
                 break;

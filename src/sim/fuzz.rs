@@ -2472,6 +2472,24 @@ fn gzip_streams() {
     let run = |gz: &[u8], mem: &mut Vec<u16>, want: Option<&[u8]>| -> Result<usize, Error> {
         let mut out = Scratch(mem);
         let r = gunzip(&mut gz.iter().copied(), &mut out);
+        // the same stream in slices of 1 to 64 bytes, the input taken up again where the inflater says: the same
+        // answer, the same bytes (the resumable inflater, which the card's reads in slices rely on)
+        let mut w = std::vec![0u16; out.0.len()];
+        let mut o2 = Scratch(&mut w);
+        let mut inf = crate::inflate::Inflater::new();
+        let r2 = loop {
+            let budget = 1 + (gz.len() * 31 + inf.written() * 7) % 64;
+            let mut src = gz.iter().copied().skip(inf.taken as usize);
+            match inf.step(&mut src, &mut o2, budget) {
+                Ok(None) => {}
+                Ok(Some(n)) => break Ok(n),
+                Err(e) => break Err(e),
+            }
+        };
+        assert_eq!(r, r2, "sliced or whole");
+        if let Ok(n) = r {
+            assert!((0..n).all(|i| out.get(i) == o2.get(i)), "sliced or whole: other bytes");
+        }
         if let (Ok(n), Some(w)) = (&r, want) {
             assert!((0..*n).map(|i| out.get(i).unwrap()).eq(w.iter().copied()), "an answer that is not the original");
         }
