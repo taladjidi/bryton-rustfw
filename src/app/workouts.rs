@@ -34,11 +34,15 @@ impl GaugeShown {
             == (o.kind, o.avg, o.band, o.step, o.pace.is_some())
     }
 
-    /// Its bar for a gauge `cols` wide: the band's columns, the marker in the number's colour.
-    fn bar(&self, cols: u32) -> Option<ui::GaugeBar> {
+    /// Its bar for a gauge `cols` wide: the band's columns, the marker with the number's colour, and the zones of
+    /// the reading's kind behind it (for this FTP and maximum heart rate, so they follow a change of either).
+    fn bar(&self, cols: u32, (ftp, max_hr): (u16, u16)) -> Option<ui::GaugeBar> {
         let band = self.band?;
-        let cols_of = (workout::gauge_x(band.0, band, cols), workout::gauge_x(band.1, band, cols));
-        Some((cols_of, self.marker.map(|m| (m, self.color))))
+        Some(ui::GaugeBar {
+            band: (workout::gauge_x(band.0, band, cols), workout::gauge_x(band.1, band, cols)),
+            marker: self.marker.map(|m| (m, self.color)),
+            zones: workout::gauge_zones(self.kind, band, cols, ftp, max_hr),
+        })
     }
 }
 
@@ -352,7 +356,7 @@ impl App {
             None if g.step => target.push_str("OPEN"),
             None => {}
         }
-        let bar = g.bar(ui::gauge_cols(bx));
+        let bar = g.bar(ui::gauge_cols(bx), (self.settings.ftp, self.settings.max_hr));
         ui::draw_gauge(c, bx, (title.as_str(), tag.as_str(), target.as_str()), g.value.as_str(), ui::WHITE, bar);
     }
 
@@ -374,8 +378,9 @@ impl App {
         if now.value != old.value {
             ui::draw_gauge_value(&mut p, bx, old.value.as_str(), now.value.as_str(), ui::WHITE); // the marker has the state
         }
-        if let Some(bar) = now.bar(cols).filter(|_| (now.marker, now.color) != (old.marker, old.color)) {
-            ui::draw_gauge_marker(&mut p, bx, old.bar(cols).and_then(|b| b.1), bar);
+        let zones = (self.settings.ftp, self.settings.max_hr);
+        if let Some(bar) = now.bar(cols, zones).filter(|_| (now.marker, now.color) != (old.marker, old.color)) {
+            ui::draw_gauge_marker(&mut p, bx, old.marker.map(|m| (m, old.color)), bar);
         }
         Drawn::Gauge(now)
     }

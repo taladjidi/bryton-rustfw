@@ -162,7 +162,7 @@ The power button starts it again. After the backlight's time-out, any key brings
 | swipe right | previous ride page (round) | back (as Back) | keep it |
 | swipe up / down | | the next / previous screen of rows | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
-| tap | the gear right of the overview's date: the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
+| tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | selects the row touched; a tap on the row already chosen acts on it (as Start); the "<" left of the title: back | keep it |
 
 A swipe is a drag of at least 37 px across or 48 px up or down, given at the release; a finger that moves under
 10 px is a tap (at the release) or a hold (while still down). A touch brings the backlight back, as a key does.
@@ -215,7 +215,7 @@ sizes) and the cue arrows stay pixel.
 
 ## Menu
 
-Hold Page (or tap the gear) for the menu: what to ride first, then what was ridden, then the set-up (UI review
+Hold Page (or tap the cog) for the menu: what to ride first, then what was ridden, then the set-up (UI review
 4.3). A row that opens a menu or a screen ends in ">"; a value sits on the right with its unit ("FTP  200 W"). Any
 setting is three levels down at most (MENU > SETTINGS > ME > FTP), the diagnostics under SYSTEM:
 
@@ -320,11 +320,14 @@ TrainingPeaks), read only:
   Only the columns the line leaves and reaches are redrawn (about 300 px/s in a full-page box, sim).
 - **WKT POWER**, a gauge field: the reading the step targets big (power over the window set by DISPLAY > GAUGE
   POWER: 3 s, 10 s, 30 s or each second, "POWER 3S" in its title; heart rate for a heart-rate step, cadence for
-  a cadence one), a bar from 30 % under the target band to 30 % over it with the band as a green box and a marker
-  at the reading, and the band in numbers under it ("200-220"). The number and the marker are coloured by how far
-  the reading is: green in the band, yellow within 5 %, blue further under, red further over (the zone palette's
-  easy and hard colours). With an open step or no workout, the power alone. Only the number's changed characters
-  and the marker's old and new columns are redrawn (about 6 500 px/s for the page with a top half box, sim).
+  a cadence one), a bar 3 times as thick as it was (as thick as the box leaves room for the number) from 30 % under the target band
+  to 30 % over it, painted with the rider's zones along that scale (power: Coggan's seven from FTP; heart rate: the
+  five from max HR; the zone palette of the power and heart-rate fields), so the target is seen in context. The band
+  is a white outline over the zones; the reading is a white tick with a black outline, its ends beyond the track
+  coloured by how far it is from the band (green in it, yellow within 5 %, blue under, red over); the number is white.
+  The scale is fixed for a step, so the zones do not slide. The climb pacer's TOP field draws the same gauge. With an
+  open step or no workout, the power alone. Only the number's changed characters and the tick's old and new columns
+  are redrawn (about 4 400 px/s for the page with a top half box, sim).
 - Any FIT workout file is read (Garmin's profile: time, distance and open steps, repeats, % FTP or watts, % max HR
   or bpm, zones), and Bryton's own encoding of power targets.
 
