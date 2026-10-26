@@ -200,6 +200,10 @@ impl App {
                 if !self.recorder.starting() {
                     self.alarm_notice("NOT RECORDING");
                 } else {
+                    if self.recorder.held() {
+                        // behind the last ride's save, which the card keeps failing: tried again, this one after it
+                        self.alarm_notice("NOT RECORDING: CARD");
+                    }
                     // (a ride started while the last one is being saved waits for that save: recorder.rs `start`)
                     // no full copy of a ride the clean one does not record
                     self.full.start(t, recorder::ride_name(local), self.resume_pending || self.full_pending);
@@ -338,7 +342,7 @@ impl App {
             recorder::Outcome::Failed(_) => {
                 // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
                 if self.recorder.fails() % 60 == 1 {
-                    self.alarm_notice("NOT SAVING");
+                    self.alarm_notice(if self.recorder.held() { "NOT RECORDING: CARD" } else { "NOT SAVING" });
                 }
             }
         }
