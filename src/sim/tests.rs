@@ -513,9 +513,17 @@ fn stock_data_menu() {
     assert_consistent(&sim, &app);
     sim.save("stock");
     assert!(cp.trusted());
-    assert_eq!(value(&app, at(S::EstFtp)), std::format!("{} W CP", cp.cp));
-    assert_eq!(value(&app, at(S::Model)), "CP FIT");
+    // the first start took stock's FTP, 265 W: the bests give a floor under it, nothing to apply, the settings ride
+    assert_eq!(app.settings.ftp, 265);
+    assert_eq!(value(&app, at(S::EstFtp)), std::format!(">={} W CP", cp.cp));
+    assert_eq!(value(&app, at(S::ApplyFtp)), "--");
+    assert_eq!(value(&app, at(S::Model)), "SETTINGS", "CP under 95 % of the FTP setting");
     assert_eq!(value(&app, at(S::Hrvt1)), "--", "no full copy on this volume");
+    assert_eq!(value(&app, at(S::HrvRides)), "0/0 OF 0");
+    app.settings.ftp = 200; // a setting under what the bests show
+    assert_eq!(value(&app, at(S::EstFtp)), std::format!("{} W CP", cp.cp));
+    assert_eq!(value(&app, at(S::ApplyFtp)), std::format!("{} W", (cp.cp + 2) / 5 * 5));
+    assert_eq!(value(&app, at(S::Model)), "CP FIT");
 
     // APPLY FTP, then APPLY W': asked, then the estimate into the setting, saved
     for (row, want) in [(S::ApplyFtp, (cp.cp + 2) / 5 * 5), (S::ApplyWPrime, ((cp.w_prime + 250) / 500 * 500) as u16)] {
@@ -551,6 +559,31 @@ fn stock_data_menu() {
     assert_eq!(Settings::from_word(sim.backup[WHEEL_BKP]).ftp, 265, "kept");
 }
 
+/// FITNESS reads the recent full copies when it shows; a reading that failed (no `\Rustfw\Activities` here, or the
+/// card lent meanwhile) is tried again at the next visit, not left failed until a restart.
+#[test]
+fn fitness_reads_the_full_copies_again_after_a_failure() {
+    use crate::thresholds::Status;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_threshold_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::thresholds::Scan::new())));
+    let status = |app: &App| app.thresholds.as_deref().map(|s| s.status());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Stock));
+    run(&mut sim, &mut app, 200);
+    assert_eq!(status(&app), Some(Status::Idle), "not before FITNESS shows");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 500);
+    assert_eq!(status(&app), Some(Status::Failed), "no folder of full copies on this volume");
+    back(&mut sim, &mut app);
+    run(&mut sim, &mut app, 200);
+    assert_eq!(status(&app), Some(Status::Idle), "to be read again");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 500);
+    assert_eq!(status(&app), Some(Status::Failed), "read again");
+}
+
 /// The ride's CP and W' are taken at its start and kept (app/fitness.rs): a ride started while the scan reads keeps
 /// the settings' pair after the scan has the curve, for W' balance and the pacer alike; the next ride takes the fit's.
 #[test]
@@ -558,6 +591,7 @@ fn ride_model_latched_at_start() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
+    app.settings.ftp = 250; // stock's 265 W would keep the settings (the fit's CP under 95 % of it)
     let settings = (app.settings.ftp, app.settings.wprime_j);
     app.stock.start(app.date); // READ RIDES
     app.start_pause(); // a ride, before the curve is read

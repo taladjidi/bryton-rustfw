@@ -379,7 +379,7 @@ pub struct App {
     /// for the whole ride.
     ride_model: Option<(u16, u16, bool)>,
     /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
-    /// main.rs: [`App::set_threshold_memory`], 3 KB the app has no room for).
+    /// main.rs: [`App::set_threshold_memory`], 5 KB the app has no room for).
     thresholds: Option<&'static mut thresholds::Scan>,
     /// The climb pacer's plan (app/pace.rs).
     pace: PaceState,

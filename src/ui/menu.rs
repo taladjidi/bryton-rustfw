@@ -429,7 +429,7 @@ pub enum StockRow {
     Hrvt1,
     /// The second (alpha1 0.5).
     Hrvt2,
-    /// How many recent rides gave HRVT1, of those read.
+    /// How many recent rides gave HRVT1 and HRVT2, of those read.
     HrvRides,
     /// Distance this week.
     WeekKm,
@@ -461,7 +461,7 @@ impl StockRow {
             StockRow::ApplyWPrime => "APPLY W'",
             StockRow::Hrvt1 => "HRVT1 AET",
             StockRow::Hrvt2 => "HRVT2",
-            StockRow::HrvRides => "HRV RIDES",
+            StockRow::HrvRides => "RIDES",
             StockRow::WeekKm => "WEEK KM",
             StockRow::WeekH => "WEEK H",
             StockRow::YearKm => "YEAR KM",

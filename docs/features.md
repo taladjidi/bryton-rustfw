@@ -224,7 +224,7 @@ MENU
  +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step; last row RAMP TEST
  +- COURSES >      the course files (green: followed); Start follows or stops
  +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, EST FTP, MODEL, APPLY FTP, APPLY W', HRVT1 AET, HRVT2,
- |                 HRV RIDES, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
+ |                 RIDES, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
  +- PAGES >        OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT, FIELD n -> group -> field), ADD PAGE
  +- SENSORS >      HEART RATE, SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING; DI2 KEYS >; PHONE >
  +- SETTINGS >
@@ -446,19 +446,25 @@ STOCK):
     minute and a 10 to 30 minute effort): the line through one best of 2 to 5 minutes and one of 12 to 30 that no
     best rises above, so 2 and 3 minute bests never ridden all-out do not pull W' down as a least-squares fit did.
     **CP FIT** ("4/7 PTS 2%"): the bests of 2 to 30 minutes within 3 % of the model, of those there are, and the
-    largest gap. The fit is trusted from 3 bests on it within 5 %. A stop or a power dropout ends an effort (a best
+    largest gap. The fit is trusted from 3 bests on it within 5 %, two of them of 2 to 5 minutes (one inflated
+    best alone never sets W'), CP and W' in the settings' ranges. A stop or a power dropout ends an effort (a best
     never spans a cafe stop);
-  - **EST FTP**: CP when the fit is trusted ("CP"), else HRVT2 when three recent rides gave one ("HRV");
-    **MODEL**: which CP and W' a ride takes (CP FIT, or SETTINGS: the FTP and W' settings), chosen at the ride's
-    start and kept to its end (during a ride: the ride's); **APPLY FTP** and **APPLY W'** copy the estimates into
-    the settings (Start twice);
-  - **HRVT1 AET, HRVT2, HRV RIDES**: the power at DFA alpha1 0.75 and 0.5 (Rogers et al. 2021) from the full copies
-    of the last 42 days (`\Rustfw\Activities`, read when FITNESS first shows, a bounded amount a pass), each ride a
-    linear fit of power on alpha1 (up to 1.0) over 2-minute windows every 5 s (Andriolo et al. 2024, the AI
-    Endurance method), gated (5 minutes of points, half of them in alpha1's dynamic range, a spread of 0.3, a
-    falling slope, r^2 0.3), then the median of the rides; HRV RIDES: how many gave HRVT1, of those read. A guide
-    within some 20 to 40 W (hrvt.rs). The share of beats hrv.rs drops as artifacts is not recorded yet, so the
-    studies' 5 % artifact gate is not applied;
+  - **A curve's bests are lower bounds**, so the estimates only raise the settings: **EST FTP** is CP when the fit
+    is trusted ("CP"), else HRVT2 when three recent rides gave one ("HRV"), shown as a floor (">=236 W CP") when
+    under the FTP setting; **APPLY FTP** offers it only above the setting, **APPLY W'** the fit's W' (Start twice,
+    the source named: "SET FTP 240 W (CP)?"); **MODEL**: which CP and W' a ride takes, CP FIT (the trusted fit, its
+    CP at least 95 % of the FTP setting) or SETTINGS (the FTP and W' settings), chosen at the ride's start and kept
+    to its end (during a ride: the ride's). A ride resumed after a restart takes what is there at its resume
+    (usually the settings: no room is left in the backup registers to keep its pair);
+  - **HRVT1 AET, HRVT2, RIDES**: the power at DFA alpha1 0.75 and 0.5 (Rogers et al. 2021) from the full copies
+    of the last 42 days (`\Rustfw\Activities`, read when FITNESS shows, a bounded amount a pass, again after a
+    failure at the next visit), each ride a linear fit of power on alpha1 over 2-minute windows every 5 s (Andriolo
+    et al. 2024, the AI Endurance method) by Deming regression (least squares on a noisy alpha1 pulls the
+    thresholds toward the ride's mean power), from the power where alpha1's mean falls under 1.0, gated (half the
+    points under 1.0, 5 minutes of points over 40 W of power, a falling slope, r^2 0.3, at most 10 % above the
+    ride's hardest 2 minutes), then the median of the 32 most recent rides that gave one; RIDES: "3/2 OF 7", the
+    rides that gave HRVT1, HRVT2, of those read. A guide within some 20 to 40 W (hrvt.rs). The share of beats
+    hrv.rs drops as artifacts is not recorded yet, so the studies' 5 % artifact gate is not applied;
   - **distance and riding time** of this week (from Monday), this year and all rides.
 - **IMPORT** applies stock's settings where this firmware has them: FTP, max heart rate, weight and W'
   (UserProfile.ini), the wheel (a speed sensor's, Sensor.ini), the paired ANT+ sensors (Sensor.ini), the

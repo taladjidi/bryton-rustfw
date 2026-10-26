@@ -2,11 +2,18 @@
 //! the heart rate variability thresholds from the recent full copies ([`crate::hrvt`], read when FITNESS first
 //! shows: [`App::step_thresholds`]), the estimated FTP, and the APPLY rows that copy them into the settings.
 //!
-//! **The ride's model** ([`App::model_now`]): the fit's CP and W' when it is trusted ([`power_curve::Cp::trusted`]:
-//! at least 3 bests of 2 to 30 minutes on the model, within 5 %, from the last 90 days), else the settings' FTP and
-//! W'. Taken at a ride's start (and at its resume after a restart) and kept until it ends
-//! ([`App::cp_model`]): the live W' balance and the climb pacer use that pair for the whole ride, even if the ride
-//! scan ends or the curve changes meanwhile.
+//! **A curve's bests are lower bounds**: a rider who has not ridden 12 to 30 minutes all-out lately has a curve,
+//! and a CP, under what they can do. So the estimates only ever raise the settings, never lower them:
+//! - **The ride's model** ([`App::model_now`]): the fit's CP and W' when it is trusted ([`power_curve::Cp::trusted`]:
+//!   at least 3 bests of 2 to 30 minutes on the model within 5 %, two of them of 2 to 5 minutes, CP and W' in the
+//!   settings' ranges, from the last 90 days) and its CP is at least [`MODEL_MIN_PCT`] % of the FTP setting; else the
+//!   settings' FTP and W' (soft data never makes the W' balance drain faster). Taken at a ride's start and kept until
+//!   it ends ([`App::cp_model`]): the live W' balance and the climb pacer use that pair for the whole ride, even if
+//!   the ride scan ends or the curve changes meanwhile. **A ride resumed after a restart** takes the pair available
+//!   at its resume (the backup registers have no room left to keep the pair the ride had), and keeps it from there
+//!   to the ride's end.
+//! - **EST FTP** below the FTP setting shows as a floor (">=236 W"): the rider is at least that. APPLY FTP offers it
+//!   only when it is above the setting.
 //!
 //! **EST FTP** ([`App::est_ftp`]): CP when its fit is trusted; else HRVT2 when [`hrvt::MIN_RIDES`] recent rides gave
 //! one. CP wins: it comes from maximal efforts, the rider's own performance, where HRVT2 is a physiological marker
@@ -19,6 +26,9 @@
 
 use crate::*;
 
+/// The fit sets a ride's CP and W' only when its CP is at least this share of the FTP setting, percent.
+pub const MODEL_MIN_PCT: u32 = 95;
+
 impl App {
     /// Gives the reading of the recent rides its memory (main.rs, AXI SRAM): without, the HRVT rows show "--".
     pub fn set_threshold_memory(&mut self, m: &'static mut thresholds::Scan) {
@@ -30,19 +40,26 @@ impl App {
         if self.stock.ready() { power_curve::fit_cp(&self.stock.out.curve) } else { None }
     }
 
-    /// The CP (W) and W' (J, at most 65 kJ) a ride started now takes, and whether they are the fit's (module doc).
+    /// The CP (W) and W' (J) a ride started now takes, and whether they are the fit's (module doc).
     pub(crate) fn model_now(&self) -> (u16, u16, bool) {
-        match self.cp_fit().filter(power_curve::Cp::trusted) {
-            Some(c) => (c.cp, c.w_prime.min(u32::from(u16::MAX)) as u16, true),
+        let ftp = u32::from(self.settings.ftp);
+        let fit = self.cp_fit().filter(|c| c.trusted() && u32::from(c.cp) * 100 >= ftp * MODEL_MIN_PCT);
+        match fit.and_then(|c| Some((c.cp, u16::try_from(c.w_prime).ok()?))) {
+            Some((cp, wp)) => (cp, wp, true),
             None => (self.settings.ftp, self.settings.wprime_j, false),
         }
     }
 
     /// The estimated FTP and where it comes from (module doc).
     pub(crate) fn est_ftp(&self) -> Option<(u16, &'static str)> {
-        let cp = self.cp_fit().filter(power_curve::Cp::trusted).map(|c| (c.ftp(), " CP"));
-        let hrv = || self.thresholds.as_deref()?.out.vt2_trusted().map(|w| (w, " HRV"));
+        let cp = self.cp_fit().filter(power_curve::Cp::trusted).map(|c| (c.ftp(), "CP"));
+        let hrv = || self.thresholds.as_deref()?.out.vt2_trusted().map(|w| (w, "HRV"));
         cp.or_else(hrv)
+    }
+
+    /// The FTP APPLY FTP offers: the estimate, to the setting's steps, only when above the setting.
+    pub(crate) fn ftp_offer(&self) -> Option<(u16, &'static str)> {
+        self.est_ftp().map(|(w, from)| (round_ftp(w), from)).filter(|&(w, _)| w > self.settings.ftp)
     }
 
     /// The value of a FITNESS row this file owns (nothing for the others: [`App::stock_value`]).
@@ -62,7 +79,11 @@ impl App {
         match r {
             S::EstFtp => match self.est_ftp() {
                 Some((w, from)) => {
+                    if w < self.settings.ftp {
+                        v.push_str(">="); // a floor: the bests are lower bounds (module doc)
+                    }
                     watts(v, Some(w));
+                    v.push_str(" ");
                     v.push_str(from);
                 }
                 None => v.push_str("--"),
@@ -74,7 +95,7 @@ impl App {
                 };
                 v.push_str(if from_fit { "CP FIT" } else { "SETTINGS" });
             }
-            S::ApplyFtp => watts(v, self.est_ftp().map(|(w, _)| round_ftp(w))),
+            S::ApplyFtp => watts(v, self.ftp_offer().map(|(w, _)| w)),
             S::ApplyWPrime => match self.cp_fit().filter(power_curve::Cp::trusted) {
                 Some(c) => {
                     push_fixed(v, i32::from(round_wprime(c.w_prime)), 3, 1);
@@ -86,7 +107,10 @@ impl App {
             S::Hrvt1 => watts(v, out.vt1().0),
             S::Hrvt2 => watts(v, out.vt2().0),
             S::HrvRides => {
+                // "3/2 OF 7": rides that gave HRVT1, HRVT2, of those read
                 v.push_u32(u32::from(out.vt1().1));
+                v.push_str("/");
+                v.push_u32(u32::from(out.vt2().1));
                 v.push_str(" OF ");
                 v.push_u32(u32::from(out.read));
             }
@@ -98,22 +122,27 @@ impl App {
     pub(crate) fn apply_estimate(&mut self, b: &mut impl Board, menu: Menu, sel: usize, r: menu::StockRow) {
         let ftp = matches!(r, menu::StockRow::ApplyFtp);
         let value = if ftp {
-            self.est_ftp().map(|(w, _)| round_ftp(w))
+            self.ftp_offer()
         } else {
-            self.cp_fit().filter(power_curve::Cp::trusted).map(|c| round_wprime(c.w_prime))
+            self.cp_fit().filter(power_curve::Cp::trusted).map(|c| (round_wprime(c.w_prime), "FIT"))
         };
-        let Some(value) = value else { return self.notice("NO ESTIMATE YET") };
+        let Some((value, from)) = value else {
+            return self.notice(if ftp { "NO ESTIMATE ABOVE FTP" } else { "NO ESTIMATE YET" });
+        };
+        // "SET FTP 240 W (CP)", "SET W' 23.5 KJ (FIT)": the source named
         let mut what = Line::<24>::new();
         what.push_str(if ftp { "SET FTP " } else { "SET W' " });
         if ftp {
             what.push_u32(u32::from(value));
-            what.push_str(" W");
+            what.push_str(" W (");
         } else {
             what.push_u32(u32::from(value) / 1000);
             what.push_str(".");
             what.push_u32(u32::from(value) % 1000 / 100);
-            what.push_str(" KJ");
+            what.push_str(" KJ (");
         }
+        what.push_str(from);
+        what.push_str(")");
         if !self.confirmed(menu, sel, what.as_str()) {
             return;
         }
@@ -131,7 +160,11 @@ impl App {
     #[inline(never)]
     pub(crate) fn step_thresholds(&mut self, b: &mut impl Board) {
         let Some(scan) = self.thresholds.as_deref_mut() else { return };
-        if scan.status() == thresholds::Status::Idle && matches!(self.screen, Screen::Menu(Menu::Stock, _)) {
+        let shown = matches!(self.screen, Screen::Menu(Menu::Stock, _));
+        if scan.status() == thresholds::Status::Failed && !shown {
+            scan.reset(); // a card error, or the card lent meanwhile: tried again at the next visit
+        }
+        if scan.status() == thresholds::Status::Idle && shown {
             let (y, m, d) = self.date;
             scan.start(u16::try_from(epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0));
         }

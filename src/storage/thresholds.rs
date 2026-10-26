@@ -30,7 +30,7 @@ pub struct Scan {
     today: u16,
     dir: Option<Cursor>,
     /// The ride being read, the bytes of it read, where its chain is.
-    file: Option<(File, u32, Seek)>,
+    file: Option<(File, u32, Seek, u16)>,
     reader: Reader,
     ride: hrvt::RideFit,
     /// What the rides read so far give.
@@ -102,14 +102,14 @@ impl Scan {
                 }
             },
         };
-        let Some((file, offset, seek)) = &mut self.file else {
+        let Some((file, offset, seek, day)) = &mut self.file else {
             match fat.list(d, dir) {
                 Ok(None) => self.status = Status::Done,
                 Err(_) => self.status = Status::Failed,
                 Ok(Some(e)) => {
-                    let recent = ride_day(e.name()).is_some_and(|day| self.today.saturating_sub(day) < hrvt::DAYS);
-                    if !e.file.dir && recent {
-                        self.file = Some((e.file, 0, Seek::default()));
+                    let day = ride_day(e.name()).filter(|&day| self.today.saturating_sub(day) < hrvt::DAYS);
+                    if let (false, Some(day)) = (e.file.dir, day) {
+                        self.file = Some((e.file, 0, Seek::default(), day));
                         (self.reader, self.ride) = (Reader::with_alpha1(), hrvt::RideFit::new());
                     }
                 }
@@ -126,7 +126,7 @@ impl Scan {
         });
         // the end of the file, its end of data or a bad byte: the ride as far as it was read (a cut copy counts)
         if n == 0 || self.reader.result().is_some() {
-            self.out.add(self.ride.thresholds());
+            self.out.add(*day, self.ride.thresholds());
             self.file = None;
         }
         (n as u32).max(1)
@@ -233,6 +233,7 @@ pub(crate) mod tests {
                 }
             });
             std::println!("{path}: {with} with alpha1, {:?}, fit {:?}, {:?}", r.result(), fit.fit(), fit.thresholds());
+            std::println!("{}", hrvt::tests::describe(&fit));
         }
     }
 }

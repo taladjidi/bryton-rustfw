@@ -238,16 +238,25 @@ pub struct Cp {
     pub points: u8,
     /// Bests of 2 to 30 minutes ([`CP_RANGE`]), at most 7.
     pub of: u8,
+    /// Bests of the short window (2 to 5 minutes) within [`SUBMAX_PCT`] of the model: the one that sets W' and any
+    /// that agree with it.
+    pub short: u8,
     /// The largest gap between the model and those bests, or a best over the model (between the windows), percent
     /// of the best.
     pub err_pct: u8,
 }
 
 impl Cp {
-    /// Enough bests on the model, close enough to it ([`TRUST_POINTS`], [`TRUST_ERR_PCT`]); the curve is the last
-    /// 90 days' ([`crate::stock::WINDOW_DAYS`]), so it is recent by construction.
+    /// Enough bests on the model, close enough to it ([`TRUST_POINTS`], [`TRUST_ERR_PCT`]), two of them in the
+    /// short window (one inflated 2-minute best alone never sets W'), and CP and W' in the settings' ranges
+    /// ([`crate::menu::FTP_RANGE`], [`crate::menu::WPRIME_RANGE`]: a soft curve can give a W' of 2 kJ). The curve
+    /// is the last 90 days' ([`crate::stock::WINDOW_DAYS`]), so it is recent by construction.
     pub fn trusted(&self) -> bool {
-        self.points >= TRUST_POINTS && self.err_pct <= TRUST_ERR_PCT
+        self.points >= TRUST_POINTS
+            && self.short >= 2
+            && self.err_pct <= TRUST_ERR_PCT
+            && crate::menu::FTP_RANGE.contains(&self.cp)
+            && u16::try_from(self.w_prime).is_ok_and(|j| crate::menu::WPRIME_RANGE.contains(&j))
     }
 
     /// The FTP this estimate gives: CP (module doc).
@@ -299,13 +308,14 @@ pub fn fit_cp(c: &Curve) -> Option<Cp> {
     if !(cp >= 1.0 && w_prime >= 1.0 && cp < 2000.0 && w_prime < 200_000.0) {
         return None;
     }
-    let (mut of, mut points, mut err) = (0u8, 0u8, 0f32);
+    let (mut of, mut points, mut short, mut err) = (0u8, 0u8, 0u8, 0f32);
     for (t, work) in (0..N).filter_map(best) {
         let (w, model) = (work / t, cp + w_prime / t);
         let e = (model - w) / w; // under the model: positive
         of += 1;
         if e * 100.0 <= SUBMAX_PCT {
             points += 1;
+            short += u8::from(t <= f32::from(SHORT_S));
             err = err.max(if e < 0.0 { -e } else { e });
         }
     }
@@ -314,6 +324,7 @@ pub fn fit_cp(c: &Curve) -> Option<Cp> {
         w_prime: (w_prime + 0.5) as u32,
         points,
         of,
+        short,
         err_pct: (err * 100.0 + 0.5).min(255.0) as u8,
     })
 }
@@ -425,20 +436,38 @@ mod tests {
         assert!(got.trusted(), "{got:?}");
     }
 
-    /// Sub-maximal bests (2, 3 and 8 minutes ridden under the rider's best) leave the fit as it was, where a plain
-    /// least squares loses W' to them.
+    /// Sub-maximal bests (2 and 8 minutes ridden under the rider's best) leave the fit as it was, where a plain
+    /// least squares loses W' to them. With the 3 minutes soft too, one short best is left on the model: the same
+    /// fit, not trusted.
     #[test]
     fn submaximal_bests_left_out() {
         let mut c = curve(|t| 260.0 + 18_000.0 / t);
         let plain = least_squares(&c);
-        for (i, f) in [(5, 0.92), (6, 0.92), (8, 0.95)] {
+        for (i, f) in [(5, 0.92), (8, 0.95)] {
             c.watts[i] = (f32::from(c.watts[i]) * f) as u16;
         }
         let got = fit_cp(&c).unwrap();
-        assert_eq!((got.cp, (got.w_prime + 500) / 1000, got.points, got.of), (260, 18, 4, 7), "{got:?}");
+        let shown = (got.cp, (got.w_prime + 500) / 1000, got.points, got.of, got.short);
+        assert_eq!(shown, (260, 18, 5, 7, 2), "{got:?}");
         assert!(got.trusted());
         let ls = least_squares(&c);
         assert!(ls.1 < plain.1 - 2000.0, "{ls:?} {plain:?}");
+        c.watts[6] = (f32::from(c.watts[6]) * 0.92) as u16;
+        let got = fit_cp(&c).unwrap();
+        assert_eq!((got.cp, got.short, got.trusted()), (260, 1, false), "{got:?}");
+    }
+
+    /// One inflated 2-minute best (a spike, a wrong calibration) sets the envelope's W', but nothing else agrees
+    /// with it: not trusted. A curve that gives a W' out of the setting's range is not trusted either.
+    #[test]
+    fn one_inflated_best_or_out_of_range() {
+        let mut c = curve(|t| 260.0 + 18_000.0 / t);
+        c.watts[5] = (f32::from(c.watts[5]) * 1.15) as u16;
+        let got = fit_cp(&c).unwrap();
+        assert!(got.w_prime > 21_000 && got.short == 1 && !got.trusted(), "{got:?}");
+        let soft = curve(|t| 240.0 + 2_600.0 / t);
+        let got = fit_cp(&soft).unwrap();
+        assert!(got.points == 7 && got.w_prime < 3000 && !got.trusted(), "{got:?}");
     }
 
     /// No short or no long best: no fit. Two bests: a fit, not trusted. A short best under CP: none.
@@ -453,7 +482,8 @@ mod tests {
         assert_eq!(only(&[7, 10]).map(|c| (c.cp, c.points, c.trusted())), Some((260, 2, false)), "two points");
         assert_eq!(only(&[5, 6, 7, 8]), None, "2 to 8 minutes: nothing sets CP");
         assert_eq!(only(&[9, 10, 11]), None, "12 to 30 minutes: nothing sets W'");
-        assert_eq!(only(&[6, 9, 11]).map(|c| (c.cp, c.points, c.trusted())), Some((260, 3, true)), "3 points");
+        assert_eq!(only(&[6, 9, 11]).map(|c| (c.cp, c.points, c.trusted())), Some((260, 3, false)), "one short");
+        assert_eq!(only(&[5, 6, 9, 11]).map(|c| (c.cp, c.points, c.trusted())), Some((260, 4, true)), "4 points");
         let mut c = clean;
         (c.watts[5], c.watts[6], c.watts[7]) = (0, 0, 250); // the only short best, under the long ones
         assert_eq!(fit_cp(&c), None);

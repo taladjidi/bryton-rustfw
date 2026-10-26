@@ -1422,7 +1422,7 @@ fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
 }
 
 /// The reading of the recent rides for FITNESS's heart rate variability thresholds (storage/thresholds.rs `Scan`,
-/// about 3 KB), beside the app in AXI SRAM (link.x `.axibss`): built once on the stack and moved in, as the courses.
+/// about 5 KB), beside the app in AXI SRAM (link.x `.axibss`): built once on the stack and moved in, as the courses.
 #[inline(never)]
 fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     static SCAN: static_cell::StaticCell<bryton_rustfw::thresholds::Scan> = static_cell::StaticCell::new();

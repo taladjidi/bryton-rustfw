@@ -583,3 +583,40 @@ fn a_profile_set_while_paused_survives_a_switch_off() {
     run(&mut sim2, &mut app, 150_000);
     assert!(app.indoors(), "and by hand: no trainer, still indoor");
 }
+
+/// A ride resumed after a restart takes the CP and W' available at its resume (the backup registers have no room
+/// for the pair it had, app/fitness.rs): here the settings', since this start has no scan yet, though the ride began
+/// on the fit's; and keeps them to its end, the scan finishing meanwhile.
+#[test]
+fn a_resumed_ride_takes_the_model_available_at_resume() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.stock.start(app.date);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 60_000);
+    }
+    app.settings.ftp = 250; // the fit's CP is 250 W: under 95 % of stock's 265 W it would not be taken
+    app.save_misc(&mut sim);
+    let settings = (app.settings.ftp, app.settings.wprime_j);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride_model.map(|m| m.2), Some(true), "this ride on the fit");
+    assert_ne!(app.cp_model(), settings);
+    run(&mut sim, &mut app, 150_000);
+
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    sim2.backup = sim.backup;
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, 1000);
+    assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
+    assert_eq!(app.ride_model, Some((settings.0, settings.1, false)), "what this start had at the resume");
+    app.stock.start(app.date);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim2, &mut app, u64::from(POLL_MS));
+        assert!(sim2.ms < 120_000);
+    }
+    assert!(app.cp_fit().is_some_and(|c| c.trusted()));
+    assert_eq!(app.cp_model(), settings, "kept to the ride's end");
+}
