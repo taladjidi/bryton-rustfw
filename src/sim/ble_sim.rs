@@ -175,6 +175,10 @@ impl Nordic {
     }
 
     fn gattc_on(&mut self, conn: u16, id: u16, status: u16, body: &[u8]) {
+        if self.drop_gattc == Some((conn, id)) {
+            self.drop_gattc = None;
+            return;
+        }
         let mut p = conn.to_le_bytes().to_vec();
         p.extend(status.to_le_bytes());
         p.extend([0, 0]);

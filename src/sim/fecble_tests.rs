@@ -234,3 +234,34 @@ fn a_stopped_workout_releases_the_fec_ble_trainer() {
         super::trainer_tests::release_after(&mut sim, &mut app, how, erg, free);
     }
 }
+
+/// The ride paused: the FE-C over BLE trainer is let go; resumed, the target again; and the switch-off lets it go.
+#[test]
+fn a_paused_ride_and_the_switch_off_release_the_fec_ble_trainer() {
+    let erg = |sim: &Sim| trainer(sim).mode == 5;
+    let free = |sim: &Sim| (trainer(sim).mode, trainer(sim).resistance) == (4, 0);
+    let (mut sim, mut app) = unit_with(FtmsSim::new_fec(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    super::trainer_tests::pause_releases(&mut sim, &mut app, erg, free);
+    let (mut sim, mut app) = unit_with(FtmsSim::new_fec(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    super::trainer_tests::off_releases(&mut sim, &mut app, erg, free);
+}
+
+/// A page's write answer lost: the next pages still go out (review: one write in flight for ever wedged the link).
+#[test]
+fn a_lost_write_answer_does_not_wedge_the_fec_ble_trainer() {
+    let (mut sim, mut app) = unit_with(FtmsSim::new_fec(), None);
+    pair(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    app.open(Screen::Trainer);
+    sim.nordic.drop_gattc = Some((1, 0x38));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.nordic.drop_gattc, None, "the write's answer was lost");
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!((trainer(&sim).mode, trainer(&sim).target_w), (5, 110), "the next target went out");
+}

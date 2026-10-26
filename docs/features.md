@@ -318,9 +318,23 @@ intervals or enough clean data; not kept; not a steady-state zone 2 power). APPL
 setting's 5 W step), KEEP or Back keeps the one set; Start and Lap keep their ride meaning on the screen. A ramp under
 a whole minute has no result. The ride is recorded and saved as any ride.
 
-**Release.** When a workout or course that drove the trainer stops (STOP WORKOUT, its end, the ride's end) and the rider
-has not taken the trainer over, one free-resistance command goes out (FE-C page 48 at 0 %, FTMS Set Target Resistance
-Level 0), so ERG's last target does not stay on the trainer; the same once at the first contact after a start.
+**Release.** The trainer is let go (free resistance: FE-C page 48 at 0 %, FTMS Set Target Resistance Level 0) whenever
+what held it stops, so ERG's last target does not stay on it:
+- **stop:** STOP WORKOUT, the workout's end, a course no longer followed (a +/- on the trainer screen under a workout
+  or a course adjusts its target, it does not take the trainer over);
+- **end:** the ride saved or discarded, the rider's own take-over (MODE, +/- with nothing driving) included;
+- **pause:** ERG while the ride is paused or auto-paused (3 s without power or cadence indoors), so the rider never
+  restarts at 0 rpm against the target; the trainer screen says PAUSED: FREE, and the target goes out again on
+  resume. SIM and RESISTANCE stand (SIM brakes by the speed, like the road from a standstill);
+- **switch-off:** one free resistance before the radio chip goes off (bounded: two tries over ANT+, then a channel
+  period for it to go on air);
+- **boot:** once at the first contact after a start.
+
+The release goes again every 4 s until it is known to have arrived (ANT+ TX_COMPLETED, the BLE write's answer, the
+FTMS response), five times at most. A chip that never answers the first acknowledged message turns the ANT+ control off
+until the chip is started again; once one was answered, a later silence only has the message sent again. An FTMS
+trainer that refused the control is asked again 10 s later, then less often (up to a minute apart), while it is driven.
+With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too (AUTO keeps it on).
 
 ## Workouts
 

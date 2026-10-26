@@ -206,11 +206,13 @@ pub struct App {
     trainer_shown: ui::trainer::Shown,
     trainer_up: bool,
     /// The pairing file's state, the time since the last acknowledged message, whether the second ticked since the
-    /// screen was drawn, and whether the chip never answered one (control off for this power-up).
+    /// screen was drawn, whether the chip never answered the first one (control off until it starts again), and
+    /// whether it answered one since it started.
     sensors_store: SensorStore,
     ack_gap_ms: u32,
     trainer_second: bool,
     trainer_no_control: bool,
+    trainer_acked: bool,
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -601,6 +603,7 @@ impl App {
             ack_gap_ms: 0,
             trainer_second: false,
             trainer_no_control: false,
+            trainer_acked: false,
             ftms: Ftms::default(),
         }
     }
