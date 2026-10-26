@@ -173,6 +173,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/ui/mod.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
   `Rect` (`contains`, `grown`) is the one hit-test: a touch is tested against a `Rect`, never with its own range checks.
+  Its parts are re-exported whole, so paths stay `ui::X`: `ui/strip.rs` (the status strip, whole and as changes),
+  `ui/fields.rs` (a ride field's box, value, layouts, frames, zone bars, the graphs' axes and columns), `ui/gauge.rs`
+  (the workout gauge field) and `ui/overview.rs` (the overview: date, TODAY card, cog, notices, workout list rows).
 - `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
   `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
   `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,
