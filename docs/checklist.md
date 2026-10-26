@@ -21,25 +21,28 @@ the code; [features.md](features.md) says how each one works.
 - [x] Home screen with time, date and chosen fields (stock, Garmin): unit, overview with four fields (default: week, year and total km, week hours) and notices; apart from the ride pages as on stock
 - [x] Up to three data pages per profile (stock): unit
 - [x] Layouts of one to six fields, uneven ones too (stock has 12 grids) (stock, Garmin): sim, eleven layouts
-- [~] Edit a page's fields on the unit (stock, Garmin, Wahoo): from the menu; no long press on a field
-- [ ] More than three pages, pages turned on and off (Garmin, Karoo)
+- [x] Edit a page's fields on the unit (stock, Garmin, Wahoo): sim, on the page itself (rows of cells, `\Rustfw\pages.bin`)
+- [~] More than three pages, pages turned on and off (Garmin, Karoo): sim, pages added and deleted in the editor, a MORE variant of each page (swipe up)
 - [ ] Rename pages (Garmin)
 - [ ] Field size follows the box, wide boxes show more (Garmin, Karoo)
 - [x] Banners over any page for a few seconds (ride start, pause, lap, end) (stock, Garmin): sim
 - [ ] Quick Status panel: sensors and their batteries, phone link, recording, five chosen fields (stock)
-- [~] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim, the ride card (map, elevation, ten numbers); no Save / Discard choice
+- [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim, RESUME / SAVE / DISCARD, then the ride card (map, elevation over distance, ten numbers)
 - [ ] Lap summary banner (lap time, average power and heart rate) (Garmin, Wahoo)
 - [ ] Day and night colour modes (stock Meter Color Mode, Garmin)
 - [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock SPD / CAD / HR / PW Ring and Bar)
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation, by tap; whole ride by hold (stock, ours): sim
 - [x] Values in zone colours (stock): sim
 - [ ] Auto scroll through pages (stock, Garmin)
-- [ ] Screen lock (stock power key press, Garmin)
+- [x] Screen lock (stock power key press, Garmin): sim, Back and Lap held 1 s lock the touch, a padlock in the strip
 - [ ] Ready-to-ride dashboard: sensors, battery, GPS before the start (Wahoo Roam 3)
-- [ ] Indoor mode pages (no GPS, trainer) (stock, Garmin, Wahoo)
+- [x] Indoor mode pages (no GPS, trainer) (stock, Garmin, Wahoo): unit, a second page set for the INDOOR profile, the workout page first while a workout runs
 - [ ] Languages other than English (stock: German, Spanish, French...)
 - [ ] Imperial units (stock, all)
 - [x] Redraw only what changes, in the smallest box (ours): unit, 0.4 % awake on the main screen
+- [ ] Lap list with each lap's numbers in a past ride (stock Results LapDetail, Garmin)
+- [ ] Power phase page (stock MeterCyclePagePowerPhase, Garmin)
+- [ ] Wind page: head or tail wind and what it costs in speed (Wahoo ACE, 2026)
 
 ## Data fields
 
@@ -108,12 +111,13 @@ Others
 
 - [x] Temperature (stock, all): unit, from the barometer
 - [ ] Heading, compass (stock, Garmin)
-- [ ] Gears, gear ratio, gear combo, Di2 battery (stock, Garmin, Wahoo, Karoo)
+- [~] Gears, gear ratio, gear combo, Di2 battery (stock, Garmin, Wahoo, Karoo): sim, gear fields and shift counts; not seen on the unit
 - [ ] E-bike: battery, range, assist mode and level (stock, Garmin, Wahoo, Karoo)
-- [~] Workout fields: target power, cadence, heart rate, step and workout time left, interval count (stock, all): sim; the step's target, time left, the next step, the step count; no workout time left
+- [x] Workout fields: target power, cadence, heart rate, step and workout time left, interval count (stock, all): sim; the step's target, time left, NEXT with its length, the step count, WKT LEFT, ERG W
 - [~] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all): sim, distance to go, off course, the climb, ascent left; no turns or POIs
 - [ ] Road surface type (Garmin)
 - [ ] Battery of the unit and of each sensor as fields (Garmin, Wahoo)
+- [ ] Component wear: the bike chosen per ride, kilometres added per part (Garmin, June 2026)
 
 ## Sensors and radios
 
@@ -128,14 +132,15 @@ Others
 - [~] BLE scan of nearby devices with signal strength and kind (ours): unit; no connection yet
 - [ ] ANT+ radar (Garmin Varia, Bryton Gardia): vehicles beside the page, threat colours (stock, Garmin, Wahoo, Karoo, Coros)
 - [ ] ANT+ lights: on with the ride, by ambient light (stock "Light" sensor, Garmin, Wahoo)
-- [ ] Shimano Di2 gears and hood buttons (private ANT channel) (stock, patch P12 ten actions, Garmin, Wahoo, Karoo)
-- [ ] SRAM AXS / ANT+ Shifting gears and buttons (stock e-shifting, Garmin, Wahoo, Karoo)
+- [~] Shimano Di2 gears and hood buttons (private ANT channel) (stock, patch P12 ten actions, Garmin, Wahoo, Karoo): sim
+- [~] SRAM AXS / ANT+ Shifting gears and buttons (stock e-shifting, Garmin, Wahoo, Karoo): sim
 - [ ] E-bike: Shimano STEPS and ANT+ LEV (stock, Garmin, Wahoo, Karoo)
-- [ ] Smart trainer, ANT+ FE-C (stock, all)
-- [ ] Smart trainer over BLE FTMS (Garmin, Wahoo, Karoo, Coros): simulated only (phase 2), beside the phone
-- [ ] Smart trainer over BLE without FTMS, FE-C over BLE (Tacx scheme; Van Rysel D500): simulated only
+- [~] Smart trainer, ANT+ FE-C (stock, all): unit, paired and read (Van Rysel D500); ERG not yet seen on the trainer
+- [~] Smart trainer over BLE FTMS (Garmin, Wahoo, Karoo, Coros): sim, beside the phone; the two links accepted by the chip on the unit
+- [~] Smart trainer over BLE without FTMS, FE-C over BLE (Tacx scheme; Van Rysel D500): unit, linked and read; commands not yet seen applied
 - [ ] Remote buttons (Bryton ESS, Garmin Edge remote) (stock, Garmin)
 - [ ] Running dynamics / MTB fork and shock sensors (Garmin, Karoo)
+- [ ] Muscle oxygen (Moxy, Train.Red), core temperature (CORE) sensors as fields (Garmin, Wahoo announced 2026)
 - [x] GPS (u-blox M10), with time and last position at power-up for a fast fix (stock, all): unit
 - [ ] GNSS systems chosen per profile (GPS, Galileo, GLONASS, BeiDou, QZSS) (stock, all)
 - [ ] Dual-frequency GNSS (Garmin 1050, Wahoo Roam 3, Coros; the S510's M10 is single band)
@@ -156,13 +161,13 @@ Others
 - [~] FIT activity file written as the ride goes (stock, all): sim (recorder.rs, eMMC writes), checked with Garmin's SDK and fitdecode
 - [~] Checkpoint every minute, two copies of the recovery record, resume after any reset (stock, AGENTS.md): sim, power cut after every sector
 - [~] Rides saved to \Activities, readable by stock and the computer (stock, all): sim (stock's name, the history lists them)
-- [ ] Discard a ride (stock, all)
+- [x] Discard a ride (stock, all): sim, moved into `\Rustfw\Discarded`, never erased
 - [ ] Recording rate: 1 s or smart (stock, Garmin)
 - [ ] HRV (RR intervals) in the FIT file as hrv messages (patch P8, Garmin)
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ): sim, in a full copy beside the clean one (`\Rustfw\Activities`, with RMSSD), checked with Garmin's SDK
 - [~] Laps, session and activity messages at the end (stock, all): sim (a lap message per Lap, timer events at pauses)
 - [ ] Power off during a stop, resume at power on (stock Auto Power Off, Garmin)
-- [ ] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all)
+- [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): ROAD / INDOOR, chosen by itself from the trainer heard (sub_sport in the FIT); no bikes
 - [ ] Settings in a file, two copies (stock .ini files, all): in RTC backup registers for now
 - [ ] Screenshots saved to the volume (stock \Screenshot): over USB only (`dev.py shot`)
 - [~] Debug log file after a fault (stock \Debug, patch D1): sim, a fault resets the unit and is said at start (FAULT RESET n, backup register 29); no log file yet
@@ -172,7 +177,7 @@ Others
 - [x] Track since power-on on a map, heading arrow, fitted view, scale bar (stock, all): unit; not on a real ride yet
 - [x] Last known position before a fix (ours): unit
 - [~] Basemap: roads and water from stock's tile cache (stock, all): sim with real tiles; not seen on the unit
-- [ ] Map zoom and pan by touch (stock, all)
+- [~] Map zoom and pan by touch (stock, all): sim, "+" / "-" buttons and a drag; no pinch
 - [ ] North up, heading up (stock Compass / Heading Mode, all)
 - [~] IGN Plan v2 maps from packs made on the computer, "(c) IGN" on the map (ours; Garmin and Karoo have no IGN
   raster): sim with synthetic packs, real packs decoded on the computer; not seen on the unit
@@ -182,7 +187,7 @@ Others
 - [~] Off-course alert, back on track to the nearest point (stock, Wahoo Back on Track, all): sim, the alert and the distance off; no way back drawn
 - [ ] Navigate to the start of a course first (stock)
 - [ ] Reverse a course (stock, Garmin)
-- [ ] Turn-by-turn cues (stock, all)
+- [x] Turn-by-turn cues (stock, all): sim, from the file or the course's shape, said before and at each turn
 - [ ] Voice turn-by-turn on a speaker (Garmin 1050, Wahoo Roam 3, Karoo)
 - [ ] Rerouting on the unit (stock, all; Coros needs the phone)
 - [ ] Retrace / back to start along the ride's own path (stock, Garmin, Wahoo, Karoo)
@@ -194,6 +199,9 @@ Others
 - [ ] Course creator on the unit (Garmin 1050)
 - [ ] POIs and peaks along a course (stock, Garmin)
 - [ ] Live segments (Strava) (stock LiveSegments, Garmin, Wahoo, Karoo)
+- [ ] Segments from the rider's own rides (best sections ridden twice), no Strava (ours; Garmin Segments are account based)
+- [ ] Road closures and hazards on the route (Garmin Edge 1060, live data)
+- [ ] Favourite and recent places, navigate to one (stock My Favorites / History)
 - [~] Course sync from Strava, Komoot, RideWithGPS (stock app, all): without an app, copied over USB: sim, the routes stock's app synced and GPX or FIT copied over USB
 - [ ] Virtual ride: a course on a smart trainer (stock, Wahoo)
 
@@ -214,10 +222,12 @@ Others
 - [ ] ZWO / ERG / MRC workouts, converted on the computer (Wahoo, Karoo)
 - [x] Workouts synced from TrainingPeaks, intervals.icu (stock app, all): sim, read from what stock's app synced
 - [x] Workout calendar: today and this week (stock, Garmin, Wahoo): sim, today and the next days (eight)
-- [ ] ERG mode to the workout target (stock Smart Workout, all)
-- [ ] Trainer resistance and power modes, by hand (stock)
-- [ ] Trainer slope from the course grade (Garmin, Wahoo, Karoo)
+- [~] ERG mode to the workout target (stock Smart Workout, all): sim, Page / Lap adjust it; not yet seen on the trainer
+- [~] Trainer resistance and power modes, by hand (stock): sim, the trainer screen (ERG, resistance, SIM); stock's level mode not done
+- [~] Trainer slope from the course grade (Garmin, Wahoo, Karoo): sim
 - [ ] FTP, max HR and LTHR tests (stock Bryton Test, Garmin, Coros)
+- [ ] Trainer level mode (stock CourseLevelPlay) and a virtual course turned into a workout (stock VirtualToSmartWorkout)
+- [ ] AI Coach / Pace Pilot on the unit: pacing sections and grams of carbohydrate along a course (stock AICoach, from the app)
 - [ ] Progress Planner: seven-day plan that adapts to load and fatigue (stock app, S810)
 - [ ] Targeted adaptive coaching / daily suggested workouts (Garmin)
 - [ ] Pace Pilot: pacing plan for a course, with eat and drink reminders (stock app, S810)
@@ -241,6 +251,8 @@ Others
 - [x] Gradient-coloured climb profile in sections (stock, all): sim, the PROFILE field
 - [ ] Pacing on a climb from FTP and W' balance (ours, Garmin Power Guide)
 - [ ] Summit segments / climb challenges with others (Wahoo, Garmin 1050)
+- [ ] Completed climbs listed with their times (Karoo: a climb counts once 250 m of it is done)
+- [ ] Climb detection on or off per profile, descents too (Garmin 32.20, Karoo: off / routes only / everything)
 
 ## Alerts and safety
 
@@ -251,7 +263,7 @@ Others
 - [~] Heart rate, power, cadence, speed high / low alerts (stock Alert, Garmin, Wahoo): sim, heart rate high; not power, cadence, speed or low limits yet
 - [ ] Custom alerts with text (Wahoo, Karoo)
 - [~] Notices: GPS fix, sensor paired, battery low (stock, all): sim, on the overview
-- [~] Turn and off-course beeps (stock, all): sim, off course; no turns
+- [x] Turn and off-course beeps (stock, all): sim
 - [ ] Bike bell on the speaker or buzzer (Garmin 1050, Wahoo Roam 3)
 - [ ] Radar alerts (stock, all)
 - [ ] Incident detection with the accelerometer (Garmin, Karoo, Wahoo)
@@ -353,7 +365,7 @@ Storage, USB and updates
 ## History and analysis
 
 - [~] Ride list on the unit with summary and details (stock Results, all): sim, HISTORY: stock's rides newest first, each with its card (track, profile, ten numbers); no laps or graphs per ride
-- [ ] Delete rides on the unit (stock)
+- [x] Delete rides on the unit (stock): sim, HISTORY's DELETE moves a ride into `\Rustfw\Deleted`
 - [~] Totals: week, month, year, odometer (stock Overview, Garmin): unit, week, year and total km and week hours on the overview (read by themselves 30 s after start); no month
 - [ ] Personal records and best efforts (Garmin, Karoo)
 - [~] Power curve over 90 days, season, all time (stock app Rider's Insight, Garmin): sim, 90-day bests (1 s to 60 min) for CP and W'; no screen, no season
@@ -361,6 +373,35 @@ Storage, USB and updates
 - [ ] Each ride matched to the planned workout (ours, roadmap 4b)
 - [x] Rides read from stock's \Activities too (ours): sim (HISTORY > FITNESS > READ RIDES), checked on two backups
 - [ ] Ride upload to intervals.icu or Strava from a computer tool (ours)
+
+## Climbs ahead and live segments: what it would take
+
+Researched 2026-10-26 (stock reverse engineered, other units from their docs and reviews).
+
+Climbs without a course:
+- **Stock (Climb Challenge 2.0)** follows the road ahead in its own map's routing graph (`\Map\MapData\<region>\*.dat`
+  section 1, z14 tiles, already on the unit): the same road, else the same road class, else the smallest turn, under
+  110 degrees. It fits straight pieces to the smoothed elevation, keeps pieces over 2 % as a candidate (a dip up to
+  150 m kept inside), drops candidates under 300 m, glues climbs up to 2 km apart while the whole stays over 3 %, and
+  keeps a climb over 300 m (1 km with a setting), over 3 % and over 12 m of gain.
+- **Garmin ClimbPro** in free ride (Edge 540 and newer) and **Karoo Climber** (Predictive Path) do the same from the
+  map: Karoo leaves out climbs under 400 m or under 3 % and filters by size; Garmin's thresholds are not published
+  (500 m and 3 % is the forum's reading).
+- **Here:** the routing graph's format is known (STORAGE_AND_MAPS.md 4.7); where the per-node elevation comes from is
+  not (a node field, or the Topo folder: to find in Ghidra). With it, the climb finder of `course.rs` could run on the
+  traced road as on a course. Without it, a DEM made on the computer (open data, like the IGN packs) would serve.
+
+Live segments:
+- **Stock** has the whole feature (pages, a ghost that follows each target's real splits point by point: KOM, QOM,
+  PR, rivals; finished and lost screens), but only Bryton's app fills `\PlanTrip\LiveSegment`, for Strava
+  subscribers. The package format is reconstructed (live_segments.c); stock never imports a package copied over USB.
+- **Garmin, Wahoo, Karoo** get Strava's starred segments through their apps, Strava subscription required.
+- **Strava's API** still lists starred segments and segment streams, but the 2024 terms limit what an app may do and
+  a paid developer plan replaces free access from June 2026 (one source, inferred until checked). A personal
+  `sync.py` step that fetches the owner's starred segments is likely allowed; KOM split times are not exposed, so
+  a KOM ghost would run at a constant pace.
+- **Here, without Strava:** segments from the rider's own rides (a stretch ridden more than once, the best effort as
+  the ghost), matched by GPS on the unit as `course.rs` matches a course, are possible with what is on the card.
 
 ## Sources
 
@@ -391,3 +432,16 @@ Storage, USB and updates
 - Garmin incident detection: https://www8.garmin.com/manuals/webhelp/edge520plus/EN-GB/GUID-F109FB24-B55D-49D2-B388-D042E7FBA965.html
 - Apple ANCS: https://developer.apple.com/Library/ios/documentation/CoreBluetooth/Reference/AppleNotificationCenterServiceSpecification/Introduction/Introduction.html
 - FIT workout files: https://developer.garmin.com/fit/articles/file-types/workout.html
+- Garmin June 2026 update (component wear, Bosch): https://www8.garmin.com/wearables/PDF/WearablesSoftwareUpdate/2026/June2026.pdf
+- Garmin Edge 32.20 (climb and descent detection per profile): https://www.garminnews.com/garmin-releases-fresh-stable-update-32-20-for-edge-1050-850-550-and-mtb-whats-new/
+- Garmin Edge 1060 (hazards, road closures, voice): https://escapecollective.com/garmins-latest-releases-include-a-new-flagship-1060-computer/
+- Wahoo release notes (wind, Komoot live sync): https://support.wahoofitness.com/hc/en-us/articles/22860229203346
+- Karoo Climber: https://support.hammerhead.io/hc/en-us/articles/25602163627163-Karoo-OS-CLIMBER
+- ClimbPro without a course: https://the5krunner.com/garmin-features/navigation/climbpro/, scoring discussed at
+  https://forums.garmin.com/sports-fitness/cycling/f/edge-830/168010/understanding-climbpro-on-the-edge
+- Strava Live Segments need a subscription: https://www.cyclingweekly.com/news/product-news/strava-live-segments-188811
+- Strava API reference (starred segments, segment streams): https://developers.strava.com/docs/reference/; the 2024
+  terms: https://dcrainmaker.com/2024/11/stravas-changes-to-kill-off-apps.html; the 2026 paid plan:
+  https://tryterra.co/blog/strava-api-changes-2026
+- Stock's climbs ahead and live segments, reconstructed: the Ghidra repo's recovered_src/ride/route_climb.c and
+  live_segments.c, STORAGE_AND_MAPS.md 4.7
