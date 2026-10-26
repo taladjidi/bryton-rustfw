@@ -1315,6 +1315,7 @@ fn menu_tree_by_chance() {
         "Workouts",
         "Steps",
         "Courses",
+        "Quick",
         "Ride",
         "WorkoutNow",
         "CourseNow",

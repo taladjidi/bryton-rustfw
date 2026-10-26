@@ -69,3 +69,66 @@ fn one_tap_acts_on_a_row_unless_the_ride_moves() {
     assert_ne!(app.settings.light_level, before, "the second tap acts");
     assert_eq!(n.0, 2);
 }
+
+/// The unit with a power meter paired and heard, and a trainer paired (the quick panel's conditional rows).
+fn with_meter_and_trainer() -> (Sim, App) {
+    const ID: SensorId = SensorId { device: 7, trans: 5 };
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(ID);
+    sim.backup[14] = Kind::Trainer.to_word(SensorId { device: 5555, trans: 0xf1 });
+    let data = |_| [0x10, 1, 0xff, 85, 0, 0, 210, 0];
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+    run(&mut sim, &mut app, 3000);
+    assert!(app.power_heard());
+    (sim, app)
+}
+
+fn swipe(app: &mut App, sim: &mut Sim, d: crate::touch::Dir) {
+    app.input(sim, Input::Touch(Gesture::Swipe(d)));
+}
+
+/// Item 3: the quick panel. Calibrating the power meter from the overview: before, Page held, SENSORS (tap, tap),
+/// a swipe to its second screen and CALIBRATE POWER (tap, tap) = 7 touches (5 with one-tap rows); now a swipe down
+/// and a tap = 2. The panel lists only what applies, closes with a swipe up or Back, and a ride page keeps the
+/// media remote on a swipe down.
+#[test]
+fn the_quick_panel_from_the_overview() {
+    use crate::touch::Dir;
+    let (mut sim, mut app) = with_meter_and_trainer();
+    let mut n = Count(0);
+    n.0 += 1;
+    swipe(&mut app, &mut sim, Dir::Down);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Quick, 0));
+    let labels: Vec<_> = (0..app.rows(Menu::Quick))
+        .map(|i| std::string::String::from(app.menu_row(Menu::Quick, i).unwrap().0.as_str()))
+        .collect();
+    assert_eq!(labels, ["CALIBRATE POWER", "TRAINER CONTROL", "PROFILE", "BRIGHTNESS", "USB DRIVE", "NOTIFICATIONS"]);
+    run(&mut sim, &mut app, 300);
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("quick_panel");
+    n.tap_row(&mut sim, &mut app, 0);
+    assert_eq!((app.screen(), n.0), (Screen::PowerCal, 2), "was 7");
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Menu(Menu::Quick, 0), "Back returns to the panel");
+    swipe(&mut app, &mut sim, Dir::Up);
+    assert_eq!(app.screen(), Screen::Main, "a swipe up closes it");
+    swipe(&mut app, &mut sim, Dir::Down);
+    app.input(&mut sim, Input::Back);
+    assert_eq!(app.screen(), Screen::Main, "Back closes it");
+
+    // without a meter or a trainer: fewer rows
+    let (mut sim, mut app) = unit();
+    swipe(&mut app, &mut sim, Dir::Down);
+    assert_eq!(app.rows(Menu::Quick), 4);
+
+    // a ride page: the remote, as before
+    app.input(&mut sim, Input::Back);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1100);
+    assert!(matches!(app.screen(), Screen::Ride(_)));
+    swipe(&mut app, &mut sim, Dir::Down);
+    assert_eq!(app.screen(), Screen::Media);
+}

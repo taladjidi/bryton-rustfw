@@ -84,10 +84,12 @@ fn media_keys_and_now_playing() {
     app.activate(&mut sim, Menu::Phone, 1);
     run(&mut sim, &mut app, 3000);
     app.input(&mut sim, Input::Media); // Lap held on the overview
-    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Down))); // from the overview
+    app.screen = Screen::Ride(0); // the overview's swipe down is the quick panel (before a ride)
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Down)));
     assert_eq!(app.screen, Screen::Media);
     app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
-    assert_eq!(app.screen, Screen::Main, "a swipe up closes it");
+    assert_eq!(app.screen, Screen::Ride(0), "a swipe up closes it");
+    app.screen = Screen::Main;
     app.activate(&mut sim, Menu::Phone, 2); // REMOTE
     assert_eq!(app.screen, Screen::Media);
     app.show(&mut sim);

@@ -355,7 +355,11 @@ impl App {
             (Screen::Ride(_), Input::Back | Input::Touch(Gesture::Swipe(Dir::Down))) if self.more_shown().is_some() => {
                 self.more_on = None
             }
-            // a swipe down on a page opens the remote, without the menus
+            // a swipe down on the overview before a ride opens the quick panel; on a page (or the overview of a ride)
+            // it opens the remote, without the menus
+            (Screen::Main, Input::Touch(Gesture::Swipe(Dir::Down))) if self.ride.state() == ride::State::Idle => {
+                self.open(Screen::Menu(Menu::Quick, 0))
+            }
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
             // Back, or a swipe up (the swipe down that opened it, undone)
             (Screen::Media, Input::Back | Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
@@ -555,6 +559,8 @@ impl App {
                     return self.update_menu_rows(b, menu, next);
                 }
             }
+            // the quick panel is one screen: the swipe down that opened it, undone
+            (Screen::Menu(Menu::Quick, _), Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down)))) => {
                 // a screen of rows at a time: up shows the next, down the previous
                 let (first, rows) = (menu::first_shown(sel, ui::MENU_ROWS), self.rows(menu));

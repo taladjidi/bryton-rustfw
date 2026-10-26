@@ -844,6 +844,7 @@ impl App {
                 | Menu::Courses
                 | Menu::System
                 | Menu::BuiltIn
+                | Menu::Quick
                 | Menu::Ride(_)
                 | Menu::Phone
                 | Menu::BtTrainers),
