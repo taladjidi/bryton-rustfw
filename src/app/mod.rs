@@ -21,6 +21,7 @@ mod more;
 mod notifs;
 mod nrf_watch;
 mod pace;
+mod pass;
 mod phone;
 mod powercal;
 mod profile;

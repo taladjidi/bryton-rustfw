@@ -128,6 +128,11 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   - `Board` is the only way to reach hardware. Each method is a primitive: send a panel command, read RTC_TR,
     read the keys, sleep.
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
+  - `App`'s fields are parts, not flags: a concern with several fields is a sub-struct with its own `new` and its
+    small pure methods (`Phone`, `Ftms`, and in `app/groups.rs` `Notices` (`notes`), `Light`, `Gps`, `Radio`,
+    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`)). A new field of one of these goes in
+    its struct; a new concern with three or more fields gets its own. `App` must stay under the size budget
+    (`tests::app_size_budget`, 56 KB; it lives in AXI SRAM).
 - `src/app/mod.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
@@ -159,6 +164,8 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
     tile, the snap, the trace, at most 12 ms or 6 units a pass, and a pass ends after a unit that read a tile; paused: no work), and the CLIMB fields fed from the trace when no course
     is on (`ahead_text`, `ahead_bar`, called from `course_text` and `course_bar`). BIKE > CLIMBS AHEAD turns it off
     (`Settings::ahead`, register 11's tag 0xaa to 0xac).
+  - `groups.rs`: the sub-structs above. `pass.rs`: the parts of `App::step` (seconds caught up, the alert said,
+    sensors found, the banner's time, the screen's redraw).
   - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
     use refused), when it may be (no ride running or unsaved), taken back on eject, a restart after the computer

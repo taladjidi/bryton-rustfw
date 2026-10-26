@@ -339,3 +339,44 @@ impl Recording {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_higher_banner_stays_and_the_lower_waits() {
+        let mut n = Notices::new();
+        n.say("TURN LEFT", Banner::Info);
+        n.say("HEART RATE", Banner::Alarm);
+        assert_eq!((n.text.as_str(), n.kind), ("HEART RATE", Banner::Alarm), "the alarm takes over");
+        assert_eq!(n.next.map(|w| w.0.as_str() == "TURN LEFT"), Some(true), "and the lower waits");
+        n.say("LAP", Banner::Info);
+        assert_eq!(n.text.as_str(), "HEART RATE", "a lower kind does not push an alarm off");
+        n.ms = None;
+        n.show_waiting();
+        assert_eq!(n.ms, Some(0), "the one that waited comes up");
+    }
+
+    #[test]
+    fn notices_come_newest_first() {
+        let mut n = Notices::new();
+        for t in ["a", "b", "c"] {
+            let mut l = Line::new();
+            l.push_str(t);
+            n.push(l);
+        }
+        assert_eq!((n.list[0].as_str(), n.list[1].as_str()), ("c", "b"));
+    }
+
+    #[test]
+    fn silence_grows_and_a_resume_sets_both_copies() {
+        let mut r = Radio::new([Sensor::Off; Kind::ALL.len()]);
+        r.heard_ms[0] = 10;
+        r.tick(5);
+        assert_eq!((r.heard_ms[0], r.heard_ms[1]), (15, u32::MAX), "saturating");
+        let mut rec = Recording::new();
+        rec.resume_if(true);
+        assert!(rec.resume_pending && rec.full_pending);
+    }
+}

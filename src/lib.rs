@@ -361,29 +361,7 @@ impl App {
         panel::init(b);
         play(b, &BEEP_ON);
         let mut rx = nrf::Rx::new();
-        let ble = nrf::start(b).ok();
-        let nets = Kind::ALL.map(Kind::network);
-        let mut refusal = None;
-        let (ant, di2) = match (ble, ant_key) {
-            (Some(_), Some(key)) => match nrf::ant_start(b, &mut rx, key, di2_key, &nets) {
-                Ok(di2) => (true, di2),
-                Err(e) => {
-                    refusal = rx.failed.filter(|_| matches!(e, nrf::Error::Code(_))); // an answer (app/nrf_watch.rs)
-                    (false, false)
-                }
-            },
-            _ => (false, false),
-        };
-        let mut sensors = [Sensor::Off; Kind::ALL.len()];
-        for (kind, s) in Kind::ALL.into_iter().zip(&mut sensors) {
-            if let Some(id) = kind.from_word(b.backup_read(kind.backup()))
-                && ant
-                && (kind.network() == 0 || di2)
-                && nrf::ant_open(b, &mut rx, kind.channel(), kind.device_type(), kind.period(), Some(id)).is_ok()
-            {
-                *s = Sensor::Paired(id);
-            }
-        }
+        let ChipStart { ble, ant, di2, refusal, sensors } = start_chip(b, &mut rx, ant_key, di2_key);
         let misc = Settings::from_word(b.backup_read(WHEEL_BKP))
             .with_power_word(b.backup_read(POWER_BKP))
             .with_alerts_word(b.backup_read(ALERTS_BKP));
@@ -558,34 +536,13 @@ impl App {
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
         self.date = rtc_date_from_dr(dr);
-        if sec != self.seconds {
-            // every second gone, not one a pass: a pass that took longer (an eMMC or radio wait) loses no ride time;
-            // more than MAX_CATCH_UP is the clock set, not riding
-            let gone = (sec + 60 - self.seconds) % 60;
-            self.seconds = sec; // the time the recorder reads goes with the minute already read
-            // each with its own time for the recorder: the first was `n - 1` seconds ago (the second review, R5)
-            let n = gone.clamp(1, MAX_CATCH_UP);
-            for k in 0..n {
-                self.rec.lag_s = n - 1 - k;
-                self.second();
-            }
-            self.rec.lag_s = 0;
-        }
+        self.catch_up_seconds(sec);
         self.settle_set(b);
         if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);
         }
-        // one at a time: the next waits for the banner of the one before to go
-        if !(self.notes.ms.is_some() && alerts::Alert::is_text(self.notes.text.as_str()))
-            && let Some(a) = self.alert.pop()
-        {
-            self.say_as(
-                a.text(),
-                if a == alerts::Alert::HrHigh || a == alerts::Alert::CadenceLow { Banner::Alarm } else { Banner::Ride },
-            );
-            self.tones.play(&BEEP_ALERT);
-        }
+        self.say_alert();
         self.play_tones(b);
         self.off_armed_ms = self.off_armed_ms.saturating_sub(pass_ms);
         t = self.timed(b, Sec::Second, t);
@@ -610,19 +567,7 @@ impl App {
         self.strip.rec = self.rec.mark(&self.ride, self.card_writable);
         self.update_strip(b); // after everything that changes it (time, battery, GPS, the ride)
         t = self.timed(b, Sec::Strip, t);
-        for kind in Kind::ALL {
-            if self.radio.ask & 1 << kind.channel() != 0
-                && let Ok(Some(id)) = nrf::ant_channel_id(b, &mut self.rx, kind.channel())
-            {
-                self.radio.sensors[kind as usize] = Sensor::Paired(id);
-                self.keep_pairing(b, kind, id);
-                let mut l = Line::<20>::new();
-                l.push_str(kind.name());
-                l.push_str(" PAIRED");
-                self.notice(l.as_str());
-            }
-        }
-        self.radio.ask = 0;
+        self.pair_asked(b);
         self.live.tick(pass_ms);
         self.radio.tick(pass_ms);
         self.reopen_rested(b, pass_ms);
@@ -644,66 +589,8 @@ impl App {
             self.leave_editor(b, true); // recording again (by no key of the editor's): its work kept, never lost
         }
         self.redraw_ms = self.redraw_ms.saturating_add(pass_ms);
-        // under an incoming call a banner waits (the call says who calls there, end_ring shows it)
-        if let Some(ms) = self.notes.ms.filter(|_| !self.phone.ringing) {
-            if !core::mem::replace(&mut self.notes.drawn, true) {
-                ui::draw_banner(
-                    &mut Panel(b, (0, ui::H), self.settings.smooth),
-                    self.notes.text.as_str(),
-                    self.notes.kind == Banner::Alarm,
-                );
-            }
-            self.notes.ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < BANNER_MS);
-            if self.notes.ms.is_none() {
-                self.unbanner(b);
-            }
-        }
-        match self.screen {
-            Screen::Main | Screen::Ride(_) | Screen::Edit(..) => self.update_page(b),
-            Screen::Summary => {
-                // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
-                let area = self.area();
-                if let Some((m, _)) = &mut self.summary {
-                    let (base, view) = (Some(&self.basemap), m.view);
-                    map::update(
-                        &mut Panel(b, area, self.settings.smooth),
-                        map::area(ui::card::MAP),
-                        &self.track,
-                        m,
-                        base,
-                        None,
-                        None,
-                    );
-                    if m.view != view {
-                        self.show(b); // refitted: the basemap of the new view under it (else black; review)
-                    }
-                }
-            }
-            Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, self.area(), self.settings.smooth), &self.radio.nearby);
-                self.list_dirty = false;
-                self.redraw_ms = 0;
-            }
-            Screen::Menu(
-                menu @ (Menu::Main
-                | Menu::Sensors
-                | Menu::Gps
-                | Menu::Stock
-                | Menu::History
-                | Menu::Courses
-                | Menu::System
-                | Menu::BuiltIn
-                | Menu::Quick
-                | Menu::Ride(_)
-                | Menu::Phone
-                | Menu::BtTrainers),
-                sel,
-            ) if self.redraw_ms >= LIST_REDRAW_MS => {
-                self.update_menu_rows(b, menu, sel);
-                self.redraw_ms = 0;
-            }
-            _ => {}
-        }
+        self.run_banner(b, pass_ms);
+        self.redraw_screen(b);
         t = self.timed(b, Sec::Draw, t);
         let mask = b.keys_down();
         // a key stuck since the start is no use: it does not keep the light on either

@@ -223,3 +223,51 @@ impl App {
         }
     }
 }
+
+/// What starting the Nordic chip came to ([`start_chip`]).
+pub(crate) struct ChipStart {
+    /// The BLE stack's version; None: the chip did not start.
+    pub(crate) ble: Option<nrf::Version>,
+    /// ANT started (needs BLE and a built-in ANT+ key).
+    pub(crate) ant: bool,
+    /// Shimano's network is up (its key built in): the Di2 channel can open.
+    pub(crate) di2: bool,
+    /// The chip answered ANT's start with a refusal (app/nrf_watch.rs).
+    pub(crate) refusal: Option<(u8, u32)>,
+    /// The sensors paired in the backup registers, their channels opened.
+    pub(crate) sensors: [Sensor; Kind::ALL.len()],
+}
+
+/// Starts BLE, then ANT with `ant_key` (and Shimano's network with `di2_key`), and opens the channel of each sensor
+/// kept in the backup registers.
+pub(crate) fn start_chip(
+    b: &mut impl Board,
+    rx: &mut nrf::Rx,
+    ant_key: Option<[u8; 8]>,
+    di2_key: Option<[u8; 8]>,
+) -> ChipStart {
+    let ble = nrf::start(b).ok();
+    let nets = Kind::ALL.map(Kind::network);
+    let mut refusal = None;
+    let (ant, di2) = match (ble, ant_key) {
+        (Some(_), Some(key)) => match nrf::ant_start(b, rx, key, di2_key, &nets) {
+            Ok(di2) => (true, di2),
+            Err(e) => {
+                refusal = rx.failed.filter(|_| matches!(e, nrf::Error::Code(_))); // an answer (app/nrf_watch.rs)
+                (false, false)
+            }
+        },
+        _ => (false, false),
+    };
+    let mut sensors = [Sensor::Off; Kind::ALL.len()];
+    for (kind, s) in Kind::ALL.into_iter().zip(&mut sensors) {
+        if let Some(id) = kind.from_word(b.backup_read(kind.backup()))
+            && ant
+            && (kind.network() == 0 || di2)
+            && nrf::ant_open(b, rx, kind.channel(), kind.device_type(), kind.period(), Some(id)).is_ok()
+        {
+            *s = Sensor::Paired(id);
+        }
+    }
+    ChipStart { ble, ant, di2, refusal, sensors }
+}
