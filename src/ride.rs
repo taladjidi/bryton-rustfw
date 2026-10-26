@@ -449,12 +449,12 @@ impl Climb {
 // Zones
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Zone colours, RGB565: stock's palette for the first three (seven ABGR words at 0xd0086a8c..0xd0086aa4 of the R039
-/// image, read by its zone colour lookup at 0xd01530bc: grey #b4b4b4, blue #506eff, green #7dff1e), a lemon yellow
-/// where stock's #ffd000 is next to the orange, then magenta, violet and cyan where stock has orange, red and purple: orange is the menu selection and the info
-/// banners (`ui::ACCENT`) and red the alarms (`ui::RED`), and a zone must never look like either (UI review 2, P3:
-/// heart rate zone 4 was exactly the banner orange). Tested: no zone colour is near either.
-pub const ZONE_COLORS: [u16; 7] = [0xb5b6, 0x537f, 0x7fe3, 0xffe0, 0xf81f, 0x901f, 0x07ff];
+/// Zone colours, RGB565, in the progression the owner asked for (2026-10-26), the usual one of training apps: Z1 blue,
+/// Z2 green, Z3 yellow, Z4 orange, Z5 red, Z6 violet, Z7 magenta; heart rate's five zones take the first five, so a
+/// colour means the same zone on both. The orange and red are kept apart from the menu orange (`ui::ACCENT`) and the
+/// alarm red (`ui::RED`) by hue and value (tested), though they are close: an earlier choice (UI review 2, P3) had
+/// left orange and red out of the zones for that reason; the owner prefers the familiar progression.
+pub const ZONE_COLORS: [u16; 7] = [0x537f, 0x7fe3, 0xffe0, 0xfbe0, 0xe0e3, 0x901f, 0xf81f];
 
 /// What kind of ride this is: on the road, or indoors on a trainer (the bike is on it, the GPS has nothing to say).
 /// Chosen at Start from the trainer heard, or set by hand (app/profile.rs); the indoor one skips the map pages in
@@ -539,24 +539,23 @@ pub fn power_zone(w: u16, ftp: u16) -> u8 {
 }
 
 /// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 yellow,
-/// below magenta (Rogers et al.); the zone palette, as the owner's rule keeps orange and red for the banner and alarms.
+/// below orange (Rogers et al.), from the zone palette.
 pub fn dfa_color(v: u16) -> u16 {
     ZONE_COLORS[if v >= 75 {
-        2
+        1
     } else if v >= 50 {
-        3
+        2
     } else {
-        4
+        3
     }]
 }
 
-/// The colour of heart-rate zone `z` (1 to 5): grey, blue, green, magenta, violet (the palette's lemon yellow and
-/// cyan are the power zones').
+/// The colour of heart-rate zone `z` (1 to 5): blue, green, yellow, orange, red, as power's first five.
 pub fn hr_color(z: u8) -> u16 {
-    ZONE_COLORS[[0, 1, 2, 4, 5][usize::from(z.clamp(1, 5) - 1)]]
+    ZONE_COLORS[usize::from(z.clamp(1, 5) - 1)]
 }
 
-/// The colour of power zone `z` (1 to 7): grey, blue, green, lemon yellow, magenta, violet, cyan.
+/// The colour of power zone `z` (1 to 7): blue, green, yellow, orange, red, violet, magenta.
 pub fn power_color(z: u8) -> u16 {
     ZONE_COLORS[usize::from(z.clamp(1, 7) - 1)]
 }

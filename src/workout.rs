@@ -266,26 +266,26 @@ fn zone_color(kind: Kind, z: u8) -> u16 {
 }
 
 /// How far a reading `v` is from `band`, as a colour: the zone palette's green in it, its yellow within 5 % of it
-/// (nearly there), its blue further under and its violet ([`ride::ZONE_COLORS`] 5) further over. The same colours the zones give easy and hard
+/// (nearly there), its blue further under and its red further over. The same colours the zones give easy and hard
 /// efforts ([`ride::ZONE_COLORS`]), so the gauge reads as the power and heart-rate fields do.
 ///
 /// ```
 /// use bryton_rustfw::{ride::ZONE_COLORS as Z, workout::gauge_color};
 /// let c = [180, 195, 200, 220, 230, 240].map(|w| gauge_color(w, (200, 220)));
-/// assert_eq!(c, [Z[1], Z[3], Z[2], Z[2], Z[3], Z[5]]);
+/// assert_eq!(c, [Z[0], Z[2], Z[1], Z[1], Z[2], Z[4]]);
 /// ```
 pub fn gauge_color(v: u16, (lo, hi): (u16, u16)) -> u16 {
     let (v, lo, hi) = (u32::from(v), u32::from(lo), u32::from(hi));
     if v < lo * 95 / 100 {
-        ride::ZONE_COLORS[1]
+        ride::ZONE_COLORS[0]
     } else if v < lo {
-        ride::ZONE_COLORS[3]
-    } else if v <= hi {
         ride::ZONE_COLORS[2]
+    } else if v <= hi {
+        ride::ZONE_COLORS[1]
     } else if v <= hi * 105 / 100 {
-        ride::ZONE_COLORS[3]
+        ride::ZONE_COLORS[2]
     } else {
-        ride::ZONE_COLORS[5]
+        ride::ZONE_COLORS[4]
     }
 }
 
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!([100, 150, 160, 250].map(|v| gauge_x(v, (105, 208), 103)), [0, 45, 55, 102], "held at the ends");
         let c = [140, 145, 155, 167, 170].map(|v| gauge_color(v, (150, 160)));
         let z = ride::ZONE_COLORS;
-        assert_eq!(c, [z[1], z[3], z[2], z[3], z[5]], "5 % off: 142 and 168 bpm");
+        assert_eq!(c, [z[0], z[2], z[1], z[2], z[4]], "5 % off: 142 and 168 bpm");
         assert_eq!(gauge_x(5, gauge_scale(Kind::Cadence, (0, 0), 0, 0), 50), 49, "a band of 0: no division by zero");
         assert_eq!(gauge_x(0, (140, 286), 0), 0, "no columns");
     }

@@ -39,20 +39,20 @@ pub const YELLOW: u16 = 0xffe0;
 
 /// A climb's colour by its grade (% x 10), in the bands climbing apps use: under 6 %, under 9 %, under 12 %, above
 /// (Garmin's ClimbPro colours its climbs by grade the same way; the bands here are this firmware's). The zone
-/// palette's green, lemon yellow, magenta and violet by severity: orange is the banner's and red the alarms'.
+/// palette's green, yellow, orange and red by severity.
 ///
 /// ```
 /// use bryton_rustfw::ride::ZONE_COLORS;
 /// use bryton_rustfw::ui::grade_color;
-/// assert_eq!([grade_color(45), grade_color(150)], [ZONE_COLORS[2], ZONE_COLORS[5]]);
+/// assert_eq!([grade_color(45), grade_color(150)], [ZONE_COLORS[1], ZONE_COLORS[4]]);
 /// ```
 pub fn grade_color(x10: i32) -> u16 {
     use crate::ride::ZONE_COLORS;
     ZONE_COLORS[match x10 {
-        ..60 => 2,
-        60..90 => 3,
-        90..120 => 4,
-        _ => 5,
+        ..60 => 1,
+        60..90 => 2,
+        90..120 => 3,
+        _ => 4,
     }]
 }
 

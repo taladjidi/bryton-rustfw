@@ -208,16 +208,16 @@ pub fn wkg_x10(w: u16, kg: u16) -> u32 {
 }
 
 /// The colour of a W' balance of `j` out of `wprime_j` as it drains: green over 75 %, yellow over 50 %, orange over
-/// 25 %, then red (stock's zone palette).
+/// 25 %, then red (the zone palette).
 ///
 /// ```
 /// use bryton_rustfw::{power::wbal_color, ride::ZONE_COLORS};
-/// assert_eq!([20_000, 12_000, 6000, -10].map(|j| wbal_color(j, 20_000)), [2, 3, 4, 5].map(|i| ZONE_COLORS[i]));
+/// assert_eq!([20_000, 12_000, 6000, -10].map(|j| wbal_color(j, 20_000)), [1, 2, 3, 4].map(|i| ZONE_COLORS[i]));
 /// ```
 pub fn wbal_color(j: i32, wprime_j: u16) -> u16 {
     let pct = i64::from(j) * 100 / i64::from(wprime_j.max(1));
     let zone = [75, 50, 25].iter().filter(|&&t| pct <= t).count();
-    ZONE_COLORS.get(2 + zone).copied().unwrap_or(ZONE_COLORS[5])
+    ZONE_COLORS.get(1 + zone).copied().unwrap_or(ZONE_COLORS[4])
 }
 
 #[cfg(test)]
