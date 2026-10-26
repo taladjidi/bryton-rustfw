@@ -185,7 +185,7 @@ impl Setting {
             Setting::Ftp => "FTP",
             Setting::Weight => "WEIGHT",
             Setting::WPrime => "W'",
-            Setting::BikeWeight => "BIKE",
+            Setting::BikeWeight => "WEIGHT",
             Setting::Eat => "EAT",
             Setting::Drink => "DRINK",
             Setting::HrAlert => "HR ABOVE",

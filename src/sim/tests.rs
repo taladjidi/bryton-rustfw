@@ -4596,7 +4596,7 @@ fn bike_weight() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     let row = |app: &App| app.menu_row(Menu::Bike, 1).map(|(l, v, _)| format!("{} {}", l.as_str(), v.as_str()));
-    assert_eq!(row(&app).as_deref(), Some("BIKE 9 KG"));
+    assert_eq!(row(&app).as_deref(), Some("WEIGHT 9 KG"));
     assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 9.0);
     app.settings.bike_kg = 5;
     app.settings.step(menu::Setting::BikeWeight, false);
@@ -4606,7 +4606,7 @@ fn bike_weight() {
     }
     assert_eq!(app.settings.bike_kg, 30);
     app.settings.bike_kg = 12;
-    assert_eq!(row(&app).as_deref(), Some("BIKE 12 KG"));
+    assert_eq!(row(&app).as_deref(), Some("WEIGHT 12 KG"));
     assert_eq!(app.pace_rider().mass, f32::from(app.settings.weight_kg) + 12.0);
     let kept = Settings::from_word(0).with_power_word(app.settings.power_word());
     assert_eq!((kept.bike_kg, kept.weight_kg, kept.wprime_j), (12, app.settings.weight_kg, app.settings.wprime_j));
