@@ -13,7 +13,7 @@ impl App {
             Some("CONNECT USB")
         } else if self.ride.state() != ride::State::Idle {
             Some("END THE RIDE FIRST")
-        } else if !self.ride_settled() {
+        } else if !self.ride_settled() && !self.save_stuck() {
             Some("RIDE NOT SAVED YET")
         } else {
             None
@@ -23,7 +23,7 @@ impl App {
             return Err(why);
         }
         if !self.emmc.lent() {
-            if self.trash_check {
+            if self.trash_check && self.ride_settled() {
                 // a delete a cut left, finished first (the review of 2026-10-25): lent, the ride would be in neither
                 // folder, a computer's fsck could free or reconnect its chain, and the move would then link the
                 // ride's name onto it. Failed: the move's own check of the chain still holds
@@ -31,11 +31,21 @@ impl App {
                 self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t).is_err();
             }
             self.past.stop(); // a past ride being read
-            self.emmc.lend(true);
+            if self.ride_settled() {
+                self.emmc.lend(true);
+            } else {
+                self.emmc.lend_read_only(); // a save stuck: what is on the card copied, nothing written
+            }
             self.drive.insert();
         }
-        self.say("USB DRIVE ON");
+        self.say(if self.ride_settled() { "USB DRIVE ON" } else { "USB DRIVE READ ONLY" });
         Ok(())
+    }
+
+    /// No ride running, and a save that cannot finish (recorder.rs, `stuck`; the other copy's waits for it or
+    /// is done): the card may be lent read only, nothing written meanwhile.
+    fn save_stuck(&self) -> bool {
+        self.ride.state() == ride::State::Idle && (self.recorder.stuck() || self.full.stuck())
     }
 
     /// From the unit: takes the card back, unless the computer has it mounted (it said so: PREVENT MEDIUM

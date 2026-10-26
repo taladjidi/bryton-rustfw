@@ -93,10 +93,15 @@ impl App {
     /// workout ends with it, back to the overview.
     pub(crate) fn discard_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
+        // a ride held behind the last one's save: its end drops it (nothing recorded), and the last one, still in
+        // the recorder, is never the one discarded
+        let held = [self.recorder.pending(), self.full.pending()];
         self.recorder(ev);
         // too late once the save has begun (a full card stopped the ride): it is in \Activities, so say so
-        let took = self.recorder.discard() || !self.card_writable;
-        self.full.discard();
+        let took = held[0] || self.recorder.discard() || !self.card_writable;
+        if !held[1] {
+            self.full.discard();
+        }
         self.player = None;
         (self.depth, self.screen) = (0, Screen::Main);
         self.say(if took { "DISCARDING" } else { "ALREADY SAVED" });
@@ -291,6 +296,7 @@ impl App {
         // the two copies checkpoint together: the clean one never behind (recorder.rs, "Two copies")
         self.recorder.keep_up(&self.full);
         self.full.keep_up(&self.recorder);
+        let was_held = self.recorder.held();
         let o = if self.resume_pending {
             let o = self.recorder.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             // a card that failed at boot is tried again (the marker stays until the ride is found)
@@ -333,8 +339,9 @@ impl App {
             }
             recorder::Outcome::Discarded(_) => self.notice("RIDE DISCARDED"), // the history as it was: no scan
             recorder::Outcome::Kept(_) => {
-                // not in \Activities: left in \Rustfw\Rides as it was (damaged, or the card kept failing)
-                self.alarm_notice("SAVE FAILED");
+                // not in \Activities: left in \Rustfw\Rides as it was, or named there again (damaged, or the card
+                // kept failing)
+                self.alarm_notice("SAVE FAILED: KEPT IN RUSTFW/RIDES");
             }
             recorder::Outcome::Stopped(e) => {
                 // the ride's recording stops here (said once): what reached the card is saved next
@@ -342,10 +349,13 @@ impl App {
             }
             recorder::Outcome::Failed(_) => {
                 // the first failure in a row, then every 5 minutes of them (a try every RETRY passes, 5 s)
-                if self.recorder.fails() % 60 == 1 {
+                if self.recorder.fails() % 60 == 1 && was_held == self.recorder.held() {
                     self.alarm_notice(if self.recorder.held() { "NOT RECORDING: CARD" } else { "NOT SAVING" });
                 }
             }
+        }
+        if !was_held && self.recorder.held() {
+            self.alarm_notice("NOT RECORDING: CARD"); // the ride started behind the last one's save, now stuck
         }
         self.step_full(b, local);
         let open = self.recorder.phase() != recorder::Phase::Done || self.full.phase() != recorder::Phase::Done;

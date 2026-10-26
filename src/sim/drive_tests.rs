@@ -221,39 +221,120 @@ fn a_delete_cut_halfway_is_finished_before_lending() {
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
-/// A save failing after its step 4 (recorder.rs: the ride's entry removed, the new one not written; the record alone
-/// names the ride) keeps the ride open: the marker stays, the drive is refused (a computer's fsck could free the
-/// nameless chain), a Start says the new ride waits ("NOT RECORDING: CARD"); once the card is well the old ride is
-/// saved, the new one recorded, and when it is saved the drive is lent.
+/// A save failing after its step 4 (recorder.rs: the ride's entry removed, the new one not written) and unable to
+/// name the ride again in `\Rustfw\Rides` (its directory failing too): stuck. The marker stays and the drive is
+/// lent read only (MODE SENSE write protected: the owner copies what is on the card, no computer's fsck writes the
+/// nameless chain); a Start says the new ride waits ("NOT RECORDING: CARD"); once the card is well the old ride is
+/// saved, the new one recorded, and when it is saved the drive is lent as ever.
 #[test]
-fn a_save_stuck_after_its_step_4_holds_the_drive() {
+fn a_save_stuck_after_its_step_4_lends_the_drive_read_only() {
     let (mut sim, mut app) = started(true);
-    let img = &sim.emmc.image;
-    let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
-    let (spc, data) = (u(13, 1), u(14, 2) + u(16, 1) * u(36, 4));
-    let mut ram = crate::fat::tests::Ram(img.clone(), 0);
-    let c = crate::fat::Fat::mount(&mut ram).unwrap().open(&mut ram, "Activities").unwrap().cluster;
-    let acts = data + (c - 2) * spc;
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 30_000);
     app.press(&mut sim, Press::Short(Key::Start)); // pause
-    sim.emmc.bad = Some(acts..acts + spc); // \Activities' directory cannot be written
+    let dirs = ["Activities", "Rustfw/Rides"].map(|p| dir_sectors(&sim.emmc.image, p));
+    sim.emmc.bad = std::vec![dirs[0].clone()]; // \Activities' directory cannot be written
     save_ride(&mut sim, &mut app);
-    run(&mut sim, &mut app, 120_000); // past GIVE_UP tries
-    assert_eq!(app.recorder.phase(), recorder::Phase::Saving, "never given up");
+    run(&mut sim, &mut app, 1000); // its end on the card, step 4 done, 5 failed
+    sim.emmc.bad = dirs.to_vec(); // nor \Rustfw\Rides' from here
+    run(&mut sim, &mut app, 300_000); // past GIVE_UP tries
+    assert_eq!(app.recorder.phase(), recorder::Phase::Saving, "never done while nameless");
+    assert!(app.recorder.stuck());
     assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "the marker kept");
-    assert_eq!(app.drive_on(&mut sim), Err("RIDE NOT SAVED YET"));
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(app.banner.as_str(), "USB DRIVE READ ONLY");
+    let mut h = Host::default();
+    command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]);
+    let (ms, _) = command(&mut sim, &mut app, &mut h, 2, 192, true, &[0x1a, 0, 0x3f, 0, 192, 0]);
+    assert_eq!(ms[2], 0x80, "write protected");
+    h.out = [vec![0; 512]].into();
+    assert_eq!(command(&mut sim, &mut app, &mut h, 3, 512, false, &rw10(0x2a, 100, 1)).1, 1, "a write refused");
+    app.drive_off();
+    assert!(!app.drive_lent() && !app.restart_wanted());
     app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.ride.state(), ride::State::Running);
     assert!(app.notices[0].as_str().ends_with("NOT RECORDING: CARD"), "{}", app.notices[0].as_str());
-    sim.emmc.bad = None;
-    run(&mut sim, &mut app, 30_000);
+    sim.emmc.bad.clear();
+    run(&mut sim, &mut app, 300_000);
     assert!(app.notices.iter().any(|n| n.as_str().ends_with("RIDE SAVED")));
     assert_eq!(app.recorder.phase(), recorder::Phase::Recording, "the new ride recorded");
-    assert_eq!(app.drive_on(&mut sim), Err("END THE RIDE FIRST"));
     app.press(&mut sim, Press::Short(Key::Start)); // pause
     save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 3000);
     assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(app.banner.as_str(), "USB DRIVE ON");
+}
+
+/// The sectors of folder `path`'s first cluster on the volume `img`.
+fn dir_sectors(img: &[u8], path: &str) -> core::ops::Range<u32> {
+    let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
+    let (spc, data) = (u(13, 1), u(14, 2) + u(16, 1) * u(36, 4));
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    let c = crate::fat::Fat::mount(&mut ram).unwrap().open(&mut ram, path).unwrap().cluster;
+    let lba = data + (c - 2) * spc;
+    lba..lba + spc
+}
+
+/// The `.fit` files in folder `path` of the volume `img`.
+fn fits_in(img: &[u8], path: &str) -> usize {
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut ram).unwrap();
+    let Ok(dir) = fat.open(&mut ram, path) else { return 0 };
+    let mut c = fat.cursor(dir).unwrap();
+    let mut n = 0;
+    while let Some(e) = fat.list(&mut ram, &mut c).unwrap() {
+        n += usize::from(e.name().ends_with(b".fit"));
+    }
+    n
+}
+
+/// The re-review of 4748752: DISCARD on a ride held behind the last one's save discarded the last one (the end took
+/// the held start, the discard then acted on the ride still in the recorder). The held ride is dropped, the last
+/// one saved.
+#[test]
+fn discarding_a_held_ride_saves_the_last_one() {
+    let (mut sim, mut app) = started(true);
+    let before = [fits_in(&sim.emmc.image, "Activities"), fits_in(&sim.emmc.image, "Rustfw/Activities")];
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app); // ended, its save at the next pass
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
+    app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
+    assert!(app.recorder.pending() && app.full.pending());
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    app.discard_ride();
+    assert!(!app.recorder.pending() && !app.full.pending());
+    run(&mut sim, &mut app, 10_000);
+    let after = [fits_in(&sim.emmc.image, "Activities"), fits_in(&sim.emmc.image, "Rustfw/Activities")];
+    assert_eq!(after, before.map(|n| n + 1), "the last ride saved, both copies");
+    assert_eq!(fits_in(&sim.emmc.image, "Rustfw/Discarded") + fits_in(&sim.emmc.image, "Rustfw/Discarded/Full"), 0);
+}
+
+/// "NOT RECORDING: CARD" as soon as a ride held behind the last one's save is known not to be recorded (that save
+/// stuck), not at the next of the every-5-minutes "NOT SAVING" notices.
+#[test]
+fn a_held_ride_is_said_once_the_save_is_stuck() {
+    let (mut sim, mut app) = started(true);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 30_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    let dirs = ["Activities", "Rustfw/Rides"].map(|p| dir_sectors(&sim.emmc.image, p));
+    sim.emmc.bad = std::vec![dirs[0].clone()];
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 1000); // step 4 done, 5 failed
+    sim.emmc.bad = dirs.to_vec();
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
+    app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
+    assert!(app.recorder.pending() && !app.recorder.held());
+    let said = |app: &App| app.notices.iter().filter(|n| n.as_str().ends_with("NOT RECORDING: CARD")).count();
+    assert_eq!(said(&app), 0);
+    let mut ms = 0;
+    while !app.recorder.held() && ms < 300_000 {
+        run(&mut sim, &mut app, 100);
+        ms += 100;
+    }
+    assert!(app.recorder.held());
+    assert_eq!(said(&app), 1, "said when it became so");
 }

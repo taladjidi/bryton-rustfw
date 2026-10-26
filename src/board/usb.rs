@@ -429,8 +429,10 @@ impl Host for Link {
     }
 
     // The computer's addresses reach rd / wr only here, checked again whatever the caller (dev.rs checks them too):
-    // aligned, poke in the peripheral space only (RM0399's memory map: 0x40000000 to 0x5fffffff), so it never
-    // writes RAM a Rust object lives in; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped.
+    // aligned, poke in the peripheral space only (RM0399's memory map: 0x40000000 to 0x5fffffff), so the poke itself
+    // never writes RAM; peek there or in the DTCM or the SDRAM ([`dev::MEMORY`]), always mapped. A poke can still
+    // make the hardware write RAM (a DMA, MDMA or FMC register, the RCC or the MPU's peers): the dev link is a
+    // debugging tool, and that is its operator's to avoid, not something this check can promise.
     fn peek(&mut self, addr: u32) -> u32 {
         let ok = addr.is_multiple_of(4) && (dev::IO.contains(&addr) || dev::MEMORY.iter().any(|r| r.contains(&addr)));
         if ok { rd(addr) } else { 0 }
