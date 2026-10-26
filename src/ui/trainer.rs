@@ -39,7 +39,7 @@ const NOW_Y: u32 = TARGET_Y + 44;
 const STATUS_Y: u32 = NOW_Y + 24;
 const Y1: u32 = STATUS_Y + 26;
 const BOTTOM_Y: u32 = Y1 + 62;
-const BOTTOM_H: u32 = 40;
+const BOTTOM_H: u32 = 48;
 /// The target buttons as (button, x, y, w, h).
 pub const BUTTONS: [(Button, u32, u32, u32, u32); 2] =
     [(Button::Minus, 8, Y1, 108, 56), (Button::Plus, 124, Y1, 108, 56)];
@@ -202,7 +202,8 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
                     c.fill(x, BOTTOM_Y, bw, BOTTOM_H, bg);
                     let big = VALUE.width(label) + 8 <= bw;
                     let st = Style { fg, bg, ..if big { VALUE } else { LABEL } };
-                    let y = BOTTOM_Y + (BOTTOM_H - st.height()) / 2;
+                    // centre on the ink (7 font rows of the 10 the box has), but keep the whole box inside the button
+                    let y = BOTTOM_Y + ((BOTTOM_H - 7 * st.scale) / 2).min(BOTTOM_H - st.height());
                     text::draw(c, &st, x + bw / 2, y, Align::Centre, label);
                 }
             }
