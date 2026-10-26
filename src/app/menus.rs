@@ -179,8 +179,12 @@ impl App {
                     _ => self.calendar.get(i).map(|_| Row::Workout(i)),
                 }
             }
-            Menu::Steps if i == 0 => Some(Row::WorkoutStart),
-            Menu::Steps => (i <= self.plan.steps().len()).then_some(Row::Step(i - 1)),
+            // no START while the workout runs: it would play it again from the top
+            Menu::Steps if i == 0 && !self.workout_running() => Some(Row::WorkoutStart),
+            Menu::Steps => {
+                let k = if self.workout_running() { i } else { i - 1 };
+                (k < self.plan.steps().len()).then_some(Row::Step(k))
+            }
             Menu::Courses => self.courses.as_deref()?.list.get(i).map(|_| Row::Course(i)),
             Menu::Phone => menu::PHONE
                 .get(i)

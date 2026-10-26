@@ -544,12 +544,25 @@ pub fn power_zone(w: u16, ftp: u16) -> u8 {
     [56, 76, 91, 106, 121, 151].iter().filter(|&&t| pct >= t).count() as u8 + 1
 }
 
-/// The colour of heart-rate zone `z` (1 to 5): grey, blue, green, orange, red.
+/// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 yellow,
+/// below magenta (Rogers et al.); the zone palette, as the owner's rule keeps orange and red for the banner and alarms.
+pub fn dfa_color(v: u16) -> u16 {
+    ZONE_COLORS[if v >= 75 {
+        2
+    } else if v >= 50 {
+        3
+    } else {
+        4
+    }]
+}
+
+/// The colour of heart-rate zone `z` (1 to 5): grey, blue, green, magenta, violet (the palette's lemon yellow and
+/// cyan are the power zones').
 pub fn hr_color(z: u8) -> u16 {
     ZONE_COLORS[[0, 1, 2, 4, 5][usize::from(z.clamp(1, 5) - 1)]]
 }
 
-/// The colour of power zone `z` (1 to 7): grey, blue, green, yellow, orange, red, purple.
+/// The colour of power zone `z` (1 to 7): grey, blue, green, lemon yellow, magenta, violet, cyan.
 pub fn power_color(z: u8) -> u16 {
     ZONE_COLORS[usize::from(z.clamp(1, 7) - 1)]
 }

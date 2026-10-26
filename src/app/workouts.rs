@@ -85,7 +85,9 @@ impl App {
             };
             (self.plan, self.plan_file, self.player) = (w, Some(p.file), None);
         }
-        self.open(Screen::Menu(Menu::Steps, 0));
+        // running: the step playing is selected (row 0 is START only when it is not)
+        let at = self.player.and_then(|pl| pl.step(self.plan.steps())).unwrap_or(0);
+        self.open(Screen::Menu(Menu::Steps, at));
     }
 
     /// A workout is playing a step (not done): the ride menu shows WORKOUT.
@@ -99,6 +101,9 @@ impl App {
         self.ftms_retry(); // a Bluetooth trainer given up is tried again
         if self.ride.state() == ride::State::Idle {
             self.start_pause();
+            if self.ride.state() == ride::State::Idle {
+                return; // refused (USB DRIVE ON): no player on a ride that never ticks
+            }
             self.new_ride = false; // the page is drawn anew anyway
         }
         self.choose_profile(); // a ride that began before the trainer was heard goes indoor here
@@ -171,8 +176,10 @@ impl App {
             Some((lo, hi)) if hi > lo => {
                 let (lo, hi) = (u32::from(lo), u32::from(hi));
                 l.push_u32((lo + hi) / 2);
-                l.push_str("|+-");
-                l.push_u32((hi - lo).div_ceil(2));
+                // "1000|+-50" is 9 characters, and the line cuts the 50 to 5: without the sign it is whole
+                let half = (hi - lo).div_ceil(2);
+                l.push_str(if l.as_str().len() + 3 + if half >= 10 { 2 } else { 1 } > 8 { "|" } else { "|+-" });
+                l.push_u32(half);
             }
             _ => self.push_target(l, s, false),
         }
@@ -267,14 +274,16 @@ impl App {
         l
     }
 
-    /// [`Field::StepTarget`]'s edge bar: how the reading (3 s power, heart rate, cadence) sits against the band, as the
+    /// [`Field::StepTarget`]'s edge bar: how the reading (power over the GAUGE POWER window, heart rate, cadence) sits against the band, as the
     /// gauge's marker ([`workout::gauge_color`]); BLACK without a reading or a target.
     pub(crate) fn target_bar(&self) -> u16 {
         use storage::workout::Kind;
         let steps = self.plan.steps();
         let Some(s) = self.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
         let reading = match s.target.kind {
-            Kind::Power => self.power.rolling(0),
+            // the gauge's window (GAUGE POWER), so the bar and the marker agree
+            Kind::Power if self.settings.wkt_avg < 3 => self.power.rolling(self.settings.wkt_avg),
+            Kind::Power => self.live.get(Metric::Power),
             Kind::Hr => self.live.get(Metric::Hr),
             Kind::Cadence => self.live.get(Metric::Cadence),
             Kind::Open => None,

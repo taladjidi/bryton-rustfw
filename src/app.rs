@@ -33,6 +33,7 @@ mod workouts;
 
 pub use barometer::*;
 pub use clock::*;
+pub(crate) use courses::push_grade;
 pub use device::*;
 pub(crate) use editor::*;
 pub(crate) use fields::*;

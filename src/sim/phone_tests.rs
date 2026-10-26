@@ -154,6 +154,43 @@ fn incoming_calls() {
     assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
 }
 
+/// A call over the media remote: Start answers, Back declines, the remote stays.
+#[test]
+fn a_call_beats_the_media_remote() {
+    let script = std::vec![(3000, Act::Notify(1, 9, "Mum", "")), (6000, Act::Notify(1, 10, "Unknown", ""))];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    app.open(Screen::Media);
+    run(&mut sim, &mut app, 2500);
+    assert!(app.phone.ringing);
+    app.input(&mut sim, Input::Select);
+    assert!(!app.phone.ringing, "answered, not play / pause");
+    assert!(app.screen == Screen::Media);
+    run(&mut sim, &mut app, 3500);
+    assert!(app.phone.ringing);
+    app.input(&mut sim, Input::Back);
+    assert!(!app.phone.ringing, "declined");
+    assert!(app.screen == Screen::Media, "the remote stays");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 0), (10, 1)]);
+}
+
+/// Back on a MORE page declines a call instead of only hiding MORE.
+#[test]
+fn a_call_on_a_more_page() {
+    let script = std::vec![(3000, Act::Notify(1, 9, "Mum", ""))];
+    let (mut sim, mut app) = unit(iphone(script));
+    app.activate(&mut sim, Menu::Phone, 1);
+    app.open(Screen::Ride(0));
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(crate::Dir::Up)));
+    assert!(app.more_shown().is_some());
+    run(&mut sim, &mut app, 2500);
+    assert!(app.phone.ringing);
+    app.input(&mut sim, Input::Back);
+    assert!(!app.phone.ringing, "declined");
+    assert!(app.more_shown().is_some(), "MORE untouched");
+    assert_eq!(sim.nordic.phone.as_ref().unwrap().actions, [(9, 1)]);
+}
+
 /// After a restart the bond is read from the card, the unit advertises slowly, the phone encrypts with its key and
 /// the HID report works at once (its CCCD given back). FORGET erases it; a phone with another key is refused.
 #[test]

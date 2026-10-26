@@ -49,7 +49,7 @@ impl App {
     }
 
     /// Once a second: makes the plan again when the rider changes section (or 30 s pass before the climb); nothing
-    /// otherwise, so the solver (a few ms) runs once per section.
+    /// otherwise, so the solver (about 75 us) runs once per section.
     #[inline(never)]
     pub(crate) fn pace_second(&mut self) {
         let timer = self.ride.timer_s();

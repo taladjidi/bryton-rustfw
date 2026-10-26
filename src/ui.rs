@@ -37,21 +37,23 @@ pub const DARK: u16 = 0x39e7;
 /// RGB565 yellow.
 pub const YELLOW: u16 = 0xffe0;
 
-/// A climb's colour by its grade (% x 10), in the bands climbing apps use: green under 6 %, yellow under 9 %,
-/// orange under 12 %, red above (Garmin's ClimbPro colours its climbs green to red the same way; the bands here are
-/// this firmware's).
+/// A climb's colour by its grade (% x 10), in the bands climbing apps use: under 6 %, under 9 %, under 12 %, above
+/// (Garmin's ClimbPro colours its climbs by grade the same way; the bands here are this firmware's). The zone
+/// palette's green, lemon yellow, magenta and violet by severity: orange is the banner's and red the alarms'.
 ///
 /// ```
-/// use bryton_rustfw::ui::{grade_color, GREEN, RED};
-/// assert_eq!([grade_color(45), grade_color(150)], [GREEN, RED]);
+/// use bryton_rustfw::ride::ZONE_COLORS;
+/// use bryton_rustfw::ui::grade_color;
+/// assert_eq!([grade_color(45), grade_color(150)], [ZONE_COLORS[2], ZONE_COLORS[5]]);
 /// ```
 pub fn grade_color(x10: i32) -> u16 {
-    match x10 {
-        ..60 => GREEN,
-        60..90 => YELLOW,
-        90..120 => ACCENT,
-        _ => RED,
-    }
+    use crate::ride::ZONE_COLORS;
+    ZONE_COLORS[match x10 {
+        ..60 => 2,
+        60..90 => 3,
+        90..120 => 4,
+        _ => 5,
+    }]
 }
 
 /// Small text: labels. The pixel font at 2x, so its dots match Ferris' look.

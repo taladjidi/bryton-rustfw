@@ -296,7 +296,7 @@ pub struct App {
     /// Reminders and alerts of the ride, the one due (said and beeped at the next pass), and the one tone player
     /// (alerts, courses, workouts).
     alerts: alerts::Alerts,
-    alert: Option<alerts::Alert>,
+    alert: alerts::Queue,
     tones: Tones,
     /// A first hold of Back during a ride armed switching off for this long ([`OFF_CONFIRM_MS`]).
     off_armed_ms: u32,
@@ -548,7 +548,7 @@ impl App {
             ride_started: ((2000, 1, 1), (0, 0)),
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,
-            alert: None,
+            alert: alerts::Queue::default(),
             tones: Tones::default(),
             summary: None,
             new_ride: false,
@@ -686,7 +686,10 @@ impl App {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);
         }
-        if let Some(a) = self.alert.take() {
+        // one at a time: the next waits for the banner of the one before to go
+        if !(self.banner_ms.is_some() && alerts::Alert::is_text(self.banner.as_str()))
+            && let Some(a) = self.alert.pop()
+        {
             self.say_as(
                 a.text(),
                 if a == alerts::Alert::HrHigh || a == alerts::Alert::CadenceLow { Banner::Alarm } else { Banner::Ride },
