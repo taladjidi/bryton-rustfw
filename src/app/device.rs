@@ -175,6 +175,7 @@ impl App {
         self.step_recorder(b);
         self.hold_pages(b); // pages changed and not in the file yet: the registers keep them (app/editor.rs)
         if self.ble.is_some() {
+            self.release_trainer(b); // not left at the last target until its own time-out
             nrf::system_off(b);
         }
         b.gnss_power(false);

@@ -159,7 +159,8 @@ fn the_trainer_screen_offers_it() {
 }
 
 /// The rider stops dead mid-ramp: the ride pauses itself after 3 s without power or cadence, which would freeze the
-/// stop rules while ERG held the step's target. The ramp ends at once and the cool-down target goes out.
+/// stop rules while ERG held the step's target. The ramp ends at once; the trainer is let go while the ride is
+/// paused (no target to restart against at 0 rpm), and the cool-down target goes out once the rider pedals again.
 #[test]
 fn a_rider_who_stops_dead_gets_the_cool_down_target() {
     let (mut sim, mut app) = unit();
@@ -171,6 +172,10 @@ fn a_rider_who_stops_dead_gets_the_cool_down_target() {
     run(&mut sim, &mut app, 6000);
     assert!(app.ramp.is_none() && app.ramp_result.is_some(), "the test ended");
     assert_eq!(app.player.and_then(|p| p.step(app.plan.steps())), Some(ramp::COOL));
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.resistance), (0x30, 0), "let go while paused");
+    sim.nordic.trainer.stopped = false;
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(sim.nordic.trainer.mode, 0x31);
     assert!(sim.nordic.trainer.target_w.abs_diff((u32::from(ftp) * 45 / 100) as u16) <= 1);
     assert_eq!(app.screen(), Screen::RampResult);
 }

@@ -553,3 +553,18 @@ fn the_longest_message_arrives_whole() {
     run(&mut sim, &mut app, 8000);
     assert_eq!(app.phone.inbox.len(), 1, "the answer was dropped");
 }
+
+/// A discovery answer lost (here the first service's, ANCS): the discovery goes on after its deadline, so AMS and
+/// the time still come (review: a dropped answer left them off for the link).
+#[test]
+fn a_lost_discovery_answer_does_not_stop_it() {
+    let (mut sim, mut app) = unit(iphone(Vec::new()));
+    sim.nordic.drop_gattc = Some((0, 0x30));
+    app.activate(&mut sim, Menu::Phone, 1); // PAIR
+    run(&mut sim, &mut app, 10_000);
+    assert_eq!(sim.nordic.drop_gattc, None, "the answer was lost");
+    assert_eq!(app.phone.link(), Link::Secure);
+    let ph = sim.nordic.phone.as_ref().unwrap();
+    assert!(ph.subscribed.contains(&0x23) && ph.subscribed.contains(&0x33), "AMS and the time: {:?}", ph.subscribed);
+    assert_eq!(sim.rtc_sets, 1, "the clock set from the phone");
+}

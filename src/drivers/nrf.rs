@@ -424,6 +424,8 @@ impl SensorId {
 const EVENT_CHANNEL_CLOSED: u8 = 0x07;
 /// An acknowledged message was not acknowledged by the other end (ANT message 0x40 event code 6).
 const EVENT_TRANSFER_TX_FAILED: u8 = 0x06;
+/// An acknowledged message was acknowledged (event code 5; the same layout as code 6 here, inferred).
+const EVENT_TRANSFER_TX_COMPLETED: u8 = 0x05;
 
 /// Low-priority search time-out, in 2.5 s units: 12 = 30 s. Then the chip closes the channel and the app reopens it
 /// later ([`crate::SEARCH_REST_MS`]), so a sensor that is not sending (a strap not worn) does not keep the radio
@@ -459,6 +461,22 @@ pub fn ant_closed(p: &[u8]) -> Option<u8> {
 pub fn ant_tx_failed(p: &[u8]) -> Option<u8> {
     match p {
         [ANT_EVT, .., EVENT_TRANSFER_TX_FAILED, ch] if p.len() == 44 => Some(*ch),
+        _ => None,
+    }
+}
+
+/// The channel of ANT event `p` if it reports an acknowledged message delivered (`EVENT_TRANSFER_TX_COMPLETED`).
+///
+/// ```
+/// let mut p = [0u8; 44];
+/// p[0] = 8;
+/// (p[42], p[43]) = (5, 7);
+/// assert_eq!(bryton_rustfw::nrf::ant_tx_completed(&p), Some(7));
+/// assert_eq!(bryton_rustfw::nrf::ant_tx_completed(&[8, 5, 7]), None, "short");
+/// ```
+pub fn ant_tx_completed(p: &[u8]) -> Option<u8> {
+    match p {
+        [ANT_EVT, .., EVENT_TRANSFER_TX_COMPLETED, ch] if p.len() == 44 => Some(*ch),
         _ => None,
     }
 }

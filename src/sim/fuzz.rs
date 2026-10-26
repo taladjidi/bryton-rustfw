@@ -38,12 +38,13 @@ fn nordic_packets() {
     // random bytes (the stream out of step), then frames built on purpose: a length header and an advertising
     // report, an ANT event (broadcast, acknowledged, channel closed) or random bytes; random bytes alone never
     // make a 44-byte ANT event or an advertising report (code review: the decoders were never reached)
-    let mut reached = [0usize; 4];
-    let look = |p: &[u8], reached: &mut [usize; 4]| {
+    let mut reached = [0usize; 5];
+    let look = |p: &[u8], reached: &mut [usize; 5]| {
         let _ = crate::nrf::event_id(p);
         reached[0] += usize::from(crate::nrf::ant_broadcast(p).is_some());
         reached[1] += usize::from(crate::nrf::ant_closed(p).is_some());
         reached[3] += usize::from(crate::nrf::ant_tx_failed(p).is_some());
+        reached[4] += usize::from(crate::nrf::ant_tx_completed(p).is_some());
         if let Some(r) = crate::nrf::adv_report(p) {
             reached[2] += 1;
             let _ = (crate::nrf::ad_name(r.data), crate::nrf::ad_maker(r.data));
@@ -86,6 +87,7 @@ fn nordic_packets() {
                     match r() % 6 {
                         0 | 1 => p[42] = 0x07, // EVENT_CHANNEL_CLOSED
                         2 => p[42] = 0x06,     // EVENT_TRANSFER_TX_FAILED
+                        3 => p[42] = 0x05,     // EVENT_TRANSFER_TX_COMPLETED
                         _ => {}
                     }
                     if r() % 8 == 0 {
@@ -2041,6 +2043,8 @@ fn fec_pages_and_commands() {
                 erg_w: (r() % 2 == 0).then(|| u16::from_le_bytes([r(), r()])),
                 step: usize::from(r() % 4),
                 grade_x100: (r() % 2 == 0).then(|| i16::from_le_bytes([r(), r()])),
+                riding: r() % 8 != 0,
+                paused: r() % 4 == 0,
             };
             match r() % 4 {
                 0 => t.step_by(&drive, r() % 2 == 0, r() % 2 == 0),
@@ -2072,8 +2076,10 @@ fn fec_pages_and_commands() {
                 assert!(p[0] == 1 && p[1] != 0 && p[1] & 0x3f == 0, "{p:?}");
                 continue;
             }
-            if r() % 7 == 0 {
-                t.unsent(); // a refusal or a TX_FAILED, whatever went out last
+            match r() % 7 {
+                0 => t.unsent(), // a refusal or a TX_FAILED, whatever went out last
+                1 => t.acked(),  // a TX_COMPLETED, a write's answer
+                _ => {}
             }
             for c in [due, Some(t.command(&drive)), user].into_iter().flatten() {
                 let p = fec::encode(c);
