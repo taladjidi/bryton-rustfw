@@ -255,6 +255,8 @@ pub struct App {
     /// on it again acts; any other input clears it (App::confirmed). A past ride's DELETE, asked on its card, is
     /// [`PAST_DELETE`].
     confirm: Option<(Menu, usize)>,
+    /// GIVE UP SAVE's step while its row waits in [`App::confirm`]: two banners of explanation, then two questions.
+    give_up_step: u8,
     /// A held key already acted (a list scrolled, a value stepped), so its release does not act once more; cleared
     /// when no key is down.
     repeated: bool,
@@ -530,6 +532,7 @@ impl App {
             editing: false,
             menu_chosen: false,
             confirm: None,
+            give_up_step: 0,
             repeated: false,
             under: [Screen::Main; 8],
             depth: 0,

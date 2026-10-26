@@ -299,6 +299,8 @@ pub enum Row {
     AltGps,
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
     Drive,
+    /// GIVE UP SAVE, first in SYSTEM only while a save is stuck (app/riding.rs, `give_up_save`).
+    GiveUpSave,
     /// A setting.
     Set(Setting),
     /// ANT sensor `n` ([`crate::sensors::Kind::ALL`]): Select pairs or forgets it.

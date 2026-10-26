@@ -45,7 +45,12 @@ impl App {
     /// No ride running, and a save that cannot finish (recorder.rs, `stuck`; the other copy's waits for it or
     /// is done): the card may be lent read only, nothing written meanwhile.
     fn save_stuck(&self) -> bool {
-        self.ride.state() == ride::State::Idle && (self.recorder.stuck() || self.full.stuck())
+        self.ride.state() == ride::State::Idle && self.save_stuck_any()
+    }
+
+    /// A save stuck, either copy's (GIVE UP SAVE shows).
+    pub(crate) fn save_stuck_any(&self) -> bool {
+        self.recorder.stuck() || self.full.stuck()
     }
 
     /// From the unit: takes the card back, unless the computer has it mounted (it said so: PREVENT MEDIUM

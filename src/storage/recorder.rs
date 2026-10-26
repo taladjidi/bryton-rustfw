@@ -60,6 +60,16 @@
 //! (the card not mounting) never concludes either: it may name a save cut after 4, so it is tried again, stuck
 //! past its retries; and a ride left open whose entry is gone is a save from the moment that is seen.
 //!
+//! **GIVE UP SAVE** (SETTINGS > SYSTEM, only while stuck: [`Recorder::give_up_save`]) is the owner's way out on a
+//! card that keeps failing, after copying it (the drive lent read only): the ride named where it was recorded
+//! (`keep_in_rides`, once more); else under a free name in `\Rustfw\Rescue` (`Rescue\Full` for the full copy),
+//! only if neither folder that may name the chain does (both read whole: never a second entry on it) and the card
+//! has [`FULL_RESERVE`] free (the folder made or grown takes a cluster), its record "done" written before the link
+//! (a cut between leaves the chain lost, never named twice: a record still "saving" would have the next start save
+//! it into `\Activities` beside the rescue entry); else the record "done" alone, the chain left lost (a computer's
+//! fsck may make it `FILE0000.CHK`: a lost chain, nothing cross-linked). Either way the stuck state ends: a ride held
+//! behind it starts, and the drive is lent writable again.
+//!
 //! **A Start during a save** (its retries take up to a minute, or for good when stuck): the new ride is kept and
 //! started once the save is over ([`Recorder::start`]), its timer stopped from its start to its first second
 //! recorded; behind a stuck save the app says the new ride is not recorded ([`Recorder::held`]). Its end drops it
@@ -198,6 +208,22 @@ impl Kind {
             Kind::Full => fat.ensure_dir(d, dir, "Full", t),
         }
     }
+}
+
+/// `\Rustfw\Rescue` and `\Rustfw\Rescue\Full`: where GIVE UP SAVE names a stuck save's ride when its rides folder
+/// cannot (module doc).
+pub const RESCUE_PATHS: [&str; 2] = ["Rustfw/Rescue", "Rustfw/Rescue/Full"];
+
+/// What GIVE UP SAVE ([`Recorder::give_up_save`]) did with a stuck save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GaveUp {
+    /// Named by `keep_in_rides` after all: `Kept` (in its rides folder), or `Saved` / `Discarded` (the save's own
+    /// link found there).
+    Named(Outcome),
+    /// Named in [`RESCUE_PATHS`] under that name.
+    Rescue([u8; 12]),
+    /// Named nowhere (the card or the record unreadable): the chain left lost, the card to be copied.
+    Lost,
 }
 
 /// `\Rustfw\Activities`: the full copies of the saved rides ([`Kind::Full`]).
@@ -704,6 +730,98 @@ impl Recorder {
     /// open: the drive lent read only, for the owner to copy what is on the card).
     pub fn stuck(&self) -> bool {
         self.stuck
+    }
+
+    /// GIVE UP SAVE (module doc): only while [`Recorder::stuck`] (else None). Names the ride where it can, else
+    /// leaves its chain lost; the stuck state ends whatever the card does, and a start held behind it starts.
+    #[inline(never)] // its sector buffers in its own frame
+    pub fn give_up_save(&mut self, d: &mut impl DiskWrite, now: Local) -> Option<GaveUp> {
+        if !self.stuck {
+            return None;
+        }
+        let t = dos_time(now);
+        let r = match Fat::mount(d) {
+            Ok(mut fat) if self.phase == Phase::Saving => self.give_up_on(&mut fat, d, t),
+            // the record never read (the card not mounting at boot): nothing known to name, nothing written; the
+            // next ride's first card work reads it (one writer, one ride)
+            _ => GaveUp::Lost,
+        };
+        (self.phase, self.stuck, self.want, self.stopped, self.hold, self.checked) =
+            (Phase::Done, false, false, false, false, false);
+        (self.fails, self.wait) = (0, 0);
+        self.start_pending();
+        Some(r)
+    }
+
+    fn give_up_on(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> GaveUp {
+        if let Ok(o) = self.keep_in_rides(fat, d, t) {
+            return GaveUp::Named(o);
+        }
+        if self.rescue(fat, d, t).is_ok() {
+            return GaveUp::Rescue(self.name);
+        }
+        // named nowhere: the record "done", the chain lost. Failing too, the record still says "saving": the next
+        // start tries the save again (stuck again if the card still fails)
+        let first = self.file.map_or(0, |h| h.first);
+        let _ = self.write_record(fat, d, Phase::Done, first);
+        GaveUp::Lost
+    }
+
+    /// The ride named in [`RESCUE_PATHS`] (module doc, "GIVE UP SAVE"): the record "done" first, then the link.
+    fn rescue(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), Error> {
+        let (first, size) = (self.file.map_or(0, |h| h.first), self.len);
+        if first < 2 {
+            return Err(Error::Corrupt);
+        }
+        // never a second entry on the chain: both folders that may name it read whole, neither does
+        let target = if self.discard { self.kind.discarded_path() } else { self.kind.saved() };
+        for path in [target, self.kind.rides().1] {
+            let dir = match fat.open(d, path) {
+                Ok(dir) => dir,
+                Err(Error::NotFound) => continue,
+                Err(e) => return Err(e),
+            };
+            let mut c = fat.cursor(dir)?;
+            while let Some(e) = fat.list(d, &mut c)? {
+                if e.file.cluster == first {
+                    return Err(Error::Refused);
+                }
+            }
+        }
+        // a folder made or grown takes a cluster: never from the reserve the next ride's clean copy needs
+        let free = match fat.free_clusters(d)? {
+            Some(n) => Some(n),
+            None => {
+                fat.sync_fats(d)?;
+                fat.free_clusters(d)?
+            }
+        };
+        if free.is_none_or(|n| u64::from(n) * u64::from(fat.cluster_bytes()) < FULL_RESERVE) {
+            return Err(Error::Refused);
+        }
+        let mine = fat.ensure_dir(d, fat.root(), DIR, t)?;
+        let mut dir = fat.ensure_dir(d, mine, "Rescue", t)?;
+        if self.kind == Kind::Full {
+            dir = fat.ensure_dir(d, dir, "Full", t)?;
+        }
+        let mut buf = [0u8; 16];
+        let mut name = self.name;
+        for _ in 0..10 {
+            match fat.find(d, dir, file_name(&name, &mut buf)?) {
+                Ok(_) => name = next_name(&name),
+                Err(Error::NotFound) => break,
+                Err(e) => return Err(e),
+            }
+        }
+        let n = file_name(&name, &mut buf)?;
+        if !matches!(fat.find(d, dir, n), Err(Error::NotFound)) {
+            return Err(Error::Refused); // ten names taken
+        }
+        fat.make_room(d, dir, n)?;
+        self.write_record(fat, d, Phase::Done, first)?;
+        fat.link(d, dir, n, &Handle { first, size, ..Handle::default() }, t)?;
+        self.name = name;
+        Ok(())
     }
 
     /// A Start is waiting for the last ride's save ([`Recorder::start`]).
@@ -3408,5 +3526,82 @@ mod tests {
         assert!(full.due());
         full.io_after(&clean, &mut d, local(1));
         assert_eq!((full.phase(), full.pending()), (Phase::Recording, false), "started after the clean one");
+    }
+
+    /// A save stuck after its step 4 (`\Activities`' directory failing to write, then `\Rustfw\Rides`' failing to
+    /// write, or to read if `unread`), a Start held behind it: the recorder and the card, ready for GIVE UP SAVE.
+    fn stuck_save(unread: bool) -> (Recorder, Bad) {
+        let mut d = card(crate::fat::tests::image());
+        let mut r = open_ride(&mut d, 200);
+        let (acts, rides) = (dir_lbas(&d.img, ACTIVITIES), std::vec![dir_lbas(&d.img, "Rustfw/Rides")]);
+        let mut d = Bad { card: d, bad: std::vec![acts.clone()], unread: Vec::new(), on: true };
+        r.end(T0 + 200, words(200));
+        assert_eq!(r.io(&mut d, local(201)), Outcome::Failed(Error::Io), "step 4 done, 5 not");
+        if unread {
+            d.unread = rides;
+        } else {
+            d.bad.extend(rides);
+        }
+        io_all(&mut r, &mut d, 201);
+        assert_eq!((r.phase(), r.stuck()), (Phase::Saving, true));
+        (r, d)
+    }
+
+    /// After GIVE UP SAVE: the held ride starts, is recorded and saved (the card well again).
+    fn next_ride_records(r: &mut Recorder, d: &mut Bad, what: &str) {
+        const NEXT: [u8; 12] = *b"261023110000";
+        assert_eq!(r.phase(), Phase::Starting, "{what}: the held start started");
+        d.on = false;
+        assert!(io_all(r, d, 1001).is_empty(), "{what}");
+        r.second(&sample(1001), words(1));
+        r.end(T0 + 1002, words(2));
+        assert_eq!(io_all(r, d, 1003), [Outcome::Saved(NEXT)], "{what}");
+        assert_eq!(saved(&d.card.img, "Activities/261023110000.fit").map(|s| s.1), Ok(true), "{what}");
+    }
+
+    /// GIVE UP SAVE, its three outcomes. Only while stuck; the rides folder writable again: named there
+    /// (`Kept`); still failing to write but readable: named in `\Rustfw\Rescue`, the volume clean; unreadable: the
+    /// record "done" alone, the chain lost (fsck: a lost chain of the ride's clusters, which a computer's fsck may
+    /// turn into FILE0000.CHK; no cross-link, nothing in any folder named twice). Each time the held start starts.
+    #[test]
+    fn give_up_save_names_the_ride_where_it_can() {
+        let mut idle = Recorder::new();
+        assert_eq!(idle.give_up_save(&mut card(crate::fat::tests::image()), local(0)), None, "not stuck: nothing");
+        let start = |r: &mut Recorder| {
+            r.start(T0 + 1000, *b"261023110000", false);
+            assert!(r.held());
+        };
+
+        // the rides folder well again: named there
+        let (mut r, mut d) = stuck_save(false);
+        start(&mut r);
+        d.bad.truncate(1); // \Activities still failing
+        assert_eq!(r.give_up_save(&mut d, local(300)), Some(GaveUp::Named(Outcome::Kept(NAME))));
+        assert!(!r.stuck());
+        kept_in_rides(&d.card.img, "rides");
+        assert_eq!(check_clean(&d.card.img, "rides"), 0);
+        next_ride_records(&mut r, &mut d, "rides");
+
+        // its directory still failing to write: named in \Rustfw\Rescue, the record done first
+        let (mut r, mut d) = stuck_save(false);
+        start(&mut r);
+        assert_eq!(r.give_up_save(&mut d, local(300)), Some(GaveUp::Rescue(NAME)));
+        let (times, session) = saved(&d.card.img, "Rustfw/Rescue/261023100000.fit").unwrap();
+        assert!(session && times.len() == 200, "whole: {} s", times.len());
+        assert!(saved(&d.card.img, "Rustfw/Rides/261023100000.fit").is_err() && saved(&d.card.img, SAVED).is_err());
+        assert_eq!(check_clean(&d.card.img, "rescue"), 0, "named once, nothing lost");
+        next_ride_records(&mut r, &mut d, "rescue");
+        assert_eq!(check_clean(&d.card.img, "rescue, then a ride"), 0);
+
+        // its directory unreadable: nowhere to name it, the record "done", the chain lost
+        let (mut r, mut d) = stuck_save(true);
+        start(&mut r);
+        assert_eq!(r.give_up_save(&mut d, local(300)), Some(GaveUp::Lost));
+        let lost = check_clean(&d.card.img, "lost");
+        assert!(lost >= 1, "the ride's chain lost (fsck: {lost} clusters), never cross-linked");
+        let mut again = Recorder::new();
+        assert_eq!(again.recover(&mut d, local(301)), Outcome::Nothing, "the record done: a boot does nothing");
+        next_ride_records(&mut r, &mut d, "lost");
+        assert_eq!(check_clean(&d.card.img, "lost, then a ride"), lost, "the same chain lost, no more");
     }
 }

@@ -213,7 +213,16 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
   (`Fat::make_room`: a zeroed cluster linked when the folder must grow), so a full card fails with the ride still
   named. A save the card keeps failing puts the ride back in `\Rustfw\Rides` ("SAVE FAILED: KEPT IN RUSTFW/RIDES");
   if even that fails, the ride stays open and is tried again (backing off up to 160 s) until the card takes it, the
-  USB drive lent read only meanwhile, and a ride started meanwhile waits for it ("NOT RECORDING: CARD"). Both copies
+  USB drive lent read only meanwhile, and a ride started meanwhile waits for it ("NOT RECORDING: CARD"). The way out
+  on a card that keeps failing is **GIVE UP SAVE**, first in SETTINGS > SYSTEM only while a save is stuck: copy the
+  card first (USB, read only), then two banners say the ride stays on the card unnamed and it asks twice (Start: yes,
+  Back: no, at any step). It tries once more to name the ride in `\Rustfw\Rides` ("KEPT IN RUSTFW/RIDES"), else
+  under a free name in `\Rustfw\Rescue` (`Rescue\Full` for the full copy; only if neither folder that may name the
+  ride does, and with 8 MB free: "KEPT IN RUSTFW/RESCUE"), else marks it given up, its clusters left lost on the card
+  for a computer's fsck to turn into `FILE0000.CHK` ("GIVEN UP: COPY THE CARD"). Then the ride held behind it starts
+  recording and the drive is lent writable again. Refused while the card is lent ("USB DRIVE ON") and while a ride
+  that is being recorded runs ("END THE RIDE FIRST"); a ride held behind the stuck save has nothing recorded, so it
+  is allowed then, and that ride starts recording at once. Both copies
   share one name: the full copy saves after the clean one, under the name that one took. A ride discarded goes
   through the same steps into `\Rustfw\Discarded` instead, its records saying so from the end on, so a cut during it
   finishes there at the next start (never in `\Activities`).
