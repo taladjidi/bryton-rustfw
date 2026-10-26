@@ -175,7 +175,7 @@ pub enum Rec {
 
 /// The strip's boxes (x, width): BLE on the left, the time centred, then USB and the battery on the right.
 const STRIP_BLE: (u32, u32) = (4, 3 * CELL * 2);
-const STRIP_GPS: (u32, u32) = (STRIP_BLE.0 + STRIP_BLE.1 + 6, 3 * CELL * 2);
+const STRIP_GPS: (u32, u32) = (STRIP_BLE.0 + STRIP_BLE.1 + 2, 3 * CELL * 2);
 const STRIP_TIME: (u32, u32) = ((W - 5 * CELL * 2) / 2, 5 * CELL * 2);
 const STRIP_BATTERY: (u32, u32) = (W - 4 - 4 * CELL * 2, 4 * CELL * 2);
 /// The USB symbol, 13 x 14 (bit 15 = leftmost): a trident, the plug's arrow on top.
@@ -199,8 +199,9 @@ pub const USB_ICON: [u16; 14] = [
 const STRIP_USB: (u32, u32) = (STRIP_BATTERY.0 - 21, 13);
 /// The ride's state, right of the time: a red dot while it records, orange bars while paused, nothing otherwise.
 const STRIP_REC: (u32, u32) = (STRIP_TIME.0 + STRIP_TIME.1 + 3, 10);
-/// The touch lock's padlock, left of the time, in the 8 px between "GPS" and the time: 7 wide, 10 high.
-const STRIP_LOCK: (u32, u32) = (81, 8);
+/// The touch lock's padlock: a cell of its own between "GPS" and the time (1 px clear of the GPS box, whose last letter has a pixel of its own, 3 of the time's),
+/// 7 wide, 10 high.
+const STRIP_LOCK: (u32, u32) = (STRIP_GPS.0 + STRIP_GPS.1 + 1, 8);
 const PADLOCK: [u16; 10] = [0x3800, 0x4400, 0x4400, 0xfe00, 0xfe00, 0xee00, 0xee00, 0xfe00, 0xfe00, 0xfe00];
 /// A dot 10 px wide (bit 15 leftmost), and two bars.
 const REC_DOT: [u16; 10] = [0x1e00, 0x7f80, 0x7f80, 0xffc0, 0xffc0, 0xffc0, 0xffc0, 0x7f80, 0x7f80, 0x1e00];
@@ -1775,7 +1776,7 @@ pub(crate) mod tests {
             }
         }
         const { assert!(RIDE_Y + RIDE_H == H && RIDE_Y >= STRIP_H + 2) };
-        let strip = [STRIP_BLE, STRIP_GPS, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
+        let strip = [STRIP_BLE, STRIP_GPS, STRIP_LOCK, STRIP_TIME, STRIP_REC, STRIP_USB, STRIP_BATTERY];
         assert!(strip.windows(2).all(|p| p[0].0 + p[0].1 <= p[1].0) && STRIP_BATTERY.0 + STRIP_BATTERY.1 <= W);
         assert!(TIME_Y + TIME.height() <= DATE_Y && OVERVIEW_Y + OVERVIEW_H < NOTICES_Y && TIME_Y > STRIP_H);
         assert!(GEAR_AT.1 >= DATE_Y && GEAR_AT.1 + 18 <= OVERVIEW_Y && GEAR_AT.0 + 18 <= W, "the gear in the date row");

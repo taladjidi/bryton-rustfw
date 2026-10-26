@@ -2416,7 +2416,7 @@ fn back_and_lap_together_lock_the_touch() {
     assert_eq!(app.screen(), Screen::Main, "neither key acted at its release");
     assert!(sim.backlight, "Back did not toggle the light");
     // the padlock is in the strip, and the screen equals the panel
-    let lit = |sim: &Sim| (81..88).any(|x| sim.screen[(12 * W + x) as usize] == ui::WHITE);
+    let lit = |sim: &Sim| (79..86).any(|x| sim.screen[(12 * W + x) as usize] == ui::WHITE);
     run(&mut sim, &mut app, 4500); // the banner goes, the gear tapped at 8 s
     assert!(lit(&sim), "padlock");
     assert_consistent(&sim, &app);
