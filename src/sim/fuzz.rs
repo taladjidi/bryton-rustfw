@@ -2800,6 +2800,7 @@ fn damaged_maps_under_a_ride() {
             }
         }
         *a = Ahead::new();
+        a.set_trails(round % 2 == 1);
         // along the road east, a little off it now and then, sometimes the other way or somewhere else
         let (mut x, mut y, mut h) = (100.0 + f64::from(next() % 400), 0.0, 90.0);
         for t in 0..150 {
@@ -2860,6 +2861,7 @@ fn random_road_networks() {
     let mut a = std::boxed::Box::new(Ahead::new());
     for round in 0..150 {
         *a = Ahead::new();
+        a.set_trails(round % 2 == 1);
         type Road = (u16, u8, Vec<(f64, f64, i16)>);
         let mut roads: Vec<Road> = Vec::new();
         for r in 0..1 + next() % 5 {
@@ -2878,7 +2880,7 @@ fn random_road_networks() {
                     break;
                 }
             }
-            roads.push((1 + (r % 3) as u16, [0xee, 0x99, 0x55][next() as usize % 3], pts));
+            roads.push((1 + (r % 3) as u16, [0xee, 0x99, 0x55, 0x1e][next() as usize % 4], pts));
         }
         let borrowed: Vec<_> = roads.iter().map(|(w, c, p)| (*w, *c, &p[..])).collect();
         net(&mut a, &borrowed);
