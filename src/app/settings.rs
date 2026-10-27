@@ -248,9 +248,20 @@ pub struct Settings {
     pub ahead: bool,
     /// The smooth font for text (the FONT setting, SMOOTH) instead of the pixel font; kept in register 16, bit 24.
     pub smooth: bool,
-    /// GPS POWER (BIKE): SAVER puts the receiver in cyclic tracking (u-blox PSMCT, [`crate::gnss::config`]), about 5 mA
-    /// less, at some cost in accuracy; FULL (the default) is continuous tracking. Kept in register 16, bit 25.
-    pub gps_saver: bool,
+    /// GPS POWER (BIKE): kept in register 16, bits 25 (SAVER) and 26 (FULL); neither is AUTO.
+    pub gps_power: GpsPower,
+}
+
+/// GPS POWER: the receiver's power mode ([`crate::gnss::config`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpsPower {
+    /// Cyclic tracking while riding fast and straight, continuous otherwise ([`crate::gnss::Adaptive`]): the default.
+    #[default]
+    Auto,
+    /// Continuous tracking always.
+    Full,
+    /// Cyclic tracking always (u-blox PSMCT): about 5 mA less, at some cost in accuracy (docs/power.md).
+    Saver,
 }
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
@@ -296,7 +307,7 @@ impl Settings {
             profile: None,
             ahead: true,
             smooth: false,
-            gps_saver: false,
+            gps_power: GpsPower::Auto,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -395,15 +406,16 @@ impl Settings {
     /// kept in `w` (RTC backup register 16). Tag 0xa in bits 28..31 (this layout), then the rider's weight less 30 kg in
     /// 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the bike's weight in 100 g in 16..23 (0:
     /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; clear in earlier words: PIXEL), GPS POWER in
-    /// bit 25 (SAVER; clear in earlier words: FULL); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
+    /// bits 25..26 (1 SAVER, 2 FULL, 0 AUTO; earlier words had only bit 25, SAVER, clear for their default FULL, now
+    /// read as AUTO); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
     /// from earlier builds: tag 0xb in bits 28..31, the same up to the window, the bike's kg in 16..20, the single
     /// presses' actions in 21..23 and 24..26; tag 0xc1 in bits 24..31, the weight in kg in 0..7, W' in 0.5 kJ in
     /// 8..15, the window in 16..17, the actions in 18..23, no bike weight.
     /// Without either tag, the defaults ([`power::WEIGHT_KG`], [`power::WPRIME_J`], [`power::BIKE_HG`], 3 s).
     ///
     /// ```
-    /// use bryton_rustfw::Settings;
-    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, bike_hg: 65, gps_saver: true, ..Settings::from_word(0) };
+    /// use bryton_rustfw::{GpsPower, Settings};
+    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, bike_hg: 65, gps_power: GpsPower::Full, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
     /// // an earlier build's word: its weight and W', the bike at the default
@@ -419,7 +431,11 @@ impl Settings {
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
                 wkt_avg: (w >> 14 & 3) as usize,
                 smooth: w >> 24 & 1 != 0,
-                gps_saver: w >> 25 & 1 != 0,
+                gps_power: match w >> 25 & 3 {
+                    1 => GpsPower::Saver,
+                    2 => GpsPower::Full,
+                    _ => GpsPower::Auto, // and words before AUTO, whose FULL was the default: the new default
+                },
                 bike_hg: match (w >> 16 & 0xff) as u16 {
                     0 => power::BIKE_HG,
                     b => b.clamp(*bike.start(), *bike.end()),
@@ -449,7 +465,16 @@ impl Settings {
             _ => {
                 let remote = [menu::Remote::None, menu::Remote::None, s2, s3];
                 let (weight_kg, wprime_j, bike_hg) = (power::WEIGHT_KG, power::WPRIME_J, power::BIKE_HG);
-                Settings { weight_kg, wprime_j, bike_hg, wkt_avg: 0, remote, smooth: false, gps_saver: false, ..self }
+                Settings {
+                    weight_kg,
+                    wprime_j,
+                    bike_hg,
+                    wkt_avg: 0,
+                    remote,
+                    smooth: false,
+                    gps_power: GpsPower::Auto,
+                    ..self
+                }
             }
         }
     }
@@ -458,7 +483,11 @@ impl Settings {
     /// ([`Settings::with_power_word`]).
     pub fn power_word(self) -> u32 {
         (0xa << 28)
-            | u32::from(self.gps_saver) << 25
+            | (match self.gps_power {
+                GpsPower::Auto => 0,
+                GpsPower::Saver => 1,
+                GpsPower::Full => 2,
+            }) << 25
             | u32::from(self.smooth) << 24
             | (u32::from(self.bike_hg) & 0xff) << 16
             | (self.wkt_avg as u32 & 3) << 14
@@ -495,7 +524,11 @@ impl Settings {
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
-            Setting::GpsPower => l.push_str(if self.gps_saver { "SAVER" } else { "FULL" }),
+            Setting::GpsPower => l.push_str(match self.gps_power {
+                GpsPower::Auto => "AUTO",
+                GpsPower::Full => "FULL",
+                GpsPower::Saver => "SAVER",
+            }),
             Setting::LightOff => match LIGHT_TIMEOUTS_S.get(self.light_timeout) {
                 Some(0) | None => l.push_str("NEVER"),
                 Some(&t) => {
@@ -562,7 +595,13 @@ impl Settings {
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::Font => self.smooth = !self.smooth,
-            Setting::GpsPower => self.gps_saver = !self.gps_saver,
+            Setting::GpsPower => {
+                self.gps_power = match self.gps_power {
+                    GpsPower::Auto => GpsPower::Full,
+                    GpsPower::Full => GpsPower::Saver,
+                    GpsPower::Saver => GpsPower::Auto,
+                }
+            }
             Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             Setting::BikeProfile => {
                 self.profile = match self.profile {

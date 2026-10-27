@@ -21,7 +21,7 @@ sheets, at their test conditions), none was measured on the unit.
 
 | Part | Today | Options | Saving | Done here |
 |------|-------|---------|--------|-----------|
-| GNSS (u-blox M10) | 11.8 mA: continuous, 9.5 mA at VCC + 2.3 at V_IO, GPS + Galileo + BeiDou B1I | cyclic tracking (PSMCT) | about 4.8 mA (4.5 at VCC, 0.3 at V_IO) | BIKE > GPS POWER SAVER, opt-in |
+| GNSS (u-blox M10) | 11.8 mA: continuous, 9.5 mA at VCC + 2.3 at V_IO, GPS + Galileo + BeiDou B1I | cyclic tracking (PSMCT) | about 4.8 mA (4.5 at VCC, 0.3 at V_IO) while in it | GPS POWER AUTO (default): while riding fast and straight |
 | | | GPS + Galileo only | 1.6 mA | owner's decision |
 | | | GPS only | 2.2 mA | no (fewer satellites under trees) |
 | | | off between rides after a while | 11.8 mA while idle | owner's decision |
@@ -56,9 +56,14 @@ sheets, at their test conditions), none was measured on the unit.
   tracking: the receiver tracks, then sleeps within each update period); CFG-PM-UPDATEEPH (default on) wakes it to
   refresh ephemeris. The MAX-M10S integration manual (UBX-20053088, 2.3) describes continuous mode and the backup
   modes; the data sheet's "power save mode" figures are cyclic tracking (its note 28).
-- **What it costs:** in cyclic tracking the receiver does not track continuously, so the position is noisier and
-  slower to follow a sharp change (u-blox's general description of its power save modes; how much on a bike is to
-  see). Hence a setting, FULL by default.
+- **What it costs** (u-blox SAM-M10Q integration manual UBX-22020019 R01, 2.6.2, the M10 platform's power save mode):
+  PSMCT keeps the navigation output at 1 Hz ("In the POT state the receiver continues to output position fixes
+  according to the CFG-RATE-*"; 1 and 2 Hz supported), but in its power optimized tracking (POT) state "no new
+  signals are acquired and no data is downloaded" (it goes back to continuous for the ephemeris it schedules), SBAS
+  (EGNOS) is neither downloaded nor used in power save mode, and a weak or lost signal sends it back to tracking. u-blox
+  gives no accuracy figure for it; speed comes from Doppler at each fix either way, so a steady speed should change
+  little (inferred), while a satellite lost under trees or in a turn is not replaced until the receiver leaves POT,
+  and the position loses SBAS's corrections. Hence AUTO takes it only where that matters least, and conservatively.
 - **What stock does** (Ghidra, ghidra/notes/agent_d01e8000.md, agent_b1.md): a GPS setting `gpsPW` 0..5
   (`Gps_PowerIndexToModeCmd` 0xd01f34a8) mapped to modes off, FULL ON, "trickle power" (power save), GLONASS and
   BeiDou (`Gps_HandleCommand` 0xd0252e38, `Gps_SwitchConstellationMode` 0xd01f0d40), each a group of UBX
@@ -66,9 +71,24 @@ sheets, at their test conditions), none was measured on the unit.
   power save mode, `Gps_AutoSelectConstellationGroup` 0xd0254ab0 switches to another group ("Group 3 bike others")
   after about 10 minutes riding with a 3D fix, an accuracy under 5 m and 8 satellites or more, five checks in a row.
   The commands in each group are not traced.
-- **This firmware:** continuous tracking (FULL) as before, or SAVER (BIKE > GPS POWER): CFG-PM-OPERATEMODE PSMCT in
-  the RAM layer with the rest of the configuration, at each power-up and again when the setting changes
-  (`gnss::config`). The receiver is already switched off for an indoor ride (app/gps.rs `gnss_switch`).
+- **This firmware: GPS POWER AUTO (the default, owner 2026-10-27), FULL or SAVER** (BIKE > GPS POWER). FULL is
+  continuous tracking, SAVER cyclic tracking always: CFG-PM-OPERATEMODE in the RAM layer with the rest of the
+  configuration, at each power-up and again at each change (`gnss::config`; CFG-VALSET to RAM applies at once).
+  **AUTO** (`gnss::Adaptive`, one decision per fix) uses cyclic tracking only while all of these held for a minute in a
+  row (`AUTO_STEADY_S`), and goes back to continuous at the first fix where one fails:
+  - a ride running (between rides, paused or stopped: continuous);
+  - 10 minutes of good 3D fixes since the last loss (`AUTO_WARM_S`), 8 satellites or more, horizontal accuracy under
+    5 m: stock's own conditions for its power save mode's switch (`Gps_AutoSelectConstellationGroup` 0xd0254ab0), and
+    the receiver has gathered its satellites and their data by then (the manual: more signals tracked first help it
+    stay in POT);
+  - faster than 20 km/h to enter, and it stays down to 15 km/h (`AUTO_FAST_MM_S`, `AUTO_SLOW_MM_S`): MTB, technical
+    ground and steep climbs are under that, where the owner wants the resolution; the gap is the hysteresis;
+  - no turn: the heading within 30 degrees of each of the last 5 s (`AUTO_TURN`): a road bend at 20 km/h that turns
+    30 degrees in 5 s has a 53 m radius; hairpins, roundabouts and switchbacks turn more.
+  So a switch to cyclic tracking comes at most once a minute (no flapping), and a switch back within a second.
+  **Expected saving:** 4.8 mA while in cyclic tracking (the table above), so about 2.5 to 3.5 mA averaged on a road
+  ride that spends 50 to 70 % of its time fast and straight past the first 10 minutes (an estimate, to measure), next
+  to nothing on an MTB ride, which stays continuous. SAVER saves the 4.8 mA all the time, at the cost above.
 - **Left to the owner:** GPS + Galileo only (CFG-SIGNAL-BDS_ENA 0x10310022 off: 1.6 mA in continuous mode, nothing
   in cyclic tracking, which has the same 5 mA either way); switching the receiver off after some minutes on the
   overview without a ride (11.8 mA while the unit sits on, a warm start of a few seconds at the next ride thanks to

@@ -135,6 +135,98 @@ pub fn config(saver: bool) -> [u8; 32] {
     frame(0x06, 0x8a, &p)
 }
 
+/// GPS POWER AUTO's thresholds and why. The trade (u-blox M10 integration manuals, e.g. SAM-M10Q UBX-22020019 R01,
+/// 2.6.2 "Power save mode"): cyclic tracking (PSMCT) keeps the 1 Hz navigation output ("In the POT state the receiver
+/// continues to output position fixes according to the CFG-RATE-*"), but in its power optimized tracking state "no new
+/// signals are acquired and no data is downloaded", SBAS is neither downloaded nor used in power save mode, and a weak
+/// or lost signal sends it back to tracking. u-blox gives no accuracy figure for it. So AUTO takes it only where little
+/// is lost: fast, straight, under open sky, well after the fix, and goes back to continuous tracking at once otherwise.
+///
+/// Riding faster than this (mm/s, 20 km/h) is fast enough for cyclic tracking: a road pace. Under
+/// [`AUTO_SLOW_MM_S`] (15 km/h) is MTB, technical ground and steep climbs, where the owner wants the resolution; the
+/// gap between the two is the hysteresis, so a speed around one edge does not switch modes back and forth.
+pub const AUTO_FAST_MM_S: u32 = 5556;
+/// See [`AUTO_FAST_MM_S`].
+pub const AUTO_SLOW_MM_S: u32 = 4167;
+/// A turn: the heading moved more than this (degrees x 1e-5) within [`AUTO_TURN_S`] seconds. A road bend at 20 km/h
+/// that turns 30 degrees in 5 s has a radius of about 53 m; hairpins, roundabouts and trail switchbacks turn more.
+pub const AUTO_TURN: i32 = 30 * 100_000;
+/// See [`AUTO_TURN`].
+pub const AUTO_TURN_S: usize = 5;
+/// Seconds of good fixes before cyclic tracking: as stock's own switch in its power save mode
+/// (`Gps_AutoSelectConstellationGroup` 0xd0254ab0, docs/power.md: about 10 minutes riding with a 3D fix), and so the
+/// receiver has gathered satellites and their data first (the manual: more signals tracked at the start help it stay
+/// in power optimized tracking; no data download there).
+pub const AUTO_WARM_S: u16 = 600;
+/// Seconds every condition must hold in a row before cyclic tracking (any second that fails goes back to continuous at
+/// once): at most one switch to SAVER a minute, so the modes cannot flap.
+pub const AUTO_STEADY_S: u16 = 60;
+/// Stock's other conditions for its switch (the same function): at least 8 satellites and a horizontal accuracy under
+/// 5 m, as mm.
+pub const AUTO_SATS: u8 = 8;
+/// See [`AUTO_SATS`].
+pub const AUTO_HACC_MM: u32 = 5000;
+
+/// GPS POWER AUTO: chooses cyclic tracking (true) or continuous tracking, one fix (a second) at a time; thresholds
+/// above.
+///
+/// ```
+/// use bryton_rustfw::gnss::{Adaptive, Pvt, AUTO_STEADY_S, AUTO_WARM_S};
+/// let fast = Pvt { fix: 3, fix_ok: true, sats: 12, h_acc_mm: 2000, speed_mm_s: 9000, ..Pvt::default() };
+/// let mut a = Adaptive::default();
+/// let saver = (0..AUTO_WARM_S + AUTO_STEADY_S).map(|_| a.fix(Some(fast), true)).last();
+/// assert_eq!(saver, Some(true), "fast and straight, a fix for long enough");
+/// assert!(!a.fix(Some(Pvt { speed_mm_s: 3000, ..fast }), true), "slow: continuous at once");
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Adaptive {
+    /// Seconds of good fixes in a row (up to [`AUTO_WARM_S`]).
+    warm_s: u16,
+    /// Seconds in a row every condition held (up to [`AUTO_STEADY_S`]).
+    steady_s: u16,
+    /// The last headings, degrees x 1e-5, one a fix (a ring): the next slot, and how many are kept.
+    heads: [i32; AUTO_TURN_S],
+    next: usize,
+    n: usize,
+    saver: bool,
+}
+
+impl Adaptive {
+    /// Cyclic tracking chosen.
+    pub fn saver(&self) -> bool {
+        self.saver
+    }
+
+    /// Takes the second's fix (None: none) and whether a ride is running; returns the choice.
+    pub fn fix(&mut self, pvt: Option<Pvt>, riding: bool) -> bool {
+        let Some(p) = pvt.filter(|p| p.good() && p.fix == 3) else {
+            *self = Adaptive::default(); // lost: continuous, and the warm-up again
+            return false;
+        };
+        self.warm_s = self.warm_s.saturating_add(1).min(AUTO_WARM_S);
+        let fast = p.speed_mm_s >= if self.saver { AUTO_SLOW_MM_S } else { AUTO_FAST_MM_S };
+        let diff = |h: i32| {
+            let d = (i64::from(p.heading) - i64::from(h)).rem_euclid(360 * 100_000); // any i32 from the receiver
+            d.min(360 * 100_000 - d)
+        };
+        let turning = self.heads.iter().take(self.n).any(|&h| diff(h) > i64::from(AUTO_TURN));
+        if let Some(slot) = self.heads.get_mut(self.next) {
+            *slot = p.heading;
+        }
+        self.next = (self.next + 1) % AUTO_TURN_S;
+        self.n = (self.n + 1).min(AUTO_TURN_S);
+        let good = riding
+            && fast
+            && !turning
+            && self.warm_s >= AUTO_WARM_S
+            && p.sats >= AUTO_SATS
+            && p.h_acc_mm <= AUTO_HACC_MM;
+        self.steady_s = if good { self.steady_s.saturating_add(1).min(AUTO_STEADY_S) } else { 0 };
+        self.saver = good && (self.saver || self.steady_s >= AUTO_STEADY_S);
+        self.saver
+    }
+}
+
 /// UBX-MGA-INI-TIME_UTC: the time, so the receiver can use the orbits it keeps (it loses its own clock when
 /// powered off, seen on the unit). `utc`: year, month, day, hour, minute, second; `acc_s`: its accuracy.
 pub fn mga_time(utc: (u16, u8, u8, u8, u8, u8), acc_s: u16) -> [u8; 32] {
@@ -219,6 +311,8 @@ pub struct Pvt {
     pub lat: i32,
     /// Height above mean sea level, mm.
     pub alt_mm: i32,
+    /// Horizontal accuracy estimate, mm.
+    pub h_acc_mm: u32,
     /// Ground speed, mm/s.
     pub speed_mm_s: u32,
     /// Heading of motion, degrees x 1e-5.
@@ -263,6 +357,7 @@ pub fn pvt(class: u8, id: u8, p: &[u8]) -> Option<Pvt> {
         lon: i32_at(24),
         lat: i32_at(28),
         alt_mm: i32_at(36),
+        h_acc_mm: i32_at(40) as u32,
         speed_mm_s: i32_at(60).max(0) as u32,
         heading: i32_at(64),
     })

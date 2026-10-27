@@ -105,7 +105,8 @@ pub enum Setting {
     ClimbsAhead,
     /// The font of every text: PIXEL (dot matrix, the default) or SMOOTH ([`crate::fonts::smooth`]).
     Font,
-    /// The GPS receiver's power mode: FULL (continuous tracking, the default) or SAVER (cyclic tracking).
+    /// The GPS receiver's power mode: AUTO (the default: cyclic tracking while riding fast and straight), FULL
+    /// (continuous tracking) or SAVER (cyclic tracking) ([`crate::GpsPower`]).
     GpsPower,
 }
 

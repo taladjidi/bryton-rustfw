@@ -130,6 +130,8 @@ pub(crate) struct Gps {
     pub(crate) aid: gnss::Aid,
     /// The GPS had a good fix since power-on.
     pub(crate) had_fix: bool,
+    /// GPS POWER AUTO's choice ([`gnss::Adaptive`]).
+    pub(crate) auto: gnss::Adaptive,
 }
 
 impl Gps {
@@ -146,6 +148,7 @@ impl Gps {
             off: false,
             aid,
             had_fix: false,
+            auto: gnss::Adaptive::default(),
         }
     }
 

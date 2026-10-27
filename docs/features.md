@@ -281,7 +281,7 @@ MENU
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, GAUGE POWER (the workout gauge's window)
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
-     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (FULL / SAVER)
+     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```
 
@@ -414,8 +414,11 @@ silent at its end. A chip that never answers the first acknowledged message turn
 until the chip is started again; once one was answered, a later silence only has the message sent again. An FTMS
 trainer that refused the control is asked again 10 s later, then less often (up to a minute apart), while it is driven.
 With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too (AUTO keeps it on).
-BIKE > GPS POWER SAVER puts the receiver in u-blox cyclic tracking: about 4.5 mA less (estimated from
-u-blox's data sheet: [power.md](power.md)), at some cost in accuracy; FULL (continuous) by default.
+BIKE > GPS POWER: AUTO (the default) puts the receiver in u-blox cyclic tracking only while a ride runs fast (over
+20 km/h, until under 15) and straight (no turn over 30 degrees in 5 s) with a good fix (10 minutes in, 8 satellites,
+under 5 m) for a minute, and back in continuous tracking at the first fix that is not, so MTB and climbs keep the full
+resolution; about 4.8 mA less while in it (estimated from u-blox's data sheet: [power.md](power.md)). FULL is
+continuous always, SAVER cyclic always.
 
 ## Workouts
 

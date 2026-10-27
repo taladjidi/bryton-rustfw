@@ -606,8 +606,13 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   more. Stock has a GPS power setting (`gpsPW`, `Gps_PowerIndexToModeCmd` 0xd01f34a8: off, full, "trickle power",
   GLONASS, BeiDou) and in its power save mode switches to another constellation group after about 10 minutes of a
   good fix (`Gps_AutoSelectConstellationGroup` 0xd0254ab0); the UBX commands of each group are not traced. This
-  firmware: FULL, or PSMCT with BIKE > GPS POWER SAVER (RAM layer, `gnss::config`); not seen on the unit yet.
-  docs/power.md has the estimates.
+  firmware: GPS POWER AUTO (PSMCT only while riding fast and straight, `gnss::Adaptive`), FULL or SAVER (RAM layer,
+  `gnss::config`, sent again at each change); not seen on the unit yet. docs/power.md has the estimates.
+- **PSMCT's behaviour** (SAM-M10Q integration manual UBX-22020019 R01, 2.6.2, the M10 platform): 1 and 2 Hz navigation
+  rates (and periods of 2 to 10 s); fixes still output at CFG-RATE in its power optimized tracking state, where no
+  new signals are acquired and no data downloaded (it returns to continuous for scheduled ephemeris downloads, about
+  every 30 minutes with CFG-PM-UPDATEEPH); SBAS not used in power save mode; BeiDou B1C not supported (B1I is, the
+  default); a weak or lost signal returns it to tracking, then acquisition.
 - **Switched off for an indoor ride (app/gps.rs `gnss_switch`):** PI6 low while a ride runs with the INDOOR profile
   (a u-blox M10 draws about 7 to 8 mA tracking), high again at the ride's end or when the profile goes to ROAD, 1 s
   later like the cold start (the line has been low over 1 s), then the configuration, the time and the position are

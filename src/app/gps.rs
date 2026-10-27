@@ -46,8 +46,8 @@ impl App {
         } else {
             self.read_gnss(b, send.take());
         }
-        if self.gps.pvt_ms > PVT_STALE_MS {
-            self.gps.pvt = None;
+        if self.gps.pvt_ms > PVT_STALE_MS && self.gps.pvt.take().is_some() {
+            self.adapt(None); // silent: continuous tracking, if AUTO had chosen cyclic
         }
         self.strip.gps = self.gps.bars();
         // blinks while searching; steady otherwise, so the strip is not redrawn every second for nothing
@@ -70,6 +70,7 @@ impl App {
                     self.gps.pvt = Some(pvt);
                     self.gps.pvt_ms = 0;
                     self.learn_aid(b, pvt);
+                    self.adapt(Some(pvt));
                     // a speed sensor or a trainer heard lately gives the speed (indoors a fix through a window says
                     // 0 km/h and would stop the ride); a paired one that is silent (a dead battery, a magnet knocked
                     // off) must not leave the ride without one: then the GPS's
@@ -114,6 +115,7 @@ impl App {
             self.gps.off = false;
             self.gps.ms = 0; // powered again at GNSS_ON_MS, then configured and aided as at boot
             self.gps.sent = 0;
+            self.gps.auto = gnss::Adaptive::default(); // continuous tracking first
         }
         self.gps.off
     }
@@ -122,7 +124,7 @@ impl App {
     /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known. Then
     /// None. A change of GPS POWER sends the configuration alone again (its power mode), in the RAM layer as at start.
     pub(crate) fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
-        let config = gnss::config(self.settings.gps_saver);
+        let config = gnss::config(self.gnss_saver());
         if core::mem::take(&mut self.gps.reconfig) && self.gps.sent > 0 {
             return Some(config);
         }
@@ -145,6 +147,25 @@ impl App {
                 }
                 _ => return None,
             }
+        }
+    }
+
+    /// The receiver's power mode now: GPS POWER, or for AUTO its choice.
+    pub(crate) fn gnss_saver(&self) -> bool {
+        match self.settings.gps_power {
+            GpsPower::Auto => self.gps.auto.saver(),
+            GpsPower::Full => false,
+            GpsPower::Saver => true,
+        }
+    }
+
+    /// GPS POWER AUTO takes the second's fix (None: lost); a change of its choice sends the configuration again (the
+    /// power mode, RAM layer, as at start: CFG-PM-OPERATEMODE takes effect at once, UBX-22020019 2.6.2.6).
+    fn adapt(&mut self, pvt: Option<gnss::Pvt>) {
+        let was = self.gps.auto.saver();
+        let riding = self.ride.state() == ride::State::Running;
+        if self.gps.auto.fix(pvt, riding) != was && self.settings.gps_power == GpsPower::Auto {
+            self.gps.reconfig = true;
         }
     }
 

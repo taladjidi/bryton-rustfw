@@ -108,6 +108,9 @@ build (POWER_STEPS=15) gives the wall time.
 
 ## Not yet seen on the unit
 
+- **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of
+  0x20d00001 reads 2 after 11 minutes fast and straight, 0 within a second of a stop or a hairpin; the track and the
+  speed against FULL's (and a speed sensor's) on the same road; the share of the ride in cyclic tracking.
 - **GPS POWER SAVER (u-blox cyclic tracking, `gnss::config`)**: on the host only. On the unit, outdoors: the
   configuration answered ACK-ACK (`tools/gnss.py`, CFG-VALGET of 0x20d00001 reads 2), NAV-PVT still read every second
   over SPI between the receiver's sleeps (no gaps: the strip's GPS stays green, no fix dropped after 3 s), the track
