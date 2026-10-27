@@ -115,6 +115,21 @@ The golden rule (AGENTS.md) depends on this whole phase.
   with Domestique's method (median of the neighbours, a 20 % rule, an R^2 >= 0.95 gate on the window) on a ride
   with raw beats recorded: pending a real ride with the strap (docs/status.md).
 
+## 4a. An MTB mode (the owner's ask, 2026-10-27)
+
+A third ride profile beside ROAD and INDOOR, chosen by hand (BIKE > PROFILE) and kept in the ride file (sub_sport
+mountain), with what off-road riding needs:
+- GNSS at full rate whatever the speed (the adaptive GPS POWER gives full tracking when slow, but MTB should not
+  depend on it), and the track kept at a higher resolution for the map and the FIT records.
+- Its own page set (as INDOOR has): bigger fields, fewer per page, readable on rough ground; climbing and descending
+  first (altitude, grade, ascent and descent, VAM, a profile of the last minutes); time over distance; heart rate.
+- Auto-pause for slow climbing and stops at trail junctions (a lower threshold, or time based), and auto lap by
+  position if useful.
+- Climbs ahead and the climb pacer on tracks and paths (the road classes stock's routing ignores are where MTB rides).
+- Touch: larger targets and the touch lock by default while moving (gloves, mud); keys first.
+- Later: suspension or dropper data if the sensors exist (ANT+ / BLE), and a descent flow field.
+To be designed with the owner before building.
+
 ## 4b. History and training load
 
 From every ride on the shared volume (stock's and ours, AGENTS.md "Share the storage with stock"), as Domestique
