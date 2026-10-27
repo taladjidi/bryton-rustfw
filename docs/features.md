@@ -12,7 +12,7 @@
   sensor paired, the battery low; a tap opens them), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
   date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
   44 x 44 px box opens the menu). A swipe down on the overview, before a ride, opens the **quick panel** (QUICK:
-  CALIBRATE POWER when a meter is heard, TRAINER CONTROL when a trainer is paired, PROFILE, BRIGHTNESS, USB DRIVE,
+  REMOTE (the media remote, first), CALIBRATE POWER when a meter is heard, TRAINER CONTROL when a trainer is paired, PROFILE, BRIGHTNESS, USB DRIVE,
   NOTIFICATIONS; a swipe up or Back closes it); on a ride page a swipe down still opens the media remote.
   **TODAY card** (the owner's idea, 2026-10-26: the big clock went, the strip has the time): "TODAY" and the planned
   length (H:MM) on one line, the workout's name under it (cut to whole characters), and its profile at the bottom: a

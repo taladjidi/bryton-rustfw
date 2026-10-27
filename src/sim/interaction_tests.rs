@@ -105,24 +105,33 @@ fn the_quick_panel_from_the_overview() {
     let labels: Vec<_> = (0..app.rows(Menu::Quick))
         .map(|i| std::string::String::from(app.menu_row(Menu::Quick, i).unwrap().0.as_str()))
         .collect();
-    assert_eq!(labels, ["CALIBRATE POWER", "TRAINER CONTROL", "PROFILE", "BRIGHTNESS", "USB DRIVE", "NOTIFICATIONS"]);
+    assert_eq!(
+        labels,
+        ["REMOTE", "CALIBRATE POWER", "TRAINER CONTROL", "PROFILE", "BRIGHTNESS", "USB DRIVE", "NOTIFICATIONS"]
+    );
     run(&mut sim, &mut app, 300);
     super::tests::assert_consistent(&sim, &app);
     sim.save("quick_panel");
-    n.tap_row(&mut sim, &mut app, 0);
+    n.tap_row(&mut sim, &mut app, 1);
     assert_eq!((app.screen(), n.0), (Screen::PowerCal, 2), "was 6");
     app.input(&mut sim, Input::Back);
-    assert_eq!(app.screen(), Screen::Menu(Menu::Quick, 0), "Back returns to the panel");
+    assert_eq!(app.screen(), Screen::Menu(Menu::Quick, 1), "Back returns to the panel, its row kept");
     swipe(&mut app, &mut sim, Dir::Up);
     assert_eq!(app.screen(), Screen::Main, "a swipe up closes it");
     swipe(&mut app, &mut sim, Dir::Down);
     app.input(&mut sim, Input::Back);
     assert_eq!(app.screen(), Screen::Main, "Back closes it");
+    // the media remote is its first row: the overview's swipe down used to open it directly
+    swipe(&mut app, &mut sim, Dir::Down);
+    n.0 = 1;
+    n.tap_row(&mut sim, &mut app, 0);
+    assert_eq!((app.screen(), n.0), (Screen::Media, 2), "the remote: swipe down, tap");
+    app.input(&mut sim, Input::Back);
 
     // without a meter or a trainer: fewer rows
     let (mut sim, mut app) = unit();
     swipe(&mut app, &mut sim, Dir::Down);
-    assert_eq!(app.rows(Menu::Quick), 4);
+    assert_eq!(app.rows(Menu::Quick), 5, "the remote, profile, brightness, USB drive, notifications");
 
     // a ride page: the remote, as before
     app.input(&mut sim, Input::Back);

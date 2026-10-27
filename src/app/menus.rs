@@ -145,6 +145,8 @@ impl App {
             Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
             Menu::Quick => {
                 let rows = [
+                    // the media remote first: the overview's swipe down opens this panel, no longer the remote
+                    (Row::Phone(menu::PhoneRow::Media), true),
                     (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
                     (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
                     (Row::Set(menu::Setting::BikeProfile), true),
