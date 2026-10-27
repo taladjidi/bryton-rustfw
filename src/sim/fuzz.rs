@@ -2857,7 +2857,7 @@ fn random_road_networks() {
     }
     let mut next = xorshift(404);
     let mut mem = std::vec![0u16; 48 * 1024];
-    let (mut traces, mut climbs, mut stops, mut lengths, mut sent) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let (mut traces, mut climbs, mut stops, mut lengths, mut sent, mut slow) = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
     let mut a = std::boxed::Box::new(Ahead::new());
     for round in 0..150 {
         *a = Ahead::new();
@@ -2906,6 +2906,7 @@ fn random_road_networks() {
                     break;
                 }
             }
+            slow += u32::from(round % 2 == 1 && a.on_road() && a.on_slow());
             climbs += a.climbs().len() as u32;
             stops += u32::from(a.on_road() && a.end() == End::Stop);
             lengths += u32::from(a.on_road() && a.end() == End::Length);
@@ -2919,6 +2920,7 @@ fn random_road_networks() {
         "random networks: {traces} traces, {climbs} climbs, {stops} stopped, {lengths} at length, {sent} said"
     );
     assert!(traces > 300 && climbs > 20 && stops > 20 && lengths > 20, "{traces} {climbs} {stops} {lengths}");
+    assert!(slow > 0, "trails rounds that ended on a slow edge: {slow}");
 }
 
 /// The ramp test's arithmetic (ramp.rs) on random power, cadence and DFA a1 series: missing readings, spikes, a1 out

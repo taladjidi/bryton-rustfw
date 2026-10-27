@@ -284,6 +284,12 @@ impl Ahead {
         (self.off_s, self.seg, self.along_m, self.retry_s) = (0, 0, 0, 0);
     }
 
+    /// The trace is on a slow-class edge (the fuzz counts trails that reached one).
+    #[cfg(test)]
+    pub fn on_slow(&self) -> bool {
+        self.attr >> 4 == SLOW
+    }
+
     /// Trails mode on or off; a change drops the trace (and what it found) so it is made again, the tiles stay.
     pub fn set_trails(&mut self, on: bool) {
         if self.trails != on {
@@ -674,7 +680,8 @@ impl Ahead {
                 if c < TURN_COS_MILLI {
                     continue;
                 }
-                let class = if next.on_way(self.way) { 2 } else { u8::from(attr == self.attr) } + 4 * u8::from(!slow);
+                let class = if next.on_way(self.way) { 2 } else { u8::from(attr == self.attr) }
+                    + 4 * u8::from(!slow || self.trails);
                 if pick.is_none_or(|(k, ..)| (class, c) > k) {
                     pick = Some(((class, c), pos, attr, ni));
                 }
@@ -1266,10 +1273,45 @@ pub(crate) mod tests {
             let on_road = points(a).last().unwrap().1.abs() < 1.0;
             assert_eq!(on_road, !trails, "trails {trails}");
         }
+    }
+
+    /// A road crosses the climbing path partway up: in trails mode the trace stays on the path past the crossing.
+    #[test]
+    fn trails_stay_on_the_path_across_a_road() {
         let a = &mut Ahead::new();
         a.set_trails(true);
-        a.set_trails(false);
-        assert!(!a.on_road());
+        let path: Vec<_> = (0..=40).map(|k| (500.0, 25.0 * f64::from(k), 100 + 2 * k)).collect();
+        net(a, &[(1, 0x1e, &path), (2, 0x2e, &east(0.0, 1000.0, 500.0, |_| 120.0))]);
+        assert!(run(a, fix(500.0, 3.0, 0.0)));
+        let p = points(a);
+        assert!(p.iter().all(|q| (q.0 - 500.0).abs() < 1.0) && p.last().unwrap().1 > 900.0, "{p:?}");
+    }
+
+    /// Switching mode while a tile is half loaded drops the trace; the next one completes.
+    #[test]
+    fn mode_switch_mid_work() {
+        use crate::fat::tests::Ram;
+        use crate::route::tests::image_with_map;
+        let mut d = Ram(image_with_map(), 0);
+        let mut mem = std::vec![0u16; crate::route::SCRATCH_WORDS];
+        let a = &mut std::boxed::Box::new(Ahead::new());
+        a.fix = fix(1000.0, 0.0, 90.0);
+        a.phase = Phase::Snap;
+        let mut guard = 0;
+        while !a.loading() && a.work(&mut d, &mut mem) {
+            guard += 1;
+            assert!(guard < 200);
+        }
+        assert!(a.loading(), "a tile half loaded");
+        a.set_trails(true);
+        assert!(!a.busy() && !a.loading());
+        a.fix = fix(1000.0, 0.0, 90.0);
+        a.phase = Phase::Snap;
+        while a.work(&mut d, &mut mem) {
+            guard += 1;
+            assert!(guard < 400);
+        }
+        assert!(!a.busy() && a.on_road());
     }
 
     /// After the graph is emptied mid-trace its node numbers mean nothing: a place already on the trace is found
