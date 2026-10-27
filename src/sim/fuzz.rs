@@ -2836,7 +2836,7 @@ fn damaged_maps_under_a_ride() {
     let mut noise = bytes(5, 1 << 24);
     let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
     let mut mem = std::vec![0u16; 48 * 1024];
-    let (mut traces, mut climbs, mut said, mut tiles, mut quiet) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let (mut traces, mut climbs, mut said, mut tiles, mut quiet, mut flips) = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
     let mut a = std::boxed::Box::new(Ahead::new());
     for round in 0..120 {
         let mut d = crate::fat::tests::Ram(img.clone(), 0);
@@ -2867,23 +2867,36 @@ fn damaged_maps_under_a_ride() {
             if a.second(true, Some(fx)).is_some() {
                 said += 1;
             }
+            // the mode switched at a random second, sometimes while a trace or a tile is in progress
+            if next().is_multiple_of(25) {
+                flips += u32::from(a.busy() || a.loading());
+                a.set_trails(!a.trails());
+            }
             let mut steps = 0;
             while a.work(&mut d, &mut mem) && steps < 20 {
                 steps += 1;
             }
             let _ = (a.alt_at(next() % 5000), a.grade_ahead(next() % 5000), a.climb_at(next() % 5000), t);
         }
+        // the round ends sane: a trace still under way is finished, and then nothing is busy
+        let mut steps = 0;
+        while a.work(&mut d, &mut mem) {
+            steps += 1;
+            assert!(steps < 100_000, "a trace that never finishes");
+        }
+        assert!(!a.busy(), "idle once the work says so");
         traces += a.traces;
         climbs += a.climbs().len() as u32;
         tiles += a.io().0;
         quiet += u32::from(!a.on_road());
     }
     std::println!(
-        "damaged maps: {traces} traces, {climbs} climbs, {said} said, {tiles} tiles read, {quiet} rides off the trace"
+        "damaged maps: {traces} traces, {climbs} climbs, {said} said, {tiles} tiles read, {quiet} rides off the trace, \
+         {flips} mode switches mid-work"
     );
     assert!(
-        traces > 100 && climbs > 20 && said > 10 && tiles > 300 && quiet > 5,
-        "{traces} {climbs} {said} {tiles} {quiet}"
+        traces > 100 && climbs > 20 && said > 10 && tiles > 300 && quiet > 5 && flips > 0,
+        "{traces} {climbs} {said} {tiles} {quiet} {flips}"
     );
 }
 
