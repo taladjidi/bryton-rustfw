@@ -282,12 +282,12 @@ fn the_indoor_page_set_is_a_row() {
     n.key(&mut sim, &mut app, Press::Long(Key::Page));
     for (menu, row) in [
         (Menu::Main, menu::Row::Open(Menu::Pages)),
-        (Menu::Pages, menu::Row::Open(Menu::PageList(true))),
-        (Menu::PageList(true), menu::Row::Open(Menu::Page(0))),
+        (Menu::Pages, menu::Row::Open(Menu::PageList(ride::Profile::Indoor))),
+        (Menu::PageList(ride::Profile::Indoor), menu::Row::Open(Menu::Page(0))),
     ] {
         let i = at(&app, menu, row);
         n.tap_row(&mut sim, &mut app, i);
     }
     assert_eq!((app.screen(), n.0), (Screen::Menu(Menu::Page(0), 0), 4));
-    assert!(app.view_indoor(), "the indoor set");
+    assert!(app.view_set() == ride::Profile::Indoor, "the indoor set");
 }
