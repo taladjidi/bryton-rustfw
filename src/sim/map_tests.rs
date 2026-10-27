@@ -350,6 +350,44 @@ fn map_zoom_buttons() {
     sim.save("map_zoom_half");
 }
 
+/// With a course followed, the crosshair toggles between the default view and the whole route (the fit), and back.
+#[test]
+fn map_crosshair_toggles_the_route() {
+    use crate::map::{self, View};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(course_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_level = 0;
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.open_courses(&mut sim);
+    app.follow_course(hill(&app));
+    for _ in 0..100 {
+        app.step(&mut sim);
+    }
+    sim.gnss.fix = Some(500);
+    app.screen = Screen::Ride(2);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 20_000);
+    let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let [_, minus] = map::buttons(area).unwrap();
+    let centre = (minus.0 + minus.2 / 2, minus.1 + minus.3 + 8 + minus.3 / 2);
+    let tap = |sim: &mut Sim, app: &mut App| {
+        app.input(sim, Input::Touch(Gesture::Tap(centre.0 as u16, centre.1 as u16)));
+        assert_consistent(sim, app);
+    };
+    let default = map::default_mpp16(area);
+    assert_eq!(app.map_view(0).unwrap().mpp16, default, "the default view first");
+    tap(&mut sim, &mut app);
+    let whole = View::fit(&app.track, area, app.route().as_ref()).unwrap();
+    assert_eq!(app.map_view(0), Some(whole), "the whole route");
+    assert_ne!(whole.mpp16, default);
+    assert_eq!(app.map_zoom, None, "not a zoom by hand");
+    tap(&mut sim, &mut app);
+    assert_eq!(app.map_view(0).unwrap().mpp16, default, "the default view again");
+}
+
 /// No position, no view (the fit of nothing: "NO FIX"); with one, the default view is about 1 km across, and "+" and
 /// "-" work from it.
 #[test]
@@ -460,7 +498,8 @@ fn map_zoom_with_a_course() {
         let (x, y) = v.px(area, app.track.pos().unwrap());
         assert!(x >= area.0 && x < area.0 + area.2 && y >= area.1 && y < area.1 + area.3, "the arrow on the map");
         let course = sim.screen.iter().filter(|&&p| p == map::COURSE).count();
-        assert!(course > 0, "the course drawn where it is in view: {course} px");
+        // presence only: the count moved from 83 to 281 px between runs of this test (the track covers part of it)
+        assert!(course > 0, "the course drawn in view: {course} px");
         assert_consistent(&sim, &app);
     }
     assert!(views > 0, "the view follows the rider");

@@ -285,6 +285,8 @@ pub struct App {
     map_zoom: Option<u32>,
     /// Zoomed in and panned by hand: the map's centre (metres on the track's plane); None: it follows the rider.
     map_centre: Option<(i32, i32)>,
+    /// The crosshair with a course followed showed the whole route ([`map::View::fit`]) instead of the default view.
+    map_whole: bool,
     /// The eMMC, for the basemap and the dev link (identified at first use, never at boot).
     emmc: emmc::Emmc,
     /// Roads and water under the first map field of a page, drawn once per view.
@@ -444,6 +446,7 @@ impl App {
             track: map::Track::new(),
             map_zoom: None,
             map_centre: None,
+            map_whole: false,
             emmc: emmc::Emmc::new(),
             basemap: tiles::Basemap::new(),
             touch_ok: touch::init(b),

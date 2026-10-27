@@ -294,7 +294,15 @@ impl App {
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
-                        map::draw(c, map::area(bx), &self.track, m.view, base, self.route().as_ref(), m.zoomed());
+                        map::draw(
+                            c,
+                            map::area(bx),
+                            &self.track,
+                            m.view,
+                            base,
+                            self.route().as_ref(),
+                            m.zoomed() || m.route_drawn(),
+                        );
                     }
                     Drawn::Profile(p) => self.draw_profile(c, bx, p),
                     Drawn::Workout(w) => self.draw_workout_graph(c, bx, w),
@@ -311,18 +319,19 @@ impl App {
         }
     }
 
-    /// The map's zoom set by hand, if any.
-    /// A page's map follows the rider at the default level (no zoom set by hand): outdoors. Indoors, the fit.
+    /// A page's map follows the rider at the default level (no zoom set by hand): outdoors, and unless the crosshair
+    /// showed the whole route. Indoors, the fit.
     pub(crate) fn page_follow(&self) -> bool {
-        !self.indoors()
+        !self.indoors() && !self.map_whole
     }
 
+    /// The map's zoom set by hand, if any.
     pub(crate) fn zoom(&self) -> Option<map::Zoom> {
         self.map_zoom.map(|level| map::Zoom { level, centre: self.map_centre })
     }
 
     /// The page's (first) map: its area and how it is drawn.
-    fn page_map(&self) -> Option<(map::Rect, map::Shown)> {
+    pub(crate) fn page_map(&self) -> Option<(map::Rect, map::Shown)> {
         let i = self.first_map()?;
         match (self.widgets().nth(i), self.drawn.get(i)) {
             (Some((bx, _)), Some(Drawn::Map(m))) => Some((map::area(bx), *m)),

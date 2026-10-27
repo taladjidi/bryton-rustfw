@@ -54,7 +54,7 @@ impl App {
         let Some(c) = self.courses.as_deref_mut() else { return };
         // another map (the course in or out of the fit): fitted until "+", not a zoom from before that waited for
         // the fit to grow (review)
-        (self.map_zoom, self.map_centre) = (None, None);
+        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
         if c.on.is_some() && c.on == c.list.get(k).map(|e| e.file) {
             return self.stop_course();
         }
@@ -66,7 +66,7 @@ impl App {
     pub(crate) fn stop_course(&mut self) {
         let Some(c) = self.courses.as_deref_mut().filter(|c| c.on.is_some()) else { return };
         c.on = None;
-        (self.map_zoom, self.map_centre) = (None, None);
+        (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false);
         self.say("COURSE OFF");
     }
 

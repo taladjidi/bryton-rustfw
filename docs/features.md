@@ -60,7 +60,7 @@
   when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
   across the screen at least 120 px tall (a smaller graph shows its title and bars), and the workout gauge's target
   line only in a box 100 px tall or more.
-- **Map:** the track since power-on, north up, fitted to the whole track, an arrow for position and heading, a
+- **Map:** the track since power-on, north up, about 1 km across around the rider (fitted to the whole track until a fix), an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
     packs to `\Rustfw\Maps` (made on the computer by `tools/ign_pack.py`, docs/install.md, "IGN maps"): zooms 11
@@ -78,14 +78,18 @@
     level set by hand the map follows the rider: centred a little ahead of them, and centred again only when the
     arrow leaves the middle of the map (a new basemap each time, about every 26 s at 1.5 m a pixel and 29 km/h,
     35 s at 2 m). A third button, a crosshair under "-", shown whenever the zoom is set by hand, goes back to
-    fitting the whole track (and course). Kept until the unit is switched off. A hold on the map opens the page
+    the default view. Kept until the unit is switched off.
+  - **Default view:** with a position and no zoom set by hand, the map is about 1 km across its smaller side (4 m a
+    pixel on the full-page map), centred a quarter of the map ahead of the rider and redrawn when they leave the
+    middle three fifths; no fix yet: the whole track fitted. With a course followed, the crosshair toggles between
+    that view and the whole route (fitted) and back. A hold on the map opens the page
     editor with the map's box selected (not while a ride records, as on any box); a map of half a page or less has no buttons. The fitted map keeps the arrow clear of the buttons.
   - **Pan:** at a zoom set by hand, drag the map: it moves with the finger, redrawn once when the finger lifts
     (one new basemap, no redraw while dragging), at most two map widths past the track and the course. The map
     then stays put instead of following; "+" and "-" zoom around the centre panned to; the crosshair goes back to
     the fit. While the zoom is set by hand, a drag on the map pans instead of changing page or opening the media
     remote; the keys still change pages. Fitted, swipes keep their meanings. A new ride, or a course followed or
-    dropped, fits the map again.
+    dropped, returns to the default view.
 - Everything is in the project's own dot-matrix font, or in Barlow Semi Condensed Bold with FONT = SMOOTH (Touch,
   below). Only what changes is redrawn, in the smallest box.
 
@@ -124,6 +128,7 @@
 |---|---|---|
 | Page | from the overview, the ride pages; then round them (the overview is apart, as on stock) | down (stops at the last row) |
 | hold Page | the menu; during a ride (recording or paused), the ride menu | |
+| tap the cog | the menu; while recording too (settings change as on the keys, the ride goes on) | |
 | Lap | a lap (while riding), on the overview too | up (stops at the first row) |
 | Start | start, pause, resume the ride (from the overview: and show page 1); a banner says which | select, or change the value |
 | hold Start | a paused ride: the end-ride screen (RESUME, SAVE, DISCARD; or END RIDE in the ride menu); the overview with no ride: today's workout; on a past ride's card: DELETE, asked | |

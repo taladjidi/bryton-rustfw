@@ -404,6 +404,17 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Next | Input::Touch(Gesture::Swipe(Dir::Left))) => {
                 (self.screen, self.more_on) = (self.paged(true), None) // the next page's normal variant
             }
+            // the crosshair with a course followed: the whole route, then the default view again
+            (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y)))
+                if self.map_zoom.is_none()
+                    && self.route().is_some()
+                    && self.page_map().is_some_and(|(a, m)| {
+                        map::button_at(a, &m, i32::from(x), i32::from(y)) == Some(map::Button::Centre)
+                    }) =>
+            {
+                self.map_whole = !self.map_whole;
+                return self.update_page(b);
+            }
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
             (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.zoom_at(x, y).is_some() => {
                 if let Some(z) = self.zoom_at(x, y) {
@@ -426,6 +437,10 @@ impl App {
             }
             // while recording, touch on a page only turns pages and works the map: no menu by a hold or the gear, no
             // field changed by a tap (a wet glove, a drop of rain; the keys still do all of it)
+            // the gear stays a menu while recording (the owner, 2026-10-27): its settings take effect as on the keys
+            (Screen::Main, Input::Touch(Gesture::Tap(x, y))) if recording && inside(ui::GEAR_TAP, x, y) => {
+                self.open(Screen::Menu(self.menu_root(), 0))
+            }
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(..) | Gesture::Hold(..))) if recording => return,
             // a tap on a graph shows the next plot, until the unit is switched off (the page as kept is not changed: a
             // stray touch never edits it for good); a hold switches between the last minutes and the whole ride
