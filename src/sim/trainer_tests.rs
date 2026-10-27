@@ -915,25 +915,63 @@ fn a_silent_trainer_ends_the_indoor_ride() {
     assert_eq!(app.notes.text.as_str(), "TRAINER LOST: ROAD RIDE");
 }
 
-/// BIKE > PROFILE: AUTO, ROAD, INDOOR round; each is kept (register 11's tag: AUTO keeps the tag earlier builds read),
-/// and a forced INDOOR is the profile at Start without a trainer.
+/// BIKE > PROFILE MTB: a trainer heard still makes the ride INDOOR, and its silence gives the ride back to MTB, not
+/// ROAD; with no trainer, Start takes MTB.
+#[test]
+fn mtb_gives_way_to_a_trainer_and_comes_back() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.classic_pages();
+    sim.backup[14] = Kind::Trainer.to_word(ID);
+    sim.nordic.sensors.push(trainer_sensor());
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.profile = Some(crate::ride::Profile::Mtb);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.indoors(), "a trainer heard: indoor, MTB or not");
+    sim.nordic.sensors.clear();
+    run(&mut sim, &mut app, 160_000);
+    assert_eq!(app.ride_profile(), crate::ride::Profile::Mtb, "the trainer silent: back to MTB");
+    assert_eq!(app.notes.text.as_str(), "TRAINER LOST: MTB RIDE");
+    app.toggle_indoor();
+    assert!(app.indoors());
+    app.toggle_indoor();
+    assert_eq!(app.ride_profile(), crate::ride::Profile::Mtb, "out again by hand: MTB");
+
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.profile = Some(crate::ride::Profile::Mtb);
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride_profile(), app.notes.text.as_str()), (crate::ride::Profile::Mtb, "MTB RIDE"));
+}
+
+/// BIKE > PROFILE: AUTO, ROAD, INDOOR, MTB round; each is kept (register 11's tag: AUTO keeps the tag earlier builds
+/// read, and so does MTB, with register 16's bit 27), and a forced INDOOR is the profile at Start without a trainer.
 #[test]
 fn the_profile_setting_is_kept() {
     let mut s = crate::Settings::from_word(0);
     let mut seen = std::vec::Vec::new();
-    for _ in 0..3 {
+    for _ in 0..4 {
         let mut l = crate::Line::<12>::new();
         s.text(crate::menu::Setting::BikeProfile, &mut l);
         seen.push((
             std::string::String::from(l.as_str()),
             s.to_word() >> 24,
-            crate::Settings::from_word(s.to_word()) == s,
+            crate::Settings::from_word(s.to_word()).with_power_word(s.power_word()) == s,
         ));
         s.cycle(crate::menu::Setting::BikeProfile);
     }
     assert_eq!(
         seen,
-        [("AUTO".to_string(), 0xa7, true), ("ROAD".to_string(), 0xa8, true), ("INDOOR".to_string(), 0xa9, true)]
+        [
+            ("AUTO".to_string(), 0xa7, true),
+            ("ROAD".to_string(), 0xa8, true),
+            ("INDOOR".to_string(), 0xa9, true),
+            ("MTB".to_string(), 0xa7, true)
+        ]
     );
     assert_eq!(s.profile, None, "round");
 

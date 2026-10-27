@@ -122,6 +122,8 @@ pub(crate) struct Gps {
     pub(crate) sent: u8,
     /// The configuration goes again at the next message (the GPS POWER setting changed).
     pub(crate) reconfig: bool,
+    /// The power mode the last configuration sent (saver: cyclic tracking).
+    pub(crate) saver: bool,
     /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
     pub(crate) wait: u8,
     /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
@@ -149,6 +151,7 @@ impl Gps {
             ms: 0,
             sent: 0,
             reconfig: false,
+            saver: false,
             wait: 0,
             off: false,
             aid,

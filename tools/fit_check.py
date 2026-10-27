@@ -7,11 +7,11 @@ ArtPct in each record and the strap's beats in hrv messages: checked with both d
 developer fields from their descriptions, the beats of both equal to the ones the test fed (count and values). The
 recorder's saved pair (target/fit/recorded.fit, recorded_full.fit, from `cargo test-host two_copies_cost`):
     fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
-same records in both, developer fields and beats only in the full one, every beat the recorder was fed. The ride profile (fit.rs `Sample::indoor`, from
+same records in both, developer fields and beats only in the full one, every beat the recorder was fed. The ride profile (fit.rs `Sample::profile`, from
 `cargo test-host fit_sample`):
-    fit_check.py --profile target/fit/indoor.fit target/fit/older.fit
+    fit_check.py --profile target/fit/indoor.fit target/fit/older.fit target/fit/mtb.fit
 an indoor ride cut and resumed (sport cycling, sub_sport indoor_cycling in every lap and the session), and a ride
-resumed from a record of the build before sub_sport (road).
+resumed from a record of the build before sub_sport (road), and an MTB ride cut and resumed (mountain).
 """
 import sys
 import warnings
@@ -197,6 +197,7 @@ if args[:1] == ["--pair"]:
 elif args[:1] == ["--profile"]:
     check_profile(args[1], "indoor_cycling")
     check_profile(args[2], "road")
+    check_profile(args[3], "mountain")
 else:
     check(args[0], True)
     check(args[1], False)

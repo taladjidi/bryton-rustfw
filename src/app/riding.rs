@@ -326,7 +326,7 @@ impl App {
             rmssd_ms: self.hrv.rmssd().filter(|_| hr),
             artifacts_pct: self.hrv.artifacts().filter(|_| hr),
             ascent_m: Some(self.ride.ascent_m()),
-            indoor: self.indoors(),
+            profile: self.ride_profile(),
             by_hand: self.profile_by_hand,
         }
     }
@@ -336,9 +336,9 @@ impl App {
     /// The ride's own profile, not [`App::indoors`]: at the End event the ride is idle already, where that is the
     /// next ride's choice. A recorder without a ride open ignores it.
     fn profile_to_recorders(&mut self) {
-        let (indoor, by_hand) = (self.profile == ride::Profile::Indoor, self.profile_by_hand);
-        self.rec.clean.set_profile(indoor, by_hand);
-        self.rec.full.set_profile(indoor, by_hand);
+        let (profile, by_hand) = (self.profile, self.profile_by_hand);
+        self.rec.clean.set_profile(profile, by_hand);
+        self.rec.full.set_profile(profile, by_hand);
     }
 
     /// The recorder's card work when due (a checkpoint a minute, the save), the ride left open at boot, and the
@@ -372,8 +372,8 @@ impl App {
                 // paused where the last checkpoint left it: Start goes on, a long Start ends and saves it
                 self.ride = ride::Ride::resumed(&words);
                 // its profile from the record (an older one: ROAD, automatic), by hand if the rider set it so;
-                // automatic, a trainer silent for TRAINER_QUIET_S after the restart turns it back to ROAD
-                self.profile = if self.rec.clean.indoor() { ride::Profile::Indoor } else { ride::Profile::Road };
+                // automatic, a trainer silent for TRAINER_QUIET_S after the restart turns it back to ROAD or MTB
+                self.profile = self.rec.clean.profile();
                 (self.profile_by_hand, self.tlink.quiet_s) = (self.rec.clean.by_hand(), 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
                 self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
@@ -464,7 +464,7 @@ impl App {
             alt_mm: alt.0,
             alt_ref: alt.1,
             alt_corr_mm: self.alt.corr(),
-            indoor: self.indoors(),
+            profile: self.ride_profile(),
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
