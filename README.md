@@ -71,6 +71,7 @@ Measured on the unit (2026-10-27, `tools/profile.py` from RAM, 30 s windows; the
 | [docs/journal.md](docs/journal.md) | what was found on the unit, dated |
 | [docs/roadmap.md](docs/roadmap.md) | what to build next, in dependency order |
 | [docs/boot.md](docs/boot.md) | how it starts, from the bootloader's hand-off |
+| [docs/power.md](docs/power.md) | what each peripheral draws (estimated), what was done, how to measure the battery |
 | [BOARD.md](BOARD.md) | the hardware: pin map, timing diagrams, every chip, with evidence |
 | [AGENTS.md](AGENTS.md) | how to work on it: rules, tests, the dev loop |
 

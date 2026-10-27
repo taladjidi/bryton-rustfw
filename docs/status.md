@@ -84,6 +84,15 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **GPS POWER SAVER (u-blox cyclic tracking, `gnss::config`)**: on the host only. On the unit, outdoors: the
+  configuration answered ACK-ACK (`tools/gnss.py`, CFG-VALGET of 0x20d00001 reads 2), NAV-PVT still read every second
+  over SPI between the receiver's sleeps (no gaps: the strip's GPS stays green, no fix dropped after 3 s), the track
+  beside FULL's on the same road, and the battery against FULL (docs/power.md, measurement plan). Also which
+  constellations the receiver uses (CFG-VALGET of CFG-SIGNAL-*_ENA: the default or what stock left).
+- **The ANT+ search rests growing (app/radio.rs `search_rest_ms`)**: a paired sensor left switched off: searches at
+  0:00, 1:40, 4:10, 8:40, then every 4 min 40 s (the high-priority search may add 10 s each); found at once after a
+  ride's Start; the battery with one absent sensor against none (docs/power.md).
+
 - **A USB suspend (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`)**: decided on the host only; macOS
   would not suspend the idle unit while awake. With the owner: plug the unit in, let the Mac sleep for a minute, wake
   it. Expected: the dot grey during the sleep, no "USB RECONNECT", `dev.py info` answers at once after the wake (same

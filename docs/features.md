@@ -280,7 +280,7 @@ MENU
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, GAUGE POWER (the workout gauge's window)
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
-     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF)
+     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (FULL / SAVER)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```
 
@@ -413,6 +413,8 @@ silent at its end. A chip that never answers the first acknowledged message turn
 until the chip is started again; once one was answered, a later silence only has the message sent again. An FTMS
 trainer that refused the control is asked again 10 s later, then less often (up to a minute apart), while it is driven.
 With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too (AUTO keeps it on).
+BIKE > GPS POWER SAVER puts the receiver in u-blox cyclic tracking: about 4.5 mA less (estimated from
+u-blox's data sheet: [power.md](power.md)), at some cost in accuracy; FULL (continuous) by default.
 
 ## Workouts
 
@@ -582,7 +584,8 @@ STOCK):
 
 - **ANT+:** heart rate (and the beat-to-beat intervals, for DFA a1 and RMSSD), speed, cadence, speed and cadence,
   power, on stock's channels. A paired sensor is kept
-  through power off, so a friend's is never taken. A silent sensor searches 30 s, then rests a minute. Needs the
+  through power off, so a friend's is never taken. A silent sensor searches 30 s, then rests a minute, then 2,
+  then 4 minutes at most while it stays away (a ride's Start, or the sensor heard, starts over from a minute). Needs the
   ANT+ key from your own stock firmware ([install.md](install.md)).
 - **Power meter calibration** (SENSORS > CALIBRATE POWER, offered while the power meter is paired and heard; not
   yet seen on the unit): the screen says UNCLIP, CRANKS VERTICAL, NO PRESSURE; Start (or the CALIBRATE button) sends
