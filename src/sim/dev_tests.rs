@@ -46,6 +46,8 @@ fn peek_and_poke_registers_only() {
         "peek 0x40013001",
         "peek 0x5ffffffc 2",
         "peek 0x40000000 65",
+        "peek 0xe000e010",
+        "peek 0xe000e33c 2",
         "peek 0x",
         "poke 0x40013000",
     ] {

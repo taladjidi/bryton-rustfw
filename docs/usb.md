@@ -131,6 +131,13 @@ Backup register 0 after a high-speed drop at the mount, read after the replug: `
   loop spins just the same, unmeasured. Timing decides it: about three runs in four of some builds, none of
   others (adding a store after WFI hid it; `dsb` / `isb` around WFI did not). Fix: main.rs `touch_edge` reads CPUPR1 back after
   clearing it and clears the NVIC pending bit on every call: 0 spins in 12 runs of two layouts that spun before.
+  **The same again with the panel's DMA** (2026-10-27, after c5465b0): the cpu figure at 1006 permille, ISPR0 0x00000c00,
+  ICSR.VECTPENDING 27 = IRQ 11 (DMA1 stream 0) with DMA1_LISR 0: `dma_wait` cleared the NVIC right after LIFCR, the
+  line re-pended it, and nothing cleared it until the next transfer. 0 in 10 runs of the build at e923b23, but 5 in 6
+  with LISR's read back removed. Fix, for every wake source: main.rs `sleep` clears the pending bits of all three
+  (IRQ 11, 23, 77) just before each WFI, after the sources were read; the lines are level, so an unread event pends
+  again at once. The sources no longer clear their own NVIC bit. With the read back removed: 0 spins in 10 runs; the
+  build as committed: 0 in 20. `dev.py peek` now reads the NVIC (0xe000e100 to 0xe000e33c) and ICSR (0xe000ed04).
 - **macOS refusing the mount** ("mount approval dissented, 0xF8DA0008") was its lock screen: it does not mount a newly
   inserted disk while locked. Not the unit.
 - **The main loop stalling** after a drive command (fixed): the eMMC access slept, which takes over SysTick. This was

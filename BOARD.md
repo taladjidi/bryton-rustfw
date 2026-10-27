@@ -232,7 +232,10 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   while the stream sends the other; a fill is one word repeated (no memory increment). The buffers are the top 4 KB
   of AXI SRAM (link.x PANELDMA, 0x2407f000): DMA1 reaches AXI SRAM and the SDRAM through the bus matrix, never the
   DTCM (RM0399 "System architecture"). The CPU sleeps (WFI) on the stream's line, NVIC 11, pended by TCIE / TEIE /
-  DMEIE with interrupts masked; DMA1LPEN and SPI1LPEN are set for that wait only. An abort sets TCIF (RM0399 DMA,
+  DMEIE with interrupts masked; DMA1LPEN and SPI1LPEN are set for that wait only. Its NVIC pending bit is cleared
+  just before each WFI (main.rs `sleep`), never right after LIFCR: there it stuck as IRQ 23's did (seen 2026-10-27:
+  NVIC_ISPR0 0x00000c00, ICSR 0x0041b000, VECTPENDING 27 = IRQ 11, DMA1_LISR 0), so every WFI returned at once until
+  the next transfer. An abort sets TCIF (RM0399 DMA,
   stream disable). **Seen on the unit 2026-10-27** (from RAM): a first timeout of 10 ms cut full-screen fills
   (0x7ffe pixels take 10.5 ms at 50 MHz); 30 ms since. Renode 1.17's SPI model has no transmit DMA request: there
   the first wait times out and the CPU path takes over (the pixels still match). **Cache contract:** the D-cache is
@@ -834,7 +837,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 |---|---|
 | bus | **I2C1** (0x40005400), PB6 SCL, PB7 SDA, AF4, open drain, no internal pull; RCC_APB1LENR bit 21, reset APB1LRSTR bit 21 |
 | stock's timing | kernel clock D2PCLK1 12.5 MHz, TIMINGR 0x00100414 (about 400 kHz, inferred); HAL analog filter call with 0 (on, inferred from HAL's encoding), digital filter off |
-| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6, reads it back, and clears the NVIC pending bit on every pass, edge or not: cleared right after the EXTI write, the still-asserted line pended IRQ 23 again and it stuck (seen 2026-10-27: NVIC_ISPR0 0x00800400, ICSR 0x00427000, VECTPENDING 39 = IRQ 23, with EXTI_CPUPR1 0x00000010, line 6 clear), so every WFI returned at once |
+| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6 and reads it back; the NVIC pending bit is cleared just before each WFI with every wake source's (main.rs `sleep`): cleared right after the EXTI write, the still-asserted line pended IRQ 23 again and it stuck (seen 2026-10-27: NVIC_ISPR0 0x00800400, ICSR 0x00427000, VECTPENDING 39 = IRQ 23, with EXTI_CPUPR1 0x00000010, line 6 clear), so every WFI returned at once |
 | power | PG3 high, shared with the panel (already high in this firmware) |
 | reset | **PH3**, high to run (active-low RESET: the chip answers on I2C1 once PH3 is high, seen on the unit) |
 

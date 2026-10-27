@@ -71,6 +71,9 @@ The dated findings are in [journal.md](journal.md).
   of wall time awake): the touch line's IRQ 23 stuck pending in the NVIC (docs/usb.md, "Ruled out or fixed").
 - **After the fix** (`touch_edge` clears the pending bit on every call): `usb` at 43 to 44 calls a second, 0.05 % of wall
   time, in 12 runs of two layouts; the dev link and `info` work. A tap on the panel after the fix is still to see.
+- **Again with the panel's DMA:** IRQ 11 stuck the same way (ISPR0 0x00000c00, DMA1_LISR 0). Now one place, main.rs
+  `sleep`, clears every wake source's pending bit just before each WFI: 0 spins in 20 runs (cpu 9 to 10 permille), and
+  0 in 10 of a variant that spun 5 times in 6 before. A tap after this fix is still to see.
 
 ## Seen on the unit: the profiler and the performance pass (2026-10-27, from RAM, owner away)
 
