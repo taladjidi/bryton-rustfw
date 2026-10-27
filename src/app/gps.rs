@@ -120,12 +120,16 @@ impl App {
 
     /// The next message for the receiver after power-up, one per pass: the configuration, the time (UTC from the
     /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known. Then
-    /// None.
+    /// None. A change of GPS POWER sends the configuration alone again (its power mode), in the RAM layer as at start.
     pub(crate) fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
+        let config = gnss::config(self.settings.gps_saver);
+        if core::mem::take(&mut self.gps.reconfig) && self.gps.sent > 0 {
+            return Some(config);
+        }
         loop {
             self.gps.sent = self.gps.sent.saturating_add(1);
             match self.gps.sent {
-                1 => return Some(gnss::config()),
+                1 => return Some(config),
                 2 => {
                     // the RTC holds local time: with the offset learnt at a fix, UTC within a couple of seconds;
                     // without it, the RTC as is, within 14 h (any time zone): the date still helps

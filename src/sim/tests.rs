@@ -561,7 +561,7 @@ fn gps_fix_and_speed() {
     run(&mut sim, &mut app, 3000);
     assert!(sim.gnss.powered);
     let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
-    assert!(sent(&sim, crate::gnss::config()), "configuration");
+    assert!(sent(&sim, crate::gnss::config(false)), "configuration");
     let frames = sim.gnss.got.iter().filter(|&&b| b == 0xb5).count();
     assert_eq!(frames, 2, "the RTC time (14 h accuracy, no offset learnt yet), no position yet");
     assert_eq!(app.strip.gps, Some(0), "searching");
@@ -619,6 +619,36 @@ fn gps_fix_and_speed() {
     assert_eq!(app.strip.gps, None);
     app.press(&mut sim, Press::Long(Key::Back));
     assert!(!sim.gnss.powered, "off with the unit");
+}
+
+/// GPS POWER (SETTINGS > BIKE): FULL by default (the receiver told continuous tracking at power-up); SAVER sends the
+/// configuration again at once with cyclic tracking, is kept in register 16, and the next power-up sends it so.
+#[test]
+fn gps_power_saver_from_the_menu() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 3000);
+    let count = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).filter(|w| *w == f).count();
+    let (full, saver) = (crate::gnss::config(false), crate::gnss::config(true));
+    assert_eq!((count(&sim, full), count(&sim, saver)), (1, 0), "FULL at power-up");
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::GpsPower));
+    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "FULL");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "SAVER");
+    assert_eq!(count(&sim, saver), 1, "sent once, at once");
+    assert!(Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).gps_saver, "kept");
+    sim.gnss.powered = false; // a power cycle
+    sim.gnss.off_since = sim.ms;
+    sim.gnss.got.clear();
+    let mut again = App::start(&mut sim, None);
+    run(&mut sim, &mut again, 3000);
+    assert_eq!((count(&sim, full), count(&sim, saver)), (0, 1), "SAVER at the next power-up");
 }
 
 /// A key stuck down since the start does not keep the light on (2026-10-25 review: the time-out never came).

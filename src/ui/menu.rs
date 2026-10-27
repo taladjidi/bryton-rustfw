@@ -105,6 +105,8 @@ pub enum Setting {
     ClimbsAhead,
     /// The font of every text: PIXEL (dot matrix, the default) or SMOOTH ([`crate::fonts::smooth`]).
     Font,
+    /// The GPS receiver's power mode: FULL (continuous tracking, the default) or SAVER (cyclic tracking).
+    GpsPower,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -198,6 +200,7 @@ impl Setting {
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::Font => "FONT",
+            Setting::GpsPower => "GPS POWER",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
     }
@@ -598,14 +601,15 @@ pub const DISPLAY: [Row; 5] = [
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
-/// ride setting, not a diagnostic), and the climbs ahead.
-pub const BIKE: [Row; 6] = [
+/// ride setting, not a diagnostic), the climbs ahead and the GPS receiver's power mode.
+pub const BIKE: [Row; 7] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
     Row::AltGps,
     Row::Set(Setting::BikeProfile),
     Row::Set(Setting::ClimbsAhead),
+    Row::Set(Setting::GpsPower),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

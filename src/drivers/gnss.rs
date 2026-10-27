@@ -108,14 +108,27 @@ pub fn frame(class: u8, id: u8, payload: &[u8]) -> [u8; 32] {
 /// UBX-CFG-VALSET to the RAM layer only (never flash or battery-backed RAM): NAV-PVT once per fix on SPI, no NMEA
 /// on SPI (what the receiver already does after stock, seen on the unit; sent so a receiver that lost its backup
 /// memory does the same), and AssistNow Autonomous on (the receiver predicts orbits from the ones it received;
-/// stock enables it too, "Enable_Assist_Auto"). Key IDs from u-blox's M10 interface description.
-pub fn config() -> [u8; 32] {
+/// stock enables it too, "Enable_Assist_Auto"), and the power mode: continuous (FULL), or with `saver` cyclic
+/// tracking (PSMCT, CFG-PM-OPERATEMODE 2), which the MAX-M10S data sheet (UBX-20035208 R08, table 15, 3 V, 1 Hz)
+/// gives as 5 mA at VCC tracking instead of 9.5 for the default GPS + Galileo + BeiDou B1I, at some cost in accuracy
+/// (the receiver sleeps between fixes; docs/power.md). Key IDs from u-blox's M10 SPG 5.10 interface description
+/// (UBX-21035062, CFG-PM). Four keys: the payload's 24 bytes fill the 32-byte frame.
+///
+/// ```
+/// use bryton_rustfw::gnss::config;
+/// assert_eq!(config(false)[25..29], [0x01, 0x00, 0xd0, 0x20], "CFG-PM-OPERATEMODE");
+/// assert_eq!((config(false)[29], config(true)[29]), (0, 2), "FULL, PSMCT");
+/// ```
+pub fn config(saver: bool) -> [u8; 32] {
     const MSGOUT_UBX_NAV_PVT_SPI: u32 = 0x2091_000a;
     const SPIOUTPROT_NMEA: u32 = 0x107a_0002;
     const ANA_USE_ANA: u32 = 0x1023_0001;
-    let mut p = [0u8; 19];
+    const PM_OPERATEMODE: u32 = 0x20d0_0001;
+    let mut p = [0u8; 24];
     p[..4].copy_from_slice(&[0, 0x01, 0, 0]); // version 0, layers: RAM
-    for (i, (key, value)) in [(MSGOUT_UBX_NAV_PVT_SPI, 1), (SPIOUTPROT_NMEA, 0), (ANA_USE_ANA, 1)].iter().enumerate() {
+    let keys =
+        [(MSGOUT_UBX_NAV_PVT_SPI, 1), (SPIOUTPROT_NMEA, 0), (ANA_USE_ANA, 1), (PM_OPERATEMODE, 2 * u8::from(saver))];
+    for (i, (key, value)) in keys.iter().enumerate() {
         p[4 + 5 * i..8 + 5 * i].copy_from_slice(&key.to_le_bytes());
         p[8 + 5 * i] = *value;
     }
@@ -301,10 +314,10 @@ mod tests {
 
     #[test]
     fn config_is_a_valid_frame() {
-        let c = config();
+        let c = config(true);
         let mut parser = Parser::new();
         let got: std::vec::Vec<_> = c.iter().filter_map(|&b| parser.push(b).map(|(c, i, p)| (c, i, p.len()))).collect();
-        assert_eq!(got, [(0x06, 0x8a, 19)]);
+        assert_eq!(got, [(0x06, 0x8a, 24)]);
         for f in [mga_time((2026, 10, 23, 15, 4, 5), 2), mga_pos(5_123_000, 4_234_000, 10_000)] {
             let mut parser = Parser::new();
             let got: std::vec::Vec<_> =
