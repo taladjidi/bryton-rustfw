@@ -132,7 +132,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
     small pure methods (`Phone`, `Ftms`, and in `app/groups.rs` `Notices` (`notes`), `Light`, `Gps`, `Radio`,
     `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`)). A new field of one of these goes in
     its struct; a new concern with three or more fields gets its own. `App` must stay under the size budget
-    (`tests::app_size_budget`, 56 KB; it lives in AXI SRAM).
+    (`tests::app_size_budget`, 64 KB; it lives in AXI SRAM, about 19 KB of which was free on 2026-10-27).
 - `src/app/mod.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can

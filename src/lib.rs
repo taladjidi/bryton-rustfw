@@ -627,12 +627,13 @@ mod tests {
     extern crate std;
     use super::*;
 
-    /// The app's size and its biggest parts (printed): it lives in AXI SRAM (main.rs make_app), and its one
-    /// temporary copy at start-up is on the stack.
+    /// The app's size (printed): it lives in AXI SRAM (main.rs make_app; about 19 KB of the 512 KB free on
+    /// 2026-10-27), and its one temporary copy at start-up is on the stack (123 KB of DTCM: 64 KB here plus main's
+    /// 16 KB fits). Raised from 56 KB at the owner's go (2026-10-27: App was 57 104 B of 57 344).
     #[test]
     fn app_size_budget() {
         std::println!("App is {} B", core::mem::size_of::<App>());
-        assert!(core::mem::size_of::<App>() < 56 * 1024, "App is {} B", core::mem::size_of::<App>());
+        assert!(core::mem::size_of::<App>() < 64 * 1024, "App is {} B", core::mem::size_of::<App>());
     }
 
     #[test]
