@@ -1,7 +1,7 @@
 # USB at high speed: the drops
 
 High speed USB drops the link under sustained traffic on this unit, with this firmware and with Bryton's. Full speed holds.
-This page has what is known, what was tried, and what to ask or try next. Last updated 2026-10-24.
+This page has what is known, what was tried, and what to ask or try next. Last updated 2026-10-27.
 
 ## The hardware
 
@@ -80,6 +80,45 @@ Backup register 0 after a high-speed drop at the mount, read after the replug: `
   from the device's side is the likeliest. Candidates: the transmit FIFO (sized to one packet, filled word by word
   by uncached code), the ULPI data timing at 60 MHz, the PHY's transmitter or supply. Next tries 2, 4, 5 and 7 below
   target exactly that.
+
+## Suspend: a normal state, not a drop (2026-10-27)
+
+- **What a suspend is:** the computer stops sending starts of frame; after 3 ms of an idle bus the core sets
+  OTG_GINTSTS.USBSUSP and OTG_DSTS.SUSPSTS (USB 2.0 7.1.7.6; RM0399, OTG_HS, OTG_GINTSTS and OTG_DSTS). The computer
+  ends it with resume signalling (OTG_GINTSTS.WKUPINT) or a bus reset. synopsys-usb-otg 0.5 reports USBSUSP and
+  WKUPINT as `PollResult::Suspend` / `Resume` and does nothing else (its `suspend` / `resume` are empty); usb-device
+  0.3 goes to `UsbDeviceState::Suspend` and back to the state before at the next resume, reset or traffic.
+- **Before:** `Suspend` is not `Configured`, so after 2 s the watch called it a drop: a soft disconnect (DCTL.SDIS,
+  100 ms of busy-waiting), "USB RECONNECT" on the screen, register 31 counted one more drop, and register 0's drive
+  record was overwritten. Once per suspend: the watch re-armed only once configured again.
+- **Now** (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`, tests in dev.rs): a suspend from configured is
+  left alone however long it lasts, the dot turns grey, and the link carries on as configured at the resume. Nothing
+  is polled in between: no USB interrupt comes, so WFI sleeps whole slices. Its timers run on the main loop's clock
+  (they ran on the cycle counter, which stops in WFI and wraps every 9 s).
+- **What is still a drop:**
+  - configured and the frame number (DSTS.FNSOF) still for 200 ms with no suspend (the green-dot drop);
+  - configured once, then not configured again for 2 s (a reset the computer did not follow up);
+  - a suspend after the drive's last command ended in a phase error: a computer suspends a device only when it is
+    idle, never in the middle of a transfer, so that is the port disabled (the 2026-10-24 drop above), and the old
+    recovery runs.
+- **On the unit:** a suspend could not be provoked without sleeping the Mac (not allowed). With the serial port closed
+  and the drive not lent, macOS kept the device powered (ioreg: IOUSBHostDevice DevicePowerState 2, over 2
+  minutes): it does not suspend this device while awake. The build ran from RAM with the link up, a green dot, cpu 8
+  permille. What a real suspend does is in docs/status.md, "Not yet seen on the unit".
+
+**Do suspends explain the past issues?** Mostly not.
+- **Do not fit:** the drops came during sustained high-speed transfers, and a computer never suspends a device with
+  a transfer in flight. They depend on speed (full speed held), which fits signal integrity, not power management.
+  Stock's drive (every 80 to 90 s while copying) and Engineer Mode's `LIBUSB_ERROR_IO` are other firmwares, without
+  this watch. The green-dot drop had no suspend: a suspend would have set USBSUSP and left Configured. Only an unplug
+  brought the link back, while a suspended device comes back with the next traffic.
+- **Fits, as an effect:** register 0 at the 2026-10-24 drop (`0xd1280200`: a READ(10) phase error, no reset, then the
+  core left Configured) is what the core reports as a suspend: the port went idle, but after the transfer failed.
+- **Fits, separately:** while the Mac slept with the unit plugged in (a system sleep suspends every port), the old
+  watch disconnected and reconnected the unit 2 s in; on waking, macOS found a device that had left and come back,
+  so it enumerated it afresh (the serial port gone and back, a lent drive "not ejected properly"), and the unit
+  showed "USB RECONNECT". Register 31 counted those as
+  drops and register 0 could hold a sleep's record instead of a real drop's (status 0 in it means no failed command).
 
 ## Ruled out or fixed
 

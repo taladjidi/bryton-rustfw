@@ -84,6 +84,11 @@ The dated findings are in [journal.md](journal.md).
 
 ## Not yet seen on the unit
 
+- **A USB suspend (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`)**: decided on the host only; macOS
+  would not suspend the idle unit while awake. With the owner: plug the unit in, let the Mac sleep for a minute, wake
+  it. Expected: the dot grey during the sleep, no "USB RECONNECT", `dev.py info` answers at once after the wake (same
+  uptime, no new enumeration), backup register 31 (`dev.py peek 0x580040cc`) unchanged.
+
 - **The profiler (link/prof.rs, `dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the
   counter's wrap, the `prof` answer). On the unit: `tools/profile.py --run` through its scenarios; the overhead `prof`
   reports (a few tens of cycles a section expected), the sum of the rows near `dev.py info`'s awake permille, and the key

@@ -274,6 +274,10 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
      OTG_HS              |<- 200 ms ->| core up, enumerated  ...  |
      strip USB  (none)   orange (powered) ........ green (configured) | system reset at the fall
 
+- **Suspend** (the computer idle or asleep: no starts of frame for 3 ms, OTG_GINTSTS.USBSUSP and OTG_DSTS.SUSPSTS
+  set, RM0399 OTG_HS): the dot turns grey and the link waits; resume signalling (OTG_GINTSTS.WKUPINT) or traffic
+  brings it back to green. Not a drop (docs/usb.md, "Suspend").
+
 ## 8. RTC
 
 - RTC (0x58004000) on the LSE, 24 h format, prescalers 31 / 1023 (1 Hz). It keeps running in standby.

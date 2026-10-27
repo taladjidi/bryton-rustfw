@@ -13,7 +13,7 @@
 
 use super::hw::{rd, stage_write, wr};
 use crate::{AF, CPU_HZ, OUT, Port, RCC, RCC_CR, cycles, delay_ms, gpio, modify, pin_set};
-use bryton_rustfw::dev::{self, Effect, Host, Session, Stats};
+use bryton_rustfw::dev::{self, Effect, Host, Session, Stats, UsbState, UsbWatch};
 use bryton_rustfw::{App, Board, msc};
 use static_cell::StaticCell;
 use synopsys_usb_otg::{PhyType, UsbBus, UsbPeripheral};
@@ -36,10 +36,6 @@ const DCFG: u32 = OTG_HS + 0x800;
 const FULL_SPEED: bool = option_env!("USB_FS").is_some();
 /// Bulk packet size: 512 at high speed, 64 at full speed (USB 2.0 5.8.3).
 const MPS: usize = if FULL_SPEED { 64 } else { 512 };
-/// Configured, but no start of frame for this long: the computer dropped the device (module doc, "Drops").
-const SOF_LOST_MS: u32 = 200;
-/// Configured once, then not for this long: the computer reset the device and gave up on it.
-const UNCONFIGURED_MS: u32 = 2000;
 const RCC_AHB1RSTR: u32 = RCC + 0x080;
 const RCC_AHB1ENR: u32 = RCC + 0x0d8;
 const RCC_D2CCIP2R: u32 = RCC + 0x054;
@@ -191,10 +187,14 @@ pub struct Link {
     out: [u8; 512],
     len: usize,
     last_full: bool,
-    /// DSTS.FNSOF when last seen changing, and when (cycles).
+    /// DSTS.FNSOF when last seen changing, and when (ms, the caller's clock).
     sof: (u32, u32),
-    /// Configured at some point, and since when (cycles) not configured any more (None: configured, or never was).
-    lost: (bool, Option<u32>),
+    /// The bus state the watch saw last, and since when (ms).
+    bus: (UsbState, u32),
+    /// Configured since the last reconnect.
+    was_configured: bool,
+    /// The last state before a suspend was Configured (cleared by a reconnect).
+    before: bool,
     /// A drive command ran since [`Link::worked`]: its eMMC access may have slept, which takes over SysTick.
     worked: bool,
 }
@@ -283,18 +283,15 @@ pub fn start() -> Option<Link> {
         out: [0; 512],
         len: 0,
         last_full: false,
-        sof: (u32::MAX, cycles()),
-        lost: (false, None),
+        sof: (u32::MAX, 0),
+        bus: (UsbState::Unconfigured, 0),
+        was_configured: false,
+        before: false,
         worked: false,
     })
 }
 
 impl Link {
-    /// The computer has configured the device: the dev link is usable.
-    pub fn configured(&self) -> bool {
-        self.dev.state() == UsbDeviceState::Configured
-    }
-
     /// Services USB: runs a drive command (msc.rs, through the app) and any bytes received on the dev link through
     /// its protocol.
     pub fn poll(&mut self, s: &mut Session, app: &mut App, board: &mut impl Board, stats: Stats) -> Effect {
@@ -337,45 +334,48 @@ impl Link {
         core::mem::take(&mut self.worked)
     }
 
-    /// Watches the frame number the computer's starts of frame advance (every 125 us at high speed): configured and
-    /// still for [`SOF_LOST_MS`], the computer has dropped the device (seen on the unit, 2026-10-24: the Mac lost it
-    /// mid-transfer while the unit still showed a green dot; stock dropped the same way on 2026-10-22). Then a soft
-    /// disconnect and connect, so the computer enumerates it again without an unplug. True when it did.
-    /// Also: configured once, then not for [`UNCONFIGURED_MS`] (the dot orange: the computer reset the device and
-    /// did not set it up again, seen on the unit 2026-10-24 after a drive transfer), the same reconnect.
-    pub fn watch(&mut self) -> bool {
-        let now = cycles();
+    /// Watches the link once per poll (lib dev.rs [`dev::watch_usb`] decides): `now_ms` is the main loop's clock
+    /// (cycles stop in WFI, and wrap in 9 s), `failed` the drive's last command ended in a phase error.
+    /// - **Suspend is a normal state:** usb-device goes to `Suspend` on OTG_GINTSTS.USBSUSP (the bus idle 3 ms,
+    ///   RM0399 OTG_HS, OTG_GINTSTS / OTG_DSTS.SUSPSTS) and back to the state before on WKUPINT or any traffic
+    ///   (usb-device `UsbDevice::poll`); nothing to do meanwhile, no interrupt comes, WFI sleeps whole slices.
+    /// - **A drop:** configured and the frame number (DSTS.FNSOF, every 125 us at high speed) still for
+    ///   [`dev::SOF_LOST_MS`] without a suspend (2026-10-24: the Mac lost the device mid-transfer, green dot), or
+    ///   configured once then not for [`dev::UNCONFIGURED_MS`], or suspended after a failed transfer (the port
+    ///   disabled, docs/usb.md): a soft disconnect and connect, so the computer may enumerate it again.
+    pub fn watch(&mut self, now_ms: u32, failed: bool) -> UsbWatch {
         let fnsof = rd(DSTS) >> 8 & 0x3fff;
-        let configured = self.configured();
-        self.lost = match (configured, self.lost) {
-            (true, _) => (true, None),
-            (false, (true, None)) => (true, Some(now)),
-            (false, l) => l,
+        let bus = match self.dev.state() {
+            UsbDeviceState::Configured => UsbState::Configured,
+            UsbDeviceState::Suspend => UsbState::Suspended { configured: self.before },
+            _ => UsbState::Unconfigured,
         };
-        if let (true, Some(t)) = self.lost
-            && now.wrapping_sub(t) >= UNCONFIGURED_MS * (CPU_HZ / 1000)
-        {
-            self.reconnect();
-            self.lost = (false, None);
-            return true;
+        if bus == UsbState::Configured {
+            (self.before, self.was_configured) = (true, true);
+        } else if bus == UsbState::Unconfigured {
+            self.before = false;
         }
-        if !configured || fnsof != self.sof.0 {
-            self.sof = (fnsof, now);
-            return false;
+        if bus != self.bus.0 {
+            self.bus = (bus, now_ms);
         }
-        if now.wrapping_sub(self.sof.1) < SOF_LOST_MS * (CPU_HZ / 1000) {
-            return false;
+        if bus != UsbState::Configured || fnsof != self.sof.0 {
+            self.sof = (fnsof, now_ms);
         }
-        self.reconnect();
-        true
+        let since = if bus == UsbState::Configured { self.sof.1 } else { self.bus.1 };
+        let w = dev::watch_usb(bus, self.was_configured, now_ms.wrapping_sub(since), failed);
+        if w == UsbWatch::Drop {
+            self.reconnect(now_ms);
+        }
+        w
     }
 
     /// A soft disconnect and connect: the computer sees a detach, then an attach, and enumerates the device again.
-    fn reconnect(&mut self) {
+    fn reconnect(&mut self, now_ms: u32) {
         modify(DCTL, 0, 1 << 1); // SDIS: the D+ pull-up off
         wait(|| false, 100);
         modify(DCTL, 1 << 1, 0);
-        self.sof = (u32::MAX, cycles());
+        self.sof = (u32::MAX, now_ms);
+        (self.was_configured, self.before) = (false, false);
     }
 
     /// Soft disconnect, so the computer sees the device leave before the next image enumerates again.
