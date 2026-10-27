@@ -860,6 +860,11 @@ fn climb_page_picture() {
                 // the bar is past the left figure (about 30 % of the plot) and the picture is of 40 %
                 assert!(&region(&sim) == r, "the figure survives the bar passing under it");
                 check_progress(&app, &n);
+                // a half-width cell: the figures do not overlap and stay in the field
+                let narrow = ui::climb_area((0, 0, 120, 100));
+                let [(l, _), (r, _)] = app.climb_text_boxes(narrow).unwrap();
+                assert!(l.0 + l.2 <= narrow.0 + narrow.2 && r.0 >= l.0 + l.2 && r.0 + r.2 <= narrow.0 + narrow.2);
+                assert!(l.2 > 0 && r.2 == 0, "the right figure dropped: {l:?} {r:?}");
                 assert!(a.2 > 0);
                 sim.save("climb_page_mid");
                 return;
@@ -868,4 +873,121 @@ fn climb_page_picture() {
         }
     }
     panic!("never half way");
+}
+
+/// Climbs ahead, riding to the warning of the climb.
+fn ahead_scene(route: fn(u64) -> (i32, i32, i32)) -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::route::tests::image_with_map();
+    sim.gnss.route = Some(route);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.ms;
+    while !app.page_on(crate::CLIMB) && sim.ms - t0 < 300_000 {
+        run(&mut sim, &mut app, 500);
+    }
+    (sim, app)
+}
+
+/// Metres still to the climb's start (negative: inside it).
+fn to_start(app: &App) -> i64 {
+    app.climb_now().map_or(i64::MAX, |n| i64::from(n.climb.start_m) - i64::from(n.along))
+}
+
+/// The CLIMB page's one opening per climb, in the cases that could open it twice or never: paused at the start
+/// (opens on resume), a menu up (not later), a key down at the crossing (the next pass), the page already shown,
+/// the rider's place stepping back over the start, a resume inside the climb (no opening).
+#[test]
+fn climb_page_opens_once_per_climb() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static HOLD: AtomicU64 = AtomicU64::new(u64::MAX);
+    // paused just before the start: nothing; resumed: opens at the crossing
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    while to_start(&app) > 30 {
+        run(&mut sim, &mut app, 250);
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.screen(), Screen::Ride(0), "paused");
+    app.press(&mut sim, Press::Short(Key::Start));
+    while to_start(&app) > 0 {
+        run(&mut sim, &mut app, 50);
+    }
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened after the resume");
+    // left by Page: not again, not after a pause and resume inside the climb, not with the latch lost (a resume
+    // after a trace gap sees the rider inside: preset, no opening)
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.climb.2 = None;
+    run(&mut sim, &mut app, 3000);
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "not again");
+
+    // a menu at the start: skipped for this climb, even once the menu is left
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    app.press(&mut sim, Press::Long(Key::Page));
+    while to_start(&app) > -2 {
+        run(&mut sim, &mut app, 250);
+    }
+    back(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "not opened later");
+
+    // a key down at the crossing: the page waits for the next pass without one
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    sim.keys = Box::new(|ms| {
+        if ms >= HOLD.load(Ordering::SeqCst) && ms < HOLD.load(Ordering::SeqCst) + 1900 { Key::Lap as u8 } else { 0 }
+    });
+    while to_start(&app) > 4 {
+        run(&mut sim, &mut app, 50);
+    }
+    HOLD.store(sim.ms, Ordering::SeqCst);
+    while to_start(&app) > 0 {
+        run(&mut sim, &mut app, 50);
+    }
+    assert!(sim.ms < HOLD.load(Ordering::SeqCst) + 1900, "the key is still down at the crossing");
+    assert_eq!(app.screen(), Screen::Ride(0), "a key is down: not yet");
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "the next pass");
+    HOLD.store(u64::MAX, Ordering::SeqCst);
+
+    // already on the page at the start: stays; left, it does not return
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+    while to_start(&app) > -2 {
+        run(&mut sim, &mut app, 250);
+    }
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB));
+
+    // the place jittering over the start (a fix 15 m behind every other second there): one opening
+    fn jitter(ms: u64) -> (i32, i32, i32) {
+        let s = 100.0 + ms as f64 * 0.008;
+        let back = if (900.0..1000.0).contains(&s) && ms / 1000 % 2 == 1 { 15.0 } else { 0.0 };
+        let (lat, lon) = crate::route::tests::metres(s - back, 0.0);
+        (lat, lon, 9_000_000)
+    }
+    let (mut sim, mut app) = ahead_scene(jitter);
+    let mut opens = 0;
+    for _ in 0..800 {
+        run(&mut sim, &mut app, 250);
+        if app.screen() == Screen::Ride(crate::CLIMB) {
+            opens += 1;
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+    }
+    assert_eq!(opens, 1, "opened once");
 }

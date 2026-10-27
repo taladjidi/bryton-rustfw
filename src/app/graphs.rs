@@ -384,15 +384,19 @@ impl App {
         r.push_u32(k.grade_x10().div_ceil(10).max(1));
         r.push_str("%");
         let h = ui::LABEL.height();
-        let (wl, wr) = (ui::LABEL.width(l.as_str()) + 6, ui::LABEL.width(r.as_str()) + 6);
-        Some([((a.0, a.1, wl, h), l), ((a.0 + a.2 - wr.min(a.2), a.1, wr, h), r)])
+        let wl = (ui::LABEL.width(l.as_str()) + 6).min(a.2);
+        let mut wr = (ui::LABEL.width(r.as_str()) + 6).min(a.2);
+        if wl + wr > a.2 {
+            (wr, r) = (0, Line::new()); // a narrow field: the gain only
+        }
+        Some([((a.0, a.1, wl, h), l), ((a.0 + a.2 - wr, a.1, wr, h), r)])
     }
 
     /// The climb's figures drawn again where they cover columns `cols` of the plot `a` (after those were redrawn).
     fn draw_climb_text(&self, c: &mut impl Canvas, a: (u32, u32, u32, u32), cols: core::ops::Range<u32>) {
         for ((x, y, w, _), s) in self.climb_text_boxes(a).into_iter().flatten() {
             let first = x - a.0;
-            if first < cols.end && cols.start < first + w {
+            if w > 0 && first < cols.end && cols.start < first + w {
                 ui::text::draw_in(c, &ui::LABEL, x, y, w, ui::text::Align::Centre, s.as_str());
             }
         }
