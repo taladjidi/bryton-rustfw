@@ -160,8 +160,7 @@ Cost is about calls x context size, so the main session (Opus) orchestrates and 
 - **Briefs:** goal, files and line ranges, tests to add, what is out of scope. Work that would pass the turn cap is
   split into two briefs. A feature with a costly part is split: `critical` writes that part, `implementer` the rest
   (settings, menus, UI, tests) on the same branch.
-- **Worktrees fork from the commit main had when the session started**, not from main now: a worktree agent merges
-  main first.
+- **Worktrees fork from the last push (`origin/main`)**, not from local main: a worktree agent merges main first. Agents never switch the main checkout (`git checkout`, `switch`, `reset`, `stash` there); merges into main go through `runner`, which checks it is on main first.
 - **Measured 2026-10-27:** a Sonnet review found everything an Opus one did, plus one more, at 2/3 of the cost; a
   Haiku implementer did a spelled-out fix at 1/3 of Sonnet's cost, same quality.
 - **The main session does no legwork:** it does not poll, gate runs and merges go to `runner`, it reads a file only to

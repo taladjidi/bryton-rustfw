@@ -434,6 +434,8 @@ build (POWER_STEPS=15) gives the wall time.
   RMSSD from the owner's strap (needs a few minutes of real beats); the AUTO backlight on stock's curve, outdoors.
 - **Pages moved off backup register 19** (stock reads it at boot): the first start of a new build moves them; then
   stock, reinstalled, should keep its last battery voltage as before.
+- **2026-10-27:** the power-average tap during a ride; the CLIMBING page appearing at a climb (course and climbs ahead); the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`), and the crosshair toggling the whole route; the cog opening settings during a ride.
+- **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps
 

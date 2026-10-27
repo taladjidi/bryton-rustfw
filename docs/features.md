@@ -230,6 +230,7 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
   values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
+- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and climbing pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window; the quick panel's watts stay 3 s.
 - Power (src/training/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
@@ -293,7 +294,7 @@ MENU
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
-     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, GAUGE POWER (the workout gauge's window)
+     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
@@ -333,7 +334,7 @@ MENU
   that page is gone, as the course page once the course stops). A row that goes while its menu shows (WORKOUT when
   the workout ends) moves the selection to the last row left.
 - **Numbers** (MAX HR 1 bpm, FTP 5 W, WEIGHT 1 kg, the bike's WEIGHT 0.1 kg, W' 0.5 kJ, the alerts 5): Start, then Lap up and Page down, held
-  to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, GAUGE POWER, WHEEL) goes to its next value.
+  to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, WHEEL) goes to its next value.
 - **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
   altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
   build is made from and its date; `dev.py info` gives the same commit).
@@ -456,7 +457,7 @@ TrainingPeaks), read only:
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
 - **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, olive within 5 %, the zone 1 colour (teal) under, the zone 5 colour (wine) over,
-  from the power over the GAUGE POWER window, the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
+  from the power over the tapped window (3, 10 or 30 s), the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
   from 0 to 150 % of FTP, heart rate from half the max to it, a quarter for an open target) in its zone colour; a
@@ -493,12 +494,13 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
+- **Climbing page:** when a climb is announced (a followed course, or climbs ahead without one) a CLIMBING page (altitude graph, climb, gain to the top, grade, VAM, the pacer or the ascent without a course) joins the ride pages one Page press after the page shown then, until the top; not added when one of the rider's pages already shows climb fields.
 - **Climb pacer** (pacing.rs, the TOP field, on the course page in place of the distance): within 5 km of a climb
   and on it, the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
   rider's bests when it is trusted, else FTP and the W' setting, taken at the ride's start and kept to its end: it
   also drains the W' balance) and the W' balance
   now, planned again at each section from where the rider is, with the rider's weight plus the bike's (SETTINGS >
-  BIKE > WEIGHT, 9.0 kg by default, also told to the trainer; a new ride forgets the plan). On the climb the power (3 s, or the GAUGE POWER window) shows in the workout gauge against the target's band
+  BIKE > WEIGHT, 9.0 kg by default, also told to the trainer; a new ride forgets the plan). On the climb the power (the tapped window, 3 s by default) shows in the workout gauge against the target's band
   (5 % each side, the target in numbers under the bar, or at the top right of a short box); ahead of it only the time.
   The time to the top ("TOP 4:49", in the title) counts down between plans. Power equation of Martin et al. 1998 for
   the speed; W' recovery inside the climb ignored; all the W' goes to the climb in hand.
