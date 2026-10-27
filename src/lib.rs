@@ -231,10 +231,12 @@ pub struct App {
     more: [Option<page::Page>; PAGES],
     /// The INDOOR profile's pages with their MORE variants, in the file only (app/profile.rs, app/editor.rs).
     indoor: page::Set,
-    /// The set PAGES and the editor show while no ride is open: false ROAD, true INDOOR (app/profile.rs).
-    pages_indoor: bool,
+    /// The MTB profile's pages (at most [`page::MTB_PAGES`]), in the file only.
+    mtb: page::Set,
+    /// The set PAGES and the editor show while no ride is open (app/profile.rs).
+    pages_set: ride::Profile,
     /// The set the ride pages on screen were taken from at the last pass ([`App::indoors`] then).
-    set_shown: bool,
+    set_shown: ride::Profile,
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
@@ -415,8 +417,9 @@ impl App {
             page_count,
             more: [None; PAGES],
             indoor: page::Set::indoor_default(),
-            pages_indoor: false,
-            set_shown: false,
+            mtb: page::Set::mtb_default(),
+            pages_set: ride::Profile::Road,
+            set_shown: ride::Profile::Road,
             more_on: None,
             store,
             edit: None,

@@ -417,6 +417,24 @@ fn indoor_crc(s: &[u8; 512]) -> u16 {
     crate::fit::crc(more_crc(s), &s[INDOOR_AT..INDOOR_CRC_AT])
 }
 
+/// Most pages the MTB set holds: the sector has room for four after the indoor part (6 pages would need 160 bytes
+/// where 131 are free).
+pub const MTB_PAGES: usize = 4;
+
+/// The MTB set, after the indoor CRC, same pattern as the indoor part with [`MTB_PAGES`] pages: its page count (zero
+/// in a file of an earlier build: the defaults), its pages, the MORE flags and variants, and a CRC-16 of these
+/// continuing the indoor part's CRC. A bad or absent one leaves [`Set::mtb_default`], everything above it untouched.
+/// Ends at byte 489 of 512. Earlier builds read nothing past the indoor CRC (byte 381): they ignore these bytes,
+/// and a sector they write back has them zero (a count of 0: the defaults).
+const MTB_AT: usize = INDOOR_CRC_AT + 2;
+const MTB_MORE_AT: usize = MTB_AT + 1 + MTB_PAGES * PAGE_BYTES;
+const MTB_CRC_AT: usize = MTB_MORE_AT + 1 + MTB_PAGES * PAGE_BYTES;
+
+/// The MTB part's CRC.
+fn mtb_crc(s: &[u8; 512]) -> u16 {
+    crate::fit::crc(indoor_crc(s), &s[MTB_AT..MTB_CRC_AT])
+}
+
 /// A set of ride pages with their MORE variants: the indoor profile's (the road set lives in the app's own fields,
 /// where the backup registers can reach its first pages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +470,31 @@ impl Set {
     }
 }
 
+impl Set {
+    /// The MTB pages until the rider edits them: big fields, few per page (gloves, rough ground). Time, distance,
+    /// speed and heart rate; the climb (altitude graph, grade, ascent, VAM); the speeds and the ascent; the map.
+    /// (No descent or altitude field exists: the graph and the ascent stand in.)
+    ///
+    /// ```
+    /// let s = bryton_rustfw::page::Set::mtb_default();
+    /// assert!(s.count == 4 && s.pages.iter().take(s.count).all(|p| p.valid() && p.roomy()));
+    /// ```
+    pub fn mtb_default() -> Set {
+        use Field::*;
+        let mut pages = [BLANK; crate::PAGES];
+        let sets: [(u8, [Field; CELLS]); MTB_PAGES] = [
+            (4, [Timer, Dist, Speed, Hr, Time, Time, Time, Time]),
+            (10, [AltGraph, Grade, Ascent, Vam, Time, Time, Time, Time]),
+            (4, [MaxSpeed, AvgSpeed, Ascent, Timer, Time, Time, Time, Time]),
+            (1, [Map, Time, Time, Time, Time, Time, Time, Time]),
+        ];
+        for (slot, (id, f)) in pages.iter_mut().zip(sets) {
+            *slot = Page::preset(id, f).unwrap_or(BLANK);
+        }
+        Set { pages, count: MTB_PAGES, more: [None; crate::PAGES] }
+    }
+}
+
 /// The ride pages as the file keeps them: two copies, one a sector, the newer whole one (the larger `seq`) the one
 /// read; a write goes over the older, so a power cut while writing one leaves the other (the recorder's two
 /// records). Each copy also keeps the backup registers' words written with it (`words`) and those they held before
@@ -473,6 +516,8 @@ pub struct Saved {
     pub more: [Option<Page>; crate::PAGES],
     /// The indoor profile's set, if the copy has a good one (else [`Set::indoor_default`]).
     pub indoor: Option<Set>,
+    /// The MTB profile's set (at most [`MTB_PAGES`]), if the copy has a good one (else [`Set::mtb_default`]).
+    pub mtb: Option<Set>,
 }
 
 /// `p` as a copy keeps it.
@@ -507,7 +552,7 @@ impl Saved {
     /// ```
     /// use bryton_rustfw::{page::*, ui::Field};
     /// let p = Page::preset(4, [Field::Hr; 8]).unwrap();
-    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6], indoor: None };
+    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6], indoor: None, mtb: None };
     /// let mut sector = s.to_sector();
     /// assert_eq!(Saved::from_sector(&sector), Some(s));
     /// sector[70] ^= 1;
@@ -554,7 +599,51 @@ impl Saved {
             let crc = indoor_crc(&s);
             s[INDOOR_CRC_AT..INDOOR_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
         }
+        if let Some(m) = self.mtb.as_ref().filter(|m| m.count <= MTB_PAGES) {
+            s[MTB_AT] = m.count as u8;
+            for (p, out) in m.pages.iter().zip(s[MTB_AT + 1..MTB_MORE_AT].chunks_exact_mut(PAGE_BYTES)) {
+                write_page(p, out);
+            }
+            let mut flags = 0u8;
+            for (k, (x, out)) in
+                m.more.iter().zip(s[MTB_MORE_AT + 1..MTB_CRC_AT].chunks_exact_mut(PAGE_BYTES)).enumerate()
+            {
+                if let Some(p) = x {
+                    flags |= 1 << k;
+                    write_page(p, out);
+                }
+            }
+            s[MTB_MORE_AT] = flags;
+            let crc = mtb_crc(&s);
+            s[MTB_CRC_AT..MTB_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        }
         s
+    }
+
+    /// The MTB part of a sector: None where it is absent, damaged, over [`MTB_PAGES`] or holding a page not well
+    /// formed (the whole set then goes to its defaults).
+    fn read_mtb(s: &[u8; 512]) -> Option<Set> {
+        let count = usize::from(s[MTB_AT]);
+        let good = s.get(MTB_CRC_AT..MTB_CRC_AT + 2)? == mtb_crc(s).to_le_bytes();
+        if !good || !(1..=MTB_PAGES).contains(&count) {
+            return None;
+        }
+        let mut set = Set { pages: [BLANK; crate::PAGES], count, more: [None; crate::PAGES] };
+        for (k, (p, b)) in
+            set.pages.iter_mut().zip(s.get(MTB_AT + 1..MTB_MORE_AT)?.chunks_exact(PAGE_BYTES)).enumerate()
+        {
+            *p = read_page(b)?;
+            if k < count && !(p.well_formed() && p.roomy()) {
+                return None;
+            }
+        }
+        let flags = s[MTB_MORE_AT];
+        for (k, (m, b)) in
+            set.more.iter_mut().zip(s.get(MTB_MORE_AT + 1..MTB_CRC_AT)?.chunks_exact(PAGE_BYTES)).enumerate()
+        {
+            *m = read_page(b).filter(|p| flags & 1 << k != 0 && p.well_formed() && p.roomy());
+        }
+        Some(set)
     }
 
     /// The indoor part of a sector: None where it is not there (a file of an earlier build), damaged, or holds a page
@@ -613,6 +702,7 @@ impl Saved {
             was: core::array::from_fn(|k| word(6 + k)),
             more,
             indoor: Self::read_indoor(s),
+            mtb: Self::read_mtb(s),
         })
     }
 
@@ -723,6 +813,7 @@ mod tests {
             was: [0; 6],
             more: [None; 6],
             indoor: None,
+            mtb: None,
         };
         let b = Saved { seq: 4, pages: [p(4); crate::PAGES], count: 3, ..a };
         let mut file = [0u8; 1024];
@@ -763,6 +854,7 @@ mod tests {
             was: [2; 6],
             more: [None, Some(m), None, None, None, Some(p)],
             indoor: None,
+            mtb: None,
         };
         let sector = s.to_sector();
         assert_eq!(Saved::from_sector(&sector), Some(s));
@@ -794,6 +886,7 @@ mod tests {
             was: [0; 6],
             more,
             indoor: None,
+            mtb: None,
         };
         let old = mk(4, p, [None, Some(w), None, None, None, None]).to_sector();
         let new = mk(6, q, [None; crate::PAGES]).to_sector();
@@ -823,6 +916,7 @@ mod tests {
             was: [2; 6],
             more: [None, Some(m), None, None, None, None],
             indoor: Some(set),
+            mtb: None,
         };
         let sector = s.to_sector();
         const { assert!(INDOOR_CRC_AT + 2 <= 512) } // fits the sector
@@ -853,5 +947,57 @@ mod tests {
             torn[..at].copy_from_slice(&new[..at]);
             assert_eq!(Saved::from_sector(&torn).map(|t| t.indoor), Some(None), "torn before {what}");
         }
+    }
+
+    /// The MTB part (at most four pages) round-trips; a bad or absent one leaves the defaults (None) and everything
+    /// before it; a copy torn before it never mixes with another copy's MTB set; an earlier build's bytes past the
+    /// indoor CRC (zero) read as absent.
+    #[test]
+    fn the_mtb_set_in_the_file() {
+        let p = Page::preset(4, F).unwrap();
+        let m = Page::preset(14, F).unwrap();
+        let mut set = Set::mtb_default();
+        set.count = 3;
+        set.pages[2] = p;
+        set.more[1] = Some(m);
+        let s = Saved {
+            seq: 5,
+            pages: [p; crate::PAGES],
+            count: 3,
+            words: [1; 6],
+            was: [2; 6],
+            more: [None, Some(m), None, None, None, None],
+            indoor: Some(Set::indoor_default()),
+            mtb: Some(set),
+        };
+        let sector = s.to_sector();
+        const { assert!(MTB_CRC_AT + 2 == 489) }
+        assert_eq!(Saved::from_sector(&sector), Some(s));
+        let plain = Saved { mtb: None, ..s };
+        let mut old = sector;
+        old[MTB_AT..].fill(0);
+        assert_eq!(Saved::from_sector(&old), Some(plain), "absent");
+        for at in [MTB_AT, MTB_AT + 5, MTB_MORE_AT + 3, MTB_CRC_AT] {
+            let mut bad = sector;
+            bad[at] ^= 0x10;
+            assert_eq!(Saved::from_sector(&bad), Some(plain), "damaged at {at}");
+        }
+        let mut bad = sector;
+        bad[MTB_AT] = 5; // over the cap, CRC made right
+        let crc = mtb_crc(&bad);
+        bad[MTB_CRC_AT..MTB_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(Saved::from_sector(&bad), Some(plain), "five pages");
+        let mut five = s;
+        five.mtb = Some(Set { count: 5, ..set });
+        assert_eq!(Saved::from_sector(&five.to_sector()), Some(plain), "never written over the cap");
+        // the indoor part damaged: the MTB part (chained to it) goes too, the road pages stay
+        let mut bad = sector;
+        bad[INDOOR_AT + 3] ^= 0x10;
+        assert_eq!(Saved::from_sector(&bad).map(|t| (t.indoor, t.mtb, t.pages)), Some((None, None, s.pages)));
+        // torn before the MTB part
+        let new = Saved { seq: 6, indoor: Some(Set { count: 2, ..Set::indoor_default() }), ..s }.to_sector();
+        let mut torn = sector;
+        torn[..MTB_AT].copy_from_slice(&new[..MTB_AT]);
+        assert_eq!(Saved::from_sector(&torn).map(|t| t.mtb), Some(None));
     }
 }

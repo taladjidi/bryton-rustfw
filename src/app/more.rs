@@ -22,7 +22,7 @@ impl App {
 
     /// Ride page `n`'s MORE variant of the set in force: the rider's, else the page's default.
     pub(crate) fn more_page(&self, n: usize) -> Page {
-        let (pages, _, more) = self.set_ref(self.indoors());
+        let (pages, _, more) = self.set_ref(self.ride_profile());
         match (more.get(n).copied().flatten(), pages.get(n)) {
             (Some(m), _) => m,
             (None, Some(p)) => p.more_of(),
@@ -32,8 +32,8 @@ impl App {
 
     /// An editor's work kept: the page's, or its MORE variant.
     pub(crate) fn keep_edit(&mut self, e: &Editing) {
-        let indoor = self.view_indoor();
-        let (pages, _, more) = self.set_mut(indoor);
+        let which = self.view_set();
+        let (pages, _, more) = self.set_mut(which);
         if e.more {
             if let Some(m) = more.get_mut(e.page) {
                 *m = Some(e.work);

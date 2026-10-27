@@ -18,10 +18,10 @@ pub enum Menu {
     /// CALIBRATE POWER and TRAINER CONTROL first (when they apply), one row per sensor kind, BT TRAINER, the Di2
     /// buttons and the phone.
     Sensors,
-    /// The two sets of ride pages: ROAD PAGES and INDOOR PAGES, each opening its list ([`Menu::PageList`]).
+    /// The two sets of ride pages: ROAD, INDOOR and MTB PAGES, each opening its list ([`Menu::PageList`]).
     Pages,
-    /// The overview, the ride pages and ADD PAGE of one set (`true`: the indoor one).
-    PageList(bool),
+    /// The overview, the ride pages and ADD PAGE of one set (ROAD, INDOOR or MTB).
+    PageList(ride::Profile),
     /// One menu per subject ([`menu::SETTINGS`]).
     Settings,
     /// The rider's numbers ([`menu::ME`]).
@@ -80,8 +80,9 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Main => "MENU",
         Menu::Sensors => "SENSORS",
         Menu::Pages => "PAGES",
-        Menu::PageList(false) => "ROAD PAGES",
-        Menu::PageList(true) => "INDOOR PAGES",
+        Menu::PageList(ride::Profile::Road) => "ROAD PAGES",
+        Menu::PageList(ride::Profile::Indoor) => "INDOOR PAGES",
+        Menu::PageList(ride::Profile::Mtb) => "MTB PAGES",
         Menu::Settings => "SETTINGS",
         Menu::Me => "ME",
         Menu::Display => "DISPLAY",
@@ -120,7 +121,9 @@ impl App {
         use menu::Row;
         match menu {
             Menu::Main => menu::MAIN.get(i).copied(),
-            Menu::Pages => [Row::Open(Menu::PageList(false)), Row::Open(Menu::PageList(true))].get(i).copied(),
+            Menu::Pages => [ride::Profile::Road, ride::Profile::Indoor, ride::Profile::Mtb]
+                .get(i)
+                .map(|&p| Row::Open(Menu::PageList(p))),
             Menu::PageList(_) => match i {
                 0 => Some(Row::Open(Menu::Page(OVERVIEW))),
                 _ if i <= self.view_count() => Some(Row::Open(Menu::Page(i - 1))),
@@ -669,16 +672,16 @@ impl App {
             Menu::Courses => self.open_courses(b),
             // the ride menu's EDIT THIS PAGE: the editor on the page itself (the overview's fields: their menu)
             Menu::Page(n) if matches!(menu, Menu::Ride(_)) && n < PAGES => {
-                self.pages_indoor = self.indoors(); // the set on screen
+                self.pages_set = self.ride_profile(); // the set on screen
                 self.edit_page(b, n, 0)
             }
             // a set's page list: the editor works on that set (while a ride is open, on the ride's own only)
-            Menu::PageList(indoor) if self.ride.state() != ride::State::Idle && indoor != self.indoors() => {
+            Menu::PageList(set) if self.ride.state() != ride::State::Idle && set != self.ride_profile() => {
                 self.say("THE RIDE'S SET")
             }
             m => {
-                if let Menu::PageList(indoor) = m {
-                    self.pages_indoor = indoor;
+                if let Menu::PageList(set) = m {
+                    self.pages_set = set;
                 }
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
                     self.stock.start(self.date); // the history is what the scan of stock's rides finds
