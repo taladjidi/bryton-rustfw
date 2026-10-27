@@ -104,13 +104,10 @@ sheets, at their test conditions), none was measured on the unit.
 - **Backlight:** PG13, LPTIM1 PWM on the LSE (32768 Hz / 100: 328 Hz), 1 to 99 % (BOARD.md 6). The LED current is
   not known (no panel data sheet); a 2.8-inch TFT's backlight is typically 3 or 4 white LEDs at 15 to 20 mA, so
   about 60 mA at 100 % (inferred), and the average follows the duty: 1 % 0.6 mA, 8 % 5 mA, 40 % 24 mA, 60 % 36 mA.
-  - **Today:** a fresh unit is at 100 %, never off (`Settings::from_word`'s defaults); stock's settings imported
-    bring its level, and AUTO follows stock's curve (BOARD.md 16: 1 % above 120 lux, 8 % below 5 lux, 40 to 70 %
-    between). The owner chose stock's curve for AUTO (BOARD.md 16).
-  - **Left to the owner:** the default for a fresh unit (AUTO and OFF AFTER 30 S would be about 60 mA less than today's
-    100 % never off; tests and screenshots expect 100 % now); the AUTO curve's middle bands (stock's own setting 1 is
-    20 % at 5 to 20 lux where this firmware uses 40 %: dusk, about 12 mA); a ride's OFF AFTER (10, 30, 60 s: at
-    night the backlight is the largest draw by far).
+  - **Decided (owner, 2026-10-27):** a fresh unit (no saved settings) starts with AUTO and OFF AFTER 30 S
+    (`Settings::from_word`'s defaults), about 60 mA less than the 100 % never off it had before; saved settings and
+    stock's imported ones keep theirs. AUTO follows stock's curve (BOARD.md 16).
+  - **Left to the owner:** a ride's OFF AFTER (10, 30, 60 s: at night the backlight is the largest draw by far).
 - **Panel (ST7789):** 4 to 7 mA in normal mode (secondary sources on the ST7789V; Sitronix's own table not read).
   Its idle mode (8 colours) and partial mode would change what is shown. A lower frame rate (FRCTRL2, 0xC6: stock's
   0x0F is 60 Hz, 0x1F is 39 Hz) saves part of the driver's current but may flicker: to try on the unit, not done.

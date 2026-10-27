@@ -125,7 +125,8 @@
 | hold Lap | the phone's music: play / pause (PHONE below); on the trainer screen while riding: the target one big step down (Page is up) | |
 | hold Back and Lap together 1 s | the touch lock on or off, on every screen: all touch is ignored and a padlock shows in the strip (until unlocked or switched off); neither key acts on its own | the same |
 
-The power button starts it again. After the backlight's time-out, any key brings it back.
+The power button starts it again. After the backlight's time-out, any key brings it back. A fresh unit (no saved
+settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or stock's imported, keep theirs.
 
 - **Menus:** rows 44 px tall (about 8 mm, a fingertip), six a screen, a longer menu turned a screen at a time;
   a "<" left of the title goes back. The selected row is black on orange (10:1 contrast; white on that orange was

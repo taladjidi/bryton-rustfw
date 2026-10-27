@@ -594,7 +594,7 @@ fn ride_menu() {
     // BRIGHTNESS: in place
     to_row(&mut sim, &mut app, Row::Set(Setting::Light));
     app.press(&mut sim, Press::Short(Key::Start));
-    assert_eq!((sim.light_level, app.screen()), (60, Screen::Menu(Menu::Ride(0), 3)));
+    assert_eq!((sim.light_level, app.screen()), (100, Screen::Menu(Menu::Ride(0), 3)), "AUTO by default, then 100 %");
     // SENSORS, ALL SETTINGS: their menus, Back to the ride menu's row, then to the page
     for (row, m, at) in [(Row::Open(Menu::Sensors), Menu::Sensors, 4), (Row::Open(Menu::Main), Menu::Main, 5)] {
         back(&mut sim, &mut app, 1);

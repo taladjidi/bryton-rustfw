@@ -279,8 +279,10 @@ impl Settings {
             wheel_mm: WHEELS[1],
             max_hr: ride::MAX_HR,
             ftp: ride::FTP,
-            light_level: 0,
-            light_timeout: 0,
+            // a fresh unit (no saved word): AUTO, off after 30 s, about 60 mA less than 100 % never off
+            // (docs/power.md, the owner's choice of 2026-10-27); a saved word keeps its own
+            light_level: LIGHT_AUTO,
+            light_timeout: 2,
             weight_kg: power::WEIGHT_KG,
             wprime_j: power::WPRIME_J,
             bike_hg: power::BIKE_HG,
@@ -542,12 +544,12 @@ impl Settings {
     /// A choice to its next value (round), as Select does.
     ///
     /// ```
-    /// use bryton_rustfw::{Settings, LIGHT_LEVELS, menu::Setting};
-    /// let mut s = Settings::from_word(0);
+    /// use bryton_rustfw::{Settings, LIGHT_AUTO, LIGHT_LEVELS, menu::Setting};
+    /// let mut s = Settings::from_word(0); // a fresh unit: AUTO
     /// for _ in 0..LIGHT_LEVELS.len() + 1 {
     ///     s.cycle(Setting::Light);
     /// }
-    /// assert_eq!(s.light_level, 0, "round");
+    /// assert_eq!(s.light_level, LIGHT_AUTO, "round");
     /// ```
     pub fn cycle(&mut self, s: Setting) {
         match s {

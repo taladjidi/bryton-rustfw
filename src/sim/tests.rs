@@ -667,7 +667,18 @@ fn a_stuck_key_lets_the_light_time_out() {
 fn backlight_level_and_timeout() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
-    assert_eq!(sim.light_level, 100, "100 % and never off by default");
+    let s = app.settings;
+    assert_eq!(
+        (s.light_level, LIGHT_TIMEOUTS_S[s.light_timeout]),
+        (LIGHT_AUTO, 30),
+        "a fresh unit: AUTO, off after 30 s"
+    );
+    run(&mut sim, &mut app, 31_000);
+    assert_eq!(sim.light_level, 0, "off after 30 s by default");
+    app.press(&mut sim, Press::Short(Key::Back)); // back on
+    (app.settings.light_level, app.settings.light_timeout) = (0, 0); // 100 %, never off: the rest from there
+    app.update_light(&mut sim);
+    assert_eq!(sim.light_level, 100);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::Light));
     app.press(&mut sim, Press::Short(Key::Start)); // LIGHT %: 60
@@ -700,6 +711,7 @@ fn auto_backlight_follows_the_ambient_light() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     assert_eq!(sim.bus.accel_ctrl1, 0x07, "the accelerometer switched off");
+    (app.settings.light_level, app.settings.light_timeout) = (0, 0); // 100 %, never off (a fresh unit has AUTO)
     run(&mut sim, &mut app, 30_000);
     assert_eq!(sim.bus.light_reads, 0, "a fixed level and no menu: the light sensor is never used");
     app.press(&mut sim, Press::Long(Key::Page));
@@ -1290,7 +1302,11 @@ fn max_hr_and_ftp_from_the_menu() {
     sim.save("zones_menu");
     let again = App::start(&mut sim, None);
     assert_eq!((again.settings.max_hr, again.settings.ftp, again.settings.wheel_mm), (194, 55, WHEELS[2]));
-    assert_eq!((again.settings.light_level, again.settings.light_timeout), (0, 0), "the backlight settings untouched");
+    assert_eq!(
+        (again.settings.light_level, again.settings.light_timeout),
+        (LIGHT_AUTO, 2),
+        "the backlight settings untouched"
+    );
 }
 
 /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

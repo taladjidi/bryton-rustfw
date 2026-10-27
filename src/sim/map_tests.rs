@@ -456,6 +456,8 @@ fn map_zoom_with_a_course() {
     sim.gnss.route = Some(course_route);
     sim.classic_pages();
     let mut app = App::start(&mut sim, None);
+    // steps without simulated time pass below: a fixed level, so the light sensor is not read before its conversion
+    app.settings.light_level = 0;
     app.set_course_memory(crate::storage::course_file::tests::memory());
     app.open_courses(&mut sim);
     app.follow_course(hill(&app));
