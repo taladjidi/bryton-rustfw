@@ -182,6 +182,9 @@ build (POWER_STEPS=15) gives the wall time.
   decoded (estimated 15 ms at the median, about 80 ms for the largest tile that fits the 96 KB buffer, 2080 nodes);
   the AXI SRAM cell stays in `.bss` (`nm`: `make_ahead`, about 105 KB) and the unit
   boots (a new static in `.axibss` is a core-level change: Renode, then `DIAG_STOP`).
+- **The GNSS receiver off when idle (app/gps.rs `gnss_idle`)**: only against the simulator. On the unit: indoors,
+  the strip's GPS goes blank 5 minutes after power-on; outdoors with a fix, 10 minutes after the last key; the GPS
+  menu, a map page or Start bring it back, and the time to a fix then (expected about 30 s, the ephemeris not kept).
 - **The GNSS receiver off for an indoor ride (app/gps.rs `gnss_switch`, BOARD.md 13)**: only against the simulator.
   On the unit: with a trainer heard, Start switches the receiver off (strip GPS blank), and after SAVE or DISCARD,
   or once the profile goes to ROAD, it is powered again 1 s later and gives a fix outdoors (how long, with the time

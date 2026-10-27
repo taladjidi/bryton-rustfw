@@ -24,7 +24,7 @@ sheets, at their test conditions), none was measured on the unit.
 | GNSS (u-blox M10) | 11.8 mA: continuous, 9.5 mA at VCC + 2.3 at V_IO, GPS + Galileo + BeiDou B1I | cyclic tracking (PSMCT) | about 4.8 mA (4.5 at VCC, 0.3 at V_IO) while in it | GPS POWER AUTO (default): while riding fast and straight |
 | | | GPS + Galileo only | 1.6 mA | owner's decision |
 | | | GPS only | 2.2 mA | no (fewer satellites under trees) |
-| | | off between rides after a while | 11.8 mA while idle | owner's decision |
+| | | off between rides once idle | 11.8 mA while idle | yes: 5 min without a fix, 10 min with one and no key |
 | Nordic, ANT+ search for an absent sensor | about 2.2 mA each (40 s in 100 at 5.4 mA) | longer rests | about 1.4 mA each | rests of 1, 2, then 4 min |
 | Nordic, ANT+ channel tracking a sensor | 30 to 60 uA each at 4 Hz | 2 Hz for heart rate | about 20 uA | no (beats lost for HRV) |
 | Nordic, BLE to the phone | 20 to 40 uA connected, 10 to 15 uA advertising each second | longer slave latency | about 10 uA | no (already low) |
@@ -89,10 +89,20 @@ sheets, at their test conditions), none was measured on the unit.
   **Expected saving:** 4.8 mA while in cyclic tracking (the table above), so about 2.5 to 3.5 mA averaged on a road
   ride that spends 50 to 70 % of its time fast and straight past the first 10 minutes (an estimate, to measure), next
   to nothing on an MTB ride, which stays continuous. SAVER saves the 4.8 mA all the time, at the cost above.
+- **Off when idle (owner, 2026-10-27; app/gps.rs `gnss_idle`):** with no ride open, the receiver's supply is cut
+  (as for an indoor ride, BOARD.md 13) once it searched 5 minutes since it was switched on without a fix
+  (`GNSS_SEARCH_MS`: a start outdoors takes about half a minute, a few minutes at worst by a window or under trees;
+  the search costs about 1 mAh indoors), or, with a fix, after 10 minutes without a key, a touch or a screen that
+  needs a position (`GNSS_IDLE_MS`). Keys alone do not wake it (indoors they would restart the search); it is on
+  again at Start (any ride; the climbs ahead start with it), for a page with a map, the GPS menu, or a course followed,
+  with the same sequencing as at boot (powered 1 s later, the configuration, the time and the last position sent).
+  **Fix after switching on again:** the supply cut loses the ephemeris (no V_BCKP known), so it is a warm start helped
+  by the time and position: the ephemeris takes 18 to 36 s to download under a strong signal (UBX-22020019, 2.4),
+  so expect about 30 s outdoors, not the 1 to 2 s of a hot start; a hot start would need the backup domain kept
+  (UBX-RXM-PMREQ software standby, 46 uA, its wake on the unit not tried). **Saving:** 11.8 mA for every hour the
+  unit sits on without a ride past those minutes, about 12 mAh an hour left on indoors.
 - **Left to the owner:** GPS + Galileo only (CFG-SIGNAL-BDS_ENA 0x10310022 off: 1.6 mA in continuous mode, nothing
-  in cyclic tracking, which has the same 5 mA either way); switching the receiver off after some minutes on the
-  overview without a ride (11.8 mA while the unit sits on, a warm start of a few seconds at the next ride thanks to
-  the aiding).
+  in cyclic tracking, which has the same 5 mA either way).
 
 ### Nordic chip (BLE and ANT+)
 

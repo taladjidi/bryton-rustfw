@@ -656,6 +656,66 @@ fn gps_power_from_the_menu() {
     assert_eq!((count(&sim, full), count(&sim, saver)), (0, 1), "SAVER at the next power-up");
 }
 
+/// The receiver off between rides: indoors (no fix) after [`crate::GNSS_SEARCH_MS`] whatever the keys do; on again
+/// for the GPS menu (aided again: time and position), off again 5 minutes after leaving it, on at Start; with a fix,
+/// off after [`crate::GNSS_IDLE_MS`] without a key, which a key press puts off.
+#[test]
+fn gps_off_when_idle() {
+    use crate::{GNSS_IDLE_MS, GNSS_SEARCH_MS};
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_timeout = 0;
+    run(&mut sim, &mut app, u64::from(GNSS_SEARCH_MS) - 2000);
+    assert!(sim.gnss.powered, "searching for 5 minutes");
+    app.press(&mut sim, Press::Short(Key::Lap)); // a key: indoors, it does not keep the search going
+    run(&mut sim, &mut app, 3000);
+    assert!(!sim.gnss.powered && app.strip.gps.is_none(), "no fix in 5 minutes: off");
+    run(&mut sim, &mut app, 60_000);
+    assert!(!sim.gnss.powered, "stays off");
+
+    app.screen = Screen::Menu(Menu::Gps, 0); // the GPS status: it needs the receiver
+    app.show(&mut sim);
+    sim.gnss.got.clear();
+    run(&mut sim, &mut app, 3000);
+    assert!(sim.gnss.powered, "on for the GPS menu");
+    let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
+    assert!(sent(&sim, crate::gnss::config(false)), "configured again");
+    sim.gnss.fix = Some(0);
+    run(&mut sim, &mut app, 2000);
+    assert!(app.gps.pvt.is_some_and(|p| p.good()), "a fix");
+    sim.gnss.fix = None; // indoors again: with a fix since power-up, the 10 minutes without a key apply
+    app.screen = Screen::Main;
+    app.show(&mut sim);
+    run(&mut sim, &mut app, u64::from(GNSS_IDLE_MS));
+    assert!(!sim.gnss.powered, "off again");
+    sim.gnss.got.clear();
+    app.press(&mut sim, Press::Short(Key::Start)); // a ride: on again
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert!(sim.gnss.powered, "on at Start");
+    assert!(
+        sent(&sim, crate::gnss::mga_pos(FIX_LAT / 1000 * 1000, FIX_LON / 1000 * 1000, 10_000)),
+        "the last position"
+    );
+    run(&mut sim, &mut app, u64::from(GNSS_SEARCH_MS) + 60_000);
+    assert!(sim.gnss.powered, "a ride open: never off, fix or not");
+
+    // with a fix and no ride: 10 minutes without a key
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_timeout = 0;
+    run(&mut sim, &mut app, u64::from(GNSS_IDLE_MS) - 60_000);
+    app.press(&mut sim, Press::Short(Key::Lap)); // the rider is there
+    run(&mut sim, &mut app, u64::from(GNSS_IDLE_MS) - 5000);
+    assert!(sim.gnss.powered && app.gps.pvt.is_some(), "a key put the time-out off");
+    run(&mut sim, &mut app, 10_000);
+    assert!(!sim.gnss.powered, "10 minutes without a key: off");
+    app.press(&mut sim, Press::Short(Key::Lap));
+    run(&mut sim, &mut app, 3000);
+    assert!(!sim.gnss.powered, "a key does not wake it");
+}
+
 /// A straight road: heading north.
 fn straight(_: u64) -> (i32, i32, i32) {
     (FIX_LAT, FIX_LON, 0)
