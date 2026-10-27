@@ -118,6 +118,23 @@ fn timer_stop() {
     wr(SCB_ICSR, 1 << 25); // PENDSTCLR
 }
 
+/// WFI, every wake source's NVIC pending bit cleared first: the one way this firmware sleeps.
+///
+/// The wake sources (the touch line's EXTI9_5, DMA1 stream 0, OTG_HS) are enabled in the NVIC only to end WFI
+/// (interrupts stay masked, so no handler runs and nothing else clears them). Each source is level: its peripheral
+/// flag (EXTI_CPUPR1, DMA1_LISR, GINTSTS) holds the line, and the line pends its IRQ again after this clear, so an
+/// event not yet consumed still ends the sleep. A pending bit whose flag was already cleared did not: cleared by each
+/// source after its own flag, it stuck whenever the flag's write reached the line after the NVIC clear (the
+/// peripheral is on another bus and domain), and every WFI then returned at once. Seen on the unit twice: IRQ 23
+/// (2026-10-27, ISPR0 0x00800400) and IRQ 11 (2026-10-27, ISPR0 0x00000c00, ICSR.VECTPENDING 27, DMA1_LISR 0: the
+/// DMA's clear in `dma_wait`, 5 runs in 6 with its read back removed). Clearing here, after the sources were read and
+/// just before sleeping, depends on no clear's timing.
+fn sleep() {
+    wr(NVIC_ICPR0, EXTI9_5_IRQ | DMA1_S0_IRQ);
+    wr(NVIC_ICPR0 + 8, usb::OTG_HS_IRQ);
+    wfi();
+}
+
 /// Sleeps (WFI) instead of spinning.
 fn delay_ms(ms: u32) {
     let mut left = ms;
@@ -126,7 +143,7 @@ fn delay_ms(ms: u32) {
         left -= chunk;
         timer_start(chunk);
         while !timer_done() {
-            wfi(); // another wake-up (USB activity): sleep again
+            sleep(); // another wake-up (USB activity): sleep again
         }
         timer_stop();
     }
@@ -410,12 +427,10 @@ fn dma_wait() -> bool {
             DMA_FAIL.store(0x2000_0000 | (u32::from(own) << 24) | (sr & 0xffff) | (isr << 16), Ordering::Relaxed);
             break false;
         }
-        wfi();
-        wr(NVIC_ICPR0, DMA1_S0_IRQ); // a flag still set pends it again: none is lost
+        sleep();
     };
     wr(DMA1_LIFCR, 0x3d);
-    let _ = rd(DMA1_LISR); // the clear done before the NVIC's (as touch_edge)
-    wr(NVIC_ICPR0, DMA1_S0_IRQ);
+    let _ = rd(DMA1_LISR); // the clear done before the next sleep's NVIC clear
     wr(RCC_AHB1LPENR, lp.0);
     wr(RCC_APB2LPENR, lp.1);
     if own {
@@ -1346,22 +1361,14 @@ const NVIC_ICER0: u32 = 0xe000_e180;
 const EXTI9_5_IRQ: u32 = 1 << 23;
 const TOUCH_LINE: u32 = 1 << 6;
 
-/// The touch INT line fell since the last call (and the wake-up it caused is cleared).
-///
-/// The NVIC's pending bit is cleared on every call, edge or not. Cleared only after an edge, it stuck: the write to
-/// EXTI (APB4, D3 domain) had not reached the line when the NVIC clear landed, so the still-asserted line pended
-/// IRQ 23 again, and with CPUPR1 clear nothing ever cleared it. Every WFI then returned at once: the main loop spun
-/// (seen on the unit, 2026-10-27: ISPR0 0x00800400 and ICSR.VECTPENDING 39 = IRQ 23 with EXTI_CPUPR1 line 6 clear,
-/// the loop polled 255 000 times a second instead of 42; it depends on the code's timing, so some builds only).
-/// The read back makes the EXTI write complete first; the clear on every call heals what a race still leaves.
+/// The touch INT line fell since the last call. Its NVIC pending bit is cleared by [`sleep`], with every wake
+/// source's (a clear here, after the EXTI write, stuck: see there).
 fn touch_edge() -> bool {
     let edge = rd(EXTI_CPUPR1) & TOUCH_LINE != 0;
     if edge {
         wr(EXTI_CPUPR1, TOUCH_LINE); // write 1 to clear
-        let _ = rd(EXTI_CPUPR1); // the write done before the NVIC clear (same peripheral, Device memory: in order)
+        let _ = rd(EXTI_CPUPR1); // the write done (same peripheral, Device memory: in order)
     }
-    // an edge from now on sets CPUPR1, whose line pends IRQ 23 again: none is lost
-    wr(NVIC_ICPR0, EXTI9_5_IRQ);
     edge
 }
 
@@ -1813,7 +1820,7 @@ fn main() -> ! {
                     // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
                     break (edge, done);
                 }
-                wfi();
+                sleep();
             };
             let ms = if done { slice } else { timer_elapsed_ms(slice) };
             timer_stop();

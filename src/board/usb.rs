@@ -41,8 +41,8 @@ const RCC_AHB1ENR: u32 = RCC + 0x0d8;
 const RCC_D2CCIP2R: u32 = RCC + 0x054;
 const PWR_D3CR: u32 = 0x5802_4818;
 const NVIC_ISER2: u32 = 0xe000_e108;
-const NVIC_ICPR2: u32 = 0xe000_e288;
-const OTG_HS_IRQ: u32 = 1 << (77 - 64); // IRQ 77
+/// OTG_HS's bit in the NVIC's third word (IRQ 77): main.rs `sleep` clears its pending bit before each WFI.
+pub const OTG_HS_IRQ: u32 = 1 << (77 - 64);
 
 /// ULPI data, clock, STP, NXT, DIR, all AF10 (BOARD.md 4 / 7).
 const ULPI_PINS: [(Port, u32); 12] = [
@@ -317,7 +317,6 @@ impl Link {
             }
             self.flush();
         }
-        wr(NVIC_ICPR2, OTG_HS_IRQ); // the core's flags are handled: let the next activity wake WFI again
         effect
     }
 

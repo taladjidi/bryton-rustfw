@@ -69,8 +69,12 @@ pub const IO: core::ops::RangeInclusive<u32> = 0x4000_0000..=0x5fff_fffc;
 
 /// Memory `peek` may read too (never `poke`: that could change running code or the app's state): the DTCM (data
 /// and stack, 128 KB) and the SDRAM (BOARD.md 2: 64 MB from 0xd0000000, set up by the bootloader, where the image
-/// runs). Both are always mapped, so a read cannot fault.
-pub const MEMORY: [core::ops::RangeInclusive<u32>; 2] = [0x2000_0000..=0x2001_fffc, 0xd000_0000..=0xd3ff_fffc];
+/// runs). Both are always mapped, so a read cannot fault. Then, read only, the NVIC's enable, pending and active
+/// registers (ISER to IABR) and the SCB's ICSR (VECTPENDING): which interrupt wakes WFI (docs/usb.md, a main loop
+/// that never slept). Reading them changes nothing (ARMv7-M ARM B3.4); SysTick's CSR is left out, since reading it
+/// clears COUNTFLAG, the main loop's end of sleep.
+pub const MEMORY: [core::ops::RangeInclusive<u32>; 4] =
+    [0x2000_0000..=0x2001_fffc, 0xd000_0000..=0xd3ff_fffc, 0xe000_e100..=0xe000_e33c, 0xe000_ed04..=0xe000_ed04];
 
 /// Largest image `load` accepts: the 1 MB link region (link.x).
 pub const STAGE_MAX: u32 = 1 << 20;
@@ -317,8 +321,8 @@ impl Session {
             Some(b"peek") => match (words.next().and_then(parse), words.next().map_or(Some(1), parse)) {
                 (Some(a), Some(n @ 1..=64))
                     if a % 4 == 0
-                        && [IO, MEMORY[0].clone(), MEMORY[1].clone()]
-                            .iter()
+                        && core::iter::once(&IO)
+                            .chain(&MEMORY)
                             .any(|r| r.contains(&a) && r.contains(&(a + 4 * (n - 1)))) =>
                 {
                     for i in 0..n {
@@ -326,7 +330,7 @@ impl Session {
                         h.send(&hex(v));
                     }
                 }
-                _ => h.send(b"err usage: peek <addr 0x40000000..0x5ffffffc or DTCM / SDRAM, aligned> [n 1..64]\n"),
+                _ => h.send(b"err usage: peek <addr: IO, DTCM, SDRAM, NVIC, ICSR; aligned> [n 1..64]\n"),
             },
             Some(b"poke") => match (words.next().and_then(parse), words.next().and_then(parse)) {
                 (Some(a), Some(v)) if a % 4 == 0 && IO.contains(&a) => {
