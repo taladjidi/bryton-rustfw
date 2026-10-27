@@ -223,6 +223,7 @@ impl App {
         let more = self.more_shown() == Some(page);
         let p = match page {
             COURSE => page::Page::from_cfg(COURSE_PAGE).unwrap_or(BLANK),
+            CLIMB => page::Page::from_cfg(self.climb_cfg()).unwrap_or(BLANK),
             WORKOUT => page::Page::from_cfg(WORKOUT_PAGE).unwrap_or(BLANK),
             n if more => self.more_page(n),
             n => self.ride_page_ref(n).copied().unwrap_or(BLANK),

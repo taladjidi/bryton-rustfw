@@ -158,7 +158,7 @@ pub enum Screen {
 const ROUND: usize = PAGES + 2;
 
 /// Ride page `n`'s place in the round.
-fn place(n: usize) -> usize {
+pub(crate) fn place(n: usize) -> usize {
     match n {
         WORKOUT => 0,
         COURSE => PAGES + 1,
@@ -195,8 +195,15 @@ impl App {
     fn paged(&self, next: bool) -> Screen {
         match (self.screen, next) {
             (Screen::Main, true) => self.ride_page(0, 1),
+            // the climb page sits right after the page it was opened from (profile.rs `settle_climb`)
+            (Screen::Ride(CLIMB), true) => self.ride_page(place(self.climb.1) + 1, 1),
+            (Screen::Ride(CLIMB), false) => Screen::Ride(self.climb.1),
+            (Screen::Ride(n), true) if n == self.climb.1 && self.page_on(CLIMB) => Screen::Ride(CLIMB),
             (Screen::Ride(n), true) => self.ride_page(place(n) + 1, 1),
-            (Screen::Ride(n), false) => self.ride_page(place(n) + ROUND - 1, ROUND - 1),
+            (Screen::Ride(n), false) => match self.ride_page(place(n) + ROUND - 1, ROUND - 1) {
+                Screen::Ride(p) if p == self.climb.1 && self.page_on(CLIMB) => Screen::Ride(CLIMB),
+                s => s,
+            },
             (s, _) => s,
         }
     }
@@ -217,6 +224,7 @@ impl App {
         match n {
             COURSE => self.courses.as_deref().is_some_and(|c| c.on.is_some()),
             WORKOUT => self.plan.player.is_some(),
+            CLIMB => self.on_climb() && !self.has_climb_page(),
             n => n < self.ride_count() && !(self.indoors() && self.indoor_blank(n)),
         }
     }

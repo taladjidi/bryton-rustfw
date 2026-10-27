@@ -85,6 +85,10 @@ pub const COURSE: usize = PAGES + 1;
 /// loaded.
 pub const WORKOUT: usize = PAGES + 2;
 
+/// [`Screen::Ride`]'s number for the climb page, in the round right after the page the rider was on when a climb's
+/// warning fired, until its top is passed (`App::on_climb`); not stored, the rider's sets are unchanged.
+pub const CLIMB: usize = PAGES + 3;
+
 // The RTC backup registers (32 words, kept in standby and through a reset; BOARD.md 8 has stock's side), all named
 // here, each word behind a tag so an empty or foreign one reads as unset:
 //
@@ -716,6 +720,13 @@ pub(crate) const DEFAULT_PAGES: [PageCfg; REG_PAGES + 1] = {
 pub(crate) const COURSE_PAGE: PageCfg = {
     use Field::*;
     PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, ClimbPace, Timer, AvgSpeed] }
+};
+
+/// The climb page ([`CLIMB`]): the recent altitude large, the climb's length and grade, the ascent to its top, the
+/// pacer's power, the grade under the wheel and the VAM. Not configurable.
+pub(crate) const CLIMB_PAGE: PageCfg = {
+    use Field::*;
+    PageCfg { layout: 12, fields: [AltGraph, Climb, ClimbGain, ClimbPace, Grade, Vam] }
 };
 
 /// The workout page, first in the round while a workout runs ([`WORKOUT`]): the reading the step targets in its gauge
