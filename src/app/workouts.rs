@@ -70,6 +70,7 @@ impl App {
         let zones = (self.settings.ftp, self.settings.max_hr);
         self.plan.calendar = storage::workout_file::calendar(vol, self.date, zones).unwrap_or_default();
         (self.plan.day, self.plan.zones) = (Some(self.date), zones);
+        self.plan.done_key = None;
     }
 
     /// Reads the calendar again when it is not the one for today and the rider's zones (a new day, a new FTP or
@@ -92,27 +93,42 @@ impl App {
         self.plan.calendar.iter().position(|p| p.day == self.date).unwrap_or(0)
     }
 
-    /// Planned workout `k` is done: played to its end today, or a ride of its day matches it
-    /// ([`history::done_mask`]). Never before the scan has the rides (no wrong mark).
+    /// Planned workout `k` is done: played to its end on its day, or a ride of its day matched it
+    /// ([`App::refresh_done`]).
     pub(crate) fn workout_done(&self, k: usize) -> bool {
         let Some(p) = self.plan.calendar.get(k) else { return false };
-        if p.day == self.date && self.plan.played == Some(p.file) {
-            return true;
-        }
+        self.plan.played == Some((p.day, p.file)) || self.plan.done >> k & 1 != 0
+    }
+
+    /// Works out `plan.done` when the date, the calendar or the history changed ([`history::done_mask`]). Not while
+    /// the scan has not the rides (no wrong mark), and the last answer stays through a rescan (no flicker).
+    pub(crate) fn refresh_done(&mut self) {
         if !self.stock.ready() {
-            return false;
+            return;
         }
-        let (mut want, mut rides) = ([0u32; 8], [0u32; 8]);
-        let (mut at, mut n) = (0, 0);
-        for (i, q) in self.plan.calendar.iter().enumerate().filter(|(_, q)| q.day == p.day).take(8) {
-            if let Some(w) = want.get_mut(n) {
-                *w = q.total_s;
-            }
+        let n = self.plan.calendar.iter().count();
+        let key = fnv(fnv(0x811c_9dc5, &[self.date.1, self.date.2, n as u8]), &self.stock.index.rev.to_le_bytes());
+        if self.plan.done_key == Some(key) {
+            return;
+        }
+        self.plan.done_key = Some(key);
+        self.plan.done = (0..n.min(8)).fold(0, |m, k| m | u8::from(self.ride_done(k)) << k);
+    }
+
+    /// Whether a saved ride matches calendar entry `k` once its day's workouts each took a ride.
+    fn ride_done(&self, k: usize) -> bool {
+        let Some(p) = self.plan.calendar.get(k) else { return false };
+        let (mut want, mut rides) = ([0u32; storage::workout_file::DAYS], [0u32; 8]);
+        let (mut at, mut n) = (None, 0);
+        for (i, q) in self.plan.calendar.iter().enumerate().filter(|(_, q)| q.day == p.day) {
+            let Some(w) = want.get_mut(n) else { break };
+            *w = q.total_s;
             if i == k {
-                at = n;
+                at = Some(n);
             }
             n += 1;
         }
+        // a day with more than 8 rides: only the 8 newest count (a workout needs one of them)
         let mut m = 0;
         for r in (0..history::RIDES).map_while(|i| self.stock.index.get(i)) {
             if (r.start.0, r.start.1, r.start.2) == p.day
@@ -122,7 +138,7 @@ impl App {
                 m += 1;
             }
         }
-        history::done_mask(&want[..n], &rides[..m]) >> at & 1 != 0
+        at.is_some_and(|at| history::done_mask(&want[..n], &rides[..m]) >> at & 1 != 0)
     }
 
     /// The overview's TODAY card whole ([`ui::draw_today`]).
@@ -146,8 +162,8 @@ impl App {
     pub(crate) fn today_print(&self) -> u32 {
         let h = fnv(0x811c_9dc5, &[self.date.1, self.date.2, u8::from(self.plan.day.is_some())]);
         let Some(p) = self.today() else { return h };
-        fnv(fnv(fnv(h, p.name.as_str().as_bytes()), &p.total_s.to_le_bytes()), &p.prof)
-            ^ u32::from(self.workout_done(self.today_index()))
+        let h = fnv(fnv(fnv(h, p.name.as_str().as_bytes()), &p.total_s.to_le_bytes()), &p.prof);
+        fnv(h, &[u8::from(self.workout_done(self.today_index()))])
     }
 
     /// Reads planned workout `k` and shows its steps. One workout at a time: while one runs, only its own steps
@@ -167,6 +183,7 @@ impl App {
                 return self.say("UNREADABLE");
             };
             (self.plan.workout, self.plan.file, self.plan.player) = (w, Some(p.file), None);
+            self.plan.planned = true;
         }
         // running: the step playing is selected (row 0 is START only when it is not)
         let at = self.plan.player.and_then(|pl| pl.step(self.plan.steps())).unwrap_or(0);
@@ -202,7 +219,7 @@ impl App {
         }
         self.choose_profile(); // a ride that began before the trainer was heard goes indoor here
         let (p, ev) = workout::Player::start(self.plan.steps(), at, self.ride.dist_m());
-        self.plan.player = Some(p);
+        (self.plan.player, self.plan.ran_s) = (Some(p), 0);
         self.workout_event(ev);
         // the first page that shows the workout (the default page 1 has no field for it), else page 1
         let page = if self.indoors() || self.trainer_heard() {
@@ -228,7 +245,12 @@ impl App {
         match ev {
             workout::Event::Countdown(_) => return self.tones.play(&Self::COUNT_TONE),
             workout::Event::Done => {
-                self.plan.played = self.plan.file; // the day's mark ([`App::workout_done`]); not kept over a restart
+                // the day's mark ([`App::workout_done`]; not kept over a restart): a calendar workout (not the ramp
+                // test), run for 80 % of its time at least (Lap through every step is not doing it)
+                let (total, file) = (self.plan.workout.total_s(), self.plan.file);
+                if self.plan.planned && 5 * u64::from(self.plan.ran_s) >= 4 * u64::from(total) {
+                    self.plan.played = file.map(|f| (self.date, f));
+                }
                 l.push_str("WORKOUT DONE")
             }
             workout::Event::Step(i) => {

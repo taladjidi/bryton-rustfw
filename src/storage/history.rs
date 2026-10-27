@@ -178,6 +178,8 @@ pub fn done_mask(planned_s: &[u32], rides_s: &[u32]) -> u32 {
 pub struct Index {
     rides: [Ride; RIDES],
     len: usize,
+    /// Counts the changes, so a reader can tell its answer is stale.
+    pub rev: u32,
 }
 
 impl Default for Index {
@@ -189,12 +191,13 @@ impl Default for Index {
 impl Index {
     /// No rides.
     pub const fn new() -> Self {
-        Index { rides: [NONE; RIDES], len: 0 }
+        Index { rides: [NONE; RIDES], len: 0, rev: 0 }
     }
 
     /// Forgets them all.
     pub fn clear(&mut self) {
         self.len = 0;
+        self.rev = self.rev.wrapping_add(1);
     }
 
     /// Rides kept.
@@ -215,6 +218,7 @@ impl Index {
 
     /// Adds `r` in its place (newest first); when full, the oldest goes (`r` itself if it is older than all).
     pub fn add(&mut self, r: Ride) {
+        self.rev = self.rev.wrapping_add(1);
         let kept = self.rides.get(..self.len).unwrap_or(&[]);
         let at = kept.iter().position(|k| k.start < r.start).unwrap_or(self.len);
         if at >= RIDES {

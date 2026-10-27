@@ -28,6 +28,7 @@ impl App {
             return self.say("WORKOUT RUNNING");
         }
         (self.plan.workout, self.plan.file, self.plan.player) = (ramp::workout(), Some(RAMP_FILE), None);
+        self.plan.planned = false;
         (self.ramp.run, self.ramp.result) = (Some(ramp::Ramp::new()), None);
         self.start_workout(0);
     }
