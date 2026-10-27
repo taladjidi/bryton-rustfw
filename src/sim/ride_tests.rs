@@ -534,3 +534,78 @@ fn distance_profile_fills_the_width() {
         assert!(empty.is_empty(), "n = {n}: columns {empty:?} are empty");
     }
 }
+
+/// A tap on a 3 / 10 / 30 s power field, even while recording, cycles the window every such field shows (on any
+/// page), keeps it through a restart, draws only those boxes, and a tap elsewhere does nothing new.
+#[test]
+fn a_tap_cycles_the_power_average() {
+    use Field::*;
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Hr, Speed, Dist, Timer, Time] }.into();
+    app.pages[1] = PageCfg { layout: 6, fields: [Speed, Power30s, Hr, Dist, Timer, Time] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start)); // recording: taps on fields do nothing else
+    // 35 s at 100 W then 5 s at 400 W: 3 s 400, 10 s 250, 30 s 150
+    for s in 0..40 {
+        app.power.second(Some(if s < 35 { 100 } else { 400 }), &app.ride, 250, 20_000);
+    }
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    let tap_field = |app: &mut App, sim: &mut Sim, f: Field| {
+        let (x, y, w, h) = app.widgets().find(|&(_, wd)| wd == Widget::Field(f)).unwrap().0;
+        app.input(sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    };
+    let screen = app.screen();
+    assert_eq!(text(&app, Power3s), "400");
+    let before = sim.pixels;
+    tap_field(&mut app, &mut sim, Power3s);
+    assert_eq!((app.screen(), text(&app, Power3s)), (screen, "250".into()), "10 s");
+    assert!(sim.pixels - before < 40_000, "only the power boxes are drawn");
+    tap_field(&mut app, &mut sim, Power3s);
+    assert_eq!(text(&app, Power3s), "150", "30 s");
+    // the other page's field shows it too, and a restart keeps it
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(text(&app, Power30s), "150");
+    tap_field(&mut app, &mut sim, Power30s);
+    assert_eq!(text(&app, Power30s), "400", "3 s again");
+    assert_eq!(app.avg_field(Power30s).label(), "3S W", "and its label");
+    assert_eq!(text(&app, WktPower), "400", "the gauge follows");
+    tap_field(&mut app, &mut sim, Power30s);
+    let mut app = App::start(&mut sim, Some(KEY));
+    assert_eq!(app.settings.wkt_avg, 1, "kept through a reset");
+    assert_eq!(app.avg_field(Power3s).label(), "10S W");
+    // the touch lock blocks the tap
+    app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Hr, Speed, Dist, Timer, Time] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.strip.locked = true;
+    tap_field(&mut app, &mut sim, Power3s);
+    assert_eq!(app.settings.wkt_avg, 1, "locked");
+    app.strip.locked = false;
+    // a MORE page (swipe up) has the field too
+    app.input(&mut sim, Input::Touch(Gesture::Swipe(Dir::Up)));
+    assert!(app.more_shown().is_some());
+    tap_field(&mut app, &mut sim, Power3s);
+    assert_eq!(app.settings.wkt_avg, 2, "MORE");
+    app.input(&mut sim, Input::Back);
+    // a tap on a field that is not a power average changes nothing
+    let other = |wd: &Widget| matches!(wd, Widget::Field(f) if ![Power3s, Power10s, Power30s].contains(f));
+    let (x, y, w, h) = app.widgets().find(|(_, wd)| other(wd)).unwrap().0;
+    app.input(&mut sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    assert_eq!(app.settings.wkt_avg, 2);
+}
+
+/// Every profile x climbs-ahead x window survives the settings words (the window is in register 16's, the rest in 11's).
+#[test]
+fn settings_words_round_trip() {
+    use crate::ride::Profile::*;
+    for profile in [None, Some(Road), Some(Indoor), Some(Mtb)] {
+        for ahead in [false, true] {
+            for wkt_avg in 0..3 {
+                let s = Settings { profile, ahead, wkt_avg, ..Settings::from_word(0) };
+                let back = Settings::from_word(s.to_word()).with_power_word(s.power_word());
+                assert_eq!((back.profile, back.ahead, back.wkt_avg), (profile, ahead, wkt_avg));
+            }
+        }
+    }
+    assert_eq!(Settings::from_word(0).with_power_word(0xa000_c000).wkt_avg, 0, "an old NOW is 3 s");
+}

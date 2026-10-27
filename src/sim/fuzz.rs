@@ -1315,7 +1315,7 @@ fn menu_tree_by_chance() {
             };
             let stored = |sim: &Sim| watched.iter().map(|&r| sim.backup[r]).collect::<Vec<_>>();
             let (before, editing) = (stored(&sim), app.editing);
-            let in_menu = matches!(app.screen(), Screen::Menu(..));
+            let (in_menu, avg) = (matches!(app.screen(), Screen::Menu(..)), app.settings.wkt_avg);
             app.input(&mut sim, i);
             if matches!(app.screen(), Screen::End(_)) && b % 4 != 0 {
                 // SAVE most times, as Start held (or END RIDE, asked) did before the end-ride screen: a ride ended
@@ -1325,7 +1325,16 @@ fn menu_tree_by_chance() {
             if stored(&sim) != before {
                 let act = matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
                     || editing && matches!(i, Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)));
-                assert!(act && in_menu, "seed {seed} step {k}: {i:?} changed a stored setting");
+                // a tap on a power average field of a ride page changes the window, kept
+                let avg_tap = !in_menu
+                    && matches!(i, Input::Touch(Gesture::Tap(..)))
+                    && app.settings.wkt_avg == (avg + 1) % 3
+                    && stored(&sim)
+                        .iter()
+                        .zip(&before)
+                        .enumerate()
+                        .all(|(n, (a, b))| a == b || n == 1 && (a ^ b) & !(3 << 14) == 0);
+                assert!(act && in_menu || avg_tap, "seed {seed} step {k}: {i:?} changed a stored setting");
                 acts += 1;
             }
             if let Screen::Menu(m, s) = app.screen() {

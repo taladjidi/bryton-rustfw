@@ -287,7 +287,12 @@ impl App {
                 ui::draw_notices(c, n.get(..shown).unwrap_or(&[]));
             }
             (Widget::Field(f), d) => {
-                ui::draw_field_frame_bar(c, bx, f, if let Drawn::Value(_, _, bar) = d { bar } else { ui::BLACK });
+                ui::draw_field_frame_bar(
+                    c,
+                    bx,
+                    self.avg_field(f),
+                    if let Drawn::Value(_, _, bar) = d { bar } else { ui::BLACK },
+                );
                 match d {
                     Drawn::Map(m) => {
                         let base = (self.first_map() == Some(i)).then_some(&self.basemap);
@@ -306,6 +311,45 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `f`, but a 3 / 10 / 30 s power field as the window chosen by a tap (its label).
+    pub(crate) fn avg_field(&self, f: Field) -> Field {
+        match f {
+            // the editor shows the field the rider picked
+            Field::Power3s | Field::Power10s | Field::Power30s if !matches!(self.screen, Screen::Edit(..)) => {
+                [Field::Power3s, Field::Power10s, Field::Power30s][self.settings.wkt_avg.min(2)]
+            }
+            f => f,
+        }
+    }
+
+    /// A tap on a power average field of the page: the window goes to the next (3, 10, 30 s, round), kept, and
+    /// those boxes are drawn again, each in its own box.
+    pub(crate) fn cycle_wkt_avg(&mut self, b: &mut impl Board) {
+        self.settings.wkt_avg = (self.settings.wkt_avg + 1) % 3;
+        self.save_misc(b);
+        for (i, (bx, w)) in self.widgets().enumerate() {
+            if !matches!(w, Widget::Field(Field::Power3s | Field::Power10s | Field::Power30s)) {
+                continue;
+            }
+            let (x, y, bw, bh) = bx;
+            let mut p = Panel(b, self.area(), self.settings.smooth);
+            p.fill(x, y, bw, bh, ui::BLACK); // the label may be shorter now
+            let now = self.now_drawn(bx, w);
+            if let Some(d) = self.drawn.get_mut(i) {
+                *d = now;
+            }
+            self.draw_widget(&mut Panel(b, self.area(), self.settings.smooth), i, bx, w);
+        }
+        self.update_page(b); // the gauge and the pacer follow
+    }
+
+    /// Whether (`x`, `y`) is in a power average field of the page.
+    pub(crate) fn wkt_avg_at(&self, x: u16, y: u16) -> bool {
+        self.widgets().any(|(bx, w)| {
+            matches!(w, Widget::Field(Field::Power3s | Field::Power10s | Field::Power30s)) && inside(bx, x, y)
+        })
     }
 
     /// The map's zoom set by hand, if any.

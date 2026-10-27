@@ -228,7 +228,8 @@ pub struct Settings {
     pub drink_min: u16,
     /// See `eat_min`.
     pub hr_alert: u16,
-    /// The power the workout gauge shows ([`Field::WktPower`]): an index in [`WKT_AVGS`]; kept in register 16.
+    /// The power average window every 3 / 10 / 30 s field, the workout gauge and the climb pacer show (a tap on one of the
+    /// fields cycles it): an index in [`WKT_AVGS`]; kept in register 16.
     pub wkt_avg: usize,
     /// What each shifter button press does, by [`sensors::Press`]: 3 bits each, the single presses in register 16
     /// (bits 18..23), the long ones in register 28 (bits 5..7 and 13..15), the bits those words left free. 0, in
@@ -271,7 +272,12 @@ pub enum GpsPower {
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
 /// (power.rs [`power::Power::rolling`] 0, 1, 2), then the power each second. 3 s first: the default.
-pub const WKT_AVGS: [&str; 4] = ["3S", "10S", "30S", "NOW"];
+pub const WKT_AVGS: [&str; 3] = ["3S", "10S", "30S"];
+
+/// The power window kept in 2 bits: 3, 10, 30 s as 0, 1, 2; an old 3 (NOW, each second) reads as 3 s.
+fn window(bits: u32) -> usize {
+    (bits & 3) as usize % 3
+}
 
 impl Settings {
     /// The settings in `w` (defaults for an empty or foreign word).
@@ -421,7 +427,7 @@ impl Settings {
     ///
     /// ```
     /// use bryton_rustfw::{GpsPower, Settings};
-    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, bike_hg: 65, gps_power: GpsPower::Full, ..Settings::from_word(0) };
+    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 2, bike_hg: 65, gps_power: GpsPower::Full, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
     /// // MTB: register 11 says AUTO (what a build before MTB reads), register 16 says MTB
@@ -430,7 +436,7 @@ impl Settings {
     /// assert_eq!(Settings::from_word(m.to_word()).with_power_word(m.power_word()), m);
     /// // an earlier build's word: its weight and W', the bike at the default
     /// let old = Settings::from_word(0).with_power_word(0xc1_03_2e_46);
-    /// assert_eq!((old.weight_kg, old.wprime_j, old.bike_hg, old.wkt_avg), (70, 23_000, 90, 3));
+    /// assert_eq!((old.weight_kg, old.wprime_j, old.bike_hg, old.wkt_avg), (70, 23_000, 90, 0), "an old NOW reads 3 s");
     /// ```
     pub fn with_power_word(self, w: u32) -> Settings {
         let [s0, s1, s2, s3] = self.remote;
@@ -439,7 +445,7 @@ impl Settings {
             0xa0..=0xaf => Settings {
                 weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
-                wkt_avg: (w >> 14 & 3) as usize,
+                wkt_avg: window(w >> 14),
                 smooth: w >> 24 & 1 != 0,
                 gps_power: match w >> 25 & 3 {
                     1 => GpsPower::Saver,
@@ -457,7 +463,7 @@ impl Settings {
             0xb0..=0xbf => Settings {
                 weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
-                wkt_avg: (w >> 14 & 3) as usize,
+                wkt_avg: window(w >> 14),
                 bike_hg: match (w >> 16 & 0x1f) as u16 {
                     0 => power::BIKE_HG,
                     b => (b * 10).clamp(*bike.start(), *bike.end()),
@@ -468,7 +474,7 @@ impl Settings {
             0xc1 => Settings {
                 weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
-                wkt_avg: (w >> 16 & 3) as usize,
+                wkt_avg: window(w >> 16),
                 bike_hg: power::BIKE_HG,
                 remote: [menu::Remote::from_bits(w >> 18), menu::Remote::from_bits(w >> 21), s2, s3],
                 ..self
@@ -576,7 +582,6 @@ impl Settings {
                 }
                 l.push_u32(m.unsigned_abs());
             }
-            Setting::WktAvg => l.push_str(WKT_AVGS.get(self.wkt_avg).copied().unwrap_or("")),
             Setting::BikeProfile => l.push_str(match self.profile {
                 None => "AUTO",
                 Some(ride::Profile::Road) => "ROAD",
@@ -615,7 +620,6 @@ impl Settings {
                     GpsPower::Saver => GpsPower::Auto,
                 }
             }
-            Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             Setting::BikeProfile => {
                 self.profile = match self.profile {
                     None => Some(ride::Profile::Road),

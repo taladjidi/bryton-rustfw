@@ -255,9 +255,10 @@ impl App {
             },
             Field::Rmssd => (self.hrv.rmssd().map(u32::from).filter(|_| self.live.get(Metric::Hr).is_some()), false),
             // power.rs and the ride's derived metrics
-            Field::Power3s => (p.rolling(0).map(u32::from), false),
-            Field::Power10s => (p.rolling(1).map(u32::from), false),
-            Field::Power30s => (p.rolling(2).map(u32::from), false),
+            // the three show the window a tap chose (settings.wkt_avg)
+            Field::Power3s | Field::Power10s | Field::Power30s => {
+                (p.rolling(self.settings.wkt_avg).map(u32::from), false)
+            }
             Field::Np => (p.np().map(u32::from), false),
             Field::If => {
                 match p.if_x100(ftp) {
@@ -327,9 +328,7 @@ impl App {
         let (p, ftp) = (&self.power, self.settings.ftp);
         match f {
             Field::Power => zone(held(0), true),
-            Field::Power3s => zone(held(1), true),
-            Field::Power10s => zone(held(2), true),
-            Field::Power30s => zone(held(3), true),
+            Field::Power3s | Field::Power10s | Field::Power30s => zone(held(1 + self.settings.wkt_avg), true),
             Field::Hr => zone(held(4), false),
             Field::Np => p.np().map_or(ui::BLACK, |w| ride::power_zone_color(w, ftp)),
             Field::MaxPower => p.max().map_or(ui::BLACK, |w| ride::power_zone_color(w, ftp)),
