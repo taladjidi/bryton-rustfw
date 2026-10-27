@@ -21,6 +21,15 @@ use crate::*;
 /// an outdoor ride recorded as indoor because the unit sat near a powered trainer.
 pub const TRAINER_QUIET_S: u16 = 120;
 
+/// The climb the CLIMB page shows and where the rider is on the trace or course.
+#[derive(Clone, Copy, Debug)]
+pub struct ClimbNow {
+    pub(crate) climb: course::Climb,
+    pub(crate) along: u32,
+    /// Of the followed course (else the road ahead's).
+    pub(crate) course: bool,
+}
+
 impl App {
     /// The set PAGES and the editor show: the profile's while a ride is open, else the one chosen in PAGES.
     pub(crate) fn view_set(&self) -> ride::Profile {
@@ -86,11 +95,30 @@ impl App {
         }) == Some(true)
     }
 
+    /// The climb the CLIMB page shows: the followed course's (the one the rider is on, else the next), else the road
+    /// ahead's; where the rider is on it (m from the trace's or course's start).
+    pub(crate) fn climb_now(&self) -> Option<ClimbNow> {
+        if let Some((c, at)) = self.on_course() {
+            let climb = *c.climbs().get(c.climb_at(at.along_m)?.0)?;
+            return Some(ClimbNow { climb, along: at.along_m, course: true });
+        }
+        let a = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors())?;
+        Some(ClimbNow { climb: a.climb_at(a.along_m())?.0, along: a.along_m(), course: false })
+    }
+
+    /// The altitude at `d` m of the climb in hand, dm.
+    pub(crate) fn climb_alt(&self, n: &ClimbNow, d: u32) -> Option<i32> {
+        match n.course {
+            true => self.courses.as_deref()?.course.alt_at(d),
+            false => self.ahead.as_ref()?.0.alt_at(d),
+        }
+    }
+
     /// The climb page's fields: the pacer's cell is the ascent where no course is followed (no plan there).
     pub(crate) fn climb_cfg(&self) -> PageCfg {
         let mut c = CLIMB_PAGE;
         if self.courses.as_deref().is_none_or(|c| c.on.is_none()) {
-            c.fields[3] = Field::Ascent;
+            c.fields[2] = Field::Ascent;
         }
         c
     }
@@ -99,7 +127,10 @@ impl App {
     pub(crate) fn has_climb_page(&self) -> bool {
         (0..self.ride_count()).any(|n| {
             self.ride_page_ref(n).is_some_and(|p| {
-                p.fields.iter().take(p.cells()).any(|f| matches!(f, Field::Climb | Field::ClimbGain | Field::ClimbPace))
+                p.fields
+                    .iter()
+                    .take(p.cells())
+                    .any(|f| matches!(f, Field::Climb | Field::ClimbGain | Field::ClimbPace | Field::ClimbProfile))
             })
         })
     }
@@ -117,6 +148,14 @@ impl App {
                 self.climb.1 = n;
             }
         }
+        // the rider reaches the climb's start: the page opens once, over a ride page only, never under a finger
+        let inside = on && self.climb_now().is_some_and(|n| n.along >= n.climb.start_m);
+        let free = matches!(self.screen, Screen::Ride(n) if n != CLIMB) && !self.touch.down() && !self.keys.any_down();
+        if inside && !self.climb.2 && free {
+            self.screen = Screen::Ride(CLIMB);
+            self.show(b);
+        }
+        self.climb.2 = inside;
         if on == self.climb.0 {
             return;
         }

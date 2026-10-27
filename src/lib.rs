@@ -237,8 +237,8 @@ pub struct App {
     pages_set: ride::Profile,
     /// The set the ride pages on screen were taken from at the last pass ([`App::ride_profile`] then).
     set_shown: ride::Profile,
-    /// The climb page is in the round, and the page it follows ([`CLIMB`]).
-    climb: (bool, usize),
+    /// The climb page is in the round, the page it follows, and the rider is on the climb (the page opens once there).
+    climb: (bool, usize, bool),
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
@@ -424,7 +424,7 @@ impl App {
             mtb: page::Set::mtb_default(),
             pages_set: ride::Profile::Road,
             set_shown: ride::Profile::Road,
-            climb: (false, 0),
+            climb: (false, 0, false),
             more_on: None,
             store,
             edit: None,

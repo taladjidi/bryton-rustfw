@@ -28,6 +28,8 @@ pub(crate) struct ProfileShown {
     start: u32,
     span: u32,
     rider: Option<u32>,
+    /// The climb's profile (the CLIMB page): `start` and `span` are the climb's, `id` is 1 (road ahead) or 2 (course).
+    climb: bool,
 }
 
 /// What the workout graph shows: the workout (its file, None: none), the zones' FTP and max heart rate, the rider's
@@ -82,6 +84,26 @@ fn graph_title(plot: ride::Plot) -> &'static str {
         Plot::Wbal => "W'BAL KJ",
         Plot::Dfa => "DFA A1",
         Plot::Alt => "ELEV M",
+    }
+}
+
+impl ProfileShown {
+    /// The rider's column (tests).
+    #[cfg(test)]
+    pub(crate) fn rider(&self) -> Option<u32> {
+        self.rider
+    }
+
+    /// The part shown: from m (tests).
+    #[cfg(test)]
+    pub(crate) fn start(&self) -> u32 {
+        self.start
+    }
+
+    /// The part shown: over m (tests).
+    #[cfg(test)]
+    pub(crate) fn span(&self) -> u32 {
+        self.span
     }
 }
 
@@ -277,8 +299,18 @@ impl App {
 
     /// What a profile `cols` wide shows now: from the eighth of the course the rider is in to the end (so it is
     /// redrawn whole eight times over a course, and otherwise moves by a column now and then).
-    pub(crate) fn profile_now(&self, cols: u32) -> ProfileShown {
-        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None };
+    pub(crate) fn profile_now(&self, cols: u32, climb: bool) -> ProfileShown {
+        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None, climb };
+        if climb {
+            let Some(n) = self.climb_now() else { return none };
+            let (start, span) = (n.climb.start_m, n.climb.len_m.max(1));
+            let rider = n
+                .along
+                .checked_sub(start)
+                .filter(|&d| d < span)
+                .map(|d| ((u64::from(d) * u64::from(cols) / u64::from(span)) as u32).min(cols.max(1) - 1));
+            return ProfileShown { id: 1 + u32::from(n.course), start, span, rider, climb };
+        }
         let Some(c) = self.courses.as_deref().filter(|c| c.on.is_some() && c.course.has_alt()) else { return none };
         let len = c.course.len_m();
         let at = c.at.off_m.map(|_| c.at.along_m.min(len));
@@ -287,12 +319,15 @@ impl App {
         let span = (len - start).max(1);
         let rider =
             at.map(|d| ((u64::from(d - start) * u64::from(cols) / u64::from(span)) as u32).min(cols.max(1) - 1));
-        ProfileShown { id: c.course.id(), start, span, rider }
+        ProfileShown { id: c.course.id(), start, span, rider, climb }
     }
 
     /// Profile column `k` of `p` in a plot `a`: its bar's height and colour (the rider's column white, the ridden
     /// part dark, the climbs by grade, the rest grey).
     pub(crate) fn profile_bar(&self, p: ProfileShown, a: (u32, u32, u32, u32), k: u32) -> (u32, u16) {
+        if p.climb {
+            return self.climb_bar(p, a, k);
+        }
         let Some(c) = self.courses.as_deref().filter(|_| p.id != 0) else { return (0, ui::BLACK) };
         if p.rider == Some(k) {
             return (a.3, ui::WHITE);
@@ -310,9 +345,57 @@ impl App {
         (h, color)
     }
 
+    /// Column `k` of the climb's profile: as high as its altitude in the climb's range (30 m at least), coloured by
+    /// the grade over it (100 m at least, inside the climb); the progress as the workout graph's: done dark, the rider's
+    /// column white.
+    fn climb_bar(&self, p: ProfileShown, a: (u32, u32, u32, u32), k: u32) -> (u32, u16) {
+        let Some(n) = self.climb_now().filter(|_| p.id != 0) else { return (0, ui::BLACK) };
+        if p.rider == Some(k) {
+            return (a.3, ui::WHITE);
+        }
+        let end = p.start.saturating_add(p.span);
+        let at = |i: u32| p.start + (u64::from(p.span) * u64::from(i) / u64::from(a.2.max(1))) as u32;
+        let (d0, d1) = (at(k), at(k + 1));
+        let mid = d0 + (d1 - d0) / 2;
+        let half = ((d1 - d0) / 2).max(50);
+        let (g0, g1) = (mid.saturating_sub(half).max(p.start), mid.saturating_add(half).min(end));
+        let alt = |d| self.climb_alt(&n, d);
+        let (Some(lo), Some(hi), Some(h0), Some(h1), Some(m)) = (alt(p.start), alt(end), alt(g0), alt(g1), alt(mid))
+        else {
+            return (0, ui::BLACK);
+        };
+        let grade = (h1 - h0) * 100 / g1.saturating_sub(g0).clamp(1, i32::MAX as u32) as i32;
+        let hi = hi.max(lo + 300);
+        let h = ((i64::from(m - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
+        // the workout graph's progress: the part done dark, the rider's column white
+        (h, if p.rider.is_some_and(|r| k < r) { ui::DARK } else { ui::grade_color(grade) })
+    }
+
+    /// The climb profile's title line: the gain at the left, the length and average grade at the right (as the
+    /// banner says them).
+    fn draw_climb_title(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32)) {
+        let (x, y, w) = (bx.0, bx.1, bx.2);
+        let Some(k) = self.climb_now().map(|n| n.climb) else { return ui::draw_plot_title(c, bx, "NO CLIMB") };
+        let (mut l, mut r) = (Line::<12>::new(), Line::<16>::new());
+        l.push_str("+");
+        l.push_u32(k.gain_m);
+        l.push_str(" M");
+        ui::card::push_km(&mut r, k.len_m);
+        r.push_str(" KM ");
+        r.push_u32(k.grade_x10().div_ceil(10).max(1));
+        r.push_str("%");
+        let half = w / 2;
+        ui::text::draw_in(c, &ui::LABEL, x + 6, y + 4, half.saturating_sub(6), ui::text::Align::Left, l.as_str());
+        ui::text::draw_in(c, &ui::LABEL, x + half, y + 4, half.saturating_sub(6), ui::text::Align::Right, r.as_str());
+    }
+
     /// The profile field in box `bx`, whole.
     pub(crate) fn draw_profile(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), p: ProfileShown) {
-        ui::draw_plot_title(c, bx, if p.id == 0 { "NO COURSE" } else { "PROFILE" });
+        if p.climb {
+            self.draw_climb_title(c, bx);
+        } else {
+            ui::draw_plot_title(c, bx, if p.id == 0 { "NO COURSE" } else { "PROFILE" });
+        }
         let a = ui::plot_area(bx);
         ui::draw_graph(c, a, &|k| self.profile_bar(p, a, k));
     }
@@ -321,7 +404,7 @@ impl App {
     /// between the rider's old place and the new one.
     pub(crate) fn update_profile(&self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let a = ui::plot_area(bx);
-        let now = self.profile_now(a.2);
+        let now = self.profile_now(a.2, old.climb);
         let mut p = Panel(b, self.area(), self.settings.smooth);
         if (ProfileShown { rider: old.rider, ..now }) != old {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), ui::plot_area(bx).1 - bx.1, ui::BLACK);

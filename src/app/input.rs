@@ -76,6 +76,11 @@ pub struct Keys {
 }
 
 impl Keys {
+    /// A key is down.
+    pub fn any_down(&self) -> bool {
+        self.held_ms.iter().any(|&h| h > 0)
+    }
+
     /// The keys down at the start (`mask`): ignored until each is released.
     pub fn at_start(mask: u8) -> Self {
         Keys { stuck: mask, ..Keys::default() }

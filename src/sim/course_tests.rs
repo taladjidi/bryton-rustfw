@@ -607,17 +607,14 @@ fn climb_page_in_the_round() {
             (0..PAGES + 2).chain([crate::CLIMB]).filter(|&n| n != crate::OVERVIEW && app.page_on(n)).count()
         };
         let base = count(&app);
-        let (mut shown, mut seen_on, mut gone) = (false, false, false);
+        let (mut shown, mut seen_on, mut gone, mut mid) = (false, false, false, false);
         while sim.ms < 700_000 && !gone {
             run(&mut sim, &mut app, 1000);
             let on = app.page_on(crate::CLIMB);
             if on && !seen_on {
                 seen_on = true;
                 assert_eq!(count(&app), base + 1, "one more page");
-                let at = if mode == 2 { crate::COURSE } else { 0 };
-                assert_eq!(app.screen(), Screen::Ride(at), "not jumped to");
-                app.press(&mut sim, Press::Short(Key::Page));
-                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "one Page press");
+                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the climb's start");
                 sim.save("climb_page");
                 shown = true;
                 if mode == 2 {
@@ -628,6 +625,16 @@ fn climb_page_in_the_round() {
                     app.toggle_indoor();
                     run(&mut sim, &mut app, 2000);
                 }
+            }
+            // half way up: the progress is the distance climbed over the climb's length (README picture)
+            if let (true, false, Some(n)) = (shown, mid, app.climb_now())
+                && n.along >= n.climb.start_m + n.climb.len_m / 2
+                && mode == 0
+            {
+                mid = true;
+                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+                check_progress(&app, &n);
+                sim.save("climb_page_mid");
             }
             if seen_on && !on {
                 gone = true;
@@ -667,10 +674,8 @@ fn climb_page_without_a_course() {
     }
     run(&mut sim, &mut app, 15_000);
     assert!(app.page_on(crate::CLIMB));
-    let shown = app.screen();
-    app.press(&mut sim, Press::Short(Key::Page));
-    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "one Page press from {shown:?}");
-    assert_eq!(app.climb_cfg().fields[3], Field::Ascent, "no pacer plan without a course");
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+    assert_eq!(app.climb_cfg().fields[2], Field::Ascent, "no pacer plan without a course");
     while app.page_on(crate::CLIMB) && sim.ms - t0 < 600_000 {
         run(&mut sim, &mut app, 1000);
     }
@@ -687,5 +692,74 @@ fn climb_fields_keep_the_climb_page_out() {
     for f in [Field::Climb, Field::ClimbGain, Field::ClimbPace] {
         app.pages[0] = PageCfg { layout: 1, fields: [f; 6] }.into();
         assert!(app.has_climb_page(), "{f:?}");
+    }
+}
+
+/// The climb profile's rider column is the distance climbed over the climb's length, in its plot's columns, and its
+/// numbers are the climb's.
+fn check_progress(app: &App, n: &ClimbNow) {
+    let cols = ui::plot_area((0, 0, 240, 150)).2;
+    let p = app.profile_now(cols, true);
+    let want = (u64::from(n.along - n.climb.start_m) * u64::from(cols) / u64::from(n.climb.len_m)) as u32;
+    assert_eq!(p.rider(), Some(want.min(cols - 1)), "progress");
+    assert_eq!((p.start(), p.span()), (n.climb.start_m, n.climb.len_m), "the climb's own length");
+}
+
+/// Climbs ahead: the CLIMB page opens once when the rider reaches the climb's start (not at the warning before it),
+/// not over a menu, and does not come back for the same climb after Page leaves it.
+#[test]
+fn climb_page_opens_at_the_start() {
+    for menu in [false, true] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::route::tests::image_with_map();
+        sim.gnss.route = Some(ahead_route);
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        let mut app = App::start(&mut sim, None);
+        app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+        app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 3000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let t0 = sim.ms;
+        while !app.page_on(crate::CLIMB) && sim.ms - t0 < 300_000 {
+            run(&mut sim, &mut app, 500);
+        }
+        assert_eq!(app.screen(), Screen::Ride(0), "the warning does not move the screen");
+        if menu {
+            app.press(&mut sim, Press::Long(Key::Page));
+            assert!(matches!(app.screen(), Screen::Menu(..)));
+        }
+        while app.climb_now().is_some_and(|n| n.along < n.climb.start_m) && sim.ms - t0 < 300_000 {
+            assert!(menu || app.screen() == Screen::Ride(0), "not before the start");
+            run(&mut sim, &mut app, 500);
+        }
+        run(&mut sim, &mut app, 1500);
+        if menu {
+            assert!(matches!(app.screen(), Screen::Menu(..)), "not over a menu");
+            run(&mut sim, &mut app, 3000);
+            assert!(matches!(app.screen(), Screen::Menu(..)), "and not later");
+            continue;
+        }
+        assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+        let n = app.climb_now().unwrap();
+        check_progress(&app, &n);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_ne!(app.screen(), Screen::Ride(crate::CLIMB));
+        run(&mut sim, &mut app, 10_000);
+        assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "once per climb");
+        assert_consistent(&sim, &app);
+    }
+}
+
+/// A fresh unit has climbs ahead on, and so does a word written before the setting (tags 0xa7 to 0xa9).
+#[test]
+fn climbs_ahead_default_on() {
+    assert!(Settings::from_word(0).ahead);
+    for tag in [0xa7u32, 0xa8, 0xa9] {
+        assert!(Settings::from_word(tag << 24).ahead, "{tag:x}");
+    }
+    for tag in [0xaau32, 0xab, 0xac] {
+        assert!(!Settings::from_word(tag << 24).ahead, "{tag:x}");
     }
 }
