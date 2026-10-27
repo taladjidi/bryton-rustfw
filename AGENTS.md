@@ -151,7 +151,7 @@ Cost is about calls x context size, so the main session (Opus) orchestrates and 
 
 | Agent | Model | Turns | For |
 |-------|-------|-------|-----|
-| `implementer` | Sonnet, worktree | 120 | features, UI, menus, ordinary fixes |
+| `implementer` | Haiku (Sonnet for open design), worktree | 120 | tests, fixes, well-specified changes; with Sonnet: new screens, protocols, refactors across files |
 | `critical` | Opus, worktree | 150 | only the part that writes storage or touches the recorder, power, boot, hw.rs, security |
 | `mechanic` | Haiku | 40 | docs, status ticks, gallery, FLASHLOG, renames, a fix a review spelled out |
 | `reviewer` | Sonnet (Opus for recorder, storage, boot), read-only | 60 | one pass on a diff, a findings list |
@@ -162,7 +162,8 @@ Cost is about calls x context size, so the main session (Opus) orchestrates and 
   (settings, menus, UI, tests) on the same branch.
 - **Worktrees fork from the commit main had when the session started**, not from main now: a worktree agent merges
   main first.
-- **Measured 2026-10-27:** a Sonnet review found everything an Opus one did, plus one more, at 2/3 of the cost.
+- **Measured 2026-10-27:** a Sonnet review found everything an Opus one did, plus one more, at 2/3 of the cost; a
+  Haiku implementer did a spelled-out fix at 1/3 of Sonnet's cost, same quality.
 - **The main session does no legwork:** it does not poll, gate runs and merges go to `runner`, it reads a file only to
   write a brief.
 - **One review per feature:** `reviewer` once, its findings to `mechanic` (spelled out) or `implementer`; a second
