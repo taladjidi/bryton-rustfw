@@ -17,6 +17,8 @@ pub enum UsbDot {
     Powered,
     /// Configured: the dev link is usable.
     Ready,
+    /// Configured, then suspended by the computer (idle): the next traffic resumes it.
+    Suspended,
 }
 
 /// What the status strip shows.
@@ -165,6 +167,7 @@ pub fn draw_strip_changes(c: &mut impl Canvas, s: &Strip, old: Option<&Strip>) {
             UsbDot::Failed => RED,
             UsbDot::Powered => ACCENT,
             UsbDot::Ready => GREEN,
+            UsbDot::Suspended => GREY,
         };
         // level with the capitals next to it: 7 font rows at 2x = 14 px, the symbol's height, from the text's top
         draw_bitmap(c, &USB_ICON, STRIP_USB.0, top, 1, usb);

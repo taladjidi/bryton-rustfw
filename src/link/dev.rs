@@ -87,6 +87,64 @@ pub struct Stats {
     pub cpu_permille: u32,
 }
 
+/// Configured, but no start of frame for this long (and no suspend seen): the computer dropped the device.
+pub const SOF_LOST_MS: u32 = 200;
+/// Configured once, then not for this long (or suspended after a failed transfer): the computer gave up on it.
+pub const UNCONFIGURED_MS: u32 = 2000;
+
+/// The USB device's state, as the board's watch reads it (usb-device's state, the crate's suspend from
+/// OTG_GINTSTS.USBSUSP).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbState {
+    /// Configured: the dev link is usable.
+    Configured,
+    /// The bus idle for 3 ms (USB 2.0 7.1.7.6; RM0399 OTG_GINTSTS USBSUSP, OTG_DSTS SUSPSTS); `configured`: it
+    /// was configured just before, and not reconnected since.
+    Suspended {
+        /// Configured just before the suspend.
+        configured: bool,
+    },
+    /// Default or addressed: not configured (yet, or again after a bus reset).
+    Unconfigured,
+}
+
+/// What the watch makes of [`UsbState`]: the dot to show, or a drop to recover from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbWatch {
+    /// Configured and starts of frame coming.
+    Up,
+    /// Suspended by the computer: a normal state (macOS suspends an idle device), the link resumes on its own at
+    /// the next traffic (RM0399 OTG_GINTSTS WKUPINT, or a bus reset).
+    Suspended,
+    /// Not configured.
+    Down,
+    /// Dropped: reconnect (docs/usb.md, "What was seen").
+    Drop,
+}
+
+/// The USB watch's decision, once per poll. `was_configured`: configured since the last reconnect; `still_ms`:
+/// time in this state, or while configured, since the frame number last moved; `failed`: the drive's last command
+/// ended in a phase error (its data phase found nobody taking packets for a second). A computer suspends a device
+/// only when idle, never in the middle of a transfer, so a suspend after a failed transfer is a drop (the port
+/// disabled, docs/usb.md 2026-10-24); any other suspend from configured is left alone, however long.
+///
+/// ```
+/// use bryton_rustfw::dev::{UsbState, UsbWatch, watch_usb};
+/// let suspended = UsbState::Suspended { configured: true };
+/// assert_eq!(watch_usb(suspended, true, 3_600_000, false), UsbWatch::Suspended);
+/// assert_eq!(watch_usb(suspended, true, 2000, true), UsbWatch::Drop);
+/// assert_eq!(watch_usb(UsbState::Configured, true, 200, false), UsbWatch::Drop);
+/// ```
+pub fn watch_usb(bus: UsbState, was_configured: bool, still_ms: u32, failed: bool) -> UsbWatch {
+    match bus {
+        UsbState::Configured if still_ms >= SOF_LOST_MS => UsbWatch::Drop,
+        UsbState::Configured => UsbWatch::Up,
+        UsbState::Suspended { configured: true } if !failed => UsbWatch::Suspended,
+        _ if was_configured && still_ms >= UNCONFIGURED_MS => UsbWatch::Drop,
+        _ => UsbWatch::Down,
+    }
+}
+
 /// What the main loop must do after a [`Session::feed`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -719,6 +777,40 @@ fn decimal(mut v: u32, buf: &mut [u8; 10]) -> &[u8] {
         v /= 10;
         if v == 0 {
             return &buf[i..];
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suspend_is_not_a_drop() {
+        let s = UsbState::Suspended { configured: true };
+        // the Mac suspends an idle device: left alone, however long, the dot says so
+        for ms in [0, SOF_LOST_MS, UNCONFIGURED_MS, u32::MAX] {
+            assert_eq!(watch_usb(s, true, ms, false), UsbWatch::Suspended);
+        }
+        // a suspend right after a transfer failed is the port disabled (docs/usb.md, 2026-10-24): the old recovery
+        assert_eq!(watch_usb(s, true, UNCONFIGURED_MS - 1, true), UsbWatch::Down);
+        assert_eq!(watch_usb(s, true, UNCONFIGURED_MS, true), UsbWatch::Drop);
+        // after that reconnect, nothing more until configured again
+        let gone = UsbState::Suspended { configured: false };
+        assert_eq!(watch_usb(gone, false, u32::MAX, true), UsbWatch::Down);
+    }
+
+    #[test]
+    fn drops_still_recovered() {
+        // configured, frame number frozen, no suspend: the green-dot drop
+        assert_eq!(watch_usb(UsbState::Configured, true, SOF_LOST_MS - 1, false), UsbWatch::Up);
+        assert_eq!(watch_usb(UsbState::Configured, true, SOF_LOST_MS, false), UsbWatch::Drop);
+        // reset and never configured again, or suspended before being configured again
+        for bus in [UsbState::Unconfigured, UsbState::Suspended { configured: false }] {
+            assert_eq!(watch_usb(bus, true, UNCONFIGURED_MS - 1, false), UsbWatch::Down);
+            assert_eq!(watch_usb(bus, true, UNCONFIGURED_MS, false), UsbWatch::Drop);
+            // never configured (still enumerating, or nothing on the other end): no reconnect
+            assert_eq!(watch_usb(bus, false, u32::MAX, false), UsbWatch::Down);
         }
     }
 }

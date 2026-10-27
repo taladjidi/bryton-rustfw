@@ -18,7 +18,7 @@
 mod board;
 
 use board::{hw, usb};
-use bryton_rustfw::dev::{Effect, Session, Stats};
+use bryton_rustfw::dev::{Effect, Session, Stats, UsbWatch};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
 use bryton_rustfw::ui::UsbDot;
@@ -1791,14 +1791,19 @@ fn main() -> ! {
                         l.linger(50);
                         system_reset();
                     }
-                    if l.watch() {
-                        app.usb_dropped(&mut board);
-                    }
+                    let dot = match l.watch(stats.uptime_ms.wrapping_add(slept), app.drive_failed()) {
+                        UsbWatch::Up => UsbDot::Ready,
+                        UsbWatch::Suspended => UsbDot::Suspended,
+                        UsbWatch::Down => UsbDot::Powered,
+                        UsbWatch::Drop => {
+                            app.usb_dropped(&mut board);
+                            UsbDot::Powered
+                        }
+                    };
                     // a drive command read or wrote the card, which may have slept and taken over SysTick: without
                     // this, the sleep's end is lost and the main loop stalls while USB is still served (seen on the
                     // unit, 2026-10-24: the uptime stopped, the dev link kept answering)
                     woke |= l.worked();
-                    let dot = if l.configured() { UsbDot::Ready } else { UsbDot::Powered };
                     app.set_usb(&mut board, dot);
                     app.prof().span(Sec::Usb, usb_at, cycles());
                 }

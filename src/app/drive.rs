@@ -101,6 +101,12 @@ impl App {
         self.drive.bus_reset();
     }
 
+    /// The drive's last command ended in a phase error (Bulk-Only 5.3.3: its data phase found nobody taking packets):
+    /// a suspend now is the port disabled, not the computer idling (lib dev.rs `watch_usb`).
+    pub fn drive_failed(&self) -> bool {
+        self.drive.log.iter().last().is_some_and(|e| e.3 == 2)
+    }
+
     /// The drive's last commands (the dev link's `drivelog`).
     pub fn drive_log(&self) -> &msc::Log {
         &self.drive.log
