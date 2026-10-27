@@ -338,8 +338,7 @@ impl App {
         let Some(s) = self.plan.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
         let reading = match s.target.kind {
             // the gauge's window (GAUGE POWER), so the bar and the marker agree
-            Kind::Power if self.settings.wkt_avg < 3 => self.power.rolling(self.settings.wkt_avg),
-            Kind::Power => self.live.get(Metric::Power),
+            Kind::Power => self.power.rolling(self.settings.wkt_avg),
             Kind::Hr => self.live.get(Metric::Hr),
             Kind::Cadence => self.live.get(Metric::Cadence),
             Kind::Open => None,
@@ -362,8 +361,7 @@ impl App {
         let reading = match kind {
             Kind::Hr => self.live.get(Metric::Hr),
             Kind::Cadence => self.live.get(Metric::Cadence),
-            _ if avg < 3 => self.power.rolling(avg),
-            _ => self.live.get(Metric::Power),
+            _ => self.power.rolling(avg),
         };
         let mut value = Line::new();
         match reading {

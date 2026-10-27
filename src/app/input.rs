@@ -420,8 +420,8 @@ impl App {
                 return;
             }
             // a tap on a 3 / 10 / 30 s power field cycles the window all of them show, even while recording
-            (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.pwr_avg_at(x, y) => {
-                return self.cycle_pwr_avg(b);
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.wkt_avg_at(x, y) => {
+                return self.cycle_wkt_avg(b);
             }
             // a tap on a TRAINER MODE / TARGET field opens the trainer screen, even while recording (the touch lock
             // above is what stops a stray touch)

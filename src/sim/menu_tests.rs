@@ -448,7 +448,6 @@ fn menu_tree_reaches_everything() {
         Setting::Eat,
         Setting::Drink,
         Setting::HrAlert,
-        Setting::WktAvg,
     ];
     let mut wanted: Vec<Row> = settings.iter().map(|&s| Row::Set(s)).collect();
     wanted.extend((0..4).map(|n| Row::Set(Setting::Remote(n))));

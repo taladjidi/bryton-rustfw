@@ -93,8 +93,6 @@ pub enum Setting {
     Drink,
     /// Heart rate alert over this, bpm.
     HrAlert,
-    /// The power the workout gauge shows (a choice of [`crate::WKT_AVGS`]: 3, 10, 30 s or each second).
-    WktAvg,
     /// What a shifter button press does ([`Remote`]), for press `n` ([`crate::sensors::Press`]).
     Remote(u8),
     /// The barometric altitude (a number, m): typing it calibrates the barometer to it (altitude.rs).
@@ -197,7 +195,6 @@ impl Setting {
             Setting::Eat => "EAT",
             Setting::Drink => "DRINK",
             Setting::HrAlert => "HR ABOVE",
-            Setting::WktAvg => "GAUGE POWER",
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
@@ -594,13 +591,8 @@ pub const ME: [Row; 4] =
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 5] = [
-    Row::Set(Setting::Light),
-    Row::Set(Setting::LightOff),
-    Row::Set(Setting::Touch),
-    Row::Set(Setting::Font),
-    Row::Set(Setting::WktAvg),
-];
+pub const DISPLAY: [Row; 4] =
+    [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::Font)];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead and the GPS receiver's power mode.

@@ -93,7 +93,7 @@ pub const WORKOUT: usize = PAGES + 2;
 //   1..4     stock (clock set, clock, USB mode)                     -
 //   5..8, 10 paired ANT+ sensors (tag 0xa5)                         sensors::Kind::backup
 //   9, 12,13 stock (12: its Nordic image; 13: last battery mV)      -
-//   11       wheel, backlight, max HR, FTP, power average (tag)     WHEEL_BKP
+//   11       wheel, backlight, max HR, FTP                          WHEEL_BKP
 //   14       paired shifting system (0x61 / 0x62)                   sensors::Kind::backup
 //   15       stock reads it at boot                                 -
 //   16       weights and W' (0xa)                                   POWER_BKP
@@ -224,7 +224,8 @@ pub struct Settings {
     pub drink_min: u16,
     /// See `eat_min`.
     pub hr_alert: u16,
-    /// The power the workout gauge shows ([`Field::WktPower`]): an index in [`WKT_AVGS`]; kept in register 16.
+    /// The power average window every 3 / 10 / 30 s field, the workout gauge and the climb pacer show (a tap on one of the
+    /// fields cycles it): an index in [`WKT_AVGS`]; kept in register 16.
     pub wkt_avg: usize,
     /// What each shifter button press does, by [`sensors::Press`]: 3 bits each, the single presses in register 16
     /// (bits 18..23), the long ones in register 28 (bits 5..7 and 13..15), the bits those words left free. 0, in
@@ -247,10 +248,6 @@ pub struct Settings {
     /// register 11's tag: 0xa7 to 0xa9 on, 0xaa to 0xac off (the same three profiles; an earlier build reads those
     /// as an empty word: defaults).
     pub ahead: bool,
-    /// The window the 3 / 10 / 30 s power fields all show (a tap on one cycles it): 0, 1, 2. Kept in register 11's
-    /// tag, 6 more for each step (0xa7 to 0xac: 3 s, 0xad to 0xb2: 10 s, 0xb3 to 0xb8: 30 s); an earlier build reads
-    /// 10 s and 30 s as an empty word (defaults).
-    pub pwr_avg: usize,
     /// The smooth font for text (the FONT setting, SMOOTH) instead of the pixel font; kept in register 16, bit 24.
     pub smooth: bool,
     /// GPS POWER (BIKE): kept in register 16, bits 25 (SAVER) and 26 (FULL); neither is AUTO.
@@ -271,7 +268,12 @@ pub enum GpsPower {
 
 /// The power windows the workout gauge offers, as its menu row and its title show them: 3, 10 and 30 s averages
 /// (power.rs [`power::Power::rolling`] 0, 1, 2), then the power each second. 3 s first: the default.
-pub const WKT_AVGS: [&str; 4] = ["3S", "10S", "30S", "NOW"];
+pub const WKT_AVGS: [&str; 3] = ["3S", "10S", "30S"];
+
+/// The power window kept in 2 bits: 3, 10, 30 s as 0, 1, 2; an old 3 (NOW, each second) reads as 3 s.
+fn window(bits: u32) -> usize {
+    (bits & 3) as usize % 3
+}
 
 impl Settings {
     /// The settings in `w` (defaults for an empty or foreign word).
@@ -311,20 +313,18 @@ impl Settings {
             alt_m: 500,
             profile: None,
             ahead: true,
-            pwr_avg: 0,
             smooth: false,
             gps_power: GpsPower::Auto,
         };
         match w >> 24 {
-            0xa7..=0xb8 => Settings {
+            0xa7..=0xac => Settings {
                 profile: match (w >> 24) % 3 {
                     // 0xa8, 0xab: ROAD; 0xa9, 0xac: INDOOR; 0xa7, 0xaa: AUTO
                     0 => Some(ride::Profile::Road),
                     1 => Some(ride::Profile::Indoor),
                     _ => None,
                 },
-                ahead: ((w >> 24) - 0xa7) % 6 < 3,
-                pwr_avg: ((w >> 24) as usize - 0xa7) / 6,
+                ahead: w >> 24 < 0xaa,
                 wheel_mm: index(w & 7),
                 max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end()),
                 ftp: (5 * (w >> 16 & 0x7f) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
@@ -423,7 +423,7 @@ impl Settings {
     ///
     /// ```
     /// use bryton_rustfw::{GpsPower, Settings};
-    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, bike_hg: 65, gps_power: GpsPower::Full, ..Settings::from_word(0) };
+    /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 2, bike_hg: 65, gps_power: GpsPower::Full, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
     /// // MTB: register 11 says AUTO (what a build before MTB reads), register 16 says MTB
@@ -432,7 +432,7 @@ impl Settings {
     /// assert_eq!(Settings::from_word(m.to_word()).with_power_word(m.power_word()), m);
     /// // an earlier build's word: its weight and W', the bike at the default
     /// let old = Settings::from_word(0).with_power_word(0xc1_03_2e_46);
-    /// assert_eq!((old.weight_kg, old.wprime_j, old.bike_hg, old.wkt_avg), (70, 23_000, 90, 3));
+    /// assert_eq!((old.weight_kg, old.wprime_j, old.bike_hg, old.wkt_avg), (70, 23_000, 90, 0), "an old NOW reads 3 s");
     /// ```
     pub fn with_power_word(self, w: u32) -> Settings {
         let [s0, s1, s2, s3] = self.remote;
@@ -441,7 +441,7 @@ impl Settings {
             0xa0..=0xaf => Settings {
                 weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
-                wkt_avg: (w >> 14 & 3) as usize,
+                wkt_avg: window(w >> 14),
                 smooth: w >> 24 & 1 != 0,
                 gps_power: match w >> 25 & 3 {
                     1 => GpsPower::Saver,
@@ -459,7 +459,7 @@ impl Settings {
             0xb0..=0xbf => Settings {
                 weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
-                wkt_avg: (w >> 14 & 3) as usize,
+                wkt_avg: window(w >> 14),
                 bike_hg: match (w >> 16 & 0x1f) as u16 {
                     0 => power::BIKE_HG,
                     b => (b * 10).clamp(*bike.start(), *bike.end()),
@@ -470,7 +470,7 @@ impl Settings {
             0xc1 => Settings {
                 weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
-                wkt_avg: (w >> 16 & 3) as usize,
+                wkt_avg: window(w >> 16),
                 bike_hg: power::BIKE_HG,
                 remote: [menu::Remote::from_bits(w >> 18), menu::Remote::from_bits(w >> 21), s2, s3],
                 ..self
@@ -516,8 +516,7 @@ impl Settings {
             None | Some(ride::Profile::Mtb) => 0xa7, // MTB in register 16
             Some(ride::Profile::Road) => 0xa8,
             Some(ride::Profile::Indoor) => 0xa9,
-        } + 3 * u32::from(!self.ahead)
-            + 6 * self.pwr_avg.min(2) as u32) << 24
+        } + 3 * u32::from(!self.ahead)) << 24
             | u32::from(!self.touch) << 23 // ponytail: the bit FTP / 5 (120 at most) leaves free in a full word
             | (u32::from(self.ftp / 5) & 0x7f) << 16
             | (u32::from(self.max_hr.saturating_sub(100)) & 0xff) << 8
@@ -579,7 +578,6 @@ impl Settings {
                 }
                 l.push_u32(m.unsigned_abs());
             }
-            Setting::WktAvg => l.push_str(WKT_AVGS.get(self.wkt_avg).copied().unwrap_or("")),
             Setting::BikeProfile => l.push_str(match self.profile {
                 None => "AUTO",
                 Some(ride::Profile::Road) => "ROAD",
@@ -618,7 +616,6 @@ impl Settings {
                     GpsPower::Saver => GpsPower::Auto,
                 }
             }
-            Setting::WktAvg => self.wkt_avg = (self.wkt_avg + 1) % WKT_AVGS.len(),
             Setting::BikeProfile => {
                 self.profile = match self.profile {
                     None => Some(ride::Profile::Road),

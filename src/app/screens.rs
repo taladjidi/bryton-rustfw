@@ -315,8 +315,9 @@ impl App {
     /// `f`, but a 3 / 10 / 30 s power field as the window chosen by a tap (its label).
     pub(crate) fn avg_field(&self, f: Field) -> Field {
         match f {
-            Field::Power3s | Field::Power10s | Field::Power30s => {
-                [Field::Power3s, Field::Power10s, Field::Power30s][self.settings.pwr_avg.min(2)]
+            // the editor shows the field the rider picked
+            Field::Power3s | Field::Power10s | Field::Power30s if !matches!(self.screen, Screen::Edit(..)) => {
+                [Field::Power3s, Field::Power10s, Field::Power30s][self.settings.wkt_avg.min(2)]
             }
             f => f,
         }
@@ -324,8 +325,8 @@ impl App {
 
     /// A tap on a power average field of the page: the window goes to the next (3, 10, 30 s, round), kept, and
     /// those boxes are drawn again, each in its own box.
-    pub(crate) fn cycle_pwr_avg(&mut self, b: &mut impl Board) {
-        self.settings.pwr_avg = (self.settings.pwr_avg + 1) % 3;
+    pub(crate) fn cycle_wkt_avg(&mut self, b: &mut impl Board) {
+        self.settings.wkt_avg = (self.settings.wkt_avg + 1) % 3;
         self.save_misc(b);
         for (i, (bx, w)) in self.widgets().enumerate() {
             if !matches!(w, Widget::Field(Field::Power3s | Field::Power10s | Field::Power30s)) {
@@ -340,10 +341,11 @@ impl App {
             }
             self.draw_widget(&mut Panel(b, self.area(), self.settings.smooth), i, bx, w);
         }
+        self.update_page(b); // the gauge and the pacer follow
     }
 
     /// Whether (`x`, `y`) is in a power average field of the page.
-    pub(crate) fn pwr_avg_at(&self, x: u16, y: u16) -> bool {
+    pub(crate) fn wkt_avg_at(&self, x: u16, y: u16) -> bool {
         self.widgets().any(|(bx, w)| {
             matches!(w, Widget::Field(Field::Power3s | Field::Power10s | Field::Power30s)) && inside(bx, x, y)
         })
