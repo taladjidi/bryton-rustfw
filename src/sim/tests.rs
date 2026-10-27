@@ -741,18 +741,22 @@ fn auto_backlight_follows_the_ambient_light() {
     sim.bus.lux10 = Some(5); // 0.5 lux: dark
     run(&mut sim, &mut app, 60_000);
     assert_eq!(sim.light_level, 8);
+    sim.bus.lux10 = Some(100); // 10 lux: dusk
+    run(&mut sim, &mut app, 2100);
+    assert_eq!(sim.light_level, 20, "dusk, stock's 20 %, within 2 s");
     sim.bus.lux10 = Some(300); // 30 lux
-    run(&mut sim, &mut app, 1000);
-    assert_eq!(sim.light_level, 50, "within a second");
+    run(&mut sim, &mut app, 2100);
+    assert_eq!(sim.light_level, 30, "within 2 s");
 
-    // a light hovering on the 50 lux edge: one level throughout
-    let mut levels = std::collections::BTreeSet::new();
-    for i in 0..40 {
+    // a light flickering on the 50 lux edge: stock has no hysteresis, but decides once a second
+    let mut changes = 0;
+    for i in 0..400 {
+        let before = sim.light_level;
         sim.bus.lux10 = Some(if i % 2 == 0 { 450 } else { 550 });
-        run(&mut sim, &mut app, 3000);
-        levels.insert(sim.light_level);
+        run(&mut sim, &mut app, 50);
+        changes += u32::from(sim.light_level != before);
     }
-    assert_eq!(levels.into_iter().collect::<Vec<_>>(), [50]);
+    assert!(changes <= 21, "{changes} changes in 20 s");
 
     // one reading per LIGHT_MS
     let reads0 = sim.bus.light_reads;

@@ -1,7 +1,7 @@
 //! The chips on the sensor bus (I2C4, BOARD.md 16), against [`Board::i2c_read`] / [`Board::i2c_write`]: the ambient
 //! light sensor (LTR-308ALS), the barometer (LPS22HH, read for its temperature and pressure) and the accelerometer
-//! (only switched off: stock leaves it running). Plus the automatic backlight: a level from the ambient light, smoothed
-//! and with hysteresis so it does not flicker between two levels.
+//! (only switched off: stock leaves it running). Plus the automatic backlight: stock's curve and timing, a level from
+//! the ambient light chosen every second.
 //!
 //! Power first: the light sensor measures only while the automatic backlight (or the sensors menu) needs it, then
 //! continuously (100 ms conversions, read every [`crate::LIGHT_MS`], so the backlight follows the light within about
@@ -118,48 +118,58 @@ pub fn baro_read_raw(b: &mut impl Board) -> Option<(u32, i16)> {
     Some((p.max(0) as u32, i16::from_le_bytes([d[3], d[4]])))
 }
 
-/// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each:
-/// stock's curve (its setting 3, BOARD.md 16), its bands of 5, 20, 50 and 120 lux, rising with the light indoors and
-/// down to the 1 % minimum above 120 lux, where the panel ("high reflectance" TFT, as Bryton sells it) is read by the
-/// light it reflects and the backlight adds little but drain. The darkest band is dimmer than stock's 14 % (8 %, its
-/// setting 1): in the dark the eye needs little (the owner, 2026-10-23).
-// ponytail: one curve; stock offers five (a setting) if someone wants another
-pub const AUTO_BANDS: [(u32, u8); 5] = [(50, 8), (200, 40), (500, 50), (1200, 70), (u32::MAX, 1)];
+/// The automatic backlight: ambient light bands (upper edge, tenths of a lux) and the backlight level in each, stock's
+/// curve exactly (the owner, 2026-10-27): its setting 1 (`Sensor_LightSensorUpdateBacklight` 0xd023e304, the table in
+/// initialised data at 0x2400ea44, BOARD.md 16): 8 % up to 5 lux, 20 % at dusk (5 to 20 lux), 30 % to 50 lux, then
+/// stock's level 0 above 50 lux, which its PWM clamps to the 1 % minimum (`Pwr_BacklightSetPwmDuty` 0xd0189c26): the
+/// panel ("high reflectance" TFT, as Bryton sells it) is read by the light it reflects. The fourth band (50 to 120 lux)
+/// is kept apart, as in stock's table, though its level is the fifth's.
+pub const AUTO_BANDS: [(u32, u8); 5] = [(50, 8), (200, 20), (500, 30), (1200, 1), (u32::MAX, 1)];
 
-/// Smoothing and hysteresis for [`AUTO_BANDS`].
+/// Readings a band is chosen from: stock decides once a measurement, one 400 ms conversion a second (MEAS_RATE 0x05,
+/// `Sensor_LightSensorCmd` 0xd023e024; rate field 5 is 1000 ms in DFRobot's LTR-308 driver, `eRate_1000ms`); this
+/// firmware reads every [`crate::LIGHT_MS`], so the band follows the mean of a second of readings.
+pub const AUTO_READS: u32 = 1000 / crate::LIGHT_MS;
+
+/// Stock's automatic backlight: the band of the light measured, chosen once a second ([`AUTO_READS`]). No other
+/// smoothing and no hysteresis, as stock: its threshold interrupt is re-armed at the band's own edges (INT_PST 0: the
+/// first reading outside them), and the band is the first whose edges hold the reading (`lo <= lux <= hi`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Auto {
-    /// The smoothed light, tenths of a lux (None before the first reading).
+    /// The light the band was last chosen from, tenths of a lux (None before the first reading).
     avg: Option<u32>,
+    /// The readings since then, summed, and their count.
+    sum: u32,
+    n: u32,
     band: usize,
 }
 
 impl Auto {
-    /// Takes one reading (tenths of a lux) and returns the level: the average moves half way to each reading (four a
-    /// second: a change of light shows within a second), and the band changes only once the average is a quarter past its edge, so a light that hovers on
-    /// an edge keeps one level.
+    /// Takes one reading (tenths of a lux) and returns the level. The first reading chooses the band at once; then the
+    /// mean of each [`AUTO_READS`] readings does.
     ///
     /// ```
-    /// use bryton_rustfw::ambient::Auto;
+    /// use bryton_rustfw::ambient::{Auto, AUTO_READS};
     /// let mut a = Auto::default();
     /// assert_eq!(a.update(10), 8); // 1 lux: dark
-    /// assert_eq!(a.update(100), 8); // one 10 lux reading: half way, not past the edge's margin
+    /// assert_eq!(a.update(100), 8, "10 lux: dusk, not before the second is up");
+    /// for _ in 2..AUTO_READS {
+    ///     a.update(100);
+    /// }
+    /// assert_eq!(a.update(100), 20, "dusk: 20 %");
     /// ```
     pub fn update(&mut self, lux10: u32) -> u8 {
-        let avg = self.avg.map_or(lux10, |a| (u64::from(a) + u64::from(lux10)).div_ceil(2) as u32);
-        let band = AUTO_BANDS.iter().position(|&(top, _)| avg <= top).unwrap_or(AUTO_BANDS.len() - 1);
-        let top = |i: usize| AUTO_BANDS.get(i).map_or(u32::MAX, |&(t, _)| t);
-        if self.avg.is_none()
-            || (band > self.band && avg > top(self.band).saturating_add(top(self.band) / 4))
-            || (band < self.band && self.band > 0 && avg < top(self.band - 1) - top(self.band - 1) / 4)
-        {
-            self.band = band;
+        self.sum = self.sum.saturating_add(lux10);
+        self.n += 1;
+        if self.avg.is_none() || self.n >= AUTO_READS {
+            let avg = self.sum / self.n;
+            self.band = AUTO_BANDS.iter().position(|&(top, _)| avg <= top).unwrap_or(AUTO_BANDS.len() - 1);
+            (self.avg, self.sum, self.n) = (Some(avg), 0, 0);
         }
-        self.avg = Some(avg);
         AUTO_BANDS.get(self.band).map_or(AUTO_BANDS[0].1, |&(_, level)| level)
     }
 
-    /// The smoothed light, tenths of a lux.
+    /// The light the level was last chosen from, tenths of a lux.
     pub fn lux10(&self) -> Option<u32> {
         self.avg
     }
@@ -169,28 +179,36 @@ impl Auto {
 mod tests {
     use super::*;
 
+    /// Stock's table, setting 1 (BOARD.md 16): 0..5, 5..20, 20..50, 50..120, 120.. lux to 8, 20, 30, 0, 0 (0: the
+    /// PWM's 1 % minimum), a reading on an edge in the lower band.
     #[test]
-    fn bands_and_hysteresis() {
-        assert!(AUTO_BANDS.windows(2).all(|w| w[0].0 < w[1].0), "edges in order");
-        let indoors = &AUTO_BANDS[..AUTO_BANDS.len() - 1];
-        assert!(indoors.windows(2).all(|w| w[0].1 <= w[1].1), "indoors: more light, more backlight");
+    fn stock_curve() {
+        let stock = [(0, 8), (50, 8), (51, 20), (200, 20), (201, 30), (500, 30), (501, 1), (1200, 1), (1201, 1)];
+        for (lux10, level) in stock.into_iter().chain([(262_143, 1)]) {
+            assert_eq!(Auto::default().update(lux10), level, "{lux10} tenths of a lux");
+        }
+    }
+
+    /// No hysteresis (stock's), but one decision a second: a light flickering on an edge changes the level at most
+    /// once per [`AUTO_READS`] readings.
+    #[test]
+    fn one_decision_a_second() {
         let mut a = Auto::default();
-        assert_eq!(a.update(0), 8);
-        for _ in 0..20 {
-            a.update(300); // 30 lux
+        let mut changes = 0;
+        let mut last = a.update(450);
+        for i in 0..20 * AUTO_READS {
+            let l = a.update(if i % 2 == 0 { 450 } else { 550 });
+            changes += u32::from(l != last);
+            last = l;
         }
-        assert_eq!(a.update(300), 50);
-        // hovering on the 50 lux edge (45..55): the level stays
-        for i in 0..40 {
-            assert_eq!(a.update(if i % 2 == 0 { 450 } else { 550 }), 50, "reading {i}");
-        }
-        for _ in 0..20 {
-            a.update(10_000);
+        assert!(changes <= 20, "{changes}");
+        for _ in 0..2 * AUTO_READS {
+            a.update(10_000); // a window that straddles the change, then a whole one
         }
         assert_eq!(a.update(10_000), 1, "daylight: the minimum, the panel reflects it");
-        for _ in 0..30 {
+        for _ in 0..2 * AUTO_READS {
             a.update(0);
         }
-        assert_eq!(a.update(0), 8, "dark again");
+        assert_eq!(a.update(0), 8, "dark again within 2 s");
     }
 }

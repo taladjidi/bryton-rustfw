@@ -354,8 +354,10 @@ build (POWER_STEPS=15) gives the wall time.
   "(c) IGN" corner, the 2.1 MB map memory zeroed at boot.
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
   checked against openant).
-- **The automatic backlight by eye:** stock's curve (8 % in the dark, the 1 % minimum above 120 lux): is the panel
-  readable in full sun at 1 % (compare BRIGHTNESS 100 and 10 outdoors)?
+- **The automatic backlight by eye:** stock's curve exactly (its setting 1: 8 % in the dark, 20 % at dusk, 30 % to
+  50 lux, the 1 % minimum above 50 lux; a band chosen once a second, no hysteresis, 2026-10-27): is the panel readable
+  in full sun and in a lit room at 1 % (a desk lamp read 480 lux on 2026-10-23), and does a light on a band's edge
+  make the level step visibly?
 - **Backlight levels** (60 / 30 / 10 %) and the time-out, each by eye.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
 - **The map's zoom buttons** ("+" and "-" on the full-page map, now any level, coarser than the fit too, and the

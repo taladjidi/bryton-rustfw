@@ -106,7 +106,11 @@ sheets, at their test conditions), none was measured on the unit.
   about 60 mA at 100 % (inferred), and the average follows the duty: 1 % 0.6 mA, 8 % 5 mA, 40 % 24 mA, 60 % 36 mA.
   - **Decided (owner, 2026-10-27):** a fresh unit (no saved settings) starts with AUTO and OFF AFTER 30 S
     (`Settings::from_word`'s defaults), about 60 mA less than the 100 % never off it had before; saved settings and
-    stock's imported ones keep theirs. AUTO follows stock's curve (BOARD.md 16).
+    stock's imported ones keep theirs.
+  - **AUTO is stock's curve exactly (owner, 2026-10-27):** its setting 1 (BOARD.md 16, `Sensor_LightSensorUpdateBacklight`
+    0xd023e304): 8 % up to 5 lux, 20 % at dusk (5 to 20 lux, was 40 %: about 12 mA less), 30 % to 50 lux (was 50 %),
+    the 1 % minimum above 50 lux (was 70 % from 50 to 120 lux: about 40 mA less in a lit room), and stock's timing: a
+    band chosen once a second, no hysteresis.
   - **Left to the owner:** a ride's OFF AFTER (10, 30, 60 s: at night the backlight is the largest draw by far).
 - **Panel (ST7789):** 4 to 7 mA in normal mode (secondary sources on the ST7789V; Sitronix's own table not read).
   Its idle mode (8 colours) and partial mode would change what is shown. A lower frame rate (FRCTRL2, 0xC6: stock's

@@ -793,15 +793,24 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
 
   Level 0 is the PWM's minimum, 1 % (`Pwr_BacklightSetPwmDuty` clamps to 1..100): in daylight the transflective
   panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
+- **Stock's timing and hysteresis** (`Sensor_LightSensorCmd` 0xd023e024, `Sensor_LightSensorUpdateBacklight`):
+  MEAS_RATE 0x05 is a 400 ms, 20-bit conversion once a second (rate field 5 is 1000 ms in DFRobot's driver,
+  `eRate_1000ms`); INT_PST 0x1a = 0 (an interrupt on the first reading outside the thresholds); at each interrupt the
+  band is the first whose edges hold the reading (`lo <= lux <= hi`), and the thresholds are re-armed at that band's
+  own edges: no averaging beyond the conversion and no hysteresis margin. Level 0 sets the PWM to its 1 % minimum;
+  stock switches the backlight off instead in one state (`Pwr_BacklightApplyOnOff` 0xd0189c42 when 0xd0189c0e returns
+  1 and 0xd0189c16 returns 0; what those two read is not traced). Which of the five settings a fresh stock unit uses
+  is not traced either (DeviceData.ini `AutoBrnVal`).
 - **This firmware** (src/drivers/ambient.rs): MEAS_RATE 0x22 (18 bits in 100 ms, a reading every 100 ms; the fields from
   DFRobot's LTR-308 driver: resolution in bits 6..4, rate in 2..0), so 0.1 lux per count at gain 6. The sensor
   measures continuously while the backlight is AUTO and on (or the sensors menu shows the light), read every 250 ms
   (MAIN_STATUS, ALS_DATA), and is in standby (MAIN_CTRL = 0) otherwise. (Until 2026-10-23: one 400 ms measurement
-  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve (src/drivers/ambient.rs
-  `AUTO_BANDS`: its setting 3, with 8 % instead of 14 % below 5 lux, and the 1 % minimum above 120 lux, where the
-  panel reads by reflected light; for a while this firmware rose to 100 % instead, until the owner chose stock's
-  logic), with a running average (half per reading) and
-  a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
+  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve exactly since
+  2026-10-27 (src/drivers/ambient.rs `AUTO_BANDS`: its setting 1, 8 / 20 / 30 % up to 5 / 20 / 50 lux, the 1 %
+  minimum above; the owner's choice, dusk at 20 %) and stock's timing: the band chosen once a second from the mean of
+  that second's four readings, no hysteresis. (Before: stock's setting 3 with 8 % in the dark, a running average and a
+  quarter of the edge as hysteresis.) Stock's lux are this firmware's x 0.93 on this unit (its calibration, below):
+  its edges fall about 7 % lower in this firmware's lux, not corrected. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
   480 lux (raw 19304) and dimmed the screen to 1 %, which the owner found wrong; the room read 0.3 to 0.6 lux, a hand
   over the sensor 0.05. Stock's calibration on this unit is 932 (its debug log, `Light sensor cali value 932`, from
   the eMMC raw sector at base + 0x4404 with 55 aa markers; `0xd018dc10`), so its lux are this firmware's x 0.93. The barometer powered down (CTRL_REG1 0x10 = 0x02: output rate 0, BDU) and one one-shot conversion
