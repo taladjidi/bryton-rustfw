@@ -349,6 +349,12 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).
+- `src/sim/tests.rs` keeps the shared helpers (`run`, `assert_consistent`, `back`, `KEY`, `STRAP`...) and the boot, key, touch,
+  banner, light and misc tests; the rest is by concern: `stock_tests.rs` (the overview's totals, STOCK DATA, fitness, ride
+  history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `menu_tests.rs` (the menu
+  tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `ride_tests.rs` (zone colours and bar,
+  live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
+  `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts

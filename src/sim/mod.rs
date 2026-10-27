@@ -1483,7 +1483,21 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 }
 
 #[cfg(test)]
+mod course_tests;
+#[cfg(test)]
+mod map_tests;
+#[cfg(test)]
+mod menu_tests;
+#[cfg(test)]
+mod perf_tests;
+#[cfg(test)]
+mod ride_tests;
+#[cfg(test)]
+mod stock_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod workout_tests;
 
 mod ble_sim;
 pub use ble_sim::{Act, FtmsSim, PhoneSim};
