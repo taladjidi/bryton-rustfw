@@ -83,6 +83,15 @@ Backup register 0 after a high-speed drop at the mount, read after the replug: `
 
 ## Ruled out or fixed
 
+- **A main loop that never slept with the cable in** (2026-10-27, fixed; not USB): the profiler showed the `usb`
+  section 255,000 times a second (3.2 us each, 82 % of wall time) instead of about 42. It looked like a suspended
+  bus, but DSTS.SUSPSTS read 0 and the spin went on with GINTMSK = 0 and with GAHBCFG.GINT = 0. The NVIC (peeked
+  with a debug build) held IRQ 23, the touch line's EXTI9_5, pending (ISPR0 0x00800400, ICSR.VECTPENDING 39) with
+  EXTI_CPUPR1 line 6 clear: the NVIC clear had landed before the EXTI write, the line pended it again, and nothing
+  cleared it any more. The usb row only showed it because the link is polled once per WFI; without the cable the
+  loop spins just the same, unmeasured. Timing decides it: about three runs in four of some builds, none of
+  others (adding a store after WFI hid it; `dsb` / `isb` around WFI did not). Fix: main.rs `touch_edge` reads CPUPR1 back after
+  clearing it and clears the NVIC pending bit on every call: 0 spins in 12 runs of two layouts that spun before.
 - **macOS refusing the mount** ("mount approval dissented, 0xF8DA0008") was its lock screen: it does not mount a newly
   inserted disk while locked. Not the unit.
 - **The main loop stalling** after a drive command (fixed): the eMMC access slept, which takes over SysTick. This was

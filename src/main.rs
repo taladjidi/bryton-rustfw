@@ -1114,13 +1114,22 @@ const EXTI9_5_IRQ: u32 = 1 << 23;
 const TOUCH_LINE: u32 = 1 << 6;
 
 /// The touch INT line fell since the last call (and the wake-up it caused is cleared).
+///
+/// The NVIC's pending bit is cleared on every call, edge or not. Cleared only after an edge, it stuck: the write to
+/// EXTI (APB4, D3 domain) had not reached the line when the NVIC clear landed, so the still-asserted line pended
+/// IRQ 23 again, and with CPUPR1 clear nothing ever cleared it. Every WFI then returned at once: the main loop spun
+/// (seen on the unit, 2026-10-27: ISPR0 0x00800400 and ICSR.VECTPENDING 39 = IRQ 23 with EXTI_CPUPR1 line 6 clear,
+/// the loop polled 255 000 times a second instead of 42; it depends on the code's timing, so some builds only).
+/// The read back makes the EXTI write complete first; the clear on every call heals what a race still leaves.
 fn touch_edge() -> bool {
-    if rd(EXTI_CPUPR1) & TOUCH_LINE == 0 {
-        return false;
+    let edge = rd(EXTI_CPUPR1) & TOUCH_LINE != 0;
+    if edge {
+        wr(EXTI_CPUPR1, TOUCH_LINE); // write 1 to clear
+        let _ = rd(EXTI_CPUPR1); // the write done before the NVIC clear (same peripheral, Device memory: in order)
     }
-    wr(EXTI_CPUPR1, TOUCH_LINE); // write 1 to clear
-    wr(NVIC_ICPR0, EXTI9_5_IRQ); // else WFI would return at once from now on
-    true
+    // an edge from now on sets CPUPR1, whose line pends IRQ 23 again: none is lost
+    wr(NVIC_ICPR0, EXTI9_5_IRQ);
+    edge
 }
 
 /// SCL and SDA of an I2C bus: AF4, open drain, not driven while being set up.

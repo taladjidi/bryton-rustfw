@@ -65,6 +65,13 @@ The dated findings are in [journal.md](journal.md).
   an independent implementation of the published method on the same beats: medians 1.05 and 1.05, r = 0.57 window
   by window, a typical difference of +-0.07.
 
+## Seen on the unit: a main loop that never slept (2026-10-27, from RAM)
+
+- **The spin:** with some builds, every WFI returned at once (the profiler's `usb` row at 255,000 calls a second, 82 %
+  of wall time awake): the touch line's IRQ 23 stuck pending in the NVIC (docs/usb.md, "Ruled out or fixed").
+- **After the fix** (`touch_edge` clears the pending bit on every call): `usb` at 43 to 44 calls a second, 0.05 % of wall
+  time, in 12 runs of two layouts; the dev link and `info` work. A tap on the panel after the fix is still to see.
+
 ## Not yet seen on the unit
 
 - **The profiler (link/prof.rs, `dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the

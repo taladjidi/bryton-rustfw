@@ -262,6 +262,9 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 - Needs VOS1 (PWR_D3CR VOS = 3).
 - VBUS sensing is off in the core: VBUS is read on **PC13**, not on the OTG VBUS pin.
 - Interrupt: OTG_HS is IRQ 77.
+- **Core interrupts the crate unmasks** (synopsys-usb-otg 0.5 `enable`): GINTMSK read 0x80043810 on the unit
+  (RXFLVL, USBSUSP, USBRST, ENUMDNE, IEPINT, WUIM); SOF and EOPF stay masked, so frames do not wake WFI. GINTSTS
+  reads 0x44808438 whenever the link answers a peek (SOF, EOPF, ESUSP and the FIFO-empty bits are set but masked).
 - Stock uses it for mass storage only, and a plug-in restarts the unit into that mode (RTC backup register 4).
 - This firmware: the dev link starts when PC13 goes high, and unplugging resets the unit (simplest way to power
   the PHY and the core down again):
@@ -795,7 +798,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 |---|---|
 | bus | **I2C1** (0x40005400), PB6 SCL, PB7 SDA, AF4, open drain, no internal pull; RCC_APB1LENR bit 21, reset APB1LRSTR bit 21 |
 | stock's timing | kernel clock D2PCLK1 12.5 MHz, TIMINGR 0x00100414 (about 400 kHz, inferred); HAL analog filter call with 0 (on, inferred from HAL's encoding), digital filter off |
-| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6 and the NVIC pending bit |
+| interrupt | **PC6**, EXTI6 falling edge, no pull (EXTI9_5 shared with the light sensor's PF9 line). This firmware: EXTI6 from port C (SYSCFG EXTICR2), falling edge, unmasked for the CPU, EXTI9_5 enabled in the NVIC only so the edge wakes WFI (interrupts stay masked); the main loop clears EXTI PR1 bit 6, reads it back, and clears the NVIC pending bit on every pass, edge or not: cleared right after the EXTI write, the still-asserted line pended IRQ 23 again and it stuck (seen 2026-10-27: NVIC_ISPR0 0x00800400, ICSR 0x00427000, VECTPENDING 39 = IRQ 23, with EXTI_CPUPR1 0x00000010, line 6 clear), so every WFI returned at once |
 | power | PG3 high, shared with the panel (already high in this firmware) |
 | reset | **PH3**, high to run (active-low RESET: the chip answers on I2C1 once PH3 is high, seen on the unit) |
 
