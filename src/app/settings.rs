@@ -722,11 +722,11 @@ pub(crate) const COURSE_PAGE: PageCfg = {
     PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, ClimbPace, Timer, AvgSpeed] }
 };
 
-/// The climb page ([`CLIMB`]): the recent altitude large, the climb's length and grade, the ascent to its top, the
-/// pacer's power, the grade under the wheel and the VAM. Not configurable.
+/// The climb page ([`CLIMB`]): the climb's profile (60 %, with its gain, length and grade), under it the grade under
+/// the wheel and the pacer's power (the ascent where no course is followed). Not configurable.
 pub(crate) const CLIMB_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 12, fields: [AltGraph, Climb, ClimbGain, ClimbPace, Grade, Vam] }
+    PageCfg { layout: 15, fields: [ClimbProfile, Grade, ClimbPace, Time, Time, Time] }
 };
 
 /// The workout page, first in the round while a workout runs ([`WORKOUT`]): the reading the step targets in its gauge

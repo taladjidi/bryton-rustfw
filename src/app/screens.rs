@@ -263,7 +263,9 @@ impl App {
                 self.zoom(),
                 self.page_follow(),
             )),
-            Widget::Field(Field::Profile) => Drawn::Profile(self.profile_now(ui::plot_area(bx).2)),
+            Widget::Field(f @ (Field::Profile | Field::ClimbProfile)) => {
+                Drawn::Profile(self.profile_now(ui::plot_area(bx).2, f == Field::ClimbProfile))
+            }
             Widget::Field(Field::WorkoutGraph) => Drawn::Workout(self.workout_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
             Widget::Field(Field::ClimbPace) => Drawn::Gauge(self.pace_now(ui::gauge_cols(bx))),

@@ -152,12 +152,15 @@ pub enum Field {
     /// W' left ([`crate::pacing`]), in the workout gauge: the 3 s power against a band around the target; "TOP" and the
     /// time to the top in its title.
     ClimbPace,
+    /// The climb the rider is on (else the next), from its start to its top: each column coloured by its grade,
+    /// the rider's place white, the climb's gain, length and average grade over it (the CLIMB page).
+    ClimbProfile,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 65] = {
+    pub const ALL: [Field; 66] = {
         use Field::*;
         [
             Time,
@@ -225,6 +228,7 @@ impl Field {
             ErgTarget,
             WorkoutLeft,
             ClimbPace,
+            ClimbProfile,
         ]
     };
 
@@ -301,6 +305,7 @@ impl Field {
             "ERG W",
             "WKT LEFT",
             "TOP",
+            "CLIMB",
         ];
         LABELS[self as usize]
     }
@@ -320,7 +325,7 @@ impl Field {
             "8-88", "8888", "GOOD",   // the course followed again:
             "888.8K", // the trainer:
             "ERG", "-10.0%", // the widest target: a grade (a power is "2000W")
-            "888|+88", "88:88|88", "", // the workout and ERG again, the climb pacer
+            "888|+88", "88:88|88", "", "", // the workout and ERG again, the climb pacer, the climb profile
         ];
         WIDEST[self as usize]
     }
@@ -339,6 +344,7 @@ impl Field {
                 | Field::WorkoutGraph
                 | Field::WktPower
                 | Field::ClimbPace
+                | Field::ClimbProfile
         )
     }
 
@@ -380,7 +386,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
         ("CLIMB", &[Ascent, Vam, Grade]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
-        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile, ClimbPace]),
+        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile, ClimbPace, ClimbProfile]),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
@@ -393,7 +399,7 @@ pub type Layout = (&'static [(u8, u8)], &'static str);
 
 /// The layouts by the id a page keeps ([`crate::PageCfg::layout`]); 0 is a page switched off. Ids 1, 2, 3, 4 and 6
 /// are the layouts of earlier builds, whose id was their field count, so pages kept then read the same.
-pub const LAYOUTS: [Layout; 15] = [
+pub const LAYOUTS: [Layout; 16] = [
     (&[], "OFF"),
     (&[(1, 1)], "1"),
     (&[(1, 1), (1, 1)], "2"),
@@ -411,6 +417,8 @@ pub const LAYOUTS: [Layout; 15] = [
     // registers never keep them (crate::page::Page::to_cfg)
     (&[(1, 1), (1, 2), (1, 2), (1, 2)], "1+2X3"),
     (&[(1, 2), (1, 2), (1, 2), (1, 2)], "2X4"),
+    // id 15: the CLIMB page's (not in the menu's order, never stored): the profile 60 %, two values under it
+    (&[(3, 1), (2, 2)], "CLIMB"),
 ];
 
 /// The order the page menu goes through the layouts: by field count (none is off: a page is deleted instead).
@@ -739,6 +747,21 @@ pub fn draw_graph_stats(
             text::draw_in(c, &style, right - STATS_W, ly, STATS_W, Align::Right, l);
         }
     }
+}
+
+/// A progress graph's column `k` (the workout graph's, the climb's): `bar` (height, colour) as it is, the part done
+/// (columns before the rider's) dark, the rider's column white and `full` high.
+pub fn progress_column(rider: Option<u32>, k: u32, full: u32, bar: (u32, u16)) -> (u32, u16) {
+    match rider {
+        Some(r) if r == k => (full, WHITE),
+        Some(r) if k < r => (bar.0, DARK),
+        _ => bar,
+    }
+}
+
+/// The climb's plot in field box `bx`: all of the box but a margin (its figures are written over it).
+pub fn climb_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    (x + 4, y + 3, w.saturating_sub(8), h.saturating_sub(7))
 }
 
 /// A plot without axes (the course profile) in field box `bx`: left, top, columns, height.

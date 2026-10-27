@@ -29,8 +29,8 @@ entirely. Not affiliated with Bryton.
 | The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | The target gauge spans every zone, power from 40 to 165 % of the FTP (sim) | The same in a half box: the climb pacer's TOP field (sim) | FTP ramp test result: FTP, best minute, APPLY / KEEP (sim) |
 | ![Rest day](docs/img/overview-rest.png) | ![WORKOUTS list](docs/img/workouts-list.png) | ![Quick panel](docs/img/quick-panel.png) | |
 | The overview's TODAY card with nothing planned (sim) | WORKOUTS: each day's profile beside its date and length; a rest day's card gets here, else it opens today's workout (sim) | The quick panel, a swipe down anywhere: the media remote, the power meter with ZERO and its result, each sensor with its battery (LOW in red), GPS, phone, battery and the brightness (sim) | |
-| ![FITNESS](docs/img/fitness.png) | ![Power meter calibration](docs/img/power-zero.png) | ![BIKE menu](docs/img/menu-bike.png) | |
-| HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | |
+| ![FITNESS](docs/img/fitness.png) | ![Power meter calibration](docs/img/power-zero.png) | ![BIKE menu](docs/img/menu-bike.png) | ![CLIMB page](docs/img/climb-page.png) |
+| HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | The CLIMB page, opened when the climb starts: its profile by grade, the part done dark and the rider white, gain, length and grade, then the grade and the climb coach (sim, made-up road) |
 
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*

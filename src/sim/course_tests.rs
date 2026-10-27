@@ -607,17 +607,14 @@ fn climb_page_in_the_round() {
             (0..PAGES + 2).chain([crate::CLIMB]).filter(|&n| n != crate::OVERVIEW && app.page_on(n)).count()
         };
         let base = count(&app);
-        let (mut shown, mut seen_on, mut gone) = (false, false, false);
+        let (mut shown, mut seen_on, mut gone, mut mid) = (false, false, false, false);
         while sim.ms < 700_000 && !gone {
             run(&mut sim, &mut app, 1000);
             let on = app.page_on(crate::CLIMB);
             if on && !seen_on {
                 seen_on = true;
                 assert_eq!(count(&app), base + 1, "one more page");
-                let at = if mode == 2 { crate::COURSE } else { 0 };
-                assert_eq!(app.screen(), Screen::Ride(at), "not jumped to");
-                app.press(&mut sim, Press::Short(Key::Page));
-                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "one Page press");
+                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the climb's start");
                 sim.save("climb_page");
                 shown = true;
                 if mode == 2 {
@@ -628,6 +625,15 @@ fn climb_page_in_the_round() {
                     app.toggle_indoor();
                     run(&mut sim, &mut app, 2000);
                 }
+            }
+            // half way up: the progress is the distance climbed over the climb's length (README picture)
+            if let (true, false, Some(n)) = (shown, mid, app.climb_now())
+                && n.along >= n.climb.start_m + n.climb.len_m / 2
+                && mode == 0
+            {
+                mid = true;
+                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+                check_progress(&app, &n);
             }
             if seen_on && !on {
                 gone = true;
@@ -667,10 +673,8 @@ fn climb_page_without_a_course() {
     }
     run(&mut sim, &mut app, 15_000);
     assert!(app.page_on(crate::CLIMB));
-    let shown = app.screen();
-    app.press(&mut sim, Press::Short(Key::Page));
-    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "one Page press from {shown:?}");
-    assert_eq!(app.climb_cfg().fields[3], Field::Ascent, "no pacer plan without a course");
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+    assert_eq!(app.climb_cfg().fields[2], Field::Ascent, "no pacer plan without a course");
     while app.page_on(crate::CLIMB) && sim.ms - t0 < 600_000 {
         run(&mut sim, &mut app, 1000);
     }
@@ -688,4 +692,302 @@ fn climb_fields_keep_the_climb_page_out() {
         app.pages[0] = PageCfg { layout: 1, fields: [f; 6] }.into();
         assert!(app.has_climb_page(), "{f:?}");
     }
+}
+
+/// The climb profile's rider column is the distance climbed over the climb's length, in its plot's columns, and its
+/// numbers are the climb's.
+fn check_progress(app: &App, n: &ClimbNow) {
+    let cols = ui::plot_area((0, 0, 240, 150)).2;
+    let p = app.profile_now(cols, true);
+    let want = (u64::from(n.along - n.climb.start_m) * u64::from(cols) / u64::from(n.climb.len_m)) as u32;
+    assert_eq!(p.rider(), Some(want.min(cols - 1)), "progress");
+    assert_eq!((p.start(), p.span()), (n.climb.start_m, n.climb.len_m), "the climb's own length");
+}
+
+/// Climbs ahead: the CLIMB page opens once when the rider reaches the climb's start (not at the warning before it),
+/// not over a menu, and does not come back for the same climb after Page leaves it.
+#[test]
+fn climb_page_opens_at_the_start() {
+    for menu in [false, true] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::route::tests::image_with_map();
+        sim.gnss.route = Some(ahead_route);
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        let mut app = App::start(&mut sim, None);
+        app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+        app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 3000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let t0 = sim.ms;
+        while !app.page_on(crate::CLIMB) && sim.ms - t0 < 300_000 {
+            run(&mut sim, &mut app, 500);
+        }
+        assert_eq!(app.screen(), Screen::Ride(0), "the warning does not move the screen");
+        if menu {
+            app.press(&mut sim, Press::Long(Key::Page));
+            assert!(matches!(app.screen(), Screen::Menu(..)));
+        }
+        while app.climb_now().is_some_and(|n| n.along < n.climb.start_m) && sim.ms - t0 < 300_000 {
+            assert!(menu || app.screen() == Screen::Ride(0), "not before the start");
+            run(&mut sim, &mut app, 500);
+        }
+        run(&mut sim, &mut app, 1500);
+        if menu {
+            assert!(matches!(app.screen(), Screen::Menu(..)), "not over a menu");
+            run(&mut sim, &mut app, 3000);
+            assert!(matches!(app.screen(), Screen::Menu(..)), "and not later");
+            continue;
+        }
+        assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+        let n = app.climb_now().unwrap();
+        check_progress(&app, &n);
+        app.press(&mut sim, Press::Short(Key::Page));
+        assert_ne!(app.screen(), Screen::Ride(crate::CLIMB));
+        run(&mut sim, &mut app, 10_000);
+        assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "once per climb");
+        assert_consistent(&sim, &app);
+    }
+}
+
+/// A fresh unit has climbs ahead on, and so does a word written before the setting (tags 0xa7 to 0xa9).
+#[test]
+fn climbs_ahead_default_on() {
+    assert!(Settings::from_word(0).ahead);
+    for tag in [0xa7u32, 0xa8, 0xa9] {
+        assert!(Settings::from_word(tag << 24).ahead, "{tag:x}");
+    }
+    for tag in [0xaau32, 0xab, 0xac] {
+        assert!(!Settings::from_word(tag << 24).ahead, "{tag:x}");
+    }
+}
+
+/// The README's CLIMB page: a made-up climb of four sections (4, 7, 10 and 6 %) after 2 km of flat, a power meter at
+/// 250 W, the rider 40 % up. The page opened at the climb's start; the progress is the distance climbed over the
+/// climb's length, and the figures written over the plot are never erased by it (the columns that pass under them
+/// are followed by the text again).
+#[test]
+fn climb_page_picture() {
+    // 2 km east on the flat, 2 km north (the climb), 1 km east: the synthetic hill's shape
+    fn scene_route(ms: u64) -> (i32, i32, i32) {
+        let s = ms as f64 * 0.008;
+        let (x, y, heading) = match s {
+            s if s < 2000.0 => (-2000.0 + s, -1500.0, 90.0),
+            s if s < 4000.0 => (0.0, -3500.0 + s, 0.0),
+            s => (s - 4000.0, 500.0, 90.0),
+        };
+        let m_per_unit = 0.011_132;
+        ((y / m_per_unit) as i32, (x / m_per_unit) as i32, (heading * 1e5) as i32)
+    }
+    // 4, 7, 10 and 6 % in 500 m sections from 2000 m
+    fn alt_m(s: f64) -> f64 {
+        let up = |from: f64, pct: f64| ((s - from).clamp(0.0, 500.0)) * pct / 100.0;
+        100.0 + up(2000.0, 4.0) + up(2500.0, 7.0) + up(3000.0, 10.0) + up(3500.0, 6.0)
+    }
+    fn alt_mm(ms: u64) -> i32 {
+        (alt_m(ms as f64 * 0.008) * 1000.0) as i32
+    }
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.gnss.route = Some(scene_route);
+    sim.gnss.alt = Some(alt_mm);
+    sim.bus.baro_alt = Some(alt_mm);
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor {
+        device_type: 0x0b,
+        id: 7,
+        data: |_| [0x10, 1, 0xff, 85, 0, 0, 250, 0],
+        network: 0,
+        ack: &[],
+    });
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    for _ in 0..hill(&app) {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200);
+    app.press(&mut sim, Press::Short(Key::Page));
+    // the course's own points, with this climb's altitudes
+    {
+        let c = app.courses.as_deref_mut().unwrap();
+        assert!(c.on.is_some());
+        c.course.clear();
+        for i in 0..=250u64 {
+            let (lat, lon, _) = scene_route(i * 2500);
+            c.course.push(lat, lon, Some((alt_m(i as f64 * 20.0) * 10.0) as i32));
+        }
+        c.course.finish();
+        c.at = crate::course::Tracker::new();
+    }
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.ms;
+    let boxes = |app: &App| {
+        let a = ui::climb_area(ui::field_box(15, ui::RIDE_H, 0).unwrap());
+        (a, app.climb_text_boxes(a).unwrap().map(|(b, _)| b))
+    };
+    // the figures just after the climb's start (the bar at its foot: columns 3 on of the left box are clear of it)
+    let mut first = None;
+    while sim.ms - t0 < 600_000 {
+        run(&mut sim, &mut app, 1000);
+        let Some(n) = app.climb_now().filter(|n| n.along >= n.climb.start_m + 5 && app.area().0 == 0) else { continue };
+        let (a, [left, _]) = boxes(&app);
+        let region = |sim: &Sim| {
+            let mut v = std::vec::Vec::new();
+            for y in left.1..left.1 + left.3 {
+                for x in left.0 + 3..left.0 + left.2 {
+                    v.push(sim.screen[(y * 240 + x) as usize]);
+                }
+            }
+            v
+        };
+        match first {
+            None => {
+                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+                let r = region(&sim);
+                assert!(r.iter().filter(|&&p| p == ui::WHITE).count() > 20, "the gain is written");
+                first = Some(r);
+            }
+            Some(ref r) if n.along >= n.climb.start_m + n.climb.len_m * 40 / 100 => {
+                // the bar is past the left figure (about 30 % of the plot) and the picture is of 40 %
+                assert!(&region(&sim) == r, "the figure survives the bar passing under it");
+                check_progress(&app, &n);
+                // a half-width cell: the figures do not overlap and stay in the field
+                let narrow = ui::climb_area((0, 0, 120, 100));
+                let [(l, _), (r, _)] = app.climb_text_boxes(narrow).unwrap();
+                assert!(l.0 + l.2 <= narrow.0 + narrow.2 && r.0 >= l.0 + l.2 && r.0 + r.2 <= narrow.0 + narrow.2);
+                assert!(l.2 > 0 && r.2 == 0, "the right figure dropped: {l:?} {r:?}");
+                assert!(a.2 > 0);
+                sim.save("climb_page_mid");
+                return;
+            }
+            Some(_) => {}
+        }
+    }
+    panic!("never half way");
+}
+
+/// Climbs ahead, riding to the warning of the climb.
+fn ahead_scene(route: fn(u64) -> (i32, i32, i32)) -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::route::tests::image_with_map();
+    sim.gnss.route = Some(route);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.ms;
+    while !app.page_on(crate::CLIMB) && sim.ms - t0 < 300_000 {
+        run(&mut sim, &mut app, 500);
+    }
+    (sim, app)
+}
+
+/// Metres still to the climb's start (negative: inside it).
+fn to_start(app: &App) -> i64 {
+    app.climb_now().map_or(i64::MAX, |n| i64::from(n.climb.start_m) - i64::from(n.along))
+}
+
+/// The CLIMB page's one opening per climb, in the cases that could open it twice or never: paused at the start
+/// (opens on resume), a menu up (not later), a key down at the crossing (the next pass), the page already shown,
+/// the rider's place stepping back over the start, a resume inside the climb (no opening).
+#[test]
+fn climb_page_opens_once_per_climb() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static HOLD: AtomicU64 = AtomicU64::new(u64::MAX);
+    // paused just before the start: nothing; resumed: opens at the crossing
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    while to_start(&app) > 30 {
+        run(&mut sim, &mut app, 250);
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 8000);
+    assert_eq!(app.screen(), Screen::Ride(0), "paused");
+    app.press(&mut sim, Press::Short(Key::Start));
+    while to_start(&app) > 0 {
+        run(&mut sim, &mut app, 50);
+    }
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened after the resume");
+    // left by Page: not again, not after a pause and resume inside the climb, not with the latch lost (a resume
+    // after a trace gap sees the rider inside: preset, no opening)
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    app.climb.2 = None;
+    run(&mut sim, &mut app, 3000);
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "not again");
+
+    // a menu at the start: skipped for this climb, even once the menu is left
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    app.press(&mut sim, Press::Long(Key::Page));
+    while to_start(&app) > -2 {
+        run(&mut sim, &mut app, 250);
+    }
+    back(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "not opened later");
+
+    // a key down at the crossing: the page waits for the next pass without one
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    sim.keys = Box::new(|ms| {
+        if ms >= HOLD.load(Ordering::SeqCst) && ms < HOLD.load(Ordering::SeqCst) + 1900 { Key::Lap as u8 } else { 0 }
+    });
+    while to_start(&app) > 4 {
+        run(&mut sim, &mut app, 50);
+    }
+    HOLD.store(sim.ms, Ordering::SeqCst);
+    while to_start(&app) > 0 {
+        run(&mut sim, &mut app, 50);
+    }
+    assert!(sim.ms < HOLD.load(Ordering::SeqCst) + 1900, "the key is still down at the crossing");
+    assert_eq!(app.screen(), Screen::Ride(0), "a key is down: not yet");
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "the next pass");
+    HOLD.store(u64::MAX, Ordering::SeqCst);
+
+    // already on the page at the start: stays; left, it does not return
+    let (mut sim, mut app) = ahead_scene(ahead_route);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+    while to_start(&app) > -2 {
+        run(&mut sim, &mut app, 250);
+    }
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    assert_ne!(app.screen(), Screen::Ride(crate::CLIMB));
+
+    // the place jittering over the start (a fix 15 m behind every other second there): one opening
+    fn jitter(ms: u64) -> (i32, i32, i32) {
+        let s = 100.0 + ms as f64 * 0.008;
+        let back = if (900.0..1000.0).contains(&s) && ms / 1000 % 2 == 1 { 15.0 } else { 0.0 };
+        let (lat, lon) = crate::route::tests::metres(s - back, 0.0);
+        (lat, lon, 9_000_000)
+    }
+    let (mut sim, mut app) = ahead_scene(jitter);
+    let mut opens = 0;
+    for _ in 0..800 {
+        run(&mut sim, &mut app, 250);
+        if app.screen() == Screen::Ride(crate::CLIMB) {
+            opens += 1;
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+    }
+    assert_eq!(opens, 1, "opened once");
 }

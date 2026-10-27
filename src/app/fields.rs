@@ -162,6 +162,7 @@ impl App {
             | Field::DfaGraph
             | Field::AltGraph
             | Field::Profile
+            | Field::ClimbProfile
             | Field::WorkoutGraph => {
                 return l;
             }
