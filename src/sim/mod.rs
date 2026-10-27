@@ -136,6 +136,8 @@ pub struct EmmcCard {
     pub cut_after: Option<u64>,
     /// Writes touching these sectors fail (a CRC error), nothing of them landing: a card failing in one place.
     pub bad: Vec<core::ops::Range<u32>>,
+    /// Reads touching these sectors fail (a read error), the card otherwise as it is: a file that cannot be read yet.
+    pub unreadable: Vec<core::ops::Range<u32>>,
     /// Bytes of sectors read so far (the cost of a pass: [`crate::App::SCAN_IDLE`]).
     pub bytes_read: u64,
     /// A cut tears the sector being written (garbage in it, as JEDEC allows for a plain write); a reliable write's
@@ -164,6 +166,7 @@ impl Default for EmmcCard {
             sectors_written: 0,
             cut_after: None,
             bad: Vec::new(),
+            unreadable: Vec::new(),
             bytes_read: 0,
             tear: false,
             rel_param: 0,
@@ -279,6 +282,10 @@ impl EmmcCard {
         use crate::emmc::BusError::{Crc, Timeout};
         assert!(buf.len().is_multiple_of(512) && !buf.is_empty(), "eMMC read of {} bytes", buf.len());
         let s = self.cmd_data(index, arg)?;
+        let end = u64::from(arg) + (buf.len() / 512) as u64;
+        if self.unreadable.iter().any(|b| u64::from(b.start) < end && u64::from(arg) < u64::from(b.end)) {
+            return Err(Crc);
+        }
         if self.host_wide != self.card_wide {
             return Err(Crc); // the bus widths differ: the data comes out as garbage
         }

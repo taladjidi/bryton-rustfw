@@ -30,8 +30,8 @@
 //! file is read [`PAGES_LOAD_MS`] later (or at the first screen other than the overview, the card not being touched at
 //! boot) and wins, unless the registers differ from both sets of words its newest copy keeps: then another build
 //! (an earlier one, or a read-only one, which keep their pages there only) changed them, and those pages win, the
-//! others staying the file's. A build that may not write the card never reads or writes the file: its pages are
-//! the registers' (three at most).
+//! others staying the file's. A build that may not write the card reads the file as any build does and waits for
+//! it before an edit, but never writes it: its changes go to the registers (three pages, lossy).
 //!
 //! **A change the file must wait for** (made during a paused ride, with the editor still open after ADD PAGE, or
 //! with the drive lent; or not written yet at a switch-off) goes to the registers at once, marked
@@ -176,12 +176,11 @@ impl App {
         }
     }
 
-    /// The pages' file read when it is time, written when the pages changed and no ride is open.
+    /// The pages' file read when it is time, written when the pages changed and no ride is open. A build that may not
+    /// write the card reads it too: the registers keep a page of a layout earlier builds lack as their nearest one, so
+    /// without the file it would show another layout (2026-10-27, a RAM build showed the owner's page 1 as 2X3).
     #[inline(never)]
     pub(crate) fn step_pages(&mut self, b: &mut impl Board) {
-        if !self.card_writable {
-            return;
-        }
         if !self.pages_writable_soon() {
             self.hold_pages(b);
         }
@@ -192,7 +191,7 @@ impl App {
         if !self.store.loaded && self.store.tries < LOAD_TRIES && due {
             self.load_pages(b);
         }
-        if self.store.dirty && self.pages_writable_soon() {
+        if self.card_writable && self.store.dirty && self.pages_writable_soon() {
             if !self.store.sound && !self.sync_fats_step(b) {
                 return; // the FAT copies compared over the next passes first
             }
@@ -226,7 +225,7 @@ impl App {
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
     /// is made to the file's pages, not to the registers' copy (which would then be written over the file's).
     pub(crate) fn ensure_pages(&mut self, b: &mut impl Board) {
-        if self.card_writable && !self.emmc.lent() && !self.store.loaded {
+        if !self.emmc.lent() && !self.store.loaded {
             self.load_pages(b);
         }
     }
@@ -235,7 +234,7 @@ impl App {
     pub(crate) fn pages_ready(&mut self, b: &mut impl Board) -> bool {
         self.ensure_pages(b);
         let why = match () {
-            _ if !self.card_writable || self.store.loaded => return true,
+            _ if self.store.loaded => return true,
             _ if self.emmc.lent() => "USB DRIVE ON",
             _ => "PAGES NOT READ",
         };

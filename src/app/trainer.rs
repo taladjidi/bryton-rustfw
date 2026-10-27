@@ -268,7 +268,7 @@ impl App {
     /// earlier build kept in backup register 14 is moved here, and 14 is left to the shifting system.
     #[inline(never)]
     fn sensors_storage(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS {
+        if self.emmc.lent() || self.gps.ms < SENSORS_LOAD_MS {
             return;
         }
         if !self.sensors_store.loaded {
@@ -300,8 +300,8 @@ impl App {
                 self.set_sensor(b, Kind::Trainer, Sensor::Paired(id));
             }
         }
-        if !self.sensors_store.dirty || !self.ride_settled() {
-            return;
+        if !self.card_writable || !self.sensors_store.dirty || !self.ride_settled() {
+            return; // a build that may not write the card reads the file, never writes it
         }
         let (local, _) = self.rec_time();
         let sector = sensors::sector(self.sensors_store.trainer, self.sensors_store.bt, self.sensors_store.bt_fec);

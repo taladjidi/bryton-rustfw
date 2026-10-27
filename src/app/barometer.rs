@@ -158,10 +158,11 @@ impl App {
     /// The calibration file: read once, written when the calibration changed, between rides.
     #[inline(never)]
     fn alt_storage(&mut self, b: &mut impl Board) {
-        if !self.card_writable || self.emmc.lent() || self.gps.ms < ALT_LOAD_MS {
+        if self.emmc.lent() || self.gps.ms < ALT_LOAD_MS {
             return;
         }
-        // the read is allowed while a ride is open (a resumed ride has its calibration back); the write is not
+        // the read is allowed while a ride is open (a resumed ride has its calibration back), and by a build that may
+        // not write the card; the write is not
         if !self.alt_store.loaded {
             self.alt_store.loaded = true;
             let mut s = [0u8; 512];
@@ -178,7 +179,7 @@ impl App {
                 self.alt.load(cal, now);
             }
         }
-        if !self.ride_settled() {
+        if !self.card_writable || !self.ride_settled() {
             return;
         }
         let Some(cal) = self.alt.take_dirty() else { return };
