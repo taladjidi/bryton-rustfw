@@ -237,6 +237,8 @@ pub struct App {
     pages_set: ride::Profile,
     /// The set the ride pages on screen were taken from at the last pass ([`App::ride_profile`] then).
     set_shown: ride::Profile,
+    /// The climb page is in the round, and the page it follows ([`CLIMB`]).
+    climb: (bool, usize),
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
@@ -422,6 +424,7 @@ impl App {
             mtb: page::Set::mtb_default(),
             pages_set: ride::Profile::Road,
             set_shown: ride::Profile::Road,
+            climb: (false, 0),
             more_on: None,
             store,
             edit: None,
@@ -549,6 +552,7 @@ impl App {
         self.date = rtc_date_from_dr(dr);
         self.catch_up_seconds(sec);
         self.settle_set(b);
+        self.settle_climb(b);
         if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);
