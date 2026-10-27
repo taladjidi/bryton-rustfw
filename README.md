@@ -3,6 +3,21 @@
 An open, from-scratch firmware in safe Rust for the **Bryton Rider S510** bike computer. It replaces Bryton's OS
 entirely. Not affiliated with Bryton.
 
+## Climbs ahead and the climb coach
+
+<img src="docs/img/climb-page.png" width="240" align="right" alt="The CLIMB page">
+
+On the road ahead, even without a course, the bike computer finds the climbs (Garmin ClimbPro's definition, on
+stock's own routing map), says the next one, and when it starts opens the **CLIMB page** once:
+- the climb's profile, coloured by grade, the part done dark and the rider's place in white, as on the workout page;
+- its gain, length and average grade written on the graph;
+- below, the grade now and the **climb coach**: the power to hold for this section, from CP and W' (the time to the
+  top, the target and a gauge), so the climb is ridden at the pace that gets to the top soonest.
+
+With a course followed, the same page uses the course's climbs. (Picture: the simulator on a made-up road.)
+
+<br clear="right">
+
 | | | | |
 |:-:|:-:|:-:|:-:|
 | ![Overview](docs/img/overview.png) | ![Ride started](docs/img/ride.png) | ![Power fields](docs/img/power.png) | ![W' balance graph](docs/img/wbal.png) |
@@ -35,12 +50,12 @@ entirely. Not affiliated with Bryton.
 *"unit": a screenshot of the bike computer over USB (`./dev.py shot`, rendered by the firmware from what it drew);
 "sim": the same firmware code drawing in the host simulator.*
 
-**Status (2026-10-26):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in eleven
+**Status (2026-10-27):** runs on the unit (installed, and newer builds from RAM). An overview and ride pages in eleven
 layouts, a page editor, touch and keys, menus, ANT+ sensors, a power meter's calibration and a smart trainer (ERG, SIM,
 an FTP ramp test), derived power metrics (NP, TSS, W' balance...), heart rate variability (DFA a1, thresholds from
 recent rides) and the beats recorded raw, graphs, GPS with fast aided starts, a track map with a basemap (IGN Plan v2
 packs, else stock's cached tiles), the workouts stock's app synced, courses with climbs, a climb pacer and the climbs
-on the road ahead without a course, the phone as a Bluetooth accessory, a PIXEL or SMOOTH font, and a USB dev link.
+on the road ahead without a course, with a CLIMB page that opens at a climb's start, the phone as a Bluetooth accessory, a PIXEL or SMOOTH font, and a USB dev link.
 Rides are saved to `\Activities` as stock does (seen on the unit), in two copies, and survive a reset or a power cut.
 The newest features are seen in the simulator only so far (docs/status.md). It shares the storage with Bryton's firmware, so the two can be swapped.
 
