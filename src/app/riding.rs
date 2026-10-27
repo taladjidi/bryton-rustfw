@@ -20,6 +20,7 @@ impl App {
             self.history = ride::History::default();
             self.alerts = alerts::Alerts::new();
             self.radio.shifts = 0;
+            self.radio.wake_rested();
             self.pace = PaceState::new(); // the last ride's plan: its TOP time and W' budget
             let mut track = map::Track::new();
             if let Some(p) = self.gps.pvt.filter(|p| p.good()) {

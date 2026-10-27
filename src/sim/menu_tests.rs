@@ -216,6 +216,37 @@ fn a_silent_sensor_searches_then_rests() {
     assert!(sim.nordic.channels[0].open, "a sensor that sends keeps its channel");
 }
 
+/// A paired strap that stays away: each search that finds nothing doubles the rest after it (1, 2, then 4 min at
+/// most), and a ride's Start searches again at once.
+#[test]
+fn an_absent_sensor_rests_longer_until_a_ride_starts() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    let mut app = App::start(&mut sim, Some(KEY));
+    let opens = |sim: &Sim| sim.nordic.got.iter().filter(|p| p.starts_with(&[6, 0xc4, 0])).count();
+    // searches of 30 s (the Sim models the low-priority one only), then rests of 60, 120, 240, 240 s
+    let mut want = 1;
+    for rest in [60_000, 120_000, 240_000, SEARCH_REST_MAX_MS] {
+        run(&mut sim, &mut app, 30_000 + 1000);
+        assert!(!sim.nordic.channels[0].open, "closed by its search time-out");
+        run(&mut sim, &mut app, u64::from(rest) - 2000);
+        assert_eq!(opens(&sim), want, "resting {rest} ms");
+        run(&mut sim, &mut app, 1000);
+        want += 1;
+        assert_eq!(opens(&sim), want, "searching again after {rest} ms");
+    }
+    run(&mut sim, &mut app, 31_000);
+    assert!(!sim.nordic.channels[0].open, "resting again");
+    app.press(&mut sim, Press::Short(Key::Start)); // overview: the first ride page
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride starts
+    run(&mut sim, &mut app, 200);
+    assert_eq!(opens(&sim), want + 1, "a ride's Start searches at once");
+    run(&mut sim, &mut app, 31_000 + 57_000);
+    assert_eq!(opens(&sim), want + 1, "then the first rest again");
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(opens(&sim), want + 2);
+}
+
 /// The page menu: Start cycles the layout and the fields; kept in a backup register, read back at the next
 /// start. A power meter's value shows in the new field.
 #[test]

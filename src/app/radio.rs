@@ -8,8 +8,24 @@ use phone::Media;
 
 /// How long a sensor's channel rests, closed, after its search timed out ([`nrf::SEARCH_TIMEOUT`]) before it
 /// searches again: so a strap not worn costs the radio 30 s of listening in 90 instead of all the time.
-// ponytail: fixed; during a ride a lost sensor should come back sooner (search again at once on the first drop-out)
 pub const SEARCH_REST_MS: u32 = 60_000;
+
+/// Each search in a row that finds nothing doubles the rest after it, up to this: a sensor left at home (a power
+/// meter on the other bike) then searches about 40 s in 280 instead of 40 in 100 (the chip's high-priority search,
+/// 10 s by default, before the 30 s low-priority one), about 1 mA less per absent sensor (docs/power.md, estimated).
+/// A sensor heard, the rider's own action in SENSORS, or a ride's Start (the channels resting search again at once)
+/// start from [`SEARCH_REST_MS`] again.
+pub const SEARCH_REST_MAX_MS: u32 = 4 * SEARCH_REST_MS;
+
+/// The rest after `misses` searches in a row that found nothing (the first: [`SEARCH_REST_MS`]).
+///
+/// ```
+/// use bryton_rustfw::{search_rest_ms, SEARCH_REST_MAX_MS, SEARCH_REST_MS};
+/// assert_eq!([0, 1, 2, 3, 9].map(search_rest_ms), [SEARCH_REST_MS, SEARCH_REST_MS, 120_000, 240_000, SEARCH_REST_MAX_MS]);
+/// ```
+pub fn search_rest_ms(misses: u8) -> u32 {
+    (SEARCH_REST_MS << misses.saturating_sub(1).min(2)).min(SEARCH_REST_MAX_MS)
+}
 
 /// A sensor's channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,7 +47,7 @@ impl App {
                 continue;
             }
             self.radio.resting_ms[i] = self.radio.resting_ms[i].saturating_add(pass_ms).min(u32::MAX - 1);
-            if self.radio.resting_ms[i] >= SEARCH_REST_MS {
+            if self.radio.resting_ms[i] >= search_rest_ms(self.radio.misses[i]) {
                 let id = match self.radio.sensors[i] {
                     Sensor::Paired(id) => Some(id),
                     _ => None, // still pairing: search for any
@@ -66,6 +82,7 @@ impl App {
             return; // still open: leave it as it was
         }
         self.radio.resting_ms[i] = u32::MAX;
+        self.radio.misses[i] = 0; // the rider's action: from the first rest again
         self.radio.sensors[i] = Sensor::Off;
         self.radio.heard_ms[i] = u32::MAX;
         let id = match want {
@@ -132,11 +149,15 @@ impl App {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)
                     }
                     self.radio.heard_ms[kind as usize] = 0;
+                    self.radio.misses[kind as usize] = 0;
                     if self.radio.sensors[kind as usize] == Sensor::Search {
                         self.radio.ask |= 1 << ch;
                     }
                 } else if let Some(kind) = nrf::ant_closed(p).and_then(Kind::from_channel) {
-                    self.radio.resting_ms[kind as usize] = 0; // its search timed out: reopened after a rest
+                    // its search timed out: reopened after a rest, longer for each search in a row that found nothing
+                    self.radio.resting_ms[kind as usize] = 0;
+                    let m = &mut self.radio.misses[kind as usize];
+                    *m = m.saturating_add(1);
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Power.channel()) {
                     self.powercal.unsent(); // a calibration request the meter did not take: sent again
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
