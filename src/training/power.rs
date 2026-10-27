@@ -94,6 +94,8 @@ impl Power {
             let w = self.wbal_mj.unwrap_or(full);
             let w = if p > cp { w - (p - cp) * 1000 } else { w + (full - w) * (cp - p) / i64::from(wprime_j.max(1)) };
             self.wbal_mj = Some(w.clamp(-full, full));
+        } else {
+            self.wbal_mj = None; // "None before a ride": an ended or discarded ride's value is not the next one's
         }
     }
 
@@ -302,5 +304,10 @@ mod tests {
         assert_eq!(p.wbal_j(), Some(-10_000), "below 0: CP or W' set too low");
         p.new_ride();
         assert_eq!((p.wbal_j(), p.kj(), p.rolling(0)), (None, 0, Some(400)), "a new ride: full again");
+        p.second(Some(400), &r, 250, 20_000);
+        assert!(p.wbal_j().is_some());
+        let idle = Ride::new();
+        p.second(Some(0), &idle, 250, 20_000);
+        assert_eq!(p.wbal_j(), None, "no ride: no W' balance left over from the last one");
     }
 }
