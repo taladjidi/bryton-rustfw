@@ -34,6 +34,11 @@ impl App {
             && !self.emmc.lent()
     }
 
+    /// The ride is an MTB ride: climbs ahead follow paths and tracks.
+    pub(crate) fn mtb(&self) -> bool {
+        self.ride_profile() == ride::Profile::Mtb
+    }
+
     /// Once a second: the rider on the trace, a new trace when needed, a climb to say.
     pub(crate) fn ahead_second(&mut self) {
         let on = self.ahead_on();
@@ -43,7 +48,9 @@ impl App {
             heading_e5: p.heading,
             speed_mm_s: p.speed_mm_s,
         });
+        let mtb = self.mtb();
         let Some((a, _)) = self.ahead.as_mut() else { return };
+        a.set_trails(mtb);
         if let Some(c) = a.second(on, fix) {
             self.course_event(course::Event::Climb(c));
         }

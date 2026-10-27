@@ -33,6 +33,9 @@
 //!   place on it), the profile ([`Ahead::alt_at`], [`Ahead::grade_ahead`], as a [`Course`]'s), and the announcement
 //!   of the next climb as the rider reaches it ([`ANNOUNCE_M`] before its start, or inside it), once.
 //!
+//! - **Trails** ([`Ahead::set_trails`], on an MTB ride): the slow class (paths, steps) is neither penalised at the snap
+//!   nor refused by the trace, so a track is followed like a road; classes 0, 6 and 15 stay excluded.
+//!
 //! Nothing here panics or loops on any input: every index is checked, the trace ends at [`PATH`] points, the
 //! snap is a pass over the graph's edges (sim/fuzz.rs feeds it random graphs and damaged files).
 
@@ -173,6 +176,8 @@ pub struct Ahead {
     said_top: (i32, i32),
     /// The graph was emptied during this trace: its node numbers mean nothing, the path is searched instead.
     cleared: bool,
+    /// Trails mode (an MTB ride): paths and steps are followed and snapped to like roads.
+    trails: bool,
     /// Traces made and tiles asked for in all (the cost, sim.rs).
     pub traces: u32,
 }
@@ -266,6 +271,7 @@ impl Ahead {
             in_said: false,
             said_top: (0, 0),
             cleared: false,
+            trails: false,
             traces: 0,
         }
     }
@@ -276,6 +282,27 @@ impl Ahead {
         (self.phase, self.n, self.have, self.n_climbs, self.said) = (Phase::Idle, 0, false, 0, false);
         self.in_said = false;
         (self.off_s, self.seg, self.along_m, self.retry_s) = (0, 0, 0, 0);
+    }
+
+    /// The trace is on a slow-class edge (the fuzz counts trails that reached one).
+    #[cfg(test)]
+    pub fn on_slow(&self) -> bool {
+        self.attr >> 4 == SLOW
+    }
+
+    /// Trails mode is on ([`Ahead::set_trails`]).
+    #[cfg(test)]
+    pub fn trails(&self) -> bool {
+        self.trails
+    }
+
+    /// Trails mode on or off; a change drops the trace (and what it found) so it is made again, the tiles stay.
+    pub fn set_trails(&mut self, on: bool) {
+        if self.trails != on {
+            self.trails = on;
+            self.maps.abort(&mut self.graph);
+            (self.phase, self.n, self.have, self.n_climbs, self.retry_s) = (Phase::Idle, 0, false, 0, 0);
+        }
     }
 
     /// The graph (tiles held, for the cost).
@@ -550,7 +577,7 @@ impl Ahead {
                 let len = norm(ab).max(1) as i64;
                 let along = ((ab.0 * hx + ab.1 * hy).abs() * 1000) / (len * 16384);
                 // a metre is 89.8 units
-                let slow = if attr >> 4 == SLOW { u64::from(SNAP_M) * 1_000_000 / 11_132 } else { 0 };
+                let slow = if attr >> 4 == SLOW && !self.trails { u64::from(SNAP_M) * 1_000_000 / 11_132 } else { 0 };
                 let score = d + turn_penalty_m(along) * 1_000_000 / 11_132 + slow;
                 if best.is_none_or(|b| score < b.0) {
                     best = Some((score, i, to, t));
@@ -642,7 +669,7 @@ impl Ahead {
                 // stock marks an edge not routable by its speed index (0, 6, over 14: -1 in the table at 0xd0293898);
                 // index 1 (factor 0.3) is inferred to be paths and steps: only on the way already on one, and last
                 let slow = attr >> 4 == SLOW;
-                if pos == self.prev || !routable(attr) || (slow && !on_slow) {
+                if pos == self.prev || !routable(attr) || (slow && !on_slow && !self.trails) {
                     continue;
                 }
                 let Some(ni) = self.graph.find(pos.0, pos.1) else { continue };
@@ -659,7 +686,8 @@ impl Ahead {
                 if c < TURN_COS_MILLI {
                     continue;
                 }
-                let class = if next.on_way(self.way) { 2 } else { u8::from(attr == self.attr) } + 4 * u8::from(!slow);
+                let class = if next.on_way(self.way) { 2 } else { u8::from(attr == self.attr) }
+                    + 4 * u8::from(!slow || self.trails);
                 if pick.is_none_or(|(k, ..)| (class, c) > k) {
                     pick = Some(((class, c), pos, attr, ni));
                 }
@@ -1233,6 +1261,63 @@ pub(crate) mod tests {
         let a = &mut Ahead::new();
         net(a, &[(1, 0x1e, &east(0.0, 3000.0, 0.0, |_| 100.0))]);
         assert!(run(a, fix(100.0, 0.0, 90.0)) && a.len_m() > 2000);
+    }
+
+    /// Trails mode: a side path that climbs is snapped to and followed when the heading points down it; road mode
+    /// keeps the road.
+    #[test]
+    fn trails_follow_the_path() {
+        let (c, s) = (40f64.to_radians().cos(), 40f64.to_radians().sin());
+        let path: Vec<_> =
+            (0..=40).map(|k| (500.0 + 25.0 * f64::from(k) * c, 25.0 * f64::from(k) * s, 100 + 2 * k)).collect();
+        for trails in [false, true] {
+            let a = &mut Ahead::new();
+            a.set_trails(trails);
+            net(a, &[(1, 0x2e, &east(0.0, 3000.0, 0.0, |_| 100.0)), (2, 0x1e, &path)]);
+            // heading along the path, 2 m off the junction
+            assert!(run(a, fix(500.0 + 3.0 * c, 3.0 * s, 50.0)));
+            let on_road = points(a).last().unwrap().1.abs() < 1.0;
+            assert_eq!(on_road, !trails, "trails {trails}");
+        }
+    }
+
+    /// A road crosses the climbing path partway up: in trails mode the trace stays on the path past the crossing.
+    #[test]
+    fn trails_stay_on_the_path_across_a_road() {
+        let a = &mut Ahead::new();
+        a.set_trails(true);
+        let path: Vec<_> = (0..=40).map(|k| (500.0, 25.0 * f64::from(k), 100 + 2 * k)).collect();
+        net(a, &[(1, 0x1e, &path), (2, 0x2e, &east(0.0, 1000.0, 500.0, |_| 120.0))]);
+        assert!(run(a, fix(500.0, 3.0, 0.0)));
+        let p = points(a);
+        assert!(p.iter().all(|q| (q.0 - 500.0).abs() < 1.0) && p.last().unwrap().1 > 900.0, "{p:?}");
+    }
+
+    /// Switching mode while a tile is half loaded drops the trace; the next one completes.
+    #[test]
+    fn mode_switch_mid_work() {
+        use crate::fat::tests::Ram;
+        use crate::route::tests::image_with_map;
+        let mut d = Ram(image_with_map(), 0);
+        let mut mem = std::vec![0u16; crate::route::SCRATCH_WORDS];
+        let a = &mut std::boxed::Box::new(Ahead::new());
+        a.fix = fix(1000.0, 0.0, 90.0);
+        a.phase = Phase::Snap;
+        let mut guard = 0;
+        while !a.loading() && a.work(&mut d, &mut mem) {
+            guard += 1;
+            assert!(guard < 200);
+        }
+        assert!(a.loading(), "a tile half loaded");
+        a.set_trails(true);
+        assert!(!a.busy() && !a.loading());
+        a.fix = fix(1000.0, 0.0, 90.0);
+        a.phase = Phase::Snap;
+        while a.work(&mut d, &mut mem) {
+            guard += 1;
+            assert!(guard < 400);
+        }
+        assert!(!a.busy() && a.on_road());
     }
 
     /// After the graph is emptied mid-trace its node numbers mean nothing: a place already on the trace is found

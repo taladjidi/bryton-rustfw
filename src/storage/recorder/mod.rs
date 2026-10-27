@@ -554,9 +554,9 @@ impl Recorder {
         }
     }
 
-    /// The ride is indoors (its FIT writer's profile: kept in the recovery record, so a resumed ride has it).
-    pub fn indoor(&self) -> bool {
-        self.writer.indoor()
+    /// The ride's profile (its FIT writer's: kept in the recovery record, so a resumed ride has it).
+    pub fn profile(&self) -> crate::ride::Profile {
+        self.writer.profile()
     }
 
     /// That profile was set by hand (kept in the recovery record too).
@@ -567,9 +567,9 @@ impl Recorder {
     /// The profile in force ([`fit::Writer::set_profile`]), for the end and the next record even with no second
     /// recorded since (a change while paused). Only for a ride being recorded and not ended: the file's end
     /// already says what it was.
-    pub fn set_profile(&mut self, indoor: bool, by_hand: bool) {
+    pub fn set_profile(&mut self, profile: crate::ride::Profile, by_hand: bool) {
         if matches!(self.phase, Phase::Starting | Phase::Recording) && !self.ended {
-            self.writer.set_profile(indoor, by_hand);
+            self.writer.set_profile(profile, by_hand);
         }
     }
 

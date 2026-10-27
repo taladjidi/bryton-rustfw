@@ -238,9 +238,10 @@ pub struct Settings {
     /// The altitude being edited (ALTITUDE in SYSTEM > BUILT IN), m + [`ALT_MENU_OFFSET`]. Not kept: the
     /// calibration is (altitude.rs).
     pub alt_m: u16,
-    /// The ride profile the rider fixed (BIKE > PROFILE); None: AUTO, indoor when a trainer is heard at Start. Kept in
-    /// register 11's tag: 0xa7 for AUTO (the tag every build knows), 0xa8 ROAD, 0xa9 INDOOR (an earlier build reads
-    /// those two as an empty word: defaults).
+    /// The ride profile the rider fixed (BIKE > PROFILE); None: AUTO, indoor when a trainer is heard at Start, else
+    /// road; MTB: the same with MTB for road (app/profile.rs). Kept in register 11's tag: 0xa7 for AUTO (the
+    /// tag every build knows), 0xa8 ROAD, 0xa9 INDOOR (an earlier build reads those two as an empty word: defaults);
+    /// MTB is 0xa7 there with register 16's bit 27 ([`Settings::with_power_word`]), so a build before MTB reads AUTO.
     pub profile: Option<ride::Profile>,
     /// Climbs found on the road ahead when no course is followed (BIKE > CLIMBS AHEAD, `climbs_ahead`). Kept in
     /// register 11's tag: 0xa7 to 0xa9 on, 0xaa to 0xac off (the same three profiles; an earlier build reads those
@@ -407,7 +408,8 @@ impl Settings {
     /// 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the bike's weight in 100 g in 16..23 (0:
     /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; clear in earlier words: PIXEL), GPS POWER in
     /// bits 25..26 (1 SAVER, 2 FULL, 0 AUTO; earlier words had only bit 25, SAVER, clear for their default FULL, now
-    /// read as AUTO); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
+    /// read as AUTO), BIKE > PROFILE MTB in bit 27 (earlier builds take bits 24..27 as part of the tag 0xa0 to 0xaf
+    /// and ignore it); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
     /// from earlier builds: tag 0xb in bits 28..31, the same up to the window, the bike's kg in 16..20, the single
     /// presses' actions in 21..23 and 24..26; tag 0xc1 in bits 24..31, the weight in kg in 0..7, W' in 0.5 kJ in
     /// 8..15, the window in 16..17, the actions in 18..23, no bike weight.
@@ -418,6 +420,10 @@ impl Settings {
     /// let s = Settings { weight_kg: 68, wprime_j: 23_500, wkt_avg: 3, bike_hg: 65, gps_power: GpsPower::Full, ..Settings::from_word(0) };
     /// assert_eq!(Settings::from_word(0).with_power_word(s.power_word()), s);
     /// assert_eq!(Settings::from_word(0).with_power_word(0).wprime_j, 20_000);
+    /// // MTB: register 11 says AUTO (what a build before MTB reads), register 16 says MTB
+    /// let m = Settings { profile: Some(bryton_rustfw::ride::Profile::Mtb), ..Settings::from_word(0) };
+    /// assert_eq!(m.to_word() >> 24, 0xa7);
+    /// assert_eq!(Settings::from_word(m.to_word()).with_power_word(m.power_word()), m);
     /// // an earlier build's word: its weight and W', the bike at the default
     /// let old = Settings::from_word(0).with_power_word(0xc1_03_2e_46);
     /// assert_eq!((old.weight_kg, old.wprime_j, old.bike_hg, old.wkt_avg), (70, 23_000, 90, 3));
@@ -436,6 +442,7 @@ impl Settings {
                     2 => GpsPower::Full,
                     _ => GpsPower::Auto, // and words before AUTO, whose FULL was the default: the new default
                 },
+                profile: if w >> 27 & 1 != 0 { Some(ride::Profile::Mtb) } else { self.profile },
                 bike_hg: match (w >> 16 & 0xff) as u16 {
                     0 => power::BIKE_HG,
                     b => b.clamp(*bike.start(), *bike.end()),
@@ -488,6 +495,7 @@ impl Settings {
                 GpsPower::Saver => 1,
                 GpsPower::Full => 2,
             }) << 25
+            | u32::from(self.profile == Some(ride::Profile::Mtb)) << 27
             | u32::from(self.smooth) << 24
             | (u32::from(self.bike_hg) & 0xff) << 16
             | (self.wkt_avg as u32 & 3) << 14
@@ -499,7 +507,7 @@ impl Settings {
     pub fn to_word(self) -> u32 {
         let wheel = WHEELS.iter().position(|&w| w == self.wheel_mm).unwrap_or(1) as u32;
         (match self.profile {
-            None => 0xa7,
+            None | Some(ride::Profile::Mtb) => 0xa7, // MTB in register 16
             Some(ride::Profile::Road) => 0xa8,
             Some(ride::Profile::Indoor) => 0xa9,
         } + 3 * u32::from(!self.ahead)) << 24
@@ -569,6 +577,7 @@ impl Settings {
                 None => "AUTO",
                 Some(ride::Profile::Road) => "ROAD",
                 Some(ride::Profile::Indoor) => "INDOOR",
+                Some(ride::Profile::Mtb) => "MTB",
             }),
             Setting::Remote(n) => l.push_str(self.remote.get(usize::from(n)).map_or("", |a| a.name())),
         }
@@ -607,7 +616,8 @@ impl Settings {
                 self.profile = match self.profile {
                     None => Some(ride::Profile::Road),
                     Some(ride::Profile::Road) => Some(ride::Profile::Indoor),
-                    Some(ride::Profile::Indoor) => None,
+                    Some(ride::Profile::Indoor) => Some(ride::Profile::Mtb),
+                    Some(ride::Profile::Mtb) => None,
                 }
             }
             Setting::Remote(n) => {

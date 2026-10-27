@@ -176,6 +176,8 @@ settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or sto
   their MORE variants; the overview is shared. The editor and PAGES work on the profile's set while a ride is open,
   else the one PAGES > ROAD PAGES or INDOOR PAGES opened. The indoor set is in `pages.bin` only (after the MORE part, a CRC of its own,
   so earlier builds ignore it and a file without it gives the defaults), never in the backup registers.
+**MTB** (BIKE > PROFILE): chosen by hand and kept until changed; a trainer heard still makes the ride INDOOR, and MTB comes back when it goes quiet. The ride file says mountain biking, the GNSS receiver tracks continuously whatever GPS POWER says, auto-pause waits for 5 s under 2 km/h (slow climbs keep the timer running), its own 4 pages (time, distance, speed, heart rate; the altitude graph, grade, ascent, VAM; totals; the map), and climbs ahead follows paths and tracks.
+
 - **Graphs:** a graph field shows power, heart rate, W' balance, DFA alpha1 or the elevation profile: a tap on it
   goes to the next one until the unit is switched off (the page as kept changes only in PAGES), a hold switches every
   graph between the last minutes and the whole ride; neither while a ride records (below).

@@ -584,8 +584,16 @@ fn a_tiny_row_is_refused_and_drawn_safely() {
     let rows = [(1, 2), (3, 1), (3, 1), (3, 1), (3, 1)];
     let tiny = Page { rows, fields: [Speed, Hr, Power, Cadence, Dist, Time, Time, Time] };
     assert!(tiny.well_formed() && !tiny.roomy());
-    let s =
-        Saved { seq: 3, pages: [tiny; PAGES], count: 1, words: [0; 6], was: [0; 6], more: [None; PAGES], indoor: None };
+    let s = Saved {
+        seq: 3,
+        pages: [tiny; PAGES],
+        count: 1,
+        words: [0; 6],
+        was: [0; 6],
+        more: [None; PAGES],
+        indoor: None,
+        mtb: None,
+    };
     assert_eq!(Saved::from_sector(&s.to_sector()), None);
     let (mut sim, mut app) = started();
     app.pages[0] = tiny;
@@ -943,12 +951,12 @@ fn the_round_takes_the_profiles_pages() {
     // a ride open: PAGES shows the ride's set whatever was chosen there
     press(&mut sim, &mut app, Key::Start);
     run(&mut sim, &mut app, 1500);
-    app.pages_indoor = false;
-    assert!(app.view_indoor());
+    app.pages_set = ride::Profile::Road;
+    assert!(app.view_set() == ride::Profile::Indoor);
     app.settings.profile = Some(crate::ride::Profile::Road);
     app.toggle_indoor(); // by hand: ROAD
     run(&mut sim, &mut app, 100);
-    assert!(!app.view_indoor());
+    assert!(app.view_set() == ride::Profile::Road);
 }
 
 /// PAGES > ROAD PAGES / INDOOR PAGES open that set's list and the editor works on it (item 8: one row for each set,
@@ -958,14 +966,14 @@ fn the_round_takes_the_profiles_pages() {
 fn the_pages_menu_edits_the_set_it_names() {
     let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
-    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(true)));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(ride::Profile::Indoor)));
     let label = |app: &App, i| app.menu_row(Menu::Pages, i).map(|(l, ..)| std::string::String::from(l.as_str()));
     assert_eq!((label(&app, 0).as_deref(), label(&app, 1).as_deref()), (Some("ROAD PAGES"), Some("INDOOR PAGES")));
-    assert_eq!(app.rows(Menu::Pages), 2);
+    assert_eq!((app.rows(Menu::Pages), label(&app, 2).as_deref()), (3, Some("MTB PAGES")));
     press(&mut sim, &mut app, Key::Start);
-    assert_eq!(app.screen(), Screen::Menu(Menu::PageList(true), 0));
-    assert!(app.pages_indoor, "the editor works on the indoor set");
-    assert_eq!(app.rows(Menu::PageList(true)), 1 + 3 + 1, "the overview, three pages, ADD PAGE");
+    assert_eq!(app.screen(), Screen::Menu(Menu::PageList(ride::Profile::Indoor), 0));
+    assert!(app.pages_set == ride::Profile::Indoor, "the editor works on the indoor set");
+    assert_eq!(app.rows(Menu::PageList(ride::Profile::Indoor)), 1 + 3 + 1, "the overview, three pages, ADD PAGE");
     sim.save("pages_menu_indoor");
     super::tests::assert_consistent(&sim, &app);
     to_row(&mut sim, &mut app, menu::Row::AddPage);
@@ -981,18 +989,18 @@ fn the_pages_menu_edits_the_set_it_names() {
     // the road list: the road set
     let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
-    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(false)));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(ride::Profile::Road)));
     press(&mut sim, &mut app, Key::Start);
-    assert!(!app.pages_indoor);
-    assert_eq!(app.rows(Menu::PageList(false)), 1 + 3 + 1);
+    assert!(app.pages_set == ride::Profile::Road);
+    assert_eq!(app.rows(Menu::PageList(ride::Profile::Road)), 1 + 3 + 1);
     // while a ride is open only the ride's own set opens
     let (mut sim, mut app) = started();
     press(&mut sim, &mut app, Key::Start);
     run(&mut sim, &mut app, 1500);
     app.press(&mut sim, Press::Long(Key::Page));
-    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(true)));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(ride::Profile::Indoor)));
     press(&mut sim, &mut app, Key::Start);
-    assert_eq!((app.notes.text.as_str(), app.pages_indoor), ("THE RIDE'S SET", false));
+    assert_eq!((app.notes.text.as_str(), app.pages_set == ride::Profile::Indoor), ("THE RIDE'S SET", false));
 }
 
 /// A hold on a box of an indoor page edits the indoor set (the page is indoor's), kept it is written, the road pages
@@ -1007,7 +1015,7 @@ fn a_hold_edits_the_set_on_screen() {
     let (x, y) = centre(&app, 1);
     app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
     let e = app.edit.unwrap();
-    assert_eq!((e.page, e.more, e.work, app.pages_indoor), (0, false, app.indoor.pages[0], true));
+    assert_eq!((e.page, e.more, e.work, app.pages_set == ride::Profile::Indoor), (0, false, app.indoor.pages[0], true));
     sim.save("indoor_editor");
     let w = e.work.with_field(1, Dist).unwrap();
     app.edit.as_mut().unwrap().work = w;
@@ -1029,7 +1037,7 @@ fn a_hold_edits_the_set_on_screen() {
     assert_eq!((app.indoor.pages[0], app.indoor.more[0]), (w, Some(m)));
     // LAYOUT on the indoor set
     let (indoor1, road1) = (app.indoor.pages[1], app.pages()[1]);
-    app.pages_indoor = true;
+    app.pages_set = ride::Profile::Indoor;
     app.next_layout(&mut sim, 1);
     assert_ne!(app.indoor.pages[1], indoor1);
     assert_eq!(app.pages()[1], road1, "the road page untouched");
@@ -1066,6 +1074,101 @@ fn the_indoor_set_survives_a_cut_with_its_pages() {
         if new { news += 1 } else { olds += 1 }
     }
     std::println!("indoor cut: {total} sectors, {olds} old, {news} new");
+    assert!(olds > 0);
+}
+
+/// An MTB ride shows the MTB pages (four, big fields); PAGES > MTB PAGES edits that set, which refuses a fifth page
+/// and is kept in the file beside the indoor and road sets.
+#[test]
+fn an_mtb_ride_takes_the_mtb_pages() {
+    let (mut sim, mut app) = started();
+    assert_eq!(app.mtb, crate::page::Set::mtb_default(), "no file yet: the defaults");
+    app.settings.profile = Some(crate::ride::Profile::Mtb);
+    run(&mut sim, &mut app, 100);
+    press(&mut sim, &mut app, Key::Page);
+    assert_eq!((app.screen(), first_field(&app)), (Screen::Ride(0), Some(Timer)));
+    sim.save("mtb_page1");
+    super::tests::assert_consistent(&sim, &app);
+    for (n, f) in [(1, AltGraph), (2, MaxSpeed), (3, Map)] {
+        press(&mut sim, &mut app, Key::Page);
+        assert_eq!((app.screen(), first_field(&app)), (Screen::Ride(n), Some(f)));
+        sim.save(&std::format!("mtb_page{}", n + 1));
+        super::tests::assert_consistent(&sim, &app);
+    }
+    press(&mut sim, &mut app, Key::Page);
+    assert_eq!(app.screen(), Screen::Ride(0), "four pages, then round");
+    // the menu: a third row, whose list is the MTB set; ADD PAGE refused at four
+    app.settings.profile = None;
+    run(&mut sim, &mut app, 100);
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(ride::Profile::Mtb)));
+    press(&mut sim, &mut app, Key::Start);
+    assert!(app.pages_set == ride::Profile::Mtb);
+    assert_eq!(app.rows(Menu::PageList(ride::Profile::Mtb)), 1 + 4 + 1);
+    to_row(&mut sim, &mut app, menu::Row::AddPage);
+    press(&mut sim, &mut app, Key::Start);
+    assert_eq!((app.notes.text.as_str(), app.mtb.count), ("4 PAGES AT MOST", 4));
+    // an edit of page 1 reaches the MTB set only, and the file
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Page(0)));
+    press(&mut sim, &mut app, Key::Start);
+    app.leave_editor(&mut sim, false);
+    app.mtb.pages[0] = Page::preset(1, [Cadence; 8]).unwrap();
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 300);
+    let f = file(&sim).unwrap();
+    assert_eq!(f.mtb, Some(app.mtb));
+    assert_eq!(f.indoor, Some(app.indoor));
+    let (_, app2) = reboot(&mut sim);
+    assert_eq!((app2.mtb, app2.indoor), (app.mtb, app.indoor));
+}
+
+/// On the MTB set: delete a page, then add until refused: never past four.
+#[test]
+fn the_mtb_set_never_passes_four_pages() {
+    let (mut sim, mut app) = started();
+    app.pages_set = ride::Profile::Mtb;
+    app.edit_page(&mut sim, 0, 0);
+    app.delete_page(&mut sim);
+    assert_eq!(app.mtb.count, 3);
+    for _ in 0..4 {
+        app.add_page(&mut sim, 3);
+        assert!(app.mtb.count <= 4);
+    }
+    assert_eq!((app.mtb.count, app.notes.text.as_str()), (4, "4 PAGES AT MOST"));
+}
+
+/// The MTB set and the road pages from one copy: a cut after every sector of a write that changes both.
+#[test]
+fn the_mtb_set_survives_a_cut_with_its_pages() {
+    let w = |f| Page::preset(1, [f; 8]).unwrap();
+    let change = |app: &mut App, sim: &mut Sim, f| {
+        app.mtb.pages[1] = w(f);
+        app.pages[0] = Page::preset(2, [f, Grade, Time, Time, Time, Time, Time, Time]).unwrap();
+        app.pages_changed(sim);
+        run(sim, app, 200);
+    };
+    let (mut sim, mut app) = started();
+    change(&mut app, &mut sim, Hr);
+    let base = sim.emmc.sectors_written;
+    change(&mut app, &mut sim, Cadence);
+    let total = sim.emmc.sectors_written - base;
+    assert!(total > 0);
+    let (mut olds, mut news) = (0, 0);
+    for cut in 0..total {
+        let (mut sim, mut app) = started();
+        change(&mut app, &mut sim, Hr);
+        let backup = sim.backup;
+        sim.emmc.cut_after = Some(sim.emmc.sectors_written + cut);
+        change(&mut app, &mut sim, Cadence);
+        sim.backup = backup;
+        let (_, app2) = reboot(&mut sim);
+        let new = app2.mtb.pages[1] == w(Cadence);
+        assert!(new || app2.mtb.pages[1] == w(Hr), "cut {cut}: {:?}", app2.mtb.pages[1]);
+        assert_eq!(new, app2.pages()[0].fields[0] == Cadence, "cut {cut}: pages and MTB set from one copy");
+        assert_eq!(app2.indoor, crate::page::Set::indoor_default(), "cut {cut}: the indoor set untouched");
+        if new { news += 1 } else { olds += 1 }
+    }
+    std::println!("mtb cut: {total} sectors, {olds} old, {news} new");
     assert!(olds > 0);
 }
 

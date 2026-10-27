@@ -1529,7 +1529,7 @@ fn page_edits() {
 fn pages_file() {
     use crate::page::{Page, Saved};
     use crate::ui::Field;
-    let (mut good, mut bad, mut more_read, mut indoor_read) = (0u32, 0u32, 0usize, 0usize);
+    let (mut good, mut bad, mut more_read, mut indoor_read, mut mtb_read) = (0u32, 0u32, 0usize, 0usize, 0usize);
     let p = Page::preset(5, [Field::Hr; 8]).unwrap();
     let whole = Saved {
         seq: 9,
@@ -1539,6 +1539,7 @@ fn pages_file() {
         was: [2; 6],
         more: [None; crate::PAGES],
         indoor: Some(crate::page::Set::indoor_default()),
+        mtb: Some(crate::page::Set::mtb_default()),
     }
     .to_sector();
     let mut sim = super::Sim::new(9, 0, 0);
@@ -1615,8 +1616,33 @@ fn pages_file() {
             }
             let ind_end = flags + 1 + crate::PAGES * 13;
             let crc = crate::fit::crc(crc, &s[ind..ind_end]);
+            let ind_crc = crc;
             let crc = if seed % 11 == 0 { crc ^ 1 } else { crc };
             s[ind_end..ind_end + 2].copy_from_slice(&crc.to_le_bytes());
+            // and the MTB set behind that (four pages at most): the same pages again or random ones, a count now and
+            // then out of range, a CRC chained to the indoor part's (now and then wrong)
+            let mtb = ind_end + 2;
+            let mflags = mtb + 1 + 4 * 13;
+            let mtb_end = mflags + 1 + 4 * 13;
+            s[mtb] = if seed % 13 == 0 { 5 + (seed % 3) as u8 } else { 1 + (seed % 4) as u8 };
+            s[mflags] = (seed >> 3) as u8 & 0xf;
+            let (pa, pb) = s[mtb + 1..mtb_end].split_at_mut(mflags - mtb);
+            for page in pa[..mflags - mtb - 1].chunks_exact_mut(13).chain(pb.chunks_exact_mut(13)) {
+                let used = 1 + usize::from(page[12] % 5);
+                for (r, b) in page[..5].iter_mut().enumerate() {
+                    *b = if r < used { (1 + *b % 3) << 4 | (1 + *b / 4 % 2) } else { 0 };
+                }
+                for b in &mut page[5..] {
+                    *b %= Field::ALL.len() as u8 + 2;
+                }
+            }
+            if seed % 4 != 0 {
+                s.copy_within(60..60 + 4 * 13, mtb + 1);
+                s.copy_within(more + 1..more + 1 + 4 * 13, mflags + 1);
+            }
+            let crc = crate::fit::crc(ind_crc, &s[mtb..mtb_end]);
+            let crc = if seed % 17 == 0 { crc ^ 1 } else { crc };
+            s[mtb_end..mtb_end + 2].copy_from_slice(&crc.to_le_bytes());
         }
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&s);
@@ -1626,6 +1652,23 @@ fn pages_file() {
                 assert!(saved.pages[..saved.count].iter().all(|p| p.well_formed() && p.roomy()));
                 assert!(saved.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
                 more_read += saved.more.iter().flatten().count();
+                if let Some(m) = saved.mtb {
+                    assert!((1..=crate::page::MTB_PAGES).contains(&m.count));
+                    assert!(m.pages[..m.count].iter().all(|p| p.well_formed() && p.roomy()));
+                    assert!(m.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
+                    mtb_read += 1;
+                    if seed % 2 == 1 {
+                        // the MTB pages, each drawn as the ride's pages (a profile fixed in BIKE)
+                        app.mtb = m;
+                        app.settings.profile = Some(crate::ride::Profile::Mtb);
+                        for k in 0..m.count {
+                            app.screen = crate::Screen::Ride(k);
+                            app.show(&mut sim);
+                            drawn += 1;
+                        }
+                        app.settings.profile = None;
+                    }
+                }
                 if let Some(i) = saved.indoor {
                     assert!((1..=crate::PAGES).contains(&i.count));
                     assert!(i.pages[..i.count].iter().all(|p| p.well_formed() && p.roomy()));
@@ -1667,10 +1710,11 @@ fn pages_file() {
         }
     }
     std::println!(
-        "pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn; {more_read} MORE read; {indoor_read} indoor sets read"
+        "pages.bin copies: {good} read, {bad} refused; {drawn} random pages drawn; {more_read} MORE read; {indoor_read} indoor sets read; {mtb_read} MTB sets read"
     );
     assert!(good > 20 && bad > 1000 && drawn > 20 && more_read > 20, "{good} {bad} {drawn} {more_read}");
     assert!(indoor_read > 20, "the indoor part reached: {indoor_read}");
+    assert!(mtb_read > 20, "the MTB part reached: {mtb_read}");
 }
 
 /// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at
@@ -1681,7 +1725,7 @@ fn page_editor_inputs() {
     use super::*;
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
     let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
-    let (mut indoor_edits, mut indoor_changed) = (0, 0);
+    let (mut indoor_edits, mut indoor_changed, mut mtb_edits) = (0, 0, 0);
     for seed in 1..=24u32 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
@@ -1698,7 +1742,8 @@ fn page_editor_inputs() {
             {
                 // back into the editor, on a page by chance
                 app.leave_menus();
-                app.pages_indoor = next() % 2 == 0; // the indoor set now and then (a ride's own while it is open)
+                app.pages_set =
+                    [ride::Profile::Indoor, ride::Profile::Road, ride::Profile::Mtb][usize::from(a / 3) % 3]; // the indoor set now and then (a ride's own while it is open)
                 let n = app.view_count();
                 app.screen = Screen::Ride(usize::from(b) % n);
                 app.edit_page(&mut sim, usize::from(b) % n, usize::from(next()) % 8);
@@ -1731,8 +1776,10 @@ fn page_editor_inputs() {
             }
             added += usize::from(app.view_count() > count);
             deleted += usize::from(app.view_count() < count);
-            indoor_edits += usize::from(app.edit.is_some() && app.view_indoor());
+            indoor_edits += usize::from(app.edit.is_some() && app.view_set() == ride::Profile::Indoor);
             indoor_changed += usize::from(app.indoor != indoor);
+            assert!(app.mtb.count <= crate::page::MTB_PAGES && app.mtb.count >= 1);
+            mtb_edits += usize::from(app.edit.is_some() && app.view_set() == ride::Profile::Mtb);
             if let (Some(c), Some(e)) = (cells, app.edit) {
                 splits += usize::from(e.work.cells() > c);
                 merges += usize::from(e.work.cells() < c);
@@ -1763,6 +1810,7 @@ fn page_editor_inputs() {
     std::println!("MORE reached: {mores} passes up, {more_edits} in the editor, {more_kept} kept");
     std::println!("indoor set reached: {indoor_edits} passes in its editor, {indoor_changed} changes");
     assert!(indoor_edits > 50 && indoor_changed > 5, "{indoor_edits} {indoor_changed}");
+    assert!(mtb_edits > 0, "the MTB set reached: {mtb_edits}");
     assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
     assert!(mores > 50 && more_edits > 5 && more_kept > 0, "{mores} {more_edits} {more_kept}");
 }
@@ -2800,6 +2848,7 @@ fn damaged_maps_under_a_ride() {
             }
         }
         *a = Ahead::new();
+        a.set_trails(round % 2 == 1);
         // along the road east, a little off it now and then, sometimes the other way or somewhere else
         let (mut x, mut y, mut h) = (100.0 + f64::from(next() % 400), 0.0, 90.0);
         for t in 0..150 {
@@ -2856,10 +2905,11 @@ fn random_road_networks() {
     }
     let mut next = xorshift(404);
     let mut mem = std::vec![0u16; 48 * 1024];
-    let (mut traces, mut climbs, mut stops, mut lengths, mut sent) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let (mut traces, mut climbs, mut stops, mut lengths, mut sent, mut slow) = (0u32, 0u32, 0u32, 0u32, 0u32, 0u32);
     let mut a = std::boxed::Box::new(Ahead::new());
     for round in 0..150 {
         *a = Ahead::new();
+        a.set_trails(round % 2 == 1);
         type Road = (u16, u8, Vec<(f64, f64, i16)>);
         let mut roads: Vec<Road> = Vec::new();
         for r in 0..1 + next() % 5 {
@@ -2878,7 +2928,7 @@ fn random_road_networks() {
                     break;
                 }
             }
-            roads.push((1 + (r % 3) as u16, [0xee, 0x99, 0x55][next() as usize % 3], pts));
+            roads.push((1 + (r % 3) as u16, [0xee, 0x99, 0x55, 0x1e][next() as usize % 4], pts));
         }
         let borrowed: Vec<_> = roads.iter().map(|(w, c, p)| (*w, *c, &p[..])).collect();
         net(&mut a, &borrowed);
@@ -2904,6 +2954,7 @@ fn random_road_networks() {
                     break;
                 }
             }
+            slow += u32::from(round % 2 == 1 && a.on_road() && a.on_slow());
             climbs += a.climbs().len() as u32;
             stops += u32::from(a.on_road() && a.end() == End::Stop);
             lengths += u32::from(a.on_road() && a.end() == End::Length);
@@ -2917,6 +2968,7 @@ fn random_road_networks() {
         "random networks: {traces} traces, {climbs} climbs, {stops} stopped, {lengths} at length, {sent} said"
     );
     assert!(traces > 300 && climbs > 20 && stops > 20 && lengths > 20, "{traces} {climbs} {stops} {lengths}");
+    assert!(slow > 0, "trails rounds that ended on a slow edge: {slow}");
 }
 
 /// The ramp test's arithmetic (ramp.rs) on random power, cadence and DFA a1 series: missing readings, spikes, a1 out

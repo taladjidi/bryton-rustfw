@@ -119,6 +119,9 @@ build (POWER_STEPS=15) gives the wall time.
 - **The ANT+ search rests growing (app/radio.rs `search_rest_ms`)**: a paired sensor left switched off: searches at
   0:00, 1:40, 4:10, 8:40, then every 4 min 40 s (the high-priority search may add 10 s each); found at once after a
   ride's Start; the battery with one absent sensor against none (docs/power.md).
+- **MTB mode (2026-10-27)**: an MTB ride started, the unit restarted mid-ride, then saved; the file reads as mountain
+  biking in Intervals.icu; the receiver switching from cyclic to continuous tracking at an MTB ride's start and back
+  after it; climbs ahead on a real path network.
 
 - **A USB suspend (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`)**: decided on the host only; macOS
   would not suspend the idle unit while awake. With the owner: plug the unit in, let the Mac sleep for a minute, wake

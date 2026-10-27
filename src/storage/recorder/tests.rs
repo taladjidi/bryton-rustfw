@@ -6,6 +6,7 @@ use crate::fat::Disk;
 use crate::fat::write::tests::{fill, free_counts, fsck, fsck_torn};
 use crate::fit::RECORD_LEN;
 use crate::fitread::{Msg, Reader};
+use crate::ride::Profile;
 use std::vec::Vec;
 
 /// The card: the volume in memory, and a power cut after `budget` sectors written (the sector that would be
@@ -73,9 +74,9 @@ fn local(t: u32) -> Local {
 }
 
 std::thread_local! {
-    /// The test ride's profile ([`Sample::indoor`], [`Sample::by_hand`]): set by the indoor variants of a test,
-    /// on its own thread.
-    static PROFILE: core::cell::Cell<(bool, bool)> = const { core::cell::Cell::new((false, false)) };
+    /// The test ride's profile ([`Sample::profile`], [`Sample::by_hand`]): set by the indoor and MTB variants of a
+    /// test, on its own thread.
+    static PROFILE: core::cell::Cell<(Profile, bool)> = const { core::cell::Cell::new((Profile::Road, false)) };
 }
 
 fn sample(t: u32) -> Sample {
@@ -92,7 +93,7 @@ fn sample(t: u32) -> Sample {
         rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
         artifacts_pct: (t >= 60).then_some((t % 9) as u8),
         ascent_m: Some(t / 10),
-        indoor: PROFILE.get().0,
+        profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
     }
 }
@@ -285,26 +286,36 @@ fn sub_sport(img: &[u8], name: &str) -> Option<u64> {
 /// cluster, no cross-link; a lost cluster at worst).
 #[test]
 fn power_cut_at_every_sector_write() {
-    power_cut_at_every_sector(false, false);
+    power_cut_at_every_sector(Profile::Road, false);
 }
 
 /// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)
 /// and is saved with sub_sport indoor_cycling (6), at boot too (ended from the record alone).
 #[test]
 fn an_indoor_ride_cut_at_every_sector_stays_indoor() {
-    power_cut_at_every_sector(true, false);
+    power_cut_at_every_sector(Profile::Indoor, false);
+}
+
+/// The same for an MTB ride: after every cut it comes back MTB and is saved with sub_sport mountain (8).
+#[test]
+fn an_mtb_ride_cut_at_every_sector_stays_mtb() {
+    power_cut_at_every_sector(Profile::Mtb, true);
 }
 
 /// The same for an indoor ride set by hand (no trainer: a dumb trainer, rollers): it comes back by hand too, so
 /// the app does not give it back to the automatic choice (which turns it ROAD without a trainer).
 #[test]
 fn an_indoor_ride_by_hand_cut_at_every_sector_stays_by_hand() {
-    power_cut_at_every_sector(true, true);
+    power_cut_at_every_sector(Profile::Indoor, true);
 }
 
-fn power_cut_at_every_sector(indoor: bool, by_hand: bool) {
-    PROFILE.set((indoor, by_hand));
-    let sub = Some(if indoor { 6 } else { 7 });
+fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
+    PROFILE.set((profile, by_hand));
+    let sub = Some(match profile {
+        Profile::Road => 7,
+        Profile::Indoor => 6,
+        Profile::Mtb => 8,
+    });
     let img = crate::fat::tests::image();
     let mut full = Card { img: img.clone(), budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
     ride(&mut Recorder::new(), &mut full, 0).unwrap();
@@ -343,7 +354,7 @@ fn power_cut_at_every_sector(indoor: bool, by_hand: bool) {
         match outcome {
             Outcome::Resumed(w, name) => {
                 assert_eq!(name, NAME);
-                assert_eq!((r.indoor(), r.by_hand()), (indoor, by_hand), "{what}: profile back");
+                assert_eq!((r.profile(), r.by_hand()), (profile, by_hand), "{what}: profile back");
                 resumed += 1;
                 let from = w[0] + 1;
                 let from = if (PAUSE + 1..RESUME).contains(&from) { RESUME } else { from };
