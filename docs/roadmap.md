@@ -128,7 +128,7 @@ mountain), with what off-road riding needs:
 - Climbs ahead and the climb pacer on tracks and paths (the road classes stock's routing ignores are where MTB rides).
 - Touch: larger targets and the touch lock by default while moving (gloves, mud); keys first.
 - Later: suspension or dropper data if the sensors exist (ANT+ / BLE), and a descent flow field.
-To be designed with the owner before building.
+Done 2026-10-27 (owner's choices): the profile by hand in BIKE > PROFILE (INDOOR still wins from the trainer heard), sub_sport mountain kept in the recovery record, continuous GNSS during an MTB ride, auto-pause under 2 km/h for 5 s, a set of 4 pages (PAGES > MTB PAGES), climbs ahead following paths (stock's speed class 1). Still to do: touch for gloves and mud, a higher-resolution map track, descent and moving-time fields, suspension and dropper data.
 
 ## 4b. History and training load
 

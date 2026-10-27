@@ -173,7 +173,7 @@ Others
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ): sim, in a full copy beside the clean one (`\Rustfw\Activities`, with RMSSD), checked with Garmin's SDK
 - [~] Laps, session and activity messages at the end (stock, all): sim (a lap message per Lap, timer events at pauses)
 - [ ] Power off during a stop, resume at power on (stock Auto Power Off, Garmin)
-- [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): ROAD / INDOOR, chosen by itself from the trainer heard (sub_sport in the FIT); no bikes
+- [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): ROAD / INDOOR / MTB (INDOOR from the trainer heard, MTB by hand; sub_sport in the FIT); no bikes
 - [ ] Settings in a file, two copies (stock .ini files, all): in RTC backup registers for now
 - [ ] Screenshots saved to the volume (stock \Screenshot): over USB only (`dev.py shot`)
 - [~] Debug log file after a fault (stock \Debug, patch D1): sim, a fault resets the unit and is said at start (FAULT RESET n, backup register 29); no log file yet
