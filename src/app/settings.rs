@@ -93,7 +93,7 @@ pub const WORKOUT: usize = PAGES + 2;
 //   1..4     stock (clock set, clock, USB mode)                     -
 //   5..8, 10 paired ANT+ sensors (tag 0xa5)                         sensors::Kind::backup
 //   9, 12,13 stock (12: its Nordic image; 13: last battery mV)      -
-//   11       wheel, backlight, max HR, FTP                          WHEEL_BKP
+//   11       wheel, backlight, max HR, FTP, power average (tag)     WHEEL_BKP
 //   14       paired shifting system (0x61 / 0x62)                   sensors::Kind::backup
 //   15       stock reads it at boot                                 -
 //   16       weights and W' (0xa)                                   POWER_BKP
@@ -247,6 +247,10 @@ pub struct Settings {
     /// register 11's tag: 0xa7 to 0xa9 on, 0xaa to 0xac off (the same three profiles; an earlier build reads those
     /// as an empty word: defaults).
     pub ahead: bool,
+    /// The window the 3 / 10 / 30 s power fields all show (a tap on one cycles it): 0, 1, 2. Kept in register 11's
+    /// tag, 6 more for each step (0xa7 to 0xac: 3 s, 0xad to 0xb2: 10 s, 0xb3 to 0xb8: 30 s); an earlier build reads
+    /// 10 s and 30 s as an empty word (defaults).
+    pub pwr_avg: usize,
     /// The smooth font for text (the FONT setting, SMOOTH) instead of the pixel font; kept in register 16, bit 24.
     pub smooth: bool,
     /// GPS POWER (BIKE): kept in register 16, bits 25 (SAVER) and 26 (FULL); neither is AUTO.
@@ -307,18 +311,20 @@ impl Settings {
             alt_m: 500,
             profile: None,
             ahead: true,
+            pwr_avg: 0,
             smooth: false,
             gps_power: GpsPower::Auto,
         };
         match w >> 24 {
-            0xa7..=0xac => Settings {
+            0xa7..=0xb8 => Settings {
                 profile: match (w >> 24) % 3 {
                     // 0xa8, 0xab: ROAD; 0xa9, 0xac: INDOOR; 0xa7, 0xaa: AUTO
                     0 => Some(ride::Profile::Road),
                     1 => Some(ride::Profile::Indoor),
                     _ => None,
                 },
-                ahead: w >> 24 < 0xaa,
+                ahead: ((w >> 24) - 0xa7) % 6 < 3,
+                pwr_avg: ((w >> 24) as usize - 0xa7) / 6,
                 wheel_mm: index(w & 7),
                 max_hr: (100 + (w >> 8 & 0xff) as u16).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end()),
                 ftp: (5 * (w >> 16 & 0x7f) as u16).clamp(*menu::FTP_RANGE.start(), *menu::FTP_RANGE.end()),
@@ -510,7 +516,8 @@ impl Settings {
             None | Some(ride::Profile::Mtb) => 0xa7, // MTB in register 16
             Some(ride::Profile::Road) => 0xa8,
             Some(ride::Profile::Indoor) => 0xa9,
-        } + 3 * u32::from(!self.ahead)) << 24
+        } + 3 * u32::from(!self.ahead)
+            + 6 * self.pwr_avg.min(2) as u32) << 24
             | u32::from(!self.touch) << 23 // ponytail: the bit FTP / 5 (120 at most) leaves free in a full word
             | (u32::from(self.ftp / 5) & 0x7f) << 16
             | (u32::from(self.max_hr.saturating_sub(100)) & 0xff) << 8

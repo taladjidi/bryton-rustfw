@@ -534,3 +534,47 @@ fn distance_profile_fills_the_width() {
         assert!(empty.is_empty(), "n = {n}: columns {empty:?} are empty");
     }
 }
+
+/// A tap on a 3 / 10 / 30 s power field, even while recording, cycles the window every such field shows (on any
+/// page), keeps it through a restart, draws only those boxes, and a tap elsewhere does nothing new.
+#[test]
+fn a_tap_cycles_the_power_average() {
+    use Field::*;
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Hr, Speed, Dist, Timer, Time] }.into();
+    app.pages[1] = PageCfg { layout: 6, fields: [Speed, Power30s, Hr, Dist, Timer, Time] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start)); // recording: taps on fields do nothing else
+    // 35 s at 100 W then 5 s at 400 W: 3 s 400, 10 s 250, 30 s 150
+    for s in 0..40 {
+        app.power.second(Some(if s < 35 { 100 } else { 400 }), &app.ride, 250, 20_000);
+    }
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    let tap_field = |app: &mut App, sim: &mut Sim, f: Field| {
+        let (x, y, w, h) = app.widgets().find(|&(_, wd)| wd == Widget::Field(f)).unwrap().0;
+        app.input(sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    };
+    let screen = app.screen();
+    assert_eq!(text(&app, Power3s), "400");
+    let before = sim.pixels;
+    tap_field(&mut app, &mut sim, Power3s);
+    assert_eq!((app.screen(), text(&app, Power3s)), (screen, "250".into()), "10 s");
+    assert!(sim.pixels - before < 40_000, "only the power boxes are drawn");
+    tap_field(&mut app, &mut sim, Power3s);
+    assert_eq!(text(&app, Power3s), "150", "30 s");
+    // the other page's field shows it too, and a restart keeps it
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_eq!(text(&app, Power30s), "150");
+    tap_field(&mut app, &mut sim, Power30s);
+    assert_eq!(text(&app, Power30s), "400", "3 s again");
+    tap_field(&mut app, &mut sim, Power30s);
+    let mut app = App::start(&mut sim, Some(KEY));
+    assert_eq!(app.settings.pwr_avg, 1, "kept through a reset");
+    // a tap on a field that is not a power average changes nothing
+    app.pages[0] = PageCfg { layout: 6, fields: [Power3s, Hr, Speed, Dist, Timer, Time] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    let (x, y, w, h) = app.widgets().find(|&(_, wd)| wd == Widget::Field(Dist)).unwrap().0;
+    app.input(&mut sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
+    assert_eq!(app.settings.pwr_avg, 1);
+}
