@@ -375,6 +375,112 @@ fn a_read_only_build_shows_the_files_pages() {
     assert_eq!(ro.backup[PAGE_BKP[0][0]..=PAGE_BKP[REG_PAGES][1]], backup[PAGE_BKP[0][0]..=PAGE_BKP[REG_PAGES][1]]);
 }
 
+/// A read-only start on `image` and `backup`, past the file's read: the app, and whether the card and the page
+/// registers are as they were (no write command, every byte the same).
+fn read_only(image: &[u8], backup: [u32; 32]) -> (Sim, App) {
+    let mut ro = Sim::new(9, 5, 0);
+    (ro.emmc.image, ro.backup, ro.writable) = (image.to_vec(), backup, false);
+    let mut app = App::start(&mut ro, None);
+    run(&mut ro, &mut app, PAGES_LOAD_MS as u64 + 200);
+    assert!(ro.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
+    assert!(ro.emmc.image == image, "the card unchanged");
+    (ro, app)
+}
+
+/// The page registers' words.
+fn page_words(sim: &Sim) -> Vec<u32> {
+    PAGE_BKP.iter().flatten().map(|&r| sim.backup[r]).collect()
+}
+
+/// A read-only build on a file it cannot use, or registers that differ from it: the same pages a writable build
+/// shows, the card never written, the registers left as they are or put right as a writable build does.
+#[test]
+fn a_read_only_build_takes_the_file_as_a_writable_one() {
+    let (mut sim, mut app) = started();
+    for f in [Wbal, Np] {
+        app.pages[2] = Page::preset(1, [f; 8]).unwrap();
+        app.pages_changed(&mut sim);
+        run(&mut sim, &mut app, 200);
+    }
+    let saved = file(&sim).unwrap();
+    let regs: Vec<Page> = saved.pages[..3].iter().map(|p| Page::from(p.to_cfg())).collect();
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let f = fat.open(&mut d, "Rustfw/pages.bin").unwrap();
+    let at = fat.lba(f.cluster) as usize * 512;
+
+    // (a) both copies damaged: the registers' pages, the registers untouched
+    let mut bad = sim.emmc.image.clone();
+    bad[at + 20] ^= 1;
+    bad[at + 512 + 20] ^= 1;
+    let (ro, app) = read_only(&bad, sim.backup);
+    assert_eq!((pages(&app), page_words(&ro)), (regs.clone(), page_words(&sim)), "damaged");
+
+    // (a) a short file (its directory entry says 512 bytes): the same
+    let mut short = sim.emmc.image.clone();
+    let entry = |e: &[u8]| {
+        let cluster =
+            u32::from(u16::from_le_bytes([e[20], e[21]])) << 16 | u32::from(u16::from_le_bytes([e[26], e[27]]));
+        e[11] != 0x0f && cluster == f.cluster && e[28..32] == 1024u32.to_le_bytes()
+    };
+    let name = (0..short.len() / 32).map(|k| 32 * k).find(|&o| entry(&short[o..o + 32])).unwrap();
+    short[name + 28..name + 32].copy_from_slice(&512u32.to_le_bytes());
+    let (ro, app) = read_only(&short, sim.backup);
+    assert_eq!((pages(&app), page_words(&ro)), (regs, page_words(&sim)), "short");
+
+    // (b) another build changed page 2 in the registers: its page wins, the file's others kept, registers untouched
+    let mut other = sim.backup;
+    let changed = PageCfg { layout: 1, fields: [Cadence; 6] };
+    for (r, w) in PAGE_BKP[1].iter().zip(changed.to_words()) {
+        other[*r] = w;
+    }
+    let (ro, app) = read_only(&sim.emmc.image, other);
+    assert_eq!(pages(&app), [saved.pages[0], changed.into(), saved.pages[2]], "the registers' page 2");
+    assert_eq!(ro.backup, other, "registers untouched");
+
+    // (b) a cut between the file and its registers (they hold the file's previous words): put right, as a
+    // writable build does
+    let mut cut = sim.backup;
+    for (r, w) in PAGE_BKP.iter().take(REG_PAGES).flatten().zip(saved.was) {
+        cut[*r] = w;
+    }
+    assert_ne!(cut, sim.backup);
+    let (ro, app) = read_only(&sim.emmc.image, cut);
+    assert_eq!((pages(&app), page_words(&ro)), (pages_of(&saved), page_words(&sim)), "registers put right");
+}
+
+/// A page edit on a read-only build before the file could be read (the first read failing): refused, so nothing
+/// shows that the file's pages would then take away; after the read, the screen's pages are the file's and the
+/// registers', the card unwritten.
+#[test]
+fn a_read_only_edit_waits_for_the_file() {
+    let (mut sim, mut app) = started();
+    app.pages[0] = Page::preset(2, [Wbal, Np, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    let want = pages(&app);
+    let mut ro = Sim::new(9, 5, 0);
+    (ro.emmc.image, ro.backup, ro.writable) = (sim.emmc.image.clone(), sim.backup, false);
+    let image = ro.emmc.image.clone();
+    ro.emmc.dead = true;
+    let mut app = App::start(&mut ro, None);
+    app.step(&mut ro);
+    app.screen = Screen::Ride(0);
+    let before = app.pages()[0];
+    app.next_layout(&mut ro, 0);
+    assert_eq!((app.notes.text.as_str(), app.pages()[0]), ("PAGES NOT READ", before), "refused");
+    assert_eq!(page_words(&ro), page_words(&sim), "nothing in the registers");
+    ro.emmc.dead = false;
+    run(&mut ro, &mut app, PAGES_LOAD_MS as u64 + 200);
+    assert_eq!(pages(&app), want, "the file's pages");
+    let regs: Vec<PageCfg> = (0..3).map(|k| app.pages()[k].to_cfg()).collect();
+    let kept: Vec<PageCfg> =
+        PAGE_BKP.iter().take(3).map(|r| PageCfg::from_words([ro.backup[r[0]], ro.backup[r[1]]]).unwrap()).collect();
+    assert_eq!(regs, kept, "the screen's pages are the registers'");
+    assert!(ro.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
+    assert!(ro.emmc.image == image, "the card unchanged");
+}
+
 /// A power cut after every sector of a write of the pages, the first (the file created) and a later one (a copy
 /// over the older): the volume stays clean for fsck, and the next start reads the old pages or the new, never a mix.
 /// The registers are as the cut left them: as before the write (they come after it), the CPU dying with the card.

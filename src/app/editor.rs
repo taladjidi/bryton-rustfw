@@ -234,7 +234,7 @@ impl App {
     pub(crate) fn pages_ready(&mut self, b: &mut impl Board) -> bool {
         self.ensure_pages(b);
         let why = match () {
-            _ if !self.card_writable || self.store.loaded => return true,
+            _ if self.store.loaded => return true,
             _ if self.emmc.lent() => "USB DRIVE ON",
             _ => "PAGES NOT READ",
         };
