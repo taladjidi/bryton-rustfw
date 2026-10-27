@@ -30,7 +30,7 @@
   it: two inputs from the overview; Start held on the overview does the same, while no ride is open), and on a rest day
   WORKOUTS (not while a ride records, as every touch). Drawn once: when the
   overview opens and when the calendar or the day changes; nothing per second (the overview now costs 4 px/s, the
-  strip's, where the clock's digits made it 53). The calendar is read 8 s after the start (the card is not touched at
+  strip's, where the clock's digits made it 53). The calendar is read 1 s after the start (the card is not touched at
   boot; the card shows only its title until then, and a tap before reads it at once), and again at midnight and when
   FTP or the maximum heart rate changes (the profiles are recoloured).
 - **Readings at 1 Hz:** the power, speed, cadence and heart rate values on the pages are the readings of the second's
