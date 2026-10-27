@@ -223,10 +223,16 @@ pub fn button(c: &mut impl Canvas, b: Button, (x, y, w, h): (u32, u32, u32, u32)
             triangle(c, cx - 7, cy - 10, 20, false, fg);
             triangle(c, cx + 3, cy - 10, 20, false, fg);
         }
+        // a narrow volume button (the quick panel's): a speaker, then the sign, so it never reads as brightness
+        Button::VolDown | Button::VolUp if w < 52 => {
+            c.fill(cx - 15, cy - 4, 4, 8, fg);
+            triangle(c, cx - 15, cy - 9, 18, false, fg);
+            let style = Style { fg, bg, ..LABEL };
+            let sign = if b == Button::VolUp { "+" } else { "-" };
+            text::draw(c, &style, cx + 1, cy - style.height() / 2, Align::Left, sign);
+        }
         _ => {
             let label = match b {
-                Button::VolDown if w < 52 => "-",
-                Button::VolUp if w < 52 => "+",
                 Button::VolDown => "VOL-",
                 Button::VolUp => "VOL+",
                 Button::SkipBack => "<<",
