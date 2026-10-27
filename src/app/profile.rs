@@ -74,6 +74,9 @@ impl App {
     /// A climb is ahead or under way: from the moment its warning fires (a followed course: the rider on the climb;
     /// the road ahead: [`climbs_ahead::ANNOUNCE_M`] before its start) until its top is passed.
     pub(crate) fn on_climb(&self) -> bool {
+        if self.ride.state() == ride::State::Idle {
+            return false;
+        }
         if let Some((c, at)) = self.on_course() {
             return c.climb_at(at.along_m).is_some_and(|(_, on)| on);
         }
@@ -81,6 +84,15 @@ impl App {
         ahead.and_then(|a| {
             a.climb_at(a.along_m()).map(|(k, on)| on || a.along_m() + climbs_ahead::ANNOUNCE_M >= k.start_m)
         }) == Some(true)
+    }
+
+    /// The climb page's fields: the pacer's cell is the ascent where no course is followed (no plan there).
+    pub(crate) fn climb_cfg(&self) -> PageCfg {
+        let mut c = CLIMB_PAGE;
+        if self.courses.as_deref().is_none_or(|c| c.on.is_none()) {
+            c.fields[3] = Field::Ascent;
+        }
+        c
     }
 
     /// One of the rider's ride pages already shows the climb: no second page for it.
@@ -96,14 +108,21 @@ impl App {
     /// at the top (shown then, the round goes on to the page after its home).
     pub(crate) fn settle_climb(&mut self, b: &mut impl Board) {
         let on = self.page_on(CLIMB);
+        // the anchor is the page shown when the page joins (any of the round); one that leaves the round (a set
+        // switch, a page deleted, an indoor skip) is replaced by the page shown
+        if on && (!self.climb.0 || !self.page_on(self.climb.1)) {
+            self.climb.1 =
+                if let Screen::Ride(n) = self.screen { if n != CLIMB { n } else { self.climb.1 } } else { 0 };
+            if let (false, Screen::Ride(n)) = (self.page_on(self.climb.1), self.ride_page(0, 1)) {
+                self.climb.1 = n;
+            }
+        }
         if on == self.climb.0 {
             return;
         }
         self.climb.0 = on;
-        if on {
-            self.climb.1 = if let Screen::Ride(n) = self.screen { if n < PAGES { n } else { 0 } } else { 0 };
-        } else if self.screen == Screen::Ride(CLIMB) {
-            self.screen = self.ride_page(self.climb.1 + 2, 1);
+        if !on && self.screen == Screen::Ride(CLIMB) {
+            self.screen = self.ride_page(place(self.climb.1) + 1, 1);
             self.show(b);
         }
     }

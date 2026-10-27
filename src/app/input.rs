@@ -158,7 +158,7 @@ pub enum Screen {
 const ROUND: usize = PAGES + 2;
 
 /// Ride page `n`'s place in the round.
-fn place(n: usize) -> usize {
+pub(crate) fn place(n: usize) -> usize {
     match n {
         WORKOUT => 0,
         COURSE => PAGES + 1,
