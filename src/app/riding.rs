@@ -116,6 +116,7 @@ impl App {
             self.rec.full.discard();
         }
         self.plan.player = None;
+        self.plan.played = None; // a discarded ride is not a day's workout done
         (self.depth, self.screen) = (0, Screen::Main);
         self.say(if took { "DISCARDING" } else { "ALREADY SAVED" });
     }
@@ -480,6 +481,7 @@ impl App {
         }
         // the workout's step clock moves with the ride's timer
         let (ticked, dist, steps) = (self.ride.timer_s() != timer, self.ride.dist_m(), self.plan.workout.steps());
+        self.plan.ran_s += u32::from(ticked && self.plan.player.is_some_and(|p| p.step(steps).is_some()));
         if let Some(e) = self.plan.player.as_mut().and_then(|p| p.second(steps, ticked, dist)) {
             self.workout_event(e);
         }

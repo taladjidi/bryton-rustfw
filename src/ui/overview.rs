@@ -67,8 +67,8 @@ pub enum Today<'a> {
     Pending,
     /// Nothing planned: REST DAY.
     Rest,
-    /// A workout: its name, its length ("1:30") and its profile ([`draw_profile_bars`]).
-    Planned(&'a str, &'a str, &'a [u8]),
+    /// A workout: its name, its length ("1:30"), its profile ([`draw_profile_bars`]) and whether it is done ([`DONE_BOX`]).
+    Planned(&'a str, &'a str, &'a [u8], bool),
 }
 
 /// The TODAY card whole:"TODAY" and the length (H:MM) on the first line, the workout's name cut to the width on
@@ -84,7 +84,8 @@ pub fn draw_today(c: &mut impl Canvas, card: Today) {
     let grey = Style { fg: GREY, ..LABEL };
     text::draw(c, &grey, tx, y + 3, Align::Left, "TODAY");
     match card {
-        Today::Planned(name, length, prof) => {
+        Today::Planned(name, length, prof, done) => {
+            draw_done(c, done);
             text::draw(c, &LABEL, x + w - 6, y + 3, Align::Right, length);
             text::draw(c, &LABEL, tx, y + 23, Align::Left, fit(&LABEL, name, tw));
             draw_profile_bars(c, (x + 4, y + 46, h - 51), (w - 8) / prof.len().max(1) as u32, prof);
@@ -96,9 +97,36 @@ pub fn draw_today(c: &mut impl Canvas, card: Today) {
     }
 }
 
+/// The TODAY card's DONE tag: a tick and the word in green, in its own fixed box (blank when not done).
+pub const DONE_BOX: (u32, u32, u32, u32) = (TODAY_BOX.0 + 80, TODAY_BOX.1 + 2, 80, 18);
+
+/// A green tick, 16 x 12 px, at (`x`, `y`): 2 px blocks along its two strokes.
+pub fn draw_tick(c: &mut impl Canvas, x: u32, y: u32) {
+    for (i, dy) in [6u32, 8, 10, 8, 6, 4, 2, 0].into_iter().enumerate() {
+        c.fill(x + 2 * i as u32, y + dy, 2, 2, GREEN);
+    }
+}
+
+/// [`DONE_BOX`] painted: the tag when `done`, else black.
+pub fn draw_done(c: &mut impl Canvas, done: bool) {
+    let (x, y, w, h) = DONE_BOX;
+    c.fill(x, y, w, h, BLACK);
+    if done {
+        draw_tick(c, x + 2, y + 2);
+        text::draw(c, &Style { fg: GREEN, ..LABEL }, x + 22, y + 1, Align::Left, "DONE");
+    }
+}
+
 /// A WORKOUTS list row in slot `slot`: the day over the length on the left, the workout's profile on the right
-/// ([`draw_profile_bars`], 2 px a column, on black even when the row is selected).
-pub fn draw_workout_row(c: &mut impl Canvas, slot: usize, (day, length): (&str, &str), selected: bool, prof: &[u8]) {
+/// ([`draw_profile_bars`], 2 px a column, on black even when the row is selected), a green tick between them when `done`.
+pub fn draw_workout_row(
+    c: &mut impl Canvas,
+    slot: usize,
+    (day, length): (&str, &str),
+    selected: bool,
+    prof: &[u8],
+    done: bool,
+) {
     let y = LIST_Y + slot as u32 * MENU_ROW;
     let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
     c.fill(0, y, W, MENU_ROW - 1, bg);
@@ -106,6 +134,9 @@ pub fn draw_workout_row(c: &mut impl Canvas, slot: usize, (day, length): (&str, 
     let style = Style { fg, bg, ..LABEL };
     text::draw(c, &style, NEARBY.0, y + 1, Align::Left, day);
     text::draw(c, &style, NEARBY.0, y + 21, Align::Left, length);
+    if done {
+        draw_tick(c, 96, y + 16);
+    }
     let (bx, bw) = (W - 8 - 2 * prof.len() as u32 - 4, 2 * prof.len() as u32 + 4);
     c.fill(bx, y + 3, bw, MENU_ROW - 7, BLACK);
     draw_profile_bars(c, (bx + 2, y + 5, MENU_ROW - 11), 2, prof);

@@ -81,6 +81,7 @@ fn calendar(app: &App, days: &[(u8, &Workout)]) -> Calendar {
 fn plan(app: &mut App, days: &[(u8, &Workout)]) {
     app.plan.calendar = calendar(app, days);
     (app.plan.day, app.plan.zones) = (Some(app.date), (app.settings.ftp, app.settings.max_hr));
+    app.plan.done_key = None;
 }
 
 /// The colour of column `k` of the TODAY card's profile, at its baseline, as the Sim's panel shows it.
@@ -299,4 +300,117 @@ fn midnight_reads_the_calendar_again() {
     assert_ne!(app.date, day, "midnight passed");
     assert_eq!(app.plan.day, Some(app.date), "read again");
     assert_consistent(&mut sim, &mut app);
+}
+
+/// A unit whose scan has run (so the history is ready), holding exactly `rides` (moving seconds) dated today, and
+/// the sweet spot planned today.
+fn with_rides(rides: &[u32]) -> (Sim, App) {
+    let (mut sim, mut app) = unit();
+    app.stock.start(app.date);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+    }
+    let base = app.stock.index.get(0).copied().expect("a synthetic ride");
+    app.stock.index.clear();
+    for &timer_s in rides {
+        app.stock.index.add(crate::history::Ride {
+            start: (app.date.0, app.date.1, app.date.2, 7, 0),
+            timer_s,
+            ..base
+        });
+    }
+    plan(&mut app, &[(0, &sweet_spot())]);
+    app.show(&mut sim);
+    (sim, app)
+}
+
+fn done_pixels(sim: &Sim) -> usize {
+    let (x, y, w, h) = ui::DONE_BOX;
+    (y..y + h)
+        .flat_map(|r| (x..x + w).map(move |c| (r, c)))
+        .filter(|&(r, c)| sim.screen[(r * W + c) as usize] == ui::GREEN)
+        .count()
+}
+
+/// A saved ride of the day that is long enough marks the workout done on the card and in the list; a short one
+/// does not.
+#[test]
+fn a_ride_of_the_day_marks_the_workout_done() {
+    let (mut sim, mut app) = with_rides(&[3600]);
+    assert_consistent(&mut sim, &mut app);
+    assert!(app.workout_done(0));
+    assert!(done_pixels(&sim) > 0, "the tag");
+    sim.save("overview_done");
+    app.open(Screen::Menu(Menu::Workouts, 0));
+    app.show(&mut sim);
+    assert_consistent(&mut sim, &mut app);
+    sim.save("workouts_done");
+    let (mut sim, mut app) = with_rides(&[2000]);
+    assert_consistent(&mut sim, &mut app);
+    assert!(!app.workout_done(0));
+    assert_eq!(done_pixels(&sim), 0);
+}
+
+/// Plays the planned workout of today to its Done, `ran_s` seconds after START, from the calendar or as the ramp test.
+fn play_to_the_end(app: &mut App, ran_s: u32, planned: bool) {
+    app.plan.workout = sweet_spot();
+    app.plan.file = app.plan.calendar.iter().next().map(|p| p.file);
+    (app.plan.planned, app.plan.ran_s) = (planned, ran_s);
+    app.workout_event(crate::workout::Event::Done);
+}
+
+/// The workout played to its end counts whatever the ride; before the scan has the rides nothing is marked; the
+/// ramp test, a Lap through every step and another day's play do not count.
+#[test]
+fn a_workout_played_to_its_end_is_done() {
+    let (_sim, mut app) = with_rides(&[600]);
+    assert!(!app.workout_done(0));
+    play_to_the_end(&mut app, 10, true);
+    assert!(!app.workout_done(0), "10 s of 4080: laps through the steps");
+    play_to_the_end(&mut app, 4000, false);
+    assert!(!app.workout_done(0), "the ramp test shares the player");
+    play_to_the_end(&mut app, 3300, true);
+    assert!(app.workout_done(0));
+    app.plan.played = app.plan.played.map(|(d, f)| ((d.0, d.1, d.2 + 1), f));
+    assert!(!app.workout_done(0), "played on another day");
+    let (_, mut app) = unit();
+    plan(&mut app, &[(0, &sweet_spot())]);
+    app.refresh_done();
+    assert!(!app.workout_done(0), "scan not ready");
+}
+
+/// Discarding the ride takes the played mark back.
+#[test]
+fn a_discarded_ride_is_not_a_workout_done() {
+    let (mut sim, mut app) = with_rides(&[]);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 3000);
+    play_to_the_end(&mut app, 4000, true);
+    assert!(app.workout_done(0));
+    app.press(&mut sim, Press::Short(Key::Start)); // paused
+    app.discard_ride();
+    assert!(!app.workout_done(0));
+}
+
+/// The card redraws when a ride is saved (the history changes), and two workouts of a day need two rides.
+#[test]
+fn the_card_follows_the_history_and_a_ride_each() {
+    let (mut sim, mut app) = with_rides(&[]);
+    assert_consistent(&mut sim, &mut app);
+    assert_eq!(done_pixels(&sim), 0);
+    let start = (app.date.0, app.date.1, app.date.2, 7, 0);
+    let base = crate::history::Ride { start, timer_s: 3600, ..crate::history::NONE };
+    app.stock.index.add(base);
+    assert_consistent(&mut sim, &mut app);
+    assert!(done_pixels(&sim) > 0, "the card follows the new ride");
+    plan(&mut app, &[(0, &vo2()), (0, &sweet_spot())]);
+    app.refresh_done();
+    let done = |app: &App| {
+        (0..2).map(|k| (app.plan.calendar.get(k).map(|p| p.total_s), app.workout_done(k))).collect::<std::vec::Vec<_>>()
+    };
+    assert_eq!(done(&app).iter().filter(|x| x.1).count(), 1, "one ride, one workout");
+    assert!(done(&app).iter().any(|&(t, d)| d && t == Some(4080)), "the longer");
+    app.stock.index.add(crate::history::Ride { timer_s: 2700, ..base });
+    app.refresh_done();
+    assert_eq!(done(&app).iter().filter(|x| x.1).count(), 2, "the second ride takes the second workout");
 }

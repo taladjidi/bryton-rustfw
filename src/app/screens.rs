@@ -500,6 +500,7 @@ impl App {
         if field || self.screen == Screen::Main {
             self.refresh_calendar(b, field);
         }
+        self.refresh_done();
         for (i, (bx, w)) in self.widgets().enumerate() {
             let now = self.now_drawn(bx, w);
             if let Some(d) = self.drawn.get_mut(i) {
@@ -559,6 +560,7 @@ impl App {
     /// Redraws what changed in the page's boxes since they were drawn; in the editor, the frame again over the
     /// selected box when it changed.
     pub(crate) fn update_page(&mut self, b: &mut impl Board) {
+        self.refresh_done();
         if self.screen == Screen::Main {
             self.refresh_calendar(b, false); // after the start, midnight, or new zones: the card follows
         }

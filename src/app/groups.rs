@@ -280,6 +280,16 @@ pub(crate) struct Plan {
     pub(crate) file: Option<fat::File>,
     /// Where it is (workout.rs); None: not running.
     pub(crate) player: Option<workout::Player>,
+    /// The workout played to its end (its file; counts for its day only).
+    pub(crate) played: Option<((u16, u8, u8), fat::File)>,
+    /// The workout opened is a calendar one (not the ramp test, which plays through the same player).
+    pub(crate) planned: bool,
+    /// Seconds the player ran since START: a Lap skipped through to the end is not a workout done.
+    pub(crate) ran_s: u32,
+    /// Bit k: calendar entry k has a ride of its day matching it ([`App::refresh_done`]); kept while a scan runs.
+    pub(crate) done: u8,
+    /// What `done` was computed for (the date, the calendar, the history), None: not yet.
+    pub(crate) done_key: Option<u32>,
 }
 
 impl Plan {
@@ -292,6 +302,11 @@ impl Plan {
             workout: storage::workout_file::Workout::new(),
             file: None,
             player: None,
+            played: None,
+            planned: false,
+            ran_s: 0,
+            done: 0,
+            done_key: None,
         }
     }
 
