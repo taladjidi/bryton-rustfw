@@ -284,10 +284,17 @@ fn spi_init() -> Option<hw::PanelDma> {
     // runs: no cost in keeping it), divided by 2 (MBR 0): 50 MHz. The ST7789's serial write cycle is 16 ns at least,
     // 62.5 MHz (ST7789V datasheet, "Serial interface characteristics", tSCYCW), and SPI1's master clock goes to
     // 80 MHz (DS12930 table 119). Without POWER_STEPS bit 3, or with PLL1's Q output off (DIVQ1EN, RCC_PLLCFGR bit
-    // 17), per_ck (the HSI, 64 MHz: board_init) / 8 = 8 MHz, as before.
-    let fast = POWER_STEPS & SPI1_FAST != 0 && rd(RCC_PLLCFGR) & (1 << 17) != 0;
-    modify(RCC_D2CCIP1R, 7 << 12, if fast { 0 } else { 4 << 12 }); // SPI123SEL
-    let mbr = if fast { 0 } else { 2 };
+    // 17), per_ck (the HSI, 64 MHz: board_init): / 4 = 16 MHz with bit 3 (as before PLL1Q), / 8 = 8 MHz without.
+    let fast = POWER_STEPS & SPI1_FAST != 0;
+    let pll1q = fast && rd(RCC_PLLCFGR) & (1 << 17) != 0;
+    modify(RCC_D2CCIP1R, 7 << 12, if pll1q { 0 } else { 4 << 12 }); // SPI123SEL
+    let mbr = if pll1q {
+        0
+    } else if fast {
+        1
+    } else {
+        2
+    };
     // FTHLV = 4 frames (TXP then means room for a 32-bit write of 4 bytes: pixels go 2 per access), DSIZE = 8 bits
     wr(SPI_CFG1, (mbr << 28) | (3 << 5) | 7);
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
@@ -298,8 +305,7 @@ fn spi_init() -> Option<hw::PanelDma> {
     modify(RCC_AHB1ENR, 0, 1); // DMA1EN
     let _ = rd(RCC_AHB1ENR);
     core::hint::black_box(&DMA_FAIL); // kept in the image though only peeked
-    let mut dma = hw::PanelDma::take()?;
-    dma.stop(); // whatever the bootloader left on stream 0
+    let dma = hw::PanelDma::take()?; // stops whatever the bootloader left on stream 0
     wr(DMAMUX1_C0CR, SPI1_TX_REQ);
     wr(DMA1_LIFCR, 0x3d);
     wr(NVIC_ICPR0, DMA1_S0_IRQ);
@@ -505,12 +511,15 @@ fn lcd_ram(count: u32, dma: &mut Option<hw::PanelDma>, mut run: Run<'_>) {
         spi_setup(2 * n);
         let mut words = (n / 2) as usize;
         let by_dma = n >= min && dma.is_some();
+        let mut stuck = false; // the stream would not stop: the CPU must not write TXDR either
         if let Some(d) = dma.as_mut().filter(|_| by_dma) {
-            words = match dma_words(d, words, &mut run) {
-                Ok(()) => 0,
-                Err(w) => w,
+            let r = dma_words(d, words, &mut run);
+            stuck = r == Err(None);
+            words = match r {
+                Ok(()) | Err(None) => 0,
+                Err(Some(w)) => w,
             };
-            if words > 0 {
+            if r.is_err() {
                 *dma = None; // dead until reset: the CPU from here on
                 wr(NVIC_ICER0, DMA1_S0_IRQ); // its line no longer wakes WFI (the abort set TCIF: hw.rs PanelDma::stop)
                 wr(NVIC_ICPR0, DMA1_S0_IRQ);
@@ -521,7 +530,7 @@ fn lcd_ram(count: u32, dma: &mut Option<hw::PanelDma>, mut run: Run<'_>) {
         for _ in 0..words {
             spi_word(run.pair());
         }
-        if n % 2 == 1 {
+        if n % 2 == 1 && !stuck {
             let c = run.one();
             spi_byte((c >> 8) as u8);
             spi_byte(c as u8);
@@ -548,16 +557,17 @@ fn dma_go(d: &mut hw::PanelDma, i: usize, n: usize, repeat: bool) -> bool {
 
 /// `words` words of a transfer set up (spi_setup) sent by DMA: a fill as one repeat of its word, a blit
 /// double-buffered (the CPU fills one buffer while the stream sends the other). On a failure, whatever the stream
-/// had not sent of the words taken from `run` goes by the CPU, and Err gives the words of `run` still to send.
-fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<(), usize> {
+/// had not sent of the words taken from `run` goes by the CPU, and Err gives the words of `run` still to send; Err(None)
+/// when the stream will not stop: nothing more may be written to TXDR (the transfer is left short, so SPI1 times out
+/// at its end and is taken as dead: spi_wait).
+fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<(), Option<usize>> {
     if let Run::Fill(_) = run {
-        if let Some(b) = d.buf(0) {
-            b[0] = run.pair();
-        }
+        let Some(b) = d.buf(0) else { return Err(Some(words)) };
+        b[0] = run.pair();
         if !dma_go(d, 0, words, true) {
-            return Err(words);
+            return Err(Some(words));
         }
-        return if dma_wait() { Ok(()) } else { Err(d.stop().min(words)) }; // the same word, by the CPU
+        return if dma_wait() { Ok(()) } else { Err(d.stop().map(|rest| rest.min(words))) }; // the same word, by the CPU
     }
     let mut left = words;
     let mut flight: Option<(usize, usize)> = None; // buffer, words in it
@@ -578,7 +588,7 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
         if let Some((i, n)) = flight
             && !dma_wait()
         {
-            let rest = d.stop().min(n);
+            let Some(rest) = d.stop().map(|rest| rest.min(n)) else { return Err(None) };
             if let Some(b) = d.buf(i) {
                 b[n - rest..n].iter().for_each(|&w| spi_word(w));
             }
@@ -587,17 +597,17 @@ fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<()
             {
                 b[..m].iter().for_each(|&w| spi_word(w));
             }
-            return Err(left);
+            return Err(Some(left));
         }
         let Some((i, n)) = ready else {
-            return if left == 0 { Ok(()) } else { Err(left) };
+            return if left == 0 { Ok(()) } else { Err(Some(left)) };
         };
         if !dma_go(d, i, n, false) {
             // not started (the stream is idle here, so not expected): these words by the CPU, and the rest
             if let Some(b) = d.buf(i) {
                 b[..n].iter().for_each(|&w| spi_word(w));
             }
-            return Err(left);
+            return Err(Some(left));
         }
         flight = Some((i, n));
         cur ^= 1;

@@ -286,16 +286,20 @@ unsafe extern "C" {
 pub struct PanelDma(());
 
 impl PanelDma {
-    /// The handle, the buffers zeroed: Some the first time, None after.
+    /// The handle, the stream stopped (the bootloader may have left it running) and the buffers zeroed: Some the
+    /// first time, None after, or when the stream will not stop.
     pub fn take() -> Option<PanelDma> {
         static TAKEN: AtomicBool = AtomicBool::new(false);
         if TAKEN.swap(true, Ordering::Relaxed) {
             return None;
         }
+        let mut dma = PanelDma(());
+        dma.stop()?;
         // SAFETY: PANELDMA is AXI SRAM that link.x reserves for these two buffers and links nothing into; the stream
-        // is not running yet (only this module enables it). Zeroed through the raw pointer before any reference.
+        // has just been seen stopped (EN 0), and only this module enables it again. Zeroed through the raw pointer
+        // before any reference to it exists.
         unsafe { core::ptr::write_bytes(Self::addr(0) as *mut u32, 0, 2 * DMA_WORDS) };
-        Some(PanelDma(()))
+        Some(dma)
     }
 
     fn addr(i: usize) -> u32 {
@@ -340,14 +344,15 @@ impl PanelDma {
         true
     }
 
-    /// Stops the stream (bounded wait for EN to read 0) and returns the words it had not sent (NDTR).
-    pub fn stop(&mut self) -> usize {
+    /// Stops the stream (bounded wait for EN to read 0) and returns the words it had not sent (NDTR), or None when
+    /// EN still reads 1: the stream may still write SPI1_TXDR, so the caller must not.
+    pub fn stop(&mut self) -> Option<usize> {
         wr(DMA1_S0CR, rd(DMA1_S0CR) & !1);
         let mut n = 0;
         while self.busy() && n < 10_000 {
             n += 1;
         }
         wr(DMA1_LIFCR, 0x3d); // an abort sets TCIF (RM0399 DMA, "Stream disable")
-        rd(DMA1_S0NDTR) as usize
+        (!self.busy()).then(|| rd(DMA1_S0NDTR) as usize)
     }
 }
