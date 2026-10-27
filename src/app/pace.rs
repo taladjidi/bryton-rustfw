@@ -113,7 +113,7 @@ impl App {
         let plan = &self.pace.plan;
         let target = plan.watts.first().copied().filter(|&w| w > 0 && plan.n > 0 && self.pace.on);
         let band = target.map(|w| (w - w * BAND_PCT / 100, w.saturating_add(w * BAND_PCT / 100)));
-        let reading = if avg < 3 { self.power.rolling(avg) } else { self.live.get(Metric::Power) };
+        let reading = self.power.rolling(avg);
         let mut value = Line::new();
         match reading {
             Some(v) => value.push_u32(u32::from(v)),

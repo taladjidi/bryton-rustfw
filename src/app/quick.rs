@@ -168,7 +168,11 @@ impl App {
                 }
             }
             B_WATTS => {
-                put(&mut l, self.field_text(Field::Power3s).as_str());
+                if let Some(w) = self.power.rolling(0) {
+                    l.push_u32(u32::from(w)); // the 3 s power, whatever window a tap chose for the fields
+                } else {
+                    l.push_str("--");
+                }
                 put(&mut l, "W");
                 ui::WHITE
             }
