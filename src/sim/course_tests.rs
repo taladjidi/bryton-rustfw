@@ -570,3 +570,61 @@ fn course_cues_over_any_screen() {
         }
     }
 }
+
+/// The climb page joins the round when a climb's warning fires and leaves at the top: one Page press from the page
+/// on screen reaches it, the rider's own climb fields keep it away, and leaving it while shown moves on.
+#[test]
+fn climb_page_in_the_round() {
+    for own in [false, true] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        sim.gnss.route = Some(course_route);
+        let mut app = App::start(&mut sim, None);
+        app.set_map_memory(crate::tiles::tests::memory());
+        app.set_course_memory(crate::storage::course_file::tests::memory());
+        if own {
+            app.pages[0] = PageCfg { layout: 1, fields: [Field::Climb; 6] }.into();
+        }
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 1000);
+        for _ in 0..hill(&app) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 200);
+        app.press(&mut sim, Press::Short(Key::Page)); // page 1
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let count = |app: &App| {
+            (0..PAGES + 2).chain([crate::CLIMB]).filter(|&n| n != crate::OVERVIEW && app.page_on(n)).count()
+        };
+        let base = count(&app);
+        let (mut shown, mut seen_on, mut gone) = (false, false, false);
+        while sim.ms < 700_000 && !gone {
+            run(&mut sim, &mut app, 1000);
+            let on = app.page_on(crate::CLIMB);
+            if on && !seen_on {
+                seen_on = true;
+                assert_eq!(count(&app), base + 1, "one more page");
+                assert_eq!(app.screen(), Screen::Ride(0), "not jumped to");
+                app.press(&mut sim, Press::Short(Key::Page));
+                assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "one Page press");
+                sim.save("climb_page");
+                shown = true;
+            }
+            if seen_on && !on {
+                gone = true;
+                assert_eq!(count(&app), base);
+                if shown {
+                    assert_eq!(app.screen(), Screen::Ride(1), "moved on to the page after");
+                }
+            }
+            assert_consistent(&sim, &app);
+        }
+        assert_eq!((seen_on, gone), (!own, !own), "own climb fields: no second page");
+    }
+}

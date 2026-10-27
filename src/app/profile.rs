@@ -71,6 +71,43 @@ impl App {
         }
     }
 
+    /// A climb is ahead or under way: from the moment its warning fires (a followed course: the rider on the climb;
+    /// the road ahead: [`climbs_ahead::ANNOUNCE_M`] before its start) until its top is passed.
+    pub(crate) fn on_climb(&self) -> bool {
+        if let Some((c, at)) = self.on_course() {
+            return c.climb_at(at.along_m).is_some_and(|(_, on)| on);
+        }
+        let ahead = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors());
+        ahead.and_then(|a| {
+            a.climb_at(a.along_m()).map(|(k, on)| on || a.along_m() + climbs_ahead::ANNOUNCE_M >= k.start_m)
+        }) == Some(true)
+    }
+
+    /// One of the rider's ride pages already shows the climb: no second page for it.
+    pub(crate) fn has_climb_page(&self) -> bool {
+        (0..self.ride_count()).any(|n| {
+            self.ride_page_ref(n).is_some_and(|p| {
+                p.fields.iter().take(p.cells()).any(|f| matches!(f, Field::Climb | Field::ClimbGain | Field::ClimbPace))
+            })
+        })
+    }
+
+    /// Each pass: the climb page enters the round after the page on screen when the warning fires, and leaves it
+    /// at the top (shown then, the round goes on to the page after its home).
+    pub(crate) fn settle_climb(&mut self, b: &mut impl Board) {
+        let on = self.page_on(CLIMB);
+        if on == self.climb.0 {
+            return;
+        }
+        self.climb.0 = on;
+        if on {
+            self.climb.1 = if let Screen::Ride(n) = self.screen { if n < PAGES { n } else { 0 } } else { 0 };
+        } else if self.screen == Screen::Ride(CLIMB) {
+            self.screen = self.ride_page(self.climb.1 + 2, 1);
+            self.show(b);
+        }
+    }
+
     /// Each pass: when the profile in force changed (a trainer heard or lost, by hand), the ride pages on screen
     /// come from the other set: a page the set lacks goes to the first one it has, and the page is drawn anew.
     /// Held while the editor is open (it works on a copy of one set).
