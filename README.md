@@ -27,8 +27,8 @@ entirely. Not affiliated with Bryton.
 | The touch lock: a padlock in the strip (sim) | A zone as an 8 px bar on the box's top edge (sim) | An empty list says so in a row: no notifications (sim) | The overview's cog opens the menu (sim) |
 | ![Overview, SMOOTH font](docs/img/overview-cog-smooth.png) | ![Target gauge](docs/img/gauge-zones.png) | ![Target gauge, half box](docs/img/gauge-zones-half.png) | ![Ramp test result](docs/img/ramp-result.png) |
 | The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | The target gauge spans every zone, power from 40 to 165 % of the FTP (sim) | The same in a half box: the climb pacer's TOP field (sim) | FTP ramp test result: FTP, best minute, APPLY / KEEP (sim) |
-| ![Rest day](docs/img/overview-rest.png) | ![WORKOUTS list](docs/img/workouts-list.png) | ![Quick panel](docs/img/menu-quick.png) | |
-| The overview's TODAY card with nothing planned (sim) | WORKOUTS: each day's profile beside its date and length; a rest day's card gets here, else it opens today's workout (sim) | The quick panel, a swipe down on the overview: the pre-ride actions (sim) | |
+| ![Rest day](docs/img/overview-rest.png) | ![WORKOUTS list](docs/img/workouts-list.png) | ![Quick panel](docs/img/quick-panel.png) | |
+| The overview's TODAY card with nothing planned (sim) | WORKOUTS: each day's profile beside its date and length; a rest day's card gets here, else it opens today's workout (sim) | The quick panel, a swipe down anywhere: the media remote, the power meter with ZERO and its result, each sensor with its battery (LOW in red), GPS, phone, battery and the brightness (sim) | |
 | ![FITNESS](docs/img/fitness.png) | ![Power meter calibration](docs/img/power-zero.png) | ![BIKE menu](docs/img/menu-bike.png) | |
 | HISTORY > FITNESS: CP, W', EST FTP, HRVT1 / HRVT2 from past rides (sim, no rides read) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | |
 

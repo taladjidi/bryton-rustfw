@@ -32,7 +32,7 @@ impl App {
     }
 
     /// CALIBRATE, or CANCEL while a request is out.
-    fn powercal_go(&mut self) {
+    pub(crate) fn powercal_go(&mut self) {
         if self.powercal.asking() {
             self.powercal.reset();
         } else if self.ride.state() == ride::State::Running {
@@ -64,7 +64,7 @@ impl App {
 
     /// Once a pass: the request, the clocks, and the screen when the phase changed.
     pub(crate) fn step_powercal(&mut self, b: &mut impl Board) {
-        if self.screen != Screen::PowerCal {
+        if !matches!(self.screen, Screen::PowerCal | Screen::Quick) {
             return;
         }
         if self.powercal.asking() && (self.ride.state() == ride::State::Running || !self.ant) {
@@ -77,7 +77,7 @@ impl App {
             self.powercal.unsent(); // refused (the last still queued) or a byte lost: sent again
         }
         let now = (self.powercal.phase(), self.powercal.auto());
-        if self.powercal_shown != Some(now) {
+        if self.screen == Screen::PowerCal && self.powercal_shown != Some(now) {
             self.powercal_shown = Some(now);
             self.show(b);
         }

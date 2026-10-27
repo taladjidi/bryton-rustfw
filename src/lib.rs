@@ -186,6 +186,9 @@ pub struct App {
     powercal: powercal::Cal,
     /// What the calibration screen shows (phase, auto zero state); None: not drawn yet.
     powercal_shown: Option<(powercal::Phase, Option<powercal::AutoZero>)>,
+    /// What the quick panel shows, box by box, and its shape (app/quick.rs).
+    quick_shown: [u32; app::QUICK_BOXES],
+    quick_shape: u8,
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -466,6 +469,8 @@ impl App {
             sensors_store: SensorStore::default(),
             powercal: powercal::Cal::default(),
             powercal_shown: None,
+            quick_shown: [0; app::QUICK_BOXES],
+            quick_shape: 0,
             ftms: Ftms::default(),
             prof: prof::Prof::default(),
         }
@@ -614,6 +619,10 @@ impl App {
         }
         if self.screen == Screen::Media && self.redraw_ms >= LIST_REDRAW_MS {
             self.update_media(b);
+            self.redraw_ms = 0;
+        }
+        if self.screen == Screen::Quick && self.redraw_ms >= LIST_REDRAW_MS {
+            self.update_quick(b);
             self.redraw_ms = 0;
         }
         t = self.timed(b, Sec::Phone, t);

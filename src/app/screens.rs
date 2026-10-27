@@ -188,6 +188,7 @@ impl App {
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
             }
+            Screen::Quick => self.draw_quick(c),
             Screen::Trainer => self.draw_trainer(c),
             Screen::RampResult => self.draw_ramp(c),
             Screen::PowerCal => self.draw_powercal(c),
@@ -480,6 +481,9 @@ impl App {
         }
         if self.screen == Screen::Media {
             self.phone.shown = ui::media::shown(&self.media_now());
+        }
+        if self.screen == Screen::Quick {
+            self.quick_drawn();
         }
         if self.screen == Screen::Trainer {
             self.trainer_printed();

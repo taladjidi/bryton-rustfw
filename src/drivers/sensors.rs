@@ -403,6 +403,8 @@ pub struct Decoders {
     buttons: Option<[u8; 2]>,
     /// The ANT+ shifting system's battery status per component (0: not heard).
     battery: [u8; 16],
+    /// The last battery status each kind sent (common page 82; 0: not heard), what the quick panel shows.
+    status: [u8; Kind::ALL.len()],
     /// A shifter button pressed, per side (right, left), for the app to take: the newest of each side since it last
     /// took them, so both buttons changing in one page, or a press on each side in one pass, are both kept.
     pub press: [Option<Press>; 2],
@@ -426,15 +428,31 @@ impl Decoders {
             Kind::Speed => self.speed = Revs::default(),
             Kind::Cadence => self.cadence = Revs::default(),
             Kind::SpeedCadence => (self.sc_speed, self.sc_cadence) = (Revs::default(), Revs::default()),
-            Kind::Shifting => self.battery = [0; 16],
+            Kind::Shifting => (self.battery, self.status[kind as usize]) = ([0; 16], 0),
             // the next button page is the baseline (a press missed while silent is not made up later)
             Kind::Di2 => self.buttons = None,
             Kind::Power | Kind::Trainer => {}
         }
     }
 
+    /// `kind`'s last battery status from page 82: 1 new, 2 good, 3 ok, 4 low, 5 critical; None if never heard
+    /// (a Di2 reports a percent in [`Metric::ShiftBattery`] instead).
+    pub fn battery_status(&self, kind: Kind) -> Option<u8> {
+        self.status.get(kind as usize).copied().filter(|&s| s > 0)
+    }
+
     /// Takes the 8 data bytes of a broadcast from `kind` into `live`.
     pub fn decode(&mut self, kind: Kind, d: [u8; 8], wheel_mm: u16, live: &mut Live) {
+        // common page 82 (0x52), battery status, from any profile (the ANT+ common pages; openant `devices/common.py`
+        // reads byte 7 bits 4-6 as the status, bits 0-3 as the coarse voltage, byte 6 the fraction / 256): the
+        // status 1 new to 5 critical is kept per kind (6 charging and 7 invalid are not a level). The shifting
+        // arm below keeps the worst of its components.
+        if d[0] == 0x52
+            && !matches!(kind, Kind::Shifting | Kind::Di2 | Kind::Trainer)
+            && let Some(slot) = self.status.get_mut(kind as usize).filter(|_| matches!(d[7] >> 4 & 7, 1..=5))
+        {
+            *slot = d[7] >> 4 & 7;
+        }
         let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
         let rpm = |r: u32| (r / 100) as u16;
         match kind {
@@ -494,6 +512,7 @@ impl Decoders {
                 }
                 if let Some(&worst) = self.battery.iter().max().filter(|&&s| s > 0) {
                     live.set(Metric::ShiftBattery, SHIFT_STATUS + u16::from(worst));
+                    self.status[kind as usize] = worst;
                 }
             }
             Kind::Shifting => {}
@@ -543,6 +562,23 @@ mod tests {
         assert_eq!([Metric::Power, Metric::Cadence, Metric::Balance].map(|m| live.get(m)), [None; 3]);
         dec.decode(Kind::Power, [0x10, 1, 0xff, 85, 0, 0, 210, 0], 2105, &mut live);
         assert_eq!(live.get(Metric::Power), Some(210));
+    }
+
+    /// Page 82 on any profile gives its battery status, the last one kept; invalid and charging are no level; a
+    /// silent sensor's status is forgotten for shifting only (its components), the others keep the last.
+    #[test]
+    fn battery_page_82() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let page = |status: u8| [0x52, 0, 0xff, 0, 0, 0, 128, 3 | status << 4];
+        assert_eq!(dec.battery_status(Kind::Hr), None);
+        dec.decode(Kind::Hr, page(2), 2105, &mut live);
+        dec.decode(Kind::Power, page(4), 2105, &mut live);
+        dec.decode(Kind::Power, page(7), 2105, &mut live);
+        assert_eq!([Kind::Hr, Kind::Power, Kind::Speed].map(|k| dec.battery_status(k)), [Some(2), Some(4), None]);
+        dec.decode(Kind::Shifting, [0x52, 0, 0x01, 0, 0, 0, 0, 5 << 4], 2105, &mut live);
+        assert_eq!(dec.battery_status(Kind::Shifting), Some(5));
+        dec.restart(Kind::Shifting);
+        assert_eq!(dec.battery_status(Kind::Shifting), None);
     }
 
     /// A counter that jumped (a battery change, a sensor back after minutes) gives no reading, not an overflow

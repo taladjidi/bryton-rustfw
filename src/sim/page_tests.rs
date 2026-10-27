@@ -696,10 +696,10 @@ fn a_swipe_up_shows_more() {
     assert_eq!((app.screen(), app.more_shown()), (Screen::Ride(0), None));
     press(&mut sim, &mut app, Key::Back);
     assert_eq!(app.screen(), Screen::Main);
-    // down on the page with no MORE up still opens the remote
+    // down on the page with no MORE up opens the quick panel
     press(&mut sim, &mut app, Key::Page);
     swipe(&mut sim, &mut app, Dir::Down);
-    assert_eq!(app.screen(), Screen::Media);
+    assert_eq!(app.screen(), Screen::Quick);
     press(&mut sim, &mut app, Key::Back);
     // Page from MORE: the next page, normal; round to the first, normal
     swipe(&mut sim, &mut app, Dir::Up);

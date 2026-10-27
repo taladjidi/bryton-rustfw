@@ -209,7 +209,7 @@ fn beat_streams_into_the_full_copy() {
 #[test]
 fn ant_decoders() {
     use crate::sensors::{Decoders, Kind, Live, Metric, SHIFT_STATUS};
-    let (mut gears, mut batteries, mut presses) = (0, 0, 0);
+    let (mut gears, mut batteries, mut presses, mut statuses) = (0, 0, 0, 0);
     for seed in 5..=8u32 {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         let v: std::vec::Vec<u8> = bytes(seed, 1 << 18).collect();
@@ -234,9 +234,15 @@ fn ant_decoders() {
                 batteries += 1;
             }
             presses += core::mem::take(&mut dec.press).iter().flatten().count();
+            // page 82 on every profile: the status kept is a level, 1 to 5
+            if let Some(s) = dec.battery_status(kind) {
+                assert!((1..=5).contains(&s), "status {s}");
+                statuses += 1;
+            }
         }
     }
     assert!(gears > 1000 && batteries > 1000 && presses > 100, "reached: {gears} {batteries} {presses}");
+    assert!(statuses > 1000, "page 82 reached on the profiles: {statuses}");
 }
 
 /// Random calibration pages (power meter page 0x01, ids mixed in so the replies are reached) into the reply decoder
@@ -1316,7 +1322,6 @@ fn menu_tree_by_chance() {
         "Workouts",
         "Steps",
         "Courses",
-        "Quick",
         "Ride",
         "WorkoutNow",
         "CourseNow",

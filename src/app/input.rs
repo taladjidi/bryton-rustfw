@@ -140,6 +140,8 @@ pub enum Screen {
     Past,
     /// The phone's media remote (app/phone.rs).
     Media,
+    /// The quick panel (app/quick.rs): media, power meter, sensors, status, brightness.
+    Quick,
     /// The trainer: mode and target (app/trainer.rs).
     Trainer,
     /// The power meter calibration (app/powercal.rs).
@@ -351,6 +353,7 @@ impl App {
         match self.screen {
             Screen::Main | Screen::Ride(_) => self.input_page(b, i, recording, graph_hit, shown),
             Screen::Media => self.input_media(b, i, shown),
+            Screen::Quick => self.input_quick(b, i, shown),
             Screen::Notif(..) => self.input_notif(b, i),
             Screen::RampResult => self.input_ramp(b, i, shown),
             Screen::PowerCal => self.input_powercal(b, i, shown),
@@ -363,7 +366,7 @@ impl App {
     }
 
     /// The screen shown again if the input changed it (or the page's variant): the arms that do not draw themselves.
-    fn reshow(&mut self, b: &mut impl Board, (screen, more): Seen) {
+    pub(crate) fn reshow(&mut self, b: &mut impl Board, (screen, more): Seen) {
         if self.screen != screen || self.more_on != more {
             self.show(b);
         }
@@ -389,12 +392,8 @@ impl App {
             (Screen::Ride(_), Input::Back | Input::Touch(Gesture::Swipe(Dir::Down))) if self.more_shown().is_some() => {
                 self.more_on = None
             }
-            // a swipe down on the overview before a ride opens the quick panel; on a page (or the overview of a ride)
-            // it opens the remote, without the menus
-            (Screen::Main, Input::Touch(Gesture::Swipe(Dir::Down))) if self.ride.state() == ride::State::Idle => {
-                self.open(Screen::Menu(Menu::Quick, 0))
-            }
-            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open(Screen::Media),
+            // a swipe down opens the quick panel, everywhere (the media remote is at its top)
+            (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open_quick(),
             // a tap on the overview's notices opens their list, even while recording (it only reads; the touch lock
             // returns before this)
             (Screen::Main, Input::Touch(Gesture::Tap(_, y))) if u32::from(y) >= ui::NOTICES_Y => {
@@ -631,8 +630,6 @@ impl App {
                 // title stays (a whole show cleared the page first, 139 000 px for 69 000 drawn: 2026-10-26)
                 return self.update_menu_rows(b, menu, next);
             }
-            // the quick panel is one screen: the swipe down that opened it, undone
-            (Screen::Menu(Menu::Quick, _), Input::Touch(Gesture::Swipe(Dir::Up))) => self.close(),
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down)))) => {
                 // a screen of rows at a time: up shows the next, down the previous
                 let (first, rows) = (menu::first_shown(sel, ui::MENU_ROWS), self.rows(menu));
@@ -788,7 +785,7 @@ fn is_back(i: Input) -> bool {
 }
 
 /// The screen and the page variant before an input: `reshow` draws again if they changed.
-type Seen = (Screen, Option<usize>);
+pub(crate) type Seen = (Screen, Option<usize>);
 
 /// What an input does to an incoming call: Some(true) answers (Start, the green button), Some(false) declines (Back,
 /// the red one); None for a tap elsewhere.

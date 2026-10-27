@@ -88,7 +88,7 @@ pub struct Now<'a> {
 /// The whole screen: the buttons, then everything [`update`] draws.
 pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
     for &(b, x, y, w, h) in &BUTTONS {
-        button(c, b, (x, y, w, h), b == Button::Play && now.playing);
+        button(c, b, (x, y, w, h), b == Button::Play && now.playing, false);
     }
     let mut shown = Shown::default();
     update(c, now, &mut shown, true);
@@ -117,7 +117,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown, all: bool) {
     if all || shown.playing != Some(now.playing) {
         shown.playing = Some(now.playing);
         let &(b, x, y, w, h) = &BUTTONS[1];
-        button(c, b, (x, y, w, h), now.playing);
+        button(c, b, (x, y, w, h), now.playing, false);
     }
     let (bx, by, bw, bh) = BAR;
     let px = if now.duration > 0 { (now.elapsed.min(now.duration) * bw / now.duration).min(bw) } else { 0 };
@@ -197,9 +197,14 @@ fn split(s: &str, w: u32) -> (&str, &str) {
     (&s[..cut], s[cut..].trim_start())
 }
 
-/// A button: its box, then its icon or label.
-fn button(c: &mut impl Canvas, b: Button, (x, y, w, h): (u32, u32, u32, u32), playing: bool) {
-    let (bg, fg) = if b == Button::Play { (ACCENT, BLACK) } else { (DARK, WHITE) };
+/// A button: its box, then its icon or label; `dim` (no phone) greys it. A box under 52 px wide has "-" and "+"
+/// for the volume.
+pub fn button(c: &mut impl Canvas, b: Button, (x, y, w, h): (u32, u32, u32, u32), playing: bool, dim: bool) {
+    let (bg, fg) = match (b, dim) {
+        (_, true) => (DARK, GREY),
+        (Button::Play, _) => (ACCENT, BLACK),
+        _ => (DARK, WHITE),
+    };
     c.fill(x, y, w, h, bg);
     let (cx, cy) = (x + w / 2, y + h / 2);
     match b {
@@ -220,6 +225,8 @@ fn button(c: &mut impl Canvas, b: Button, (x, y, w, h): (u32, u32, u32, u32), pl
         }
         _ => {
             let label = match b {
+                Button::VolDown if w < 52 => "-",
+                Button::VolUp if w < 52 => "+",
                 Button::VolDown => "VOL-",
                 Button::VolUp => "VOL+",
                 Button::SkipBack => "<<",

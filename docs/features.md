@@ -11,9 +11,16 @@
   only the rides new or changed since are read), and the newest notice on one row at the foot (a GPS fix, a
   sensor paired, the battery low; a tap opens them), nothing when there are none (Ferris the Rust crab lives in ABOUT). A cog ends the
   date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
-  44 x 44 px box opens the menu). A swipe down on the overview, before a ride, opens the **quick panel** (QUICK:
-  REMOTE (the media remote, first), CALIBRATE POWER when a meter is heard, TRAINER CONTROL when a trainer is paired, PROFILE, BRIGHTNESS, USB DRIVE,
-  NOTIFICATIONS; a swipe up or Back closes it); on a ride page a swipe down still opens the media remote.
+  44 x 44 px box opens the menu). A swipe down, on the overview and on every ride page, opens the **quick panel**, what to see right away and not
+  a way to the settings (a swipe up or Back closes it). Top to bottom: **media** (the title and the artist, one line
+  each, and 44 px buttons: previous, play / pause, next, volume down and up, the media remote's actions; greyed without a
+  phone); the **power meter** when one is paired (the 3 s watts, its battery, and ZERO, which runs the zero-offset
+  calibration in place and writes "ZERO -12 OK", "FAILED" or "NO ANSWER" on the same block; refused while the ride
+  runs); one line per **paired sensor** (heart rate, speed, cadence, speed and cadence, shifting, trainer: its value or
+  SEARCHING, and its battery when the sensor said it, ANT+ common page 82: bars, or LOW in red); **GPS** (satellites),
+  the **phone** link and the unit's battery; and **brightness** buttons (the levels, AUTO at the bright end). Each box
+  is redrawn alone, a second at most. PROFILE, USB DRIVE, NOTIFICATIONS (still a tap on the overview's notices) and
+  TRAINER CONTROL stay in their menus.
   **TODAY card** (the owner's idea, 2026-10-26: the big clock went, the strip has the time): "TODAY" and the planned
   length (H:MM) on one line, the workout's name under it (cut to whole characters), and its profile at the bottom: a
   bar per column (56 columns of 4 px, the width of the card) in the colour of the step's zone and as high as its
@@ -342,7 +349,8 @@ again fails a test. A key press or a tap is one, a swipe is one, Page held is on
 | A menu row acts (PAGES from the overview, touch) | 3 (hold, tap selects, tap acts) | 2 | `one_tap_acts_on_a_row_unless_the_ride_moves` |
 | Today's workout started, touch | 5 | 2 (the card, START) | `todays_workout_in_two_inputs` |
 | Today's workout started, keys | 4 | 2 (Start held, Start) | `todays_workout_in_two_inputs` |
-| Calibrate the power meter from the overview, touch | 6 | 2 (swipe down, a tap) | `the_quick_panel_from_the_overview` |
+| Calibrate the power meter from the overview, touch | 6 | 2 (swipe down, ZERO; result in place) | `the_quick_panel_has_the_remote_the_meter_and_the_light` |
+| Play / pause the phone's media, touch (overview or any ride page) | 2 (swipe down, a tap; a ride page: swipe down, a tap on the remote) | 2 (swipe down, a tap), the panel also shows the meter, sensors and light | same |
 | The same by keys (meter heard) | 17 | 7 (SENSORS lists it first) | `sensors_actions_come_first` |
 | TRAINER CONTROL from the overview, keys | 4 (a MAIN row) | 7 (SENSORS row 0); 2 touches by the quick panel | `the_trainer_screen_is_one_step_from_the_menu_and_the_fields` |
 | The trainer's target down, riding, keys | none (a tap on "-") | 1 (Lap held) | `riding_the_long_keys_on_the_trainer_screen` |
@@ -649,7 +657,7 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
   connected, it advertises once a second so the phone comes back by itself.
 - **Media keys:** on an iPhone, through Apple's media service (AMS): play / pause, next, previous, volume; otherwise
   as a BLE keyboard's media keys (HID consumer control, also mute). Hold Lap on any page: play / pause. SENSORS > PHONE >
-  REMOTE is a player, also opened by a swipe down on a ride page (a swipe up closes it; on the overview a swipe down is the quick panel): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
+  REMOTE is the full player (the quick panel has its main buttons, one swipe down from any page): the title on two lines, the artist, the album, a progress bar with the elapsed and remaining
   time, and buttons: previous, play / pause, next, then skip back, volume down, volume up, skip forward (AMS's skip:
   the app sets how far, often 15 or 30 s in a podcast app; there is no "go to a position"). Keys: Start play / pause,
   Page next, Lap previous, held Page / Lap volume; swipes: left / right track; a skip the app does not take says NOT IN THIS APP; a hold takes a

@@ -26,7 +26,7 @@ the code; [features.md](features.md) says how each one works.
 - [ ] Rename pages (Garmin)
 - [ ] Field size follows the box, wide boxes show more (Garmin, Karoo)
 - [x] Banners over any page for a few seconds (ride start, pause, lap, end) (stock, Garmin): sim
-- [ ] Quick Status panel: sensors and their batteries, phone link, recording, five chosen fields (stock)
+- [~] Quick Status panel: sensors and their batteries, phone link, recording, five chosen fields (stock): sim; ours is a swipe down: media, power meter ZERO, sensors, GPS, phone, battery, brightness; no chosen fields
 - [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim, RESUME / SAVE / DISCARD, then the ride card (map, elevation over distance, ten numbers)
 - [ ] Lap summary banner (lap time, average power and heart rate) (Garmin, Wahoo)
 - [ ] Day and night colour modes (stock Meter Color Mode, Garmin)
@@ -130,7 +130,7 @@ Others
 - [~] Power meter calibration (zero offset, auto zero) (stock, Garmin, Wahoo, Karoo): sim; the page 0x01 layouts are from open implementations, SENSORS > CALIBRATE POWER with its screen, the sim meter and tests; not yet seen on the unit (Sigeyi AXO spider)
 - [~] Sensor pairing menu: pair, forget (stock, all): one sensor per kind; no ID typed in, no names
 - [ ] Sensor pool: several of a kind, switch when another is found (stock, Garmin)
-- [ ] Sensor battery levels (ANT+ common page 82) (stock Quick Status, all)
+- [~] Sensor battery levels (ANT+ common page 82) (stock Quick Status, all): sim; decoded for every kind, shown in the quick panel (bars, LOW in red); HR page 7 not decoded; not seen on the unit
 - [ ] BLE heart rate, speed and cadence, power (stock, all)
 - [~] BLE scan of nearby devices with signal strength and kind (ours): unit; no connection yet
 - [ ] ANT+ radar (Garmin Varia, Bryton Gardia): vehicles beside the page, threat colours (stock, Garmin, Wahoo, Karoo, Coros)

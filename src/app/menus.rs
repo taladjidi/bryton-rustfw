@@ -34,9 +34,6 @@ pub enum Menu {
     System,
     /// The built-in sensors' readings ([`menu::BUILT_IN`]).
     BuiltIn,
-    /// The quick panel: a swipe down on the overview opens the pre-ride actions (power meter calibration, the
-    /// trainer, the profile, the brightness, the USB drive, the notifications) from existing rows.
-    Quick,
     /// The ride menu, Page held while a ride records or is paused, over ride page `n` ([`OVERVIEW`] from the
     /// overview): RESUME or PAUSE, END RIDE, WORKOUT and COURSE while one runs, BRIGHTNESS, SENSORS, EDIT THIS PAGE,
     /// ALL SETTINGS (the main menu). Rows that do not apply are not shown.
@@ -91,7 +88,6 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Bike => "BIKE",
         Menu::System => "SYSTEM",
         Menu::BuiltIn => "BUILT IN",
-        Menu::Quick => "QUICK",
         Menu::Ride(_) => "RIDE",
         Menu::WorkoutNow => "WORKOUT",
         Menu::CourseNow => "COURSE",
@@ -143,19 +139,6 @@ impl App {
             Menu::System if self.save_stuck_any() && i == 0 => Some(Row::GiveUpSave),
             Menu::System => menu::SYSTEM.get(i - usize::from(self.save_stuck_any())).copied(),
             Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
-            Menu::Quick => {
-                let rows = [
-                    // the media remote first: the overview's swipe down opens this panel, no longer the remote
-                    (Row::Phone(menu::PhoneRow::Media), true),
-                    (Row::Ride(menu::RideRow::CalPower), self.power_heard()),
-                    (Row::Ride(menu::RideRow::Trainer), self.trainer_on()),
-                    (Row::Set(menu::Setting::BikeProfile), true),
-                    (Row::Set(menu::Setting::Light), true),
-                    (Row::Drive, self.ride.state() == ride::State::Idle && self.ride_settled()),
-                    (Row::Open(Menu::Notifs), true),
-                ];
-                rows.into_iter().filter(|r| r.1).map(|r| r.0).nth(i)
-            }
             Menu::Ride(n) => {
                 use menu::RideRow;
                 let rows = [
