@@ -1500,7 +1500,8 @@ fn main() -> ! {
     let mut usb_tried = false;
     let mut session = Session::new();
     let mut stats = Stats::default();
-    let (mut awake, mut window_ms) = (0u32, 0u32); // awake cycles in the current second, its length
+    // awake cycles in the current second, all cycles run (the sleep loop's too), its length
+    let (mut awake, mut ran, mut window_ms) = (0u32, 0u32, 0u32);
     let mut since_touch = 0u32; // ms slept since the panel was last read
     loop {
         let t0 = cycles();
@@ -1608,12 +1609,15 @@ fn main() -> ! {
         // the app's work (step and keys), not the USB polls: those happen only while a cable is in
         let worked = t1.wrapping_sub(t0) - sleep_cycles + cycles().wrapping_sub(t1);
         awake = awake.saturating_add(worked);
+        // CYCCNT stops in WFI, so the sleep's cycles are the time the CPU ran while it should have slept
+        ran = ran.saturating_add(worked).saturating_add(sleep_cycles);
         // a pass is its work plus its sleep (a long one, an eMMC scan, is longer than POLL_MS)
         let pass_ms = worked / (CPU_HZ / 1000) + slept;
         window_ms += pass_ms;
         if window_ms >= 1000 {
             stats.awake_permille = (u64::from(awake / (CPU_HZ / 1000)) * 1000 / u64::from(window_ms)) as u32;
-            (awake, window_ms) = (0, 0);
+            stats.cpu_permille = (u64::from(ran / (CPU_HZ / 1000)) * 1000 / u64::from(window_ms)) as u32;
+            (awake, ran, window_ms) = (0, 0, 0);
         }
         stats.uptime_ms = stats.uptime_ms.wrapping_add(pass_ms);
         app.prof().pass(pass_ms, slept);

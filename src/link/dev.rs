@@ -82,6 +82,9 @@ pub struct Stats {
     pub uptime_ms: u32,
     /// Share of the last second the CPU spent awake in the app's work, per mille (the rest: WFI).
     pub awake_permille: u32,
+    /// Share of the last second the CPU ran at all, per mille: the app's work and everything inside the sleep loop
+    /// (USB polls, and anything that keeps WFI from sleeping: a stuck interrupt kept it near 820, 2026-10-27).
+    pub cpu_permille: u32,
 }
 
 /// What the main loop must do after a [`Session::feed`].
@@ -215,6 +218,8 @@ impl Session {
                 h.send(decimal(stats.uptime_ms, &mut [0; 10]));
                 h.send(b" ms, awake ");
                 h.send(decimal(stats.awake_permille, &mut [0; 10]));
+                h.send(b" permille, cpu ");
+                h.send(decimal(stats.cpu_permille, &mut [0; 10]));
                 h.send(b" permille, radio resets ");
                 h.send(decimal(u32::from(app.radio_resets()), &mut [0; 10]));
                 h.send(b", climb tile us last ");
