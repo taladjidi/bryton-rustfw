@@ -686,7 +686,7 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
 ## USB
 
 With a cable in, a dev link starts: screenshots, key presses, register and memory reads, the battery log, eMMC
-sector reads, and running a new build from RAM (`dev.py`, see AGENTS.md). Unplugging resets the unit.
+sector reads, and running a new build from RAM (`dev.py`, see docs/devloop.md). Unplugging resets the unit.
 
 **USB drive:** the computer can mount the eMMC's FAT volume (BRYTON: rides, routes, workouts, map tiles) without
 going back to stock. The unit is a card reader with the card out until SETTINGS > SYSTEM > USB DRIVE (or `dev.py drive`) lends

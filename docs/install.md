@@ -3,7 +3,7 @@
 ## Build
 
     ./check.sh          # fmt, clippy, host tests, build, pack -> out/IMG.bin (1 MB + trailer), out/update.ini;
-                        # plus the Renode checks when RENODE points at Renode (AGENTS.md, Emulation)
+                        # plus the Renode checks when RENODE points at Renode (docs/devloop.md, Emulation)
 
 rustup installs the pinned toolchain and target on first use. `cargo test-host` alone runs the tests and draws
 the screens through a simulated panel into `target/sim/*.bmp`. `pack.py` re-checks what the stock updater checks
@@ -79,4 +79,4 @@ individuals: the tool only fetches Plan IGN v2.
 
 Once installed, later builds don't need a flash: with the cable in and the USB symbol green, `./dev.py run` runs
 `out/IMG.bin` from RAM, `./dev.py shot` takes a screenshot, and `./dev.py reset` (or unplugging) returns to the
-installed build. AGENTS.md, "Development loop on the unit", has the rest.
+installed build. docs/devloop.md has the rest.
