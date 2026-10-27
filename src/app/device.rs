@@ -60,7 +60,7 @@ pub const MAX_PASS_MS: u32 = 1000;
 pub const BATTERY_MS: u32 = 10_000;
 
 /// BATTERY LOW is said at this charge, percent, or below (not while charging).
-const LOW_BATTERY_PERCENT: u8 = 15;
+pub(crate) const LOW_BATTERY_PERCENT: u8 = 15;
 
 /// How often the barometer is read while riding (or averaging for a calibration); app/barometer.rs.
 pub const BARO_RIDE_MS: u32 = 1000;
