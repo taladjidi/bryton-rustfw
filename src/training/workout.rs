@@ -165,9 +165,6 @@ pub fn column(
     rider: Option<u32>,
     k: u32,
 ) -> (u32, u16) {
-    if rider == Some(k) {
-        return (h, ui::WHITE);
-    }
     let total = graph_total_s(steps);
     let t = (u64::from(k) * u64::from(total) / u64::from(cols.max(1))) as u32;
     let mut end = 0u32;
@@ -175,11 +172,10 @@ pub fn column(
         end = end.saturating_add(graph_s(s));
         t < end
     }) else {
-        return (0, ui::BLACK);
+        return ui::progress_column(rider, k, h, (0, ui::BLACK));
     };
     let (level, color) = level(s, ftp, max_hr);
-    let height = (level * h / 1000).clamp(1, h.max(1));
-    (height, if rider.is_some_and(|r| k < r) { ui::DARK } else { color })
+    ui::progress_column(rider, k, h, ((level * h / 1000).clamp(1, h.max(1)), color))
 }
 
 /// What the workout gauge field measures and its target band, during step `s` (None: no workout running), for this

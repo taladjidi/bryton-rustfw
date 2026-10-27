@@ -4,6 +4,9 @@
 
 use crate::*;
 
+/// A box: left, top, width, height.
+type Box4 = (u32, u32, u32, u32);
+
 /// What a graph field shows on screen: its plot, over the last minutes or the whole ride, the bars up to `n`
 /// ([`ride::History::len`] or [`ride::History::whole_len`]), the whole ride's halvings and the scale (low, high, in
 /// the plot's units), and the ride's figures at its top right ([`App::graph_stats`]). A change of anything but `n`
@@ -350,9 +353,6 @@ impl App {
     /// column white.
     fn climb_bar(&self, p: ProfileShown, a: (u32, u32, u32, u32), k: u32) -> (u32, u16) {
         let Some(n) = self.climb_now().filter(|_| p.id != 0) else { return (0, ui::BLACK) };
-        if p.rider == Some(k) {
-            return (a.3, ui::WHITE);
-        }
         let end = p.start.saturating_add(p.span);
         let at = |i: u32| p.start + (u64::from(p.span) * u64::from(i) / u64::from(a.2.max(1))) as u32;
         let (d0, d1) = (at(k), at(k + 1));
@@ -367,16 +367,15 @@ impl App {
         let grade = (h1 - h0) * 100 / g1.saturating_sub(g0).clamp(1, i32::MAX as u32) as i32;
         let hi = hi.max(lo + 300);
         let h = ((i64::from(m - lo) * i64::from(a.3)) / i64::from(hi - lo)).clamp(1, i64::from(a.3)) as u32;
-        // the workout graph's progress: the part done dark, the rider's column white
-        (h, if p.rider.is_some_and(|r| k < r) { ui::DARK } else { ui::grade_color(grade) })
+        ui::progress_column(p.rider, k, a.3, (h, ui::grade_color(grade)))
     }
 
-    /// The climb profile's title line: the gain at the left, the length and average grade at the right (as the
-    /// banner says them).
-    fn draw_climb_title(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32)) {
-        let (x, y, w) = (bx.0, bx.1, bx.2);
-        let Some(k) = self.climb_now().map(|n| n.climb) else { return ui::draw_plot_title(c, bx, "NO CLIMB") };
-        let (mut l, mut r) = (Line::<12>::new(), Line::<16>::new());
+    /// The climb's figures written over its plot: the gain (top left) and the length and average grade (top right,
+    /// as the banner says them), each in a black box the size of its text, so it reads over any colour. None
+    /// without a climb.
+    pub(crate) fn climb_text_boxes(&self, a: Box4) -> Option<[(Box4, Line<16>); 2]> {
+        let k = self.climb_now()?.climb;
+        let (mut l, mut r) = (Line::<16>::new(), Line::<16>::new());
         l.push_str("+");
         l.push_u32(k.gain_m);
         l.push_str(" M");
@@ -384,34 +383,49 @@ impl App {
         r.push_str(" KM ");
         r.push_u32(k.grade_x10().div_ceil(10).max(1));
         r.push_str("%");
-        let half = w / 2;
-        ui::text::draw_in(c, &ui::LABEL, x + 6, y + 4, half.saturating_sub(6), ui::text::Align::Left, l.as_str());
-        ui::text::draw_in(c, &ui::LABEL, x + half, y + 4, half.saturating_sub(6), ui::text::Align::Right, r.as_str());
+        let h = ui::LABEL.height();
+        let (wl, wr) = (ui::LABEL.width(l.as_str()) + 6, ui::LABEL.width(r.as_str()) + 6);
+        Some([((a.0, a.1, wl, h), l), ((a.0 + a.2 - wr.min(a.2), a.1, wr, h), r)])
+    }
+
+    /// The climb's figures drawn again where they cover columns `cols` of the plot `a` (after those were redrawn).
+    fn draw_climb_text(&self, c: &mut impl Canvas, a: (u32, u32, u32, u32), cols: core::ops::Range<u32>) {
+        for ((x, y, w, _), s) in self.climb_text_boxes(a).into_iter().flatten() {
+            let first = x - a.0;
+            if first < cols.end && cols.start < first + w {
+                ui::text::draw_in(c, &ui::LABEL, x, y, w, ui::text::Align::Centre, s.as_str());
+            }
+        }
     }
 
     /// The profile field in box `bx`, whole.
     pub(crate) fn draw_profile(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), p: ProfileShown) {
-        if p.climb {
-            self.draw_climb_title(c, bx);
-        } else {
+        let a = if p.climb { ui::climb_area(bx) } else { ui::plot_area(bx) };
+        if !p.climb {
             ui::draw_plot_title(c, bx, if p.id == 0 { "NO COURSE" } else { "PROFILE" });
         }
-        let a = ui::plot_area(bx);
         ui::draw_graph(c, a, &|k| self.profile_bar(p, a, k));
+        if p.climb {
+            self.draw_climb_text(c, a, 0..a.2);
+        }
     }
 
     /// The profile field drawn as `old`: whole when it shows another part of the course, else only the columns
     /// between the rider's old place and the new one.
     pub(crate) fn update_profile(&self, b: &mut impl Board, old: ProfileShown, bx: (u32, u32, u32, u32)) -> Drawn {
-        let a = ui::plot_area(bx);
+        let a = if old.climb { ui::climb_area(bx) } else { ui::plot_area(bx) };
         let now = self.profile_now(a.2, old.climb);
         let mut p = Panel(b, self.area(), self.settings.smooth);
         if (ProfileShown { rider: old.rider, ..now }) != old {
-            p.fill(bx.0, bx.1, bx.2.saturating_sub(1), ui::plot_area(bx).1 - bx.1, ui::BLACK);
+            p.fill(bx.0, bx.1, bx.2.saturating_sub(1), a.1 - bx.1, ui::BLACK);
             self.draw_profile(&mut p, bx, now);
         } else if now.rider != old.rider {
-            for k in moved(old.rider, now.rider).filter(|&k| k < a.2) {
+            let cols = moved(old.rider, now.rider);
+            for k in cols.clone().filter(|&k| k < a.2) {
                 ui::draw_graph_column(&mut p, a, k, self.profile_bar(old, a, k), self.profile_bar(now, a, k));
+            }
+            if now.climb {
+                self.draw_climb_text(&mut p, a, cols);
             }
         }
         Drawn::Profile(now)

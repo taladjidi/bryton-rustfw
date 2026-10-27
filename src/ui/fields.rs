@@ -749,6 +749,21 @@ pub fn draw_graph_stats(
     }
 }
 
+/// A progress graph's column `k` (the workout graph's, the climb's): `bar` (height, colour) as it is, the part done
+/// (columns before the rider's) dark, the rider's column white and `full` high.
+pub fn progress_column(rider: Option<u32>, k: u32, full: u32, bar: (u32, u16)) -> (u32, u16) {
+    match rider {
+        Some(r) if r == k => (full, WHITE),
+        Some(r) if k < r => (bar.0, DARK),
+        _ => bar,
+    }
+}
+
+/// The climb's plot in field box `bx`: all of the box but a margin (its figures are written over it).
+pub fn climb_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    (x + 4, y + 3, w.saturating_sub(8), h.saturating_sub(7))
+}
+
 /// A plot without axes (the course profile) in field box `bx`: left, top, columns, height.
 pub fn plot_area((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
     (x + 4, y + FIELD_LABEL_H, w.saturating_sub(8), h.saturating_sub(FIELD_LABEL_H + 4))
