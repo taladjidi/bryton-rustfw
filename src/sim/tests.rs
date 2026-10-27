@@ -193,9 +193,9 @@ fn a_silent_nordic_chip_does_not_stop_the_pages() {
 
 #[test]
 fn ticks_through_midnight() {
-    let mut sim = Sim::new(23, 59, 58);
+    let mut sim = Sim::new(23, 59, 59);
     let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 3000);
+    run(&mut sim, &mut app, 900);
     assert_eq!(hm(&mut sim), "00:00");
     assert!(main_screen(&mut sim, &app, UsbDot::Off) == sim.screen);
 }

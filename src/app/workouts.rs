@@ -5,7 +5,8 @@
 use crate::*;
 
 /// The overview's calendar is read this long after the start, not at boot (the card is not touched then).
-pub(crate) const CALENDAR_MS: u32 = 8_000;
+/// It was 8 s until 2026-10-27: an empty TODAY card that long after the start.
+pub(crate) const CALENDAR_MS: u32 = 1_000;
 
 /// No step: what a workout field shows past the last one.
 pub(crate) const OPEN: storage::workout_file::Step = storage::workout_file::Step {

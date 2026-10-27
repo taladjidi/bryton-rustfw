@@ -309,7 +309,7 @@ fn overview_show_budget() {
 
 /// The overview left alone with no fix (indoors), as the profiler's idle window on the unit: 2013 px/s there
 /// (2026-10-26) was a one-off and the GPS search, nothing steady. The TODAY card is drawn again once the calendar is
-/// read (CALENDAR_MS, 8 s, after the start: 32 690 px, 36 034 with a card; inside a window that starts a few
+/// read (CALENDAR_MS, 1 s, after the start: 32 690 px, 36 034 with a card; inside a window that starts a few
 /// seconds after a RAM run), then the strip's "GPS" blinks, three glyphs a second, 720 px, and its clock's minute.
 /// 36 034 / 30 + 724 = 1925 px/s.
 #[test]

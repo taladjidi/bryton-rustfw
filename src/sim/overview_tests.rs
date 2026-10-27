@@ -136,11 +136,18 @@ fn the_card_follows_the_calendar() {
     sim.own_settings();
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 3000);
+    run(&mut sim, &mut app, 500);
     assert!(app.plan.day.is_none(), "not at boot");
     assert_consistent(&mut sim, &mut app);
-    run(&mut sim, &mut app, 6000);
-    assert_eq!(app.plan.day, Some(app.date));
+    // the card is filled within 3 s of the start (8 s before 2026-10-27, measured in the Sim and on the unit)
+    let mut ms = 500;
+    while app.plan.day.is_none() && ms < 10_000 {
+        run(&mut sim, &mut app, 100);
+        ms += 100;
+    }
+    std::println!("TODAY card read {ms} ms after the start");
+    assert!(ms <= 3000, "{ms} ms");
+    run(&mut sim, &mut app, 1000);
     assert!(app.today().is_some(), "the synthetic card plans a workout today");
     assert_consistent(&mut sim, &mut app);
 }
@@ -154,7 +161,7 @@ fn a_tap_on_the_card_opens_the_calendar() {
     sim.own_settings();
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 1500);
+    run(&mut sim, &mut app, 500);
     assert!(app.plan.day.is_none());
     let (x, y, w, h) = TODAY_BOX;
     let tap = |app: &mut App, sim: &mut Sim, x, y| app.input(sim, Input::Touch(Gesture::Tap(x as u16, y as u16)));
