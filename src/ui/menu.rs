@@ -99,7 +99,8 @@ pub enum Setting {
     Remote(u8),
     /// The barometric altitude (a number, m): typing it calibrates the barometer to it (altitude.rs).
     Altitude,
-    /// The ride profile: AUTO (indoor when a trainer is heard at Start), ROAD or INDOOR ([`crate::ride::Profile`]).
+    /// The ride profile: AUTO (indoor when a trainer is heard at Start), ROAD, INDOOR or MTB (indoor too when a
+    /// trainer is heard) ([`crate::ride::Profile`]).
     BikeProfile,
     /// Climbs found on the road ahead when no course is followed, on or off (`climbs_ahead`).
     ClimbsAhead,

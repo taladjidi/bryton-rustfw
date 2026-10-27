@@ -229,6 +229,24 @@ fn ahead_route(ms: u64) -> (i32, i32, i32) {
     (lat, lon, 9_000_000)
 }
 
+/// An MTB ride turns climbs ahead's trails mode on; a road ride leaves it off.
+#[test]
+fn an_mtb_ride_follows_trails_ahead() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    let trails = |app: &App| app.ahead.as_ref().unwrap().0.trails();
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 2000);
+    assert!(!trails(&app), "road: off");
+    app.settings.profile = Some(crate::ride::Profile::Mtb);
+    app.toggle_indoor();
+    app.toggle_indoor(); // out again: MTB now
+    assert_eq!(app.ride_profile(), crate::ride::Profile::Mtb);
+    run(&mut sim, &mut app, 2000);
+    assert!(trails(&app), "MTB: on");
+}
+
 /// Climbs ahead: no course, a ride along the road of a map file on the card. The tiles are read as the ride needs
 /// them, the climb fields say what is coming ("--" before the trace), the banner and the beep come at the climb's
 /// start, as a course's, the fields follow the climb, and the trace is made again as the ride reaches its end. BIKE >

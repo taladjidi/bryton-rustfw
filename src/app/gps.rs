@@ -155,10 +155,17 @@ impl App {
 
     /// The next message for the receiver after power-up, one per pass: the configuration, the time (UTC from the
     /// RTC and its learnt offset, or the RTC as is with a 14 h accuracy) and the last position when known. Then
-    /// None. A change of GPS POWER sends the configuration alone again (its power mode), in the RAM layer as at start.
+    /// None. A change of GPS POWER, or of the power mode in force ([`App::gnss_saver`]: AUTO's choice, an MTB ride
+    /// started or ended), sends the configuration alone again (its power mode), in the RAM layer as at start
+    /// (CFG-PM-OPERATEMODE takes effect at once, UBX-22020019 2.6.2.6).
     pub(crate) fn next_gnss_message(&mut self, b: &mut impl Board) -> Option<[u8; 32]> {
-        let config = gnss::config(self.gnss_saver());
-        if core::mem::take(&mut self.gps.reconfig) && self.gps.sent > 0 {
+        let saver = self.gnss_saver();
+        let config = gnss::config(saver);
+        let changed = core::mem::take(&mut self.gps.reconfig) || saver != self.gps.saver;
+        if self.gps.sent == 0 || changed {
+            self.gps.saver = saver;
+        }
+        if changed && self.gps.sent > 0 {
             return Some(config);
         }
         loop {
@@ -185,6 +192,9 @@ impl App {
 
     /// The receiver's power mode now: GPS POWER, or for AUTO its choice.
     pub(crate) fn gnss_saver(&self) -> bool {
+        if self.ride.state() != ride::State::Idle && self.profile == ride::Profile::Mtb {
+            return false; // off road: continuous tracking whatever GPS POWER says (the owner, 2026-10-27)
+        }
         match self.settings.gps_power {
             GpsPower::Auto => self.gps.auto.saver(),
             GpsPower::Full => false,
@@ -192,14 +202,11 @@ impl App {
         }
     }
 
-    /// GPS POWER AUTO takes the second's fix (None: lost); a change of its choice sends the configuration again (the
-    /// power mode, RAM layer, as at start: CFG-PM-OPERATEMODE takes effect at once, UBX-22020019 2.6.2.6).
+    /// GPS POWER AUTO takes the second's fix (None: lost); a change of the power mode is sent by
+    /// [`App::next_gnss_message`].
     fn adapt(&mut self, pvt: Option<gnss::Pvt>) {
-        let was = self.gps.auto.saver();
         let riding = self.ride.state() == ride::State::Running;
-        if self.gps.auto.fix(pvt, riding) != was && self.settings.gps_power == GpsPower::Auto {
-            self.gps.reconfig = true;
-        }
+        self.gps.auto.fix(pvt, riding);
     }
 
     /// Keeps what the next power-up needs from a fix: the RTC's offset from UTC (once the receiver's time is

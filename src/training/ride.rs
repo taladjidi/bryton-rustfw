@@ -58,9 +58,10 @@ pub struct Input {
     /// The part of this second's altitude change that is a correction (a calibration's shift let go:
     /// `altitude::Altimeter::corr`), not a climb: moved out of the low point and the climb window, paused too.
     pub alt_corr_mm: i32,
-    /// An indoor ride ([`Profile::Indoor`]): auto-paused on no power and no cadence, not on speed (a trainer's
-    /// flywheel speed lags, and some trainers report a speed at 0 rpm: inferred).
-    pub indoor: bool,
+    /// The ride's profile: its auto-pause. Indoors on no power and no cadence, not on speed (a trainer's flywheel
+    /// speed lags, and some trainers report a speed at 0 rpm: inferred); MTB on a speed under [`AUTO_PAUSE_X10`] for
+    /// [`MTB_PAUSE_S`] in a row (a slow climb or a trail junction is not a stop); ROAD on the speed at once.
+    pub profile: Profile,
 }
 
 /// Words of [`Ride::to_words`].
@@ -71,6 +72,10 @@ pub const AUTO_PAUSE_X10: u16 = 20;
 
 /// An indoor ride is auto-paused after this many seconds with no power and no cadence.
 pub const INDOOR_PAUSE_S: u8 = 3;
+
+/// An MTB ride is auto-paused after this many seconds in a row under [`AUTO_PAUSE_X10`] (the owner's choice,
+/// 2026-10-27).
+pub const MTB_PAUSE_S: u8 = 5;
 
 /// Altitude gain is counted once it exceeds the last low point by this much (GPS altitude is noisy).
 pub const ASCENT_HYSTERESIS_MM: i32 = 5000;
@@ -107,7 +112,7 @@ impl Avg {
 pub struct Ride {
     state: State,
     moving: bool,
-    /// Seconds in a row with no power and no cadence (indoor auto-pause).
+    /// Seconds in a row with no power and no cadence (indoor auto-pause), or under [`AUTO_PAUSE_X10`] (MTB's).
     still_s: u8,
     timer_s: u32,
     dist9: u64,
@@ -198,16 +203,24 @@ impl Ride {
         if self.state != State::Running {
             return None;
         }
-        if i.indoor {
-            // pedalling is power or cadence; neither reported at all (no sensor) keeps the timer running
-            let still = i.power.is_none_or(|p| p == 0) && i.cadence.is_none_or(|c| c == 0);
-            let heard = i.power.is_some() || i.cadence.is_some();
-            self.still_s = if still && heard { self.still_s.saturating_add(1) } else { 0 };
-            self.moving = self.still_s < INDOOR_PAUSE_S;
-        } else {
-            self.still_s = 0;
-            // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
-            self.moving = i.speed_x10.is_none_or(|v| v >= AUTO_PAUSE_X10);
+        // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
+        let slow = i.speed_x10.is_some_and(|v| v < AUTO_PAUSE_X10);
+        match i.profile {
+            Profile::Indoor => {
+                // pedalling is power or cadence; neither reported at all (no sensor) keeps the timer running
+                let still = i.power.is_none_or(|p| p == 0) && i.cadence.is_none_or(|c| c == 0);
+                let heard = i.power.is_some() || i.cadence.is_some();
+                self.still_s = if still && heard { self.still_s.saturating_add(1) } else { 0 };
+                self.moving = self.still_s < INDOOR_PAUSE_S;
+            }
+            Profile::Mtb => {
+                self.still_s = if slow { self.still_s.saturating_add(1) } else { 0 };
+                self.moving = self.still_s < MTB_PAUSE_S;
+            }
+            Profile::Road => {
+                self.still_s = 0;
+                self.moving = !slow;
+            }
         }
         if self.moving {
             self.timer_s = self.timer_s.saturating_add(1);
@@ -475,9 +488,9 @@ impl Climb {
 /// (`ui::RED`) (tested).
 pub const ZONE_COLORS: [u16; 7] = [0x4c90, 0x4c86, 0xddc9, 0xd408, 0xb98b, 0x6237, 0x5a8d];
 
-/// What kind of ride this is: on the road, or indoors on a trainer (the bike is on it, the GPS has nothing to say).
-/// Chosen at Start from the trainer heard, or set by hand (app/profile.rs); the indoor one skips the map pages in
-/// the round.
+/// What kind of ride this is: on the road, off road, or indoors on a trainer (the bike is on it, the GPS has nothing
+/// to say). Chosen at Start from BIKE > PROFILE and the trainer heard, or set by hand (app/profile.rs); the indoor one
+/// skips the map pages in the round.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Profile {
     /// Outdoors: today's behaviour.
@@ -485,6 +498,8 @@ pub enum Profile {
     Road,
     /// On a trainer.
     Indoor,
+    /// Off road: sub_sport mountain in the file, continuous GNSS tracking, a time-based auto-pause.
+    Mtb,
 }
 
 /// A zone shown with hysteresis on the value, not on time: the bar follows the number it sits on at once, but a value
@@ -879,7 +894,7 @@ mod tests {
             alt_mm: None,
             alt_ref: 0,
             alt_corr_mm: 0,
-            indoor: false,
+            profile: Profile::Road,
         }
     }
 
@@ -938,7 +953,8 @@ mod tests {
     /// first pedal stroke; on the road it is the speed.
     #[test]
     fn indoor_auto_pause_follows_power_and_cadence() {
-        let indoor = |speed, power, cadence| Input { speed_x10: Some(speed), power, cadence, indoor: true, ..at(0) };
+        let indoor =
+            |speed, power, cadence| Input { speed_x10: Some(speed), power, cadence, profile: Profile::Indoor, ..at(0) };
         let mut r = Ride::new();
         r.start_pause();
         for _ in 0..10 {
@@ -970,6 +986,43 @@ mod tests {
             road.second(&Input { power: Some(0), cadence: Some(0), ..at(0) });
         }
         assert!(!road.moving(), "road: no speed");
+    }
+
+    /// MTB pauses after 5 s in a row under 2 km/h, never on a slow climb, and goes on at the first second above.
+    #[test]
+    fn mtb_auto_pause_waits_five_seconds() {
+        let mtb = |speed| Input { profile: Profile::Mtb, ..at(speed) };
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..600 {
+            r.second(&mtb(30)); // 3 km/h up a wall for 10 minutes
+        }
+        assert!(r.moving());
+        assert_eq!(r.timer_s(), 600, "a 3 km/h climb never pauses");
+        for _ in 0..4 {
+            r.second(&mtb(0));
+        }
+        assert!(r.moving(), "4 s stopped: not paused");
+        assert_eq!(r.timer_s(), 604);
+        r.second(&mtb(19));
+        assert!(!r.moving(), "the fifth second under 2 km/h: paused");
+        r.second(&mtb(0));
+        assert_eq!(r.timer_s(), 604, "the timer waits");
+        r.second(&mtb(21));
+        assert!(r.moving(), "above 2 km/h: back at once");
+        assert_eq!(r.timer_s(), 605);
+        for _ in 0..4 {
+            r.second(&mtb(0));
+        }
+        r.second(&mtb(25));
+        for _ in 0..4 {
+            r.second(&mtb(0));
+        }
+        assert!(r.moving(), "the count starts again after a second above");
+        let mut road = Ride::new();
+        road.start_pause();
+        road.second(&at(0));
+        assert!(!road.moving(), "road: at once, as before");
     }
 
     #[test]
