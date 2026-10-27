@@ -253,3 +253,101 @@ pub fn run_staged(size: u32) -> ! {
     // interrupts masked; nothing returns into the old image, since the new one starts with a fresh stack.
     unsafe { ram_trampoline(STAGE, len) }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The panel's DMA (main.rs `lcd_ram`): DMA1 stream 0 sends pixel words from two buffers in AXI SRAM to SPI1's TXDR
+// while the CPU fills the other buffer or sleeps. link.x reserves PANELDMA (top 4 KB of AXI SRAM: DMA1 reaches it
+// through the D2-to-D1 bus matrix, RM0399 "System architecture"; it cannot reach the DTCM) and links nothing there.
+// Only this module writes the stream's address and enable registers (main.rs sets DMAMUX1, the clock, the NVIC line
+// and reads the flags), so the DMA never reads memory a Rust object holds except these buffers, and a buffer is
+// handed out only while the stream does not read it.
+// Cache contract: the D-cache is off (BOARD.md 2), so no maintenance is done. PANELDMA is 4 KB, 4 KB-aligned, so a
+// single MPU region (size 4 KB, TEX 1 C 0 B 0: normal, not cacheable; higher numbered than any region over AXI SRAM)
+// can cover it exactly: the D-cache commit must add that region, or else clean the buffer by address (DCCMVAC over
+// its words, then DSB) in `start` before EN is set.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Words in each of the two buffers (2 pixels a word): 128 words, 256 pixels, 82 us at 50 MHz.
+pub const DMA_WORDS: usize = 128;
+// RM0399 DMA registers (DMA1 0x40020000): stream 0's CR, NDTR, PAR, M0AR at 0x10..0x1c, LIFCR at 0x08.
+const DMA1_LIFCR: u32 = 0x4002_0008;
+const DMA1_S0CR: u32 = 0x4002_0010;
+const DMA1_S0NDTR: u32 = 0x4002_0014;
+const DMA1_S0PAR: u32 = 0x4002_0018;
+const DMA1_S0M0AR: u32 = 0x4002_001c;
+/// SPI1_TXDR (RM0399 SPI registers: SPI1 0x40013000 + 0x20).
+const SPI1_TXDR: u32 = 0x4001_3020;
+
+unsafe extern "C" {
+    static _spaneldma: u32;
+}
+
+/// DMA1 stream 0 and its two buffers: one handle, so one owner ([`PanelDma::take`]).
+pub struct PanelDma(());
+
+impl PanelDma {
+    /// The handle, the buffers zeroed: Some the first time, None after.
+    pub fn take() -> Option<PanelDma> {
+        static TAKEN: AtomicBool = AtomicBool::new(false);
+        if TAKEN.swap(true, Ordering::Relaxed) {
+            return None;
+        }
+        // SAFETY: PANELDMA is AXI SRAM that link.x reserves for these two buffers and links nothing into; the stream
+        // is not running yet (only this module enables it). Zeroed through the raw pointer before any reference.
+        unsafe { core::ptr::write_bytes(Self::addr(0) as *mut u32, 0, 2 * DMA_WORDS) };
+        Some(PanelDma(()))
+    }
+
+    fn addr(i: usize) -> u32 {
+        &raw const _spaneldma as u32 + 4 * (DMA_WORDS * (i & 1)) as u32
+    }
+
+    /// The stream is running (EN reads 1 until the last word has gone, or an abort has taken effect: RM0399 DMA).
+    pub fn busy(&self) -> bool {
+        rd(DMA1_S0CR) & 1 != 0
+    }
+
+    /// Buffer `i` (0 or 1) to write, or None while the stream reads it.
+    pub fn buf(&mut self, i: usize) -> Option<&mut [u32; DMA_WORDS]> {
+        if self.busy() && rd(DMA1_S0M0AR) == Self::addr(i) {
+            return None;
+        }
+        // SAFETY: buffer i of PANELDMA (see take), initialised. The stream does not read it now, and cannot start
+        // to before `start`, which takes `&mut self`: the reference returned here must be gone by then. The handle
+        // is unique (take), so no other reference to the buffer exists.
+        Some(unsafe { &mut *(Self::addr(i) as *mut [u32; DMA_WORDS]) })
+    }
+
+    /// Starts sending words 0..n of buffer `i` to SPI1_TXDR, or word 0 `n` times when `repeat` (a fill), one word
+    /// per SPI1 request (direct mode, 32-bit both sides). The stream interrupts on its end and on errors, which only
+    /// pends its NVIC line (interrupts stay masked): it wakes WFI. false when the stream is running or n is out of
+    /// range (1..=DMA_WORDS, or 1..=0xffff for a repeat).
+    pub fn start(&mut self, i: usize, n: usize, repeat: bool) -> bool {
+        let max = if repeat { 0xffff } else { DMA_WORDS };
+        if self.busy() || n == 0 || n > max {
+            return false;
+        }
+        wr(DMA1_LIFCR, 0x3d); // stream 0's flags: TCIF HTIF TEIF DMEIF FEIF
+        wr(DMA1_S0PAR, SPI1_TXDR);
+        wr(DMA1_S0M0AR, Self::addr(i));
+        wr(DMA1_S0NDTR, n as u32);
+        // RM0399 DMA_SxCR: PSIZE 12:11 and MSIZE 14:13 = 32 bits, MINC 10 (not for a repeat), DIR 7:6 = memory to
+        // peripheral, TCIE 4, TEIE 2, DMEIE 1; then EN 0
+        let cr = (2 << 13) | (2 << 11) | (u32::from(!repeat) << 10) | (1 << 6) | (1 << 4) | (1 << 2) | (1 << 1);
+        wr(DMA1_S0CR, cr);
+        barrier(); // the buffer's writes land before the stream reads it (no cache: in order already)
+        wr(DMA1_S0CR, cr | 1);
+        true
+    }
+
+    /// Stops the stream (bounded wait for EN to read 0) and returns the words it had not sent (NDTR).
+    pub fn stop(&mut self) -> usize {
+        wr(DMA1_S0CR, rd(DMA1_S0CR) & !1);
+        let mut n = 0;
+        while self.busy() && n < 10_000 {
+            n += 1;
+        }
+        wr(DMA1_LIFCR, 0x3d); // an abort sets TCIF (RM0399 DMA, "Stream disable")
+        rd(DMA1_S0NDTR) as usize
+    }
+}

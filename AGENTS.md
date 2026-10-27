@@ -91,6 +91,8 @@ The point of this project is a firmware in safe Rust.
     addresses before they get there: poke the peripheral space only);
   - `barrier`, `wfi`, `cpsid` (single CPU instructions);
   - `stage_write` and `run_staged` (the USB RAM-run);
+  - `PanelDma` (DMA1 stream 0 into SPI1, the panel's pixels): the only code that sets a DMA's memory address, to its
+    own two buffers in AXI SRAM (link.x PANELDMA), handed out (`buf`) only while the stream does not read them;
   - `map_memory` (`from_raw_parts_mut`: link.x MAP in SDRAM handed out once as a slice);
   - the empty critical-section implementation the USB crates need. It is sound only because interrupts are
     never unmasked: keep it that way, or replace it.

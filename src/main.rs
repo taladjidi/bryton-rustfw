@@ -23,7 +23,7 @@ use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
 use bryton_rustfw::ui::UsbDot;
 use bryton_rustfw::{App, Board, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, TOUCH_MS, standby_flags_word};
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
 // ANT_KEY, DI2_KEY: the ANT+ and Shimano network keys from the private ant_key.bin / di2_key.bin, or None (build.rs).
@@ -85,10 +85,14 @@ const SYST_RVR: u32 = 0xe000_e014;
 const SYST_CVR: u32 = 0xe000_e018;
 const SCB_ICSR: u32 = 0xe000_ed04;
 
+/// SysTick runs a period (timer_start to timer_stop): a DMA wait (dma_wait) leaves it alone then.
+static TIMER_ON: AtomicBool = AtomicBool::new(false);
+
 /// Starts a SysTick period of `ms` (at most 80: 24-bit counter at 200 MHz). Its end makes the SysTick exception
 /// pending, which wakes WFI even with interrupts masked (ARMv7-M B1.5.19); the handler never runs.
 // ponytail: WFI sleep keeps the core clock running; stop mode with an RTC / LPTIM wake-up is the next step down.
 fn timer_start(ms: u32) {
+    TIMER_ON.store(true, Ordering::Relaxed);
     wr(SYST_CSR, 0);
     wr(SCB_ICSR, 1 << 25); // PENDSTCLR
     wr(SYST_RVR, ms.min(80) * (CPU_HZ / 1000) - 1);
@@ -109,6 +113,7 @@ fn timer_elapsed_ms(ms: u32) -> u32 {
 }
 
 fn timer_stop() {
+    TIMER_ON.store(false, Ordering::Relaxed);
     wr(SYST_CSR, 0);
     wr(SCB_ICSR, 1 << 25); // PENDSTCLR
 }
@@ -207,12 +212,11 @@ fn board_init() {
     // GPIOA..GPIOI clocks (AHB4ENR bits 0..8), SPI1 (APB2ENR bit 12), RTC APB (APB4ENR bit 16)
     modify(RCC_AHB4ENR, 0, 0x1ff);
     modify(RCC_APB4ENR, 0, 1 << 16);
-    // SPI1 kernel clock = per_ck = HSI (64 MHz): independent of the PLL outputs the bootloader left on or off.
+    // per_ck = HSI (64 MHz): independent of the PLL outputs the bootloader left on or off (SPI1's slow clock: spi_init).
     modify(RCC_CR, 0, 1); // HSION
     let t0 = cycles();
     while rd(RCC_CR) & (1 << 2) == 0 && cycles().wrapping_sub(t0) < CPU_HZ / 100 {} // HSIRDY, 10 ms max
     modify(RCC_D1CCIPR, 3 << 28, 0); // CKPERSEL = hsi_ker_ck
-    modify(RCC_D2CCIP1R, 7 << 12, 4 << 12); // SPI123SEL = per_ck
     modify(RCC_APB2ENR, 0, 1 << 12);
     let _ = rd(RCC_APB2ENR);
 
@@ -239,7 +243,8 @@ fn board_init() {
 
 // ---------------------------------------------------------------------------------------------------------------
 // SPI1 (0x40013000, the STM32H7 SPI): master, transmit only, 8-bit, CPOL 1 / CPHA 1 like the stock setup
-// (BOARD.md 6), software slave management (CS on PG10 by hand), 64 MHz / 8 = 8 MHz.
+// (BOARD.md 6), software slave management (CS on PG10 by hand), 50 MHz from PLL1Q (8 MHz from the HSI without
+// POWER_STEPS bit 3). Pixel runs go by DMA1 stream 0 (hw.rs PanelDma) unless POWER_STEPS bit 4 is clear.
 // ---------------------------------------------------------------------------------------------------------------
 const SPI1: u32 = 0x4001_3000;
 const SPI_CR1: u32 = SPI1;
@@ -250,31 +255,78 @@ const SPI_SR: u32 = SPI1 + 0x14;
 const SPI_IFCR: u32 = SPI1 + 0x18;
 const SPI_TXDR: u32 = SPI1 + 0x20;
 const SR_TXP: u32 = 1 << 1;
+const SR_MODF: u32 = 1 << 9;
+const CFG1_TXDMAEN: u32 = 1 << 15;
 const SPI_TIMEOUT: u32 = CPU_HZ / 100; // 10 ms: a stuck SPI must not hang the loop
+const RCC_PLLCFGR: u32 = RCC + 0x02c;
+const RCC_AHB1ENR: u32 = RCC + 0x0d8;
+const RCC_AHB1LPENR: u32 = RCC + 0x100;
+const RCC_APB2LPENR: u32 = RCC + 0x118;
+/// DMAMUX1 channel 0, which feeds DMA1 stream 0 (RM0399 DMAMUX: channels 0..7 are DMA1's streams 0..7).
+const DMAMUX1_C0CR: u32 = 0x4002_0800;
+/// DMAMUX1 request input 38: spi1_tx_dma (RM0399 table "DMAMUX1: assignment of multiplexer inputs to resources";
+/// stm32h7xx_hal_dma.h DMA_REQUEST_SPI1_TX 38).
+const SPI1_TX_REQ: u32 = 38;
+/// DMA1 stream 0's interrupt line (RM0399 NVIC table: DMA1_Stream0 at position 11).
+const DMA1_S0_IRQ: u32 = 1 << 11;
+const DMA1_LISR: u32 = 0x4002_0000;
+const DMA1_LIFCR: u32 = 0x4002_0008;
+// LISR, stream 0: TCIF0 5, TEIF0 3, DMEIF0 2 (RM0399 DMA_LISR)
+const TCIF0: u32 = 1 << 5;
+const DMA_ERR0: u32 = (1 << 3) | (1 << 2);
 
-fn spi_init() {
+/// SPI1 up; returns the panel's DMA when POWER_STEPS asks for it.
+fn spi_init() -> Option<hw::PanelDma> {
     // SSI first: with SSM, MASTER set while SSI is 0 is a mode fault, which clears MASTER (seen on the unit,
     // diag v17: CFG2 read back without MASTER, so SPI1 took 16 bytes and never clocked; RM0399 SPI mode fault).
     wr(SPI_CR1, CR1_SSI);
-    // MBR = /8 (8 MHz) or, with POWER_STEPS bit 3, /4 (16 MHz: a redraw takes half the time awake; the ST7789's
-    // serial write cycle is 16 ns at least, 62.5 MHz, and SPI1's master clock goes to 80 MHz: DS12930 table 119),
+    // Kernel clock: pll1_q_ck (SPI123SEL 0), 100 MHz (BOARD.md 1: PLL1 Q 8, the SDMMC's clock too, so it always
+    // runs: no cost in keeping it), divided by 2 (MBR 0): 50 MHz. The ST7789's serial write cycle is 16 ns at least,
+    // 62.5 MHz (ST7789V datasheet, "Serial interface characteristics", tSCYCW), and SPI1's master clock goes to
+    // 80 MHz (DS12930 table 119). Without POWER_STEPS bit 3, or with PLL1's Q output off (DIVQ1EN, RCC_PLLCFGR bit
+    // 17), per_ck (the HSI, 64 MHz: board_init) / 8 = 8 MHz, as before.
+    let fast = POWER_STEPS & SPI1_FAST != 0 && rd(RCC_PLLCFGR) & (1 << 17) != 0;
+    modify(RCC_D2CCIP1R, 7 << 12, if fast { 0 } else { 4 << 12 }); // SPI123SEL
+    let mbr = if fast { 0 } else { 2 };
     // FTHLV = 4 frames (TXP then means room for a 32-bit write of 4 bytes: pixels go 2 per access), DSIZE = 8 bits
-    let mbr = if POWER_STEPS & SPI1_FAST != 0 { 1 } else { 2 };
     wr(SPI_CFG1, (mbr << 28) | (3 << 5) | 7);
     // AFCNTR (keep pins driven), SSM, CPOL, CPHA, MASTER, COMM = simplex transmitter
     wr(SPI_CFG2, (1 << 31) | (1 << 26) | (1 << 25) | (1 << 24) | (1 << 22) | (1 << 17));
+    if POWER_STEPS & PANEL_DMA == 0 {
+        return None;
+    }
+    modify(RCC_AHB1ENR, 0, 1); // DMA1EN
+    let _ = rd(RCC_AHB1ENR);
+    core::hint::black_box(&DMA_FAIL); // kept in the image though only peeked
+    let mut dma = hw::PanelDma::take()?;
+    dma.stop(); // whatever the bootloader left on stream 0
+    wr(DMAMUX1_C0CR, SPI1_TX_REQ);
+    wr(DMA1_LIFCR, 0x3d);
+    wr(NVIC_ICPR0, DMA1_S0_IRQ);
+    wr(NVIC_ISER0, DMA1_S0_IRQ); // its end pends the line, which wakes WFI (interrupts masked: no handler)
+    Some(dma)
 }
 
 const CR1_SSI: u32 = 1 << 12; // with SSM: internal NSS high, no mode fault
 const SR_EOT: u32 = 1 << 3;
 
-/// Starts a transfer of exactly `n` bytes (1..=0xffff), as the stock HAL_SPI_Transmit does (BOARD.md 6).
-fn spi_begin(n: u32) {
-    wr(SPI_CR1, CR1_SSI); // SPE = 0: TSIZE is only writable then
+/// Sets up a transfer of exactly `n` bytes (1..=0xffff), SPI1 disabled (TSIZE is only writable then).
+fn spi_setup(n: u32) {
+    wr(SPI_CR1, CR1_SSI); // SPE = 0
     wr(SPI_IFCR, 0xff8); // clear every event flag
     wr(SPI_CR2, n & 0xffff);
+}
+
+/// Enables SPI1 and starts the transfer set up (CSTART), as the stock HAL_SPI_Transmit does (BOARD.md 6).
+fn spi_go() {
     wr(SPI_CR1, CR1_SSI | 1); // SPE
     wr(SPI_CR1, CR1_SSI | (1 << 9) | 1); // CSTART
+}
+
+/// Starts a transfer of exactly `n` bytes (1..=0xffff) fed by the CPU.
+fn spi_begin(n: u32) {
+    spi_setup(n);
+    spi_go();
 }
 
 /// SPI waits that ran out (spi_byte, spi_end).
@@ -302,11 +354,68 @@ fn spi_byte(b: u8) {
     wr8(SPI_TXDR, b); // 8-bit access: one frame
 }
 
+/// One 32-bit FIFO write: 4 frames (FTHLV is 4, so TXP means room for them).
+fn spi_word(w: u32) {
+    if spi_wait(SR_TXP) {
+        wr(SPI_TXDR, w);
+    }
+}
+
 /// Waits for the end of the transfer (EOT: the last byte is out), then disables SPI1 until the next one.
 fn spi_end() {
     spi_wait(SR_EOT);
     wr(SPI_IFCR, 0xff8);
     wr(SPI_CR1, CR1_SSI);
+}
+
+/// A DMA wait's bound: the longest transfer, 0x7ffe pixels, takes 10.5 ms at 50 MHz (a first bound of 10 ms cut
+/// full-screen fills short, seen on the unit 2026-10-27).
+const DMA_TIMEOUT_MS: u32 = 30;
+
+/// Sleeps until DMA1 stream 0 has sent its words: true, or false on a DMA error, a mode fault or a timeout.
+/// WFI wakes on the stream's interrupt line (TCIE / TEIE / DMEIE: hw.rs PanelDma::start). The timeout: SysTick, when
+/// nothing else runs it (the cycle counter stops in WFI); when the main loop's sleep runs it, its end wakes WFI, and
+/// from then on its pending bit keeps WFI from sleeping, so the cycle counter bounds the wait.
+/// Why the last DMA wait failed, for `dev.py peek` (its address: `nm` on the ELF): 0x1000_0000 | DMA1_LISR on a DMA
+/// error; 0x2000_0000 | own SysTick << 24 | LISR << 16 | SPI1_SR's low half on a timeout or a mode fault; 0 never.
+static DMA_FAIL: AtomicU32 = AtomicU32::new(0);
+fn dma_wait() -> bool {
+    let own = !TIMER_ON.load(Ordering::Relaxed);
+    if own {
+        timer_start(DMA_TIMEOUT_MS);
+    }
+    // DMA1 and SPI1 keep their clocks while the core sleeps, for this wait only (sleep_power_init clears their LPEN
+    // bits: DMA1 alone is 37 uA/MHz, DS12930 table 48)
+    let lp = (rd(RCC_AHB1LPENR), rd(RCC_APB2LPENR));
+    wr(RCC_AHB1LPENR, lp.0 | 1); // DMA1LPEN
+    wr(RCC_APB2LPENR, lp.1 | (1 << 12)); // SPI1LPEN
+    let t0 = cycles();
+    let ok = loop {
+        let isr = rd(DMA1_LISR);
+        if isr & DMA_ERR0 != 0 {
+            DMA_FAIL.store(0x1000_0000 | isr, Ordering::Relaxed);
+            break false;
+        }
+        if isr & TCIF0 != 0 {
+            break true;
+        }
+        let sr = rd(SPI_SR);
+        if sr & SR_MODF != 0 || (own && timer_done()) || cycles().wrapping_sub(t0) > DMA_TIMEOUT_MS * (CPU_HZ / 1000) {
+            DMA_FAIL.store(0x2000_0000 | (u32::from(own) << 24) | (sr & 0xffff) | (isr << 16), Ordering::Relaxed);
+            break false;
+        }
+        wfi();
+        wr(NVIC_ICPR0, DMA1_S0_IRQ); // a flag still set pends it again: none is lost
+    };
+    wr(DMA1_LIFCR, 0x3d);
+    let _ = rd(DMA1_LISR); // the clear done before the NVIC's (as touch_edge)
+    wr(NVIC_ICPR0, DMA1_S0_IRQ);
+    wr(RCC_AHB1LPENR, lp.0);
+    wr(RCC_APB2LPENR, lp.1);
+    if own {
+        timer_stop();
+    }
+    ok
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -340,47 +449,159 @@ fn lcd_power_on() {
     delay_ms(120);
 }
 
-/// RAMWR then `count` pixels from `next`.
-/// RAMWR then `count` pixels from `next`, two per 32-bit FIFO write. Generic, so a fill gets its own copy in which
-/// the colour is a constant. Transfers of at most 0x7ffe pixels (TSIZE is 16 bits, 2 bytes per pixel).
+/// Two pixels as one FIFO word: the SPI sends the word's bytes from the lowest; the panel wants each pixel high
+/// byte first.
 #[inline(always)]
-fn lcd_ram(count: u32, mut next: impl FnMut() -> u16) {
+fn pixel_pair(a: u16, b: u16) -> u32 {
+    u32::from(a.swap_bytes()) | (u32::from(b.swap_bytes()) << 16)
+}
+
+/// Pixels in a run under these go by the CPU: a blit's first buffer is filled before the DMA starts, so a short one
+/// gains nothing; a fill's DMA set-up and wake-up cost about what 64 pixels take on the wire.
+const DMA_MIN_BLIT: u32 = 2 * hw::DMA_WORDS as u32;
+const DMA_MIN_FILL: u32 = 64;
+
+/// What a pixel run is: a fill (one colour) or a blit (each pixel from a function).
+enum Run<'a> {
+    Fill(u16),
+    Blit(&'a mut dyn FnMut() -> u16),
+}
+
+impl Run<'_> {
+    #[inline(always)]
+    fn pair(&mut self) -> u32 {
+        match self {
+            Run::Fill(c) => pixel_pair(*c, *c),
+            Run::Blit(f) => {
+                let a = f();
+                pixel_pair(a, f())
+            }
+        }
+    }
+    #[inline(always)]
+    fn one(&mut self) -> u16 {
+        match self {
+            Run::Fill(c) => *c,
+            Run::Blit(f) => f(),
+        }
+    }
+}
+
+/// RAMWR then `count` pixels, two per 32-bit FIFO write, in transfers of at most 0x7ffe pixels (TSIZE is 16 bits,
+/// 2 bytes a pixel). A transfer long enough goes by DMA when `dma` is there; a DMA failure finishes the transfer by
+/// the CPU and drops the DMA for good.
+fn lcd_ram(count: u32, dma: &mut Option<hw::PanelDma>, mut run: Run<'_>) {
     pin_set(LCD_CS.0, LCD_CS.1, false);
     pin_set(LCD_DC.0, LCD_DC.1, false);
     spi_begin(1);
     spi_byte(0x2c); // RAMWR
     spi_end();
     pin_set(LCD_DC.0, LCD_DC.1, true);
+    let min = if matches!(run, Run::Fill(_)) { DMA_MIN_FILL } else { DMA_MIN_BLIT };
     let mut left = count;
     while left > 0 {
         let n = left.min(0x7ffe);
         left -= n;
-        spi_begin(2 * n);
-        for _ in 0..n / 2 {
-            let (a, b) = (next(), next());
-            // the SPI sends the word's bytes from the lowest; the panel wants each pixel high byte first
-            let word = u32::from(a.swap_bytes()) | (u32::from(b.swap_bytes()) << 16);
-            if spi_wait(SR_TXP) {
-                wr(SPI_TXDR, word); // 4 bytes: FTHLV is 4 frames, so TXP means room for them
+        spi_setup(2 * n);
+        let mut words = (n / 2) as usize;
+        let by_dma = n >= min && dma.is_some();
+        if let Some(d) = dma.as_mut().filter(|_| by_dma) {
+            words = match dma_words(d, words, &mut run) {
+                Ok(()) => 0,
+                Err(w) => w,
+            };
+            if words > 0 {
+                *dma = None; // dead until reset: the CPU from here on
+                wr(NVIC_ICER0, DMA1_S0_IRQ); // its line no longer wakes WFI (the abort set TCIF: hw.rs PanelDma::stop)
+                wr(NVIC_ICPR0, DMA1_S0_IRQ);
             }
+        } else {
+            spi_go();
+        }
+        for _ in 0..words {
+            spi_word(run.pair());
         }
         if n % 2 == 1 {
-            let c = next();
+            let c = run.one();
             spi_byte((c >> 8) as u8);
             spi_byte(c as u8);
         }
         spi_end();
+        if by_dma {
+            modify(SPI_CFG1, CFG1_TXDMAEN, 0); // SPE is 0 again: CFG1 is writable
+        }
     }
     pin_set(LCD_CS.0, LCD_CS.1, true);
 }
 
-fn lcd_ram_write(count: u32, next: &mut dyn FnMut() -> u16) {
-    lcd_ram(count, next);
+/// Starts DMA1 stream 0 on buffer `i`, then, for a transfer's first start, TXDMAEN and SPE (RM0399 SPI
+/// "Communication using DMA": the stream enabled, then TXDMAEN, then SPE; CFG1 is writable only while SPE is 0).
+/// The SPI runs afterwards either way, so the CPU can finish a transfer the stream did not.
+fn dma_go(d: &mut hw::PanelDma, i: usize, n: usize, repeat: bool) -> bool {
+    let started = d.start(i, n, repeat);
+    if rd(SPI_CR1) & 1 == 0 {
+        modify(SPI_CFG1, 0, CFG1_TXDMAEN);
+        spi_go();
+    }
+    started
 }
 
-/// `count` pixels of one colour (most panel writes: clearing boxes, backgrounds): no per-pixel callback.
-fn lcd_fill(count: u32, color: u16) {
-    lcd_ram(count, || color);
+/// `words` words of a transfer set up (spi_setup) sent by DMA: a fill as one repeat of its word, a blit
+/// double-buffered (the CPU fills one buffer while the stream sends the other). On a failure, whatever the stream
+/// had not sent of the words taken from `run` goes by the CPU, and Err gives the words of `run` still to send.
+fn dma_words(d: &mut hw::PanelDma, words: usize, run: &mut Run<'_>) -> Result<(), usize> {
+    if let Run::Fill(_) = run {
+        if let Some(b) = d.buf(0) {
+            b[0] = run.pair();
+        }
+        if !dma_go(d, 0, words, true) {
+            return Err(words);
+        }
+        return if dma_wait() { Ok(()) } else { Err(d.stop().min(words)) }; // the same word, by the CPU
+    }
+    let mut left = words;
+    let mut flight: Option<(usize, usize)> = None; // buffer, words in it
+    let mut cur = 0;
+    loop {
+        // the next buffer, filled while the stream sends the one in flight
+        let k = left.min(hw::DMA_WORDS);
+        let ready = match d.buf(cur) {
+            Some(b) if k > 0 => {
+                for w in &mut b[..k] {
+                    *w = run.pair();
+                }
+                left -= k;
+                Some((cur, k))
+            }
+            _ => None,
+        };
+        if let Some((i, n)) = flight
+            && !dma_wait()
+        {
+            let rest = d.stop().min(n);
+            if let Some(b) = d.buf(i) {
+                b[n - rest..n].iter().for_each(|&w| spi_word(w));
+            }
+            if let Some((j, m)) = ready
+                && let Some(b) = d.buf(j)
+            {
+                b[..m].iter().for_each(|&w| spi_word(w));
+            }
+            return Err(left);
+        }
+        let Some((i, n)) = ready else {
+            return if left == 0 { Ok(()) } else { Err(left) };
+        };
+        if !dma_go(d, i, n, false) {
+            // not started (the stream is idle here, so not expected): these words by the CPU, and the rest
+            if let Some(b) = d.buf(i) {
+                b[..n].iter().for_each(|&w| spi_word(w));
+            }
+            return Err(left);
+        }
+        flight = Some((i, n));
+        cur ^= 1;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -524,15 +745,17 @@ fn standby() -> ! {
 //   POWER_STEPS=0 ./check.sh && ./dev.py run      the build as before these steps
 // ---------------------------------------------------------------------------------------------------------------
 /// Bit 0: idle peripherals and the flash interface clocked off in sleep. Bit 1: the GPIO ports too. Bit 2: PLL2 and
-/// PLL3 off. Bit 3: SPI1 (the panel) at 16 MHz instead of 8.
+/// PLL3 off. Bit 3: SPI1 (the panel) at 50 MHz from PLL1Q instead of 8 from the HSI. Bit 4: the panel's pixel runs by DMA.
 const POWER_STEPS: u32 = match option_env!("POWER_STEPS") {
     Some(s) => parse_u32(s),
-    None => 0xf, // all four, seen on the unit 2026-10-25 (keys, touch, backlight, USB drive, a ride, power button)
+    // bits 0..2 seen on the unit 2026-10-25 (keys, touch, backlight, USB drive, a ride, power button); 3 and 4 2026-10-27
+    None => 0x1f,
 };
 const SLEEP_GATE: u32 = 1;
 const SLEEP_GATE_GPIO: u32 = 2;
 const PLLS_OFF: u32 = 4;
 const SPI1_FAST: u32 = 8;
+const PANEL_DMA: u32 = 16;
 
 /// The sleep clock registers RCC_AHB3LPENR..RCC_APB4LPENR (RCC + 0xfc..0x11c: stm32h747xx.h `RCC_TypeDef`, AHB3 AHB1
 /// AHB2 AHB4 APB3 APB1L APB1H APB2 APB4), with the bits kept: every other one is cleared (bit positions:
@@ -1247,6 +1470,8 @@ struct S510 {
     /// For the profiler (`App::prof`), since the main loop last took them: pixels to the panel, eMMC sectors read,
     /// written.
     io: (u32, u32, u32),
+    /// The panel's DMA (None: pixels by the CPU, without POWER_STEPS bit 4 or after a DMA failure).
+    dma: Option<hw::PanelDma>,
 }
 
 impl Board for S510 {
@@ -1258,11 +1483,11 @@ impl Board for S510 {
     }
     fn panel_ram_write(&mut self, count: u32, next: &mut dyn FnMut() -> u16) {
         self.io.0 = self.io.0.wrapping_add(count);
-        lcd_ram_write(count, next);
+        lcd_ram(count, &mut self.dma, Run::Blit(next));
     }
     fn panel_fill(&mut self, count: u32, color: u16) {
         self.io.0 = self.io.0.wrapping_add(count);
-        lcd_fill(count, color);
+        lcd_ram(count, &mut self.dma, Run::Fill(color));
     }
     fn backlight(&mut self, level: u8) {
         backlight(level);
@@ -1458,7 +1683,7 @@ fn main() -> ! {
     board_init();
     standby_crumb_at_boot();
     checkpoint(3);
-    spi_init();
+    let dma = spi_init();
     backlight_init();
     buzzer_init();
     let _ = adc_init(); // a failure leaves the battery unknown ("--%")
@@ -1466,7 +1691,7 @@ fn main() -> ! {
     i2c_init();
     sleep_power_init();
     checkpoint(4);
-    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), io: (0, 0, 0) };
+    let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), io: (0, 0, 0), dma };
     let app = make_app(&mut board);
     // what one profiler section costs (link/prof.rs): two counter reads and an add, the second time (the first
     // fills the I-cache from SDRAM)

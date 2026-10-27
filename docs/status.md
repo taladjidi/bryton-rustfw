@@ -82,6 +82,27 @@ The dated findings are in [journal.md](journal.md).
 - **Not seen on the unit yet:** the flattened menus and the quick panel (f935c0f), the refactors B1 to B3 (behaviour
   kept by the tests; the unit only booted and ran the profile scenarios on them).
 
+## Seen on the unit: SPI1 at 50 MHz and the panel's DMA (2026-10-27, from RAM, owner away)
+
+`tools/profile.py -s 8 idle page menu`, cpu about 10 permille on each build (no stuck interrupt). The profiler counts
+CPU cycles, which stop in WFI: with the DMA the figures are the CPU's work, not the wall time; the 50 MHz CPU-only
+build (POWER_STEPS=15) gives the wall time.
+
+| | 16 MHz, CPU (main 72193a1) | 50 MHz, CPU | 50 MHz + DMA (CPU time) |
+|---|---:|---:|---:|
+| menu move (input mean) | 16.0 ms | 10.2 ms | 9.6 ms |
+| a whole menu screen (input max) | 98.6 ms | 61.8 ms | 58.2 ms |
+| overview full draw (draw max) | 62.6 ms | 44.2 ms | 32.5 ms |
+| awake, idle overview | 1.78 % | 1.56 % | 1.41 % |
+| awake, menu | 3.89 % | 2.81 % | 2.67 % |
+
+- Drawing is now CPU-bound: a menu screen (about 70k pixels) takes about 22 ms on the wire at 50 MHz but 58 ms of
+  CPU, about 165 cycles a pixel to make (the per-pixel callback, glyph and code fetches from uncached SDRAM). Fills go
+  by DMA while the CPU sleeps; a blit's DMA only overlaps the wire with that work. The next gain is the D-cache
+  (hw.rs `PanelDma`'s cache contract) or cheaper pixel making in ui/text.rs.
+- Still to see: the panel itself at 50 MHz (screenshots are the app's rendering, not the panel's): an owner's look for
+  noise or shifted pixels; if any, MBR /4 (25 MHz) in `spi_init`.
+
 ## Not yet seen on the unit
 
 - **The profiler (link/prof.rs, `dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the

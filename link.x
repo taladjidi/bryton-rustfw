@@ -9,20 +9,23 @@
    (make_scan_cache, 256 KB), the road ahead (make_ahead, about 110 KB) and FITNESS's reading of the recent rides
    (make_thresholds, about 5 KB): in DTCM's .bss the app left too little
    stack (2026-10-24, an overflow on opening a workout). It is
-   zeroed at reset as .bss is (hw.rs). */
+   zeroed at reset as .bss is (hw.rs). Its top 4 KB (PANELDMA) are the panel DMA's buffers (hw.rs PanelDma). */
 MEMORY
 {
   SDRAM (rx) : ORIGIN = 0xd0000000, LENGTH = 1M
   DTCM (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
   ITCM (rwx) : ORIGIN = 0x00001000, LENGTH = 4K
   MAP (rw)   : ORIGIN = 0xd1000000, LENGTH = 2560K
-  AXISRAM (rw) : ORIGIN = 0x24000000, LENGTH = 512K
+  AXISRAM (rw) : ORIGIN = 0x24000000, LENGTH = 508K
+  PANELDMA (rw) : ORIGIN = 0x2407f000, LENGTH = 4K
 }
 
 ENTRY(reset)
 _stack_top = ORIGIN(DTCM) + LENGTH(DTCM);
 _smap = ORIGIN(MAP);
 _emap = ORIGIN(MAP) + LENGTH(MAP);
+/* the panel DMA's two buffers (hw.rs PanelDma): the top 4 KB of AXI SRAM, reached by DMA1; nothing is linked there */
+_spaneldma = ORIGIN(PANELDMA);
 
 SECTIONS
 {

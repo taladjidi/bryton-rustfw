@@ -215,9 +215,29 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   2026-10-23; RM0399, SPI mode fault). Renode does not model it.
 - Stock pushes pixels over the LTDC RGB interface (framebuffer in AXI SRAM). This firmware does not use the LTDC.
 - One command on SPI1 (`lcd_cmd`): chip select low, D/C low for the command byte, high for its parameters (or
-  the pixels of a RAMWR), chip select high. Mode 3, 8 MHz, MSB first. Pixels go two per 32-bit FIFO write (FTHLV
+  the pixels of a RAMWR), chip select high. Mode 3, 50 MHz, MSB first. Pixels go two per 32-bit FIFO write (FTHLV
   4 frames; the SPI sends the word's bytes from the lowest, so each RGB565 pixel is byte-swapped into it); a fill
   writes the same word over and over. Checked in Renode against the simulator, and **seen on the panel** (2026-10-23).
+- **SPI1's clock** (main.rs `spi_init`): kernel clock pll1_q_ck (RCC_D2CCIP1R SPI123SEL 0), 100 MHz (section 1;
+  PLL1 always runs, and its Q output feeds the SDMMC too, so nothing is switched on for it), MBR /2: **50 MHz**. The
+  ST7789V's serial write cycle is 16 ns at least (tSCYCW: 62.5 MHz; ST7789V datasheet, serial interface
+  characteristics); SPI1's master clock goes to 80 MHz (DS12930 table 119). It was 8 MHz (HSI / 8), then 16 (HSI / 4,
+  2026-10-25). Without POWER_STEPS bit 3, or if PLL1's Q output is off (RCC_PLLCFGR DIVQ1EN), HSI / 8 as before.
+- **Pixel runs by DMA** (hw.rs `PanelDma`, main.rs `lcd_ram`): DMA1 stream 0, DMAMUX1 channel 0 on request 38
+  (spi1_tx_dma; RM0399 DMAMUX1 table, stm32h7xx_hal_dma.h `DMA_REQUEST_SPI1_TX`), memory to peripheral, 32-bit both
+  sides, direct mode, one word (two pixels) per SPI1 request: with FTHLV 4 frames, TXP (and so the request) means
+  room for 4 bytes. Order (RM0399 SPI, "Communication using DMA"): TSIZE with SPE 0, the stream enabled, TXDMAEN,
+  SPE, CSTART; TXDMAEN cleared after EOT (CFG1 is writable only with SPE 0). The master holds the clock when the
+  FIFO is empty, so the stream can be re-armed mid-transfer: a blit goes in buffers of 128 words, the CPU filling one
+  while the stream sends the other; a fill is one word repeated (no memory increment). The buffers are the top 4 KB
+  of AXI SRAM (link.x PANELDMA, 0x2407f000): DMA1 reaches AXI SRAM and the SDRAM through the bus matrix, never the
+  DTCM (RM0399 "System architecture"). The CPU sleeps (WFI) on the stream's line, NVIC 11, pended by TCIE / TEIE /
+  DMEIE with interrupts masked; DMA1LPEN and SPI1LPEN are set for that wait only. An abort sets TCIF (RM0399 DMA,
+  stream disable). **Seen on the unit 2026-10-27** (from RAM): a first timeout of 10 ms cut full-screen fills
+  (0x7ffe pixels take 10.5 ms at 50 MHz); 30 ms since. Renode 1.17's SPI model has no transmit DMA request: there
+  the first wait times out and the CPU path takes over (the pixels still match). **Cache contract:** the D-cache is
+  off, so no maintenance; PANELDMA is 4 KB-aligned so one MPU region can make it non-cacheable when the D-cache is
+  turned on (or clean it by address before each start: hw.rs).
 
      PG10 CS    ~~~~\______________________________________________/~~~~
      PG9  D/C   ~~~~\________/~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
