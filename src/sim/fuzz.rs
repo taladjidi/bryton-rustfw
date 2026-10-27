@@ -1725,7 +1725,7 @@ fn page_editor_inputs() {
     use super::*;
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
     let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
-    let (mut indoor_edits, mut indoor_changed) = (0, 0);
+    let (mut indoor_edits, mut indoor_changed, mut mtb_edits) = (0, 0, 0);
     for seed in 1..=24u32 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
@@ -1742,7 +1742,8 @@ fn page_editor_inputs() {
             {
                 // back into the editor, on a page by chance
                 app.leave_menus();
-                app.pages_set = if next() % 2 == 0 { ride::Profile::Indoor } else { ride::Profile::Road }; // the indoor set now and then (a ride's own while it is open)
+                app.pages_set =
+                    [ride::Profile::Indoor, ride::Profile::Road, ride::Profile::Mtb][usize::from(a / 3) % 3]; // the indoor set now and then (a ride's own while it is open)
                 let n = app.view_count();
                 app.screen = Screen::Ride(usize::from(b) % n);
                 app.edit_page(&mut sim, usize::from(b) % n, usize::from(next()) % 8);
@@ -1777,6 +1778,8 @@ fn page_editor_inputs() {
             deleted += usize::from(app.view_count() < count);
             indoor_edits += usize::from(app.edit.is_some() && app.view_set() == ride::Profile::Indoor);
             indoor_changed += usize::from(app.indoor != indoor);
+            assert!(app.mtb.count <= crate::page::MTB_PAGES && app.mtb.count >= 1);
+            mtb_edits += usize::from(app.edit.is_some() && app.view_set() == ride::Profile::Mtb);
             if let (Some(c), Some(e)) = (cells, app.edit) {
                 splits += usize::from(e.work.cells() > c);
                 merges += usize::from(e.work.cells() < c);
@@ -1807,6 +1810,7 @@ fn page_editor_inputs() {
     std::println!("MORE reached: {mores} passes up, {more_edits} in the editor, {more_kept} kept");
     std::println!("indoor set reached: {indoor_edits} passes in its editor, {indoor_changed} changes");
     assert!(indoor_edits > 50 && indoor_changed > 5, "{indoor_edits} {indoor_changed}");
+    assert!(mtb_edits > 0, "the MTB set reached: {mtb_edits}");
     assert!(splits > 10 && merges > 10 && added > 3 && deleted > 3, "{splits} {merges} {added} {deleted}");
     assert!(mores > 50 && more_edits > 5 && more_kept > 0, "{mores} {more_edits} {more_kept}");
 }

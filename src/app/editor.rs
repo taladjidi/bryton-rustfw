@@ -43,10 +43,11 @@
 //! A MORE variant is not in the registers at all: a MORE edit made then is lost the same way, and where the registers
 //! win over the file's page, that page's MORE goes back to its default (it may belong to another page).
 //!
-//! **Two sets** (UI review 3, 4.2.7): the ROAD pages above and the INDOOR set ([`page::Set`], app/profile.rs), in the file
-//! only, after the MORE part with a CRC of its own (page.rs). The editor, LAYOUT, the picker and PAGES work on the
-//! set of the profile in force while a ride is open, else the one PAGES > ROAD PAGES or INDOOR PAGES opened (a hold on a ride page or
-//! the ride menu's EDIT THIS PAGE take the set on screen). The registers never hold the indoor set: an indoor edit
+//! **Three sets** (UI review 3, 4.2.7): the ROAD pages above, the INDOOR set and the MTB set (four pages at most, the
+//! editor refuses a fifth) ([`page::Set`], app/profile.rs), in the file only, after the MORE part, each with a CRC of
+//! its own (page.rs). The editor, LAYOUT, the picker and PAGES work on the
+//! set of the profile in force while a ride is open, else the one PAGES > ROAD, INDOOR or MTB PAGES opened (a hold on a ride page or
+//! the ride menu's EDIT THIS PAGE take the set on screen). The registers never hold the indoor or MTB set: an edit of either
 //! made while the file must wait (a paused ride, the drive lent) is lost to a switch-off, like pages 4 to 6.
 //!
 //! **No change before the file is read**: the editor, LAYOUT and the picker read it first, and refuse while it

@@ -235,7 +235,7 @@ pub struct App {
     mtb: page::Set,
     /// The set PAGES and the editor show while no ride is open (app/profile.rs).
     pages_set: ride::Profile,
-    /// The set the ride pages on screen were taken from at the last pass ([`App::indoors`] then).
+    /// The set the ride pages on screen were taken from at the last pass ([`App::ride_profile`] then).
     set_shown: ride::Profile,
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,

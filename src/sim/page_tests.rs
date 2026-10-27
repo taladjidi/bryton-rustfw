@@ -1122,6 +1122,21 @@ fn an_mtb_ride_takes_the_mtb_pages() {
     assert_eq!((app2.mtb, app2.indoor), (app.mtb, app.indoor));
 }
 
+/// On the MTB set: delete a page, then add until refused: never past four.
+#[test]
+fn the_mtb_set_never_passes_four_pages() {
+    let (mut sim, mut app) = started();
+    app.pages_set = ride::Profile::Mtb;
+    app.edit_page(&mut sim, 0, 0);
+    app.delete_page(&mut sim);
+    assert_eq!(app.mtb.count, 3);
+    for _ in 0..4 {
+        app.add_page(&mut sim, 3);
+        assert!(app.mtb.count <= 4);
+    }
+    assert_eq!((app.mtb.count, app.notes.text.as_str()), (4, "4 PAGES AT MOST"));
+}
+
 /// The MTB set and the road pages from one copy: a cut after every sector of a write that changes both.
 #[test]
 fn the_mtb_set_survives_a_cut_with_its_pages() {

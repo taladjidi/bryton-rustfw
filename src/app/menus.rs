@@ -18,7 +18,7 @@ pub enum Menu {
     /// CALIBRATE POWER and TRAINER CONTROL first (when they apply), one row per sensor kind, BT TRAINER, the Di2
     /// buttons and the phone.
     Sensors,
-    /// The two sets of ride pages: ROAD, INDOOR and MTB PAGES, each opening its list ([`Menu::PageList`]).
+    /// The three sets of ride pages: ROAD, INDOOR and MTB PAGES, each opening its list ([`Menu::PageList`]).
     Pages,
     /// The overview, the ride pages and ADD PAGE of one set (ROAD, INDOOR or MTB).
     PageList(ride::Profile),

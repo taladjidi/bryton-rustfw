@@ -435,7 +435,7 @@ fn mtb_crc(s: &[u8; 512]) -> u16 {
     crate::fit::crc(indoor_crc(s), &s[MTB_AT..MTB_CRC_AT])
 }
 
-/// A set of ride pages with their MORE variants: the indoor profile's (the road set lives in the app's own fields,
+/// A set of ride pages with their MORE variants: the indoor and the MTB profiles' (the road set lives in the app's own fields,
 /// where the backup registers can reach its first pages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Set {
