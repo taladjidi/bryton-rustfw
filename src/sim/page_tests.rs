@@ -375,8 +375,8 @@ fn a_read_only_build_shows_the_files_pages() {
     assert_eq!(ro.backup[PAGE_BKP[0][0]..=PAGE_BKP[REG_PAGES][1]], backup[PAGE_BKP[0][0]..=PAGE_BKP[REG_PAGES][1]]);
 }
 
-/// A read-only start on `image` and `backup`, past the file's read: the app, and whether the card and the page
-/// registers are as they were (no write command, every byte the same).
+/// A read-only start on `image` and `backup`, past the file's read: the app, and whether the card is as it was (no
+/// write command, every byte the same). The registers are the caller's to check.
 fn read_only(image: &[u8], backup: [u32; 32]) -> (Sim, App) {
     let mut ro = Sim::new(9, 5, 0);
     (ro.emmc.image, ro.backup, ro.writable) = (image.to_vec(), backup, false);
@@ -385,6 +385,16 @@ fn read_only(image: &[u8], backup: [u32; 32]) -> (Sim, App) {
     assert!(ro.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
     assert!(ro.emmc.image == image, "the card unchanged");
     (ro, app)
+}
+
+/// A writable start on `image` and `backup`, past the file's read: the app, and the sim (its registers as it left
+/// them), for the pages a read-only build must show as well.
+fn writable(image: &[u8], backup: [u32; 32]) -> (Sim, App) {
+    let mut sim = Sim::new(9, 5, 0);
+    (sim.emmc.image, sim.backup) = (image.to_vec(), backup);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, PAGES_LOAD_MS as u64 + 200);
+    (sim, app)
 }
 
 /// The page registers' words.
@@ -415,6 +425,7 @@ fn a_read_only_build_takes_the_file_as_a_writable_one() {
     bad[at + 512 + 20] ^= 1;
     let (ro, app) = read_only(&bad, sim.backup);
     assert_eq!((pages(&app), page_words(&ro)), (regs.clone(), page_words(&sim)), "damaged");
+    assert_eq!(pages(&app), pages(&writable(&bad, sim.backup).1), "as a writable build");
 
     // (a) a short file (its directory entry says 512 bytes): the same
     let mut short = sim.emmc.image.clone();
@@ -427,6 +438,7 @@ fn a_read_only_build_takes_the_file_as_a_writable_one() {
     short[name + 28..name + 32].copy_from_slice(&512u32.to_le_bytes());
     let (ro, app) = read_only(&short, sim.backup);
     assert_eq!((pages(&app), page_words(&ro)), (regs, page_words(&sim)), "short");
+    assert_eq!(pages(&app), pages(&writable(&short, sim.backup).1), "as a writable build");
 
     // (b) another build changed page 2 in the registers: its page wins, the file's others kept, registers untouched
     let mut other = sim.backup;
@@ -436,6 +448,7 @@ fn a_read_only_build_takes_the_file_as_a_writable_one() {
     }
     let (ro, app) = read_only(&sim.emmc.image, other);
     assert_eq!(pages(&app), [saved.pages[0], changed.into(), saved.pages[2]], "the registers' page 2");
+    assert_eq!(pages(&app), pages(&writable(&sim.emmc.image, other).1), "as a writable build");
     assert_eq!(ro.backup, other, "registers untouched");
 
     // (b) a cut between the file and its registers (they hold the file's previous words): put right, as a
@@ -447,6 +460,47 @@ fn a_read_only_build_takes_the_file_as_a_writable_one() {
     assert_ne!(cut, sim.backup);
     let (ro, app) = read_only(&sim.emmc.image, cut);
     assert_eq!((pages(&app), page_words(&ro)), (pages_of(&saved), page_words(&sim)), "registers put right");
+    assert_eq!(pages(&app), pages(&writable(&sim.emmc.image, cut).1), "as a writable build");
+}
+
+/// A first start of a read-only build whose file cannot be read yet (a read error there): stock's pages are not put over
+/// the file's, which show once it is read; the card is not written.
+#[test]
+fn a_first_start_on_a_read_only_build_keeps_the_files_pages() {
+    let (mut sim, mut app) = started();
+    app.pages[0] = Page::preset(2, [Wbal, Np, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    let want = pages(&app);
+    let image = sim.emmc.image.clone();
+    let mut d = Ram(image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let f = fat.open(&mut d, "Rustfw/pages.bin").unwrap();
+    let lba = fat.lba(f.cluster);
+    let mut ro = Sim::new(9, 5, 0);
+    (ro.emmc.image, ro.writable) = (image.clone(), false);
+    ro.emmc.unreadable.push(lba..lba + 2);
+    let mut app = App::start(&mut ro, None);
+    use crate::ui::Field::*;
+    assert_ne!(&app.pages()[0].fields[..4], &[Power, Hr, Cadence, Speed][..], "stock's first page not taken");
+    ro.emmc.unreadable.clear();
+    run(&mut ro, &mut app, PAGES_LOAD_MS as u64 + 200);
+    assert_eq!(pages(&app), want, "the file's pages once read");
+    assert!(ro.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
+    assert!(ro.emmc.image == image, "the card unchanged");
+}
+
+/// A first start of a read-only build over stock's settings and no pages.bin: stock's pages are taken into the
+/// registers and shown, as a writable build takes them; the card is not written.
+#[test]
+fn a_first_start_on_a_read_only_build_takes_stocks_pages() {
+    let image = crate::fat::tests::image();
+    let (ro, app) = read_only(&image, [0; 32]);
+    let (w, wapp) = writable(&image, [0; 32]);
+    assert_eq!(pages(&app), pages(&wapp), "as a writable build shows them");
+    assert_eq!(page_words(&ro), page_words(&w), "the registers as a writable build's");
+    use crate::ui::Field::*;
+    assert_eq!(&app.pages()[0].fields[..4], &[Power, Hr, Cadence, Speed][..], "stock's first page");
 }
 
 /// A page edit on a read-only build before the file could be read (the first read failing): refused, so nothing

@@ -30,8 +30,8 @@
 //! file is read [`PAGES_LOAD_MS`] later (or at the first screen other than the overview, the card not being touched at
 //! boot) and wins, unless the registers differ from both sets of words its newest copy keeps: then another build
 //! (an earlier one, or a read-only one, which keep their pages there only) changed them, and those pages win, the
-//! others staying the file's. A build that may not write the card never reads or writes the file: its pages are
-//! the registers' (three at most).
+//! others staying the file's. A build that may not write the card reads the file as any build does and waits for
+//! it before an edit, but never writes it: its changes go to the registers (three pages, lossy).
 //!
 //! **A change the file must wait for** (made during a paused ride, with the editor still open after ADD PAGE, or
 //! with the drive lent; or not written yet at a switch-off) goes to the registers at once, marked
