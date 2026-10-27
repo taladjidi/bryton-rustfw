@@ -130,6 +130,13 @@ pub(crate) struct Gps {
     pub(crate) aid: gnss::Aid,
     /// The GPS had a good fix since power-on.
     pub(crate) had_fix: bool,
+    /// GPS POWER AUTO's choice ([`gnss::Adaptive`]).
+    pub(crate) auto: gnss::Adaptive,
+    /// Between rides (app/gps.rs `gnss_idle`): the time since the receiver was switched on or a screen needed it, a
+    /// good fix since it was switched on, and asleep (off until needed or a ride starts).
+    pub(crate) quiet_ms: u32,
+    pub(crate) fixed: bool,
+    pub(crate) slept: bool,
 }
 
 impl Gps {
@@ -146,6 +153,10 @@ impl Gps {
             off: false,
             aid,
             had_fix: false,
+            auto: gnss::Adaptive::default(),
+            quiet_ms: 0,
+            fixed: false,
+            slept: false,
         }
     }
 

@@ -178,6 +178,7 @@ fn perf_budgets() {
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
         sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
+        app.settings.light_level = 0; // steps without simulated time below: the light sensor not read early
         app.pages[..3].copy_from_slice(&pages);
         if course {
             app.set_course_memory(crate::storage::course_file::tests::memory());
@@ -339,6 +340,7 @@ fn idle_bus_budgets() {
         sim.gnss.fix = fix;
         let mut app = App::start(&mut sim, None);
         app.settings.light_level = crate::LIGHT_AUTO;
+        app.settings.light_timeout = 0; // never off: the sensor read all along
         run(&mut sim, &mut app, 20_000);
         let (g, l, i2c) = (sim.gnss.got.len(), sim.bus.light_reads, sim.bus.transactions);
         run(&mut sim, &mut app, 60_000);

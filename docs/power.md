@@ -21,10 +21,10 @@ sheets, at their test conditions), none was measured on the unit.
 
 | Part | Today | Options | Saving | Done here |
 |------|-------|---------|--------|-----------|
-| GNSS (u-blox M10) | 11.8 mA: continuous, 9.5 mA at VCC + 2.3 at V_IO, GPS + Galileo + BeiDou B1I | cyclic tracking (PSMCT) | about 4.8 mA (4.5 at VCC, 0.3 at V_IO) | BIKE > GPS POWER SAVER, opt-in |
+| GNSS (u-blox M10) | 11.8 mA: continuous, 9.5 mA at VCC + 2.3 at V_IO, GPS + Galileo + BeiDou B1I | cyclic tracking (PSMCT) | about 4.8 mA (4.5 at VCC, 0.3 at V_IO) while in it | GPS POWER AUTO (default): while riding fast and straight |
 | | | GPS + Galileo only | 1.6 mA | owner's decision |
 | | | GPS only | 2.2 mA | no (fewer satellites under trees) |
-| | | off between rides after a while | 11.8 mA while idle | owner's decision |
+| | | off between rides once idle | 11.8 mA while idle | yes: 5 min without a fix, 10 min with one and no key |
 | Nordic, ANT+ search for an absent sensor | about 2.2 mA each (40 s in 100 at 5.4 mA) | longer rests | about 1.4 mA each | rests of 1, 2, then 4 min |
 | Nordic, ANT+ channel tracking a sensor | 30 to 60 uA each at 4 Hz | 2 Hz for heart rate | about 20 uA | no (beats lost for HRV) |
 | Nordic, BLE to the phone | 20 to 40 uA connected, 10 to 15 uA advertising each second | longer slave latency | about 10 uA | no (already low) |
@@ -56,9 +56,14 @@ sheets, at their test conditions), none was measured on the unit.
   tracking: the receiver tracks, then sleeps within each update period); CFG-PM-UPDATEEPH (default on) wakes it to
   refresh ephemeris. The MAX-M10S integration manual (UBX-20053088, 2.3) describes continuous mode and the backup
   modes; the data sheet's "power save mode" figures are cyclic tracking (its note 28).
-- **What it costs:** in cyclic tracking the receiver does not track continuously, so the position is noisier and
-  slower to follow a sharp change (u-blox's general description of its power save modes; how much on a bike is to
-  see). Hence a setting, FULL by default.
+- **What it costs** (u-blox SAM-M10Q integration manual UBX-22020019 R01, 2.6.2, the M10 platform's power save mode):
+  PSMCT keeps the navigation output at 1 Hz ("In the POT state the receiver continues to output position fixes
+  according to the CFG-RATE-*"; 1 and 2 Hz supported), but in its power optimized tracking (POT) state "no new
+  signals are acquired and no data is downloaded" (it goes back to continuous for the ephemeris it schedules), SBAS
+  (EGNOS) is neither downloaded nor used in power save mode, and a weak or lost signal sends it back to tracking. u-blox
+  gives no accuracy figure for it; speed comes from Doppler at each fix either way, so a steady speed should change
+  little (inferred), while a satellite lost under trees or in a turn is not replaced until the receiver leaves POT,
+  and the position loses SBAS's corrections. Hence AUTO takes it only where that matters least, and conservatively.
 - **What stock does** (Ghidra, ghidra/notes/agent_d01e8000.md, agent_b1.md): a GPS setting `gpsPW` 0..5
   (`Gps_PowerIndexToModeCmd` 0xd01f34a8) mapped to modes off, FULL ON, "trickle power" (power save), GLONASS and
   BeiDou (`Gps_HandleCommand` 0xd0252e38, `Gps_SwitchConstellationMode` 0xd01f0d40), each a group of UBX
@@ -66,13 +71,38 @@ sheets, at their test conditions), none was measured on the unit.
   power save mode, `Gps_AutoSelectConstellationGroup` 0xd0254ab0 switches to another group ("Group 3 bike others")
   after about 10 minutes riding with a 3D fix, an accuracy under 5 m and 8 satellites or more, five checks in a row.
   The commands in each group are not traced.
-- **This firmware:** continuous tracking (FULL) as before, or SAVER (BIKE > GPS POWER): CFG-PM-OPERATEMODE PSMCT in
-  the RAM layer with the rest of the configuration, at each power-up and again when the setting changes
-  (`gnss::config`). The receiver is already switched off for an indoor ride (app/gps.rs `gnss_switch`).
+- **This firmware: GPS POWER AUTO (the default, owner 2026-10-27), FULL or SAVER** (BIKE > GPS POWER). FULL is
+  continuous tracking, SAVER cyclic tracking always: CFG-PM-OPERATEMODE in the RAM layer with the rest of the
+  configuration, at each power-up and again at each change (`gnss::config`; CFG-VALSET to RAM applies at once).
+  **AUTO** (`gnss::Adaptive`, one decision per fix) uses cyclic tracking only while all of these held for a minute in a
+  row (`AUTO_STEADY_S`), and goes back to continuous at the first fix where one fails:
+  - a ride running (between rides, paused or stopped: continuous);
+  - 10 minutes of good 3D fixes since the last loss (`AUTO_WARM_S`), 8 satellites or more, horizontal accuracy under
+    5 m: stock's own conditions for its power save mode's switch (`Gps_AutoSelectConstellationGroup` 0xd0254ab0), and
+    the receiver has gathered its satellites and their data by then (the manual: more signals tracked first help it
+    stay in POT);
+  - faster than 20 km/h to enter, and it stays down to 15 km/h (`AUTO_FAST_MM_S`, `AUTO_SLOW_MM_S`): MTB, technical
+    ground and steep climbs are under that, where the owner wants the resolution; the gap is the hysteresis;
+  - no turn: the heading within 30 degrees of each of the last 5 s (`AUTO_TURN`): a road bend at 20 km/h that turns
+    30 degrees in 5 s has a 53 m radius; hairpins, roundabouts and switchbacks turn more.
+  So a switch to cyclic tracking comes at most once a minute (no flapping), and a switch back within a second.
+  **Expected saving:** 4.8 mA while in cyclic tracking (the table above), so about 2.5 to 3.5 mA averaged on a road
+  ride that spends 50 to 70 % of its time fast and straight past the first 10 minutes (an estimate, to measure), next
+  to nothing on an MTB ride, which stays continuous. SAVER saves the 4.8 mA all the time, at the cost above.
+- **Off when idle (owner, 2026-10-27; app/gps.rs `gnss_idle`):** with no ride open, the receiver's supply is cut
+  (as for an indoor ride, BOARD.md 13) once it searched 5 minutes since it was switched on without a fix
+  (`GNSS_SEARCH_MS`: a start outdoors takes about half a minute, a few minutes at worst by a window or under trees;
+  the search costs about 1 mAh indoors), or, with a fix, after 10 minutes without a key, a touch or a screen that
+  needs a position (`GNSS_IDLE_MS`). Keys alone do not wake it (indoors they would restart the search); it is on
+  again at Start (any ride; the climbs ahead start with it), for a page with a map, the GPS menu, or a course followed,
+  with the same sequencing as at boot (powered 1 s later, the configuration, the time and the last position sent).
+  **Fix after switching on again:** the supply cut loses the ephemeris (no V_BCKP known), so it is a warm start helped
+  by the time and position: the ephemeris takes 18 to 36 s to download under a strong signal (UBX-22020019, 2.4),
+  so expect about 30 s outdoors, not the 1 to 2 s of a hot start; a hot start would need the backup domain kept
+  (UBX-RXM-PMREQ software standby, 46 uA, its wake on the unit not tried). **Saving:** 11.8 mA for every hour the
+  unit sits on without a ride past those minutes, about 12 mAh an hour left on indoors.
 - **Left to the owner:** GPS + Galileo only (CFG-SIGNAL-BDS_ENA 0x10310022 off: 1.6 mA in continuous mode, nothing
-  in cyclic tracking, which has the same 5 mA either way); switching the receiver off after some minutes on the
-  overview without a ride (11.8 mA while the unit sits on, a warm start of a few seconds at the next ride thanks to
-  the aiding).
+  in cyclic tracking, which has the same 5 mA either way).
 
 ### Nordic chip (BLE and ANT+)
 
@@ -104,13 +134,14 @@ sheets, at their test conditions), none was measured on the unit.
 - **Backlight:** PG13, LPTIM1 PWM on the LSE (32768 Hz / 100: 328 Hz), 1 to 99 % (BOARD.md 6). The LED current is
   not known (no panel data sheet); a 2.8-inch TFT's backlight is typically 3 or 4 white LEDs at 15 to 20 mA, so
   about 60 mA at 100 % (inferred), and the average follows the duty: 1 % 0.6 mA, 8 % 5 mA, 40 % 24 mA, 60 % 36 mA.
-  - **Today:** a fresh unit is at 100 %, never off (`Settings::from_word`'s defaults); stock's settings imported
-    bring its level, and AUTO follows stock's curve (BOARD.md 16: 1 % above 120 lux, 8 % below 5 lux, 40 to 70 %
-    between). The owner chose stock's curve for AUTO (BOARD.md 16).
-  - **Left to the owner:** the default for a fresh unit (AUTO and OFF AFTER 30 S would be about 60 mA less than today's
-    100 % never off; tests and screenshots expect 100 % now); the AUTO curve's middle bands (stock's own setting 1 is
-    20 % at 5 to 20 lux where this firmware uses 40 %: dusk, about 12 mA); a ride's OFF AFTER (10, 30, 60 s: at
-    night the backlight is the largest draw by far).
+  - **Decided (owner, 2026-10-27):** a fresh unit (no saved settings) starts with AUTO and OFF AFTER 30 S
+    (`Settings::from_word`'s defaults), about 60 mA less than the 100 % never off it had before; saved settings and
+    stock's imported ones keep theirs.
+  - **AUTO is stock's curve exactly (owner, 2026-10-27):** its setting 1 (BOARD.md 16, `Sensor_LightSensorUpdateBacklight`
+    0xd023e304): 8 % up to 5 lux, 20 % at dusk (5 to 20 lux, was 40 %: about 12 mA less), 30 % to 50 lux (was 50 %),
+    the 1 % minimum above 50 lux (was 70 % from 50 to 120 lux: about 40 mA less in a lit room), and stock's timing: a
+    band chosen once a second, no hysteresis.
+  - **Left to the owner:** a ride's OFF AFTER (10, 30, 60 s: at night the backlight is the largest draw by far).
 - **Panel (ST7789):** 4 to 7 mA in normal mode (secondary sources on the ST7789V; Sitronix's own table not read).
   Its idle mode (8 colours) and partial mode would change what is shown. A lower frame rate (FRCTRL2, 0xC6: stock's
   0x0F is 60 Hz, 0x1F is 39 Hz) saves part of the driver's current but may flicker: to try on the unit, not done.

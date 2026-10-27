@@ -952,6 +952,7 @@ fn scan_caches() {
 #[test]
 fn ubx_frames() {
     let mut parser = crate::gnss::Parser::new();
+    let mut auto = crate::gnss::Adaptive::default();
     // random bytes, then UBX frames built on purpose (sync, class, id, length, payload, Fletcher checksum): NAV-PVT
     // with random content, other messages, bad checksums, garbage between; random bytes alone never pass the
     // checksum, so the decoder was never reached (code review)
@@ -981,12 +982,65 @@ fn ubx_frames() {
             f.extend((0..r() % 4).map(|_| r())); // garbage between frames
             for x in f {
                 if let Some((c, i, p)) = parser.push(x) {
-                    pvts += usize::from(crate::gnss::pvt(c, i, p).is_some());
+                    let pvt = crate::gnss::pvt(c, i, p);
+                    pvts += usize::from(pvt.is_some());
+                    auto.fix(pvt, true); // GPS POWER AUTO on whatever the receiver says: no panic
                 }
             }
         }
     }
     assert!(pvts > 1000, "NAV-PVT decoded: {pvts}");
+}
+
+/// GPS POWER AUTO fed rides in stretches of 100 s, each either steady (fast, straight, a good fix) or anything (speed,
+/// heading, satellites, accuracy at random, fixes lost, the ride paused): cyclic tracking is reached, and never entered
+/// twice within [`crate::gnss::AUTO_STEADY_S`] seconds.
+#[test]
+fn gps_power_auto() {
+    use crate::gnss::{AUTO_STEADY_S, Adaptive, Pvt};
+    let mut entered = 0;
+    for seed in 1..=8u32 {
+        let mut r = xorshift(seed);
+        let mut a = Adaptive::default();
+        let (mut heading, mut last_entry, mut steady) = (0i32, None::<u32>, true);
+        for s in 0..20_000u32 {
+            if s % 100 == 0 {
+                steady = !r().is_multiple_of(3);
+            }
+            let (pvt, riding) = if steady {
+                heading = heading.wrapping_add((r() % 100_001) as i32 - 50_000); // half a degree either way
+                let p = Pvt {
+                    fix: 3,
+                    fix_ok: true,
+                    sats: 10,
+                    h_acc_mm: 2000,
+                    speed_mm_s: 6000 + r() % 9000,
+                    heading,
+                    ..Pvt::default()
+                };
+                (Some(p), true)
+            } else {
+                heading = r() as i32;
+                let p = Pvt {
+                    fix: (r() % 6) as u8,
+                    fix_ok: !r().is_multiple_of(4),
+                    sats: (r() % 20) as u8,
+                    h_acc_mm: r() % 20_000,
+                    speed_mm_s: r() % 20_000,
+                    heading,
+                    ..Pvt::default()
+                };
+                ((!r().is_multiple_of(50)).then_some(p), !r().is_multiple_of(10))
+            };
+            let was = a.saver();
+            if a.fix(pvt, riding) && !was {
+                assert!(last_entry.is_none_or(|t| s - t > u32::from(AUTO_STEADY_S)), "seed {seed} at {s}: flapping");
+                last_entry = Some(s);
+                entered += 1;
+            }
+        }
+    }
+    assert!(entered > 8, "cyclic tracking reached {entered} times");
 }
 
 /// Random bytes, and real LZ4 blocks with random bytes changed, into the LZ4 decoder and the IGN tile decoder: no

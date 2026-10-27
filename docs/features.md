@@ -132,7 +132,8 @@
 | hold Lap | the phone's music: play / pause (PHONE below); on the trainer screen while riding: the target one big step down (Page is up) | |
 | hold Back and Lap together 1 s | the touch lock on or off, on every screen: all touch is ignored and a padlock shows in the strip (until unlocked or switched off); neither key acts on its own | the same |
 
-The power button starts it again. After the backlight's time-out, any key brings it back.
+The power button starts it again. After the backlight's time-out, any key brings it back. A fresh unit (no saved
+settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or stock's imported, keep theirs.
 
 - **Menus:** rows 44 px tall (about 8 mm, a fingertip), six a screen, a longer menu turned a screen at a time;
   a "<" left of the title goes back. The selected row is black on orange (10:1 contrast; white on that orange was
@@ -287,7 +288,7 @@ MENU
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, GAUGE POWER (the workout gauge's window)
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
-     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (FULL / SAVER)
+     |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >
 ```
 
@@ -420,9 +421,15 @@ answer, the FTMS response), five times at most. The rider's own hold ends with t
 silent at its end. A chip that never answers the first acknowledged message turns the ANT+ control off
 until the chip is started again; once one was answered, a later silence only has the message sent again. An FTMS
 trainer that refused the control is asked again 10 s later, then less often (up to a minute apart), while it is driven.
-With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too (AUTO keeps it on).
-BIKE > GPS POWER SAVER puts the receiver in u-blox cyclic tracking: about 4.5 mA less (estimated from
-u-blox's data sheet: [power.md](power.md)), at some cost in accuracy; FULL (continuous) by default.
+With BIKE > PROFILE fixed to INDOOR the GNSS receiver stays off between rides too. Otherwise, between rides, it
+searches 5 minutes after it is switched on, and stays on with a fix until 10 minutes pass without a key, then switches
+off; it comes back at Start, for a page with a map, the GPS menu or a course followed (a fix about 30 s later outdoors:
+the time and last position are sent to it, the ephemeris is not kept).
+BIKE > GPS POWER: AUTO (the default) puts the receiver in u-blox cyclic tracking only while a ride runs fast (over
+20 km/h, until under 15) and straight (no turn over 30 degrees in 5 s) with a good fix (10 minutes in, 8 satellites,
+under 5 m) for a minute, and back in continuous tracking at the first fix that is not, so MTB and climbs keep the full
+resolution; about 4.8 mA less while in it (estimated from u-blox's data sheet: [power.md](power.md)). FULL is
+continuous always, SAVER cyclic always.
 
 ## Workouts
 

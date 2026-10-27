@@ -606,14 +606,20 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
   more. Stock has a GPS power setting (`gpsPW`, `Gps_PowerIndexToModeCmd` 0xd01f34a8: off, full, "trickle power",
   GLONASS, BeiDou) and in its power save mode switches to another constellation group after about 10 minutes of a
   good fix (`Gps_AutoSelectConstellationGroup` 0xd0254ab0); the UBX commands of each group are not traced. This
-  firmware: FULL, or PSMCT with BIKE > GPS POWER SAVER (RAM layer, `gnss::config`); not seen on the unit yet.
-  docs/power.md has the estimates.
+  firmware: GPS POWER AUTO (PSMCT only while riding fast and straight, `gnss::Adaptive`), FULL or SAVER (RAM layer,
+  `gnss::config`, sent again at each change); not seen on the unit yet. docs/power.md has the estimates.
+- **PSMCT's behaviour** (SAM-M10Q integration manual UBX-22020019 R01, 2.6.2, the M10 platform): 1 and 2 Hz navigation
+  rates (and periods of 2 to 10 s); fixes still output at CFG-RATE in its power optimized tracking state, where no
+  new signals are acquired and no data downloaded (it returns to continuous for scheduled ephemeris downloads, about
+  every 30 minutes with CFG-PM-UPDATEEPH); SBAS not used in power save mode; BeiDou B1C not supported (B1I is, the
+  default); a weak or lost signal returns it to tracking, then acquisition.
 - **Switched off for an indoor ride (app/gps.rs `gnss_switch`):** PI6 low while a ride runs with the INDOOR profile
   (a u-blox M10 draws about 7 to 8 mA tracking), high again at the ride's end or when the profile goes to ROAD, 1 s
   later like the cold start (the line has been low over 1 s), then the configuration, the time and the position are
   sent again. The supply is cut, not UBX-RXM-PMREQ backup mode: its wake sources (EXTINT, SPI CS; u-blox M10
   interface description) and the V_BCKP wiring are not known here, and a receiver that never woke would stay dead.
-  Inferred: a warm start after the ride, no ephemeris kept.
+  Inferred: a warm start after the ride, no ephemeris kept. The same cut between rides once idle (app/gps.rs
+  `gnss_idle`: 5 minutes without a fix, or 10 with one and no key), with the same sequencing when it comes back.
 - **Aiding at power-up, as stock's minimum** (stock also feeds AssistNow Offline data from `\System\mgaoffline.ubx`,
   which the phone app downloads; libMga, `GPS_AssistNow_Offline_Host`): after the configuration, this firmware
   sends UBX-MGA-INI-TIME_UTC (UTC from the RTC, which holds local time, minus an offset learnt at the first fix
@@ -793,15 +799,24 @@ From stock (Ghidra: `I2C2_Configuration` 0xd02437e8, which sets up I2C4 despite 
 
   Level 0 is the PWM's minimum, 1 % (`Pwr_BacklightSetPwmDuty` clamps to 1..100): in daylight the transflective
   panel is read by reflected light. Changing band reprograms the sensor's thresholds to the new band's edges.
+- **Stock's timing and hysteresis** (`Sensor_LightSensorCmd` 0xd023e024, `Sensor_LightSensorUpdateBacklight`):
+  MEAS_RATE 0x05 is a 400 ms, 20-bit conversion once a second (rate field 5 is 1000 ms in DFRobot's driver,
+  `eRate_1000ms`); INT_PST 0x1a = 0 (an interrupt on the first reading outside the thresholds); at each interrupt the
+  band is the first whose edges hold the reading (`lo <= lux <= hi`), and the thresholds are re-armed at that band's
+  own edges: no averaging beyond the conversion and no hysteresis margin. Level 0 sets the PWM to its 1 % minimum;
+  stock switches the backlight off instead in one state (`Pwr_BacklightApplyOnOff` 0xd0189c42 when 0xd0189c0e returns
+  1 and 0xd0189c16 returns 0; what those two read is not traced). Which of the five settings a fresh stock unit uses
+  is not traced either (DeviceData.ini `AutoBrnVal`).
 - **This firmware** (src/drivers/ambient.rs): MEAS_RATE 0x22 (18 bits in 100 ms, a reading every 100 ms; the fields from
   DFRobot's LTR-308 driver: resolution in bits 6..4, rate in 2..0), so 0.1 lux per count at gain 6. The sensor
   measures continuously while the backlight is AUTO and on (or the sensors menu shows the light), read every 250 ms
   (MAIN_STATUS, ALS_DATA), and is in standby (MAIN_CTRL = 0) otherwise. (Until 2026-10-23: one 400 ms measurement
-  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve (src/drivers/ambient.rs
-  `AUTO_BANDS`: its setting 3, with 8 % instead of 14 % below 5 lux, and the 1 % minimum above 120 lux, where the
-  panel reads by reflected light; for a while this firmware rose to 100 % instead, until the owner chose stock's
-  logic), with a running average (half per reading) and
-  a quarter of the edge as hysteresis. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
+  every 3 s, which the owner found too slow to follow the light.) The level follows stock's curve exactly since
+  2026-10-27 (src/drivers/ambient.rs `AUTO_BANDS`: its setting 1, 8 / 20 / 30 % up to 5 / 20 / 50 lux, the 1 %
+  minimum above; the owner's choice, dusk at 20 %) and stock's timing: the band chosen once a second from the mean of
+  that second's four readings, no hysteresis. (Before: stock's setting 3 with 8 % in the dark, a running average and a
+  quarter of the edge as hysteresis.) Stock's lux are this firmware's x 0.93 on this unit (its calibration, below):
+  its edges fall about 7 % lower in this firmware's lux, not corrected. **Seen on the unit (2026-10-23)** with stock's curve: a desk lamp read about
   480 lux (raw 19304) and dimmed the screen to 1 %, which the owner found wrong; the room read 0.3 to 0.6 lux, a hand
   over the sensor 0.05. Stock's calibration on this unit is 932 (its debug log, `Light sensor cali value 932`, from
   the eMMC raw sector at base + 0x4404 with 55 aa markers; `0xd018dc10`), so its lux are this firmware's x 0.93. The barometer powered down (CTRL_REG1 0x10 = 0x02: output rate 0, BDU) and one one-shot conversion

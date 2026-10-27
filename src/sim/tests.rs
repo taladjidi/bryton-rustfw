@@ -621,34 +621,158 @@ fn gps_fix_and_speed() {
     assert!(!sim.gnss.powered, "off with the unit");
 }
 
-/// GPS POWER (SETTINGS > BIKE): FULL by default (the receiver told continuous tracking at power-up); SAVER sends the
-/// configuration again at once with cyclic tracking, is kept in register 16, and the next power-up sends it so.
+/// GPS POWER (SETTINGS > BIKE): AUTO by default (continuous tracking at power-up, no ride); FULL, then SAVER, each
+/// send the configuration again at once; kept in register 16, and the next power-up sends SAVER's.
 #[test]
-fn gps_power_saver_from_the_menu() {
+fn gps_power_from_the_menu() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 3000);
     let count = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).filter(|w| *w == f).count();
     let (full, saver) = (crate::gnss::config(false), crate::gnss::config(true));
-    assert_eq!((count(&sim, full), count(&sim, saver)), (1, 0), "FULL at power-up");
+    assert_eq!((count(&sim, full), count(&sim, saver), sim.gnss.pm_mode), (1, 0, 0), "AUTO: continuous at power-up");
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
     app.press(&mut sim, Press::Short(Key::Start));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
     app.press(&mut sim, Press::Short(Key::Start));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::GpsPower));
+    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "AUTO");
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
     assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "FULL");
+    assert_eq!(count(&sim, full), 2, "sent again");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
     assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "SAVER");
-    assert_eq!(count(&sim, saver), 1, "sent once, at once");
-    assert!(Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).gps_saver, "kept");
+    assert_eq!((count(&sim, saver), sim.gnss.pm_mode), (1, 2), "sent once, at once");
+    let kept = Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).gps_power;
+    assert_eq!(kept, crate::GpsPower::Saver, "kept");
     sim.gnss.powered = false; // a power cycle
     sim.gnss.off_since = sim.ms;
     sim.gnss.got.clear();
     let mut again = App::start(&mut sim, None);
     run(&mut sim, &mut again, 3000);
     assert_eq!((count(&sim, full), count(&sim, saver)), (0, 1), "SAVER at the next power-up");
+}
+
+/// The receiver off between rides: indoors (no fix) after [`crate::GNSS_SEARCH_MS`] whatever the keys do; on again
+/// for the GPS menu (aided again: time and position), off again 5 minutes after leaving it, on at Start; with a fix,
+/// off after [`crate::GNSS_IDLE_MS`] without a key, which a key press puts off.
+#[test]
+fn gps_off_when_idle() {
+    use crate::{GNSS_IDLE_MS, GNSS_SEARCH_MS};
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_timeout = 0;
+    run(&mut sim, &mut app, u64::from(GNSS_SEARCH_MS) - 2000);
+    assert!(sim.gnss.powered, "searching for 5 minutes");
+    app.press(&mut sim, Press::Short(Key::Lap)); // a key: indoors, it does not keep the search going
+    run(&mut sim, &mut app, 3000);
+    assert!(!sim.gnss.powered && app.strip.gps.is_none(), "no fix in 5 minutes: off");
+    run(&mut sim, &mut app, 60_000);
+    assert!(!sim.gnss.powered, "stays off");
+
+    app.screen = Screen::Menu(Menu::Gps, 0); // the GPS status: it needs the receiver
+    app.show(&mut sim);
+    sim.gnss.got.clear();
+    run(&mut sim, &mut app, 3000);
+    assert!(sim.gnss.powered, "on for the GPS menu");
+    let sent = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).any(|w| w == f);
+    assert!(sent(&sim, crate::gnss::config(false)), "configured again");
+    sim.gnss.fix = Some(0);
+    run(&mut sim, &mut app, 2000);
+    assert!(app.gps.pvt.is_some_and(|p| p.good()), "a fix");
+    sim.gnss.fix = None; // indoors again: with a fix since power-up, the 10 minutes without a key apply
+    app.screen = Screen::Main;
+    app.show(&mut sim);
+    run(&mut sim, &mut app, u64::from(GNSS_IDLE_MS));
+    assert!(!sim.gnss.powered, "off again");
+    sim.gnss.got.clear();
+    app.press(&mut sim, Press::Short(Key::Start)); // a ride: on again
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.ride.state(), ride::State::Running);
+    assert!(sim.gnss.powered, "on at Start");
+    assert!(
+        sent(&sim, crate::gnss::mga_pos(FIX_LAT / 1000 * 1000, FIX_LON / 1000 * 1000, 10_000)),
+        "the last position"
+    );
+    run(&mut sim, &mut app, u64::from(GNSS_SEARCH_MS) + 60_000);
+    assert!(sim.gnss.powered, "a ride open: never off, fix or not");
+
+    // with a fix and no ride: 10 minutes without a key
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_timeout = 0;
+    run(&mut sim, &mut app, u64::from(GNSS_IDLE_MS) - 60_000);
+    app.press(&mut sim, Press::Short(Key::Lap)); // the rider is there
+    run(&mut sim, &mut app, u64::from(GNSS_IDLE_MS) - 5000);
+    assert!(sim.gnss.powered && app.gps.pvt.is_some(), "a key put the time-out off");
+    run(&mut sim, &mut app, 10_000);
+    assert!(!sim.gnss.powered, "10 minutes without a key: off");
+    app.press(&mut sim, Press::Short(Key::Lap));
+    run(&mut sim, &mut app, 3000);
+    assert!(!sim.gnss.powered, "a key does not wake it");
+}
+
+/// A straight road: heading north.
+fn straight(_: u64) -> (i32, i32, i32) {
+    (FIX_LAT, FIX_LON, 0)
+}
+
+/// Switchbacks: the heading swings 90 degrees every 3 s.
+fn switchbacks(ms: u64) -> (i32, i32, i32) {
+    (FIX_LAT, FIX_LON, if (ms / 3000).is_multiple_of(2) { 0 } else { 9_000_000 })
+}
+
+/// GPS POWER AUTO on a ride (the receiver's CFG-PM-OPERATEMODE as the GNSS model saw it): continuous for the warm-up
+/// after the fix, cyclic tracking once fast and straight for a minute, continuous again within two fixes of slowing
+/// down or turning; a speed hovering around the edges does not flap; no cyclic tracking without a ride.
+#[test]
+fn gps_power_auto_follows_the_riding() {
+    use crate::gnss::{AUTO_STEADY_S, AUTO_WARM_S};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(9000); // 32 km/h
+    sim.gnss.route = Some(straight);
+    let mut app = App::start(&mut sim, None);
+    app.settings.light_timeout = 0;
+    run(&mut sim, &mut app, 120_000);
+    assert_eq!(sim.gnss.pm_mode, 0, "no ride: continuous");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Running);
+    let t0 = sim.ms;
+    run(&mut sim, &mut app, u64::from(AUTO_WARM_S + AUTO_STEADY_S) * 1000 - 130_000);
+    assert_eq!(sim.gnss.pm_mode, 0, "not before the warm-up and a steady minute");
+    run(&mut sim, &mut app, 15_000);
+    assert_eq!(sim.gnss.pm_mode, 2, "fast and straight: cyclic tracking");
+    let entered = sim.gnss.pm_log.last().unwrap().0;
+    assert!(entered >= t0 + u64::from(AUTO_STEADY_S) * 1000, "{} s after Start", (entered - t0) / 1000);
+
+    sim.gnss.fix = Some(5000); // 18 km/h: between the edges, cyclic tracking keeps
+    run(&mut sim, &mut app, 30_000);
+    assert_eq!(sim.gnss.pm_mode, 2, "hysteresis: 18 km/h keeps cyclic tracking");
+    sim.gnss.fix = Some(3000); // 11 km/h: a climb
+    run(&mut sim, &mut app, 2100);
+    assert_eq!(sim.gnss.pm_mode, 0, "slow: continuous within two fixes");
+
+    sim.gnss.fix = Some(9000);
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(sim.gnss.pm_mode, 2, "fast again for a minute");
+    sim.gnss.route = Some(switchbacks);
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(sim.gnss.pm_mode, 0, "turning: continuous");
+
+    // a speed around the edges, 20 s each side: never a steady minute, so no switch at all
+    sim.gnss.route = Some(straight);
+    let switches = sim.gnss.pm_log.len();
+    for i in 0..20 {
+        sim.gnss.fix = Some(if i % 2 == 0 { 6000 } else { 4000 });
+        run(&mut sim, &mut app, 20_000);
+    }
+    assert_eq!(sim.gnss.pm_log.len(), switches, "no flapping: {:?}", &sim.gnss.pm_log[switches..]);
+    let log = &sim.gnss.pm_log;
+    assert!(log.windows(3).all(|w| w[2].0 - w[0].0 > 60_000), "at most two switches a minute: {log:?}");
 }
 
 /// A key stuck down since the start does not keep the light on (2026-10-25 review: the time-out never came).
@@ -667,7 +791,18 @@ fn a_stuck_key_lets_the_light_time_out() {
 fn backlight_level_and_timeout() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
-    assert_eq!(sim.light_level, 100, "100 % and never off by default");
+    let s = app.settings;
+    assert_eq!(
+        (s.light_level, LIGHT_TIMEOUTS_S[s.light_timeout]),
+        (LIGHT_AUTO, 30),
+        "a fresh unit: AUTO, off after 30 s"
+    );
+    run(&mut sim, &mut app, 31_000);
+    assert_eq!(sim.light_level, 0, "off after 30 s by default");
+    app.press(&mut sim, Press::Short(Key::Back)); // back on
+    (app.settings.light_level, app.settings.light_timeout) = (0, 0); // 100 %, never off: the rest from there
+    app.update_light(&mut sim);
+    assert_eq!(sim.light_level, 100);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::Light));
     app.press(&mut sim, Press::Short(Key::Start)); // LIGHT %: 60
@@ -700,6 +835,7 @@ fn auto_backlight_follows_the_ambient_light() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
     assert_eq!(sim.bus.accel_ctrl1, 0x07, "the accelerometer switched off");
+    (app.settings.light_level, app.settings.light_timeout) = (0, 0); // 100 %, never off (a fresh unit has AUTO)
     run(&mut sim, &mut app, 30_000);
     assert_eq!(sim.bus.light_reads, 0, "a fixed level and no menu: the light sensor is never used");
     app.press(&mut sim, Press::Long(Key::Page));
@@ -729,18 +865,22 @@ fn auto_backlight_follows_the_ambient_light() {
     sim.bus.lux10 = Some(5); // 0.5 lux: dark
     run(&mut sim, &mut app, 60_000);
     assert_eq!(sim.light_level, 8);
+    sim.bus.lux10 = Some(100); // 10 lux: dusk
+    run(&mut sim, &mut app, 2100);
+    assert_eq!(sim.light_level, 20, "dusk, stock's 20 %, within 2 s");
     sim.bus.lux10 = Some(300); // 30 lux
-    run(&mut sim, &mut app, 1000);
-    assert_eq!(sim.light_level, 50, "within a second");
+    run(&mut sim, &mut app, 2100);
+    assert_eq!(sim.light_level, 30, "within 2 s");
 
-    // a light hovering on the 50 lux edge: one level throughout
-    let mut levels = std::collections::BTreeSet::new();
-    for i in 0..40 {
+    // a light flickering on the 50 lux edge: stock has no hysteresis, but decides once a second
+    let mut changes = 0;
+    for i in 0..400 {
+        let before = sim.light_level;
         sim.bus.lux10 = Some(if i % 2 == 0 { 450 } else { 550 });
-        run(&mut sim, &mut app, 3000);
-        levels.insert(sim.light_level);
+        run(&mut sim, &mut app, 50);
+        changes += u32::from(sim.light_level != before);
     }
-    assert_eq!(levels.into_iter().collect::<Vec<_>>(), [50]);
+    assert!(changes <= 21, "{changes} changes in 20 s");
 
     // one reading per LIGHT_MS
     let reads0 = sim.bus.light_reads;
@@ -1290,7 +1430,11 @@ fn max_hr_and_ftp_from_the_menu() {
     sim.save("zones_menu");
     let again = App::start(&mut sim, None);
     assert_eq!((again.settings.max_hr, again.settings.ftp, again.settings.wheel_mm), (194, 55, WHEELS[2]));
-    assert_eq!((again.settings.light_level, again.settings.light_timeout), (0, 0), "the backlight settings untouched");
+    assert_eq!(
+        (again.settings.light_level, again.settings.light_timeout),
+        (LIGHT_AUTO, 2),
+        "the backlight settings untouched"
+    );
 }
 
 /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

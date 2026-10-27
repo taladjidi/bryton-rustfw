@@ -517,6 +517,14 @@ pub struct Gnss {
     pub alt: Option<fn(u64) -> i32>,
     /// Every byte received, in order (0xff included).
     pub got: Vec<u8>,
+    /// CFG-PM-OPERATEMODE as the last CFG-VALSET set it (0 FULL, 2 PSMCT; 0 at power-up, the receiver's default),
+    /// and each change: (simulated ms, mode).
+    pub pm_mode: u8,
+    pub pm_log: Vec<(u64, u8)>,
+    /// Horizontal accuracy of a fix, mm (0: 3 m).
+    pub h_acc_mm: u32,
+    /// Its own UBX framing of what it receives.
+    rx: crate::gnss::Parser,
     /// UTC of the next report, seconds since 1970 (set by the board: its RTC minus 2 h).
     utc: i64,
     /// When its power line was last driven low (0: from reset, as the board does at boot).
@@ -544,6 +552,7 @@ impl Gnss {
             p[24..28].copy_from_slice(&lon.to_le_bytes());
             p[28..32].copy_from_slice(&lat.to_le_bytes());
             p[36..40].copy_from_slice(&self.alt.map_or(0, |f| f(now)).to_le_bytes());
+            p[40..44].copy_from_slice(&(if self.h_acc_mm == 0 { 3000 } else { self.h_acc_mm }).to_le_bytes());
             p[60..64].copy_from_slice(&speed.to_le_bytes());
             p[64..68].copy_from_slice(&heading.to_le_bytes());
         }
@@ -556,6 +565,31 @@ impl Gnss {
         self.out.extend([0xb5, 0x62]);
         self.out.extend(body);
         self.out.extend([a, b]);
+    }
+
+    /// A byte from the host: CFG-VALSET's keys taken (the RAM layer only, as this firmware sends; each key's value
+    /// size from its bits 28..30, u-blox M10 interface description UBX-21035062, "Configuration interface").
+    fn receive(&mut self, now: u64, byte: u8) {
+        let Some((0x06, 0x8a, p)) = self.rx.push(byte) else { return };
+        assert_eq!(p.get(..2), Some(&[0, 0x01][..]), "VALSET version 0, the RAM layer only");
+        let mut at = 4;
+        while let Some(k) = p.get(at..at + 4) {
+            let key = u32::from_le_bytes([k[0], k[1], k[2], k[3]]);
+            let size = match key >> 28 & 7 {
+                1 | 2 => 1,
+                3 => 2,
+                4 => 4,
+                _ => 8,
+            };
+            if key == 0x20d0_0001 {
+                let mode = p[at + 4];
+                if mode != self.pm_mode || self.pm_log.is_empty() {
+                    self.pm_log.push((now, mode));
+                }
+                self.pm_mode = mode;
+            }
+            at += 4 + size;
+        }
     }
 }
 
@@ -1365,6 +1399,7 @@ impl Board for Sim {
         }
         if !on && self.gnss.powered {
             self.gnss.off_since = self.ms;
+            self.gnss.pm_mode = 0; // its RAM layer lost with the supply
         }
         self.gnss.powered = on;
     }
@@ -1378,6 +1413,9 @@ impl Board for Sim {
         g.tick(self.ms);
         for b in buf.iter_mut() {
             g.got.push(*b);
+            if g.powered {
+                g.receive(self.ms, *b);
+            }
             *b = if g.powered { g.out.pop_front().unwrap_or(0xff) } else { 0xff };
         }
     }

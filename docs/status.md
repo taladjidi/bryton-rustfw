@@ -108,6 +108,9 @@ build (POWER_STEPS=15) gives the wall time.
 
 ## Not yet seen on the unit
 
+- **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of
+  0x20d00001 reads 2 after 11 minutes fast and straight, 0 within a second of a stop or a hairpin; the track and the
+  speed against FULL's (and a speed sensor's) on the same road; the share of the ride in cyclic tracking.
 - **GPS POWER SAVER (u-blox cyclic tracking, `gnss::config`)**: on the host only. On the unit, outdoors: the
   configuration answered ACK-ACK (`tools/gnss.py`, CFG-VALGET of 0x20d00001 reads 2), NAV-PVT still read every second
   over SPI between the receiver's sleeps (no gaps: the strip's GPS stays green, no fix dropped after 3 s), the track
@@ -179,6 +182,9 @@ build (POWER_STEPS=15) gives the wall time.
   decoded (estimated 15 ms at the median, about 80 ms for the largest tile that fits the 96 KB buffer, 2080 nodes);
   the AXI SRAM cell stays in `.bss` (`nm`: `make_ahead`, about 105 KB) and the unit
   boots (a new static in `.axibss` is a core-level change: Renode, then `DIAG_STOP`).
+- **The GNSS receiver off when idle (app/gps.rs `gnss_idle`)**: only against the simulator. On the unit: indoors,
+  the strip's GPS goes blank 5 minutes after power-on; outdoors with a fix, 10 minutes after the last key; the GPS
+  menu, a map page or Start bring it back, and the time to a fix then (expected about 30 s, the ephemeris not kept).
 - **The GNSS receiver off for an indoor ride (app/gps.rs `gnss_switch`, BOARD.md 13)**: only against the simulator.
   On the unit: with a trainer heard, Start switches the receiver off (strip GPS blank), and after SAVE or DISCARD,
   or once the profile goes to ROAD, it is powered again 1 s later and gives a fix outdoors (how long, with the time
@@ -354,8 +360,10 @@ build (POWER_STEPS=15) gives the wall time.
   "(c) IGN" corner, the 2.1 MB map memory zeroed at boot.
 - **Sensors other than the heart-rate strap:** speed, cadence, power (the decoders follow the ANT+ profiles,
   checked against openant).
-- **The automatic backlight by eye:** stock's curve (8 % in the dark, the 1 % minimum above 120 lux): is the panel
-  readable in full sun at 1 % (compare BRIGHTNESS 100 and 10 outdoors)?
+- **The automatic backlight by eye:** stock's curve exactly (its setting 1: 8 % in the dark, 20 % at dusk, 30 % to
+  50 lux, the 1 % minimum above 50 lux; a band chosen once a second, no hysteresis, 2026-10-27): is the panel readable
+  in full sun and in a lit room at 1 % (a desk lamp read 480 lux on 2026-10-23), and does a light on a band's edge
+  make the level step visibly?
 - **Backlight levels** (60 / 30 / 10 %) and the time-out, each by eye.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
 - **The map's zoom buttons** ("+" and "-" on the full-page map, now any level, coarser than the fit too, and the

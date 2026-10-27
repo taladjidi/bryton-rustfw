@@ -69,7 +69,8 @@ pub const BARO_RIDE_MS: u32 = 1000;
 pub const TOUCH_MS: u32 = 10;
 
 /// How often the ambient light is read while the backlight follows it (and while the menu shows it): with the
-/// smoothing ([`ambient::Auto`]), a change of light reaches the backlight in about a second.
+/// band chosen once a second ([`ambient::Auto`], stock's timing), a change of light reaches the
+/// backlight within 2 s (a window that straddles it, then a whole one).
 pub const LIGHT_MS: u32 = 250;
 
 impl App {

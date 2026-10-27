@@ -16,6 +16,7 @@ fn unit() -> (Sim, App) {
     sim.nordic.sensors.push(AntSensor { device_type: 0x11, id: 5555, data: |_| [0; 8], network: 0, ack: &[] });
     sim.nordic.trainer.rider_w = 180;
     let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.light_timeout = 0; // never off: a key after the time-out would only wake the light
     run(&mut sim, &mut app, 4000);
     (sim, app)
 }
