@@ -88,6 +88,7 @@ impl App {
                         base,
                         None,
                         None,
+                        false,
                     );
                     if m.view != view {
                         self.show(b); // refitted: the basemap of the new view under it (else black; review)

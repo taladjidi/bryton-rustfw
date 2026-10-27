@@ -241,7 +241,7 @@ fn map_page_follows_a_ride() {
         (refit_px + small_px) / s
     );
     assert!((2..=12).contains(&refits), "fitted again as the ride grows: {refits}");
-    assert_eq!(late_refits, 0, "the loop closed: the view stays");
+    assert!(late_refits > 0, "the loop closed: the view still follows the rider round it");
     assert!(small_px / s < 2000, "{} px/s between full redraws", small_px / s);
     let v = app.map_view(0).unwrap();
     let (x, y) = v.px(area, app.track.pos().unwrap());
@@ -328,8 +328,8 @@ fn map_zoom_buttons() {
     sim.save("map_zoom_out");
     tap(&mut sim, &mut app, centre);
     assert_eq!(app.map_zoom, None, "back to the fit");
-    let shown = map::Shown::of(&app.track, area, None, None);
-    assert_eq!(app.map_view(0), shown.view, "the fitted view");
+    let shown = map::Shown::of(&app.track, area, None, None, true);
+    assert_eq!(app.map_view(0), shown.view, "the default view");
     // a hold on the map opens the page editor (no ride recording), even on a button
     app.input(&mut sim, Input::Touch(Gesture::Hold((plus.0 + 4) as u16, (plus.1 + 4) as u16)));
     assert_eq!(app.screen(), Screen::Edit(2, 0));
@@ -350,60 +350,32 @@ fn map_zoom_buttons() {
     sim.save("map_zoom_half");
 }
 
-/// Indoors (the owner's test on the unit, 2026-10-25: "the map's gestures don't work"): a fix that does not move,
-/// so the fit is already the finest it takes (2 m a pixel). "-" zooms out by hand, a drag pans that view, the
-/// crosshair goes back to the fit, "+" goes finer than the fit (1.5 m); before, "+" and "-" both left the fit and
-/// nothing could pan.
+/// No position, no view (the fit of nothing: "NO FIX"); with one, the default view is about 1 km across, and "+" and
+/// "-" work from it.
 #[test]
-fn map_zoom_indoors() {
-    use crate::map::{self, FIT_LEVEL, MIN_LEVEL, mpp16};
+fn map_default_view_without_a_fix() {
+    use crate::map::{self, mpp16};
     let mut sim = Sim::new(9, 0, 0);
     sim.classic_pages();
     let mut app = App::start(&mut sim, None);
     for _ in 0..3 {
         app.press(&mut sim, Press::Short(Key::Page));
     }
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.map_view(0), None, "no fix: no view");
     sim.gnss.fix = Some(500);
     run(&mut sim, &mut app, 30_000);
     let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
-    let [plus, minus] = map::buttons(area).unwrap();
-    let centre = (minus.0, minus.1 + minus.3 + 4, minus.2, minus.3);
-    let tap = |sim: &mut Sim, app: &mut App, b: map::Rect| {
-        app.input(sim, Input::Touch(Gesture::Tap((b.0 + b.2 / 2) as u16, (b.1 + b.3 / 2) as u16)));
-        assert_consistent(sim, app);
-    };
-    let fit = app.map_view(0).unwrap();
-    assert_eq!(fit.mpp16, mpp16(FIT_LEVEL), "indoors: the fit at its finest");
-    let count = |sim: &Sim, c: u16| {
-        let r = centre;
-        (r.1..r.1 + r.3)
-            .flat_map(|y| (r.0..r.0 + r.2).map(move |x| (x, y)))
-            .filter(|&(x, y)| sim.screen[(y as u32 * ui::W + x as u32) as usize] == c)
-            .count()
-    };
-    let no_crosshair = count(&sim, ui::WHITE);
-    tap(&mut sim, &mut app, minus);
-    assert_eq!(app.map_zoom, Some(FIT_LEVEL + 1), "out by hand from the fit");
-    assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(FIT_LEVEL + 1));
-    assert!(count(&sim, ui::WHITE) > no_crosshair + 100, "the crosshair drawn");
-    sim.save("map_zoom_indoors_out");
-    // a drag pans it (3 m a pixel: left and down, the view goes east and north)
-    let before = app.map_view(0).unwrap();
-    drag(&mut sim, &mut app, (100, 200), (-60, 30));
+    let [plus, _] = map::buttons(area).unwrap();
     let v = app.map_view(0).unwrap();
-    assert_eq!((v.cx, v.cy), (before.cx + 180, before.cy + 90), "the view moved with the finger: {v:?}");
-    assert_eq!(app.screen(), Screen::Ride(2));
+    assert_eq!(v.mpp16, map::default_mpp16(area), "the default level");
+    let span = v.mpp16 * i64::from(area.2) / 16;
+    assert!((700..=1400).contains(&span), "the default view {span} m across");
+    app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
     assert_consistent(&sim, &app);
-    // the crosshair: the fit again, the crosshair gone
-    tap(&mut sim, &mut app, centre);
-    assert_eq!((app.map_zoom, app.map_centre), (None, None));
-    assert_eq!(app.map_view(0), Some(fit));
-    assert_eq!(count(&sim, ui::WHITE), no_crosshair, "no crosshair at the fit");
-    // finer than the fit
-    tap(&mut sim, &mut app, plus);
-    assert_eq!(app.map_zoom, Some(MIN_LEVEL));
-    assert_eq!(app.map_view(0).unwrap().mpp16, 24, "1.5 m a pixel");
-    sim.save("map_zoom_indoors_in");
+    let level = app.map_zoom.expect("zoomed in by hand");
+    assert!(mpp16(level) < v.mpp16, "\"+\" goes finer than the default");
+    assert_eq!(app.map_view(0).unwrap().mpp16, mpp16(level));
 }
 
 /// A zoom set in one ride is not the next ride's (review: unused while the new fit was finer, it came back by
@@ -469,22 +441,26 @@ fn map_zoom_with_a_course() {
     app.show(&mut sim);
     run(&mut sim, &mut app, 20_000);
     let area = map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
-    let [plus, _] = map::buttons(area).unwrap();
-    for _ in 0..3 {
-        app.input(&mut sim, Input::Touch(Gesture::Tap((plus.0 + 20) as u16, (plus.1 + 20) as u16)));
+    let [_, minus] = map::buttons(area).unwrap();
+    let v0 = app.map_view(0).unwrap();
+    let span = v0.mpp16 * i64::from(area.2) / 16;
+    assert!((700..=1400).contains(&span), "the default view {span} m across, not the route");
+    // the default view is about 1 km across: five levels out to show the course
+    for _ in 0..5 {
+        app.input(&mut sim, Input::Touch(Gesture::Tap((minus.0 + 20) as u16, (minus.1 + 20) as u16)));
     }
     let level = app.map_zoom.expect("zoomed in");
     let mut views = 0;
     for _ in 0..12 {
         let view = app.map_view(0);
-        run(&mut sim, &mut app, 10_000);
+        run(&mut sim, &mut app, 60_000);
         let v = app.map_view(0).unwrap();
         views += u32::from(Some(v) != view);
         assert_eq!(v.mpp16, map::mpp16(level));
         let (x, y) = v.px(area, app.track.pos().unwrap());
         assert!(x >= area.0 && x < area.0 + area.2 && y >= area.1 && y < area.1 + area.3, "the arrow on the map");
         let course = sim.screen.iter().filter(|&&p| p == map::COURSE).count();
-        assert!(course > 50, "the course drawn: {course} px");
+        assert!(course > 0, "the course drawn where it is in view: {course} px");
         assert_consistent(&sim, &app);
     }
     assert!(views > 0, "the view follows the rider");

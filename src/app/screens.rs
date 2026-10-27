@@ -255,9 +255,13 @@ impl App {
             Widget::Notices => {
                 Drawn::Print(self.notes.list.iter().fold(0x811c_9dc5, |h, n| fnv(h, n.as_str().as_bytes())))
             }
-            Widget::Field(Field::Map) => {
-                Drawn::Map(map::Shown::of(&self.track, map::area(bx), self.route().as_ref(), self.zoom()))
-            }
+            Widget::Field(Field::Map) => Drawn::Map(map::Shown::of(
+                &self.track,
+                map::area(bx),
+                self.route().as_ref(),
+                self.zoom(),
+                self.page_follow(),
+            )),
             Widget::Field(Field::Profile) => Drawn::Profile(self.profile_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WorkoutGraph) => Drawn::Workout(self.workout_now(ui::plot_area(bx).2)),
             Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
@@ -308,6 +312,11 @@ impl App {
     }
 
     /// The map's zoom set by hand, if any.
+    /// A page's map follows the rider at the default level (no zoom set by hand): outdoors. Indoors, the fit.
+    pub(crate) fn page_follow(&self) -> bool {
+        !self.indoors()
+    }
+
     pub(crate) fn zoom(&self) -> Option<map::Zoom> {
         self.map_zoom.map(|level| map::Zoom { level, centre: self.map_centre })
     }
@@ -445,7 +454,7 @@ impl App {
         }
         if self.screen == Screen::Summary {
             let (_, _, cols, _) = ui::card::ELEV;
-            let m = map::Shown::of(&self.track, map::area(ui::card::MAP), None, None);
+            let m = map::Shown::of(&self.track, map::area(ui::card::MAP), None, None, false);
             self.summary = Some((m, self.graph_summary(cols)));
         }
         if let (Some((v, o)), false) = (self.card_view(), self.emmc.lent()) {
@@ -506,14 +515,14 @@ impl App {
             let now = match (w, old) {
                 (_, Drawn::Map(mut m)) => {
                     let area = map::area(bx);
-                    let (zoom, route) = (self.zoom(), self.route());
-                    if first == Some(i) && map::refit(area, &self.track, &m, route.as_ref(), zoom) {
-                        let view = map::Shown::of(&self.track, area, route.as_ref(), zoom).view;
+                    let (zoom, route, follow) = (self.zoom(), self.route(), self.page_follow());
+                    if first == Some(i) && map::refit(area, &self.track, &m, route.as_ref(), zoom, follow) {
+                        let view = map::Shown::of(&self.track, area, route.as_ref(), zoom, follow).view;
                         self.render_basemap(b, area, view);
                     }
                     let (base, route) = ((first == Some(i)).then_some(&self.basemap), self.route());
                     let mut p = Panel(b, self.area(), self.settings.smooth);
-                    map::update(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom);
+                    map::update(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom, follow);
                     Drawn::Map(m)
                 }
                 (_, Drawn::Graph(g)) => self.update_graph(b, g, bx),
