@@ -152,13 +152,17 @@ Cost is about calls x context size, so the main session (Opus) orchestrates and 
 | Agent | Model | Turns | For |
 |-------|-------|-------|-----|
 | `implementer` | Sonnet, worktree | 120 | features, UI, menus, ordinary fixes |
-| `critical` | Opus, worktree | 150 | the recorder, storage writes, power, boot, hw.rs, security |
+| `critical` | Opus, worktree | 150 | only the part that writes storage or touches the recorder, power, boot, hw.rs, security |
 | `mechanic` | Haiku | 40 | docs, status ticks, gallery, FLASHLOG, renames, a fix a review spelled out |
-| `reviewer` | Opus, read-only | 60 | one pass on a diff, a findings list |
+| `reviewer` | Sonnet (Opus for recorder, storage, boot), read-only | 60 | one pass on a diff, a findings list |
 | `runner` | Haiku | 30 | check.sh, merging a worktree branch, scripted sessions on the unit |
 
 - **Briefs:** goal, files and line ranges, tests to add, what is out of scope. Work that would pass the turn cap is
-  split into two briefs.
+  split into two briefs. A feature with a costly part is split: `critical` writes that part, `implementer` the rest
+  (settings, menus, UI, tests) on the same branch.
+- **Worktrees fork from the commit main had when the session started**, not from main now: a worktree agent merges
+  main first.
+- **Measured 2026-10-27:** a Sonnet review found everything an Opus one did, plus one more, at 2/3 of the cost.
 - **The main session does no legwork:** it does not poll, gate runs and merges go to `runner`, it reads a file only to
   write a brief.
 - **One review per feature:** `reviewer` once, its findings to `mechanic` (spelled out) or `implementer`; a second
