@@ -300,3 +300,65 @@ fn midnight_reads_the_calendar_again() {
     assert_eq!(app.plan.day, Some(app.date), "read again");
     assert_consistent(&mut sim, &mut app);
 }
+
+/// A unit whose scan has run (so the history is ready), holding exactly `rides` (moving seconds) dated today, and
+/// the sweet spot planned today.
+fn with_rides(rides: &[u32]) -> (Sim, App) {
+    let (mut sim, mut app) = unit();
+    app.stock.start(app.date);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+    }
+    let base = app.stock.index.get(0).copied().expect("a synthetic ride");
+    app.stock.index.clear();
+    for &timer_s in rides {
+        app.stock.index.add(crate::history::Ride {
+            start: (app.date.0, app.date.1, app.date.2, 7, 0),
+            timer_s,
+            ..base
+        });
+    }
+    plan(&mut app, &[(0, &sweet_spot())]);
+    app.show(&mut sim);
+    (sim, app)
+}
+
+fn done_pixels(sim: &Sim) -> usize {
+    let (x, y, w, h) = ui::DONE_BOX;
+    (y..y + h)
+        .flat_map(|r| (x..x + w).map(move |c| (r, c)))
+        .filter(|&(r, c)| sim.screen[(r * W + c) as usize] == ui::GREEN)
+        .count()
+}
+
+/// A saved ride of the day that is long enough marks the workout done on the card and in the list; a short one
+/// does not.
+#[test]
+fn a_ride_of_the_day_marks_the_workout_done() {
+    let (mut sim, mut app) = with_rides(&[3600]);
+    assert_consistent(&mut sim, &mut app);
+    assert!(app.workout_done(0));
+    assert!(done_pixels(&sim) > 0, "the tag");
+    sim.save("overview_done");
+    app.open(Screen::Menu(Menu::Workouts, 0));
+    app.show(&mut sim);
+    assert_consistent(&mut sim, &mut app);
+    sim.save("workouts_done");
+    let (mut sim, mut app) = with_rides(&[2000]);
+    assert_consistent(&mut sim, &mut app);
+    assert!(!app.workout_done(0));
+    assert_eq!(done_pixels(&sim), 0);
+}
+
+/// The workout played to its end counts whatever the ride; before the scan has the rides nothing is marked.
+#[test]
+fn a_workout_played_to_its_end_is_done() {
+    let (_sim, mut app) = with_rides(&[600]);
+    assert!(!app.workout_done(0));
+    app.plan.file = app.plan.calendar.iter().next().map(|p| p.file);
+    app.workout_event(crate::workout::Event::Done);
+    assert!(app.workout_done(0));
+    let (_, mut app) = unit();
+    plan(&mut app, &[(0, &sweet_spot())]);
+    assert!(!app.workout_done(0), "scan not ready");
+}

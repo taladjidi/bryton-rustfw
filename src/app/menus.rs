@@ -421,6 +421,9 @@ impl App {
                 let p = self.plan.calendar.get(k)?;
                 label.push_str(date_text(p.day).as_str());
                 push_hm(&mut value, p.total_s);
+                if self.workout_done(k) {
+                    color = ui::GREEN;
+                }
             }
             Row::WorkoutStart => {
                 push_hm(&mut value, self.plan.workout.total_s());
@@ -518,7 +521,14 @@ impl App {
                 {
                     // the day over the length, and the workout's profile beside them: "SAT 24 OCT" is "SAT 24"
                     let day = label.as_str().rsplit_once(' ').map_or(label.as_str(), |d| d.0);
-                    return ui::draw_workout_row(c, slot, (day, value.as_str()), i == sel, &p.prof);
+                    return ui::draw_workout_row(
+                        c,
+                        slot,
+                        (day, value.as_str()),
+                        i == sel,
+                        &p.prof,
+                        self.workout_done(k),
+                    );
                 }
                 ui::draw_menu_row(c, slot, label.as_str(), value.as_str(), color, i == sel && !inert);
                 if let Some(menu::Row::Edit(r @ (menu::EditRow::SplitAcross | menu::EditRow::SplitDown))) =

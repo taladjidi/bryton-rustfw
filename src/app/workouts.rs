@@ -88,6 +88,43 @@ impl App {
         self.plan.calendar.iter().find(|p| p.day == self.date)
     }
 
+    fn today_index(&self) -> usize {
+        self.plan.calendar.iter().position(|p| p.day == self.date).unwrap_or(0)
+    }
+
+    /// Planned workout `k` is done: played to its end today, or a ride of its day matches it
+    /// ([`history::done_mask`]). Never before the scan has the rides (no wrong mark).
+    pub(crate) fn workout_done(&self, k: usize) -> bool {
+        let Some(p) = self.plan.calendar.get(k) else { return false };
+        if p.day == self.date && self.plan.played == Some(p.file) {
+            return true;
+        }
+        if !self.stock.ready() {
+            return false;
+        }
+        let (mut want, mut rides) = ([0u32; 8], [0u32; 8]);
+        let (mut at, mut n) = (0, 0);
+        for (i, q) in self.plan.calendar.iter().enumerate().filter(|(_, q)| q.day == p.day).take(8) {
+            if let Some(w) = want.get_mut(n) {
+                *w = q.total_s;
+            }
+            if i == k {
+                at = n;
+            }
+            n += 1;
+        }
+        let mut m = 0;
+        for r in (0..history::RIDES).map_while(|i| self.stock.index.get(i)) {
+            if (r.start.0, r.start.1, r.start.2) == p.day
+                && let Some(s) = rides.get_mut(m)
+            {
+                *s = r.timer_s;
+                m += 1;
+            }
+        }
+        history::done_mask(&want[..n], &rides[..m]) >> at & 1 != 0
+    }
+
     /// The overview's TODAY card whole ([`ui::draw_today`]).
     pub(crate) fn draw_today(&self, c: &mut impl Canvas) {
         let mut hm = Line::<8>::new();
@@ -95,7 +132,10 @@ impl App {
             (Some(p), _) => {
                 push_hm(&mut hm, p.total_s);
                 let name = if p.name.as_str().is_empty() { "WORKOUT" } else { p.name.as_str() };
-                ui::draw_today(c, ui::Today::Planned(name, hm.as_str(), &p.prof));
+                ui::draw_today(
+                    c,
+                    ui::Today::Planned(name, hm.as_str(), &p.prof, self.workout_done(self.today_index())),
+                );
             }
             (None, Some(_)) => ui::draw_today(c, ui::Today::Rest),
             (None, None) => ui::draw_today(c, ui::Today::Pending),
@@ -107,6 +147,7 @@ impl App {
         let h = fnv(0x811c_9dc5, &[self.date.1, self.date.2, u8::from(self.plan.day.is_some())]);
         let Some(p) = self.today() else { return h };
         fnv(fnv(fnv(h, p.name.as_str().as_bytes()), &p.total_s.to_le_bytes()), &p.prof)
+            ^ u32::from(self.workout_done(self.today_index()))
     }
 
     /// Reads planned workout `k` and shows its steps. One workout at a time: while one runs, only its own steps
@@ -186,7 +227,10 @@ impl App {
         let mut l = Line::<20>::new();
         match ev {
             workout::Event::Countdown(_) => return self.tones.play(&Self::COUNT_TONE),
-            workout::Event::Done => l.push_str("WORKOUT DONE"),
+            workout::Event::Done => {
+                self.plan.played = self.plan.file; // the day's mark ([`App::workout_done`]); not kept over a restart
+                l.push_str("WORKOUT DONE")
+            }
             workout::Event::Step(i) => {
                 l.push_u32(i as u32 + 1);
                 l.push_str("/");

@@ -153,6 +153,27 @@ impl Acc {
     }
 }
 
+/// Which of one day's planned workouts (`planned_s`, seconds) the day's rides (`rides_s`, moving time) did: a bit per
+/// workout. Longest workout first, each takes the shortest unused ride of at least 80 % of its length, so two workouts
+/// need two rides. Only the first 32 of each count. (Planned TSS is not kept in the calendar: time only.)
+pub fn done_mask(planned_s: &[u32], rides_s: &[u32]) -> u32 {
+    let (n, m) = (planned_s.len().min(32), rides_s.len().min(32));
+    let (mut done, mut seen, mut used) = (0u32, 0u32, 0u32);
+    for _ in 0..n {
+        let Some((w, &len)) =
+            planned_s.iter().enumerate().take(n).filter(|&(i, _)| seen >> i & 1 == 0).max_by_key(|&(i, &s)| (s, n - i))
+        else {
+            break;
+        };
+        seen |= 1 << w;
+        let fits = |&(j, &r): &(usize, &u32)| used >> j & 1 == 0 && r > 0 && 5 * u64::from(r) >= 4 * u64::from(len);
+        if let Some((j, _)) = rides_s.iter().enumerate().take(m).filter(fits).min_by_key(|&(_, &r)| r) {
+            (done, used) = (done | 1 << w, used | 1 << j);
+        }
+    }
+    done
+}
+
 /// The newest [`RIDES`] rides, newest first.
 pub struct Index {
     rides: [Ride; RIDES],
@@ -414,6 +435,17 @@ impl Samples {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn workouts_match_rides_of_their_day() {
+        assert_eq!(done_mask(&[3600], &[]), 0, "no rides");
+        assert_eq!(done_mask(&[3600], &[2800]), 0, "short ride (78 %)");
+        assert_eq!(done_mask(&[3600], &[2880]), 1, "80 % is enough");
+        assert_eq!(done_mask(&[3600, 3000], &[3700]), 1, "two workouts, one ride: the longest gets it");
+        assert_eq!(done_mask(&[3600, 3000], &[3700, 2500]), 3);
+        assert_eq!(done_mask(&[3000, 3600], &[2500, 3700]), 3, "order of the list does not matter");
+        assert_eq!(done_mask(&[0], &[0]), 0, "a ride must have moved");
+    }
 
     fn ride(y: u16, d: u8) -> Ride {
         Ride { start: (y, 10, d, 8, 0), ..NONE }

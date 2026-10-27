@@ -280,6 +280,8 @@ pub(crate) struct Plan {
     pub(crate) file: Option<fat::File>,
     /// Where it is (workout.rs); None: not running.
     pub(crate) player: Option<workout::Player>,
+    /// The workout played to its end (its file; counts for its day only).
+    pub(crate) played: Option<fat::File>,
 }
 
 impl Plan {
@@ -292,6 +294,7 @@ impl Plan {
             workout: storage::workout_file::Workout::new(),
             file: None,
             player: None,
+            played: None,
         }
     }
 
