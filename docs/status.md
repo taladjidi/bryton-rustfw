@@ -72,6 +72,16 @@ The dated findings are in [journal.md](journal.md).
 - **After the fix** (`touch_edge` clears the pending bit on every call): `usb` at 43 to 44 calls a second, 0.05 % of wall
   time, in 12 runs of two layouts; the dev link and `info` work. A tap on the panel after the fix is still to see.
 
+## Seen on the unit: the profiler and the performance pass (2026-10-27, from RAM, owner away)
+
+- **`tools/profile.py`** from RAM (30 s windows; no card writes: the ride scenario left out): idle overview 1.72 %
+  awake before the performance pass (54d3f0a), 1.55 % after; a ride page 1.51 % then 1.32 %; menus with a key every
+  0.5 s 2.75 % then 1.82 %, a menu move 7.6 then 4.0 ms on average (the panel's SPI, about 1 us a pixel, sets it),
+  the worst 161 then 95 ms. GNSS 113 then 45 us a pass, the light sensor 45 then 28 us a call.
+- **`info`'s new `cpu` figure** (99e6f5e): 12 per mille on the overview after the touch fix, beside `awake` 11.
+- **Not seen on the unit yet:** the flattened menus and the quick panel (f935c0f), the refactors B1 to B3 (behaviour
+  kept by the tests; the unit only booted and ran the profile scenarios on them).
+
 ## Not yet seen on the unit
 
 - **The profiler (link/prof.rs, `dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the
