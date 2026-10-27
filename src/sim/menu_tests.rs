@@ -713,3 +713,36 @@ pub(super) fn main_row(app: &App, i: usize) -> std::string::String {
     let (label, value, _) = app.menu_row(m, i).unwrap();
     format!("{} {}", label.as_str(), value.as_str())
 }
+
+/// While recording, the cog on the overview still opens the menu (the owner, 2026-10-27): a setting changed there
+/// applies, and the ride goes on recording.
+#[test]
+fn cog_opens_settings_while_recording() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    for _ in 0..10 {
+        if app.screen() == Screen::Main {
+            break;
+        }
+        app.input(&mut sim, Input::Back); // the overview is Back from the ride pages
+        run(&mut sim, &mut app, 1000);
+    }
+    assert_eq!(app.screen(), Screen::Main);
+    let g = crate::ui::GEAR_TAP;
+    app.input(&mut sim, Input::Touch(Gesture::Tap((g.0 + g.2 / 2) as u16, (g.1 + g.3 / 2) as u16)));
+    assert_consistent(&sim, &app);
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Ride(_), _)), "the cog's menu: {:?}", app.screen());
+    let light = app.settings.light_level;
+    to_row(&mut sim, &mut app, menu::Row::Set(menu::Setting::Light));
+    app.input(&mut sim, Input::Select);
+    assert_ne!(app.settings.light_level, light, "the backlight changed while recording");
+    run(&mut sim, &mut app, 5000);
+    assert_eq!(app.ride.state(), crate::ride::State::Running, "still recording");
+    assert_eq!(app.rec.clean.phase(), crate::recorder::Phase::Recording);
+}

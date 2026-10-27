@@ -232,9 +232,9 @@ fn perf_budgets() {
         ("six values, 4 Hz sensors", [values, graph, map], 0, None, true, (3_000, 12)),
         // 646, 17: the changed columns of two graphs, a step of 5 bars every 10 s
         ("two graphs", [graph, values, map], 0, None, false, (1_000, 30)),
-        // 1494, 33: the track's new segments and the arrow, refits included (1260 before the fit kept the arrow
-        // clear of the zoom buttons, 1211 without them)
-        ("map", [map, values, graph], 0, None, false, (1_800, 50)),
+        // 1985, 40: the default view (about 1 km across, following the rider: a whole map at each re-centre when the
+        // rider leaves the middle three fifths); the budget is that plus 10 %; 1494, 33 with the fit of the whole track
+        ("map", [map, values, graph], 0, None, false, (2_200, 50)),
         // 584, 3: on the course, the profile's rider column (a whole profile at each eighth), two values, and the
         // hill's left turn said twice (2026-10-25: 456 before the cues; a banner and the page under it again, about
         // 19 000 px each)
