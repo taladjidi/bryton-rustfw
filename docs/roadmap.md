@@ -5,7 +5,7 @@ stock firmware in bryton-S510-mods, what riders ask of Garmin, Wahoo, Hammerhead
 reviews), and the hardware facts in BOARD.md. Phase 1 comes first because everything after it adds pages, fields,
 settings and menu rows.
 
-Every phase keeps the split of AGENTS.md (Layout): protocols, decisions and drawing in the library, which cannot
+Every phase keeps the split of AGENTS.md (Layout, docs/layout.md): protocols, decisions and drawing in the library, which cannot
 reach a register (`check.sh` checks it keeps `forbid(unsafe_code)`); `main.rs` only moves bytes and bits through
 `Board` primitives. A new chip gets primitives in the shape of the existing ones (the touch controller reuses the
 I2C ones with a bus number) and a model in the simulator. Each phase ends with a read of `main.rs` for any decision
