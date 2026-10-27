@@ -293,7 +293,7 @@ fn user_made_pages() {
 
 /// The file and the registers: a damaged file falls back to the registers (three pages, as they keep them);
 /// registers another build changed win for their pages, the file's others kept; a build that may not write the card
-/// keeps its pages in the registers only and never touches the card for them.
+/// keeps its changes in the registers only and never writes the card for them.
 #[test]
 fn file_and_registers() {
     let (mut sim, mut app) = started();
@@ -330,17 +330,49 @@ fn file_and_registers() {
     let regs: Vec<Page> = saved.pages[..3].iter().map(|p| Page::from(p.to_cfg())).collect();
     assert_eq!(pages(&app3), regs);
 
-    // read only: the registers at once, the card never touched
+    // read only: the registers at once, the card never written
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     (sim.writable, sim.backup) = (false, other);
+    let image = sim.emmc.image.clone();
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 3000);
     app.pages[0] = p4;
     app.pages_changed(&mut sim);
     assert_eq!(PageCfg::from_words([sim.backup[20], sim.backup[21]]), Some(p4.to_cfg()));
     run(&mut sim, &mut app, 3000);
-    assert!(sim.emmc.cmds.is_empty(), "{:?}", &sim.emmc.cmds[..4.min(sim.emmc.cmds.len())]);
+    assert!(sim.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
+    assert!(sim.emmc.image == image, "the card unchanged");
+}
+
+/// A build that may not write the card (a RAM build without EMMC_WRITE=1) still reads the file: a page of a layout
+/// the registers cannot keep (here power and heart rate full width over 2 x 2) shows as the file has it, not as the
+/// registers' nearest layout (2X3, layout 6: what a RAM build showed the owner on 2026-10-27); the card unwritten.
+#[test]
+fn a_read_only_build_shows_the_files_pages() {
+    let (mut sim, mut app) = started();
+    let free = Page {
+        rows: [(1, 1), (1, 1), (1, 2), (1, 2), (0, 0)],
+        fields: [Power3s, Hr, Speed, Dist, Timer, Ascent, Time, Time],
+    };
+    assert!(free.valid() && free.preset_id().is_none(), "free-form");
+    app.pages[0] = free;
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 200);
+    assert_eq!(file(&sim).unwrap().pages[0], free);
+    assert_eq!(reg_page(&sim).map(|c| c.layout), Some(6), "the registers keep the 2X3 fallback");
+
+    let mut ro = Sim::new(9, 5, 0);
+    (ro.emmc.image, ro.backup, ro.writable) = (sim.emmc.image.clone(), sim.backup, false);
+    let (image, backup) = (ro.emmc.image.clone(), ro.backup);
+    let mut app = App::start(&mut ro, None);
+    assert_eq!(app.pages()[0], Page::from(reg_page(&ro).unwrap()), "the registers' page before the file is read");
+    run(&mut ro, &mut app, PAGES_LOAD_MS as u64 + 200);
+    assert_eq!(app.pages()[0], free, "the file's page");
+    assert_eq!(pages(&app), pages(&reboot(&mut sim).1), "as a writable build shows them");
+    assert!(ro.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
+    assert!(ro.emmc.image == image, "the card unchanged");
+    assert_eq!(ro.backup[PAGE_BKP[0][0]..=PAGE_BKP[REG_PAGES][1]], backup[PAGE_BKP[0][0]..=PAGE_BKP[REG_PAGES][1]]);
 }
 
 /// A power cut after every sector of a write of the pages, the first (the file created) and a later one (a copy

@@ -52,19 +52,21 @@ fn a_ride_reset_resumed_and_saved() {
 }
 
 /// A build that may not write the card (the unit's, until EMMC_WRITE=1): a ride says NOT RECORDING once and the
-/// card gets no command at all during it (the recorder used to read both FATs and retry every 5 s).
+/// card gets no command at all during it (the recorder used to read both FATs and retry every 5 s), once the
+/// rider's files are read after the start (pages, pairing, bond, altitude: read, never written).
 #[test]
 fn read_only_build_does_not_touch_the_card() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     sim.writable = false;
     let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 1000);
+    run(&mut sim, &mut app, 5000);
     let cmds = sim.emmc.cmds.len();
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 20_000);
     assert!(app.notes.list[0].as_str().ends_with("NOT RECORDING"), "{}", app.notes.list[0].as_str());
     assert_eq!(sim.emmc.cmds.len(), cmds, "no card work during the ride");
+    assert!(sim.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
 }
 
 /// The record times of the ride file at `path` on the volume `img`.

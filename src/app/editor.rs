@@ -176,12 +176,11 @@ impl App {
         }
     }
 
-    /// The pages' file read when it is time, written when the pages changed and no ride is open.
+    /// The pages' file read when it is time, written when the pages changed and no ride is open. A build that may not
+    /// write the card reads it too: the registers keep a page of a layout earlier builds lack as their nearest one, so
+    /// without the file it would show another layout (2026-10-27, a RAM build showed the owner's page 1 as 2X3).
     #[inline(never)]
     pub(crate) fn step_pages(&mut self, b: &mut impl Board) {
-        if !self.card_writable {
-            return;
-        }
         if !self.pages_writable_soon() {
             self.hold_pages(b);
         }
@@ -192,7 +191,7 @@ impl App {
         if !self.store.loaded && self.store.tries < LOAD_TRIES && due {
             self.load_pages(b);
         }
-        if self.store.dirty && self.pages_writable_soon() {
+        if self.card_writable && self.store.dirty && self.pages_writable_soon() {
             if !self.store.sound && !self.sync_fats_step(b) {
                 return; // the FAT copies compared over the next passes first
             }
@@ -226,7 +225,7 @@ impl App {
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
     /// is made to the file's pages, not to the registers' copy (which would then be written over the file's).
     pub(crate) fn ensure_pages(&mut self, b: &mut impl Board) {
-        if self.card_writable && !self.emmc.lent() && !self.store.loaded {
+        if !self.emmc.lent() && !self.store.loaded {
             self.load_pages(b);
         }
     }
