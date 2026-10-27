@@ -776,7 +776,7 @@ fn gps_power_auto_follows_the_riding() {
 }
 
 /// An MTB ride tracks continuously whatever GPS POWER says: SAVER's cyclic tracking before Start, continuous
-/// within a pass of it, and while paused (the ride still open).
+/// within a pass of it, and while paused (the ride still open); SAVER's again once it is saved.
 #[test]
 fn an_mtb_ride_tracks_continuously() {
     let mut sim = Sim::new(9, 0, 0);
@@ -795,6 +795,11 @@ fn an_mtb_ride_tracks_continuously() {
     app.press(&mut sim, Press::Short(Key::Start)); // pause: the ride is still open, still continuous
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.gnss.pm_mode, 0, "paused: still the MTB ride's");
+    app.press(&mut sim, Press::Long(Key::Start)); // the end-ride screen, SAVE selected
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Idle, "saved");
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(sim.gnss.pm_mode, 2, "the ride over: SAVER again");
 }
 
 /// A key stuck down since the start does not keep the light on (2026-10-25 review: the time-out never came).

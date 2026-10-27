@@ -24,17 +24,16 @@
 //! Doing this twice is harmless.
 //!
 //! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 11 (MTB), bit 12 (the full
-//! copy describes
-//! `ArtPct`: `ARTIFACTS`), bit 13 (the profile set by
-//! hand), bit 14 (this layout: lap and session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16
+//! copy describes `ArtPct`: `ARTIFACTS`), bit 13 (the profile set by hand), bit 14 (this layout: lap and session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16
 //! (developer fields), the ascent (17..30) and bit 31 (the build before sub_sport: total_ascent, no sport). A record
 //! without this layout reads as a road ride and has its lap and session defined again. This build never sets bit
-//! 31, so the build before, resuming its ride, defines its own lap and session again too. Every build since the
-//! first reads bits 0..15 as the mask and only compares it with the next record's (`mask != self.mask`), so bits
-//! 11 to 15 there only define the record message again at the next second (a later definition of a local type
-//! replaces the earlier one: FIT protocol); the build just before MTB reads the mask as bits 0..9 and ignores bit 11.
-//! So a build before MTB resumes an MTB ride as a road ride: its lap and session say road, nothing is lost. A build
-//! before total_ascent reads neither layout bit and is not covered (as before).
+//! 31, so the build before, resuming its ride, defines its own lap and session again too. The builds before the
+//! ride profile (706e1ca) read bits 0..15 as the mask and only compare it with the next record's
+//! (`mask != self.mask`), so bits 11 to 15 there only define the record message again at the next second (a later
+//! definition of a local type replaces the earlier one: FIT protocol); from 706e1ca on, builds read the mask as bits
+//! 0..9 (`& 0x3ff`), so the ones before MTB ignore bit 11. Either way a build before MTB resumes an MTB ride as a
+//! road ride: its lap and session say road, nothing is lost. A build before total_ascent reads neither layout bit
+//! and is not covered (as before).
 //!
 //! The profile ([`Sample::profile`], [`Sample::by_hand`]) is the last second's, or the one given since by
 //! [`Writer::set_profile`] (a change while paused): what the end and the record carry.

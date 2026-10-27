@@ -36,8 +36,7 @@ impl App {
 
     /// The ride is an MTB ride: climbs ahead follow paths and tracks.
     pub(crate) fn mtb(&self) -> bool {
-        // shortcut: wired to ride::Profile::Mtb when the profile lands
-        false
+        self.ride_profile() == ride::Profile::Mtb
     }
 
     /// Once a second: the rider on the trace, a new trace when needed, a climb to say.

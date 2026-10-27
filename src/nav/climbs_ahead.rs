@@ -290,6 +290,12 @@ impl Ahead {
         self.attr >> 4 == SLOW
     }
 
+    /// Trails mode is on ([`Ahead::set_trails`]).
+    #[cfg(test)]
+    pub fn trails(&self) -> bool {
+        self.trails
+    }
+
     /// Trails mode on or off; a change drops the trace (and what it found) so it is made again, the tiles stay.
     pub fn set_trails(&mut self, on: bool) {
         if self.trails != on {
