@@ -762,6 +762,7 @@ impl App {
             self.settings.cycle(s);
             self.save_misc(b);
             self.update_light(b);
+            self.gps.reconfig |= s == menu::Setting::GpsPower; // the receiver told at its next message
             if s == menu::Setting::Font {
                 // every text changes at once: the strip and the screen drawn whole
                 self.notes.drawn = false; // the banner too, if one is up

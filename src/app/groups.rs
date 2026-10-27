@@ -120,6 +120,8 @@ pub(crate) struct Gps {
     pub(crate) ms: u32,
     /// Messages sent to the receiver so far: configuration, time, position.
     pub(crate) sent: u8,
+    /// The configuration goes again at the next message (the GPS POWER setting changed).
+    pub(crate) reconfig: bool,
     /// Passes left before the receiver is read again while it has nothing ([`GNSS_IDLE_PASSES`]).
     pub(crate) wait: u8,
     /// The receiver is switched off for an indoor ride (app/gps.rs `gnss_switch`).
@@ -139,6 +141,7 @@ impl Gps {
             pvt_ms: 0,
             ms: 0,
             sent: 0,
+            reconfig: false,
             wait: 0,
             off: false,
             aid,
@@ -167,6 +170,8 @@ pub(crate) struct Radio {
     pub(crate) heard_ms: [u32; Kind::ALL.len()],
     /// Since each sensor's channel was closed by its search time-out (`u32::MAX`: not resting).
     pub(crate) resting_ms: [u32; Kind::ALL.len()],
+    /// Each sensor's searches in a row that found nothing: its rest grows with them ([`crate::search_rest_ms`]).
+    pub(crate) misses: [u8; Kind::ALL.len()],
     /// Channels that sent data while searching: ask the chip which sensor it found.
     pub(crate) ask: u8,
     /// The sensors heard in the NEARBY search.
@@ -186,11 +191,22 @@ impl Radio {
             sensors,
             heard_ms: [u32::MAX; Kind::ALL.len()],
             resting_ms: [u32::MAX; Kind::ALL.len()],
+            misses: [0; Kind::ALL.len()],
             ask: 0,
             nearby: nrf::Nearby::new(),
             scanning: false,
             gear: None,
             shifts: 0,
+        }
+    }
+
+    /// A ride starts: the channels resting search again at the next pass, from the first rest (a strap put on just
+    /// before Start is found at once, not after a long rest).
+    pub(crate) fn wake_rested(&mut self) {
+        for (r, m) in self.resting_ms.iter_mut().zip(&mut self.misses) {
+            if *r != u32::MAX {
+                (*r, *m) = (u32::MAX - 1, 0);
+            }
         }
     }
 

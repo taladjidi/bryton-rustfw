@@ -451,6 +451,9 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   14, stock's scan channels, extended: 14 on 0, 13 on 1). `Ant_SetNetworkKeys` 0xd027d6d4 sets key 0 from the table
   at 0x24010410 and key 1 from 8 bytes on (in R039's image, the 8 bytes after the ANT+ key: `tools/ant_key.py`).
   Every channel at 2457 MHz (0x39), low-priority search time-out 0xff (power: 7 and 0x61, not traced).
+  This firmware sets the low-priority search time-out to 12 (30 s) and rests a channel closed after a search that
+  found nothing (1, 2, then 4 minutes; app/radio.rs): a searching channel keeps the radio listening (ANT Message
+  Protocol and Usage, search time-outs; recalled), about 5 mA on an nRF52 (docs/power.md, estimated).
   Shimano's channel sends its button page as acknowledged data (ANT message 0x4f, stock's `Ant_Di2_OnAntEvent`). Close: `06 c5 [ch]`, answered `01 c5 [result]`, then an ANT event with event code 0x07 (channel closed)
   in byte 42 and the channel in byte 43 (inferred from the ANT message format; the simulator models it).
 - **BLE sensors (central), traced in stock, not yet tried on the unit** (Ghidra; ser_*_enc / _dec):
@@ -593,6 +596,15 @@ From stock (Ghidra: `Gps_SpiInit` 0xd018af34, `Gps_SetPower` 0xd01f10ac) and **s
      polled         64 bytes per 50 ms pass (2 x 32-byte transfers)
 
 - **Indoors:** no fix, 0 satellites (seen). A fix: to see.
+- **Power modes and currents** (u-blox M10 SPG 5.10 interface description UBX-21035062 R02, 4.9.15; MAX-M10S data sheet
+  UBX-20035208 R08, table 15, 3 V, 1 Hz; the figures are the module's, the board's part is not known): CFG-PM-OPERATEMODE
+  (0x20d00001) 0 FULL (continuous), 1 PSMOO (on / off), 2 PSMCT (cyclic tracking). Tracking at VCC: 9.5 mA continuous
+  and 5 mA cyclic for the default GPS + Galileo + BeiDou B1I, 8 mA for GPS + Galileo, 7.5 for GPS; V_IO about 2.2 mA
+  more. Stock has a GPS power setting (`gpsPW`, `Gps_PowerIndexToModeCmd` 0xd01f34a8: off, full, "trickle power",
+  GLONASS, BeiDou) and in its power save mode switches to another constellation group after about 10 minutes of a
+  good fix (`Gps_AutoSelectConstellationGroup` 0xd0254ab0); the UBX commands of each group are not traced. This
+  firmware: FULL, or PSMCT with BIKE > GPS POWER SAVER (RAM layer, `gnss::config`); not seen on the unit yet.
+  docs/power.md has the estimates.
 - **Switched off for an indoor ride (app/gps.rs `gnss_switch`):** PI6 low while a ride runs with the INDOOR profile
   (a u-blox M10 draws about 7 to 8 mA tracking), high again at the ride's end or when the profile goes to ROAD, 1 s
   later like the cold start (the line has been low over 1 s), then the configuration, the time and the position are
