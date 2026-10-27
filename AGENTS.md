@@ -389,6 +389,28 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   Tests use stand-in keys. `tools/font.py`, `tools/pixel_font.py`: the fonts.
 - `link.x`, `pack.py`: memory map and the update file. `pack.py` re-checks what the stock updater checks.
 
+## AI agents: the right model for the task
+
+Cost is about calls x context size, so the main session (Opus) orchestrates and typed agents do the work
+(definitions in `~/.claude/agents/`, each with its model and a turn cap, `maxTurns`; a hook,
+`~/.claude/hooks/agent_models.py`, refuses forks and any agent that would run on Opus by default):
+
+| Agent | Model | Turns | For |
+|-------|-------|-------|-----|
+| `implementer` | Sonnet, worktree | 120 | features, UI, menus, ordinary fixes |
+| `critical` | Opus, worktree | 150 | the recorder, storage writes, power, boot, hw.rs, security |
+| `mechanic` | Haiku | 40 | docs, status ticks, gallery, FLASHLOG, renames, a fix a review spelled out |
+| `reviewer` | Opus, read-only | 60 | one pass on a diff, a findings list |
+| `runner` | Haiku | 30 | check.sh, merging a worktree branch, scripted sessions on the unit |
+
+- **Briefs:** goal, files and line ranges, tests to add, what is out of scope. Work that would pass the turn cap is
+  split into two briefs.
+- **The main session does no legwork:** it does not poll, gate runs and merges go to `runner`, it reads a file only to
+  write a brief.
+- **One review per feature:** `reviewer` once, its findings to `mechanic` (spelled out) or `implementer`; a second
+  review only for recorder, storage or boot changes.
+- Every merge still passes `./check.sh`, whatever model wrote the code.
+
 ## Before every commit
 
     ./check.sh
