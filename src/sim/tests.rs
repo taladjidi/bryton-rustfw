@@ -1757,14 +1757,18 @@ fn font_choice_register_round_trip() {
     assert_eq!((a.smooth, l.as_str()), (true, "SMOOTH"));
 }
 
-/// main.rs's loop: a pass, then a sleep of [`App::pass_ms`] in [`TOUCH_MS`] slices, ended at once by a key going
-/// down while idle (its EXTI line on the unit). Returns when each pass started.
+/// main.rs's loop: a pass, then a sleep of [`App::pass_ms`] in [`TOUCH_MS`] slices, ended at once while idle by a
+/// key going down (its EXTI line on the unit) or, while the chip is read ([`App::radio_up`]), by a byte from it
+/// (USART2's line); the chip's bytes flushed while it is not. Returns when each pass started.
 fn run_main(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<u64> {
     let (end, mut passes) = (sim.ms + ms, Vec::new());
     while sim.ms < end && !sim.standby {
         passes.push(sim.ms);
         app.step(sim);
-        let (idle, mut slept, mut keys) = (app.pass_ms() > POLL_MS, 0, sim.keys_down());
+        let (idle, radio, mut slept, mut keys) = (app.pass_ms() > POLL_MS, app.radio_up(), 0, sim.keys_down());
+        if !radio {
+            sim.nordic.out.clear();
+        }
         while slept < app.pass_ms() {
             sim.delay_ms(TOUCH_MS);
             slept += TOUCH_MS;
@@ -1772,7 +1776,7 @@ fn run_main(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<u64> {
                 app.input(sim, i);
             }
             let now = sim.keys_down();
-            if idle && now & !keys != 0 {
+            if idle && (now & !keys != 0 || radio && !sim.nordic.out.is_empty()) {
                 break;
             }
             keys = now;
@@ -1818,4 +1822,44 @@ fn nordic_link_at_the_idle_rate() {
     assert_eq!(app.live.get(Metric::Hr), Some(72));
     assert_eq!((app.watch.resyncs, app.watch.resets), (0, 0));
     assert!(sim.nordic.out.is_empty(), "every byte the chip sent was read");
+}
+
+/// The chip not started (dead: the watchdog backs off between attempts): its stray bytes neither wake the idle loop
+/// nor wait for ever, so the loop stays at 4 passes a second (review of d28032a: a byte nobody reads would end
+/// every WFI).
+#[test]
+fn idle_loop_ignores_bytes_from_a_chip_not_started() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.nordic.dead = true;
+    let mut app = App::start(&mut sim, Some(KEY));
+    run_main(&mut sim, &mut app, 40_000);
+    assert!(!app.radio_up());
+    let mut passes = 0;
+    for _ in 0..40 {
+        sim.nordic.stray(0x5a);
+        passes += run_main(&mut sim, &mut app, 250).len();
+    }
+    assert!(passes <= 44, "{passes} passes in 10 s");
+    assert!(sim.nordic.out.is_empty(), "flushed");
+}
+
+/// A tone started after an idle pass of 250 ms keeps its whole length: the alert's first beep lasts its 100 ms
+/// (review of d28032a: the pass before was taken off it, so it lasted 0 to 50 ms).
+#[test]
+fn alert_beep_from_an_idle_pass_keeps_its_length() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run_main(&mut sim, &mut app, 40_000);
+    assert_eq!(app.pass_ms(), IDLE_POLL_MS);
+    app.tones.play(&BEEP_ALERT);
+    let n0 = sim.tones.len();
+    let mut at = Vec::new(); // when each tone was set
+    while at.len() < 2 && sim.ms < 50_000 {
+        let n = sim.tones.len();
+        let t = run_main(&mut sim, &mut app, 1)[0];
+        at.extend((n..sim.tones.len()).map(|_| t));
+    }
+    assert_eq!(sim.tones[n0..n0 + 2], [2500, 0]);
+    let beep = at[1] - at[0];
+    assert!((100..=100 + u64::from(POLL_MS)).contains(&beep), "first beep {beep} ms");
 }

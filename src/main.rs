@@ -856,6 +856,7 @@ const U_CR1: u32 = USART2;
 const U_CR3: u32 = USART2 + 0x08;
 const U_BRR: u32 = USART2 + 0x0c;
 const U_ISR: u32 = USART2 + 0x1c;
+const U_RQR: u32 = USART2 + 0x18;
 const U_ICR: u32 = USART2 + 0x20;
 const U_RDR: u32 = USART2 + 0x24;
 const U_TDR: u32 = USART2 + 0x28;
@@ -1395,21 +1396,29 @@ fn key_lines_init() {
     wr(EXTI_CPUPR1, KEY_LINES);
 }
 
-/// The key lines and the Nordic chip's bytes end WFI (on) or not (off). A pending IRQ wakes WFI with PRIMASK set
+/// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`radio`: only while the app reads them, or
+/// a byte nobody reads would end every WFI and the loop would spin). A pending IRQ wakes WFI with PRIMASK set
 /// (ARMv7-M ARM B1.5.19), the way the touch line already does; no handler runs.
-fn wake_on_io(on: bool) {
-    wr(if on { NVIC_ISER0 } else { NVIC_ICER0 }, KEY_IRQS);
-    wr(if on { NVIC_ISER0 + 4 } else { NVIC_ICER0 + 4 }, USART2_IRQ);
+fn wake_on_io(keys: bool, radio: bool) {
+    wr(if keys { NVIC_ISER0 } else { NVIC_ICER0 }, KEY_IRQS);
+    wr(if radio { NVIC_ISER0 + 4 } else { NVIC_ICER0 + 4 }, USART2_IRQ);
 }
 
-/// A key went down since the last call (its EXTI flag, cleared here), or a byte from the Nordic chip waits.
-fn io_edge() -> bool {
+/// A key went down since the last call (its EXTI flag, cleared here), or (`radio`) a byte from the Nordic chip
+/// waits.
+fn io_edge(radio: bool) -> bool {
     let keys = rd(EXTI_CPUPR1) & KEY_LINES;
     if keys != 0 {
         wr(EXTI_CPUPR1, keys); // write 1 to clear
         let _ = rd(EXTI_CPUPR1); // the write done
     }
-    keys != 0 || rd(U_ISR) & ISR_RXFNE != 0
+    keys != 0 || radio && rd(U_ISR) & ISR_RXFNE != 0
+}
+
+/// Drops what the Nordic chip sent while the app does not read it (no chip started: `App::radio_up`): RQR.RXFRQ
+/// flushes the RX FIFO (RM0399 USART_RQR), so RTS lets it on and nothing stale waits for the next start.
+fn nrf_flush() {
+    wr(U_RQR, 1 << 3);
 }
 
 /// SCL and SDA of an I2C bus: AF4, open drain, not driven while being set up.
@@ -1814,8 +1823,12 @@ fn main() -> ! {
         // idle: a longer sleep (App::pass_ms), ended at once by a key or a byte from the Nordic chip, so neither
         // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before)
         let idle = app.pass_ms() > POLL_MS;
+        let radio = app.radio_up();
+        if !radio {
+            nrf_flush();
+        }
         if idle {
-            wake_on_io(true);
+            wake_on_io(true, radio);
         }
         'sleep: loop {
             let left = app.pass_ms().saturating_sub(slept); // a finger down makes it POLL_MS again
@@ -1836,7 +1849,14 @@ fn main() -> ! {
                         Effect::Run(size) => {
                             l.linger(50);
                             l.disconnect();
-                            wake_on_io(false); // an older image's sleep would not clear these lines: it would spin
+                            // an older image's sleep does not clear these lines: a pending one would end its every
+                            // WFI, the spin standby's WFI showed on 2026-10-25 (main.rs `standby`, BOARD.md 9). So
+                            // the key lines masked and cleared (RM0399 EXTI CPUIMR1 / CPUPR1), the NVIC lines off,
+                            // and USART2's RXFNEIE (CR1 bit 5, RM0399 USART_CR1) off
+                            wake_on_io(false, false);
+                            modify(EXTI_CPUIMR1, KEY_LINES, 0);
+                            wr(EXTI_CPUPR1, KEY_LINES);
+                            modify(U_CR1, 1 << 5, 0);
                             hw::run_staged(size);
                         }
                         e => woke |= app.serve(&mut board, l, &session, e),
@@ -1862,7 +1882,7 @@ fn main() -> ! {
                     app.set_usb(&mut board, dot);
                     app.prof().span(Sec::Usb, usb_at, cycles());
                 }
-                let (edge, done, io) = (touch_edge(), timer_done(), idle && io_edge());
+                let (edge, done, io) = (touch_edge(), timer_done(), idle && io_edge(radio));
                 if edge || done || io || press.is_some() || woke {
                     // a key from the link acts now, so the next command cannot replace it; board work done for the
                     // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
@@ -1889,7 +1909,7 @@ fn main() -> ! {
             }
         }
         if idle {
-            wake_on_io(false);
+            wake_on_io(false, false);
         }
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
         board.sleep = (slept, sleep_cycles / (CPU_HZ / 1_000_000));

@@ -171,7 +171,9 @@ impl App {
         let (t, dt) = (&mut self.tones, self.dt_ms);
         if t.ms > 0 {
             t.ms = t.ms.saturating_sub(dt);
-            return;
+            if t.ms > 0 {
+                return;
+            }
         }
         if t.left.is_empty() && !t.on {
             t.left = t.queue[0];
@@ -181,7 +183,8 @@ impl App {
         match t.left.split_first() {
             Some((&(hz, len), rest)) => {
                 b.beep(hz);
-                (t.left, t.ms, t.on) = (rest, len.saturating_sub(dt), true);
+                // its whole length from now: the pass before (an idle one is 250 ms) was not part of it
+                (t.left, t.ms, t.on) = (rest, len, true);
             }
             None if t.on => {
                 b.beep(0);

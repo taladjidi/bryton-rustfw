@@ -197,10 +197,15 @@ calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the
 2. FMC: wait until not busy, self-refresh command, wait FMC_SDSR MODES2 = self-refresh.
 3. PWR_CPUCR PDDS_D1 / D2 / D3 = 0 (Stop, not Standby), PWR_CR1 SVOS (SVOS3 keeps the D3 peripherals that can wake
    the system running; SVOS5 is lower and still wakes on EXTI and the RTC: DS12930 3.5.3), RCC_CFGR STOPWUCK = HSI
-   (the wake clock), SCB_SCR.SLEEPDEEP = 1, DSB, WFI.
-4. Wake: HSI at once (tWUSTOP 4.4 us typical at VOS3, 39 us at VOS5, table 49); HSE on and ready (tSU(HSE) 2 ms,
-   table 52: the longest step, so PLL1 from HSI instead is worth trying), PLL1 on and locked (tLOCK 50 us typical,
-   150 max), SYSCLK back to PLL1P (200 MHz, the bus dividers are kept), SLEEPDEEP = 0.
+   (the wake clock), SCB_SCR.SLEEPDEEP = 1, DSB, WFI. On the dual-core H747, D3 is shared: it stops only when
+   neither CPU keeps it running, so CPU2's own register, PWR_CPU2CR (PDDS_D3 = 0, RUN_D3 = 0), must allow it too
+   (RM0399 PWR, "Power management", the domain and system low-power modes and PWR_CPU2CR; the M4 never started here
+   leaves it at reset, inferred). Read back before the first WFI.
+4. Wake: HSI at once (tWUSTOP 4.4 us typical at VOS3, 39 us at VOS5, table 49); the regulator back at the Run voltage
+   before any higher clock: wait PWR_D3CR.VOSRDY and PWR_CSR1.ACTVOSRDY (RM0399 PWR, "Voltage scaling" and the exit
+   from Stop: from SVOS4 / SVOS5 the Run VOS is restored by hardware, and 200 MHz needs it there); HSE on and ready
+   (tSU(HSE) 2 ms, table 52: the longest step, so PLL1 from HSI instead is worth trying), PLL1 on and locked (tLOCK 50
+   us typical, 150 max), SYSCLK back to PLL1P (200 MHz, the bus dividers are kept), SLEEPDEEP = 0.
 5. FMC: normal mode command, wait MODES2 = normal; RTS back to its alternate function; return to the SDRAM code.
 6. PWR_CPUCR.STOPF says whether the system really was in Stop (it is also what a DIAG stage reads).
 
@@ -234,9 +239,10 @@ DIAG stage before it is trusted):
    CSleep WFI of 100 ms, then the image's CRC is checked against the one at boot. With the cable in, from RAM
    (`dev.py run`): the first step, and nothing written to the eMMC.
 2. **One Stop of a second, from RAM:** the same command disconnects USB, enters Stop with the RTC wakeup timer,
-   restores the clocks and the SDRAM, writes STOPF, the image's CRC and the wake time to a backup register, then a
-   system reset (the RAM image is gone, the installed firmware starts with the USB link up): `dev.py peek` of the
-   register says whether it worked. Nothing installed, and a hang ends at the four-button restart.
+   restores the clocks and the SDRAM, writes STOPF, PWR_CPU2CR, the cycles waited for VOSRDY / ACTVOSRDY, the image's
+   CRC and the wake time to backup registers, then a system reset (the RAM image is gone, the installed firmware
+   starts with the USB link up): `dev.py peek` of the register says whether it worked. Nothing installed, and a hang
+   ends at the four-button restart.
 3. **Stop between passes, on battery:** a `DIAG_STOP` build installed with the owner present, the breadcrumbs counting
    Stop entries and returns (as `STANDBY_BKP`), and the battery history before and after (this page's plan).
 
