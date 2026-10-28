@@ -810,4 +810,5 @@ fn auto_off_waits_for_the_recorder() {
     // 5 min of idle (AUTO OFF 5) plus a margin for the second-by-second count
     run(&mut sim, &mut app, 360_000);
     assert!(sim.standby, "AUTO OFF 5 did not switch off within its time");
+    assert_eq!(sim.backup[RIDE_BKP], 0);
 }

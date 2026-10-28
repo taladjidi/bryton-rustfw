@@ -212,6 +212,7 @@ impl App {
         play(b, &BEEP_OFF);
         if self.light.measuring {
             ambient::light_stop(b);
+            self.light.measuring = false; // the rest of this pass (standby returns on the Sim) must not read it
         }
         b.backlight(0);
         panel::off(b);
