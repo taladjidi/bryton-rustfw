@@ -85,7 +85,7 @@ A feature not listed here was seen on the unit.
   road ahead has, the trace made again when the road bends away from the one traced; the climbs against what stock
   shows for the same ride; `dev.py info` ends with "climb tile us last N max M": the time of the last and the longest tile read, inflated and
   decoded (estimated 15 ms at the median, about 80 ms for the largest tile that fits the 96 KB buffer, 2080 nodes);
-  the AXI SRAM cell stays in `.bss` (`nm`: `make_ahead`, about 105 KB) and the unit
+  the AXI SRAM cell stays in `.bss` (`make_ahead`, about <!-- n:ahead -->106 KB<!-- /n -->) and the unit
   boots (a new static in `.axibss` is a core-level change: Renode, then `DIAG_STOP`).
 - **The GNSS receiver off when idle (app/gps.rs `gnss_idle`)**: only against the simulator. On the unit: indoors,
   the strip's GPS goes blank 5 minutes after power-on; outdoors with a fix, 10 minutes after the last key; the GPS

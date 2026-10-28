@@ -56,13 +56,13 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `pack.py` prints: about 625 KB (2026-10-28; stock's is over 3 MB). Size costs little here
+  - watch the image size `pack.py` prints: about <!-- n:image -->619 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
   when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
-  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about 15 KB left on 2026-10-28; link.x
+  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->15 KB<!-- /n --> left; link.x
   says what is where); a static there must start as all zeros (an `Option` of a reference or a struct with a bool niche
   does not) or it lands in `.data`, in DTCM. The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road
   ahead inflates tiles into.
@@ -170,6 +170,7 @@ It runs, in order:
 - the firmware build;
 - `tools/stack_check.py` (the stack frames against their budgets);
 - `pack.py`;
+- `tools/numbers.py --write` (the markers of the docs, each changed one printed) and `tools/numbers.py selftest`;
 - `dev.py selftest`, `tools/sync.py selftest`, `tools/s810_probe.py selftest`, `tools/route_pack.py selftest`;
 - `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python);
@@ -226,6 +227,8 @@ the `font_sheet` test) when choosing a text size.
 ## Docs
 
 - `//!` at the top of each file: what it is for.
+- A live number in the docs (a size, a count, a line total) is a `tools/numbers.py` marker, `<!-- n:NAME -->TEXT<!-- /n -->`,
+  rewritten by `numbers.py --write`; never typed by hand. Dated numbers (journal, measurements) stay as they were.
 - `///` on every public item (`#![warn(missing_docs)]` in lib.rs).
 - Comments say why, and where a value comes from; the code says what.
 - `cargo doc --target aarch64-apple-darwin --open` renders the library docs.

@@ -32,6 +32,10 @@ if command -v cargo-deny >/dev/null 2>&1; then cargo deny check -s; else echo "c
 cargo build --release
 python3 tools/stack_check.py
 python3 pack.py
+# the live numbers of the docs (markers, AGENTS.md Docs): after the tests and pack.py, so the ELF and the test list
+# exist; --write prints each marker it changed
+python3 tools/numbers.py --write
+python3 tools/numbers.py selftest
 python3 -I dev.py selftest
 python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1: no network
 python3 -I tools/s810_probe.py selftest  # the S810 owner's probe on a made-up volume: nothing personal comes out
