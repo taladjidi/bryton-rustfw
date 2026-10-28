@@ -14,8 +14,8 @@ sheets, at their test conditions), none was measured on the unit.
   the claim at that draw, a saving `dI` gives `30 x I / (I - dI)` hours. Example: if the unit draws 40 mA (then the
   cell is about 1200 mAh), 4.5 mA saved is 33.8 h instead of 30, 10 mA saved is 40 h.
 - **The total is unknown** because the largest part is probably the STM32H747 itself: in WFI sleep its core clock
-  and the SDRAM keep running (tens of mA, inferred; ST's data sheet DS12930 has the table, not read here). Stop mode
-  between seconds is docs/status.md's first next step and is not part of this page.
+  and the SDRAM keep running (16.5 to 47 mA for the MCU, DS12930 table 44, plus the SDRAM's). Stop mode between
+  passes is the plan below ("Stop mode: plan").
 
 ## Today, per part (a ride page outdoors in daylight, a phone connected, heart rate and power paired)
 
@@ -148,6 +148,102 @@ sheets, at their test conditions), none was measured on the unit.
   The panel stays on with the backlight off: the transflective panel is read by daylight.
 - **Light sensor** (LTR-308, measuring every 100 ms while AUTO is on) and **barometer** (LPS22HH, one reading a second
   while riding): about 0.1 mA and 0.01 mA (recalled from their data sheets): nothing to gain.
+
+## The main loop while idle (2026-10-28)
+
+- **Measured overnight before** (owner, on battery, the overview, backlight off): 12.2 h cost about 41 % of the
+  charge, about 3.4 % an hour; the CPU awake 0.8 % of the time, 20 passes a second of 0.4 ms each. So the CPU's work
+  is not what drains the cell: the floor is the sleep itself (WFI with the clocks and the SDRAM running, the panel,
+  the Nordic chip).
+- **Done (lib `App::pass_ms`, main.rs's sleep):** with no ride or its card, no key for 30 s (`IDLE_AFTER_MS`, the
+  default OFF AFTER), no finger, no tone or banner timed by the passes and the card not lent to the computer, a pass
+  every 250 ms (`IDLE_POLL_MS`) instead of 50. Nothing waits for it: the touch INT (as before), a key's falling edge
+  (EXTI 1 to 4, BOARD.md 5) and a byte from the Nordic chip (BOARD.md 11) end the sleep at once. A pending IRQ ends
+  WFI with PRIMASK set (ARMv7-M ARM B1.5.19: WFI completes on any exception that would be taken were PRIMASK clear),
+  so no handler is needed, as for the touch line. The timers count each pass's real length (`App::dt_ms`) already.
+  It applies with the cable in too: USB's own interrupt ends the sleep for its traffic (no SOF interrupt is unmasked),
+  which is also how it can be measured.
+- **Measured on the unit** (`dev.py run` from RAM, the overview, a phone connected, the GPS off after its search,
+  `dev.py prof` over 3 minutes): before, 21.2 passes a second of 0.44 ms, awake 0.99 %; after, 6.7 passes a second
+  of 0.73 ms, awake 0.52 %. A pass costs more because the work is per second more than per pass (the second's tick,
+  the radio's events); the Nordic chip's bytes wake the loop about 2.7 times a second, and the radio is now the
+  largest part (0.23 %). Half the CPU's awake time, which is a fraction of a mA (0.5 % of the difference between
+  Run and Sleep currents): the loop Stop mode needs (a long sleep that wakes on what matters) more than a saving in
+  itself.
+
+## Stop mode: plan (design, not built)
+
+**Why.** In WFI (CSleep) the STM32H747 draws 16.5 mA at VOS3, 200 MHz with every peripheral clock off and 47.1 mA
+with all on (DS12930 Rev 1, table 44, LDO, typical at 25 C); this firmware keeps FMC, SDMMC1, the RAMs, USART2,
+LPTIM1, TIM1, SYSCFG and the RTC clocked in sleep (BOARD.md 1), so somewhere between. With D1, D2 and D3 in Stop
+it draws 2.78 mA at SVOS3, 1.96 at SVOS4, 1.27 at SVOS5 (flash off, no IWDG; table 42). The SDRAM is the other
+part: in sleep the FMC clocks it at 50 MHz with CKE high (its standby current, tens of mA for an SDR SDRAM, inferred:
+the part is not known), in self-refresh it keeps its data on its own at about 1 mA or less (mobile SDR, inferred).
+**Expected saving: 15 to 45 mA of the MCU and some of the SDRAM's, between passes**, so the idle drain could fall
+to a half or a third (an estimate; the cell's capacity and the unit's total current are not known: the battery
+history before and after is the measure).
+
+**Can it run with the image in SDRAM?** Not as is: in Stop the FMC has no clock, and the SDRAM must be put in
+self-refresh first (FMC_SDCMR MODE = 101, bank 2; RM0399 FMC, "Self-refresh mode"), and nothing may fetch from it
+until it is back in normal mode with the clocks restored. So the entry, the WFI and the wake path run from ITCM
+(as the RAM-run trampoline does, link.x `.itcm`, 4 KB, copied at reset), with the stack in DTCM (retained in Stop)
+and interrupts masked (a fault there would fetch its vector from the SDRAM: none may happen, so no indexing, no
+calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the D-cache is off.
+
+**The sequence** (one hw.rs primitive, `stop(wake)`, in `.itcm`):
+1. Before: no DMA running (`PanelDma` idle), no tone (TIM1), no USB (VBUS low: USB needs VOS1 and its clocks, so no
+   Stop while the cable is in), the eMMC idle. RTS to the Nordic chip held high as a GPIO (PD4), so it keeps its bytes
+   rather than send into a stopped USART (what RTS does when USART2 is unclocked: inferred).
+2. FMC: wait until not busy, self-refresh command, wait FMC_SDSR MODES2 = self-refresh.
+3. PWR_CPUCR PDDS_D1 / D2 / D3 = 0 (Stop, not Standby), PWR_CR1 SVOS (SVOS3 keeps the D3 peripherals that can wake
+   the system running; SVOS5 is lower and still wakes on EXTI and the RTC: DS12930 3.5.3), RCC_CFGR STOPWUCK = HSI
+   (the wake clock), SCB_SCR.SLEEPDEEP = 1, DSB, WFI.
+4. Wake: HSI at once (tWUSTOP 4.4 us typical at VOS3, 39 us at VOS5, table 49); HSE on and ready (tSU(HSE) 2 ms,
+   table 52: the longest step, so PLL1 from HSI instead is worth trying), PLL1 on and locked (tLOCK 50 us typical,
+   150 max), SYSCLK back to PLL1P (200 MHz, the bus dividers are kept), SLEEPDEEP = 0.
+5. FMC: normal mode command, wait MODES2 = normal; RTS back to its alternate function; return to the SDRAM code.
+6. PWR_CPUCR.STOPF says whether the system really was in Stop (it is also what a DIAG stage reads).
+
+**Wake sources.**
+- The pass's timer: the RTC wakeup timer (RTC_WUTR, from RTCCLK / 16: 0.49 ms steps), its EXTI line (19 on this
+  family, recalled: to check in RM0399's EXTI event input table) unmasked for the CPU; or LPTIM2 on the LSE.
+- Keys (EXTI 1 to 4), the touch INT (EXTI 6), VBUS (PC13, EXTI 13, rising: today it is read each pass, which a
+  250 ms pass still does), the power key (WKUP1, EXTI 55, as standby): configurable EXTI lines wake from Stop at any
+  SVOS (DS12930 3.5.3, "wakeup ... through GPIO or asynchronous interrupt").
+- The Nordic chip: USART2 can wake from Stop (DS12930 3.32: start bit, received frame, FIFO status) with UESM and its
+  kernel clock HSI, but only at SVOS3, and at 1 Mbaud the first bytes arrive within 10 us of the start bit, so
+  whether the wake loses one is to see on the unit. Stock uses PH8, the chip's request line, as an EXTI wake-up
+  (BOARD.md 11): with RTS held high, PH8 (what it signals is to trace in Ghidra) or the next pass reads them.
+- The GNSS receiver (SPI4, polled) and the I2C sensors keep their data until read: nothing to wake for.
+
+**What breaks.**
+- SysTick stops with the core clock: the sleep's length must come from the RTC (RTC_SSR sub-seconds, 1/256 s with
+  PREDIV_S 255) or LPTIM2's counter, for `Board::last_sleep`, the uptime and the profiler's `slept_ms`. `delay_ms`
+  stays SysTick and WFI (CSleep): Stop is only for the sleep between passes.
+- DWT CYCCNT stops (it already stops in WFI), so awake time still counts work only; the wake (about 2 ms with HSE)
+  becomes a profiler section of its own, `wake`, or it looks like the step's.
+- The backlight's PWM (LPTIM1 on the LSE) runs on in Stop (DS12930 3.29.5: an LPTIM clocked by the LSE runs in Stop);
+  TIM1 (buzzer) does not, hence no Stop while a tone plays (`App::pass_ms` is fast then already).
+- The dev link: none (no Stop with the cable in), so Stop is measured by its breadcrumbs and the battery history.
+- The M4 core is never started (BOARD.md 1): D2 enters DStop when no running CPU holds its peripherals (RM0399 PWR,
+  domain states); whether the bootloader leaves the M4 gated so it does is what STOPF answers.
+
+**On the unit, in order** (each a step a review can stop at; AGENTS.md: a new step that touches the core gets a
+DIAG stage before it is trusted):
+1. **Self-refresh alone, no Stop:** a dev link command runs the ITCM routine with only steps 2 and 5 around a
+   CSleep WFI of 100 ms, then the image's CRC is checked against the one at boot. With the cable in, from RAM
+   (`dev.py run`): the first step, and nothing written to the eMMC.
+2. **One Stop of a second, from RAM:** the same command disconnects USB, enters Stop with the RTC wakeup timer,
+   restores the clocks and the SDRAM, writes STOPF, the image's CRC and the wake time to a backup register, then a
+   system reset (the RAM image is gone, the installed firmware starts with the USB link up): `dev.py peek` of the
+   register says whether it worked. Nothing installed, and a hang ends at the four-button restart.
+3. **Stop between passes, on battery:** a `DIAG_STOP` build installed with the owner present, the breadcrumbs counting
+   Stop entries and returns (as `STANDBY_BKP`), and the battery history before and after (this page's plan).
+
+**hw.rs would gain** one primitive: `stop(wake_ms) -> StopReport`, in `.itcm`, with its own volatile accesses
+inlined (no call into SDRAM code), its `// SAFETY:` saying why no SDRAM access can happen between the self-refresh
+command and its exit (interrupts masked, no fault path, everything it touches in ITCM, DTCM or peripherals). The RTC
+wakeup timer, the EXTI lines and RTS as a GPIO are ordinary register writes in main.rs.
 
 ## Measurement plan (for the owner)
 

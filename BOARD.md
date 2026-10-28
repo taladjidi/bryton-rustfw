@@ -192,7 +192,11 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 - PB4 leaves reset as NJTRST (alternate function, pull-up): it must be made an input (seen on the unit: MODER
   field 2, PUPDR pull-up, IDR high at rest). PA1, PB2 and PE3 read high at rest without a pull-up (external
   ones, inferred).
-- Stock reads them by EXTI falling edge and debounces 15 ms later. This firmware polls them every 50 ms.
+- Stock reads them by EXTI falling edge and debounces 15 ms later. This firmware polls them every pass (50 ms), and
+  while idle (passes of 250 ms, lib `App::pass_ms`) their falling edges end the sleep at once: EXTI lines 1 to 4 (PA1,
+  PB2, PE3, PB4; SYSCFG EXTICR1 / EXTICR2), IRQs 7 to 10 enabled in the NVIC only around that sleep (main.rs
+  `wake_on_io`), interrupts masked as for the touch line. **Inferred, not yet seen on the unit** (a finger needed:
+  `dev.py key` goes through the link); without it a press waits a pass, 250 ms at most.
 - Short and long presses (lib.rs `Keys`): a short press acts at the release; a long one acts once, while the key
   is still held, and its release does nothing.
 
@@ -415,6 +419,10 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
 - **This firmware (src/drivers/nrf.rs, seen on the unit 2026-10-23):** the same reset sequence, with USART2 on the HSI
   kernel clock (64 MHz, BRR 64) rather than the bootloader's PLL3; then `sd_ble_enable` and `sd_ble_version_get`
   without any `sd_ble_cfg_set`, both answered (result 0, version 4 / 1 / 50).
+- **Receiving:** polled (`nrf_recv`), the 16-byte RX FIFO and RTS keep the chip's bytes waiting, so nothing is lost
+  on this side however long a pass; how much the chip itself queues meanwhile is not known. So while idle (passes of
+  250 ms) a byte ends the sleep at once: CR1.RXFNEIE pends USART2's IRQ 38, enabled in the NVIC only around that
+  sleep (main.rs `wake_on_io`), interrupts masked.
 - **Power off:** `sd_power_system_off` (`00 32`), no response; stock sends nothing else first and leaves PA6 /
   PI4 as they are. The next start's reset pulse wakes the chip (nRF52 pin reset; inferred, to see on the unit).
 - **Scanning (API v5 layout, seen on the unit 2026-10-23):** `sd_ble_gap_scan_start` `00 8a 01 [flags]

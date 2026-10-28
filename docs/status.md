@@ -108,6 +108,8 @@ build (POWER_STEPS=15) gives the wall time.
 
 ## Not yet seen on the unit
 
+- **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: idle 30 s on the overview, then a real press of
+  each key acts at once (not up to 250 ms later); `dev.py prof` shows about 4 to 7 passes a second idle.
 - **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of
   0x20d00001 reads 2 after 11 minutes fast and straight, 0 within a second of a stop or a hairpin; the track and the
   speed against FULL's (and a speed sensor's) on the same road; the share of the ride in cyclic tracking.
