@@ -32,7 +32,7 @@ critical-section = "1.2"                                          # implemented 
 opt-level = "s"
 lto = true
 codegen-units = 1
-debug = true          # symbols stay in the ELF only; pack.py copies the loadable bytes
+debug = true          # symbols stay in the ELF only; tools/pack.py copies the loadable bytes
 panic = "abort"
 
 [profile.dev]

@@ -248,14 +248,14 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   port (it implements `Host`) and the mass storage interface (its class requests, and `msc::Pipe` over its bulk
   endpoints, each wait 1 s at most).
 - `src/board/hw.rs`: the unsafe primitives (above).
-- `dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
-- `tools/sync.py`: the computer's sync (docs/sync.md): rides from the mounted drive or the dev link (dev.py `ls` /
+- `tools/dev.py`: the computer side of the dev link. `renode/`: the emulator platform and checks.
+- `tools/sync.py`: the computer's sync (docs/sync.md): rides from the mounted drive or the dev link (tools/dev.py `ls` /
   `get`) to Intervals.icu (full copy) and Strava (clean copy), never twice; planned workouts from Intervals.icu to
   `\Workout\calendar`. Dry run unless `--go`; keys and tokens only in `~/.config/bryton-rustfw/` (0600), never in
   the repository. `sync.py selftest` (check.sh) runs against a fake server on 127.0.0.1.
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
-  after `dev.py reset`): a firmware that reads the link takes the bytes first.
+  after `tools/dev.py reset`): a firmware that reads the link takes the bytes first.
 - `tools/s810_probe.py`: what an S810 owner sends back (docs/s810.md, section 3): read only, the stock drive's
   versions, file shapes and the debug logs' hardware lines in one zip, nothing personal; `selftest` (check.sh).
 - `tools/fonts/`: Barlow Semi Condensed Bold (`BarlowSemiCondensed-Bold.ttf`) and its OFL.txt licence, for the SMOOTH fonts (`tools/font.py`).
@@ -264,7 +264,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   SHA256SUMS.
 - `tools/stack_check.py`: the firmware's stack frames against their budgets (check.sh, after the build).
 - `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
-  rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after pack.py), `--check` lists the stale ones, `selftest`.
+  rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after tools/pack.py), `--check` lists the stale ones, `selftest`.
 - `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo).
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
@@ -272,4 +272,4 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   key (the Di2 channel) is handled the same way: `di2_key.bin`, `DI2_KEY`, never printed, no hash of it kept.
   Tests use stand-in keys. `tools/font.py`, `tools/pixel_font.py`: the fonts.
 - `deny.toml`: cargo deny's policy (advisories, licences, duplicate crates), run by check.sh.
-- `link.x`, `pack.py`: memory map and the update file. `pack.py` re-checks what the stock updater checks.
+- `link.x`, `tools/pack.py`: memory map and the update file. `tools/pack.py` re-checks what the stock updater checks.

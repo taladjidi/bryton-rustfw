@@ -13,7 +13,7 @@ the full copy `\\Rustfw\\Activities\\<name>.fit` (Alpha1 and RMSSD in the record
 is one, else the clean one. Bryton's own server refuses the full one, so it never goes there (the Bryton app syncs
 from the unit itself). Every file is checked whole (its FIT CRCs) before it goes anywhere: a copy the USB link cut
 short is never uploaded. The rides found either on a mounted volume (this firmware's USB drive, or stock's) or
-through the dev link (dev.py `ls` / `get`, read only). Rides discarded at their end (`\\Rustfw\\Discarded`) and deleted
+through the dev link (tools/dev.py `ls` / `get`, read only). Rides discarded at their end (`\\Rustfw\\Discarded`) and deleted
 from the history (`\\Rustfw\\Deleted`) are never read.
 
 Workouts: Intervals.icu's planned workouts (events of category WORKOUT) of today and the next N days, each as FIT
@@ -229,11 +229,11 @@ def flush(fd):
 
 
 class Link:
-    """The dev link (dev.py), read only."""
+    """The dev link (tools/dev.py), read only."""
     writable = False
 
     def __init__(self):
-        sys.path.insert(0, str(ROOT))
+        sys.path.insert(0, str(ROOT / 'tools'))
         import dev
         self.dev = dev
         self.s = dev.connect()

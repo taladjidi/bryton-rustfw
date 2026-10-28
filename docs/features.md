@@ -342,7 +342,7 @@ MENU
   to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, WHEEL) goes to its next value.
 - **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
   altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
-  build is made from and its date; `dev.py info` gives the same commit).
+  build is made from and its date; `tools/dev.py info` gives the same commit).
 - **Where the rows were** before this tree (2026-10-25), old path -> new path: SENSORS > LUX / TEMP C / HPA -> SYSTEM >
   BUILT IN; RIDER > MAX HR, FTP W, WEIGHT KG, W' KJ -> SETTINGS > ME > MAX HR, FTP, WEIGHT, W'; RIDER > WKT POWER ->
   DISPLAY > GAUGE POWER; DEVICE > LIGHT % / LIGHT OFF / TOUCH -> DISPLAY > BRIGHTNESS / OFF AFTER / TOUCH; DEVICE >
@@ -701,10 +701,10 @@ The unit pairs with a phone as a Bluetooth accessory, with nothing to install on
 ## USB
 
 With a cable in, a dev link starts: screenshots, key presses, register and memory reads, the battery log, eMMC
-sector reads, and running a new build from RAM (`dev.py`, see docs/devloop.md). Unplugging resets the unit.
+sector reads, and running a new build from RAM (`tools/dev.py`, see docs/devloop.md). Unplugging resets the unit.
 
 **USB drive:** the computer can mount the eMMC's FAT volume (BRYTON: rides, routes, workouts, map tiles) without
-going back to stock. The unit is a card reader with the card out until SETTINGS > SYSTEM > USB DRIVE (or `dev.py drive`) lends
+going back to stock. The unit is a card reader with the card out until SETTINGS > SYSTEM > USB DRIVE (or `tools/dev.py drive`) lends
 it; refused with a banner while a ride runs (END THE RIDE FIRST), waits to be saved (RIDE NOT SAVED YET) or without
 the dev link up (CONNECT USB). Lent, nothing else touches the card: no ride can start (USB DRIVE ON), the scans, the
 basemap and the dev link's card commands wait. Ejecting on the computer gives it back; so does USB DRIVE again on

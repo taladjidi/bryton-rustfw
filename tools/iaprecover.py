@@ -4,7 +4,7 @@
 Needs sudo (libusb must take the device from the OS disk driver): sudo python3 tools/iaprecover.py …
   sudo python3 iaprecover.py [--out FILE] [--bytes N]   read the OS area, compare with vanilla IMG.raw
   sudo python3 iaprecover.py --write-vanilla            write vanilla IMG.raw to the OS area, verify every chunk
-  sudo python3 iaprecover.py --write out/IMG.bin        write a bryton-rustfw image (pack.py output) the same way
+  sudo python3 iaprecover.py --write out/IMG.bin        write a bryton-rustfw image (tools/pack.py output) the same way
   sudo python3 iaprecover.py --boot-sum                 compare the unit's bootloader with iap.bin (its byte sum, read-only)
 
 Put the unit in bootloader USB mode first: USB plugged in, press all four buttons to reboot, keep holding Page
@@ -20,7 +20,7 @@ handler for it: the reply is a stale buffer (seen on the unit 2026-10-22). So th
 Opcode 0x2A WRITE(10) with byte 6 = 0x0c writes 2 KB the same way (bootloader FUN_0800932c case 0xc).
 A failed sector write is only logged on the bootloader's debug UART (the CSW still says OK), so --write-vanilla
 reads every chunk back and stops at the first mismatch. Only the SHA256SUMS-verified vanilla image can be
-written, or with --write an IMG.bin that passes the checks pack.py and the stock updater make (bryton-rustfw).
+written, or with --write an IMG.bin that passes the checks tools/pack.py and the stock updater make (bryton-rustfw).
 Uses libusb through ctypes (no pyusb). sudo is needed so libusb can detach macOS's mass-storage driver.
 """
 import ctypes, ctypes.util, hashlib, os, struct, sys
@@ -114,7 +114,7 @@ def write_vanilla(h, van):
 
 
 def check_image(img):
-    """What the stock updater checks for a raw IMG.bin (BOARD.md 10), plus a sane vector table (as pack.py)."""
+    """What the stock updater checks for a raw IMG.bin (BOARD.md 10), plus a sane vector table (as tools/pack.py)."""
     sp, reset = struct.unpack_from('<2I', img, 0)
     tag = img[0x94:0x98]
     if not 0x100001 <= len(img) < 0xa00001:

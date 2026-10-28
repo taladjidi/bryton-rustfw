@@ -19,7 +19,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   FMC, SDMMC1, the TCMs, AXI SRAM, D2 SRAMs, SRAM4, BKPRAM, USB1 OTG HS + ULPI, LPTIM1, USART2, TIM1, SYSCFG, RTC
   (the flash interface and the GPIO ports included), and stops PLL2 (unless FMCSEL or SDMMCSEL is on it) and PLL3:
   nothing it uses runs from them. **Inferred, not yet seen on the unit.** Which PLLs and peripherals the
-  bootloader leaves on: to read (`dev.py peek 0x58024400` RCC_CR, `0x580244d4 9` RCC_AHB3ENR..APB4ENR,
+  bootloader leaves on: to read (`tools/dev.py peek 0x58024400` RCC_CR, `0x580244d4 9` RCC_AHB3ENR..APB4ENR,
   `0x580244fc 9` the LPENR registers).
 
 ## 2. Boot hand-off
@@ -48,7 +48,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
   - Switching the MPU off is not an option: the default memory map makes 0xc0000000..0xdfffffff execute-never.
   - **Unaligned reads from the SDRAM return wrong bytes** (seen on the unit, 2026-10-23, this firmware's region:
     normal, not cached). A 7-byte constant at 0xd000a0c3 copied with unaligned loads came out as `03 01 03 00`
-    for `02 01 03 04`: bytes from the neighbouring lanes. Aligned word reads of the same memory (`dev.py peek`)
+    for `02 01 03 04`: bytes from the neighbouring lanes. Aligned word reads of the same memory (`tools/dev.py peek`)
     are right. This firmware builds with `+strict-align` (.cargo/config.toml), so it never emits unaligned
     accesses; precompiled `core` code could still, and the D-cache (line fills are aligned bursts) would be the
     complete fix. Inferred cause: the FMC's handling of unaligned accesses to a 16-bit SDRAM, not traced. Stock
@@ -209,7 +209,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
   while idle (passes of 250 ms, lib `App::pass_ms`) their falling edges end the sleep at once: EXTI lines 1 to 4 (PA1,
   PB2, PE3, PB4; SYSCFG EXTICR1 / EXTICR2), IRQs 7 to 10 enabled in the NVIC only around that sleep (main.rs
   `wake_on_io`), interrupts masked as for the touch line. **Inferred, not yet seen on the unit** (a finger needed:
-  `dev.py key` goes through the link); without it a press waits a pass, 250 ms at most.
+  `tools/dev.py key` goes through the link); without it a press waits a pass, 250 ms at most.
 - Short and long presses (lib.rs `Keys`): a short press acts at the release; a long one acts once, while the key
   is still held, and its release does nothing.
 
@@ -384,7 +384,7 @@ The stock OS installs `IMG.bin` from the root of its USB drive at start-up, with
 - It must be larger than 1 MB, smaller than 10 MB, and end with a 4-byte trailer: the additive sum of all bytes before it, little
   endian. The OS writes it to the eMMC OS area and reads it back to check that sum.
 - The bootloader then copies it to 0xd0000000 at the next start (section 2).
-- `pack.py` builds this file and re-checks all of the above.
+- `tools/pack.py` builds this file and re-checks all of the above.
 - **Seen on the unit (2026-10-22):** a raw image is written from offset 0 of the OS area, trailer included, and
   the rest of the area keeps the previous image (Engineer Mode readback after installing this firmware).
 - In Engineer Mode the bootloader writes the OS area 2 KB at a time (`tools/iaprecover.py`); its write status is
@@ -671,7 +671,7 @@ From stock (Ghidra: `Buzzer_PwmInit` 0xd018b3f0, `Buzzer_PlayTone` 0xd018b54a, `
 
 ## 15. eMMC
 
-**Seen on the unit (2026-10-23, `dev.py emmc` / `sector`, read only, from RAM):**
+**Seen on the unit (2026-10-23, `tools/dev.py emmc` / `sector`, read only, from RAM):**
 - SEC_COUNT 0x3a40000 (31.3 GB); B = 0x3a2dfe6; OS area from 0x3a3d000.
 - The first 8 KB of the OS area equal the installed image as the bootloader copied it to SDRAM (`peek`).
 - **No MBR:** sector 0 is the FAT32 boot sector itself: OEM "MSWIN4.1", 512 bytes per sector, 32 sectors per
@@ -687,7 +687,7 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
 (`src/drivers/emmc.rs`, read only) runs only on the dev link's `emmc` and `sector` commands.
 
 - **Card:** a soldered eMMC (stock's log calls it "iNAND"), about 31 GB (SEC_COUNT about 0x3a3_e000, inferred
-  from the ~31 GB USB drive; to see with `dev.py emmc`).
+  from the ~31 GB USB drive; to see with `tools/dev.py emmc`).
 - **Pins** (stock's Mmc_MspInit 0xd018b790): PC8..PC11 D0..D3, PC12 CLK, PD2 CMD, all AF12, push-pull, no pull,
   very high speed. No card detect, no write protect.
 - **PF8:** stock drives it low 10 ms, then high, then waits 600 ms before a new card init after a pin or
@@ -698,7 +698,7 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
   at power-on, 126 (397 kHz) for identification, 2 (25 MHz) after (Mmc_SetClockSpeed 0xd018b896). Default speed,
   single data rate, no HS_TIMING switch (no 0x03b9.... literal in the image). Whether the bootloader's PLL1Q
   output (RCC_PLLCFGR DIVQ1EN, bit 17) is on: inferred from the bootloader reading the eMMC with SDMMCSEL at its
-  reset value, to see (`dev.py peek 0x5802442c`).
+  reset value, to see (`tools/dev.py peek 0x5802442c`).
 - **Controller settings, stock** (Mmc_Init 0xd018b824): falling clock edge (CLKCR NEGEDGE), power save (PWRSAV),
   4-bit bus, hardware flow control (HWFC_EN), DTIMER 0xffffff. Data path polled through the FIFO (0x80), no IDMA:
   read 8 words on RXFIFOHF until DCRCFAIL, DTIMEOUT, RXOVERR or DATAEND, then ICR = 0x1fe00fff
@@ -730,7 +730,7 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
   the same one sector at a time; with neither, plain writes as above. A cut during a reliable write leaves each
   sector old or new; during a plain one, JEDEC allows the sector being written to be garbage, and a cut tears what
   the recorder rewrites in place every minute (the ride's first and last sectors, its directory sector, a FAT
-  sector). The unit's two bytes: not read yet (`dev.py emmc` prints them; docs/status.md).
+  sector). The unit's two bytes: not read yet (`tools/dev.py emmc` prints them; docs/status.md).
 
       CMD   [CMD13]..[R1 tran] [CMD23 1<<31 | n]..[R1] [CMD25 lba]..[R1]                     [CMD13]..[prg]..[tran]
       D0..3                                                       [start][512 B][CRC16][end] x n ..[busy]
@@ -766,7 +766,7 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
 | B+0xf01a .. N-1 = N-0x3000 .. N-1 | 6 MB | OS area: what the bootloader copies to SDRAM (section 2) | bootloader 0x08007fe2 |
 
 - The USB drive of the stock OS is exactly sectors 0 .. B-1, so a read-only `dd` of it on a computer gives the
-  same bytes as `dev.py sector` there. The OS area starts with the installed image (section 10).
+  same bytes as `tools/dev.py sector` there. The OS area starts with the installed image (section 10).
 - Writes only from the ride recorder, inside the FAT volume; the one CMD6 is the bus width, a volatile byte the
   card clears at CMD0 and power-off. The card is identified at first use (the basemap, the dev link, a ride's
   start), and at boot only when backup register 30 says a ride is open.
@@ -902,7 +902,7 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
 | 0x12.. point slots | 00 ... | no valid bit: no finger |
 
   INT (PC6) read high with no finger, and polling it costs nothing measurable: awake 6 to 7 per mille before and
-  after the driver (`dev.py info`). Not checked yet (needs a finger): that INT goes low while a finger is down,
+  after the driver (`tools/dev.py info`). Not checked yet (needs a finger): that INT goes low while a finger is down,
   and the axes (expected: x 0 at the left, y 0 at the top, as the panel; to check, hold a finger near the top left
   corner and run `tools/i2c.py --touch read 0x55 0x12 3`: small x and y, valid bit set).
 - **Gestures:** none from the chip (register 0x10, gesture type, exists only on the ST1615 per the protocol doc;

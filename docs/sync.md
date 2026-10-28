@@ -129,7 +129,7 @@ tools/sync.py status     # what is configured, how many rides were uploaded
 ```
 
 - `--volume PATH` takes the volume from somewhere other than `/Volumes/BRYTON`.
-- `--link` reads the rides through the dev link (dev.py `ls` / `get`) without the drive; it uploads, but does not
+- `--link` reads the rides through the dev link (tools/dev.py `ls` / `get`) without the drive; it uploads, but does not
   write workouts.
 - `--days N` sets how many days of workouts to fetch.
 - Eject the drive when it is done: the unit takes the card back and restarts if the computer wrote to it.

@@ -9,7 +9,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 A feature not listed here was seen on the unit.
 
 - **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: idle 30 s on the overview, then a real press of
-  each key acts at once (not up to 250 ms later); `dev.py prof` shows about 4 to 7 passes a second idle.
+  each key acts at once (not up to 250 ms later); `tools/dev.py prof` shows about 4 to 7 passes a second idle.
 - **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of
   0x20d00001 reads 2 after 11 minutes fast and straight, 0 within a second of a stop or a hairpin; the track and the
   speed against FULL's (and a speed sensor's) on the same road; the share of the ride in cyclic tracking.
@@ -27,12 +27,12 @@ A feature not listed here was seen on the unit.
 
 - **A USB suspend (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`)**: decided on the host only; macOS
   would not suspend the idle unit while awake. With the owner: plug the unit in, let the Mac sleep for a minute, wake
-  it. Expected: the dot grey during the sleep, no "USB RECONNECT", `dev.py info` answers at once after the wake (same
-  uptime, no new enumeration), backup register 31 (`dev.py peek 0x580040cc`) unchanged.
+  it. Expected: the dot grey during the sleep, no "USB RECONNECT", `tools/dev.py info` answers at once after the wake (same
+  uptime, no new enumeration), backup register 31 (`tools/dev.py peek 0x580040cc`) unchanged.
 
-- **The profiler (link/prof.rs, `dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the
+- **The profiler (link/prof.rs, `tools/dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the
   counter's wrap, the `prof` answer). On the unit: `tools/profile.py --run` through its scenarios; the overhead `prof`
-  reports (a few tens of cycles a section expected), the sum of the rows near `dev.py info`'s awake permille, and the key
+  reports (a few tens of cycles a section expected), the sum of the rows near `tools/dev.py info`'s awake permille, and the key
   figures in README.md filled in from it.
 
 - **The ascent filter on a ride (altitude.rs, ride.rs)**: the median of 5, the 1/6 average, the slewed reference and the
@@ -40,7 +40,7 @@ A feature not listed here was seen on the unit.
   unit, a ride's ascent against a known climb and against stock's, with a calibration made at the start.
 - **The sliced tile load (climbs_ahead.rs, storage/inflate.rs, storage/route.rs, app/ahead.rs)**: before the change one
   tile took up to 238 ms in one pass on a ride; the longest slice is estimated at about 3 ms (host instruction counts,
-  scaled). On a ride, `dev.py info` ends with "climb tile us last N max M slice max S": S is to be seen under a few ms.
+  scaled). On a ride, `tools/dev.py info` ends with "climb tile us last N max M slice max S": S is to be seen under a few ms.
 
 - **The ramp test (ramp.rs, app/ramp.rs, WORKOUTS > RAMP TEST)**: only on the simulator. On the unit with the D500 or
   another trainer: the 5 min at 50 %, the one-minute steps in ERG, the stop on cadence under 60 rpm, on power under half
@@ -81,9 +81,9 @@ A feature not listed here was seen on the unit.
   graph's 2560 nodes; traces from 199 random places: 194 made, median 4 km, 111 climbs). On the unit, with a map file
   of the region copied to `\Map\MapData\<Region>` (stock's own has them): a ride shows CLIMB and CLIMB M after the first
   seconds (the tiles read one a pass: how long a pass takes with a 445-node tile, inflated 16 KB into the SDRAM
-  buffer, is to measure with `dev.py info`; inferred 20 to 50 ms), the banner and the beep 50 m before a climb the
+  buffer, is to measure with `tools/dev.py info`; inferred 20 to 50 ms), the banner and the beep 50 m before a climb the
   road ahead has, the trace made again when the road bends away from the one traced; the climbs against what stock
-  shows for the same ride; `dev.py info` ends with "climb tile us last N max M": the time of the last and the longest tile read, inflated and
+  shows for the same ride; `tools/dev.py info` ends with "climb tile us last N max M": the time of the last and the longest tile read, inflated and
   decoded (estimated 15 ms at the median, about 80 ms for the largest tile that fits the 96 KB buffer, 2080 nodes);
   the AXI SRAM cell stays in `.bss` (`make_ahead`, about <!-- n:ahead -->106 KB<!-- /n -->) and the unit
   boots (a new static in `.axibss` is a core-level change: Renode, then `DIAG_STOP`).
@@ -121,7 +121,7 @@ A feature not listed here was seen on the unit.
 - **The two links' configuration and the Bluetooth trainer, FTMS (nrf.rs `start`, drivers/ftms.rs, app/ftms.rs;
   phase 2)**: only against the simulator's chip and trainer. On the unit, in this order:
   1. `sd_ble_cfg_set` (`00 69 20 00 00 00 01 01 02 03 00`, then `00 69 40 00 00 00 01 01 01 00`) answered 0 and
-     `sd_ble_enable` after it answered 0 (else the chip is reset and started as before: `dev.py info` would show
+     `sd_ble_enable` after it answered 0 (else the chip is reset and started as before: `tools/dev.py info` would show
      two resets at the start, and SENSORS' BT TRAINER says NO LINK);
   2. the phone still pairs and comes back, advertising on tag 1 (the PHONE menu, media keys, a notification);
   3. SENSORS > BT TRAINER lists a real FTMS trainer (its service data or its UUID list), Select connects to it
@@ -156,13 +156,13 @@ A feature not listed here was seen on the unit.
 - **The end-ride screen (app/riding.rs `end_input`, recorder.rs "A discarded ride")**, with an EMMC_WRITE=1 build:
   a short ride, Start, Start held: END RIDE, the time and distance, RESUME selected; Page and Lap move, Back and
   RESUME leave it paused on its page; taps with gloves on each button. SAVE: the card (it stays on Page and Lap,
-  goes on Back or Start), `dev.py ls Activities` and `Rustfw/Activities` have it, the history lists it. Another ride,
-  DISCARD: "DISCARD RIDE?", KEEP selected; DISCARD: "RIDE DISCARDED", `dev.py ls Rustfw/Discarded` and
+  goes on Back or Start), `tools/dev.py ls Activities` and `Rustfw/Activities` have it, the history lists it. Another ride,
+  DISCARD: "DISCARD RIDE?", KEEP selected; DISCARD: "RIDE DISCARDED", `tools/dev.py ls Rustfw/Discarded` and
   `Rustfw/Discarded/Full` have it, `\Activities` not, the history and the totals as before; `tools/sync.py` (dry
-  run) does not list it. A restart (`dev.py reset`) with the screen up: "RIDE RESUMED", paused. The first ride after
+  run) does not list it. A restart (`tools/dev.py reset`) with the screen up: "RIDE RESUMED", paused. The first ride after
   this build makes `\Rustfw\Discarded\Full` at its start (the FATs compared first, a few seconds).
 
-- **The Nordic link watchdog (app/nrf_watch.rs)**: `dev.py info` ends with "radio resets 0" over a normal ride and a
+- **The Nordic link watchdog (app/nrf_watch.rs)**: `tools/dev.py info` ends with "radio resets 0" over a normal ride and a
   quiet hour (no sensor, no phone); with a strap and the phone linked, a reset of the chip from the dev link (`poke`
   of its reset line, not a DFU command) brings both back within a minute and "RADIO RESET" once; the ride keeps
   recording through it.
@@ -178,7 +178,7 @@ A feature not listed here was seen on the unit.
   buttons, the targets as "210" and "+-10", the confirmations "START: YES BACK: NO".
 - **DELETE in HISTORY (storage/trash.rs)**, with an EMMC_WRITE=1 build: a ride's card, Start held (or a tap on
   its red DELETE), then Start: "RIDE
-  DELETED", the list without it, the totals lower at once; `dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
+  DELETED", the list without it, the totals lower at once; `tools/dev.py ls Rustfw/Deleted` (and `Rustfw/Deleted/Full`
   for one of this firmware's rides) has it, `\Activities` not; the next start's totals the same (the cache written
   without it). Then, on stock: the ride gone from its history and nothing else changed (its `.sum` / `.csum` left in
   `\System\History\Summary`: whether stock lists a summary without its FIT is inferred from Ghidra, not seen);
@@ -187,24 +187,24 @@ A feature not listed here was seen on the unit.
 - **The page editor and `\Rustfw\pages.bin` (app/editor.rs, page.rs)**, with an EMMC_WRITE=1 build: a hold on a
   ride page's box opens the editor (the frame, the hint in the strip's place, live values); SPLIT, MERGE, TALLER,
   UNDO, a field; Back keeps, DROP CHANGES asks; ADD PAGE up to six, the Page key round them all; DELETE PAGE. Then
-  `dev.py ls Rustfw`: `pages.bin`, 1024 bytes. The first write compares both FAT copies first (as the scan's cache:
+  `tools/dev.py ls Rustfw`: `pages.bin`, 1024 bytes. The first write compares both FAT copies first (as the scan's cache:
   some 10 s of passes, inferred; the loop stays responsive). Restart: the pages as made (the file read 2 s after the
   start: a page shown before that is the registers' copy). Not while a ride records: no editor by a hold, no EDIT
   THIS PAGE in the RIDE menu until paused. The installed stock-switch case: stock and an earlier build of this
   firmware still read pages 1 to 3 from registers 20 to 25 (layouts of up to six fields).
 - **The scan's cache (storage/stock.rs `Cache`, `\Rustfw\scan.bin`)**, with an EMMC_WRITE=1 build: the first start
-  reads every ride as before (`dev.py info` awake permille during it: now at most about 15 ms of work a pass, so
+  reads every ride as before (`tools/dev.py info` awake permille during it: now at most about 15 ms of work a pass, so
   lower than the 717 seen; Back held 3 s switches off during it), then `\Rustfw\scan.bin` is there (64 + 64 bytes a
-  ride; `dev.py ls Rustfw`). The next start: the overview's totals at the first screen, no 30 s of `--`, and the
-  scan 30 s later reads nothing (`dev.py info` stays low). A ride saved: the next scan reads only it. A ride deleted
+  ride; `tools/dev.py ls Rustfw`). The next start: the overview's totals at the first screen, no 30 s of `--`, and the
+  scan 30 s later reads nothing (`tools/dev.py info` stays low). A ride saved: the next scan reads only it. A ride deleted
   from the computer: gone from the totals. The first write of the cache (also after a cache that did not check
   out) first compares both FATs (sectors 0 to 29,807 of each, about 15 MB in all: 3 to 4 s in one go at 10.5 MB/s),
   16 sectors of each a step, within the pass's 15 ms (`Cache::prepare`): some 10 s over 160 passes, inferred; check
-  the loop stays responsive (`dev.py info` uptime, a key) and the time it takes. A ride saved during the scan is
+  the loop stays responsive (`tools/dev.py info` uptime, a key) and the time it takes. A ride saved during the scan is
   read (its FAT sector read again each pass); a read error leaves a ride out of the totals until the next start,
   not for good. An emptied `scan.bin` (from the computer) is written again with its first cluster (fsck clean).
   A key held while the computer copies to the drive counts its real time (Back held 3 s switches off, not 2 s).
-  `dev.py bench scan` now reads only rides not in the cache: measure it with the cache deleted.
+  `tools/dev.py bench scan` now reads only rides not in the cache: measure it with the cache deleted.
 
 - **Electronic shifting (sensors.rs, app/radio.rs)**, all simulated only, the owner's Di2 at hand: with
   `di2_key.bin` built in (`tools/ant_key.py`), SENSORS > DI2 reads OFF (not NO KEY: the chip took network 1's key
@@ -218,7 +218,7 @@ A feature not listed here was seen on the unit.
   Intervals.icu's gear chart). A Di2 switched off (or out of range): GEAR goes to "--". An ANT+ Shifting system
   (SRAM AXS) if one can be borrowed: SHIFTING row, gear, battery status.
 
-- **The phone link (BLE, app/phone.rs)**, in this order, the dev link up (`dev.py run`, then the screenshots), an
+- **The phone link (BLE, app/phone.rs)**, in this order, the dev link up (`tools/dev.py run`, then the screenshots), an
   iPhone at hand. A build run from RAM without EMMC_WRITE=1 keeps the bond only until a reset: after one, forget
   "S510" on the iPhone before pairing again (the iPhone keeps a key the unit no longer has).
   1. **Set-up:** MENU > PHONE: LINK reads OFF (the chip took every GATT set-up command: services, characteristics,
@@ -243,14 +243,14 @@ A feature not listed here was seen on the unit.
      a second or two; the overview's notices keep it. NOTIFY OFF, then a message: nothing.
   7. **Calls:** call the iPhone: the CALL screen with the caller's name; Start answers it (on the iPhone too); a
      second call, Back declines; a third, answered on the iPhone: the screen closes.
-  8. **Reconnection** (an EMMC_WRITE=1 build, the bond written: `dev.py ls Rustfw` lists ble.bin, 512 B): switch off
+  8. **Reconnection** (an EMMC_WRITE=1 build, the bond written: `tools/dev.py ls Rustfw` lists ble.bin, 512 B): switch off
      and on: 3 s after the start LINK WAITING, then SECURE without any prompt on the iPhone; media keys work at once
      (the CCCDs given back). Walk away until the link drops: LINK WAITING, and back in range it reconnects.
   9. **FORGET:** LINK OFF, nothing advertised; on the iPhone, forget S510 too.
   9a. **Re-pair and strangers** (2026-10-24 review): bonded, forget S510 on the iPhone only, then PAIR on the unit:
      the iPhone pairs again without FORGET on the unit. A second phone (not paired) taps S510 while the unit only
      waits (no PAIR): pairing refused, and within 30 s the unit drops it (LINK back to WAITING).
-  10. **Cost:** `dev.py info` awake time with LINK OFF, WAITING and SECURE (the Nordic chip's own current is not
+  10. **Cost:** `tools/dev.py info` awake time with LINK OFF, WAITING and SECURE (the Nordic chip's own current is not
       measurable here; estimated 10 to 15 uA advertising once a second).
   11. **The RTC set** (`Board::rtc_set`, RM0399 init mode): the time right after the phone set it, and kept through
       a power off; stock afterwards still shows the right time.
@@ -273,7 +273,7 @@ A feature not listed here was seen on the unit.
 - **The map on a real ride:** its awake time, and the last-known-position dot after a power cycle.
 - **The map's zoom buttons** ("+" and "-" on the full-page map, now any level, coarser than the fit too, and the
   crosshair back to the fit): hit with a gloved finger indoors (the fit at 2 m: "-" must zoom out, the drag pan),
-  the time of a re-centre over IGN at 1.5 and 2 m a pixel (`dev.py mapbench`), and whether one every 26 to 35 s
+  the time of a re-centre over IGN at 1.5 and 2 m a pixel (`tools/dev.py mapbench`), and whether one every 26 to 35 s
   is acceptable awake time. IGN zoom 16 drawn at 0.85x at 2 m (before: zoom 15 at 1.7x): sharper, or one-pixel
   lines broken by the shrink?
 - **Panning the zoomed map** by a drag: the drag read from the panel's points (no swipe taken for a page change while
@@ -339,7 +339,7 @@ A feature not listed here was seen on the unit.
 - **Added 2026-10-27, one line each:**
   - the power-average tap during a ride;
   - the CLIMB page appearing at a climb (course and climbs ahead);
-  - the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`);
+  - the map's 1 km default view following the rider, its redraw cost on the unit (`tools/dev.py prof`);
   - the crosshair toggling the whole route;
   - the cog opening settings during a ride.
 - A tap on the panel after the stuck-IRQ fixes (touch IRQ 23, panel DMA IRQ 11, main.rs `sleep`).

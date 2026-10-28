@@ -11,7 +11,7 @@ fn app_at(h: u64, m: u64, s: u64) -> (Sim, App) {
     (sim, app)
 }
 
-/// A minimal image as pack.py makes it: SP, reset vector, tag, size word.
+/// A minimal image as tools/pack.py makes it: SP, reset vector, tag, size word.
 fn image(size: u32) -> Vec<u8> {
     let mut img = vec![0u8; size as usize];
     img[0..4].copy_from_slice(&0x2002_0000u32.to_le_bytes());

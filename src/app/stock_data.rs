@@ -12,7 +12,7 @@ impl App {
     // -----------------------------------------------------------------------------------------------------------
 
     /// Bytes of stock's rides read per pass: more while no ride runs, little during a ride. Seen on the unit
-    /// (2026-10-24, `dev.py bench scan`): 2.1 to 2.5 MB/s read and parsed (the eMMC alone 10.5 MB/s), so 96 KB keeps
+    /// (2026-10-24, `tools/dev.py bench scan`): 2.1 to 2.5 MB/s read and parsed (the eMMC alone 10.5 MB/s), so 96 KB keeps
     /// a pass near 40 ms and the menu answering (70 rides, 12 MB: about 15 s).
     pub(crate) const SCAN_IDLE: u32 = 96 * 1024;
 

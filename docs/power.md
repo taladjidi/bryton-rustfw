@@ -171,8 +171,8 @@ sheets, at their test conditions), none was measured on the unit.
   so no handler is needed, as for the touch line. The timers count each pass's real length (`App::dt_ms`) already.
   It applies with the cable in too: USB's own interrupt ends the sleep for its traffic (no SOF interrupt is unmasked),
   which is also how it can be measured.
-- **Measured on the unit** (`dev.py run` from RAM, the overview, a phone connected, the GPS off after its search,
-  `dev.py prof` over 3 minutes): before, 21.2 passes a second of 0.44 ms, awake 0.99 %; after, 6.7 passes a second
+- **Measured on the unit** (`tools/dev.py run` from RAM, the overview, a phone connected, the GPS off after its search,
+  `tools/dev.py prof` over 3 minutes): before, 21.2 passes a second of 0.44 ms, awake 0.99 %; after, 6.7 passes a second
   of 0.73 ms, awake 0.52 %. A pass costs more because the work is per second more than per pass (the second's tick,
   the radio's events); the Nordic chip's bytes wake the loop about 2.7 times a second, and the radio is now the
   largest part (0.23 %). Half the CPU's awake time, which is a fraction of a mA (0.5 % of the difference between
@@ -245,11 +245,11 @@ calls out of ITCM). The I-cache keeps its lines in Stop (D1 logic retained); the
 DIAG stage before it is trusted):
 1. **Self-refresh alone, no Stop:** a dev link command runs the ITCM routine with only steps 2 and 5 around a
    CSleep WFI of 100 ms, then the image's CRC is checked against the one at boot. With the cable in, from RAM
-   (`dev.py run`): the first step, and nothing written to the eMMC.
+   (`tools/dev.py run`): the first step, and nothing written to the eMMC.
 2. **One Stop of a second, from RAM:** the same command disconnects USB, enters Stop with the RTC wakeup timer,
    restores the clocks and the SDRAM, writes STOPF, PWR_CPU2CR, the cycles waited for VOSRDY / ACTVOSRDY, the image's
    CRC and the wake time to backup registers, then a system reset (the RAM image is gone, the installed firmware
-   starts with the USB link up): `dev.py peek` of the register says whether it worked. Nothing installed, and a hang
+   starts with the USB link up): `tools/dev.py peek` of the register says whether it worked. Nothing installed, and a hang
    ends at the four-button restart.
 3. **Stop between passes, on battery:** a `DIAG_STOP` build installed with the owner present, the breadcrumbs counting
    Stop entries and returns (as `STANDBY_BKP`), and the battery history before and after (this page's plan).
@@ -262,17 +262,17 @@ wakeup timer, the EXTI lines and RTS as a GPIO are ordinary register writes in m
 ## Measurement plan (for the owner)
 
 The unit must run on its battery: USB power charges it (BOARD.md 12) and unplugging resets it, so a build run from
-RAM (`dev.py run`) is gone once unplugged. The A / B switches are therefore settings in the installed build: GPS
+RAM (`tools/dev.py run`) is gone once unplugged. The A / B switches are therefore settings in the installed build: GPS
 POWER (FULL / SAVER), BRIGHTNESS and OFF AFTER, a sensor paired but absent (A) or forgotten (B).
 
-- **What is read:** the battery history, one smoothed reading a minute, the last 4 hours, in RAM (`dev.py bat`). It
+- **What is read:** the battery history, one smoothed reading a minute, the last 4 hours, in RAM (`tools/dev.py bat`). It
   survives plugging the cable back in (plugging does not reset the unit; the readings taken on the cable are flagged
   charging), not a power off.
 - **One run:**
   1. Charge to full, unplug (the unit restarts), wait 20 minutes (the voltage relaxes after the charge).
   2. Set the case (for example GPS POWER FULL), open the same ride page, outdoors or at a window so the GPS has a
      fix, backlight AUTO. A ride may run (Start) so the receiver, the sensors and the page behave as on a ride.
-  3. Leave it 4 hours, then plug in and run `dev.py bat > runA.txt` at once.
+  3. Leave it 4 hours, then plug in and run `tools/dev.py bat > runA.txt` at once.
   4. Charge to full again and do the same with case B.
 - **How long:** the voltage-based reading moves about 10 to 20 mV an hour at 40 mA (inferred from a typical Li-ion
   curve); its noise after the smoothing is a few mV. A 4-hour run from the same start resolves a difference of about

@@ -16,7 +16,7 @@ import argparse, os, re, struct, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'tools'))
 from dev import png, W, H  # noqa: E402
 
 ELF = ROOT / 'target/thumbv7em-none-eabihf/release/bryton-rustfw'

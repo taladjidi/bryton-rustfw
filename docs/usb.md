@@ -44,7 +44,7 @@ This page has what is known, what was tried, and what to ask or try next. Last u
 |---|---|---|---|---|
 | 2026-10-22 | stock, its USB drive | high | copying files | the drive vanished every 80 to 90 s; macOS saw the device leave first |
 | 2026-10-22 | Engineer Mode (bootloader) | high | 4 MB read | `bulk in: LIBUSB_ERROR_IO`, the device gone; a retry after a replug worked |
-| 2026-10-23..24 | this firmware, dev link only | high | hours, 30 MB of sector dumps at about 0.25 MB/s | one answer line cut once (dev.py now asks again), no drop |
+| 2026-10-23..24 | this firmware, dev link only | high | hours, 30 MB of sector dumps at about 0.25 MB/s | one answer line cut once (tools/dev.py now asks again), no drop |
 | 2026-10-24 | this firmware, USB drive | high | reading a 172 MB file at 6.4 to 7.2 MB/s | dropped after 15 MB, then after 40 MB; once right at the mount |
 | 2026-10-24 | this firmware, USB drive | **full** | the same 172 MB file at 1.0 MB/s | **no drop** |
 
@@ -107,7 +107,7 @@ What the unit saw at a drop, the suspend watch, and the causes ruled out are dat
 ## Meanwhile
 
 - **The installed build runs USB at full speed** (built with `USB_FS=1`): about 1 MB/s for the drive. The dev link
-  and `dev.py run` work the same.
+  and `tools/dev.py run` work the same.
 - **A high-speed build** is the default `cargo build` (no `USB_FS`), kept for these tests.
 
 Sources:

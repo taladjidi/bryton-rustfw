@@ -12,7 +12,7 @@ From the bootloader's hand-off to the first screen (details and evidence: BOARD.
    default map 0xc0000000..0xdfffffff is execute-never.
 4. **Clocks are the bootloader's** (CPU 200 MHz); each peripheral takes its kernel clock from the HSI, so nothing
    depends on which PLL outputs were left on. Peripherals are reset through RCC before use, since a RAM run
-   (`dev.py run`) inherits their state.
+   (`tools/dev.py run`) inherits their state.
 5. **The app** (`App::start`): the panel's init sequence, the power-on beep, the Nordic chip (reset, BLE, ANT and
    the paired sensors), the settings from the RTC backup registers, the main screen. The GPS receiver is powered
    one second later, then given its configuration, the time and the last position.

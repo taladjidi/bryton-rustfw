@@ -7,7 +7,7 @@
   numbers.py selftest         the marker rewrite on in-memory text (check.sh)
 
 A marker is `<!-- n:NAME -->TEXT<!-- /n -->`; only TEXT changes, the text around it is the writer's. The values:
-  image        bytes of the image pack.py packs (its "image N B used"), from the release ELF
+  image        bytes of the image tools/pack.py packs (its "image N B used"), from the release ELF
   axi_free     AXI SRAM bytes left: the start of PANELDMA (link.x) minus _eaxi, the end of the app's cells
   app, courses, ahead, scan_cache
                the sizes of the static cells in AXI SRAM (main.rs make_app, make_courses, make_ahead,
@@ -23,8 +23,8 @@ Standard library only: the ELF's symbol table is read here, so no nm is needed o
 import argparse, glob, os, re, struct, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-import pack  # the image is pack.py's own computation (load_segments, BASE, ELF)
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import pack  # the image is tools/pack.py's own computation (load_segments, BASE, ELF)
 
 MARK = re.compile(r'<!-- n:([a-z_]+) -->([^\n]*?)<!-- /n -->')
 # the static cells in AXI SRAM: the mangled prefix of each cell's symbol (link.x .axibss names the same)

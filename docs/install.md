@@ -16,7 +16,7 @@
   (docs/devloop.md, layer 6). Diagnostic only.
 
 rustup installs the pinned toolchain and target on first use. `cargo test-host` alone runs the tests and draws
-the screens through a simulated panel into `target/sim/*.bmp`. `pack.py` re-checks what the stock updater checks
+the screens through a simulated panel into `target/sim/*.bmp`. `tools/pack.py` re-checks what the stock updater checks
 (raw tag "R039" at 0x94, size over 1 MB, additive-sum trailer) and that the vector table is sane.
 
 ## The ANT+ key
@@ -42,7 +42,7 @@ bootloader's recovery mode, which this firmware cannot touch (it lives in the in
   OS installs it while starting up, then restarts into it.
 - **From Engineer Mode** (any firmware, or a stuck unit): USB cable plugged **first**, then the four-button
   restart while holding **Page** until "Engineer Mode" shows (without the cable the bootloader ignores Page).
-  Then `sudo python3 tools/iaprecover.py --write out/IMG.bin`: it checks the image as `pack.py` and the updater
+  Then `sudo python3 tools/iaprecover.py --write out/IMG.bin`: it checks the image as `tools/pack.py` and the updater
   do, writes it in 2 KB chunks and reads each one back. Restart.
   The computer will offer to initialise the raw disk: always Ignore or Cancel. Leave the mode by unplugging the cable.
   If the link drops mid-write, redo the write from the start and compare.

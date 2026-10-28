@@ -12,7 +12,7 @@ Scenarios (all by default, in this order):
   ride    a ride started with Start, running; then paused and ended with DISCARD (End, DISCARD, DISCARD): it goes to
           \\Rustfw\\Discarded (a build without EMMC_WRITE records nothing), never to \\Activities
 
-Each scenario starts from the overview (Back pressed a few times). `--run` first runs a build from RAM (dev.py run,
+Each scenario starts from the overview (Back pressed a few times). `--run` first runs a build from RAM (tools/dev.py run,
 out/IMG.bin by default): the same code and memory as an installed one (the image runs from SDRAM either way), so
 the figures should match a flashed build, except for the USB link itself, which only runs with the cable in: its cost
 is its own row (`usb`), and the rows above it are what a ride without the cable costs.
@@ -21,7 +21,7 @@ import argparse, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / 'tools'))
 import dev  # noqa: E402  (the dev link's computer side)
 
 SCENARIOS = ('idle', 'page', 'pages', 'menu', 'ride')

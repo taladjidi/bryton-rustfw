@@ -111,7 +111,7 @@ impl App {
         false
     }
 
-    /// The computer dropped the USB device and the board reconnected it: counted (read it with `dev.py peek`) and
+    /// The computer dropped the USB device and the board reconnected it: counted (read it with `tools/dev.py peek`) and
     /// said in a notice.
     pub fn usb_dropped(&mut self, b: &mut impl Board) {
         let n = b.backup_read(USB_DROPS_BKP);
@@ -256,7 +256,7 @@ impl App {
     }
 
     /// What kept AUTO OFF from counting at its last second: one bit per reason, in `step_auto_off`'s order
-    /// (`dev.py info`).
+    /// (`tools/dev.py info`).
     pub fn auto_off_held(&self) -> u32 {
         self.auto_off.why
     }
@@ -269,7 +269,7 @@ impl App {
             return false;
         }
         self.auto_off.seen = self.seconds;
-        // what keeps the unit on, one bit each in this order (`dev.py info` prints it: "auto off held 0x...")
+        // what keeps the unit on, one bit each in this order (`tools/dev.py info` prints it: "auto off held 0x...")
         let held = [
             self.light.idle_ms < 1000, // a key or touch in the last second
             self.busy(),

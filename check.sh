@@ -1,6 +1,6 @@
 #!/bin/sh
 # Everything to pass before a commit: format, lints, host tests (+ target/sim/*.bmp), firmware build, packing,
-# the offline checks of dev.py.
+# the offline checks of tools/dev.py.
 set -e
 cd "$(dirname "$0")"
 # The split (AGENTS.md, Layout): the library cannot reach hardware, since it forbids unsafe; unsafe lives in hw.rs,
@@ -31,12 +31,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --target aarch64-apple-darwin --no-deps -q 
 if command -v cargo-deny >/dev/null 2>&1; then cargo deny check -s; else echo "cargo-deny: not installed, skipped"; fi
 cargo build --release
 python3 tools/stack_check.py
-python3 pack.py
-# the live numbers of the docs (markers, AGENTS.md Docs): after the tests and pack.py, so the ELF and the test list
+python3 tools/pack.py
+# the live numbers of the docs (markers, AGENTS.md Docs): after the tests and tools/pack.py, so the ELF and the test list
 # exist; --write prints each marker it changed
 python3 tools/numbers.py --write
 python3 tools/numbers.py selftest
-python3 -I dev.py selftest
+python3 -I tools/dev.py selftest
 python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1: no network
 python3 -I tools/s810_probe.py selftest  # the S810 owner's probe on a made-up volume: nothing personal comes out
 python3 -I tools/route_pack.py selftest  # the synthetic map file (test-data/route) built and read back by an independent reader

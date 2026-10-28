@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package the Rust firmware as an S510 update: out/IMG.bin (a RAW image) + out/update.ini.
 
-  cargo build --release && python3 pack.py
+  cargo build --release && python3 tools/pack.py
 
 The stock updater (BOARD.md 10) takes IMG.bin as a raw image, skipping gunzip, when the
 4 bytes at 0x94 are "R" + 3 digits; it needs the file to be at least 0x100001 bytes, below 10 MB, and its last
@@ -11,7 +11,7 @@ jumps to the reset vector, without any check. Every rule is re-checked here befo
 """
 import os, struct, sys
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ELF = os.path.join(ROOT, 'target', 'thumbv7em-none-eabihf', 'release', 'bryton-rustfw')
 OUT = os.path.join(ROOT, 'out')
 BASE, SPAN = 0xd0000000, 0x00100000           # load address, and the 1 MB image (link.x SDRAM region)

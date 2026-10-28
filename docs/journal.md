@@ -16,7 +16,7 @@ Where to look: each finding's evidence is in BOARD.md; every write to the unit i
 ## 2026-10-23
 
 - **SPI1 mode fault:** CR1.SSI must be set before CFG2.MASTER, else a mode fault clears MASTER (found with
-  `dev.py peek` on v17, which skipped the panel and started USB). Fixed: the clock shows, the dev link works.
+  `tools/dev.py peek` on v17, which skipped the panel and started USB). Fixed: the clock shows, the dev link works.
 - **Power button:** PA0 (WKUP1) must be a GPIO input, or the press does not wake the unit from standby.
 - **Caches off at hand-off:** the bootloader turns both caches off before jumping; the firmware runs uncached
   until it turns the I-cache on (now done, seen from RAM: ride page 0.5 % to 0.2 % awake).
@@ -32,7 +32,7 @@ Where to look: each finding's evidence is in BOARD.md; every write to the unit i
 - **GPS:** a u-blox M10 on SPI4 that already sends NAV-PVT after stock. After a reset its power line must be held
   low over a second before power-on, else it never starts. Outside: a fix, and with the time and last position
   given at power-up, a much faster fix after a power cycle.
-- **Redrawing:** redrawing only what changes cut the main screen from 17.5 % to 0.4 % awake (`dev.py info`).
+- **Redrawing:** redrawing only what changes cut the main screen from 17.5 % to 0.4 % awake (`tools/dev.py info`).
 - **Pixels two per 32-bit SPI write:** the panel shows them right (by eye).
 - **eMMC (read only):** 31.3 GB; the OS area equals the installed image; sector 0 is a FAT32 boot sector, no MBR.
 - **Sensor bus (I2C4):** LTR-308ALS light sensor, LPS22HH barometer, LIS2DH12 accelerometer; stock's automatic
@@ -40,7 +40,7 @@ Where to look: each finding's evidence is in BOARD.md; every write to the unit i
 - **Beeps** at power-on and power-off: heard.
 - **The cycle counter stops in sleep:** DWT CYCCNT does not count during WFI (the core clock stops; DBGMCU_CR is 0),
   while SysTick does. A main loop that timed its sleep with CYCCNT never woke by itself: passes went on only when a
-  key or a touch woke it (found by `dev.py info`: uptime stuck at 0). The sleep is now timed by SysTick; the awake
+  key or a touch woke it (found by `tools/dev.py info`: uptime stuck at 0). The sleep is now timed by SysTick; the awake
   figure, which counts CYCCNT, was right all along.
 
 The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).
@@ -91,7 +91,7 @@ owner):
   read twice, equal), every directory outside `\Map` (62), and the files of `\Activities`, `\System`, `\Workout`,
   `\PlanTrip` (99 FIT files, CRCs good). The volume is 31 GB and nearly full of map data (0.7 GB free), so a whole
   image would take hours at the link's rate; what a write can damage is the FATs and the directories, which this
-  covers. A long `sector` read stopped once on a cut answer: dev.py now asks again.
+  covers. A long `sector` read stopped once on a cut answer: tools/dev.py now asks again.
 - **Steps 1 to 4 of the plan passed** (this file, 2026-10-24): the write test, a ride saved, a reset
   mid-ride and its resume. Not done: the power cut (step 5) and stock booted afterwards (step 6).
 - **Found:** stock leaves FAT2 out of date (1559 entries) and FSInfo's free count stale; this writer leaves both
@@ -128,21 +128,21 @@ Backup register 0 after a high-speed drop at the mount, read after the replug: `
 
 ## 2026-10-24: eMMC writes and the recorder, on the unit (from RAM, owner present)
 
-- **Reliable write:** `dev.py emmc` reads WR_REL_PARAM 0x15, REL_WR_SEC_C 1: enhanced reliable write, so CMD23 with
+- **Reliable write:** `tools/dev.py emmc` reads WR_REL_PARAM 0x15, REL_WR_SEC_C 1: enhanced reliable write, so CMD23 with
   bit 31 before each CMD25.
-- **`dev.py wtest`** on one sector of a cluster free in both FATs: written changed, read back, restored, read back.
+- **`tools/dev.py wtest`** on one sector of a cluster free in both FATs: written changed, read back, restored, read back.
 - **A 2-minute ride:** `\Rustfw`, `\Rustfw\Rides`, `ride.rec` made; the save moved the ride to
   `\Activities\261024083403.fit` (1227 B, 153 records), which Garmin's FIT SDK and fitdecode read, CRC good.
   Against the backup taken just before: 4 clusters taken in FAT1, root and `\Activities` changed only by appended
   entries, FSInfo recounted (stock's free count was stale: 43700 for 43767). FAT2 is now equal to FAT1: stock had
   left 1559 entries of FAT2 out of date, and the writer copies FAT1's sectors over.
-- **A reset mid-ride:** 90 s in, `dev.py reset`; the build again from RAM: RIDE RESUMED, the ride carried on into
+- **A reset mid-ride:** 90 s in, `tools/dev.py reset`; the build again from RAM: RIDE RESUMED, the ride carried on into
   one file (261024083931.fit): a timer stop at the last checkpoint (60 s), a start at the resume, 30 s lost.
 
 
 ## 2026-10-24: two copies of a ride, on the unit (from RAM)
 
-- A ride, `dev.py reset` 100 s in, the build again, RIDE RESUMED, the save: `\Activities\261024203259.fit` (FIT 1.0,
+- A ride, `tools/dev.py reset` 100 s in, the build again, RIDE RESUMED, the save: `\Activities\261024203259.fit` (FIT 1.0,
   no developer data) and `\Rustfw\Activities\261024203259.fit` (FIT 2.0, Alpha1 and RMSSD described; invalid without
   a strap), 144 records each and the same (tools/fit_check.py --pair, fitdecode and Garmin's FIT SDK). Before the
   review's fix the clean copy had resumed 22 s behind the full one.
@@ -171,7 +171,7 @@ Backup register 0 after a high-speed drop at the mount, read after the replug: `
 - **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT, ALTITUDE, FROM GPS, PROFILE, CLIMBS AHEAD; DISPLAY shows
   BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER. WEIGHT edited from 9.0 to 8.5 kg (five Page presses, 0.1 kg each)
   and W' (ME) from 15.0 to 21.0 kJ by the dev link's keys.
-- **Settings registers read back** (`dev.py peek` of RTC_BKP16R / BKP28R): register 16 = 0xa0551530 (tag 0xa, rider
+- **Settings registers read back** (`tools/dev.py peek` of RTC_BKP16R / BKP28R): register 16 = 0xa0551530 (tag 0xa, rider
   78 kg, W' 21.0 kJ, bike 8.5 kg); register 28 = 0x9280c0e0 (tag 0x9); register 11 unchanged (0xa7345b21). The
   rider's weight and W' from the earlier layout carried over.
 - **A ride from RAM (1ba795d, FLASHLOG #81):** started (INDOOR), past its first checkpoint, the image restarted
@@ -286,7 +286,7 @@ build (POWER_STEPS=15) gives the wall time.
   with LISR's read back removed. Fix, for every wake source: main.rs `sleep` clears the pending bits of all three
   (IRQ 11, 23, 77) just before each WFI, after the sources were read; the lines are level, so an unread event pends
   again at once. The sources no longer clear their own NVIC bit. With the read back removed: 0 spins in 10 runs; the
-  build as committed: 0 in 20. `dev.py peek` now reads the NVIC (0xe000e100 to 0xe000e33c) and ICSR (0xe000ed04).
+  build as committed: 0 in 20. `tools/dev.py peek` now reads the NVIC (0xe000e100 to 0xe000e33c) and ICSR (0xe000ed04).
 - **macOS refusing the mount** ("mount approval dissented, 0xF8DA0008") was its lock screen: it does not mount a newly
   inserted disk while locked. Not the unit.
 - **The main loop stalling** after a drive command (fixed): the eMMC access slept, which takes over SysTick. This was

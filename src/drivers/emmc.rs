@@ -24,7 +24,7 @@
 //! REL_WR_SEC_C (byte 222) is not 0; `mmc_blk_data_prep` uses CMD25 for it even for one block, bit 31 in CMD23's
 //! argument; `mmc_apply_rel_rw`: without EN_REL_WR, the legacy mode, a reliable write is REL_WR_SEC_C sectors
 //! aligned or one sector). Here: EN_REL_WR, the whole write at once; legacy, one sector at a time; neither, plain
-//! writes (what the unit's card offers: not yet read, `dev.py emmc` prints both bytes; docs/status.md). The one CMD6 SWITCH
+//! writes (what the unit's card offers: not yet read, `tools/dev.py emmc` prints both bytes; docs/status.md). The one CMD6 SWITCH
 //! is the bus width, EXT_CSD byte 183 BUS_WIDTH, a volatile byte the card clears at every CMD0 and power cycle, the
 //! same switch stock and the bootloader make at each start. The simulated card fails any test that sends anything
 //! else.

@@ -360,7 +360,7 @@ fn spi_begin(n: u32) {
 static SPI_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 
 /// After a first timeout the SPI is taken as dead: later waits give up at once (still counted), so a stuck panel
-/// costs nothing and the loop and the USB dev link keep running, so `dev.py peek` can find out why (that is how
+/// costs nothing and the loop and the USB dev link keep running, so `tools/dev.py peek` can find out why (that is how
 /// the SPI1 mode fault was found: docs/journal.md).
 // ponytail: dead until reset, even after a one-off timeout; retry later if one ever happens on a working panel.
 fn spi_wait(flag: u32) -> bool {
@@ -403,7 +403,7 @@ const DMA_TIMEOUT_MS: u32 = 30;
 /// WFI wakes on the stream's interrupt line (TCIE / TEIE / DMEIE: hw.rs PanelDma::start). The timeout: SysTick, when
 /// nothing else runs it (the cycle counter stops in WFI); when the main loop's sleep runs it, its end wakes WFI, and
 /// from then on its pending bit keeps WFI from sleeping, so the cycle counter bounds the wait.
-/// Why the last DMA wait failed, for `dev.py peek` (its address: `nm` on the ELF): 0x1000_0000 | DMA1_LISR on a DMA
+/// Why the last DMA wait failed, for `tools/dev.py peek` (its address: `nm` on the ELF): 0x1000_0000 | DMA1_LISR on a DMA
 /// error; 0x2000_0000 | own SysTick << 24 | LISR << 16 | SPI1_SR's low half on a timeout or a mode fault; 0 never.
 static DMA_FAIL: AtomicU32 = AtomicU32::new(0);
 fn dma_wait() -> bool {
@@ -1055,7 +1055,7 @@ fn wait_us(us: u32, mut done: impl FnMut() -> bool) -> bool {
 fn adc_init() -> bool {
     modify(RCC_D3CCIPR, 3 << 16, 2 << 16); // ADCSEL = per_ck
     modify(RCC_AHB4ENR, 0, 1 << 24); // ADC3EN
-    // from reset: a RAM run (dev.py run) inherits an enabled ADC, whose configuration can't be written
+    // from reset: a RAM run (tools/dev.py run) inherits an enabled ADC, whose configuration can't be written
     modify(RCC_AHB4RSTR, 0, 1 << 24);
     modify(RCC_AHB4RSTR, 1 << 24, 0);
     modify(RCC_APB4ENR, 0, 1 << 1); // SYSCFGEN

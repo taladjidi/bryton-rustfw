@@ -1,11 +1,11 @@
 //! The USB dev link protocol, firmware side, free of any transport: bytes from the computer go into
-//! [`Session::feed`], answers go out through [`Host::send`]. `dev.py` is the other end.
+//! [`Session::feed`], answers go out through [`Host::send`]. `tools/dev.py` is the other end.
 //!
 //! Commands, one per line:
 //! - `info`: `bryton-rustfw <version> up <ms> ms, awake <n> permille` (CPU awake in the app's work, last second).
 //! - `bat`: the battery history, one line a minute, oldest first: millivolts, ` c` while charging; then `end`.
 //! - `shot`: `shot 240 320`, then 240 x 320 RGB565 pixels, big endian, row by row (what the app drew).
-//! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (pack.py, without its
+//! - `load <size> <sum>`: `ready`, then the computer sends `size` bytes of a packed image (tools/pack.py, without its
 //!   trailer) and the firmware stores them in SDRAM; `sum` is their additive sum. Answer `ok` and the firmware
 //!   runs the image ([`Effect::Run`]), or `err <reason>`.
 //! - `key <page|lap|start|back> [long]`: `ok`, then the app acts as if the key was pressed, or held
@@ -24,7 +24,7 @@
 //! - `ls <path>`: lists a folder of the eMMC's FAT volume ([`Effect::Ls`]): a line per entry, `<size hex> <d|f>
 //!   <name>`, then `end`; or `err <why>`. `get <path> <offset> <len>`: up to 4096 bytes of a file from `offset`
 //!   ([`Effect::Get`]), as one line of hex (two digits a byte; fewer at the end of the file), or `err <why>`. Read
-//!   only, through the firmware's own FAT reader (storage/fat.rs): `dev.py get` copies a file off the unit.
+//!   only, through the firmware's own FAT reader (storage/fat.rs): `tools/dev.py get` copies a file off the unit.
 //! - `find <lba> <count> <lo> <hi>`: reads `count` sectors (at most 65536) from `lba` ([`Effect::Find`]) and answers a
 //!   line `<lba hex> <hits hex>` for each sector holding 8 or more little-endian u32 values in `lo..=hi` at any byte
 //!   offset (FIT timestamps of a time window: carving a lost ride's records from free space), at most 512 lines,
@@ -440,7 +440,7 @@ impl Session {
     }
 }
 
-/// The checks pack.py makes, so a bad upload never runs: tag "R" + 3 digits at 0x94, size word at 0x98, initial
+/// The checks tools/pack.py makes, so a bad upload never runs: tag "R" + 3 digits at 0x94, size word at 0x98, initial
 /// SP in DTCM, Thumb reset vector inside the image.
 pub fn check_image(head: &[u8], size: u32) -> Result<(), &'static str> {
     let word = |o: usize| head.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));

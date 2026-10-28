@@ -63,7 +63,7 @@ pub const EMPTY_READINGS: u8 = 3;
 pub const LOG: usize = 240;
 
 /// The battery as the app follows it: a smoothed voltage, the low readings in a row, and a history (to measure
-/// the drain on the unit: `dev.py bat`).
+/// the drain on the unit: `tools/dev.py bat`).
 pub struct Battery {
     mv: Option<u16>,
     low: u8,

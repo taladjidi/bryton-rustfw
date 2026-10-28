@@ -17,7 +17,7 @@ rare failed transfer. Each bus wait is a USB round trip; the bus holds SCL low m
 import importlib.util, sys, time
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location('dev', Path(__file__).resolve().parent.parent / 'dev.py')
+spec = importlib.util.spec_from_file_location('dev', Path(__file__).resolve().parent / 'dev.py')
 dev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dev)
 

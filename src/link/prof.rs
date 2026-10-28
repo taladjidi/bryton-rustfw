@@ -1,5 +1,5 @@
 //! The on-device profiler: where the CPU's awake time goes, by named section of the main loop, read over the dev
-//! link (`prof`, dev.rs; `dev.py prof`). Always on: a section costs one read of the DWT cycle counter
+//! link (`prof`, dev.rs; `tools/dev.py prof`). Always on: a section costs one read of the DWT cycle counter
 //! ([`crate::Board::cycles`]) and a few adds (the main loop measures it at start-up: `overhead` in `prof`), about
 //! 25 sections a pass and 20 passes a second: about 0.01 % of the CPU at a few tens of cycles each (inferred).
 //!
@@ -84,7 +84,7 @@ impl Sec {
         Sec::Usb,
     ];
 
-    /// Its name in `prof`'s answer (dev.py prints it).
+    /// Its name in `prof`'s answer (tools/dev.py prints it).
     pub fn name(self) -> &'static str {
         match self {
             Sec::Step => "step",

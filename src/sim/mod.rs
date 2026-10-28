@@ -67,7 +67,7 @@ pub struct Sim {
     pub bus: Bus,
     pub touch: TouchChip,
     /// The work an eMMC read costs, ns a byte (reading and parsing what was read: about 430 on the unit, 2.3 MB/s,
-    /// `dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`Board::awake_us`]. 0 (the default): free.
+    /// `tools/dev.py bench scan`): it moves the clock ([`Sim::ms`]) and [`Board::awake_us`]. 0 (the default): free.
     pub work_ns_per_byte: u64,
     /// Work done so far, ns.
     pub awake_ns: u64,

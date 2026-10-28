@@ -13,7 +13,7 @@ impl App {
     const AHEAD_STEPS: u32 = 6;
 
     /// The last tile of the road ahead read, inflated and decoded (all its slices), the longest so far, and the
-    /// longest single call on a tile, in microseconds of CPU ([`Board::awake_us`]; `dev.py info`).
+    /// longest single call on a tile, in microseconds of CPU ([`Board::awake_us`]; `tools/dev.py info`).
     pub fn ahead_tile_us(&self) -> (u32, u32, u32) {
         self.ahead_us
     }
@@ -70,7 +70,7 @@ impl App {
             let more = a.work(&mut emmc::Volume(&mut self.emmc, b), mem);
             let spent = b.awake_us().wrapping_sub(t1);
             if loading || a.loading() || a.io().0 != tiles {
-                // a slice of a tile: the longest one, and the tile's whole (dev.py info says how long)
+                // a slice of a tile: the longest one, and the tile's whole (tools/dev.py info says how long)
                 let (total, max, slice) = (self.ahead_acc.saturating_add(spent), self.ahead_us.1, self.ahead_us.2);
                 self.ahead_us.2 = slice.max(spent);
                 self.ahead_acc = total;

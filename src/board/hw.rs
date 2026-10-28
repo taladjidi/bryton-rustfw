@@ -11,7 +11,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Vector table. Word 0x94 (vector 37) must hold "R039": the stock updater (BOARD.md 10) takes an IMG.bin with
-// "R" + 3 digits there as a raw image, and pack.py checks it. Word 0x98 is the image size (the
+// "R" + 3 digits there as a raw image, and tools/pack.py checks it. Word 0x98 is the image size (the
 // stock image has 0x003d7000 there). Interrupts stay masked; every vector parks the CPU.
 // ---------------------------------------------------------------------------------------------------------------
 global_asm!(

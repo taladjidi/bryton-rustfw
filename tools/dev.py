@@ -25,7 +25,7 @@ plugged in: the dot at the top right turns green when the link is ready.
 import argparse, os, struct, sys, time, zlib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 VID, PID = 0x1209, 0x0001          # src/board/usb.rs
 W, H = 240, 320
 CPU_HZ = 200_000_000               # src/main.rs CPU_HZ: the profiler counts these cycles

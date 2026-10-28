@@ -1518,7 +1518,7 @@ pub(crate) mod tests {
         // The largest tile in the slices of a main loop pass: what each call does, and the time on the unit
         // estimated from the instructions each kind of work takes (a bit decoded 25, a byte out 30 with its CRC, a
         // node 900, a sift 400) scaled so that the whole tile costs what the unit measured for its slowest one
-        // (237.5 ms for a tile load in one go, 2026-10-26, dev.py info).
+        // (237.5 ms for a tile load in one go, 2026-10-26, tools/dev.py info).
         let t = (largest.3, largest.4);
         g.clear();
         let mut calls = std::vec::Vec::new(); // (instructions, kind)
