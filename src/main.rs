@@ -88,14 +88,17 @@ const SCB_ICSR: u32 = 0xe000_ed04;
 /// SysTick runs a period (timer_start to timer_stop): a DMA wait (dma_wait) leaves it alone then.
 static TIMER_ON: AtomicBool = AtomicBool::new(false);
 
-/// Starts a SysTick period of `ms` (at most 80: 24-bit counter at 200 MHz). Its end makes the SysTick exception
+/// A SysTick period's longest, ms: its 24-bit counter at 200 MHz.
+const TIMER_MAX_MS: u32 = 80;
+
+/// Starts a SysTick period of `ms` (at most [`TIMER_MAX_MS`]). Its end makes the SysTick exception
 /// pending, which wakes WFI even with interrupts masked (ARMv7-M B1.5.19); the handler never runs.
 // ponytail: WFI sleep keeps the core clock running; stop mode with an RTC / LPTIM wake-up is the next step down.
 fn timer_start(ms: u32) {
     TIMER_ON.store(true, Ordering::Relaxed);
     wr(SYST_CSR, 0);
     wr(SCB_ICSR, 1 << 25); // PENDSTCLR
-    wr(SYST_RVR, ms.min(80) * (CPU_HZ / 1000) - 1);
+    wr(SYST_RVR, ms.min(TIMER_MAX_MS) * (CPU_HZ / 1000) - 1);
     wr(SYST_CVR, 0);
     wr(SYST_CSR, 0b111); // ENABLE, TICKINT, CLKSOURCE = processor clock
 }
@@ -108,7 +111,7 @@ fn timer_done() -> bool {
 /// Milliseconds of a period of `ms` gone so far (SysTick keeps counting through WFI; the DWT cycle counter does not:
 /// the core clock stops in sleep, DBGMCU_CR being 0, seen on the unit 2026-10-23).
 fn timer_elapsed_ms(ms: u32) -> u32 {
-    let total = ms.min(80) * (CPU_HZ / 1000);
+    let total = ms.min(TIMER_MAX_MS) * (CPU_HZ / 1000);
     total.saturating_sub(rd(SYST_CVR)) / (CPU_HZ / 1000)
 }
 
@@ -130,7 +133,8 @@ fn timer_stop() {
 /// DMA's clear in `dma_wait`, 5 runs in 6 with its read back removed). Clearing here, after the sources were read and
 /// just before sleeping, depends on no clear's timing.
 fn sleep() {
-    wr(NVIC_ICPR0, EXTI9_5_IRQ | DMA1_S0_IRQ);
+    wr(NVIC_ICPR0, EXTI9_5_IRQ | DMA1_S0_IRQ | KEY_IRQS);
+    wr(NVIC_ICPR0 + 4, USART2_IRQ);
     wr(NVIC_ICPR0 + 8, usb::OTG_HS_IRQ);
     wfi();
 }
@@ -139,7 +143,7 @@ fn sleep() {
 fn delay_ms(ms: u32) {
     let mut left = ms;
     while left > 0 {
-        let chunk = left.min(80);
+        let chunk = left.min(TIMER_MAX_MS);
         left -= chunk;
         timer_start(chunk);
         while !timer_done() {
@@ -741,8 +745,8 @@ fn standby() -> ! {
         // (seen on the unit, 2026-10-25: the touch line's EXTI and its NVIC wake-up, added 2026-10-23; reproduced
         // on Renode, renode/run.py --off). Cleared again at every return, so a wake-up source added later cannot
         // bring it back. Then only the power button is let back in.
-        modify(EXTI_CPUIMR1, TOUCH_LINE, 0);
-        wr(EXTI_CPUPR1, TOUCH_LINE);
+        modify(EXTI_CPUIMR1, TOUCH_LINE | KEY_LINES, 0);
+        wr(EXTI_CPUPR1, TOUCH_LINE | KEY_LINES);
         timer_stop();
         wr(SCB_ICSR, 1 << 25); // PENDSTCLR
         for k in 0..8 {
@@ -852,6 +856,7 @@ const U_CR1: u32 = USART2;
 const U_CR3: u32 = USART2 + 0x08;
 const U_BRR: u32 = USART2 + 0x0c;
 const U_ISR: u32 = USART2 + 0x1c;
+const U_RQR: u32 = USART2 + 0x18;
 const U_ICR: u32 = USART2 + 0x20;
 const U_RDR: u32 = USART2 + 0x24;
 const U_TDR: u32 = USART2 + 0x28;
@@ -883,7 +888,8 @@ fn nrf_reset() {
     wr(U_CR1, 0);
     wr(U_BRR, 64); // 64 MHz / 1 Mbaud
     wr(U_CR3, (1 << 9) | (1 << 8)); // CTSE, RTSE
-    wr(U_CR1, (1 << 29) | (1 << 3) | (1 << 2) | 1); // FIFOEN, TE, RE, UE
+    // FIFOEN, RXFNEIE (a byte pends IRQ 38, enabled in the NVIC only for an idle sleep: wake_on_io), TE, RE, UE
+    wr(U_CR1, (1 << 29) | (1 << 5) | (1 << 3) | (1 << 2) | 1);
     delay_ms(150);
     pin_set(NRF_RESET.0, NRF_RESET.1, true);
     delay_ms(800);
@@ -1372,6 +1378,49 @@ fn touch_edge() -> bool {
     edge
 }
 
+// The keys' falling edges (BOARD.md 5) wake an idle sleep, as the touch INT does: EXTI lines 1 (PA1), 2 (PB2), 3
+// (PE3) and 4 (PB4), each its own IRQ, EXTI1..EXTI4 = 7..10, and USART2 is IRQ 38 (stm32h747xx.h `IRQn_Type`;
+// SYSCFG EXTICR1, lines 0..3, at 0x58000408, port codes A 0, B 1, E 4). Enabled in the NVIC only around an idle
+// sleep (`wake_on_io`): in a short one, and in delay_ms, a held key's flag or a waiting byte would end every WFI.
+const SYSCFG_EXTICR1: u32 = 0x5800_0408;
+const KEY_LINES: u32 = 0b1_1110;
+const KEY_IRQS: u32 = 0b1111 << 7;
+const USART2_IRQ: u32 = 1 << (38 - 32);
+
+/// The keys' EXTI lines: falling edge, unmasked for this core (SYSCFG's clock is on: i2c_init).
+fn key_lines_init() {
+    modify(SYSCFG_EXTICR1, 0xfff << 4, (1 << 8) | (4 << 12)); // line 1 port A, 2 port B, 3 port E
+    modify(SYSCFG_EXTICR2, 0xf, 1); // line 4 port B
+    modify(EXTI_FTSR1, 0, KEY_LINES);
+    modify(EXTI_CPUIMR1, 0, KEY_LINES);
+    wr(EXTI_CPUPR1, KEY_LINES);
+}
+
+/// The key lines end WFI (`keys`) or not, and the Nordic chip's bytes (`radio`: only while the app reads them, or
+/// a byte nobody reads would end every WFI and the loop would spin). A pending IRQ wakes WFI with PRIMASK set
+/// (ARMv7-M ARM B1.5.19), the way the touch line already does; no handler runs.
+fn wake_on_io(keys: bool, radio: bool) {
+    wr(if keys { NVIC_ISER0 } else { NVIC_ICER0 }, KEY_IRQS);
+    wr(if radio { NVIC_ISER0 + 4 } else { NVIC_ICER0 + 4 }, USART2_IRQ);
+}
+
+/// A key went down since the last call (its EXTI flag, cleared here), or (`radio`) a byte from the Nordic chip
+/// waits.
+fn io_edge(radio: bool) -> bool {
+    let keys = rd(EXTI_CPUPR1) & KEY_LINES;
+    if keys != 0 {
+        wr(EXTI_CPUPR1, keys); // write 1 to clear
+        let _ = rd(EXTI_CPUPR1); // the write done
+    }
+    keys != 0 || radio && rd(U_ISR) & ISR_RXFNE != 0
+}
+
+/// Drops what the Nordic chip sent while the app does not read it (no chip started: `App::radio_up`): RQR.RXFRQ
+/// flushes the RX FIFO (RM0399 USART_RQR), so RTS lets it on and nothing stale waits for the next start.
+fn nrf_flush() {
+    wr(U_RQR, 1 << 3);
+}
+
 /// SCL and SDA of an I2C bus: AF4, open drain, not driven while being set up.
 fn i2c_pins(port: Port, pins: [u32; 2]) {
     for pin in pins {
@@ -1706,6 +1755,7 @@ fn main() -> ! {
     let _ = adc_init(); // a failure leaves the battery unknown ("--%")
     gnss_init();
     i2c_init();
+    key_lines_init();
     sleep_power_init();
     checkpoint(4);
     let mut board = S510 { cycles_at: 0, cycles: 0, sleep: (POLL_MS, 0), io: (0, 0, 0), dma };
@@ -1770,14 +1820,24 @@ fn main() -> ! {
         // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
         // while the finger is down)
         let mut slept = 0; // ms, by SysTick: cycles() stops counting in WFI
+        // idle: a longer sleep (App::pass_ms), ended at once by a key or a byte from the Nordic chip, so neither
+        // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before)
+        let idle = app.pass_ms() > POLL_MS;
+        let radio = app.radio_up();
+        if !radio {
+            nrf_flush();
+        }
+        if idle {
+            wake_on_io(true, radio);
+        }
         'sleep: loop {
-            let left = POLL_MS.saturating_sub(slept);
+            let left = app.pass_ms().saturating_sub(slept); // a finger down makes it POLL_MS again
             if left == 0 {
                 break;
             }
-            let slice = if app.touching() { left.min(TOUCH_MS) } else { left };
+            let slice = left.min(if app.touching() { TOUCH_MS } else { TIMER_MAX_MS });
             timer_start(slice);
-            let (edge, done) = loop {
+            let (edge, done, io) = loop {
                 let usb_at = cycles();
                 if let Some(l) = &mut link {
                     match l.poll(&mut session, app, &mut board, stats) {
@@ -1789,6 +1849,14 @@ fn main() -> ! {
                         Effect::Run(size) => {
                             l.linger(50);
                             l.disconnect();
+                            // an older image's sleep does not clear these lines: a pending one would end its every
+                            // WFI, the spin standby's WFI showed on 2026-10-25 (main.rs `standby`, BOARD.md 9). So
+                            // the key lines masked and cleared (RM0399 EXTI CPUIMR1 / CPUPR1), the NVIC lines off,
+                            // and USART2's RXFNEIE (CR1 bit 5, RM0399 USART_CR1) off
+                            wake_on_io(false, false);
+                            modify(EXTI_CPUIMR1, KEY_LINES, 0);
+                            wr(EXTI_CPUPR1, KEY_LINES);
+                            modify(U_CR1, 1 << 5, 0);
                             hw::run_staged(size);
                         }
                         e => woke |= app.serve(&mut board, l, &session, e),
@@ -1814,11 +1882,11 @@ fn main() -> ! {
                     app.set_usb(&mut board, dot);
                     app.prof().span(Sec::Usb, usb_at, cycles());
                 }
-                let (edge, done) = (touch_edge(), timer_done());
-                if edge || done || press.is_some() || woke {
+                let (edge, done, io) = (touch_edge(), timer_done(), idle && io_edge(radio));
+                if edge || done || io || press.is_some() || woke {
                     // a key from the link acts now, so the next command cannot replace it; board work done for the
                     // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
-                    break (edge, done);
+                    break (edge, done, io);
                 }
                 sleep();
             };
@@ -1836,9 +1904,12 @@ fn main() -> ! {
                     break 'sleep;
                 }
             }
-            if press.is_some() || woke {
+            if io || press.is_some() || woke {
                 break;
             }
+        }
+        if idle {
+            wake_on_io(false, false);
         }
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
         board.sleep = (slept, sleep_cycles / (CPU_HZ / 1_000_000));

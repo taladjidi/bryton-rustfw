@@ -97,6 +97,12 @@ fn drain(b: &mut impl Board) {
 }
 
 impl App {
+    /// The Nordic chip is started and its bytes read each pass (main.rs wakes an idle sleep on them only then, and
+    /// flushes them otherwise).
+    pub fn radio_up(&self) -> bool {
+        self.ble.is_some()
+    }
+
     /// Chip resets since the start.
     pub fn radio_resets(&self) -> u16 {
         self.watch.resets
