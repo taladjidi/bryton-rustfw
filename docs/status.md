@@ -319,7 +319,8 @@ A feature not listed here was seen on the unit.
 - **Stock reading this firmware's rides** (\Activities\261024083403.fit, 261024083931.fit) and the Bryton app's sync.
 - **The power button starts the unit after a switch-off:** fixed in ea359a0 (IRQ 149 enabled before standby), seen
   on the unit 2026-10-25, installed and unplugged.
-- **AUTO OFF** (SYSTEM > AUTO OFF): sim only. On the unit: 5 min idle on battery gives the banner and beeps at 10 s and
+- **AUTO OFF** (SYSTEM > AUTO OFF): switching off idle on battery confirmed by the owner 2026-10-28 (b0861d8; before
+  it, a powered trainer heard held it on). Still to see on the unit: 5 min idle on battery gives the banner and beeps at 10 s and
   5 s, a key or touch cancels, the unit powers off; never with a ride or recorder busy, a cable in, the drive lent, a
   write waiting, or movement; the power button starts it again; the setting survives a restart (register 18 bits
   22..24).
