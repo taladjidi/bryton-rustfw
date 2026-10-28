@@ -5,8 +5,15 @@
     ./check.sh          # fmt, clippy, host tests, build, pack -> out/IMG.bin (1 MB + trailer), out/update.ini;
                         # plus the Renode checks when RENODE points at Renode (docs/devloop.md, Emulation)
 
-`EMMC_WRITE=1 ./check.sh` builds an image that may write the card (rides, settings, the drive's write mode). Without
-it the unit records nothing and the USB drive is read only. Install only a build you mean to ride with.
+### Build variants
+
+- `EMMC_WRITE=1 ./check.sh` (src/main.rs `EMMC_WRITE`): a build that may write the card (rides, settings, the
+  drive's write mode). Without it the unit records nothing and the USB drive is read only. Install only a build you
+  mean to ride with.
+- `USB_FS=1 ./check.sh` (src/board/usb.rs `FULL_SPEED`): USB at full speed (12 Mbit/s, 64-byte packets) instead of
+  the default high speed. An experiment for the drops (docs/usb.md).
+- `DIAG_STOP=N cargo build --release` (src/main.rs `STOP`): stops at boot stage N, to see where a boot stops
+  (docs/devloop.md, layer 6). Diagnostic only.
 
 rustup installs the pinned toolchain and target on first use. `cargo test-host` alone runs the tests and draws
 the screens through a simulated panel into `target/sim/*.bmp`. `pack.py` re-checks what the stock updater checks
@@ -77,10 +84,16 @@ individuals: the tool only fetches Plan IGN v2.
 
    It writes `IGN<z>_<x / 32>_<y / 32>.PAK` (one per zoom and block of 32 x 32 tiles) and `ATTRIB.TXT`.
    To check them on the computer: `IGN_PACKS=~/ign-packs cargo test-host every_packed_tile -- --ignored --nocapture`.
-3. Copy them to the card through this firmware's USB drive (below, "Copying files without stock"), or Bryton's
-   firmware's, into a folder `Rustfw/Maps` at the drive's top (make it if missing; needs an EMMC_WRITE=1 build; at full speed,
-   about 1 MB/s, 3.9 GB takes over an hour: copy a smaller area first, then compare).
-   Compare the copy (`diff -r ~/ign-packs /Volumes/BRYTON/Rustfw/Maps`): the USB link can drop. This firmware reads the folder, never writes it; stock ignores it.
+3. Copy them to the card, into a folder `Rustfw/Maps` at the drive's top (make it if missing):
+   - free the space first: remove the map folders you do not need from `\MAP\MapData\` with `rm -rf` on the mounted
+     drive, not in the Finder (its trash stays on the card);
+   - copy with `cp -X` (no `._` files) through this firmware's USB drive (below, "Copying files without stock"), or
+     Bryton's firmware's. This firmware needs an EMMC_WRITE=1 build (Build, above). At full speed, about 1 MB/s, so
+     3.9 GB takes over an hour: copy a smaller area first, then compare;
+   - eject the drive (the unit restarts), mount it again and compare: `diff -r ~/ign-packs /Volumes/BRYTON/Rustfw/Maps`.
+     A compare right after the copy reads the Mac's cache, not the card. The USB link can drop, so the compare is the
+     test. This firmware reads the folder, never writes it; stock ignores it.
+4. On the unit, check the map: the draw time per view, the zoom chosen, and "(c) IGN" in the corner.
 
 ## Day to day
 

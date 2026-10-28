@@ -1,5 +1,9 @@
 # Features
 
+What the firmware does, built and tested: each feature, how it works and its numbers.
+Not here: what is not built (roadmap.md), what the unit has not shown yet (status.md), dated findings (journal.md).
+Where to look: checklist.md compares the features with stock, Garmin and others; docs/layout.md maps the files.
+
 ## Screens
 
 - **Status strip** (every screen): BLE (green, red if the radio chip did not answer), GPS (blinking grey while
@@ -278,8 +282,7 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
 
 ## Menu
 
-Hold Page (or tap the cog) for the menu: what to ride first, then what was ridden, then the set-up (UI review
-4.3). A row that opens a menu or a screen ends in ">"; a value sits on the right with its unit ("FTP  200 W"). Any
+Hold Page (or tap the cog) for the menu: what to ride first, then what was ridden, then the set-up. A row that opens a menu or a screen ends in ">"; a value sits on the right with its unit ("FTP  200 W"). Any
 setting is three levels down at most (MENU > SETTINGS > ME > FTP; a page's own rows are four: MENU > PAGES >
 ROAD PAGES > PAGE 1 > LAYOUT), the diagnostics under SYSTEM:
 

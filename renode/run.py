@@ -84,7 +84,7 @@ def decode(stream):
 
 
 def bmp_rgb(path):
-    """24-bit bottom-up BMP (sim.rs) -> list of rows of (r, g, b)."""
+    """24-bit bottom-up BMP (src/sim/) -> list of rows of (r, g, b)."""
     b = path.read_bytes()
     off, = struct.unpack_from('<I', b, 10)
     rows = []
@@ -172,7 +172,7 @@ def main():
     preview = ROOT / 'target/sim/preview.bmp'
     if preview.exists():
         sim = bmp_rgb(preview)
-        for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, the empty notices (ui.rs)
+        for y in list(range(22, 24)) + list(range(272, 316)):          # the strip's line, the empty notices (src/ui/)
             bad = [x for x in range(W) if rgb(screen, x, y) != sim[y][x]]
             if bad:
                 fails.append(f'row {y} differs from the simulator at x {bad[0]}..{bad[-1]}')
@@ -182,7 +182,7 @@ def main():
             fails.append('PC13 high but the USB core was never touched')
         if after_usb == 0:
             fails.append('no panel traffic after the USB start: hung')
-        dot = rgb(screen, 167 + 6, 2 + 6)                                   # the USB symbol's stem (ui.rs)
+        dot = rgb(screen, 167 + 6, 2 + 6)                                   # the USB symbol's stem (src/ui/)
         if dot not in ((248, 164, 0), (248, 0, 0)):                         # powered (no host) or failed
             fails.append(f'USB symbol is {dot}, neither orange nor red')
     if a.off:

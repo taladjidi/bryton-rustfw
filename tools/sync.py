@@ -9,7 +9,7 @@
 Without --go nothing is uploaded or written: it says what it would do.
 
 Rides: `\\Activities\\<name>.fit` (this firmware's clean copy, or stock's ride) goes to Strava; to Intervals.icu goes
-the full copy `\\Rustfw\\Activities\\<name>.fit` (Alpha1 and RMSSD in the records, recorder.rs "Two copies") when there
+the full copy `\\Rustfw\\Activities\\<name>.fit` (Alpha1 and RMSSD in the records, src/storage/recorder/mod.rs "Two copies") when there
 is one, else the clean one. Bryton's own server refuses the full one, so it never goes there (the Bryton app syncs
 from the unit itself). Every file is checked whole (its FIT CRCs) before it goes anywhere: a copy the USB link cut
 short is never uploaded. The rides found either on a mounted volume (this firmware's USB drive, or stock's) or
@@ -622,7 +622,7 @@ def selftest():
                         ('Activities/261020080000.fit', fake_fit(b'on strava already')),
                         ('Activities/261024100000.fit', clean[:-1]),  # cut short: never uploaded
                         ('Activities/tmp.fit', fake_fit(b'stock in progress')),
-                        # discarded at the end of the ride (recorder.rs): never uploaded
+                        # discarded at the end of the ride (src/storage/recorder/mod.rs): never uploaded
                         ('Rustfw/Discarded/261024080000.fit', fake_fit(fid(4) + b'discarded')),
                         ('Rustfw/Discarded/Full/261024080000.fit', fake_fit(fid(4) + b'discarded', dev=True)),
                         ('Activities/250101080000.fit', fake_fit(b'too old')),

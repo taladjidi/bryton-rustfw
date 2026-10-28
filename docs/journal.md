@@ -1,7 +1,8 @@
 # Journal: what the unit taught us
 
-Findings on the real hardware, newest last. Each one is in BOARD.md with its evidence; every write to the unit is a
-row in bryton-S510-mods' FLASHLOG.
+What this file holds: dated findings from the real unit, one heading per date, newest last; append only.
+What does not belong: what is built (features.md) and what is still to do (roadmap.md, status.md).
+Where to look: each finding's evidence is in BOARD.md; every write to the unit is a row in bryton-S510-mods' FLASHLOG.
 
 ## 2026-10-22: the first install stops before the first frame
 
@@ -41,6 +42,8 @@ row in bryton-S510-mods' FLASHLOG.
   while SysTick does. A main loop that timed its sleep with CYCCNT never woke by itself: passes went on only when a
   key or a touch woke it (found by `dev.py info`: uptime stuck at 0). The sleep is now timed by SysTick; the awake
   figure, which counts CYCCNT, was right all along.
+
+The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).
 
 ## 2026-10-24: what a lost ride left on the card
 
@@ -82,99 +85,6 @@ owner):
   16 KB cluster, every 8 minutes or so); making the folders the first time, about 20 more. Image +23 KB (150.9 KB to
   174.0 KB without the ANT+ key), App +1.5 KB (39.4 KB), make_app's frame 107 KB of its 110 KB budget.
 
-### The recorder: what to check on the unit (with the owner, in this order)
-
-1. A backup of the drive first (stock's USB drive, read only on the computer: `dd` of the whole `BRYTON` volume).
-2. The write primitive alone, from RAM (`dev.py run`): a test command (to add to the
-   dev link) that writes one sector inside a file made for it on the computer (`\Rustfw\scratch.bin`, found by the
-   FAT reader), reads it back, and restores it; `dev.py sector` before and after.
-3. A short ride from RAM (`dev.py run`): Start, two minutes, End. Then stock (or the computer) must show
-   `\Activities\YYMMDDhhmmss.fit` and `\Rustfw\ride.rec`; the file opens in the Bryton app / Garmin's FIT tools;
-   `fsck_msdos -n` on the Mac finds nothing.
-4. A restart mid-ride: Start, three minutes, `dev.py reset` (or the four-button restart); the build again from RAM:
-   "RIDE RESUMED", the timer back to the last minute; Start, a minute, End: one file with both parts.
-5. A power cut mid-ride: the same with the battery connector or a hard power off, if the owner agrees.
-6. Stock booted after each of 3 to 5: it must not complain, format, or lose any file; its own ride recording still
-   works.
-7. Only then an install (`iaprecover.py --write`), recorded in FLASHLOG.
-
-## 2026-10-24: review 2, courses, workouts, alerts and the buzzer: fixed
-
-From the second adversarial review (findings numbered as there), each with a test written first that failed:
-- **6, lap courses** (`course.rs` `search`): the lost-rider search kept the first 4 chunk boxes at distance 0, so on
-  a lap course every lap's box held the rider and laps 1 to 4 always won: after a gap or a detour on lap 5 the
-  rider was placed a lap back. Fixed: of the boxes about as near as the nearest, the 4 nearest along the course to
-  where the rider was. Test `lap_course_found_on_the_right_lap` (lap 4 before).
-- **7 and 15, long single passes:** opening COURSES read every file to the end for its length (up to 32 of 4 MB),
-  following a course read it whole, a past ride's card read up to 4 MB, and WORKOUTS read 8 KB of every future
-  file. Now COURSES lists from the folders and measures a file at a time, the course to follow and the card are
-  read 96 KB a pass (`App::SCAN_IDLE`, about 40 ms), and the calendar looks into the earliest 8 day folders, 16
-  files at most. Test `long_reads_spread_over_passes`: the most a pass reads went from 2.3 MB to 108 KB (300 ms at
-  2.5 MB/s is the limit it checks).
-- **11, climbs:** `find_climbs` made a bin per 50 m of whatever length the file claimed (86 million for a crafted
-  30 KB GPX): at most 32768 bins now. Test `climbs_bounded_on_a_crafted_course`.
-- **12, GPX numbers:** `decimal` overflowed an i64 on 12 digits with 7 places (a panic in debug, a wrapped point in
-  release): checked arithmetic, the point refused. Test `decimal_overflow`; the GPX fuzz gets long digit runs.
-- **13, alerts:** a heart-rate alert returned before the timer was noted, so an eat or drink minute in the same
-  second was lost: the reminders due are kept pending first. Test `heart_rate_alert_keeps_the_reminders_due`.
-- **14, the buzzer:** the workout's tones and the alerts had a player each, both driving the buzzer in the same
-  pass and cutting each other off. One player (`App::tones`) with a queue of 3. Test `tones_do_not_cut_each_other`.
-- **Also:** a course thinned past a point every 50 m (over about 330 km) widens its off-course threshold to half
-  the spacing plus 25 m, since its chords cut bends by up to half the spacing (test
-  `thinned_course_no_false_off_course`); make_courses's comment said it was built in place, it is not (35.6 KB,
-  budgeted).
-- **Cost:** image 190.7 KB to 192.2 KB; App 42.9 KB on the host; make_app 43.3 to 44.3 KB, make_courses 34.0 to
-  35.6 KB.
-- **Not done:** GPX gaps (a point far from the previous one is still joined to it), a course's own stated length
-  (FIT total_distance, Bryton's 254) instead of reading it whole.
-
-The first frame ever, with the earlier seven-segment digits: [img/first-frame-2026-10-23.png](img/first-frame-2026-10-23.png).
-
-## 2026-10-24: the second review's recorder findings, fixed (simulator only)
-
-The second adversarial review (read only, on ce3ead8) found these in the recorder; each fix came with a test that
-fails without it (the review's probes turned into tests where they fit):
-- **R1, one bad byte blocked every later ride:** the save's read-back failed its CRC and was tried again forever.
-  Fixed: a file that reads but is not whole is left as it is in `\Rustfw\Rides`, the record "done", said once
-  (SAVE FAILED); only a card error is tried again, and a save or a ride left unfinished only `GIVE_UP` (12, a minute)
-  times in a row. Tests `a_damaged_ride_is_kept_and_the_next_one_recorded`, `a_save_that_keeps_failing_is_given_up`.
-  A failed save also stopped being retried at all (its checkpoint cleared `want`): a save is now due until done.
-- **R2, Start while the boot's recovery was pending took over the new ride's writer:** `recover` does nothing once a
-  ride has started; the new ride's first card work finishes the old one first (resumed in its place when the marker
-  said it was open, else saved). Tests `start_while_the_boot_recovery_is_pending` (the probe's case: both rides
-  saved whole), `start_while_the_card_failed_at_boot` (the app's glue).
-- **R3 (C1), the read-only build's loop:** fixed on main before (1ef21ec).
-- **R3 (torn writes):** reliable write when the card offers it (emmc.rs, BOARD.md 15), the EXT_CSD bytes in
-  `dev.py emmc`. For a card that does not: the ride in progress moved to `\Rustfw\Rides`, so its entry (rewritten every
-  minute) and `ride.rec`'s never share a sector; each record slot carries copies of the two file sectors the next
-  checkpoint rewrites in place (sector 0, the last), which the resume writes back; `sync_fats` takes the second FAT's
-  sector when the first's holds what no FAT holds (torn), and makes FSInfo again when its signatures are gone; a ride
-  whose entry was torn is saved from its record. The card models (sim.rs `EmmcCard`, recorder.rs tests' `Card`) tear
-  the sector a cut falls in. Tests `power_cut_tearing_the_sector_at_every_write` (274 cuts: 155 resumed, 25 saved at
-  boot, the next ride always saved, at most 2 lost clusters; one cut tears the root directory's sector, which loses
-  stock's entries there: the reliable write's job), `every_write_is_reliable_when_the_card_offers_it` (CMD23 bit 31
-  before every CMD25, none of CMD24, and a cut at every sector of a ride's first 75 s on the Sim: clean volume each
-  time; with plain writes the same sweep loses the root's entries), `reliable_writes_when_offered` (the driver).
-- **R4, Off lost up to a minute:** `power_off` checkpoints first (one try). Test `off_mid_ride_keeps_every_second`.
-- **R5, caught-up seconds shared one time:** each has its own (`lag_s`). Test `seconds_caught_up_keep_their_own_time`.
-- **R6, a lost marker resumed a ride from days ago:** a ride left open is resumed at a Start only if the marker said
-  so or it stopped less than an hour (`RESUME_S`) before; else ended at its last record and saved. Test
-  `an_old_ride_left_open_is_saved_and_a_new_one_started`.
-- **R7, the move gap:** narrowed: `\Activities` and a free name are found before the entry is marked deleted, so only
-  the link is left in the gap. The fsck cross-link check before linking is not done.
-- **R8, "done" without a link:** ten names taken is now an error (the ride kept), never "done".
-- **R10, the record's layout:** tag RFR2, the ride words' count in the record (checked), a `const` assert that they fit.
-- **R11, a failing recorder looked like a working one:** the strip's dot is grey while not saving (a failure, a
-  refused start, a build that may not write); NOT SAVING at the first failure in a row, then every 5 minutes of them
-  (the old RECORDING ERROR did not fit its 20-character line and was never shown); the count resets on success. Test
-  `a_failing_recorder_shows`.
-- **Low:** `h.clusters * cluster_bytes` checked.
-- **Not done:** `find_free` one sector at a time on a nearly full volume (review P3), R9 (power totals, workout and
-  course after a resume), R12 (stock reading this firmware's FIT), the fsck check of R7.
-- **Cost:** image 189,796 B to 191,204 B (+1.4 KB); App +8 B; make_app's frame 43.0 KB to 44.5 KB (budget 50 KB);
-  `ride.rec` 1 KB to 3 KB; a checkpoint's record write 1 sector to 3 (one command), and CMD23 before each write on
-  a card with reliable write.
-
 ## 2026-10-24: the first eMMC writes, on the unit (from RAM, owner present)
 
 - **Backup first,** over the dev link (no mass storage in this firmware): the whole FAT region (sectors 0 to 29807,
@@ -197,29 +107,155 @@ fails without it (the review's probes turned into tests where they fit):
   Fixed: `Link::worked` tells the loop, as the dev link's own card commands did.
 - **High speed drops** every long transfer after 15 to 40 MB, as stock's drive did on 2026-10-22: the Mac resets the
   device and it stays unconfigured until a replug. **Full speed** read 172 MB with no drop, at 1.0 MB/s. Cause not
-  found yet (docs/status.md lists what to try); the installed build runs at full speed meanwhile.
+  found yet (docs/usb.md lists what to try); the installed build runs at full speed meanwhile.
 - **The IGN copy is put aside** until there is an hour with the unit (docs/roadmap.md, section 5).
 
-## 2026-10-24: review backlog closed (simulator only)
+## 2026-10-24: what the unit saw at a drop
 
-Left open by the two reviews above; each fix with a test that fails without it:
-- **R7, the fsck check:** the tests' fsck (fat/write.rs) now follows the lost chains too: one that runs into a
-  file's chain, another lost chain, a free cluster, out of the volume or round a loop is an error, as fsck_msdos
-  says. Every power-cut test and the writer fuzz's clean rounds pass it. Test `fsck_follows_the_lost_chains`.
-- **P3, `find_free`:** the FAT read 8 sectors a command (4 KB in its own frame), not one. On the test volume
-  (550 FAT sectors): 41 to 6 reads past 40 taken sectors, 276 to 36 wrapping from the middle, 551 to 70 on a full
-  volume. Test `find_free_reads_the_fat_in_runs`.
-- **Course gaps:** a jump of over 1 km where a GPX `trk`, `trkseg` or `rte` starts is not ridden: not counted, drawn
-  or followed (a bit per point, kept through the thinning). Inside a segment points stay joined (a planner's
-  straight road, a tunnel). Test `gaps_between_segments` (12 km before, 4 km now).
-- **A course's own length:** a FIT course's record distances, first to last, taken when within 2 % of the summed
-  points (every distance scaled to it), else the sum; Bryton's 254 (within 0.25 % of the sum) not read; GPX has
-  none. Test `stated_length`.
-- **A course read after leaving the list** no longer opens a ride page; from the list it still does, as stock's
-  route details lead to riding. Test `course_read_after_leaving_the_list`.
-- **clippy --tests:** passes again, pedantic included (approx_constant in tiles.rs); left: 5 plain warnings in
-  fit.rs, recorder.rs and sim/recorder_tests.rs, and about 1,500 pedantic ones (casts, must_use, doc wording).
-- **Not done: make_courses's frame** (35.6 KB, budget 40 KB). It is in main.rs; the library alone cannot make the
-  compiler build `Courses` in place: a plain `origin` (no Option) made the frame 69.6 KB, `Courses::new` not
-  inlined 69.6 KB plus 32.8 KB of its own. It needs main.rs to build the cell in place.
-- **Cost:** image 247,176 B to 247,944 B (+768 B); the course memory +512 B.
+Backup register 0 after a high-speed drop at the mount, read after the replug: `0xd1280200`.
+- **Last command:** 0x28, READ(10), with status 2: a **phase error**. The data phase could not hand the next 512-byte
+  packet to the IN endpoint for a whole second (`Bulk::send` gave up), so the computer had stopped taking data in
+  the middle of a transfer from the unit.
+- **Resets:** none of either kind (0xff bus reset, 0xfe Bulk-Only reset) among the last 32 entries. The computer did
+  not reset the device first.
+- **Then:** the core left Configured (the dot orange, most likely USB suspend: no more starts of frame), and the
+  watch reconnected (register 31: 2 drops in all).
+- **Reading (inferred):** the computer disabled the port without a reset. That is what a host controller does after
+  transaction errors (babble, a bad CRC) on an IN transfer. Only fast IN traffic fails: a damaged high-speed packet
+  from the device's side is the likeliest. Candidates: the transmit FIFO (sized to one packet, filled word by word
+  by uncached code), the ULPI data timing at 60 MHz, the PHY's transmitter or supply. Next tries 2, 4, 5 and 7 below
+  target exactly that.
+
+## 2026-10-26: fonts, rows and registers (owner present)
+
+- **FONT (SETTINGS > DISPLAY > FONT, SMOOTH):** run from RAM (e762241): switching to SMOOTH redraws at once; the
+  overview, the indoor ride page and the DISPLAY menu draw in Barlow Semi Condensed Bold with no box moving. Register
+  16 then read 0xa15a0f30 (bit 24 set). After the flash of e762241 (FLASHLOG #80) it read 0xa05a0f30 (PIXEL): the owner
+  had switched back to PIXEL by hand (the choice kept as set). Big "--" values look wide in SMOOTH (the
+  glyph keeps the pixel font's cell).
+- **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT, ALTITUDE, FROM GPS, PROFILE, CLIMBS AHEAD; DISPLAY shows
+  BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER. WEIGHT edited from 9.0 to 8.5 kg (five Page presses, 0.1 kg each)
+  and W' (ME) from 15.0 to 21.0 kJ by the dev link's keys.
+- **Settings registers read back** (`dev.py peek` of RTC_BKP16R / BKP28R): register 16 = 0xa0551530 (tag 0xa, rider
+  78 kg, W' 21.0 kJ, bike 8.5 kg); register 28 = 0x9280c0e0 (tag 0x9); register 11 unchanged (0xa7345b21). The
+  rider's weight and W' from the earlier layout carried over.
+- **A ride from RAM (1ba795d, FLASHLOG #81):** started (INDOOR), past its first checkpoint, the image restarted
+  mid-ride: RIDE RESUMED; END RIDE > DISCARD put both copies in `\Rustfw\Discarded` (valid FIT: indoor_cycling, 45
+  records, the full copy's three developer fields).
+
+## 2026-10-26: palette, altitude and the data of a real ride (owner present)
+
+- **The new palette and the zone bars on the panel** (from RAM): Intervals.icu's teal, green, olive, brown, wine,
+  purple and slate, brightened x 1.5, and the bars following their numbers at once.
+- **ALTITUDE** calibrated with the dev link's keys in 1 m steps.
+- **The RAM ride check of fe7776bbc83c:** a start, a restart mid-ride, a discard.
+- **A real ride's data:** 52,480 beats recorded as `hrv` messages in the full copy and read back. Our DFA a1 against
+  an independent implementation of the published method on the same beats: medians 1.05 and 1.05, r = 0.57 window
+  by window, a typical difference of +-0.07.
+
+## 2026-10-27: a main loop that never slept (from RAM)
+
+- **The spin:** with some builds, every WFI returned at once (the profiler's `usb` row at 255,000 calls a second, 82 %
+  of wall time awake): the touch line's IRQ 23 stuck pending in the NVIC (below, "2026-10-24 to 10-27: USB causes ruled out or fixed").
+- **After the fix** (`touch_edge` clears the pending bit on every call): `usb` at 43 to 44 calls a second, 0.05 % of wall
+  time, in 12 runs of two layouts; the dev link and `info` work. A tap on the panel after the fix is still to see.
+- **Again with the panel's DMA:** IRQ 11 stuck the same way (ISPR0 0x00000c00, DMA1_LISR 0). Now one place, main.rs
+  `sleep`, clears every wake source's pending bit just before each WFI: 0 spins in 20 runs (cpu 9 to 10 permille), and
+  0 in 10 of a variant that spun 5 times in 6 before. A tap after this fix is still to see.
+
+## 2026-10-27: the profiler and the performance pass (from RAM, owner away)
+
+- **`tools/profile.py`** from RAM (30 s windows; no card writes: the ride scenario left out): idle overview 1.72 %
+  awake before the performance pass (54d3f0a), 1.55 % after; a ride page 1.51 % then 1.32 %; menus with a key every
+  0.5 s 2.75 % then 1.82 %, a menu move 7.6 then 4.0 ms on average (the panel's SPI, about 1 us a pixel, sets it),
+  the worst 161 then 95 ms. GNSS 113 then 45 us a pass, the light sensor 45 then 28 us a call.
+- **`info`'s new `cpu` figure** (99e6f5e): 12 per mille on the overview after the touch fix, beside `awake` 11.
+- **Not seen on the unit yet:** the flattened menus and the quick panel (f935c0f), the refactors B1 to B3 (behaviour
+  kept by the tests; the unit only booted and ran the profile scenarios on them).
+
+## 2026-10-27: SPI1 at 50 MHz and the panel's DMA (from RAM, owner away)
+
+`tools/profile.py -s 8 idle page menu`, cpu about 10 permille on each build (no stuck interrupt). The profiler counts
+CPU cycles, which stop in WFI: with the DMA the figures are the CPU's work, not the wall time; the 50 MHz CPU-only
+build (POWER_STEPS=15) gives the wall time.
+
+| | 16 MHz, CPU (main 72193a1) | 50 MHz, CPU | 50 MHz + DMA (CPU time) |
+|---|---:|---:|---:|
+| menu move (input mean) | 16.0 ms | 10.2 ms | 9.6 ms |
+| a whole menu screen (input max) | 98.6 ms | 61.8 ms | 58.2 ms |
+| overview full draw (draw max) | 62.6 ms | 44.2 ms | 32.5 ms |
+| awake, idle overview | 1.78 % | 1.56 % | 1.41 % |
+| awake, menu | 3.89 % | 2.81 % | 2.67 % |
+
+- Drawing is now CPU-bound: a menu screen (about 70k pixels) takes about 22 ms on the wire at 50 MHz but 58 ms of
+  CPU, about 165 cycles a pixel to make (the per-pixel callback, glyph and code fetches from uncached SDRAM). Fills go
+  by DMA while the CPU sleeps; a blit's DMA only overlaps the wire with that work. The next gain is the D-cache
+  (hw.rs `PanelDma`'s cache contract) or cheaper pixel making in ui/text.rs.
+- Still to see: the panel itself at 50 MHz (screenshots are the app's rendering, not the panel's): an owner's look for
+  noise or shifted pixels; if any, MBR /4 (25 MHz) in `spi_init`.
+
+## 2026-10-27: suspend, a normal state, not a drop
+
+- **What a suspend is:** the computer stops sending starts of frame; after 3 ms of an idle bus the core sets
+  OTG_GINTSTS.USBSUSP and OTG_DSTS.SUSPSTS (USB 2.0 7.1.7.6; RM0399, OTG_HS, OTG_GINTSTS and OTG_DSTS). The computer
+  ends it with resume signalling (OTG_GINTSTS.WKUPINT) or a bus reset. synopsys-usb-otg 0.5 reports USBSUSP and
+  WKUPINT as `PollResult::Suspend` / `Resume` and does nothing else (its `suspend` / `resume` are empty); usb-device
+  0.3 goes to `UsbDeviceState::Suspend` and back to the state before at the next resume, reset or traffic.
+- **Before:** `Suspend` is not `Configured`, so after 2 s the watch called it a drop: a soft disconnect (DCTL.SDIS,
+  100 ms of busy-waiting), "USB RECONNECT" on the screen, register 31 counted one more drop, and register 0's drive
+  record was overwritten. Once per suspend: the watch re-armed only once configured again.
+- **Now** (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`, tests in dev.rs): a suspend from configured is
+  left alone however long it lasts, the dot turns grey, and the link carries on as configured at the resume. Nothing
+  is polled in between: no USB interrupt comes, so WFI sleeps whole slices. Its timers run on the main loop's clock
+  (they ran on the cycle counter, which stops in WFI and wraps every 9 s).
+- **What is still a drop:**
+  - configured and the frame number (DSTS.FNSOF) still for 200 ms with no suspend (the green-dot drop);
+  - configured once, then not configured again for 2 s (a reset the computer did not follow up);
+  - a suspend after the drive's last command ended in a phase error: a computer suspends a device only when it is
+    idle, never in the middle of a transfer, so that is the port disabled (the 2026-10-24 drop above), and the old
+    recovery runs.
+- **On the unit:** a suspend could not be provoked without sleeping the Mac (not allowed). With the serial port closed
+  and the drive not lent, macOS kept the device powered (ioreg: IOUSBHostDevice DevicePowerState 2, over 2
+  minutes): it does not suspend this device while awake. The build ran from RAM with the link up, a green dot, cpu 8
+  permille. What a real suspend does is in docs/status.md, "Not yet seen on the unit".
+
+**Do suspends explain the past issues?** Mostly not.
+- **Do not fit:** the drops came during sustained high-speed transfers, and a computer never suspends a device with
+  a transfer in flight. They depend on speed (full speed held), which fits signal integrity, not power management.
+  Stock's drive (every 80 to 90 s while copying) and Engineer Mode's `LIBUSB_ERROR_IO` are other firmwares, without
+  this watch. The green-dot drop had no suspend: a suspend would have set USBSUSP and left Configured. Only an unplug
+  brought the link back, while a suspended device comes back with the next traffic.
+- **Fits, as an effect:** register 0 at the 2026-10-24 drop (`0xd1280200`: a READ(10) phase error, no reset, then the
+  core left Configured) is what the core reports as a suspend: the port went idle, but after the transfer failed.
+- **Fits, separately:** while the Mac slept with the unit plugged in (a system sleep suspends every port), the old
+  watch disconnected and reconnected the unit 2 s in; on waking, macOS found a device that had left and come back,
+  so it enumerated it afresh (the serial port gone and back, a lent drive "not ejected properly"), and the unit
+  showed "USB RECONNECT". Register 31 counted those as
+  drops and register 0 could hold a sleep's record instead of a real drop's (status 0 in it means no failed command).
+
+## 2026-10-24 to 10-27: USB causes ruled out or fixed
+
+- **A main loop that never slept with the cable in** (2026-10-27, fixed; not USB): the profiler showed the `usb`
+  section 255,000 times a second (3.2 us each, 82 % of wall time) instead of about 42. It looked like a suspended
+  bus, but DSTS.SUSPSTS read 0 and the spin went on with GINTMSK = 0 and with GAHBCFG.GINT = 0. The NVIC (peeked
+  with a debug build) held IRQ 23, the touch line's EXTI9_5, pending (ISPR0 0x00800400, ICSR.VECTPENDING 39) with
+  EXTI_CPUPR1 line 6 clear: the NVIC clear had landed before the EXTI write, the line pended it again, and nothing
+  cleared it any more. The usb row only showed it because the link is polled once per WFI; without the cable the
+  loop spins just the same, unmeasured. Timing decides it: about three runs in four of some builds, none of
+  others (adding a store after WFI hid it; `dsb` / `isb` around WFI did not). Fix, first step: main.rs `touch_edge` reads CPUPR1 back after
+  clearing it and clears the NVIC pending bit on every call: 0 spins in 12 runs of two layouts that spun before
+  (superseded: `sleep` now clears the NVIC pending bits, next paragraph).
+  **The same again with the panel's DMA** (2026-10-27, after c5465b0): the cpu figure at 1006 permille, ISPR0 0x00000c00,
+  ICSR.VECTPENDING 27 = IRQ 11 (DMA1 stream 0) with DMA1_LISR 0: `dma_wait` cleared the NVIC right after LIFCR, the
+  line re-pended it, and nothing cleared it until the next transfer. 0 in 10 runs of the build at e923b23, but 5 in 6
+  with LISR's read back removed. Fix, for every wake source: main.rs `sleep` clears the pending bits of all three
+  (IRQ 11, 23, 77) just before each WFI, after the sources were read; the lines are level, so an unread event pends
+  again at once. The sources no longer clear their own NVIC bit. With the read back removed: 0 spins in 10 runs; the
+  build as committed: 0 in 20. `dev.py peek` now reads the NVIC (0xe000e100 to 0xe000e33c) and ICSR (0xe000ed04).
+- **macOS refusing the mount** ("mount approval dissented, 0xF8DA0008") was its lock screen: it does not mount a newly
+  inserted disk while locked. Not the unit.
+- **The main loop stalling** after a drive command (fixed): the eMMC access slept, which takes over SysTick. This was
+  not the drop: the USB link kept working through it.
+- **The ULPI pins' slew rate:** already very high speed, as stock sets them.
+- **A CBW not valid leaving the drive deaf after a bus reset:** fixed; a bus reset clears it now (msc.rs
+  `Drive::bus_reset`).

@@ -235,7 +235,7 @@ def fit_workout(name, steps):
 
 
 def workouts(m):
-    """\\Workout as stock leaves it, with made-up workouts (sim.rs tests: today is 2026-10-23): a folder per
+    """\\Workout as stock leaves it, with made-up workouts (src/sim/ tests: today is 2026-10-23): a folder per
     planned day, a .fit and a .json per workout, stock's temporary copies beside."""
     S = 1000  # ms
 
@@ -273,7 +273,7 @@ def workouts(m):
 
 
 def hill(step=25.0):
-    """The synthetic course (sim.rs `course_ride` rides it): from 2 km west and 1.5 km south of 0 N 0 E, 2 km east
+    """The synthetic course (src/sim/ `course_ride` rides it): from 2 km west and 1.5 km south of 0 N 0 E, 2 km east
     on the flat at 100 m, 2 km north climbing to 220 m (6 %), 1 km east on the top. Points every `step` m: (latitude,
     longitude in degrees, altitude in m, distance in m)."""
     legs = [((-2000.0, -1500.0, 100.0), (0.0, -1500.0, 100.0)), ((0.0, -1500.0, 100.0), (0.0, 500.0, 220.0)),
@@ -367,7 +367,7 @@ def lines(corners, step):
     return pts
 
 
-# The zigzag's corners after the winding stretch, and its hairpin (course/cues.rs `zigzag`, which sim.rs rides).
+# The zigzag's corners after the winding stretch, and its hairpin (course/cues.rs `zigzag`, which src/sim/ rides).
 ZIGZAG_END = [(3300.0, 600.0), (2800.0, 100.0), (2800.0, -500.0), (2350.0, -700.0)]
 HAIRPIN = [(2350.0, -700.0), (1900.0, -900.0), (1900.0, -906.0), (2350.0, -706.0)]
 # Its turns as a FIT course states them: (corner, course_point type: 6 left, 7 right, 22 sharp right, 19 slight left,
@@ -392,7 +392,7 @@ def zigzag():
 
 
 def courses(m):
-    """Made-up courses (storage/course_file.rs, sim.rs): stock's \\PlanTrip with a route in Bryton's layout and a file that
+    """Made-up courses (storage/course_file.rs, src/sim/): stock's \\PlanTrip with a route in Bryton's layout and a file that
     is no FIT, and \\Courses (copied over USB) with the same hill as a Garmin FIT course and as GPX; and the zigzag
     as a FIT course with its turns as course points and as a GPX track (its turns found on its shape)."""
     pts = hill()

@@ -4,10 +4,9 @@ Rules for anyone (person or AI agent) changing this firmware. Keep it short and 
 
 ## Golden rule: never lose a ride
 
-It outranks everything below, performance included. Learned the hard way on 2026-10-22: one wrong pointer in a
-stock-firmware patch (P9) restarted the unit at the start and the save of a ride, and the whole 3 hours were
-lost. The stock firmware's own design is the minimum bar (public repo docs/how-it-works.md, "How a ride is
-saved"):
+It outranks everything below, performance included: on 2026-10-22 one wrong pointer in a stock-firmware patch
+(P9) restarted the unit during a save and a 3-hour ride was lost. The stock firmware's own design is the minimum
+bar (public repo docs/how-it-works.md, "How a ride is saved"):
 - **On the eMMC as it goes:** ride data is appended to the file in chunks; it never exists only in RAM.
 - **A checkpoint at least every 60 s:** flush the data, then write a recovery record (file length, CRC, ride
   totals). Keep two copies (old / new) so a power cut while writing one leaves the other whole.
@@ -49,9 +48,8 @@ This is a battery device: every cycle the CPU is awake costs ride time.
 - **Do less:**
   - **redraw only what changes, in the smallest box that holds it**: a value in its own fixed box, a digit in its
     own cell; never a whole line, a whole screen or a wide clearing box for one changed character. Every pixel is a
-    SPI transfer and CPU time, uncached from SDRAM: redrawing the main screen's two seconds digits over the full
-    width each second kept the CPU awake 17.5 % of the time; one 30 x 50 digit cell, 2.4 % (measured, `dev.py
-    info`). Full redraws only when a screen opens;
+    SPI transfer and CPU time, uncached from SDRAM: a full-width redraw of the seconds kept the CPU awake 17.5 %
+    of the time, one 30 x 50 digit cell 2.4 % (measured, `dev.py info`). Full redraws only when a screen opens;
   - send the panel the smallest window;
   - no work in the loop that could be done once.
 - **Light code:**
@@ -62,8 +60,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
-  since as a local it was held in main's frame several times over (111 KB) and opening a workout overflowed the
-  stack (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
+  since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
   buffers in their own non-inlined function, never in main's. AXI SRAM (512 KB) holds the app, the courses, the scan's
   cache and the road ahead (about 15 KB left on 2026-10-28; link.x says what is where); a static there must start as all
   zeros (an `Option` of a reference or a struct with a bool niche does not) or it lands in `.data`, in DTCM.
@@ -108,7 +105,8 @@ The point of this project is a firmware in safe Rust.
   - The two `'static` USB buffers are `StaticCell`s, which are initialised once and checked.
   - Raw pointers appear only in hw.rs.
 - **Panics:** no `unwrap` / indexing that can fail on the firmware path, unless it is provably in range. A panic
-  marks the fault and resets the unit (hw.rs `default_handler`; it parks after 3 resets in a row without a minute of running), so a ride resumes from its checkpoint; still, no panics on the firmware path.
+  marks the fault and resets the unit (hw.rs `default_handler`), so a ride resumes from its checkpoint. The unit
+  parks after 3 resets in a row without a minute of running.
 
 ## Layout: logic in the library, transport in the board
 
@@ -145,29 +143,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 
 ## AI agents: the right model for the task
 
-Cost is about calls x context size, so the main session (Opus) orchestrates and typed agents do the work
-(definitions in `~/.claude/agents/`, each with its model and a turn cap, `maxTurns`; a hook,
-`~/.claude/hooks/agent_models.py`, refuses forks and any agent that would run on Opus by default):
-
-| Agent | Model | Turns | For |
-|-------|-------|-------|-----|
-| `implementer` | Haiku (Sonnet for open design), worktree | 120 | tests, fixes, well-specified changes; with Sonnet: new screens, protocols, refactors across files |
-| `critical` | Opus, worktree | 150 | only the part that writes storage or touches the recorder, power, boot, hw.rs, security |
-| `mechanic` | Haiku | 40 | docs, status ticks, gallery, FLASHLOG, renames, a fix a review spelled out |
-| `reviewer` | Sonnet (Opus for recorder, storage, boot), read-only | 60 | one pass on a diff, a findings list |
-| `runner` | Haiku | 30 | check.sh, merging a worktree branch, scripted sessions on the unit |
-
-- **Briefs:** goal, files and line ranges, tests to add, what is out of scope. Work that would pass the turn cap is
-  split into two briefs. A feature with a costly part is split: `critical` writes that part, `implementer` the rest
-  (settings, menus, UI, tests) on the same branch.
-- **Worktrees fork from the last push (`origin/main`)**, not from local main: a worktree agent merges main first. Agents never switch the main checkout (`git checkout`, `switch`, `reset`, `stash` there); merges into main go through `runner`, which checks it is on main first.
-- **Measured 2026-10-27:** a Sonnet review found everything an Opus one did, plus one more, at 2/3 of the cost; a
-  Haiku implementer did a spelled-out fix at 1/3 of Sonnet's cost, same quality.
-- **The main session does no legwork:** it does not poll, gate runs and merges go to `runner`, it reads a file only to
-  write a brief.
-- **One review per feature:** `reviewer` once, its findings to `mechanic` (spelled out) or `implementer`; a second
-  review only for recorder, storage or boot changes.
-- Every merge still passes `./check.sh`, whatever model wrote the code.
+Typed agents in `~/.claude/agents/` do the work; the main session orchestrates. Opus (`critical`) only for code where
+a mistake costs a ride: storage, the recorder, power, boot, hw.rs and security. One review per feature, and every merge
+passes `./check.sh`. Agents never switch the main checkout: worktrees fork from `origin/main`, merges go through `runner`.
 
 ## Before every commit
 
@@ -176,6 +154,8 @@ Cost is about calls x context size, so the main session (Opus) orchestrates and 
 It runs, in order:
 - the layout guard: `src/lib.rs` keeps `#![forbid(unsafe_code)]`, and `unsafe` appears only in hw.rs (plus usb.rs's
   marker line), so the library cannot reach a register;
+- the docs guard: every file of `src` and `tools` is named in docs/layout.md, and no doc names a retired flat file
+  (the list is in check.sh);
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - `cargo clippy --release -- -D warnings`, and on the tests and the simulator;
 - `cargo test-host` (unit tests, simulator tests and doc tests on the Mac; writes `target/sim/preview.bmp`);
@@ -267,11 +247,9 @@ libraries that already do it; use or adapt them when they fit (no_std, no heap, 
   - Each new one needs a reason and must be a well-known embedded crate (embassy, heapless, embedded-hal).
   - Its own `unsafe` is part of what we trust.
   - `cargo deny check` in check.sh (when installed) checks advisories, licences and duplicates.
-  - **gzip is our own** (`src/storage/inflate.rs`, 2026-10-26): `miniz_oxide` (default features off, no alloc) was
-    looked at first and not taken: its licence line carries Zlib, which `deny.toml` does not allow, it needs `adler2`,
-    its decoder wants the whole compressed tile in one slice (47 KB more RAM) and an 11 KB state, and the measured
-    need is one small reader (about 2 KB of image, tested against Python's gzip and fuzzed) that pulls bytes from the
-    card as `ign::lz4` does.
+  - **gzip is our own** (`src/storage/inflate.rs`): `miniz_oxide` was not taken (its Zlib licence is not in
+    `deny.toml`, it needs `adler2`, its decoder wants the whole compressed tile in RAM). The need is one small reader,
+    tested against Python's gzip and fuzzed, that pulls bytes from the card as `ign::lz4` does.
 - **No `usbd-serial::SerialPort`:** it is hardcoded to 64-byte packets, which is full speed only. On this
   high-speed link, `usb.rs` uses `CdcAcmClass` with 512-byte packets.
 - Release profile: `opt-level = "s"`, LTO, `panic = "abort"`, debug info kept in the ELF only.
@@ -298,17 +276,10 @@ libraries that already do it; use or adapt them when they fit (no_std, no heap, 
 
 ## Development loop on the unit
 
-Commands (`dev.py info / shot / run / peek / poke / key / emmc / prof / reset`, `tools/profile.py --run`), the
-profiler, the Renode emulation (install, checks, limits) and the testing-strategy layer table: docs/devloop.md.
-Rules from it:
-- Run a build from RAM with `./check.sh && ./dev.py run` (nothing written to the eMMC). Software can't enter Engineer
-  Mode; updating the eMMC goes through the stock updater or Engineer Mode (`tools/iaprecover.py --write out/IMG.bin`).
-- A new costly part of the pass gets its profiler section (`Sec`, its name, `App::timed` around it).
-- **No watchdog, on purpose.** The IWDG keeps counting in standby unless an option byte (FZ_IWDG_SDBY) says
-  otherwise, so it would wake the unit from power-off. Option bytes are flash configuration, and we never touch them.
-- Renode passing proves little: it does not model the MPU, caches, attributes, a real WFI wake, SPI or ULPI timing
-  (it passed an image whose SPI1 lost master mode on the unit, 2026-10-22). The simulator is the main tool.
-- Testing layers (build checks, host tests, Renode, fuzzing, the gate, the unit at boot, the unit): docs/devloop.md.
+The commands, the profiler, Renode, the testing layers, the run-from-RAM loop, Engineer Mode and the no-watchdog
+decision are in docs/devloop.md. One rule stays here, since that doc does not state it:
+- **Renode passing proves little:** it does not model the MPU, caches, attributes, a real WFI wake, SPI or ULPI
+  timing (it passed an image whose SPI1 lost master mode on the unit, 2026-10-22). The simulator is the main tool.
 
 ## Later (when the firmware does more than one thing)
 

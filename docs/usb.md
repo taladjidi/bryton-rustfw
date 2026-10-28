@@ -1,7 +1,7 @@
 # USB at high speed: the drops
 
 High speed USB drops the link under sustained traffic on this unit, with this firmware and with Bryton's. Full speed holds.
-This page has what is known, what was tried, and what to ask or try next. Last updated 2026-10-27.
+This page has what is known, what was tried, and what to ask or try next. Last updated 2026-10-28.
 
 ## The hardware
 
@@ -65,87 +65,10 @@ This page has what is known, what was tried, and what to ask or try next. Last u
   - Traffic matters: low throughput at high speed held; 7 MB/s fails within seconds.
   - After the fault, the PHY or the core is in a state only a full reset clears.
 
-## What the unit saw at a drop (2026-10-24)
+## Dated findings
 
-Backup register 0 after a high-speed drop at the mount, read after the replug: `0xd1280200`.
-- **Last command:** 0x28, READ(10), with status 2: a **phase error**. The data phase could not hand the next 512-byte
-  packet to the IN endpoint for a whole second (`Bulk::send` gave up), so the computer had stopped taking data in
-  the middle of a transfer from the unit.
-- **Resets:** none of either kind (0xff bus reset, 0xfe Bulk-Only reset) among the last 32 entries. The computer did
-  not reset the device first.
-- **Then:** the core left Configured (the dot orange, most likely USB suspend: no more starts of frame), and the
-  watch reconnected (register 31: 2 drops in all).
-- **Reading (inferred):** the computer disabled the port without a reset. That is what a host controller does after
-  transaction errors (babble, a bad CRC) on an IN transfer. Only fast IN traffic fails: a damaged high-speed packet
-  from the device's side is the likeliest. Candidates: the transmit FIFO (sized to one packet, filled word by word
-  by uncached code), the ULPI data timing at 60 MHz, the PHY's transmitter or supply. Next tries 2, 4, 5 and 7 below
-  target exactly that.
-
-## Suspend: a normal state, not a drop (2026-10-27)
-
-- **What a suspend is:** the computer stops sending starts of frame; after 3 ms of an idle bus the core sets
-  OTG_GINTSTS.USBSUSP and OTG_DSTS.SUSPSTS (USB 2.0 7.1.7.6; RM0399, OTG_HS, OTG_GINTSTS and OTG_DSTS). The computer
-  ends it with resume signalling (OTG_GINTSTS.WKUPINT) or a bus reset. synopsys-usb-otg 0.5 reports USBSUSP and
-  WKUPINT as `PollResult::Suspend` / `Resume` and does nothing else (its `suspend` / `resume` are empty); usb-device
-  0.3 goes to `UsbDeviceState::Suspend` and back to the state before at the next resume, reset or traffic.
-- **Before:** `Suspend` is not `Configured`, so after 2 s the watch called it a drop: a soft disconnect (DCTL.SDIS,
-  100 ms of busy-waiting), "USB RECONNECT" on the screen, register 31 counted one more drop, and register 0's drive
-  record was overwritten. Once per suspend: the watch re-armed only once configured again.
-- **Now** (lib link/dev.rs `watch_usb`, board/usb.rs `Link::watch`, tests in dev.rs): a suspend from configured is
-  left alone however long it lasts, the dot turns grey, and the link carries on as configured at the resume. Nothing
-  is polled in between: no USB interrupt comes, so WFI sleeps whole slices. Its timers run on the main loop's clock
-  (they ran on the cycle counter, which stops in WFI and wraps every 9 s).
-- **What is still a drop:**
-  - configured and the frame number (DSTS.FNSOF) still for 200 ms with no suspend (the green-dot drop);
-  - configured once, then not configured again for 2 s (a reset the computer did not follow up);
-  - a suspend after the drive's last command ended in a phase error: a computer suspends a device only when it is
-    idle, never in the middle of a transfer, so that is the port disabled (the 2026-10-24 drop above), and the old
-    recovery runs.
-- **On the unit:** a suspend could not be provoked without sleeping the Mac (not allowed). With the serial port closed
-  and the drive not lent, macOS kept the device powered (ioreg: IOUSBHostDevice DevicePowerState 2, over 2
-  minutes): it does not suspend this device while awake. The build ran from RAM with the link up, a green dot, cpu 8
-  permille. What a real suspend does is in docs/status.md, "Not yet seen on the unit".
-
-**Do suspends explain the past issues?** Mostly not.
-- **Do not fit:** the drops came during sustained high-speed transfers, and a computer never suspends a device with
-  a transfer in flight. They depend on speed (full speed held), which fits signal integrity, not power management.
-  Stock's drive (every 80 to 90 s while copying) and Engineer Mode's `LIBUSB_ERROR_IO` are other firmwares, without
-  this watch. The green-dot drop had no suspend: a suspend would have set USBSUSP and left Configured. Only an unplug
-  brought the link back, while a suspended device comes back with the next traffic.
-- **Fits, as an effect:** register 0 at the 2026-10-24 drop (`0xd1280200`: a READ(10) phase error, no reset, then the
-  core left Configured) is what the core reports as a suspend: the port went idle, but after the transfer failed.
-- **Fits, separately:** while the Mac slept with the unit plugged in (a system sleep suspends every port), the old
-  watch disconnected and reconnected the unit 2 s in; on waking, macOS found a device that had left and come back,
-  so it enumerated it afresh (the serial port gone and back, a lent drive "not ejected properly"), and the unit
-  showed "USB RECONNECT". Register 31 counted those as
-  drops and register 0 could hold a sleep's record instead of a real drop's (status 0 in it means no failed command).
-
-## Ruled out or fixed
-
-- **A main loop that never slept with the cable in** (2026-10-27, fixed; not USB): the profiler showed the `usb`
-  section 255,000 times a second (3.2 us each, 82 % of wall time) instead of about 42. It looked like a suspended
-  bus, but DSTS.SUSPSTS read 0 and the spin went on with GINTMSK = 0 and with GAHBCFG.GINT = 0. The NVIC (peeked
-  with a debug build) held IRQ 23, the touch line's EXTI9_5, pending (ISPR0 0x00800400, ICSR.VECTPENDING 39) with
-  EXTI_CPUPR1 line 6 clear: the NVIC clear had landed before the EXTI write, the line pended it again, and nothing
-  cleared it any more. The usb row only showed it because the link is polled once per WFI; without the cable the
-  loop spins just the same, unmeasured. Timing decides it: about three runs in four of some builds, none of
-  others (adding a store after WFI hid it; `dsb` / `isb` around WFI did not). Fix, first step: main.rs `touch_edge` reads CPUPR1 back after
-  clearing it and clears the NVIC pending bit on every call: 0 spins in 12 runs of two layouts that spun before
-  (superseded: `sleep` now clears the NVIC pending bits, next paragraph).
-  **The same again with the panel's DMA** (2026-10-27, after c5465b0): the cpu figure at 1006 permille, ISPR0 0x00000c00,
-  ICSR.VECTPENDING 27 = IRQ 11 (DMA1 stream 0) with DMA1_LISR 0: `dma_wait` cleared the NVIC right after LIFCR, the
-  line re-pended it, and nothing cleared it until the next transfer. 0 in 10 runs of the build at e923b23, but 5 in 6
-  with LISR's read back removed. Fix, for every wake source: main.rs `sleep` clears the pending bits of all three
-  (IRQ 11, 23, 77) just before each WFI, after the sources were read; the lines are level, so an unread event pends
-  again at once. The sources no longer clear their own NVIC bit. With the read back removed: 0 spins in 10 runs; the
-  build as committed: 0 in 20. `dev.py peek` now reads the NVIC (0xe000e100 to 0xe000e33c) and ICSR (0xe000ed04).
-- **macOS refusing the mount** ("mount approval dissented, 0xF8DA0008") was its lock screen: it does not mount a newly
-  inserted disk while locked. Not the unit.
-- **The main loop stalling** after a drive command (fixed): the eMMC access slept, which takes over SysTick. This was
-  not the drop: the USB link kept working through it.
-- **The ULPI pins' slew rate:** already very high speed, as stock sets them.
-- **A CBW not valid leaving the drive deaf after a bus reset:** fixed; a bus reset clears it now (msc.rs
-  `Drive::bus_reset`).
+What the unit saw at a drop, the suspend watch, and the causes ruled out are dated in journal.md
+(2026-10-24 and 2026-10-27).
 
 ## Next tries, cheapest first
 

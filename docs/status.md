@@ -1,5 +1,9 @@
 # Status
 
+What this file holds: what the unit has not shown yet, the known problems, and the next steps.
+What does not belong: what is built (features.md) and the roadmap (roadmap.md).
+Where to look: features.md for what the firmware does, journal.md for the dated findings, docs/usb.md for the USB drops.
+
 ## Seen on the unit
 
 [features.md](features.md) lists what the firmware does. This file lists what the unit has not shown yet; a feature not listed here was seen on the unit.
@@ -37,74 +41,6 @@ The dated findings are in [journal.md](journal.md).
   removes the call's notification at the answer, so the call's time and a hang-up cannot follow over ANCS.
 - Not yet: messages' banners, skip in a podcast, the camera shutter, a re-pair after forgetting on the iPhone only,
   a stranger's phone, range loss during a ride.
-
-## Seen on the unit: fonts, rows and registers (2026-10-26, owner present)
-
-- **FONT (SETTINGS > DISPLAY > FONT, SMOOTH):** run from RAM (e762241): switching to SMOOTH redraws at once; the
-  overview, the indoor ride page and the DISPLAY menu draw in Barlow Semi Condensed Bold with no box moving. Register
-  16 then read 0xa15a0f30 (bit 24 set). After the flash of e762241 (FLASHLOG #80) it read 0xa05a0f30 (PIXEL): the owner
-  had switched back to PIXEL by hand (the choice kept as set). Big "--" values look wide in SMOOTH (the
-  glyph keeps the pixel font's cell).
-- **BIKE and DISPLAY rows:** BIKE shows WHEEL, WEIGHT, ALTITUDE, FROM GPS, PROFILE, CLIMBS AHEAD; DISPLAY shows
-  BRIGHTNESS, OFF AFTER, TOUCH, FONT, GAUGE POWER. WEIGHT edited from 9.0 to 8.5 kg (five Page presses, 0.1 kg each)
-  and W' (ME) from 15.0 to 21.0 kJ by the dev link's keys.
-- **Settings registers read back** (`dev.py peek` of RTC_BKP16R / BKP28R): register 16 = 0xa0551530 (tag 0xa, rider
-  78 kg, W' 21.0 kJ, bike 8.5 kg); register 28 = 0x9280c0e0 (tag 0x9); register 11 unchanged (0xa7345b21). The
-  rider's weight and W' from the earlier layout carried over.
-- **A ride from RAM (1ba795d, FLASHLOG #81):** started (INDOOR), past its first checkpoint, the image restarted
-  mid-ride: RIDE RESUMED; END RIDE > DISCARD put both copies in `\Rustfw\Discarded` (valid FIT: indoor_cycling, 45
-  records, the full copy's three developer fields).
-
-## Seen on the unit: palette, altitude and the data of a real ride (2026-10-26, owner present)
-
-- **The new palette and the zone bars on the panel** (from RAM): Intervals.icu's teal, green, olive, brown, wine,
-  purple and slate, brightened x 1.5, and the bars following their numbers at once.
-- **ALTITUDE** calibrated with the dev link's keys in 1 m steps.
-- **The RAM ride check of fe7776bbc83c:** a start, a restart mid-ride, a discard.
-- **A real ride's data:** 52,480 beats recorded as `hrv` messages in the full copy and read back. Our DFA a1 against
-  an independent implementation of the published method on the same beats: medians 1.05 and 1.05, r = 0.57 window
-  by window, a typical difference of +-0.07.
-
-## Seen on the unit: a main loop that never slept (2026-10-27, from RAM)
-
-- **The spin:** with some builds, every WFI returned at once (the profiler's `usb` row at 255,000 calls a second, 82 %
-  of wall time awake): the touch line's IRQ 23 stuck pending in the NVIC (docs/usb.md, "Ruled out or fixed").
-- **After the fix** (`touch_edge` clears the pending bit on every call): `usb` at 43 to 44 calls a second, 0.05 % of wall
-  time, in 12 runs of two layouts; the dev link and `info` work. A tap on the panel after the fix is still to see.
-- **Again with the panel's DMA:** IRQ 11 stuck the same way (ISPR0 0x00000c00, DMA1_LISR 0). Now one place, main.rs
-  `sleep`, clears every wake source's pending bit just before each WFI: 0 spins in 20 runs (cpu 9 to 10 permille), and
-  0 in 10 of a variant that spun 5 times in 6 before. A tap after this fix is still to see.
-
-## Seen on the unit: the profiler and the performance pass (2026-10-27, from RAM, owner away)
-
-- **`tools/profile.py`** from RAM (30 s windows; no card writes: the ride scenario left out): idle overview 1.72 %
-  awake before the performance pass (54d3f0a), 1.55 % after; a ride page 1.51 % then 1.32 %; menus with a key every
-  0.5 s 2.75 % then 1.82 %, a menu move 7.6 then 4.0 ms on average (the panel's SPI, about 1 us a pixel, sets it),
-  the worst 161 then 95 ms. GNSS 113 then 45 us a pass, the light sensor 45 then 28 us a call.
-- **`info`'s new `cpu` figure** (99e6f5e): 12 per mille on the overview after the touch fix, beside `awake` 11.
-- **Not seen on the unit yet:** the flattened menus and the quick panel (f935c0f), the refactors B1 to B3 (behaviour
-  kept by the tests; the unit only booted and ran the profile scenarios on them).
-
-## Seen on the unit: SPI1 at 50 MHz and the panel's DMA (2026-10-27, from RAM, owner away)
-
-`tools/profile.py -s 8 idle page menu`, cpu about 10 permille on each build (no stuck interrupt). The profiler counts
-CPU cycles, which stop in WFI: with the DMA the figures are the CPU's work, not the wall time; the 50 MHz CPU-only
-build (POWER_STEPS=15) gives the wall time.
-
-| | 16 MHz, CPU (main 72193a1) | 50 MHz, CPU | 50 MHz + DMA (CPU time) |
-|---|---:|---:|---:|
-| menu move (input mean) | 16.0 ms | 10.2 ms | 9.6 ms |
-| a whole menu screen (input max) | 98.6 ms | 61.8 ms | 58.2 ms |
-| overview full draw (draw max) | 62.6 ms | 44.2 ms | 32.5 ms |
-| awake, idle overview | 1.78 % | 1.56 % | 1.41 % |
-| awake, menu | 3.89 % | 2.81 % | 2.67 % |
-
-- Drawing is now CPU-bound: a menu screen (about 70k pixels) takes about 22 ms on the wire at 50 MHz but 58 ms of
-  CPU, about 165 cycles a pixel to make (the per-pixel callback, glyph and code fetches from uncached SDRAM). Fills go
-  by DMA while the CPU sleeps; a blit's DMA only overlaps the wire with that work. The next gain is the D-cache
-  (hw.rs `PanelDma`'s cache contract) or cheaper pixel making in ui/text.rs.
-- Still to see: the panel itself at 50 MHz (screenshots are the app's rendering, not the panel's): an owner's look for
-  noise or shifted pixels; if any, MBR /4 (25 MHz) in `spi_init`.
 
 ## Not yet seen on the unit
 
@@ -408,18 +344,8 @@ build (POWER_STEPS=15) gives the wall time.
 - **The Nordic chip after a power off and on** (`sd_power_system_off`, then the reset pulse).
 - **Charging control:** the charger is on whenever USB is in (as the bootloader leaves it), with no temperature
   window yet (BOARD.md 12; the barometer's temperature can now feed it). The 3.3 V switch-off not reached.
-- **The USB drive (mass storage, msc.rs): to do, high speed** (all of it in docs/usb.md). Seen on the unit (2026-10-24): the composite
-  device keeps the dev link; SETTINGS > SYSTEM > USB DRIVE (or `dev.py drive`) mounts BRYTON (macOS refuses the mount while its
-  screen is locked: "mount approval dissented, 0xF8DA0008"); 40 files equal to the backup; a write (a 48-byte file)
-  read back through the firmware's own FAT reader after the eject and restart. **High speed drops** every long read
-  after 15 to 40 MB at 6.4 to 7.2 MB/s: the Mac resets the device, which then stays unconfigured (orange dot) until a
-  replug; a soft reconnect (`usb::Link::watch`, counted in backup register 31) did not bring it back. Stock's drive
-  dropped the same way on 2026-10-22, on a sound Apple cable straight into the Mac, so the cause is on the unit's
-  side (board, PHY, or a setup both firmwares share; the ULPI pins are already very high speed). **Full speed
-  (`USB_FS=1`) read all 172 MB of world.dat at 1.0 MB/s with no drop.** To try: `dev.py drivelog` right after a
-  drop (the last 32 commands, to rule out a protocol fault), the PHY's own registers over ULPI, the OTG_HS FIFO sizes
-  against ST's MSC example, the D-cache on (FIFO writes from uncached SDRAM code are slow), the 60 MHz ULPI clock.
-  Not yet: Windows, Linux, unplugging while mounted.
+- **The USB drive (mass storage, msc.rs): to do, high speed.** The drops, what was seen and what to try are in
+  docs/usb.md. Not yet: Windows, Linux, unplugging while mounted.
 - **The OTG_HS IRQ waking WFI** (the link may run on the 50 ms SysTick wake-ups alone).
 - **The touch panel with a finger** (the chip itself answered: BOARD.md 17): INT low while touched, the axes
   (x 0 left, y 0 top expected), the gestures (swipe left / right between pages, hold for the menu, a tap on a menu
@@ -434,13 +360,26 @@ build (POWER_STEPS=15) gives the wall time.
   write waiting, or movement; the power button starts it again; the setting survives a restart (register 18 bits
   22..24).
 
-- **New since the installed build, seen only from RAM or in the simulator (2026-10-24):** touch gestures by feel and
-  their axes; the overview and its notices; banners (ride start, pause, lap, end); eleven page layouts; graphs (five
-  plots by tap, the whole ride by hold); derived power fields and W' balance on a ride with a power meter; DFA a1 and
-  RMSSD from the owner's strap (needs a few minutes of real beats); the AUTO backlight on stock's curve, outdoors.
+- **New since the installed build (2026-10-24), seen only from RAM or in the simulator, one line each:**
+  - touch gestures by feel and their axes;
+  - the overview and its notices;
+  - banners (ride start, pause, lap, end);
+  - eleven page layouts;
+  - graphs (five plots by tap, the whole ride by hold);
+  - derived power fields and W' balance on a ride with a power meter;
+  - DFA a1 and RMSSD from the owner's strap (needs a few minutes of real beats);
+  - the AUTO backlight on stock's curve, outdoors.
 - **Pages moved off backup register 19** (stock reads it at boot): the first start of a new build moves them; then
   stock, reinstalled, should keep its last battery voltage as before.
-- **2026-10-27:** the power-average tap during a ride; the CLIMB page appearing at a climb (course and climbs ahead); the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`), and the crosshair toggling the whole route; the cog opening settings during a ride.
+- **Added 2026-10-27, one line each:**
+  - the power-average tap during a ride;
+  - the CLIMB page appearing at a climb (course and climbs ahead);
+  - the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`);
+  - the crosshair toggling the whole route;
+  - the cog opening settings during a ride.
+
+## Known problems
+
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps

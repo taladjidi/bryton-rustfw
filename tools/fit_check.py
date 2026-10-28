@@ -2,7 +2,7 @@
 """Decodes the FIT files src/storage/fit.rs writes with fitdecode (an independent decoder) and checks them: CRCs,
 no warnings, and the sample ride's values (the synthetic ride of fit.rs's tests). Usage (src/storage/fit.rs, module doc):
     fit_check.py target/fit/sample.fit target/fit/cut.fit [target/fit/sample_full.fit]
-The third, the full copy (developer fields, recorder.rs "Two copies"), is the same ride with Alpha1, RMSSD and
+The third, the full copy (developer fields, src/storage/recorder/mod.rs "Two copies"), is the same ride with Alpha1, RMSSD and
 ArtPct in each record and the strap's beats in hrv messages: checked with both decoders, Garmin's SDK naming the
 developer fields from their descriptions, the beats of both equal to the ones the test fed (count and values). The
 recorder's saved pair (target/fit/recorded.fit, recorded_full.fit, from `cargo test-host two_copies_cost`):
@@ -22,7 +22,7 @@ T0 = 1_161_676_800 + 631_065_600  # FIT 0 is 1989-12-31 00:00 UTC; this is 2026-
 DEV = ("developer_data_id", "field_description")
 DEV_FIELDS = ("Alpha1", "RMSSD", "ArtPct")
 
-# The beats each test fed, ms (fit.rs tests `beats`: the sample ride's records are seconds 1 to 1200; recorder.rs
+# The beats each test fed, ms (fit.rs tests `beats`: the sample ride's records are seconds 1 to 1200; src/storage/recorder/mod.rs
 # tests `beats`: one a second through the 900 s ride, paused too)
 SAMPLE_BEATS = [600 + (t * 37 + k * 11) % 400 for t in range(10, 1201) for k in range(2 + t % 2)]
 RECORDED_BEATS = [250 + t for t in range(900)]

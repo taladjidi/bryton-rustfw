@@ -1,17 +1,9 @@
 # Layout: what each file holds
 
-Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the files you touch.
+What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
+"Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
-  to that: a new concern goes in its own file in `src/app/`.
-  - `Board` is the only way to reach hardware. Each method is a primitive: send a panel command, read RTC_TR,
-    read the keys, sleep.
-  - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
-  - `App`'s fields are parts, not flags: a concern with several fields is a sub-struct with its own `new` and its
-    small pure methods (`Phone`, `Ftms`, and in `app/groups.rs` `Notices` (`notes`), `Light`, `Gps`, `Radio`,
-    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`), `AutoOff`). A new field of one of these goes in
-    its struct; a new concern with three or more fields gets its own. `App` must stay under the size budget
-    (`tests::app_size_budget`, 64 KB; App is 55 KB of its 64 KB budget; it lives in AXI SRAM, about 15 KB free on 2026-10-28, link.x).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`).
 - `src/app/mod.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
@@ -43,7 +35,9 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
     tile, the snap, the trace, at most 12 ms or 6 units a pass, and a pass ends after a unit that read a tile; paused: no work), and the CLIMB fields fed from the trace when no course
     is on (`ahead_text`, `ahead_bar`, called from `course_text` and `course_bar`). BIKE > CLIMBS AHEAD turns it off
     (`Settings::ahead`, register 11's tag 0xaa to 0xac).
-  - `groups.rs`: the sub-structs above. `pass.rs`: the parts of `App::step` (seconds caught up, the alert said,
+  - `groups.rs`: the sub-structs of `App` (`Phone`, `Ftms`, `Notices` (`notes`), `Light`, `Gps`, `Radio`,
+    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`), `AutoOff`), each with its `new` and its
+    small pure methods. `pass.rs`: the parts of `App::step` (seconds caught up, the alert said,
     sensors found, the banner's time, the screen's redraw).
   - `device.rs`: backlight, buzzer, status strip, switching off, AUTO OFF (`step_auto_off`) and the idle pass length (`pass_ms`). `clock.rs`: RTC decoding, dates.
   - `profile.rs`: the ride profile (ROAD, INDOOR or MTB), chosen from the trainer heard or set by hand, given up when the trainer goes silent.

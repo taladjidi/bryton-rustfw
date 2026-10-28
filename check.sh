@@ -9,6 +9,22 @@ grep -q '^#!\[forbid(unsafe_code)\]' src/lib.rs || { echo "layout: src/lib.rs lo
 n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort | grep -v '^src/board/hw.rs$' | tr '\n' ' ')
 [ "$n" = "src/board/usb.rs " ] && [ "$(grep -c 'unsafe impl\|allow(unsafe_code)' src/board/usb.rs)" = 2 ] \
     || { echo "layout: unsafe outside hw.rs: $n"; exit 1; }
+# The docs guard: every file of src and tools is named in docs/layout.md, by its path, its basename or its folder
+# (`tools/fonts/`); no doc names the files that moved (src/sim.rs, src/ui.rs).
+miss=""
+for f in $(git ls-files src tools); do
+    ok=0
+    grep -qF "$f" docs/layout.md && ok=1
+    grep -qF "$(basename "$f")" docs/layout.md && ok=1
+    d=$(dirname "$f")
+    while [ "$ok" = 0 ] && [ "$d" != . ]; do
+        case $d in */*) grep -qF "$d/" docs/layout.md && ok=1 ;; esac
+        d=$(dirname "$d")
+    done
+    [ "$ok" = 1 ] || miss="$miss $f"
+done
+[ -z "$miss" ] || { echo "docs: not in docs/layout.md:$miss"; exit 1; }
+if git grep -nE '(^|[^A-Za-z0-9_])(src/)?(sim|ui)\.rs' -- '*.md'; then echo "docs: a doc names src/sim.rs or src/ui.rs (src/sim/, src/ui/)"; exit 1; fi
 cargo fmt --check
 cargo clippy --release -- -D warnings
 cargo clippy --tests --target aarch64-apple-darwin -q -- -D warnings  # the tests and the simulator too

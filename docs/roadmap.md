@@ -1,9 +1,8 @@
 # Roadmap
 
-What to build, in the order the pieces depend on each other (2026-10-23). The sources: the features built on the
-stock firmware in bryton-S510-mods, what riders ask of Garmin, Wahoo, Hammerhead, Coros and Bryton units (forums,
-reviews), and the hardware facts in BOARD.md. Phase 1 comes first because everything after it adds pages, fields,
-settings and menu rows.
+What is not built yet, in the order the pieces depend on each other (2026-10-23, updated 2026-10-28).
+Not here: what is built (features.md), what the unit has not shown (status.md), dated findings (journal.md).
+Where to look: checklist.md for the comparison with stock, Garmin and other units.
 
 Every phase keeps the split of AGENTS.md (Layout, docs/layout.md): protocols, decisions and drawing in the library, which cannot
 reach a register (`check.sh` checks it keeps `forbid(unsafe_code)`); `main.rs` only moves bytes and bits through
@@ -13,48 +12,19 @@ that crept in.
 
 ## 1. Pages and menus that the rest can build on
 
-- **The owner's notes, for later (2026-10-25):**
-  - Plain power and heart rate fields coloured by the zone the rider is in (the value or the box's background), as
-    the graphs already are.
-  - Pages the rider adds (up to a sensible number) and edits live on the page, splitting and merging cells, instead
-    of fixed layouts picked from a list. Done (2026-10-25, branch pages-editor): up to six pages of rows of one or
-    two cells, the editor on the page (docs/features.md, "The page editor"). Left: the overview through the same
-    editor, pages switched off and reordered (features.md, The page editor), a MORE variant per page.
+Phase 1 (done): input events, screen stack, menus as data, Settings table, banners, touch, page editor (features.md).
+Left: the overview through the same editor, pages switched off and reordered, a MORE variant per page, and widgets
+with a fingerprint.
 
-Today `App` (src/lib.rs) holds menus as hard-coded row numbers (`activate` matching `(Menu::Main, 7 | 8)`), each
-Back has its own destination, and four mechanisms track what is on screen (`shown`, `main_shown`, `menu_shown`,
-`graph_shown`). Each new feature would add another case to all of them.
-
-- **Input events, not keys.** Keys and touch both become one `Input`: `Next`, `Prev`, `Select`, `Back`, `Menu`,
-  `Up` / `Down` (a value editor, with repeat), `Tap(x, y)`, `Swipe(dir)`, `Hold`. Screens handle `Input` only, so a
-  gesture and a key reach the same code, and a Di2 hood button or the dev link can too.
-- **A screen stack.** Opening a menu or a sub-page pushes, Back pops (a fixed array, a few deep). No screen knows
-  where Back goes.
-- **Menus as data.** A static tree of items: submenu, choice (a list), number (range, step, unit), action, reading.
-  One list view draws any of them, scrolls, edits in place (as MAX HR does now) and handles touch (tap a row,
-  slide to scroll). Lists that change at run time (sensors, nearby BLE, pages) are a function returning rows.
-- **Settings in one place.** A `Settings` struct with each setting described once (name, kind, range, default) so
-  the menu, the store and the tests read the same table. Stored in the RTC backup registers now, in a settings file
-  (two copies, a CRC, a version) once the eMMC is written.
 - **Widgets with a fingerprint.** A page is a list of boxes, each with a widget (a value, the clock, a graph, the
-  map, a climb profile, a banner) and the fingerprint of what it shows. Each pass recomputes the fingerprints and
-  redraws only the boxes that changed, and inside a box only the cells that changed (as the digits and field
-  values do now). One mechanism instead of four.
-- **Pages from data.** The ride pages, the main screen and new ones (overview, map, climb, workout) are the same
-  kind of thing: a layout and its widgets, chosen in the menu. The **overview** becomes the home screen: time,
-  battery, sensors, notifications, totals (week and year distance, odometer, once rides are saved).
-- **Banners** for alerts and notifications: one box drawn over a page for a few seconds; the boxes under it are
-  redrawn when it goes.
-- **Touch** (BOARD.md 17): a driver against new `Board` primitives on I2C1 (the same shape as the I2C4 ones), the
-  point parsing and a gesture recogniser in the library (stock's thresholds: a swipe is over 37 px across or 48 px
-  up), a model of the chip in the simulator. Read only while the interrupt line is low, so no touch costs nothing.
-
-Done when: every existing screen runs on it, with the same pixels (the simulator's screenshots) and the same or
-lower awake time (`dev.py info`).
+  map, a climb profile, a banner) and the fingerprint of what it shows. Each pass redraws only the boxes whose
+  fingerprint changed, and inside a box only the cells that changed. One mechanism instead of four.
+- **Pages from data.** The overview, the map, the climb and the workout pages are the same kind of thing as the ride
+  pages: a layout and its widgets, chosen in the menu.
 
 ## 2. Power
 
-- **USB high speed** for the drive: the drops after 15 to 40 MB (docs/status.md); full speed works.
+- **USB high speed** for the drive: drops during large copies (docs/usb.md); full speed works.
 - **Stop mode** between seconds, woken by the RTC, the keys, the touch interrupt, the radio chip's UART and USB:
   the largest gain left. A core change: with the owner present. The plan and its wake sources: docs/power.md,
   "Stop mode: plan".
@@ -97,20 +67,16 @@ The golden rule (AGENTS.md) depends on this whole phase.
 
 ## 4. Ride data
 
-- Done (src/training/power.rs, ride.rs): NP, IF, TSS, kJ, kcal, W/kg, 3, 10 and 30 s power (patch P6), W' balance (the
-  planned P10, differential model, CP = FTP), max power and heart rate, average cadence, pedal balance, grade, VAM,
-  temperature. Weight and W' in the menu (RTC backup register 16).
-- Done since: CP and W' fitted as an envelope from the power curve with EST FTP / APPLY (HISTORY > FITNESS), the
-  ride's CP / W' latched at its start, the power meter's calibration (zero offset, auto zero), the bike weight.
+Done (features.md, Power, HRV and the power curve): the ride metrics, W' balance, CP and W' fitted from stock's
+rides with EST FTP / APPLY, the ride's CP / W' latched at its start, the power meter's calibration, the bike weight,
+the live DFA a1 and RMSSD fields, the HRV messages in the full copy, HRVT1 and HRVT2.
+
 - Next: torque pages (0x11, 0x12) and torque effectiveness / pedal smoothness (page 0x13). One FTP only: a CP setting
   apart from it, and indoor-only copies of the FTP, are dropped.
 - Alerts on the buzzer and a banner: HR and power limits, eat and drink reminders by time, distance or kJ (stock
   has six kinds).
-- Auto lap; a ride summary at the end; ride history and totals for the overview.
-- From the patch project: HRV recording (P8: the RR intervals as FIT hrv messages, and DFA a1 as the `Alpha1`
-  developer field, as P9 does), W' balance (planned P10), power smoothing (P5). Done: the live DFA a1 and RMSSD
-  fields (P9's algorithm, hrv.rs); every RR interval raw as FIT `hrv` messages and `ArtPct` in the full copy;
-  HRVT1 / HRVT2 from the full copies (hrvt.rs).
+- Auto lap; ride history and totals for the overview.
+- Power smoothing on the big power value, kept across restarts (patch P5).
 - **Open: the DFA a1 artifact filter.** The live filter drops a beat more than 5 % from the previous kept one (hrv.rs). Compare it
   with Domestique's method (median of the neighbours, a 20 % rule, an R^2 >= 0.95 gate on the window) on a ride
   with raw beats recorded: pending a real ride with the strap (docs/status.md).
@@ -133,16 +99,15 @@ Done 2026-10-27 (owner's choices): the profile by hand in BIKE > PROFILE (INDOOR
 ## 4b. History and training load
 
 From every ride on the shared volume (stock's and ours, AGENTS.md "Share the storage with stock"), as Domestique
-(github.com/platypus45/domestique) and intervals.icu do on a computer, on the unit:
+(github.com/platypus45/domestique) and intervals.icu do on a computer, on the unit.
+Done (features.md, History): the ride scan and its cache, the 90-day power curve for CP and W'.
 
-- **A ride index:** per ride its date, time, distance, TSS (from power: NP, IF and FTP; from heart rate when there is
-  no power: hrTSS from the threshold heart rate), time in zones and best efforts. Built by scanning the FIT files on
-  demand (about 64 bytes a ride, all of them in SDRAM), kept in this firmware's own folder once the eMMC is written
-  so it is not scanned at every start, and updated by each saved ride.
-- **Power curve and best efforts:** the mean-maximal power from 1 s to 60 min over the last 90 days, the season and
-  all time, with the date of each best; CP and W' from it (section 4).
+- **A ride index:** per ride its TSS (from power: NP, IF and FTP; from heart rate when there is no power: hrTSS from
+  the threshold heart rate), time in zones and best efforts, updated by each saved ride.
+- **Power curve screen:** the mean-maximal power from 1 s to 60 min over the season and all time, with the date of
+  each best.
 - **Training load:** daily TSS, fitness (CTL: 42-day average), fatigue (ATL: 7-day), form (TSB: CTL - ATL), the ramp
-  rate, weekly TSS against a target.
+  rate, weekly TSS against a target. Not built.
 - **Fields for the overview and the pages:** this week's load as one bar a day (coloured by intensity), a progress
   bar of the week (TSS or distance against the target), form as a number with its state (fresh, neutral, tired),
   fitness as a sparkline of the last weeks.
@@ -163,19 +128,11 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
   copied over USB mass storage. A tool, `tools/map_pack.py`, with no new dependency (sqlite3 is in Python's
   standard library).
 - **IGN (done, not yet seen on the unit):** Plan IGN v2 raster tiles (data.geopf.fr WMTS, Etalab 2.0, no key) for
-  France, with contour lines and hill shading built in: `tools/ign_pack.py` fetches an area (resumable, 4 requests a
-  second) and packs it (per-tile palette of up to 256 colours, LZ4; about 24 KB a tile, about 3.9 GB for 150 x 150 km
-  at zooms 11 to 16), `src/storage/ign.rs` reads it, `src/ui/tiles.rs` draws it, stock's map under it where it
-  stops. The SCAN 25 and SCAN 100 rasters are not open to private individuals, so they are out.
-- **IGN, to do when there is an hour with the unit (2026-10-24, put aside by the owner):** the owner's region is
-  fetched and packed on the computer (zooms 10 to 16, 163,441 tiles, 222 packs, 3.34 GB, every tile decoded by the
-  firmware's own decoder, outside the repository). Left: (1) free space: the card has 0.7 GB free; the owner keeps
-  Europe, so `\MAP\MapData\{Australia,Japan,New_Zealand,South_Korea,Taiwan,israel}` go (4.2 GB, removed from the
-  computer with `rm -rf` on the mounted drive, not the Finder, whose trash stays on the card); (2) copy the packs to
-  `\Rustfw\Maps` with `cp -X` (no `._` files) through this firmware's USB drive at full speed (about 1 MB/s, so
-  about an hour); (3) eject (the unit restarts), mount again and compare with `diff -r` (a compare right after the
-  copy reads the Mac's cache, not the card); (4) the map on the unit: draw time per view, the zoom chosen, "(c) IGN".
-  Then: a pack per region with a lower zoom limit so a whole country fits.
+  France, with contour lines and hill shading built in: `tools/ign_pack.py` fetches an area (resumable) and packs it,
+  `src/storage/ign.rs` reads it, `src/ui/tiles.rs` draws it, stock's map under it where it stops. The SCAN 25 and
+  SCAN 100 rasters are not open to private individuals, so they are out.
+- **IGN copy to the unit:** procedure in docs/install.md (IGN part). Then: a pack per region with a lower zoom limit
+  so a whole country fits.
 - **Notices** on an About page: "© OpenStreetMap contributors (ODbL), © OpenMapTiles", and IGN's when used (the map
   already shows "(c) IGN" in its corner whenever IGN tiles are drawn).
 - Vector over raster: about ten times smaller, any zoom, and text that stays upright if the map turns.
@@ -229,3 +186,8 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
   new rides, fetch both copies with their FIT CRCs checked, upload the full copy to Intervals.icu and the clean one
   to Strava, remember what went where, and send the planned workouts back to `\Workout\calendar`. It needs a file
   transfer service on the bond (the Nordic chip's serialization, nrf.rs) and the FAT writer for the workouts.
+
+## Plans, not built
+
+- docs/s810.md: the Rider S810.
+- docs/theming.md: themes from a file.

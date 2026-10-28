@@ -461,9 +461,9 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     ANT+ profile and stock's decoder 0xd029f91c; **seen on the unit** with the owner's strap: 58 to 70 bpm).
   - Channel ID get (stock's encoder 0xd02bf562): `06 d4 [ch]`, answered `01 d4 [result u32] [device u16] [type]
     [transmission type]`. With the wildcard channel ID, it gives the strap the channel locked onto (seen:
-    `01 d4 00 00 00 00 26 62 78 f1`, the owner's strap). Opening with that ID (`06 d3 00 26 62 78 f1`) takes only that
-    strap (seen). Other ANT ops in stock's encoders: 0xc5 close, 0xc7 / 0xc8 broadcast / acknowledged data,
-    0xd5, 0xd7, 0xdd, 0xdf, 0xe7 (not traced).
+    `01 d4 00 00 00 00 xx xx 78 f1`, the owner's strap; xx xx is the device number, 2 bytes LE).
+    Opening with that ID (`06 d3 00 xx xx 78 f1`) takes only that strap (seen). Other ANT ops in stock's encoders:
+    0xc5 close, 0xc7 / 0xc8 broadcast / acknowledged data, 0xd5, 0xd7, 0xdd, 0xdf, 0xe7 (not traced).
   - A BLE scan with the channel open (searching) still works: fewer reports, as the radio is shared.
 - **ANT+ sensor channels, as stock opens them** (`Ant_OpenSensorChannel` 0xd025e7f0): channel, device type, period
   (1/32768 s): 0 heart rate 0x78 8070; 1 speed 0x7b 8118; 2 cadence 0x7a 16204; 3 speed and cadence 0x79 8086;
