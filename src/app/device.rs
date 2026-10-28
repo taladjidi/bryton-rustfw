@@ -251,7 +251,7 @@ impl App {
             && !self.rec.full_pending
             && self.rec.clean.phase() == recorder::Phase::Done
             && self.rec.full.phase() == recorder::Phase::Done
-            && b.backup_read(RIDE_BKP) != RIDE_OPEN
+            && (!self.card_writable || b.backup_read(RIDE_BKP) != RIDE_OPEN)
             && !b.charger_present();
         // movement keeps it on, for 60 s after the last: a speed over 2 km/h (sensor or GPS), cadence, power, a
         // trainer heard or connected

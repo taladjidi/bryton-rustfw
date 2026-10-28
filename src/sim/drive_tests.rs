@@ -267,7 +267,7 @@ fn a_save_stuck_after_its_step_4_lends_the_drive_read_only() {
 }
 
 /// The sectors of folder `path`'s first cluster on the volume `img`.
-fn dir_sectors(img: &[u8], path: &str) -> core::ops::Range<u32> {
+pub(crate) fn dir_sectors(img: &[u8], path: &str) -> core::ops::Range<u32> {
     let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
     let (spc, data) = (u(13, 1), u(14, 2) + u(16, 1) * u(36, 4));
     let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
