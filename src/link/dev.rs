@@ -290,6 +290,8 @@ impl Session {
                 h.send(decimal(app.ahead_tile_us().1, &mut [0; 10]));
                 h.send(b" slice max ");
                 h.send(decimal(app.ahead_tile_us().2, &mut [0; 10]));
+                h.send(b", auto off held ");
+                h.send(decimal(app.auto_off_held(), &mut [0; 10]));
                 h.send(b"\n");
             }
             Some(b"bat") => {

@@ -255,42 +255,52 @@ impl App {
         b.standby();
     }
 
+    /// What kept AUTO OFF from counting at its last second: one bit per reason, in `step_auto_off`'s order
+    /// (`dev.py info`).
+    pub fn auto_off_held(&self) -> u32 {
+        self.auto_off.why
+    }
+
     /// AUTO OFF, once a second: counts the time with nothing keeping the unit on (no ride open or on its card, no
-    /// cable, the drive not lent, no key or touch, no call, no write waiting) and switches off at the time-out, with
-    /// a warning 10 s and 5 s before. True when it switched off.
+    /// cable, the drive not lent, no key or touch, no call, no write waiting, no movement) and switches off at the
+    /// time-out, with a warning 10 s and 5 s before. True when it switched off.
     pub(crate) fn step_auto_off(&mut self, b: &mut impl Board) -> bool {
         if self.auto_off.seen == self.seconds {
             return false;
         }
         self.auto_off.seen = self.seconds;
-        let quiet = self.light.idle_ms >= 1000 // no key or touch in the last second
-            && !self.busy()
-            && !matches!(self.screen, Screen::End(_) | Screen::Discard(_))
-            && !self.emmc.lent()
-            && !self.phone.ringing
-            && !self.touching()
-            && !self.store.dirty // pages.bin waits to be written
-            && self.stock.status() != stock::Status::Running // the scan and its cache
-            && !self.sensors_store.dirty // sensors.bin waits
-            && !self.alt.is_dirty() // so does the altitude calibration
+        // what keeps the unit on, one bit each in this order (`dev.py info` prints it: "auto off held 0x...")
+        let held = [
+            self.light.idle_ms < 1000, // a key or touch in the last second
+            self.busy(),
+            matches!(self.screen, Screen::End(_) | Screen::Discard(_)),
+            self.emmc.lent(),
+            self.phone.ringing,
+            self.touching(),
+            self.store.dirty,                              // pages.bin waits to be written
+            self.stock.status() == stock::Status::Running, // the scan and its cache
+            self.sensors_store.dirty,                      // sensors.bin waits
+            self.alt.is_dirty(),                           // so does the altitude calibration
             // the golden rule: never off while the recorder holds anything (a resume that keeps failing, a save
             // retried after the card closed, the full copy still saving)
-            && !self.rec.resume_pending
-            && !self.rec.full_pending
-            && self.rec.clean.phase() == recorder::Phase::Done
-            && self.rec.full.phase() == recorder::Phase::Done
-            && (!self.card_writable || b.backup_read(RIDE_BKP) != RIDE_OPEN)
-            && !b.charger_present();
-        // movement keeps it on, for 60 s after the last: a speed over 2 km/h (sensor or GPS), cadence, power, a
-        // trainer heard or connected
-        let moving = self.live.get(Metric::Speed).is_some_and(|v| v > 20)
-            || self.live.get(Metric::Cadence).is_some_and(|v| v > 0)
-            || self.live.get(Metric::Power).is_some_and(|v| v > 0)
-            || self.tlink.up
-            || self.radio.heard_ms[Kind::Trainer as usize] < sensors::STALE_MS
-            || self.ftms.conn.is_some();
-        self.auto_off.hold = if moving { 60 } else { self.auto_off.hold.saturating_sub(1) };
-        let quiet = quiet && self.auto_off.hold == 0;
+            self.rec.resume_pending,
+            self.rec.full_pending,
+            self.rec.clean.phase() != recorder::Phase::Done,
+            self.rec.full.phase() != recorder::Phase::Done,
+            self.card_writable && b.backup_read(RIDE_BKP) == RIDE_OPEN,
+            b.charger_present(),
+            // movement keeps it on, for 60 s after the last: a speed over 2 km/h, cadence or power, from a sensor,
+            // the GPS or a trainer (app/trainer.rs `fold_trainer`); a trainer merely heard or connected is not
+            // movement: one left powered broadcasts all day (2026-10-28)
+            self.live.get(Metric::Speed).is_some_and(|v| v > 20),
+            self.live.get(Metric::Cadence).is_some_and(|v| v > 0),
+            self.live.get(Metric::Power).is_some_and(|v| v > 0),
+        ];
+        const MOVING: u32 = 16; // the first movement bit
+        let why = held.iter().enumerate().fold(0u32, |w, (i, &h)| w | u32::from(h) << i);
+        self.auto_off.hold = if why >> MOVING != 0 { 60 } else { self.auto_off.hold.saturating_sub(1) };
+        self.auto_off.why = why;
+        let quiet = why == 0 && self.auto_off.hold == 0;
         if !quiet {
             self.light.wake = false;
         }

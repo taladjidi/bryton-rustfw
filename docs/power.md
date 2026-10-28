@@ -160,7 +160,8 @@ sheets, at their test conditions), none was measured on the unit.
   10, 30, 60 min; default 5) switches the unit off after that long with no ride open, no cable, no key or touch, the
   drive not lent and no write waiting; a banner and beep warn 10 s and 5 s before, any input cancels (`step_auto_off`,
   kept in register 18 bits 22..24; an older build rewriting that register resets it to 5 min). Movement (speed over
-  2 km/h, cadence, power, a trainer) keeps it on for 60 s after the last; never while the recorder holds anything; not
+  2 km/h, cadence, power, from a sensor, the GPS or a trainer; a trainer only heard does not count, 2026-10-28)
+  keeps it on for 60 s after the last; never while the recorder holds anything; not
   on the end-ride screens, with a call ringing, or with a settings write or the stock scan pending.
 - **Done (lib `App::pass_ms`, main.rs's sleep):** with no ride or its card, no key for 30 s (`IDLE_AFTER_MS`, the
   default OFF AFTER), no finger, no tone or banner timed by the passes and the card not lent to the computer, a pass

@@ -61,14 +61,13 @@ fn the_warning_lights_the_screen_and_a_key_cancels() {
 #[test]
 fn movement_keeps_it_on() {
     use crate::sensors::Metric;
-    for which in 0..4 {
+    for which in 0..3 {
         let (mut sim, mut app) = fresh();
         for _ in 0..400 {
             match which {
                 0 => app.live.set(Metric::Speed, 250), // riding without Start: GPS or sensor speed
                 1 => app.live.set(Metric::Power, 150),
-                2 => app.live.set(Metric::Cadence, 80),
-                _ => app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = 0, // a trainer heard
+                _ => app.live.set(Metric::Cadence, 80),
             }
             run(&mut sim, &mut app, 1000);
         }
@@ -78,6 +77,18 @@ fn movement_keeps_it_on() {
         run(&mut sim, &mut app, 80_000);
         assert!(sim.standby, "still for 5 min: off");
     }
+}
+
+/// A trainer left powered broadcasts all day: heard but still is not movement (2026-10-28, seen on the unit).
+#[test]
+fn an_idle_trainer_heard_does_not_keep_it_on() {
+    let (mut sim, mut app) = fresh();
+    for _ in 0..320 {
+        app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = 0;
+        app.tlink.up = true;
+        run(&mut sim, &mut app, 1000);
+    }
+    assert!(sim.standby);
 }
 
 /// Pairing, the altitude calibration and the pages wait to be written: never off meanwhile.

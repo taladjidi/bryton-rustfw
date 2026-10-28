@@ -435,6 +435,8 @@ pub(crate) struct AutoOff {
     pub(crate) seen: u8,
     /// Seconds left of the 60 s that movement keeps the unit on.
     pub(crate) hold: u8,
+    /// What kept the unit on at the last second counted (app/device.rs `step_auto_off`: one bit per reason).
+    pub(crate) why: u32,
     /// Seconds in a row with nothing keeping the unit on.
     quiet_s: u32,
 }
@@ -453,7 +455,7 @@ pub(crate) enum OffStep {
 impl AutoOff {
     /// Not counting.
     pub(crate) const fn new() -> Self {
-        AutoOff { seen: 255, hold: 0, quiet_s: 0 }
+        AutoOff { seen: 255, hold: 0, why: 0, quiet_s: 0 }
     }
 
     /// One second gone: `quiet` when nothing keeps the unit on (any input or reason restarts the count); `min`
