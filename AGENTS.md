@@ -60,11 +60,12 @@ This is a battery device: every cycle the CPU is awake costs ride time.
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
-  since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
-  buffers in their own non-inlined function, never in main's. AXI SRAM (512 KB) holds the app, the courses, the scan's
-  cache and the road ahead (about 15 KB left on 2026-10-28; link.x says what is where); a static there must start as all
-  zeros (an `Option` of a reference or a struct with a bool niche does not) or it lands in `.data`, in DTCM.
-  The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road ahead inflates tiles into.
+  since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
+  when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
+  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about 15 KB left on 2026-10-28; link.x
+  says what is where); a static there must start as all zeros (an `Option` of a reference or a struct with a bool niche
+  does not) or it lands in `.data`, in DTCM. The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road
+  ahead inflates tiles into.
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
   high, and unplugging resets the unit, which brings it up without USB.
 - **Measure before and after** a change that could cost: image size, and on the unit, time awake per loop
@@ -120,7 +121,9 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/link/`: the USB dev link, USB mass storage and the phone link's formats;
 - `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
-- Each folder's module root is its `mod.rs` (`src/drivers/mod.rs`, ...); lib.rs re-exports the modules of `drivers`, `storage`, `ui`, `training`, `nav` and `link` at the crate root, so paths stay `crate::ride`. `src/sim/` is the tests' simulator (`Sim`).
+- Each folder's module root is its `mod.rs` (`src/drivers/mod.rs`, ...); lib.rs re-exports the modules of `drivers`,
+  `storage`, `ui`, `training`, `nav` and `link` at the crate root, so paths stay `crate::ride`. `src/sim/` is the tests'
+  simulator (`Sim`).
 - `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
   to that: a new concern goes in its own file in `src/app/`, one `impl App` block each; modules are re-exported whole
   from lib.rs, so paths stay `crate::Settings`; a method another file calls is `pub(crate)`.
@@ -137,15 +140,18 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
   `python3 tools/font.py`). No layout may depend on the FONT choice (`smooth_fonts_share_the_pixel_cells`).
 - Screens act on inputs, never on keys. Every new input path gets its fuzz test (see Tests).
 - The ANT+ network key (`tools/ant_key.py`, gitignored `ant_key.bin`, build.rs `ANT_KEY`) and Shimano's (`di2_key.bin`,
-  `DI2_KEY`) are licensed: **never** in this repository, a commit, a test or a doc, never printed. Tests use stand-in keys.
+  `DI2_KEY`) are licensed: **never** in this repository, a commit, a test or a doc, never printed. Tests use stand-in
+  keys.
 - What each file holds: docs/layout.md; read the entries for the files you touch.
 
 
 ## AI agents: the right model for the task
 
-Typed agents in `~/.claude/agents/` do the work; the main session orchestrates. Opus (`critical`) only for code where
-a mistake costs a ride: storage, the recorder, power, boot, hw.rs and security. One review per feature, and every merge
-passes `./check.sh`. Agents never switch the main checkout: worktrees fork from `origin/main`, merges go through `runner`.
+Typed agents in `~/.claude/agents/` do the work; the main session orchestrates. Opus (`critical`) only for code where a
+mistake costs a ride: storage, the recorder, power, boot, hw.rs and security. One review per feature, and every merge
+passes `./check.sh`. Agents never switch the main checkout: worktrees fork from `origin/main`, merges go through
+`runner`. A second review only for recorder, storage or boot changes (reviewer on Opus there); a worktree agent merges
+main first.
 
 ## Before every commit
 
@@ -167,7 +173,8 @@ It runs, in order:
 - `dev.py selftest`, `tools/sync.py selftest`, `tools/s810_probe.py selftest`, `tools/route_pack.py selftest`;
 - `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python);
-- if Renode is installed: `renode/run.py`, `renode/run.py --vbus` and `renode/run.py --off` (docs/devloop.md, Emulation).
+- - if Renode is installed: `renode/run.py`, `renode/run.py --vbus` and `renode/run.py --off` (docs/devloop.md,
+  Emulation).
 
 Look at `target/sim/preview.bmp` after any drawing change, and at `target/sim/fonts.bmp` (every font, written by
 the `font_sheet` test) when choosing a text size.
@@ -191,9 +198,9 @@ the `font_sheet` test) when choosing a text size.
   - A screenshot must equal the simulated panel.
   - A good image loads.
   - Bad ones are refused (checksum, tag, sizes).
-- **Hardware:** cannot be tested on the host (Renode covers part of it, see docs/devloop.md). Every register access names its source: a
-  [BOARD.md](BOARD.md) section or RM0399. A new hardware fact goes into BOARD.md first, as a fact (no copied
-  vendor code).
+- - **Hardware:** cannot be tested on the host (Renode covers part of it, see docs/devloop.md). Every register access
+  names its source: a [BOARD.md](BOARD.md) section or RM0399. A new hardware fact goes into BOARD.md first, as a fact
+  (no copied vendor code).
   - Guesses are marked "inferred".
   - With a diagram where it helps: the pin map (BOARD.md 4) gets every new pin, and a sequence where order or
     timing matters (power-up, reset, a bus transfer, a key) gets a timing diagram in plain text, signal names on

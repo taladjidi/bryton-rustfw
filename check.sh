@@ -9,19 +9,17 @@ grep -q '^#!\[forbid(unsafe_code)\]' src/lib.rs || { echo "layout: src/lib.rs lo
 n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort | grep -v '^src/board/hw.rs$' | tr '\n' ' ')
 [ "$n" = "src/board/usb.rs " ] && [ "$(grep -c 'unsafe impl\|allow(unsafe_code)' src/board/usb.rs)" = 2 ] \
     || { echo "layout: unsafe outside hw.rs: $n"; exit 1; }
-# The docs guard: every file of src and tools is named in docs/layout.md, by its path, its basename or its folder
-# (`tools/fonts/`); no doc names the files that moved (src/sim.rs, src/ui.rs).
+# The docs guard: every file of src and tools is named in docs/layout.md, by its path or by its basename as a
+# backticked word (`menus.rs`); the data folders (tools/fonts/) are the only ones without an entry of their own.
+# No doc names the files that moved (src/sim.rs, src/ui.rs).
 miss=""
-for f in $(git ls-files src tools); do
+for f in $(git ls-files -co --exclude-standard src tools); do
     ok=0
     grep -qF "$f" docs/layout.md && ok=1
-    grep -qF "$(basename "$f")" docs/layout.md && ok=1
-    d=$(dirname "$f")
-    while [ "$ok" = 0 ] && [ "$d" != . ]; do
-        case $d in */*) grep -qF "$d/" docs/layout.md && ok=1 ;; esac
-        d=$(dirname "$d")
-    done
-    [ "$ok" = 1 ] || miss="$miss $f"
+    grep -qF "\`$(basename "$f")\`" docs/layout.md && ok=1
+    [ "$ok" = 1 ] && continue
+    case $f in tools/fonts/*) continue ;; esac
+    miss="$miss $f"
 done
 [ -z "$miss" ] || { echo "docs: not in docs/layout.md:$miss"; exit 1; }
 if git grep -nE '(^|[^A-Za-z0-9_])(src/)?(sim|ui)\.rs' -- '*.md'; then echo "docs: a doc names src/sim.rs or src/ui.rs (src/sim/, src/ui/)"; exit 1; fi

@@ -4,6 +4,12 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 "Layout". Read the entries for the files you touch.
 
 - `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`).
+- `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
+- `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
+- `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
+- `src/nav/mod.rs`: where the rider is and where the route goes: the course and its cues, the climbs ahead, the barometric altitude (pure logic).
+- `src/storage/mod.rs`: files: the FAT32 volume on the eMMC, the FIT ride file, the recorder, the IGN map packs, and what stock left on the volume.
+- `src/training/mod.rs`: training logic, all pure: power metrics and the curve, pacing, the ramp test, HRV, workouts, reminders, the home trainer.
 - `src/app/mod.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
@@ -48,9 +54,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/ui/mod.rs`: what is on screen, through the `Canvas` trait (`fill` a rectangle, `blit` one from a pixel
   function). It knows nothing about the panel. Text styles (`LABEL`, `VALUE`) are defined there once.
   `Rect` (`contains`, `grown`) is the one hit-test: a touch is tested against a `Rect`, never with its own range checks.
-  Its parts are re-exported whole, so paths stay `ui::X`: `ui/strip.rs` (the status strip, whole and as changes),
-  `ui/fields.rs` (a ride field's box, value, layouts, frames, zone bars, the graphs' axes and columns), `ui/gauge.rs`
-  (the workout gauge field) and `ui/overview.rs` (the overview: date, TODAY card, cog, notices, workout list rows).
+  Its parts are re-exported whole, so paths stay `ui::X`: `src/ui/strip.rs` (the status strip, whole and as changes),
+  `ui/fields.rs` (a ride field's box, value, layouts, frames, zone bars, the graphs' axes and columns), `src/ui/gauge.rs`
+  (the workout gauge field) and `src/ui/overview.rs` (the overview: date, TODAY card, cog, notices, workout list rows).
 - `src/ui/menu.rs`: menus as data. `Input` (what a key or a gesture asks for: screens act on inputs, never on keys),
   `Row` (what a menu row is: a submenu, a setting, a sensor, a reading, a page field) and each menu's table,
   `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,
@@ -166,7 +172,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   saved to `\Rustfw\Activities`), which never holds the clean one up
   (`App::step_full`, docs/sync.md). A ride discarded at its end goes through the same save into
   `\Rustfw\Discarded` (`Discarded\Full`), its records saying so, so no cut puts it in `\Activities`.
-  `recorder/rec.rs`: the recovery record (`Rec`, one sector of `ride.rec`) and the ride names; `recorder/tests.rs`: its tests.
+  `src/storage/recorder/rec.rs`: the recovery record (`Rec`, one sector of `ride.rec`) and the ride names; `recorder/tests.rs`: its tests.
 - `src/storage/fitread.rs`: a FIT reader, one byte at a time (no buffer): records (time, power, HR, distance; never
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread

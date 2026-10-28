@@ -4,45 +4,9 @@ What this file holds: what the unit has not shown yet, the known problems, and t
 What does not belong: what is built (features.md) and the roadmap (roadmap.md).
 Where to look: features.md for what the firmware does, journal.md for the dated findings, docs/usb.md for the USB drops.
 
-## Seen on the unit
-
-[features.md](features.md) lists what the firmware does. This file lists what the unit has not shown yet; a feature not listed here was seen on the unit.
-The dated findings are in [journal.md](journal.md).
-
-## Seen on the unit: eMMC writes and the recorder (2026-10-24, from RAM, owner present)
-
-- **Reliable write:** `dev.py emmc` reads WR_REL_PARAM 0x15, REL_WR_SEC_C 1: enhanced reliable write, so CMD23 with
-  bit 31 before each CMD25.
-- **`dev.py wtest`** on one sector of a cluster free in both FATs: written changed, read back, restored, read back.
-- **A 2-minute ride:** `\Rustfw`, `\Rustfw\Rides`, `ride.rec` made; the save moved the ride to
-  `\Activities\261024083403.fit` (1227 B, 153 records), which Garmin's FIT SDK and fitdecode read, CRC good.
-  Against the backup taken just before: 4 clusters taken in FAT1, root and `\Activities` changed only by appended
-  entries, FSInfo recounted (stock's free count was stale: 43700 for 43767). FAT2 is now equal to FAT1: stock had
-  left 1559 entries of FAT2 out of date, and the writer copies FAT1's sectors over.
-- **A reset mid-ride:** 90 s in, `dev.py reset`; the build again from RAM: RIDE RESUMED, the ride carried on into
-  one file (261024083931.fit): a timer stop at the last checkpoint (60 s), a start at the resume, 30 s lost.
-
-## Seen on the unit: two copies of a ride (2026-10-24, from RAM)
-
-- A ride, `dev.py reset` 100 s in, the build again, RIDE RESUMED, the save: `\Activities\261024203259.fit` (FIT 1.0,
-  no developer data) and `\Rustfw\Activities\261024203259.fit` (FIT 2.0, Alpha1 and RMSSD described; invalid without
-  a strap), 144 records each and the same (tools/fit_check.py --pair, fitdecode and Garmin's FIT SDK). Before the
-  review's fix the clean copy had resumed 22 s behind the full one.
-- Not yet: a ride with the strap (Alpha1 values), tools/sync.py against the real Intervals.icu and Strava.
-
-## Seen on the unit: the phone (2026-10-24, an iPhone, from RAM with EMMC_WRITE=1)
-
-- **Pairing:** PAIR, then S510 tapped on the iPhone: the normal iOS prompt, Just Works; LINK SECURE, the bond in
-  `\Rustfw\ble.bin` (512 B), the clock set from the phone (CTS, right to the minute).
-- **Reconnect:** after a restart the bond read back and the iPhone reconnected by itself (when in range).
-- **Media (AMS):** title, artist, album, duration and elapsed time from Deezer; play/pause, next, the volume from
-  the keys and the new player screen.
-- **Calls (ANCS):** the overlay over the overview with the caller's name; answered from the green button. iOS
-  removes the call's notification at the answer, so the call's time and a hang-up cannot follow over ANCS.
-- Not yet: messages' banners, skip in a podcast, the camera shutter, a re-pair after forgetting on the iPhone only,
-  a stranger's phone, range loss during a ride.
-
 ## Not yet seen on the unit
+
+A feature not listed here was seen on the unit.
 
 - **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: idle 30 s on the overview, then a real press of
   each key acts at once (not up to 250 ms later); `dev.py prof` shows about 4 to 7 passes a second idle.
@@ -377,6 +341,9 @@ The dated findings are in [journal.md](journal.md).
   - the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`);
   - the crosshair toggling the whole route;
   - the cog opening settings during a ride.
+- A tap on the panel after the stuck-IRQ fixes (touch IRQ 23, panel DMA IRQ 11, main.rs `sleep`).
+- The flattened menus and the quick panel (f935c0f), and refactors B1 to B3: only booted and profiled.
+- The panel at 50 MHz SPI: an owner's look for noise or shifted pixels; if any, MBR /4 (25 MHz) in `spi_init`.
 
 ## Known problems
 
@@ -388,5 +355,5 @@ The dated findings are in [journal.md](journal.md).
    merged, still to see on the unit.
 2. **USB high speed** for the drive: the drops after 15 to 40 MB (above); full speed works.
 3. **A settings file** to free the backup registers (docs/roadmap.md).
-4. The new features above, on the unit, as the owner rides them.
+4. Everything under 'Not yet seen on the unit', on the unit, as the owner rides it.
 5. D-cache on for the SDRAM (hw.rs PanelDma cache contract), the next drawing gain.

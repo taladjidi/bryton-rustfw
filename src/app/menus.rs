@@ -10,7 +10,7 @@ pub const SCAN_S: u16 = 10;
 /// The device list and the sensors menu are redrawn at most this often while reports come in.
 pub const LIST_REDRAW_MS: u32 = 1000;
 
-/// The menus (the tree: docs/features.md, "Menus").
+/// The menus (the tree: docs/features.md, "Menu").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Menu {
     /// The main menu ([`menu::MAIN`]): workouts, courses, history, pages, sensors, settings: six rows, one screen.

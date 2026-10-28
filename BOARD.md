@@ -316,7 +316,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 
 - **Suspend** (the computer idle or asleep: no starts of frame for 3 ms, OTG_GINTSTS.USBSUSP and OTG_DSTS.SUSPSTS
   set, RM0399 OTG_HS): the dot turns grey and the link waits; resume signalling (OTG_GINTSTS.WKUPINT) or traffic
-  brings it back to green. Not a drop (docs/usb.md, "Suspend").
+  brings it back to green. Not a drop (docs/journal.md, "2026-10-27: suspend, a normal state, not a drop").
 
 ## 8. RTC
 
