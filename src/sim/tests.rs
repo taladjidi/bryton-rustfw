@@ -1757,3 +1757,110 @@ fn font_choice_register_round_trip() {
     a.text(Setting::Font, &mut l);
     assert_eq!((a.smooth, l.as_str()), (true, "SMOOTH"));
 }
+
+/// main.rs's loop: a pass, then a sleep of [`App::pass_ms`] in [`TOUCH_MS`] slices, ended at once while idle by a
+/// key going down (its EXTI line on the unit) or, while the chip is read ([`App::radio_up`]), by a byte from it
+/// (USART2's line); the chip's bytes flushed while it is not. Returns when each pass started.
+fn run_main(sim: &mut Sim, app: &mut App, ms: u64) -> Vec<u64> {
+    let (end, mut passes) = (sim.ms + ms, Vec::new());
+    while sim.ms < end && !sim.standby {
+        passes.push(sim.ms);
+        app.step(sim);
+        let (idle, radio, mut slept, mut keys) = (app.pass_ms() > POLL_MS, app.radio_up(), 0, sim.keys_down());
+        if !radio {
+            sim.nordic.out.clear();
+        }
+        while slept < app.pass_ms() {
+            sim.delay_ms(TOUCH_MS);
+            slept += TOUCH_MS;
+            if let Some(i) = app.touch(sim, TOUCH_MS) {
+                app.input(sim, i);
+            }
+            let now = sim.keys_down();
+            if idle && (now & !keys != 0 || radio && !sim.nordic.out.is_empty()) {
+                break;
+            }
+            keys = now;
+        }
+        sim.sleep = (slept, 0);
+    }
+    passes
+}
+
+/// Idle (no ride, no key for IDLE_AFTER_MS) the loop runs 4 passes a second instead of 20; a key wakes it at once
+/// and is acted on as before, and the loop is fast again while the rider uses the unit. A ride keeps it fast.
+#[test]
+fn idle_loop_slows_and_a_key_wakes_it() {
+    let mut sim = Sim::new(9, 0, 0).keys(|ms| if (45_000..45_120).contains(&ms) { Key::Page as u8 } else { 0 });
+    let mut app = App::start(&mut sim, None);
+    let left = 44_000 - sim.ms; // the key goes down at 45 s
+    let passes = run_main(&mut sim, &mut app, left);
+    let between = |a: u64, b: u64| passes.iter().filter(|&&t| (a..b).contains(&t)).count();
+    assert!((95..=101).contains(&between(20_000, 25_000)), "20 passes/s before IDLE_AFTER_MS");
+    assert!((19..=21).contains(&between(39_000, 44_000)), "4 passes/s idle: {}", between(39_000, 44_000));
+    assert_eq!(app.pass_ms(), IDLE_POLL_MS);
+    assert_eq!(app.screen(), Screen::Main);
+    let passes = run_main(&mut sim, &mut app, 2000);
+    let first = passes.iter().find(|&&t| t >= 45_000).copied().unwrap_or(u64::MAX);
+    assert!(first <= 45_000 + u64::from(TOUCH_MS), "a pass {} ms after the key went down", first - 45_000);
+    assert!(matches!(app.screen(), Screen::Ride(_)), "Page acted on: {:?}", app.screen());
+    assert_eq!(app.pass_ms(), POLL_MS, "fast again after a key");
+    // a ride keeps it fast, however long without a key
+    app.press(&mut sim, Press::Short(Key::Start));
+    run_main(&mut sim, &mut app, 60_000);
+    assert_eq!(app.pass_ms(), POLL_MS);
+}
+
+/// The Nordic link at the idle rate, even without its wake (main.rs ends an idle sleep when a byte arrives): the
+/// strap's broadcasts all reach the app, and the watchdog neither resyncs nor resets the chip.
+#[test]
+fn nordic_link_at_the_idle_rate() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr72, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    run_passes(&mut sim, &mut app, 120_000, IDLE_POLL_MS);
+    assert_eq!(app.live.get(Metric::Hr), Some(72));
+    assert_eq!((app.watch.resyncs, app.watch.resets), (0, 0));
+    assert!(sim.nordic.out.is_empty(), "every byte the chip sent was read");
+}
+
+/// The chip not started (dead: the watchdog backs off between attempts): its stray bytes neither wake the idle loop
+/// nor wait for ever, so the loop stays at 4 passes a second (review of d28032a: a byte nobody reads would end
+/// every WFI).
+#[test]
+fn idle_loop_ignores_bytes_from_a_chip_not_started() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.nordic.dead = true;
+    let mut app = App::start(&mut sim, Some(KEY));
+    run_main(&mut sim, &mut app, 40_000);
+    assert!(!app.radio_up());
+    let mut passes = 0;
+    for _ in 0..40 {
+        sim.nordic.stray(0x5a);
+        passes += run_main(&mut sim, &mut app, 250).len();
+    }
+    assert!(passes <= 44, "{passes} passes in 10 s");
+    assert!(sim.nordic.out.is_empty(), "flushed");
+}
+
+/// A tone started after an idle pass of 250 ms keeps its whole length: the alert's first beep lasts its 100 ms
+/// (review of d28032a: the pass before was taken off it, so it lasted 0 to 50 ms).
+#[test]
+fn alert_beep_from_an_idle_pass_keeps_its_length() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    run_main(&mut sim, &mut app, 40_000);
+    assert_eq!(app.pass_ms(), IDLE_POLL_MS);
+    app.tones.play(&BEEP_ALERT);
+    let n0 = sim.tones.len();
+    let mut at = Vec::new(); // when each tone was set
+    while at.len() < 2 && sim.ms < 50_000 {
+        let n = sim.tones.len();
+        let t = run_main(&mut sim, &mut app, 1)[0];
+        at.extend((n..sim.tones.len()).map(|_| t));
+    }
+    assert_eq!(sim.tones[n0..n0 + 2], [2500, 0]);
+    let beep = at[1] - at[0];
+    assert!((100..=100 + u64::from(POLL_MS)).contains(&beep), "first beep {beep} ms");
+}

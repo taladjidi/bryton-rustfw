@@ -537,7 +537,7 @@ impl App {
     }
 
     /// One pass of the main loop: read the time, the radio and the keys, redraw what changed. The caller sleeps
-    /// [`POLL_MS`] between passes (servicing USB meanwhile on the unit).
+    /// [`App::pass_ms`] between passes (servicing USB meanwhile on the unit).
     pub fn step(&mut self, b: &mut impl Board) {
         use prof::Sec;
         let mut t = b.cycles(); // each section's start (link/prof.rs): the end of the one before

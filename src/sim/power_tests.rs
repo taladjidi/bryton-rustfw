@@ -149,3 +149,15 @@ fn the_recorders_holds_keep_it_on() {
         assert!(sim.standby, "hold {which} cleared: off");
     }
 }
+
+#[test]
+fn the_idle_loop_keeps_the_five_minutes_in_seconds() {
+    // the idle loop's passes are 250 ms: AUTO OFF counts the RTC seconds, never the passes
+    let (mut sim, mut app) = fresh();
+    run(&mut sim, &mut app, 60_000);
+    assert_eq!(app.pass_ms(), IDLE_POLL_MS, "idle: the slow loop is on");
+    run(&mut sim, &mut app, 225_000);
+    assert!(!sim.standby, "not off before 5 min");
+    run(&mut sim, &mut app, 20_000);
+    assert!(sim.standby, "off at 5 min, not 20 or 1.25");
+}

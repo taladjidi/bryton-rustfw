@@ -40,6 +40,11 @@ impl Tones {
             *slot = melody;
         }
     }
+
+    /// Nothing playing or queued: the pass's length does not time a tone.
+    fn quiet(&self) -> bool {
+        !self.on && self.ms == 0 && self.left.is_empty() && self.queue[0].is_empty()
+    }
 }
 
 /// Plays `tones` (blocking: a few hundred ms, only at power-on and power-off).
@@ -53,6 +58,12 @@ pub(crate) fn play(b: &mut impl Board, tones: &[(u32, u32)]) {
 
 /// Main loop period: the time and the keys are read this often.
 pub const POLL_MS: u32 = 50;
+/// Main loop period while idle ([`App::pass_ms`]): no ride, no key for [`IDLE_AFTER_MS`]. A key, a touch and a byte
+/// from the Nordic chip end main.rs's sleep at once, so this bounds only what nothing announces: the clock shown (a
+/// second at most this late), the GNSS read, the timers' resolution.
+pub const IDLE_POLL_MS: u32 = 250;
+/// No key for this long (the backlight's default OFF AFTER), and the loop may slow to [`IDLE_POLL_MS`].
+pub const IDLE_AFTER_MS: u32 = 30_000;
 /// A pass's work counted at most ([`Board::awake_us`]): the first pass, or a stall, is not a key held for seconds.
 pub const MAX_PASS_MS: u32 = 1000;
 
@@ -116,6 +127,19 @@ impl App {
         self.notice("USB RECONNECT");
     }
 
+    /// How long main.rs sleeps before the next pass: [`IDLE_POLL_MS`] when nothing is going on (no ride or its card,
+    /// no key for [`IDLE_AFTER_MS`], no finger, no tone or banner timed by the passes, the card not lent to the
+    /// computer), else [`POLL_MS`]. Measured 2026-10-28 overnight on the overview: 20 passes/s of 0.4 ms each.
+    pub fn pass_ms(&self) -> u32 {
+        let idle = !self.busy()
+            && !self.touching()
+            && self.light.idle_ms >= IDLE_AFTER_MS
+            && self.tones.quiet()
+            && self.notes.ms.is_none()
+            && !self.emmc.lent();
+        if idle { IDLE_POLL_MS } else { POLL_MS }
+    }
+
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
         let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;
@@ -147,7 +171,9 @@ impl App {
         let (t, dt) = (&mut self.tones, self.dt_ms);
         if t.ms > 0 {
             t.ms = t.ms.saturating_sub(dt);
-            return;
+            if t.ms > 0 {
+                return;
+            }
         }
         if t.left.is_empty() && !t.on {
             t.left = t.queue[0];
@@ -157,7 +183,8 @@ impl App {
         match t.left.split_first() {
             Some((&(hz, len), rest)) => {
                 b.beep(hz);
-                (t.left, t.ms, t.on) = (rest, len.saturating_sub(dt), true);
+                // its whole length from now: the pass before (an idle one is 250 ms) was not part of it
+                (t.left, t.ms, t.on) = (rest, len, true);
             }
             None if t.on => {
                 b.beep(0);
