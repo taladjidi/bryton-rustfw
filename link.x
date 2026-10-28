@@ -5,9 +5,8 @@
    images loaded over USB (hw.rs STAGE): nothing is linked there. MAP (16 MB in, past the 6 MB the bootloader
    copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
    either. AXISRAM (D1, 512 KB, unused by this firmware otherwise) holds the app itself (main.rs make_app's static
-   cell, about 55 KB), the course memory (make_courses, about 73 KB), the scan's cache of stock's rides
-   (make_scan_cache, 256 KB), the road ahead (make_ahead, about 104 KB) and FITNESS's reading of the recent rides
-   (make_thresholds, about 5 KB): in DTCM's .bss the app left too little
+   cell), the course memory (make_courses), the scan's cache of stock's rides (make_scan_cache), the road ahead
+   (make_ahead) and FITNESS's reading of the recent rides (make_thresholds; sizes: tools/numbers.py), in DTCM's .bss the app left too little
    stack (2026-10-24, an overflow on opening a workout). It is
    zeroed at reset as .bss is (hw.rs). Its top 4 KB (PANELDMA) are the panel DMA's buffers (hw.rs PanelDma). */
 MEMORY

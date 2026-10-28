@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->56 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->15 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -177,7 +177,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
   over the main loop's passes, each pass bounded by `Board::awake_us`) and the import of its settings. Its cache
-  (`Cache`, `\Rustfw\scan.bin`, 256 KB in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
+  (`Cache`, `\Rustfw\scan.bin`, <!-- n:scan_cache -->263 KB<!-- /n --> in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
   (totals, history, best powers), so each ride is decoded once ever and a start reads only new or changed rides. `src/training/power_curve.rs`: best powers per duration in
   one pass, merged across rides, and the 2-parameter CP / W' fit (an envelope, the reference tools in its module
   doc). Pure logic. `src/training/hrvt.rs`: HRVT1 / HRVT2 (DFA alpha1 0.75 / 0.5) from a ride's alpha1 and power, the median
@@ -194,7 +194,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   logic fed one second at a time (the step running, time left, 3-2-1 beeps, Lap to the next step).
 - `src/storage/course_file.rs`: course files, read only: stock's `\PlanTrip\*.fit` (Bryton's own route layout, in the
   module doc), FIT courses and GPX (a small streaming reader) in `\Courses`; the list, and `Courses`, the course
-  memory (about 70 KB, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
+  memory (about <!-- n:courses -->75 KB<!-- /n -->, a static cell in AXI SRAM from main.rs `make_courses`). `src/nav/course/mod.rs`: the course model,
   pure logic: points thinned to 4096, where the rider is (a moving window, a bounded search when lost),
   off course, ascent left, the climbs (Garmin ClimbPro's definition), the profile's columns. `src/nav/course/cues.rs`:
   turn-by-turn cues (FIT course points, GPX turn words, else the turns of the course's shape), the next one said.
@@ -215,7 +215,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   2.0, ghidra/recovered_src/ride/route_climb.c): the snap to the nearest road (heading-aware), the trace (same way, else
   same class, else the smallest turn under 110 degrees, tiles asked for as it goes), stock's 9-tap smoothing, and the
   climbs by the course's own Garmin definition (`Course::climbs_of`), the rider placed on the trace each second, the
-  climb said once. About 105 KB in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
+  climb said once. About <!-- n:ahead -->106 KB<!-- /n --> in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
@@ -263,6 +263,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
   SHA256SUMS.
 - `tools/stack_check.py`: the firmware's stack frames against their budgets (check.sh, after the build).
+- `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
+  rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after pack.py), `--check` lists the stale ones, `selftest`.
 - `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo).
 - `build.rs`, `tools/ant_key.py`: the ANT+ network key. It is licensed, so it is **never** in this repository, in a
   commit, a test or a doc: `tools/ant_key.py` copies it from the owner's stock image into the gitignored
