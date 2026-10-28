@@ -73,9 +73,9 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 
 | | | |
 |:-:|:-:|:-:|
-| ![Menu](img/menu.png) | ![Ride menu](img/ride-menu.png) | ![Settings](img/settings.png) |
+| ![Menu](img/menu.png) | ![Ride menu](img/ride-menu.png) | ![ME settings](img/settings.png) |
 | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap acts on a row (sim) | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS > ME: values with their units, edited in place (sim) |
-| ![Settings](img/menu-settings.png) | ![BIKE menu](img/menu-bike.png) |  |
+| ![SETTINGS menu](img/menu-settings.png) | ![BIKE menu](img/menu-bike.png) |  |
 | SETTINGS: a menu per subject, any setting three levels down at most (sim) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) |  |
 
 ## Sensors and phone
@@ -83,6 +83,6 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | | | |
 |:-:|:-:|:-:|
 | ![Sensors](img/sensors.png) | ![GPS](img/gps.png) | ![Power meter calibration](img/power-zero.png) |
-| Sensors and built-in readings (sim) | GPS (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
+| Sensors and built-in readings (sim) | Speed page (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
 | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |  |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |

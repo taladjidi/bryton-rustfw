@@ -79,7 +79,7 @@ pub fn blend(fg: u16, bg: u16, a: u8) -> u16 {
     (mix(11, 0x1f) | mix(5, 0x3f) | mix(0, 0x1f)) as u16
 }
 
-/// How text looks: a font, its scale and its colours. The UI defines its styles once (ui.rs) and draws with them.
+/// How text looks: a font, its scale and its colours. The UI defines its styles once (src/ui/mod.rs) and draws with them.
 pub struct Style {
     /// The font.
     pub font: &'static Font,

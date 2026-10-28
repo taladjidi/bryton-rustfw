@@ -522,7 +522,7 @@ fn a_message_while_the_list_is_open() {
 }
 
 /// The longest message the unit asks for (120 characters, in words that waste the most room) still fits the lines
-/// of the detail: Page / Lap change nothing and no MORE is drawn. (Scrolling itself is tested in ui.rs.)
+/// of the detail: Page / Lap change nothing and no MORE is drawn. (Scrolling itself is tested in src/sim/menu_tests.rs.)
 #[test]
 fn the_longest_notification_fits() {
     let (mut sim, mut app) = unit(iphone(std::vec![]));

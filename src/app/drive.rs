@@ -42,7 +42,7 @@ impl App {
         Ok(())
     }
 
-    /// No ride running, and a save that cannot finish (recorder.rs, `stuck`; the other copy's waits for it or
+    /// No ride running, and a save that cannot finish (storage/recorder/mod.rs, `stuck`; the other copy's waits for it or
     /// is done): the card may be lent read only, nothing written meanwhile.
     fn save_stuck(&self) -> bool {
         self.ride.state() == ride::State::Idle && self.save_stuck_any()

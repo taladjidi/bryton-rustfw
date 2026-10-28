@@ -31,7 +31,7 @@
 //! - **Cues ([`cues`]):** turn-by-turn cues, from the file or found on the course's shape, and the next one said.
 //!
 //! Nothing here panics or loops on any input: every index is checked, every loop is bounded by [`POINTS`],
-//! [`CLIMBS`] or a window (the file readers are fuzzed in sim.rs `fuzz`).
+//! [`CLIMBS`] or a window (the file readers are fuzzed in src/sim/fuzz.rs).
 
 use crate::map::{Route, cos_q16, project};
 
@@ -282,7 +282,7 @@ pub struct Tracker {
     warned: bool,
     /// Climbs said so far (the next one to say).
     said: usize,
-    /// Segments and chunk boxes looked at so far: the cost (sim.rs checks a budget).
+    /// Segments and chunk boxes looked at so far: the cost (src/sim/ checks a budget).
     pub examined: u32,
     /// The next cue (its index), what of it was said (0 nothing, 1 the warning, 2 the turn), the speed along the
     /// course, m/s.

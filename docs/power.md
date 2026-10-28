@@ -1,6 +1,6 @@
 # Power: what the peripherals draw, what was changed, how to measure it
 
-With the CPU awake about 1.3 % of the time on a ride page (docs/status.md, `tools/profile.py`), the rest of the unit
+With the CPU awake about 0.5 % of the time idle on the overview and about 1.3 % on a ride page (docs/status.md, `tools/profile.py`), the rest of the unit
 dominates the battery. This page estimates each part's current from its data sheet, lists the options, says what
 this firmware does, and how the owner can measure the difference. **Every mA figure here is estimated** (from data
 sheets, at their test conditions), none was measured on the unit.
@@ -146,13 +146,9 @@ sheets, at their test conditions), none was measured on the unit.
   Its idle mode (8 colours) and partial mode would change what is shown. A lower frame rate (FRCTRL2, 0xC6: stock's
   0x0F is 60 Hz, 0x1F is 39 Hz) saves part of the driver's current but may flicker: to try on the unit, not done.
   The panel stays on with the backlight off: the transflective panel is read by daylight.
-- **Light sensor** (LTR-308, measuring every 100 ms while AUTO is on) and **barometer** (LPS22HH, one reading a second
+- **Light sensor** (LTR-308, measuring every 250 ms while AUTO is on) and **barometer** (LPS22HH, one reading a second
   while riding): about 0.1 mA and 0.01 mA (recalled from their data sheets): nothing to gain.
 
-- **Measured 2026-10-28: 12.2 h idle on the overview cost about 41 % of the battery.** So SYSTEM > AUTO OFF (OFF, 5,
-  10, 30, 60 min; default 5) switches the unit off after that long with no ride open, no cable, no key or touch, the
-  drive not lent and no write waiting; a banner and beep warn 10 s and 5 s before, any input cancels (`step_auto_off`,
-  kept in register 18 bits 22..24; an older build rewriting that register resets it to 5 min).
 
 ## The main loop while idle (2026-10-28)
 
@@ -160,6 +156,12 @@ sheets, at their test conditions), none was measured on the unit.
   charge, about 3.4 % an hour; the CPU awake 0.8 % of the time, 20 passes a second of 0.4 ms each. So the CPU's work
   is not what drains the cell: the floor is the sleep itself (WFI with the clocks and the SDRAM running, the panel,
   the Nordic chip).
+- **Measured 2026-10-28: 12.2 h idle on the overview cost about 41 % of the battery.** So SYSTEM > AUTO OFF (OFF, 5,
+  10, 30, 60 min; default 5) switches the unit off after that long with no ride open, no cable, no key or touch, the
+  drive not lent and no write waiting; a banner and beep warn 10 s and 5 s before, any input cancels (`step_auto_off`,
+  kept in register 18 bits 22..24; an older build rewriting that register resets it to 5 min). Movement (speed over
+  2 km/h, cadence, power, a trainer) keeps it on for 60 s after the last; never while the recorder holds anything; not
+  on the end-ride screens, with a call ringing, or with a settings write or the stock scan pending.
 - **Done (lib `App::pass_ms`, main.rs's sleep):** with no ride or its card, no key for 30 s (`IDLE_AFTER_MS`, the
   default OFF AFTER), no finger, no tone or banner timed by the passes and the card not lent to the computer, a pass
   every 250 ms (`IDLE_POLL_MS`) instead of 50. Nothing waits for it: the touch INT (as before), a key's falling edge

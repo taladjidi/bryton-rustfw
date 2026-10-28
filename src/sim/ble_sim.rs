@@ -810,7 +810,7 @@ impl FtmsSim {
         0
     }
 
-    /// Its address as the unit's chip reports it (`adv_report` in sim.rs: type byte 0, then the 6 bytes).
+    /// Its address as the unit's chip reports it (`adv_report` in src/sim/: type byte 0, then the 6 bytes).
     pub fn peer(&self) -> [u8; 7] {
         [0, self.addr, 1, 2, 3, 4, 5]
     }

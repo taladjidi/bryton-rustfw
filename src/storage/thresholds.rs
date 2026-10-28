@@ -1,5 +1,5 @@
 //! The recent full copies read for the heart rate variability thresholds ([`crate::hrvt`]): each ride of the last
-//! [`hrvt::DAYS`] days in `\Rustfw\Activities` (the full copies, with `Alpha1`: recorder.rs `Kind::Full`) through
+//! [`hrvt::DAYS`] days in `\Rustfw\Activities` (the full copies, with `Alpha1`: storage/recorder/mod.rs `Kind::Full`) through
 //! the FIT reader with alpha1 ([`Reader::with_alpha1`]) into a [`hrvt::RideFit`], its thresholds into a
 //! [`hrvt::Recent`]. A bounded amount a call ([`Scan::step`]), so the main loop spreads it over its passes as the
 //! ride scan does (stock.rs); read only. Nothing is kept on the card: it is read again at each power-up (or after

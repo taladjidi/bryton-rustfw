@@ -16,5 +16,8 @@ From the bootloader's hand-off to the first screen (details and evidence: BOARD.
 5. **The app** (`App::start`): the panel's init sequence, the power-on beep, the Nordic chip (reset, BLE, ANT and
    the paired sensors), the settings from the RTC backup registers, the main screen. The GPS receiver is powered
    one second later, then given its configuration, the time and the last position.
-6. **The loop:** every 50 ms it reads the RTC, the keys, the radio chip and the GPS, redraws what changed, and
+6. **The loop:** every 50 ms (250 ms after 30 s with no key, no ride and no card work) it reads the RTC, the keys, the radio chip and the GPS, redraws what changed, and
    sleeps (SysTick + WFI) until the next pass; with a cable in, the USB dev link is served while it sleeps.
+7. **USB:** started once when VBUS (PC13) goes high (src/board/usb.rs `start`); unplugging resets the unit.
+8. **Sleep:** `sleep_power_init` trims the RCC LPEN bits (BOARD.md 1); keys and the touch line wake WFI. Power-off:
+   standby (BOARD.md 9, docs/power.md).

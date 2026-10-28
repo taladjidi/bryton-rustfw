@@ -16,7 +16,7 @@ rides do not sync to Bryton": tested on 2026-10-24). Intervals.icu reads DFA a1 
 | `\Rustfw\Activities\YYMMDDhhmmss.fit` | FIT protocol 2.0: the same messages, plus `developer_data_id`, three `field_description`s and in every record `Alpha1` (float32, DFA a1), `RMSSD` (uint16, ms) and `ArtPct` (uint8, %), invalid while the strap gives no beats; and every beat the strap sent in standard `hrv` messages | Intervals.icu |
 
 Both are recorded as the ride goes, each by its own recorder with its own checkpoints, recovery records
-(`\Rustfw\ride.rec`, `\Rustfw\full.rec`) and save (src/storage/recorder.rs, "Two copies"). The clean one is
+(`\Rustfw\ride.rec`, `\Rustfw\full.rec`) and save (src/storage/recorder/mod.rs, "Two copies"). The clean one is
 always handled first and never waits for the full one. When the full copy fails, the clean one is still saved and
 the banner says NO FULL COPY. The two checkpoint together, so after a reset the clean copy never has fewer seconds
 than the full one (seen on the unit before: 22 s fewer, the full copy's bigger records having filled its buffer
@@ -32,7 +32,7 @@ Runalyze, Kubios) can check the live value against theirs. They go through the s
 recovery records as the records (a checkpoint after a minute of beats while paused too); beats that find no room
 (a card failing) wait in a queue of 40 and past it are dropped and counted, never holding the recording up. About
 20 KB an hour at 150 bpm. The clean copy has none: no file shows that Strava, stock or Bryton's server take hrv
-messages from this firmware (P8 wrote them into stock's files; bryton-S510-mods' docs do not say whether those
+messages from this firmware (a stock firmware patch, bryton-S510-mods P8, wrote them into stock's files; bryton-S510-mods' docs do not say whether those
 synced to Bryton or Strava), so it stays as it was.
 
 **Artifacts.** `ArtPct` is the share of the beats in the live DFA a1's 2-minute window that its 5 % rule dropped.

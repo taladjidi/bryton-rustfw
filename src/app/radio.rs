@@ -143,7 +143,7 @@ impl App {
                     }
                     for &rr in self.decoders.beats.rr() {
                         self.hrv.push(rr);
-                        self.rec.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: recorder.rs)
+                        self.rec.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: storage/recorder/mod.rs)
                     }
                     if matches!(kind, Kind::Shifting | Kind::Di2) {
                         self.shifted(); // its presses wait in the decoders until the stream is read (below)
@@ -199,7 +199,7 @@ impl App {
     }
 
     /// The gear just decoded: a change while riding is a shift, counted and recorded (a gear change event, the
-    /// front or the rear one; recorder.rs takes it into RAM, never waiting on the card).
+    /// front or the rear one; storage/recorder/mod.rs takes it into RAM, never waiting on the card).
     fn shifted(&mut self) {
         let Some(now) = self.live.get(Metric::Gear) else { return };
         let Some(was) = self.radio.gear.replace(now).filter(|&g| g != now) else { return };

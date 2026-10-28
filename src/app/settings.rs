@@ -184,7 +184,7 @@ pub const FAULT_CLEAR_MS: u32 = 60_000;
 /// The backup register of the alerts ([`Settings::alerts_word`]); not referenced by stock (BOARD.md 8).
 pub(crate) const ALERTS_BKP: usize = 28;
 
-/// The backup register that says a ride is open on the card (recorder.rs): [`RIDE_OPEN`] from its start until it
+/// The backup register that says a ride is open on the card (storage/recorder/mod.rs): [`RIDE_OPEN`] from its start until it
 /// is saved, so the boot looks for it; not referenced by stock (BOARD.md 8). Lost with the backup domain (a flat
 /// battery): the next Start then finds the ride from its record.
 pub(crate) const RIDE_BKP: usize = 30;

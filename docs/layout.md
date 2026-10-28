@@ -2,8 +2,6 @@
 
 Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the files you touch.
 
-  `training`, `nav` and `link` at the crate root, so paths stay `crate::ride`. `src/sim/` is the tests' simulator (`Sim`).
-
 - `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
   to that: a new concern goes in its own file in `src/app/`.
   - `Board` is the only way to reach hardware. Each method is a primitive: send a panel command, read RTC_TR,
@@ -11,9 +9,9 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
   - **If a method needs an `if` about the device's behaviour, that logic belongs in the library.**
   - `App`'s fields are parts, not flags: a concern with several fields is a sub-struct with its own `new` and its
     small pure methods (`Phone`, `Ftms`, and in `app/groups.rs` `Notices` (`notes`), `Light`, `Gps`, `Radio`,
-    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`)). A new field of one of these goes in
+    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`), `AutoOff`). A new field of one of these goes in
     its struct; a new concern with three or more fields gets its own. `App` must stay under the size budget
-    (`tests::app_size_budget`, 64 KB; it lives in AXI SRAM, about 19 KB of which was free on 2026-10-27).
+    (`tests::app_size_budget`, 64 KB; App is 55 KB of its 64 KB budget; it lives in AXI SRAM, about 15 KB free on 2026-10-28, link.x).
 - `src/app/mod.rs` and `src/app/`: the rest of the app, each file an `impl App` block (several are allowed in a crate)
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
@@ -47,7 +45,9 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
     (`Settings::ahead`, register 11's tag 0xaa to 0xac).
   - `groups.rs`: the sub-structs above. `pass.rs`: the parts of `App::step` (seconds caught up, the alert said,
     sensors found, the banner's time, the screen's redraw).
-  - `device.rs`: backlight, buzzer, status strip, switching off. `clock.rs`: RTC decoding, dates.
+  - `device.rs`: backlight, buzzer, status strip, switching off, AUTO OFF (`step_auto_off`) and the idle pass length (`pass_ms`). `clock.rs`: RTC decoding, dates.
+  - `profile.rs`: the ride profile (ROAD, INDOOR or MTB), chosen from the trainer heard or set by hand, given up when the trainer goes silent.
+  - `quick.rs`: the quick panel (`Screen::Quick`, a swipe down): what the rider wants first, top to bottom.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
     use refused), when it may be (no ride running or unsaved), taken back on eject, a restart after the computer
     wrote.
@@ -91,13 +91,14 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
   numbers. Drawn once, when shown.
 - `src/ui/media.rs`: the media player screen: what the phone says is playing (AMS), a progress bar, touch buttons,
   each part in its own fixed box.
+- `src/ui/quick.rs`: the quick panel's geometry and drawing (app/quick.rs decides what each box says).
 - `src/ui/map.rs`: the map field: the track (fixed array, thinned when full), the local projection, the fitted view,
   and drawing in runs per row clipped to `Canvas::clip`, so a dirty box and a screenshot row use the same code.
 - `src/drivers/ambient.rs`: the sensor bus chips (I2C4) against the `Board` primitives `i2c_read` / `i2c_write`: the
   ambient light sensor, the barometer, the accelerometer (switched off), and the automatic backlight (stock's curve
-  and timing). `sim.rs` has a model of the bus (`Bus`); `tools/i2c.py` reaches it through `peek` / `poke`.
+  and timing). `src/sim/mod.rs` has a model of the bus (`Bus`); `tools/i2c.py` reaches it through `peek` / `poke`.
 - `src/drivers/touch.rs`: the touch controller (Sitronix, I2C1) against the `Board` primitives `touch_read` / `touch_reset` /
-  `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `sim.rs`
+  `touch_int`: its registers, the start, and the gestures (tap, hold, swipe) recognised from the points; `src/sim/mod.rs`
   has a model of the chip (`TouchChip`) with a scripted finger. `tools/i2c.py --touch` reads it from the computer.
 - `src/nav/altitude.rs`: the barometric altitude: the international barometric formula as an integer table, the
   smoothing (a median of 5 readings, then an average of 1/6), the calibration (typed, from the receiver, at a ride's
@@ -139,7 +140,7 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
 - `src/drivers/sensors.rs`: ANT+ sensor kinds (stock's channels), decoding their broadcasts, the live values the ride
   pages show. Pure logic.
 - `src/drivers/nrf.rs`: the Nordic BLE / ANT chip's serialization protocol (framing, commands, start-up), against the
-  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `sim.rs` has a model of the chip (`Nordic`). BLE
+  `Board` byte primitives `nrf_reset` / `nrf_send` / `nrf_recv`; `src/sim/mod.rs` has a model of the chip (`Nordic`). BLE
   events that arrive while a command waits are kept (`Rx::pop`); the main loop acts on events only once the bytes
   read are framed (a command sent mid-read would take the rest of the stream out of order).
 - `src/drivers/ble.rs`: the SoftDevice API v5 calls of the phone link (GAP peripheral, GATT server and client), the
@@ -153,7 +154,7 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
   developer fields included.
 - `src/drivers/emmc.rs`: the eMMC (SDMMC1) protocol: identification, EXT_CSD SEC_COUNT, block reads and writes
   (writes refused at or past sector B, stock's reserved area), stock's layout; against the `Board` primitives
-  `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `sim.rs` has a model of the card
+  `emmc_power_on` / `emmc_bus` / `emmc_cmd` / `emmc_read` / `emmc_write`; `src/sim/mod.rs` has a model of the card
   (`EmmcCard`, which serves a FAT image when given one and can lose power after any sector written). Used by the
   basemap, the recorder and the dev link's `emmc` and `sector` commands; identified at first use (at the first main loop pass, for the scan's cache of
   stock's rides; at boot at the first start, for stock's settings, or when a ride is open).
@@ -238,6 +239,7 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
   `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
+- `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
 - `src/sim/shift_tests.rs`: electronic shifting on the Sim: a Di2 and an ANT+ shifting system paired, the shifts
   counted while riding, a system that goes silent.
 - `src/main.rs`: `impl Board for S510` with registers, and the main loop. Clocks, GPIO, SPI byte transport,
@@ -256,6 +258,7 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
   after `dev.py reset`): a firmware that reads the link takes the bytes first.
 - `tools/s810_probe.py`: what an S810 owner sends back (docs/s810.md, section 3): read only, the stock drive's
   versions, file shapes and the debug logs' hardware lines in one zip, nothing personal; `selftest` (check.sh).
+- `tools/fonts/`: Barlow Semi Condensed Bold (`BarlowSemiCondensed-Bold.ttf`) and its OFL.txt licence, for the SMOOTH fonts (`tools/font.py`).
 - `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
   SHA256SUMS.
@@ -266,4 +269,5 @@ Moved out of AGENTS.md (which keeps the layout rules). Read the entries for the 
   `ant_key.bin`, and build.rs passes it to main.rs as `ANT_KEY` (None without the file). Shimano's private network
   key (the Di2 channel) is handled the same way: `di2_key.bin`, `DI2_KEY`, never printed, no hash of it kept.
   Tests use stand-in keys. `tools/font.py`, `tools/pixel_font.py`: the fonts.
+- `deny.toml`: cargo deny's policy (advisories, licences, duplicate crates), run by check.sh.
 - `link.x`, `pack.py`: memory map and the update file. `pack.py` re-checks what the stock updater checks.

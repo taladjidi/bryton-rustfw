@@ -40,7 +40,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
     the second call, just before the jump), 5 = 0xd0400000 2 MB (same attributes as 4), 6 = SRAM4, 7 = ITCM 0x0
     64 KB executable. Regions 3 to 5 are write-through cacheable (C = 1, B = 0, TEX 0), not shareable.
   - An earlier reading, "our firmware stops in its first MPU writes" (diag v1 / v2), relied on the backlight as
-    a readout, which later proved not to work (section on the backlight below). Unproven.
+    a readout, which later proved not to work (section 6). Unproven.
   - **Seen on the unit (2026-10-22, diag v9):** an image that turns the I-cache on, reads PC13 and requests a
     system reset (AIRCR) runs as expected: the reset brings the bootloader up again (docs/journal.md, 2026-10-22).
   - **This firmware turns the I-cache on** (MPU region write-through cacheable, ICIALLU, CCR.IC; D-cache off):
@@ -79,7 +79,7 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 ## 4. Pins
 
-Every pin this firmware uses, from the MCU's side (arrows: signal direction). Sections 5 to 14 have the details.
+Every pin this firmware uses, from the MCU's side (arrows: signal direction). Sections 5 to 17 have the details.
 
                                       +----------------------------+
      power button --+---------------->| PA0  WKUP1 (rising)        |
@@ -136,6 +136,17 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
          power <----------------------| PI6   high = on            |
          line  ---------------------->| PF7   (unused here)        |
                                       |                            |
+       buzzer (TIM1, AF1)             |                            |
+         PWM     <--------------------| PA10  TIM1 CH3 (AF1)       |
+         amp enable <-----------------| PH2   high = on            |
+                                      |                            |
+       touch (I2C1, AF4,              |                            |
+         open drain, no pull)         |                            |
+         SCL   <----------------------| PB6                        |
+         SDA   <--------------------->| PB7                        |
+         touch INT ------------------>| PC6   low = a point        |
+         reset  <---------------------| PH3   high = run           |
+                                      |                            |
        eMMC (SDMMC1, AF12)            |                            |
          CLK   <----------------------| PC12                       |
          CMD   <--------------------->| PD2                        |
@@ -150,6 +161,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PA3 PA5 | USB ULPI D0, CK (AF10) | 7 |
 | PA6 | Nordic chip reset, low = reset | 11 |
 | PA7 | USB ULPI PHY enable / reset, high = running (inferred) | 7 |
+| PA10 | buzzer: TIM1 channel 3 PWM (AF1); a plain low output between tones | 14 |
 | PB0 PB1 PB5 PB10..PB13 | USB ULPI D1 D2 D7 D3..D6 (AF10) | 7 |
 | PB2 | key 0x02 lap, active low | 5 |
 | PB4 | key 0x04 start / stop, active low; NJTRST (AF, pull-up) after reset | 5 |
@@ -158,7 +170,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PC3_C | battery through a divider by 1.5, ADC3 channel 1 (analog switch PC3SO) | 12 |
 | PC8..PC11 | eMMC D0..D3, SDMMC1 (AF12) | 15 |
 | PC12 | eMMC CLK, SDMMC1 (AF12) | 15 |
-| PC6 | touch interrupt, low while the chip has a point (EXTI falling in stock; polled here) | 17 |
+| PC6 | touch interrupt, low while the chip has a point (EXTI falling in stock; EXTI6 falling edge wakes the idle sleep, section 17) | 17 |
 | PC13 | USB / charger present, 1 = plugged (also standby wake-up WKUP4) | 7 |
 | PD2 | eMMC CMD, SDMMC1 (AF12) | 15 |
 | PD3 PD4 PD5 PD6 | USART2 CTS, RTS, TX, RX to the Nordic chip (AF7, pull-up) | 11 |
@@ -177,6 +189,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 | PG11 | SPI1 SCK (panel), AF5 | 6 |
 | PG13 | backlight, high = on (LPTIM1_OUT, AF1, in stock) | 6 |
 | PG14 | charge enable, active low (left low by the bootloader) | 12 |
+| PH2 | buzzer amplifier enable, high = on | 14 |
 | PH3 | touch controller reset, high = run (the chip answers once it is high: seen on the unit) | 17 |
 | PH4 | USB ULPI NXT (AF10) | 7 |
 | PH8 | Nordic request line (EXTI wake-up in stock; unused here) | 11 |
@@ -309,7 +322,7 @@ Every pin this firmware uses, from the MCU's side (arrows: signal direction). Se
 
 - RTC (0x58004000) on the LSE, 24 h format, prescalers 31 / 1023 (1 Hz). It keeps running in standby.
 - The stock firmware sets it from GPS. It holds **local time** (seen on the unit, 2026-10-23).
-- Backup registers and stock (R039, from its 27 calls of the HAL read / write, ghidra/HARDWARE.md "RTC and backup
+- Backup registers and stock (R039, from its 27 calls of the HAL read / write, bryton repo, ghidra/HARDWARE.md "RTC and backup
   registers"): 1 (clock set, 0xa5a5), 2, 3 (clock), 4 (USB mode), 9, 12 (Nordic image version), 13 (last battery
   voltage, mV: 4178 on the unit) are its own; 15 and 19 are read at boot (13 is kept only if 19 = 0xa5a5 and 15 !=
   0x4649; stock's first boot writes 19 = 0); 0, 5..8, 10, 11, 14, 16..18 and 20..31 are not referenced by its code
@@ -448,7 +461,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
     ANT+ profile and stock's decoder 0xd029f91c; **seen on the unit** with the owner's strap: 58 to 70 bpm).
   - Channel ID get (stock's encoder 0xd02bf562): `06 d4 [ch]`, answered `01 d4 [result u32] [device u16] [type]
     [transmission type]`. With the wildcard channel ID, it gives the strap the channel locked onto (seen:
-    `01 d4 00 00 00 00 26 62 78 f1`, device 25126). Opening with that ID (`06 d3 00 26 62 78 f1`) takes only that
+    `01 d4 00 00 00 00 26 62 78 f1`, the owner's strap). Opening with that ID (`06 d3 00 26 62 78 f1`) takes only that
     strap (seen). Other ANT ops in stock's encoders: 0xc5 close, 0xc7 / 0xc8 broadcast / acknowledged data,
     0xd5, 0xd7, 0xdd, 0xdf, 0xe7 (not traced).
   - A BLE scan with the channel open (searching) still works: fewer reports, as the radio is shared.
@@ -489,7 +502,7 @@ nRF5 SDK serialization. Traced in the stock firmware (Ghidra: ser_app_hal_hw_ini
   configuration), `sd_ble_version_get`. Each command waits for its response, 5 s at most.
 - **SoftDevice API version 5** (S132 / S332 v5.x, nRF5 SDK 14): stock's GATTS request encoders use 0xa0 service add,
   0xa2 characteristic add, 0xa6 hvx, 0xa7 service changed, 0xa8 authorize reply, 0xa9 / 0xaa system attributes set /
-  get, 0xab, 0xad MTU reply (Ghidra, ghidra/notes/agent_b2.md, 0xd02ac312..0xd02ac966), and GATTC 0x94 / 0x96 / 0x97 /
+  get, 0xab, 0xad MTU reply (Ghidra, bryton repo, ghidra/notes/agent_b2.md, 0xd02ac312..0xd02ac966), and GATTC 0x94 / 0x96 / 0x97 /
   0x9c (above): GATTS at 0xa0 and GATTC at 0x94 are API v5's ranges (v6: 0xa8 and 0x9b; Nordic's pc-ble-driver
   `include/sd_api_v5/ble_ranges.h` and `sd_api_v6`), and the scan parameters and advertising report seen on the unit
   have v5's layouts. The Nordic image itself is not in the stock image (`\Nordic.bin`), so the exact version is not
@@ -669,7 +682,7 @@ From stock (Ghidra: `Buzzer_PwmInit` 0xd018b3f0, `Buzzer_PlayTone` 0xd018b54a, `
   over SysTick); such commands now end that pass's sleep, as a key from the link does.
 
 From stock (Ghidra, OS R039 and bootloader R002; the addresses are those of the report
-`ghidra/STORAGE_AND_MAPS.md`, sections 1 and 2), register meanings from RM0399 (SDMMC) and the card side from
+`ghidra/STORAGE_AND_MAPS.md` in the bryton repo, sections 1 and 2), register meanings from RM0399 (SDMMC) and the card side from
 the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: this firmware's driver
 (`src/drivers/emmc.rs`, read only) runs only on the dev link's `emmc` and `sector` commands.
 

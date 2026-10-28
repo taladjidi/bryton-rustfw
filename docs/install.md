@@ -5,6 +5,9 @@
     ./check.sh          # fmt, clippy, host tests, build, pack -> out/IMG.bin (1 MB + trailer), out/update.ini;
                         # plus the Renode checks when RENODE points at Renode (docs/devloop.md, Emulation)
 
+`EMMC_WRITE=1 ./check.sh` builds an image that may write the card (rides, settings, the drive's write mode). Without
+it the unit records nothing and the USB drive is read only. Install only a build you mean to ride with.
+
 rustup installs the pinned toolchain and target on first use. `cargo test-host` alone runs the tests and draws
 the screens through a simulated panel into `target/sim/*.bmp`. `pack.py` re-checks what the stock updater checks
 (raw tag "R039" at 0x94, size over 1 MB, additive-sum trailer) and that the vector table is sane.
@@ -25,7 +28,7 @@ channel (SENSORS > DI2 reads NO KEY). A build with the keys is for your own unit
 
 ## Install
 
-This **replaces the OS**: no USB drive, no rides saved yet, no updates from this firmware. The way back is the
+This **replaces the OS**: no updates come from this firmware. Rides are saved to `\Activities` and the BRYTON volume can be lent as a USB drive (below). The way back is the
 bootloader's recovery mode, which this firmware cannot touch (it lives in the internal flash).
 
 - **From stock:** plug in, copy `out/IMG.bin` and `out/update.ini` to the BRYTON drive, eject, unplug. The stock
@@ -34,21 +37,24 @@ bootloader's recovery mode, which this firmware cannot touch (it lives in the in
   restart while holding **Page** until "Engineer Mode" shows (without the cable the bootloader ignores Page).
   Then `sudo python3 tools/iaprecover.py --write out/IMG.bin`: it checks the image as `pack.py` and the updater
   do, writes it in 2 KB chunks and reads each one back. Restart.
+  The computer will offer to initialise the raw disk: always Ignore or Cancel. Leave the mode by unplugging the cable.
+  If the link drops mid-write, redo the write from the start and compare.
 - Expected: the overview (the date, today's card), "BLE" green, then "GPS" blinking.
 
 Record every write to the unit in bryton-S510-mods' FLASHLOG (AGENTS.md).
 
 ## Back to Bryton's firmware
 
-Engineer Mode as above, then `sudo python3 tools/iaprecover.py --write-vanilla` (from
-[bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods), see its `docs/recovery.md`; run
-`tools/fetch_firmware.py` once to get the stock image). Restart, then install any firmware as usual.
+First, once: `tools/fetch_firmware.py` (the stock image, needed by `--write-vanilla`). Then Engineer Mode as above,
+then `sudo python3 tools/iaprecover.py --write-vanilla` (in this repo; details in
+[bryton-S510-mods](https://github.com/taladjidi/bryton-S510-mods) `docs/recovery.md`). Restart, then install any
+firmware as usual.
 
 ## Copying files without stock
 
 With the cable in and the USB symbol green, SETTINGS > SYSTEM > USB DRIVE (or `./dev.py drive`) lends the BRYTON volume to the
 computer as a USB drive: copy rides off, or routes and workouts on (a build with EMMC_WRITE=1; others offer it read
-only). No ride may run or wait to be saved. Eject it on the computer to give it back; after a write the unit
+only). Writes need an EMMC_WRITE=1 build (Build, above). No ride may run or wait to be saved. Eject it on the computer to give it back; after a write the unit
 restarts. Unplugging also gives it back (the unit resets). Not yet seen on the unit (docs/status.md).
 
 ## IGN maps
@@ -72,7 +78,8 @@ individuals: the tool only fetches Plan IGN v2.
    It writes `IGN<z>_<x / 32>_<y / 32>.PAK` (one per zoom and block of 32 x 32 tiles) and `ATTRIB.TXT`.
    To check them on the computer: `IGN_PACKS=~/ign-packs cargo test-host every_packed_tile -- --ignored --nocapture`.
 3. Copy them to the card through this firmware's USB drive (below, "Copying files without stock"), or Bryton's
-   firmware's, into a folder `Rustfw/Maps` at the drive's top (make it if missing).
+   firmware's, into a folder `Rustfw/Maps` at the drive's top (make it if missing; needs an EMMC_WRITE=1 build; at full speed,
+   about 1 MB/s, 3.9 GB takes over an hour: copy a smaller area first, then compare).
    Compare the copy (`diff -r ~/ign-packs /Volumes/BRYTON/Rustfw/Maps`): the USB link can drop. This firmware reads the folder, never writes it; stock ignores it.
 
 ## Day to day

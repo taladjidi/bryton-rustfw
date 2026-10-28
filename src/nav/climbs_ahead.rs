@@ -178,7 +178,7 @@ pub struct Ahead {
     cleared: bool,
     /// Trails mode (an MTB ride): paths and steps are followed and snapped to like roads.
     trails: bool,
-    /// Traces made and tiles asked for in all (the cost, sim.rs).
+    /// Traces made and tiles asked for in all (the cost, src/sim/).
     pub traces: u32,
 }
 

@@ -261,7 +261,7 @@ pub struct Slice {
 }
 
 impl Slice {
-    /// The slice of a main loop pass: about a millisecond or two on the unit each (sim.rs counts the operations).
+    /// The slice of a main loop pass: about a millisecond or two on the unit each (src/sim/ counts the operations).
     pub const PASS: Slice = Slice { inflate: 1024, nodes: 48, sort: 200 };
     /// The whole tile in one call.
     #[cfg(test)]
@@ -796,7 +796,7 @@ pub struct Maps {
     found: [Found; 2],
     next: usize,
     job: Job,
-    /// Tiles read and decoded, and bytes read from the card (for the cost, sim.rs).
+    /// Tiles read and decoded, and bytes read from the card (for the cost, src/sim/).
     pub tiles: u32,
     /// See `tiles`.
     pub bytes: u32,

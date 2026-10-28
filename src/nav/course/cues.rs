@@ -884,7 +884,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// The zigzag of tools/fat_image.py's `Zigzag.gpx` and `Turns.fit` (sim.rs rides it): a left and a right corner,
+    /// The zigzag of tools/fat_image.py's `Zigzag.gpx` and `Turns.fit` (src/sim/ rides it): a left and a right corner,
     /// 1.5 km of winding road (15 m either side, 300 m waves), a sharp right, a slight left, a right, a hairpin.
     pub(crate) fn zigzag() -> Vec<(f64, f64, f64)> {
         let mut pts = lines(&[(0.0, 0.0, 0.0), (1000.0, 0.0, 0.0), (1000.0, 600.0, 0.0), (1800.0, 600.0, 0.0)], 10.0);

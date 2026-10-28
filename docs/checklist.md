@@ -172,7 +172,7 @@ Others
   `ArtPct` share per record
 - [~] DFA a1 in the FIT file as the Alpha1 developer field (patch P9, Garmin Connect IQ): sim, in a full copy beside the clean one (`\Rustfw\Activities`, with RMSSD), checked with Garmin's SDK
 - [~] Laps, session and activity messages at the end (stock, all): sim (a lap message per Lap, timer events at pauses)
-- [ ] Power off during a stop, resume at power on (stock Auto Power Off, Garmin)
+- [~] AUTO OFF (SYSTEM): switches off after idle, sim; never with a ride open (stock Auto Power Off, Garmin)
 - [~] Bike profiles: road, MTB, gravel, cyclocross, commute, indoor, three bikes (stock, all): ROAD / INDOOR / MTB (INDOOR from the trainer heard, MTB by hand; sub_sport in the FIT); no bikes
 - [ ] Settings in a file, two copies (stock .ini files, all): in RTC backup registers for now
 - [ ] Screenshots saved to the volume (stock \Screenshot): over USB only (`dev.py shot`)
@@ -253,7 +253,7 @@ Others
 
 - [x] Elevation profile graph of the ride (Garmin, Karoo): sim
 - [x] Climb detection on a course: each climb's length, grade, what is left (stock Climb Challenge 2.0, Garmin ClimbPro, Wahoo Summit, Karoo Climber): sim, Garmin's definition (500 m, 3 %), a banner and a beep at each start
-- [ ] Climb page that opens by itself near a climb, can be turned off (stock Climb Page Switch, Garmin)
+- [~] Climb page that opens by itself at a climb's start (stock Climb Page Switch, Garmin): sim, once per climb; no off switch
 - [~] Climbs without a course, predicted from the road ahead (stock Climb Challenge 2.0, Karoo Climber, Garmin 1050): sim, the routing graph and elevations of stock's map files traced 4 km ahead, Garmin's definition as a course's, a banner and a beep, the CLIMB fields, BIKE > CLIMBS AHEAD; not seen on the unit
 - [ ] Climb filter: all or medium and above (stock)
 - [x] Gradient-coloured climb profile in sections (stock, all): sim, the PROFILE field
@@ -354,8 +354,8 @@ Storage, USB and updates
 - [x] MAX HR, FTP, weight, W' (stock, ours): unit (MAX HR, FTP); sim (weight, W')
 - [x] Overview fields and pages 1 to 3 (stock): sim
 - [x] Menus in groups, one screen each; a field picked by group then field (Garmin, Wahoo: categories): sim
-- [x] The menu tree of the UI review (4.3): WORKOUTS, COURSES, HISTORY, PAGES, SENSORS, SETTINGS (ME, ALERTS, DISPLAY, BIKE, SYSTEM); any setting three levels down at most, units after the values: sim
-- [x] A ride menu while riding (Garmin's controls, Karoo's drawer; UI review step 8): PAUSE / RESUME, END RIDE (asked first), WORKOUT (NEXT STEP, STOP), COURSE (STOP FOLLOWING), BRIGHTNESS, SENSORS, EDIT THIS PAGE, ALL SETTINGS; only the rows that apply: sim
+- [x] The menu tree: WORKOUTS, COURSES, HISTORY, PAGES, SENSORS, SETTINGS (ME, ALERTS, DISPLAY, BIKE, SYSTEM); any setting three levels down at most, units after the values: sim
+- [x] A ride menu while riding (Garmin's controls, Karoo's drawer): PAUSE / RESUME, END RIDE (asked first), WORKOUT (NEXT STEP, STOP), COURSE (STOP FOLLOWING), BRIGHTNESS, SENSORS, EDIT THIS PAGE, ALL SETTINGS; only the rows that apply: sim
 - [x] GPS status: fix, satellites, position, altitude, UTC (stock About, Garmin): unit
 - [~] Settings kept through power off (stock, all): RTC backup registers, not a file
 - [ ] Time zone, daylight saving, date and time formats (stock, all)

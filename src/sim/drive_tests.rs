@@ -221,7 +221,7 @@ fn a_delete_cut_halfway_is_finished_before_lending() {
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
-/// A save failing after its step 4 (recorder.rs: the ride's entry removed, the new one not written) and unable to
+/// A save failing after its step 4 (storage/recorder/mod.rs: the ride's entry removed, the new one not written) and unable to
 /// name the ride again in `\Rustfw\Rides` (its directory failing too): stuck. The marker stays and the drive is
 /// lent read only (MODE SENSE write protected: the owner copies what is on the card, no computer's fsck writes the
 /// nameless chain); a Start says the new ride waits ("NOT RECORDING: CARD"); once the card is well the old ride is
@@ -339,7 +339,7 @@ fn a_held_ride_is_said_once_the_save_is_stuck() {
     assert_eq!(said(&app), 1, "said when it became so");
 }
 
-/// GIVE UP SAVE (app/riding.rs, recorder.rs "GIVE UP SAVE"): no such row while no save is stuck; on a save stuck
+/// GIVE UP SAVE (app/riding.rs, storage/recorder/mod.rs "GIVE UP SAVE"): no such row while no save is stuck; on a save stuck
 /// after its step 4 (as above), a ride held behind it, first in SYSTEM. Two banners of explanation, then asked
 /// twice; Back drops it at any step (from the start again). Then the ride is named in `\Rustfw\Rescue` (the rides
 /// folder failing to write), or, on a card under the full copy's reserve (no folder made there), given up: its

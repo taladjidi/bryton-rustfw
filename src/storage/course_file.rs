@@ -50,7 +50,7 @@
 //! ([`Item::CueHere`]), a waypoint's by its position; anything else (other waypoints, names, extensions) is skipped. A tag
 //! longer than [`TAG`] bytes is cut (its attributes past that are not seen).
 //!
-//! Nothing here panics or loops on any input (fuzzed in sim.rs `fuzz`): every loop is bounded by the file's size,
+//! Nothing here panics or loops on any input (fuzzed in src/sim/fuzz.rs): every loop is bounded by the file's size,
 //! the list or a buffer.
 
 use crate::course::{Course, Item, Odometer, Pt, Tracker, Turn};

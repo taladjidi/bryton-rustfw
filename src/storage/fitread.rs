@@ -41,7 +41,7 @@
 //!   [`MAX_ARTIFACTS`] % of its beats dropped gives no alpha1 (hrv.rs, "Artifacts"); a file without that field, all.
 //!
 //! Only the first file of a chained FIT file is read. Nothing here panics or loops on any input: each byte moves a
-//! small state machine one step (fuzzed in sim.rs `fuzz`).
+//! small state machine one step (fuzzed in src/sim/fuzz.rs).
 
 use crate::fit::crc;
 

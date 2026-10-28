@@ -102,7 +102,7 @@ impl App {
     }
 
     /// Ends a paused ride and discards it (DISCARD, asked twice): the recorder saves both copies into
-    /// `\Rustfw\Discarded` instead (recorder.rs, "A discarded ride": never erased, never in the history), the
+    /// `\Rustfw\Discarded` instead (storage/recorder/mod.rs, "A discarded ride": never erased, never in the history), the
     /// workout ends with it, back to the overview.
     pub(crate) fn discard_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
@@ -121,7 +121,7 @@ impl App {
         self.say(if took { "DISCARDING" } else { "ALREADY SAVED" });
     }
 
-    /// GIVE UP SAVE (SYSTEM, only while a save is stuck: recorder.rs, "GIVE UP SAVE"): two banners of explanation,
+    /// GIVE UP SAVE (SYSTEM, only while a save is stuck: storage/recorder/mod.rs, "GIVE UP SAVE"): two banners of explanation,
     /// then asked twice, each Start on the row going on and anything else (Back) dropping it; then both copies'
     /// stuck saves given up, the outcome said. Refused while the card is lent (the recorder cannot reach it), and
     /// while a ride runs that is recorded: one held behind the stuck save has nothing recorded, so it is let
@@ -240,7 +240,7 @@ impl App {
     }
 
     // -----------------------------------------------------------------------------------------------------------
-    // The recorder (recorder.rs): events into its RAM buffer here, its card work in step_recorder
+    // The recorder (storage/recorder/mod.rs): events into its RAM buffer here, its card work in step_recorder
     // -----------------------------------------------------------------------------------------------------------
 
     /// The ride recorder's one entry point: every [`ride::Event`] goes through here, in order. RAM only: the card
@@ -269,7 +269,7 @@ impl App {
                         // behind the last ride's save, which the card keeps failing: tried again, this one after it
                         self.alarm_notice("NOT RECORDING: CARD");
                     }
-                    // (a ride started while the last one is being saved waits for that save: recorder.rs `start`)
+                    // (a ride started while the last one is being saved waits for that save: storage/recorder/mod.rs `start`)
                     // no full copy of a ride the clean one does not record
                     let resume = self.rec.resume_pending || self.rec.full_pending;
                     self.rec.full.start_after(&self.rec.clean, t, recorder::ride_name(local), resume);
@@ -353,7 +353,7 @@ impl App {
         if self.rec.clean.phase() != recorder::Phase::Done {
             self.rec.resume_pending = false; // a ride started: its first card work does the boot's first (one writer)
         }
-        // the two copies checkpoint together: the clean one never behind (recorder.rs, "Two copies")
+        // the two copies checkpoint together: the clean one never behind (storage/recorder/mod.rs, "Two copies")
         self.rec.clean.keep_up(&self.rec.full);
         self.rec.full.keep_up(&self.rec.clean);
         let was_held = self.rec.clean.held();
@@ -425,7 +425,7 @@ impl App {
         }
     }
 
-    /// The full copy's card work, after the clean one's (recorder.rs, "Two copies"): its ride left open is looked
+    /// The full copy's card work, after the clean one's (storage/recorder/mod.rs, "Two copies"): its ride left open is looked
     /// for once the clean one's has been, and whatever it does, it never stops the clean one; a full copy that
     /// cannot be saved is said.
     fn step_full(&mut self, b: &mut impl Board, local: recorder::Local) {

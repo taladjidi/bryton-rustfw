@@ -132,7 +132,7 @@ const KEYS: u16 = 16;
 /// Points of a water ring filled at most (projected on the stack).
 const RING: usize = 1024;
 
-/// What one view change cost: for the measurements (sim.rs) and the dev link.
+/// What one view change cost: for the measurements (src/sim/) and the dev link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     /// Tiles read from the eMMC (not already held).

@@ -75,12 +75,12 @@ restarts the unit when the computer wrote).
 | colors | `text` | `#FFFFFF` | labels, values (white digits), the date |
 | colors | `dim` | `#848284` | notes, axes, a value's tail |
 | colors | `line` | `#393D39` | menu row lines, empty bars, the ridden part |
-| colors | `accent` | `#FFA500` | the selected row, banners, frames in the editor |
+| colors | `accent` | `#FFA500` (approximately; 0xfd20 in the code) | the selected row, banners, frames in the editor |
 | colors | `on_accent` | `#000000` | text on the accent |
 | colors | `alarm` | `#FF0000` | alarm banners, the BACK button, bad readings |
 | colors | `on_alarm` | `#FFFFFF` | text on the alarm |
 | colors | `ok`, `warn` | `#00FF00`, `#FFFF00` | the strip's dots, the trainer's states |
-| colors | `ferris` | `#FF4D00` | Ferris |
+| colors | `ferris` | `#F74D00` | Ferris |
 | colors | `cog` | `#C5C2C5` | the overview's menu cog |
 | colors | `course` | `#CE00FF` | the course on the map |
 | colors | `zone1` to `zone7` | Intervals.icu's palette x 1.5 | zones, grade, gauge, W' balance, DFA a1, profiles |

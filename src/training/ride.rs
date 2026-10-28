@@ -8,7 +8,7 @@
 //!
 //! **Recorder hook.** Nothing here is stored: every change of state and every second of ride comes out as an
 //! [`Event`], and the app hands each one to one place (`App::recorder` in lib.rs), which feeds the recorder
-//! (recorder.rs). [`Ride::to_words`] goes into its recovery record, and [`Ride::resumed`] brings a ride back after
+//! (storage/recorder/mod.rs). [`Ride::to_words`] goes into its recovery record, and [`Ride::resumed`] brings a ride back after
 //! a reset.
 
 /// Where the ride is.

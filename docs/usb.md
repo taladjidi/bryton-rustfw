@@ -5,8 +5,8 @@ This page has what is known, what was tried, and what to ask or try next. Last u
 
 ## The hardware
 
-- **MCU:** STM32H747 (Cortex-M7 at 480 MHz). USB1 **OTG_HS** (0x40040000) with an **external ULPI PHY**. The PHY's
-  part number is not known yet (ghidra/HARDWARE.md, open questions).
+- **MCU:** STM32H747 (Cortex-M7 at 200 MHz as the bootloader leaves it; the part allows 480). USB1 **OTG_HS** (0x40040000) with an **external ULPI PHY**. The PHY's
+  part number is not known yet (bryton-S510-mods, ghidra/HARDWARE.md, open questions).
 - **ULPI pins, all AF10, very high speed, push-pull, no pull** (BOARD.md 4 and 7; the same as stock's HAL_PCD_MspInit
   0xd0298758):
 
@@ -129,8 +129,9 @@ Backup register 0 after a high-speed drop at the mount, read after the replug: `
   EXTI_CPUPR1 line 6 clear: the NVIC clear had landed before the EXTI write, the line pended it again, and nothing
   cleared it any more. The usb row only showed it because the link is polled once per WFI; without the cable the
   loop spins just the same, unmeasured. Timing decides it: about three runs in four of some builds, none of
-  others (adding a store after WFI hid it; `dsb` / `isb` around WFI did not). Fix: main.rs `touch_edge` reads CPUPR1 back after
-  clearing it and clears the NVIC pending bit on every call: 0 spins in 12 runs of two layouts that spun before.
+  others (adding a store after WFI hid it; `dsb` / `isb` around WFI did not). Fix, first step: main.rs `touch_edge` reads CPUPR1 back after
+  clearing it and clears the NVIC pending bit on every call: 0 spins in 12 runs of two layouts that spun before
+  (superseded: `sleep` now clears the NVIC pending bits, next paragraph).
   **The same again with the panel's DMA** (2026-10-27, after c5465b0): the cpu figure at 1006 permille, ISPR0 0x00000c00,
   ICSR.VECTPENDING 27 = IRQ 11 (DMA1 stream 0) with DMA1_LISR 0: `dma_wait` cleared the NVIC right after LIFCR, the
   line re-pended it, and nothing cleared it until the next transfer. 0 in 10 runs of the build at e923b23, but 5 in 6

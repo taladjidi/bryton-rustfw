@@ -19,7 +19,7 @@ that crept in.
   - Pages the rider adds (up to a sensible number) and edits live on the page, splitting and merging cells, instead
     of fixed layouts picked from a list. Done (2026-10-25, branch pages-editor): up to six pages of rows of one or
     two cells, the editor on the page (docs/features.md, "The page editor"). Left: the overview through the same
-    editor, pages switched off and reordered (UI review 2, 5.2 points 11 and 12), a MORE variant per page (5.3).
+    editor, pages switched off and reordered (features.md, The page editor), a MORE variant per page.
 
 Today `App` (src/lib.rs) holds menus as hard-coded row numbers (`activate` matching `(Menu::Main, 7 | 8)`), each
 Back has its own destination, and four mechanisms track what is on screen (`shown`, `main_shown`, `menu_shown`,
@@ -56,9 +56,10 @@ lower awake time (`dev.py info`).
 
 - **USB high speed** for the drive: the drops after 15 to 40 MB (docs/status.md); full speed works.
 - **Stop mode** between seconds, woken by the RTC, the keys, the touch interrupt, the radio chip's UART and USB:
-  the largest gain left. A core change: with the owner present.
-- **SPI by DMA** for the panel: the CPU sleeps while a map (about 130 ms at 8 MHz) goes out. The format of what is
-  drawn matters less than this.
+  the largest gain left. A core change: with the owner present. The plan and its wake sources: docs/power.md,
+  "Stop mode: plan".
+- **Idle loop at 250 ms and AUTO OFF:** done 2026-10-28 (docs/power.md).
+- **SPI by DMA** for the panel: done (2026-10-27, seen from RAM, SPI1 at 50 MHz); the next drawing gain is the D-cache.
 - **D-cache on for the SDRAM** (write-through), after which `+strict-align` can go. Until then, data the firmware
   scans (tiles, tracks, tables) is laid out word-aligned so it is read with 32-bit loads (`LDR`, `LDM`), never
   byte by byte.
@@ -77,15 +78,14 @@ The golden rule (AGENTS.md) depends on this whole phase.
    the scan's result kept (a cache file in our own folder, once there is a write path) so it is not read again
    at each start; stock's summaries (`.sum` / `.csum`) instead of whole rides for the totals, once their format
    is known.
-1. eMMC writes (done in the simulator, 2026-10-24): CMD24 / CMD25 + CMD12, CMD13 busy bounded, refused at or
-   past sector B. Not yet run on the unit.
+1. eMMC writes (done; seen on the unit 2026-10-24, docs/journal.md): CMD24 / CMD25 + CMD12, CMD13 busy bounded,
+   refused at or past sector B.
 2. FAT32 writes (done in the simulator): create with a long name, append, cut back, move, delete by 0xe5 only,
    both FAT copies, FSInfo, in an order a power cut can stop at any point (`fat/write.rs` module doc). Host tests
    cut the power after every sector.
-3. Ride recording (done in the simulator): `recorder.rs`, the ride in `\Rustfw`, a checkpoint at least every
-   minute, two recovery records, resume at boot, the save to `\Activities`. Next: on the unit with the owner
-   (docs/journal.md 2026-10-24); a reliable write (CMD23 bit 31) for the sectors rewritten in place; the track,
-   graphs and power totals of a resumed ride (only the ride's totals come back); HRV messages.
+3. Ride recording (done; seen on the unit 2026-10-24, docs/journal.md): `recorder.rs`, the ride in `\Rustfw`, a
+   checkpoint at least every minute, two recovery records, resume at boot, the save to `\Activities`. Next: the
+   track, graphs and power totals of a resumed ride (only the ride's totals come back).
    Two copies of each ride (done in the simulator): the clean one for stock, Bryton and Strava, and a full one
    with DFA a1 (`Alpha1`) and RMSSD as developer fields for Intervals.icu (docs/sync.md, "Why two files").
    `tools/sync.py` uploads them from the computer and brings the planned workouts back. Next: a run against the
@@ -187,9 +187,9 @@ From every ride on the shared volume (stock's and ours, AGENTS.md "Share the sto
   off-course alert, distance to go, ascent left; the course's elevation profile coloured by grade; **climb
   detection** (Garmin ClimbPro's definition: each climb's length, grade, what is left, a banner at its start).
 - **Done (sim):** climbs without a course, from stock's routing maps (climbs_ahead.rs, BIKE > CLIMBS AHEAD); the
-  climb pacer on a followed course (pacing.rs, the TOP field: constant-speed closed form from CP, W' and the weights).
-- **Next:** the way back to the course drawn, navigate to the start, reverse a course; a climb page that opens by
-  itself.
+  climb pacer on a followed course (pacing.rs, the TOP field: constant-speed closed form from CP, W' and the weights);
+  the CLIMB page, opened once at a climb's start (profile by grade, gain, length, grade).
+- **Next:** the way back to the course drawn, navigate to the start, reverse a course.
 - **Open: live segments without Strava**, from the rider's own rides: a segment found in a past ride (a climb, a
   stretch ridden often), the time against the best, on a field, with no service in between.
 - **Open: stock's Climb Challenge**, compared with our climbs ahead on the same ride (the climbs found, their

@@ -335,14 +335,14 @@ pub(crate) struct RampState {
     pub(crate) show: bool,
 }
 
-/// The ride recorders and what goes with the ride being recorded (app/riding.rs, storage/recorder.rs).
+/// The ride recorders and what goes with the ride being recorded (app/riding.rs, storage/recorder/mod.rs).
 pub(crate) struct Recording {
     /// The ride recorder (FIT file, checkpoints, save); a ride to look for on the card at the first step is
     /// `resume_pending`.
     pub(crate) clean: recorder::Recorder,
     /// A ride is left open on the card for `clean`.
     pub(crate) resume_pending: bool,
-    /// The ride's full copy (developer fields: recorder.rs, "Two copies"), driven after `clean`.
+    /// The ride's full copy (developer fields: storage/recorder/mod.rs, "Two copies"), driven after `clean`.
     pub(crate) full: recorder::Recorder,
     /// A ride of its own to look for on the card once the clean one's is found.
     pub(crate) full_pending: bool,

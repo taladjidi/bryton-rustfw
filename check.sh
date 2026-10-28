@@ -32,10 +32,10 @@ if "$PY" -c 'import fitdecode, garmin_fit_sdk' 2>/dev/null; then
 else
     echo "fit_check: fitdecode / garmin-fit-sdk not installed, skipped (FIT_PYTHON)"
 fi
-# The firmware on Renode's STM32H747 (renode/run.py), when Renode is installed (AGENTS.md, Emulation).
+# The firmware on Renode's STM32H747 (renode/run.py), when Renode is installed (docs/devloop.md, Emulation).
 export RENODE="${RENODE:-/Applications/Renode.app/Contents/MacOS/renode}"
 if command -v "$RENODE" >/dev/null 2>&1; then
     python3 renode/run.py && python3 renode/run.py --vbus && python3 renode/run.py --off
 else
-    echo "renode: not found, emulator checks skipped (AGENTS.md, Emulation)"
+    echo "renode: not found, emulator checks skipped (docs/devloop.md, Emulation)"
 fi

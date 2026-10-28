@@ -58,14 +58,14 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `pack.py` prints: about 390 KB (2026-10-26, with the road ahead; stock's is over 3 MB). Size costs little here
+  - watch the image size `pack.py` prints: about 625 KB (2026-10-28; stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it was held in main's frame several times over (111 KB) and opening a workout overflowed the
   stack (2026-10-24). `tools/stack_check.py` (check.sh) fails when a function's frame passes its budget: keep big
   buffers in their own non-inlined function, never in main's. AXI SRAM (512 KB) holds the app, the courses, the scan's
-  cache and the road ahead (2026-10-26: about 28 KB left; link.x says what is where); a static there must start as all
+  cache and the road ahead (about 15 KB left on 2026-10-28; link.x says what is where); a static there must start as all
   zeros (an `Option` of a reference or a struct with a bool niche does not) or it lands in `.data`, in DTCM.
   The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road ahead inflates tiles into.
 - **USB costs power** (VOS1, the PHY, the core), so it runs only while a cable is in: started when PC13 goes
@@ -108,7 +108,7 @@ The point of this project is a firmware in safe Rust.
   - The two `'static` USB buffers are `StaticCell`s, which are initialised once and checked.
   - Raw pointers appear only in hw.rs.
 - **Panics:** no `unwrap` / indexing that can fail on the firmware path, unless it is provably in range. A panic
-  parks the CPU (the panic handler), so the screen freezes.
+  marks the fault and resets the unit (hw.rs `default_handler`; it parks after 3 resets in a row without a minute of running), so a ride resumes from its checkpoint; still, no panics on the firmware path.
 
 ## Layout: logic in the library, transport in the board
 
@@ -122,7 +122,7 @@ Folders sort the files; the modules keep their own names (`crate::ambient`, re-e
 - `src/link/`: the USB dev link, USB mass storage and the phone link's formats;
 - `src/storage/`: FAT, FIT, and what stock left on the volume;
 - `src/board/`: the binary's own modules, hw.rs (all the `unsafe`) and usb.rs.
-- Each folder's module root is its `mod.rs` (`src/drivers/mod.rs`, ...); lib.rs re-exports the modules of `drivers`, `storage`, `ui`,
+- Each folder's module root is its `mod.rs` (`src/drivers/mod.rs`, ...); lib.rs re-exports the modules of `drivers`, `storage`, `ui`, `training`, `nav` and `link` at the crate root, so paths stay `crate::ride`. `src/sim/` is the tests' simulator (`Sim`).
 - `src/lib.rs`: the `Board` trait and `App`: its state, `App::start`, `App::step` (the main loop's pass). Keep it
   to that: a new concern goes in its own file in `src/app/`, one `impl App` block each; modules are re-exported whole
   from lib.rs, so paths stay `crate::Settings`; a method another file calls is `pub(crate)`.
@@ -179,9 +179,12 @@ It runs, in order:
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);
 - `cargo clippy --release -- -D warnings`, and on the tests and the simulator;
 - `cargo test-host` (unit tests, simulator tests and doc tests on the Mac; writes `target/sim/preview.bmp`);
+- `RUSTDOCFLAGS="-D warnings" cargo doc` (no broken or private links);
+- `cargo deny check` (when installed);
 - the firmware build;
+- `tools/stack_check.py` (the stack frames against their budgets);
 - `pack.py`;
-- `dev.py selftest`, `tools/sync.py selftest`;
+- `dev.py selftest`, `tools/sync.py selftest`, `tools/s810_probe.py selftest`, `tools/route_pack.py selftest`;
 - `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python);
 - if Renode is installed: `renode/run.py`, `renode/run.py --vbus` and `renode/run.py --off` (docs/devloop.md, Emulation).
@@ -191,9 +194,9 @@ the `font_sheet` test) when choosing a text size.
 
 ## Tests
 
-- **Unit tests:** in `#[cfg(test)] mod tests` at the bottom of each file. `ui.rs` tests draw into a framebuffer
+- **Unit tests:** in `#[cfg(test)] mod tests` at the bottom of each file. `src/ui/` tests draw into a framebuffer
   that panics on any off-screen fill.
-- **Simulator tests (`sim.rs`):** the whole app runs against `Sim`, a fake `Board`.
+- **Simulator tests (`src/sim/`):** the whole app runs against `Sim`, a fake `Board`.
   - **The panel model** checks the command bytes as the real ST7789 would see them: powered, pixel format,
     RAMCTRL routing, window bounds, pixel count. It paints its framebuffer from RAMWR.
   - **Time:** the RTC advances with the delays.
@@ -204,7 +207,7 @@ the `font_sheet` test) when choosing a text size.
   - Test behaviour, not implementation: what is on screen, what a key sequence does.
   - When a bug is found, write the test that catches it first.
 - **Doc tests:** small examples in `///` comments of pure functions; they double as documentation.
-- **Dev protocol:** `sim.rs` `dev_tests` drive `Session` with a fake computer (`Pc`).
+- **Dev protocol:** `src/sim/dev_tests.rs` drive `Session` with a fake computer (`Pc`).
   - A screenshot must equal the simulated panel.
   - A good image loads.
   - Bad ones are refused (checksum, tag, sizes).
@@ -314,4 +317,4 @@ Rules from it:
   - there is no SWD probe, so no defmt / RTT;
   - a UART or a log file on the eMMC is the likely channel.
 - Integration tests in `tests/` for multi-module behaviour, still on the host.
-- CI (GitHub Actions running check.sh) if the project goes public.
+- CI (GitHub Actions running check.sh).

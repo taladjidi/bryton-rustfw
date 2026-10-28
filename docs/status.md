@@ -2,7 +2,7 @@
 
 ## Seen on the unit
 
-Everything in [features.md](features.md) runs on the unit (2026-10-23), installed or from RAM, unless listed below.
+[features.md](features.md) lists what the firmware does. This file lists what the unit has not shown yet; a feature not listed here was seen on the unit.
 The dated findings are in [journal.md](journal.md).
 
 ## Seen on the unit: eMMC writes and the recorder (2026-10-24, from RAM, owner present)
@@ -429,6 +429,10 @@ build (POWER_STEPS=15) gives the wall time.
 - **Stock reading this firmware's rides** (\Activities\261024083403.fit, 261024083931.fit) and the Bryton app's sync.
 - **The power button starts the unit after a switch-off:** fixed in ea359a0 (IRQ 149 enabled before standby), seen
   on the unit 2026-10-25, installed and unplugged.
+- **AUTO OFF** (SYSTEM > AUTO OFF): sim only. On the unit: 5 min idle on battery gives the banner and beeps at 10 s and
+  5 s, a key or touch cancels, the unit powers off; never with a ride or recorder busy, a cable in, the drive lent, a
+  write waiting, or movement; the power button starts it again; the setting survives a restart (register 18 bits
+  22..24).
 
 - **New since the installed build, seen only from RAM or in the simulator (2026-10-24):** touch gestures by feel and
   their axes; the overview and its notices; banners (ride start, pause, lap, end); eleven page layouts; graphs (five
@@ -436,13 +440,14 @@ build (POWER_STEPS=15) gives the wall time.
   RMSSD from the owner's strap (needs a few minutes of real beats); the AUTO backlight on stock's curve, outdoors.
 - **Pages moved off backup register 19** (stock reads it at boot): the first start of a new build moves them; then
   stock, reinstalled, should keep its last battery voltage as before.
-- **2026-10-27:** the power-average tap during a ride; the CLIMBING page appearing at a climb (course and climbs ahead); the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`), and the crosshair toggling the whole route; the cog opening settings during a ride.
+- **2026-10-27:** the power-average tap during a ride; the CLIMB page appearing at a climb (course and climbs ahead); the map's 1 km default view following the rider, its redraw cost on the unit (`dev.py prof`), and the crosshair toggling the whole route; the cog opening settings during a ride.
 - **COURSE page while riding:** the screenshot differs from the panel at row 137, x 4 (found 2026-10-27, the consistency check is skipped on that page in `climb_page_in_the_round`). The map test's course pixel count varied (83 to 281) between runs of the simulator, which should be deterministic: to look into.
 
 ## Next steps
 
-1. **Stop mode** between seconds (woken by the RTC, the keys, the radio chip's UART, USB): the largest battery
-   gain left. A core change, tried with the owner present.
+1. **Stop mode** between passes: plan and wake sources in docs/power.md (Stop mode: plan); the 250 ms idle loop is
+   merged, still to see on the unit.
 2. **USB high speed** for the drive: the drops after 15 to 40 MB (above); full speed works.
 3. **A settings file** to free the backup registers (docs/roadmap.md).
 4. The new features above, on the unit, as the owner rides them.
+5. D-cache on for the SDRAM (hw.rs PanelDma cache contract), the next drawing gain.

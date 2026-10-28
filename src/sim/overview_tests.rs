@@ -1,4 +1,4 @@
-//! The overview's TODAY card and the WORKOUTS list's profile thumbnails on the Sim (ui.rs `draw_today`,
+//! The overview's TODAY card and the WORKOUTS list's profile thumbnails on the Sim (src/ui/overview.rs `draw_today`,
 //! `draw_workout_row`, app/workouts.rs): what is drawn, the tap, the zones' colours, the cost.
 
 use super::tests::assert_consistent as consistent;

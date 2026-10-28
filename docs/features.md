@@ -139,13 +139,15 @@
 
 The power button starts it again. After the backlight's time-out, any key brings it back. A fresh unit (no saved
 settings) starts with BRIGHTNESS AUTO and OFF AFTER 30 S; saved settings, or stock's imported, keep theirs.
+AUTO OFF (SYSTEM > AUTO OFF: off, or after 5, 10, 30 or 60 min idle) switches the unit off with no ride, cable, drive
+or write waiting and no movement; details: docs/power.md.
 
 - **Menus:** rows 44 px tall (about 8 mm, a fingertip), six a screen, a longer menu turned a screen at a time;
   a "<" left of the title goes back. The selected row is black on orange (10:1 contrast; white on that orange was
   2:1); a row's value is white like its label, green when it says a state that is on (a sensor heard, the phone
   linked).
 
-- **The page editor** (app/editor.rs; UI review 2, 5.2): a hold on a ride page's box, PAGES > a page > EDIT ON
+- **The page editor** (app/editor.rs): a hold on a ride page's box, PAGES > a page > EDIT ON
   PAGE, or RIDE > EDIT THIS PAGE while paused; never while a ride records (recording again behind it closes it,
   its work kept). The page shows at its real size with live values, the selected box in a 3 px orange frame, and
   the hint in the strip's place ("PAGE 2  START: MENU"):
@@ -230,7 +232,7 @@ Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into t
   values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
-- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and climbing pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window; the quick panel's watts stay 3 s.
+- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and CLIMB pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window; the quick panel's watts stay 3 s.
 - Power (src/training/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
@@ -452,6 +454,7 @@ TrainingPeaks), read only:
   the card. RAMP TEST keeps its plain row. Select
   shows the workout's steps, its name as the title: what ends each step (a time, a distance, or LAP) and its target
   (power in W from % FTP, heart rate in bpm from % max HR, cadence), coloured by zone; repeats are written out.
+- **DONE:** a planned workout shown as done on the TODAY card (a tick and DONE) and in WORKOUTS (a tick).
 - **START** (or Select on a step: from that step) starts the workout, and the ride if none runs, on page 1. The
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
   left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
@@ -494,7 +497,7 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
-- **Climbing page:** when a climb is announced (a followed course, or climbs ahead without one) a CLIMBING page (altitude graph, climb, gain to the top, grade, VAM, the pacer or the ascent without a course) joins the ride pages one Page press after the page shown then, until the top; not added when one of the rider's pages already shows climb fields.
+- **CLIMB page:** opens once at a climb's start (a followed course, or climbs ahead without one): the climb's profile coloured by grade with the part done darker, gain, length and grade on it, the grade and the climb coach below; not added when one of the rider's pages already shows climb fields.
 - **Climb pacer** (pacing.rs, the TOP field, on the course page in place of the distance): within 5 km of a climb
   and on it, the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
   rider's bests when it is trusted, else FTP and the W' setting, taken at the ride's start and kept to its end: it
@@ -611,14 +614,13 @@ STOCK):
   through power off, so a friend's is never taken. A silent sensor searches 30 s, then rests a minute, then 2,
   then 4 minutes at most while it stays away (a ride's Start, or the sensor heard, starts over from a minute). Needs the
   ANT+ key from your own stock firmware ([install.md](install.md)).
-- **Power meter calibration** (SENSORS > CALIBRATE POWER, offered while the power meter is paired and heard; not
-  yet seen on the unit): the screen says UNCLIP, CRANKS VERTICAL, NO PRESSURE; Start (or the CALIBRATE button) sends
+- **Power meter calibration** (SENSORS > CALIBRATE POWER, offered while the power meter is paired and heard): the screen says UNCLIP, CRANKS VERTICAL, NO PRESSURE; Start (or the CALIBRATE button) sends
   the ANT+ Bicycle Power calibration request (page 0x01, id 0xAA, as an acknowledged message, sent again if the air
   loses it) and waits 10 s for the meter: ZERO OFFSET with the number (and WAS, the offset before it this session),
   FAILED, or NO ANSWER. Once the meter has said it supports auto zero, an AUTO ZERO ON / OFF button (Page or Lap
   too) sends the configuration and shows the state the meter confirms. Not while a ride runs (a notice; paused is
   fine). Layouts and sources: src/drivers/powercal.rs.
-- **Electronic shifting** (not yet seen on the unit): **DI2** (Shimano's own ANT channel, as stock and the patched
+- **Electronic shifting:** **DI2** (Shimano's own ANT channel, as stock and the patched
   stock firmware's P12 use it; needs Shimano's network key, copied from your stock image with the ANT+ one by
   `tools/ant_key.py`) and **SHIFTING** (the public ANT+ Shifting profile: SRAM AXS, Campagnolo), paired from the
   sensors menu; one shifting system at a time (pairing one forgets the other). Fields (group SHIFTING): **GEAR**
@@ -650,11 +652,11 @@ STOCK):
 
 The settings live in the RTC backup registers (32 words kept through standby and a reset; the table is in
 `src/app/settings.rs`), each word behind a tag so an empty or foreign one reads as unset, and earlier tags are still
-read. All 32 are taken (the two diagnostics share 0 and 31), so a new setting needs the settings file (roadmap 3.4).
+read. All 32 are taken (the two diagnostics share 0 and 31), so a new setting needs the settings file (roadmap section 3, item 4).
 - **11:** wheel, backlight, max HR, FTP, touch, ride profile, climbs ahead; tag 0xa7 (AUTO), 0xa8 (ROAD), 0xa9 (INDOOR),
-  0xaa to 0xac the same with CLIMBS AHEAD off.
+  0xaa to 0xac the same with CLIMBS AHEAD off. MTB reads as AUTO here; it is kept in register 16 bit 27.
 - **16, tag 0xa:** the rider's weight less 30 kg in bits 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the
-  bike's weight in 100 g in 16..23 (0: the 9.0 kg default), the smooth font in bit 24. Read from earlier builds: tag
+  bike's weight in 100 g in 16..23 (0: the 9.0 kg default), the smooth font in bit 24, the MTB profile in bit 27. Read from earlier builds: tag
   0xb (bike in kg, the single presses' actions), tag 0xc1 (weight in kg, W', window, actions; no bike weight, read as
   the default).
 - **28, tag 0x9:** the eat and drink reminders in 5 min steps (bits 0..4 and 8..12), the long presses' actions (5..7,
@@ -662,6 +664,7 @@ read. All 32 are taken (the two diagnostics share 0 and 31), so a new setting ne
   builds: tag 0xc2 (the heart rate in bpm, the single presses in register 16).
 - **Others:** 5..8 and 10 the paired ANT+ sensors, 14 the shifting system, 17 and 18 the GNSS aiding, 20..27 the ride
   pages and the overview (0xd / 0xe), 29 the fault marker, 30 a ride open on the card.
+- **18, tags 0xa or 0x5:** AUTO OFF in bits 22..24 (an index into the AUTO OFF choices, 0 off), kept through a restart.
 
 ## Phone (BLE, no app)
 

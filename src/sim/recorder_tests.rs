@@ -1,4 +1,4 @@
-//! The ride recorder (recorder.rs) in the app, on the simulated card with the synthetic volume.
+//! The ride recorder (storage/recorder/mod.rs) in the app, on the simulated card with the synthetic volume.
 
 use super::*;
 

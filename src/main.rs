@@ -1663,7 +1663,7 @@ const EMMC_WRITE: bool = match option_env!("EMMC_WRITE") {
     None => false,
 };
 
-/// Boot stage at which a diagnostic build stops: `DIAG_STOP=n cargo build --release` (0: never; AGENTS.md layer 6).
+/// Boot stage at which a diagnostic build stops: `DIAG_STOP=n cargo build --release` (0: never; docs/devloop.md layer 6).
 const STOP: u32 = match option_env!("DIAG_STOP") {
     Some(s) => parse_u32(s),
     None => 0,

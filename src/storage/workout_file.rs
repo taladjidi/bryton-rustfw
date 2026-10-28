@@ -29,7 +29,7 @@
 //! file, value - 100000 is the percentage the .json beside it gives for that step ("ramp 42-71%" for 100042 and
 //! 100071, say); `wkt_name` is cut at 15 characters (the .json has the whole name).
 //!
-//! Nothing here panics or loops on any input (fuzzed in sim.rs `fuzz`): every index is checked, every loop is
+//! Nothing here panics or loops on any input (fuzzed in src/sim/fuzz.rs): every index is checked, every loop is
 //! bounded by the buffer or [`STEPS`].
 
 use crate::fat::{self, Disk, Fat, File};

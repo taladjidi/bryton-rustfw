@@ -2,7 +2,7 @@
 //! the EXT_CSD, single and multi-block reads and writes, and stock's layout derived from SEC_COUNT.
 //!
 //! The protocol (JEDEC eMMC) lives here, against five [`Board`] primitives: power the controller on, set the bus,
-//! send a command, read or write blocks through the FIFO. `sim.rs` has a model of the card (`EmmcCard`).
+//! send a command, read or write blocks through the FIFO. `src/sim/` has a model of the card (`EmmcCard`).
 //!
 //! **Writes** ([`Card::write`]): only inside stock's FAT volume, sectors 0 .. B-1 ([`Layout::fat_end`]); a write
 //! that reaches B or beyond (the factory image, the calibration, the fonts, the OS) is refused here, before any
@@ -316,7 +316,7 @@ impl Emmc {
     }
 
     /// Lends the card write protected (MODE SENSE says so, a write fails before any command): while a ride's save
-    /// cannot finish (recorder.rs, stuck), for the owner to copy what is on the card without a computer's fsck
+    /// cannot finish (storage/recorder/mod.rs, stuck), for the owner to copy what is on the card without a computer's fsck
     /// touching the ride's chain.
     pub fn lend_read_only(&mut self) {
         (self.lent, self.read_only) = (true, true);

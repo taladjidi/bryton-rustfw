@@ -11,7 +11,7 @@
 //!   and the numbers: the session's (time, distance, ascent, average power and heart rate) and the records' (NP
 //!   with [`crate::power`]'s method, a record a second; maximum heart rate; work). TSS with the FTP set now.
 //!
-//! The file content is untrusted (fuzzed in sim.rs `fuzz`): every loop is bounded by the file's size (at most
+//! The file content is untrusted (fuzzed in src/sim/fuzz.rs): every loop is bounded by the file's size (at most
 //! [`MAX_BYTES`]) or a fixed array, nothing indexes unchecked. Read only, as all of the FAT reader; a ride is
 //! deleted (moved out of sight, kept) by [`crate::trash`].
 

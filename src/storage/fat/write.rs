@@ -40,7 +40,7 @@
 //! Why own code and not a crate (checked 2026-10-24): `embedded-sdmmc` 0.9 creates 8.3 names only (stock's ride
 //! names, `YYMMDDhhmmss.fit`, need a long name), wants an MBR (the unit has none), and its write order is not
 //! documented: whether a cut leaves a free cluster in a chain is what this module must be able to say and test
-//! (sim.rs `recorder_tests` cut the power after every sector). `fatfs` needs `std` or nightly `core_io`. This is
+//! (src/sim/recorder_tests.rs cut the power after every sector). `fatfs` needs `std` or nightly `core_io`. This is
 //! about 450 lines with no heap, every loop bounded by the volume's cluster count or FAT's 65536 entries a
 //! directory.
 #![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::cast_possible_truncation))]

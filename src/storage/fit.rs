@@ -20,7 +20,7 @@
 //! [`Writer::checkpoint`]: it writes the trailer and header from the record and cuts the file to that length,
 //! which gives the checkpoint's file back exactly (the data before it was never rewritten). Recording goes on.
 //! The caller keeps two copies of the record (old / new) and takes the valid one with the larger sequence number
-//! (recorder.rs: never the larger [`Writer::data_len`], so a finished ride's record cannot pass for a new ride's).
+//! (storage/recorder/mod.rs: never the larger [`Writer::data_len`], so a finished ride's record cannot pass for a new ride's).
 //! Doing this twice is harmless.
 //!
 //! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 11 (MTB), bit 12 (the full
@@ -44,7 +44,7 @@
 //! The file CRC covers the header too, and the header changes with the size: [`crc_combine`] joins the header's
 //! CRC to the running data CRC in about 400 steps, whatever the file length, so a checkpoint never reads the file.
 //!
-//! **Developer fields** ([`Writer::begin_with`] `dev`): the full copy of a ride (recorder.rs) is protocol 2.0 with,
+//! **Developer fields** ([`Writer::begin_with`] `dev`): the full copy of a ride (storage/recorder/mod.rs) is protocol 2.0 with,
 //! after file_id, a `developer_data_id` (207: application_id, developer_data_index 0) and three `field_description`s
 //! (206: developer_data_index, field_definition_number, fit_base_type_id, field_name, units, native_mesg_num 20),
 //! `Alpha1` (float32, no units: the name Intervals.icu reads DFA a1 from, as AlphaHRV writes it,

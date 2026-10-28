@@ -1,6 +1,6 @@
 //! Everything the firmware does, written against [`Board`]: the few operations that touch hardware.
 //!
-//! `main.rs` implements [`Board`] with registers on the unit; `sim.rs` implements it on the host, with a model
+//! `main.rs` implements [`Board`] with registers on the unit; `src/sim/` implements it on the host, with a model
 //! of the panel, so the whole app (power-up sequence, drawing protocol, clock, keys, power off) runs in
 //! `cargo test-host`. Rule: logic goes here, `main.rs` only moves bytes and reads pins (AGENTS.md).
 //!

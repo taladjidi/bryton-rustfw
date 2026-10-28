@@ -29,7 +29,7 @@
 //! cutting the power after every sector written (below).
 //!
 //! **The FAT sync** (`Fat::sync_fats`, both FATs read whole: 3 to 4 s on the owner's 15 MB, estimated) runs in one
-//! call, as the recorder's (recorder.rs, "After a cut"): only at the first delete on a card (the folders made) and
+//! call, as the recorder's (storage/recorder/mod.rs, "After a cut"): only at the first delete on a card (the folders made) and
 //! when a cut left a move pending, before any chain is read; spreading it would leave a move half known across
 //! passes.
 
