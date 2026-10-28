@@ -501,7 +501,9 @@ impl Settings {
 
     /// Self with AUTO OFF from register 18 ([`AUTO_OFF_MIN`]): anything out of range, or unset, is the default.
     pub fn with_auto_off_word(self, w: u32) -> Settings {
+        // only a word the aiding wrote (its tag 0xa or 0x5): an older build rewriting the register leaves zeros
         match (w >> 22 & 7) as usize {
+            _ if !matches!(w >> 28, 0xa | 0x5) => self,
             i @ 1..=5 => Settings { auto_off: i - 1, ..self },
             _ => self,
         }

@@ -78,6 +78,8 @@ pub(crate) struct Light {
     pub(crate) shown: u8,
     /// Since the last key press.
     pub(crate) idle_ms: u32,
+    /// The AUTO OFF warning is up: the light stays on though timed out.
+    pub(crate) wake: bool,
     /// The automatic backlight's state (ambient.rs).
     pub(crate) auto: ambient::Auto,
     /// The level it asks for.
@@ -94,6 +96,7 @@ impl Light {
         Light {
             shown: 0,
             idle_ms: 0,
+            wake: false,
             auto: ambient::Auto::default(),
             auto_level: LIGHT_LEVELS[1],
             ms: LIGHT_MS,
@@ -430,6 +433,8 @@ mod tests {
 pub(crate) struct AutoOff {
     /// The RTC second last counted (255: none yet).
     pub(crate) seen: u8,
+    /// Seconds left of the 60 s that movement keeps the unit on.
+    pub(crate) hold: u8,
     /// Seconds in a row with nothing keeping the unit on.
     quiet_s: u32,
 }
@@ -448,7 +453,7 @@ pub(crate) enum OffStep {
 impl AutoOff {
     /// Not counting.
     pub(crate) const fn new() -> Self {
-        AutoOff { seen: 255, quiet_s: 0 }
+        AutoOff { seen: 255, hold: 0, quiet_s: 0 }
     }
 
     /// One second gone: `quiet` when nothing keeps the unit on (any input or reason restarts the count); `min`

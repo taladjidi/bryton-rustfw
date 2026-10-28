@@ -23,12 +23,16 @@ fn idle_five_minutes_switches_off_with_a_warning() {
     assert!(sim.standby && !sim.display_on);
 }
 
+/// A Page key held for 120 ms from `at` ms (the sim's clock), read by the main loop as on the unit.
+fn page_at(sim: &mut Sim, at: u64) {
+    sim.keys = Box::new(move |t| if (at..at + 120).contains(&t) { Key::Page as u8 } else { 0 });
+}
+
 #[test]
 fn a_key_or_a_cable_restarts_the_count() {
     let (mut sim, mut app) = fresh();
-    run(&mut sim, &mut app, 299_000);
-    app.press(&mut sim, Press::Short(Key::Page));
-    app.light.idle_ms = 0; // the main loop's key poll does this
+    page_at(&mut sim, 299_000);
+    run(&mut sim, &mut app, 299_500);
     run(&mut sim, &mut app, 290_000);
     assert!(!sim.standby, "a key at 4:59 restarted it");
     sim.charger = true;
@@ -38,6 +42,53 @@ fn a_key_or_a_cable_restarts_the_count() {
     run(&mut sim, &mut app, 290_000);
     assert!(!sim.standby, "the count started again at the unplug");
     run(&mut sim, &mut app, 20_000);
+    assert!(sim.standby);
+}
+
+#[test]
+fn the_warning_lights_the_screen_and_a_key_cancels() {
+    let (mut sim, mut app) = fresh();
+    app.settings.light_timeout = 1; // 10 s
+    run(&mut sim, &mut app, 296_000);
+    assert!(app.notes.text.as_str() == "SWITCHING OFF" && app.light.shown > 0, "warned, light on");
+    let at = sim.ms + 100;
+    page_at(&mut sim, at);
+    run(&mut sim, &mut app, 250_000);
+    assert!(!sim.standby, "a key cancelled it");
+}
+
+/// Movement of any kind keeps it on, and it goes 60 s after the last, then 5 min of quiet.
+#[test]
+fn movement_keeps_it_on() {
+    use crate::sensors::Metric;
+    for which in 0..3 {
+        let (mut sim, mut app) = fresh();
+        for _ in 0..400 {
+            match which {
+                0 => app.live.set(Metric::Speed, 250), // riding without Start: GPS or sensor speed
+                1 => app.live.set(Metric::Power, 150),
+                _ => app.live.set(Metric::Cadence, 80),
+            }
+            run(&mut sim, &mut app, 1000);
+        }
+        assert!(!sim.standby, "moving {which}: never");
+        run(&mut sim, &mut app, 300_000);
+        assert!(!sim.standby, "60 s of grace after the last movement");
+        run(&mut sim, &mut app, 80_000);
+        assert!(sim.standby, "still for 5 min: off");
+    }
+}
+
+/// Pairing, the altitude calibration and the pages wait to be written: never off meanwhile.
+#[test]
+fn files_waiting_keep_it_on() {
+    let (mut sim, mut app) = fresh();
+    app.card_writable = false;
+    app.sensors_store.dirty = true;
+    run(&mut sim, &mut app, 400_000);
+    assert!(!sim.standby, "pairing pending");
+    app.sensors_store.dirty = false;
+    run(&mut sim, &mut app, 310_000);
     assert!(sim.standby);
 }
 

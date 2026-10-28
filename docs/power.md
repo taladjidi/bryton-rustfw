@@ -152,7 +152,7 @@ sheets, at their test conditions), none was measured on the unit.
 - **Measured 2026-10-28: 12.2 h idle on the overview cost about 41 % of the battery.** So SYSTEM > AUTO OFF (OFF, 5,
   10, 30, 60 min; default 5) switches the unit off after that long with no ride open, no cable, no key or touch, the
   drive not lent and no write waiting; a banner and beep warn 10 s and 5 s before, any input cancels (`step_auto_off`,
-  kept in register 18 bits 22..24).
+  kept in register 18 bits 22..24; an older build rewriting that register resets it to 5 min).
 
 ## Measurement plan (for the owner)
 
