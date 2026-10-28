@@ -259,6 +259,7 @@ impl App {
             || self.live.get(Metric::Cadence).is_some_and(|v| v > 0)
             || self.live.get(Metric::Power).is_some_and(|v| v > 0)
             || self.tlink.up
+            || self.radio.heard_ms[Kind::Trainer as usize] < sensors::STALE_MS
             || self.ftms.conn.is_some();
         self.auto_off.hold = if moving { 60 } else { self.auto_off.hold.saturating_sub(1) };
         let quiet = quiet && self.auto_off.hold == 0;

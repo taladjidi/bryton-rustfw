@@ -69,6 +69,30 @@ fn read_only_build_does_not_touch_the_card() {
     assert!(sim.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
 }
 
+/// A read-only build (a RAM run) that boots with a ride left open never clears its marker; a writable build then
+/// resumes the ride.
+#[test]
+fn a_read_only_build_leaves_the_open_ride_marker() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    sim2.writable = false;
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, 60_000);
+    assert_eq!(sim2.backup[RIDE_BKP], RIDE_OPEN, "the marker kept");
+    let (mut sim3, mut app) = reboot(&mut sim2, 5);
+    run(&mut sim3, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+}
+
 /// The record times of the ride file at `path` on the volume `img`.
 fn record_times(img: &[u8], path: &str) -> Vec<u32> {
     let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
@@ -739,27 +763,23 @@ fn a_workout_records_a_lap_per_step() {
     assert_eq!(lap_count(&file), 8);
 }
 
-/// AUTO OFF never switches off while the recorder holds a ride: a resume the card keeps refusing, a save that
-/// keeps failing; then, once it is saved and closed, it does (the golden rule).
+/// AUTO OFF never switches off while the recorder holds a ride: a save that keeps failing holds it (the recorder
+/// itself does not retry after a failed end: the rider's GIVE UP SAVE closes it).
 #[test]
 fn auto_off_waits_for_the_recorder() {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::fat::tests::image();
-    let mut app = App::start(&mut sim, None);
-    run(&mut sim, &mut app, 2000);
-    app.press(&mut sim, Press::Short(Key::Start));
-    run(&mut sim, &mut app, 70_000);
-    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
-    app.settings.auto_off = 1;
-    let (mut sim2, mut app) = (sim, app);
-    // ended with every write failing, so the save keeps retrying
-    sim2.emmc.bad.push(0..u32::MAX);
-    save_ride(&mut sim2, &mut app);
-    crate::sim::tests::back(&mut sim2, &mut app);
-    run(&mut sim2, &mut app, 400_000);
-    assert!(!sim2.standby, "a save retrying after its screen closed");
-    sim2.emmc.bad.clear();
-    run(&mut sim2, &mut app, 700_000);
-    // a save that gave up stays: only the rider's GIVE UP SAVE (or a retry that works) lets the unit go
-    assert!(!sim2.standby || sim2.backup[RIDE_BKP] == 0, "off only once the ride is closed");
+    {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 70_000);
+        assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+        app.settings.auto_off = 1;
+        sim.emmc.bad.push(0..u32::MAX); // every write fails: the save keeps retrying
+        save_ride(&mut sim, &mut app);
+        crate::sim::tests::back(&mut sim, &mut app);
+        run(&mut sim, &mut app, 400_000);
+        assert!(!sim.standby, "a save retrying after its screen closed");
+    }
 }

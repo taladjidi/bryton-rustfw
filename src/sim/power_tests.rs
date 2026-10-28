@@ -61,13 +61,14 @@ fn the_warning_lights_the_screen_and_a_key_cancels() {
 #[test]
 fn movement_keeps_it_on() {
     use crate::sensors::Metric;
-    for which in 0..3 {
+    for which in 0..4 {
         let (mut sim, mut app) = fresh();
         for _ in 0..400 {
             match which {
                 0 => app.live.set(Metric::Speed, 250), // riding without Start: GPS or sensor speed
                 1 => app.live.set(Metric::Power, 150),
-                _ => app.live.set(Metric::Cadence, 80),
+                2 => app.live.set(Metric::Cadence, 80),
+                _ => app.radio.heard_ms[crate::sensors::Kind::Trainer as usize] = 0, // a trainer heard
             }
             run(&mut sim, &mut app, 1000);
         }
@@ -127,4 +128,24 @@ fn the_setting_round_trips_in_register_18() {
         assert_eq!(aid, app.gps.aid, "the aiding reads as before");
     }
     assert_eq!(Settings::from_word(0).with_auto_off_word(0).auto_off, 1, "an older word: 5 min");
+}
+
+/// The recorder's holds, each alone: never off, and off within 310 s once cleared.
+#[test]
+fn the_recorders_holds_keep_it_on() {
+    for which in 0..2 {
+        let (mut sim, mut app) = fresh();
+        let hold = |_: &mut Sim, app: &mut App, on: bool| match which {
+            0 => app.rec.resume_pending = on,
+            _ => app.rec.full_pending = on,
+        };
+        for _ in 0..400 {
+            hold(&mut sim, &mut app, true); // the recorder clears its own flags: held each second
+            run(&mut sim, &mut app, 1000);
+        }
+        assert!(!sim.standby, "hold {which}: never");
+        hold(&mut sim, &mut app, false);
+        run(&mut sim, &mut app, 310_000);
+        assert!(sim.standby, "hold {which} cleared: off");
+    }
 }
