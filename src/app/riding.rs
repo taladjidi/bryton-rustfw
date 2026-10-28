@@ -419,7 +419,8 @@ impl App {
         }
         self.step_full(b, local);
         let open = self.rec.clean.phase() != recorder::Phase::Done || self.rec.full.phase() != recorder::Phase::Done;
-        if !self.rec.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
+        // a build that cannot write the card never clears the marker of a ride left open
+        if self.card_writable && !self.rec.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
             b.backup_write(RIDE_BKP, if open { RIDE_OPEN } else { 0 });
         }
     }

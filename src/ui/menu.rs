@@ -73,6 +73,8 @@ pub enum Setting {
     Light,
     /// Backlight time-out (a choice of [`crate::LIGHT_TIMEOUTS_S`]).
     LightOff,
+    /// AUTO OFF (a choice of [`crate::AUTO_OFF_MIN`]).
+    AutoOff,
     /// The touch panel on or off (keys always work).
     Touch,
     /// Max heart rate (a number).
@@ -186,6 +188,7 @@ impl Setting {
             Setting::Wheel => "WHEEL",
             Setting::Light => "BRIGHTNESS",
             Setting::LightOff => "OFF AFTER",
+            Setting::AutoOff => "AUTO OFF",
             Setting::Touch => "TOUCH",
             Setting::MaxHr => "MAX HR",
             Setting::Ftp => "FTP",
@@ -607,8 +610,15 @@ pub const BIKE: [Row; 7] = [
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
-pub const SYSTEM: [Row; 6] =
-    [Row::Drive, Row::Stock(StockRow::Import), Row::Open(Menu::Gps), Row::Nearby, Row::Open(Menu::BuiltIn), Row::About];
+pub const SYSTEM: [Row; 7] = [
+    Row::Drive,
+    Row::Stock(StockRow::Import),
+    Row::Open(Menu::Gps),
+    Row::Nearby,
+    Row::Open(Menu::BuiltIn),
+    Row::About,
+    Row::Set(Setting::AutoOff),
+];
 
 /// What the page editor does to the selected cell or its page (Start in the editor: UI review 2, 5.2 point 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

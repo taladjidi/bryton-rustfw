@@ -119,7 +119,7 @@ impl App {
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
         let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;
-        let on = timeout_ms == 0 || self.light.idle_ms < timeout_ms;
+        let on = timeout_ms == 0 || self.light.idle_ms < timeout_ms || self.light.wake;
         let level = match LIGHT_LEVELS.get(self.settings.light_level) {
             _ if !on => 0,
             Some(&l) => l,
@@ -212,6 +212,7 @@ impl App {
         play(b, &BEEP_OFF);
         if self.light.measuring {
             ambient::light_stop(b);
+            self.light.measuring = false; // the rest of this pass (standby returns on the Sim) must not read it
         }
         b.backlight(0);
         panel::off(b);
@@ -225,6 +226,61 @@ impl App {
         }
         b.delay_ms(50);
         b.standby();
+    }
+
+    /// AUTO OFF, once a second: counts the time with nothing keeping the unit on (no ride open or on its card, no
+    /// cable, the drive not lent, no key or touch, no call, no write waiting) and switches off at the time-out, with
+    /// a warning 10 s and 5 s before. True when it switched off.
+    pub(crate) fn step_auto_off(&mut self, b: &mut impl Board) -> bool {
+        if self.auto_off.seen == self.seconds {
+            return false;
+        }
+        self.auto_off.seen = self.seconds;
+        let quiet = self.light.idle_ms >= 1000 // no key or touch in the last second
+            && !self.busy()
+            && !matches!(self.screen, Screen::End(_) | Screen::Discard(_))
+            && !self.emmc.lent()
+            && !self.phone.ringing
+            && !self.touching()
+            && !self.store.dirty // pages.bin waits to be written
+            && self.stock.status() != stock::Status::Running // the scan and its cache
+            && !self.sensors_store.dirty // sensors.bin waits
+            && !self.alt.is_dirty() // so does the altitude calibration
+            // the golden rule: never off while the recorder holds anything (a resume that keeps failing, a save
+            // retried after the card closed, the full copy still saving)
+            && !self.rec.resume_pending
+            && !self.rec.full_pending
+            && self.rec.clean.phase() == recorder::Phase::Done
+            && self.rec.full.phase() == recorder::Phase::Done
+            && (!self.card_writable || b.backup_read(RIDE_BKP) != RIDE_OPEN)
+            && !b.charger_present();
+        // movement keeps it on, for 60 s after the last: a speed over 2 km/h (sensor or GPS), cadence, power, a
+        // trainer heard or connected
+        let moving = self.live.get(Metric::Speed).is_some_and(|v| v > 20)
+            || self.live.get(Metric::Cadence).is_some_and(|v| v > 0)
+            || self.live.get(Metric::Power).is_some_and(|v| v > 0)
+            || self.tlink.up
+            || self.radio.heard_ms[Kind::Trainer as usize] < sensors::STALE_MS
+            || self.ftms.conn.is_some();
+        self.auto_off.hold = if moving { 60 } else { self.auto_off.hold.saturating_sub(1) };
+        let quiet = quiet && self.auto_off.hold == 0;
+        if !quiet {
+            self.light.wake = false;
+        }
+        let min = AUTO_OFF_MIN.get(self.settings.auto_off).copied().unwrap_or(0);
+        match self.auto_off.second(min, quiet) {
+            OffStep::Wait => false,
+            OffStep::Warn => {
+                self.alarm("SWITCHING OFF");
+                self.light.wake = true; // seen and cancelled even with the light timed out; idle_ms keeps counting
+                self.tones.play(&BEEP_ALERT);
+                false
+            }
+            OffStep::Off => {
+                self.power_off(b);
+                true
+            }
+        }
     }
 
     /// Redraws the status strip if what it shows changed.

@@ -214,6 +214,8 @@ pub struct Settings {
     pub light_level: usize,
     /// Backlight time-out: an index in [`LIGHT_TIMEOUTS_S`].
     pub light_timeout: usize,
+    /// AUTO OFF: an index in [`AUTO_OFF_MIN`] (idle on the overview, not riding, no cable).
+    pub auto_off: usize,
     /// Rider weight, kg (in [`menu::WEIGHT_RANGE`]); kept in register 16 ([`Settings::power_word`]).
     pub weight_kg: u16,
     /// W', J (in [`menu::WPRIME_RANGE`], a multiple of 500); kept in register 16.
@@ -305,6 +307,7 @@ impl Settings {
             // (docs/power.md, the owner's choice of 2026-10-27); a saved word keeps its own
             light_level: LIGHT_AUTO,
             light_timeout: 2,
+            auto_off: 1,
             weight_kg: power::WEIGHT_KG,
             wprime_j: power::WPRIME_J,
             bike_hg: power::BIKE_HG,
@@ -496,6 +499,16 @@ impl Settings {
         }
     }
 
+    /// Self with AUTO OFF from register 18 ([`AUTO_OFF_MIN`]): anything out of range, or unset, is the default.
+    pub fn with_auto_off_word(self, w: u32) -> Settings {
+        // only a word the aiding wrote (its tag 0xa or 0x5): an older build rewriting the register leaves zeros
+        match (w >> 22 & 7) as usize {
+            _ if !matches!(w >> 28, 0xa | 0x5) => self,
+            i @ 1..=5 => Settings { auto_off: i - 1, ..self },
+            _ => self,
+        }
+    }
+
     /// The weights, W', the gauge's window and the single presses' actions as kept in register 16
     /// ([`Settings::with_power_word`]).
     pub fn power_word(self) -> u32 {
@@ -547,6 +560,13 @@ impl Settings {
                 GpsPower::Full => "FULL",
                 GpsPower::Saver => "SAVER",
             }),
+            Setting::AutoOff => match AUTO_OFF_MIN.get(self.auto_off) {
+                Some(&m) if m > 0 => {
+                    l.push_u32(m);
+                    l.push_str(" MIN");
+                }
+                _ => l.push_str("OFF"),
+            },
             Setting::LightOff => match LIGHT_TIMEOUTS_S.get(self.light_timeout) {
                 Some(0) | None => l.push_str("NEVER"),
                 Some(&t) => {
@@ -610,6 +630,7 @@ impl Settings {
             }
             Setting::Light => self.light_level = (self.light_level + 1) % (LIGHT_LEVELS.len() + 1),
             Setting::LightOff => self.light_timeout = (self.light_timeout + 1) % LIGHT_TIMEOUTS_S.len(),
+            Setting::AutoOff => self.auto_off = (self.auto_off + 1) % AUTO_OFF_MIN.len(),
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::Font => self.smooth = !self.smooth,
@@ -696,6 +717,12 @@ pub const LIGHT_AUTO: usize = LIGHT_LEVELS.len();
 
 /// Backlight time-outs offered, seconds without a key press (0: never off).
 pub const LIGHT_TIMEOUTS_S: [u32; 4] = [0, 10, 30, 60];
+
+/// AUTO OFF choices, minutes of quiet before the unit switches itself off (0: never). Kept in bits 22..24 of
+/// register 18 (`AID_BKP`'s second word, whose bits 22..27 the aiding never uses and older builds ignore) as
+/// index + 1; 0 there (a fresh unit, an older build's word) reads as the default, 5 min (owner's choice,
+/// 2026-10-28: 12.2 h idle on the overview cost about 41 % of the battery).
+pub const AUTO_OFF_MIN: [u32; 5] = [0, 5, 10, 30, 60];
 
 /// Wheel circumferences offered (mm): 700 x 23, 25, 28, 32, 35, 38 C and 650B x 47 (ANT+ / tyre makers' tables).
 pub const WHEELS: [u16; 7] = [2096, 2105, 2136, 2155, 2168, 2180, 2079];
@@ -807,6 +834,14 @@ impl App {
         b.backup_write(WHEEL_BKP, self.settings.to_word());
         b.backup_write(POWER_BKP, self.settings.power_word());
         b.backup_write(ALERTS_BKP, self.settings.alerts_word());
+        self.write_aid(b);
+    }
+
+    /// The aiding's two words (they change with a fix) with AUTO OFF in the second's bits 22..24.
+    pub(crate) fn write_aid(&self, b: &mut impl Board) {
+        let [w0, w1] = self.gps.aid.to_words();
+        b.backup_write(AID_BKP[0], w0);
+        b.backup_write(AID_BKP[1], w1 | (self.settings.auto_off as u32 + 1) << 22);
     }
 
     /// The ride pages (the first [`App::page_count`]), then the overview's fields ([`OVERVIEW`]).

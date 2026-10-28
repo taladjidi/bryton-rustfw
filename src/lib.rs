@@ -264,6 +264,8 @@ pub struct App {
     tones: Tones,
     /// A first hold of Back during a ride armed switching off for this long ([`OFF_CONFIRM_MS`]).
     off_armed_ms: u32,
+    /// The AUTO OFF timer (app/device.rs).
+    auto_off: AutoOff,
     /// When the ride started: date, hours and minutes (its card's title).
     ride_started: ((u16, u8, u8), (u8, u8)),
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
@@ -373,7 +375,8 @@ impl App {
         let ChipStart { ble, ant, di2, refusal, sensors } = start_chip(b, &mut rx, ant_key, di2_key);
         let misc = Settings::from_word(b.backup_read(WHEEL_BKP))
             .with_power_word(b.backup_read(POWER_BKP))
-            .with_alerts_word(b.backup_read(ALERTS_BKP));
+            .with_alerts_word(b.backup_read(ALERTS_BKP))
+            .with_auto_off_word(b.backup_read(AID_BKP[1]));
         let (pages, page_count) = pages_from_registers(b);
         let store = PageStore::at_boot(b);
         App {
@@ -437,6 +440,7 @@ impl App {
             ride_started: ((2000, 1, 1), (0, 0)),
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,
+            auto_off: AutoOff::new(),
             alert: alerts::Queue::default(),
             tones: Tones::default(),
             summary: None,
@@ -559,6 +563,9 @@ impl App {
         }
         self.say_alert();
         self.play_tones(b);
+        if self.step_auto_off(b) {
+            return; // quiet for the whole time-out: switched off
+        }
         self.off_armed_ms = self.off_armed_ms.saturating_sub(pass_ms);
         t = self.timed(b, Sec::Second, t);
         if self.poll_battery(b, pass_ms) {

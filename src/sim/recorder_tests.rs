@@ -69,6 +69,30 @@ fn read_only_build_does_not_touch_the_card() {
     assert!(sim.emmc.cmds.iter().all(|c| !matches!(c.0, 24 | 25)), "no write command");
 }
 
+/// A read-only build (a RAM run) that boots with a ride left open never clears its marker; a writable build then
+/// resumes the ride.
+#[test]
+fn a_read_only_build_leaves_the_open_ride_marker() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+    let mut sim2 = Sim::new(9, 3, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    sim2.writable = false;
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, 60_000);
+    assert_eq!(sim2.backup[RIDE_BKP], RIDE_OPEN, "the marker kept");
+    let (mut sim3, mut app) = reboot(&mut sim2, 5);
+    run(&mut sim3, &mut app, 1000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE RESUMED"), "{}", app.notes.list[0].as_str());
+}
+
 /// The record times of the ride file at `path` on the volume `img`.
 fn record_times(img: &[u8], path: &str) -> Vec<u32> {
     let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
@@ -737,4 +761,54 @@ fn a_workout_records_a_lap_per_step() {
     let file = ride_file(&sim, "Activities", name).expect("saved");
     // before the workout, the five timed steps, the cool-down up to Lap, after it to the end
     assert_eq!(lap_count(&file), 8);
+}
+
+/// AUTO OFF never switches off while the recorder holds a ride: a save that keeps failing holds it (the recorder
+/// itself does not retry after a failed end: the rider's GIVE UP SAVE closes it).
+#[test]
+fn auto_off_waits_for_the_recorder() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+    app.settings.auto_off = 1;
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    // the rides folders fail to write (as drive_tests.rs's GIVE UP SAVE): the save is stuck after its retries
+    let dirs = ["Activities", "Rustfw/Rides"].map(|p| crate::sim::drive_tests::dir_sectors(&sim.emmc.image, p));
+    sim.emmc.bad = std::vec![dirs[0].clone()];
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 1000); // the first folder's write fails, the next step too
+    sim.emmc.bad = dirs.to_vec();
+    run(&mut sim, &mut app, 300_000);
+    assert!(app.rec.clean.stuck());
+    app.press(&mut sim, Press::Short(Key::Start)); // the End card closes
+    run(&mut sim, &mut app, 400_000);
+    assert!(!sim.standby, "a save stuck after its screen closed");
+    // the card comes back; a new ride is held behind the stuck save, then the rider gives up the save
+    // (SYSTEM > GIVE UP SAVE: asked, then sure, then YES), as in drive_tests.rs
+    sim.emmc.bad.clear();
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    assert!(app.rec.clean.stuck() && app.rec.clean.held());
+    app.open(Screen::Menu(Menu::System, 0));
+    app.show(&mut sim);
+    for _ in 0..5 {
+        app.input(&mut sim, Input::Select);
+    }
+    run(&mut sim, &mut app, 30_000);
+    crate::sim::tests::back(&mut sim, &mut app); // out of SYSTEM
+    crate::sim::tests::back(&mut sim, &mut app);
+    app.press(&mut sim, Press::Short(Key::Start)); // the held ride, pause, then saved
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 30_000);
+    assert_eq!(sim.backup[RIDE_BKP], 0, "no ride open once the held one is saved");
+    app.press(&mut sim, Press::Short(Key::Back)); // the banner
+    app.press(&mut sim, Press::Short(Key::Back)); // the summary closes: the overview, idle
+    // 5 min of idle (AUTO OFF 5) plus a margin for the second-by-second count
+    run(&mut sim, &mut app, 360_000);
+    assert!(sim.standby, "AUTO OFF 5 did not switch off within its time");
+    assert_eq!(sim.backup[RIDE_BKP], 0);
 }

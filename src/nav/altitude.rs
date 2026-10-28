@@ -456,6 +456,11 @@ impl Altimeter {
         self.corr
     }
 
+    /// A calibration waits to be written.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty && self.cal.is_some()
+    }
+
     /// The calibration to write, once (None when the file has it).
     pub fn take_dirty(&mut self) -> Option<Cal> {
         let c = self.cal.filter(|_| self.dirty);

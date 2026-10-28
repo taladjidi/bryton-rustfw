@@ -988,9 +988,7 @@ impl App {
             && self.gps.aid.offset_15min != Some(offset)
         {
             self.gps.aid.offset_15min = Some(offset);
-            for (r, w) in AID_BKP.into_iter().zip(self.gps.aid.to_words()) {
-                b.backup_write(r, w);
-            }
+            self.write_aid(b);
         }
     }
 

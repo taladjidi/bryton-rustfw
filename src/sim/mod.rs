@@ -1159,7 +1159,7 @@ impl Sim {
             dirty: false,
             nordic: Nordic::default(),
             rtc_sets: 0,
-            backup: [0; 32],
+            backup: core::array::from_fn(|i| if i == 18 { 5 << 28 | 1 << 22 } else { 0 }), // AUTO OFF off: tests idle long
             battery_mv: Some(3900),
             charger: false,
             gnss: Gnss::default(),
@@ -1564,6 +1564,8 @@ mod ftms_tests;
 mod interaction_tests;
 #[cfg(test)]
 mod overview_tests;
+#[cfg(test)]
+mod power_tests;
 #[cfg(test)]
 mod powercal_tests;
 #[cfg(test)]
