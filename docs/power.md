@@ -149,6 +149,11 @@ sheets, at their test conditions), none was measured on the unit.
 - **Light sensor** (LTR-308, measuring every 100 ms while AUTO is on) and **barometer** (LPS22HH, one reading a second
   while riding): about 0.1 mA and 0.01 mA (recalled from their data sheets): nothing to gain.
 
+- **Measured 2026-10-28: 12.2 h idle on the overview cost about 41 % of the battery.** So SYSTEM > AUTO OFF (OFF, 5,
+  10, 30, 60 min; default 5) switches the unit off after that long with no ride open, no cable, no key or touch, the
+  drive not lent and no write waiting; a banner and beep warn 10 s and 5 s before, any input cancels (`step_auto_off`,
+  kept in register 18 bits 22..24).
+
 ## Measurement plan (for the owner)
 
 The unit must run on its battery: USB power charges it (BOARD.md 12) and unplugging resets it, so a build run from

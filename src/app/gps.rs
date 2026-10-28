@@ -228,9 +228,7 @@ impl App {
         }
         if aid != self.gps.aid {
             self.gps.aid = aid;
-            for (r, w) in AID_BKP.into_iter().zip(aid.to_words()) {
-                b.backup_write(r, w);
-            }
+            self.write_aid(b);
         }
     }
 }

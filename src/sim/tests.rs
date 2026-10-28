@@ -1660,6 +1660,7 @@ fn bike_weight() {
     // every action and the alerts kept across the two registers
     app.settings.remote = [Remote::Lap, Remote::Play, Remote::PrevTrack, Remote::Start];
     (app.settings.eat_min, app.settings.drink_min, app.settings.hr_alert) = (45, 20, 230);
+    app.settings.auto_off = 1;
     let s = app.settings;
     let kept = Settings::from_word(s.to_word()).with_power_word(s.power_word()).with_alerts_word(s.alerts_word());
     assert_eq!(kept, s);

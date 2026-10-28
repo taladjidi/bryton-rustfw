@@ -425,3 +425,66 @@ mod tests {
         assert!(rec.resume_pending && rec.full_pending);
     }
 }
+
+/// The AUTO OFF timer (app/device.rs `step_auto_off`): seconds of quiet counted, pure logic.
+pub(crate) struct AutoOff {
+    /// The RTC second last counted (255: none yet).
+    pub(crate) seen: u8,
+    /// Seconds in a row with nothing keeping the unit on.
+    quiet_s: u32,
+}
+
+/// What a quiet second asks of [`AutoOff::second`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OffStep {
+    /// Nothing yet.
+    Wait,
+    /// 10 s and 5 s before: the warning banner and beep.
+    Warn,
+    /// The time-out is up: switch off.
+    Off,
+}
+
+impl AutoOff {
+    /// Not counting.
+    pub(crate) const fn new() -> Self {
+        AutoOff { seen: 255, quiet_s: 0 }
+    }
+
+    /// One second gone: `quiet` when nothing keeps the unit on (any input or reason restarts the count); `min`
+    /// minutes is the time-out (0: never).
+    pub(crate) fn second(&mut self, min: u32, quiet: bool) -> OffStep {
+        if !quiet || min == 0 {
+            self.quiet_s = 0;
+            return OffStep::Wait;
+        }
+        self.quiet_s += 1;
+        match (min * 60).saturating_sub(self.quiet_s) {
+            0 => OffStep::Off,
+            left if left <= 10 && left % 5 == 0 => OffStep::Warn,
+            _ => OffStep::Wait,
+        }
+    }
+}
+
+#[cfg(test)]
+mod auto_off_tests {
+    extern crate std;
+    use super::*;
+
+    #[test]
+    fn counts_warns_and_restarts() {
+        let mut a = AutoOff::new();
+        let steps: std::vec::Vec<_> = (0..300).map(|_| a.second(5, true)).collect();
+        assert_eq!(steps[289], OffStep::Warn);
+        assert_eq!(steps[294], OffStep::Warn);
+        assert_eq!(steps[299], OffStep::Off);
+        assert_eq!(steps.iter().filter(|s| **s != OffStep::Wait).count(), 3);
+        for _ in 0..299 {
+            a.second(5, true);
+        }
+        assert_eq!(a.second(5, false), OffStep::Wait, "any activity restarts the count");
+        assert_eq!(a.second(5, true), OffStep::Wait);
+        assert!((0..5000).all(|_| a.second(0, true) == OffStep::Wait), "0: never");
+    }
+}

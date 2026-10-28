@@ -227,6 +227,38 @@ impl App {
         b.standby();
     }
 
+    /// AUTO OFF, once a second: counts the time with nothing keeping the unit on (no ride open or on its card, no
+    /// cable, the drive not lent, no key or touch, no call, no write waiting) and switches off at the time-out, with
+    /// a warning 10 s and 5 s before. True when it switched off.
+    pub(crate) fn step_auto_off(&mut self, b: &mut impl Board) -> bool {
+        if self.auto_off.seen == self.seconds {
+            return false;
+        }
+        self.auto_off.seen = self.seconds;
+        let quiet = self.light.idle_ms >= 1000 // no key or touch in the last second
+            && !self.busy()
+            && !matches!(self.screen, Screen::End(_) | Screen::Discard(_))
+            && !self.emmc.lent()
+            && !self.phone.ringing
+            && !self.touching()
+            && !self.store.dirty // pages.bin waits to be written
+            && self.stock.status() != stock::Status::Running // the scan and its cache
+            && !b.charger_present();
+        let min = AUTO_OFF_MIN.get(self.settings.auto_off).copied().unwrap_or(0);
+        match self.auto_off.second(min, quiet) {
+            OffStep::Wait => false,
+            OffStep::Warn => {
+                self.alarm("SWITCHING OFF");
+                self.tones.play(&BEEP_ALERT);
+                false
+            }
+            OffStep::Off => {
+                self.power_off(b);
+                true
+            }
+        }
+    }
+
     /// Redraws the status strip if what it shows changed.
     pub(crate) fn update_strip(&mut self, b: &mut impl Board) {
         if self.strip != self.strip_shown && !self.hint_shown {
