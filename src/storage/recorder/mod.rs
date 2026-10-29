@@ -1203,7 +1203,15 @@ impl Recorder {
         let (rec, mut copy, mut s) = (self.rec.ok_or(Error::NotFound)?, [0u8; SECTOR], [0u8; SECTOR]);
         if let Some(crc) = marked {
             fat.read_sector(d, &h, 1, &mut s)?;
-            return Ok((fit::crc(0, &s) == crc).then_some(h));
+            if fit::crc(0, &s) != crc {
+                return Ok(None);
+            }
+            if h.clusters > 1 {
+                return Ok(Some(h));
+            }
+            // one cluster: a small file written there since (an .ini, a .sum) changes sector 0 alone, sector 1
+            // keeping the ride's stale bytes: sector 0 compared too (both the sector before the repair and the
+            // record's copy pass; a sector 0 torn by a cut on a card without reliable write lets such a ride go)
         }
         fat.read_sector(d, &rec, 3 * (self.seq % 2), &mut copy)?;
         fat.read_sector(d, &h, 0, &mut s)?;
@@ -1550,7 +1558,7 @@ impl Recorder {
         }
     }
 
-    /// Whether the card's record says a ride is left unfinished (recording or saving; or the record cannot be read),
+    /// Whether the card's record says a ride is left unfinished (recording or saving; or a card error reading it),
     /// read only: one the boot did not take up (its marker lost, a flat battery), which the next Start does. While
     /// so, the card is not lent writable: a computer could free or reuse the chain the record alone may name (the
     /// review of 2026-10-29, S3).
@@ -1564,8 +1572,11 @@ impl Recorder {
         };
         match read(self, d) {
             Ok(open) => open,
-            Err(Error::NotFound) => false, // never recorded here
-            Err(_) => true,
+            // a card error: what the record says is unknown
+            Err(Error::Io) => true,
+            // never recorded here; or a damaged volume, which the recorder cannot use either: the drive lent
+            // writable, for a computer to repair it
+            Err(_) => false,
         }
     }
 
@@ -1625,7 +1636,9 @@ impl Recorder {
                         self.writer = w;
                         self.saving(r.cluster, size);
                         if r.checked.is_none() {
-                            self.mark_checked(fat, d, r.seq, &h, size)?; // before the repair's first write
+                            // before the repair's first write; a ride under 3 sectors is not marked: a torn repair
+                            // lets it go
+                            self.mark_checked(fat, d, r.seq, &h, size)?;
                         }
                         h
                     }

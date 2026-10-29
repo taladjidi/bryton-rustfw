@@ -2168,18 +2168,25 @@ fn a_stuck_save_whose_chain_a_computer_freed_is_never_linked() {
 /// The review of the S1 fix, finding 1: a ride left open whose entry is gone (a torn folder sector) but whose chain
 /// is whole. The boot's recovery checks the chain, marks its record (`Rec::checked`), repairs sector 0 and the last
 /// sector from the record's copies, and saves. Cut at every sector of that, torn, then booted again: the ride is
-/// saved whole, a torn repair redone (unmarked, the torn sector 0 failed the check: the ride was let go).
+/// saved whole, a torn repair redone (unmarked, the torn sector 0 failed the check: the ride was let go). A ride
+/// over one cluster: within one, sector 0 is compared even when marked, so a torn one lets it go (the third review).
 #[test]
 fn a_ride_without_its_entry_is_saved_whatever_cut_its_repair() {
     let mut d = card(crate::fat::tests::image());
-    let _ = open_ride(&mut d, 200);
+    let _ = open_ride(&mut d, 800);
     let sector0 = first_lba(&d.img, "Rustfw/Rides/261023100000.fit") as u32;
+    {
+        let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        let f = fat.open(&mut ram, "Rustfw/Rides/261023100000.fit").unwrap();
+        assert!(f.size > fat.cluster_bytes(), "over one cluster: {} bytes", f.size);
+    }
     let mut img = d.img;
     remove_ride_entry(&mut img);
     let mut whole = card(img.clone());
-    assert_eq!(Recorder::new().recover(&mut whole, local(300)), Outcome::Saved(NAME));
+    assert_eq!(Recorder::new().recover(&mut whole, local(900)), Outcome::Saved(NAME));
     let (want, _) = saved(&whole.img, SAVED).unwrap();
-    assert!(want.len() >= 200 - CHECKPOINT_S as usize);
+    assert!(want.len() >= 800 - CHECKPOINT_S as usize);
     let (total, mut torn0) = (whole.written, 0);
     for cut in 0..total {
         for torn in [false, true] {
@@ -2231,20 +2238,7 @@ fn best_rec(img: &[u8]) -> Rec {
 #[test]
 fn a_marked_record_whose_chain_a_computer_freed_or_reused_is_let_go() {
     for reuse in [false, true] {
-        let mut d = card(crate::fat::tests::image());
-        let first = open_ride(&mut d, 200).file.unwrap().first;
-        let mut img = d.img;
-        remove_ride_entry(&mut img);
-        // the boot cut at its first write after the mark (copies and record, one write)
-        let mut img = (0..20)
-            .map(|b| {
-                let mut c = Card { budget: Some(b), ..card(img.clone()) };
-                Recorder::new().recover(&mut c, local(300));
-                c.img
-            })
-            .find(|i| best_rec(i).checked.is_some())
-            .expect("a boot cut after the mark");
-        assert_eq!(best_rec(&img).phase, Phase::Recording);
+        let (mut img, first) = marked_and_cut(200);
         let len = free_chain(&mut img, first);
         let other = reuse.then(|| other_file(&mut img, first, len));
         let what = if reuse { "reused" } else { "freed" };
@@ -2253,4 +2247,42 @@ fn a_marked_record_whose_chain_a_computer_freed_or_reused_is_let_go() {
         let_go(&d.img, &other, what);
         assert_eq!(best_rec(&d.img).phase, Phase::Done, "{what}");
     }
+}
+
+/// A ride of `secs` seconds left open, its entry removed, the boot cut at its first write after the mark (copies
+/// and record, one write): the image, and the ride's first cluster.
+fn marked_and_cut(secs: u32) -> (Vec<u8>, u32) {
+    let mut d = card(crate::fat::tests::image());
+    let first = open_ride(&mut d, secs).file.unwrap().first;
+    let mut img = d.img;
+    remove_ride_entry(&mut img);
+    let img = (0..20)
+        .map(|b| {
+            let mut c = Card { budget: Some(b), ..card(img.clone()) };
+            Recorder::new().recover(&mut c, local(300));
+            c.img
+        })
+        .find(|i| best_rec(i).checked.is_some())
+        .expect("a boot cut after the mark");
+    assert_eq!(best_rec(&img).phase, Phase::Recording);
+    (img, first)
+}
+
+/// The third review, finding 1: a ride within one cluster, marked, the boot cut before its repair; its cluster
+/// then given to a file of one sector (an .ini, a .sum), which changes sector 0 alone: sector 1 still holds the
+/// ride's stale bytes and passes the mark's CRC. Sector 0 is compared too for a one-cluster chain: the ride let go,
+/// the small file whole, nothing linked onto it.
+#[test]
+fn a_marked_one_cluster_ride_whose_cluster_a_small_file_took_is_let_go() {
+    let (mut img, first) = marked_and_cut(70);
+    let cluster = {
+        let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().cluster_bytes() as usize
+    };
+    assert_eq!(free_chain(&mut img, first), cluster, "the ride within one cluster");
+    let other = Some(other_file(&mut img, first, SECTOR));
+    let mut d = card(img);
+    assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Nothing);
+    let_go(&d.img, &other, "a small file");
+    assert_eq!(best_rec(&d.img).phase, Phase::Done);
 }
