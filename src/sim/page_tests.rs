@@ -1381,6 +1381,32 @@ fn the_power_word_is_never_a_page() {
     assert_eq!(boot(true), boot(false));
 }
 
+/// A page with nothing changing sends the panel nothing between seconds or across them (the boxes are only looked
+/// at when a second ticked), and a new sensor reading draws at the second after it.
+#[test]
+fn idle_ride_page_sends_no_pixels_and_a_reading_draws_at_the_second() {
+    let (mut sim, mut app) = started();
+    app.screen = Screen::Ride(0);
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 10000);
+    // the strip blinks on its own; the page's boxes are what is measured, pass after pass
+    let px = sim.pixels;
+    for _ in 0..40 {
+        app.update_page(&mut sim);
+    }
+    assert_eq!(sim.pixels, px, "nothing changed: nothing sent");
+    app.live.set(crate::sensors::Metric::Speed, 251);
+    app.live.snapshot();
+    app.light.idle_ms = 60_000;
+    app.value_due = false;
+    let px = sim.pixels;
+    app.update_page(&mut sim);
+    assert_eq!(sim.pixels, px, "a new reading between seconds is held back");
+    app.value_due = true; // the second's tick
+    app.update_page(&mut sim);
+    assert!(sim.pixels > px, "the reading is drawn at the second");
+}
+
 /// The editor draws the boxes of the page it edits, not another screen's (EDITED once shared the workout page's index).
 #[test]
 fn editor_draws_the_edited_pages_boxes() {
