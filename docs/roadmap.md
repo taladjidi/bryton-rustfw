@@ -54,15 +54,15 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
 - **T4. Bounded metrics** (theming.md phase 2): `zone_bar` 4 to 12, `frame` 1 to 4, `menu_row` 44 to 56, read
   through `Canvas::theme()` and by the touch code from `App`; every "fits" test and the sim suite at both ends of
   each range. Agent: implementer (sonnet).
-- **T5. Day and night**: THEME AUTO: a day and a night theme by name, switched from the ambient light sensor with
-  hysteresis (the automatic backlight's reading, app/ambient), at most one switch a minute, a full redraw each.
-  Agent: implementer.
+- ~~**T5. Day and night**~~ done, sim only (theming.md section 4b): THEME AUTO, DAY THEME and NIGHT THEME, switched from
+  the ambient light (ui/theme.rs `DayNight`, app/themes.rs): night under 20 lux, day over 50 lux, each held 30 s, at most
+  one switch a minute, a full redraw each. Agent: implementer.
 - **T6. Overview variants** (theming.md phase 3): `overview = classic | fields`, each a table of boxes checked like
   page.rs. Agent: implementer (sonnet).
 - **T7. Tools and docs**: `tools/theme.py` writes the built-in themes as example files to a mounted drive and
   renders a file through the simulator (`preview FILE`); features.md lists every key, kept in step by a test.
   Agent: mechanic.
-- On the unit: OUTDOOR and LIGHT read in the sun, AUTO switching at dusk (status.md lines).
+- On the unit: OUTDOOR and LIGHT read in the sun, THEME AUTO switching at dusk (status.md lines).
 
 ### Block 2: live segments (docs/segments.md)
 

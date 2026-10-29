@@ -1,7 +1,7 @@
 # Theming: a plan
 
 Status: phase 1 built and sim-tested: T1 (colours, DARK, OUTDOOR, files) and T2 (LIGHT, the black-background
-assumptions fixed), 2026-10-29; fonts, metrics and layouts are not (first written 2026-10-26). The owner's wish: "the UI layout / look could be defined from a
+assumptions fixed), 2026-10-29, and T5 (THEME AUTO: day and night by the light), 2026-10-30; fonts, metrics and layouts are not (first written 2026-10-26). The owner's wish: "the UI layout / look could be defined from a
 theme file on the SD card, and the user could pick whatever theme suits them". The "SD card" is the eMMC's FAT
 volume (the BRYTON drive); this firmware reads files from it with src/storage/fat/ and keeps its own in `\Rustfw`.
 
@@ -209,6 +209,17 @@ enters the repository.
 **Picking.** SETTINGS > DISPLAY > THEME: the row shows the name; it opens a list (the built-ins, then the files,
 16 at most) as COURSES does. A tap applies it at once (full redraw); `settings.bin` is written when no ride is open.
 FONT stays its own setting; a theme's `font` key (level b) only sets its default.
+
+**4b. THEME AUTO (T5, built).** THEME's list starts with AUTO. With it, the theme in use is DAY THEME (OUTDOOR at
+first) or NIGHT THEME (DARK at first), each picked as THEME is (the built-ins, then the files), and the ambient light
+chooses between them. The thresholds are stock's backlight curve (drivers/ambient.rs `AUTO_BANDS`): night under 20 lux,
+the top of its dusk band, where the backlight is at 20 %; day again over 50 lux, the top of its 30 % band, 2.5 times
+the night threshold, so a dusk that flickers stays on its side. Each is held 30 s (the mean of each second's readings,
+checked once a second, integers only), and two switches are at least a minute apart (`ui::theme::DayNight`, unit
+tests). No switch before the first reading: a start is on the day theme. A switch is a full redraw, only when the
+name in use changes. While AUTO is on the light sensor measures all the time (it is read every 250 ms), a cost on
+the battery that the unit has not measured yet (status.md). The settings file keeps AUTO (a byte), DAY THEME and
+NIGHT THEME (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 44, 66 or 69 bytes reads AUTO off.
 
 ## 5. Phases
 

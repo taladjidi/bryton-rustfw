@@ -3290,6 +3290,7 @@ fn settings_file() {
     let d = crate::Settings::from_word(0);
     let (mut refused, mut whole, mut short, mut defaulted) = (0u32, 0u32, 0u32, 0u32);
     let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
+    let (mut auto_on, mut day_night_kept, mut day_night_fell_back) = (0u32, 0u32, 0u32); // AUTO, and DAY and NIGHT's names
     let (mut with_limit, mut wild_limit) = (0u32, 0u32); // limits read, and out of range ones read as 0
     let (mut with_lthr, mut wild_lthr, mut with_smooth, mut wild_smooth) = (0u32, 0u32, 0u32, 0u32);
     for _ in 0..20_000 {
@@ -3304,7 +3305,7 @@ fn settings_file() {
                 0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
                 1 => (next() % 31) as u16,      // an earlier build's
                 2 => 31 + (next() % 60) as u16, // a later build's
-                3 => 44 + (next() % 26) as u16, // with the alert limits, LTHR and POWER SMOOTH: whole or cut among them
+                3 => 44 + (next() % 51) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO and the names: whole or cut
                 _ => 31,
             };
             s[6..8].copy_from_slice(&len.to_le_bytes());
@@ -3317,6 +3318,9 @@ fn settings_file() {
             let mut lim = [None::<(u16, bool)>; 11]; // the limits written at 28 + 44 + 2n, and whether in range
             let mut lthr_w = None::<(u16, bool)>; // LTHR at 66, POWER SMOOTH at 68: written, and in range
             let mut ps_w = None::<(u8, bool)>;
+            let mut auto_w = None::<u8>; // AUTO at 69 (a byte: 0, 1, or out of its form)
+            let mut day_w = None::<([u8; 12], bool)>; // DAY THEME at 70, NIGHT THEME at 82: the name, and whether it is one
+            let mut night_w = None::<([u8; 12], bool)>;
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
             if !next().is_multiple_of(4) {
                 let ok = crate::Settings { ftp: 100 + 5 * (next() % 80) as u16, ..d };
@@ -3375,6 +3379,28 @@ fn settings_file() {
                     s[28 + 68] = v;
                     ps_w = Some((v, usize::from(v) < 4));
                 }
+                if usize::from(len) >= 70 {
+                    // AUTO: a byte, 0 or 1 (on for 1), or one out of its form (off)
+                    let v = if next().is_multiple_of(4) { (2 + next() % 254) as u8 } else { (next() % 2) as u8 };
+                    s[28 + 69] = v;
+                    auto_w = Some(v);
+                }
+                for (at, w, whole) in [(70usize, &mut day_w, 82u16), (82, &mut night_w, 94)] {
+                    if len >= whole {
+                        // a name of letters, digits, - and _ (up to 12), or one with a bad byte
+                        let mut name = [0u8; 12];
+                        let n = 1 + (next() % 12) as usize;
+                        for b in name.iter_mut().take(n) {
+                            *b = b"AZaz09-_"[(next() % 8) as usize];
+                        }
+                        let bad = next().is_multiple_of(4);
+                        if bad {
+                            name[(next() % n as u32) as usize] = b'/';
+                        }
+                        s[28 + at..28 + at + 12].copy_from_slice(&name);
+                        *w = Some((name, !bad));
+                    }
+                }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
             let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
@@ -3413,6 +3439,26 @@ fn settings_file() {
                             assert_eq!(st.limits[n], if ok { v } else { 0 }, "limit {n} written {v}");
                             with_limit += u32::from(ok && v > 0);
                             wild_limit += u32::from(!ok);
+                        }
+                    }
+                    // AUTO, DAY THEME, NIGHT THEME: written (a bad one reads off, OUTDOOR, DARK), or the defaults when cut
+                    let d = crate::Settings::from_word(0);
+                    if let Some(v) = auto_w {
+                        assert_eq!(st.auto_theme, v == 1, "AUTO written {v}");
+                        auto_on += u32::from(v == 1);
+                    } else if usize::from(len) < 70 {
+                        assert!(!st.auto_theme, "AUTO is off in a file without it");
+                    }
+                    for (w, got, def) in [(day_w, st.day_theme, d.day_theme), (night_w, st.night_theme, d.night_theme)]
+                    {
+                        match w {
+                            Some((name, ok)) => {
+                                assert_eq!(got, if ok { name } else { def }, "a theme name written {name:?}");
+                                day_night_kept += u32::from(ok);
+                                day_night_fell_back += u32::from(!ok);
+                            }
+                            None if usize::from(len) < 82 => assert_eq!(got, def, "a cut file: the default"),
+                            None => {}
                         }
                     }
                     let again = SettingsCopy::from_sector(&SettingsCopy { seq: c.seq, ..c }.to_sector());
@@ -3454,6 +3500,8 @@ fn settings_file() {
     }
     std::println!("settings copies: {refused} refused, {whole} whole, {short} short, {defaulted} with a default");
     std::println!("theme names: {kept} kept, {fell_back} fallen back");
+    std::println!("AUTO on {auto_on}, day and night names kept {day_night_kept}, fallen back {day_night_fell_back}");
+    assert!(auto_on > 0 && day_night_kept > 0 && day_night_fell_back > 0, "every new path reached");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
     assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");
     assert!(with_limit > 100 && wild_limit > 100, "{with_limit} limits read, {wild_limit} out of range read as 0");

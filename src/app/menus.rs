@@ -780,8 +780,8 @@ impl App {
             if !self.editing {
                 self.save_misc(b);
             }
-        } else if s == menu::Setting::Theme {
-            self.next_theme(b);
+        } else if matches!(s, menu::Setting::Theme | menu::Setting::DayTheme | menu::Setting::NightTheme) {
+            self.next_theme(b, s);
         } else {
             self.settings.cycle(s);
             self.save_misc(b);

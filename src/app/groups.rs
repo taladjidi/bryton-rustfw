@@ -88,6 +88,8 @@ pub(crate) struct Light {
     pub(crate) ms: u32,
     /// The measurement is still running.
     pub(crate) measuring: bool,
+    /// AUTO (THEME): the day or night theme from the light (ui/theme.rs).
+    pub(crate) day_night: crate::theme::DayNight,
 }
 
 impl Light {
@@ -101,6 +103,7 @@ impl Light {
             auto_level: LIGHT_LEVELS[1],
             ms: LIGHT_MS,
             measuring: false,
+            day_night: Default::default(),
         }
     }
 

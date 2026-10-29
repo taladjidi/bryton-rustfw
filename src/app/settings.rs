@@ -299,6 +299,13 @@ pub struct Settings {
     /// POWER SMOOTH (BIKE): an index into [`POWER_SMOOTH_S`], the big power value's window. Kept in settings.bin only,
     /// after LTHR; 0 (the live reading) in a file that predates it.
     pub power_smooth: usize,
+    /// AUTO (THEME): the colour theme follows the ambient light, DAY THEME by day and NIGHT THEME by night
+    /// ([`crate::theme::DayNight`]). Kept in settings.bin only, after POWER SMOOTH; off in a file that predates it.
+    pub auto_theme: bool,
+    /// DAY THEME and NIGHT THEME (DISPLAY): the themes AUTO uses, named as THEME is. Kept in settings.bin only.
+    pub day_theme: [u8; 12],
+    /// NIGHT THEME: the theme AUTO uses in the dark.
+    pub night_theme: [u8; 12],
 }
 
 /// The big power value's window, seconds, as POWER SMOOTH offers them: the live reading, then 3, 5 and 10 s.
@@ -307,21 +314,32 @@ pub const POWER_SMOOTH_S: [u32; 4] = [1, 3, 5, 10];
 impl Settings {
     /// The theme's name as the menu shows it.
     pub fn theme_name(&self) -> &str {
-        let n = self.theme.iter().position(|&b| b == 0).unwrap_or(self.theme.len());
-        match self.theme.get(..n).and_then(|b| core::str::from_utf8(b).ok()) {
+        Self::name_of(&self.theme)
+    }
+
+    /// A theme name (THEME, DAY THEME or NIGHT THEME) as the menu shows it: DARK for the empty one.
+    pub fn name_of(name: &[u8; 12]) -> &str {
+        let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        match name.get(..n).and_then(|b| core::str::from_utf8(b).ok()) {
             Some(s) if !s.is_empty() => s,
             _ => "DARK",
         }
     }
 
-    /// Sets the theme by name (up to 12 characters; DARK is the empty name).
-    pub fn set_theme_name(&mut self, name: &str) {
-        self.theme = [0; 12];
+    /// A theme name as its bytes (up to 12 characters; DARK is the empty name).
+    pub fn name_bytes(name: &str) -> [u8; 12] {
+        let mut out = [0u8; 12];
         if !name.eq_ignore_ascii_case("DARK") {
-            for (t, b) in self.theme.iter_mut().zip(name.bytes()) {
+            for (t, b) in out.iter_mut().zip(name.bytes()) {
                 *t = b;
             }
         }
+        out
+    }
+
+    /// Sets THEME by name (up to 12 characters; DARK is the empty name).
+    pub fn set_theme_name(&mut self, name: &str) {
+        self.theme = Self::name_bytes(name);
     }
 }
 
@@ -392,6 +410,9 @@ impl Settings {
             power_match: true,
             lthr: 0,
             power_smooth: 0,
+            auto_theme: false,
+            day_theme: Settings::name_bytes("OUTDOOR"),
+            night_theme: [0; 12],
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -632,7 +653,10 @@ impl Settings {
                 l.push_str(" S");
             }
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
+            Setting::Theme if self.auto_theme => l.push_str("AUTO"),
             Setting::Theme => l.push_str(self.theme_name()),
+            Setting::DayTheme => l.push_str(Self::name_of(&self.day_theme)),
+            Setting::NightTheme => l.push_str(Self::name_of(&self.night_theme)),
             Setting::GpsPower => l.push_str(match self.gps_power {
                 GpsPower::Auto => "AUTO",
                 GpsPower::Full => "FULL",
@@ -726,9 +750,14 @@ impl Settings {
             Setting::PowerSmooth => self.power_smooth = (self.power_smooth + 1) % POWER_SMOOTH_S.len(),
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
-            Setting::Theme => {
-                let next = if self.theme_name().eq_ignore_ascii_case("DARK") { "OUTDOOR" } else { "DARK" };
-                self.set_theme_name(next);
+            Setting::Theme | Setting::DayTheme | Setting::NightTheme => {
+                let slot = match s {
+                    Setting::DayTheme => &mut self.day_theme,
+                    Setting::NightTheme => &mut self.night_theme,
+                    _ => &mut self.theme,
+                };
+                let next = if Self::name_of(slot).eq_ignore_ascii_case("DARK") { "OUTDOOR" } else { "DARK" };
+                *slot = Self::name_bytes(next);
             }
             Setting::GpsPower => {
                 self.gps_power = match self.gps_power {
