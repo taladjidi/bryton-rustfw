@@ -505,14 +505,15 @@ impl App {
     }
 
     pub(crate) fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
+        let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
         for i in 0..ui::MENU_ROWS {
-            self.draw_menu_row(c, menu, sel, i);
+            self.draw_menu_row(c, menu, sel, first, i);
         }
     }
 
     /// Screen row `slot` of `menu` (the menu turns a screen at a time: [`menu::first_shown`]).
-    pub(crate) fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, slot: usize) {
-        let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
+    pub(crate) fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, first: usize, slot: usize) {
+        let i = first + slot;
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
                 let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
@@ -542,8 +543,8 @@ impl App {
     }
 
     /// A fingerprint of screen row `slot` as it would be drawn (FNV-1a over its text, colour and selection).
-    pub(crate) fn menu_row_print(&self, menu: Menu, sel: usize, slot: usize) -> u32 {
-        let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
+    pub(crate) fn menu_row_print(&self, menu: Menu, sel: usize, first: usize, slot: usize) -> u32 {
+        let i = first + slot;
         let mut h = 0x811c_9dc5u32;
         let mut eat = |bytes: &[u8]| {
             for &x in bytes {
@@ -565,10 +566,11 @@ impl App {
 
     /// Redraws the menu rows that changed since they were drawn (the selection, a value).
     pub(crate) fn update_menu_rows(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
+        let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
         for i in 0..ui::MENU_ROWS {
-            let print = self.menu_row_print(menu, sel, i);
+            let print = self.menu_row_print(menu, sel, first, i);
             if self.menu_shown[i] != print {
-                self.draw_menu_row(&mut Panel(b, self.area(), self.look()), menu, sel, i);
+                self.draw_menu_row(&mut Panel(b, self.area(), self.look()), menu, sel, first, i);
                 self.menu_shown[i] = print;
             }
         }
