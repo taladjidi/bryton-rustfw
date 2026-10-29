@@ -3945,7 +3945,7 @@ fn segment_files() {
             }
             Err(e) => match e {
                 Error::TooBig => 1,
-                Error::Short => 2,
+                Error::Short | Error::Io => 2, // Io: only a card gives it
                 Error::Targets => 3,
                 Error::Target => 4,
                 Error::Points => 5,
@@ -4049,6 +4049,72 @@ fn segment_matcher() {
         }
     }
     assert!(starts > 100 && finishes > 20 && losts > 20 && by_other > 10, "{starts} {finishes} {losts} {by_other}");
+}
+
+/// The segment index (app/segments.rs): folders of segment files with broken headers and names (a flipped byte
+/// in the header, a cut file, a name that is not the id, a stray file), read by the app on the Sim. Nothing panics, the
+/// build ends, every candidate is either indexed or counted as skipped, and over the seeds both indexed and skipped
+/// files are reached.
+#[test]
+fn segment_index_folders() {
+    use crate::segment::tests::synth;
+    let (mut indexed, mut skipped, mut loaded, mut failed) = (0usize, 0usize, 0usize, 0usize);
+    for seed in 1..=24u32 {
+        let mut noise = bytes(seed, 4096);
+        let mut next = move || noise.next().unwrap_or(0) as usize;
+        let mut files: Vec<(std::string::String, Vec<u8>)> = Vec::new();
+        let mut candidates = 0;
+        for k in 0..6 + next() % 6 {
+            let mut f = synth(20, &[*b"07", *b"05"]);
+            f[1..5].copy_from_slice(&(7000 + k as u32).to_le_bytes());
+            let mut name = std::format!("{}.seg", 7000 + k);
+            for _ in 0..next() % 4 {
+                match next() % 7 {
+                    0 | 1 => {
+                        let i = next() % 0x200;
+                        if let Some(b) = f.get_mut(i) {
+                            *b ^= 1 << (next() % 8);
+                        }
+                    }
+                    2 => f.truncate(1 + next() % 0x400),
+                    3 => name = std::format!("{}.seg", 9000 + k), // not the id
+                    4 => name = std::format!("{}.dat", 7000 + k),
+                    6 => {
+                        let i = 0x200 + next() * 3 % f.len().max(1); // the body
+                        if let Some(b) = f.get_mut(i) {
+                            *b ^= 0x10;
+                        }
+                    }
+                    5 => f.get_mut(0x179).iter_mut().for_each(|b| **b = next() as u8),
+                    _ => {}
+                }
+            }
+            candidates += usize::from(name.ends_with(".seg"));
+            files.push((name, f));
+        }
+        let files: Vec<(&str, Vec<u8>)> = files.iter().map(|(n, f)| (n.as_str(), f.clone())).collect();
+        let image = super::segment_tests::card(&files);
+        let mut sim = super::Sim::new(9, 0, 0);
+        sim.emmc.image = image.clone();
+        let mut app = crate::App::start(&mut sim, None);
+        app.set_segment_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::Segments::new())));
+        super::tests::run(&mut sim, &mut app, 12_000);
+        let s = app.segments().unwrap();
+        assert!(s.ready(), "seed {seed}");
+        assert_eq!(s.indexed() + usize::from(s.skipped), candidates, "seed {seed}");
+        // every indexed file loaded: whole ones load, the ones with a broken body fail, neither panics
+        let mut seg = crate::Segments::new();
+        let mut disk = crate::fat::tests::Ram(image, 0);
+        for id in s.ids() {
+            match seg.load(&mut disk, id) {
+                Ok(()) => loaded += 1,
+                Err(()) => failed += 1,
+            }
+        }
+        (indexed, skipped) = (indexed + s.indexed(), skipped + usize::from(s.skipped));
+    }
+    assert!(indexed > 20 && skipped > 20, "indexed {indexed}, skipped {skipped}");
+    assert!(loaded > 10 && failed > 0, "loaded {loaded}, failed {failed}");
 }
 
 #[test]
