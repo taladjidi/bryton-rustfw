@@ -212,6 +212,9 @@ pub struct App {
     settings: Settings,
     /// The colour theme in use (THEME), DARK until the settings file is read ([`App::look`]).
     theme: ui::Theme,
+    /// AUTO's day and night themes, resolved into RAM between rides ([`App::load_day_night`]): the switch never reads
+    /// the card. Built-in defaults until the settings are loaded (OUTDOOR by day, DARK by night).
+    auto_themes: [ui::Theme; 2],
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     editing: bool,
     /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
@@ -436,6 +439,7 @@ impl App {
             up_ms: 0,
             settings: misc,
             theme: ui::Theme::DARK,
+            auto_themes: [ui::Theme::OUTDOOR, ui::Theme::DARK],
             editing: false,
             menu_chosen: false,
             confirm: None,

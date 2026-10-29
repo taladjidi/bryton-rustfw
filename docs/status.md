@@ -11,7 +11,9 @@ A feature not listed here was seen on the unit.
 - **THEME AUTO (ui/theme.rs `DayNight`, app/themes.rs; theming.md 4b)**: sim only. Still to see: the switch at dusk
   (night under 20 lux for 30 s, day back over 50 lux for 30 s, at most one switch a minute), the screen redrawn once
   in each theme, and the cost of the light sensor measuring all the time while AUTO is on (its time awake, measured
-  on the unit with the light on AUTO and with THEME off).
+  on the unit with the light on AUTO and with THEME off). Also the sensor with the screen white at 30 % backlight in
+  the dark: the panel's own light reaching the sensor against the 20 and 50 lux thresholds (assumed: the sensor sees
+  the room, not the panel).
 
 - **The heart rate and power fields, POWER SMOOTH, LTHR and the balance average (training/ride.rs ZoneTime, app/fields.rs,
   app/settings_file.rs)**: sim only. Still to see: the zone numbers and times against the strap's zones on a real ride,

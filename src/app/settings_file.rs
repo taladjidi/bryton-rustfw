@@ -189,7 +189,7 @@ impl SettingsCopy {
             *n = data.next().unwrap_or(0);
         }
         if theme_name_ok(&name) {
-            s.theme = name;
+            s.theme = normal(name);
         }
         // POWER MATCH (appended after THEME): a byte, 0 or 1; a file without it reads ON
         s.power_match = data.next().map_or(d.power_match, |v| if v < 2 { v == 1 } else { d.power_match });
@@ -211,8 +211,8 @@ impl SettingsCopy {
         // AUTO, DAY THEME, NIGHT THEME (appended after POWER SMOOTH): a file without them reads AUTO off, OUTDOOR by day
         // and DARK by night; a name out of its form reads as its default
         s.auto_theme = data.next().map_or(d.auto_theme, |v| if v < 2 { v == 1 } else { d.auto_theme });
-        s.day_theme = theme_name_at(&mut data).unwrap_or(d.day_theme);
-        s.night_theme = theme_name_at(&mut data).unwrap_or(d.night_theme);
+        s.day_theme = theme_name_at(&mut data).map(normal).unwrap_or(d.day_theme);
+        s.night_theme = theme_name_at(&mut data).map(normal).unwrap_or(d.night_theme);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -232,6 +232,11 @@ fn theme_name_ok(name: &[u8; 12]) -> bool {
     let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
     name.get(..n).is_some_and(|s| s.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
         && name.get(n..).is_some_and(|s| s.iter().all(|&b| b == 0))
+}
+
+/// A theme name read from the file as its canonical bytes: DARK (or any case of it) is the empty name.
+fn normal(name: [u8; 12]) -> [u8; 12] {
+    Settings::name_bytes(Settings::name_of(&name))
 }
 
 /// The next 12 bytes of `data` as a theme name; None if the data ends first or the name is not one.
@@ -267,6 +272,8 @@ pub(crate) struct SettingsStore {
     pub(crate) boot_words: [u32; 4],
     /// THEME was picked (the file may not be read yet): the file's name of it does not win.
     pub(crate) theme_set: bool,
+    /// DAY THEME or NIGHT THEME was picked: the file's names do not win (as THEME's).
+    pub(crate) names_set: bool,
     /// The file was read whole: written over in place (as `PageStore::sound`).
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
@@ -413,16 +420,18 @@ impl App {
         // a theme picked before the file was read stays and goes to the file (the registers carry no theme)
         // the registers carry no theme: THEME, AUTO and the day and night themes are the file's, or those picked before it
         let pick = if st.theme_set { was } else { merged };
+        let names = if st.names_set { was } else { merged };
+        let now = Settings { day_theme: names.day_theme, night_theme: names.night_theme, ..pick };
         let themes = |s: &Settings| (s.theme, s.auto_theme, s.day_theme, s.night_theme);
         // the file gets the registers' fields, or words that say what the registers now hold, or the theme picked
         st.dirty = self.card_writable
-            && (took.contains(&true) || merged.register_words() != c.words || themes(&pick) != themes(&c.settings));
+            && (took.contains(&true) || merged.register_words() != c.words || themes(&now) != themes(&c.settings));
         self.settings = Settings {
             alt_m: was.alt_m,
             theme: pick.theme,
             auto_theme: pick.auto_theme,
-            day_theme: pick.day_theme,
-            night_theme: pick.night_theme,
+            day_theme: now.day_theme,
+            night_theme: now.night_theme,
             ..merged
         };
         if (st.lost || self.card_writable) && self.settings.register_words() != regs {
@@ -437,6 +446,7 @@ impl App {
             if (self.settings.theme, self.settings.auto_theme, self.settings.day_theme, self.settings.night_theme)
                 != (was.theme, was.auto_theme, was.day_theme, was.night_theme)
             {
+                self.load_day_night(b);
                 self.apply_theme(b, false);
             } else if self.settings.smooth != was.smooth {
                 self.font_changed(b);

@@ -216,8 +216,11 @@ chooses between them. The thresholds are stock's backlight curve (drivers/ambien
 the top of its dusk band, where the backlight is at 20 %; day again over 50 lux, the top of its 30 % band, 2.5 times
 the night threshold, so a dusk that flickers stays on its side. Each is held 30 s (the mean of each second's readings,
 checked once a second, integers only), and two switches are at least a minute apart (`ui::theme::DayNight`, unit
-tests). No switch before the first reading: a start is on the day theme. A switch is a full redraw, only when the
-name in use changes. While AUTO is on the light sensor measures all the time (it is read every 250 ms), a cost on
+tests). The first checked reading decides at once, with no hold. AUTO's day and night themes are resolved into RAM
+between rides (`App::load_day_night`: a missing file gives its side's default, with a notice), so a switch never reads
+the card. A switch is a full redraw, only when the
+name in use changes. While AUTO is on the light sensor is read once a second when only AUTO wants it (every 250 ms while the backlight
+follows it too), a cost on
 the battery that the unit has not measured yet (status.md). The settings file keeps AUTO (a byte), DAY THEME and
 NIGHT THEME (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 44, 66 or 69 bytes reads AUTO off.
 

@@ -1,6 +1,7 @@
 //! The colour theme in use: resolved from THEME's name (a built-in, or `\Rustfw\Themes\<NAME>.ini` read from the
-//! card), picked in SETTINGS > DISPLAY > THEME, applied with a full redraw. A file read only: this never writes the
-//! card (the choice is kept by the settings file, app/settings_file.rs).
+//! card), picked in SETTINGS > DISPLAY > THEME, applied with a full redraw. AUTO's day and night themes are resolved
+//! into RAM between rides ([`App::load_day_night`]), so the light's switch never reads the card. A file read only:
+//! this never writes the card (the choice is kept by the settings file, app/settings_file.rs).
 
 use crate::*;
 use theme::{Refused, Theme};
@@ -71,47 +72,74 @@ impl App {
         self.font_changed(b);
     }
 
-    /// Makes the theme THEME names the one drawn (DARK when its file is missing or refused, with a notice when
-    /// `said`), and draws the screen again whole.
-    pub(crate) fn apply_theme(&mut self, b: &mut impl Board, said: bool) {
-        let in_use = self.theme_in_use();
-        let mut name = text::Line::<12>::new();
-        name.push_str(Settings::name_of(&in_use));
-        let t = match Theme::builtin(name.as_str()) {
+    /// The theme `name` names: a built-in, or a file read from the card. A file that is missing or refused gives
+    /// `fallback` and the notice's text. A card read: between rides only ([`App::load_day_night`]).
+    fn resolve(&mut self, b: &mut impl Board, name: &[u8; 12], fallback: Theme) -> (Theme, Option<&'static str>) {
+        let n = Settings::name_of(name);
+        let t = match Theme::builtin(n) {
             Some(t) => Ok(t),
             None if self.emmc.lent() => Err(None),
-            None => self.read_theme(b, name.as_str()),
+            None => self.read_theme(b, n),
         };
-        self.theme = t.unwrap_or(Theme::DARK);
-        self.repaint(b);
-        if let (Err(why), true) = (t, said) {
-            self.notice(why.map_or("THEME NOT FOUND", Refused::text));
+        match t {
+            Ok(t) => (t, None),
+            Err(why) => (fallback, Some(why.map_or("THEME NOT FOUND", Refused::text))),
         }
     }
 
-    /// The name in use: THEME's, or with AUTO the day or the night one, by the light ([`ui::theme::DayNight`]).
-    pub(crate) fn theme_in_use(&self) -> [u8; 12] {
-        let s = &self.settings;
-        match (s.auto_theme, self.light.day_night.night) {
-            (false, _) => s.theme,
-            (true, false) => s.day_theme,
-            (true, true) => s.night_theme,
+    /// AUTO's day and night themes resolved into RAM, between rides: when the names change, and when AUTO is picked. A
+    /// file missing or refused gives its side's built-in default (OUTDOOR by day, DARK by night), with a notice.
+    pub(crate) fn load_day_night(&mut self, b: &mut impl Board) {
+        let s = self.settings;
+        let (day, day_why) = self.resolve(b, &s.day_theme, Theme::OUTDOOR);
+        let (night, night_why) = self.resolve(b, &s.night_theme, Theme::DARK);
+        self.auto_themes = [day, night];
+        if let Some(why) = day_why.or(night_why) {
+            self.notice(why);
         }
     }
 
-    /// AUTO (THEME): one light reading, `dt_ms` after the last. The theme follows it, drawn again when it changes.
-    pub(crate) fn follow_light(&mut self, b: &mut impl Board, lux10: u32, dt_ms: u32) {
-        if !self.settings.auto_theme {
+    /// The theme AUTO draws now: the day one or the night one, from RAM.
+    fn auto_now(&self) -> Theme {
+        self.auto_themes[usize::from(self.light.day_night.night)]
+    }
+
+    /// AUTO's theme drawn when it is not the one on the screen (a whole redraw); nothing otherwise.
+    pub(crate) fn show_auto(&mut self, b: &mut impl Board) {
+        let t = self.auto_now();
+        if t != self.theme {
+            self.theme = t;
+            self.repaint(b);
+        }
+    }
+
+    /// Makes the theme THEME names the one drawn (DARK when its file is missing or refused, with a notice when
+    /// `said`), and draws the screen again whole. With AUTO on, the day or the night one, from RAM.
+    pub(crate) fn apply_theme(&mut self, b: &mut impl Board, said: bool) {
+        if self.settings.auto_theme {
+            self.theme = self.auto_now();
+            self.repaint(b);
             return;
         }
-        let was = self.theme_in_use();
-        if self.light.day_night.update(lux10, dt_ms).is_some() && self.theme_in_use() != was {
-            self.apply_theme(b, false);
+        let name = self.settings.theme;
+        let (t, why) = self.resolve(b, &name, Theme::DARK);
+        self.theme = t;
+        self.repaint(b);
+        if let (Some(why), true) = (why, said) {
+            self.notice(why);
+        }
+    }
+
+    /// AUTO (THEME): one light reading, `dt_ms` after the last. The switch is decided and drawn from RAM (no card read).
+    pub(crate) fn follow_light(&mut self, b: &mut impl Board, lux10: u32, dt_ms: u32) {
+        if self.settings.auto_theme && self.light.day_night.update(lux10, dt_ms).is_some() {
+            self.show_auto(b);
         }
     }
 
     /// THEME's, DAY THEME's or NIGHT THEME's Select: the next name of the list, applied at once and kept. THEME's list
-    /// starts with AUTO; the others are DARK, OUTDOOR, LIGHT and the card's files.
+    /// starts with AUTO; the others are DARK, OUTDOOR, LIGHT and the card's files. A DAY or NIGHT pick redraws only
+    /// when AUTO is on and the theme in use changes.
     pub(crate) fn next_theme(&mut self, b: &mut impl Board, s: menu::Setting) {
         let (files, n) = self.theme_files(b);
         let auto_first = s == menu::Setting::Theme;
@@ -141,7 +169,7 @@ impl App {
         let next = (now + 1) % (off + 3 + n);
         if auto_first && next == 0 {
             self.settings.auto_theme = true;
-            self.light.day_night = Default::default();
+            self.light.day_night = Default::default(); // the first reading decides at once
         } else {
             let picked = Settings::name_bytes(name(next - off));
             match s {
@@ -153,8 +181,22 @@ impl App {
                 }
             }
         }
-        self.settings_store.theme_set = true;
+        if auto_first {
+            self.settings_store.theme_set = true;
+        } else {
+            self.settings_store.names_set = true;
+        }
         self.save_misc(b);
-        self.apply_theme(b, true);
+        if auto_first {
+            if self.settings.auto_theme {
+                self.load_day_night(b);
+            }
+            self.apply_theme(b, true);
+        } else {
+            self.load_day_night(b);
+            if self.settings.auto_theme {
+                self.show_auto(b);
+            }
+        }
     }
 }
