@@ -173,7 +173,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         fnv(u32::from(now.status_color) + 6, now.status),
         fnv(7, ["MODE", "BOTH", "RAMP", "CANCEL"][now.bottom as usize]),
         fnv(8, now.timer),
-        fnv(9, now.pm),
+        fnv(fnv(9, now.source), now.pm), // the source line's box erases this one: repainted after it
     ];
     let bold = Style { fg: ACCENT, ..VALUE };
     let grey = Style { fg: GREY, ..LABEL };
@@ -244,4 +244,24 @@ pub const GOOD: u16 = GREEN;
 pub fn bottom_centre(bottom: Bottom, button: Button) -> Option<(u16, u16)> {
     let (_, x, w, ..) = bottom_buttons(bottom).into_iter().flatten().find(|b| b.0 == button)?;
     Some(((x + w / 2) as u16, (BOTTOM_Y + BOTTOM_H / 2) as u16))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::tests::Frame;
+
+    /// The source line's redraw erases the power match box beside it: the box is painted again after it.
+    #[test]
+    fn power_match_survives_a_source_change() {
+        let now = |source| Now { mode: "ERG", source, target: "200 W", pm: "PM+6%", ..Now::default() };
+        let mut f = Frame::new();
+        let mut shown = draw(&mut f, &now("WORKOUT"));
+        update(&mut f, &now("MANUAL"), &mut shown);
+        let mut whole = Frame::new();
+        draw(&mut whole, &now("MANUAL"));
+        assert!(f.px == whole.px, "as if drawn whole");
+        let lit = (PM_X..PM_X + PM_W).any(|x| (SOURCE_Y..SOURCE_Y + 20).any(|y| f.at(x, y) != crate::ui::BLACK));
+        assert!(lit, "the field is on screen");
+    }
 }

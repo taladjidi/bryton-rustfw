@@ -22,6 +22,8 @@ pub const MAX_R: i32 = ONE * 115 / 100;
 pub const MIN_W: u16 = 30;
 /// Seconds skipped after a target change or a resume.
 pub const SETTLE_S: u8 = 5;
+/// Samples before the correction is shown (the estimate has settled a little).
+pub const SHOW_AFTER: u8 = 5;
 /// The average's time constant, seconds (one update a second).
 pub const TAU_S: i32 = 30;
 /// Seconds a lost source holds the ratio before it eases back.
@@ -36,7 +38,7 @@ pub const STEP_W: i64 = 2;
 pub struct PowerMatch {
     r: i32,
     applied: i32,
-    seeded: bool,
+    n: u8,
     erg: bool,
     settle: u8,
     target: u16,
@@ -65,7 +67,7 @@ pub fn apply(target_w: u16, ratio_q16: i32) -> u16 {
 impl PowerMatch {
     /// No estimate: the ratio is 1.0.
     pub const fn new() -> Self {
-        PowerMatch { r: ONE, applied: ONE, seeded: false, erg: false, settle: SETTLE_S, target: 0, stale_s: 0, dec: 0 }
+        PowerMatch { r: ONE, applied: ONE, n: 1, erg: false, settle: SETTLE_S, target: 0, stale_s: 0, dec: 0 }
     }
 
     /// One second. `erg`: ERG is held now, for `target_w` (the rider's, not the corrected one); `meter` and `trainer`
@@ -98,8 +100,10 @@ impl PowerMatch {
             self.settle -= 1;
         } else if m > MIN_W && t > MIN_W && rpm > 0 {
             let obs = ((i64::from(t) << 16) / i64::from(m)).clamp(i64::from(MIN_R), i64::from(MAX_R)) as i32;
-            self.r = if self.seeded { self.r + (obs - self.r) / TAU_S } else { obs };
-            self.seeded = true;
+            // a running mean (1.0 counts as the first sample) until the average's window is full: one outlier
+            // does not pin the ratio
+            self.n = self.n.saturating_add(1);
+            self.r += (obs - self.r) / i32::from(self.n).min(TAU_S);
         }
         self.sync();
     }
@@ -119,7 +123,7 @@ impl PowerMatch {
         let next = self.r - self.dec;
         self.r = if (self.r - ONE).signum() == (next - ONE).signum() { next } else { ONE };
         if self.r == ONE {
-            self.seeded = false;
+            self.n = 1;
         }
     }
 
@@ -137,7 +141,8 @@ impl PowerMatch {
 
     /// The correction in force as a percentage, while ERG is held and there is an estimate.
     pub fn pct(&self) -> Option<i32> {
-        (self.erg && self.seeded).then(|| ((i64::from(self.applied - ONE) * 100 + i64::from(ONE) / 2) >> 16) as i32)
+        (self.erg && self.n > SHOW_AFTER)
+            .then(|| ((i64::from(self.applied - ONE) * 100 + i64::from(ONE) / 2) >> 16) as i32)
     }
 }
 
@@ -159,17 +164,26 @@ mod tests {
         run(&mut pm, 80, 200, 1.1);
         let sent = apply(200, pm.ratio());
         assert!((218..=222).contains(&sent), "{sent}: 200 x 1.1");
-        assert_eq!(pm.pct(), Some(10));
+        assert!(matches!(pm.pct(), Some(9..=10)), "{:?}", pm.pct());
         let mut low = PowerMatch::new();
         run(&mut low, 80, 200, 0.9);
         assert!(apply(200, low.ratio()) < 184, "reading low: asked for less");
     }
 
     #[test]
+    fn one_outlier_does_not_pin_the_ratio() {
+        let mut pm = PowerMatch::new();
+        run(&mut pm, u32::from(SETTLE_S), 200, 1.0); // settling
+        pm.update(true, 200, Some(100), Some(200), 90); // the first sample twice the meter: clamped, then halved
+        assert!(pm.r < MAX_R && pm.r > ONE, "{}", pm.r);
+        assert_eq!(pm.pct(), None, "not shown on one sample");
+    }
+
+    #[test]
     fn the_ratio_is_clamped() {
         let mut pm = PowerMatch::new();
-        run(&mut pm, 60, 200, 1.5);
-        assert_eq!(pm.r, MAX_R, "1.15");
+        run(&mut pm, 200, 200, 1.5);
+        assert!(MAX_R - pm.r < 160, "1.15, to the average's integer step");
         run(&mut pm, 600, 200, 0.5);
         assert!(pm.r - MIN_R < 40, "0.85, to the average's integer step");
     }

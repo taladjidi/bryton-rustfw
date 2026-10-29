@@ -195,7 +195,6 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
 #[test]
 fn the_full_copy_records_the_trainer_for_erg() {
     let (mut sim, mut app) = unit();
-    app.settings.power_match = false; // the meter's 210 W is not the trainer's: the target is held as set
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
     run(&mut sim, &mut app, 4000);
@@ -231,8 +230,11 @@ fn the_full_copy_records_the_trainer_for_erg() {
     assert!(rec.iter().all(|r| field(r, 233).is_some()), "the trainer heard every second");
     let col = |f: u8| rec.iter().map(|r| field(r, f).unwrap()).collect::<Vec<_>>();
     // the target held, every second of the first step, a resend or not (the review of 842e73f)
+    // power match is on: the meter's constant 210 W is far from the trainer's 110, so the trainer is asked for less
+    // (0.85 at most) once it samples, but the recorded target is the rider's
     assert!(col(233).iter().all(|&w| w == 110), "target_w, the workout's first step: {:?}", col(233));
-    assert!(col(234).iter().filter(|&&w| w == 110).count() > 10, "trainer_w holds the target: {:?}", col(234));
+    assert!(col(234).iter().skip(1).all(|&w| (93..=110).contains(&w)), "trainer_w: {:?}", col(234));
+    assert!(col(234).iter().filter(|&&w| w == 110).count() > 4, "held at 110 before the sampling: {:?}", col(234));
     assert!(col(235).iter().all(|&w| w == 210), "meter_w, the meter's: {:?}", col(235));
     assert!(col(236).iter().all(|&s| s == 3), "fe_state in use: {:?}", col(236));
     assert!(col(238).iter().all(|&l| l == 0), "link ANT+");

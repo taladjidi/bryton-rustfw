@@ -184,7 +184,7 @@ impl SettingsCopy {
             s.theme = name;
         }
         // POWER MATCH (appended after THEME): a byte, 0 or 1; a file without it reads ON
-        s.power_match = data.next().map_or(d.power_match, |v| v == 1);
+        s.power_match = data.next().map_or(d.power_match, |v| if v < 2 { v == 1 } else { d.power_match });
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -495,6 +495,8 @@ mod tests {
         let old = with(&|sec| sec[6] = 43).unwrap();
         assert!(old.power_match && !s.power_match, "a file from before POWER MATCH reads ON, the rest as it was");
         assert_eq!(Settings { power_match: false, ..old }, s);
+        let wild = with(&|sec| sec[DATA_AT + 43] = 7).unwrap();
+        assert!(wild.power_match, "a byte out of range reads the default, ON");
         let odd = with(&|sec| {
             sec[DATA_AT..DATA_AT + 2].copy_from_slice(&1234u16.to_le_bytes()); // no such wheel
             sec[DATA_AT + 4..DATA_AT + 6].copy_from_slice(&9999u16.to_le_bytes()); // FTP out of range
