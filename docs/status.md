@@ -8,13 +8,15 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
-- **The settings' file (`\Rustfw\settings.bin`, app/settings_file.rs)**: on the host only. On the unit: the first
-  start of the build writes it (the settings as before, nothing changed on screen); change a setting (FTP, GPS POWER),
-  wait 5 s, restart: still there; the file is 1024 bytes on the drive. Then switch to stock and back: stock's
-  settings and rides as they were, `\Activities\` and `\System\` untouched, and this firmware's settings back.
+- **The settings' file (`\Rustfw\settings.bin`, app/settings_file.rs)**: seen on the unit 2026-10-29 (RAM run,
+  EMMC_WRITE=1). The first start created the file (seq 1). A FONT change wrote seq 2 into the other copy. After
+  `dev.py reset` the older installed build b0861d8 booted, and re-running f5d7f3e kept the change. Changing it back wrote
+  seq 3. Still to see: switch to stock and back, stock's settings and rides as they were, `\Activities\` and `\System\`
+  untouched, and this firmware's settings back.
 
-- **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: idle 30 s on the overview, then a real press of
-  each key acts at once (not up to 250 ms later); `tools/dev.py prof` shows about 4 to 7 passes a second idle.
+- **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: seen on the unit 2026-10-29: 7 passes a second idle
+  on the overview (`prof`, 1 s window, 0.91 % awake). Still to see: a real press of each key, after 30 s idle, acts at
+  once (not up to 250 ms later).
 - **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of
   0x20d00001 reads 2 after 11 minutes fast and straight, 0 within a second of a stop or a hairpin; the track and the
   speed against FULL's (and a speed sensor's) on the same road; the share of the ride in cyclic tracking.
@@ -35,10 +37,10 @@ A feature not listed here was seen on the unit.
   it. Expected: the dot grey during the sleep, no "USB RECONNECT", `tools/dev.py info` answers at once after the wake (same
   uptime, no new enumeration), backup register 31 (`tools/dev.py peek 0x580040cc`) unchanged.
 
-- **The profiler (link/prof.rs, `tools/dev.py prof`, tools/profile.py)**: tested on the simulator only (sections, the
-  counter's wrap, the `prof` answer). On the unit: `tools/profile.py --run` through its scenarios; the overhead `prof`
-  reports (a few tens of cycles a section expected), the sum of the rows near `tools/dev.py info`'s awake permille, and the key
-  figures in README.md filled in from it.
+- **The profiler (link/prof.rs, `tools/dev.py prof`, tools/profile.py)**: seen on the unit 2026-10-29: section overhead
+  15 cycles; the rows sum to 1.508 % against 1.51 % awake. Idle overview 21.2 passes/s, 1.51 % awake; ride page 1 1.46 %;
+  ride page 5 1.37 %; menu 2.69 %; ride discarded 4.98 %. Still to do: the key figures in README.md filled in from these
+  (they still hold the 2026-10-27 numbers).
 
 - **The ascent filter on a ride (altitude.rs, ride.rs)**: the median of 5, the 1/6 average, the slewed reference and the
   3 m hysteresis are tuned on the records of one real ride (341 m became 123 m on a real 60 km ride, offline); on the

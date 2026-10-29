@@ -651,11 +651,33 @@ STOCK):
 - **Beeps** at power-on and power-off, for a workout's steps, alerts and courses: one tone player, so two sounds
   due together play one after the other.
 
-## Settings registers
+## Settings
 
-The settings live in the RTC backup registers (32 words kept through standby and a reset; the table is in
-`src/app/settings.rs`), each word behind a tag so an empty or foreign one reads as unset, and earlier tags are still
-read. All 32 are taken (the two diagnostics share 0 and 31), so a new setting needs the settings file (roadmap section 3, item 4).
+The settings live in `\Rustfw\settings.bin` (`src/app/settings_file.rs`): 1024 bytes, two copies of one 512-byte sector.
+Each copy holds "RSET", a version (1), the length of the settings in it, a sequence number and a CRC-32 of the sector.
+The newest whole copy (the higher sequence number) wins, and a write goes over the other copy, so a write cut at any
+point leaves the newest copy before it whole. The file is read when `\Rustfw\pages.bin` is read, a few seconds after
+the start (never at boot), and written between rides only. Its settings: the wheel size, the numbers (max HR, FTP,
+weight, bike weight, W', eat, drink, heart rate alert), then the choices, one byte each. A value out of its range reads
+as its default. A later build appends its settings and raises the length.
+
+**Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
+- the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers
+  are written from them;
+- else, register by register: a register that differs from the word the newest copy was written with brings only the
+  fields it carries, and the file is written again with them. Every other field is the file's;
+- no file, or no whole copy: the registers' settings are written as its first copy, once.
+
+A read that fails for any reason but "no file" is tried again, never taken for no file.
+
+**Backup registers still written.** Registers 11, 16 and 28, and AUTO OFF's bits of register 18, are written at every
+change, because the first screen needs them before the card is read (backlight level and time-out, font, AUTO OFF).
+A change made during a ride, with the USB drive lent, or by a build that may not write the card (it reads the file and
+never writes it) waits in the registers, and survives a reset or a switch-off there; the registers win over the file
+where they differ from what it was written with. A setting added from now on goes in the file only.
+
+The register layout, for the words still written:
+
 - **11:** wheel, backlight, max HR, FTP, touch, ride profile, climbs ahead; tag 0xa7 (AUTO), 0xa8 (ROAD), 0xa9 (INDOOR),
   0xaa to 0xac the same with CLIMBS AHEAD off. MTB reads as AUTO here; it is kept in register 16 bit 27.
 - **16, tag 0xa:** the rider's weight less 30 kg in bits 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the
