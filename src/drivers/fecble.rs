@@ -1,5 +1,5 @@
 //! FE-C over BLE, the second way a Bluetooth trainer is driven: trainers without FTMS (older Tacx scheme, the
-//! Van Rysel D500 among them) carry the ANT+ FE-C pages (`fec.rs`) inside ANT message frames over one vendor GATT
+//! Van Rysel D500 and D900 among them) carry the ANT+ FE-C pages (`fec.rs`) inside ANT message frames over one vendor GATT
 //! service. This file is the framing and what the advertising says; the pages are `fec.rs`'s, the link is
 //! app/ftms.rs.
 //!

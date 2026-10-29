@@ -8,7 +8,6 @@ impl App {
     /// radio wait) loses no ride time.
     pub(crate) fn catch_up_seconds(&mut self, sec: u8) {
         if sec != self.seconds {
-            // every second gone, not one a pass: a pass that took longer (an eMMC or radio wait) loses no ride time;
             // more than MAX_CATCH_UP is the clock set, not riding
             let gone = (sec + 60 - self.seconds) % 60;
             self.seconds = sec; // the time the recorder reads goes with the minute already read
