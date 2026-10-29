@@ -342,6 +342,7 @@ impl App {
             }
             _ => None,
         };
+        let call = call_choice(i);
         match (self.screen, i) {
             // during a ride (or on its card), a first hold only warns: switching off ends the riding (the recorder
             // checkpoints first, and the next start resumes the ride paused)
@@ -352,9 +353,9 @@ impl App {
             (_, Input::Off) => return self.power_off(b),
             // an incoming call, over any screen: Start or the green button answers, Back or the red one declines
             (_, Input::Select | Input::Back | Input::Touch(Gesture::Tap(..)))
-                if self.phone.ringing && call_choice(i).is_some() =>
+                if self.phone.ringing && call.is_some() =>
             {
-                let accept = call_choice(i) == Some(true);
+                let accept = call == Some(true);
                 self.answer(b, accept);
                 self.end_ring(b);
                 self.say(if accept { "ANSWERED" } else { "DECLINED" });
@@ -395,6 +396,7 @@ impl App {
         graph_hit: Option<(usize, Field)>,
         shown: Seen,
     ) {
+        let zoom = if let Input::Touch(Gesture::Tap(x, y)) = i { self.zoom_at(x, y) } else { None };
         match (self.screen, i) {
             // the phone: Lap held plays or pauses from a page; the media remote and an incoming call
             (Screen::Main | Screen::Ride(_), Input::Media) => return self.media(b, Media::PlayPause, false),
@@ -409,7 +411,9 @@ impl App {
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open_quick(),
             // a tap on the overview's notices opens their list, even while recording (it only reads; the touch lock
             // returns before this)
-            (Screen::Main, Input::Touch(Gesture::Tap(_, y))) if u32::from(y) >= ui::NOTICES_Y => {
+            (Screen::Main, Input::Touch(Gesture::Tap(x, y)))
+                if ui::Rect(0, ui::NOTICES_Y, ui::W, ui::H - ui::NOTICES_Y).contains(x, y) =>
+            {
                 self.open(Screen::Menu(Menu::Notifs, 0))
             }
             // the overview is apart from the ride pages, as on stock: Page goes to them, then round them; Back
@@ -429,8 +433,8 @@ impl App {
                 return self.update_page(b);
             }
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
-            (Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.zoom_at(x, y).is_some() => {
-                if let Some(z) = self.zoom_at(x, y) {
+            (Screen::Ride(_), Input::Touch(Gesture::Tap(..))) if zoom.is_some() => {
+                if let Some(z) = zoom {
                     (self.map_zoom, self.map_centre) = (z.map(|z| z.level), z.and_then(|z| z.centre));
                 }
                 return self.update_page(b);

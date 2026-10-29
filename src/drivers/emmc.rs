@@ -327,6 +327,11 @@ impl Emmc {
         self.lent
     }
 
+    /// Lent write protected ([`Emmc::lend_read_only`]).
+    pub fn read_only(&self) -> bool {
+        self.lent && self.read_only
+    }
+
     /// The card (identified if needed): its layout and its reliable write parameters.
     pub fn card(&mut self, b: &mut impl Board) -> Result<Card, Error> {
         if self.lent {

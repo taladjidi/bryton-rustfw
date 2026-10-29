@@ -260,11 +260,8 @@ impl App {
 
     /// The graph field at (`x`, `y`) on the page shown, if there is one: its box index and field.
     pub(crate) fn graph_at(&self, x: u16, y: u16) -> Option<(usize, Field)> {
-        let (x, y) = (u32::from(x), u32::from(y));
-        self.widgets().enumerate().find_map(|(i, ((bx, by, bw, bh), w))| match w {
-            Widget::Field(f) if graph_plot(f).is_some() && (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y) => {
-                Some((i, f))
-            }
+        self.widgets().enumerate().find_map(|(i, (r, w))| match w {
+            Widget::Field(f) if graph_plot(f).is_some() && ui::Rect::from(r).contains(x, y) => Some((i, f)),
             _ => None,
         })
     }

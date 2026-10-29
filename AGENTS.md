@@ -56,7 +56,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - no heap;
   - no dependencies without a measured need;
   - tables over code (the panel init is data);
-  - watch the image size `tools/pack.py` prints: about <!-- n:image -->638 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
+  - watch the image size `tools/pack.py` prints: about <!-- n:image -->640 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
 - **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
@@ -170,8 +170,9 @@ It runs, in order:
 - the firmware build;
 - `tools/stack_check.py` (the stack frames against their budgets);
 - `tools/pack.py`;
+- `tools/font.py` regenerates `src/ui/fonts.rs` into a temporary file and `cmp` fails on a diff (skipped without PIL);
 - `tools/numbers.py --write` (the markers of the docs, each changed one printed) and `tools/numbers.py selftest`;
-- `tools/dev.py selftest`, `tools/sync.py selftest`, `tools/s810_probe.py selftest`, `tools/route_pack.py selftest`;
+- `tools/dev.py selftest`, `tools/sync.py selftest`, `tools/s810_probe.py selftest`, `tools/route_pack.py selftest`, `tools/ign_pack.py selftest`;
 - `tools/fit_check.py` on the test rides when fitdecode and garmin-fit-sdk are installed (`FIT_PYTHON` may name a venv's
   Python);
 - - if Renode is installed: `renode/run.py`, `renode/run.py --vbus` and `renode/run.py --off` (docs/devloop.md,

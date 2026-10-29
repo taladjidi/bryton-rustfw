@@ -22,23 +22,38 @@ impl App {
             self.say(why);
             return Err(why);
         }
+        let mut left = false; // lent read only for a ride left open (said so)
         if !self.emmc.lent() {
             if self.trash_check && self.ride_settled() {
                 // a delete a cut left, finished first (the review of 2026-10-25): lent, the ride would be in neither
                 // folder, a computer's fsck could free or reconnect its chain, and the move would then link the
-                // ride's name onto it. Failed: the move's own check of the chain still holds
+                // ride's name onto it. A card error: lent read only (below), finished at the next scan or lending; a
+                // damaged volume (`Corrupt`), which the move cannot use either: lent writable, for a computer to mend
                 let t = fat::write::dos_time(self.rec_time().0);
-                self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t).is_err();
+                self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t) == Err(fat::Error::Io);
             }
             self.past.stop(); // a past ride being read
-            if self.ride_settled() {
+            // a ride the records say is left open though none is here (the boot's marker lost: a flat battery), a
+            // chain only its record may name: not lent writable until the next Start takes it up (review S3)
+            let open = |a: &mut Self, b: &mut _| {
+                a.rec.clean.left_open(&mut emmc::Volume(&mut a.emmc, b))
+                    || a.rec.full.left_open(&mut emmc::Volume(&mut a.emmc, b))
+            };
+            let settled = self.ride_settled() && !self.trash_check;
+            left = settled && open(self, b);
+            if settled && !left {
                 self.emmc.lend(true);
             } else {
-                self.emmc.lend_read_only(); // a save stuck: what is on the card copied, nothing written
+                // a save stuck, a delete left halfway, a ride left open: what is on the card copied, nothing written
+                self.emmc.lend_read_only();
             }
             self.drive.insert();
         }
-        self.say(if self.ride_settled() { "USB DRIVE ON" } else { "USB DRIVE READ ONLY" });
+        self.say(match (left, self.emmc.read_only()) {
+            (true, _) => "RIDE LEFT OPEN: START A RIDE",
+            (_, true) => "USB DRIVE READ ONLY",
+            _ => "USB DRIVE ON",
+        });
         Ok(())
     }
 

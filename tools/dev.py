@@ -161,18 +161,29 @@ def ls(s, path):
 
 
 def get(s, path, progress=False):
-    """A file of the eMMC FAT volume, 4 KB an answer (tools/sync.py uses it too)."""
+    """A file of the eMMC FAT volume, 4 KB an answer (tools/sync.py uses it too). Its size is the one `ls` gives its
+    folder: an answer cut by a dropped link is raised here, never copied short (AGENTS.md, Project rules)."""
+    folder, _, name = path.replace('/', '\\').rpartition('\\')
+    sizes = {n.upper(): size for size, is_dir, n in ls(s, folder or '\\') if not is_dir}
+    if name.upper() not in sizes:
+        raise OSError(f'get {path}: not in its folder')
+    size = sizes[name.upper()]
     data = bytearray()
-    while True:
+    while len(data) < size:
         answer = command(s, f'get {path} {len(data)} 4096')
         if answer.startswith('err'):
             raise OSError(f'get {path}: {answer}')
-        chunk = bytes.fromhex(answer)
+        try:
+            chunk = bytes.fromhex(answer)
+        except ValueError:
+            raise OSError(f'get {path}: malformed answer at {len(data)}') from None
+        want = min(4096, size - len(data))
+        if len(chunk) != want:
+            raise OSError(f'get {path}: answer of {len(chunk)} bytes at {len(data)}, want {want}')
         data += chunk
-        if len(chunk) < 4096:
-            return bytes(data)
         if progress and len(data) % (256 * 1024) == 0:
             print(f'{len(data) // 1024} KB...', file=sys.stderr)
+    return bytes(data)
 
 
 def prof_read(s):
@@ -235,6 +246,45 @@ def selftest():
     assert '| draw | 20.0 | 25.0 | 45 | 0.050 |' in t, t
     assert '| step, not in a section | | | | 0.150 |' in t and '**0.30**' in t and 'tiles' not in t, t
     assert '2400 px/s' in t and '1.5 sectors/s' in t, t
+    class Link:
+        """The dev link's computer side: `ls` lists one file of `size` bytes, each `get` takes the next of `answers`."""
+        def __init__(self, size, answers=()):
+            self.size, self.answers, self.out = size, list(answers), []
+
+        def reset_input_buffer(self):
+            self.out = []
+
+        def write(self, cmd):
+            if cmd.decode().split()[0] == 'ls':
+                self.out = [f'{self.size:x} f FILE.FIT', 'end']
+            else:
+                self.out = [self.answers.pop(0)]
+
+        def readline(self):
+            return (self.out.pop(0) + '\n').encode()
+
+    blob = bytes(range(256)) * 40                       # 10240 bytes: answers of 4096, 4096 and 2048
+    path = 'Activities\\FILE.FIT'
+    chunks = [blob[i:i + 4096].hex() for i in range(0, len(blob), 4096)]
+    assert get(Link(len(blob), chunks), path) == blob
+    cases = [
+        ('err busy', ['err busy'], 'err busy'),
+        ('odd hex', ['abc'], 'malformed answer at 0'),
+        ('cut in the middle', [chunks[0], blob[4096:4196].hex()], 'answer of 100 bytes at 4096, want 4096'),
+    ]
+    for what, answers, want in cases:
+        try:
+            get(Link(len(blob), answers), path)
+        except OSError as e:
+            assert want in str(e), (what, str(e))
+        else:
+            raise AssertionError(f'{what}: a bad answer was copied')
+    try:
+        get(Link(len(blob)), 'Activities\\OTHER.FIT')
+    except OSError as e:
+        assert 'not in its folder' in str(e), e
+    else:
+        raise AssertionError('a file ls does not list was copied')
     print('dev.py selftest ok')
 
 

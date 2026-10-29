@@ -657,7 +657,7 @@ impl App {
                 }
             }
             Some(Row::Stock(menu::StockRow::Scan)) if self.stock.status() != stock::Status::Running => {
-                self.stock.start(self.date);
+                self.rescan();
             }
             Some(Row::Stock(menu::StockRow::Import)) if self.confirmed(menu, sel, "IMPORT SETTINGS") => {
                 self.import_stock(b, false)
@@ -694,7 +694,7 @@ impl App {
                     self.pages_set = set;
                 }
                 if m == Menu::History && self.stock.status() == stock::Status::Idle {
-                    self.stock.start(self.date); // the history is what the scan of stock's rides finds
+                    self.rescan(); // the history is what the scan of stock's rides finds
                 }
                 self.open(Screen::Menu(m, 0))
             }

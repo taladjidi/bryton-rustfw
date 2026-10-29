@@ -426,7 +426,7 @@ impl App {
                     t.reset(); // its full copy read too, when FITNESS next shows
                 }
                 if self.stock.status() != stock::Status::Idle {
-                    self.stock.start(self.date); // the history again, with this ride
+                    self.rescan(); // the history again, with this ride
                 }
             }
             recorder::Outcome::Discarded(_) => self.notice("RIDE DISCARDED"), // the history as it was: no scan

@@ -73,11 +73,17 @@ impl App {
         }
     }
 
+    /// The scan of stock's rides (re)started: a delete a cut left is tried again at its first pass.
+    pub(crate) fn rescan(&mut self) {
+        self.trash_tried = false;
+        self.stock.start(self.date);
+    }
+
     /// For the dev link's `bench scan`: the scan of stock's rides (started if it is not running) goes on for about
     /// `bytes`; how many it read.
     pub fn bench_scan(&mut self, b: &mut impl Board, bytes: u32) -> u32 {
         if self.stock.status() != stock::Status::Running {
-            self.stock.start(self.date);
+            self.rescan();
         }
         let before = self.stock.read_bytes();
         self.stock.step(&mut emmc::Volume(&mut self.emmc, b), bytes);
@@ -119,14 +125,19 @@ impl App {
             && self.gps.ms >= STOCK_SCAN_MS
             && self.ride.state() == ride::State::Idle
         {
-            self.stock.start(self.date);
+            self.rescan();
         }
-        if self.stock.status() == stock::Status::Running && self.trash_check && self.ride_settled() {
+        let running = self.stock.status() == stock::Status::Running;
+        self.trash_tried &= running; // a new scan, a new try
+        if running && !self.trash_tried && self.trash_check && self.ride_settled() {
             // a delete a cut left (trash.rs): finished before the scan reads the rides (it then drops the ride); not
-            // at boot (the card is not touched then), not during a ride (it makes the FATs equal first)
-            self.trash_check = false;
+            // at boot (the card is not touched then), not during a ride (it makes the FATs equal first). Once a
+            // scan: a lasting error is not tried every pass. A card error: kept, tried again at the next scan and
+            // before the drive is lent, read only meanwhile (drive_on; the review of 2026-10-29, S4); a damaged
+            // volume: dropped, as drive_on does
+            self.trash_tried = true;
             let t = fat::write::dos_time(self.rec_time().0);
-            let _ = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t); // failed: finished by the next delete
+            self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t) == Err(fat::Error::Io);
         }
         let t0 = b.awake_us();
         if self.stock.status() == stock::Status::Running {

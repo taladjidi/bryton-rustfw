@@ -83,7 +83,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     fall back to PIXEL at that scale: `fonts::smooth`, `text::pick`), so no layout depends on the choice: keep it so
     (`smooth_fonts_share_the_pixel_cells`). `Canvas::smooth` carries the choice to every draw (`Panel`'s third field, filled from
     the settings; screenshot rows carry it in `Row`), so the screenshot equals the panel.
-  - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL).
+  - To change a glyph, edit `tools/pixel_font.py` and run `python3 tools/font.py` (needs PIL; `-o PATH` writes elsewhere; check.sh compares its output with this file).
 - `src/drivers/panel.rs`: the ST7789 protocol as data and command bytes (init table, CASET / RASET / RAMWR, off).
 - `src/drivers/gnss.rs`: the u-blox receiver's UBX framing, NAV-PVT and the configuration sent (RAM layer only).
   `tools/gnss.py` talks to it from the computer through `peek` / `poke`.
