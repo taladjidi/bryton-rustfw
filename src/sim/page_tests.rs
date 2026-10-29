@@ -538,7 +538,7 @@ fn a_read_only_edit_waits_for_the_file() {
 /// A power cut after every sector of a write of the pages, the first (the file created) and a later one (a copy
 /// over the older): the volume stays clean for fsck, and the next start reads the old pages or the new, never a mix.
 /// The registers are as the cut left them: as before the write (they come after it), the CPU dying with the card.
-/// A cut tears no sector here; on a card with reliable writes, the sector being written is torn too (src/sim/).
+/// The sector being written at the cut is torn (half old, half new), unless the card offers reliable writes (src/sim/).
 #[test]
 fn a_cut_at_every_sector_reads_old_or_new() {
     let edit = |app: &mut App, sim: &mut Sim, k: u32| {
@@ -552,7 +552,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
     for (writes, reliable) in [(1, false), (2, false), (1, true), (2, true)] {
         let setup = || {
             let (mut sim, mut app) = started_on(reliable);
-            sim.emmc.tear = reliable;
+            sim.emmc.tear = true;
             for k in 0..writes - 1 {
                 edit(&mut app, &mut sim, k);
                 run(&mut sim, &mut app, 200);

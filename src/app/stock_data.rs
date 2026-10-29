@@ -226,14 +226,17 @@ impl App {
         let own = matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xac)
             || Kind::ALL.iter().any(|k| k.from_word(b.backup_read(k.backup())).is_some())
             || PAGE_BKP.iter().any(|r| PageCfg::from_words([b.backup_read(r[0]), b.backup_read(r[1])]).is_some());
+        // the registers written below are not the rider's change: settings.bin, if there, still wins over them
+        let lost = self.settings_store.lost;
         if own || self.rec.resume_pending {
             if !own {
                 self.save_misc(b); // the ride's settings kept as they are: no import at the next start either
             }
-            return;
+        } else {
+            self.import_stock(b, true);
+            self.save_misc(b);
         }
-        self.import_stock(b, true);
-        self.save_misc(b);
+        self.settings_store.lost = lost;
     }
 
     /// Applies stock's settings ([`stock::Scan::import`]) where this firmware has them, and says how many (`quiet`:

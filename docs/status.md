@@ -8,6 +8,11 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **The settings' file (`\Rustfw\settings.bin`, app/settings_file.rs)**: on the host only. On the unit: the first
+  start of the build writes it (the settings as before, nothing changed on screen); change a setting (FTP, GPS POWER),
+  wait 5 s, restart: still there; the file is 1024 bytes on the drive. Then switch to stock and back: stock's
+  settings and rides as they were, `\Activities\` and `\System\` untouched, and this firmware's settings back.
+
 - **Idle loop woken by a key (BOARD.md 5, main.rs `wake_on_io`)**: idle 30 s on the overview, then a real press of
   each key acts at once (not up to 250 ms later); `tools/dev.py prof` shows about 4 to 7 passes a second idle.
 - **GPS POWER AUTO (`gnss::Adaptive`)**: on the host only. On the unit, a road ride: `tools/gnss.py` CFG-VALGET of

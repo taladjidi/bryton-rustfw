@@ -14,7 +14,11 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   plus its own types and constants. The modules are private and re-exported whole from lib.rs, so paths stay
   `crate::Settings`, `bryton_rustfw::POLL_MS`; App's fields are private to the crate root, which every module can
   read; a method another file calls is `pub(crate)`.
-  - `settings.rs`: `Settings`, `PageCfg`, every backup register of the app (`*_BKP`), saving them.
+  - `settings.rs`: `Settings`, `PageCfg`, every backup register of the app (`*_BKP`), saving them; which registers
+    stay beside the settings' file, and why.
+  - `settings_file.rs`: `\Rustfw\settings.bin`, the settings' file (`SettingsCopy`: two copies, magic, version,
+    length, sequence number, CRC-32; read with the pages' file, written between rides; which wins over the
+    registers; the migration from them).
   - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
@@ -227,6 +231,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
+  `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).

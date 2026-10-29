@@ -760,13 +760,17 @@ impl App {
             self.update_light(b);
             self.gps.reconfig |= s == menu::Setting::GpsPower; // the receiver told at its next message
             if s == menu::Setting::Font {
-                // every text changes at once: the strip and the screen drawn whole
-                self.notes.drawn = false; // the banner too, if one is up
-                self.strip_shown = self.strip;
-                ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
-                self.show(b);
+                self.font_changed(b);
             }
         }
+    }
+
+    /// The font changed: every text changes at once, the strip and the screen drawn whole.
+    pub(crate) fn font_changed(&mut self, b: &mut impl Board) {
+        self.notes.drawn = false; // the banner too, if one is up
+        self.strip_shown = self.strip;
+        ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
+        self.show(b);
     }
 
     /// Select on an ANT+ sensor: pair, stop, search again, forget.

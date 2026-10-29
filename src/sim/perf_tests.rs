@@ -103,6 +103,9 @@ fn long_reads_spread_over_passes() {
     let fresh = || {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = card.clone();
+        // the card's work takes time (the unit's 2.5 MB/s read and parsed): what is spread over passes by the time it
+        // takes is spread here too (settings.bin's FAT comparison at the first start)
+        sim.work_ns_per_byte = 400;
         let mut app = App::start(&mut sim, None);
         app.set_course_memory(crate::storage::course_file::tests::memory());
         app.press(&mut sim, Press::Long(Key::Page));

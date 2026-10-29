@@ -277,7 +277,7 @@ impl App {
             self.emmc.lent(),
             self.phone.ringing,
             self.touching(),
-            self.store.dirty,                              // pages.bin waits to be written
+            self.store.dirty || self.settings_store.dirty, // pages.bin or settings.bin waits to be written
             self.stock.status() == stock::Status::Running, // the scan and its cache
             self.sensors_store.dirty,                      // sensors.bin waits
             self.alt.is_dirty(),                           // so does the altitude calibration

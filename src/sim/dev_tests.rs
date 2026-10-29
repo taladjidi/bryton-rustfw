@@ -63,10 +63,11 @@ fn info_answers() {
     let (_, app) = app_at(1, 2, 3);
     let mut pc = Pc::default();
     Session::new().feed(b"info\n", &app, Stats { uptime_ms: 1234, awake_permille: 0, cpu_permille: 0 }, &mut pc);
+    // held 65: the keys at the start (bit 0) and, a first start, the settings' file to write (bit 6)
     assert_eq!(
         pc.got,
         format!(
-            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, radio resets 0, climb tile us last 0 max 0 slice max 0, auto off held 1\n",
+            "bryton-rustfw {} {} up 1234 ms, awake 0 permille, cpu 0 permille, radio resets 0, climb tile us last 0 max 0 slice max 0, auto off held 65\n",
             env!("CARGO_PKG_VERSION"),
             env!("GIT_DESCRIBE")
         )
