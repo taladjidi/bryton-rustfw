@@ -1,7 +1,21 @@
 //! The settings and where they are kept: [`Settings`] (wheel, backlight, heart rate, power, alerts) and the ride
-//! pages' [`PageCfg`], packed into RTC backup registers (which survive standby) until the eMMC holds a settings
-//! file (BOARD.md 8: none used by stock). The app's backup registers are all named here, so two features never take
-//! the same one; the paired sensors' are [`sensors::Kind::backup`].
+//! pages' [`PageCfg`], packed into RTC backup registers (which survive standby; BOARD.md 8: none used by stock). The
+//! app's backup registers are all named here, so two features never take the same one; the paired sensors' are
+//! [`sensors::Kind::backup`].
+//!
+//! **The file and the registers.** The settings are kept in `\Rustfw\settings.bin` (app/settings_file.rs), which
+//! wins over the registers once it is read; a new setting goes there only. Registers 11, 16 and 28 and AUTO OFF's
+//! bits of 18 stay, written at every change ([`App::save_misc`]) with what they held before, because:
+//! - the file is read a few seconds after the start (the card is not touched at boot), and the first screen needs
+//!   its backlight level and time-out (11) and its font (16) before; 11's tag also tells the first start that this
+//!   firmware ran here ([`App::first_start`]);
+//! - the file is written between rides only: a change made during a ride, with the USB drive lent, or by a build that
+//!   may not write the card lives in the registers until then, and survives a reset or a switch-off there (they
+//!   win over the file where they differ from what it was written with);
+//! - the words are full, so a register freed would give a single word back, and older builds read these.
+//!
+//! A setting added from now on lives in the file only: lost to a reset only if it was changed while the file had to
+//! wait.
 
 use crate::*;
 use page::Page;
@@ -97,14 +111,14 @@ pub const CLIMB: usize = PAGES + 3;
 //   1..4     stock (clock set, clock, USB mode)                     -
 //   5..8, 10 paired ANT+ sensors (tag 0xa5)                         sensors::Kind::backup
 //   9, 12,13 stock (12: its Nordic image; 13: last battery mV)      -
-//   11       wheel, backlight, max HR, FTP                          WHEEL_BKP
+//   11       wheel, backlight, max HR, FTP (also in settings.bin)   WHEEL_BKP
 //   14       paired shifting system (0x61 / 0x62)                   sensors::Kind::backup
 //   15       stock reads it at boot                                 -
-//   16       weights and W' (0xa)                                   POWER_BKP
+//   16       weights and W' (0xa; also in settings.bin)             POWER_BKP
 //   17, 18   GNSS aiding                                            AID_BKP
 //   19       stock reads it at boot (once ours: set back to 0)      STOCK_BKP19
 //   20..27   ride pages and the overview (0xd / 0xe)                PAGE_BKP
-//   28       alerts and the keys' actions (0x9)                     ALERTS_BKP
+//   28       alerts and the keys' actions (0x9; also settings.bin)  ALERTS_BKP
 //   29       fault marker (0xfa)                                    FAULT_BKP
 //   30       a ride open on the card                                RIDE_BKP
 //   31       diagnostics: USB drops (0x0b), reset flags (0x5c)      USB_DROPS_BKP = STANDBY_FLAGS_BKP
@@ -236,8 +250,7 @@ pub struct Settings {
     /// What each shifter button press does, by [`sensors::Press`]: 3 bits each, the single presses in register 16
     /// (bits 18..23), the long ones in register 28 (bits 5..7 and 13..15), the bits those words left free. 0, in
     /// words written before: nothing.
-    // ponytail: split over two words because no backup register is free (BOARD.md 8); one place once settings
-    // move to a file on the card
+    // split over two words because no backup register is free (BOARD.md 8); in settings.bin, four bytes in a row
     pub remote: [menu::Remote; 4],
     /// The touch panel acts (the TOUCH setting); off, it is not read for gestures and only the keys act. Kept in
     /// register 11, bit 23.
@@ -672,7 +685,7 @@ impl Settings {
         *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
     }
 
-    fn number_mut(&mut self, s: Setting) -> Option<&mut u16> {
+    pub(crate) fn number_mut(&mut self, s: Setting) -> Option<&mut u16> {
         match s {
             Setting::MaxHr => Some(&mut self.max_hr),
             Setting::Ftp => Some(&mut self.ftp),
@@ -828,9 +841,25 @@ pub(crate) fn register_words(pages: &[Page], count: usize) -> [u32; 2 * REG_PAGE
 /// A page of one cell showing the time: what a page that cannot be read becomes.
 pub const BLANK: Page = Page { rows: [(1, 1), (0, 0), (0, 0), (0, 0), (0, 0)], fields: [Field::Time; page::CELLS] };
 
+impl Settings {
+    /// The words `App::save_misc` writes to registers 11, 16 and 28, then AUTO OFF's bits of register 18 (as
+    /// [`with_auto_off_word`](Settings::with_auto_off_word) reads them, shifted down): what a copy of
+    /// `\Rustfw\settings.bin` keeps to know whether the registers changed since it was written.
+    pub fn register_words(self) -> [u32; 4] {
+        [self.to_word(), self.power_word(), self.alerts_word(), self.auto_off as u32 + 1]
+    }
+}
+
 impl App {
+    /// A setting changed: written to its backup registers at once, and to `\Rustfw\settings.bin` between rides
+    /// (app/settings_file.rs).
+    pub(crate) fn save_misc(&mut self, b: &mut impl Board) {
+        self.write_settings_registers(b);
+        self.settings_store.dirty |= self.card_writable;
+    }
+
     /// Writes the settings to their backup registers.
-    pub(crate) fn save_misc(&self, b: &mut impl Board) {
+    pub(crate) fn write_settings_registers(&self, b: &mut impl Board) {
         b.backup_write(WHEEL_BKP, self.settings.to_word());
         b.backup_write(POWER_BKP, self.settings.power_word());
         b.backup_write(ALERTS_BKP, self.settings.alerts_word());

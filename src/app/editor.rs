@@ -192,34 +192,83 @@ impl App {
             self.load_pages(b);
         }
         if self.card_writable && self.store.dirty && self.pages_writable_soon() {
-            if !self.store.sound && !self.sync_fats_step(b) {
-                return; // the FAT copies compared over the next passes first
+            if !self.store.sound {
+                match Self::sync_fats_step(&mut self.emmc, b, &mut self.store.sync) {
+                    Some(false) => return, // the FAT copies compared over the next passes first
+                    Some(true) => self.store.sound = true,
+                    None => {}
+                }
             }
             self.save_pages(b);
         }
     }
 
-    /// FAT sectors of both copies compared ([`App::SYNC_SECTORS`] a step) until the pass has spent
-    /// [`App::SCAN_IDLE_US`]; true once done (or when it cannot be: the write then says why).
+    /// FAT sectors of both copies compared from `*at` ([`App::SYNC_SECTORS`] a step) until the pass has spent
+    /// [`App::SCAN_IDLE_US`]: Some(true) once all are, Some(false) to go on at the next pass, None when it cannot be
+    /// (the write then says why).
     #[inline(never)]
-    fn sync_fats_step(&mut self, b: &mut impl Board) -> bool {
+    pub(crate) fn sync_fats_step(emmc: &mut emmc::Emmc, b: &mut impl Board, at: &mut u32) -> Option<bool> {
         let t0 = b.awake_us();
-        let mut d = emmc::Volume(&mut self.emmc, b);
-        let Ok(mut fat) = fat::Fat::mount(&mut d) else { return true };
+        let mut d = emmc::Volume(emmc, b);
+        let mut fat = fat::Fat::mount(&mut d).ok()?;
         for _ in 0..fat.fat_sectors() / Self::SYNC_SECTORS + 1 {
-            match fat.sync_fats_from(&mut d, self.store.sync, Self::SYNC_SECTORS) {
-                Ok((next, _)) => self.store.sync = next,
-                Err(_) => return true,
-            }
-            if self.store.sync >= fat.fat_sectors() {
-                self.store.sound = true;
-                return true;
+            *at = fat.sync_fats_from(&mut d, *at, Self::SYNC_SECTORS).ok()?.0;
+            if *at >= fat.fat_sectors() {
+                return Some(true);
             }
             if d.1.awake_us().wrapping_sub(t0) >= Self::SCAN_IDLE_US {
-                return false;
+                return Some(false);
             }
         }
-        false
+        Some(false)
+    }
+
+    /// `\Rustfw\<name>`, a file of two 512-byte copies (pages.bin, settings.bin), read into `file`: Ok(1024) when it
+    /// is whole; NotFound when it is not there or not that size.
+    pub(crate) fn read_copies(
+        &mut self,
+        b: &mut impl Board,
+        name: &str,
+        file: &mut [u8; 1024],
+    ) -> Result<usize, fat::Error> {
+        let mut d = emmc::Volume(&mut self.emmc, b);
+        let mut fat = fat::Fat::mount(&mut d)?;
+        let dir = fat.open(&mut d, recorder::DIR)?;
+        let f = fat.open_in(&mut d, dir, name)?;
+        if f.dir || f.size != 1024 {
+            return Err(fat::Error::NotFound);
+        }
+        fat.read_at(&mut d, &f, 0, file)
+    }
+
+    /// Copy `slot` (0 or 1) of `\Rustfw\<name>` written with `sector`, the other untouched; the file created (or
+    /// grown) with both, the other zeros, when it is not whole. None: no volume.
+    #[inline(never)] // its 1 KB buffer in its own frame
+    pub(crate) fn write_copy(
+        &mut self,
+        b: &mut impl Board,
+        name: &str,
+        slot: u32,
+        sector: &[u8; 512],
+    ) -> Option<Result<(), fat::Error>> {
+        let t = fat::write::dos_time(self.rec_time().0);
+        let mut d = emmc::Volume(&mut self.emmc, b);
+        let mut fat = fat::Fat::mount(&mut d).ok()?;
+        Some((|| {
+            let dir = fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)?;
+            let mut h = match fat.locate(&mut d, dir, name) {
+                Err(fat::Error::NotFound) => fat.create(&mut d, dir, name, t)?,
+                other => other?,
+            };
+            if h.size == 1024 {
+                return fat.write_sectors(&mut d, &mut h, slot, sector); // the other copy untouched
+            }
+            let mut both = [0u8; 1024];
+            let at = 512 * (slot as usize % 2);
+            both[at..at + 512].copy_from_slice(sector);
+            fat.write_sectors(&mut d, &mut h, 0, &both)?;
+            fat.set_size(&mut d, &mut h, 1024, t)
+        })())
     }
 
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
@@ -246,15 +295,7 @@ impl App {
     #[inline(never)] // its 1 KB buffer in its own frame
     fn load_pages(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
-        let mut d = emmc::Volume(&mut self.emmc, b);
-        let read = fat::Fat::mount(&mut d).and_then(|mut fat| {
-            let dir = fat.open(&mut d, recorder::DIR)?;
-            let f = fat.open_in(&mut d, dir, page::FILE)?;
-            if f.dir || f.size != 1024 {
-                return Err(fat::Error::NotFound);
-            }
-            fat.read_at(&mut d, &f, 0, &mut file)
-        });
+        let read = self.read_copies(b, page::FILE, &mut file);
         if read == Err(fat::Error::Io) {
             self.store.tries = self.store.tries.saturating_add(1);
             return; // tried again: a write now would not know the newest copy's number
@@ -343,26 +384,10 @@ impl App {
             indoor: Some(self.indoor),
             mtb: Some(self.mtb),
         };
-        let slot = (s.seq % 2) as usize;
-        let sector = s.to_sector();
-        let t = fat::write::dos_time(self.rec_time().0);
-        let mut d = emmc::Volume(&mut self.emmc, b);
         // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
-        let Ok(mut fat) = fat::Fat::mount(&mut d) else { return self.save_page_registers(b) };
-        let r = (|| {
-            let dir = fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)?;
-            let mut h = match fat.locate(&mut d, dir, page::FILE) {
-                Err(fat::Error::NotFound) => fat.create(&mut d, dir, page::FILE, t)?,
-                other => other?,
-            };
-            if h.size == 1024 {
-                return fat.write_sectors(&mut d, &mut h, slot as u32, &sector); // the other copy untouched
-            }
-            let mut both = [0u8; 1024];
-            both[512 * slot..512 * (slot + 1)].copy_from_slice(&sector);
-            fat.write_sectors(&mut d, &mut h, 0, &both)?;
-            fat.set_size(&mut d, &mut h, 1024, t)
-        })();
+        let Some(r) = self.write_copy(b, page::FILE, s.seq % 2, &s.to_sector()) else {
+            return self.save_page_registers(b);
+        };
         match r {
             Ok(()) => (self.store.seq, self.store.sound) = (s.seq, true),
             Err(_) => {

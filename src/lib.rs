@@ -243,6 +243,8 @@ pub struct App {
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
     store: PageStore,
+    /// `\Rustfw\settings.bin` (app/settings_file.rs): read yet, to be written, its copies.
+    settings_store: SettingsStore,
     /// The page editor's work, while it is open.
     edit: Option<Editing>,
     /// The strip's place shows the editor's hint (app/editor.rs), not the strip.
@@ -379,6 +381,7 @@ impl App {
             .with_auto_off_word(b.backup_read(AID_BKP[1]));
         let (pages, page_count) = pages_from_registers(b);
         let store = PageStore::at_boot(b);
+        let settings_store = SettingsStore::at_boot(b);
         App {
             keys: Keys::at_start(b.keys_down()),
             light: Light::new(),
@@ -430,6 +433,7 @@ impl App {
             climb: (false, 0, None),
             more_on: None,
             store,
+            settings_store,
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
@@ -604,6 +608,7 @@ impl App {
             t = self.timed(b, Sec::Ahead, t);
             self.step_past(b);
             self.step_thresholds(b);
+            self.step_settings(b);
             self.step_pages(b);
             t = self.timed(b, Sec::Files, t);
         }

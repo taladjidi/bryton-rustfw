@@ -105,6 +105,8 @@ fn long_reads_spread_over_passes() {
         sim.emmc.image = card.clone();
         let mut app = App::start(&mut sim, None);
         app.set_course_memory(crate::storage::course_file::tests::memory());
+        // the first start's work done first: settings.bin created (its FAT copies compared, the file made), once
+        run(&mut sim, &mut app, u64::from(crate::PAGES_LOAD_MS) + 1000);
         app.press(&mut sim, Press::Long(Key::Page));
         (sim, app)
     };

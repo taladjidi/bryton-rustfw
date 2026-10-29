@@ -3046,3 +3046,92 @@ fn ramp_results() {
     }
     assert!(with_result > 250 && with_aet > 20 && stopped > 100, "{with_result} {with_aet} {stopped}");
 }
+
+/// Random and damaged copies of `\Rustfw\settings.bin` (app/settings_file.rs `SettingsCopy`), built field by field
+/// (the magic, the version, the length, the sequence number, the CRC each right or wrong, the settings' bytes in and
+/// out of their ranges, one copy or two): no panic; whatever is read holds only values the menus offer, the newer
+/// whole copy wins; and every path is reached: copies refused (magic, version, length, CRC), read whole, read short
+/// (the defaults past the length), with a value out of range (its default).
+#[test]
+fn settings_file() {
+    use crate::{SettingsCopy, menu::Setting};
+    let mut next = xorshift(0x5e77);
+    let d = crate::Settings::from_word(0);
+    let (mut refused, mut whole, mut short, mut defaulted) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut file = [0u8; 1024];
+        let mut want: Option<u32> = None; // the newest copy built whole
+        for slot in 0..1 + (next() % 2) as usize {
+            let s = &mut file[512 * slot..512 * (slot + 1)];
+            let r = next();
+            s[..4].copy_from_slice(if r.is_multiple_of(13) { b"RSEX" } else { b"RSET" });
+            s[4..6].copy_from_slice(&(if r.is_multiple_of(11) { 2u16 } else { 1 }).to_le_bytes());
+            let len: u16 = match r % 7 {
+                0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
+                1 => (next() % 31) as u16,      // an earlier build's
+                2 => 31 + (next() % 60) as u16, // a later build's
+                _ => 31,
+            };
+            s[6..8].copy_from_slice(&len.to_le_bytes());
+            let seq = next() % 8;
+            s[8..12].copy_from_slice(&seq.to_le_bytes());
+            for b in s[12..508].iter_mut() {
+                *b = next() as u8;
+            }
+            // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
+            if !next().is_multiple_of(4) {
+                let ok = crate::Settings { ftp: 100 + 5 * (next() % 80) as u16, ..d };
+                let good = SettingsCopy { seq, words: [0; 4], settings: ok }.to_sector();
+                let n = usize::from(len).min(31);
+                s[28..28 + n].copy_from_slice(&good[28..28 + n]);
+                if next().is_multiple_of(3) {
+                    s[28 + (next() % 31) as usize] = next() as u8; // one byte out of its range, maybe
+                }
+            }
+            let crc = crate::inflate::crc32(s[..508].iter().copied());
+            let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
+            s[508..].copy_from_slice(&crc.to_le_bytes());
+            let is_whole = !r.is_multiple_of(13) && !r.is_multiple_of(11) && !r.is_multiple_of(17) && len <= 480;
+            if is_whole {
+                want = Some(want.map_or(seq, |w| w.max(seq)));
+            } else {
+                refused += 1;
+            }
+            match SettingsCopy::from_sector((&*s).try_into().unwrap()) {
+                None => assert!(!is_whole, "a whole copy refused"),
+                Some(c) => {
+                    assert!(is_whole, "a damaged copy read");
+                    let st = c.settings;
+                    assert!(crate::WHEELS.contains(&st.wheel_mm));
+                    let mut m = st;
+                    for k in crate::NUMBERS {
+                        let (range, _) = k.number().unwrap();
+                        assert!(range.contains(&*m.number_mut(k).unwrap()), "{k:?}");
+                    }
+                    assert!(st.light_level <= crate::LIGHT_AUTO && st.light_timeout < crate::LIGHT_TIMEOUTS_S.len());
+                    assert!(st.auto_off < crate::AUTO_OFF_MIN.len() && st.wkt_avg < crate::WKT_AVGS.len());
+                    let mut l = crate::Line::<12>::new();
+                    for k in
+                        [Setting::Light, Setting::LightOff, Setting::AutoOff, Setting::BikeProfile, Setting::GpsPower]
+                    {
+                        st.text(k, &mut l);
+                    }
+                    if len < 31 {
+                        short += 1;
+                    } else {
+                        whole += 1;
+                        // a byte a build never writes there read as its default
+                        defaulted += u32::from(st.gps_power == d.gps_power && s[28 + 30] > 2);
+                    }
+                }
+            }
+        }
+        if let Some(c) = SettingsCopy::newest(&file) {
+            assert_eq!(Some(c.seq), want, "the newest whole copy");
+        } else {
+            assert_eq!(want, None);
+        }
+    }
+    std::println!("settings copies: {refused} refused, {whole} whole, {short} short, {defaulted} with a default");
+    assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
+}
