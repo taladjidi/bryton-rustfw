@@ -59,8 +59,8 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - watch the image size `tools/pack.py` prints: about <!-- n:image -->641 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
-- **Memory:** the thread stack is DTCM (about 122 KB, on PSP, above a 256 B MPU guard; faults run on their own 1 KB
-  on MSP: link.x); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
+- **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
+  overflow reaches it: main.rs `stack_check`); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
   when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
   SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->15 KB<!-- /n --> left; link.x
@@ -84,7 +84,7 @@ The point of this project is a firmware in safe Rust.
 - `src/lib.rs` has `#![forbid(unsafe_code)]`: no `unsafe` there, ever.
 - The binary has `#![deny(unsafe_code)]`. The exception is `src/board/hw.rs`, which holds the unavoidable unsafe
   primitives:
-  - the vector table and the reset entry (thread mode onto PSP, section copies);
+  - the vector table and the reset entry (section copies);
   - the fault and panic handler (`default_handler`: the fault marker, then a reset);
   - `rd` / `wr` / `wr8` (volatile register access; the dev link's `peek` / `poke` in usb.rs check the computer's
     addresses before they get there: poke the peripheral space only);

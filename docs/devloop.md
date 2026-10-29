@@ -16,8 +16,8 @@ Install the firmware once (docs/install.md). From then on, with the cable in and
     ./dev.py drive                # lend the eMMC FAT volume to the computer as a USB drive (eject gives it back)
     ./dev.py ls PATH              # list a folder of the volume; get PATH -o F copies a file off it (read only)
     ./dev.py bat                  # battery history; drivelog: the USB drive's last 32 commands
-    ./dev.py stackfault           # overflow the thread stack on purpose (no ride open): proves the stack guard,
-                                  # expect a reset, then peek 0x580040c4 (FAULT_REG) = 0xfa0000nn
+    ./dev.py stackfault           # run the stack past its canary (no ride open): pass = the unit resets and
+                                  # ./dev.py peek 0x580040c4 reads 0xfa0000nn within a minute
                                   # find / bench / mapbench / wtest: see ./dev.py -h
     ./dev.py prof [--reset] [--watch 5]   # the profiler: per section of the pass, calls/s, mean / max us, % of wall time
     ./dev.py reset                # back to the installed firmware (so does unplugging, or a power cycle)

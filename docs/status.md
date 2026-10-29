@@ -8,9 +8,9 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
-- **The stack guard (review S8; link.x, hw.rs reset, main.rs mpu_init)**: a `DIAG_STOP=8` build reaches Engineer
-  Mode (main runs on PSP), the image boots and runs as before (`info`, `prof`), and `dev.py stackfault` resets the
-  unit with the fault marker (`peek 0x580040c4`: 0xfa0000nn) instead of freezing.
+- **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: the image runs as before
+  (`info`, `prof`), and `dev.py stackfault` resets the unit with the fault marker (`peek 0x580040c4`: 0xfa0000nn,
+  read within a minute of the reset).
 
 - **Power match (training/power_match.rs, BIKE > POWER MATCH)**: an ERG ride with the Sigeyi paired: the power
   meter reads the workout's target within a few % after a minute, the "PM+x%" on the trainer screen, the correction

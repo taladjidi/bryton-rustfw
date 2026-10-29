@@ -273,8 +273,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/progress.py`: a progress bar when tqdm is installed, nothing otherwise (cosmetic).
 - `tools/fetch_firmware.py`: downloads the stock R039 firmware from Bryton's update server and checks it against
   SHA256SUMS.
-- `tools/stack_check.py`: the firmware's stack frames against their budgets, the thread and handler stacks' sizes
-  (check.sh, after the build).
+- `tools/stack_check.py`: the firmware's stack frames against their budgets, the stack's size (from the canary
+  to the top; check.sh, after the build).
 - `tools/numbers.py`: the live numbers of the docs (image, AXI SRAM free, the cells' sizes, the tests, lines of Rust): `--write`
   rewrites the markers `<!-- n:NAME -->TEXT<!-- /n -->` (check.sh, after tools/pack.py), `--check` lists the stale ones, `selftest`.
 - `tools/iaprecover.py`: recovery through the bootloader's USB mode: read back the OS area, or rewrite it (sudo).

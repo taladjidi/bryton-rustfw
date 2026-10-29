@@ -41,9 +41,10 @@
 //!   read> <sectors written>`, then a line per section `<name> <calls> <cycles> <max cycles>`, then `end`; all in
 //!   decimal. `prof reset`: `ok`, and a new window starts ([`Effect::ProfReset`]).
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
-//! - `stackfault`: `ok`, then the firmware overflows its thread stack on purpose ([`Effect::StackFault`]) to prove
-//!   the stack guard: the expected end is a reset with the fault marker in RTC backup register 29. `err ride open`
-//!   while a ride runs or waits to be saved.
+//! - `stackfault`: `ok`, then the firmware runs its stack down past the stack canary on purpose ([`Effect::StackFault`],
+//!   main.rs `stack_fault`) and returns, so the pass's check must find it. Pass: the unit resets and RTC backup
+//!   register 29 (`peek 0x580040c4`) reads 0xfa0000nn within a minute (the app clears it after a minute of running).
+//!   `err ride open` while a ride runs or waits to be saved.
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
 //!   <value>`: writes the word, `ok`. Numbers in decimal or `0x` hex; `addr` must be word aligned and in the
@@ -186,7 +187,7 @@ pub enum Effect {
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
     ProfReset,
-    /// Overflow the thread stack on purpose, to prove the stack guard (main.rs `stack_fault`).
+    /// Run the stack down past its canary on purpose, to prove the check (main.rs `stack_fault`).
     StackFault,
 }
 

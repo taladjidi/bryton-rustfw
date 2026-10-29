@@ -38,8 +38,7 @@ fn modify(a: u32, clear: u32, set: u32) {
 // MPU: one region over the 64 MB SDRAM, normal memory, write-through cacheable (for the I-cache), executable, full
 // access; everything else the default map (PRIVDEFENA). The MPU is only switched ON, never off: with it off, 0xc0000000..0xdfffffff would be
 // device memory (execute-never under the default map), and this code runs there. Highest region number so it
-// wins over anything the bootloader could have left. A second region, the next number down, is the stack guard in
-// DTCM (no access: GUARD_RASR); the bootloader's regions cover only SDRAM, SRAM4 and ITCM (BOARD.md 2).
+// wins over anything the bootloader could have left.
 // ---------------------------------------------------------------------------------------------------------------
 fn mpu_init() {
     const MPU_CTRL: u32 = 0xe000_ed94;
@@ -56,15 +55,7 @@ fn mpu_init() {
     // ENABLE, SIZE 25 (2^26 = 64 MB), TEX 000 C 1 B 0 (normal, write-through: the I-cache may hold its code; the
     // D-cache stays off, so data accesses remain uncached), AP 011 (full), XN 0
     wr(MPU_RASR, 1 | (25 << 1) | (1 << 17) | (3 << 24));
-    // the stack guard (link.x _guard, BOARD.md 2): 256 B under the thread stack that nothing may read, write or run,
-    // so an overflow faults (MemManage, then hw.rs default_handler on MSP: a reset) instead of overwriting .bss
-    wr(MPU_RNR, regions - 2);
-    wr(MPU_RBAR, hw::stack_guard());
-    wr(MPU_RASR, GUARD_RASR);
     wr(MPU_CTRL, rd(MPU_CTRL) | 0b101); // ENABLE + PRIVDEFENA
-    // SHCSR.MEMFAULTENA (ARMv7-M ARM B3.2.13): the guard hit is a MemManage fault, not escalated to HardFault (both
-    // vectors are default_handler; this keeps MMFSR telling what happened)
-    modify(0xe000_ed24, 0, 1 << 16);
     barrier();
     // I-cache on (ARMv7-M: invalidate all, then CCR.IC). The bootloader leaves it off (BOARD.md 2); the RAM-run
     // trampoline invalidates it before jumping to a new image (hw.rs).
@@ -73,10 +64,6 @@ fn mpu_init() {
     modify(0xe000_ed14, 0, 1 << 17); // SCB_CCR.IC
     barrier();
 }
-
-/// The stack guard's MPU_RASR (ARMv7-M ARM B3.5.9): ENABLE, SIZE 7 (2^(7+1) = 256 B, link.x `_guard` is aligned to
-/// it), AP 000 (no access, privileged or not), XN 1, TEX C B S 0 (attributes do not matter for a region nothing reaches).
-const GUARD_RASR: u32 = 1 | (7 << 1) | (1 << 28);
 
 // ---------------------------------------------------------------------------------------------------------------
 // Time: the DWT cycle counter at the bootloader's 200 MHz (BOARD.md 1: the bootloader uses the OS PLL1 setup).
@@ -1693,8 +1680,7 @@ const fn parse_u32(s: &str) -> u32 {
 }
 
 /// At stage STOP, waits for USB power, then resets. Power on, hold Page, plug in: Engineer Mode means the firmware
-/// got there (the signal proven by diag v9; the backlight is no readout). Stages, in boot order: [`STAGE_PSP`] (8,
-/// numbered last as it came last: main reached on the thread stack, hw.rs reset), 1 MPU and the stack guard, 2 DWT,
+/// got there (the signal proven by diag v9; the backlight is no readout). Stages, in boot order: 1 MPU, 2 DWT,
 /// 3 clocks and pins, 4 SPI and the sleep power steps (POWER_STEPS), 5 panel up and first frame, 6 first app step,
 /// 7 first SysTick + WFI wait done.
 fn checkpoint(n: u32) {
@@ -1755,25 +1741,34 @@ fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
 }
 
-/// Boot stage: main reached, on PSP (hw.rs reset's switch; Renode does not prove it, AGENTS.md Tests).
-const STAGE_PSP: u32 = 8;
-
-/// Overflows the thread stack on purpose (the dev link's `stackfault`, never the UI): 128 B a call, every word
-/// written (black_box), so the descent cannot step over the 256 B guard. Expected end: a MemManage on the guard and
-/// default_handler's reset with the fault marker. Bounded (2048 calls, 256 KB, twice DTCM) so it terminates even if
-/// nothing faulted.
-#[inline(never)]
-fn stack_fault(depth: u32) -> u32 {
-    let frame = core::hint::black_box([depth; 32]);
-    if depth >= 2048 {
-        return depth;
+/// The stack canary still holds its pattern, or a fault (hw.rs `fault`: the marker, a reset, the ride resumes from its
+/// checkpoint). An overflow cannot be caught when it happens: with interrupts masked (PRIMASK) an MPU guard's fault
+/// escalates to HardFault, whose stacking on the overflowed stack locks the core up (seen on the unit 2026-10-29,
+/// BOARD.md 2). One DTCM load and a compare.
+#[inline(always)]
+fn stack_check() {
+    if !bryton_rustfw::stack_intact(rd(hw::stack_canary())) {
+        hw::fault();
     }
-    // used after the call, so the frame stays live and the recursion is not a loop
-    stack_fault(depth + 1).wrapping_add(core::hint::black_box(frame)[depth as usize % 32])
+}
+
+/// Runs the stack down past its canary on purpose (the dev link's `stackfault`, never the UI), then returns, so the
+/// pass's [`stack_check`] must reset the unit. 128 B a call, all written before the next call (black_box), so the
+/// frames cover the canary's word; it stops in the first frame that reaches below the canary, so less than a frame
+/// of `.bss` under it is overwritten before the check, which follows at once.
+#[inline(never)]
+fn stack_fault(canary: u32) -> u32 {
+    let mut frame = [canary; 32];
+    core::hint::black_box(&mut frame);
+    if hw::address(&frame) <= canary {
+        return frame[0];
+    }
+    // used after the call, so each frame stays live and the recursion is not made a loop
+    stack_fault(canary).wrapping_add(core::hint::black_box(&frame)[1])
 }
 
 fn main() -> ! {
-    checkpoint(STAGE_PSP);
+    wr(hw::stack_canary(), bryton_rustfw::STACK_CANARY); // before anything runs deep: the stack is near its top
     mpu_init();
     checkpoint(1);
     dwt_init();
@@ -1830,6 +1825,7 @@ fn main() -> ! {
     loop {
         let t0 = cycles();
         app.step(&mut board);
+        stack_check();
         app.prof().span(Sec::Step, t0, cycles());
         checkpoint(6);
         let vbus = !pin_low(VBUS.0, VBUS.1);
@@ -1880,8 +1876,8 @@ fn main() -> ! {
                         }
                         Effect::StackFault => {
                             l.linger(50);
-                            stack_fault(0);
-                            system_reset(); // the guard did not fault: still a reset, without the fault marker
+                            stack_fault(hw::stack_canary());
+                            stack_check(); // resets; if it does not, the unit keeps running: the test failed
                         }
                         Effect::Run(size) => {
                             l.linger(50);

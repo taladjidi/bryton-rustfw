@@ -20,8 +20,8 @@ plugged in: the dot at the top right turns green when the link is ready.
                                   --reset starts a new window; --watch N prints a fresh N-second window, again
                                   and again (tools/profile.py runs scripted scenarios)
   dev.py reset                    restart the unit (bootloader, then the installed firmware)
-  dev.py stackfault               overflow the thread stack on purpose: the stack guard's test; expect a reset
-                                  with the fault marker (peek 0x580040c4: 0xfa0000nn); refused while a ride is open
+  dev.py stackfault               run the stack past its canary on purpose (no ride open): the unit must reset
+                                  with the fault marker (peek 0x580040c4 reads 0xfa0000nn within a minute)
   dev.py selftest                 offline checks of this script (check.sh runs it)
 """
 import argparse, os, struct, sys, time, zlib
@@ -312,7 +312,7 @@ def main():
     p = sub.add_parser('poke', help='write a register: poke 0x40013000 0x1001')
     p.add_argument('addr')
     p.add_argument('value')
-    sub.add_parser('stackfault', help='overflow the thread stack: the unit resets with the fault marker')
+    sub.add_parser('stackfault', help='run the stack past its canary: the unit resets with the fault marker')
     sub.add_parser('drive', help='offer the eMMC FAT volume to the computer as a USB drive (eject gives it back)')
     sub.add_parser('emmc', help='identify the eMMC and print its layout (BOARD.md 15)')
     p = sub.add_parser('ls', help='list a folder of the eMMC FAT volume (read only): ls [PATH]')

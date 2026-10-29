@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The firmware's stack frames against their budgets and the two stacks (check.sh, after the build).
+"""The firmware's stack frames against their budgets and the stack (check.sh, after the build).
 
-The thread stack is DTCM from the guard's end up to the handler stack (link.x `_guard_end` to `_psp_top`): on
-2026-10-24 main's frame had grown to 111 KB (the app held there several times over) and opening a workout overflowed
-it into .bss. Since then a 256 B MPU guard sits under it (main.rs mpu_init), and faults run on their own 1 KB stack
-(`_psp_top` to `_msp_top`, hw.rs reset). This reads each function's frame from its `push` and `sub sp, #n` in the
-release ELF (llvm-objdump from the toolchain) and the stacks' bounds (llvm-nm), and fails when a frame is over its
-budget, when main's frame and the largest other one do not fit the thread stack together (a lower bound of the boot's
-depth: main calls make_app), or when default_handler's frame does not fit the handler stack.
+The stack is DTCM from the canary above .bss to the top (link.x `_stack_canary` to `_stack_top`): on 2026-10-24
+main's frame had grown to 111 KB (the app held there several times over) and opening a workout overflowed it into
+.bss. The canary (main.rs `stack_check`) turns an overflow that reaches it into a reset at the end of the pass, but
+cannot stop it: these budgets are the line. This reads each function's frame from its `push` and `sub sp, #n` in the
+release ELF (llvm-objdump from the toolchain) and the stack's bounds (llvm-nm), and fails when a frame is over its
+budget, or when main's frame and the largest other one do not fit the stack together (a lower bound of the boot's
+depth: main calls make_app).
 
     stack_check.py            check the release ELF
     stack_check.py selftest   offline checks of the parsing (check.sh runs it)
@@ -17,8 +17,9 @@ import pathlib, re, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ELF = ROOT / 'target/thumbv7em-none-eabihf/release/bryton-rustfw'
 # frames allowed, bytes: the app's start (one temporary copy of App, once at boot), the course memory's (part of it
-# built on the stack, once at boot, after the app's), main, anything else
-BUDGET = {'make_app': 64_000, 'make_courses': 40_000, 'main': 16_384}
+# built on the stack, once at boot, after the app's; 41,000 since pushes count: 39,956 B on 2026-10-29), main,
+# anything else
+BUDGET = {'make_app': 64_000, 'make_courses': 41_000, 'main': 16_384}
 OTHER = 20_480
 
 
@@ -59,7 +60,7 @@ def frames(text):
 
 
 def symbols(text):
-    """The stacks' bounds from llvm-nm text."""
+    """The stack's bounds from llvm-nm text."""
     return {m.group(2): int(m.group(1), 16) for m in re.finditer(r'^([0-9a-f]+) \w (\w+)$', text, re.M)}
 
 
@@ -69,19 +70,14 @@ def budget(f):
 
 def check(fr, syms):
     """The failures, a line each, and the summary line."""
-    thread = syms['_psp_top'] - syms['_guard_end']
-    handler = syms['_msp_top'] - syms['_psp_top']
+    stack = syms['_stack_top'] - syms['_stack_canary'] - 4
     over = [f'{s} B > {budget(f)} B: {f}' for f, s in fr.items() if s > budget(f)]
     main = next((s for f, s in fr.items() if re.search(r'\d4main17h', f)), 0)
     largest = max((s for f, s in fr.items() if not re.search(r'\d4main17h', f)), default=0)
-    if main + largest > thread:
-        over.append(f'main {main} B + the largest other frame {largest} B > the thread stack {thread} B')
-    fault = fr.get('default_handler', 0)
-    if fault > handler:
-        over.append(f'default_handler {fault} B > the handler stack {handler} B')
+    if main + largest > stack:
+        over.append(f'main {main} B + the largest other frame {largest} B > the stack {stack} B')
     top = sorted(fr.items(), key=lambda x: -x[1])[:3]
-    summary = (f'thread stack {thread} B (from {syms["_guard_end"]:#x}), handler stack {handler} B, default_handler '
-               f'{fault} B; frames: ' + ', '.join(f'{re.sub(r"17h[0-9a-f]+E$", "", f)[-40:]} {s}' for f, s in top))
+    summary = (f'stack {stack} B (canary at {syms["_stack_canary"]:#x}); frames: ' + ', '.join(f'{re.sub(r"17h[0-9a-f]+E$", "", f)[-40:]} {s}' for f, s in top))
     return over, summary
 
 
@@ -95,12 +91,12 @@ def selftest():
     fr = frames(text)
     assert fr == {'default_handler': 8, '_ZN13bryton_rustfw4main17h0123456789abcdefE': 20 + 4 + 16 + 0x1000,
                   '_ZN13bryton_rustfw8make_app17h0123456789abcdefE': 36 + 0x100}, fr
-    syms = symbols('20001300 B _guard_end\n2001fc00 A _psp_top\n20020000 A _msp_top\n')
-    assert syms == {'_guard_end': 0x20001300, '_psp_top': 0x2001fc00, '_msp_top': 0x20020000}, syms
+    syms = symbols('200011bc B _stack_canary\n20020000 A _stack_top\n')
+    assert syms == {'_stack_canary': 0x200011bc, '_stack_top': 0x20020000}, syms
     assert check(fr, syms)[0] == [], check(fr, syms)
-    small = dict(syms, _psp_top=0x20001300 + 4096)
-    assert any('thread stack' in o for o in check(fr, small)[0]), check(fr, small)
-    assert any('handler stack' in o for o in check(dict(fr, default_handler=2048), syms)[0])
+    small = dict(syms, _stack_top=0x200011c0 + 4096)
+    assert any('the stack' in o for o in check(fr, small)[0]), check(fr, small)
+    assert any('64000' in o for o in check(dict(fr, _ZN13bryton_rustfw8make_app17h0123456789abcdefE=70_000), syms)[0])
     print('stack_check.py selftest ok')
 
 
