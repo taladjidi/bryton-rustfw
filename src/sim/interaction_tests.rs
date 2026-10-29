@@ -27,8 +27,7 @@ fn at(app: &App, menu: Menu, row: menu::Row) -> usize {
 }
 
 fn unit() -> (Sim, App) {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 1000);
     (sim, app)
 }

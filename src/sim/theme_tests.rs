@@ -204,8 +204,7 @@ fn scramble_reaches_the_gauge_trainer_graph_call_and_end_screens() {
     use crate::storage::workout_file::Kind;
     use crate::ui::{self, Canvas};
     let look = scramble();
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.settings.ftp = 200;
     let bx = (0, 24, 240, 118);
     let mut left = Vec::new();
