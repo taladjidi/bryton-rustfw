@@ -3135,3 +3135,122 @@ fn settings_file() {
     std::println!("settings copies: {refused} refused, {whole} whole, {short} short, {defaulted} with a default");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
 }
+
+/// Which wins at a start (app/settings_file.rs), by chance: random backup registers (each tagged as some build writes
+/// it, or not: register 11 untagged is a flat backup battery, register 18 without the aiding's tag carries no AUTO
+/// OFF) and a random `\Rustfw\settings.bin` (none, whole with the registers' words, whole with one of them changed,
+/// damaged). No panic; the settings are those the module doc says (the file's merged with the changed registers), in
+/// range; once written, the file and the registers agree; and every path is reached: lost registers, each register
+/// winning, the file winning, the migration.
+#[test]
+fn settings_decision() {
+    use super::Sim;
+    use super::tests::run;
+    use crate::{AID_BKP, ALERTS_BKP, POWER_BKP, Settings, SettingsCopy, WHEEL_BKP};
+    let kept = |app: &crate::App| Settings { alt_m: 500, ..app.settings };
+    let pristine = crate::fat::tests::image();
+    // the same volume with a file: what the migration of a start with this firmware's defaults wrote (slot 1)
+    let (with_file, at) = {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = pristine.clone();
+        sim.own_settings();
+        let mut app = crate::App::start(&mut sim, None);
+        run(&mut sim, &mut app, 30_000);
+        let img = sim.emmc.image;
+        let slot1 = (0..img.len() / 512).map(|k| 512 * k).find(|&a| img[a..a + 4] == *b"RSET").unwrap();
+        (img, slot1 - 512)
+    };
+    let mut next = xorshift(0x7e57);
+    let random_settings = |next: &mut dyn FnMut() -> u32| {
+        let w = (0xa7 + next() % 6) << 24 | next() & 0x7f_ffff;
+        Settings::from_word(w)
+            .with_power_word(0xa << 28 | next() & 0x0fff_ffff)
+            .with_alerts_word(0x9 << 28 | next() & 0x0fff_ffff)
+    };
+    let (mut lost, mut took, mut file_wins, mut migrated) = (0u32, [0u32; 4], 0u32, 0u32);
+    for seed in 0..160 {
+        let mut sim = Sim::new(9, 0, 0);
+        // the registers: a build's words, an earlier build's tags, or none
+        let s = random_settings(&mut next);
+        let [w11, w16, w28, off] = s.register_words();
+        let pick = |n: u32, ours: u32, old: u32| match n % 5 {
+            0 => 0,
+            1 => old,
+            _ => ours,
+        };
+        sim.backup[WHEEL_BKP] = pick(next(), w11, 0xa5 << 24 | 2136);
+        sim.backup[POWER_BKP] = pick(next(), w16, 0xc1_03_2e_46);
+        sim.backup[ALERTS_BKP] = pick(next(), w28, 0xc2 << 24 | 150 << 16 | 4);
+        sim.backup[AID_BKP[1]] = match next() % 3 {
+            0 => next() & 0x003f_ffff, // no aiding tag
+            _ => 0xa << 28 | off << 22,
+        };
+        let aid = sim.backup[AID_BKP[1]];
+        let regs = [
+            sim.backup[WHEEL_BKP],
+            sim.backup[POWER_BKP],
+            sim.backup[ALERTS_BKP],
+            if aid >> 28 == 0xa { aid >> 22 & 7 } else { 0 },
+        ];
+        let is_lost = !matches!(regs[0] >> 24, 0xa5..=0xac);
+        // the file
+        let kind = next() % 4;
+        sim.emmc.image = if kind == 0 { pristine.clone() } else { with_file.clone() };
+        if kind != 0 {
+            for slot in 0..2 {
+                let mut words = regs;
+                if kind == 2 {
+                    let k = (next() % 4) as usize;
+                    words[k] ^= 1 << (next() % 32); // that register changed since the copy
+                }
+                let c = SettingsCopy { seq: 10 + next() % 4, words, settings: random_settings(&mut next) };
+                let mut sec = c.to_sector();
+                if kind == 3 {
+                    sec[(next() % 512) as usize] ^= 1 << (next() % 8); // damaged
+                }
+                sim.emmc.image[at + 512 * slot..at + 512 * (slot + 1)].copy_from_slice(&sec);
+            }
+        }
+        let image: [u8; 1024] = sim.emmc.image[at..at + 1024].try_into().unwrap();
+        let newest = if kind == 0 { None } else { SettingsCopy::newest(&image) };
+        let mut app = crate::App::start(&mut sim, None);
+        let before = kept(&app);
+        run(&mut sim, &mut app, u64::from(crate::PAGES_LOAD_MS) + 30_000);
+        let got = kept(&app);
+        match newest {
+            None => {
+                migrated += 1;
+                if !is_lost {
+                    assert_eq!(got, before, "seed {seed}: the registers' kept");
+                }
+            }
+            Some(c) if is_lost => {
+                lost += 1;
+                assert_eq!(got, c.settings, "seed {seed}: lost registers, the file's");
+            }
+            Some(c) => {
+                let (want, t) = c.settings.with_registers(c.words, regs);
+                assert_eq!(got, want, "seed {seed}");
+                for (n, t) in took.iter_mut().zip(t) {
+                    *n += u32::from(t);
+                }
+                file_wins += u32::from(!t.contains(&true));
+            }
+        }
+        assert!(crate::WHEELS.contains(&got.wheel_mm));
+        let mut m = got;
+        for k in crate::NUMBERS {
+            assert!(k.number().unwrap().0.contains(&*m.number_mut(k).unwrap()), "seed {seed}: {k:?}");
+        }
+        // written: the file has the settings, the registers the same words
+        assert!(!app.settings_store.dirty, "seed {seed}");
+        let mut d = crate::fat::tests::Ram(sim.emmc.image.clone(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+        let v = crate::fat::tests::read_all(&mut fat, &mut d, "Rustfw/settings.bin").unwrap();
+        let c = SettingsCopy::newest(&v.try_into().unwrap()).unwrap();
+        assert_eq!(c.settings, got, "seed {seed}: the file");
+        assert_eq!(c.words[..3], [WHEEL_BKP, POWER_BKP, ALERTS_BKP].map(|r| sim.backup[r]), "seed {seed}: registers");
+    }
+    std::println!("settings at a start: {lost} lost, registers took {took:?}, {file_wins} file, {migrated} migrated");
+    assert!(lost > 0 && file_wins > 0 && migrated > 0 && took.iter().all(|&n| n > 0));
+}

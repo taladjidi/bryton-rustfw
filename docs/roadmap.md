@@ -32,13 +32,11 @@ theming.md is the design; these steps follow it, with three decisions taken on 2
 the theme and the font are kept in the settings file (T0), not in a `theme.bin` of their own; the FONT setting
 becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
 
-- **T0. The settings file** (phase 3, step 4; status.md, Next steps 3). Prerequisite: the 32 backup registers are
-  full, and T1, T3, T5 and block 2 each add a setting. `\Rustfw\settings.bin`: two copies, each with a magic, a
-  format version, a sequence number and a CRC; the newest whole copy wins; written between rides only (as
-  `pages.bin`), never with a ride open; read at the first main loop pass; the registers' values migrated once,
-  and the registers kept only for what the unit needs before the card is mounted (app/settings.rs says which).
-  Host tests cut the write after every sector (as fat/write.rs's); fuzz over damaged copies. Agent: critical, then
-  reviewer on Opus. Then a mechanic moves the "Settings registers" section of features.md to the new store.
+- ~~**T0. The settings file**~~ done (app/settings_file.rs; on the unit: status.md, "Not yet seen on the unit"):
+  `\Rustfw\settings.bin`, two copies with a magic, a version, a length, a sequence number and a CRC-32, written
+  between rides, read when `pages.bin` is (the card is not touched at boot), merged with the registers register by
+  register; registers 11, 16, 28 and 18's AUTO OFF bits stay as a mirror (app/settings.rs says why). Left: a
+  mechanic moves the "Settings registers" section of features.md to the new store.
 - **T1. Colours** (theming.md phase 1): split the shared roles (`ON_ACCENT`, `ON_ALARM`, the cog), `Canvas::ink`,
   `Theme` in `src/ui/theme.rs`, `Panel` and `Row` carrying it, `text::draw` and the colour-making blits translating;
   the INI parser and the whole-theme checks (contrast 4.5:1, red only for alarms); `\Rustfw\Themes\*.ini` listed;

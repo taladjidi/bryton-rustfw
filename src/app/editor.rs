@@ -195,7 +195,7 @@ impl App {
             if !self.store.sound {
                 match Self::sync_fats_step(&mut self.emmc, b, &mut self.store.sync) {
                     Some(false) => return, // the FAT copies compared over the next passes first
-                    Some(true) => self.store.sound = true,
+                    Some(true) => self.fats_equal(),
                     None => {}
                 }
             }
@@ -221,6 +221,17 @@ impl App {
             }
         }
         Some(false)
+    }
+
+    /// Both FAT copies compared equal: neither file's next write compares them again.
+    pub(crate) fn fats_equal(&mut self) {
+        (self.store.sound, self.settings_store.sound) = (true, true);
+    }
+
+    /// A write failed (a FAT sector may differ between the copies): both files' next writes compare them first.
+    pub(crate) fn fats_unsure(&mut self) {
+        (self.store.sound, self.store.sync) = (false, 0);
+        (self.settings_store.sound, self.settings_store.sync) = (false, 0);
     }
 
     /// `\Rustfw\<name>`, a file of two 512-byte copies (pages.bin, settings.bin), read into `file`: Ok(1024) when it
@@ -391,7 +402,7 @@ impl App {
         match r {
             Ok(()) => (self.store.seq, self.store.sound) = (s.seq, true),
             Err(_) => {
-                (self.store.sound, self.store.sync) = (false, 0); // compared again before the next write
+                self.fats_unsure(); // compared again before the next write
                 self.notice("PAGES NOT SAVED");
             }
         }

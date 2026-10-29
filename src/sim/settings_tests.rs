@@ -146,6 +146,30 @@ fn registers_newer_than_the_file_win() {
     assert!(app2.settings_store.dirty);
 }
 
+/// Register by register: register 18 rewritten by a build without AUTO OFF (its bits gone) keeps the file's AUTO OFF;
+/// register 16 changed alone gives only its fields (the weight), the others staying the file's; the file then has
+/// both and the registers agree with it.
+#[test]
+fn each_register_on_its_own() {
+    let (mut sim, mut app) = started(some(), false);
+    app.settings.auto_off = 3;
+    app.settings.ftp = 300;
+    app.save_misc(&mut sim);
+    run(&mut sim, &mut app, 500);
+    let file_settings = kept(&app);
+    assert_eq!(file(&sim).map(|c| c.settings), Some(file_settings));
+    sim.backup[crate::AID_BKP[1]] = 0x0123_4567; // no aiding tag: AUTO OFF unknown
+    sim.backup[crate::POWER_BKP] = Settings { weight_kg: 81, smooth: false, ..file_settings }.power_word();
+    let (mut sim2, mut app2) = reboot(&mut sim, false);
+    let want = Settings { weight_kg: 81, smooth: false, ..file_settings };
+    assert_eq!(kept(&app2), want, "register 16's fields only; AUTO OFF and FTP the file's");
+    settle(&mut sim2, &mut app2);
+    assert_eq!(file(&sim2).map(|c| c.settings), Some(want), "the file has them");
+    let back = Settings::from_word(0).with_auto_off_word(sim2.backup[crate::AID_BKP[1]]);
+    assert_eq!(back.auto_off, 3, "register 18 put right");
+    assert_eq!(sim2.backup[crate::POWER_BKP], want.power_word());
+}
+
 /// Both copies damaged: the registers' settings, written again as a new copy; one damaged: the other.
 #[test]
 fn damaged_copies() {
@@ -173,7 +197,10 @@ fn damaged_copies() {
 /// A power cut after every sector of a write of the settings: the first (the file created, the migration) and later
 /// ones (a copy over the older). The next start, with the registers as the change left them, has the new settings;
 /// with them lost, the file's old or new, never the defaults once a copy was whole; the volume stays clean for fsck.
-/// On a card with reliable writes, the sector being written is torn too.
+/// The sector being written at the cut is torn (half old, half new, the rest garbage) unless the card offers reliable
+/// writes. The migration is cut on a reliable card only: it creates `\Rustfw\` in the root directory, and a torn root
+/// sector garbles the entries beside the new one, stock's folders included (BOARD.md, "Reliable write": a plain write
+/// tears what is rewritten in place; the FAT layer cannot make that atomic).
 #[test]
 fn a_cut_at_every_sector_reads_old_or_new() {
     let change = |app: &mut App, sim: &mut Sim, k: u16| {
@@ -181,7 +208,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
         app.settings.smooth = k % 2 == 1;
         app.save_misc(sim);
     };
-    for (writes, reliable) in [(0, false), (1, false), (2, false), (0, true), (1, true), (2, true)] {
+    for (writes, reliable) in [(1, false), (2, false), (0, true), (1, true), (2, true)] {
         // `writes` changes written before the one cut (0: the cut is in the migration)
         // what a start with the registers lost reads from a card without the file (stock's settings, imported)
         let baseline = {
@@ -195,7 +222,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
             if reliable {
                 sim.emmc.rel_param = crate::emmc::EN_REL_WR;
             }
-            sim.emmc.tear = reliable;
+            sim.emmc.tear = true;
             set_registers(&mut sim, some());
             let mut app = App::start(&mut sim, None);
             let old = if writes == 0 { baseline } else { some() };

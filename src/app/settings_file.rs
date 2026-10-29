@@ -1,6 +1,7 @@
 //! `\Rustfw\settings.bin`: where the [`Settings`] are kept since the backup registers ran out (roadmap T0). Read
-//! when the pages' file is (never at boot), written between rides only, the way `\Rustfw\pages.bin` is (app/editor.rs: the recorder is the
-//! card's one writer while a ride is open), in this firmware's own folder (stock never looks there).
+//! when the pages' file is (never at boot), written between rides only, the way `\Rustfw\pages.bin` is
+//! (app/editor.rs: the recorder is the card's one writer while a ride is open), in this firmware's own folder (stock
+//! never looks there).
 //!
 //! **The format.** 1024 bytes: two copies of one 512-byte sector each ([`SettingsCopy`]). The newest whole copy (a
 //! good magic, version and CRC; the higher sequence number) wins, and a write goes over the other one, so a write
@@ -22,10 +23,15 @@
 //! read a few seconds later, then:
 //! - the registers held none of this firmware's settings at the start (a flat backup battery; the first start's
 //!   import of stock's then put them there): the file's, and the registers written from it;
-//! - the registers' settings differ from those the newest copy was written with (its words: a change made while the
-//!   file had to wait, during a ride or with the drive lent, then a reset or a switch-off; one made before the file
-//!   was read; or another build's): the registers', written to the file;
-//! - else the file's (the registers hold the same).
+//! - else, register by register ([`Settings::with_registers`]): one that differs from the word the newest copy was
+//!   written with (a change made while the file had to wait, during a ride or with the drive lent, then a reset or a
+//!   switch-off; one made before the file was read; or another build's) gives the fields it carries, and the file
+//!   is written again with them; every other field is the file's, including those a changed register does not carry
+//!   (an earlier build's tag, or register 18 rewritten by a build without AUTO OFF);
+//! - the registers are then written from the result where they differ from it (by a build that may write the card).
+//!
+//! A read that fails for any reason but "no file" is tried again: it never counts as no file, which would write a
+//! first copy beside a newer one.
 //!
 //! No file (the first start of a build with it), or no whole copy: the registers' settings are written as its first
 //! copy, once (the migration). A build that may not write the card reads the file but never writes it.
@@ -207,6 +213,71 @@ impl SettingsStore {
     }
 }
 
+/// The settings' registers as a copy's words compare with them: 11, 16 and 28 whole, then AUTO OFF's index + 1 from
+/// register 18 (0 where its tag says nothing of this build's wrote it, [`Settings::with_auto_off_word`]).
+fn registers(b: &mut impl Board) -> [u32; 4] {
+    let aid = b.backup_read(AID_BKP[1]);
+    let off = if matches!(aid >> 28, 0xa | 0x5) { aid >> 22 & 7 } else { 0 };
+    [b.backup_read(WHEEL_BKP), b.backup_read(POWER_BKP), b.backup_read(ALERTS_BKP), off]
+}
+
+impl Settings {
+    /// These settings (a copy's, written with the registers' `words`) with the fields of each register in `regs`
+    /// ([`Settings::register_words`]' order) that changed since taken from it; the fields of the others, and those a
+    /// changed register does not carry (its tag says which), stay. Which registers gave theirs.
+    ///
+    /// ```
+    /// use bryton_rustfw::Settings;
+    /// let file = Settings { ftp: 265, weight_kg: 68, auto_off: 3, ..Settings::from_word(0) };
+    /// let words = file.register_words();
+    /// let now = Settings { weight_kg: 70, ..file }; // register 16 changed alone
+    /// let regs = [words[0], now.power_word(), words[2], 0]; // register 18 without AUTO OFF's bits
+    /// let (s, took) = file.with_registers(words, regs);
+    /// assert_eq!((s, took), (now, [false, true, false, false]));
+    /// ```
+    pub fn with_registers(self, words: [u32; 4], regs: [u32; 4]) -> (Settings, [bool; 4]) {
+        let r = Settings::from_word(regs[0]).with_power_word(regs[1]).with_alerts_word(regs[2]);
+        let mut s = self;
+        let changed = |k: usize| words.get(k) != regs.get(k);
+        let tag = |k: usize| regs.get(k).map_or(0, |w| w >> 24);
+        let mut took = [false; 4];
+        if changed(0) && matches!(tag(0), 0xa5..=0xac) {
+            took[0] = true;
+            (s.wheel_mm, s.light_level, s.light_timeout) = (r.wheel_mm, r.light_level, r.light_timeout);
+            if tag(0) >= 0xa6 {
+                (s.max_hr, s.ftp) = (r.max_hr, r.ftp);
+            }
+            if tag(0) >= 0xa7 {
+                (s.touch, s.ahead, s.profile) = (r.touch, r.ahead, r.profile);
+            }
+        }
+        if changed(1) && matches!(tag(1), 0xa0..=0xbf | 0xc1) {
+            took[1] = true;
+            (s.weight_kg, s.wprime_j, s.wkt_avg, s.bike_hg) = (r.weight_kg, r.wprime_j, r.wkt_avg, r.bike_hg);
+            if tag(1) <= 0xaf {
+                (s.smooth, s.gps_power, s.profile) = (r.smooth, r.gps_power, r.profile);
+            } else {
+                (s.remote[0], s.remote[1]) = (r.remote[0], r.remote[1]); // earlier builds' single presses
+            }
+        }
+        if changed(2) && (tag(2) >> 4 == 0x9 || tag(2) == 0xc2) {
+            took[2] = true;
+            (s.eat_min, s.drink_min, s.hr_alert) = (r.eat_min, r.drink_min, r.hr_alert);
+            (s.remote[2], s.remote[3]) = (r.remote[2], r.remote[3]);
+            if tag(2) >> 4 == 0x9 {
+                (s.remote[0], s.remote[1]) = (r.remote[0], r.remote[1]);
+            }
+        }
+        if changed(3)
+            && let Some(i) = regs.get(3).and_then(|&v| v.checked_sub(1)).filter(|&i| i < 5)
+        {
+            took[3] = true;
+            s.auto_off = i as usize;
+        }
+        (s, took)
+    }
+}
+
 impl App {
     /// The settings' file read when the pages' is ([`PAGES_LOAD_MS`] after the start, or at the first screen other
     /// than the overview, or at a change; again after a failed read, [`LOAD_TRIES`] times), written when the settings
@@ -229,7 +300,7 @@ impl App {
         if !st.sound {
             match Self::sync_fats_step(&mut self.emmc, b, &mut self.settings_store.sync) {
                 Some(false) => return, // the FAT copies compared over the next passes first
-                Some(true) => self.settings_store.sound = true,
+                Some(true) => self.fats_equal(),
                 None => {}
             }
         }
@@ -241,10 +312,12 @@ impl App {
     fn load_settings(&mut self, b: &mut impl Board) {
         let mut file = [0u8; 1024];
         let read = self.read_copies(b, SETTINGS_FILE, &mut file);
+        let regs = registers(b);
         let st = &mut self.settings_store;
-        if read == Err(fat::Error::Io) {
-            // tried again (a write now would not know the newest copy's number), at the next change once the passes
-            // gave up: the registers keep the change meanwhile, and win over the file once it is read
+        if read.is_err() && read != Err(fat::Error::NotFound) {
+            // tried again (a write now would not know the newest copy's number, and "no file" would write a first
+            // copy beside a newer one), at the next change once the passes gave up: the registers keep the change
+            // meanwhile, and win over the file once it is read
             st.tries = st.tries.saturating_add(1);
             st.dirty = false;
             return;
@@ -253,21 +326,22 @@ impl App {
         st.sound = read == Ok(1024);
         let Some(c) = read.ok().filter(|&n| n == 1024).and_then(|_| SettingsCopy::newest(&file)) else {
             st.dirty = self.card_writable; // the migration: the registers' settings as the first copy
+            if self.card_writable && self.settings.register_words() != regs {
+                self.write_settings_registers(b); // an earlier build's words: this build's, as the copy has them
+            }
             return;
         };
         st.seq = c.seq;
-        if !st.lost && self.settings.register_words() != c.words {
-            // the registers are newer (a change the file did not get, or another build's): they win, written to it.
-            // shortcut: every setting is in the registers today; one kept in the file only must be taken from `c`
-            // here
-            st.dirty = self.card_writable;
-            return;
-        }
-        st.dirty = false;
+        // the registers lost: the file's whole; else each register that changed since the copy gives its fields
+        let (merged, took) = if st.lost { (c.settings, [false; 4]) } else { c.settings.with_registers(c.words, regs) };
+        // the file gets the registers' fields, or words that say what the registers now hold
+        st.dirty = self.card_writable && (took.contains(&true) || merged.register_words() != c.words);
         let was = self.settings;
-        self.settings = Settings { alt_m: was.alt_m, ..c.settings };
-        if st.lost {
-            self.write_settings_registers(b); // put back from the file
+        self.settings = Settings { alt_m: was.alt_m, ..merged };
+        if self.card_writable && self.settings.register_words() != regs {
+            // put right from the result (lost, or a register some fields missed); a build that may not write the
+            // card leaves them as another build wrote them
+            self.write_settings_registers(b);
         }
         if self.settings != was {
             self.update_light(b);
@@ -292,7 +366,7 @@ impl App {
             None => {}
             Some(Ok(())) => (self.settings_store.seq, self.settings_store.sound) = (c.seq, true),
             Some(Err(_)) => {
-                (self.settings_store.sound, self.settings_store.sync) = (false, 0); // compared again first
+                self.fats_unsure(); // compared again first
                 self.notice("SETTINGS NOT SAVED");
             }
         }
