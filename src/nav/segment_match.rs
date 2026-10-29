@@ -44,8 +44,8 @@ pub const OFF_M: u32 = 50;
 pub const LOST_S: u32 = 10;
 /// A pause (no movement, or no fix) over this, s, drops the segment.
 pub const PAUSE_S: u32 = 300;
-/// Less movement than this, m, is standing still.
-const STILL_M: u64 = 3;
+/// Staying within this of one spot, m, is standing still (GNSS jitter at a stop is a few metres).
+const STILL_M: u64 = 10;
 
 /// What the matcher has to say (one thing at a time).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,7 +259,7 @@ impl Matcher {
             return None;
         }
         let prev = self.prev.replace((lat, lon, t));
-        let (mut approach, mut any) = (None, false);
+        let (mut approach, mut seen) = (None, false);
         for h in headers.into_iter().filter(|h| near(h, lat, lon)) {
             if let Some(ms) = prev.and_then(|p| start_ms(h, p, (lat, lon, t))) {
                 let still_at = (lat, lon);
@@ -282,14 +282,15 @@ impl Matcher {
             }
             let Some(first) = h.start.iter().find(used) else { continue };
             if step_mm((lat, lon), *first) <= u64::from(APPROACH_M) * 1000 {
-                any = true;
-                if approach.is_none() && self.approached == 0 {
+                seen |= h.id == self.approached;
+                if approach.is_none() && h.id != self.approached {
                     approach = Some(h.id);
                 }
             }
         }
-        if !any {
-            self.approached = 0; // away from all of them: the next pass may say it again
+        // one banner at a time: the next waits until the rider is away from the one said (or it is the first)
+        if seen {
+            return None;
         }
         let id = approach?;
         self.approached = id;
@@ -309,9 +310,11 @@ impl Matcher {
 
     fn advance(a: &mut Active, seg: &Segment, lat: i32, lon: i32, t: u32) -> Option<Event> {
         let lost = Some(Event::Lost(a.id));
-        let last = seg.npoints.checked_sub(1)?;
-        let (Some(p0), Some(end), Some(before)) = (seg.pt(0), seg.pt(last), seg.pt(last.saturating_sub(1))) else {
-            return lost;
+        let last = seg.npoints.saturating_sub(1);
+        let (Some(p0), Some(end), Some(before), Some(len)) =
+            (seg.pt(0), seg.pt(last), seg.pt(last.saturating_sub(1)), seg.dist_m.get(last).copied())
+        else {
+            return lost; // a segment without points: never stay active on it
         };
         let dt = t.saturating_sub(a.last_t);
         a.last_t = t;
@@ -344,11 +347,10 @@ impl Matcher {
         a.seg = u16::try_from(h.seg).unwrap_or(u16::MAX);
         a.along_m = h.along_m;
         a.best_m = a.best_m.max(h.along_m);
-        let len = dist(last)?;
         if a.best_m.saturating_add(OFF_M) < len {
             return None;
         }
-        // finish: past the last point's perpendicular, within START_M of it
+        // finish: past the last point's perpendicular, within START_M of the last point at the crossing
         let (e, b) = (mm(o, end.lat, end.lon), mm(o, before.lat, before.lon));
         let dir = (i128::from(e.0 - b.0), i128::from(e.1 - b.1));
         let side = |f: (i32, i32)| {
@@ -356,11 +358,17 @@ impl Matcher {
             i128::from(q.0 - e.0) * dir.0 + i128::from(q.1 - e.1) * dir.1 // negative before the end
         };
         let (s0, s1) = (side(prev), side((lat, lon)));
-        if s1 < 0 || step_mm((lat, lon), (end.lat, end.lon)) > u64::from(START_M) * 1000 {
+        if s1 < 0 {
             return None;
         }
-        // the crossing, between the previous fix and this one
+        // the crossing, between the previous fix and this one (a fast rider is far past the line by the next fix)
         let f = if s0 < 0 { u64::try_from(-s0 * 1024 / (s1 - s0).max(1)).unwrap_or(1024).min(1024) } else { 0 };
+        let (q0, q1) = (mm(o, prev.0, prev.1), mm(o, lat, lon));
+        let x = |a: i64, b: i64| i128::from(a) + i128::from(b - a) * i128::from(f) / 1024;
+        let (cx, cy) = (x(q0.0, q1.0) - i128::from(e.0), x(q0.1, q1.1) - i128::from(e.1));
+        if cx * cx + cy * cy > i128::from(START_M * 1000).pow(2) {
+            return None;
+        }
         let at_ms = u64::from(t.saturating_sub(dt)) * 1000 + u64::from(dt) * 1000 * f / 1024;
         let elapsed_s = ms_to_s(at_ms.saturating_sub(a.start_ms));
         let mut deltas = [None; KEPT];
@@ -489,6 +497,63 @@ pub(crate) mod tests {
         f.extend(line(360.0, 1000.0, 5.0));
         let ev = drive(&mut Matcher::new(), &s, &f);
         assert!(ev.contains(&Event::Lost(ID)) && finish(&ev).is_none(), "{ev:?}");
+    }
+
+    #[test]
+    fn fast_pass_finishes_with_the_interpolated_time() {
+        let s = seg(20);
+        // 30 m/s: the first fix past the end is up to 30 m beyond it
+        let ev = drive(&mut Matcher::new(), &s, &line(-250.0, 1100.0, 30.0));
+        let (el, _) = finish(&ev).expect("finish");
+        // started at 0 m, ended at 950 m: 31.7 s at 30 m/s
+        assert!((31..=33).contains(&el), "{el} {ev:?}");
+    }
+
+    #[test]
+    fn malformed_segment_drops_it() {
+        let s = seg(20);
+        let mut m = Matcher::new();
+        drive(&mut m, &s, &line(-250.0, 100.0, 5.0));
+        assert_eq!(m.active_id(), Some(ID));
+        let mut bad = Segment::new();
+        bad.header.id = ID;
+        assert_eq!(m.step_active(&bad, 0, 100_000_000, 100), Some(Event::Lost(ID)));
+        assert_eq!(m.active_id(), None);
+    }
+
+    #[test]
+    fn approach_from_one_zone_into_another() {
+        let a = seg(20);
+        let mut b = seg(20);
+        b.header.id = 7;
+        for p in b.header.start.iter_mut().filter(|p| **p != (0, 0)) {
+            p.0 += 40_000; // 440 m north, a zone of its own
+        }
+        let mut m = Matcher::new();
+        let mut ev = Vec::new();
+        // north along x = -250 m: A's zone (300 m), then B's, then out of both
+        for k in 0..60 {
+            let (lat, lon) = at(-250.0, 20.0 * f64::from(k));
+            ev.extend(m.step_idle([&a.header, &b.header], lat, lon, k as u32));
+        }
+        assert_eq!(ev, [Event::Approach(ID), Event::Approach(7)]);
+    }
+
+    #[test]
+    fn jitter_at_a_stop_is_still_a_stop() {
+        let s = seg(20);
+        let mut f = line(-50.0, 250.0, 5.0);
+        let stop = f[f.len() - 1];
+        let mut x = 99u32;
+        for _ in 0..320 {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let (e, n) = (f64::from(x % 13) - 6.0, f64::from((x >> 8) % 13) - 6.0);
+            f.push((stop.0 + (n / 0.011132) as i32, stop.1 + (e / 0.011132) as i32));
+        }
+        let ev = drive(&mut Matcher::new(), &s, &f);
+        assert_eq!(ev.last(), Some(&Event::Lost(ID)), "{ev:?}");
     }
 
     #[test]

@@ -164,9 +164,9 @@ is shared, not copied: `Course::nearest` became `course::nearest_by` over a clos
 on one step. Choices: the "bounding box" is that of the header's 40 start pairs (the header holds no other point); a
 start needs 2 m of movement between two fixes and the closest approach inside the pass (the start time is
 interpolated there); lost is 10 s beyond 50 m of the track, or 10 s back more than 50 m behind the furthest point
-(a U-turn rides the track the wrong way), or 300 s still or without a fix; the finish is the crossing of the last
-point's perpendicular within 25 m of it (stopping short never finishes), its time interpolated between the fixes; the
-Approach banner is said once until the rider is beyond 300 m of every start, and not again after a lost segment near
+(a U-turn rides the track the wrong way), or 300 s still (within 10 m of one spot, so GNSS jitter at a stop counts) or without a fix; the finish is the
+crossing of the last point's perpendicular, within 25 m of the last point at the crossing (so a 30 m/s rider finishes) (stopping short never finishes), its time interpolated between the fixes; the
+Approach banner is said once per segment, the next one only when the rider is beyond 300 m of the one said, and not again after a lost segment near
 its start. After any Lost or Finish the matcher is idle again and the segment is the caller's to drop.
 
 On the unit after S5 (docs/status.md, "Not yet seen on the unit"): a ride over two known segments with an EMMC_WRITE=1
