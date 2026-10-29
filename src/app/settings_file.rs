@@ -10,13 +10,14 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (44 now: 31 in the first build, THEME's 12 bytes, then POWER MATCH's byte appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (66 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, then the 11 alert limits appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
 //! 28   settings        in [`NUMBERS`]' order: the wheel (mm), then the numbers (u16 each); then the choices, a
 //!                      byte each ([`SettingsCopy::to_sector`]), then THEME's name (12 bytes, NUL padded; a file
-//!                      only, no register), then POWER MATCH (a byte, file only); a value out of its range reads as its default
+//!                      only, no register), then POWER MATCH (a byte, file only), then the 11 alert limits ([`alerts::LIMITS`], u16 each,
+//!                      0 = OFF; a file without them reads OFF); a value out of its range reads as its default
 //! 508  CRC-32 of 0..508
 //! ```
 //!

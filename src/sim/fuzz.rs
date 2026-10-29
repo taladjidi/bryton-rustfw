@@ -3290,6 +3290,7 @@ fn settings_file() {
     let d = crate::Settings::from_word(0);
     let (mut refused, mut whole, mut short, mut defaulted) = (0u32, 0u32, 0u32, 0u32);
     let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
+    let (mut with_limit, mut wild_limit) = (0u32, 0u32); // limits read, and out of range ones read as 0
     for _ in 0..20_000 {
         let mut file = [0u8; 1024];
         let mut want: Option<u32> = None; // the newest copy built whole
@@ -3302,6 +3303,7 @@ fn settings_file() {
                 0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
                 1 => (next() % 31) as u16,      // an earlier build's
                 2 => 31 + (next() % 60) as u16, // a later build's
+                3 => 44 + (next() % 23) as u16, // with the alert limits, whole or cut among them
                 _ => 31,
             };
             s[6..8].copy_from_slice(&len.to_le_bytes());
@@ -3311,6 +3313,7 @@ fn settings_file() {
                 *b = next() as u8;
             }
             let mut theme: Option<([u8; 12], bool)> = None; // a name written at 59, and whether it reads as one
+            let mut lim = [None::<(u16, bool)>; 11]; // the limits written at 28 + 44 + 2n, and whether in range
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
             if !next().is_multiple_of(4) {
                 let ok = crate::Settings { ftp: 100 + 5 * (next() % 80) as u16, ..d };
@@ -3341,6 +3344,20 @@ fn settings_file() {
                     s[28 + 31..28 + 43].copy_from_slice(&name);
                     theme = Some((name, !bad));
                 }
+                for (n, slot) in lim.iter_mut().enumerate() {
+                    let at = 28 + 44 + 2 * n;
+                    if usize::from(len) >= 44 + 2 * n + 2 {
+                        let range = Setting::Limit(n as u8).number().unwrap().0;
+                        let ok = next().is_multiple_of(2);
+                        let v = if ok {
+                            (next() % (u32::from(*range.end()) + 1)) as u16
+                        } else {
+                            60_000 + (next() % 5000) as u16
+                        };
+                        s[at..at + 2].copy_from_slice(&v.to_le_bytes());
+                        *slot = Some((v, ok));
+                    }
+                }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
             let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
@@ -3362,6 +3379,17 @@ fn settings_file() {
                         let (range, _) = k.number().unwrap();
                         assert!(range.contains(&*m.number_mut(k).unwrap()), "{k:?}");
                     }
+                    for (n, w) in lim.iter().enumerate() {
+                        let k = Setting::Limit(n as u8);
+                        assert!(k.number().unwrap().0.contains(&st.limits[n]), "limit {n}");
+                        if let Some((v, ok)) = *w {
+                            assert_eq!(st.limits[n], if ok { v } else { 0 }, "limit {n} written {v}");
+                            with_limit += u32::from(ok && v > 0);
+                            wild_limit += u32::from(!ok);
+                        }
+                    }
+                    let again = SettingsCopy::from_sector(&SettingsCopy { seq: c.seq, ..c }.to_sector());
+                    assert_eq!(again.map(|a| a.settings.limits), Some(st.limits), "the limits round trip");
                     assert!(st.light_level <= crate::LIGHT_AUTO && st.light_timeout < crate::LIGHT_TIMEOUTS_S.len());
                     assert!(st.auto_off < crate::AUTO_OFF_MIN.len() && st.wkt_avg < crate::WKT_AVGS.len());
                     let mut l = crate::Line::<12>::new();
@@ -3401,6 +3429,7 @@ fn settings_file() {
     std::println!("theme names: {kept} kept, {fell_back} fallen back");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
     assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");
+    assert!(with_limit > 100 && wild_limit > 100, "{with_limit} limits read, {wild_limit} out of range read as 0");
 }
 
 /// Which wins at a start (app/settings_file.rs), by chance: random backup registers (each tagged as some build writes

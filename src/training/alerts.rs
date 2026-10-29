@@ -231,6 +231,13 @@ impl Alerts {
         }
     }
 
+    /// A pause or a stop: every limit's hold starts again (armed and the minute are kept).
+    pub fn reset_limits(&mut self) {
+        for b in self.bands.iter_mut() {
+            b.held = 0;
+        }
+    }
+
     /// One second of a moving ride: the limits `set` ([`LIMITS`]) against `r` into `q`. A limit alerts after
     /// [`LIMIT_HOLD_S`] seconds past it (not on one sample), re-arms once back inside by 5 %, and says at most every
     /// [`LIMIT_EVERY_S`]; no sensor, no alert. A reminder by distance, kcal or kJ fires once each time the ride crosses
@@ -250,15 +257,17 @@ impl Alerts {
     /// ```
     pub fn limits(&mut self, r: &Reading, set: &[u16; LIMITS], q: &mut Queue) {
         let v = |o: Option<u16>| o.map(u32::from);
+        // a reading of 0 is no reading for the low limits: coasting or a standstill does not alert
+        let nz = |o: Option<u16>| o.filter(|&x| x > 0).map(u32::from);
         let l = |i: usize, k: u32| set.get(i).map_or(0, |&x| u32::from(x) * k);
         // (reading, limit, high, alert) for each band
         let checks = [
             (v(r.power), l(0, 1), true, Alert::PowerHigh),
-            (v(r.power), l(1, 1), false, Alert::PowerLow),
+            (nz(r.power), l(1, 1), false, Alert::PowerLow),
             (v(r.cadence), l(2, 1), true, Alert::CadHigh),
-            (v(r.cadence), l(3, 1), false, Alert::CadUnder),
+            (nz(r.cadence), l(3, 1), false, Alert::CadUnder),
             (v(r.speed_x10), l(4, 10), true, Alert::SpeedHigh),
-            (v(r.speed_x10), l(5, 10), false, Alert::SpeedLow),
+            (nz(r.speed_x10), l(5, 10), false, Alert::SpeedLow),
             (v(r.hr), l(6, 1), false, Alert::HrLow),
             (v(r.dfa_x100), l(10, 1), false, Alert::DfaLow),
         ];
@@ -460,6 +469,20 @@ mod tests {
             assert!(run(&mut b, &set, hi, 4).is_empty());
             assert!(run(&mut b, &set, Reading { power: Some(250), ..hi }, 1).is_empty());
         }
+    }
+
+    #[test]
+    fn a_pause_restarts_the_hold_and_zero_is_no_reading_for_low_limits() {
+        let mut set = [0; LIMITS];
+        (set[0], set[1], set[3], set[5]) = (300, 100, 60, 15);
+        let mut a = Alerts::new();
+        let hi = Reading { power: Some(350), ..Reading::default() };
+        assert!(run(&mut a, &set, hi, 4).is_empty());
+        a.reset_limits();
+        assert!(run(&mut a, &set, hi, 1).is_empty(), "4 s, a pause, 1 s: not 5");
+        assert_eq!(run(&mut a, &set, hi, 4), [4]);
+        let zero = Reading { power: Some(0), cadence: Some(0), speed_x10: Some(0), ..Reading::default() };
+        assert!(run(&mut Alerts::new(), &set, zero, 100).is_empty(), "coasting, standing still");
     }
 
     #[test]

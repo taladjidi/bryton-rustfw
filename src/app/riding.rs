@@ -533,6 +533,8 @@ impl App {
             // ERG: the trainer holds the watts, the resistance climbs as the rider slows
             let slow = self.alerts.cadence(input.cadence, self.erg_on());
             self.alert.push(slow);
+        } else {
+            self.alerts.reset_limits(); // a pause or a stop starts the holds again
         }
         // the workout's step clock moves with the ride's timer
         let (ticked, dist, steps) = (self.ride.timer_s() != timer, self.ride.dist_m(), self.plan.workout.steps());
