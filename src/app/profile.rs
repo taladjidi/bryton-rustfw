@@ -141,20 +141,20 @@ impl App {
         let on = self.page_on(CLIMB);
         // the anchor is the page shown when the page joins (any of the round); one that leaves the round (a set
         // switch, a page deleted, an indoor skip) is replaced by the page shown
-        if on && (!self.climb.0 || !self.page_on(self.climb.1)) {
-            self.climb.1 =
-                if let Screen::Ride(n) = self.screen { if n != CLIMB { n } else { self.climb.1 } } else { 0 };
-            if let (false, Screen::Ride(n)) = (self.page_on(self.climb.1), self.ride_page(0, 1)) {
-                self.climb.1 = n;
+        if on && (!self.climb.on || !self.page_on(self.climb.after)) {
+            self.climb.after =
+                if let Screen::Ride(n) = self.screen { if n != CLIMB { n } else { self.climb.after } } else { 0 };
+            if let (false, Screen::Ride(n)) = (self.page_on(self.climb.after), self.ride_page(0, 1)) {
+                self.climb.after = n;
             }
         }
         self.open_climb(on, b);
-        if on == self.climb.0 {
+        if on == self.climb.on {
             return;
         }
-        self.climb.0 = on;
+        self.climb.on = on;
         if !on && self.screen == Screen::Ride(CLIMB) {
-            self.screen = self.ride_page(place(self.climb.1) + 1, 1);
+            self.screen = self.ride_page(place(self.climb.after) + 1, 1);
             self.show(b);
         }
     }
@@ -166,9 +166,9 @@ impl App {
     /// later start, the rider outside it) or none is in view; the rider stepping back over the start does not
     /// reopen it, and a trace made again inside the climb moves its start without a new climb.
     fn open_climb(&mut self, on: bool, b: &mut impl Board) {
-        let Some(n) = self.climb_now() else { return self.climb.2 = None };
+        let Some(n) = self.climb_now() else { return self.climb.handled = None };
         let (start, inside) = (n.climb.start_m, n.along >= n.climb.start_m);
-        let mut done = match self.climb.2 {
+        let mut done = match self.climb.handled {
             Some((k, d)) if k == start => d,
             Some((_, d)) if inside => d,
             _ => inside,
@@ -182,7 +182,7 @@ impl App {
                 done = true;
             }
         }
-        self.climb.2 = Some((start, done));
+        self.climb.handled = Some((start, done));
     }
 
     /// Each pass: when the profile in force changed (a trainer heard or lost, by hand), the ride pages on screen

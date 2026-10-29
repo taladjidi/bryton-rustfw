@@ -16,7 +16,7 @@ impl App {
         let ev = self.ride.start_pause();
         if ev == ride::Event::Start {
             // the ride's own track and graphs, from here (the last position kept, so the map is not empty)
-            self.ride_started = (self.date, self.strip.time);
+            self.ride_started = RideStart::new(self.date, self.strip.time);
             self.history = ride::History::default();
             self.alerts = alerts::Alerts::new();
             self.radio.shifts = 0;
@@ -409,7 +409,7 @@ impl App {
                 self.profile = self.rec.clean.profile();
                 (self.profile_by_hand, self.tlink.quiet_s) = (self.rec.clean.by_hand(), 0);
                 let two = |i: usize| name[i].wrapping_sub(b'0') % 10 * 10 + name[i + 1].wrapping_sub(b'0') % 10;
-                self.ride_started = ((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
+                self.ride_started = RideStart::new((2000 + u16::from(two(0)), two(2), two(4)), (two(6), two(8)));
                 self.history = ride::History::default();
                 // the recovery record keeps the ride's totals, not power.rs's sums: the end card's NP, TSS and kJ
                 // cover the part after the restart only (the file has every second's power: the history's and a

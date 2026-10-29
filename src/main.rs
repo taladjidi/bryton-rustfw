@@ -18,11 +18,11 @@
 mod board;
 
 use board::{hw, usb};
-use bryton_rustfw::dev::{Effect, Session, Stats, UsbWatch};
+use bryton_rustfw::dev::{Effect, Session, UsbWatch};
 use bryton_rustfw::emmc::BusError;
 use bryton_rustfw::prof::Sec;
 use bryton_rustfw::ui::UsbDot;
-use bryton_rustfw::{App, Board, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, TOUCH_MS, standby_flags_word};
+use bryton_rustfw::{App, Board, Cable, LoopPolicy, POLL_MS, STANDBY_BKP, STANDBY_FLAGS_BKP, Woke, standby_flags_word};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use hw::{barrier, rd, wfi, wr, wr8};
 
@@ -1818,12 +1818,9 @@ fn main() -> ! {
     app.set_threshold_memory(make_thresholds());
     checkpoint(5);
     let mut link: Option<usb::Link> = None;
-    let mut usb_tried = false;
     let mut session = Session::new();
-    let mut stats = Stats::default();
-    // awake cycles in the current second, all cycles run (the sleep loop's too), its length
-    let (mut awake, mut ran, mut window_ms) = (0u32, 0u32, 0u32);
-    let mut since_touch = 0u32; // ms slept since the panel was last read
+    // the loop's rules (lib app/loop_policy.rs): the cable, the wake sources, the slices, the awake and CPU shares
+    let mut policy = LoopPolicy::new(CPU_HZ, TIMER_MAX_MS);
     loop {
         // before the step too: an overflow in the last pass's sleep loop (USB, the touch) is caught before the
         // recorder runs on what it overwrote
@@ -1833,15 +1830,14 @@ fn main() -> ! {
         stack_check();
         app.prof().span(Sec::Step, t0, cycles());
         checkpoint(6);
-        let vbus = !pin_low(VBUS.0, VBUS.1);
-        if vbus && !usb_tried {
-            usb_tried = true;
-            link = usb::start();
-            app.set_usb(&mut board, if link.is_some() { UsbDot::Powered } else { UsbDot::Failed });
-        } else if !vbus && usb_tried && !app.busy() {
-            // not during a ride or on its card (a loose cable or a power bank unplugged must not lose it): after it
-            // ponytail: unplugged = reset, the simplest way to power the PHY and the USB core down again
-            system_reset();
+        match policy.cable(!pin_low(VBUS.0, VBUS.1), app.busy()) {
+            Cable::Start => {
+                link = usb::start();
+                app.set_usb(&mut board, if link.is_some() { UsbDot::Powered } else { UsbDot::Failed });
+            }
+            // unplugged, no ride or its card: the reset powers the PHY and the USB core down again
+            Cable::Reset => system_reset(),
+            Cable::Keep => {}
         }
         // Sleep until the next pass, waking for USB activity. App work waits for the end of the sleep: it may sleep
         // too (delay_ms), which would take over this timer.
@@ -1852,28 +1848,25 @@ fn main() -> ! {
         // the pass's sleep, in slices: TOUCH_MS ones while a finger is on the panel, and one ends early when the
         // touch INT falls, so the panel is read at once and then every TOUCH_MS (stock: an EXTI6 wake, then reads
         // while the finger is down)
-        let mut slept = 0; // ms, by SysTick: cycles() stops counting in WFI
         // idle: a longer sleep (App::pass_ms), ended at once by a key or a byte from the Nordic chip, so neither
         // waits for it (the chip's own buffers are not known: it is read as soon as it sends, as before)
-        let idle = app.pass_ms() > POLL_MS;
-        let radio = app.radio_up();
-        if !radio {
+        let wake = policy.begin_sleep(app.pass_ms(), app.radio_up());
+        if !wake.radio {
             nrf_flush();
         }
-        if idle {
-            wake_on_io(true, radio);
+        if wake.io {
+            wake_on_io(true, wake.radio);
         }
         'sleep: loop {
-            let left = app.pass_ms().saturating_sub(slept); // a finger down makes it POLL_MS again
-            if left == 0 {
+            // a finger down makes the pass POLL_MS again
+            let Some(slice) = policy.slice(app.pass_ms(), app.touching()) else {
                 break;
-            }
-            let slice = left.min(if app.touching() { TOUCH_MS } else { TIMER_MAX_MS });
+            };
             timer_start(slice);
-            let (edge, done, io) = loop {
+            let w = loop {
                 let usb_at = cycles();
                 if let Some(l) = &mut link {
-                    match l.poll(&mut session, app, &mut board, stats) {
+                    match l.poll(&mut session, app, &mut board, policy.stats()) {
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
                             l.linger(50);
@@ -1906,7 +1899,7 @@ fn main() -> ! {
                         l.linger(50);
                         system_reset();
                     }
-                    let dot = match l.watch(stats.uptime_ms.wrapping_add(slept), app.drive_failed()) {
+                    let dot = match l.watch(policy.now_ms(), app.drive_failed()) {
                         UsbWatch::Up => UsbDot::Ready,
                         UsbWatch::Suspended => UsbDot::Suspended,
                         UsbWatch::Down => UsbDot::Powered,
@@ -1922,36 +1915,42 @@ fn main() -> ! {
                     app.set_usb(&mut board, dot);
                     app.prof().span(Sec::Usb, usb_at, cycles());
                 }
-                let (edge, done, io) = (touch_edge(), timer_done(), idle && io_edge(radio));
-                if edge || done || io || press.is_some() || woke {
+                let w = Woke {
+                    touch: touch_edge(),
+                    timer: timer_done(),
+                    io: wake.io && io_edge(wake.radio),
+                    key: press.is_some(),
+                    usb: woke,
+                };
+                if w.any() {
                     // a key from the link acts now, so the next command cannot replace it; board work done for the
                     // link (an eMMC read) may have slept, which takes over SysTick: this sleep's end is lost, so end it
-                    break (edge, done, io);
+                    break w;
                 }
                 sleep();
             };
-            let ms = if done { slice } else { timer_elapsed_ms(slice) };
+            policy.slept(if w.timer { slice } else { timer_elapsed_ms(slice) });
             timer_stop();
-            (slept, since_touch) = (slept + ms, since_touch.saturating_add(ms));
             // the panel before the early end below: with the USB drive busy, every slice ends early, and touch was
             // never read (seen on the unit, 2026-10-24: no gesture during a copy to the drive)
-            if edge || app.touching() {
+            if w.read_touch(app.touching()) {
                 // a gesture acts after the sleep: acting may sleep too (delay_ms), which takes over SysTick
                 let t = cycles();
-                touched = app.touch(&mut board, core::mem::take(&mut since_touch));
+                touched = app.touch(&mut board, policy.take_touch_ms());
                 app.prof().span(Sec::Touch, t, cycles());
                 if touched.is_some() {
                     break 'sleep;
                 }
             }
-            if io || press.is_some() || woke {
+            if w.ends_pass() {
                 break;
             }
         }
-        if idle {
+        if wake.io {
             wake_on_io(false, false);
         }
         let sleep_cycles = cycles().wrapping_sub(sleep_start);
+        let slept = policy.slept_ms();
         board.sleep = (slept, sleep_cycles / (CPU_HZ / 1_000_000));
         let t1 = cycles();
         if press.is_some() || touched.is_some() {
@@ -1964,20 +1963,8 @@ fn main() -> ! {
             app.prof().span(Sec::Input, t1, cycles());
         }
         checkpoint(7);
-        // the app's work (step and keys), not the USB polls: those happen only while a cable is in
-        let worked = t1.wrapping_sub(t0) - sleep_cycles + cycles().wrapping_sub(t1);
-        awake = awake.saturating_add(worked);
-        // CYCCNT stops in WFI, so the sleep's cycles are the time the CPU ran while it should have slept
-        ran = ran.saturating_add(worked).saturating_add(sleep_cycles);
-        // a pass is its work plus its sleep (a long one, an eMMC scan, is longer than POLL_MS)
-        let pass_ms = worked / (CPU_HZ / 1000) + slept;
-        window_ms += pass_ms;
-        if window_ms >= 1000 {
-            stats.awake_permille = (u64::from(awake / (CPU_HZ / 1000)) * 1000 / u64::from(window_ms)) as u32;
-            stats.cpu_permille = (u64::from(ran / (CPU_HZ / 1000)) * 1000 / u64::from(window_ms)) as u32;
-            (awake, ran, window_ms) = (0, 0, 0);
-        }
-        stats.uptime_ms = stats.uptime_ms.wrapping_add(pass_ms);
+        // the app's work is the pass less its sleep loop (USB polls, a WFI that does not sleep)
+        let pass_ms = policy.account(cycles().wrapping_sub(t0), sleep_cycles);
         app.prof().pass(pass_ms, slept);
         app.prof().io(core::mem::take(&mut board.io));
     }

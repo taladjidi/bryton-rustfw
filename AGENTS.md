@@ -161,6 +161,7 @@ main first.
 It runs, in order:
 - the layout guard: `src/lib.rs` keeps `#![forbid(unsafe_code)]`, and `unsafe` appears only in hw.rs (plus usb.rs's
   marker line), so the library cannot reach a register;
+- the merge guard: no conflict marker in a tracked text file;
 - the docs guard: every file of `src` and `tools` is named in docs/layout.md, and no doc names a retired flat file
   (the list is in check.sh);
 - `cargo fmt --check` (120 columns, `rustfmt.toml`);

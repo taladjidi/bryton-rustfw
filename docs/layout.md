@@ -48,10 +48,13 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     is on (`ahead_text`, `ahead_bar`, called from `course_text` and `course_bar`). BIKE > CLIMBS AHEAD turns it off
     (`Settings::ahead`, register 11's tag 0xaa to 0xac).
   - `groups.rs`: the sub-structs of `App` (`Phone`, `Ftms`, `Notices` (`notes`), `Light`, `Gps`, `Radio`,
-    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`), `AutoOff`), each with its `new` and its
+    `TrainerLink` (`tlink`), `Plan`, `RampState` (`ramp`), `Recording` (`rec`), `AutoOff`, `ClimbPage` (`climb`), `AheadUs`, `RideStart`), each with its `new` and its
     small pure methods. `pass.rs`: the parts of `App::step` (seconds caught up, the alert said,
     sensors found, the banner's time, the screen's redraw).
   - `device.rs`: backlight, buzzer, status strip, switching off, AUTO OFF (`step_auto_off`) and the idle pass length (`pass_ms`). `clock.rs`: RTC decoding, dates.
+  - `loop_policy.rs`: `LoopPolicy`, the main loop's rules, pure and tested on the host: the cable (start USB once,
+    reset on an unplug outside a ride), the idle sleep's wake sources, the sleep slices (`TOUCH_MS` while touching),
+    what ends the pass's sleep (`Woke`), and the awake and CPU shares of `info`; main.rs keeps the primitives.
   - `profile.rs`: the ride profile (ROAD, INDOOR or MTB), chosen from the trainer heard or set by hand, given up when the trainer goes silent.
   - `quick.rs`: the quick panel (`Screen::Quick`, a swipe down): what the rider wants first, top to bottom.
   - `drive.rs`: the USB drive: the card lent to the computer (`emmc::Emmc::lend`: one owner at a time, every other
