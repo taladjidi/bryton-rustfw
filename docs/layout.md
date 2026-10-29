@@ -72,7 +72,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   and its arms in `Settings::text` / `cycle` / `step`: never a row number. Back pops a screen stack (`App::open` /
   `close`), so no screen knows where Back goes.
 - `src/ui/theme.rs`: colour themes (`Theme`: what each built-in colour is drawn as, `Canvas::ink`), the built-in
-  DARK (identity) and OUTDOOR, the INI parser and the whole-theme checks (contrast, red only for alarms).
+  DARK (identity), OUTDOOR and LIGHT, the INI parser and the whole-theme checks (contrast, red only for alarms).
 - `src/ui/text.rs`: text in the pixel font at a scale (`text::draw`, a `Style`, `Align`), one panel window per glyph.
   For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
   `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.

@@ -144,21 +144,23 @@ fn theme_from_the_card_is_picked_and_kept() {
     app.press(&mut sim, Press::Long(Key::Page));
     super::tests::to_row(&mut sim, &mut app, menu::Row::Set(Setting::Theme));
     let mut seen: Vec<(String, Theme)> = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..5 {
         app.press(&mut sim, Press::Short(Key::Start));
         run(&mut sim, &mut app, 100);
         super::tests::assert_consistent(&sim, &app);
         seen.push((app.settings.theme_name().to_string(), app.theme));
     }
     let names: Vec<&str> = seen.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names, ["OUTDOOR", "SUNNY", "REDZONE", "DARK"], "NOTES.TXT is no theme");
+    assert_eq!(names, ["OUTDOOR", "LIGHT", "SUNNY", "REDZONE", "DARK"], "NOTES.TXT is no theme");
     assert_eq!(seen[0].1, Theme::OUTDOOR);
+    assert_eq!(seen[1].1, Theme::LIGHT);
     let sunny = crate::theme::parse(SUNNY.as_bytes()).unwrap();
-    assert_eq!(seen[1].1, sunny);
-    assert_eq!(seen[2].1, Theme::DARK, "refused: DARK drawn");
-    // on to SUNNY (two more presses), kept, and applied after a restart
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(seen[2].1, sunny);
+    assert_eq!(seen[3].1, Theme::DARK, "refused: DARK drawn");
+    // on to SUNNY (three more presses), kept, and applied after a restart
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Start));
+    }
     assert_eq!(app.settings.theme_name(), "SUNNY");
     for _ in 0..200 {
         run(&mut sim, &mut app, 200);
@@ -370,4 +372,105 @@ fn the_themes_folder_listing() {
         listed += got.len();
     }
     assert!(listed > 100 && skipped > 100 && capped > 0, "{listed} listed, {skipped} skipped, {capped} capped");
+}
+
+/// LIGHT with its text one step off black, so a pixel of exactly BLACK can only be a background, a blend or an
+/// outline that skipped the theme.
+fn light_probe() -> Theme {
+    let mut t = Theme::LIGHT;
+    t.ink[1] = 0x0008;
+    t
+}
+
+/// LIGHT on the main screens, the menus, banners, a graph, the gauge, the profile bars, the call and the end screen:
+/// no pixel is the built-in black, the background around text and the cog is the theme's; shots for the gallery
+/// (`theme_light_*`).
+#[test]
+fn light_assumes_no_black() {
+    use crate::app::GaugeShown;
+    use crate::storage::workout_file::Kind;
+    use crate::ui::{self, Canvas};
+    let white = Theme::LIGHT.ink[0];
+    let no_black = |sim: &Sim, what: &str| {
+        let n = sim.screen.iter().filter(|&&p| p == ui::BLACK).count();
+        assert_eq!(n, 0, "{what}: {n} px still the built-in black");
+    };
+    let (mut sim, mut app) = unit(None);
+    set_theme(&mut sim, &mut app, light_probe());
+    scenes(&mut sim, &mut app, |sim, _, name| {
+        no_black(sim, name);
+        if name == "overview" {
+            let g = ui::GEAR_AT;
+            assert_eq!(sim.screen[g.1 as usize * 240 + g.0 as usize], white, "the cog's corner is the background");
+            assert_eq!(sim.screen[(ui::H as usize - 1) * 240 + 1], white, "the notices' area");
+        }
+    });
+    // the real LIGHT: shots
+    let (mut sim, mut app) = unit(None);
+    set_theme(&mut sim, &mut app, Theme::LIGHT);
+    scenes(&mut sim, &mut app, |sim, _, name| sim.save(&std::format!("theme_light_{name}")));
+    // the screens the scenes do not reach, on the probe
+    let look = light_probe();
+    let (mut sim, mut app) = started();
+    app.settings.ftp = 200;
+    let bx = (0, 24, 240, 118);
+    let fresh = |sim: &mut Sim| Panel(sim, (0, ui::H), look).fill(0, 0, ui::W, ui::H, ui::BLACK);
+    fresh(&mut sim);
+    ui::draw_banner(&mut Panel(&mut sim, (0, ui::H), look), "BATTERY LOW", true);
+    no_black(&sim, "alarm banner");
+    ui::draw_banner(&mut Panel(&mut sim, (0, ui::H), look), "CLIMB 2 KM", false);
+    no_black(&sim, "info banner");
+    fresh(&mut sim);
+    ui::draw_graph(&mut Panel(&mut sim, (0, ui::H), look), (0, 40, 240, 120), &|i| {
+        (10 + i % 100, crate::ride::power_color(1 + (i / 8) as u8 % 7))
+    });
+    no_black(&sim, "graph");
+    fresh(&mut sim);
+    ui::draw_profile_bars(&mut Panel(&mut sim, (0, ui::H), look), (30, 100, 80), 4, &[10, 30, 60, 80, 50, 20, 70]);
+    no_black(&sim, "profile bars");
+    fresh(&mut sim);
+    let mut value = crate::text::Line::new();
+    value.push_u32(140);
+    let band = (160, 180);
+    let scale = crate::workout::gauge_scale(Kind::Power, band, 200, 190);
+    let shown = GaugeShown {
+        kind: Kind::Power,
+        avg: 0,
+        band: Some(band),
+        step: true,
+        pace: None,
+        value,
+        color: crate::workout::gauge_color(140, band),
+        marker: Some(crate::workout::gauge_x(140, scale, ui::gauge_cols(bx))),
+    };
+    app.draw_gauge(&mut Panel(&mut sim, (0, ui::H), look), bx, shown);
+    no_black(&sim, "gauge");
+    fresh(&mut sim);
+    ui::draw_call(&mut Panel(&mut sim, (0, ui::H), look), "Work");
+    no_black(&sim, "call");
+    fresh(&mut sim);
+    ui::draw_end(&mut Panel(&mut sim, (0, ui::H), look), false, "10.5 KM", ui::END_SAVE);
+    no_black(&sim, "end");
+}
+
+/// The map page in LIGHT (the basemap under the arrow and the track): the basemap is a picture and stays as it is,
+/// the arrow, its outline and the track go through the theme; a shot for the gallery.
+#[test]
+fn light_map_page() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some(crate::tiles::tests::ORIGIN) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    sim.gnss.route = Some(super::map_tests::tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    set_theme(&mut sim, &mut app, Theme::LIGHT);
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 60_000);
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("theme_light_map");
 }

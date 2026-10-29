@@ -100,5 +100,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|:-:|
 | ![DARK](img/theme-dark.png) | ![OUTDOOR](img/theme-outdoor.png) | ![OUTDOOR, a ride page](img/theme-outdoor-ride.png) |
 | DARK: the colours as they were (sim) | OUTDOOR: lighter notes and lines, brighter zones (sim) | OUTDOOR on a ride page (sim) |
-| ![OUTDOOR menu](img/theme-outdoor-menu.png) | ![A theme file](img/theme-sunny.png) |  |
-| SETTINGS > DISPLAY > THEME cycles DARK, OUTDOOR and the files of `\Rustfw\Themes` (sim) | A theme file from the card: SUNNY, OUTDOOR with a blue accent (sim) |  |
+| ![OUTDOOR menu](img/theme-outdoor-menu.png) | ![A theme file](img/theme-sunny.png) | ![LIGHT](img/theme-light.png) |
+| SETTINGS > DISPLAY > THEME cycles DARK, OUTDOOR, LIGHT and the files of `\Rustfw\Themes` (sim) | A theme file from the card: SUNNY, OUTDOOR with a blue accent (sim) | LIGHT: black on white for the sun (sim) |
+| ![LIGHT, a ride page](img/theme-light-ride.png) | ![LIGHT menu](img/theme-light-menu.png) | ![LIGHT map](img/theme-light-map.png) |
+| LIGHT on a ride page (sim) | LIGHT menu (sim) | LIGHT map page: the basemap stays a picture (sim) |

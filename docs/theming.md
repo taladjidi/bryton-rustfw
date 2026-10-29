@@ -1,6 +1,7 @@
 # Theming: a plan
 
-Status: a design, nothing built yet (2026-10-26). The owner's wish: "the UI layout / look could be defined from a
+Status: phase 1 built and sim-tested: T1 (colours, DARK, OUTDOOR, files) and T2 (LIGHT, the black-background
+assumptions fixed), 2026-10-29; fonts, metrics and layouts are not (first written 2026-10-26). The owner's wish: "the UI layout / look could be defined from a
 theme file on the SD card, and the user could pick whatever theme suits them". The "SD card" is the eMMC's FAT
 volume (the BRYTON drive); this firmware reads files from it with src/storage/fat/ and keeps its own in `\Rustfw`.
 
@@ -183,7 +184,16 @@ every test that compares a colour. For colours alone it buys nothing the table d
   light"), so a white background reflects the sun where black does not: LIGHT is the sun theme (inferred: check
   on the unit outdoors). An LCD's power is its backlight, not its pixels, so no theme saves power (inferred from
   the panel type).
-- LIGHT needs what assumes a black background fixed first: the cog's `dim` blends over black; the zone colours are
+- **T2, done:** LIGHT is built in (`Theme::LIGHT`, white background, black text, dim `#606060`, line `#8C8C8C`, accent
+  `#B04000` with white on it, alarm `#D00000` red, zones at Intervals.icu's own values; it passes every whole-theme
+  check with no base to excuse it, unlike DARK). What assumed black and was fixed: the screenshot row (`App::render_row`
+  started from black, so the gaps nothing draws, such as the strip's gap, were black in a light theme; it now starts from
+  the theme's background). The cog already blended over `ink(BLACK)`, the text and gauge blends already took the
+  theme's background, the zones are the palette itself, and the map's arrow, outline and track go through `fill`.
+  The `light_assumes_no_black` test draws every scene in LIGHT with its text one step off black: no pixel may be the
+  built-in black. Left as it is: the basemap and the IGN tiles are pictures (a light map on a light theme, a dark map
+  on DARK are the map's own look), and the IGN copyright box (black on white, a picture's overlay).
+- Before T2, LIGHT needed what assumes a black background fixed first: the cog's `dim` blends over black; the zone colours are
   brightened for black (`ride::ZONE_COLORS`' doc); check the map's track and the basemap's edges. A screen opening
   already fills its whole area, so a white background costs no more than black.
 - The ST7789's inversion (INVOFF instead of INVON) is not a theme: it inverts every colour, the zones and the map
