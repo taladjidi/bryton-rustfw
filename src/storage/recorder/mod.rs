@@ -147,7 +147,7 @@ use crate::fat::{DiskWrite, Error, Fat, File, SECTOR, SECTOR_U32};
 use crate::fit::{self, Sample, Sink, Writer};
 use crate::ride::RIDE_WORDS;
 
-mod rec;
+pub(crate) mod rec;
 use rec::{Rec, file_name};
 pub use rec::{next_name, ride_name};
 // the record keeps the count of ride words in a byte (byte 21)

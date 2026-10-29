@@ -3627,3 +3627,98 @@ fn raw_samples() {
         "reached: {volts} volts, {plausible} plausible, {altitudes} altitudes"
     );
 }
+
+/// One recovery record's reader against its writer. The intact sector reads back equal (`c[0]`). One to three bytes
+/// flipped are refused (`c[1]`), except when the CRC-16 misses the change: every byte is under the CRC over bytes
+/// 0..510 (bytes 510..512 are the CRC itself), and a random change passes a 16-bit CRC with probability about 2^-16,
+/// so a damaged sector may read back (`c[3]`, bounded by the caller). The boot's recovery does not trust such a record
+/// blindly: it also checks the chain and sector 0 against it (`still_ours`), which bounds the harm. A random sector is
+/// refused (`c[2]`).
+fn recovery_sectors<T: PartialEq + std::fmt::Debug>(
+    next: &mut impl FnMut() -> u32,
+    original: &T,
+    sector: [u8; crate::fat::SECTOR],
+    read: impl Fn(&[u8; crate::fat::SECTOR]) -> Option<T>,
+    c: &mut [u32; 4],
+) {
+    assert_eq!(read(&sector).as_ref(), Some(original));
+    c[0] += 1;
+    let mut bad = sector;
+    for _ in 0..1 + next() % 3 {
+        let at = next() as usize % crate::fat::SECTOR;
+        bad[at] ^= 1 + (next() % 255) as u8; // a nonzero XOR, so the byte changes
+    }
+    if bad != sector {
+        c[1] += 1;
+        if let Some(back) = read(&bad) {
+            assert_eq!(back, *original, "a damaged sector read back as another record");
+            c[3] += 1; // accepted, and equal: the change fell where the record does not look
+        }
+    }
+    let mut raw = [0u8; crate::fat::SECTOR];
+    raw.iter_mut().for_each(|b| *b = next() as u8);
+    assert_eq!(read(&raw), None, "a random sector was read");
+    c[2] += 1;
+}
+
+#[test]
+fn recovery_records() {
+    use crate::fit::RECORD_LEN;
+    use crate::recorder::{Phase, rec::Rec};
+    use crate::ride::RIDE_WORDS;
+    let (mut recorder, mut trash) = ([0u32; 4], [0u32; 4]);
+    for seed in 1..=64u32 {
+        let mut next = xorshift(seed.wrapping_mul(0x9e37_79b9) ^ 0x5ec0_0001);
+        for _ in 0..100 {
+            let mut name = [0u8; 12];
+            name.iter_mut().for_each(|b| *b = next() as u8);
+            let mut fit = [0u8; RECORD_LEN];
+            fit.iter_mut().for_each(|b| *b = next() as u8);
+            let phase = [Phase::Done, Phase::Starting, Phase::Recording, Phase::Saving][next() as usize % 4];
+            let ride: [u32; RIDE_WORDS] = core::array::from_fn(|_| next());
+            let r = Rec {
+                seq: next(),
+                phase,
+                name,
+                cluster: next(),
+                fit,
+                ride,
+                discard: next().is_multiple_of(2),
+                checked: (next().is_multiple_of(2)).then(|| next() as u16),
+            };
+            recovery_sectors(&mut next, &r, r.to_sector(), Rec::from_sector, &mut recorder);
+
+            // the trash's move record: each file of the move is there or not, with its CRC or without
+            let moved = |next: &mut dyn FnMut() -> u32| {
+                (!next().is_multiple_of(3)).then(|| (next(), next(), (next().is_multiple_of(2)).then(|| next() as u16)))
+            };
+            let mut name = [0u8; 12];
+            name.iter_mut().for_each(|b| *b = next() as u8);
+            let t = crate::trash::Rec {
+                pending: next().is_multiple_of(2),
+                name,
+                suffix: next() as u8,
+                files: [moved(&mut next), moved(&mut next)],
+            };
+            // the older layout's flag 1 (its CRC ignored, so the file reads back without one): some records use it
+            let mut sector = t.to_sector();
+            let mut expect = t;
+            if next().is_multiple_of(4) {
+                for k in 0..2 {
+                    if sector[32 + 16 * k] == 2 {
+                        sector[32 + 16 * k] = 1;
+                        expect.files[k] = expect.files[k].map(|(first, size, _)| (first, size, None));
+                    }
+                }
+                let crc = crate::fit::crc(0, &sector[..crate::fat::SECTOR - 2]);
+                sector[crate::fat::SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+            }
+            recovery_sectors(&mut next, &expect, sector, crate::trash::Rec::from_sector, &mut trash);
+        }
+    }
+    // a 16-bit CRC misses about 2^-16 of the changes: at most 4 accepted per 6400 damaged sectors, all equal
+    for c in [recorder, trash] {
+        assert!(c[0] > 0 && c[1] > 0 && c[2] > 0, "reached: {c:?} (intact, damaged, random, accepted)");
+        assert!(c[3] * 1600 <= c[1], "accepted {} of {} damaged", c[3], c[1]);
+    }
+}

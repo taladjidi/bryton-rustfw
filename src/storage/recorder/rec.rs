@@ -8,25 +8,25 @@ use crate::ride::RIDE_WORDS;
 
 /// One recovery record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Rec {
-    pub(super) seq: u32,
-    pub(super) phase: Phase,
-    pub(super) name: [u8; 12],
-    pub(super) cluster: u32,
-    pub(super) fit: [u8; RECORD_LEN],
-    pub(super) ride: [u32; RIDE_WORDS],
+pub(crate) struct Rec {
+    pub(crate) seq: u32,
+    pub(crate) phase: Phase,
+    pub(crate) name: [u8; 12],
+    pub(crate) cluster: u32,
+    pub(crate) fit: [u8; RECORD_LEN],
+    pub(crate) ride: [u32; RIDE_WORDS],
     /// The save goes to `\Rustfw\Discarded` (module doc), byte 22: 0 in the records of the builds before it, which
     /// stay valid (no new [`TAG`]: a ride in progress at the update is resumed).
-    pub(super) discard: bool,
+    pub(crate) discard: bool,
     /// The chain named by this record alone was found still the ride's ([`super::Recorder::still_ours`]) before
     /// its repair began, byte 23 (1), with the CRC of the file's sector 1 then, bytes 28..30, a sector the repair
     /// never writes: a repair a cut tore is redone, never on a chain whose sector 1 changed since (another file's).
     /// 0 in the records of the builds before it, which ignore these bytes (only the record's CRC covers them).
-    pub(super) checked: Option<u16>,
+    pub(crate) checked: Option<u16>,
 }
 
 impl Rec {
-    pub(super) fn to_sector(self) -> [u8; SECTOR] {
+    pub(crate) fn to_sector(self) -> [u8; SECTOR] {
         let mut s = [0u8; SECTOR];
         s[..4].copy_from_slice(&TAG);
         s[4..8].copy_from_slice(&self.seq.to_le_bytes());
@@ -46,7 +46,7 @@ impl Rec {
         s
     }
 
-    pub(super) fn from_sector(s: &[u8; SECTOR]) -> Option<Rec> {
+    pub(crate) fn from_sector(s: &[u8; SECTOR]) -> Option<Rec> {
         if s[..4] != TAG
             || usize::from(s[21]) != RIDE_WORDS
             || fit::crc(0, &s[..SECTOR - 2]).to_le_bytes() != s[SECTOR - 2..]
