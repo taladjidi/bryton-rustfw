@@ -941,7 +941,7 @@ fn a_discard_cut_at_every_sector_part_3() {
 }
 
 /// The cuts of the discard's ride at which the next start finds it already discarded (both torn modes).
-const AT_BOOT_CUTS: [u64; 3] = [719, 720, 721];
+const AT_BOOT_CUTS: [u64; 3] = [858, 859, 860];
 
 fn a_discard_cut(part: u64) {
     for torn in [false, true] {
@@ -1145,7 +1145,7 @@ fn a_damaged_full_folder_never_stops_the_clean_copy() {
     let c = Fat::mount(&mut ram).unwrap().open(&mut ram, FULL_PATH).unwrap().cluster;
     let lba = first_lba(&d.img, DIR);
     let cluster = |e: &[u8]| u32::from_le_bytes([e[26], e[27], e[20], e[21]]);
-    let at = (lba * SECTOR..(lba + 1) * SECTOR)
+    let at = (lba * SECTOR..(lba + 4) * SECTOR) // its entry after the app's files' (`make_kept`)
         .step_by(32)
         .find(|&at| d.img[at] != b'.' && d.img[at + 11] & 0x10 != 0 && cluster(&d.img[at..at + 32]) == c)
         .unwrap();
@@ -2316,4 +2316,121 @@ fn a_marked_one_cluster_ride_whose_cluster_a_small_file_took_is_let_go() {
     assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Nothing);
     let_go(&d.img, &other, "a small file");
     assert_eq!(best_rec(&d.img).phase, Phase::Done);
+}
+
+/// Each of [`KEPT`] in `\Rustfw` at its size, and `\Rustfw\Deleted\Full`.
+fn kept_made(img: &[u8], what: &str) {
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    for (name, size) in KEPT {
+        let v = crate::fat::tests::read_all(&mut fat, &mut ram, &std::format!("Rustfw/{name}"));
+        assert_eq!(v.map(|v| v.len()), Ok(size as usize), "{what}: {name}");
+    }
+    assert!(fat.open(&mut ram, "Rustfw/Deleted/Full").is_ok_and(|f| f.dir), "{what}: Deleted/Full");
+}
+
+/// A card from before [`KEPT`] was made at a ride's start (the owner's): those files and `\Rustfw\Deleted` gone,
+/// their entries marked deleted and their chains freed.
+fn unmake_kept(img: &mut Vec<u8>) {
+    let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let dir = fat.open(&mut ram, DIR).unwrap();
+    let mut chains = Vec::new();
+    for (name, _) in KEPT {
+        let h = fat.locate(&mut ram, dir, name).unwrap();
+        fat.remove(&mut ram, &h).unwrap();
+        chains.push(h.first);
+    }
+    // the folder's 8.3 entry found by its cluster (`locate` opens files only)
+    let del = fat.open(&mut ram, "Rustfw/Deleted").unwrap();
+    chains.extend([del.cluster, fat.open(&mut ram, "Rustfw/Deleted/Full").unwrap().cluster]);
+    let lba = fat.lba(dir.cluster);
+    let (entry_lba, slot) = (lba..lba + fat.cluster_bytes() / SECTOR_U32)
+        .flat_map(|lba| (0..16u8).map(move |k| (lba, k)))
+        .find(|&(lba, k)| {
+            let e = &ram.0[lba as usize * SECTOR + 32 * usize::from(k)..][..32];
+            e[11] == 0x10 && [e[26], e[27], e[20], e[21]] == del.cluster.to_le_bytes()
+        })
+        .unwrap();
+    fat.remove(&mut ram, &Handle { entry_lba, slot, dir: dir.cluster, ..Handle::default() }).unwrap();
+    *img = ram.0;
+    for c in chains {
+        free_chain(img, c);
+    }
+}
+
+/// The review of 2026-10-29, S7: the app's files in `\Rustfw` are made zeroed at the first ride's start, each
+/// reader takes them as "none", and on a card that has them neither the set-up nor `make_kept` writes anything.
+#[test]
+fn the_apps_files_are_made_at_a_rides_start_and_once() {
+    let mut d = card(crate::fat::tests::image());
+    assert_eq!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(NAME)));
+    kept_made(&d.img, "after a ride");
+    assert_eq!(check_clean(&d.img, "after a ride"), 0);
+    let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    for (name, _) in KEPT {
+        let v = crate::fat::tests::read_all(&mut fat, &mut ram, &std::format!("Rustfw/{name}")).unwrap();
+        assert!(v.iter().all(|&b| b == 0), "{name}: zeros");
+    }
+    let (two, one) = ([0u8; 1024], [0u8; SECTOR]);
+    assert!(crate::page::Saved::newest(&two).is_none() && crate::SettingsCopy::newest(&two).is_none());
+    assert!(crate::phone::Stored::from_sector(&one).is_none() && crate::altitude::Cal::from_sector(&one).is_none());
+    assert!(crate::sensors::from_sector(&one).is_none());
+    d.written = 0;
+    assert_eq!(crate::trash::finish(&mut d, (0, 0)), Ok(false), "no move pending");
+    // the owner's card once it has them: nothing written
+    let mut r = Recorder::new();
+    let mut fat = Fat::mount(&mut d).unwrap();
+    r.setup(&mut fat, &mut d, (0, 0)).unwrap();
+    make_kept(&mut fat, &mut d, (0, 0)).unwrap();
+    assert_eq!(d.written, 0, "nothing written");
+}
+
+/// The review of 2026-10-29, S7: on a card from before (a saved ride, `\Rustfw` and its records, none of the app's
+/// files), the next ride's start makes them; a power cut at every sector of that start (plain and torn) leaves the
+/// volume clean, the saved ride whole, and the ride after it finishes the job and is saved. Entries are lost only
+/// by a torn sector of `\Rustfw`'s directory: the one write there, at a ride's start with nothing open.
+#[test]
+fn making_the_apps_files_survives_a_cut_at_every_sector() {
+    let mut d = card(crate::fat::tests::image());
+    assert_eq!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(NAME)));
+    let mut img = d.img;
+    unmake_kept(&mut img);
+    assert_eq!(check_clean(&img, "a card from before"), 0);
+    let mine = {
+        let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        let c = fat.open(&mut ram, DIR).unwrap().cluster;
+        let lba = fat.lba(c);
+        lba..lba + fat.cluster_bytes() / SECTOR_U32
+    };
+    let start = |c: &mut Card| {
+        let mut r = Recorder::new();
+        r.start(T0 + 5000, *b"261023112000", false);
+        assert!(r.due());
+        r.io(c, local(5000))
+    };
+    let mut whole = card(img.clone());
+    assert_eq!(start(&mut whole), Outcome::Nothing);
+    kept_made(&whole.img, "whole");
+    let (total, mut torn_mine) = (whole.written, 0);
+    for cut in 0..total {
+        for torn in [false, true] {
+            let mut c = Card { budget: Some(cut), torn, ..card(img.clone()) };
+            start(&mut c);
+            let what = std::format!("cut {cut} of {total}, torn {torn}, sector {}", c.cut_at);
+            let tore_mine = torn && mine.contains(&c.cut_at);
+            torn_mine += usize::from(tore_mine);
+            let mut c = card(c.img);
+            assert!(matches!(ride(&mut Recorder::new(), &mut c, 0), Some(Outcome::Saved(_))), "{what}");
+            kept_made(&c.img, &what);
+            assert!(saved(&c.img, SAVED).is_ok(), "{what}: the saved ride");
+            let lost = fsck_torn(&c.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(free_counts(&c.img).0, free_counts(&c.img).1, "{what}: FSInfo's free count");
+            assert!(lost <= 2 || tore_mine, "{what}: {lost} clusters lost");
+        }
+    }
+    std::println!("{total} writes cut, {torn_mine} tearing \\Rustfw's directory");
+    assert!(torn_mine > 0, "a cut tore \\Rustfw's directory");
 }

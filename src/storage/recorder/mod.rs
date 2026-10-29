@@ -88,6 +88,12 @@
 //! checkpoint, before its record (the first to say "discard"), has the ride saved whole into `\Activities` from its
 //! last record, as any ride whose entry a cut tore; in one place still, never lost.
 //!
+//! **The app's files in `\Rustfw`** ([`KEPT`]: the pages, the settings, the phone's bond, the altitude, the
+//! trainer, the trash's record, and `\Rustfw\Deleted\Full`) are made zeroed at a ride's start too, the last ride
+//! done (`make_kept`): later writes then go inside their own sectors, never to `\Rustfw`'s directory sector, which
+//! holds `ride.rec`'s and the ride folders' entries (a torn write there would lose every kept ride: the review of
+//! 2026-10-29, S7). Each reader takes zeros as "none"; each writer still makes its file if missing.
+//!
 //! **One writer, one ride.** What the last run left unfinished is finished before a new ride: by the boot
 //! ([`Recorder::recover`]), or, if the boot did not (its marker lost, or the card failed then), at the new ride's
 //! first card work: a ride in progress is resumed in its place if the marker said it was open or it stopped less
@@ -242,6 +248,50 @@ pub enum GaveUp {
     Rescue([u8; 12]),
     /// Named nowhere (the card or the record unreadable): the chain left lost, the card to be copied.
     Lost,
+}
+
+/// The app's files in [`DIR`] and their sizes, made zeroed by `make_kept` (module doc): pages.bin and settings.bin
+/// (two copies: app/editor.rs `write_copy`), ble.bin, altcal.bin, sensors.bin, delete.rec (one sector each).
+pub const KEPT: [(&str, u32); 6] = [
+    (crate::page::FILE, 2 * SECTOR_U32),
+    (crate::SETTINGS_FILE, 2 * SECTOR_U32),
+    (crate::BOND_FILE, SECTOR_U32),
+    (crate::ALT_FILE, SECTOR_U32),
+    (crate::sensors::SENSORS_FILE, SECTOR_U32),
+    (crate::trash::REC, SECTOR_U32),
+];
+
+/// [`KEPT`] made where missing or not their size (zeros where they were shorter), then `\Rustfw\Deleted\Full`; the
+/// FATs synced first when anything is to be made, as in [`Recorder::setup`] (a cut while making them leaves no record
+/// to say so). Reads only when all are there.
+fn make_kept(fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), Error> {
+    let dir = fat.find(d, fat.root(), DIR)?;
+    let mut whole =
+        fat.find(d, dir, crate::trash::DELETED).and_then(|del| fat.find(d, del, "Full")).is_ok_and(|f| f.dir);
+    for (name, size) in KEPT {
+        whole &= fat.locate(d, dir, name).is_ok_and(|h| h.size == size);
+    }
+    if whole {
+        return Ok(());
+    }
+    fat.sync_fats(d)?;
+    for (name, size) in KEPT {
+        let mut h = match fat.locate(d, dir, name) {
+            Ok(h) => h,
+            Err(Error::NotFound) => fat.create(d, dir, name, t)?,
+            Err(e) => return Err(e),
+        };
+        if h.size != size {
+            // shorter: never whole for its reader (each writes its sectors, then the size)
+            for k in h.size.div_ceil(SECTOR_U32)..size / SECTOR_U32 {
+                fat.write_sectors(d, &mut h, k, &[0; SECTOR])?;
+            }
+            fat.set_size(d, &mut h, size, t)?;
+        }
+    }
+    let deleted = fat.ensure_dir(d, dir, crate::trash::DELETED, t)?;
+    fat.ensure_dir(d, deleted, "Full", t)?;
+    Ok(())
 }
 
 /// `\Rustfw\Activities`: the full copies of the saved rides ([`Kind::Full`]).
@@ -1010,6 +1060,14 @@ impl Recorder {
         if self.phase == Phase::Starting {
             let dir = self.setup(&mut fat, d, t)?;
             let best = self.read_records(&mut fat, d)?;
+            // optional, as the discarded folders: a name taken there never stops the ride (the app makes its file
+            // when it writes it)
+            if self.kind == Kind::Clean
+                && best.as_ref().is_none_or(|r| r.phase == Phase::Done)
+                && make_kept(&mut fat, d, t).is_err()
+            {
+                self.errors = self.errors.saturating_add(1);
+            }
             if let Some(r) = best.filter(|r| r.phase != Phase::Done) {
                 // what the last run left unfinished comes first (the boot did not finish it: its marker was lost, or
                 // the card failed then): one writer, one ride. A ride in progress goes on in place of this one if
