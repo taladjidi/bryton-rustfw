@@ -177,13 +177,12 @@ def get(s, path, progress=False):
             chunk = bytes.fromhex(answer)
         except ValueError:
             raise OSError(f'get {path}: malformed answer at {len(data)}') from None
-        if not chunk:
-            break
+        want = min(4096, size - len(data))
+        if len(chunk) != want:
+            raise OSError(f'get {path}: answer of {len(chunk)} bytes at {len(data)}, want {want}')
         data += chunk
         if progress and len(data) % (256 * 1024) == 0:
             print(f'{len(data) // 1024} KB...', file=sys.stderr)
-    if len(data) != size:
-        raise OSError(f'get {path}: {len(data)} of {size} bytes')
     return bytes(data)
 
 
@@ -248,39 +247,44 @@ def selftest():
     assert '| step, not in a section | | | | 0.150 |' in t and '**0.30**' in t and 'tiles' not in t, t
     assert '2400 px/s' in t and '1.5 sectors/s' in t, t
     class Link:
-        """The dev link's computer side for `ls` and `get`: one file of `data`. fault 'short' cuts the answer at 4096
-        (100 bytes, then nothing); fault 'odd' answers an odd number of hex digits there."""
-        def __init__(self, data, fault=None):
-            self.data, self.fault, self.out = data, fault, []
+        """The dev link's computer side: `ls` lists one file of `size` bytes, each `get` takes the next of `answers`."""
+        def __init__(self, size, answers=()):
+            self.size, self.answers, self.out = size, list(answers), []
 
         def reset_input_buffer(self):
             self.out = []
 
         def write(self, cmd):
-            word = cmd.decode().split()
-            if word[0] == 'ls':
-                self.out = [f'{len(self.data):x} f FILE.FIT', 'end']
-                return
-            off, n = int(word[2]), 4096
-            if self.fault == 'short' and off >= 4096:
-                n = 100 if off == 4096 else 0
-            hexed = self.data[off:off + n].hex()
-            if self.fault == 'odd' and off == 4096:
-                hexed = 'abc'
-            self.out = [hexed]
+            if cmd.decode().split()[0] == 'ls':
+                self.out = [f'{self.size:x} f FILE.FIT', 'end']
+            else:
+                self.out = [self.answers.pop(0)]
 
         def readline(self):
             return (self.out.pop(0) + '\n').encode()
 
-    blob = bytes(range(256)) * 40                       # 10240 bytes: two answers and a part
-    assert get(Link(blob), 'Activities\\FILE.FIT') == blob
-    for fault, want in (('short', '4196 of 10240 bytes'), ('odd', 'malformed answer at 4096')):
+    blob = bytes(range(256)) * 40                       # 10240 bytes: answers of 4096, 4096 and 2048
+    path = 'Activities\\FILE.FIT'
+    chunks = [blob[i:i + 4096].hex() for i in range(0, len(blob), 4096)]
+    assert get(Link(len(blob), chunks), path) == blob
+    cases = [
+        ('err busy', ['err busy'], 'err busy'),
+        ('odd hex', ['abc'], 'malformed answer at 0'),
+        ('cut in the middle', [chunks[0], blob[4096:4196].hex()], 'answer of 100 bytes at 4096, want 4096'),
+    ]
+    for what, answers, want in cases:
         try:
-            get(Link(blob, fault), 'Activities\\FILE.FIT')
+            get(Link(len(blob), answers), path)
         except OSError as e:
-            assert want in str(e), e
+            assert want in str(e), (what, str(e))
         else:
-            raise AssertionError(f'{fault}: a cut answer was copied')
+            raise AssertionError(f'{what}: a bad answer was copied')
+    try:
+        get(Link(len(blob)), 'Activities\\OTHER.FIT')
+    except OSError as e:
+        assert 'not in its folder' in str(e), e
+    else:
+        raise AssertionError('a file ls does not list was copied')
     print('dev.py selftest ok')
 
 
