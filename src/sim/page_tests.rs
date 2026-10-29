@@ -1397,6 +1397,11 @@ fn idle_ride_page_sends_no_pixels_and_a_reading_draws_at_the_second() {
     assert_eq!(sim.pixels, px, "nothing changed: nothing sent");
     app.live.set(crate::sensors::Metric::Speed, 251);
     app.live.snapshot();
+    app.light.idle_ms = 60_000;
+    app.value_due = false;
+    let px = sim.pixels;
+    app.update_page(&mut sim);
+    assert_eq!(sim.pixels, px, "a new reading between seconds is held back");
     app.value_due = true; // the second's tick
     app.update_page(&mut sim);
     assert!(sim.pixels > px, "the reading is drawn at the second");

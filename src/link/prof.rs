@@ -18,9 +18,9 @@ pub enum Sec {
     Step,
     /// The RTC read, the ride's seconds, settings, alerts, tones.
     Second,
-    /// The battery's ADC reading (every few seconds).
+    /// The battery's ADC reading and the light sensor's.
     Battery,
-    /// The light sensor and the backlight.
+    /// The backlight's level.
     Light,
     /// The Nordic chip: its bytes, the link's watchdog, ANT pairing and channels opened.
     Radio,
