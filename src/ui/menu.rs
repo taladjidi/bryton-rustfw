@@ -97,6 +97,9 @@ pub enum Setting {
     Drink,
     /// Heart rate alert over this, bpm.
     HrAlert,
+    /// Limit `n` of [`crate::alerts::LIMITS`]: power, cadence, speed, heart rate low, reminders by distance, kcal and kJ,
+    /// the DFA a1 alert (0: off).
+    Limit(u8),
     /// What a shifter button press does ([`Remote`]), for press `n` ([`crate::sensors::Press`]).
     Remote(u8),
     /// The barometric altitude (a number, m): typing it calibrates the barometer to it (altitude.rs).
@@ -206,6 +209,22 @@ impl Setting {
             Setting::Eat => "EAT",
             Setting::Drink => "DRINK",
             Setting::HrAlert => "HR ABOVE",
+            Setting::Limit(n) => [
+                "PWR ABOVE",
+                "PWR BELOW",
+                "CAD ABOVE",
+                "CAD BELOW",
+                "SPD ABOVE",
+                "SPD BELOW",
+                "HR BELOW",
+                "EACH KM",
+                "EACH KCAL",
+                "EACH KJ",
+                "DFA A1",
+            ]
+            .get(usize::from(n))
+            .copied()
+            .unwrap_or(""),
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
@@ -229,7 +248,10 @@ impl Setting {
         match self {
             Setting::Wheel => " MM",
             Setting::Light => "%",
-            Setting::MaxHr | Setting::HrAlert | Setting::Lthr => " BPM",
+            Setting::MaxHr | Setting::HrAlert | Setting::Lthr | Setting::Limit(6) => " BPM",
+            Setting::Limit(0 | 1) => " W",
+            Setting::Limit(2 | 3) => " RPM",
+            Setting::Limit(4 | 5) => " KMH",
             Setting::Ftp => " W",
             Setting::Weight | Setting::BikeWeight => " KG",
             Setting::WPrime => " KJ",
@@ -251,6 +273,13 @@ impl Setting {
             Setting::BikeWeight => Some((BIKE_RANGE, 1)),
             Setting::Eat | Setting::Drink => Some((0..=120, 5)),
             Setting::HrAlert => Some((0..=230, 5)),
+            Setting::Limit(0 | 1) => Some((0..=999, 10)),
+            Setting::Limit(2 | 3) => Some((0..=250, 5)),
+            Setting::Limit(4 | 5) => Some((0..=100, 1)),
+            Setting::Limit(6) => Some((0..=230, 5)),
+            Setting::Limit(7) => Some((0..=99, 1)),
+            Setting::Limit(8 | 9) => Some((0..=990, 10)),
+            Setting::Limit(10) => Some((0..=100, 5)),
             // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 1 m steps (a known height to the metre; a held key repeats)
             Setting::Altitude => Some((0..=9500, 1)),
             _ => None,
@@ -610,8 +639,23 @@ pub const ME: [Row; 5] = [
     Row::Set(Setting::WPrime),
 ];
 
-/// ALERTS: the reminders and the heart rate alert.
-pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
+/// ALERTS: the reminders and the limits (the list scrolls).
+pub const ALERTS: [Row; 14] = [
+    Row::Set(Setting::Eat),
+    Row::Set(Setting::Drink),
+    Row::Set(Setting::Limit(7)),
+    Row::Set(Setting::Limit(8)),
+    Row::Set(Setting::Limit(9)),
+    Row::Set(Setting::HrAlert),
+    Row::Set(Setting::Limit(6)),
+    Row::Set(Setting::Limit(0)),
+    Row::Set(Setting::Limit(1)),
+    Row::Set(Setting::Limit(2)),
+    Row::Set(Setting::Limit(3)),
+    Row::Set(Setting::Limit(4)),
+    Row::Set(Setting::Limit(5)),
+    Row::Set(Setting::Limit(10)),
+];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
 pub const DISPLAY: [Row; 5] = [
