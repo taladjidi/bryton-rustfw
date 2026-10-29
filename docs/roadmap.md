@@ -10,6 +10,140 @@ reach a register (`check.sh` checks it keeps `forbid(unsafe_code)`); `main.rs` o
 I2C ones with a bus number) and a model in the simulator. Each phase ends with a read of `main.rs` for any decision
 that crept in.
 
+## Order of work (owner's choice, 2026-10-29)
+
+The phases below say what is left and how the pieces depend on each other; this section says what to build next,
+in this order. Work top down: a step starts when the one before it is merged. Block 4 (the unit) gates block 5 (the
+phone app).
+
+**For every step** (AGENTS.md and the global rules):
+- one worktree branch from `origin/main`, one agent per step, the agent named in the step (implementer on Haiku
+  unless it says sonnet; critical for anything that writes the card, the recorder, power, boot, hw.rs);
+- tests first where a bug or a rule is concerned; a fuzz test for every new input path (a file, a radio message);
+  sim screenshots for every drawing change, looked at (`target/sim/preview.bmp`), added to docs/gallery.md;
+- `./check.sh` green, one `reviewer` pass (on Opus for card writes), its findings fixed, merged by `runner`;
+- docs in the same change: features.md (what it does), checklist.md (the line ticked `sim`), status.md ("Not yet
+  seen on the unit": what to do on the unit to see it), this roadmap (the step struck);
+- image size and, for anything drawn each second, the profiler's time awake, in the commit message.
+
+### Block 1: themes, fonts and style (docs/theming.md)
+
+theming.md is the design; these steps follow it, with three decisions taken on 2026-10-29:
+the theme and the font are kept in the settings file (T0), not in a `theme.bin` of their own; the FONT setting
+becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
+
+- **T0. The settings file** (phase 3, step 4; status.md, Next steps 3). Prerequisite: the 32 backup registers are
+  full, and T1, T3, T5 and block 2 each add a setting. `\Rustfw\settings.bin`: two copies, each with a magic, a
+  format version, a sequence number and a CRC; the newest whole copy wins; written between rides only (as
+  `pages.bin`), never with a ride open; read at the first main loop pass; the registers' values migrated once,
+  and the registers kept only for what the unit needs before the card is mounted (app/settings.rs says which).
+  Host tests cut the write after every sector (as fat/write.rs's); fuzz over damaged copies. Agent: critical, then
+  reviewer on Opus. Then a mechanic moves the "Settings registers" section of features.md to the new store.
+- **T1. Colours** (theming.md phase 1): split the shared roles (`ON_ACCENT`, `ON_ALARM`, the cog), `Canvas::ink`,
+  `Theme` in `src/ui/theme.rs`, `Panel` and `Row` carrying it, `text::draw` and the colour-making blits translating;
+  the INI parser and the whole-theme checks (contrast 4.5:1, red only for alarms); `\Rustfw\Themes\*.ini` listed;
+  SETTINGS > DISPLAY > THEME; DARK (identity) and OUTDOOR. Tests: identity, scramble, parser, contrast, fuzz, a
+  gallery shot per theme. Agent: implementer (sonnet).
+- **T2. LIGHT**: fix what assumes a black background (the cog's blend, the zone colours tuned for black, the map's
+  track and edges), using the scramble test's shots of every screen; then LIGHT built in. Agent: implementer
+  (sonnet).
+- **T3. Fonts**: `tools/font.py` generates more smooth fonts into the pixel font's cells (the rule
+  `smooth_fonts_share_the_pixel_cells` keeps every layout true): add Atkinson Hyperlegible Bold (SIL OFL 1.1,
+  made for legibility; check the licence and take the TTF from github.com/google/fonts, cite it in the script's
+  doc as Barlow is). FONT becomes PIXEL, BARLOW, ATKINSON, in the settings file; a theme's `font` key sets the
+  default. Measure the image size per font (write it in the commit); a font over 150 KB is dropped. Per-role fonts
+  (labels apart from values) only if the owner asks after seeing it. Agent: implementer.
+- **T4. Bounded metrics** (theming.md phase 2): `zone_bar` 4 to 12, `frame` 1 to 4, `menu_row` 44 to 56, read
+  through `Canvas::theme()` and by the touch code from `App`; every "fits" test and the sim suite at both ends of
+  each range. Agent: implementer (sonnet).
+- **T5. Day and night**: THEME AUTO: a day and a night theme by name, switched from the ambient light sensor with
+  hysteresis (the automatic backlight's reading, app/ambient), at most one switch a minute, a full redraw each.
+  Agent: implementer.
+- **T6. Overview variants** (theming.md phase 3): `overview = classic | fields`, each a table of boxes checked like
+  page.rs. Agent: implementer (sonnet).
+- **T7. Tools and docs**: `tools/theme.py` writes the built-in themes as example files to a mounted drive and
+  renders a file through the simulator (`preview FILE`); features.md lists every key, kept in step by a test.
+  Agent: mechanic.
+- On the unit: OUTDOOR and LIGHT read in the sun, AUTO switching at dusk (status.md lines).
+
+### Block 2: live segments (docs/segments.md)
+
+Steps S1 to S9 of docs/segments.md, in order: the file, the matcher, the app part, the page, the efforts written
+after the save, `tools/segments.py`, then own-ride segments and the licensed feed. Owner's actions to start now:
+decide on a Strava subscription (the API's Standard tier needs one since 30 June 2026), and email Strava for a Live
+Segments licence.
+
+### Block 3: what is left on the unit, easiest first
+
+From checklist.md's open lines and the phases below. Each bullet is one step unless it says otherwise; group small
+fields of one kind into one step. Settings these need go in the settings file (T0).
+
+**3a. Fields and small settings** (pure logic plus a field or a row; implementer on Haiku, one step per group):
+- ride fields: trip time (with stops), lap count, last lap time, lap power, last lap power, lap NP, max cadence,
+  max altitude, descent, lap ascent and descent, uphill and downhill distance;
+- heart rate and power: % of max HR and of LTHR, the HR and power zone numbers, time in each zone, % of FTP (now,
+  average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5);
+- heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
+  the destination and the arrival time on a course, the unit's and each sensor's battery as fields;
+- trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
+  saving and the date and time formats; key click; sound on or off; backlight always on; the auto pause threshold;
+  the climb filter (all, or medium and above); the CLIMB page's off switch;
+- the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
+  to delete (DELETE exists in HISTORY).
+
+**3b. Small features** (implementer, sonnet where it says screens):
+- alerts: power, cadence and speed high / low, heart rate low; reminders by distance, kcal and kJ; a sunset alert;
+  the DFA a1 alert at the aerobic threshold (patch P9);
+- laps: auto lap by distance or time, the lap summary banner, the lap list of a past ride (sonnet);
+- pages: switched off and reordered, renamed, auto scroll, a tap on a field opens Quick Status with chosen fields,
+  swipe up to go home, the Page key acting on the press (patch P14);
+- start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start (sonnet);
+- workouts: the next-step strip instead of a popup (patch P3), two targets per step;
+- zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;
+- the heart rate strap's battery (ANT+ page 7); sensor names; Di2 gear teeth and hood button actions (patch P12), the
+  media remote from Di2 buttons;
+- screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical).
+
+**3c. Medium** (implementer, sonnet):
+- history (phase 4b): the ride index with TSS, the power curve screen, personal records and best efforts, this
+  ride's power curve, training load (CTL, ATL, TSB) with its chart and fields, month totals, each ride matched to
+  the planned workout; the scan's results written by critical;
+- courses: reverse, navigate to the start, the way back drawn, retrace along the ride's own track, turn cues from
+  stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;
+- the map: north up or heading up, pinch to zoom; our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
+- field sizes that follow the box, ring and bar gauges;
+- ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
+- torque effectiveness and pedal smoothness (page 0x13), torque pages; climbs: completed climbs listed with their
+  times, detection on or off per profile, descents;
+- trainer: level mode, a course ridden on the trainer (slope from the course), a virtual course as a workout;
+- the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept), a larger ATT MTU,
+  the notification's app shown;
+- battery hours left; a battery saver mode; GNSS systems chosen per profile; AssistNow offline data from the
+  computer; altitude calibration at saved places; favourite places.
+
+**3d. Hard** (new radios, core changes, routing):
+- ANT+ lights; ANT+ radar and its alerts (sonnet); the sensor pool (several of a kind); ANT+ remote buttons;
+  e-bikes (ANT+ LEV, Shimano STEPS);
+- BLE sensors as a central: heart rate, speed and cadence, power (sonnet; the Nordic chip's central role);
+- the accelerometer (BOARD.md 16): motion start, then incident detection (critical for the driver);
+- power (phase 2, critical, the owner present): stop mode between seconds, USB high speed for the drive, the
+  D-cache on for the SDRAM, the panel's partial and idle modes, charging only in a safe temperature range;
+- routing on the unit: to a pinned point, back to the start, rerouting, round trips (on stock's routing graph,
+  which climbs ahead already reads);
+- languages other than English (fonts beyond ASCII);
+- updating this firmware from a file on the volume (critical; never the bootloader or IAP.bin).
+
+**Not planned** (no hardware or no service for them): dual-frequency GNSS, contactless payments, a dial, voice
+input, Wi-Fi sync, voice turn-by-turn (a buzzer, no speaker), crowd-sourced hazards, real-time stamina and
+training status until the history steps exist.
+
+### Block 4: the gate before the app
+
+Everything in status.md "Not yet seen on the unit" from blocks 1 to 3 seen on the unit, with the owner riding it,
+the findings moved to journal.md. The app starts only then.
+
+### Block 5: the phone app (section 9 below)
+
 ## 1. Pages and menus that the rest can build on
 
 Phase 1 (done): input events, screen stack, menus as data, Settings table, banners, touch, page editor (features.md).
@@ -59,7 +193,7 @@ The golden rule (AGENTS.md) depends on this whole phase.
    Two copies of each ride (done in the simulator): the clean one for stock, Bryton and Strava, and a full one
    with DFA a1 (`Alpha1`) and RMSSD as developer fields for Intervals.icu (docs/sync.md, "Why two files").
    `tools/sync.py` uploads them from the computer and brings the planned workouts back. Next: a run against the
-   real services; the iOS app (phase 8).
+   real services; the phone app (section 9).
 4. Settings file (phase 1's store moves here). Open, and now wanted: the 32 backup registers are full (docs/status.md,
    features.md "Settings registers"), so a setting added needs a file to free them, two copies with a CRC.
 5. USB mass storage: rides off and courses, workouts and maps on, with no phone app. The recorder and the FAT
@@ -182,12 +316,45 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
     the notification's app shown (its bundle id is fetched and dropped).
 - With a companion app only: Android notifications and track info, find my phone, live tracking, automatic upload; a
   computer tool over USB can upload rides.
-- **The iOS app, next:** `tools/sync.py`'s logic (docs/sync.md) over the BLE bond instead of USB. It would list the
-  new rides, fetch both copies with their FIT CRCs checked, upload the full copy to Intervals.icu and the clean one
-  to Strava, remember what went where, and send the planned workouts back to `\Workout\calendar`. It needs a file
-  transfer service on the bond (the Nordic chip's serialization, nrf.rs) and the FAT writer for the workouts.
+- The phone app: section 9.
+
+## 9. The phone app (after block 4)
+
+Decided 2026-10-29 (not yet checked online: UniFFI's and the Android emulator's BLE limits, before step A1):
+- **Shape:** a Rust core crate shared by both apps (the protocol to the unit, FIT checks, `tools/sync.py`'s logic,
+  ride analysis), reusing the firmware's `no_std` code (`link/phone.rs`, `storage/fit*`) so the app and the unit
+  encode the same bytes; Swift and Kotlin bindings by UniFFI; BLE in CoreBluetooth and Android's BLE API behind a
+  `Transport` trait the core calls; UI in SwiftUI and Jetpack Compose. iOS first (the owner's phone), Android second.
+- **Testing:** the core against a fake transport on the Mac (`cargo test`), as `Sim` serves the firmware. BLE only
+  on real phones: the iOS Simulator has no Bluetooth, the Android emulator cannot reach the Mac's radio. Android
+  needs Android Studio (or the command-line tools), `rustup target add aarch64-linux-android`, `cargo-ndk`, and a
+  phone over adb.
+
+Steps:
+- **A1. A file service on the bond** (firmware; nrf.rs's serialization): list, read by chunk, write; reads first.
+  Writes are critical. Without it no app can do anything.
+- **A2. The core crate** (`app-core/`): the protocol, sync.py's logic ported, the fake transport, round-trip tests
+  against the firmware's encoder.
+- **A3. iOS:** sync (rides to Intervals.icu and Strava, workouts back), then the features below.
+- **A4. Android:** the same core, plus notifications to the unit (`NotificationListenerService`).
+
+Features, in the owner's order (2026-10-29):
+- **Unit setup:** data pages with a live preview drawn by the firmware's own page.rs through the core, settings,
+  the profile (weight, FTP, CP and W', zones, bike weight), paired sensors, themes (block 1's files).
+- **Routes:** drawn on a map (Plan IGN v2) and snapped by a router (BRouter, OpenRouteService or GraphHopper);
+  GPX, Komoot and RideWithGPS imported and edited; the climbs shown before the ride; sent with their cues.
+- **Workouts:** an editor (steps, repeats, targets in % of FTP, watts, heart rate, cadence), ZWO / ERG / MRC
+  imported, the Intervals.icu calendar to `\Workout\calendar`.
+- **Fitness:** what is on the unit (stock's rides, CP, W', the power curve), CTL / ATL / TSB, eFTP, HRVT trends.
+- **Ride insights:** graphs linked to the map, laps, zones, the ride's power curve, DFA a1 with its artifacts, W'
+  balance, decoupling; computed in the core from the full copy.
+- **Platforms:** Intervals.icu as the hub (an open, free API that already pulls from Strava and Garmin), Strava
+  upload, RideWithGPS. Garmin Connect, TrainingPeaks, Komoot and Bryton have no open API.
+- **Segments:** block 2's `tools/segments.py` moved into the app, including the licensed Live Segments feed.
+- **Phone-assisted riding:** Android notifications, find my phone, live tracking.
 
 ## Plans, not built
 
 - docs/s810.md: the Rider S810.
 - docs/theming.md: themes from a file.
+- docs/segments.md: live segments.
