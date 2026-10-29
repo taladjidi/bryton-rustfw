@@ -228,17 +228,9 @@ impl App {
         match e.dist_m {
             _ if !e.measured => value.push_str("..."),
             Some(m) => {
+                // the distance with its unit always, at the right; the name is cut to the room that is left
                 ui::card::push_km(value, m.saturating_add(50)); // to the nearest 100 m
-                // a long name is whole: the unit goes first, then the distance (the label is cut before the value)
-                let whole =
-                    |v: &Line<12>| ui::LABEL.width(label.as_str()) <= ui::menu_label_w(label.as_str(), v.as_str());
-                let mut with_unit = *value;
-                with_unit.push_str(" KM");
-                if whole(&with_unit) {
-                    *value = with_unit;
-                } else if !whole(value) {
-                    *value = Line::new();
-                }
+                value.push_str(" KM");
             }
             None => value.push_str("--"),
         }

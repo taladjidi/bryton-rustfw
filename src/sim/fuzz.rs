@@ -1321,6 +1321,7 @@ fn menu_touch_and_keys() {
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
     let (mut locks, mut locked_touches) = (0, 0);
+    let mut reach = [0usize; 5]; // Quick, PowerCal, RampResult, About, Notif
     for seed in 1..=12u32 {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
@@ -1338,6 +1339,26 @@ fn menu_touch_and_keys() {
                     (Menu::System, import.unwrap_or(0)),
                 ];
                 app.open(Screen::Menu(at[usize::from(b) % 3].0, at[usize::from(b) % 3].1));
+                app.show(&mut sim);
+            }
+            if a % 47 == 11 {
+                // the screens no walk of rows and gestures reaches by chance: each opened as its row or gesture
+                // opens it (the panel: a swipe down; CALIBRATE POWER; ABOUT; a notice tapped), with the state it shows
+                match b % 5 {
+                    0 => app.open_quick(),
+                    1 => app.open_powercal(),
+                    2 => {
+                        app.ramp.result = Some(crate::ramp::Outcome { best_w: 220, ftp: 165, secs: 900, aet: None });
+                        app.open(Screen::RampResult);
+                    }
+                    3 => app.open(Screen::About),
+                    _ => {
+                        app.phone
+                            .inbox
+                            .add(&crate::phone::Attributes { uid: u32::from(b), ..Default::default() }, (9, 41));
+                        app.open(Screen::Notif(0, 0));
+                    }
+                }
                 app.show(&mut sim);
             }
             if a % 31 == 1 {
@@ -1406,6 +1427,14 @@ fn menu_touch_and_keys() {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
             }
+            match app.screen() {
+                Screen::Quick => reach[0] += 1,
+                Screen::PowerCal => reach[1] += 1,
+                Screen::RampResult => reach[2] += 1,
+                Screen::About => reach[3] += 1,
+                Screen::Notif(..) => reach[4] += 1,
+                _ => {}
+            }
             // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
             // (a banner said by this input is drawn by the next pass: skipped until it is)
             let waiting = app.notes.ms.is_some() && !app.notes.drawn;
@@ -1415,6 +1444,15 @@ fn menu_touch_and_keys() {
         }
     }
     std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
+    std::println!(
+        "screens reached (steps): quick {}, power cal {}, ramp result {}, about {}, notif {}",
+        reach[0],
+        reach[1],
+        reach[2],
+        reach[3],
+        reach[4]
+    );
+    assert!(reach.iter().all(|&n| n > 0), "every screen reached: {reach:?}");
     std::println!("touch lock: {locks} toggles, {locked_touches} touches while locked");
     assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
