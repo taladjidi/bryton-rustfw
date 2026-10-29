@@ -330,8 +330,18 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}: the card died");
         // the volume as the cut left it: readable, the FATs at most a sector apart, a chain at most one cluster past
         // its size (a cut between a checkpoint's data and its size: the boot's recovery trims it)
-        let (_, excess) = fsck_cut(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert!(excess <= 1, "{what}: a chain {excess} clusters past its size");
+        let c = fsck_cut(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(c.apart <= 1, "{what}: {} FAT sectors apart", c.apart);
+        let mine = {
+            let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+            let mut fat = Fat::mount(&mut ram).unwrap();
+            fat.open(&mut ram, "Rustfw/Rides/261023100000.fit").map_or(0, |f| f.cluster)
+        };
+        assert!(
+            c.past.iter().all(|&(first, n)| first == mine && n <= 1),
+            "{what}: chains past their size {:?}",
+            c.past
+        );
         // reboot; and the reboot cut too, at each of its own writes, then again: the same outcome
         let cut_img = d.img;
         let mut d =
@@ -2333,6 +2343,8 @@ fn a_marked_one_cluster_ride_whose_cluster_a_small_file_took_is_let_go() {
 /// new cluster's data, sector 0, the size or the record), used to forget the grown chain: the retry took another
 /// cluster and relinked the last one to it, the first one left taken, named by nothing (16 KB per failure, counted
 /// used by FSInfo). The retry goes on from the grown chain: the ride saved whole, no cluster lost, FSInfo exact.
+/// The second FAT's sector failing twice in a row (the third review, finding 1): the retry's take-up fails too, and
+/// the one after it still takes the cluster up, the ride recorded on.
 #[test]
 fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
     const SECS: u32 = 900;
@@ -2366,13 +2378,14 @@ fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
     let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
     let fat_sector = |k: u32| u(14, 2) + k * u(36, 4) + new / (SECTOR as u32 / 4);
     let (fat1, fat2) = (fat_sector(0), fat_sector(1));
-    for (what, bad) in [
-        ("the first FAT", fat1..fat1 + 1),
-        ("the second FAT (the first one written)", fat2..fat2 + 1),
-        ("the new cluster's data", new_lba..new_lba + 1),
-        ("sector 0", sector0..sector0 + 1),
-        ("the size", rides),
-        ("the record", rec..rec + 6),
+    for (what, bad, fails) in [
+        ("the first FAT", fat1..fat1 + 1, 1),
+        ("the second FAT (the first one written)", fat2..fat2 + 1, 1),
+        ("the second FAT, twice in a row", fat2..fat2 + 1, 2),
+        ("the new cluster's data", new_lba..new_lba + 1, 1),
+        ("sector 0", sector0..sector0 + 1, 1),
+        ("the size", rides, 1),
+        ("the record", rec..rec + 6, 1),
     ] {
         let mut d = Bad { card: card(fresh.clone()), bad: std::vec![bad], unread: Vec::new(), on: false };
         let mut r = Recorder::new();
@@ -2381,18 +2394,23 @@ fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
         for t in 0..SECS {
             r.second(&sample(t), words(t));
             if r.due() {
-                d.on = t == at; // the growing checkpoint fails once
-                match r.io(&mut d, local(t)) {
-                    Outcome::Nothing => {}
-                    Outcome::Failed(Error::Io) if t == at => failed += 1,
-                    o => panic!("{what}: {o:?} at {t}"),
+                d.on = t == at; // the growing checkpoint fails (`fails` times in a row, its retries)
+                for _ in 0..10 * RETRY {
+                    match r.io(&mut d, local(t)) {
+                        Outcome::Nothing => {}
+                        Outcome::Failed(Error::Io) if t == at => failed += 1,
+                        o => panic!("{what}: {o:?} at {t}"),
+                    }
+                    if !r.waiting() && (t != at || failed == fails) {
+                        break;
+                    }
                 }
                 d.on = false;
                 // its retry, after the wait, within the second (the main loop's passes): nothing dropped
                 assert!(io_all(&mut r, &mut d, t).is_empty(), "{what}");
             }
         }
-        assert_eq!((failed, r.dropped), (1, 0), "{what}: the checkpoint at {at} failed");
+        assert_eq!((failed, r.dropped), (fails, 0), "{what}: the checkpoint at {at} failed");
         r.end(T0 + SECS, words(SECS));
         assert_eq!(io_all(&mut r, &mut d, SECS + 1), [Outcome::Saved(NAME)], "{what}");
         assert_eq!(saved(&d.card.img, SAVED).map(|s| s.0.len()), Ok(SECS as usize), "{what}: whole");

@@ -334,50 +334,72 @@ impl Fat {
         r
     }
 
-    /// [`Fat::grow`]'s clusters, `taken` counting them. The cluster an earlier grow was taking when its FAT writes
-    /// failed part way (`h.pending`: its end marker or its link in one FAT copy, or in one of its two FAT sectors) is
-    /// taken up first, both entries written again to every copy, and counted: else a retry takes another cluster and
-    /// relinks the last to it, the first one left named by nothing. Only that cluster, and only as an end of chain
-    /// linked from `h.last` or from nothing: any other link after `h.last` (a FAT sector gone wrong) is `Corrupt`,
-    /// never followed nor written into (another file's clusters).
+    /// The FAT entry of `c` in FAT copy `copy`, read from the card (not the first copy's sector kept); None
+    /// without that copy.
+    fn copy_entry(&self, d: &mut impl Disk, c: u32, copy: u32) -> Result<Option<u32>, Error> {
+        if copy >= self.fats {
+            return Ok(None);
+        }
+        let mut s = [0u8; SECTOR];
+        self.read(d, self.fat_start + copy * self.fat_size + c / (SECTOR_U32 / 4), &mut s)?;
+        Ok(Some(u32_at(&s, (c as usize % (SECTOR / 4)) * 4) & 0x0fff_ffff))
+    }
+
+    /// [`Fat::grow`]'s clusters, `taken` counting them.
+    ///
+    /// A grow whose FAT writes fail part way leaves `h.pending`, the cluster it was taking (counted then if its end
+    /// marker reached the first FAT: taken up or lost, it is not free). The next grow takes it up, both entries
+    /// written again to every copy, only when it is surely this chain's: linked from `h.last` in the first FAT (only
+    /// this handle writes that entry), or unlinked with its end marker in the first copy alone (no FAT sync since,
+    /// which makes the copies equal or frees it, so no other file can have taken it: a grow reads the first copy,
+    /// where it is not free). Otherwise it is left, a lost cluster at worst, never a cross-link; `pending` is kept
+    /// until the take-up's writes are done. A link after `h.last` this handle did not write (a FAT sector gone wrong)
+    /// is `Corrupt`, never followed nor written into (another file's clusters).
     fn take(&mut self, d: &mut impl DiskWrite, h: &mut Handle, want: u32, taken: &mut i64) -> Result<(), Error> {
-        let p = core::mem::take(&mut h.pending);
-        let end = |fat: &mut Self, d: &mut _, c: u32| -> Result<bool, Error> {
-            Ok(fat.valid(c) && fat.entry(d, c)? >= 0x0fff_fff8)
-        };
-        if h.clusters > 0 {
-            let up = match self.next(d, h.last)? {
-                None => p != 0 && end(self, d, p)?,
-                Some(n) if n == p && end(self, d, p)? => true,
+        let linked = if h.clusters > 0 { self.next(d, h.last)? } else { None };
+        let p = h.pending;
+        if p != 0 {
+            let end = self.valid(p) && self.entry(d, p)? >= 0x0fff_fff8;
+            let up = match linked {
+                Some(n) if n == p => end,
                 Some(_) => return Err(Error::Corrupt),
+                None => end && self.copy_entry(d, p, 1)? == Some(0),
             };
-            if up {
+            if up && h.clusters > 0 {
                 self.set_entries(d, &[(p, EOC), (h.last, p)])?;
-                (h.last, h.clusters, *taken) = (p, h.clusters + 1, *taken + 1);
+                (h.last, h.clusters) = (p, h.clusters + 1);
+            } else if up {
+                self.set_entries(d, &[(p, EOC)])?;
+                h.first = p;
+                if h.entry_lba != 0 {
+                    self.set_first(d, h)?;
+                }
+                (h.last, h.clusters) = (p, 1);
             }
-        } else if p != 0 && end(self, d, p)? {
-            self.set_entries(d, &[(p, EOC)])?;
-            h.first = p;
-            if h.entry_lba != 0 {
-                self.set_first(d, h)?;
-            }
-            (h.last, h.clusters, *taken) = (p, 1, *taken + 1);
+            h.pending = 0;
+        } else if linked.is_some() {
+            return Err(Error::Corrupt);
         }
         while h.clusters < want {
             let from = if h.clusters == 0 { self.hint(d)? } else { h.last + 1 };
             let c = self.find_free(d, from)?;
             h.pending = c; // until both entries are on every copy
-            if h.clusters == 0 {
-                self.set_entries(d, &[(c, EOC)])?;
-                h.first = c;
-                if h.entry_lba != 0 {
+            let r = if h.clusters == 0 {
+                self.set_entries(d, &[(c, EOC)]).and_then(|()| {
+                    h.first = c;
                     // a file with no cluster yet (as a computer leaves an emptied one): its entry gets the chain,
                     // after the chain ends (a cut before leaves a lost cluster, never a size on cluster 0;
                     // 2026-10-25 review)
-                    self.set_first(d, h)?;
-                }
+                    if h.entry_lba != 0 { self.set_first(d, h) } else { Ok(()) }
+                })
             } else {
-                self.set_entries(d, &[(c, EOC), (h.last, c)])?;
+                self.set_entries(d, &[(c, EOC), (h.last, c)])
+            };
+            if let Err(e) = r {
+                if self.valid(c) && self.entry(d, c).is_ok_and(|v| v >= 0x0fff_fff8) {
+                    *taken += 1; // its end marker on the first copy: not free any more
+                }
+                return Err(e);
             }
             (h.last, h.clusters, *taken, h.pending) = (c, h.clusters + 1, *taken + 1, 0);
         }
@@ -888,34 +910,50 @@ pub(crate) mod tests {
     /// size past its chain or on cluster 0, a chain past its size (truncated by chkdsk), FATs that differ; Ok(lost
     /// clusters: taken, named by no entry). Walks every directory.
     pub fn fsck(img: &[u8]) -> Result<u32, std::string::String> {
-        fsck_with(img, true, false).map(|(lost, _)| lost)
+        fsck_with(img, true, false).map(|c| c.lost)
     }
 
-    /// [`fsck`] of the volume a power cut left, before any boot: the FATs may differ (the first one read) and a chain
-    /// may run past its size (a cut between a checkpoint's data and its size, which the boot's recovery trims): Ok(lost
-    /// clusters, the most clusters a chain runs past its size), the whole volume scanned.
-    pub fn fsck_cut(img: &[u8]) -> Result<(u32, u32), std::string::String> {
+    /// What [`fsck_cut`] found.
+    pub struct CutScan {
+        /// Clusters taken, named by no entry.
+        pub lost: u32,
+        /// The chains that run past their size: (first cluster, clusters past it).
+        pub past: Vec<(u32, u32)>,
+        /// FAT sectors whose copies differ.
+        pub apart: u32,
+    }
+
+    /// [`fsck`] of the volume a power cut left, before any boot, the whole volume scanned: FATs that differ (the
+    /// first one read) and chains past their size (a cut between a checkpoint's data and its size, which the boot's
+    /// recovery trims) are reported, for the caller to bound.
+    pub fn fsck_cut(img: &[u8]) -> Result<CutScan, std::string::String> {
         fsck_with(img, true, true)
     }
 
     /// [`fsck`] without the orphan long name check: after a cut that tore a directory sector (garbage in it, which
     /// may read as anything), as the torn-sector power-cut tests make.
     pub fn fsck_torn(img: &[u8]) -> Result<u32, std::string::String> {
-        fsck_with(img, false, false).map(|(lost, _)| lost)
+        fsck_with(img, false, false).map(|c| c.lost)
     }
 
-    fn fsck_with(img: &[u8], orphans: bool, cut: bool) -> Result<(u32, u32), std::string::String> {
+    fn fsck_with(img: &[u8], orphans: bool, cut: bool) -> Result<CutScan, std::string::String> {
         let mut d = Ram(img.to_vec(), 0);
         let mut fat = Fat::mount(&mut d).map_err(|e| std::format!("mount {e:?}"))?;
         let fs = fat.fat_size as usize * SECTOR;
         let start = fat.fat_start as usize * SECTOR;
-        if !cut && fat.fats == 2 && img[start..start + fs] != img[start + fs..start + 2 * fs] {
+        let apart = if fat.fats == 2 {
+            let (one, two) = (&img[start..start + fs], &img[start + fs..start + 2 * fs]);
+            one.chunks(SECTOR).zip(two.chunks(SECTOR)).filter(|(a, b)| a != b).count() as u32
+        } else {
+            0
+        };
+        if !cut && apart > 0 {
             return Err("the FATs differ".into());
         }
         let n = fat.clusters + 2;
         let mut owner = std::vec![0u32; n as usize];
         let mut dirs = std::vec![fat.root()];
-        let (mut id, mut excess) = (0, 0);
+        let (mut id, mut past) = (0, Vec::new());
         while let Some(dir) = dirs.pop() {
             if orphans {
                 orphan_long_names(&mut fat, &mut d, dir.cluster)?;
@@ -966,7 +1004,9 @@ pub(crate) mod tests {
                 if need < len && !cut {
                     return Err(std::format!("file at {first}: chain of {len} past its size {size}"));
                 }
-                excess = excess.max(len.saturating_sub(need));
+                if need < len {
+                    past.push((first, len - need));
+                }
             }
         }
         // The lost clusters (taken, named by no entry, not bad): each must lead to an end of chain without meeting a
@@ -1007,7 +1047,7 @@ pub(crate) mod tests {
         if let Some(c) = (2..n).find(|&c| is_lost(c) && !reached[c as usize]) {
             return Err(std::format!("lost chain in a loop at {c}"));
         }
-        Ok((lost, excess))
+        Ok(CutScan { lost, past, apart })
     }
 
     /// Long name pieces not followed by the 8.3 entry whose checksum they carry (chkdsk and fsck_msdos report
@@ -1096,11 +1136,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// The review of S5 and S6 (2026-10-29): a grow whose FAT writes fail part way, the new cluster's entry and the
-    /// link to it in two FAT sectors, either copy of either: the retry takes that cluster up (not the next one), the
-    /// FATs equal, nothing lost, FSInfo exact.
-    #[test]
-    fn a_grow_failing_part_way_takes_its_cluster_up() {
+    /// A file grown a cluster at a time until its last cluster's entry ends a FAT sector, the next cluster free: the
+    /// volume, its handle, and that next cluster.
+    fn grown_to_a_sector_end() -> (Ram, Handle, u32) {
         let mut d = Ram(image(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let root = fat.root();
@@ -1116,13 +1154,26 @@ pub(crate) mod tests {
         }
         let c = h.last + 1;
         assert_eq!(c % per, 0, "the next cluster in the next FAT sector");
-        let base = d.0.clone();
+        (d, h, c)
+    }
+
+    /// The review of S5 and S6 (2026-10-29): a grow whose FAT writes fail part way, the new cluster's entry and the
+    /// link to it in two FAT sectors, either copy of either: the retry takes that cluster up where it is surely the
+    /// file's (linked in the first FAT, or its end marker there alone), else leaves it lost, never cross-linked. The
+    /// FATs equal, FSInfo exact.
+    #[test]
+    fn a_grow_failing_part_way_takes_its_cluster_up() {
+        let (d, h, c) = grown_to_a_sector_end();
+        let base = d.0;
+        let fat = Fat::mount(&mut Ram(base.clone(), 0)).unwrap();
+        let per = SECTOR_U32 / 4;
         let sector = |copy: u32, x: u32| fat.fat_start + copy * fat.fat_size + x / per;
-        for (what, bad) in [
-            ("the new cluster's sector, first FAT", sector(0, c)),
-            ("the new cluster's sector, second FAT", sector(1, c)),
-            ("the link's sector, first FAT", sector(0, h.last)),
-            ("the link's sector, second FAT", sector(1, h.last)),
+        // (what fails, the cluster the retry ends on, lost clusters)
+        for (what, bad, last, lost) in [
+            ("the new cluster's sector, first FAT", sector(0, c), c, 0), // nothing landed: free, taken again
+            ("the new cluster's sector, second FAT", sector(1, c), c, 0), // on the first copy alone: taken up
+            ("the link's sector, first FAT", sector(0, h.last), c + 1, 1), // unlinked on both: left, lost
+            ("the link's sector, second FAT", sector(1, h.last), c, 0),  // linked on the first: taken up
         ] {
             let mut d = FailAt(Ram(base.clone(), 0), bad);
             let mut fat = Fat::mount(&mut d).unwrap();
@@ -1131,12 +1182,46 @@ pub(crate) mod tests {
             assert_eq!(fat.write_sectors(&mut d, &mut g, at, &[9; SECTOR]), Err(Error::Io), "{what}");
             d.1 = u32::MAX;
             fat.write_sectors(&mut d, &mut g, at, &[9; SECTOR]).unwrap();
-            assert_eq!((g.last, g.clusters, g.pending), (c, h.clusters + 1, 0), "{what}: that cluster taken up");
+            assert_eq!((g.last, g.clusters, g.pending), (last, h.clusters + 1, 0), "{what}");
             let size = g.clusters * fat.cluster_bytes();
             fat.set_size(&mut d, &mut g, size, (0, 0)).unwrap();
-            assert_eq!(fsck(&d.0.0), Ok(0), "{what}");
+            assert_eq!(fsck(&d.0.0), Ok(lost), "{what}");
             assert_eq!(free_counts(&d.0.0).0, free_counts(&d.0.0).1, "{what}: FSInfo's free count");
         }
+    }
+
+    /// The third review, finding 2: the cluster a failed grow was taking, freed since by a FAT sync that took the
+    /// second copy's sector over a first one it judged torn, then taken by another file: never taken up (a
+    /// cross-link, the other file's data written over), the other file whole.
+    #[test]
+    fn a_grow_never_takes_up_a_cluster_another_file_took() {
+        let (mut d, h, c) = grown_to_a_sector_end();
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let (one, two) = (fat.fat_start + c / (SECTOR_U32 / 4), fat.fat_start + fat.fat_size + c / (SECTOR_U32 / 4));
+        let mut f = FailAt(d, two);
+        let mut g = h;
+        let at = g.clusters * fat.spc;
+        assert_eq!(fat.write_sectors(&mut f, &mut g, at, &[9; SECTOR]), Err(Error::Io));
+        assert_eq!(g.pending, c);
+        let mut d = f.0;
+        // the sync's revert: the second copy's sector over the first (the cluster free again on both)
+        let (one, two) = (one as usize * SECTOR, two as usize * SECTOR);
+        let copy = d.0[two..two + SECTOR].to_vec();
+        d.0[one..one + SECTOR].copy_from_slice(&copy);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let mut b = fat.create(&mut d, root, "B.BIN", (0, 0)).unwrap();
+        fat.write_sectors(&mut d, &mut b, 0, &[2; SECTOR]).unwrap();
+        fat.set_size(&mut d, &mut b, SECTOR_U32, (0, 0)).unwrap();
+        assert_eq!(b.first, c, "the other file took it");
+        fat.write_sectors(&mut d, &mut g, at, &[9; SECTOR]).unwrap();
+        assert_ne!(g.last, c, "a cluster of its own");
+        let mut s = [0u8; SECTOR];
+        fat.read_sector(&mut d, &b, 0, &mut s).unwrap();
+        assert_eq!(s, [2; SECTOR], "the other file's data");
+        let size = g.clusters * fat.cluster_bytes();
+        fat.set_size(&mut d, &mut g, size, (0, 0)).unwrap();
+        assert!(fsck(&d.0).is_ok(), "{:?}", fsck(&d.0));
     }
 
     /// The same review, finding 1: a link after a file's last cluster that its grow did not write (a FAT sector gone
