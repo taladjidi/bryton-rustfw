@@ -357,46 +357,94 @@ fn a_cut_at_every_sector_reads_old_or_new() {
     }
 }
 
-/// A ride whose card write fails in the second FAT (a FAT sector reached the first copy only): the next settings
-/// write, after the ride, compares the FAT copies first (it reads the second), and leaves the volume clean.
-#[test]
-fn a_recorder_write_failure_has_the_next_settings_write_compare_the_fats() {
-    let (mut sim, mut app) = started(Settings::from_word(0), false);
+/// The second FAT of the synthetic volume, and whether a command of `cmds` touched it since command `from`.
+fn fat2(sim: &Sim) -> core::ops::Range<u32> {
     let img = &sim.emmc.image;
     let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
     let (reserved, size) = (u(14, 2), u(36, 4));
-    let fat2 = reserved + size..reserved + 2 * size;
-    let touched = |sim: &Sim, from: usize, cmds: &[u8]| {
-        sim.emmc.cmds[from..].iter().any(|c| cmds.contains(&c.0) && fat2.contains(&c.1))
-    };
-    sim.emmc.bad = std::vec![fat2.clone()];
+    reserved + size..reserved + 2 * size
+}
+
+fn touched(sim: &Sim, from: usize, cmds: &[u8]) -> bool {
+    let fat2 = fat2(sim);
+    sim.emmc.cmds[from..].iter().any(|c| cmds.contains(&c.0) && fat2.contains(&c.1))
+}
+
+/// Presses Start until a write to the second FAT (failing in it) has been made.
+fn start_until_fat2_written(sim: &mut Sim, app: &mut App) {
     let from = sim.emmc.cmds.len();
-    app.press(&mut sim, Press::Short(Key::Start)); // the ride's file takes its first cluster
+    app.press(sim, Press::Short(Key::Start));
     for _ in 0..1000 {
-        run(&mut sim, &mut app, 100);
-        if touched(&sim, from, &[24, 25]) {
+        run(sim, app, 100);
+        if touched(sim, from, &[24, 25]) {
             break;
         }
     }
-    assert!(touched(&sim, from, &[24, 25]), "a FAT sector written to the first copy only");
+    assert!(touched(sim, from, &[24, 25]), "a FAT sector written to the first copy only");
+}
+
+/// The ride paused, saved, its card closed; then GPS POWER changed: written after the FAT copies were compared
+/// (the second one read), and the volume clean.
+fn save_then_settings_compare_the_fats(sim: &mut Sim, app: &mut App) {
+    run(sim, app, 70_000);
+    app.press(sim, Press::Short(Key::Start)); // pause
+    super::save_ride(sim, app);
+    run(sim, app, 10_000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    app.press(sim, Press::Short(Key::Back)); // the banner
+    app.press(sim, Press::Short(Key::Back)); // the summary
+    let from = sim.emmc.cmds.len();
+    app.press(sim, Press::Long(Key::Page));
+    to_row(sim, app, menu::Row::Open(Menu::Settings));
+    app.press(sim, Press::Short(Key::Start));
+    to_row(sim, app, menu::Row::Open(Menu::Bike));
+    app.press(sim, Press::Short(Key::Start));
+    to_row(sim, app, menu::Row::Set(Setting::GpsPower));
+    app.press(sim, Press::Short(Key::Start));
+    settle(sim, app);
+    assert_eq!(file(sim).map(|c| c.settings.gps_power), Some(crate::GpsPower::Full), "written");
+    assert!(touched(sim, from, &[17, 18]), "the second FAT read: the copies compared before the write");
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image).map(|_| ()), Ok(()));
+}
+
+/// A ride whose card write fails in the second FAT (a FAT sector reached the first copy only): the next settings
+/// write, after the ride, compares the FAT copies first.
+#[test]
+fn a_recorder_write_failure_has_the_next_settings_write_compare_the_fats() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    sim.emmc.bad = std::vec![fat2(&sim)];
+    start_until_fat2_written(&mut sim, &mut app); // the ride's file takes its first cluster
     sim.emmc.bad.clear();
+    save_then_settings_compare_the_fats(&mut sim, &mut app);
+}
+
+/// The same for an error the recorder goes on after (the review of 4dbec8d): `\Rustfw\Discarded\Full` missing at a
+/// ride's start, its creation fails in the second FAT once; the ride records on, and the settings write after it
+/// compares the FAT copies all the same.
+#[test]
+fn a_failed_folder_at_a_ride_start_has_the_settings_write_compare_the_fats() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    app.press(&mut sim, Press::Short(Key::Start)); // a first ride: every folder made
     run(&mut sim, &mut app, 70_000);
-    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    app.press(&mut sim, Press::Short(Key::Start));
     super::save_ride(&mut sim, &mut app);
     run(&mut sim, &mut app, 10_000);
-    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
-    app.press(&mut sim, Press::Short(Key::Back)); // the banner
-    app.press(&mut sim, Press::Short(Key::Back)); // the summary
-    let from = sim.emmc.cmds.len();
-    app.press(&mut sim, Press::Long(Key::Page));
-    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
-    app.press(&mut sim, Press::Short(Key::Start));
-    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
-    app.press(&mut sim, Press::Short(Key::Start));
-    to_row(&mut sim, &mut app, menu::Row::Set(Setting::GpsPower));
-    app.press(&mut sim, Press::Short(Key::Start));
-    settle(&mut sim, &mut app);
-    assert_eq!(file(&sim).map(|c| c.settings.gps_power), Some(crate::GpsPower::Full), "written");
-    assert!(touched(&sim, from, &[17, 18]), "the second FAT read: the copies compared before the write");
-    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image).map(|_| ()), Ok(()));
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
+    // `Full` deleted by hand (0xe5 on its entry and its long name's), its cluster left lost
+    let dir = crate::sim::drive_tests::dir_sectors(&sim.emmc.image, recorder::DISCARDED_PATHS[0]);
+    let img = &mut sim.emmc.image;
+    let mut entries = (dir.start as usize * 512..dir.end as usize * 512).step_by(32);
+    let at = entries.find(|&a| img[a + 11] == 0x10 && img[a] != b'.'); // its one folder
+    let mut at = at.expect("Discarded\\Full made by the first ride");
+    img[at] = 0xe5;
+    while at % 512 > 0 && img[at - 32 + 11] == 0x0f {
+        at -= 32;
+        img[at] = 0xe5;
+    }
+    let errors = app.rec.clean.errors;
+    (sim.emmc.bad, sim.emmc.bad_left) = (std::vec![fat2(&sim)], Some(1));
+    start_until_fat2_written(&mut sim, &mut app); // the folder made again: its cluster's FAT sector, once
+    assert_eq!((app.rec.clean.errors, app.rec.clean.fails()), (errors + 1, 0), "an error gone on after");
+    save_then_settings_compare_the_fats(&mut sim, &mut app);
 }
