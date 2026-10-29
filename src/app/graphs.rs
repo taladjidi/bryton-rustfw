@@ -199,6 +199,8 @@ impl App {
     /// is at least 1 high).
     pub(crate) fn graph_bar(&self, g: GraphShown, cols: u32, h: u32, i: u32) -> (u32, u16) {
         use ride::Plot;
+        #[cfg(test)]
+        self.bars.set(self.bars.get() + 1);
         let v = self.graph_value(g, cols, i);
         if v == 0 {
             return (0, ui::BLACK);
