@@ -3650,8 +3650,9 @@ fn recovery_sectors<T: PartialEq + std::fmt::Debug>(
     }
     if bad != sector {
         c[1] += 1;
-        if read(&bad).is_some_and(|back| back != *original) {
-            c[3] += 1; // a record that differs: the harm the bound is about
+        if let Some(back) = read(&bad) {
+            assert_eq!(back, *original, "a damaged sector read back as another record");
+            c[3] += 1; // accepted, and equal: the change fell where the record does not look
         }
     }
     let mut raw = [0u8; crate::fat::SECTOR];
@@ -3699,10 +3700,23 @@ fn recovery_records() {
                 suffix: next() as u8,
                 files: [moved(&mut next), moved(&mut next)],
             };
-            recovery_sectors(&mut next, &t, t.to_sector(), crate::trash::Rec::from_sector, &mut trash);
+            // the older layout's flag 1 (its CRC ignored, so the file reads back without one): some records use it
+            let mut sector = t.to_sector();
+            let mut expect = t;
+            if next().is_multiple_of(4) {
+                for k in 0..2 {
+                    if sector[32 + 16 * k] == 2 {
+                        sector[32 + 16 * k] = 1;
+                        expect.files[k] = expect.files[k].map(|(first, size, _)| (first, size, None));
+                    }
+                }
+                let crc = crate::fit::crc(0, &sector[..crate::fat::SECTOR - 2]);
+                sector[crate::fat::SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+            }
+            recovery_sectors(&mut next, &expect, sector, crate::trash::Rec::from_sector, &mut trash);
         }
     }
-    // a 16-bit CRC misses about 2^-16 of the changes: at most 4 accepted per 6400 damaged sectors
+    // a 16-bit CRC misses about 2^-16 of the changes: at most 4 accepted per 6400 damaged sectors, all equal
     for c in [recorder, trash] {
         assert!(c[0] > 0 && c[1] > 0 && c[2] > 0, "reached: {c:?} (intact, damaged, random, accepted)");
         assert!(c[3] * 1600 <= c[1], "accepted {} of {} damaged", c[3], c[1]);
