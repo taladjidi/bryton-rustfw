@@ -53,6 +53,7 @@ python3 -I tools/numbers.py --write
 python3 -I tools/numbers.py selftest
 python3 -I tools/dev.py selftest
 python3 -I tools/sync.py selftest  # a fake Intervals.icu and Strava on 127.0.0.1: no network
+python3 -I tools/segments.py selftest  # the live segment writer on synthetic efforts; the committed fixture equals a fresh one
 python3 -I tools/s810_probe.py selftest  # the S810 owner's probe on a made-up volume: nothing personal comes out
 python3 -I tools/route_pack.py selftest  # the synthetic map file (test-data/route) built and read back by an independent reader
 python3 -I tools/ign_pack.py selftest

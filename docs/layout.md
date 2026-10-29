@@ -274,6 +274,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `get`) to Intervals.icu (full copy) and Strava (clean copy), never twice; planned workouts from Intervals.icu to
   `\Workout\calendar`. Dry run unless `--go`; keys and tokens only in `~/.config/bryton-rustfw/` (0600), never in
   the repository. `sync.py selftest` (check.sh) runs against a fake server on 127.0.0.1.
+- `tools/segments.py`: the live segment files (docs/segments.md): fetches the rider's segment efforts from Intervals.icu, builds
+  `<id>.seg` files, writes them to the drive verified. `segments.py selftest` (check.sh) is synthetic; its fixture is
+  `test-data/segment/synthetic.seg`.
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
   after `tools/dev.py reset`): a firmware that reads the link takes the bytes first.
