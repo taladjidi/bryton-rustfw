@@ -291,6 +291,13 @@ pub struct App {
     power: power::Power,
     /// The menu rows on screen, as fingerprints ([`App::menu_row_print`]).
     menu_shown: [u32; ui::MENU_ROWS],
+    /// The same without the value ([`App::menu_row_print`]): a row whose head is unchanged repaints its value only.
+    menu_head: [u32; ui::MENU_ROWS],
+    /// Graph bars computed (the tests count them: a redraw clipped away must compute none).
+    #[cfg(test)]
+    pub(crate) bars: core::cell::Cell<u32>,
+    /// The nearby list's rows on screen, as fingerprints ([`ui::list_prints`]).
+    list_shown: [u32; ui::LIST_ROWS],
     /// The ride's track, from the good fixes.
     track: map::Track,
     /// The map's zoom level set by its "+" and "-" ([`map::mpp16`]); None: fitted to the track (per power-up).
@@ -465,6 +472,10 @@ impl App {
             history: ride::History::default(),
             power: power::Power::default(),
             menu_shown: [0; ui::MENU_ROWS],
+            menu_head: [0; ui::MENU_ROWS],
+            #[cfg(test)]
+            bars: core::cell::Cell::new(0),
+            list_shown: [0; ui::LIST_ROWS],
             track: map::Track::new(),
             map_zoom: None,
             map_centre: None,

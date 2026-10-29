@@ -1421,3 +1421,35 @@ fn editor_draws_the_edited_pages_boxes() {
     assert!(!edited.is_empty());
     assert_eq!(edited, ride, "the editor's boxes are ride page 0's");
 }
+
+/// A banner dismissed over a page with a graph in its lower half computes no graph bars: the boxes below the banner's
+/// rows are skipped, not computed then clipped (P3, review 2026-10-29).
+#[test]
+fn unbanner_skips_boxes_outside_its_rows() {
+    let (mut sim, mut app) = started();
+    app.pages[0] = Page::preset(14, [Speed, Hr, Power, Cadence, Dist, Timer, Ascent, Graph]).unwrap();
+    app.pages_changed(&mut sim);
+    sim.gnss.fix = Some(500);
+    press(&mut sim, &mut app, Key::Start);
+    run(&mut sim, &mut app, 5000);
+    app.bars.set(0);
+    app.draw_screen(&mut crate::ui::tests::Frame::new());
+    let whole = app.bars.replace(0);
+    app.unbanner(&mut sim);
+    let top = app.bars.get();
+    std::println!("graph bars: whole screen {whole}, unbanner {top}");
+    assert!(whole > 0 && top < whole, "{top} of {whole}");
+}
+
+/// The banner's redraw leaves the screen as the whole page drawn, on a page with a graph in its lower half.
+#[test]
+fn unbanner_equals_the_whole_draw() {
+    let (mut sim, mut app) = started();
+    app.pages[0] = Page::preset(14, [Speed, Hr, Power, Cadence, Dist, Timer, Ascent, Graph]).unwrap();
+    app.pages_changed(&mut sim);
+    sim.gnss.fix = Some(500);
+    press(&mut sim, &mut app, Key::Start);
+    run(&mut sim, &mut app, 5000);
+    app.unbanner(&mut sim);
+    super::tests::assert_consistent(&sim, &app);
+}
