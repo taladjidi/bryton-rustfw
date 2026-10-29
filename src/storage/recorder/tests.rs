@@ -2011,3 +2011,152 @@ fn a_short_buffer_drops_the_trainer_fields_not_the_second() {
     assert!(r.writer.data_len() > len, "it is in the file");
     assert_eq!(r.writer.trainer_bytes(&s), need, "without the trainer's descriptions");
 }
+
+/// A computer frees the chain at `first` (both FATs, FSInfo's count kept exact) and points FSInfo's next free
+/// cluster at it, so that the next file made takes its clusters: the bytes the chain held.
+fn free_chain(img: &mut [u8], first: u32) -> usize {
+    let u =
+        |img: &[u8], at: usize, n: usize| img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b));
+    let (fat0, len, fats, fsinfo) =
+        (u(img, 14, 2) * SECTOR, u(img, 36, 4) * SECTOR, u(img, 16, 1), u(img, 48, 2) * SECTOR);
+    let (mut c, mut n) = (first as usize, 0);
+    while (2..0x0fff_fff8).contains(&c) && n < 1 << 20 {
+        let next = u(img, fat0 + 4 * c, 4) & 0x0fff_ffff;
+        for k in 0..fats {
+            img[fat0 + k * len + 4 * c..][..4].fill(0);
+        }
+        (c, n) = (next, n + 1);
+    }
+    let free = u(img, fsinfo + 488, 4) + n;
+    img[fsinfo + 488..fsinfo + 492].copy_from_slice(&(free as u32).to_le_bytes());
+    img[fsinfo + 492..fsinfo + 496].copy_from_slice(&first.to_le_bytes());
+    n * u(img, 13, 1) * SECTOR
+}
+
+/// The computer removes the ride's entry in `\Rustfw\Rides` (marked deleted, as `Fat::remove` does).
+fn remove_ride_entry(img: &mut Vec<u8>) {
+    let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let dir = fat.open(&mut ram, "Rustfw/Rides").unwrap();
+    let h = fat.locate(&mut ram, dir, "261023100000.fit").unwrap();
+    fat.remove(&mut ram, &h).unwrap();
+    *img = ram.0;
+}
+
+const OTHER: &str = "OTHER.BIN";
+
+/// The computer then copies a file of `len` bytes (a pattern) to the root: it takes the freed clusters.
+fn other_file(img: &mut Vec<u8>, first: u32, len: usize) -> Vec<u8> {
+    let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let root = fat.root();
+    let mut h = fat.create(&mut ram, root, OTHER, (0, 0)).unwrap();
+    let v: Vec<u8> = (0..len).map(|i| (i * 7 + 3) as u8).collect();
+    fat.write_sectors(&mut ram, &mut h, 0, &v).unwrap();
+    fat.set_size(&mut ram, &mut h, len as u32, (0, 0)).unwrap();
+    assert_eq!(h.first, first, "the ride's clusters reused");
+    *img = ram.0;
+    v
+}
+
+/// The other file whole, nothing named on the ride's chain, the volume clean (no lost cluster: the chain freed or
+/// the other file's).
+fn let_go(img: &[u8], other: &Option<Vec<u8>>, what: &str) {
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    if let Some(v) = other {
+        assert_eq!(crate::fat::tests::read_all(&mut fat, &mut ram, OTHER).as_ref(), Ok(v), "{what}: the other file");
+    }
+    for p in ["Rustfw/Rides/261023100000.fit", SAVED, "Rustfw/Rescue/261023100000.fit"] {
+        assert_eq!(fat.open(&mut ram, p).err(), Some(Error::NotFound), "{what}: {p}");
+    }
+    assert_eq!(check_clean(img, what), 0);
+}
+
+/// The review of 2026-10-29, S1: a ride left open (the unit off), then removed on a computer, its chain freed or
+/// given to another file. The boot's recovery finds it named by its record alone: nothing written on that chain,
+/// nothing linked onto it, the record done (a second boot does nothing); the power cut at each of that recovery's
+/// writes, plain and torn, ends the same; the next ride is recorded and saved, the volume clean.
+#[test]
+fn a_ride_left_open_and_removed_by_a_computer_is_let_go() {
+    for reuse in [false, true] {
+        let mut d = card(crate::fat::tests::image());
+        let first = open_ride(&mut d, 200).file.unwrap().first;
+        let mut img = d.img;
+        remove_ride_entry(&mut img);
+        let len = free_chain(&mut img, first);
+        let other = reuse.then(|| other_file(&mut img, first, len));
+        let what = if reuse { "reused" } else { "freed" };
+        let_go(&img, &other, what);
+        let mut d = card(img.clone());
+        assert_eq!(Recorder::new().recover(&mut d, local(300)), Outcome::Nothing, "{what}");
+        let_go(&d.img, &other, what);
+        assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Nothing, "{what}: the record done");
+        let total = d.written;
+        assert!(total > 0, "{what}: the record written");
+        for cut in 0..total {
+            for torn in [false, true] {
+                let what = std::format!("{what}, cut {cut} of {total}, torn {torn}");
+                let mut c = Card { budget: Some(cut), torn, ..card(img.clone()) };
+                Recorder::new().recover(&mut c, local(300));
+                let mut c = card(c.img);
+                assert_eq!(Recorder::new().recover(&mut c, local(301)), Outcome::Nothing, "{what}");
+                let_go(&c.img, &other, &what);
+            }
+        }
+        assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "{what}: the next ride");
+        if let Some(v) = &other {
+            let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
+            let mut fat = Fat::mount(&mut ram).unwrap();
+            assert_eq!(crate::fat::tests::read_all(&mut fat, &mut ram, OTHER).as_ref(), Ok(v), "{what}: after");
+        }
+        assert_eq!(check_clean(&d.img, what), 0);
+    }
+}
+
+/// The review of 2026-10-29, S2: a save stuck between its steps 4 and 5 (the ride named by its record alone),
+/// then its chain freed by a computer. Neither GIVE UP SAVE (its rides folder, `\Rustfw\Rescue`) nor a boot's
+/// save links an entry onto the free clusters (the next ride's `create` would take them: a cross-link); the record
+/// ends done, the volume clean; the power cut at each of the boot's writes ends the same.
+#[test]
+fn a_stuck_save_whose_chain_a_computer_freed_is_never_linked() {
+    // GIVE UP SAVE, the rides folder writable again: lost, the held start starts
+    let (mut r, mut d) = stuck_save(false);
+    let first = r.file.unwrap().first;
+    free_chain(&mut d.card.img, first);
+    r.start(T0 + 1000, *b"261023110000", false);
+    d.bad.truncate(1);
+    assert_eq!(r.give_up_save(&mut d, local(300)), Some(GaveUp::Lost));
+    let_go(&d.card.img, &None, "give up");
+    assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Nothing, "the record done");
+    next_ride_records(&mut r, &mut d, "give up");
+    assert_eq!(check_clean(&d.card.img, "give up, then a ride"), 0);
+
+    // the rescue itself: never an entry on the freed chain
+    let (mut r, mut d) = stuck_save(false);
+    free_chain(&mut d.card.img, first);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    assert_eq!(r.rescue(&mut fat, &mut d, (0, 0)), Err(Error::Corrupt));
+    let_go(&d.card.img, &None, "rescue");
+
+    // a boot: the save tried from the record, the chain not the ride's: the record done
+    let (_, d) = stuck_save(false);
+    let mut img = d.card.img;
+    free_chain(&mut img, first);
+    let mut d = card(img.clone());
+    assert_eq!(Recorder::new().recover(&mut d, local(300)), Outcome::Nothing);
+    let_go(&d.img, &None, "boot");
+    let total = d.written;
+    for cut in 0..total {
+        for torn in [false, true] {
+            let what = std::format!("boot, cut {cut} of {total}, torn {torn}");
+            let mut c = Card { budget: Some(cut), torn, ..card(img.clone()) };
+            Recorder::new().recover(&mut c, local(300));
+            let mut c = card(c.img);
+            assert_eq!(Recorder::new().recover(&mut c, local(301)), Outcome::Nothing, "{what}");
+            let_go(&c.img, &None, &what);
+        }
+    }
+    assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "the next ride");
+    assert_eq!(check_clean(&d.img, "boot, then a ride"), 0);
+}

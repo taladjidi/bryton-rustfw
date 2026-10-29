@@ -666,8 +666,10 @@ impl Recorder {
     }
 
     fn give_up_on(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> GaveUp {
-        if let Ok(o) = self.keep_in_rides(fat, d, t) {
-            return GaveUp::Named(o);
+        match self.keep_in_rides(fat, d, t) {
+            Ok(Outcome::Nothing) => return GaveUp::Lost, // the chain no longer the ride's: the record done
+            Ok(o) => return GaveUp::Named(o),
+            Err(_) => {}
         }
         self.errors = self.errors.saturating_add(1);
         if self.rescue(fat, d, t).is_ok() {
@@ -686,8 +688,8 @@ impl Recorder {
     /// The ride named in [`RESCUE_PATHS`] (module doc, "GIVE UP SAVE"): the record "done" first, then the link.
     fn rescue(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), Error> {
         let (first, size) = (self.file.map_or(0, |h| h.first), self.len);
-        if first < 2 {
-            return Err(Error::Corrupt);
+        if first < 2 || self.still_ours(fat, d, first, size)?.is_none() {
+            return Err(Error::Corrupt); // no chain, or no longer the ride's: never an entry on it
         }
         // never a second entry on the chain: both folders that may name it read whole, neither does
         let target = if self.discard { self.kind.discarded_path() } else { self.kind.saved() };
@@ -1115,7 +1117,8 @@ impl Recorder {
     /// Makes sure the ride being saved is named by an entry, then writes its record "done": its entry in its rides
     /// folder as it is, or, gone (the save's step 4 done, 5 not), linked again there under its name (step 3 made the
     /// room: no cluster taken); unless the save's own link (5) is there already, which is the save done. Never two
-    /// entries on one chain: a folder that cannot be read is an error, tried again.
+    /// entries on one chain: a folder that cannot be read is an error, tried again. A chain no longer the ride's
+    /// ([`Recorder::still_ours`]) is never linked: the record done, `Nothing` (the ride removed by a computer).
     fn keep_in_rides(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<Outcome, Error> {
         let (first, size) = (self.file.map_or(0, |h| h.first), self.len);
         if first < 2 {
@@ -1149,6 +1152,12 @@ impl Recorder {
             Ok(h) if h.first == first => {}
             Ok(_) => return Err(Error::Refused), // its name another file's: never a second entry, tried again
             Err(Error::NotFound) => {
+                if self.still_ours(fat, d, first, size)?.is_none() {
+                    // no longer the ride's (a computer removed it): never linked, the record done, nothing named
+                    self.write_record(fat, d, Phase::Done, first)?;
+                    (self.phase, self.stuck) = (Phase::Done, false);
+                    return Ok(Outcome::Nothing);
+                }
                 fat.link(d, dir, n, &Handle { first, size, ..Handle::default() }, t)?;
             }
             Err(e) => return Err(e),
@@ -1165,6 +1174,36 @@ impl Recorder {
         if self.file.is_none_or(|h| h.first != first) {
             self.file = Some(Handle { first, size, ..Handle::default() });
         }
+    }
+
+    /// The chain at `first`, if it is still this ride's `size` bytes; None if not (the review of 2026-10-29, S1 and
+    /// S2). A chain no entry names may have been removed by a computer (or stock's USB drive), its clusters freed
+    /// or taken by another file: written or linked then, it would overwrite that file or cross-link the next one.
+    /// Taken, long enough, and its sector 0 as the latest record's copy wherever no later checkpoint rewrites it:
+    /// the header but its size and CRC, the data before the trailer (as trash.rs checks a chain with `first_crc`;
+    /// a cut during the next checkpoint may have left that one's header there).
+    #[inline(never)] // its two sectors in its own frame
+    fn still_ours(
+        &self,
+        fat: &mut Fat,
+        d: &mut impl DiskWrite,
+        first: u32,
+        size: u32,
+    ) -> Result<Option<Handle>, Error> {
+        let h = match fat.chain(d, first) {
+            Ok(h) => h,
+            Err(Error::Corrupt) => return Ok(None), // freed, or out of the volume
+            Err(e) => return Err(e),
+        };
+        if first < 2 || h.clusters.checked_mul(fat.cluster_bytes()).is_some_and(|b| b < size) {
+            return Ok(None);
+        }
+        let (rec, mut copy, mut s) = (self.rec.ok_or(Error::NotFound)?, [0u8; SECTOR], [0u8; SECTOR]);
+        fat.read_sector(d, &rec, 3 * (self.seq % 2), &mut copy)?;
+        fat.read_sector(d, &h, 0, &mut s)?;
+        let end = (size.saturating_sub(2) as usize).clamp(14, SECTOR);
+        let same = |r: core::ops::Range<usize>| s.get(r.clone()) == copy.get(r);
+        Ok((same(0..4) && same(8..12) && same(14..end)).then_some(h))
     }
 
     /// Makes `\Rustfw`, `\Rustfw\ride.rec` (two zeroed sectors), `\Rustfw\Rides`, `\Activities` and
@@ -1328,6 +1367,12 @@ impl Recorder {
         size: u32,
     ) -> Result<Outcome, Error> {
         self.len = size; // what keep_in_rides names, if it comes to that (a save as it is: less than the buffer's)
+        // a chain the save's step 4 left named by the record alone may have been freed by a computer since (its
+        // clusters still reading as the ride): moved (5), it would be linked onto free clusters. Not the ride's:
+        // left to keep_in_rides, which names it only where its entry still is
+        if !self.checked && self.still_ours(fat, d, first, size)?.is_none() {
+            return self.keep_in_rides(fat, d, t);
+        }
         // 2: read back whole, through the buffer (the file is all on the card by now); once a run (a retry would
         // read it all again: the stuck save's cost)
         let f = File { cluster: first, size, dir: false };
@@ -1510,18 +1555,23 @@ impl Recorder {
                 let entry = match fat.locate(d, dir, file_name(&r.name, &mut buf)?) {
                     Ok(h) if h.first == r.cluster && fits(&h, fat.cluster_bytes()) => Some(h),
                     // its entry gone: a cut tore its directory sector (a card without reliable write), or a computer
-                    // removed it. Then nothing to resume: the chain the record names is saved as it is, if it still
-                    // reads back as this ride's whole file, else left (`Kept`)
+                    // removed it. Then nothing to resume: the chain the record names is saved as it is, if it is
+                    // still this ride's and reads back as its whole file, else left (`Kept`)
                     Ok(_) | Err(Error::NotFound | Error::Corrupt) => None,
                     Err(e) => return Err(e),
                 };
                 let mut file = match entry {
                     Some(h) => h,
                     None => {
+                        let Some(h) = self.still_ours(fat, d, r.cluster, size)? else {
+                            // freed, or another file's now: nothing written on it, the record done
+                            self.write_record(fat, d, Phase::Done, r.cluster)?;
+                            return Ok(Outcome::Nothing);
+                        };
                         // named by the record alone: a save from here, never given up as a ride left open
                         self.writer = w;
                         self.saving(r.cluster, size);
-                        fat.chain(d, r.cluster)?
+                        h
                     }
                 };
                 // the buffer from the sector the trailer starts in, and sector 0: from the record's copies, as they

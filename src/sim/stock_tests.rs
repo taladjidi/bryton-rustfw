@@ -617,3 +617,25 @@ fn a_delete_cut_halfway_is_finished_at_start() {
     assert_eq!(app.stock.status(), crate::stock::Status::Done);
     assert!((0..app.stock.index.len()).all(|i| app.stock.index.get(i).unwrap().start.2 != 20), "not listed");
 }
+
+/// The review of 2026-10-29, S4: that finish failing at the scan (a card error at its first write) is not
+/// forgotten: still to do (`trash_check`), and done when the drive is lent, before a computer gets the card.
+#[test]
+fn a_cut_delete_whose_finish_fails_is_tried_again() {
+    use crate::storage::trash::tests::{cut_midway, file};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    (sim.emmc.bad, sim.emmc.bad_left) = (std::vec![0..u32::MAX], Some(1));
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    while sim.emmc.bad_left != Some(0) && app.gps.ms < STOCK_SCAN_MS + 2000 {
+        app.step(&mut sim);
+    }
+    assert_eq!(sim.emmc.bad_left, Some(0), "the finish's write failed");
+    assert!(app.trash_check, "still to finish");
+    app.set_usb(&mut sim, crate::ui::UsbDot::Ready);
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert!(!app.trash_check, "finished before the drive was lent");
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
