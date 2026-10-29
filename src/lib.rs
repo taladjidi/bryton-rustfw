@@ -265,6 +265,8 @@ pub struct App {
     /// The sun's rise and set (local minutes) for the date and minute of the last pass that changed it: the key, then
     /// the times (None without a fix, the zone learnt, or in polar day or night). Worked out at most once a minute.
     sun: Option<SunNow>,
+    /// The compass point on the screen for the heading (app/fields.rs `held_point`), None without a course.
+    heading: Option<u8>,
     /// The notices and the banner over the screen.
     notes: Notices,
     /// The battery was reported low.
@@ -465,6 +467,7 @@ impl App {
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
             sun: None,
+            heading: None,
             notes: Notices::new(),
             told_low: false,
             graph_whole: false,
@@ -592,6 +595,7 @@ impl App {
         self.strip.time = (h, m);
         self.date = rtc_date_from_dr(dr);
         self.refresh_sun();
+        self.refresh_heading();
         self.catch_up_seconds(sec);
         self.settle_set(b);
         self.settle_climb(b);

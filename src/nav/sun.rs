@@ -82,7 +82,8 @@ fn minute_of_day(m: f64) -> u32 {
 
 /// Sunrise and sunset on a date at a place, as local minutes of the day (rounded): `lat_e7` and `lon_e7` in degrees
 /// x 1e-7 (east positive), `days` since 1970-01-01 of the local date, `offset_min` the local clock's offset from UTC.
-/// None in polar day or night (the sun does not cross the zenith 90.833 degrees).
+/// The sunset is unwrapped: after midnight it is over 1440 (a day of light that crosses midnight). None in polar day
+/// or night (the sun does not cross the zenith 90.833 degrees).
 ///
 /// ```
 /// // the equator at the equinox: about 06:04 and 18:11 (solar noon at 12:00 minus the equation of time)
@@ -105,7 +106,10 @@ pub fn rise_set(lat_e7: i32, lon_e7: i32, days: i32, offset_min: i32) -> Option<
     }
     let half = acos(x) / DEG * 4.0; // minutes from solar noon: 4 minutes a degree of hour angle
     let off = f64::from(offset_min);
-    Some((minute_of_day(noon - half + off), minute_of_day(noon + half + off)))
+    let rise = minute_of_day(noon - half + off);
+    let set = minute_of_day(noon + half + off);
+    // a sunset after midnight is a minute past 1440 (its day's), so the time left to it does not wrap to the morning
+    Some((rise, if set < rise { set + 1440 } else { set }))
 }
 
 #[cfg(test)]
@@ -113,9 +117,9 @@ mod tests {
     extern crate std;
     use super::*;
 
-    /// Local minutes of the day within a minute of the expected ones (the expected values are from the same
-    /// equations written in double precision, checked by hand at the equinox; NOAA's calculator was not
-    /// reachable for its numbers).
+    /// Local minutes of the day within a minute of the expected ones. The expected values are the published
+    /// sunrise and sunset of api.sunrise-sunset.org (checked for the dates named), and the synthetic places' are
+    /// from the same equations in double precision (NOAA's calculator gives no table).
     fn near(got: Option<(u32, u32)>, want: (u32, u32)) -> bool {
         got.is_some_and(|(r, s)| r.abs_diff(want.0) <= 1 && s.abs_diff(want.1) <= 1)
     }
@@ -132,6 +136,17 @@ mod tests {
         assert!(near(rise_set(-400_000_000, 1_500_000_000, 20808, 600), (267, 1168)));
         // 15 E in September (20718), local clock at UTC+1: 05:49 and 17:56
         assert!(near(rise_set(0, 150_000_000, 20718, 60), (349, 1076)));
+        // published, api.sunrise-sunset.org: Greenwich (51.4772, -0.0016) 2026-06-21 at UTC: 03:43 and 20:21
+        assert!(near(rise_set(514_772_000, -16_000, 20625, 0), (223, 1221)));
+        // Greenwich 2026-03-20 at UTC: 06:02 and 18:13
+        assert!(near(rise_set(514_772_000, -16_000, 20532, 0), (362, 1093)));
+        // Sydney (-33.8688, 151.2093) 2026-12-21 at UTC+11: 05:41 and 20:05
+        assert!(near(rise_set(-338_688_000, 1_512_093_000, 20808, 660), (341, 1205)));
+        // Reykjavik (64.1466, -21.9426) 2026-06-21 at UTC: 02:55, and the sunset 00:04 of the next day (1444)
+        assert_eq!(
+            rise_set(641_466_000, -219_426_000, 20625, 0).map(|(r, s)| (r.abs_diff(175) <= 1, s.abs_diff(1444) <= 1)),
+            Some((true, true))
+        );
     }
 
     #[test]

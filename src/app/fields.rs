@@ -106,12 +106,30 @@ pub(crate) fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
 /// Speed from which the course over ground is shown as a heading (mm/s): 5 km/h, below it the heading is noise.
 const HEADING_MIN_MM_S: u32 = 1_389;
 
+/// The compass points, N first (a heading's point is [`point_of`]).
+pub(crate) const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
 /// A heading (degrees x 1e-5) as one of 8 compass points, N first; each point covers 45 degrees centred on it, so
 /// 359.9 is N and 22.5 is NE.
-pub(crate) fn compass(h: i32) -> &'static str {
-    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    let sector = ((h.rem_euclid(36_000_000) + 2_250_000) / 4_500_000) % 8;
-    POINTS.get(sector as usize).copied().unwrap_or("N")
+pub(crate) fn point_of(h: i32) -> u8 {
+    (((h.rem_euclid(36_000_000) + 2_250_000) / 4_500_000) % 8) as u8
+}
+
+/// The point shown for heading `h`, given the point on the screen: it stays until the heading is more than 30 degrees
+/// from its centre, so a heading near a sector's edge does not flicker between two points.
+pub(crate) fn held_point(h: i32, shown: Option<u8>) -> u8 {
+    match shown {
+        Some(i) => {
+            let d = (h.rem_euclid(36_000_000) - i32::from(i) * 4_500_000).rem_euclid(36_000_000);
+            if d.min(36_000_000 - d) <= 3_000_000 { i } else { point_of(h) }
+        }
+        None => point_of(h),
+    }
+}
+
+/// Minutes from `now` to the sunset, which is unwrapped (see [`crate::sun::rise_set`]); None once it has set.
+pub(crate) fn minutes_to_sunset(now: u32, sun: Option<(u32, u32)>) -> Option<u32> {
+    sun.map(|(_, s)| s).filter(|&s| s >= now).map(|s| s - now)
 }
 
 /// Seconds to the course's end at the average moving speed (km/h x 10), None under 5 km/h: a slow ride's average
@@ -169,23 +187,27 @@ impl App {
         self.zones.get(i).map(ride::ZoneHold::shown).filter(|&z| z > 0)
     }
 
-    /// The sun's rise and set for the minute, worked out once a minute (not per pass): None without a fix, a learnt
-    /// zone (the RTC is local time: the offset comes from the phone or the fix) or in polar day or night.
+    /// The sun's rise and set for the minute, worked out once a minute (not per pass). Needs a fix and a learnt zone
+    /// (the RTC is local time: the offset comes from the phone or the fix); without them nothing is kept, so the first
+    /// fix shows its times at once. In polar day or night the None is kept for the minute.
     pub(crate) fn refresh_sun(&mut self) {
+        let Some((p, o)) = self.gps.pvt.filter(|p| p.good()).zip(self.gps.aid.offset_15min) else {
+            self.sun = None;
+            return;
+        };
         let key = (self.date, self.strip.time);
         if self.sun.is_some_and(|(k, _)| k == key) {
             return;
         }
-        let times = match (self.gps.pvt.filter(|p| p.good()), self.gps.aid.offset_15min) {
-            (Some(p), Some(o)) => crate::sun::rise_set(
-                p.lat,
-                p.lon,
-                days_from_civil(self.date.0, self.date.1, self.date.2),
-                i32::from(o) * 15,
-            ),
-            _ => None,
-        };
+        let (y, m, d) = self.date;
+        let times = crate::sun::rise_set(p.lat, p.lon, days_from_civil(y, m, d), i32::from(o) * 15);
         self.sun = Some((key, times));
+    }
+
+    /// The heading's point on the screen (held, see [`held_point`]): None without a fix or under 5 km/h.
+    pub(crate) fn refresh_heading(&mut self) {
+        let fresh = self.gps.pvt.filter(|p| p.good() && p.speed_mm_s >= HEADING_MIN_MM_S);
+        self.heading = fresh.map(|p| held_point(p.heading, self.heading));
     }
 
     /// The sun's (rise, set) in local minutes of the day, as [`App::refresh_sun`] kept them.
@@ -296,8 +318,8 @@ impl App {
                 return l;
             }
             Field::Heading => {
-                match self.gps.pvt.filter(|p| p.good() && p.speed_mm_s >= HEADING_MIN_MM_S) {
-                    Some(p) => l.push_str(compass(p.heading)),
+                match self.heading.and_then(|i| POINTS.get(usize::from(i))) {
+                    Some(point) => l.push_str(point),
                     None => l.push_str("--"),
                 }
                 return l;
@@ -307,7 +329,10 @@ impl App {
                 match (f, self.sun_times()) {
                     (Field::Sunrise, Some((r, _))) => push_day_time(&mut l, r),
                     (Field::Sunset, Some((_, s))) => push_day_time(&mut l, s),
-                    (Field::ToSunset, Some((_, s))) if s >= now => push_hm(&mut l, (s - now) * 60),
+                    (Field::ToSunset, sun) => match minutes_to_sunset(now, sun) {
+                        Some(m) => push_hm(&mut l, m * 60),
+                        None => l.push_str("--"),
+                    },
                     _ => l.push_str("--"),
                 }
                 return l;
@@ -558,9 +583,16 @@ mod tests {
     fn heading_time_and_clock_of_the_sun() {
         // the compass wraps at 359.9 degrees, the 45-degree sectors centred on their points
         assert_eq!(
-            [compass(35_999_999), compass(0), compass(2_249_999), compass(2_250_000), compass(-1)],
+            [35_999_999, 0, 2_249_999, 2_250_000, -1].map(|h| POINTS[usize::from(point_of(h))]),
             ["N", "N", "N", "NE", "N"]
         );
+        // a heading swinging 22 to 24 degrees keeps N; 31 degrees off its centre it moves on to NE
+        let mut shown = None;
+        for h in [0, 2_200_000, 2_400_000, 2_300_000, 2_200_000, 2_400_000] {
+            shown = Some(held_point(h, shown));
+            assert_eq!(shown, Some(0), "held at {h}");
+        }
+        assert_eq!(held_point(3_100_000, shown), 1);
         // no course speed: "--" (None); under 5 km/h average: None; else distance / speed
         assert_eq!(
             [time_to_dest_s(10_000, None), time_to_dest_s(10_000, Some(49)), time_to_dest_s(10_000, Some(200))],
@@ -570,6 +602,10 @@ mod tests {
         let mut l = Line::<8>::new();
         push_day_time(&mut l, (23 * 60 + 50 + 30) % 1440);
         assert_eq!(l.as_str(), "00:20");
+        // Reykjavik at 23:00 on the June solstice: the sunset is 00:04 the next day (1444), so 1:04 left
+        assert_eq!(minutes_to_sunset(23 * 60, Some((175, 1444))), Some(64));
+        assert_eq!(minutes_to_sunset(23 * 60, Some((100, 1200))), None, "set for the day");
+        assert_eq!(minutes_to_sunset(23 * 60, None), None);
     }
 
     #[test]
