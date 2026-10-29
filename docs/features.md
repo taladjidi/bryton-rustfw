@@ -58,7 +58,13 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   has no room for them): after a resume the laps, the last lap, the lap's power and NP, the top cadence and altitude,
   the descent, the lap's ascent and descent, and the uphill and downhill restart from zero. The trip time restarts
   from the moving time (the timer), so it is never less than the timer. Top altitude and the descent's high point also
-  restart when the altitude source switches from GNSS to the barometer (or back). **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
+  restart when the altitude source switches from GNSS to the barometer (or back). Heart rate and power against the rider's numbers: percent of the max heart rate and of LTHR (LTHR is in ME,
+  "--" until it is typed), the heart-rate zone (1 to 5, from the max) and the power zone (1 to 7, from the FTP) now, the
+  time this ride in the zone of now (heart rate and power: the moving seconds), percent of FTP now (3 s), average, lap,
+  10 s and 30 s, and the average left / right balance (over the readings that had one). Percents are whole numbers, at
+  most 999. **Zone times restart from zero after a resume** (not kept in the recovery record), as the laps do. POWER
+  SMOOTH (BIKE: the live reading, 3, 5 or 10 s; the live reading by default) sets the window of the big power value and
+  of its zone colour; it is kept in settings.bin after the alert limits (LTHR at byte 66, POWER SMOOTH at 68), and an older file reads the default. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.

@@ -8,6 +8,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **The heart rate and power fields, POWER SMOOTH, LTHR and the balance average (training/ride.rs ZoneTime, app/fields.rs,
+  app/settings_file.rs)**: sim only. Still to see: the zone numbers and times against the strap's zones on a real ride,
+  the average balance against the meter's own figure, and LTHR and POWER SMOOTH kept through a switch-off and a switch to stock.
+
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.
 - **The trip, lap and slope fields (training/ride.rs, app/fields.rs; the page with trip time, laps, last lap, lap power

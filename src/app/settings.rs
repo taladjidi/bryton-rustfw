@@ -293,7 +293,16 @@ pub struct Settings {
     /// POWER MATCH (BIKE): ERG targets corrected so the power meter reads them ([`crate::power_match`]). Kept in
     /// settings.bin only, after THEME; ON in a file that predates it.
     pub power_match: bool,
+    /// LTHR (ME): the lactate threshold heart rate, bpm; 0 until it is set (the LTHR fields show "--"). Kept in
+    /// settings.bin only, after the alert limits (byte 66); 0 in a file that predates it.
+    pub lthr: u16,
+    /// POWER SMOOTH (BIKE): an index into [`POWER_SMOOTH_S`], the big power value's window. Kept in settings.bin only,
+    /// after LTHR; 0 (the live reading) in a file that predates it.
+    pub power_smooth: usize,
 }
+
+/// The big power value's window, seconds, as POWER SMOOTH offers them: the live reading, then 3, 5 and 10 s.
+pub const POWER_SMOOTH_S: [u32; 4] = [1, 3, 5, 10];
 
 impl Settings {
     /// The theme's name as the menu shows it.
@@ -381,6 +390,8 @@ impl Settings {
             gps_power: GpsPower::Auto,
             theme: [0; 12],
             power_match: true,
+            lthr: 0,
+            power_smooth: 0,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -614,6 +625,12 @@ impl Settings {
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
             Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
+            Setting::Lthr if self.lthr == 0 => l.push_str("--"),
+            Setting::Lthr => l.push_u32(u32::from(self.lthr)),
+            Setting::PowerSmooth => {
+                l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
+                l.push_str(" S");
+            }
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
             Setting::Theme => l.push_str(self.theme_name()),
             Setting::GpsPower => l.push_str(match self.gps_power {
@@ -706,6 +723,7 @@ impl Settings {
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::PowerMatch => self.power_match = !self.power_match,
+            Setting::PowerSmooth => self.power_smooth = (self.power_smooth + 1) % POWER_SMOOTH_S.len(),
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme => {
@@ -754,6 +772,7 @@ impl Settings {
         match s {
             Setting::MaxHr => Some(&mut self.max_hr),
             Setting::Ftp => Some(&mut self.ftp),
+            Setting::Lthr => Some(&mut self.lthr),
             Setting::Weight => Some(&mut self.weight_kg),
             Setting::BikeWeight => Some(&mut self.bike_hg),
             Setting::WPrime => Some(&mut self.wprime_j),
