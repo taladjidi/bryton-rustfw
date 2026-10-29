@@ -25,6 +25,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The target gauge spans every zone, power from 40 to 165 % of the FTP (sim) | The same in a half box: the climb pacer's TOP field (sim) | An uneven layout: a big box over 2 x 2 (sim) |
 | ![Eight fields](img/page-eight.png) |  |  |
 | Eight fields, four rows of two (sim) |  |  |
+| ![Trip, laps and last lap](img/ride-trip-fields.png) |  |  |
+| Trip time, laps, last lap, lap power and lap NP on a ride page (sim) |  |  |
 
 ## Page editor
 
