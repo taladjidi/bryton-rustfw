@@ -41,6 +41,9 @@
 //!   read> <sectors written>`, then a line per section `<name> <calls> <cycles> <max cycles>`, then `end`; all in
 //!   decimal. `prof reset`: `ok`, and a new window starts ([`Effect::ProfReset`]).
 //! - `reset`: `ok`, then a system reset (bootloader, then the firmware on the eMMC).
+//! - `stackfault`: `ok`, then the firmware overflows its thread stack on purpose ([`Effect::StackFault`]) to prove
+//!   the stack guard: the expected end is a reset with the fault marker in RTC backup register 29. `err ride open`
+//!   while a ride runs or waits to be saved.
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>
 //!   <value>`: writes the word, `ok`. Numbers in decimal or `0x` hex; `addr` must be word aligned and in the
@@ -183,6 +186,8 @@ pub enum Effect {
     Drive,
     /// Start a new profiler window ([`crate::prof::Prof::reset`]).
     ProfReset,
+    /// Overflow the thread stack on purpose, to prove the stack guard (main.rs `stack_fault`).
+    StackFault,
 }
 
 /// Bytes of the image kept for the checks: up to the image size word at 0x98.
@@ -434,6 +439,12 @@ impl Session {
                 h.send(b"ok\n");
                 return Effect::Reset;
             }
+            // a fault resumes a ride from its checkpoint, but a test has no business risking one
+            Some(b"stackfault") if !app.ride_settled() => h.send(b"err ride open\n"),
+            Some(b"stackfault") => {
+                h.send(b"ok\n");
+                return Effect::StackFault;
+            }
             Some(_) => h.send(b"err unknown command\n"),
         }
         Effect::None
@@ -482,7 +493,7 @@ impl App {
     /// caller's (main.rs): false for them.
     pub fn serve(&mut self, b: &mut impl crate::Board, h: &mut impl Host, session: &Session, effect: Effect) -> bool {
         match effect {
-            Effect::None | Effect::Key(_) | Effect::Reset | Effect::Run(_) => return false,
+            Effect::None | Effect::Key(_) | Effect::Reset | Effect::Run(_) | Effect::StackFault => return false,
             Effect::ProfReset => {
                 self.prof().reset();
                 return false;

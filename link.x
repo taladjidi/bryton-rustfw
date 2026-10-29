@@ -1,6 +1,10 @@
 /* S510 memory as the bootloader leaves it: it copies the OS area from the eMMC to SDRAM 0xd0000000, sets MSP from
    word 0 and jumps to word 1 (BOARD.md 2). Code and constants run in place from SDRAM;
-   data and the stack live in DTCM (128 KB at 0x20000000, always on, not cached). The RAM-run trampoline (hw.rs)
+   data and the stacks live in DTCM (128 KB at 0x20000000, always on, not cached): .data, .bss, a 256 B guard no code
+   may touch (main.rs mpu_init: a no-access MPU region, so an overflow faults instead of overwriting .bss), the thread
+   stack (PSP, _guard_end up to _psp_top: everything but the fault handler runs there) and at the top the 1 KB handler
+   stack (MSP, up to _stack_top: hw.rs default_handler runs there, so a fault stacked on an overflowed PSP still
+   resets the unit instead of locking the core). The RAM-run trampoline (hw.rs)
    lives in ITCM, so it can overwrite the image it came from. SDRAM from 0xd0800000 is the staging area for
    images loaded over USB (hw.rs STAGE): nothing is linked there. MAP (16 MB in, past the 6 MB the bootloader
    copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
@@ -21,6 +25,8 @@ MEMORY
 
 ENTRY(reset)
 _stack_top = ORIGIN(DTCM) + LENGTH(DTCM);
+_msp_top = _stack_top;
+_psp_top = _stack_top - 1K;
 _smap = ORIGIN(MAP);
 _emap = ORIGIN(MAP) + LENGTH(MAP);
 /* the panel DMA's two buffers (hw.rs PanelDma): the top 4 KB of AXI SRAM, reached by DMA1; nothing is linked there */
@@ -60,6 +66,9 @@ SECTIONS
   ASSERT(_ecourses > _scourses, "the course memory is not in AXISRAM: its section name changed (main.rs make_courses)")
   .bss (NOLOAD) : ALIGN(4) { _sbss = .; *(.bss .bss.*) *(COMMON); . = ALIGN(4); _ebss = .; } > DTCM
   _image_size = LOADADDR(.data) + SIZEOF(.data) - ORIGIN(SDRAM);
-  ASSERT(_ebss + 16K <= _stack_top, "less than 16 KB left for the stack")
+  /* the stack guard: an ARMv7-M MPU region's base must be aligned to its size (ARMv7-M ARM B3.5.8, MPU_RBAR) */
+  _guard = ALIGN(_ebss, 256);
+  _guard_end = _guard + 256;
+  ASSERT(_guard_end + 16K <= _psp_top, "less than 16 KB left for the thread stack")
   /DISCARD/ : { *(.ARM.exidx .ARM.exidx.* .ARM.extab.*) }
 }

@@ -76,6 +76,21 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
 
 - The image runs in place from SDRAM 0xd0000000, code and constants included.
 - This firmware's image is 1 MB at most (`link.x`). SDRAM from 0xd0800000 is its staging area for RAM-run.
+- **The stacks (this firmware, link.x):** DTCM holds .data, .bss, then a 256 B stack guard, the thread stack (PSP)
+  and at the top a 1 KB handler stack (MSP, word 0 of the image). The facts it rests on (ARMv7-M Architecture
+  Reference Manual, DDI 0403E; the STM32H7's Cortex-M7 MPU has 16 regions, RM0399 / PM0253):
+  - CONTROL (B1.4.4): SPSEL (bit 1) = 1 puts thread mode on PSP; handler mode always uses MSP. Written by MSR in
+    privileged thread mode, followed by an ISB. hw.rs `reset` does it before any Rust code runs; the RAM-run
+    trampoline writes CONTROL 0 back before starting an image, as the bootloader would.
+  - MPU_RBAR / MPU_RASR (B3.5.8, B3.5.9): a region's base is aligned to its size, SIZE n means 2^(n+1) bytes (7:
+    256 B), AP 000 is no access for privileged and unprivileged code, XN (bit 28) execute-never. With PRIVDEFENA, a
+    higher-numbered region wins where regions overlap (B3.5.3). The guard is region DREGION - 2, under the SDRAM one.
+  - SHCSR.MEMFAULTENA (B3.2.13, bit 16) makes an MPU violation a MemManage fault instead of a HardFault. A fault
+    while stacking an exception frame (MMFSR.MSTKERR, B3.2.15) is taken all the same, on the handler's stack: MSP.
+  - A fault the core cannot take (one in HardFault, or stacking that faults on the stack the handler itself uses)
+    is lockup (B1.5.15): no watchdog runs (section 2), so the unit would freeze. That is why faults get their own
+    stack.
+  - **Not yet seen on the unit** (docs/status.md): Renode does not model the MPU.
 
 ## 4. Pins
 

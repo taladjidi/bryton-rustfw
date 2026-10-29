@@ -36,7 +36,9 @@ const FAULT_REG: u32 = 0x5800_4050 + 4 * 29;
 /// A fault or a panic: marked in the RTC backup domain, then a system reset (the firmware starts again, and a ride
 /// will resume from its checkpoint: AGENTS.md, the golden rule). Parked instead after 3 in a row without a minute of
 /// running between, so a fault at start-up does not loop for ever. Interrupts are masked, so this runs only for a
-/// fault (HardFault and the others escalate) or the panic handler; it uses no stack beyond rd / wr.
+/// fault (HardFault, MemManage and the others escalate) or the panic handler; it uses no stack beyond rd / wr. It
+/// never reads the faulted frame: as a handler it runs on MSP (the 1 KB handler stack, link.x) whatever happened to
+/// the thread stack (PSP), so an overflow into the stack guard resets too.
 // SAFETY: the vector table refers to this symbol by name; nothing else is called default_handler.
 #[unsafe(no_mangle)]
 extern "C" fn default_handler() -> ! {
@@ -68,15 +70,46 @@ unsafe extern "C" {
     static _siitcm: u32;
     static _sitcm: u32;
     static _eitcm: u32;
+    static _guard: u32;
 }
 
-/// Entry from the bootloader: MSP already set from word 0, interrupts possibly left enabled.
-// SAFETY: the vector table refers to this symbol by name; nothing else is called reset.
+/// The stack guard's base (link.x `_guard`: 256 B under the thread stack, 256-aligned), for main.rs's MPU region.
+pub fn stack_guard() -> u32 {
+    &raw const _guard as u32
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Entry from the bootloader (privileged thread mode, MSP = word 0 = _stack_top, interrupts possibly left enabled;
+// BOARD.md 2). Before any Rust code runs, it masks interrupts and moves thread mode onto the process stack: PSP =
+// _psp_top, CONTROL.SPSEL = 1 (ARMv7-M ARM B1.4.4 CONTROL, B5.2.3 MSR; an ISB after a CONTROL write). Handlers always
+// run on MSP, so the 1 KB above _psp_top (link.x) is default_handler's alone: when the thread stack overflows into
+// the guard (main.rs mpu_init), the fault's own stacking onto PSP fails too (MemManage MSTKERR, B3.2.15), yet the
+// handler still has a whole stack and resets. With one stack for both, the handler's pushes would fault again, and a
+// fault the core cannot take locks it up (B1.5.15), with no watchdog to reset it (BOARD.md 2).
+// Sound because nothing is on any stack yet: the bootloader's MSP frame is never returned to, and PSP's stack is DTCM
+// that link.x reserves for it (nothing is linked between _guard_end and _stack_top).
+// ---------------------------------------------------------------------------------------------------------------
+global_asm!(
+    r#"
+    .section .text.reset, "ax", %progbits
+    .thumb_func
+    .global reset
+reset:
+    cpsid i                 @ masked for good: nothing takes an interrupt, the critical sections below rely on it
+    ldr r0, =_psp_top
+    msr psp, r0
+    movs r0, #2             @ CONTROL: SPSEL 1 (thread mode on PSP), nPRIV 0 (privileged), FPCA 0
+    msr control, r0
+    isb
+    b reset_on_psp
+    .ltorg
+    "#
+);
+
+/// The reset entry's Rust half, on the thread stack (the `reset` trampoline above).
+// SAFETY: the reset trampoline refers to this symbol by name; nothing else is called reset_on_psp.
 #[unsafe(no_mangle)]
-extern "C" fn reset() -> ! {
-    // SAFETY: masking interrupts has no memory effect. They stay masked for good: nothing here takes one, and
-    // the critical-section implementation below relies on it.
-    unsafe { asm!("cpsid i") };
+extern "C" fn reset_on_psp() -> ! {
     wr(0xe000_ed88, rd(0xe000_ed88) | (0xf << 20)); // CPACR: FPU full access (hard-float target)
     barrier();
     wr(0xe000_ed08, 0xd000_0000); // VTOR: our table (faults land in default_handler)
@@ -230,6 +263,9 @@ ram_trampoline:             @ r0 = source, r1 = byte count (multiple of 4, not 0
     ldr r2, =0xe000ef50     @ ICIALLU: drop any instruction the cache holds from the old image
     str r1, [r2]
     dsb
+    isb
+    movs r3, #0             @ CONTROL 0: back on MSP, as the bootloader starts an image (our reset moves to PSP)
+    msr control, r3
     isb
     ldr r2, =0xd0000000
     ldr r3, [r2]
