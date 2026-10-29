@@ -122,8 +122,7 @@ fn live_readings_show_at_one_hertz() {
 /// An empty list says so in a row, not in a banner that goes after 4 s: WORKOUTS with nothing planned.
 #[test]
 fn empty_workouts_say_so_in_a_row() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -391,8 +390,7 @@ fn derived_power_and_climb_fields() {
 /// register 11.
 #[test]
 fn weight_and_wprime_from_the_menu() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::Weight));
     app.press(&mut sim, Press::Short(Key::Start));

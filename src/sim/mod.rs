@@ -23,6 +23,13 @@ use std::path::PathBuf;
 use std::vec;
 use std::vec::Vec;
 
+/// The app started on a simulator at 09:00:00 with nothing on the card.
+pub fn started() -> (Sim, App) {
+    let mut sim = Sim::new(9, 0, 0);
+    let app = App::start(&mut sim, None);
+    (sim, app)
+}
+
 type KeyScript = Box<dyn Fn(u64) -> u8>;
 type FingerScript = Box<dyn Fn(u64) -> Option<(u16, u16)>>;
 

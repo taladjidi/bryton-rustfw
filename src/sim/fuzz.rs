@@ -1213,8 +1213,7 @@ fn phone_link_events() {
         0x36, 0x38, 0x39, 0x3b,
     ];
     let (mut answers, mut notifs, mut fresh, mut stored, mut rejected, mut bonds) = (0usize, 0, 0, 0, 0, 0);
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     for seed in 1..=8u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
         for c in v.chunks_exact(48) {

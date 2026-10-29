@@ -319,8 +319,7 @@ fn workout_gauge_field() {
 fn gauge_shows_the_zones() {
     use crate::app::GaugeShown;
     use crate::storage::workout_file::Kind;
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.settings.ftp = 200;
     let shown = |band: (u16, u16), w: u16, bx: (u32, u32, u32, u32), pace: Option<u16>| {
         let mut value = crate::text::Line::new();

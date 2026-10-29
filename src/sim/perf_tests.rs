@@ -268,8 +268,7 @@ fn perf_budgets() {
 /// rows: the profiler's 161 ms longest input on the unit), a move 21 120, a turn 63 360 (138 720 as a whole show).
 #[test]
 fn menu_budgets() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 2000);
     let cost = |sim: &mut Sim, app: &mut App, p: Press| {
         let px = sim.pixels;
@@ -301,8 +300,7 @@ fn menu_budgets() {
 /// own box. Measured 2026-10-26: 109 457 px (134 745 when the card's box was cleared twice: about 25 ms on the unit).
 #[test]
 fn overview_show_budget() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 10_000); // the calendar read: the card as it stays
     app.press(&mut sim, Press::Long(Key::Page));
     let px = sim.pixels;
@@ -321,8 +319,7 @@ fn overview_show_budget() {
 /// 36 034 / 30 + 724 = 1925 px/s.
 #[test]
 fn idle_overview_searching() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 5000);
     let px = sim.pixels;
     run(&mut sim, &mut app, 5000);

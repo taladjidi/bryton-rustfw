@@ -11,8 +11,7 @@ use crate::ui::Field;
 /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
 #[test]
 fn menu_lists_the_devices_nearby() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
     assert_consistent(&sim, &app);
@@ -60,8 +59,7 @@ fn menu_lists_the_devices_nearby() {
 /// Back returns to where the menu was opened, row by row: a submenu to its row, the menu to the ride page.
 #[test]
 fn back_returns_where_it_came_from() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(1));
@@ -751,8 +749,7 @@ fn cog_opens_settings_while_recording() {
 /// one row at the top and empty slots under it (2026-10-29).
 #[test]
 fn last_screen_of_system_is_full() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page)); // the main menu
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::System));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -768,4 +765,27 @@ fn last_screen_of_system_is_full() {
     }
     let bottom = app.menu_row(Menu::System, first + ui::MENU_ROWS - 1).map(|r| r.0.as_str() == "AUTO OFF");
     assert_eq!(bottom, Some(true));
+}
+
+/// A live value changing repaints its own box through `update_menu_rows`, not the row, and the screen is what the
+/// whole menu draws (P4).
+#[test]
+fn a_live_menu_value_repaints_its_own_box() {
+    let (mut sim, mut app) = started();
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::BuiltIn));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 4000);
+    let Screen::Menu(menu, sel) = app.screen() else { panic!("{:?}", app.screen()) };
+    let (_, t) = app.baro.expect("the barometer read");
+    for p in [9_000, 1_013_250, 99_000] {
+        // 3 digits, then 6, then 5: widths across the value box
+        app.baro = Some((p, t));
+        let before = sim.pixels;
+        app.update_menu_rows(&mut sim, menu, sel);
+        let sent = sim.pixels - before;
+        std::println!("value change to {p}: {sent} px (a row is {})", 240 * 43);
+        assert!(sent > 0 && sent < 240 * 43 / 2, "{sent}");
+        assert_consistent(&sim, &app);
+    }
 }
