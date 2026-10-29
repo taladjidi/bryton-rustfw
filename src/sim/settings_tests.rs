@@ -8,6 +8,7 @@ use super::*;
 use crate::fat::tests::{Ram, read_all};
 use crate::menu::Setting;
 use crate::{PAGES_LOAD_MS, Settings, SettingsCopy};
+use std::vec::Vec;
 
 /// Settings unlike the defaults in every field the registers keep.
 fn some() -> Settings {
@@ -146,6 +147,63 @@ fn registers_newer_than_the_file_win() {
     assert!(app2.settings_store.dirty);
 }
 
+/// The test volume with `\Rustfw\` and a `pages.bin` in it (no settings file).
+fn with_rustfw() -> Vec<u8> {
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let t = crate::fat::write::dos_time((2026, 10, 20, 8, 0, 0));
+    let dir = fat.mkdir(&mut d, fat.root(), crate::recorder::DIR, t).unwrap();
+    let mut h = fat.create(&mut d, dir, crate::page::FILE, t).unwrap();
+    fat.write_sectors(&mut d, &mut h, 0, &[0x55; 1024]).unwrap();
+    fat.set_size(&mut d, &mut h, 1024, t).unwrap();
+    d.0
+}
+
+/// A read-only start with the registers lost (stock's settings imported into them), then a writable start: the
+/// file's settings, not the import (the read-only start put the registers right from the file).
+#[test]
+fn a_read_only_start_with_lost_registers_keeps_the_file() {
+    let (mut sim, mut app) = started(some(), false);
+    app.settings.ftp = 300;
+    app.save_misc(&mut sim);
+    settle(&mut sim, &mut app);
+    let want = kept(&app);
+    let image = sim.emmc.image.clone();
+    let mut ro = Sim::new(9, 5, 0);
+    (ro.emmc.image, ro.writable) = (image.clone(), false);
+    let mut app = App::start(&mut ro, None);
+    run(&mut ro, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    assert_eq!(kept(&app), want, "read-only: the file's");
+    assert!(ro.emmc.image == image, "the card unchanged");
+    let mut w = Sim::new(9, 10, 0);
+    (w.emmc.image, w.backup) = (image, ro.backup);
+    let mut app = App::start(&mut w, None);
+    run(&mut w, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    assert_eq!(kept(&app), want, "then writable: still the file's");
+    assert_eq!(file(&w).map(|c| c.settings), Some(want));
+}
+
+/// Register 18 without AUTO OFF's bits at the start (an earlier build), and the aiding written before the file is
+/// read: the bits stay as they were, so the next start still takes AUTO OFF from the file, not the default.
+#[test]
+fn aiding_written_before_the_read_keeps_auto_off_unknown() {
+    let (mut sim, mut app) = started(some(), false);
+    app.settings.auto_off = 3;
+    app.save_misc(&mut sim);
+    settle(&mut sim, &mut app);
+    sim.backup[crate::AID_BKP[1]] = 0;
+    let mut s2 = Sim::new(9, 5, 0);
+    (s2.emmc.image, s2.backup) = (sim.emmc.image.clone(), sim.backup);
+    let app2 = App::start(&mut s2, None);
+    app2.write_aid(&mut s2); // a fix, before the file is read
+    assert_eq!(s2.backup[crate::AID_BKP[1]] >> 22 & 7, 0, "no AUTO OFF written");
+    let mut s3 = Sim::new(9, 10, 0);
+    (s3.emmc.image, s3.backup) = (s2.emmc.image.clone(), s2.backup);
+    let mut app3 = App::start(&mut s3, None);
+    run(&mut s3, &mut app3, u64::from(PAGES_LOAD_MS) + 200);
+    assert_eq!(app3.settings.auto_off, 3, "the file's");
+}
+
 /// Register by register: register 18 rewritten by a build without AUTO OFF (its bits gone) keeps the file's AUTO OFF;
 /// register 16 changed alone gives only its fields (the weight), the others staying the file's; the file then has
 /// both and the registers agree with it.
@@ -198,9 +256,10 @@ fn damaged_copies() {
 /// ones (a copy over the older). The next start, with the registers as the change left them, has the new settings;
 /// with them lost, the file's old or new, never the defaults once a copy was whole; the volume stays clean for fsck.
 /// The sector being written at the cut is torn (half old, half new, the rest garbage) unless the card offers reliable
-/// writes. The migration is cut on a reliable card only: it creates `\Rustfw\` in the root directory, and a torn root
-/// sector garbles the entries beside the new one, stock's folders included (BOARD.md, "Reliable write": a plain write
-/// tears what is rewritten in place; the FAT layer cannot make that atomic).
+/// writes. On a plain card the migration is cut with `\Rustfw\` there already (pages.bin's entry beside the new
+/// one): only the root directory's write is left out, since a torn root sector garbles the entries beside it, stock's
+/// folders included, and the FAT layer cannot make a plain rewrite in place atomic. The unit's card has the enhanced
+/// reliable write (BOARD.md, "Reliable write", read 2026-10-29), so every write there is reliable.
 #[test]
 fn a_cut_at_every_sector_reads_old_or_new() {
     let change = |app: &mut App, sim: &mut Sim, k: u16| {
@@ -208,7 +267,7 @@ fn a_cut_at_every_sector_reads_old_or_new() {
         app.settings.smooth = k % 2 == 1;
         app.save_misc(sim);
     };
-    for (writes, reliable) in [(1, false), (2, false), (0, true), (1, true), (2, true)] {
+    for (writes, reliable) in [(0, false), (1, false), (2, false), (0, true), (1, true), (2, true)] {
         // `writes` changes written before the one cut (0: the cut is in the migration)
         // what a start with the registers lost reads from a card without the file (stock's settings, imported)
         let baseline = {
@@ -218,7 +277,8 @@ fn a_cut_at_every_sector_reads_old_or_new() {
         };
         let setup = || {
             let mut sim = Sim::new(9, 0, 0);
-            sim.emmc.image = crate::fat::tests::image();
+            // the migration on a plain card: `\Rustfw\` there already, with pages.bin's entry beside the new one
+            sim.emmc.image = if writes == 0 && !reliable { with_rustfw() } else { crate::fat::tests::image() };
             if reliable {
                 sim.emmc.rel_param = crate::emmc::EN_REL_WR;
             }

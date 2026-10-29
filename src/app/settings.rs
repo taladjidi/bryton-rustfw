@@ -860,10 +860,15 @@ impl App {
     }
 
     /// Writes the settings to their backup registers.
+    /// Writes the settings to their backup registers (before the file is read, only those a change touched:
+    /// `SettingsStore::writes`).
     pub(crate) fn write_settings_registers(&self, b: &mut impl Board) {
-        b.backup_write(WHEEL_BKP, self.settings.to_word());
-        b.backup_write(POWER_BKP, self.settings.power_word());
-        b.backup_write(ALERTS_BKP, self.settings.alerts_word());
+        let w = self.settings.register_words();
+        for (k, (r, word)) in [WHEEL_BKP, POWER_BKP, ALERTS_BKP].into_iter().zip(w).enumerate() {
+            if self.settings_store.writes(k, word) {
+                b.backup_write(r, word);
+            }
+        }
         self.write_aid(b);
     }
 
@@ -871,7 +876,11 @@ impl App {
     pub(crate) fn write_aid(&self, b: &mut impl Board) {
         let [w0, w1] = self.gps.aid.to_words();
         b.backup_write(AID_BKP[0], w0);
-        b.backup_write(AID_BKP[1], w1 | (self.settings.auto_off as u32 + 1) << 22);
+        let off = self.settings.auto_off as u32 + 1;
+        // before the file is read and AUTO OFF unchanged: the bits as they were (none from a build without it)
+        let st = &self.settings_store;
+        let off = if st.writes(3, off) { off } else { st.boot.get(3).copied().unwrap_or(0) };
+        b.backup_write(AID_BKP[1], w1 | off << 22);
     }
 
     /// The ride pages (the first [`App::page_count`]), then the overview's fields ([`OVERVIEW`]).

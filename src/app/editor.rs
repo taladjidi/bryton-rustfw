@@ -225,13 +225,14 @@ impl App {
 
     /// Both FAT copies compared equal: neither file's next write compares them again.
     pub(crate) fn fats_equal(&mut self) {
-        (self.store.sound, self.settings_store.sound) = (true, true);
+        (self.store.sound, self.settings_store.sound, self.fats_suspect) = (true, true, false);
     }
 
     /// A write failed (a FAT sector may differ between the copies): both files' next writes compare them first.
     pub(crate) fn fats_unsure(&mut self) {
         (self.store.sound, self.store.sync) = (false, 0);
         (self.settings_store.sound, self.settings_store.sync) = (false, 0);
+        self.fats_suspect = true; // and a file read whole later does not say they are equal
     }
 
     /// `\Rustfw\<name>`, a file of two 512-byte copies (pages.bin, settings.bin), read into `file`: Ok(1024) when it
@@ -312,7 +313,7 @@ impl App {
             return; // tried again: a write now would not know the newest copy's number
         }
         self.store.loaded = true;
-        self.store.sound = read == Ok(1024);
+        self.store.sound = read == Ok(1024) && !self.fats_suspect;
         let Some(s) = read.ok().filter(|&n| n == 1024).and_then(|_| Saved::newest(&file)) else {
             self.store.dirty |= self.store.newer; // no file: the registers' pages written as the first
             return;

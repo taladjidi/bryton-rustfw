@@ -245,6 +245,8 @@ pub struct App {
     store: PageStore,
     /// `\Rustfw\settings.bin` (app/settings_file.rs): read yet, to be written, its copies.
     settings_store: SettingsStore,
+    /// A write of pages.bin or settings.bin failed since the FAT copies were last compared (app/editor.rs).
+    fats_suspect: bool,
     /// The page editor's work, while it is open.
     edit: Option<Editing>,
     /// The strip's place shows the editor's hint (app/editor.rs), not the strip.
@@ -381,7 +383,7 @@ impl App {
             .with_auto_off_word(b.backup_read(AID_BKP[1]));
         let (pages, page_count) = pages_from_registers(b);
         let store = PageStore::at_boot(b);
-        let settings_store = SettingsStore::at_boot(b);
+        let settings_store = SettingsStore::at_boot(b, misc);
         App {
             keys: Keys::at_start(b.keys_down()),
             light: Light::new(),
@@ -434,6 +436,7 @@ impl App {
             more_on: None,
             store,
             settings_store,
+            fats_suspect: false,
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),

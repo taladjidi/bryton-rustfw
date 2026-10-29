@@ -723,14 +723,15 @@ the JEDEC eMMC standard. **Nothing of this section is seen on the unit yet**: th
   word is in and DATAEND; DCRCFAIL (the card's CRC status token), DTIMEOUT and TXUNDERR (bit 4) are errors (RM0399
   SDMMC; ST's HAL_MMC_WriteBlocks feeds the FIFO on TXFIFOHE and checks the same flags). No erase, no CMD6 other
   than the bus width. What is written and in which order: `src/storage/fat/write.rs` and `src/storage/recorder.rs`.
-- **Reliable write, this firmware (not yet seen on the unit; simulator only):** the EXT_CSD read at identification
+- **Reliable write, this firmware:** the EXT_CSD read at identification
   gives WR_REL_PARAM (byte 166) and REL_WR_SEC_C (byte 222), as Linux's MMC core reads them (include/linux/mmc/mmc.h,
   drivers/mmc/core/block.c, checked 2026-10-24). With EN_REL_WR (166 bit 2) every write is CMD23 SET_BLOCK_COUNT
   with bit 31 and the count, then CMD25, which ends by itself (no CMD12); with REL_WR_SEC_C only (the legacy mode),
   the same one sector at a time; with neither, plain writes as above. A cut during a reliable write leaves each
   sector old or new; during a plain one, JEDEC allows the sector being written to be garbage, and a cut tears what
   the recorder rewrites in place every minute (the ride's first and last sectors, its directory sector, a FAT
-  sector). The unit's two bytes: not read yet (`tools/dev.py emmc` prints them; docs/status.md).
+  sector). The unit's (2026-10-29, `tools/dev.py emmc`, read-only): WR_REL_PARAM 0x15 (EN_REL_WR set: the enhanced
+  reliable write, so every write of this firmware is reliable), REL_WR_SEC_C 1, SEC_COUNT 0x3a40000 (31.3 GB).
 
       CMD   [CMD13]..[R1 tran] [CMD23 1<<31 | n]..[R1] [CMD25 lba]..[R1]                     [CMD13]..[prg]..[tran]
       D0..3                                                       [start][512 B][CRC16][end] x n ..[busy]

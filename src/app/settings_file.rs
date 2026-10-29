@@ -199,6 +199,12 @@ pub(crate) struct SettingsStore {
     pub(crate) seq: u32,
     /// At the start, register 11 held no settings of this firmware's: the file wins.
     pub(crate) lost: bool,
+    /// The registers at the start ([`registers`]) and the words of the settings read from them
+    /// ([`Settings::register_words`]): until the file is read, a register is written only where a change made it
+    /// differ from the latter, else left as it was (its fields then come from the file, not from defaults the
+    /// registers' tags lacked).
+    pub(crate) boot: [u32; 4],
+    pub(crate) boot_words: [u32; 4],
     /// The file was read whole: written over in place (as `PageStore::sound`).
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
@@ -207,9 +213,16 @@ pub(crate) struct SettingsStore {
 
 impl SettingsStore {
     /// As at a start: the registers read.
-    pub(crate) fn at_boot(b: &mut impl Board) -> Self {
-        let lost = !matches!(b.backup_read(WHEEL_BKP) >> 24, 0xa5..=0xac);
-        SettingsStore { lost, ..Default::default() }
+    pub(crate) fn at_boot(b: &mut impl Board, read: Settings) -> Self {
+        let boot = registers(b);
+        let lost = !matches!(boot[0] >> 24, 0xa5..=0xac);
+        SettingsStore { lost, boot, boot_words: read.register_words(), ..Default::default() }
+    }
+
+    /// Register `k`'s word ([`Settings::register_words`]' order) is written: the file read, the registers lost at
+    /// the start (this firmware's to set again), or a change made it differ from the start's.
+    pub(crate) fn writes(&self, k: usize, word: u32) -> bool {
+        self.loaded || !matches!(self.boot[0] >> 24, 0xa5..=0xac) || self.boot_words.get(k) != Some(&word)
     }
 }
 
@@ -323,7 +336,7 @@ impl App {
             return;
         }
         st.loaded = true;
-        st.sound = read == Ok(1024);
+        st.sound = read == Ok(1024) && !self.fats_suspect;
         let Some(c) = read.ok().filter(|&n| n == 1024).and_then(|_| SettingsCopy::newest(&file)) else {
             st.dirty = self.card_writable; // the migration: the registers' settings as the first copy
             if self.card_writable && self.settings.register_words() != regs {
@@ -338,9 +351,10 @@ impl App {
         st.dirty = self.card_writable && (took.contains(&true) || merged.register_words() != c.words);
         let was = self.settings;
         self.settings = Settings { alt_m: was.alt_m, ..merged };
-        if self.card_writable && self.settings.register_words() != regs {
+        if (st.lost || self.card_writable) && self.settings.register_words() != regs {
             // put right from the result (lost, or a register some fields missed); a build that may not write the
-            // card leaves them as another build wrote them
+            // card leaves them as another build wrote them, but not stock's import over lost ones (the next
+            // writable start would take it over the file)
             self.write_settings_registers(b);
         }
         if self.settings != was {
