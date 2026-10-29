@@ -2229,6 +2229,7 @@ fn fec_pages_and_commands() {
                 grade_x100: (r() % 2 == 0).then(|| i16::from_le_bytes([r(), r()])),
                 riding: r() % 8 != 0,
                 paused: r() % 4 == 0,
+                match_q16: (r() % 2 == 0).then(|| i32::from(r()) * 400),
             };
             match r() % 4 {
                 0 => t.step_by(&drive, r() % 2 == 0, r() % 2 == 0),

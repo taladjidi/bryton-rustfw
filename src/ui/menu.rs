@@ -111,6 +111,8 @@ pub enum Setting {
     /// The GPS receiver's power mode: AUTO (the default: cyclic tracking while riding fast and straight), FULL
     /// (continuous tracking) or SAVER (cyclic tracking) ([`crate::GpsPower`]).
     GpsPower,
+    /// ERG targets corrected so the power meter reads them, on or off (`power_match`, [`crate::power_match`]).
+    PowerMatch,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -203,6 +205,7 @@ impl Setting {
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
+            Setting::PowerMatch => "POWER MATCH",
             Setting::Font => "FONT",
             Setting::Theme => "THEME",
             Setting::GpsPower => "GPS POWER",
@@ -606,8 +609,8 @@ pub const DISPLAY: [Row; 5] = [
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
-/// ride setting, not a diagnostic), the climbs ahead and the GPS receiver's power mode.
-pub const BIKE: [Row; 7] = [
+/// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
+pub const BIKE: [Row; 8] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -615,6 +618,7 @@ pub const BIKE: [Row; 7] = [
     Row::Set(Setting::BikeProfile),
     Row::Set(Setting::ClimbsAhead),
     Row::Set(Setting::GpsPower),
+    Row::Set(Setting::PowerMatch),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

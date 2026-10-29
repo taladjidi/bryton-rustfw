@@ -87,6 +87,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |  |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |
 
+## Power match
+
+| | |
+|:-:|:-:|
+| ![Power match](img/trainer-power-match.png) | |
+| ERG with a power meter reading 20 W under the trainer: "PM+10%" left of the source line (sim) | |
+
 ## Themes
 
 | | | |

@@ -249,6 +249,7 @@ fn scramble_reaches_the_gauge_trainer_graph_call_and_end_screens() {
         status_color: ui::YELLOW,
         bottom: ui::trainer::Bottom::Cancel,
         timer: "12:34",
+        pm: "PM+6%",
     };
     ui::trainer::draw(&mut Panel(&mut sim, (0, ui::H), look), &now);
     check(&sim, "trainer");

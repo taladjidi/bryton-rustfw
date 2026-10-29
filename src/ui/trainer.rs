@@ -38,6 +38,9 @@ pub enum Bottom {
 const TITLE_Y: u32 = PAGE_Y + 4;
 /// Left edge of the timer's box in the title line: past the title "TRAINER" (it ends at 162).
 const TIMER_X: u32 = 168;
+/// The power match field: its box left of the source line's centred text.
+const PM_X: u32 = 4;
+const PM_W: u32 = 74;
 const MODE_Y: u32 = TITLE_Y + 22;
 const SOURCE_Y: u32 = MODE_Y + 42;
 const TARGET_Y: u32 = SOURCE_Y + 22;
@@ -108,11 +111,13 @@ pub struct Now<'a> {
     pub bottom: Bottom,
     /// The ride's timer ("12:34", "1:05" from an hour) in the title line while a ride runs, else empty.
     pub timer: &'a str,
+    /// Power match's correction ("PM+6%") while it is on, else empty: left of the source line.
+    pub pm: &'a str,
 }
 
 /// What is on screen: one fingerprint per box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Shown([u32; 8]);
+pub struct Shown([u32; 9]);
 
 fn fnv(h: u32, s: &str) -> u32 {
     s.bytes().chain([0]).fold(h, |h, x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
@@ -168,6 +173,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
         fnv(u32::from(now.status_color) + 6, now.status),
         fnv(7, ["MODE", "BOTH", "RAMP", "CANCEL"][now.bottom as usize]),
         fnv(8, now.timer),
+        fnv(9, now.pm),
     ];
     let bold = Style { fg: ACCENT, ..VALUE };
     let grey = Style { fg: GREY, ..LABEL };
@@ -201,6 +207,10 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
             }
             5 => {
                 text::draw_in(c, &Style { fg: now.status_color, ..LABEL }, 8, STATUS_Y, w, Align::Centre, now.status);
+            }
+            8 => {
+                // left of the centred source ("WORKOUT" starts at 78): "PM-15%" at most
+                text::draw_in(c, &Style { fg: GREY, ..LABEL }, PM_X, SOURCE_Y, PM_W, Align::Left, now.pm);
             }
             7 => {
                 // right of the centred title: five characters ("59:59"), which is also "1:05" and "12:05"

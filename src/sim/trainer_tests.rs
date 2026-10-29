@@ -195,6 +195,7 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
 #[test]
 fn the_full_copy_records_the_trainer_for_erg() {
     let (mut sim, mut app) = unit();
+    app.settings.power_match = false; // the meter's 210 W is not the trainer's: the target is held as set
     sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
     app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
     run(&mut sim, &mut app, 4000);
@@ -1415,4 +1416,70 @@ fn the_boot_release_is_tried_once() {
     run(&mut sim, &mut app, 30_000);
     let releases = sim.nordic.got.iter().filter(|p| p.get(1) == Some(&0xc8) && p.get(4) == Some(&0x30)).count();
     assert_eq!(releases, 1);
+}
+
+static METER_W: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+
+/// A power meter's page 16 with the power the test set.
+fn meter_page(_: u64) -> [u8; 8] {
+    let w = METER_W.load(core::sync::atomic::Ordering::Relaxed).to_le_bytes();
+    [0x10, 1, 0xff, 85, 0, 0, w[0], w[1]]
+}
+
+/// ERG by hand at 200 W with a power meter that reads 20 W below the trainer, `seconds` long: the meter's power at the
+/// end, the trainer's target, and the unit.
+fn erg_with_a_low_meter(on: bool, seconds: u32) -> (Sim, App, u16) {
+    let (mut sim, mut app) = unit();
+    app.settings.power_match = on;
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: meter_page, network: 0, ack: &[] });
+    app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
+    run(&mut sim, &mut app, 4000);
+    app.open(Screen::Trainer);
+    for _ in 0..20 {
+        app.press(&mut sim, Press::Short(Key::Page)); // +5 W: 100 to 200
+        run(&mut sim, &mut app, 100);
+    }
+    run(&mut sim, &mut app, 500);
+    assert_eq!(app.trainer.target_w(&app.trainer_drive()), 200);
+    let mut meter = 0;
+    for _ in 0..seconds {
+        meter = sim.nordic.trainer.power.saturating_sub(20);
+        METER_W.store(meter, core::sync::atomic::Ordering::Relaxed);
+        run(&mut sim, &mut app, 1000);
+    }
+    (sim, app, meter)
+}
+
+/// Power match: the trainer makes what it is told, the meter reads 20 W less; within a minute the target sent has
+/// gone up until the meter reads the rider's 200 W, the screen says so, and the target shown stays the rider's.
+#[test]
+fn power_match_brings_the_meter_to_the_target() {
+    let (mut sim, mut app, meter) = erg_with_a_low_meter(true, 75);
+    assert!((194..=206).contains(&meter), "the meter reads {meter} W for a 200 W target (3 %)");
+    assert!(sim.nordic.trainer.target_w >= 215, "the trainer was asked for {} W", sim.nordic.trainer.target_w);
+    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "200W", "the rider's target is shown");
+    let pm = app.with_trainer_now(|n| n.pm.to_string());
+    assert!(pm.starts_with("PM+") && pm.ends_with('%'), "{pm}");
+    assert!(
+        crate::ui::LABEL.width("PM+15%") <= 74,
+        "the field fits left of the source line: {}",
+        crate::ui::LABEL.width("PM+15%")
+    );
+    app.show(&mut sim); // the whole screen, as when it opens
+    sim.save("trainer_pm");
+    // not for every second's change of the estimate: a page only when the target moves by 2 W
+    let pages = commands(&sim).len();
+    assert!(pages < 40, "{pages} control pages in 75 s");
+    // another meter: the offset is forgotten
+    app.set_sensor(&mut sim, Kind::Power, Sensor::Off);
+    assert_eq!(app.with_trainer_now(|n| n.pm.to_string()), "");
+}
+
+/// POWER MATCH off: the trainer is told the target as set, the meter reads 20 W under it, nothing is shown.
+#[test]
+fn power_match_off_sends_the_target_as_set() {
+    let (sim, app, meter) = erg_with_a_low_meter(false, 75);
+    assert_eq!(sim.nordic.trainer.target_w, 200);
+    assert_eq!(meter, 180);
+    assert_eq!(app.with_trainer_now(|n| n.pm.to_string()), "");
 }

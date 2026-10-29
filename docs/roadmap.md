@@ -292,6 +292,7 @@ Done (features.md, History): the ride scan and its cache, the 90-day power curve
   P1, P3). ZWO, ERG and MRC files are converted to FIT on the computer.
 - Smart trainer control (ANT+ FE-C, and over Bluetooth: FTMS, FE-C over BLE) for workouts indoors. Done (sim): ERG,
   SIM, release rules, spin-down calibration, the FTP ramp test.
+- ~~ERG power match: the target corrected so the power meter reads it (BIKE > POWER MATCH).~~ Done (sim).
 
 ## 8. Radios and the phone
 

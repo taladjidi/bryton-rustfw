@@ -256,6 +256,10 @@ pub(crate) struct TrainerLink {
     pub(crate) cmds: u8,
     /// See `cmds`.
     pub(crate) fails: u8,
+    /// Power match (training/power_match.rs) and the ms since its last second.
+    pub(crate) pm: power_match::PowerMatch,
+    /// See `pm`.
+    pub(crate) pm_ms: u32,
 }
 
 impl TrainerLink {
@@ -271,6 +275,8 @@ impl TrainerLink {
             quiet_s: 0,
             cmds: 0,
             fails: 0,
+            pm: power_match::PowerMatch::new(),
+            pm_ms: 0,
         }
     }
 }
