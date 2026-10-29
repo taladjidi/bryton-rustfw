@@ -545,7 +545,8 @@ impl App {
             self.draw_top(&mut Panel(b, self.area(), self.look()));
         }
         if let Screen::Menu(menu, sel) = self.screen {
-            self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
+            let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
+            self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, first, i));
         }
         if self.screen == Screen::Media {
             self.phone.shown = ui::media::shown(&self.media_now());

@@ -668,7 +668,8 @@ impl App {
             }
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Swipe(d @ (Dir::Up | Dir::Down)))) => {
                 // a screen of rows at a time: up shows the next, down the previous
-                let (first, rows) = (menu::first_shown(sel, ui::MENU_ROWS), self.rows(menu));
+                let rows = self.rows(menu);
+                let first = menu::first_shown(sel, ui::MENU_ROWS, rows);
                 let next = if d == Dir::Up { first + ui::MENU_ROWS } else { first.saturating_sub(ui::MENU_ROWS) };
                 if next >= rows || next == first {
                     return;
@@ -685,7 +686,8 @@ impl App {
                 // the bottom rows under the last slot (316 to 319) are the last slot's, not the next screen's
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y))
                     .map(|d| ((d / ui::MENU_ROW) as usize).min(ui::MENU_ROWS - 1));
-                let row = match slot.map(|k| menu::first_shown(sel, ui::MENU_ROWS) + k) {
+                let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
+                let row = match slot.map(|k| first + k) {
                     Some(row) if self.row(menu, row).is_some() => row,
                     _ => return self.update_menu_rows(b, menu, sel), // a row's "SURE?" goes
                 };

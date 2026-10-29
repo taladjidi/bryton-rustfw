@@ -283,12 +283,16 @@ fn menu_budgets() {
     app.open(Screen::Menu(Menu::Sensors, 0));
     app.show(&mut sim);
     assert!(app.rows(Menu::Sensors) > ui::MENU_ROWS, "a menu that turns");
+    let mut turns = 0;
     for k in 1..=ui::MENU_ROWS {
         let px = cost(&mut sim, &mut app, Press::Short(Key::Page));
-        let turn = k == ui::MENU_ROWS;
+        // the screen turns once on the way: to the last screen, which starts at `total - rows` (E4), sooner than row 6
+        let turn = px > 22_000;
+        turns += usize::from(turn);
         std::println!("{} to row {k}: {px} px", if turn { "turn" } else { "move" });
-        assert!(px <= if turn { 64_000 } else { 22_000 }, "row {k}: {px} px");
+        assert!(px <= 64_000, "row {k}: {px} px");
     }
+    assert_eq!(turns, 1, "one turn in a screen of moves");
     let back = cost(&mut sim, &mut app, Press::Short(Key::Lap));
     assert!(back <= 64_000, "turn back: {back} px");
 }
