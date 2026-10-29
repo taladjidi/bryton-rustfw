@@ -41,6 +41,7 @@ impl App {
         });
         if ev == ride::Event::Start {
             self.power.new_ride();
+            self.zone_s = ride::ZoneTime::default();
             self.rec.model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
             (self.profile_by_hand, self.profile) = (false, ride::Profile::Road);
             self.choose_profile(); // after the banner above: INDOOR RIDE replaces it
@@ -415,6 +416,7 @@ impl App {
                 // cover the part after the restart only (the file has every second's power: the history's and a
                 // computer's cover the whole ride)
                 self.power.new_ride();
+                self.zone_s = ride::ZoneTime::default(); // the zone times restart after a resume, as the laps do
                 self.rec.model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
                 let now = self.now_s();
                 self.alt.ride_start(now);
@@ -502,6 +504,7 @@ impl App {
             hr: self.live.get(Metric::Hr),
             cadence: self.live.get(Metric::Cadence),
             power: self.live.get(Metric::Power),
+            balance: self.live.get(Metric::Balance),
             alt_mm: alt.0,
             alt_ref: alt.1,
             alt_corr_mm: self.alt.corr(),
@@ -548,13 +551,17 @@ impl App {
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
         // each bar zones exactly the number its box shows: live power, the 3, 10 and 30 s averages, heart rate
         let p = &self.power;
-        let watts = [self.live.shown(Metric::Power), p.rolling(0), p.rolling(1), p.rolling(2)];
+        let watts = [self.power_now(), p.rolling(0), p.rolling(1), p.rolling(2)];
         let (pm, hm) = ((ftp / 50).max(1), (max_hr / 100).max(1)); // 2 % of FTP, 1 % of max HR
         for (hold, w) in self.zones.iter_mut().zip(watts) {
             hold.update(w, pm, |w| ride::power_zone(w, ftp));
         }
         if let Some(hold) = self.zones.get_mut(4) {
             hold.update(self.live.shown(Metric::Hr), hm, |v| ride::hr_zone(v, max_hr));
+        }
+        // the time in each zone: the moving seconds, in the zone the bars show (a Start or a resume clears it)
+        if self.ride.state() == ride::State::Running && self.ride.moving() {
+            self.zone_s.second(self.zone_now(4), self.zone_now(0));
         }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);
