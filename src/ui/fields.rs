@@ -208,12 +208,32 @@ pub enum Field {
     PctFtp30s,
     /// This ride's average left / right pedal balance, percent.
     BalanceAvg,
+    // the sun, the course's arrival and the batteries (app/fields.rs). Appended, as above.
+    /// Heading of motion: a compass point (8 points, N first) from the GNSS course; "--" under 5 km/h or no fix.
+    Heading,
+    /// Sunrise, local time: the fix's place and the RTC's date ("--" without a fix, a learnt zone, or in polar day or
+    /// night).
+    Sunrise,
+    /// Sunset, local time.
+    Sunset,
+    /// Time left to today's sunset, h:mm; "--" once the sun has set.
+    ToSunset,
+    /// Time to the course's end at this ride's average moving speed, h:mm; "--" off course or under 5 km/h average.
+    TimeToDest,
+    /// Clock time of arrival at the course's end, the same estimate.
+    Eta,
+    /// The unit's battery, percent (the status bar's).
+    UnitBatt,
+    /// The power meter's battery, the ANT+ status (page 82).
+    PowerBatt,
+    /// The heart-rate strap's battery, the ANT+ status (page 82).
+    HrBatt,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 91] = {
+    pub const ALL: [Field; 100] = {
         use Field::*;
         [
             Time,
@@ -307,6 +327,15 @@ impl Field {
             PctFtp10s,
             PctFtp30s,
             BalanceAvg,
+            Heading,
+            Sunrise,
+            Sunset,
+            ToSunset,
+            TimeToDest,
+            Eta,
+            UnitBatt,
+            PowerBatt,
+            HrBatt,
         ]
     };
 
@@ -409,6 +438,15 @@ impl Field {
             "10S % FTP",
             "30S % FTP",
             "AVG L/R",
+            "HEADING",
+            "SUNRISE",
+            "SUNSET",
+            "TO SUNSET",
+            "DEST TIME",
+            "ETA",
+            "UNIT BATT",
+            "PM BATT",
+            "HR BATT",
         ];
         LABELS[self as usize]
     }
@@ -430,7 +468,8 @@ impl Field {
             "ERG", "-10.0 %", // the widest target: a grade (a power is "2000 W")
             "888|+88", "88:88|88", "", "", // the workout and ERG again, the climb pacer, the climb profile
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
-            "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88",
+            "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
+            "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT",
         ];
         WIDEST[self as usize]
     }
@@ -486,7 +525,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
             "RIDE",
             &[
                 Time, Timer, TripTime, Laps, LastLap, Speed, Dist, AvgSpeed, MaxSpeed, MaxCadence, Cadence, AvgCadence,
-                LapTime, LapDist, Kcal, Temp, Map,
+                LapTime, LapDist, Kcal, Temp, Map, Heading, Sunrise, Sunset, ToSunset, TimeToDest, Eta, UnitBatt,
             ],
         ),
         (
@@ -516,9 +555,10 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
                 PowerZone,
                 PowerZoneTime,
                 BalanceAvg,
+                PowerBatt,
             ],
         ),
-        ("HEART", &[Hr, AvgHr, MaxHr, Dfa, Rmssd, PctMaxHr, PctLthr, HrZone, HrZoneTime]),
+        ("HEART", &[Hr, AvgHr, MaxHr, Dfa, Rmssd, PctMaxHr, PctLthr, HrZone, HrZoneTime, HrBatt]),
         ("CLIMB", &[Ascent, Vam, Grade, MaxAlt, Descent, LapAscent, LapDescent, UphillKm, DownhillKm]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),

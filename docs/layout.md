@@ -237,6 +237,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/nav/segment_match.rs`: the live segment matcher (docs/segments.md, "Detection", "Ghost"): `Matcher` (near, approach,
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
+- `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the
+  module): local minutes, None in polar day and night. Pure logic; `App::refresh_sun` works it out once a minute.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait; `App::serve` there answers the effects that need the app and the card (main.rs keeps the keys, the reset
   and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from

@@ -103,6 +103,32 @@ pub(crate) fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
     l.push_str(ui::DIGITS[(m / 10 % 10) as usize]);
 }
 
+/// Speed from which the course over ground is shown as a heading (mm/s): 5 km/h, below it the heading is noise.
+const HEADING_MIN_MM_S: u32 = 1_389;
+
+/// A heading (degrees x 1e-5) as one of 8 compass points, N first; each point covers 45 degrees centred on it, so
+/// 359.9 is N and 22.5 is NE.
+pub(crate) fn compass(h: i32) -> &'static str {
+    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    let sector = ((h.rem_euclid(36_000_000) + 2_250_000) / 4_500_000) % 8;
+    POINTS.get(sector as usize).copied().unwrap_or("N")
+}
+
+/// Seconds to the course's end at the average moving speed (km/h x 10), None under 5 km/h: a slow ride's average
+/// says little about the next hour.
+pub(crate) fn time_to_dest_s(left_m: u32, avg_x10: Option<u16>) -> Option<u32> {
+    let v = avg_x10.filter(|&v| v >= 50)?;
+    Some((u64::from(left_m) * 36 / u64::from(v)).min(u64::from(u32::MAX)) as u32)
+}
+
+/// Minutes of the day as "HH:MM" (the sun's times, the arrival).
+pub(crate) fn push_day_time<const N: usize>(l: &mut Line<N>, mins: u32) {
+    let (h, m) = (mins / 60 % 24, mins % 60);
+    for d in [h / 10, h % 10, 10, m / 10, m % 10] {
+        l.push_str(if d == 10 { ":" } else { ui::DIGITS[(d % 10) as usize] });
+    }
+}
+
 /// `v` as a percent of `of` (None for 0), at most 999: a 4-digit value would not fit its box.
 fn pct_of(v: u16, of: u16) -> Option<u32> {
     (of > 0).then(|| (u32::from(v) * 100 / u32::from(of)).min(999))
@@ -141,6 +167,30 @@ impl App {
     /// The zone the bar of the held zone `i` (0 power, 4 heart rate, see [`App::field_bar`]) shows now, None for none.
     pub(crate) fn zone_now(&self, i: usize) -> Option<u8> {
         self.zones.get(i).map(ride::ZoneHold::shown).filter(|&z| z > 0)
+    }
+
+    /// The sun's rise and set for the minute, worked out once a minute (not per pass): None without a fix, a learnt
+    /// zone (the RTC is local time: the offset comes from the phone or the fix) or in polar day or night.
+    pub(crate) fn refresh_sun(&mut self) {
+        let key = (self.date, self.strip.time);
+        if self.sun.is_some_and(|(k, _)| k == key) {
+            return;
+        }
+        let times = match (self.gps.pvt.filter(|p| p.good()), self.gps.aid.offset_15min) {
+            (Some(p), Some(o)) => crate::sun::rise_set(
+                p.lat,
+                p.lon,
+                days_from_civil(self.date.0, self.date.1, self.date.2),
+                i32::from(o) * 15,
+            ),
+            _ => None,
+        };
+        self.sun = Some((key, times));
+    }
+
+    /// The sun's (rise, set) in local minutes of the day, as [`App::refresh_sun`] kept them.
+    pub(crate) fn sun_times(&self) -> Option<(u32, u32)> {
+        self.sun.and_then(|(_, t)| t)
     }
 
     /// The text of ride field `f` now ("--" without a value).
@@ -241,6 +291,55 @@ impl App {
                         }
                         l.push_u32(u32::from(g & 0xff));
                     }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::Heading => {
+                match self.gps.pvt.filter(|p| p.good() && p.speed_mm_s >= HEADING_MIN_MM_S) {
+                    Some(p) => l.push_str(compass(p.heading)),
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::Sunrise | Field::Sunset | Field::ToSunset => {
+                let now = u32::from(self.strip.time.0) * 60 + u32::from(self.strip.time.1);
+                match (f, self.sun_times()) {
+                    (Field::Sunrise, Some((r, _))) => push_day_time(&mut l, r),
+                    (Field::Sunset, Some((_, s))) => push_day_time(&mut l, s),
+                    (Field::ToSunset, Some((_, s))) if s >= now => push_hm(&mut l, (s - now) * 60),
+                    _ => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::TimeToDest | Field::Eta => {
+                let left = self.on_course().map(|(c, at)| c.len_m().saturating_sub(at.along_m));
+                match (f, left.and_then(|m| time_to_dest_s(m, r.avg_speed_x10()))) {
+                    (Field::TimeToDest, Some(s)) => push_hm(&mut l, s),
+                    (Field::Eta, Some(s)) => {
+                        let now = u32::from(self.strip.time.0) * 60 + u32::from(self.strip.time.1);
+                        push_day_time(&mut l, (now * 60 + s) / 60);
+                    }
+                    _ => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::UnitBatt => {
+                match self.strip.battery {
+                    Some(p) => {
+                        l.push_u32(u32::from(p));
+                        l.push_str("%");
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::PowerBatt | Field::HrBatt => {
+                let kind = if f == Field::PowerBatt { sensors::Kind::Power } else { sensors::Kind::Hr };
+                match self.decoders.battery_status(kind) {
+                    Some(s) => l.push_str(
+                        ["?", "NEW", "GOOD", "OK", "LOW", "CRIT"].get(usize::from(s)).copied().unwrap_or("?"),
+                    ),
                     None => l.push_str("--"),
                 }
                 return l;
@@ -451,7 +550,26 @@ mod tests {
         );
         assert_eq!(Field::from_index(66), Field::TripTime);
         assert_eq!([Field::from_index(79), Field::from_index(90)], [Field::PctMaxHr, Field::BalanceAvg]);
-        assert_eq!(Field::ALL.len(), 91);
+        assert_eq!([Field::from_index(91), Field::from_index(99)], [Field::Heading, Field::HrBatt]);
+        assert_eq!(Field::ALL.len(), 100);
+    }
+
+    #[test]
+    fn heading_time_and_clock_of_the_sun() {
+        // the compass wraps at 359.9 degrees, the 45-degree sectors centred on their points
+        assert_eq!(
+            [compass(35_999_999), compass(0), compass(2_249_999), compass(2_250_000), compass(-1)],
+            ["N", "N", "N", "NE", "N"]
+        );
+        // no course speed: "--" (None); under 5 km/h average: None; else distance / speed
+        assert_eq!(
+            [time_to_dest_s(10_000, None), time_to_dest_s(10_000, Some(49)), time_to_dest_s(10_000, Some(200))],
+            [None, None, Some(1800)]
+        );
+        // the clock of arrival wraps past midnight
+        let mut l = Line::<8>::new();
+        push_day_time(&mut l, (23 * 60 + 50 + 30) % 1440);
+        assert_eq!(l.as_str(), "00:20");
     }
 
     #[test]
