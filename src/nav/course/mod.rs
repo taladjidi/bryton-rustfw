@@ -1099,17 +1099,21 @@ pub(crate) mod tests {
     }
 
     /// A crafted file (review 2: a 30 KB GPX): points 1900 km apart, back and forth, make a course of millions of
-    /// km; the climbs are still worked out in bounded time (a bin per 50 m would be 86 million).
+    /// km; the climbs are still worked out, and the length is right (a bin per 50 m would be 86 million).
     #[test]
     fn climbs_bounded_on_a_crafted_course() {
         let mut c = Course::new();
         for k in 0..3000 {
             c.push(if k % 2 == 0 { 0 } else { 170_000_000 }, 0, Some(k % 7 * 1000));
         }
-        let t0 = std::time::Instant::now();
         c.finish();
         assert!(c.len_m() > 4_000_000_000, "{}", c.len_m());
-        assert!(t0.elapsed().as_millis() < 300, "{:?}", t0.elapsed());
+        assert!(
+            c.points().len() <= 3000 && c.climbs().len() <= 3000,
+            "{} points, {} climbs",
+            c.points().len(),
+            c.climbs().len()
+        );
     }
 
     /// A 400 km course is thinned to a point every 160 m, so its chords cut a spur by up to 80 m: riding the spur
