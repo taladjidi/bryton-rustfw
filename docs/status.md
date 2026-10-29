@@ -8,6 +8,9 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
+  the red banner on the unit for a limit crossed on a ride.
+
 - **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: seen on the unit 2026-10-29 from a
   RAM run: `info` and `prof` as before (0.98 % awake idle on the overview), `dev.py stackfault` reset the unit and
   `peek 0x580040c4` read 0xfa000001. Still to see: a DIAG_STOP-free cold boot of an installed build with it (nothing

@@ -242,7 +242,7 @@ Others
 - [x] Aerobic and anaerobic thresholds from DFA a1 over recent rides (ours): sim; not yet on real rides
 - [ ] Heat and altitude acclimation (Garmin)
 - [ ] hrTSS when there is no power meter (ours, intervals.icu)
-- [ ] DFA a1 against the aerobic threshold during a ride (patch P9): field done, no alert
+- [x] DFA a1 against the aerobic threshold during a ride (patch P9): sim; banner under a set limit (default off), hold 5 s, hysteresis
 
 ## Climbing
 
@@ -262,8 +262,8 @@ Others
 - [x] Beeps at power on and off (stock): unit
 - [ ] Key click (stock)
 - [ ] Sound on or off for alerts (stock)
-- [~] Eat, drink, rest reminders by trip time, clock, distance, kcal, kJ, heart rate (stock, Garmin, Wahoo): sim; eat and drink by ride time only
-- [~] Heart rate, power, cadence, speed high / low alerts (stock, Garmin, Wahoo): sim; heart rate high only
+- [~] Eat, drink, rest reminders by trip time, clock, distance, kcal, kJ, heart rate (stock, Garmin, Wahoo): sim; ride time, distance, kcal, kJ; no clock or heart rate reminder
+- [x] Heart rate, power, cadence, speed high / low alerts (stock, Garmin, Wahoo): sim
 - [ ] Custom alerts with text (Wahoo, Karoo)
 - [~] Notices: GPS fix, sensor paired, battery low (stock, all): sim, on the overview
 - [x] Turn and off-course beeps (stock, all): sim

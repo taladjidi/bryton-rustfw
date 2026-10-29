@@ -87,6 +87,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |  |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |
 
+## Alerts
+
+| | |
+|:-:|:-:|
+| ![POWER HIGH](img/alert-power-high.png) | ![ALERTS menu](img/alerts-menu.png) |
+| A power high limit crossed for 5 s: the red banner and three beeps (sim) | SETTINGS > ALERTS, scrolled to its end: limits and reminders, each OFF until set (sim) |
+
 ## Power match
 
 | | |

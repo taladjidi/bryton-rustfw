@@ -19,6 +19,75 @@ pub const CADENCE_LOW_S: u32 = 5;
 /// At most one cadence warning this often.
 pub const CADENCE_EVERY_S: u32 = 60;
 
+/// Seconds past a limit (power, cadence, speed, heart rate low, DFA a1) before its alert.
+pub const LIMIT_HOLD_S: u32 = 5;
+/// At most one alert of a limit this often.
+pub const LIMIT_EVERY_S: u32 = 60;
+/// The limits in the settings (`Settings::limits`), 0 being off: power high, power low, cadence high, cadence low,
+/// speed high, speed low (km/h), heart rate low, then the reminders by distance (km), kcal and kJ, and the DFA a1
+/// alert (hundredths, under it).
+pub const LIMITS: usize = 11;
+
+/// What the limits and the reminders are checked against, one second of a moving ride.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Reading {
+    /// Watts.
+    pub power: Option<u16>,
+    /// rpm.
+    pub cadence: Option<u16>,
+    /// km/h x 10.
+    pub speed_x10: Option<u16>,
+    /// bpm.
+    pub hr: Option<u16>,
+    /// DFA a1 x 100 (None without the strap's beats).
+    pub dfa_x100: Option<u16>,
+    /// Ride distance, m.
+    pub dist_m: u32,
+    /// Energy, kcal.
+    pub kcal: u32,
+    /// Work, kJ.
+    pub kj: u32,
+}
+
+/// One limit's state: seconds past it, armed, seconds since it last said.
+#[derive(Clone, Copy, Debug)]
+struct Band {
+    held: u32,
+    armed: bool,
+    since: u32,
+}
+
+impl Default for Band {
+    fn default() -> Self {
+        Band::NEW
+    }
+}
+
+impl Band {
+    const NEW: Band = Band { held: 0, armed: true, since: LIMIT_EVERY_S };
+
+    /// One second: `v` against `limit` (same unit; 0 is off), over it when `high`, else under it. True when the alert
+    /// is due: [`LIMIT_HOLD_S`] seconds past, armed, and [`LIMIT_EVERY_S`] since the last. Back inside by 5 % of the
+    /// limit (at least 1) re-arms; no reading counts as inside without re-arming.
+    fn step(&mut self, v: Option<u32>, limit: u32, high: bool) -> bool {
+        self.since = self.since.saturating_add(1);
+        let margin = (limit / 20).max(1);
+        match v.filter(|_| limit > 0) {
+            Some(v) if (high && v > limit) || (!high && v < limit) => self.held = self.held.saturating_add(1),
+            Some(v) if (high && v + margin <= limit) || (!high && v >= limit + margin) => {
+                (self.held, self.armed) = (0, true)
+            }
+            None if limit == 0 => (self.held, self.armed) = (0, true),
+            _ => self.held = 0,
+        }
+        let due = self.armed && self.held >= LIMIT_HOLD_S && self.since >= LIMIT_EVERY_S;
+        if due {
+            (self.armed, self.since) = (false, 0);
+        }
+        due
+    }
+}
+
 /// What to say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alert {
@@ -30,12 +99,58 @@ pub enum Alert {
     HrHigh,
     /// Cadence under [`CADENCE_LOW_RPM`] in ERG.
     CadenceLow,
+    /// Power over its limit.
+    PowerHigh,
+    /// Power under its limit.
+    PowerLow,
+    /// Cadence over its limit.
+    CadHigh,
+    /// Cadence under its limit.
+    CadUnder,
+    /// Speed over its limit.
+    SpeedHigh,
+    /// Speed under its limit.
+    SpeedLow,
+    /// Heart rate under its limit.
+    HrLow,
+    /// DFA a1 under its limit (the aerobic threshold, patch P9).
+    DfaLow,
+    /// Another distance step ridden.
+    Dist,
+    /// Another kcal step burned.
+    Kcal,
+    /// Another kJ step done.
+    Kj,
 }
 
 impl Alert {
+    /// Every alert, in the order they are said (the heart rate first).
+    pub const ALL: [Alert; 15] = [
+        Alert::HrHigh,
+        Alert::HrLow,
+        Alert::PowerHigh,
+        Alert::PowerLow,
+        Alert::CadenceLow,
+        Alert::CadHigh,
+        Alert::CadUnder,
+        Alert::SpeedHigh,
+        Alert::SpeedLow,
+        Alert::DfaLow,
+        Alert::Eat,
+        Alert::Drink,
+        Alert::Dist,
+        Alert::Kcal,
+        Alert::Kj,
+    ];
+
+    /// Whether this one is an alarm (a limit passed, red) and not a reminder.
+    pub fn alarm(self) -> bool {
+        !matches!(self, Alert::Eat | Alert::Drink | Alert::Dist | Alert::Kcal | Alert::Kj)
+    }
+
     /// Whether `text` is one of the banners of an alert.
     pub fn is_text(text: &str) -> bool {
-        [Alert::Eat, Alert::Drink, Alert::HrHigh, Alert::CadenceLow].iter().any(|a| a.text() == text)
+        Alert::ALL.iter().any(|a| a.text() == text)
     }
 
     /// The banner's text.
@@ -45,6 +160,17 @@ impl Alert {
             Alert::Drink => "DRINK REMINDER",
             Alert::HrHigh => "HEART RATE HIGH",
             Alert::CadenceLow => "CADENCE LOW",
+            Alert::PowerHigh => "POWER HIGH",
+            Alert::PowerLow => "POWER LOW",
+            Alert::CadHigh => "CADENCE HIGH",
+            Alert::CadUnder => "CADENCE UNDER",
+            Alert::SpeedHigh => "SPEED HIGH",
+            Alert::SpeedLow => "SPEED LOW",
+            Alert::HrLow => "HEART RATE LOW",
+            Alert::DfaLow => "DFA A1 LOW",
+            Alert::Dist => "DISTANCE REMINDER",
+            Alert::Kcal => "KCAL REMINDER",
+            Alert::Kj => "KJ REMINDER",
         }
     }
 }
@@ -52,7 +178,7 @@ impl Alert {
 /// Alerts due and not said yet: one bit each, so two in the same second (or a catch-up of several) are not lost to
 /// the one the banner shows; said one at a time, the heart rate first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Queue(u8);
+pub struct Queue(u16);
 
 impl Queue {
     /// Adds `a` (nothing for `None`).
@@ -60,11 +186,9 @@ impl Queue {
         self.0 |= a.map_or(0, |a| 1 << a as u8);
     }
 
-    /// Takes the next to say: the heart rate, the cadence, eat, drink.
+    /// Takes the next to say ([`Alert::ALL`]'s order).
     pub fn pop(&mut self) -> Option<Alert> {
-        let a = [Alert::HrHigh, Alert::CadenceLow, Alert::Eat, Alert::Drink]
-            .into_iter()
-            .find(|&a| self.0 & 1 << a as u8 != 0)?;
+        let a = Alert::ALL.into_iter().find(|&a| self.0 & 1 << a as u8 != 0)?;
         self.0 &= !(1 << a as u8);
         Some(a)
     }
@@ -83,6 +207,11 @@ pub struct Alerts {
     /// Seconds in a row under [`CADENCE_LOW_RPM`] in ERG, and since the last warning.
     slow_s: u32,
     since_cadence_s: u32,
+    /// The limits' states: [`LIMITS`] 0 to 6, then the DFA a1's.
+    bands: [Band; 8],
+    /// The distance (km), kcal and kJ at the last call, and whether there was one.
+    prev: [u32; 3],
+    primed: bool,
 }
 
 impl Alerts {
@@ -96,7 +225,58 @@ impl Alerts {
             pending: 0,
             slow_s: 0,
             since_cadence_s: CADENCE_EVERY_S,
+            bands: [Band::NEW; 8],
+            prev: [0; 3],
+            primed: false,
         }
+    }
+
+    /// One second of a moving ride: the limits `set` ([`LIMITS`]) against `r` into `q`. A limit alerts after
+    /// [`LIMIT_HOLD_S`] seconds past it (not on one sample), re-arms once back inside by 5 %, and says at most every
+    /// [`LIMIT_EVERY_S`]; no sensor, no alert. A reminder by distance, kcal or kJ fires once each time the ride crosses
+    /// a multiple of its step (the first call, and a step set mid-ride, do not).
+    ///
+    /// ```
+    /// use bryton_rustfw::alerts::{Alert, Alerts, Queue, Reading};
+    /// let mut a = Alerts::new();
+    /// let mut set = [0; 11];
+    /// set[0] = 300; // power high
+    /// let mut q = Queue::default();
+    /// let r = Reading { power: Some(350), ..Reading::default() };
+    /// for _ in 0..4 { a.limits(&r, &set, &mut q); }
+    /// assert_eq!(q.pop(), None, "4 s is not enough");
+    /// a.limits(&r, &set, &mut q);
+    /// assert_eq!(q.pop(), Some(Alert::PowerHigh));
+    /// ```
+    pub fn limits(&mut self, r: &Reading, set: &[u16; LIMITS], q: &mut Queue) {
+        let v = |o: Option<u16>| o.map(u32::from);
+        let l = |i: usize, k: u32| set.get(i).map_or(0, |&x| u32::from(x) * k);
+        // (reading, limit, high, alert) for each band
+        let checks = [
+            (v(r.power), l(0, 1), true, Alert::PowerHigh),
+            (v(r.power), l(1, 1), false, Alert::PowerLow),
+            (v(r.cadence), l(2, 1), true, Alert::CadHigh),
+            (v(r.cadence), l(3, 1), false, Alert::CadUnder),
+            (v(r.speed_x10), l(4, 10), true, Alert::SpeedHigh),
+            (v(r.speed_x10), l(5, 10), false, Alert::SpeedLow),
+            (v(r.hr), l(6, 1), false, Alert::HrLow),
+            (v(r.dfa_x100), l(10, 1), false, Alert::DfaLow),
+        ];
+        for (band, (val, limit, high, alert)) in self.bands.iter_mut().zip(checks) {
+            if band.step(val, limit, high) {
+                q.push(Some(alert));
+            }
+        }
+        let now = [r.dist_m / 1000, r.kcal, r.kj];
+        for (k, alert) in [Alert::Dist, Alert::Kcal, Alert::Kj].into_iter().enumerate() {
+            let step = l(7 + k, 1);
+            let (Some(prev), Some(&n)) = (self.prev.get_mut(k), now.get(k)) else { continue };
+            if self.primed && step > 0 && n / step > *prev / step {
+                q.push(Some(alert));
+            }
+            *prev = n;
+        }
+        self.primed = true;
     }
 
     /// One second of a moving ride: the cadence under [`CADENCE_LOW_RPM`] for [`CADENCE_LOW_S`] seconds with `erg` on
@@ -248,5 +428,83 @@ mod tests {
         let fired: std::vec::Vec<_> =
             (1..=20).filter_map(|t| a.second(1190 + t, Some(180), 20, 20, 170).map(|x| (1190 + t, x))).collect();
         assert_eq!(fired, [(1200, Alert::HrHigh), (1201, Alert::Eat), (1202, Alert::Drink)]);
+    }
+
+    fn run(a: &mut Alerts, set: &[u16; LIMITS], r: Reading, secs: u32) -> std::vec::Vec<u32> {
+        let mut q = Queue::default();
+        (1..=secs)
+            .filter(|_| {
+                a.limits(&r, set, &mut q);
+                q.pop().is_some()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_limit_fires_after_the_hold_and_rearms_with_a_margin() {
+        let mut set = [0; LIMITS];
+        set[0] = 300;
+        let mut a = Alerts::new();
+        let hi = Reading { power: Some(320), ..Reading::default() };
+        assert_eq!(run(&mut a, &set, hi, 10), [LIMIT_HOLD_S], "once, after the hold");
+        assert!(run(&mut a, &set, hi, 100).is_empty(), "still over: not armed");
+        // just under the limit (inside the 15 W margin) does not re-arm
+        run(&mut a, &set, Reading { power: Some(290), ..hi }, 5);
+        assert!(run(&mut a, &set, hi, 100).is_empty());
+        // well under re-arms: the next time over fires after the hold
+        run(&mut a, &set, Reading { power: Some(200), ..hi }, 3);
+        assert_eq!(run(&mut a, &set, hi, 70), [LIMIT_HOLD_S]);
+        // 4 s over, back, 4 s over: never
+        let mut b = Alerts::new();
+        for _ in 0..3 {
+            assert!(run(&mut b, &set, hi, 4).is_empty());
+            assert!(run(&mut b, &set, Reading { power: Some(250), ..hi }, 1).is_empty());
+        }
+    }
+
+    #[test]
+    fn low_limits_need_a_sensor_and_off_is_off() {
+        let mut set = [0; LIMITS];
+        (set[1], set[3], set[5], set[6], set[10]) = (100, 60, 15, 100, 75);
+        let mut a = Alerts::new();
+        assert!(run(&mut a, &set, Reading::default(), 100).is_empty(), "no sensor");
+        let low = Reading {
+            power: Some(50),
+            cadence: Some(40),
+            speed_x10: Some(100),
+            hr: Some(80),
+            dfa_x100: Some(60),
+            ..Reading::default()
+        };
+        let mut q = Queue::default();
+        for _ in 0..LIMIT_HOLD_S {
+            a.limits(&low, &set, &mut q);
+        }
+        let got: std::vec::Vec<_> = core::iter::from_fn(|| q.pop()).collect();
+        assert_eq!(got, [Alert::HrLow, Alert::PowerLow, Alert::CadUnder, Alert::SpeedLow, Alert::DfaLow]);
+        let high = Reading { power: Some(2000), cadence: Some(250), speed_x10: Some(900), hr: Some(220), ..low };
+        assert!(run(&mut Alerts::new(), &[0; LIMITS], high, 100).is_empty(), "off");
+        assert!(run(&mut Alerts::new(), &[0; LIMITS], low, 100).is_empty(), "off");
+    }
+
+    #[test]
+    fn reminders_by_distance_kcal_and_kj_fire_once_at_each_multiple() {
+        let mut set = [0; LIMITS];
+        (set[7], set[8], set[9]) = (10, 100, 200);
+        let mut a = Alerts::new();
+        let mut q = Queue::default();
+        let mut fired = std::vec::Vec::new();
+        // the first call, at 25 km, does not fire; each value is held 3 s
+        for km in 25..=41u32 {
+            let r = Reading { dist_m: km * 1000 + 500, kcal: km * 10, kj: km * 20, ..Reading::default() };
+            for _ in 0..3 {
+                a.limits(&r, &set, &mut q);
+                while let Some(x) = q.pop() {
+                    fired.push((km, x));
+                }
+            }
+        }
+        let at = |km| [(km, Alert::Dist), (km, Alert::Kcal), (km, Alert::Kj)];
+        assert_eq!(fired, [at(30), at(40)].concat());
     }
 }

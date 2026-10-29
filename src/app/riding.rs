@@ -515,6 +515,21 @@ impl App {
             let s = &self.settings;
             let due = self.alerts.second(self.ride.timer_s(), input.hr, s.eat_min, s.drink_min, s.hr_alert);
             self.alert.push(due);
+            let r = alerts::Reading {
+                power: input.power,
+                cadence: input.cadence,
+                speed_x10: input.speed_x10,
+                hr: input.hr,
+                dfa_x100: self
+                    .hrv
+                    .alpha1()
+                    .filter(|_| input.hr.is_some())
+                    .map(|a| (a * 100.0 + 0.5).clamp(0.0, 999.0) as u16),
+                dist_m: self.ride.dist_m(),
+                kcal: self.power.kcal(),
+                kj: self.power.kj(),
+            };
+            self.alerts.limits(&r, &self.settings.limits, &mut self.alert);
             // ERG: the trainer holds the watts, the resistance climbs as the rider slows
             let slow = self.alerts.cadence(input.cadence, self.erg_on());
             self.alert.push(slow);
