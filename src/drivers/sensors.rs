@@ -713,6 +713,10 @@ mod tests {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
         dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, 72], 2105, &mut live);
         assert_eq!(live.get(Metric::Hr), Some(72));
+        // a strap's 0 bpm (no contact) is no reading: the zones and the percents read none
+        let mut none = Live::default();
+        dec.decode(Kind::Hr, [4, 0, 0, 0, 0, 0, 0, 0], 2106, &mut none);
+        assert_eq!(none.get(Metric::Hr), None, "0 bpm is no heart rate");
         dec.decode(Kind::SpeedCadence, [0, 0, 0, 0, 0, 0, 0, 0], 2105, &mut live);
         // 1 crank turn and 3 wheel turns in 1 s, 2105 mm wheel: 60 rpm, 22.7 km/h
         dec.decode(Kind::SpeedCadence, [0, 4, 1, 0, 0, 4, 3, 0], 2105, &mut live);

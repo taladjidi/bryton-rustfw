@@ -82,8 +82,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~ride fields: trip time (with stops), lap count, last lap time, lap power, last lap power, lap NP, max cadence,
   max altitude, descent, lap ascent and descent, uphill and downhill distance~~ done, sim (features.md; they restart
   from zero after a resume);
-- heart rate and power: % of max HR and of LTHR, the HR and power zone numbers, time in each zone, % of FTP (now,
-  average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5);
+- ~~heart rate and power: % of max HR and of LTHR, the HR and power zone numbers, time in each zone, % of FTP (now,
+  average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5)~~ done, sim (features.md; the zone times and the average balance restart from zero after a resume);
 - heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
   the destination and the arrival time on a course, the unit's and each sensor's battery as fields;
 - trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
@@ -211,7 +211,7 @@ the live DFA a1 and RMSSD fields, the HRV messages in the full copy, HRVT1 and H
 - Alerts on the buzzer and a banner: HR and power limits, eat and drink reminders by time, distance or kJ (stock
   has six kinds).
 - Auto lap; ride history and totals for the overview.
-- Power smoothing on the big power value, kept across restarts (patch P5).
+- ~~Power smoothing on the big power value, kept across restarts (patch P5).~~ Done, sim (POWER SMOOTH in BIKE).
 - **Open: the DFA a1 artifact filter.** The live filter drops a beat more than 5 % from the previous kept one (hrv.rs). Compare it
   with Domestique's method (median of the neighbours, a 20 % rule, an R^2 >= 0.95 gate on the window) on a ride
   with raw beats recorded: pending a real ride with the strap (docs/status.md).

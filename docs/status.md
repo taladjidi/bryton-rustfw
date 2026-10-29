@@ -11,6 +11,9 @@ A feature not listed here was seen on the unit.
 - **Live segments, detection (app/segments.rs, step S3; nothing drawn, no effort written)**: sim only. Still to see: the index built
   from `\Rustfw\Segments\` on the card 5 s after the start (no pass slower), the load at a start, the events (`dev.py` reads
   them), no lost ride on a segment's start or finish; AXI SRAM has 1.6 KB left.
+- **The heart rate and power fields, POWER SMOOTH, LTHR and the balance average (training/ride.rs ZoneTime, app/fields.rs,
+  app/settings_file.rs)**: sim only. Still to see: the zone numbers and times against the strap's zones on a real ride,
+  the average balance against the meter's own figure, and LTHR and POWER SMOOTH kept through a switch-off and a switch to stock.
 
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.

@@ -149,6 +149,24 @@ impl Power {
         (n > 0).then(|| (sum / n) as u16)
     }
 
+    /// The average of the last `secs` seconds with power (of the seconds there are, while fewer), W: the big power
+    /// value's smoothing. The 1 s value is the live reading, not this (app/fields.rs).
+    ///
+    /// ```
+    /// use bryton_rustfw::{power::Power, ride::Ride};
+    /// let mut p = Power::default();
+    /// for w in [100, 200, 300, 400, 500] {
+    ///     p.second(Some(w), &Ride::new(), 200, 20_000);
+    /// }
+    /// assert_eq!([3, 5, 10].map(|s| p.average(s)), [Some(400), Some(300), Some(300)]);
+    /// ```
+    pub fn average(&self, secs: usize) -> Option<u16> {
+        let n = self.n.min(secs).min(RING);
+        let sum: u32 =
+            (1..=n).map(|back| u32::from(self.ring.get((self.i + RING - back) % RING).copied().unwrap_or(0))).sum();
+        (n > 0).then(|| (sum / n as u32) as u16)
+    }
+
     /// The ride's max power (None before a second with power).
     pub fn max(&self) -> Option<u16> {
         (self.secs > 0).then_some(self.max)
