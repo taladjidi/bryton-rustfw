@@ -727,7 +727,7 @@ pub(crate) mod tests {
         assert_eq!(s.parse(f), Ok(()));
         assert_eq!((s.npoints, s.header.ntargets, s.header.distance_m, s.header.id), (82, 4, 2000, 4_000_000_001));
         assert_eq!(s.kept, [Some(Effort::Pr), Some(Effort::Kom), None, Some(Effort::Recent)]);
-        assert_eq!(s.times.get(81).copied(), Some([380, 330, 0, 415]));
+        assert_eq!(s.times.get(81).copied(), Some([370, 330, 0, 415]));
         assert_eq!(s.dist_m.get(81).copied(), Some(2000));
     }
 

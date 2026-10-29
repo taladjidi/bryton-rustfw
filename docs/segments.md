@@ -129,8 +129,9 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
 
 - `segments.py fetch [--since YYYY-MM-DD]`: the activities with `has_segments`, for each its `/segments` list
   (`segment_id`, `start_index`, `end_index`, `name`) and its streams (time, latlng, distance, altitude), one JSON file
-  per activity in the cache. Resumable (a cached activity is not fetched again; one without GPS is cached empty), polite
-  (0.3 s between calls), stops on HTTP 429 and says so.
+  per activity in the cache. Resumable (a cached activity is not fetched again unless `--refresh`; one without GPS is cached empty; an activity
+  under 2 days old with no segment yet is not cached), polite (0.3 s between calls), stops on HTTP 429 or a network
+  error and says so. API: https://intervals.icu/api/v1/docs.
 - `segments.py build [--min-km 0.5] [--min-gain-m 10] [--min-rides 2] [--max 128] [--kom ID=M:SS ...] [--out DIR]`:
   - Efforts are grouped by segment id. A segment is kept when it has at least `min-rides` efforts left after the sanity
     drop, its length is at least `min-km` and its gain at least `min-gain-m`; longest first, at most `max`.
@@ -138,7 +139,9 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
     indices, thinned to at most 400 points spaced evenly along the distance (about 25 m; first and last kept). The
     gain is the ascent of its altitude with a 2 m hysteresis.
   - Sanity drop: an effort whose length differs from the geometry's by more than 10 %, or whose first or last point is
-    over 50 m from the geometry's, or with a gap in its GPS or time stream.
+    over 50 m from the geometry's, or with a gap in its GPS or time stream, a time or distance that falls, or a
+    pause (over 60 s with under 1 m moved). The same activity, segment and start index counts once, and
+    `min-rides` counts distinct activities.
   - Targets: PR (fastest effort), KOM (only with `--kom`, at constant pace; the owner reads the time on Strava),
     RECENT (latest), BEST5 (fastest of the last 5); the unit keeps the first three it knows plus the QOM (`PREFER` in
     segment.rs) and reads past BEST5. Each effort's time at a point: its time at the same distance from its own start,
@@ -147,7 +150,11 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
     bits is skipped and counted (the header's id is a u32).
 - `segments.py write --volume PATH`: the built files to `PATH/Rustfw/Segments/`, each written beside then renamed, read
   back and compared (the USB link can drop); it deletes only the `.seg` files an earlier write made (listed in the
-  cache's `written.json`) that are no longer wanted, never another file. An eMMC write: only with the owner present.
+  cache's `written.json`) that are no longer wanted, never another file: the manifest (`state/written.json` in the cache, one list per destination) is written before
+  anything is, the temporary file is read back (bypassing the page cache where the OS allows: macOS `F_NOCACHE`)
+  before the rename, and only names `<digits>.seg` are ever deleted. It refuses a `--volume` that is not an existing
+  directory holding `Rustfw/` (`--init` creates it) and an empty build (`--prune` allows it). An eMMC write: only
+  with the owner present.
 - `segments.py selftest` (check.sh): synthetic efforts (straight lines at 0 N 10 E, invented ids): grouping, the sanity
   drop, thresholds, decimation, rising times, the layout read by an independent reader, write and verify into a temp
   dir, and the committed fixture equal to a fresh one.
