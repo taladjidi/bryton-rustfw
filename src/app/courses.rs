@@ -228,7 +228,8 @@ impl App {
         match e.dist_m {
             _ if !e.measured => value.push_str("..."),
             Some(m) => {
-                // the distance with its unit always, at the right; the name is cut to the room that is left
+                // the distance with its unit stays whole, at the right (the owner's choice); the name is cut to the room
+                // left (menu_label_w), so a long course name loses its end, never its length
                 ui::card::push_km(value, m.saturating_add(50)); // to the nearest 100 m
                 value.push_str(" KM");
             }

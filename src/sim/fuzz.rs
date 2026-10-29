@@ -1321,7 +1321,8 @@ fn menu_touch_and_keys() {
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
     let (mut locks, mut locked_touches) = (0, 0);
-    let mut reach = [0usize; 5]; // Quick, PowerCal, RampResult, About, Notif
+    let mut reach = [0usize; 5]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif
+    let mut arms = [0usize; 5]; // and an arm taken there: left, asked, left, left, scrolled
     for seed in 1..=12u32 {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
@@ -1346,17 +1347,28 @@ fn menu_touch_and_keys() {
                 // opens it (the panel: a swipe down; CALIBRATE POWER; ABOUT; a notice tapped), with the state it shows
                 match b % 5 {
                     0 => app.open_quick(),
-                    1 => app.open_powercal(),
+                    1 => {
+                        // a power meter paired and heard (as powercal_tests' unit): CALIBRATE POWER asks
+                        app.radio.sensors[crate::sensors::Kind::Power as usize] =
+                            Sensor::Paired(SensorId { device: 7, trans: 5 });
+                        app.radio.heard_ms[crate::sensors::Kind::Power as usize] = 0;
+                        app.open_powercal();
+                    }
                     2 => {
                         app.ramp.result = Some(crate::ramp::Outcome { best_w: 220, ftp: 165, secs: 900, aet: None });
                         app.open(Screen::RampResult);
                     }
                     3 => app.open(Screen::About),
                     _ => {
-                        app.phone
-                            .inbox
-                            .add(&crate::phone::Attributes { uid: u32::from(b), ..Default::default() }, (9, 41));
-                        app.open(Screen::Notif(0, 0));
+                        // three notices of 13 wrapped lines (ui::NOTIF_LINES is 12): one scrolls one line; the one opened is k = 0..3
+                        const LONG: &str = "cccccccccc cccccccccc cccccccccc cccccccccc cccccccccc cccccccccc cccccccccc cccccccccc cccccccccc cccccccccc dddddddddd";
+                        for n in 0..3u8 {
+                            let mut a = crate::phone::Attributes { uid: u32::from(n) + 1, ..Default::default() };
+                            a.title.push_str("aaaaaaaaaa bbbbbbbbbb"); // two lines: a notice longer than the page scrolls
+                            a.message.push_str(LONG);
+                            app.phone.inbox.add(&a, (9, 41 + n));
+                        }
+                        app.open(Screen::Notif(usize::from(b / 5) % 3, 0));
                     }
                 }
                 app.show(&mut sim);
@@ -1383,6 +1395,31 @@ fn menu_touch_and_keys() {
             let recording = app.ride.state() == crate::ride::State::Running;
             let was_locked = app.strip.locked;
             app.input(&mut sim, i);
+            // the screen the input found, and an arm of its own taken: left (Quick, RampResult, About), the meter
+            // asked (PowerCal), a scroll (Notif)
+            match before {
+                Screen::Quick => {
+                    reach[0] += 1;
+                    arms[0] += usize::from(app.screen() != Screen::Quick);
+                }
+                Screen::PowerCal => {
+                    reach[1] += 1;
+                    arms[1] += usize::from(app.powercal.asking());
+                }
+                Screen::RampResult => {
+                    reach[2] += 1;
+                    arms[2] += usize::from(app.screen() != Screen::RampResult);
+                }
+                Screen::About => {
+                    reach[3] += 1;
+                    arms[3] += usize::from(app.screen() != Screen::About);
+                }
+                Screen::Notif(k, t) => {
+                    reach[4] += 1;
+                    arms[4] += usize::from(matches!(app.screen(), Screen::Notif(k2, t2) if k2 == k && t2 != t));
+                }
+                _ => {}
+            }
             locks += u32::from(i == Input::TouchLock);
             let same = app.screen() == before && app.pages == pages && app.graph_whole == whole;
             if let Input::Touch(g) = i {
@@ -1427,14 +1464,6 @@ fn menu_touch_and_keys() {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
             }
-            match app.screen() {
-                Screen::Quick => reach[0] += 1,
-                Screen::PowerCal => reach[1] += 1,
-                Screen::RampResult => reach[2] += 1,
-                Screen::About => reach[3] += 1,
-                Screen::Notif(..) => reach[4] += 1,
-                _ => {}
-            }
             // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
             // (a banner said by this input is drawn by the next pass: skipped until it is)
             let waiting = app.notes.ms.is_some() && !app.notes.drawn;
@@ -1445,14 +1474,23 @@ fn menu_touch_and_keys() {
     }
     std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
     std::println!(
-        "screens reached (steps): quick {}, power cal {}, ramp result {}, about {}, notif {}",
+        "screens reached (inputs): quick {}, power cal {}, ramp result {}, about {}, notif {}",
         reach[0],
         reach[1],
         reach[2],
         reach[3],
         reach[4]
     );
+    std::println!(
+        "arms taken: quick left {}, asked {}, ramp left {}, about left {}, notif scrolled {}",
+        arms[0],
+        arms[1],
+        arms[2],
+        arms[3],
+        arms[4]
+    );
     assert!(reach.iter().all(|&n| n > 0), "every screen reached: {reach:?}");
+    assert!(arms.iter().all(|&n| n > 0), "every arm taken: {arms:?}");
     std::println!("touch lock: {locks} toggles, {locked_touches} touches while locked");
     assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");

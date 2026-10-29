@@ -98,7 +98,16 @@ fn course_ride() {
     for i in 0..7 {
         let Some((_, value, _)) = app.menu_row(Menu::Courses, i) else { continue }; // a row past the files
         assert!(value.as_str().ends_with(" KM") || matches!(value.as_str(), "..." | "--"), "{}", value.as_str());
+        let Some((name, _, _)) = app.menu_row(Menu::Courses, i) else { continue };
+        assert!(
+            ui::LABEL.width(value.as_str()) + ui::menu_label_w(name.as_str(), value.as_str()) <= ui::NEARBY.2,
+            "{}",
+            name.as_str()
+        );
     }
+    // the longest name the card can hold (16 characters) with the longest distance: the name is cut, the value whole
+    let (name, value) = ("ABCDEFGHIJKLMNOP", "999.9 KM");
+    assert!(ui::LABEL.width(value) + ui::menu_label_w(name, value) <= ui::NEARBY.2, "{name}");
     assert_consistent(&sim, &app);
     sim.save("courses_menu");
 

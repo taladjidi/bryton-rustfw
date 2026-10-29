@@ -545,7 +545,7 @@ pub fn draw_title(c: &mut impl Canvas, title: &str) {
 }
 
 /// A menu row's label box: its own length and half a character's gap, but never over the value, which is whole
-/// (a long course name is cut before its length; every row of the tree fits whole, a test checks).
+/// (every row fits whole except a course's: its name is cut and its distance stays whole, see `course_row`).
 pub(crate) fn menu_label_w(label: &str, value: &str) -> u32 {
     let own = (label.len() as u32 * 2 + 1) * CELL / 2 * LABEL.scale;
     own.min(NEARBY.2.saturating_sub(LABEL.width(value)))

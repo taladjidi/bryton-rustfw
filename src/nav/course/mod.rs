@@ -1108,6 +1108,12 @@ pub(crate) mod tests {
         }
         c.finish();
         assert!(c.len_m() > 4_000_000_000, "{}", c.len_m());
+        assert!(
+            c.points().len() <= 3000 && c.climbs().len() <= 3000,
+            "{} points, {} climbs",
+            c.points().len(),
+            c.climbs().len()
+        );
     }
 
     /// A 400 km course is thinned to a point every 160 m, so its chords cut a spur by up to 80 m: riding the spur
