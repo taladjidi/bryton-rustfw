@@ -813,6 +813,49 @@ fn auto_off_waits_for_the_recorder() {
     assert_eq!(sim.backup[RIDE_BKP], 0);
 }
 
+/// Lap (19) and session (18) data messages of a ride file as (global, [(field number, value)]), little endian.
+fn msg_fields(file: &[u8]) -> Vec<(u16, Vec<(u8, u32)>)> {
+    let (mut i, mut out) = (usize::from(file[0]), Vec::new());
+    #[allow(clippy::type_complexity)]
+    let mut defs: [(u16, Vec<(u8, usize)>, usize); 16] = Default::default();
+    while i + 2 < file.len() {
+        let h = file[i];
+        let local = usize::from(h & 15);
+        if h & 0x40 != 0 {
+            let global = u16::from_le_bytes([file[i + 3], file[i + 4]]);
+            let n = usize::from(file[i + 5]);
+            let f: Vec<(u8, usize)> =
+                (0..n).map(|k| (file[i + 6 + 3 * k], usize::from(file[i + 6 + 3 * k + 1]))).collect();
+            let mut size: usize = f.iter().map(|x| x.1).sum();
+            let mut next = i + 6 + 3 * n;
+            if h & 0x20 != 0 {
+                let d = usize::from(file[next]);
+                size += (0..d).map(|k| usize::from(file[next + 1 + 3 * k + 1])).sum::<usize>();
+                next += 1 + 3 * d;
+            }
+            defs[local] = (global, f, size);
+            i = next;
+        } else {
+            let (global, f, size) = &defs[local];
+            if matches!(global, 18 | 19) {
+                let mut at = i + 1;
+                let v = f
+                    .iter()
+                    .map(|&(num, len)| {
+                        let mut b = [0u8; 4];
+                        b[..len.min(4)].copy_from_slice(&file[at..at + len.min(4)]);
+                        at += len;
+                        (num, u32::from_le_bytes(b))
+                    })
+                    .collect();
+                out.push((*global, v));
+            }
+            i += 1 + size;
+        }
+    }
+    out
+}
+
 /// AUTO LAP BY DISTANCE 5 km on a ride of 11 km at 28.8 km/h: laps fire at 5 and 10 km exactly as the Lap key does
 /// (the same recorder event), so the FIT file holds the two laps and the one that closes the ride; each lap's
 /// summary is in the banner (screenshot `auto_lap`).
@@ -845,4 +888,17 @@ fn auto_lap_by_distance_writes_a_lap_message_per_5_km() {
     run(&mut sim, &mut app, 3000);
     let file = ride_file(&sim, "Activities", name).expect("saved");
     assert_eq!(lap_count(&file), 3, "the two auto laps and the last, closed at the save");
+    // each lap's total_timer_time (8, ms) and total_distance (9, cm): 5 km each at 8 m/s, and the three make the session
+    let msgs = msg_fields(&file);
+    let get = |m: &(u16, Vec<(u8, u32)>), n: u8| m.1.iter().find(|f| f.0 == n).map(|f| f.1).unwrap();
+    let laps: Vec<_> = msgs.iter().filter(|m| m.0 == 19).collect();
+    let session = msgs.iter().find(|m| m.0 == 18).expect("a session");
+    for l in &laps[..2] {
+        assert!((490_000..=510_000).contains(&get(l, 9)), "lap distance {} cm", get(l, 9));
+        assert!((600_000..650_000).contains(&get(l, 8)), "lap time {} ms", get(l, 8));
+    }
+    for n in [8u8, 9] {
+        let sum: u32 = laps.iter().map(|l| get(l, n)).sum();
+        assert!(sum.abs_diff(get(session, n)) <= 2000, "field {n}: laps {sum}, session {}", get(session, n));
+    }
 }

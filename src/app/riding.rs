@@ -67,8 +67,13 @@ impl App {
     pub(crate) fn lap(&mut self) {
         let Some(ev) = self.ride.lap() else { return };
         self.recorder(ev);
-        self.lap_summary();
+        // a workout step (or the ramp's end) tells the rider already: no summary then
+        let steps = self.plan.workout.steps();
+        let told = self.ramp_running() || self.plan.player.is_some_and(|p| p.step(steps).is_some());
         self.next_step();
+        if !told {
+            self.lap_summary();
+        }
     }
 
     /// An auto lap (AUTO LAP in BIKE) once this lap passed its distance or moving time: the Lap key's path to the

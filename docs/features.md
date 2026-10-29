@@ -472,7 +472,7 @@ power after every sector written).
 - **AUTO LAP** (SETTINGS > BIKE): OFF (the default), BY DISTANCE or BY TIME, with LAP EVERY 1 to 50 km (5) or 1 to 60 min (10). An auto lap is the Lap key's lap (`Ride::lap`, the same recorder event), so the FIT file holds the same lap message; it does not move a workout on. Only while the ride runs.
 - **BY DISTANCE** counts from the last lap, manual or auto, not from the ride's total (as Garmin restarts it after a manual lap): with 5 km, a manual lap at 7 km makes the next at 12 km. The lap falls on the first second past the step, so it can be a few metres over.
 - **BY TIME** counts moving time (the lap time field): a stop or a pause does not count.
-- **The lap banner** (Lap key or auto lap, 8 s or until a key): lap number, lap time and distance, then average power (speed without power) and average heart rate if a strap was heard. A workout's step laps do not show it.
+- **The lap banner** (Lap key or auto lap, 8 s or until a key): lap number, lap time and distance, then average power (speed without power) and average heart rate if a strap was heard. In a workout the step banner shows instead of it (Lap moves the step on, and the step change tells the rider); so do the step laps.
 - Kept in settings.bin at data 94 (mode), 95 (km) and 96 (minutes); an older file reads OFF, 5 km, 10 min. Not yet: the lap list of a past ride.
 
 ![Lap banner](img/auto-lap.png)

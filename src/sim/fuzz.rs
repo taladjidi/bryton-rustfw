@@ -4082,3 +4082,40 @@ fn segment_matcher() {
     }
     assert!(starts > 100 && finishes > 20 && losts > 20 && by_other > 10, "{starts} {finishes} {losts} {by_other}");
 }
+
+/// AUTO LAP (BY DISTANCE and BY TIME, 1 km and 1 min) on a ride with Lap and pause pressed at random: no panic, a
+/// banner of the lap summary or its replacement always readable, and auto laps fire over the seeds.
+#[test]
+fn auto_lap_on_a_ride_with_keys() {
+    use crate::sim::{Sim, run};
+    use crate::*;
+    let mut auto = 0u32;
+    for seed in 0..8u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        sim.gnss.route = Some(crate::sim::map_tests::ride_route);
+        sim.gnss.fix = Some(8000);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        (app.settings.auto_lap, app.settings.lap_km, app.settings.lap_min) = (1 + seed as usize % 2, 1, 1);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let mut x = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        let mut manual = 0u32;
+        for _ in 0..90 {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            run(&mut sim, &mut app, 5000);
+            match x >> 28 {
+                0 => {
+                    app.press(&mut sim, Press::Short(Key::Lap));
+                    manual += 1;
+                }
+                1 => app.press(&mut sim, Press::Short(Key::Start)),
+                _ => {}
+            }
+            assert!(app.notes.text.as_str().is_ascii());
+        }
+        auto += app.ride.laps().saturating_sub(manual.min(app.ride.laps()));
+    }
+    assert!(auto > 0, "auto laps fired over the seeds");
+}

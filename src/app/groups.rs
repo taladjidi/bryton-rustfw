@@ -48,6 +48,8 @@ impl Notices {
         }
         let up = self.ms.is_some().then_some((self.text, self.kind));
         let (show, wait) = match up {
+            // a notice of what a key did replaces a lap summary (dropped, not queued)
+            Some(up) if up.1 == Banner::Summary && kind == Banner::Info => ((l, kind), None),
             Some(up) if up.1 > kind => (up, Some((l, kind))),
             Some(up) if up.1 < kind && !(up.1.is_cue() && kind.is_cue()) => ((l, kind), Some(up)),
             _ => ((l, kind), None),
@@ -414,6 +416,9 @@ mod tests {
     #[test]
     fn a_higher_banner_stays_and_the_lower_waits() {
         let mut n = Notices::new();
+        n.say("LAP 1", Banner::Summary);
+        n.say("TOUCH LOCKED", Banner::Info);
+        assert_eq!((n.text.as_str(), n.next), ("TOUCH LOCKED", None), "a notice replaces a lap summary at once");
         n.say("TURN LEFT", Banner::Info);
         n.say("HEART RATE", Banner::Alarm);
         assert_eq!((n.text.as_str(), n.kind), ("HEART RATE", Banner::Alarm), "the alarm takes over");
