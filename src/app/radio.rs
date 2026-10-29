@@ -162,6 +162,7 @@ impl App {
                     self.powercal.unsent(); // a calibration request the meter did not take: sent again
                 } else if nrf::ant_tx_failed(p) == Some(Kind::Trainer.channel()) {
                     self.trainer.unsent(); // an acknowledged message the trainer did not take: sent again
+                    self.tlink.fails = self.tlink.fails.saturating_add(1);
                 } else if nrf::ant_tx_completed(p) == Some(Kind::Trainer.channel()) {
                     self.trainer.acked(); // a release taken is not sent again
                 } else if nrf::event_id(p) == Some(nrf::EVT_TIMEOUT) && p.get(5) == Some(&1) {

@@ -54,6 +54,24 @@
 //! size, developer data index) per field. A full copy begun by a build before `ArtPct` (its recovery record
 //! without `ARTIFACTS`) goes on with two fields: its file has no description of the third.
 //!
+//! **The trainer** ([`Sample::trainer`], the full copy only, a file that describes `ArtPct`): while a trainer is
+//! connected, to diagnose ERG (the target, what the trainer and the meter say, what went out and failed), every record
+//! also carries eight more developer fields after those three, numbers 3 to 10 of developer data index 0:
+//! `target_w` (uint16, W: the ERG target the trainer should hold, invalid when not in ERG), `trainer_w` (uint16, W: the trainer's own power),
+//! `meter_w` (uint16, W: the power meter's, invalid when not heard), `fe_state` (uint8: FE-C page 25 byte 7 bits
+//! 4-6), `trn_stat` (uint8: page 25 byte 6 bits 4-6, the trainer status, in bits 4-6; byte 7 bits 0-1, the target
+//! power limits, in bits 0-1), `link` (uint8: 0 ANT+, 1 Bluetooth), `cmd_sent` (uint8: [`cmd_bit`] of each control
+//! page sent since the last record) and `ack_fail` (uint8: the ANT TX_FAILED events on the trainer's channel since
+//! the last record). 11 bytes a second. Their `field_description`s (a 16-byte name, with their own definition, local
+//! type 10: [`TRN_MESSAGES`]) go in at the first such second, just before its record, once a file (bit 10 of the
+//! recovery record's third word: a build before it ignores the bit, or reads it into its mask, which only defines
+//! the record again); a resume after a build that dropped the bit describes them again, which readers take (a later
+//! description of a field replaces the earlier one). A second without a trainer is the three-field record (a new
+//! definition at each change). With the trainer's common page 80 heard, a `device_info` (global 23: device_index 1,
+//! device_type antplus fitness_equipment (17) or ble bike_trainer (7), manufacturer, serial_number, product (the model number), software_version
+//! (scale 100), hardware_version, source_type antplus (1) or bluetooth_low_energy (3); garmin_fit_sdk/profile.py
+//! 21.218) goes before the first record that has it, once a run of the writer (a resume may write it again).
+//!
 //! **Beat to beat** ([`Writer::hrv`], the full copy only): every RR interval the strap's decoder gives, raw (before
 //! hrv.rs's artifact rule) but within its range (`sensors::Beats::RANGE`, 250 to 2000 ms: a value outside is a
 //! glitch and is not written), in standard `hrv` messages (global 78, field 0 `time`: an array of uint16, scale
@@ -133,12 +151,68 @@ pub struct Sample {
     pub artifacts_pct: Option<u8>,
     /// The ride's ascent so far, m (ride.rs): the lap's and the session's total_ascent.
     pub ascent_m: Option<u32>,
+    /// The trainer this second, while one is connected: the full copy's trainer fields only (module doc).
+    pub trainer: Option<TrainerSample>,
     /// The ride's profile this second: the lap's and the session's sub_sport, the last second's at the end (a ride
     /// the trainer left goes back to ROAD or MTB).
     pub profile: ride::Profile,
     /// The rider set that profile by hand (the app's `profile_by_hand`): only kept in the recovery record, so a
     /// resumed ride is not given back to the automatic choice.
     pub by_hand: bool,
+}
+
+/// One second of the trainer (module doc, "The trainer"): plain values the app took from the trainer's reading.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrainerSample {
+    /// The ERG target the trainer should hold this second, W (None: not in ERG). Whether it went out is `cmds`.
+    pub target_w: Option<u16>,
+    /// The trainer's own power, W.
+    pub trainer_w: Option<u16>,
+    /// The power meter's power, W (None: not heard).
+    pub meter_w: Option<u16>,
+    /// The FE state (FE-C page 25 byte 7 bits 4-6: 1 off, 2 ready, 3 in use, 4 finished).
+    pub fe_state: u8,
+    /// The trainer status bits (page 25 byte 6 bits 4-6) in bits 4-6, the target power limits (byte 7 bits 0-1)
+    /// in bits 0-1.
+    pub status: u8,
+    /// The link is Bluetooth (FTMS or FE-C over BLE), else ANT+.
+    pub ble: bool,
+    /// The control pages sent since the last record, [`cmd_bit`] each.
+    pub cmds: u8,
+    /// TX_FAILED events on the trainer's ANT channel since the last record.
+    pub ack_fails: u8,
+    /// The trainer's common pages 80 and 81, once page 80 was heard.
+    pub device: Option<TrainerDevice>,
+}
+
+/// The trainer's manufacturer and product pages (ANT+ common pages 80 and 81), for the `device_info` message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrainerDevice {
+    /// Manufacturer ID (page 80 bytes 4-5).
+    pub maker: u16,
+    /// Model number (page 80 bytes 6-7).
+    pub model: Option<u16>,
+    /// Hardware revision (page 80 byte 3).
+    pub hw: Option<u8>,
+    /// Serial number (page 81 bytes 4-7).
+    pub serial: Option<u32>,
+    /// Software version x 100 (page 81 bytes 2-3, as `fec::decode` reads them).
+    pub sw_x100: Option<u16>,
+}
+
+/// The `cmd_sent` bit of a control page sent to the trainer: 1 basic resistance (0x30), 2 target power (0x31),
+/// 4 track resistance (0x33), 8 anything else (the set-up: user configuration, a data request).
+///
+/// ```
+/// assert_eq!([0x30, 0x31, 0x33, 0x37, 0x46].map(bryton_rustfw::fit::cmd_bit), [1, 2, 4, 8, 8]);
+/// ```
+pub fn cmd_bit(page: u8) -> u8 {
+    match page {
+        0x30 => 1,
+        0x31 => 2,
+        0x33 => 4,
+        _ => 8,
+    }
 }
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
@@ -175,6 +249,7 @@ const U8: u8 = 0x02;
 const U16: u8 = 0x84;
 const S32: u8 = 0x85;
 const U32: u8 = 0x86;
+const U32Z: u8 = 0x8c;
 const STRING: u8 = 0x07;
 const BYTE: u8 = 0x0d;
 const F32: u8 = 0x88;
@@ -193,6 +268,8 @@ const L_DEV_ID: u8 = 6;
 const L_FIELD_DESC: u8 = 7;
 const L_GEAR: u8 = 8;
 const L_HRV: u8 = 9;
+const L_TRN_DESC: u8 = 10;
+const L_DEVICE: u8 = 11;
 /// RR intervals per `hrv` message (module doc).
 pub const HRV_PER_MESSAGE: usize = 5;
 // the hrv message's field size, 2 bytes a value, is written as a byte
@@ -232,8 +309,80 @@ const DEV_MESSAGES: [u8; 108] = {
     }
     m
 };
-/// The developer fields of a full copy's record: (field_definition_number, size, developer_data_index).
-const DEV_RECORD: [Field; 3] = [(0, 4, 0), (1, 2, 0), (2, 1, 0)];
+/// The developer fields of a full copy's record: (field_definition_number, size, developer_data_index): `Alpha1`,
+/// `RMSSD`, `ArtPct`, then the trainer's (module doc).
+const DEV_RECORD: [Field; 11] = [
+    (0, 4, 0),
+    (1, 2, 0),
+    (2, 1, 0),
+    (3, 2, 0),
+    (4, 2, 0),
+    (5, 2, 0),
+    (6, 1, 0),
+    (7, 1, 0),
+    (8, 1, 0),
+    (9, 1, 0),
+    (10, 1, 0),
+];
+/// Bit 10 of the recovery record's third word (the record mask's bits 10..12 were never used): the file describes
+/// the trainer's fields (module doc).
+const TRN_DESC: u32 = 1 << 10;
+/// A trainer field's `field_description` (local [`L_TRN_DESC`]): index 0, `num`, base type `ty`, name (16 bytes),
+/// units (4), native_mesg_num record (20).
+#[allow(clippy::indexing_slicing)] // evaluated by the compiler: an index out of range fails the build, never the unit
+const fn trn_desc(num: u8, ty: u8, name: &[u8], units: &[u8]) -> [u8; 26] {
+    let mut d = [0u8; 26];
+    (d[0], d[2], d[3], d[24]) = (L_TRN_DESC, num, ty, 20);
+    let mut i = 0;
+    while i < name.len() {
+        d[4 + i] = name[i];
+        i += 1;
+    }
+    i = 0;
+    while i < units.len() {
+        d[20 + i] = units[i];
+        i += 1;
+    }
+    d
+}
+/// The trainer fields' descriptions, their definition first (module doc, "The trainer").
+#[allow(clippy::indexing_slicing)] // evaluated by the compiler, as above
+pub const TRN_MESSAGES: [u8; 24 + 8 * 26] = {
+    let def: [u8; 24] =
+        [0x40 | L_TRN_DESC, 0, 0, 206, 0, 6, 0, 1, U8, 1, 1, U8, 2, 1, U8, 3, 16, STRING, 8, 4, STRING, 14, 2, U16];
+    let descs: [[u8; 26]; 8] = [
+        trn_desc(3, U16, b"target_w", b"W"),
+        trn_desc(4, U16, b"trainer_w", b"W"),
+        trn_desc(5, U16, b"meter_w", b"W"),
+        trn_desc(6, U8, b"fe_state", b""),
+        trn_desc(7, U8, b"trn_stat", b""),
+        trn_desc(8, U8, b"link", b""),
+        trn_desc(9, U8, b"cmd_sent", b""),
+        trn_desc(10, U8, b"ack_fail", b""),
+    ];
+    let mut m = [0u8; 24 + 8 * 26];
+    let mut i = 0;
+    while i < m.len() {
+        m[i] = if i < 24 { def[i] } else { descs[(i - 24) / 26][(i - 24) % 26] };
+        i += 1;
+    }
+    m
+};
+/// timestamp, device_index, device_type, manufacturer, serial_number (uint32z), product, software_version,
+/// hardware_version, source_type (module doc).
+const DEVICE: [Field; 9] = [
+    (253, 4, U32),
+    (0, 1, U8),
+    (1, 1, U8),
+    (2, 2, U16),
+    (3, 4, U32Z),
+    (4, 2, U16),
+    (5, 2, U16),
+    (6, 1, U8),
+    (25, 1, ENUM),
+];
+/// Bytes a `device_info` takes, its definition with it.
+const DEVICE_MAX: usize = 6 + 3 * 9 + 1 + 19;
 
 /// FIT manufacturer and product of the ride files: Bryton (267), the Rider S510 (2404), as stock's own files.
 pub const MANUFACTURER: u32 = 267;
@@ -364,6 +513,13 @@ pub struct Writer {
     profile: ride::Profile,
     /// That profile was set by hand (the last sample's [`Sample::by_hand`]).
     by_hand: bool,
+    /// The file describes the trainer's fields (module doc).
+    trn_desc: bool,
+    /// The record definition in force has them (not in the recovery record: a resumed full copy with `ArtPct`
+    /// defines its record again).
+    trn: bool,
+    /// The trainer's `device_info` was written by this writer.
+    device: bool,
 }
 
 impl Writer {
@@ -390,6 +546,9 @@ impl Writer {
             ascent_m: 0,
             profile: ride::Profile::Road,
             by_hand: false,
+            trn_desc: false,
+            trn: false,
+            device: false,
         }
     }
 
@@ -539,23 +698,89 @@ impl Writer {
                 mask |= 1 << i;
             }
         }
-        if mask != self.mask {
+        // the trainer's fields only in a full copy that describes `ArtPct` (they follow it)
+        let trn = s.trainer.filter(|_| self.dev && self.art);
+        if mask != self.mask || trn.is_some() != self.trn {
             self.defined &= !(1 << L_RECORD);
         }
         let (fields, values) = (fields.get(..n).unwrap_or(&[]), values.get(..n).unwrap_or(&[]));
         if self.dev {
-            // invalid: float32 all ones, uint16 0xffff
+            if let Some(t) = trn {
+                // their descriptions before the first record that has them, in the same checkpoint
+                if !self.trn_desc {
+                    self.put(sink, &TRN_MESSAGES)?;
+                    self.trn_desc = true;
+                }
+                if let (false, Some(d)) = (self.device, t.device) {
+                    self.device_info(sink, s.time, &d, t.ble)?;
+                    self.device = true;
+                }
+            }
+            // invalid: float32 all ones, uint16 0xffff, uint8 0xff
             let alpha = s.alpha1_milli.map_or(u32::MAX, |a| (f32::from(a) / 1000.0).to_bits());
-            let dev =
-                [alpha, s.rmssd_ms.map_or(0xffff, u32::from), s.artifacts_pct.map_or(0xff, |p| u32::from(p.min(100)))];
-            let n = if self.art { 3 } else { 2 };
+            let w = |v: Option<u16>| v.map_or(0xffff, |v| u32::from(v.min(0xfffe)));
+            let t = trn.unwrap_or_default();
+            let dev = [
+                alpha,
+                s.rmssd_ms.map_or(0xffff, u32::from),
+                s.artifacts_pct.map_or(0xff, |p| u32::from(p.min(100))),
+                w(t.target_w),
+                w(t.trainer_w),
+                w(t.meter_w),
+                u32::from(t.fe_state & 7),
+                u32::from(t.status & 0x73),
+                u32::from(t.ble),
+                u32::from(t.cmds & 0xf),
+                u32::from(t.ack_fails.min(0xfe)),
+            ];
+            let n = if trn.is_some() {
+                DEV_RECORD.len()
+            } else if self.art {
+                3
+            } else {
+                2
+            };
             let (df, dv) = (DEV_RECORD.get(..n).unwrap_or(&[]), dev.get(..n).unwrap_or(&[]));
             self.message_dev(sink, L_RECORD, 20, fields, values, df, dv)?;
         } else {
             self.message(sink, L_RECORD, 20, fields, values)?;
         }
         self.mask = mask;
+        self.trn = trn.is_some();
         Ok(())
+    }
+
+    /// Bytes [`Writer::record`] writes for `s`'s trainer beyond a record without one, at most: its fields, and the
+    /// first time their descriptions and the device (a buffered sink keeps this much more room).
+    pub fn trainer_bytes(&self, s: &Sample) -> usize {
+        match s.trainer {
+            Some(t) if self.dev && self.art => {
+                3 * 8
+                    + 11
+                    + if self.trn_desc { 0 } else { TRN_MESSAGES.len() }
+                    + if t.device.is_some() && !self.device { DEVICE_MAX } else { 0 }
+            }
+            _ => 0,
+        }
+    }
+
+    /// The trainer's `device_info` (module doc); a field not known is FIT's invalid (uint32z 0).
+    fn device_info(&mut self, sink: &mut impl Sink, time: u32, d: &TrainerDevice, ble: bool) -> Result<(), Error> {
+        // device_type follows source_type: ble_device_type bike_trainer (7) over bluetooth_low_energy (3),
+        // antplus_device_type fitness_equipment (17) over antplus (1)
+        let (ty, src) = if ble { (7, 3) } else { (17, 1) };
+        let v = [
+            time,
+            1, // device_index: not the creator (0)
+            ty,
+            u32::from(d.maker),
+            d.serial.unwrap_or(0),
+            d.model.map_or(0xffff, u32::from),
+            d.sw_x100.map_or(0xffff, u32::from),
+            d.hw.map_or(0xff, u32::from),
+            src,
+        ];
+        self.message(sink, L_DEVICE, 23, &DEVICE, &v)
     }
 
     /// An `hrv` message (module doc) with up to [`HRV_PER_MESSAGE`] RR intervals `rr`, ms, oldest first (more are
@@ -715,6 +940,9 @@ impl Writer {
             by_hand: w[2] & BY_HAND != 0,
             dev: w[2] >> 16 & 1 != 0,
             art: w[2] & ARTIFACTS != 0,
+            trn_desc: w[2] & TRN_DESC != 0,
+            trn: false,
+            device: false,
             ascent_m: w[2] >> 17 & ASCENT_MAX,
             start: w[3],
             last: w[4],
@@ -748,6 +976,7 @@ impl Writer {
                 | LAYOUT_SPORT
                 | u32::from(self.dev) << 16
                 | if self.art { ARTIFACTS } else { 0 }
+                | if self.trn_desc { TRN_DESC } else { 0 }
                 | self.ascent_m.min(ASCENT_MAX) << 17,
             self.start,
             self.last,
@@ -800,7 +1029,7 @@ impl Writer {
         df: &[Field],
         dv: &[u32],
     ) -> Result<(), Error> {
-        let mut buf = [0u8; 128]; // the largest, session with its definition: 109; a full record: 91
+        let mut buf = [0u8; 128]; // the largest, a full record with the trainer and its definition: 114
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             if let Some(s) = buf.get_mut(n..n + bytes.len()) {
@@ -1066,10 +1295,34 @@ pub(crate) mod tests {
                 rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
                 artifacts_pct: (t >= 60).then_some((t % 9) as u8),
                 ascent_m: Some(t / 10), // the ride's ascent so far: 1 m every 10 s
+                trainer: trainer(t),
                 profile: ride::Profile::Road,
                 by_hand: false,
             })
             .collect()
+    }
+
+    /// The test ride's trainer in second `t`: connected from 100 s to 300 s but for 150..160 (a drop), its pages 80
+    /// and 81 from 110 s; the target 200 W, its power 195 + t % 10, the meter's from 120 s, a command every 4 s and a
+    /// TX_FAILED every 7.
+    pub(crate) fn trainer(t: u32) -> Option<TrainerSample> {
+        ((100..300).contains(&t) && !(150..160).contains(&t)).then(|| TrainerSample {
+            target_w: Some(200),
+            trainer_w: Some(195 + (t % 10) as u16),
+            meter_w: (t >= 120).then_some(190 + (t % 10) as u16),
+            fe_state: 3,
+            status: 0x10 | (t % 4) as u8,
+            ble: false,
+            cmds: if t.is_multiple_of(4) { 2 } else { 0 },
+            ack_fails: u8::from(t.is_multiple_of(7)),
+            device: (t >= 110).then_some(TrainerDevice {
+                maker: 15,
+                model: Some(0x1234),
+                hw: Some(1),
+                serial: Some(0x1234_5678),
+                sw_x100: Some(10),
+            }),
+        })
     }
 
     /// A gear change of the test ride at `time`, if one: every 45 s from 7 s, front every third time.
@@ -1425,6 +1678,11 @@ pub(crate) mod tests {
                     let rr = m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1));
                     let fed = samples.iter().flat_map(|s| beats(s.time)).map(u64::from);
                     assert!(rr.filter(|&v| v != 0xffff).eq(fed), "cut at {budget}");
+                    // the trainer's fields described before the first record that has them, a resume or not
+                    let desc = m.iter().position(|x| x.0 == 206 && field(x, 1) == Some(3));
+                    let first = m.iter().position(|x| x.0 == 20 && field(x, 233).is_some());
+                    assert!(first.is_some(), "cut at {budget}: the test ride has a trainer");
+                    assert!(desc < first && desc.is_some(), "cut at {budget}: target_w described before use");
                 }
             }
             resumed += 1;
@@ -1449,7 +1707,7 @@ pub(crate) mod tests {
         let clean = file(false, &samples);
         assert_eq!(clean, file(false, &bare));
         assert_eq!(clean[1], 0x10);
-        assert!(decode(&clean).unwrap().iter().all(|m| m.1.iter().all(|f| !(230..240).contains(&f.0))));
+        assert!(decode(&clean).unwrap().iter().all(|m| m.0 != 23 && m.1.iter().all(|f| !(230..=240).contains(&f.0))));
         let full = file(true, &samples);
         assert_eq!(full[1], 0x20);
         let m = decode(&full).unwrap();
@@ -1472,8 +1730,51 @@ pub(crate) mod tests {
         let cm = decode(&clean).unwrap();
         let cr: Vec<&Msg> = cm.iter().filter(|x| x.0 == 20).collect();
         for (c, f) in cr.iter().zip(&records) {
-            assert_eq!(c.1[..], f.1[..f.1.len() - 3]);
+            assert_eq!(c.1[..], f.1.iter().copied().filter(|x| !(230..=240).contains(&x.0)).collect::<Vec<_>>()[..]);
         }
+        // the trainer (module doc): its descriptions once, before its first record (100 s); its fields only while
+        // it is connected; the device once, before the first record from 110 s
+        let at = |g: u16| m.iter().position(|x| x.0 == g);
+        let first_trn = m.iter().position(|x| x.0 == 20 && field(x, 233).is_some());
+        let descs: Vec<usize> = (0..m.len()).filter(|&i| m[i].0 == 206 && field(&m[i], 1).unwrap() >= 3).collect();
+        assert_eq!(descs.len(), 8, "eight trainer fields described once");
+        assert!(descs.iter().all(|&i| Some(i) < first_trn), "described before use");
+        assert_eq!(m.iter().filter(|x| x.0 == 23).count(), 1, "one device_info");
+        let dev = &m[at(23).unwrap()];
+        assert_eq!(
+            [2, 3, 4, 5, 6, 25, 1].map(|f| field(dev, f)),
+            [15, 0x1234_5678, 0x1234, 10, 1, 1, 17].map(Some),
+            "maker, serial, model, software 0.1, hardware, antplus, fitness equipment"
+        );
+        assert_eq!(field(dev, 253), Some(u64::from(T0 + 1 + 110)), "at 110 s");
+        for (t, r) in records.iter().enumerate() {
+            let on = (100..300).contains(&t) && !(150..160).contains(&t);
+            assert_eq!(field(r, 233).is_some(), on, "second {t}");
+            if on {
+                let got = (234..=240).map(|f| field(r, f).unwrap()).collect::<Vec<_>>();
+                let meter = if t >= 120 { 190 + t as u64 % 10 } else { 0xffff };
+                let want =
+                    [195 + t as u64 % 10, meter, 3, 0x10 | (t as u64 % 4), 0, 2 * u64::from(t.is_multiple_of(4)), 0];
+                assert_eq!(field(r, 233), Some(200), "target, second {t}");
+                assert_eq!(got[..6], want[..6], "second {t}");
+                assert_eq!(got[6], u64::from(t % 7 == 0), "ack_fail, second {t}");
+            }
+        }
+    }
+
+    /// A full copy begun by a build before `ArtPct` (two developer fields) has no trainer fields: they follow it.
+    #[test]
+    fn no_trainer_fields_without_art_pct() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin_with(&mut f, T0, true).unwrap();
+        w.art = false;
+        let s = &ride(300)[200];
+        assert!(s.trainer.is_some());
+        assert_eq!(w.trainer_bytes(s), 0);
+        w.record(&mut f, s).unwrap();
+        w.checkpoint(&mut f).unwrap();
+        let m = decode(&f).unwrap();
+        assert!(m.iter().all(|x| x.0 != 23 && !x.1.iter().any(|f| (233..=240).contains(&f.0))));
     }
 
     /// The beats' cost: an hour at 150 bpm is 9000 beats, 1800 messages of 11 bytes, 19.8 KB (and the definition).

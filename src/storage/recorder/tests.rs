@@ -93,6 +93,7 @@ fn sample(t: u32) -> Sample {
         rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
         artifacts_pct: (t >= 60).then_some((t % 9) as u8),
         ascent_m: Some(t / 10),
+        trainer: crate::fit::tests::trainer(t),
         profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
     }
@@ -839,6 +840,12 @@ fn two_copies_cut_torn(torn: bool, part: u64) {
             // the beats: in order, none twice (values rise), at most a checkpoint's worth lost before the cut
             // (a minute of records, or paused a minute of beats; and the four of an unfinished message),
             // whatever the resume
+            // the trainer's fields described before the first record that has them, whatever the resume
+            let f = crate::storage::trash::tests::file(&d.img, SAVED_FULL).unwrap();
+            let m = crate::fit::tests::decode(&f).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let desc = m.iter().position(|x| x.0 == 206 && crate::fit::tests::field(x, 1) == Some(3));
+            let first = m.iter().position(|x| x.0 == 20 && crate::fit::tests::field(x, 233).is_some());
+            assert!(first.is_none() || (desc.is_some() && desc < first), "{what}: target_w described after use");
             let rr = saved_beats(&d.img, SAVED_FULL);
             assert!(rr.windows(2).all(|p| p[0] < p[1]), "{what}: beats out of order or twice");
             let lost: Vec<u32> = (0..=d_now.min(SECS - 1))
@@ -1980,4 +1987,27 @@ fn give_up_save_names_the_ride_where_it_can() {
     assert_eq!(again.recover(&mut d, local(301)), Outcome::Nothing, "the record done: a boot does nothing");
     next_ride_records(&mut r, &mut d, "lost");
     assert_eq!(check_clean(&d.card.img, "lost, then a ride"), lost, "the same chain lost, no more");
+}
+
+/// A card behind (no io): room left for a plain record but not for the trainer's descriptions. The second is still
+/// recorded, without the trainer's fields, instead of dropped whole (the review of 842e73f).
+#[test]
+fn a_short_buffer_drops_the_trainer_fields_not_the_second() {
+    let mut r = Recorder::of(Kind::Full);
+    r.start(T0, *b"261023100000", false);
+    let plain = |t: u32| Sample { time: T0 + t, hr: Some(150), ..Default::default() };
+    let mut t = 1;
+    while r.room() >= RECORD_MAX + 300 + Writer::END_BYTES {
+        r.second(&plain(t), [0; RIDE_WORDS]);
+        t += 1;
+    }
+    let s = Sample { trainer: crate::fit::tests::trainer(200), ..plain(t) };
+    let need = r.writer.trainer_bytes(&s);
+    assert!(need > 300, "the descriptions and the device still to write: {need}");
+    assert!(r.room() >= RECORD_MAX + Writer::END_BYTES && r.room() < RECORD_MAX + need + Writer::END_BYTES);
+    let (dropped, len) = (r.dropped, r.writer.data_len());
+    r.second(&s, [0; RIDE_WORDS]);
+    assert_eq!(r.dropped, dropped, "the second is not dropped");
+    assert!(r.writer.data_len() > len, "it is in the file");
+    assert_eq!(r.writer.trainer_bytes(&s), need, "without the trainer's descriptions");
 }

@@ -204,13 +204,18 @@ impl App {
         let Some(page) = page else { return };
         self.tlink.ack_gap_ms = 0;
         if bt {
-            if !self.ftms_fec_send(b, page) {
+            if self.ftms_fec_send(b, page) {
+                self.tlink.cmds |= fit::cmd_bit(page[0]);
+            } else {
                 self.trainer.unsent(); // not written: due again at the next free slot
             }
             return;
         }
         match nrf::ant_ack(b, &mut self.rx, Kind::Trainer.channel(), page) {
-            Ok(()) => self.tlink.acked = true,
+            Ok(()) => {
+                self.tlink.acked = true;
+                self.tlink.cmds |= fit::cmd_bit(page[0]);
+            }
             Err(nrf::Error::Timeout) if self.tlink.acked => self.trainer.unsent(), // a byte lost: sent again
             Err(nrf::Error::Timeout) => {
                 // no answer to the first one: the message's layout is a guess. Not tried again until the chip starts

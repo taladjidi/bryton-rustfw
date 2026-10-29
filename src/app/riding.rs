@@ -277,6 +277,7 @@ impl App {
             }
             ride::Event::Second => {
                 let s = self.sample(t);
+                (self.tlink.cmds, self.tlink.fails) = (0, 0); // in this record
                 self.rec.clean.second(&s, words);
                 self.rec.full.second(&s, words);
             }
@@ -327,9 +328,39 @@ impl App {
             rmssd_ms: self.hrv.rmssd().filter(|_| hr),
             artifacts_pct: self.hrv.artifacts().filter(|_| hr),
             ascent_m: Some(self.ride.ascent_m()),
+            trainer: self.trainer_sample(),
             profile: self.ride_profile(),
             by_hand: self.profile_by_hand,
         }
+    }
+
+    /// The trainer this second for the full copy (fit.rs, "The trainer"), while it is connected (heard last pass).
+    fn trainer_sample(&self) -> Option<fit::TrainerSample> {
+        if !self.tlink.up {
+            return None;
+        }
+        let (t, d) = (&self.trainer, self.trainer_drive());
+        let r = &t.reading;
+        let meter = self.radio.heard_ms.get(Kind::Power as usize).is_some_and(|&ms| ms < sensors::STALE_MS);
+        Some(fit::TrainerSample {
+            // what it should hold (cleared by no resend or loss of the link); whether it went out is `cmds`
+            target_w: (t.engaged(&d) && t.mode(&d) == trainer::Mode::Erg).then(|| t.target_w(&d)),
+            trainer_w: r.power,
+            // a meter heard is what the live power is (app/trainer.rs `fold_trainer`)
+            meter_w: self.live.get(Metric::Power).filter(|_| meter),
+            fe_state: r.state,
+            status: r.status << 4 | r.limits,
+            ble: self.ftms_on(),
+            cmds: self.tlink.cmds,
+            ack_fails: self.tlink.fails,
+            device: r.maker.map(|maker| fit::TrainerDevice {
+                maker,
+                model: r.model,
+                hw: r.hw,
+                serial: r.serial,
+                sw_x100: r.sw_x100,
+            }),
+        })
     }
 
     /// The profile in force to both copies' writers: the samples carry it only on running seconds, so a change

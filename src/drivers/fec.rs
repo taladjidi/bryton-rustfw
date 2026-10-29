@@ -16,6 +16,8 @@
 //!   0.05 kg in 12 bits over the upper nibble of 4 and byte 5, wheel diameter in cm in 6 with the millimetres in the
 //!   low nibble of 4, gear ratio 0.03 in 7, 0 invalid; that library masks the bike weight's high bits, the 12 bits
 //!   are used whole here).
+//! - openant `openant/devices/common.py`: common pages 80 (hardware revision in 3, manufacturer in 4-5, model number
+//!   in 6-7) and 81 (software revision, supplemental in 2 (0xff unused) and main in 3; serial number in 4-7).
 //! - stock itself (Ghidra notes/agent_b2.md, `AntFec_*`): it decodes pages 1, 16, 25, 54, 71, 80, 81, 82 and sends
 //!   pages 1 (calibration), 48, 49, 51 and 55, with the same units.
 //! - The data request page 70 and the capabilities page 54 (max resistance N in 5-6, modes in the low bits of 7)
@@ -114,10 +116,16 @@ pub fn decode(d: [u8; 8], r: &mut Reading) {
         80 => {
             r.seen |= seen::P80;
             r.maker = Some(u16_at(4));
+            r.hw = Some(d[3]).filter(|&h| h != 0xff);
+            r.model = Some(u16_at(6)).filter(|&m| m != 0xffff);
         }
         81 => {
             r.seen |= seen::P81;
             r.serial = Some(u32::from_le_bytes([d[4], d[5], d[6], d[7]])).filter(|&s| s != u32::MAX);
+            // the version is main / 10, or (main x 100 + supplemental) / 1000 when byte 2 is not 0xff (openant
+            // common.py): x 100 here, FIT's software_version scale
+            let (supp, main) = (u16::from(d[2]), u16::from(d[3]));
+            r.sw_x100 = (main != 0xff).then_some(if supp == 0xff { main * 10 } else { (main * 100 + supp) / 10 });
         }
         _ => {}
     }

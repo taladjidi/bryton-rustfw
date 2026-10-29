@@ -791,7 +791,13 @@ impl Recorder {
         }
         self.last_rec = time;
         let s = Sample { time, ..*s };
-        self.put(RECORD_MAX, |w, sink| w.record(sink, &s));
+        // the trainer's fields are optional: without room for them (a card behind), the second without them
+        let s = if self.room() < RECORD_MAX + self.writer.trainer_bytes(&s) + Writer::END_BYTES {
+            Sample { trainer: None, ..s }
+        } else {
+            s
+        };
+        self.put(RECORD_MAX + self.writer.trainer_bytes(&s), |w, sink| w.record(sink, &s));
         self.since += 1;
         if self.since >= CHECKPOINT_S {
             self.want = true;

@@ -145,6 +145,12 @@ pub struct Reading {
     pub maker: Option<u16>,
     /// Serial number (common page 81).
     pub serial: Option<u32>,
+    /// Model number and hardware revision (common page 80).
+    pub model: Option<u16>,
+    /// See `model`.
+    pub hw: Option<u8>,
+    /// Software version x 100 (common page 81, [`crate::fec::decode`]).
+    pub sw_x100: Option<u16>,
     /// Calibration in progress (page 2): the calibrations pending ([`CAL_ZERO`] / [`CAL_SPIN`] bits), the conditions
     /// byte (bits 4-5 temperature, 6-7 speed: 1 too low, 2 ok), the target speed km/h x 10 and the target spin-down
     /// time ms.

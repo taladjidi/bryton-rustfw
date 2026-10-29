@@ -136,7 +136,27 @@ fn heart_rate_beats() {
 fn beat_streams_into_the_full_copy() {
     use crate::fit::{Sample, Writer, tests::decode};
     use crate::recorder::{Kind, Recorder};
-    let (mut messages, mut dropped) = (0, 0);
+    // a trainer that comes and goes (fit.rs, "The trainer"), any values, its pages 80 / 81 sometimes
+    let trainer = |rnd: &mut dyn FnMut() -> u32| {
+        (!rnd().is_multiple_of(4)).then(|| crate::fit::TrainerSample {
+            target_w: rnd().is_multiple_of(2).then(|| rnd() as u16),
+            trainer_w: (!rnd().is_multiple_of(3)).then(|| rnd() as u16),
+            meter_w: (!rnd().is_multiple_of(3)).then(|| rnd() as u16),
+            fe_state: rnd() as u8,
+            status: rnd() as u8,
+            ble: rnd().is_multiple_of(2),
+            cmds: rnd() as u8,
+            ack_fails: rnd() as u8,
+            device: rnd().is_multiple_of(5).then(|| crate::fit::TrainerDevice {
+                maker: rnd() as u16,
+                model: rnd().is_multiple_of(2).then(|| rnd() as u16),
+                hw: None,
+                serial: Some(rnd()),
+                sw_x100: Some(rnd() as u16),
+            }),
+        })
+    };
+    let (mut messages, mut dropped, mut trainer_recs) = (0, 0, 0);
     for seed in 1..=40u32 {
         let mut rnd = xorshift(seed);
         let beat = |rnd: &mut dyn FnMut() -> u32| match rnd() % 10 {
@@ -152,9 +172,10 @@ fn beat_streams_into_the_full_copy() {
         let mut t = t0;
         for _ in 0..200 {
             t += 1 + rnd() % 3 * (rnd() % 2); // a second, or a gap
+            let trainer = trainer(&mut rnd);
             w.record(
                 &mut f,
-                &Sample { time: t, hr: Some(150), artifacts_pct: Some(rnd() as u8), ..Default::default() },
+                &Sample { time: t, hr: Some(150), artifacts_pct: Some(rnd() as u8), trainer, ..Default::default() },
             )
             .unwrap();
             let n = match rnd() % 8 {
@@ -184,12 +205,14 @@ fn beat_streams_into_the_full_copy() {
             .filter(|&v| v != 0xffff)
             .collect();
         assert_eq!(rr, fed, "seed {seed}");
+        trainer_recs += m.iter().filter(|x| x.0 == 20 && crate::fit::tests::field(x, 240).is_some()).count();
 
         // the recorder, no card: its buffer fills, its queue too
         let mut r = Recorder::of(Kind::Full);
         r.start(t0, *b"261023100000", false);
         for s in 0..400 {
-            r.second(&Sample { time: t0 + 1 + s, ..Default::default() }, [0; crate::ride::RIDE_WORDS]);
+            let trainer = trainer(&mut rnd);
+            r.second(&Sample { time: t0 + 1 + s, trainer, ..Default::default() }, [0; crate::ride::RIDE_WORDS]);
             for _ in 0..rnd() % 8 {
                 r.beat(beat(&mut rnd));
             }
@@ -197,8 +220,8 @@ fn beat_streams_into_the_full_copy() {
         dropped += r.beats_dropped;
     }
     assert!(
-        messages > 10_000 && dropped > 1000,
-        "the writer and the queue reached: {messages} messages, {dropped} dropped"
+        messages > 10_000 && dropped > 1000 && trainer_recs > 4000,
+        "the writer and the queue reached: {messages} messages, {dropped} dropped, {trainer_recs} trainer records"
     );
 }
 

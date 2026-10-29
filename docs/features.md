@@ -306,7 +306,13 @@ Built-in names cannot be a file's. LIGHT, fonts and metrics in a theme come late
   each also carrying DFA a1 as the `Alpha1` developer field (the name Intervals.icu reads), `RMSSD` and
   `ArtPct` (the share of beats the live DFA a1 dropped), from the strap's beats; and every beat itself, raw, in
   standard `hrv` messages as Garmin's units write them (about 20 KB an hour), for tools that compute DFA a1
-  offline. It is a second file because Bryton's server refuses developer fields, and the `\Activities` file
+  offline. While a home trainer is connected (ANT+ FE-C or Bluetooth), to diagnose ERG drops, each record also
+  carries `target_w` (the ERG target the trainer should hold, invalid outside ERG), `trainer_w` (the trainer's power), `meter_w` (the power
+  meter's), `fe_state`, `trn_stat` (the trainer status bits and the target power limits of FE-C page 25),
+  `link` (0 ANT+, 1 Bluetooth), `cmd_sent` (a bit per control page sent that second: 1 resistance, 2 target
+  power, 4 track, 8 set-up) and `ack_fail` (ANT TX_FAILED events that second): 11 bytes a second, about 40 KB an
+  hour; and the trainer's manufacturer, model, serial and software version (ANT+ pages 80 and 81) once, in a
+  `device_info`. It is a second file because Bryton's server refuses developer fields, and the `\Activities` file
   stays exactly as before. It is recorded beside the clean one with its own checkpoints and resume, and it never
   holds the clean one up: if it fails, the ride is saved all the same and the banner says "NO FULL COPY".
 - **Sync on the computer** (`tools/sync.py`, docs/sync.md): new rides go to Strava (the clean copy) and to
