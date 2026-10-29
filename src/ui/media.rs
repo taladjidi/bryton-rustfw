@@ -191,10 +191,15 @@ fn split(s: &str, w: u32) -> (&str, &str) {
     if LABEL.width(s) <= w {
         return (s, "");
     }
-    let fit = s.char_indices().map(|(i, _)| i).chain([s.len()]).take_while(|&i| LABEL.width(&s[..i]) <= w).last();
+    let fit = s
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain([s.len()])
+        .take_while(|&i| LABEL.width(s.get(..i).unwrap_or("")) <= w)
+        .last();
     let fit = fit.unwrap_or(0);
-    let cut = s[..fit].rfind(' ').filter(|&i| i > 0).unwrap_or(fit);
-    (&s[..cut], s[cut..].trim_start())
+    let cut = s.get(..fit).unwrap_or("").rfind(' ').filter(|&i| i > 0).unwrap_or(fit);
+    (s.get(..cut).unwrap_or(""), s.get(cut..).unwrap_or("").trim_start())
 }
 
 /// A button: its box, then its icon or label; `dim` (no phone) greys it. A box under 52 px wide has "-" and "+"

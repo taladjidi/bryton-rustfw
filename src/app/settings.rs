@@ -155,7 +155,21 @@ pub fn standby_flags_word(rsr: u32, cpucr: u32) -> u32 {
 }
 
 /// The page the editor works on (its copy, kept or dropped when it is left): the field picker's page number then.
-pub const EDITED: usize = PAGES + 2;
+pub const EDITED: usize = PAGES + 4;
+
+// Each screen's page is its own index: a clash sends one screen's boxes to another's (the editor drew the workout page's).
+const _: () = assert!(
+    OVERVIEW != COURSE
+        && OVERVIEW != WORKOUT
+        && OVERVIEW != CLIMB
+        && OVERVIEW != EDITED
+        && COURSE != WORKOUT
+        && COURSE != CLIMB
+        && COURSE != EDITED
+        && WORKOUT != CLIMB
+        && WORKOUT != EDITED
+        && CLIMB != EDITED
+);
 
 /// The backup registers of the first ride pages and the overview, two each ([`PageCfg::to_words`]).
 /// Registers 20 to 31 are not referenced by stock (R039; ghidra/HARDWARE.md, RTC and backup registers), 19 is: its
@@ -518,7 +532,7 @@ impl Settings {
             },
             0xc1 => Settings {
                 weight_kg: ((w & 0xff) as u16).clamp(*kg.start(), *kg.end()),
-                wprime_j: (500 * (w >> 8 & 0xff) as u16).clamp(*wp.start(), *wp.end()),
+                wprime_j: u16::try_from(w >> 8 & 0xff).unwrap_or(0).saturating_mul(500).clamp(*wp.start(), *wp.end()),
                 wkt_avg: window(w >> 16),
                 bike_hg: power::BIKE_HG,
                 remote: [menu::Remote::from_bits(w >> 18), menu::Remote::from_bits(w >> 21), s2, s3],
@@ -926,5 +940,17 @@ impl App {
     /// How many ride pages there are.
     pub fn page_count(&self) -> usize {
         self.page_count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn power_word_wprime_top_byte_clamps_without_overflow() {
+        // the W' byte is 0..255 (0.5 kJ each): 255 x 500 J overflows a u16, so it clamps to the range's top
+        let s = Settings::from_word(0).with_power_word(0xc1_00_ff_00); // W' byte in bits 8..15
+        assert_eq!(s.wprime_j, *menu::WPRIME_RANGE.end());
     }
 }
