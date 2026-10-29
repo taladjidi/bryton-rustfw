@@ -204,6 +204,9 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
         let y = NOTICES_Y + 4 + r as u32 * LIST_ROW;
         let (time, text) = n.split_at(n.find(' ').map_or(0, |i| i + 1));
         let tw = small.width("00:00 ");
+        // cut at the last word that fits ("Remote control", not "Remote control e"); `lines` cuts a text with no
+        // space at its last character, as draw_in does
+        let (text, _) = lines(&style, text, W - 8 - tw);
         text::draw_in(c, &small, 4, y + style.height() - small.height(), tw, Align::Left, time);
         text::draw_in(c, &style, 4 + tw, y, W - 8 - tw, Align::Left, text);
     }
@@ -235,5 +238,22 @@ pub fn draw_notif<'a>(
     for (r, (line, head)) in lines.take(NOTIF_LINES).enumerate() {
         let style = Style { fg: if head { ACCENT } else { WHITE }, ..LABEL };
         text::draw_in(c, &style, 4, LIST_Y + LIST_ROW * (r as u32 + 1), W - 8, Align::Left, line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A notice too long for its row is cut at a space, and a short one is drawn whole.
+    #[test]
+    fn a_long_notice_is_cut_at_a_word() {
+        let style = Style { fg: WHITE, ..LABEL };
+        let w = W - 8 - LABEL.width("00:00 ");
+        let long = "Remote control entering the room now";
+        let (cut, _) = lines(&style, long, w);
+        assert!(style.width(cut) <= w && cut.len() < long.len(), "{cut}");
+        assert_eq!(long.as_bytes().get(cut.len()), Some(&b' '), "cut at a word: {cut}");
+        assert_eq!(lines(&style, "Mum", w), ("Mum", ""));
     }
 }
