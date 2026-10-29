@@ -63,7 +63,7 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   overflow reaches it: main.rs `stack_check`); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
   when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
-  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->15 KB<!-- /n --> left; link.x
+  SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->14 KB<!-- /n --> left; link.x
   says what is where); a static there must start as all zeros (an `Option` of a reference or a struct with a bool niche
   does not) or it lands in `.data`, in DTCM. The map's SDRAM (link.x MAP) holds the basemap, then the 96 KB the road
   ahead inflates tiles into.

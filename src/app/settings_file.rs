@@ -10,13 +10,14 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (44 now: 31 in the first build, THEME's 12 bytes, then POWER MATCH's byte appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (66 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, then the 11 alert limits appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
 //! 28   settings        in [`NUMBERS`]' order: the wheel (mm), then the numbers (u16 each); then the choices, a
 //!                      byte each ([`SettingsCopy::to_sector`]), then THEME's name (12 bytes, NUL padded; a file
-//!                      only, no register), then POWER MATCH (a byte, file only); a value out of its range reads as its default
+//!                      only, no register), then POWER MATCH (a byte, file only), then the 11 alert limits ([`alerts::LIMITS`], u16 each,
+//!                      0 = OFF; a file without them reads OFF); a value out of its range reads as its default
 //! 508  CRC-32 of 0..508
 //! ```
 //!
@@ -95,7 +96,7 @@ impl SettingsCopy {
     pub fn to_sector(&self) -> [u8; 512] {
         let s = self.settings;
         let mut out = [0u8; 512];
-        let mut data = [0u8; 64];
+        let mut data = [0u8; 96];
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             for &b in bytes {
@@ -118,6 +119,9 @@ impl SettingsCopy {
         put(&[u8::from(s.touch), profile, u8::from(s.ahead), u8::from(s.smooth), gps]);
         put(&s.theme);
         put(&[u8::from(s.power_match)]);
+        for v in s.limits {
+            put(&v.to_le_bytes());
+        }
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -185,6 +189,16 @@ impl SettingsCopy {
         }
         // POWER MATCH (appended after THEME): a byte, 0 or 1; a file without it reads ON
         s.power_match = data.next().map_or(d.power_match, |v| if v < 2 { v == 1 } else { d.power_match });
+        // the alert limits (appended after POWER MATCH): an older file ends before them, they read OFF
+        for n in 0..alerts::LIMITS {
+            let k = Setting::Limit(n as u8);
+            if let (Some(v), Some((range, _)), Some(slot)) =
+                (data.next().zip(data.next()).map(|(a, b)| u16::from_le_bytes([a, b])), k.number(), s.number_mut(k))
+                && range.contains(&v)
+            {
+                *slot = v;
+            }
+        }
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -436,6 +450,7 @@ mod tests {
             smooth: true,
             gps_power: GpsPower::Saver,
             power_match: false,
+            limits: [400, 90, 120, 60, 45, 15, 100, 10, 300, 500, 75],
             ..Settings::from_word(0)
         }
     }
@@ -473,7 +488,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 44);
+        assert_eq!(len, 66);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -488,13 +503,23 @@ mod tests {
         let none = with(&|sec| sec[6] = 0).unwrap();
         assert_eq!(none, d, "nothing: the defaults");
         let long = with(&|sec| {
-            sec[6] = 48;
-            sec[DATA_AT + 44..DATA_AT + 48].fill(0xee);
+            sec[6] = 70;
+            sec[DATA_AT + 66..DATA_AT + 70].fill(0xee);
         });
         assert_eq!(long, Some(s), "a later build's settings past the ones known are left");
         let old = with(&|sec| sec[6] = 43).unwrap();
         assert!(old.power_match && !s.power_match, "a file from before POWER MATCH reads ON, the rest as it was");
-        assert_eq!(Settings { power_match: false, ..old }, s);
+        assert_eq!(Settings { power_match: false, ..old }, Settings { limits: [0; alerts::LIMITS], ..s });
+        let older = with(&|sec| sec[6] = 44).unwrap();
+        assert_eq!(
+            (older.limits, older.power_match),
+            ([0; alerts::LIMITS], false),
+            "a file from before the limits reads them OFF"
+        );
+        assert_eq!(Settings { limits: s.limits, ..older }, s);
+        let wild_limit =
+            with(&|sec| sec[DATA_AT + 44..DATA_AT + 46].copy_from_slice(&60_000u16.to_le_bytes())).unwrap();
+        assert_eq!((wild_limit.limits[0], wild_limit.limits[1]), (0, s.limits[1]), "out of range: OFF");
         let wild = with(&|sec| sec[DATA_AT + 43] = 7).unwrap();
         assert!(wild.power_match, "a byte out of range reads the default, ON");
         let odd = with(&|sec| {

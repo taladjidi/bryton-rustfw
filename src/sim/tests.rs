@@ -1842,3 +1842,23 @@ fn alert_beep_from_an_idle_pass_keeps_its_length() {
     let beep = at[1] - at[0];
     assert!((100..=100 + u64::from(POLL_MS)).contains(&beep), "first beep {beep} ms");
 }
+
+/// The ALERTS menu lists the limits and reminders (it scrolls), each OFF until set; the DFA a1 limit reads 0.75.
+#[test]
+fn alerts_menu_lists_the_limits() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.settings.limits = [400, 90, 120, 60, 45, 15, 100, 10, 300, 500, 75];
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Alerts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    sim.save("alerts_menu_top");
+    for _ in 0..13 {
+        app.press(&mut sim, Press::Short(Key::Page)); // down
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::Alerts, 13));
+    sim.save("alerts_menu_bottom");
+    let mut l = Line::<12>::new();
+    app.settings.text(menu::Setting::Limit(10), &mut l);
+    assert_eq!(l.as_str(), "0.75");
+}

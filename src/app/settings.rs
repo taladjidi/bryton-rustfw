@@ -258,6 +258,8 @@ pub struct Settings {
     pub drink_min: u16,
     /// See `eat_min`.
     pub hr_alert: u16,
+    /// The other limits and reminders ([`alerts::LIMITS`], 0: off); kept in the settings file only.
+    pub limits: [u16; alerts::LIMITS],
     /// The power average window every 3 / 10 / 30 s field, the workout gauge and the climb pacer show (a tap on one of the
     /// fields cycles it): an index in [`WKT_AVGS`]; kept in register 16.
     pub wkt_avg: usize,
@@ -368,6 +370,7 @@ impl Settings {
             eat_min: 0,
             drink_min: 0,
             hr_alert: 0,
+            limits: [0; alerts::LIMITS],
             wkt_avg: 0,
             touch: true,
             remote: [menu::Remote::None; 4],
@@ -653,6 +656,17 @@ impl Settings {
                 };
                 if v == 0 { l.push_str("OFF") } else { l.push_u32(u32::from(v)) }
             }
+            Setting::Limit(n) => match self.limits.get(usize::from(n)) {
+                Some(&v) if v > 0 && n == 10 => {
+                    // DFA a1 in hundredths
+                    l.push_u32(u32::from(v / 100));
+                    l.push_str(".");
+                    l.push_u32(u32::from(v / 10 % 10));
+                    l.push_u32(u32::from(v % 10));
+                }
+                Some(&v) if v > 0 => l.push_u32(u32::from(v)),
+                _ => l.push_str("OFF"),
+            },
             Setting::Altitude => {
                 let m = i32::from(self.alt_m) - ALT_MENU_OFFSET;
                 if m < 0 {
@@ -746,6 +760,7 @@ impl Settings {
             Setting::Eat => Some(&mut self.eat_min),
             Setting::Drink => Some(&mut self.drink_min),
             Setting::HrAlert => Some(&mut self.hr_alert),
+            Setting::Limit(n) => self.limits.get_mut(usize::from(n)),
             Setting::Altitude => Some(&mut self.alt_m),
             _ => None,
         }

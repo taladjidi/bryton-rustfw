@@ -8,6 +8,8 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
+  the red banner on the unit for a limit crossed on a ride.
 - **The trip, lap and slope fields (training/ride.rs, app/fields.rs; the page with trip time, laps, last lap, lap power
   and NP, top cadence and altitude, descent, lap ascent and descent, uphill and downhill)**: sim only. Still to see:
   on a real ride, the trip time through an auto-pause and a Start pause, each lap's power and NP against the power

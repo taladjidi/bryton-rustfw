@@ -124,6 +124,15 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   once a minute). Each is a banner ("EAT REMINDER", "DRINK REMINDER", "HEART RATE HIGH" in red) and three beeps,
   played without stopping the loop; nothing while paused. Alerts due in the same second, or a catch-up after a busy
   pass, are queued (one bit each) and said one after the other, the heart rate first, none lost to the one up.
+  Also off by default (ALERTS, the list scrolls): power above / below (10 W steps), cadence above / below (5 rpm),
+  speed above / below (km/h), heart rate below (5 bpm), and DFA a1 below (hundredths, 5 steps: 75 reads 0.75, the
+  aerobic threshold of patch P9; only with the strap's beats). A limit alerts once its value has stayed past it for
+  5 s (not on one sample), re-arms once the value is back inside by 5 % of the limit (at least 1), and says at most
+  once a minute; no reading from a sensor, no alert; only while the ride runs (not paused, not outside a ride).
+  Each is a red banner ("POWER HIGH", "POWER LOW", "CADENCE HIGH", "CADENCE UNDER", "SPEED HIGH", "SPEED LOW",
+  "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (every N km, 1 to 99), kcal and kJ
+  (every N, steps of 10) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
+  step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
@@ -718,8 +727,9 @@ Each copy holds "RSET", a version (1), the length of the settings in it, a seque
 The newest whole copy (the higher sequence number) wins, and a write goes over the other copy, so a write cut at any
 point leaves the newest copy before it whole. The file is read when `\Rustfw\pages.bin` is read, a few seconds after
 the start (never at boot), and written between rides only. Its settings: the wheel size, the numbers (max HR, FTP,
-weight, bike weight, W', eat, drink, heart rate alert), then the choices, one byte each. A value out of its range reads
-as its default. A later build appends its settings and raises the length.
+weight, bike weight, W', eat, drink, heart rate alert), then the choices, one byte each, then the 11 alert limits
+(`Settings::limits`, u16 each, after POWER MATCH). A value out of its range reads as its default, and a file that ends
+before the limits (an earlier build's) reads them OFF. A later build appends its settings and raises the length.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers

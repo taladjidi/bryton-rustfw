@@ -290,3 +290,21 @@ fn the_indoor_page_set_is_a_row() {
     assert_eq!((app.screen(), n.0), (Screen::Menu(Menu::Page(0), 0), 4));
     assert!(app.view_set() == ride::Profile::Indoor, "the indoor set");
 }
+
+/// A power high limit crossed by a power meter's 210 W: after 5 s over it the banner and the beeps, on the ride
+/// page; not before.
+#[test]
+fn power_high_alert_shows_the_banner() {
+    let (mut sim, mut app) = quick_unit(false);
+    app.settings.limits[0] = 150;
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.tones.len();
+    for s in 0..4 {
+        run(&mut sim, &mut app, 1000);
+        assert_ne!(app.notes.text.as_str(), "POWER HIGH", "second {s}: not before the hold");
+    }
+    run(&mut sim, &mut app, 4000);
+    assert_eq!(app.notes.text.as_str(), "POWER HIGH");
+    assert!(sim.tones.len() > t0, "the beeps");
+    sim.save("alert_power_high");
+}
