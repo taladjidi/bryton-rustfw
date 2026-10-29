@@ -687,3 +687,30 @@ fn heart_rate_and_power_fields_against_the_numbers() {
     assert_ne!(text(&app, PowerZoneTime), "--", "the time in the zone of now");
     sim.save("ride_zone_fields");
 }
+
+#[test]
+fn sun_heading_arrival_and_battery_fields() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(ride_route);
+    sim.gnss.fix = Some(8000);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = PageCfg { layout: 6, fields: [Heading, Sunrise, Sunset, ToSunset, Eta, UnitBatt] }.into();
+    app.pages[1] = PageCfg { layout: 6, fields: [TimeToDest, HrBatt, PowerBatt, Dist, Time, Speed] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "--"];
+    assert!(compass.contains(&text(&app, Heading).as_str()), "a compass point, or -- when slow");
+    assert_ne!(text(&app, Sunrise), "--", "a fix and a learnt zone give the sunrise");
+    assert_ne!(text(&app, Sunset), "--", "and the sunset");
+    assert_eq!(text(&app, Eta), "--", "no course: no arrival");
+    assert_eq!(text(&app, TimeToDest), "--", "no course: no time to the destination");
+    assert_eq!(text(&app, PowerBatt), "--", "no power meter paired");
+    assert_eq!(text(&app, HrBatt), "--", "the strap sends no battery status in this run");
+    assert!(text(&app, UnitBatt).ends_with('%'), "the status bar's percent");
+    sim.save("sun_fields");
+}

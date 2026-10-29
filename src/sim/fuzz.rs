@@ -4050,3 +4050,23 @@ fn segment_matcher() {
     }
     assert!(starts > 100 && finishes > 20 && losts > 20 && by_other > 10, "{starts} {finishes} {losts} {by_other}");
 }
+
+#[test]
+fn sun_times_anywhere() {
+    // any latitude, longitude, date and zone (16 h either way, 15 min steps): no panic, the times in range, the sun up
+    // and down both reached (the polar cases give None)
+    let (mut rose, mut total) = (0, 0);
+    let mut next = xorshift(7);
+    for _ in 0..20_000 {
+        let lat = ((next() % 1_800_000_001) as i64 - 900_000_000) as i32;
+        let lon = ((next() % 3_600_000_001) as i64 - 1_800_000_000) as i32;
+        let days = 20_000 + (next() % 5_000) as i32;
+        let zone = ((next() % 129) as i32 - 64) * 15;
+        total += 1;
+        if let Some((rise, set)) = crate::sun::rise_set(lat, lon, days, zone) {
+            assert!(rise < 1440 && set >= rise && set < 2 * 1440, "{lat} {lon} {days} {zone}: {rise} {set}");
+            rose += 1;
+        }
+    }
+    assert!(rose > 0 && rose < total, "the sun up and the polar days both reached: {rose} of {total}");
+}

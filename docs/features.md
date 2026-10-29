@@ -69,6 +69,15 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
+- **Sun, heading, arrival and batteries (nav/sun.rs, app/fields.rs)**: heading as one of 8 compass points (N first)
+  from the GNSS course over ground, "--" under 5 km/h or without a fix. Sunrise and sunset in local time, and the time
+  left to today's sunset (h:mm, "--" once it has set): NOAA's solar equations (Meeus, ch. 25 and 28, as NOAA's calculator
+  writes them; cited in the module), from the fix's place and the RTC's date. The RTC is local time, so the zone is the
+  offset learnt from the phone or the fix; no fix, no zone, or polar day or night: "--". The sun is worked out once a
+  minute, not per pass. On a course: the time to the end at the average moving speed ("--" under 5 km/h average) and the
+  clock of arrival (ETA); the distance to go is the course's own field. Batteries: the unit's percent (the status bar's),
+  and the power meter's and the heart-rate strap's ANT+ status (page 82: NEW, GOOD, OK, LOW, CRIT). The Di2 battery is the
+  shifting field. Not yet: the sunset alert.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer

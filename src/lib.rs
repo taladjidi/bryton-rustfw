@@ -25,7 +25,7 @@ pub mod ui;
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
 pub use link::{dev, msc, phone, prof};
-pub use nav::{altitude, climbs_ahead, course, segment, segment_match};
+pub use nav::{altitude, climbs_ahead, course, segment, segment_match, sun};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
 pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
 pub use ui::{fonts, map, menu, page, text, theme, tiles};
@@ -138,6 +138,9 @@ pub trait Board {
     /// The touch controller pulls its INT line (PC6) low: it has a point to read.
     fn touch_int(&mut self) -> bool;
 }
+
+/// The sun key (local date and minute) and its rise and set (local minutes), see [`App::refresh_sun`].
+type SunNow = (((u16, u8, u8), (u8, u8)), Option<(u32, u32)>);
 
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
@@ -262,6 +265,11 @@ pub struct App {
     hint_shown: bool,
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
+    /// The sun's rise and set (local minutes) for the date and minute of the last pass that changed it: the key, then
+    /// the times (None without a fix, the zone learnt, or in polar day or night). Worked out at most once a minute.
+    sun: Option<SunNow>,
+    /// The compass point on the screen for the heading (app/fields.rs `held_point`), None without a course.
+    heading: Option<u8>,
     /// The notices and the banner over the screen.
     notes: Notices,
     /// The battery was reported low.
@@ -462,6 +470,8 @@ impl App {
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
+            sun: None,
+            heading: None,
             notes: Notices::new(),
             told_low: false,
             graph_whole: false,
@@ -588,6 +598,8 @@ impl App {
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
         self.date = rtc_date_from_dr(dr);
+        self.refresh_sun();
+        self.refresh_heading();
         self.catch_up_seconds(sec);
         self.settle_set(b);
         self.settle_climb(b);

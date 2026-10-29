@@ -6,3 +6,4 @@ pub mod climbs_ahead;
 pub mod course;
 pub mod segment;
 pub mod segment_match;
+pub mod sun;
