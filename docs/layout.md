@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->57 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->2 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->57 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->1 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -240,6 +240,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/app/segments.rs`: the live segments on the unit (docs/segments.md, "On the unit"; step S3): the index of `\Rustfw\Segments\`
   read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
   the screens (S4) read (`segment_now`, `events`). Nothing drawn, nothing written.
+  start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
+  nothing on the unit calls it yet.
+- `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the
+  module): local minutes, None in polar day and night. Pure logic; `App::refresh_sun` works it out once a minute.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait; `App::serve` there answers the effects that need the app and the card (main.rs keeps the keys, the reset
   and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from

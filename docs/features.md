@@ -69,6 +69,15 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
+- **Sun, heading, arrival and batteries (nav/sun.rs, app/fields.rs)**: heading as one of 8 compass points (N first)
+  from the GNSS course over ground, "--" under 5 km/h or without a fix. Sunrise and sunset in local time, and the time
+  left to today's sunset (h:mm, "--" once it has set): NOAA's solar equations (Meeus, ch. 25 and 28, as NOAA's calculator
+  writes them; cited in the module), from the fix's place and the RTC's date. The RTC is local time, so the zone is the
+  offset learnt from the phone or the fix; no fix, no zone, or polar day or night: "--". The sun is worked out once a
+  minute, not per pass. On a course: the time to the end at the average moving speed ("--" under 5 km/h average) and the
+  clock of arrival (ETA); the distance to go is the course's own field. Batteries: the unit's percent (the status bar's),
+  and the power meter's and the heart-rate strap's ANT+ status (page 82: NEW, GOOD, OK, LOW, CRIT). The Di2 battery is the
+  shifting field. Not yet: the sunset alert.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
@@ -243,7 +252,11 @@ moves; the screen is redrawn at once and the choice is kept through a restart (r
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
-**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through DARK (the colours as they were), OUTDOOR (lighter notes
+**Theme AUTO.** THEME's list starts with AUTO: the day theme (DAY THEME, OUTDOOR at first) and the night one (NIGHT THEME,
+DARK at first) then follow the ambient light: night under 20 lux, day again over 50 lux, each held 30 s, at most one
+switch a minute, a full redraw at each. The light sensor measures while AUTO is on. Details: theming.md 4b.
+
+**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through AUTO (when on, see above), DARK (the colours as they were), OUTDOOR (lighter notes
 and lines, brighter zones), LIGHT (black on white, for the sun) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
 `-` and `_`, 12 characters at most), drawing the screen again at once. The choice is kept by name in settings.bin (not
 in the backup registers), and a file is read again at each start. A file is an INI, read, never written:

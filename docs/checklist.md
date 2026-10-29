@@ -27,7 +27,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [~] Quick Status panel (stock): sim; a swipe-down panel, no chosen fields
 - [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim
 - [ ] Lap summary banner (Garmin, Wahoo)
-- [ ] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours): sim
+- [x] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours), and THEME AUTO switches them from the light: sim
 - [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock)
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation (stock, ours): sim
 - [x] Values in zone colours (stock): unit
@@ -60,8 +60,8 @@ Time
 - [x] Trip time, elapsed with stops (stock, all): sim
 - [x] Lap time and lap distance (stock, all): unit
 - [x] Last lap time, lap count (stock, all): sim
-- [ ] Sunrise, sunset, time to sunset (stock, Garmin)
-- [ ] Time and distance to destination, estimated arrival (stock, Garmin, Wahoo, Karoo)
+- [x] Sunrise, sunset, time to sunset (stock, Garmin): sim
+- [x] Time and distance to destination, estimated arrival (stock, Garmin, Wahoo, Karoo): sim; the distance is the course's distance to go
 
 Altitude and climbing
 
@@ -110,13 +110,13 @@ Power
 Others
 
 - [x] Temperature (stock, all): unit
-- [ ] Heading, compass (stock, Garmin)
+- [x] Heading, compass (stock, Garmin): sim
 - [~] Gears, gear ratio, gear combo, Di2 battery (stock, Garmin, Wahoo, Karoo): sim; gear fields and shift counts, not seen on the unit
 - [ ] E-bike: battery, range, assist mode and level (stock, Garmin, Wahoo, Karoo)
 - [x] Workout fields: target power, cadence, heart rate, time left, interval count (stock, all): sim
 - [~] Navigation fields: turn info, distance to POI, to peak, to destination (stock, all): sim; distance to go, off course, the climb, ascent left; no turns or POIs
 - [ ] Road surface type (Garmin)
-- [ ] Battery of the unit and of each sensor as fields (Garmin, Wahoo)
+- [x] Battery of the unit and of each sensor as fields (Garmin, Wahoo): sim; the Di2 and the power meter and HR strap (ANT+ status), not seen on the unit
 - [ ] Component wear: the bike chosen per ride, kilometres added per part (Garmin)
 
 ## Sensors and radios
