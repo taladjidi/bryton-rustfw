@@ -178,7 +178,7 @@ every test that compares a colour. For colours alone it buys nothing the table d
 |---|---|---|
 | DARK | today, night, saving power is no reason (below) | today's constants, exactly |
 | OUTDOOR | high contrast on black | `dim` light grey (`#C0C0C0`), `line` brighter, the zones brighter (Intervals.icu's x 2, clamped) |
-| LIGHT | sun: black on white | `background` white, `text` black, `dim` `#606060`, `line` `#C0C0C0`, `accent` dark orange with white text on it, the zones at Intervals.icu's own values (made for white pages) |
+| LIGHT | sun: black on white | `background` white, `text` black, `dim` `#606060`, `line` `#8C8C8C` (3:1 on white), `accent` dark orange with white text on it, the zones at Intervals.icu's own values (made for white pages) |
 
 - The panel is transflective (BOARD.md, backlight: "in daylight the transflective panel is read by reflected
   light"), so a white background reflects the sun where black does not: LIGHT is the sun theme (inferred: check
@@ -217,7 +217,7 @@ FONT stays its own setting; a theme's `font` key (level b) only sets its default
 - Split the shared roles (`ON_ACCENT`, `ON_ALARM`, the cog), `Canvas::ink`, `Theme` in src/ui/theme.rs, `Panel` and
   `Row` carrying it, `text::draw` and the two colour-making blits translating.
 - The parser, the whole-theme checks, `\Rustfw\Themes` listed, the name in `settings.bin`, the THEME row.
-- DARK and OUTDOOR. LIGHT once the black-background assumptions are fixed (1b, after a look at every screen in
+- DARK, OUTDOOR and LIGHT (built in; the black-background assumptions fixed, after a look at every screen in
   the scramble test's shots).
 - Tests: identity, scramble, parser units, contrast, fuzz, gallery shots per theme; on the unit, OUTDOOR and LIGHT
   read in the sun (docs/status.md, "Not yet seen on the unit").

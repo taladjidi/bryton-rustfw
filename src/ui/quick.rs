@@ -143,7 +143,7 @@ pub fn draw_button(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), bg: 
     text::draw_in(c, &st, x + 2, y + (h - st.height()) / 2, w - 4, Align::Centre, label);
 }
 
-/// The ZERO button: the accent when it can be pressed, dark when not (a ride moves, or a request is out).
+/// The ZERO button: the accent
 pub fn draw_zero(c: &mut impl Canvas, can: bool) {
     let (bg, fg) = if can { (ACCENT, super::ON_ACCENT) } else { (DARK, GREY) };
     draw_button(c, ZERO, bg, fg, "ZERO");

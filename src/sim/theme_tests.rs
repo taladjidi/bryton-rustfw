@@ -397,7 +397,8 @@ fn light_assumes_no_black() {
     };
     let (mut sim, mut app) = unit(None);
     set_theme(&mut sim, &mut app, light_probe());
-    scenes(&mut sim, &mut app, |sim, _, name| {
+    scenes(&mut sim, &mut app, |sim, app, name| {
+        super::tests::assert_consistent(sim, app);
         no_black(sim, name);
         if name == "overview" {
             let g = ui::GEAR_AT;
@@ -473,4 +474,9 @@ fn light_map_page() {
     run(&mut sim, &mut app, 60_000);
     super::tests::assert_consistent(&sim, &app);
     sim.save("theme_light_map");
+    let count = |c: u16| sim.screen.iter().filter(|&&p| p == c).count();
+    let ink = Theme::LIGHT.ink;
+    assert!(count(ink[4]) > 20, "the track in LIGHT's accent: {}", count(ink[4]));
+    assert!(count(ink[1]) > 40, "the arrow and the buttons in LIGHT's text: {}", count(ink[1]));
+    assert_eq!(count(crate::ui::ACCENT), 0, "no built-in accent left");
 }

@@ -3529,7 +3529,7 @@ fn settings_decision() {
 #[test]
 fn theme_files() {
     use crate::theme::{NAMES, Refused, Theme, check, parse};
-    let mut accepted = 0;
+    let (mut accepted, mut light) = (0, 0usize);
     let mut refused = [0usize; 5];
     let mut set = [false; NAMES.len()];
     for seed in 1..4000u32 {
@@ -3546,7 +3546,7 @@ fn theme_files() {
                 _ => f.push_str(&std::format!("version = 1{nl}name = T{}{nl}", rnd() % 100)),
             }
             if rnd().is_multiple_of(3) {
-                f.push_str(["base = outdoor", "base = dark", "base = ??"][rnd() as usize % 3]);
+                f.push_str(["base = outdoor", "base = dark", "base = ??", "base = light"][rnd() as usize % 4]);
                 f.push_str(nl);
             }
         }
@@ -3576,7 +3576,11 @@ fn theme_files() {
         match parse(bytes) {
             Ok(t) => {
                 accepted += 1;
-                assert!(check(&t, &Theme::DARK).is_ok() || check(&t, &Theme::OUTDOOR).is_ok(), "seed {seed}");
+                assert!(
+                    [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT].iter().any(|b| check(&t, b).is_ok()),
+                    "seed {seed}"
+                );
+                light += usize::from(bytes.windows(12).any(|w| w == b"base = light") && t != Theme::DARK);
                 for (s, (c, d)) in set.iter_mut().zip(t.ink.iter().zip(Theme::DARK.ink)) {
                     *s |= *c != d;
                 }
@@ -3589,6 +3593,7 @@ fn theme_files() {
         }
     }
     assert!(accepted > 100, "accepted {accepted}");
+    assert!(light > 0, "a theme accepted over the light base");
     assert!(refused.iter().all(|&n| n > 0), "every refusal reached: {refused:?}");
     assert!(set.iter().filter(|&&s| s).count() >= NAMES.len() - 2, "keys set from a file: {set:?}");
 }

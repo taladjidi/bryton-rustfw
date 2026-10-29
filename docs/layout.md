@@ -240,7 +240,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
-  `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR shots, a theme file picked from the card and kept),
+  `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).
