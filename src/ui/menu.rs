@@ -81,6 +81,8 @@ pub enum Setting {
     MaxHr,
     /// FTP (a number), also the CP of W' balance.
     Ftp,
+    /// Lactate threshold heart rate (a number, bpm; 0 until set, the LTHR fields show "--").
+    Lthr,
     // power.rs
     /// Rider weight (a number), for W/kg.
     Weight,
@@ -113,6 +115,8 @@ pub enum Setting {
     GpsPower,
     /// ERG targets corrected so the power meter reads them, on or off (`power_match`, [`crate::power_match`]).
     PowerMatch,
+    /// The window of the big power value: the live reading, 3, 5 or 10 s (app/settings.rs, POWER_SMOOTH_S).
+    PowerSmooth,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -206,6 +210,8 @@ impl Setting {
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::PowerMatch => "POWER MATCH",
+            Setting::Lthr => "LTHR",
+            Setting::PowerSmooth => "POWER SMOOTH",
             Setting::Font => "FONT",
             Setting::Theme => "THEME",
             Setting::GpsPower => "GPS POWER",
@@ -223,7 +229,7 @@ impl Setting {
         match self {
             Setting::Wheel => " MM",
             Setting::Light => "%",
-            Setting::MaxHr | Setting::HrAlert => " BPM",
+            Setting::MaxHr | Setting::HrAlert | Setting::Lthr => " BPM",
             Setting::Ftp => " W",
             Setting::Weight | Setting::BikeWeight => " KG",
             Setting::WPrime => " KJ",
@@ -238,6 +244,7 @@ impl Setting {
     pub fn number(self) -> Option<(core::ops::RangeInclusive<u16>, u16)> {
         match self {
             Setting::MaxHr => Some((MAX_HR_RANGE, 1)),
+            Setting::Lthr => Some((LTHR_RANGE, 1)),
             Setting::Ftp => Some((FTP_RANGE, 5)),
             Setting::Weight => Some((WEIGHT_RANGE, 1)),
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
@@ -253,6 +260,8 @@ impl Setting {
 
 /// Max heart rates offered, bpm.
 pub const MAX_HR_RANGE: core::ops::RangeInclusive<u16> = 100..=230;
+/// LTHRs offered, bpm: 0 (the default, none set) is not one of them.
+pub const LTHR_RANGE: core::ops::RangeInclusive<u16> = 100..=230;
 /// FTPs offered, W.
 pub const FTP_RANGE: core::ops::RangeInclusive<u16> = 50..=600;
 const _: () = assert!(ride::MAX_HR >= 100 && ride::MAX_HR <= 230 && ride::FTP.is_multiple_of(5));
@@ -593,8 +602,13 @@ pub const SETTINGS: [Row; 5] = [
 ];
 
 /// ME: the rider's numbers the metrics are computed from.
-pub const ME: [Row; 4] =
-    [Row::Set(Setting::MaxHr), Row::Set(Setting::Ftp), Row::Set(Setting::Weight), Row::Set(Setting::WPrime)];
+pub const ME: [Row; 5] = [
+    Row::Set(Setting::MaxHr),
+    Row::Set(Setting::Lthr),
+    Row::Set(Setting::Ftp),
+    Row::Set(Setting::Weight),
+    Row::Set(Setting::WPrime),
+];
 
 /// ALERTS: the reminders and the heart rate alert.
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
@@ -610,7 +624,7 @@ pub const DISPLAY: [Row; 5] = [
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 8] = [
+pub const BIKE: [Row; 9] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -619,6 +633,7 @@ pub const BIKE: [Row; 8] = [
     Row::Set(Setting::ClimbsAhead),
     Row::Set(Setting::GpsPower),
     Row::Set(Setting::PowerMatch),
+    Row::Set(Setting::PowerSmooth),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

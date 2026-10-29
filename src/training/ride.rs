@@ -50,6 +50,8 @@ pub struct Input {
     pub cadence: Option<u16>,
     /// W.
     pub power: Option<u16>,
+    /// The power meter's balance: the right pedal's share, %, when it reports one (drivers/sensors.rs).
+    pub balance: Option<u16>,
     /// Altitude, mm: the barometer's (calibrated) when it reads, else a good fix's.
     pub alt_mm: Option<i32>,
     /// Which altitude that is: 0 the receiver's, else the barometer on one calibration (`altitude.rs`). A change
@@ -148,6 +150,8 @@ pub struct Ride {
     /// Distance (1/9 mm) at a grade up to +1 % ([`SLOPE_X10`]), and down to -1 %.
     up9: u64,
     down9: u64,
+    /// The balance's right share, % (the moving seconds with a reading).
+    balance: Avg,
 }
 
 impl Default for Ride {
@@ -189,6 +193,7 @@ impl Ride {
             max_alt_mm: None,
             up9: 0,
             down9: 0,
+            balance: Avg { sum: 0, n: 0 },
         }
     }
 
@@ -289,6 +294,7 @@ impl Ride {
                 }
             }
             self.power.add(i.power); // zeros count: coasting is part of the average power
+            self.balance.add(i.balance.filter(|&b| b <= 100));
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
             self.max_cadence = self.max_cadence.max(i.cadence.unwrap_or(0));
             self.lap_power.sample(i.power, true);
@@ -316,6 +322,11 @@ impl Ride {
             }
         }
         Some(Event::Second)
+    }
+
+    /// The average right pedal share, % (the power meter's balance over the moving seconds that had one).
+    pub fn balance_right(&self) -> Option<u16> {
+        self.balance.get()
     }
 
     /// The totals as words, for the recorder's recovery record ([`Ride::resumed`] reads them back).
@@ -749,6 +760,44 @@ pub fn hr_zone_color(bpm: u16, max: u16) -> u16 {
     hr_color(hr_zone(bpm, max))
 }
 
+/// The seconds the ride spent in each heart-rate zone and each power zone: the moving seconds with a reading. The app
+/// keeps it (not the recovery record), so a Start or a resume starts it from zero, as the laps do.
+///
+/// ```
+/// use bryton_rustfw::ride::ZoneTime;
+/// let mut t = ZoneTime::default();
+/// t.second(Some(2), Some(7));
+/// t.second(Some(2), None);
+/// assert_eq!([t.hr_s(2), t.hr_s(1), t.power_s(7), t.power_s(0)], [Some(2), Some(0), Some(1), None]);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZoneTime {
+    hr: [u32; 5],
+    power: [u32; 7],
+}
+
+impl ZoneTime {
+    /// One moving second in heart-rate zone `hr` (1 to 5) and power zone `power` (1 to 7); None: no reading.
+    pub fn second(&mut self, hr: Option<u8>, power: Option<u8>) {
+        if let Some(s) = hr.and_then(|z| usize::from(z).checked_sub(1)).and_then(|i| self.hr.get_mut(i)) {
+            *s = s.saturating_add(1);
+        }
+        if let Some(s) = power.and_then(|z| usize::from(z).checked_sub(1)).and_then(|i| self.power.get_mut(i)) {
+            *s = s.saturating_add(1);
+        }
+    }
+
+    /// The seconds in heart-rate zone `z`, None for no such zone.
+    pub fn hr_s(&self, z: u8) -> Option<u32> {
+        usize::from(z).checked_sub(1).and_then(|i| self.hr.get(i)).copied()
+    }
+
+    /// The seconds in power zone `z`, None for no such zone.
+    pub fn power_s(&self, z: u8) -> Option<u32> {
+        usize::from(z).checked_sub(1).and_then(|i| self.power.get(i)).copied()
+    }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // History, for the graph field
 // ---------------------------------------------------------------------------------------------------------------
@@ -1024,12 +1073,23 @@ mod tests {
     extern crate std;
     use super::*;
 
+    #[test]
+    fn balance_average_ignores_samples_without_one() {
+        let mut r = Ride::new();
+        r.start_pause(); // Start
+        for b in [Some(60), None, Some(40), Some(101)] {
+            r.second(&Input { balance: b, ..at(250) });
+        }
+        assert_eq!(r.balance_right(), Some(50), "60 and 40 %; no reading and 101 % (not a share) are left out");
+    }
+
     fn at(speed: u16) -> Input {
         Input {
             speed_x10: Some(speed),
             hr: Some(140),
             cadence: Some(90),
             power: Some(200),
+            balance: None,
             alt_mm: None,
             alt_ref: 0,
             alt_corr_mm: 0,

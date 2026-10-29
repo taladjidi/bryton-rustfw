@@ -103,6 +103,11 @@ pub(crate) fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
     l.push_str(ui::DIGITS[(m / 10 % 10) as usize]);
 }
 
+/// `v` as a percent of `of` (None for 0), at most 999: a 4-digit value would not fit its box.
+fn pct_of(v: u16, of: u16) -> Option<u32> {
+    (of > 0).then(|| (u32::from(v) * 100 / u32::from(of)).min(999))
+}
+
 /// One step of FNV-1a over `bytes` (fingerprints of what a box shows).
 pub(crate) fn fnv(h: u32, bytes: &[u8]) -> u32 {
     bytes.iter().fold(h, |h, &x| (h ^ u32::from(x)).wrapping_mul(0x0100_0193))
@@ -125,6 +130,14 @@ pub(crate) fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
 }
 
 impl App {
+    /// The big power value now: the live reading, or the average of the POWER SMOOTH window (1 s is the reading).
+    pub(crate) fn power_now(&self) -> Option<u16> {
+        match POWER_SMOOTH_S.get(self.settings.power_smooth).copied().unwrap_or(1) {
+            0 | 1 => self.live.shown(Metric::Power),
+            s => self.power.average(s as usize),
+        }
+    }
+
     /// The text of ride field `f` now ("--" without a value).
     pub(crate) fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
@@ -252,7 +265,32 @@ impl App {
             Field::Hr => (live(Metric::Hr), false),
             Field::Speed => (live(Metric::Speed), true),
             Field::Cadence => (live(Metric::Cadence), false),
-            Field::Power => (live(Metric::Power), false),
+            Field::Power => (self.power_now().map(u32::from), false),
+            Field::PctMaxHr => (self.live.shown(Metric::Hr).and_then(|b| pct_of(b, self.settings.max_hr)), false),
+            Field::PctLthr => (self.live.shown(Metric::Hr).and_then(|b| pct_of(b, self.settings.lthr)), false),
+            Field::HrZone => {
+                (self.live.shown(Metric::Hr).map(|b| u32::from(ride::hr_zone(b, self.settings.max_hr))), false)
+            }
+            Field::PowerZone => (self.power_now().map(|w| u32::from(ride::power_zone(w, ftp))), false),
+            Field::PctFtp => (p.rolling(0).and_then(|w| pct_of(w, ftp)), false),
+            Field::PctFtpAvg => (r.avg_power().and_then(|w| pct_of(w, ftp)), false),
+            Field::PctFtpLap => (r.lap_avg_power().and_then(|w| pct_of(w, ftp)), false),
+            Field::PctFtp10s => (p.rolling(1).and_then(|w| pct_of(w, ftp)), false),
+            Field::PctFtp30s => (p.rolling(2).and_then(|w| pct_of(w, ftp)), false),
+            Field::HrZoneTime | Field::PowerZoneTime => {
+                let secs = if f == Field::HrZoneTime {
+                    let z = self.live.shown(Metric::Hr).map(|b| ride::hr_zone(b, self.settings.max_hr));
+                    z.and_then(|z| self.zone_s.hr_s(z))
+                } else {
+                    let z = self.power_now().map(|w| ride::power_zone(w, ftp));
+                    z.and_then(|z| self.zone_s.power_s(z))
+                };
+                match secs {
+                    Some(s) => push_duration(&mut l, s, true),
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
             Field::AvgSpeed => (r.avg_speed_x10().map(u32::from), true),
             Field::MaxSpeed => (Some(u32::from(r.max_speed_x10())), true),
             Field::AvgHr => (r.avg_hr().map(u32::from), false),
@@ -304,6 +342,17 @@ impl App {
             Field::MaxPower => (p.max().map(u32::from), false),
             Field::MaxHr => (r.max_hr().map(u32::from), false),
             Field::AvgCadence => (r.avg_cadence().map(u32::from), false),
+            Field::BalanceAvg => {
+                match r.balance_right() {
+                    Some(right) => {
+                        l.push_u32(u32::from(100u16.saturating_sub(right)));
+                        l.push_str("/");
+                        l.push_u32(u32::from(right));
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
             Field::Balance => {
                 match self.live.get(Metric::Balance) {
                     Some(right) => {
@@ -399,7 +448,17 @@ mod tests {
             [Field::Time, Field::Ascent, Field::ClimbProfile]
         );
         assert_eq!(Field::from_index(66), Field::TripTime);
-        assert_eq!(Field::ALL.len(), 79);
+        assert_eq!([Field::from_index(79), Field::from_index(90)], [Field::PctMaxHr, Field::BalanceAvg]);
+        assert_eq!(Field::ALL.len(), 91);
+    }
+
+    #[test]
+    fn percents_of_a_value() {
+        // a floor, 0 for no value (no FTP, no LTHR), and the 999 cap of a box
+        assert_eq!(
+            [pct_of(151, 200), pct_of(150, 200), pct_of(1000, 100), pct_of(5, 0)],
+            [Some(75), Some(75), Some(999), None]
+        );
     }
 
     #[test]

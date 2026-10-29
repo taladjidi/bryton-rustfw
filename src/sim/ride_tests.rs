@@ -646,3 +646,43 @@ fn trip_lap_and_slope_fields() {
     assert_ne!(text(&app, MaxAlt), "--", "a highest altitude");
     sim.save("ride_trip_fields");
 }
+
+/// The heart rate and power fields against the rider's numbers, on a page: a strap ramping its heart rate and a
+/// dual-sided meter at 300 W with the right pedal at 48 %, for two minutes at the default FTP (200 W) and max heart
+/// rate (190). LTHR is unset until the menu sets it ("--"); the percents, zones and balance are worked out by hand here.
+#[test]
+fn heart_rate_and_power_fields_against_the_numbers() {
+    use std::string::ToString;
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(ride_route);
+    sim.gnss.alt = Some(climb);
+    sim.bus.baro_alt = Some(climb);
+    sim.gnss.fix = Some(8000);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_lr, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = PageCfg { layout: 6, fields: [PctMaxHr, PctLthr, HrZone, HrZoneTime, PctFtp, PowerZone] }.into();
+    app.pages[1] =
+        PageCfg { layout: 6, fields: [PctFtpAvg, PowerZoneTime, BalanceAvg, PctFtp10s, PctFtp30s, Power] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let hr = u32::from(app.live.shown(Metric::Hr).unwrap_or(0));
+    assert_eq!(text(&app, PctMaxHr), (hr * 100 / 190).to_string(), "a percent of the max heart rate");
+    assert_eq!(text(&app, PctLthr), "--", "no LTHR set");
+    app.settings.lthr = 150;
+    assert_eq!(text(&app, PctLthr), (hr * 100 / 150).to_string(), "a percent of LTHR once it is set");
+    assert_eq!(text(&app, PctFtp), "150", "3 s power 300 W at 200 W");
+    assert_eq!(text(&app, PctFtpAvg), "150", "average power 300 W");
+    assert_eq!(text(&app, PowerZone), "6", "150 % of the FTP is zone 6 (121 to 150 %)");
+    assert_eq!(text(&app, BalanceAvg), "52/48", "the left 52 % and the right 48 %");
+    assert_eq!(text(&app, Power), "300", "the big power value, live at 1 s");
+    let secs = app.ride.timer_s();
+    assert_eq!(app.zone_s.power_s(6), Some(secs), "every moving second in power zone 6");
+    assert_ne!(text(&app, PowerZoneTime), "--", "the time in the zone of now");
+    sim.save("ride_zone_fields");
+}

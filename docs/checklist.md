@@ -76,9 +76,9 @@ Altitude and climbing
 Heart rate
 
 - [x] Heart rate, average, maximum (stock, all): unit
-- [ ] Heart rate as % of max and of LTHR (stock, Garmin)
-- [~] Heart rate zone (stock, all): sim; colour only, no zone number field
-- [ ] Time in each heart rate zone (Garmin, Karoo)
+- [x] Heart rate as % of max and of LTHR (stock, Garmin): sim
+- [x] Heart rate zone (stock, all): sim
+- [~] Time in the heart rate zone of now (Garmin, Karoo): sim; not each zone's time
 - [x] DFA a1, live from the strap's beats (patch P9, Karoo, Garmin): sim
 - [x] RMSSD (ours): sim
 
@@ -91,18 +91,18 @@ Power
 
 - [x] Power, average, maximum (stock, all): sim
 - [x] 3, 10 and 30 s power (stock, patch P6): sim
-- [ ] Power smoothing chosen on the big power value, kept across restarts (patch P5)
+- [x] Power smoothing chosen on the big power value, kept across restarts (patch P5): sim
 - [x] NP, IF, TSS (stock, Garmin, Wahoo, Karoo): sim
 - [x] kJ and kcal (stock, all): sim
 - [x] W/kg (stock, Garmin): sim
 - [x] W' balance (patch P10, Garmin, Karoo, Wahoo): sim
 - [x] Left / right balance (stock, Garmin): sim
-- [ ] Average left / right balance (stock)
+- [x] Average left / right balance (stock): sim
 - [ ] Torque effectiveness and pedal smoothness (stock, Garmin)
 - [ ] Cycling dynamics: power phase, platform centre offset, seated / standing (Garmin, S800)
-- [ ] % of FTP: current, average, lap, last lap, 3 / 10 / 30 s (stock)
-- [~] Power zone (stock, all): sim; colour only, no zone number field
-- [ ] Time in each power zone (stock, Garmin)
+- [~] % of FTP: current, average, lap, 3 / 10 / 30 s (stock): sim; no last lap's
+- [x] Power zone (stock, all): sim
+- [~] Time in the power zone of now (stock, Garmin): sim; not each zone's time
 - [x] Lap power, last lap power, lap NP (stock, Garmin, Wahoo): sim
 - [ ] Real-time stamina (Garmin)
 - [ ] Power curve, best efforts this ride (Karoo, Garmin)

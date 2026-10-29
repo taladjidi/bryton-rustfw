@@ -27,6 +27,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | Eight fields, four rows of two (sim) |  |  |
 | ![Trip, laps and last lap](img/ride-trip-fields.png) |  |  |
 | Trip time, laps, last lap, lap power and lap NP on a ride page (sim) |  |  |
+| ![Heart rate and power against the numbers](img/ride-zone-fields.png) |  |  |
+| % of max HR (LTHR not set: "--"), heart-rate zone and its time, % of FTP and the power zone on a ride page (sim) |  |  |
 
 ## Page editor
 

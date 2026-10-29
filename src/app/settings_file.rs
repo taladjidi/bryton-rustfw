@@ -10,7 +10,8 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (44 now: 31 in the first build, THEME's 12 bytes, then POWER MATCH's byte appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (47 now: 31 in the first build, THEME's 12 bytes, then POWER MATCH's byte, LTHR's 2 bytes and POWER SMOOTH's byte
+//!                      appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -118,6 +119,8 @@ impl SettingsCopy {
         put(&[u8::from(s.touch), profile, u8::from(s.ahead), u8::from(s.smooth), gps]);
         put(&s.theme);
         put(&[u8::from(s.power_match)]);
+        put(&s.lthr.to_le_bytes());
+        put(&[s.power_smooth as u8]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -185,6 +188,11 @@ impl SettingsCopy {
         }
         // POWER MATCH (appended after THEME): a byte, 0 or 1; a file without it reads ON
         s.power_match = data.next().map_or(d.power_match, |v| if v < 2 { v == 1 } else { d.power_match });
+        // LTHR (2 bytes) and POWER SMOOTH (a byte), appended after POWER MATCH: a file without them reads 0 and the live
+        // reading; an LTHR out of range reads unset
+        let lthr = u16::from_le_bytes([data.next().unwrap_or(0), data.next().unwrap_or(0)]);
+        s.lthr = Some(lthr).filter(|&v| v == 0 || menu::LTHR_RANGE.contains(&v)).unwrap_or(d.lthr);
+        s.power_smooth = data.next().map(usize::from).filter(|&v| v < POWER_SMOOTH_S.len()).unwrap_or(d.power_smooth);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -436,6 +444,8 @@ mod tests {
             smooth: true,
             gps_power: GpsPower::Saver,
             power_match: false,
+            lthr: 158,
+            power_smooth: 2,
             ..Settings::from_word(0)
         }
     }
@@ -473,7 +483,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 44);
+        assert_eq!(len, 47);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -488,15 +498,28 @@ mod tests {
         let none = with(&|sec| sec[6] = 0).unwrap();
         assert_eq!(none, d, "nothing: the defaults");
         let long = with(&|sec| {
-            sec[6] = 48;
-            sec[DATA_AT + 44..DATA_AT + 48].fill(0xee);
+            sec[6] = 49;
+            sec[DATA_AT + 47..DATA_AT + 49].fill(0xee);
         });
         assert_eq!(long, Some(s), "a later build's settings past the ones known are left");
         let old = with(&|sec| sec[6] = 43).unwrap();
         assert!(old.power_match && !s.power_match, "a file from before POWER MATCH reads ON, the rest as it was");
-        assert_eq!(Settings { power_match: false, ..old }, s);
+        // (LTHR and POWER SMOOTH come after POWER MATCH: a 43-byte file has neither)
+        assert_eq!(
+            Settings { power_match: false, lthr: 0, power_smooth: 0, ..old },
+            Settings { lthr: 0, power_smooth: 0, ..s }
+        );
         let wild = with(&|sec| sec[DATA_AT + 43] = 7).unwrap();
         assert!(wild.power_match, "a byte out of range reads the default, ON");
+        // a file from before LTHR and POWER SMOOTH (44 bytes) reads them unset and on the live reading
+        let v44 = with(&|sec| sec[6] = 44).unwrap();
+        assert_eq!((v44.lthr, v44.power_smooth, v44.power_match), (0, 0, s.power_match));
+        let wild2 = with(&|sec| {
+            sec[DATA_AT + 44..DATA_AT + 46].fill(0xff); // an LTHR out of range
+            sec[DATA_AT + 46] = 9; // a POWER SMOOTH out of range
+        })
+        .unwrap();
+        assert_eq!((wild2.lthr, wild2.power_smooth), (0, 0), "out of range: the defaults");
         let odd = with(&|sec| {
             sec[DATA_AT..DATA_AT + 2].copy_from_slice(&1234u16.to_le_bytes()); // no such wheel
             sec[DATA_AT + 4..DATA_AT + 6].copy_from_slice(&9999u16.to_le_bytes()); // FTP out of range

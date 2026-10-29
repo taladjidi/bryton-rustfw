@@ -196,6 +196,8 @@ pub struct App {
     live: Live,
     /// The zones the plain power fields (3, 10 and 30 s) and the heart rate show, with hysteresis ([`App::field_bar`]).
     zones: [ride::ZoneHold; 5],
+    /// The seconds the ride spent in each heart-rate and power zone (app/riding.rs): cleared at a Start and a resume.
+    zone_s: ride::ZoneTime,
     decoders: Decoders,
     /// RMSSD and DFA alpha1 from the strap's beats.
     hrv: hrv::Hrv,
@@ -425,6 +427,7 @@ impl App {
             tlink: TrainerLink::new(),
             live: Live::default(),
             zones: [ride::ZoneHold::default(); 5],
+            zone_s: ride::ZoneTime::default(),
             decoders: Decoders::default(),
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),
