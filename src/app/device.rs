@@ -101,6 +101,11 @@ pub const TOUCH_MS: u32 = 10;
 /// backlight within 2 s (a window that straddles it, then a whole one).
 pub const LIGHT_MS: u32 = 250;
 
+/// How often the light is read when only THEME AUTO wants it (the backlight not following it, the menu not showing it):
+/// one reading a second, the mean the switch checks ([`ui::theme::DayNight`]). The switch is decided and drawn while the
+/// screen is off too: it costs one reading a second, and the theme on the panel is the one for when the screen returns.
+pub const THEME_LIGHT_MS: u32 = 1000;
+
 impl App {
     /// The battery, every [`BATTERY_MS`]: the charge and the charger for the strip, "BATTERY LOW" once at
     /// [`LOW_BATTERY_PERCENT`]. True when the cell is empty and the unit was switched off.
@@ -212,23 +217,28 @@ impl App {
     }
 
     /// The light sensor measures while the backlight follows the ambient light (and is on), or the sensors menu
-    /// shows it, and is read every [`LIGHT_MS`]; in standby otherwise.
+    /// shows it, read every [`LIGHT_MS`]; while THEME AUTO alone wants it, read every [`THEME_LIGHT_MS`]; in standby
+    /// otherwise.
     pub(crate) fn poll_light(&mut self, b: &mut impl Board) {
         if !self.chips.light {
             return;
         }
         self.light.ms = self.light.ms.saturating_add(self.dt_ms);
-        let wanted = (self.settings.light_level == LIGHT_AUTO && self.light.shown != 0)
+        let follows = (self.settings.light_level == LIGHT_AUTO && self.light.shown != 0)
             || matches!(self.screen, Screen::Menu(Menu::BuiltIn, _));
+        let wanted = follows || self.settings.auto_theme;
+        let every = if follows { LIGHT_MS } else { THEME_LIGHT_MS };
         match (wanted, self.light.measuring) {
             (true, false) => {
                 self.light.measuring = ambient::light_start(b);
                 self.light.ms = 0;
             }
-            (true, true) if self.light.ms >= LIGHT_MS => {
+            (true, true) if self.light.ms >= every => {
                 if let Some(lux10) = ambient::light_read(b) {
                     self.light.auto_level = self.light.auto.update(lux10);
+                    let dt = self.light.ms;
                     self.light.ms = 0;
+                    self.follow_light(b, lux10, dt);
                 }
             }
             (false, true) => {

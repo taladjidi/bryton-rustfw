@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (69 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes and POWER SMOOTH's byte appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (94 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -18,6 +18,8 @@
 //!                      byte each ([`SettingsCopy::to_sector`]), then THEME's name (12 bytes, NUL padded; a file
 //!                      only, no register), then POWER MATCH (a byte, file only), then the 11 alert limits ([`alerts::LIMITS`], u16 each,
 //!                      0 = OFF; a file without them reads OFF); a value out of its range reads as its default
+//!                      then LTHR (u16), POWER SMOOTH (a byte), AUTO (a byte, 1 on) and DAY THEME and NIGHT THEME (12 bytes
+//!                      each, as THEME's); a file without them reads AUTO off, OUTDOOR by day and DARK by night
 //! 508  CRC-32 of 0..508
 //! ```
 //!
@@ -124,6 +126,9 @@ impl SettingsCopy {
         }
         put(&s.lthr.to_le_bytes());
         put(&[s.power_smooth as u8]);
+        put(&[u8::from(s.auto_theme)]);
+        put(&s.day_theme);
+        put(&s.night_theme);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -183,11 +188,8 @@ impl SettingsCopy {
         for n in name.iter_mut() {
             *n = data.next().unwrap_or(0);
         }
-        let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-        if name.get(..n).is_some_and(|s| s.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
-            && name.get(n..).is_some_and(|s| s.iter().all(|&b| b == 0))
-        {
-            s.theme = name;
+        if theme_name_ok(&name) {
+            s.theme = normal(name);
         }
         // POWER MATCH (appended after THEME): a byte, 0 or 1; a file without it reads ON
         s.power_match = data.next().map_or(d.power_match, |v| if v < 2 { v == 1 } else { d.power_match });
@@ -207,6 +209,11 @@ impl SettingsCopy {
         let lthr = data.next().zip(data.next()).map_or(d.lthr, |(a, b)| u16::from_le_bytes([a, b]));
         s.lthr = Some(lthr).filter(|&v| v == 0 || menu::LTHR_RANGE.contains(&v)).unwrap_or(d.lthr);
         s.power_smooth = data.next().map(usize::from).filter(|&v| v < POWER_SMOOTH_S.len()).unwrap_or(d.power_smooth);
+        // AUTO, DAY THEME, NIGHT THEME (appended after POWER SMOOTH): a file without them reads AUTO off, OUTDOOR by day
+        // and DARK by night; a name out of its form reads as its default
+        s.auto_theme = data.next().map_or(d.auto_theme, |v| if v < 2 { v == 1 } else { d.auto_theme });
+        s.day_theme = theme_name_at(&mut data).map(normal).unwrap_or(d.day_theme);
+        s.night_theme = theme_name_at(&mut data).map(normal).unwrap_or(d.night_theme);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -219,6 +226,27 @@ impl SettingsCopy {
             (a, b) => a.or(b),
         }
     }
+}
+
+/// A theme name is letters, digits, - and _, then NUL padding (an empty name is DARK).
+fn theme_name_ok(name: &[u8; 12]) -> bool {
+    let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    name.get(..n).is_some_and(|s| s.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        && name.get(n..).is_some_and(|s| s.iter().all(|&b| b == 0))
+}
+
+/// A theme name read from the file as its canonical bytes: DARK (or any case of it) is the empty name.
+fn normal(name: [u8; 12]) -> [u8; 12] {
+    Settings::name_bytes(Settings::name_of(&name))
+}
+
+/// The next 12 bytes of `data` as a theme name; None if the data ends first or the name is not one.
+fn theme_name_at(data: &mut impl Iterator<Item = u8>) -> Option<[u8; 12]> {
+    let mut name = [0u8; 12];
+    for n in name.iter_mut() {
+        *n = data.next()?;
+    }
+    theme_name_ok(&name).then_some(name)
 }
 
 /// Failed reads of the file after which the passes stop trying.
@@ -245,6 +273,8 @@ pub(crate) struct SettingsStore {
     pub(crate) boot_words: [u32; 4],
     /// THEME was picked (the file may not be read yet): the file's name of it does not win.
     pub(crate) theme_set: bool,
+    /// DAY THEME or NIGHT THEME was picked: the file's names do not win (as THEME's).
+    pub(crate) names_set: bool,
     /// The file was read whole: written over in place (as `PageStore::sound`).
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
@@ -389,11 +419,22 @@ impl App {
         let (merged, took) = if st.lost { (c.settings, [false; 4]) } else { c.settings.with_registers(c.words, regs) };
         let was = self.settings;
         // a theme picked before the file was read stays and goes to the file (the registers carry no theme)
-        let theme = if st.theme_set { was.theme } else { merged.theme };
+        // the registers carry no theme: THEME, AUTO and the day and night themes are the file's, or those picked before it
+        let pick = if st.theme_set { was } else { merged };
+        let names = if st.names_set { was } else { merged };
+        let now = Settings { day_theme: names.day_theme, night_theme: names.night_theme, ..pick };
+        let themes = |s: &Settings| (s.theme, s.auto_theme, s.day_theme, s.night_theme);
         // the file gets the registers' fields, or words that say what the registers now hold, or the theme picked
         st.dirty = self.card_writable
-            && (took.contains(&true) || merged.register_words() != c.words || theme != c.settings.theme);
-        self.settings = Settings { alt_m: was.alt_m, theme, ..merged };
+            && (took.contains(&true) || merged.register_words() != c.words || themes(&now) != themes(&c.settings));
+        self.settings = Settings {
+            alt_m: was.alt_m,
+            theme: pick.theme,
+            auto_theme: pick.auto_theme,
+            day_theme: now.day_theme,
+            night_theme: now.night_theme,
+            ..merged
+        };
         if (st.lost || self.card_writable) && self.settings.register_words() != regs {
             // put right from the result (lost, or a register some fields missed); a build that may not write the
             // card leaves them as another build wrote them, but not stock's import over lost ones (the next
@@ -403,7 +444,10 @@ impl App {
         if self.settings != was {
             self.update_light(b);
             self.gps.reconfig = true;
-            if self.settings.theme != was.theme {
+            if (self.settings.theme, self.settings.auto_theme, self.settings.day_theme, self.settings.night_theme)
+                != (was.theme, was.auto_theme, was.day_theme, was.night_theme)
+            {
+                self.load_day_night(b);
                 self.apply_theme(b, false);
             } else if self.settings.smooth != was.smooth {
                 self.font_changed(b);
@@ -498,7 +542,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 69);
+        assert_eq!(len, 94);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -567,5 +611,53 @@ mod tests {
         assert_eq!((odd.max_hr, odd.smooth), (s.max_hr, s.smooth), "the others kept");
         assert_eq!(with(&|sec| sec[4] = 2), None, "another version");
         assert_eq!(with(&|sec| sec[6..8].copy_from_slice(&481u16.to_le_bytes())), None, "longer than a copy holds");
+    }
+}
+
+#[cfg(test)]
+mod day_night_file_tests {
+    use super::*;
+
+    fn recrc(sec: &mut [u8; 512]) {
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    /// AUTO, DAY THEME and NIGHT THEME are kept after POWER SMOOTH (data 69 on), and read back; a file of 44, 66 or 69
+    /// bytes (an earlier build) reads AUTO off, OUTDOOR by day and DARK by night, its other settings as they were.
+    #[test]
+    fn auto_and_the_day_and_night_themes_round_trip_and_older_files_read_them_off() {
+        let s = Settings {
+            auto_theme: true,
+            day_theme: Settings::name_bytes("LIGHT"),
+            night_theme: Settings::name_bytes("SUNNY"),
+            theme: Settings::name_bytes("OUTDOOR"),
+            ..Settings::from_word(0)
+        };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 94, "the length: 69 + 1 + 12 + 12");
+        assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
+        assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
+        assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
+        let back = SettingsCopy::from_sector(&sec).map(|c| c.settings);
+        assert_eq!(
+            back.map(|b| (b.auto_theme, b.day_theme, b.night_theme, b.theme)),
+            Some((true, s.day_theme, s.night_theme, s.theme))
+        );
+        for len in [44u16, 66, 69] {
+            let mut old = sec;
+            old[6..8].copy_from_slice(&len.to_le_bytes());
+            recrc(&mut old);
+            let o = SettingsCopy::from_sector(&old).map(|c| c.settings);
+            let got = o.map(|o| (o.auto_theme, o.day_theme, o.night_theme, o.theme));
+            assert_eq!(got, Some((false, Settings::name_bytes("OUTDOOR"), [0; 12], s.theme)), "a {len}-byte file");
+        }
+        // a bad AUTO byte reads off; a damaged DAY THEME reads OUTDOOR
+        let mut bad = sec;
+        bad[28 + 69] = 7;
+        bad[28 + 70] = b'/';
+        recrc(&mut bad);
+        let b = SettingsCopy::from_sector(&bad).map(|c| c.settings);
+        assert_eq!(b.map(|b| (b.auto_theme, b.day_theme)), Some((false, Settings::name_bytes("OUTDOOR"))));
     }
 }

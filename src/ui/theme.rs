@@ -326,6 +326,91 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
     check(&t, &base).map(|()| t)
 }
 
+/// Lux (tenths) under which AUTO's night theme comes: the top of stock's dusk band (`ambient::AUTO_BANDS`, 20 lux,
+/// where its backlight is at 20 %, then 30 % up to 50 lux).
+pub const NIGHT_BELOW: u32 = 200;
+/// Lux (tenths) over which AUTO's day theme comes back: the top of stock's 30 % band (50 lux), 2.5 times
+/// [`NIGHT_BELOW`], so a dusk that flickers stays on the side it is on.
+pub const DAY_ABOVE: u32 = 500;
+/// Seconds a light reading must stay on the other side before the theme switches (the owner's 30 s).
+pub const HOLD_S: u32 = 30;
+/// Seconds at least between two switches (at most one a minute).
+pub const GAP_S: u32 = 60;
+
+/// AUTO (THEME): day or night from the ambient light. The light is the mean of each second's readings, checked once a
+/// second with integers only; a side is kept until the mean is over the other threshold for [`HOLD_S`] seconds in a
+/// row, and never switched again within [`GAP_S`] of the last switch. The first checked mean decides at once (night
+/// under [`NIGHT_BELOW`], else day), with no hold; no reading, no theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DayNight {
+    /// The night theme is in use.
+    pub night: bool,
+    /// The readings of this second, summed, and their count.
+    sum: u32,
+    n: u32,
+    /// Milliseconds since the last check.
+    ms: u32,
+    /// Seconds the mean has been on the other side (up to [`HOLD_S`]).
+    held: u32,
+    /// Seconds since the last switch (up to [`GAP_S`]).
+    since: u32,
+    /// No check yet: the first one decides at once.
+    first: bool,
+}
+
+impl Default for DayNight {
+    fn default() -> Self {
+        DayNight { night: false, sum: 0, n: 0, ms: 0, held: 0, since: GAP_S, first: true }
+    }
+}
+
+impl DayNight {
+    /// Takes one reading (tenths of a lux) taken `dt_ms` after the last. Once a second it checks the mean, and returns
+    /// the new night flag when the theme switches.
+    ///
+    /// ```
+    /// use bryton_rustfw::theme::DayNight;
+    /// let mut d = DayNight::default();
+    /// assert_eq!(d.update(10, 1000), Some(true), "the first reading, 1 lux: night at once");
+    /// for _ in 0..59 {
+    ///     assert_eq!(d.update(1000, 1000), None, "100 lux: day, but not within a minute of the switch");
+    /// }
+    /// assert_eq!(d.update(1000, 1000), Some(false), "a minute on, and held 30 s: day");
+    /// ```
+    pub fn update(&mut self, lux10: u32, dt_ms: u32) -> Option<bool> {
+        self.sum = self.sum.saturating_add(lux10);
+        self.n = self.n.saturating_add(1);
+        self.ms = self.ms.saturating_add(dt_ms);
+        if self.ms < 1000 {
+            return None;
+        }
+        let lux = self.sum / self.n.max(1);
+        (self.sum, self.n, self.ms) = (0, 0, 0);
+        if self.first {
+            self.first = false;
+            let night = lux < NIGHT_BELOW;
+            if night == self.night {
+                return None;
+            }
+            (self.night, self.since, self.held) = (night, 0, 0);
+            return Some(night);
+        }
+        self.since = self.since.saturating_add(1).min(GAP_S);
+        let other = if self.night { lux > DAY_ABOVE } else { lux < NIGHT_BELOW };
+        if !other {
+            self.held = 0;
+            return None;
+        }
+        self.held = self.held.saturating_add(1).min(HOLD_S);
+        if self.held < HOLD_S || self.since < GAP_S {
+            return None;
+        }
+        self.night = !self.night;
+        (self.held, self.since) = (0, 0);
+        Some(self.night)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -409,5 +494,78 @@ mod tests {
         assert_eq!(f("zone4=#202020"), Err(Refused::Contrast), "a zone under 3:1");
         assert_eq!(f("zone2=#4488CC\nzone1=#4488CC"), Err(Refused::SameZones));
         assert!(f("accent=#00AAFF").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod day_night_tests {
+    use super::*;
+
+    /// A DayNight past its first check (the hold rules apply from the start).
+    fn settled() -> DayNight {
+        DayNight { first: false, ..DayNight::default() }
+    }
+
+    #[test]
+    fn the_first_reading_decides_at_once() {
+        let mut night = DayNight::default();
+        assert_eq!(night.update(50, 1000), Some(true), "5 lux at the first reading: night");
+        let mut day = DayNight::default();
+        assert_eq!(day.update(300, 1000), None, "30 lux: between the thresholds, day");
+        assert!(!day.night);
+    }
+
+    /// `secs` seconds of readings of `lux10` (four 250 ms readings each); the first switch, as (second, night).
+    fn feed(d: &mut DayNight, lux10: u32, secs: u32) -> Option<(u32, bool)> {
+        let mut first = None;
+        for s in 1..=secs {
+            for _ in 0..4 {
+                if let Some(night) = d.update(lux10, 250) {
+                    first.get_or_insert((s, night));
+                }
+            }
+        }
+        first
+    }
+
+    #[test]
+    fn the_hold_of_30_seconds_then_night() {
+        let mut d = settled();
+        assert_eq!(feed(&mut d, 50, 29), None, "29 s dark: not yet");
+        assert_eq!(feed(&mut d, 50, 1), Some((1, true)), "the 30th second: night");
+        assert!(d.night);
+    }
+
+    #[test]
+    fn between_the_thresholds_the_side_is_kept() {
+        let mut d = settled();
+        assert_eq!(feed(&mut d, 300, 120), None, "30 lux by day: day stays");
+        assert_eq!(feed(&mut d, 50, 30), Some((30, true)));
+        assert_eq!(feed(&mut d, 300, 120), None, "30 lux by night: night stays (no flicker back)");
+        assert!(d.night);
+    }
+
+    #[test]
+    fn a_break_restarts_the_hold() {
+        let mut d = settled();
+        assert_eq!(feed(&mut d, 50, 20), None);
+        assert_eq!(feed(&mut d, 300, 1), None, "one second in the middle");
+        assert_eq!(feed(&mut d, 50, 20), None, "20 more seconds: 20, not 40");
+    }
+
+    #[test]
+    fn the_day_comes_back_above_50_lux_and_one_switch_a_minute() {
+        let mut d = settled();
+        assert_eq!(feed(&mut d, 50, 30), Some((30, true)));
+        assert_eq!(feed(&mut d, 600, 59), None, "the hold is met at once, the minute from the switch is not");
+        assert_eq!(feed(&mut d, 600, 1), Some((1, false)), "the 60th second after the switch: day");
+        assert!(!d.night);
+    }
+
+    #[test]
+    fn a_bright_start_stays_day() {
+        let mut d = settled();
+        assert_eq!(feed(&mut d, 1000, 120), None);
+        assert!(!d.night);
     }
 }

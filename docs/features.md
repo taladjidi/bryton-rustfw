@@ -243,7 +243,11 @@ moves; the screen is redrawn at once and the choice is kept through a restart (r
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
-**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through DARK (the colours as they were), OUTDOOR (lighter notes
+**Theme AUTO.** THEME's list starts with AUTO: the day theme (DAY THEME, OUTDOOR at first) and the night one (NIGHT THEME,
+DARK at first) then follow the ambient light: night under 20 lux, day again over 50 lux, each held 30 s, at most one
+switch a minute, a full redraw at each. The light sensor measures while AUTO is on. Details: theming.md 4b.
+
+**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through AUTO (when on, see above), DARK (the colours as they were), OUTDOOR (lighter notes
 and lines, brighter zones), LIGHT (black on white, for the sun) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
 `-` and `_`, 12 characters at most), drawing the screen again at once. The choice is kept by name in settings.bin (not
 in the backup registers), and a file is read again at each start. A file is an INI, read, never written:

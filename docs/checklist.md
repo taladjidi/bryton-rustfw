@@ -27,7 +27,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [~] Quick Status panel (stock): sim; a swipe-down panel, no chosen fields
 - [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim
 - [ ] Lap summary banner (Garmin, Wahoo)
-- [ ] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours): sim
+- [x] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours), and THEME AUTO switches them from the light: sim
 - [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock)
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation (stock, ours): sim
 - [x] Values in zone colours (stock): unit
