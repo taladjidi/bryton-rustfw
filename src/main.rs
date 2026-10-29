@@ -1741,7 +1741,36 @@ fn make_thresholds() -> &'static mut bryton_rustfw::thresholds::Scan {
     SCAN.init_with(bryton_rustfw::thresholds::Scan::new)
 }
 
+/// The stack canary still holds its pattern, or a fault (hw.rs `fault`: the marker, a reset, the ride resumes from its
+/// checkpoint). An overflow cannot be caught when it happens: with interrupts masked (PRIMASK) an MPU guard's fault
+/// escalates to HardFault, whose stacking on the overflowed stack locks the core up (seen on the unit 2026-10-29,
+/// BOARD.md 2). One DTCM load and a compare.
+#[inline(always)]
+fn stack_check() {
+    if !bryton_rustfw::stack_intact(rd(hw::stack_canary())) {
+        hw::fault();
+    }
+}
+
+/// Runs the stack down past its canary on purpose (the dev link's `stackfault`, never the UI), then returns, so the
+/// pass's [`stack_check`] must reset the unit. A frame is about 152 B: the 128 B array and the pushed registers,
+/// written before the next call (black_box), and one alignment pad word never written. It stops in the first frame
+/// that reaches below the canary, so less than a frame of `.bss` under it is overwritten before the check, which
+/// follows at once. When a build puts the canary on that pad word (about 1 build in 38) the test misses: no marker,
+/// only the plain reset after it. That is this test's frame, not a hole in the per-pass check.
+#[inline(never)]
+fn stack_fault(canary: u32) -> u32 {
+    let mut frame = [canary; 32];
+    core::hint::black_box(&mut frame);
+    if hw::address(&frame) <= canary {
+        return frame[0];
+    }
+    // used after the call, so each frame stays live and the recursion is not made a loop
+    stack_fault(canary).wrapping_add(core::hint::black_box(&frame)[1])
+}
+
 fn main() -> ! {
+    wr(hw::stack_canary(), bryton_rustfw::STACK_CANARY); // before anything runs deep: the stack is near its top
     mpu_init();
     checkpoint(1);
     dwt_init();
@@ -1796,8 +1825,12 @@ fn main() -> ! {
     let (mut awake, mut ran, mut window_ms) = (0u32, 0u32, 0u32);
     let mut since_touch = 0u32; // ms slept since the panel was last read
     loop {
+        // before the step too: an overflow in the last pass's sleep loop (USB, the touch) is caught before the
+        // recorder runs on what it overwrote
+        stack_check();
         let t0 = cycles();
         app.step(&mut board);
+        stack_check();
         app.prof().span(Sec::Step, t0, cycles());
         checkpoint(6);
         let vbus = !pin_low(VBUS.0, VBUS.1);
@@ -1844,6 +1877,13 @@ fn main() -> ! {
                         Effect::Key(p) => press = Some(p),
                         Effect::Reset => {
                             l.linger(50);
+                            system_reset();
+                        }
+                        Effect::StackFault => {
+                            l.linger(50);
+                            stack_fault(hw::stack_canary());
+                            stack_check(); // a pass: resets with the fault marker
+                            // a miss (no marker): the tail of .bss is overwritten all the same, so never run on
                             system_reset();
                         }
                         Effect::Run(size) => {

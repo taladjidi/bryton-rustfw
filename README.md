@@ -53,11 +53,11 @@ Measured on the unit (2026-10-29, `tools/profile.py` from RAM, 30 s windows; the
 <<<<<<< HEAD
 | Image | <!-- n:image -->642 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
 | Code | about <!-- n:rust_lines -->89,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
-| Tests | <!-- n:tests -->892<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->157<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+| Tests | <!-- n:tests -->893<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->158<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 =======
 | Image | <!-- n:image -->642 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
 | Code | about <!-- n:rust_lines -->89,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
-| Tests | <!-- n:tests -->892<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->157<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+| Tests | <!-- n:tests -->893<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->158<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 >>>>>>> main
 
 

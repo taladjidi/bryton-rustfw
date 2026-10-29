@@ -58,6 +58,23 @@ pub(crate) fn play(b: &mut impl Board, tones: &[(u32, u32)]) {
 
 /// Main loop period: the time and the keys are read this often.
 pub const POLL_MS: u32 = 50;
+
+/// The stack canary's pattern (main.rs writes it at start into link.x `_stack_canary`, the word just above `.bss`,
+/// and checks it every pass): any other value means the stack ran down into it, a fault (hw.rs `fault`: the marker,
+/// a reset, the ride resumes from its checkpoint). Not 0 nor a likely pointer or small count, so a frame's own
+/// words are unlikely to leave it as it was.
+pub const STACK_CANARY: u32 = 0x5aa5_c3c3;
+
+/// The stack canary's word `word` still holds [`STACK_CANARY`].
+///
+/// ```
+/// use bryton_rustfw::{STACK_CANARY, stack_intact};
+/// assert!(stack_intact(STACK_CANARY));
+/// assert!(!stack_intact(0) && !stack_intact(0x2001_ff00) && !stack_intact(STACK_CANARY ^ 1));
+/// ```
+pub const fn stack_intact(word: u32) -> bool {
+    word == STACK_CANARY
+}
 /// Main loop period while idle ([`App::pass_ms`]): no ride, no key for [`IDLE_AFTER_MS`]. A key, a touch and a byte
 /// from the Nordic chip end main.rs's sleep at once, so this bounds only what nothing announces: the clock shown (a
 /// second at most this late), the GNSS read, the timers' resolution.
