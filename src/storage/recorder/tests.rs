@@ -1308,13 +1308,17 @@ fn a_ride_resumed_on_a_full_card_is_saved() {
 fn a_damaged_record_is_refused() {
     let r = |seq, phase| {
         let ride = [seq; RIDE_WORDS];
-        Rec { seq, phase, name: NAME, cluster: 7, fit: [0; RECORD_LEN], ride, discard: false }
+        Rec { seq, phase, name: NAME, cluster: 7, fit: [0; RECORD_LEN], ride, discard: false, checked: false }
     };
     let s = r(5, Phase::Recording).to_sector();
     assert_eq!(Rec::from_sector(&s), Some(r(5, Phase::Recording)));
     // the discard's flag, byte 22; 0 in the records of the builds before it
     let d = Rec { discard: true, ..r(6, Phase::Saving) };
     assert_eq!((d.to_sector()[22], s[22]), (1, 0));
+    // the chain's mark, byte 23; 0 in the records of the builds before it, which ignore it
+    let c = Rec { checked: true, ..r(7, Phase::Recording) };
+    assert_eq!((c.to_sector()[23], s[23]), (1, 0));
+    assert_eq!(Rec::from_sector(&c.to_sector()), Some(c));
     assert_eq!(Rec::from_sector(&d.to_sector()), Some(d));
     for at in [0, 4, 8, 9, 24, 40, 100, 511] {
         let mut bad = s;
@@ -2159,4 +2163,54 @@ fn a_stuck_save_whose_chain_a_computer_freed_is_never_linked() {
     }
     assert!(matches!(ride(&mut Recorder::new(), &mut d, 0), Some(Outcome::Saved(_))), "the next ride");
     assert_eq!(check_clean(&d.img, "boot, then a ride"), 0);
+}
+
+/// The review of the S1 fix, finding 1: a ride left open whose entry is gone (a torn folder sector) but whose chain
+/// is whole. The boot's recovery checks the chain, marks its record (`Rec::checked`), repairs sector 0 and the last
+/// sector from the record's copies, and saves. Cut at every sector of that, torn, then booted again: the ride is
+/// saved whole, a torn repair redone (unmarked, the torn sector 0 failed the check: the ride was let go).
+#[test]
+fn a_ride_without_its_entry_is_saved_whatever_cut_its_repair() {
+    let mut d = card(crate::fat::tests::image());
+    let _ = open_ride(&mut d, 200);
+    let sector0 = first_lba(&d.img, "Rustfw/Rides/261023100000.fit") as u32;
+    let mut img = d.img;
+    remove_ride_entry(&mut img);
+    let mut whole = card(img.clone());
+    assert_eq!(Recorder::new().recover(&mut whole, local(300)), Outcome::Saved(NAME));
+    let (want, _) = saved(&whole.img, SAVED).unwrap();
+    assert!(want.len() >= 200 - CHECKPOINT_S as usize);
+    let (total, mut torn0) = (whole.written, 0);
+    for cut in 0..total {
+        for torn in [false, true] {
+            let what = std::format!("cut {cut} of {total}, torn {torn}");
+            let mut c = Card { budget: Some(cut), torn, ..card(img.clone()) };
+            Recorder::new().recover(&mut c, local(300));
+            torn0 += usize::from(torn && c.cut_at == sector0);
+            let mut c = card(c.img);
+            let o = Recorder::new().recover(&mut c, local(301));
+            assert!(matches!(o, Outcome::Saved(NAME) | Outcome::Nothing), "{what}: {o:?}");
+            assert_eq!(saved(&c.img, SAVED).map(|s| s.0), Ok(want.clone()), "{what}: saved whole");
+            fsck_torn(&c.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(free_counts(&c.img).0, free_counts(&c.img).1, "{what}: FSInfo's free count");
+        }
+    }
+    assert!(torn0 > 0, "a cut tore the repair's sector 0");
+}
+
+/// The review of the S1 fix, finding 4: a read error inside the chain's check (the ride's sector 0 unreadable) is
+/// a card error, not a verdict: `Failed`, the record not done, and the ride saved once the card reads again.
+#[test]
+fn a_read_error_while_checking_the_chain_keeps_the_record() {
+    let mut d = card(crate::fat::tests::image());
+    let _ = open_ride(&mut d, 200);
+    let sector0 = first_lba(&d.img, "Rustfw/Rides/261023100000.fit") as u32;
+    let mut img = d.img;
+    remove_ride_entry(&mut img);
+    let mut d = Bad { card: card(img), bad: Vec::new(), unread: std::vec![sector0..sector0 + 1], on: true };
+    assert_eq!(Recorder::new().recover(&mut d, local(300)), Outcome::Failed(Error::Io));
+    d.on = false;
+    assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Saved(NAME), "the record not done");
+    assert!(saved(&d.card.img, SAVED).is_ok_and(|s| s.0.len() >= 200 - CHECKPOINT_S as usize));
+    assert_eq!(check_clean(&d.card.img, "after"), 0);
 }

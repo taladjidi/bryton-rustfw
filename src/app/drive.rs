@@ -26,19 +26,21 @@ impl App {
             if self.trash_check && self.ride_settled() {
                 // a delete a cut left, finished first (the review of 2026-10-25): lent, the ride would be in neither
                 // folder, a computer's fsck could free or reconnect its chain, and the move would then link the
-                // ride's name onto it. Failed: the move's own check of the chain still holds
+                // ride's name onto it. Failed: lent read only (below), the delete finished at the next scan or lending
                 let t = fat::write::dos_time(self.rec_time().0);
                 self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t).is_err();
             }
             self.past.stop(); // a past ride being read
-            if self.ride_settled() {
+            if self.ride_settled() && !self.trash_check {
                 self.emmc.lend(true);
             } else {
-                self.emmc.lend_read_only(); // a save stuck: what is on the card copied, nothing written
+                // a save stuck, or a delete left halfway: what is on the card copied, nothing written
+                self.emmc.lend_read_only();
             }
             self.drive.insert();
         }
-        self.say(if self.ride_settled() { "USB DRIVE ON" } else { "USB DRIVE READ ONLY" });
+        let writable = self.ride_settled() && !self.trash_check;
+        self.say(if writable { "USB DRIVE ON" } else { "USB DRIVE READ ONLY" });
         Ok(())
     }
 

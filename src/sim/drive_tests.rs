@@ -134,6 +134,33 @@ fn read_only_build_offers_a_write_protected_drive() {
     assert_eq!(app.notes.text.as_str(), "USB DRIVE OFF");
 }
 
+/// A delete a cut left halfway (the ride in neither folder) whose finish fails when the drive is lent: lent write
+/// protected (no computer's fsck frees the nameless chain), the delete finished at the next lending, then writable.
+#[test]
+fn a_cut_delete_not_finished_lends_the_drive_read_only() {
+    use crate::storage::trash::tests::{cut_midway, file};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000); // before the scan: the delete not finished yet
+    assert!(app.trash_check);
+    (sim.emmc.bad, sim.emmc.bad_left) = (std::vec![0..u32::MAX], Some(1));
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(sim.emmc.bad_left, Some(0), "the finish's write failed");
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE READ ONLY");
+    let mut h = Host::default();
+    command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]);
+    let (ms, _) = command(&mut sim, &mut app, &mut h, 2, 192, true, &[0x1a, 0, 0x3f, 0, 192, 0]);
+    assert_eq!(ms[2], 0x80, "write protected");
+    app.drive_off();
+    assert!(!app.drive_lent());
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
+    assert!(!app.trash_check);
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
+}
+
 /// USB DRIVE in the SYSTEM menu: Select lends the card (the row says ON), Select again takes it back.
 #[test]
 fn the_device_menu_row() {

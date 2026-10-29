@@ -18,6 +18,10 @@ pub(super) struct Rec {
     /// The save goes to `\Rustfw\Discarded` (module doc), byte 22: 0 in the records of the builds before it, which
     /// stay valid (no new [`TAG`]: a ride in progress at the update is resumed).
     pub(super) discard: bool,
+    /// The chain named by this record alone was found still the ride's ([`super::Recorder::still_ours`]) before
+    /// its repair began, byte 23: a repair a cut tore is redone, never taken for another file's chain. 0 in the
+    /// records of the builds before it, which ignore the byte (only the CRC covers it).
+    pub(super) checked: bool,
 }
 
 impl Rec {
@@ -29,6 +33,7 @@ impl Rec {
         s[9..21].copy_from_slice(&self.name);
         s[21] = u8::try_from(RIDE_WORDS).unwrap_or(0); // a constant under 256
         s[22] = u8::from(self.discard);
+        s[23] = u8::from(self.checked);
         s[24..28].copy_from_slice(&self.cluster.to_le_bytes());
         s[32..32 + RECORD_LEN].copy_from_slice(&self.fit);
         for (c, w) in s[128..128 + 4 * RIDE_WORDS].chunks_exact_mut(4).zip(self.ride) {
@@ -62,6 +67,7 @@ impl Rec {
             fit: [0; RECORD_LEN],
             ride: core::array::from_fn(|k| word(128 + 4 * k)),
             discard: s[22] == 1,
+            checked: s[23] == 1,
         };
         r.name.copy_from_slice(&s[9..21]);
         r.fit.copy_from_slice(&s[32..32 + RECORD_LEN]);

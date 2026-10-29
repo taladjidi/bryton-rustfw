@@ -1206,6 +1206,17 @@ impl Recorder {
         Ok((same(0..4) && same(8..12) && same(14..end)).then_some(h))
     }
 
+    /// The record `seq` (a ride left open, its chain named by it alone) written again, its copies with it, marked
+    /// [`Rec::checked`]: the chain found still the ride's, before its repair rewrites sector 0.
+    #[inline(never)] // its sectors in its own frame
+    fn mark_checked(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, seq: u32, cluster: u32) -> Result<(), Error> {
+        let (rec, slot) = (self.rec.ok_or(Error::NotFound)?, 3 * (seq % 2));
+        let (mut first, mut last) = ([0u8; SECTOR], [0u8; SECTOR]);
+        fat.read_sector(d, &rec, slot, &mut first)?;
+        fat.read_sector(d, &rec, slot + 1, &mut last)?;
+        self.write_record_with(fat, d, Phase::Recording, cluster, Some((&first, &last)), true)
+    }
+
     /// Makes `\Rustfw`, `\Rustfw\ride.rec` (two zeroed sectors), `\Rustfw\Rides`, `\Activities` and
     /// `\Rustfw\Discarded\Full` when missing
     /// (the FATs synced first: a cut while making them leaves no record to say so). `\Rustfw\Rides`.
@@ -1269,11 +1280,11 @@ impl Recorder {
     }
 
     fn write_record(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, phase: Phase, cluster: u32) -> Result<(), Error> {
-        self.write_record_with(fat, d, phase, cluster, None)
+        self.write_record_with(fat, d, phase, cluster, None, false)
     }
 
     /// The record in its slot (module doc), after the copies of the file's sector 0 and last sector when given:
-    /// one write, the record last.
+    /// one write, the record last. `checked`: [`Rec::checked`].
     fn write_record_with(
         &mut self,
         fat: &mut Fat,
@@ -1281,11 +1292,12 @@ impl Recorder {
         phase: Phase,
         cluster: u32,
         copies: Option<(&[u8; SECTOR], &[u8; SECTOR])>,
+        checked: bool,
     ) -> Result<(), Error> {
         let mut rec = self.rec.ok_or(Error::NotFound)?;
         let seq = self.seq.wrapping_add(1);
         let (name, fit, ride, discard) = (self.name, self.writer.to_record(), self.ride, self.discard);
-        let r = Rec { seq, phase, name, cluster, fit, ride, discard };
+        let r = Rec { seq, phase, name, cluster, fit, ride, discard, checked };
         let slot = 3 * (seq % 2);
         match copies {
             Some((first, last)) => {
@@ -1327,7 +1339,7 @@ impl Recorder {
         let from = (next - self.tail_off) as usize;
         let mut last = [0u8; SECTOR];
         last.copy_from_slice(self.tail.get(from..from + SECTOR).ok_or(Error::Corrupt)?);
-        self.write_record_with(fat, d, phase, file.first, Some((&first, &last)))?;
+        self.write_record_with(fat, d, phase, file.first, Some((&first, &last)), false)?;
         // the buffer keeps the sector the next byte (over the trailer) goes in
         self.tail.copy_within(from.., 0);
         let keep = (self.len - next) as usize;
@@ -1562,6 +1574,13 @@ impl Recorder {
                 };
                 let mut file = match entry {
                     Some(h) => h,
+                    // checked by an earlier boot, whose repair below a cut may have torn (sector 0 then no longer
+                    // the record's copy): the repair redone
+                    None if r.checked => {
+                        self.writer = w;
+                        self.saving(r.cluster, size);
+                        fat.chain(d, r.cluster)?
+                    }
                     None => {
                         let Some(h) = self.still_ours(fat, d, r.cluster, size)? else {
                             // freed, or another file's now: nothing written on it, the record done
@@ -1571,6 +1590,7 @@ impl Recorder {
                         // named by the record alone: a save from here, never given up as a ride left open
                         self.writer = w;
                         self.saving(r.cluster, size);
+                        self.mark_checked(fat, d, r.seq, r.cluster)?; // before the repair's first write
                         h
                     }
                 };
