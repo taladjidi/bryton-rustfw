@@ -356,3 +356,47 @@ fn a_cut_at_every_sector_reads_old_or_new() {
         assert!(olds > 0);
     }
 }
+
+/// A ride whose card write fails in the second FAT (a FAT sector reached the first copy only): the next settings
+/// write, after the ride, compares the FAT copies first (it reads the second), and leaves the volume clean.
+#[test]
+fn a_recorder_write_failure_has_the_next_settings_write_compare_the_fats() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    let img = &sim.emmc.image;
+    let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
+    let (reserved, size) = (u(14, 2), u(36, 4));
+    let fat2 = reserved + size..reserved + 2 * size;
+    let touched = |sim: &Sim, from: usize, cmds: &[u8]| {
+        sim.emmc.cmds[from..].iter().any(|c| cmds.contains(&c.0) && fat2.contains(&c.1))
+    };
+    sim.emmc.bad = std::vec![fat2.clone()];
+    let from = sim.emmc.cmds.len();
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride's file takes its first cluster
+    for _ in 0..1000 {
+        run(&mut sim, &mut app, 100);
+        if touched(&sim, from, &[24, 25]) {
+            break;
+        }
+    }
+    assert!(touched(&sim, from, &[24, 25]), "a FAT sector written to the first copy only");
+    sim.emmc.bad.clear();
+    run(&mut sim, &mut app, 70_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    super::save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 10_000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    app.press(&mut sim, Press::Short(Key::Back)); // the banner
+    app.press(&mut sim, Press::Short(Key::Back)); // the summary
+    let from = sim.emmc.cmds.len();
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::GpsPower));
+    app.press(&mut sim, Press::Short(Key::Start));
+    settle(&mut sim, &mut app);
+    assert_eq!(file(&sim).map(|c| c.settings.gps_power), Some(crate::GpsPower::Full), "written");
+    assert!(touched(&sim, from, &[17, 18]), "the second FAT read: the copies compared before the write");
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image).map(|_| ()), Ok(()));
+}

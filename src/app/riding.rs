@@ -156,6 +156,9 @@ impl App {
             self.rec.full_pending = false;
         }
         use recorder::{GaveUp, Outcome};
+        if [clean, full].iter().any(|g| matches!(g, Some(GaveUp::Rescue(_) | GaveUp::Lost))) {
+            self.fats_unsure(); // its writes failed somewhere: a FAT sector may be in one copy only
+        }
         match clean.or(full) {
             Some(GaveUp::Named(Outcome::Saved(_))) => self.notice("RIDE SAVED"),
             Some(GaveUp::Named(Outcome::Discarded(_))) => self.notice("RIDE DISCARDED"),
@@ -367,6 +370,7 @@ impl App {
         } else {
             recorder::Outcome::Nothing
         };
+        self.rec_failed(o);
         match o {
             recorder::Outcome::Nothing => {}
             recorder::Outcome::Resumed(words, name) => {
@@ -441,10 +445,20 @@ impl App {
         } else {
             recorder::Outcome::Nothing
         };
+        self.rec_failed(o);
         match o {
             recorder::Outcome::Resumed(..) => self.rec.full.resumed_after(&self.rec.clean),
             recorder::Outcome::Kept(_) => self.notice("NO FULL COPY"),
             _ => {}
+        }
+    }
+
+    /// A card write of the recorder failed (a FAT sector may have reached the first copy only): the next
+    /// settings.bin or pages.bin write compares the FAT copies first ([`App::fats_unsure`]).
+    fn rec_failed(&mut self, o: recorder::Outcome) {
+        use recorder::Outcome::{Failed, Kept, Stopped};
+        if matches!(o, Failed(_) | Stopped(_) | Kept(_)) {
+            self.fats_unsure();
         }
     }
 
