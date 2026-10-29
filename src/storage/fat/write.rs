@@ -318,9 +318,32 @@ impl Fat {
         Ok((c, n))
     }
 
-    /// Grows `h`'s chain to `want` clusters (end of chain first, then the link), then FSInfo.
+    /// Grows `h`'s chain to `want` clusters (end of chain first, then the link), then FSInfo, a failure part way
+    /// included (the clusters taken so far counted).
     fn grow(&mut self, d: &mut impl DiskWrite, h: &mut Handle, want: u32) -> Result<(), Error> {
         let mut taken = 0;
+        let r = self.take(d, h, want, &mut taken);
+        if taken > 0 {
+            let u = self.fsinfo_update(d, taken, h.last + 1, None);
+            r?;
+            return u;
+        }
+        r
+    }
+
+    /// [`Fat::grow`]'s clusters, `taken` counting them. Clusters an earlier grow linked to `h`'s last in the first FAT
+    /// before failing (the second copy's write) are taken up first and counted: else a retry from the
+    /// stale handle takes another cluster and relinks the last to it, the first one left named by nothing.
+    fn take(&mut self, d: &mut impl DiskWrite, h: &mut Handle, want: u32, taken: &mut i64) -> Result<(), Error> {
+        while h.clusters > 0
+            && let Some(n) = self.next(d, h.last)?
+        {
+            self.set_entries(d, &[(h.last, n)])?; // the link's sector again, to every copy: the FATs equal
+            (h.last, h.clusters, *taken) = (n, h.clusters + 1, *taken + 1);
+            if h.clusters > self.clusters {
+                return Err(Error::Corrupt); // a loop
+            }
+        }
         while h.clusters < want {
             let from = if h.clusters == 0 { self.hint(d)? } else { h.last + 1 };
             let c = self.find_free(d, from)?;
@@ -336,10 +359,7 @@ impl Fat {
             } else {
                 self.set_entries(d, &[(c, EOC), (h.last, c)])?;
             }
-            (h.last, h.clusters, taken) = (c, h.clusters + 1, taken + 1);
-        }
-        if taken > 0 {
-            self.fsinfo_update(d, taken, h.last + 1, None)?;
+            (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1);
         }
         Ok(())
     }
@@ -845,7 +865,7 @@ pub(crate) mod tests {
     }
 
     /// What fsck would say of a volume: Err on a chain into a free cluster or out of the volume, a cross-link, a
-    /// size past its chain or on cluster 0, FATs that differ; Ok(lost clusters: taken, named by no entry). Walks
+    /// size past its chain or on cluster 0, a chain past its size (truncated by chkdsk), FATs that differ; Ok(lost clusters: taken, named by no entry). Walks
     /// every directory.
     pub fn fsck(img: &[u8]) -> Result<u32, std::string::String> {
         fsck_with(img, true)
@@ -913,6 +933,10 @@ pub(crate) mod tests {
                 }
                 if size != u32::MAX && size.div_ceil(fat.spc * SECTOR as u32) > len {
                     return Err(std::format!("file at {first}: size {size} past its chain of {len}"));
+                }
+                // chkdsk and fsck_msdos truncate it (the clusters past the size freed)
+                if size != u32::MAX && size.div_ceil(fat.spc * SECTOR as u32).max(1) < len {
+                    return Err(std::format!("file at {first}: chain of {len} past its size {size}"));
                 }
             }
         }

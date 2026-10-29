@@ -746,9 +746,14 @@ impl Recorder {
     }
 
     /// The record "done" if GIVE UP SAVE's rescue named the chain at `first` in this copy's [`RESCUE_PATHS`] folder
-    /// (its link done, its record not: a cut or a failure between): `Kept`, never a second entry on the chain. A
-    /// folder that cannot be read is an error, tried again.
+    /// (its link done, its record not: a cut or a failure between): `Kept` under the name it has there, never a
+    /// second entry on the chain. Asked only of a chain named in neither its saved nor its rides folder (what the
+    /// rescue requires), so a damaged rescue folder never stops an ordinary save; one that cannot be read then is an
+    /// error, tried again.
     fn rescued(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, first: u32) -> Result<Option<Outcome>, Error> {
+        if first < 2 {
+            return Ok(None); // no chain (a damaged record): an empty file there has cluster 0
+        }
         let dir = match fat.open(d, self.kind.rescue_path()) {
             Ok(dir) => dir,
             Err(Error::NotFound) => return Ok(None),
@@ -756,7 +761,11 @@ impl Recorder {
         };
         let mut c = fat.cursor(dir)?;
         while let Some(e) = fat.list(d, &mut c)? {
-            if e.file.cluster == first {
+            if !e.file.dir && e.file.cluster == first {
+                // the rescue may have taken a second later: the record and the owner get the name it has
+                if let Some(n) = e.name().get(..12).and_then(|n| <[u8; 12]>::try_from(n).ok()) {
+                    self.name = n;
+                }
                 self.write_record(fat, d, Phase::Done, first)?;
                 (self.phase, self.stuck) = (Phase::Done, false);
                 return Ok(Some(Outcome::Kept(self.name)));
@@ -1148,9 +1157,6 @@ impl Recorder {
         if first < 2 {
             return Err(Error::Corrupt); // no chain to name (cluster 0 or 1): never an entry on it
         }
-        if let Some(o) = self.rescued(fat, d, first)? {
-            return Ok(o);
-        }
         let mut buf = [0u8; 16];
         let target = if self.discard { self.kind.discarded_path() } else { self.kind.saved() };
         match fat.open(d, target) {
@@ -1179,6 +1185,9 @@ impl Recorder {
             Ok(h) if h.first == first => {}
             Ok(_) => return Err(Error::Refused), // its name another file's: never a second entry, tried again
             Err(Error::NotFound) => {
+                if let Some(o) = self.rescued(fat, d, first)? {
+                    return Ok(o);
+                }
                 if self.still_ours(fat, d, first, size, None)?.is_none() {
                     // no longer the ride's (a computer removed it): never linked, the record done, nothing named
                     self.write_record(fat, d, Phase::Done, first)?;
@@ -1381,7 +1390,8 @@ impl Recorder {
         let wrote = fat.write_sectors(d, &mut file, self.tail_off / SECTOR_U32, bytes);
         // the chain as grown, kept whatever fails from here: a retry from the old one would take another cluster and
         // relink the last to it, the one taken left named by nothing (the review of 2026-10-29, S5). The handle's
-        // chain may then be longer than its size: the next checkpoint's `set_size`, or a recovery, trims it
+        // chain may then be longer than its size: the next checkpoint's `set_size`, a recovery or the save as it is
+        // (`save_as_is`) trims it
         self.file = Some(file);
         wrote?;
         let mut first = [0u8; SECTOR];
@@ -1424,6 +1434,12 @@ impl Recorder {
         trailer_end(fat, d, &mut file, size, self.on_card_trailer)?;
         fat.read_sector(d, &rec, slot, &mut s)?;
         fat.write_sectors(d, &mut file, 0, &s)?;
+        // a checkpoint that grew the chain, then failed: cut back to the size (its entry's size first), else saved
+        // a cluster longer than its size
+        if file.clusters > size.div_ceil(fat.cluster_bytes()).max(1) {
+            fat.set_size(d, &mut file, size, t)?;
+            self.file = Some(file);
+        }
         self.save(fat, d, t, file.first, size)
     }
 
@@ -1439,9 +1455,6 @@ impl Recorder {
         size: u32,
     ) -> Result<Outcome, Error> {
         self.len = size; // what keep_in_rides names, if it comes to that (a save as it is: less than the buffer's)
-        if let Some(o) = self.rescued(fat, d, first)? {
-            return Ok(o);
-        }
         // a chain the save's step 4 left named by the record alone may have been freed by a computer since (its
         // clusters still reading as the ride): moved (5), it would be linked onto free clusters. Not the ride's:
         // left to keep_in_rides, which names it only where its entry still is
@@ -1504,7 +1517,12 @@ impl Recorder {
         // 4: the entry in the folder, if still there and still this chain
         match fat.locate(d, dir, file_name(&self.name, &mut buf)?) {
             Ok(h) if h.first == first => fat.remove(d, &h)?,
-            Ok(_) | Err(Error::NotFound | Error::Corrupt) => {} // gone, or its sector torn (the record is the name)
+            // gone, or its sector torn (the record is the name); or rescued (GIVE UP SAVE), its record not done
+            Ok(_) | Err(Error::NotFound | Error::Corrupt) => {
+                if !linked && let Some(o) = self.rescued(fat, d, first)? {
+                    return Ok(o);
+                }
+            }
             Err(e) => return Err(e),
         }
         // 5: the new entry
@@ -1660,6 +1678,10 @@ impl Recorder {
                 let mut file = match entry {
                     Some(h) => h,
                     None => {
+                        // a stopped ride's save given up and rescued, its record not done: nothing written on it
+                        if let Some(o) = self.rescued(fat, d, r.cluster)? {
+                            return Ok(o);
+                        }
                         // checked by an earlier boot (its mark), whose repair below a cut may have torn: sector 1
                         // checked instead of sector 0, the repair redone
                         let Some(h) = self.still_ours(fat, d, r.cluster, size, r.checked)? else {

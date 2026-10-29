@@ -328,9 +328,11 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         let mut d =
             Card { img: img.clone(), budget: Some(cut), written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
         assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}: the card died");
-        // the volume as the cut left it: readable, at most a FAT sector apart
+        // the volume as the cut left it: readable, at most a FAT sector apart, or a chain grown past its size (a cut
+        // between a checkpoint's data and its size: the boot's recovery trims it)
         if let Err(e) = fsck(&d.img)
             && !e.contains("FATs differ")
+            && !e.contains("past its size")
         {
             panic!("{what}: {e}");
         }
@@ -2364,7 +2366,13 @@ fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
     let rides = dir_lbas(&img, "Rustfw/Rides");
     let rec = lba(&img, "Rustfw/ride.rec");
     let sector0 = lba(&img, "Rustfw/Rides/261023100000.fit");
+    // the FAT sector holding the new cluster's entry, in each copy (the boot sector's fields: fatgen103)
+    let u = |at: usize, n: usize| img[at..at + n].iter().rev().fold(0u32, |v, &b| v << 8 | u32::from(b));
+    let fat_sector = |k: u32| u(14, 2) + k * u(36, 4) + new / (SECTOR as u32 / 4);
+    let (fat1, fat2) = (fat_sector(0), fat_sector(1));
     for (what, bad) in [
+        ("the first FAT", fat1..fat1 + 1),
+        ("the second FAT (the first one written)", fat2..fat2 + 1),
         ("the new cluster's data", new_lba..new_lba + 1),
         ("sector 0", sector0..sector0 + 1),
         ("the size", rides),
@@ -2483,11 +2491,13 @@ fn a_stopped_rides_save_cut_at_every_sector() {
         io_all(r, d, 3000);
     };
     let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.0, act, SAVED);
-    assert!(total > 5 && s7 == 0 && lost <= 1, "{total} cuts, {s7} left out, {lost} lost");
+    assert_eq!((total, s7), (6, 0), "a write added or dropped");
+    assert!(lost <= 1, "{lost} lost");
 }
 
-/// S6 (b): GIVE UP SAVE's rescue (`\Rustfw\Rescue`, the record "done" then the link) cut at every sector: the ride
-/// rescued, or saved by the boot from its record "saving".
+/// S6 (b): GIVE UP SAVE's rescue (`\Rustfw\Rescue`: the link, then the record "done") cut at every sector: the
+/// ride rescued (its record done by the boot when the cut fell between), or saved by the boot from its record
+/// "saving".
 #[test]
 fn give_up_saves_rescue_cut_at_every_sector() {
     let setup = || {
@@ -2500,7 +2510,8 @@ fn give_up_saves_rescue_cut_at_every_sector() {
     };
     let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.card, act, "Rustfw/Rescue/261023100000.fit");
     // the rescue folder's entry in \Rustfw: one sector, its tear S7's
-    assert!(total > 5 && s7 <= 1 && lost <= 1, "{total} cuts, {s7} left out, {lost} lost");
+    assert_eq!((total, s7), (38, 1), "a write added or dropped");
+    assert!(lost <= 1, "{lost} lost");
 }
 
 /// S6 (c): a Start finding the last ride unfinished (left open two days ago: ended and saved; or its save cut:
@@ -2522,7 +2533,8 @@ fn a_start_after_an_unfinished_ride_cut_at_every_sector() {
         })
         .find(|i| best_rec(i).phase == Phase::Saving)
         .unwrap();
-    for (what, old, later, marker) in [("left open", open.img, 2 * 86_400, false), ("save cut", save_cut, 5000, true)] {
+    let cases = [("left open", open.img, 2 * 86_400, false, 27), ("save cut", save_cut, 5000, true, 12)];
+    for (what, old, later, marker, cuts) in cases {
         let setup = || {
             let mut r = Recorder::new();
             r.start(T0 + 200 + later, *b"261025100000", marker);
@@ -2533,6 +2545,59 @@ fn a_start_after_an_unfinished_ride_cut_at_every_sector() {
             io_all(r, d, 200 + later);
         };
         let (total, s7, lost) = cut_every_sector(setup, |d| d, act, SAVED);
-        assert!(total > 5 && s7 == 0 && lost <= 1, "{what}: {total} cuts, {s7} left out, {lost} lost");
+        assert_eq!((total, s7), (cuts, 0), "{what}: a write added or dropped");
+        assert!(lost <= 1, "{what}: {lost} lost");
     }
+}
+
+/// The review of S5 and S6, finding 1: a rescue folder that cannot be read (a failing card's, the one GIVE UP SAVE
+/// was for) never stops a later ride's save: only a chain named nowhere else is looked for there.
+#[test]
+fn a_rescue_folder_that_cannot_be_read_never_stops_a_save() {
+    let mut ram = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let mut dir = fat.root();
+    for name in RESCUE_PATHS[0].split('/') {
+        dir = fat.ensure_dir(&mut ram, dir, name, (0, 0)).unwrap();
+    }
+    let unread = std::vec![dir_lbas(&ram.0, RESCUE_PATHS[0])];
+    let mut d = Bad { card: card(ram.0), bad: Vec::new(), unread, on: true };
+    let mut r = Recorder::new();
+    r.start(T0 - 1, NAME, false);
+    for t in 0..200 {
+        r.second(&sample(t), words(t));
+        if r.due() {
+            assert_eq!(r.io(&mut d, local(t)), Outcome::Nothing);
+        }
+    }
+    r.end(T0 + 200, words(200));
+    assert_eq!(io_all(&mut r, &mut d, 201), [Outcome::Saved(NAME)]);
+    assert_eq!(check_clean(&d.card.img, "saved"), 0);
+}
+
+/// The same review, finding 4: a rescue under a second later (its name taken in `\Rustfw\Rescue`), its record
+/// "done" failing: the boot finds it there and says, and records, the name it has, not the ride's first one.
+#[test]
+fn a_rescue_left_saving_is_done_under_its_own_name() {
+    let (mut r, mut d) = stuck_save(false);
+    let mut ram = crate::fat::tests::Ram(d.card.img.clone(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let mut dir = fat.root();
+    for name in RESCUE_PATHS[0].split('/') {
+        dir = fat.ensure_dir(&mut ram, dir, name, (0, 0)).unwrap();
+    }
+    fat.create(&mut ram, dir, "261023100000.fit", (0, 0)).unwrap(); // an empty file: no cluster
+    d.card.img = ram.0;
+    let rec = first_lba(&d.card.img, "Rustfw/ride.rec") as u32;
+    d.bad.push(rec..rec + 6); // the record "done" fails
+    const LATER: [u8; 12] = *b"261023100001";
+    assert_eq!(r.give_up_save(&mut d, local(300)), Some(GaveUp::Rescue(LATER)));
+    assert_eq!(best_rec(&d.card.img).phase, Phase::Saving, "the record not done");
+    let mut b = card(d.card.img);
+    assert_eq!(Recorder::new().recover(&mut b, local(301)), Outcome::Kept(LATER));
+    assert_eq!((best_rec(&b.img).phase, best_rec(&b.img).name), (Phase::Done, LATER));
+    let (times, _) = saved(&b.img, "Rustfw/Rescue/261023100001.fit").unwrap();
+    assert_eq!(times.len(), 200);
+    assert!(saved(&b.img, SAVED).is_err(), "never a second entry");
+    assert_eq!(check_clean(&b.img, "after"), 0);
 }
