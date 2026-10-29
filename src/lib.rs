@@ -25,7 +25,7 @@ pub mod ui;
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
 pub use link::{dev, msc, phone, prof};
-pub use nav::{altitude, climbs_ahead, course};
+pub use nav::{altitude, climbs_ahead, course, segment};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
 pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
 pub use ui::{fonts, map, menu, page, text, theme, tiles};
