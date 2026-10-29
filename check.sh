@@ -10,6 +10,10 @@ grep -q '^#!\[forbid(unsafe_code)\]' src/lib.rs || { echo "layout: src/lib.rs lo
 n=$(grep -rl 'allow(unsafe_code)\|unsafe {\|unsafe fn\|unsafe impl' src | sort | grep -v '^src/board/hw.rs$' | tr '\n' ' ')
 [ "$n" = "src/board/usb.rs " ] && [ "$(grep -c 'unsafe impl\|allow(unsafe_code)' src/board/usb.rs)" = 2 ] \
     || { echo "layout: unsafe outside hw.rs: $n"; exit 1; }
+# The merge guard: no conflict marker left in a tracked text file (one reached main on 2026-10-29 through a
+# branch's own merge of main, and nothing else here reads the docs).
+m=$(git ls-files -z -- '*.rs' '*.md' '*.py' '*.sh' '*.toml' '*.x' | xargs -0 grep -l '^<<<<<<< \|^>>>>>>> ' 2>/dev/null | tr '\n' ' ')
+[ -z "$m" ] || { echo "merge: conflict markers in: $m"; exit 1; }
 # The docs guard: every file of src and tools is named in docs/layout.md, by its path or by its basename as a
 # backticked word (`menus.rs`); the data folders (tools/fonts/) are the only ones without an entry of their own.
 # No doc names the files that moved (src/sim.rs, src/ui.rs).
