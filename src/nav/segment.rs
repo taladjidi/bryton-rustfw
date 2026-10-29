@@ -717,4 +717,34 @@ pub(crate) mod tests {
         assert_eq!(s.parse(&[0u8; 10]), Err(Error::Short));
         assert_eq!(s.npoints, 0);
     }
+
+    /// The file `tools/segments.py fixture` writes (synthetic: a straight line at 0 N 10 E; its selftest checks the
+    /// committed copy equals a fresh one), read by this reader.
+    #[test]
+    fn the_tools_fixture_parses() {
+        let f = include_bytes!("../../test-data/segment/synthetic.seg");
+        let mut s = Segment::new();
+        assert_eq!(s.parse(f), Ok(()));
+        assert_eq!((s.npoints, s.header.ntargets, s.header.distance_m, s.header.id), (82, 4, 2000, 4_000_000_001));
+        assert_eq!(s.kept, [Some(Effort::Pr), Some(Effort::Kom), None, Some(Effort::Recent)]);
+        assert_eq!(s.times.get(81).copied(), Some([380, 330, 0, 415]));
+        assert_eq!(s.dist_m.get(81).copied(), Some(2000));
+    }
+
+    /// Every file of the directory named by `SEGMENTS_DIR` parses (the tool's real output; not in the default run).
+    #[test]
+    #[ignore = "reads the .seg files of $SEGMENTS_DIR"]
+    fn built_files_parse() {
+        let dir = std::env::var("SEGMENTS_DIR").expect("SEGMENTS_DIR");
+        let (mut ok, mut bad) = (0, std::vec::Vec::new());
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let b = std::fs::read(e.path()).unwrap();
+            match Segment::new().parse(&b) {
+                Ok(()) => ok += 1,
+                Err(err) => bad.push(err),
+            }
+        }
+        std::println!("parsed {ok}, failed {}: {bad:?}", bad.len());
+        assert!(bad.is_empty());
+    }
 }
