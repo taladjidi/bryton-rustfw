@@ -404,8 +404,11 @@ impl Trainer {
             Sent::Command => self.last = None,
             Sent::Cal => self.cal_send = true,
             Sent::Release => self.release_out = false, // again at the next free slot, a try still
-            Sent::Caps => (self.caps_tries, self.caps_ms) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS),
-            Sent::User => self.user_sent = false,
+            // a failed set-up page also lost the command in force's slot: it goes out again at the next free one
+            Sent::Caps => {
+                (self.caps_tries, self.caps_ms, self.last) = (self.caps_tries.saturating_sub(1), CAPS_RETRY_MS, None);
+            }
+            Sent::User => (self.user_sent, self.last) = (false, None),
             Sent::Nothing => {}
         }
     }
@@ -662,6 +665,27 @@ mod tests {
         assert_eq!(t.due(250, true, &none), None);
         t.unsent();
         assert!(t.due(250, true, &none).is_some());
+    }
+
+    /// A set-up page sent after an ERG target, whose TX_FAILED comes late: the target is due at the next free slot
+    /// (one ack gap of 250 ms, the app's ACK_GAP_MS), not after RESEND_MS.
+    #[test]
+    fn failed_setup_page_resends_the_target_at_once() {
+        let none = Drive::default();
+        let mut t = Trainer::default();
+        t.step_by(&none, true, false);
+        assert_eq!(t.due(250, true, &none), Some(Command::Power(420)));
+        assert_eq!(t.setup(70), Some(Setup::Capabilities), "the capabilities request goes out next");
+        t.unsent(); // its TX_FAILED arrived late
+        assert_eq!(t.due(250, true, &none), Some(Command::Power(420)), "the target again, not after RESEND_MS");
+
+        let mut t = Trainer::default();
+        t.reading.seen |= crate::fec::seen::P54; // capabilities known: the rider's page is next
+        t.step_by(&none, true, false);
+        assert_eq!(t.due(250, true, &none), Some(Command::Power(420)));
+        assert_eq!(t.setup(70), Some(Setup::User));
+        t.unsent();
+        assert_eq!(t.due(250, true, &none), Some(Command::Power(420)), "the target again, not after RESEND_MS");
     }
 
     /// A calibration: the request, no other command meanwhile, the steps from page 2, the end from page 1, then the
