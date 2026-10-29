@@ -189,6 +189,81 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
 
+/// A workout in ERG with a power meter, saved and decoded (storage/fit.rs, "The trainer"): the full copy carries the
+/// ERG target sent, the trainer's power and the meter's, the FE state, the link, the commands sent and the
+/// TX_FAILEDs, every second, and the trainer's pages 80 and 81 in a device_info; the clean copy none of it.
+#[test]
+fn the_full_copy_records_the_trainer_for_erg() {
+    let (mut sim, mut app) = unit();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
+    app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
+    run(&mut sim, &mut app, 4000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // SHORT INTERVALS
+    let name = crate::recorder::ride_name(app.rec_time().0);
+    app.press(&mut sim, Press::Short(Key::Start)); // START
+    run(&mut sim, &mut app, 6000);
+    sim.nordic.ack_fail = 2; // two commands lost on air
+    run(&mut sim, &mut app, 12_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let field = crate::fit::tests::field;
+    let decode = |dir| crate::fit::tests::decode(&super::recorder_tests::ride_file(&sim, dir, name).unwrap()).unwrap();
+    let clean = decode("Activities");
+    assert!(clean.iter().all(|m| m.0 != 23 && m.0 != 206 && m.1.iter().all(|f| !(230..=240).contains(&f.0))));
+    let full = decode("Rustfw/Activities");
+    let names: Vec<u64> = full.iter().filter(|m| m.0 == 206).filter_map(|m| field(m, 3)).collect();
+    assert_eq!(names.len(), 11, "Alpha1, RMSSD, ArtPct and the trainer's eight");
+    assert_eq!(names[3].to_le_bytes(), *b"target_w", "the first trainer field's name");
+    let dev: Vec<_> = full.iter().filter(|m| m.0 == 23).collect();
+    assert_eq!(dev.len(), 1, "one device_info");
+    assert_eq!(
+        [2, 3, 4, 5, 6, 25].map(|f| field(dev[0], f)),
+        [15, 0x1234_5678, 0x1234, 10, 1, 1].map(Some),
+        "the sim's pages 80 and 81: maker 15, serial, model, software 0.1, hardware 1, over ANT+"
+    );
+    let rec: Vec<_> = full.iter().filter(|m| m.0 == 20).collect();
+    assert!(rec.len() > 15, "{} records", rec.len());
+    assert!(rec.iter().all(|r| field(r, 233).is_some()), "the trainer heard every second");
+    let col = |f: u8| rec.iter().map(|r| field(r, f).unwrap()).collect::<Vec<_>>();
+    assert!(col(233).contains(&110), "target_w, the workout's first step: {:?}", col(233));
+    assert!(col(233).iter().all(|&w| w == 0 || w == 110), "{:?}", col(233));
+    assert!(col(234).iter().filter(|&&w| w == 110).count() > 10, "trainer_w holds the target: {:?}", col(234));
+    assert!(col(235).iter().all(|&w| w == 210), "meter_w, the meter's: {:?}", col(235));
+    assert!(col(236).iter().all(|&s| s == 3), "fe_state in use: {:?}", col(236));
+    assert!(col(238).iter().all(|&l| l == 0), "link ANT+");
+    assert!(col(239).iter().any(|&c| c & 2 != 0), "cmd_sent: target power (0x31): {:?}", col(239));
+    assert_eq!(col(240).iter().sum::<u64>(), 2, "ack_fail: the two TX_FAILED: {:?}", col(240));
+    assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
+}
+
+/// A ride without a trainer: no trainer fields, no description of them, no device_info in the full copy.
+#[test]
+fn no_trainer_no_trainer_fields() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power210, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    app.set_sensor(&mut sim, Kind::Power, Sensor::Search);
+    run(&mut sim, &mut app, 4000);
+    let name = crate::recorder::ride_name(app.rec_time().0);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 15_000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let f = super::recorder_tests::ride_file(&sim, "Rustfw/Activities", name).expect("the full copy");
+    let m = crate::fit::tests::decode(&f).unwrap();
+    assert!(m.iter().filter(|x| x.0 == 20).count() > 10);
+    assert!(m.iter().any(|x| x.0 == 20 && crate::fit::tests::field(x, 7) == Some(210)), "the meter's power");
+    assert_eq!(m.iter().filter(|x| x.0 == 206).count(), 3, "Alpha1, RMSSD, ArtPct only");
+    assert!(m.iter().all(|x| x.0 != 23 && x.1.iter().all(|f| !(233..=240).contains(&f.0))));
+}
+
 /// A course followed on the trainer: SIM, the grade of the course at the distance the trainer's speed has ridden
 /// (page 51), the trainer's speed following the grade.
 #[test]

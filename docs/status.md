@@ -121,6 +121,12 @@ A feature not listed here was seen on the unit.
   register 14 is the shifting systems', and a trainer an earlier build kept there is only moved to the file. Not seen
   yet: the chip's EVENT_TRANSFER_TX_COMPLETED (code 5; the layout `[0x40, ch, 0x01, 5]` is from the ANT Message
   Protocol document), which stops the release being sent again (five times at most without it).
+- **The trainer in the full copy (storage/fit.rs "The trainer", app/riding.rs `trainer_sample`)**: only against the
+  simulator's trainer. On the unit: one ERG ride on the Van Rysel D500 with the power meter, then read
+  `\Rustfw\Activities\<name>.fit` (`tools/fit_check.py`'s decoders, or Intervals.icu's fields): `target_w`,
+  `trainer_w`, `meter_w`, `fe_state`, `trn_stat`, `link`, `cmd_sent`, `ack_fail` every second the trainer is heard
+  and none after it stops; the `device_info` with the D500's pages 80 and 81 (the software version's scale from
+  openant is inferred); the clean copy in `\Activities` unchanged and still synced by Bryton's app.
 - **Spin-down calibration of the ANT+ FE-C trainer (trainer.rs `Cal`, drivers/fec.rs pages 1 and 2, app/trainer.rs,
   ui/trainer.rs)**: only against the simulator's trainer. On the Van Rysel D500 showing CALIBRATE: CALIBRATE beside
   MODE (or Start held) sends page 1 with the spin-down bit (0x80), and the trainer answers with page 2 (the layout is

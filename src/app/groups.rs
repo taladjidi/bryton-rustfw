@@ -251,6 +251,11 @@ pub(crate) struct TrainerLink {
     pub(crate) acked: bool,
     /// The seconds the trainer has been silent while the profile is indoor and automatic.
     pub(crate) quiet_s: u16,
+    /// The control pages sent ([`fit::cmd_bit`] each) and the TX_FAILED events on its ANT channel since the last
+    /// record (the full copy's `cmd_sent` and `ack_fail`).
+    pub(crate) cmds: u8,
+    /// See `cmds`.
+    pub(crate) fails: u8,
 }
 
 impl TrainerLink {
@@ -264,6 +269,8 @@ impl TrainerLink {
             no_control: false,
             acked: false,
             quiet_s: 0,
+            cmds: 0,
+            fails: 0,
         }
     }
 }

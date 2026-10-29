@@ -791,7 +791,7 @@ impl Recorder {
         }
         self.last_rec = time;
         let s = Sample { time, ..*s };
-        self.put(RECORD_MAX, |w, sink| w.record(sink, &s));
+        self.put(RECORD_MAX + self.writer.trainer_bytes(&s), |w, sink| w.record(sink, &s));
         self.since += 1;
         if self.since >= CHECKPOINT_S {
             self.want = true;

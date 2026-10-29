@@ -145,6 +145,12 @@ pub struct Reading {
     pub maker: Option<u16>,
     /// Serial number (common page 81).
     pub serial: Option<u32>,
+    /// Model number and hardware revision (common page 80).
+    pub model: Option<u16>,
+    /// See `model`.
+    pub hw: Option<u8>,
+    /// Software version x 100 (common page 81, [`crate::fec::decode`]).
+    pub sw_x100: Option<u16>,
     /// Calibration in progress (page 2): the calibrations pending ([`CAL_ZERO`] / [`CAL_SPIN`] bits), the conditions
     /// byte (bits 4-5 temperature, 6-7 speed: 1 too low, 2 ok), the target speed km/h x 10 and the target spin-down
     /// time ms.
@@ -359,6 +365,14 @@ impl Trainer {
     /// is paused.
     pub fn engaged(&self, d: &Drive) -> bool {
         (self.engaged || d.erg_w.is_some() || d.grade_x100.is_some()) && !(d.paused && self.mode(d) == Mode::Erg)
+    }
+
+    /// The ERG target last sent and not known to have failed, W (the ride file's `target_w`); 0: none.
+    pub fn target_sent_w(&self) -> u16 {
+        match self.last {
+            Some(Command::Power(q)) => q / 4,
+            _ => 0,
+        }
     }
 
     /// What was sent may still hold the trainer: it was engaged at the last pass, or its release is not known to

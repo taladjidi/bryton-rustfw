@@ -3,7 +3,8 @@
 no warnings, and the sample ride's values (the synthetic ride of fit.rs's tests). Usage (src/storage/fit.rs, module doc):
     fit_check.py target/fit/sample.fit target/fit/cut.fit [target/fit/sample_full.fit]
 The third, the full copy (developer fields, src/storage/recorder/mod.rs "Two copies"), is the same ride with Alpha1, RMSSD and
-ArtPct in each record and the strap's beats in hrv messages: checked with both decoders, Garmin's SDK naming the
+ArtPct in each record, the trainer's eight fields (target_w ... ack_fail, numbers 3 to 10) in the records of the
+seconds a trainer is connected with their descriptions and a device_info, and the strap's beats in hrv messages: checked with both decoders, Garmin's SDK naming the
 developer fields from their descriptions, the beats of both equal to the ones the test fed (count and values). The
 recorder's saved pair (target/fit/recorded.fit, recorded_full.fit, from `cargo test-host two_copies_cost`):
     fit_check.py --pair target/fit/recorded.fit target/fit/recorded_full.fit
@@ -20,7 +21,10 @@ import fitdecode
 
 T0 = 1_161_676_800 + 631_065_600  # FIT 0 is 1989-12-31 00:00 UTC; this is 2026-10-23 08:00 UTC
 DEV = ("developer_data_id", "field_description")
-DEV_FIELDS = ("Alpha1", "RMSSD", "ArtPct")
+# the trainer's (fit.rs, "The trainer"), by field_definition_number; in the test rides from 100 s to 300 s but 150..160
+TRN_FIELDS = {3: "target_w", 4: "trainer_w", 5: "meter_w", 6: "fe_state", 7: "trn_stat", 8: "link", 9: "cmd_sent",
+              10: "ack_fail"}
+DEV_FIELDS = ("Alpha1", "RMSSD", "ArtPct") + tuple(TRN_FIELDS.values())
 
 # The beats each test fed, ms (fit.rs tests `beats`: the sample ride's records are seconds 1 to 1200; src/storage/recorder/mod.rs
 # tests `beats`: one a second through the 900 s ride, paused too)
@@ -62,7 +66,7 @@ def garmin(path, full=False):
     print("  garmin-fit-sdk:", {k: len(v) for k, v in msgs.items()})
     if full:
         names = {d["field_definition_number"]: d["field_name"] for d in msgs["field_description_mesgs"]}
-        assert names == {0: "Alpha1", 1: "RMSSD", 2: "ArtPct"}, names
+        assert names in ({0: "Alpha1", 1: "RMSSD", 2: "ArtPct"}, {0: "Alpha1", 1: "RMSSD", 2: "ArtPct", **TRN_FIELDS}), names
         alpha = [r.get("developer_fields", {}).get(0) for r in msgs["record_mesgs"]]
         known = [a for a in alpha if a is not None and a == a]  # invalid (all ones) reads as NaN here
         print(f"  garmin-fit-sdk: Alpha1 in {len(known)} of {len(alpha)} records, e.g. {known[:3]}")
@@ -136,6 +140,8 @@ def check(path, finished, full=False):
             assert ("Alpha1" in r) == (t >= 60)
             assert t < 60 or abs(r["Alpha1"] - (500 + t % 700) / 1000) < 1e-6
             assert ("ArtPct" in r) == (t >= 60) and (t < 60 or r["ArtPct"] == t % 9)
+            trainer = 100 <= t < 300 and not 150 <= t < 160
+            assert ("target_w" in r) == trainer and (not trainer or (r["target_w"], r["fe_state"]) == (200, 3)), r
     if full and finished:
         beats(path, SAMPLE_BEATS)
     if finished:

@@ -93,6 +93,7 @@ fn sample(t: u32) -> Sample {
         rmssd_ms: (t >= 60).then_some(20 + (t % 40) as u16),
         artifacts_pct: (t >= 60).then_some((t % 9) as u8),
         ascent_m: Some(t / 10),
+        trainer: crate::fit::tests::trainer(t),
         profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
     }

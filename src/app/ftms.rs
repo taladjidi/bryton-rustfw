@@ -476,6 +476,7 @@ impl App {
         let data = bytes.get(..n).unwrap_or(&[]);
         if ble::write(b, &mut self.rx, conn, f.handle(CONTROL), data).is_ok() {
             (f.cp_wait, f.cp_ms, f.cp_inflight, f.busy_ms) = (data.first().copied(), 0, true, 0);
+            self.tlink.cmds |= fit::cmd_bit(fec::encode(c)[0]); // the ride file names it by its FE-C page
         } else {
             self.trainer.unsent();
         }
