@@ -2,7 +2,7 @@
 
 `tools/sync.py` runs on the computer. It takes the new rides off the bike computer and uploads them, and it puts
 the planned workouts of the next days from Intervals.icu on the card. Python 3 and its standard library are all it
-needs. An iOS app is to do the same later over the BLE bond (roadmap, phase 8).
+needs. An iOS app is to do the same later over the BLE bond (roadmap, section 9).
 
 ## Why two files per ride
 

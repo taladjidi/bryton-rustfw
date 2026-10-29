@@ -401,9 +401,9 @@ Live segments:
   subscribers. The package format is reconstructed (live_segments.c); stock never imports a package copied over USB.
 - **Garmin, Wahoo, Karoo** get Strava's starred segments through their apps, Strava subscription required.
 - **Strava's API** still lists starred segments and segment streams, but the 2024 terms limit what an app may do and
-  a paid developer plan replaces free access from June 2026 (one source, inferred until checked). A personal
-  `sync.py` step that fetches the owner's starred segments is likely allowed; KOM split times are not exposed, so
-  a KOM ghost would run at a constant pace.
+  since 30 June 2026 its Standard tier needs the developer's own Strava subscription (checked 2026-10-29,
+  docs/segments.md). A personal tool that fetches the owner's segments is allowed; KOM split times are not exposed
+  without the Live Segments licence, so a KOM ghost would run at a constant pace. The plan: docs/segments.md.
 - **Here, without Strava:** segments from the rider's own rides (a stretch ridden more than once, the best effort as
   the ghost), matched by GPS on the unit as `course.rs` matches a course, are possible with what is on the card.
 
