@@ -35,8 +35,11 @@ const FAULT_REG: u32 = 0x5800_4050 + 4 * 29;
 
 /// A fault or a panic: marked in the RTC backup domain, then a system reset (the firmware starts again, and a ride
 /// will resume from its checkpoint: AGENTS.md, the golden rule). Parked instead after 3 in a row without a minute of
-/// running between, so a fault at start-up does not loop for ever. Interrupts are masked, so this runs only for a
-/// fault (HardFault and the others escalate) or the panic handler; it uses no stack beyond rd / wr.
+/// running between, so a fault at start-up does not loop for ever. Interrupts are masked (PRIMASK), so this runs
+/// only for a fault (every one escalates to HardFault), the panic handler or [`fault`] (main.rs's stack canary); it
+/// uses no stack beyond rd / wr. A fault whose own stacking faults (the stack already overflowed) cannot get here:
+/// the core locks up (seen on the unit 2026-10-29, BOARD.md 2), which is why the stack is watched by a canary, not
+/// an MPU guard.
 // SAFETY: the vector table refers to this symbol by name; nothing else is called default_handler.
 #[unsafe(no_mangle)]
 extern "C" fn default_handler() -> ! {
@@ -57,12 +60,30 @@ fn panic(_: &PanicInfo) -> ! {
     default_handler()
 }
 
+/// A fault found by the firmware itself (main.rs: the stack canary overwritten): marked and reset as a CPU fault is.
+pub fn fault() -> ! {
+    default_handler()
+}
+
+/// Where `x` lives (no unsafe: the pointer is only turned into a number), so main.rs's `stack_fault` knows how deep
+/// its frame is; raw pointers stay in this module (AGENTS.md).
+pub fn address<T>(x: &T) -> u32 {
+    core::ptr::from_ref(x) as u32
+}
+
+/// The stack canary's address (link.x `_stack_canary`: the word just above .bss, the stack's last, never zeroed
+/// with .bss and holding no Rust object), for main.rs to write and check through rd / wr.
+pub fn stack_canary() -> u32 {
+    &raw const _stack_canary as u32
+}
+
 unsafe extern "C" {
     static _sidata: u32;
     static _sdata: u32;
     static _edata: u32;
     static _sbss: u32;
     static _ebss: u32;
+    static _stack_canary: u32;
     static _saxi: u32;
     static _eaxi: u32;
     static _siitcm: u32;
@@ -113,7 +134,8 @@ fn copy_words(mut from: u32, mut to: u32, end: u32) {
 pub fn rd(a: u32) -> u32 {
     // SAFETY: rd and wr are safe functions over any address, which the compiler cannot check: their soundness rests
     // on every caller, and these are all of them. Register addresses (constants, each naming RM0399 or BOARD.md);
-    // in this module, the link.x section bounds and the fault marker; and usb.rs's peek / poke, the dev link's
+    // in this module, the link.x section bounds and the fault marker; main.rs's stack canary (link.x _stack_canary,
+    // a DTCM word no Rust object holds: an overflow may write it, which is what the check looks for); and usb.rs's peek / poke, the dev link's
     // computer-given addresses, which they check first (aligned; poke in the peripheral space only, peek there or in
     // the DTCM or the SDRAM: all mapped). A peek of RAM may read a value a Rust object holds (it writes nothing,
     // and the value may be stale). A reserved address inside the peripheral space can still bus-fault: a reset

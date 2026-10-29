@@ -59,7 +59,8 @@ This is a battery device: every cycle the CPU is awake costs ride time.
   - watch the image size `tools/pack.py` prints: about <!-- n:image -->643 KB<!-- /n --> (stock's is over 3 MB). Size costs little here
     (the image runs from 64 MB of SDRAM): a jump that nothing explains is what to look for (a font costs nothing
     until something draws with it: the linker drops it).
-- **Memory:** the stack is DTCM (about 123 KB); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
+- **Memory:** the stack is DTCM (about 123 KB; a canary word above .bss, checked every pass, resets the unit when an
+  overflow reaches it: main.rs `stack_check`); the app itself lives in AXI SRAM (a static cell, link.x `.axibss`),
   since as a local it overflowed the stack when a workout opened (2026-10-24). `tools/stack_check.py` (check.sh) fails
   when a function's frame passes its budget: keep big buffers in their own non-inlined function, never in main's. AXI
   SRAM (512 KB) holds the app, the courses, the scan's cache and the road ahead (about <!-- n:axi_free -->15 KB<!-- /n --> left; link.x

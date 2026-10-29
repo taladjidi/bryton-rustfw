@@ -54,6 +54,12 @@ STM32H747 reference manual (RM0399). Sections are referred to from the code as "
     complete fix. Inferred cause: the FMC's handling of unaligned accesses to a 16-bit SDRAM, not traced. Stock
     runs with the caches on, so it would not see this.
 - No watchdog is started, by the bootloader or the stock OS.
+- **A fault whose own stacking faults locks the core up (seen on the unit, 2026-10-29).** This firmware keeps
+  PRIMASK set (interrupts only wake WFI), so every configurable fault escalates to HardFault (ARMv7-M ARM B1.5.4,
+  execution priority 0 under PRIMASK); a no-access MPU region under the thread stack (on PSP, handlers on MSP)
+  made an overflow's HardFault stack its frame into that region, and a fault on HardFault's entry is lockup
+  (B1.5.15): no reset, no USB, a four-button restart. So the stack has no MPU guard: link.x `_stack_canary`, a
+  word checked every pass, turns an overflow that reaches it into a reset instead (main.rs `stack_check`).
 - **Recovery mode ("Engineer Mode")**: USB plugged, restart with the four buttons while holding Page. The
   bootloader configures the Page pin itself and reads the real key, so no firmware can enter it by software.
   Recovery tools: github.com/taladjidi/bryton-S510-mods (`tools/iaprecover.py`, `docs/recovery.md`).

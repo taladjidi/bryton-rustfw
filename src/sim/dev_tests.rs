@@ -210,3 +210,19 @@ fn serve_answers_the_card_effects() {
     assert!(app.serve(&mut sim, &mut pc, &s, Effect::Ls));
     assert!(pc.got.starts_with(b"err ") || pc.got.ends_with(b"end\n"), "{:?}", pc.got);
 }
+
+/// `stackfault` (the stack guard's test on the unit) answers `ok` and leaves the overflow to main.rs; never while a
+/// ride is open.
+#[test]
+fn stackfault_only_with_no_ride_open() {
+    let (mut sim, mut app) = app_at(9, 0, 0);
+    let (mut s, mut pc) = (Session::new(), Pc::default());
+    assert_eq!(s.feed(b"stackfault\n", &app, Stats::default(), &mut pc), Effect::StackFault);
+    assert_eq!(pc.got, b"ok\n");
+    assert!(!app.serve(&mut sim, &mut pc, &s, Effect::StackFault));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), crate::ride::State::Running);
+    pc.got.clear();
+    assert_eq!(s.feed(b"stackfault\n", &app, Stats::default(), &mut pc), Effect::None);
+    assert_eq!(pc.got, b"err ride open\n");
+}

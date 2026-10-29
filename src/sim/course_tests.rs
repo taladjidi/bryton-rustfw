@@ -92,11 +92,22 @@ fn course_ride() {
     rows.sort();
     assert_eq!(
         rows,
-        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
+        ["", "BROKEN --", "HILL 5.0 KM", "HILL 5.0 KM", "HILL GARMIN 5.0 KM", "TURNS 6.7 KM", "ZIGZAG 6.7 KM"]
     );
-    // a long name is whole: its row drops the unit rather than cut the name
-    let (name, value, _) = app.menu_row(Menu::Courses, 2).unwrap();
-    assert!(ui::LABEL.width(name.as_str()) <= ui::menu_label_w(name.as_str(), value.as_str()), "{}", name.as_str());
+    // the distance keeps its unit on every row (a long name is cut by the drawing, never the value)
+    for i in 0..7 {
+        let Some((_, value, _)) = app.menu_row(Menu::Courses, i) else { continue }; // a row past the files
+        assert!(value.as_str().ends_with(" KM") || matches!(value.as_str(), "..." | "--"), "{}", value.as_str());
+        let Some((name, _, _)) = app.menu_row(Menu::Courses, i) else { continue };
+        assert!(
+            ui::LABEL.width(value.as_str()) + ui::menu_label_w(name.as_str(), value.as_str()) <= ui::NEARBY.2,
+            "{}",
+            name.as_str()
+        );
+    }
+    // the longest name the card can hold (16 characters) with the longest distance: the name is cut, the value whole
+    let (name, value) = ("ABCDEFGHIJKLMNOP", "999.9 KM");
+    assert!(ui::LABEL.width(value) + ui::menu_label_w(name, value) <= ui::NEARBY.2, "{name}");
     assert_consistent(&sim, &app);
     sim.save("courses_menu");
 
