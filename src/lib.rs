@@ -324,6 +324,8 @@ pub struct App {
     /// A ride's delete the last run may have left unfinished: looked for when the scan of the rides first runs
     /// ([`trash::finish`]).
     trash_check: bool,
+    /// [`trash::finish`] tried in this run of the scan (once a scan: a lasting card error is not tried every pass).
+    trash_tried: bool,
     /// Workouts: those planned from the day it was read on; the one opened (its steps menu) or running, and its
     /// file; where it is (workout.rs).
     plan: Plan,
@@ -475,6 +477,7 @@ impl App {
             dt_ms: POLL_MS,
             past: history::Past::new(),
             trash_check: false,
+            trash_tried: false,
             plan: Plan::new(),
             ramp: RampState::default(),
             rec: Recording::new(),

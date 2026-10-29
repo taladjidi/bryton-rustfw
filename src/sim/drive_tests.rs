@@ -134,6 +134,108 @@ fn read_only_build_offers_a_write_protected_drive() {
     assert_eq!(app.notes.text.as_str(), "USB DRIVE OFF");
 }
 
+/// A delete a cut left halfway (the ride in neither folder) whose finish fails when the drive is lent: lent write
+/// protected (no computer's fsck frees the nameless chain), the delete finished at the next lending, then writable.
+#[test]
+fn a_cut_delete_not_finished_lends_the_drive_read_only() {
+    use crate::storage::trash::tests::{cut_midway, file};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = cut_midway();
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000); // before the scan: the delete not finished yet
+    assert!(app.trash_check);
+    (sim.emmc.bad, sim.emmc.bad_left) = (std::vec![0..u32::MAX], Some(1));
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(sim.emmc.bad_left, Some(0), "the finish's write failed");
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE READ ONLY");
+    let mut h = Host::default();
+    command(&mut sim, &mut app, &mut h, 1, 0, false, &[0; 6]);
+    let (ms, _) = command(&mut sim, &mut app, &mut h, 2, 192, true, &[0x1a, 0, 0x3f, 0, 192, 0]);
+    assert_eq!(ms[2], 0x80, "write protected");
+    app.drive_off();
+    assert!(!app.drive_lent());
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
+    assert!(!app.trash_check);
+    assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
+}
+
+/// The review of 2026-10-29, S3: a reset mid-ride that lost the boot's marker (a flat battery), so no ride comes
+/// back, while the card's record says "recording": USB DRIVE lends it write protected (no computer's fsck frees the
+/// chain the record may name alone). The next ride's Start takes the old one up; once saved, the drive is writable.
+#[test]
+fn a_ride_left_open_without_its_marker_lends_the_drive_read_only() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000); // a checkpoint on the card
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+    let mut sim2 = Sim::new(9, 3, 0); // the backup registers lost
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    let mut app = App::start(&mut sim2, None);
+    app.set_usb(&mut sim2, UsbDot::Ready);
+    run(&mut sim2, &mut app, 1000);
+    assert_eq!(app.ride.state(), ride::State::Idle, "nothing resumed");
+    assert_eq!(app.drive_on(&mut sim2), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "RIDE LEFT OPEN: START A RIDE");
+    let mut h = Host::default();
+    command(&mut sim2, &mut app, &mut h, 1, 0, false, &[0; 6]);
+    let (ms, _) = command(&mut sim2, &mut app, &mut h, 2, 192, true, &[0x1a, 0, 0x3f, 0, 192, 0]);
+    assert_eq!(ms[2], 0x80, "write protected");
+    app.drive_off();
+    assert!(!app.drive_lent());
+    // the next ride's Start: the old one, stopped minutes ago (under RESUME_S), resumed in its place, paused
+    app.press(&mut sim2, Press::Short(Key::Start));
+    run(&mut sim2, &mut app, 10_000);
+    assert_eq!(app.ride.state(), ride::State::Paused, "the old ride taken up");
+    assert_eq!(app.ride_started, ((2026, 10, 23), (9, 0)), "the old ride's start");
+    assert!(app.ride.timer_s() >= 60, "its checkpoint: {} s", app.ride.timer_s());
+    save_ride(&mut sim2, &mut app);
+    run(&mut sim2, &mut app, 5000);
+    assert_eq!(app.ride.state(), ride::State::Idle);
+    let named = |s: u32| std::format!("Activities/2610230900{s:02}.fit");
+    let n = (0..60).filter(|&s| crate::storage::trash::tests::file(&sim2.emmc.image, &named(s)).is_some()).count();
+    assert_eq!(n, 1, "the old ride saved, once");
+    assert_eq!(app.drive_on(&mut sim2), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
+    assert_eq!(crate::fat::write::tests::fsck(&sim2.emmc.image), Ok(0));
+}
+
+/// The third review, finding 2: a damaged `\Rustfw` (its entry's cluster out of the volume), which the recorder
+/// cannot use either, is not taken for a ride left open: the drive is lent writable, for a computer to repair it.
+#[test]
+fn a_damaged_rustfw_folder_lends_the_drive_writable() {
+    let (mut image, c) = {
+        let mut ram = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
+        let mut fat = crate::fat::Fat::mount(&mut ram).unwrap();
+        let root = fat.root();
+        let c = fat.ensure_dir(&mut ram, root, "Rustfw", (0, 0)).unwrap().cluster;
+        (ram.0, c)
+    };
+    // its 8.3 entry in the root: a folder (0x10) on that cluster, not its own "." entry
+    let at = (0..image.len() / 32)
+        .map(|k| k * 32)
+        .find(|&at| {
+            let e = &image[at..at + 32];
+            let cl =
+                u32::from(u16::from_le_bytes([e[26], e[27]])) | u32::from(u16::from_le_bytes([e[20], e[21]])) << 16;
+            e[0] != b'.' && e[0] != 0xe5 && e[11] == 0x10 && cl == c
+        })
+        .expect("its entry");
+    image[at + 20..at + 22].fill(0xff);
+    image[at + 26..at + 28].fill(0xff);
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = image;
+    let mut app = App::start(&mut sim, None);
+    app.set_usb(&mut sim, UsbDot::Ready);
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.drive_on(&mut sim), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
+}
+
 /// USB DRIVE in the SYSTEM menu: Select lends the card (the row says ON), Select again takes it back.
 #[test]
 fn the_device_menu_row() {
