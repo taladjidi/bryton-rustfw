@@ -2172,37 +2172,68 @@ fn a_stuck_save_whose_chain_a_computer_freed_is_never_linked() {
 /// over one cluster: within one, sector 0 is compared even when marked, so a torn one lets it go (the third review).
 #[test]
 fn a_ride_without_its_entry_is_saved_whatever_cut_its_repair() {
+    let (saved_whole, let_go) = cut_the_repair(800);
+    assert!(saved_whole > 0 && let_go == 0);
+}
+
+/// The same within one cluster (200 s): a cut tearing the repair's sector 0 lets the ride go (marked, sector 0 is
+/// still compared there: mod.rs, `still_ours`), named nowhere, its chain lost, the volume otherwise clean; any
+/// other cut, the ride saved whole.
+#[test]
+fn a_one_cluster_ride_whose_repair_tears_sector_0_is_let_go() {
+    let (saved_whole, let_go) = cut_the_repair(200);
+    assert!(saved_whole > 0 && let_go > 0, "{saved_whole} saved, {let_go} let go");
+}
+
+/// A ride of `secs` seconds left open, its entry gone, its boot's recovery cut at every sector (plain and torn),
+/// then booted again: how many cuts ended with the ride saved whole, and how many let it go (only a torn sector 0
+/// within one cluster may).
+fn cut_the_repair(secs: u32) -> (u32, u32) {
     let mut d = card(crate::fat::tests::image());
-    let _ = open_ride(&mut d, 800);
+    let _ = open_ride(&mut d, secs);
     let sector0 = first_lba(&d.img, "Rustfw/Rides/261023100000.fit") as u32;
-    {
+    let one_cluster = {
         let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
         let mut fat = Fat::mount(&mut ram).unwrap();
-        let f = fat.open(&mut ram, "Rustfw/Rides/261023100000.fit").unwrap();
-        assert!(f.size > fat.cluster_bytes(), "over one cluster: {} bytes", f.size);
-    }
+        fat.open(&mut ram, "Rustfw/Rides/261023100000.fit").unwrap().size <= fat.cluster_bytes()
+    };
+    assert_eq!(one_cluster, secs < 600, "the ride's length: one cluster or more");
     let mut img = d.img;
     remove_ride_entry(&mut img);
     let mut whole = card(img.clone());
-    assert_eq!(Recorder::new().recover(&mut whole, local(900)), Outcome::Saved(NAME));
+    assert_eq!(Recorder::new().recover(&mut whole, local(secs + 100)), Outcome::Saved(NAME));
     let (want, _) = saved(&whole.img, SAVED).unwrap();
-    assert!(want.len() >= 800 - CHECKPOINT_S as usize);
-    let (total, mut torn0) = (whole.written, 0);
+    assert!(want.len() >= (secs - CHECKPOINT_S) as usize);
+    let (total, mut torn0, mut saved_whole, mut let_go) = (whole.written, 0, 0, 0);
     for cut in 0..total {
         for torn in [false, true] {
             let what = std::format!("cut {cut} of {total}, torn {torn}");
             let mut c = Card { budget: Some(cut), torn, ..card(img.clone()) };
             Recorder::new().recover(&mut c, local(300));
-            torn0 += usize::from(torn && c.cut_at == sector0);
+            let tore0 = torn && c.cut_at == sector0;
+            torn0 += usize::from(tore0);
             let mut c = card(c.img);
             let o = Recorder::new().recover(&mut c, local(301));
-            assert!(matches!(o, Outcome::Saved(NAME) | Outcome::Nothing), "{what}: {o:?}");
-            assert_eq!(saved(&c.img, SAVED).map(|s| s.0), Ok(want.clone()), "{what}: saved whole");
+            if one_cluster && tore0 {
+                assert_eq!(o, Outcome::Nothing, "{what}");
+                let mut ram = crate::fat::tests::Ram(c.img.clone(), 0);
+                let mut fat = Fat::mount(&mut ram).unwrap();
+                for p in ["Rustfw/Rides/261023100000.fit", SAVED, "Rustfw/Rescue/261023100000.fit"] {
+                    assert_eq!(fat.open(&mut ram, p).err(), Some(Error::NotFound), "{what}: {p}");
+                }
+                assert_eq!(best_rec(&c.img).phase, Phase::Done, "{what}");
+                let_go += 1;
+            } else {
+                assert!(matches!(o, Outcome::Saved(NAME) | Outcome::Nothing), "{what}: {o:?}");
+                assert_eq!(saved(&c.img, SAVED).map(|s| s.0), Ok(want.clone()), "{what}: saved whole");
+                saved_whole += 1;
+            }
             fsck_torn(&c.img).unwrap_or_else(|e| panic!("{what}: {e}"));
             assert_eq!(free_counts(&c.img).0, free_counts(&c.img).1, "{what}: FSInfo's free count");
         }
     }
     assert!(torn0 > 0, "a cut tore the repair's sector 0");
+    (saved_whole, let_go)
 }
 
 /// The review of the S1 fix, finding 4: a read error inside the chain's check (the ride's sector 0 unreadable) is
