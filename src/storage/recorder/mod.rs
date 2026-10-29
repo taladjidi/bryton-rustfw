@@ -381,7 +381,8 @@ pub struct Recorder {
     pub dropped: u32,
     /// RR intervals dropped: the queue full (the buffer without room for long), or left at the end.
     pub beats_dropped: u32,
-    /// Card errors so far.
+    /// Card errors so far, every one, those the recorder goes on after included (never lowered: the app compares
+    /// the FAT copies again when it grows, a FAT sector may have reached one copy only).
     pub errors: u32,
     /// A Start while the last ride was still being saved: (time, name, resume_old), started once the save is done
     /// ([`Recorder::start`]).
@@ -668,13 +669,17 @@ impl Recorder {
         if let Ok(o) = self.keep_in_rides(fat, d, t) {
             return GaveUp::Named(o);
         }
+        self.errors = self.errors.saturating_add(1);
         if self.rescue(fat, d, t).is_ok() {
             return GaveUp::Rescue(self.name);
         }
+        self.errors = self.errors.saturating_add(1);
         // named nowhere: the record "done", the chain lost. Failing too, the record still says "saving": the next
         // start tries the save again (stuck again if the card still fails)
         let first = self.file.map_or(0, |h| h.first);
-        let _ = self.write_record(fat, d, Phase::Done, first);
+        if self.write_record(fat, d, Phase::Done, first).is_err() {
+            self.errors = self.errors.saturating_add(1);
+        }
         GaveUp::Lost
     }
 
@@ -1011,7 +1016,11 @@ impl Recorder {
                 fat.sync_fats(d)?; // the cut may have been between the two FATs, or torn one
                 let mut old = Recorder::of(self.kind);
                 (old.rec, old.seq, old.errors) = (self.rec, self.seq, self.errors);
-                match old.recover_from(&mut fat, d, Some(r), t, resume) {
+                let got = old.recover_from(&mut fat, d, Some(r), t, resume);
+                if got.is_err() {
+                    old.errors = old.errors.saturating_add(1); // whatever follows: the arms below go on after some
+                }
+                match got {
                     Ok(o @ Outcome::Resumed(..)) => {
                         *self = old;
                         return Ok(o);
@@ -1033,7 +1042,7 @@ impl Recorder {
                     // a ride left open that could not be resumed: named in its folder, its record overwritten next
                     Err(_) => told = Outcome::Kept(r.name),
                 }
-                self.seq = self.seq.max(old.seq);
+                (self.seq, self.errors) = (self.seq.max(old.seq), self.errors.max(old.errors));
             }
             if self.file.is_none() {
                 // a name free in this copy's folder and in both saved and both discarded folders, so that the two
@@ -1191,7 +1200,9 @@ impl Recorder {
         // either there lost the ride, or its clean copy: a_discard_cut_at_every_sector)
         // optional: a damaged or taken name there must not stop the ride's recording (a discard then keeps the ride
         // in its folder)
-        let _ = Kind::Full.discarded_dir(fat, d, t);
+        if Kind::Full.discarded_dir(fat, d, t).is_err() {
+            self.errors = self.errors.saturating_add(1); // counted all the same (the app's FAT compare)
+        }
         Ok(rides)
     }
 

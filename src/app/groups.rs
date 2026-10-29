@@ -351,6 +351,8 @@ pub(crate) struct Recording {
     /// The CP (W) and W' (J) the ride in progress took at its start, and whether from the fit (app/fitness.rs): kept
     /// for the whole ride.
     pub(crate) model: Option<(u16, u16, bool)>,
+    /// Both copies' card errors as [`App::step_recorder`] last saw them.
+    pub(crate) errors_seen: u32,
 }
 
 impl Recording {
@@ -363,6 +365,7 @@ impl Recording {
             full_pending: false,
             lag_s: 0,
             model: None,
+            errors_seen: 0,
         }
     }
 

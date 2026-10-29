@@ -418,6 +418,13 @@ impl App {
             self.alarm_notice("NOT RECORDING: CARD"); // the ride started behind the last one's save, now stuck
         }
         self.step_full(b, local);
+        // a card error of either copy (GIVE UP SAVE's too) since the last pass: a FAT sector may have reached the
+        // first copy only, so the next settings.bin or pages.bin write compares the copies first
+        let errors = self.rec.clean.errors.saturating_add(self.rec.full.errors);
+        if errors != self.rec.errors_seen {
+            self.rec.errors_seen = errors;
+            self.fats_unsure();
+        }
         let open = self.rec.clean.phase() != recorder::Phase::Done || self.rec.full.phase() != recorder::Phase::Done;
         // a build that cannot write the card never clears the marker of a ride left open
         if self.card_writable && !self.rec.resume_pending && open != (b.backup_read(RIDE_BKP) == RIDE_OPEN) {
