@@ -219,6 +219,39 @@ moves; the screen is redrawn at once and the choice is kept through a restart (r
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
+**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through DARK (the colours as they were), OUTDOOR (lighter notes
+and lines, brighter zones) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
+`-` and `_`, 12 characters at most), drawing the screen again at once. The choice is kept by name in settings.bin (not
+in the backup registers), and a file is read again at each start. A file is an INI, read, never written:
+
+```ini
+[theme]
+version = 1          ; above 1 is refused (THEME TOO NEW)
+name = SUNNY
+base = outdoor       ; dark or outdoor: the values the file does not give
+[colors]             ; #RRGGBB, any key left out keeps the base's
+background = #000000 ; every screen's background
+text = #FFFFFF       ; labels and values
+line = #393D39       ; menu row lines, empty bars
+dim = #848284        ; notes, axes
+accent = #FFA500     ; the selected row, banners, frames
+on_accent = #000000  ; text on the accent
+alarm = #FF0000      ; alarm banners, BACK, bad readings
+on_alarm = #FFFFFF   ; text on the alarm
+ok = #00FF00         ; the strip's good dots
+warn = #FFFF00       ; the trainer's states
+ferris = #F74D00     ; Ferris
+cog = #C5C2C5        ; the overview's menu cog
+course = #CE00FF     ; the course on the map
+zone1 = #4A9283      ; zone 1 to 7 (zone2 ..): power and heart rate zones, grade, gauge, W' balance
+```
+
+A value that is not a colour or a key that is not in the list is ignored. A file that is not a theme, over 4 KB, with a
+version above 1, or that fails the whole-theme checks is refused, with the reason in a notice, and DARK is drawn:
+Text (`text`, `dim`, `accent`, `alarm`, `ok` and `warn` on `background`; `on_accent` on `accent`, `ok` and `warn`;
+`on_alarm` on `alarm`) needs a contrast ratio of 4.5:1 and the rest (`line`, `ferris`, `cog`, `course`, the zones, on `background`) 3:1 (WCAG 2.1 1.4.3 and 1.4.11; a pair whose two colours are the base's is not checked: DARK's white on red is 4.0:1, its `line` and `zone7` are under 3:1); red is for alarms (`alarm` is no other colour of the file) and no two zones are alike. Pictures (the basemap, IGN tiles) are never recoloured.
+Built-in names cannot be a file's. LIGHT, fonts and metrics in a theme come later (docs/theming.md).
+
 ## Ride
 
 - Moving time (auto-pause under 2 km/h), distance from the wheel sensor or else GPS, ascent from the barometric altitude (a median of 5 readings, then an average of 1/6; 3 m hysteresis; a reading a
@@ -299,7 +332,7 @@ MENU
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
      +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
-     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT
+     +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
      +- SYSTEM >   USB DRIVE, IMPORT FROM STOCK, GPS >, BLE NEARBY >, BUILT IN > (lux, temperature, pressure), ABOUT >

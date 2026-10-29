@@ -355,7 +355,7 @@ impl App {
             return self.show(b);
         }
         let now = self.quick_prints();
-        let mut p = Panel(b, self.area(), self.settings.smooth);
+        let mut p = Panel(b, self.area(), self.look());
         for (i, (&a, &s)) in now.iter().zip(&self.quick_shown).enumerate() {
             if a != s && a != 0 {
                 self.quick_draw_box(&mut p, i);

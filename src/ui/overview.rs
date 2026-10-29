@@ -128,7 +128,7 @@ pub fn draw_workout_row(
     done: bool,
 ) {
     let y = LIST_Y + slot as u32 * MENU_ROW;
-    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, WHITE) };
+    let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, WHITE) };
     c.fill(0, y, W, MENU_ROW - 1, bg);
     c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
     let style = Style { fg, bg, ..LABEL };
@@ -176,15 +176,18 @@ fn cog_coverage(i: u32, j: u32) -> u32 {
     n
 }
 
-/// RGB565 `color` at `n` ninths over black.
-fn dim(color: u16, n: u32) -> u16 {
-    let ch = |shift: u32, max: u32| ((u32::from(color) >> shift & max) * n / 9) << shift;
+/// RGB565 `color` at `n` ninths over `bg` (black in DARK).
+fn dim(color: u16, bg: u16, n: u32) -> u16 {
+    let ch = |shift: u32, max: u32| {
+        (((u32::from(color) >> shift & max) * n + (u32::from(bg) >> shift & max) * (9 - n)) / 9) << shift
+    };
     (ch(11, 31) | ch(5, 63) | ch(0, 31)) as u16
 }
 
 /// The cog at [`GEAR_AT`], anti-aliased over black.
 fn draw_cog(c: &mut impl Canvas) {
-    c.blit(GEAR_AT.0, GEAR_AT.1, COG, COG, &mut |i, j| dim(0xc618, cog_coverage(i, j)));
+    let (color, bg) = (c.ink(COG_COLOR), c.ink(BLACK));
+    c.blit(GEAR_AT.0, GEAR_AT.1, COG, COG, &mut |i, j| dim(color, bg, cog_coverage(i, j)));
 }
 
 /// The notices, newest first; with none, the area stays black.

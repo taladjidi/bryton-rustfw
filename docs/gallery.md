@@ -86,3 +86,12 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | Sensors and built-in readings (sim) | Speed page (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
 | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |  |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |
+
+## Themes
+
+| | | |
+|:-:|:-:|:-:|
+| ![DARK](img/theme-dark.png) | ![OUTDOOR](img/theme-outdoor.png) | ![OUTDOOR, a ride page](img/theme-outdoor-ride.png) |
+| DARK: the colours as they were (sim) | OUTDOOR: lighter notes and lines, brighter zones (sim) | OUTDOOR on a ride page (sim) |
+| ![OUTDOOR menu](img/theme-outdoor-menu.png) | ![A theme file](img/theme-sunny.png) |  |
+| SETTINGS > DISPLAY > THEME cycles DARK, OUTDOOR and the files of `\Rustfw\Themes` (sim) | A theme file from the card: SUNNY, OUTDOOR with a blue accent (sim) |  |

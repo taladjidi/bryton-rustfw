@@ -54,18 +54,18 @@ type BottomButton = (Button, u32, u32, &'static str, u16, u16);
 
 /// The bottom row's buttons: (button, x, w, label, background, text colour).
 fn bottom_buttons(b: Bottom) -> [Option<BottomButton>; 2] {
-    let mode = (Button::Mode, 8, 224, "MODE", ACCENT, super::BLACK);
+    let mode = (Button::Mode, 8, 224, "MODE", ACCENT, super::ON_ACCENT);
     match b {
         Bottom::Mode => [Some(mode), None],
         Bottom::Both => [
-            Some((Button::Mode, 8, 104, "MODE", ACCENT, super::BLACK)),
-            Some((Button::Calibrate, 116, 116, "CALIBRATE", YELLOW, super::BLACK)),
+            Some((Button::Mode, 8, 104, "MODE", ACCENT, super::ON_ACCENT)),
+            Some((Button::Calibrate, 116, 116, "CALIBRATE", YELLOW, super::ON_ACCENT)),
         ],
         Bottom::ModeRamp => [
-            Some((Button::Mode, 8, 104, "MODE", ACCENT, super::BLACK)),
-            Some((Button::Ramp, 116, 116, "RAMP TEST", GREEN, super::BLACK)),
+            Some((Button::Mode, 8, 104, "MODE", ACCENT, super::ON_ACCENT)),
+            Some((Button::Ramp, 116, 116, "RAMP TEST", GREEN, super::ON_ACCENT)),
         ],
-        Bottom::Cancel => [Some((Button::Calibrate, 8, 224, "CANCEL", RED, WHITE)), None],
+        Bottom::Cancel => [Some((Button::Calibrate, 8, 224, "CANCEL", RED, super::ON_ALARM)), None],
     }
 }
 

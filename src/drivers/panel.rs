@@ -2,7 +2,7 @@
 //! and switching off. The board only carries the bytes ([`Board::panel_cmd`], [`Board::panel_ram_write`]).
 
 use crate::Board;
-use crate::ui::{BLACK, Canvas, H, W};
+use crate::ui::{BLACK, Canvas, H, Theme, W};
 
 /// Software reset.
 pub const SWRESET: u8 = 0x01;
@@ -58,7 +58,7 @@ pub fn init(b: &mut impl Board) {
             b.delay_ms(wait);
         }
     }
-    Panel(b, (0, H), false).fill(0, 0, W, H, BLACK);
+    Panel(b, (0, H), Theme::DARK).fill(0, 0, W, H, BLACK);
     b.panel_cmd(DISPON, &[]);
 }
 
@@ -70,8 +70,8 @@ pub fn off(b: &mut impl Board) {
 
 /// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels. Only
 /// rows from the second field's first to before its second are drawn (not what a banner covers, or only what it
-/// covered): `(0, H)` for the whole screen. The last field is the FONT setting ([`Canvas::smooth`]).
-pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32), pub bool);
+/// covered): `(0, H)` for the whole screen. The last field is the FONT setting and the colours ([`Canvas::smooth`], [`Canvas::ink`]).
+pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32), pub Theme);
 
 impl<B: Board> Panel<'_, B> {
     /// CASET / RASET: the window the next RAMWR fills.
@@ -89,6 +89,7 @@ impl<B: Board> Canvas for Panel<'_, B> {
             return;
         }
         self.window(x, top, w, bottom - top);
+        let color = self.2.ink(color);
         self.0.panel_fill(w * (bottom - top), color);
     }
 
@@ -115,6 +116,10 @@ impl<B: Board> Canvas for Panel<'_, B> {
     }
 
     fn smooth(&self) -> bool {
-        self.2
+        self.2.smooth
+    }
+
+    fn ink(&self, c: u16) -> u16 {
+        self.2.ink(c)
     }
 }

@@ -536,7 +536,7 @@ impl App {
     pub(crate) fn update_trainer(&mut self, b: &mut impl Board) {
         let mut shown = self.tlink.shown;
         let area = self.area();
-        self.with_trainer_now(|n| ui::trainer::update(&mut Panel(b, area, self.settings.smooth), n, &mut shown));
+        self.with_trainer_now(|n| ui::trainer::update(&mut Panel(b, area, self.look()), n, &mut shown));
         self.tlink.shown = shown;
     }
 

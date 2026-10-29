@@ -1585,6 +1585,9 @@ mod page_tests;
 #[cfg(test)]
 mod settings_tests;
 
+#[cfg(test)]
+mod theme_tests;
+
 /// The computer at the other end of the dev link: what it received, and the staging area.
 #[derive(Default)]
 pub struct Pc {

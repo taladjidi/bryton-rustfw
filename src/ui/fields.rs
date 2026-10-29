@@ -630,7 +630,7 @@ pub fn draw_edit_hint(c: &mut impl Canvas, text: &str) {
 /// side by side (`stacked` false) or one over the other, in the row's ink.
 pub fn draw_split_icon(c: &mut impl Canvas, i: usize, stacked: bool, selected: bool) {
     let (iw, ih) = (24, 16);
-    let ink = if selected { BLACK } else { WHITE };
+    let ink = if selected { ON_ACCENT } else { WHITE };
     let x = NEARBY.0 + NEARBY.2 - iw;
     let y = LIST_Y + i as u32 * MENU_ROW + (MENU_ROW - 1 - ih) / 2;
     c.fill(x, y, iw, 2, ink);

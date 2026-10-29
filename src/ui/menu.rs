@@ -106,6 +106,8 @@ pub enum Setting {
     ClimbsAhead,
     /// The font of every text: PIXEL (dot matrix, the default) or SMOOTH ([`crate::fonts::smooth`]).
     Font,
+    /// The colour theme: DARK, OUTDOOR or a file of `\Rustfw\Themes` ([`crate::theme`]).
+    Theme,
     /// The GPS receiver's power mode: AUTO (the default: cyclic tracking while riding fast and straight), FULL
     /// (continuous tracking) or SAVER (cyclic tracking) ([`crate::GpsPower`]).
     GpsPower,
@@ -202,6 +204,7 @@ impl Setting {
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::Font => "FONT",
+            Setting::Theme => "THEME",
             Setting::GpsPower => "GPS POWER",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
@@ -594,8 +597,13 @@ pub const ME: [Row; 4] =
 pub const ALERTS: [Row; 3] = [Row::Set(Setting::Eat), Row::Set(Setting::Drink), Row::Set(Setting::HrAlert)];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 4] =
-    [Row::Set(Setting::Light), Row::Set(Setting::LightOff), Row::Set(Setting::Touch), Row::Set(Setting::Font)];
+pub const DISPLAY: [Row; 5] = [
+    Row::Set(Setting::Light),
+    Row::Set(Setting::LightOff),
+    Row::Set(Setting::Touch),
+    Row::Set(Setting::Font),
+    Row::Set(Setting::Theme),
+];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead and the GPS receiver's power mode.

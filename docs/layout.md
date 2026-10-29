@@ -16,6 +16,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   read; a method another file calls is `pub(crate)`.
   - `settings.rs`: `Settings`, `PageCfg`, every backup register of the app (`*_BKP`), saving them; which registers
     stay beside the settings' file, and why.
+  - `themes.rs`: the colour theme in use (`App::look`, `apply_theme`, `next_theme`): THEME's name resolved to a
+    built-in or a file of `\Rustfw\Themes` (read only, listed 14 at most), the whole screen drawn again.
   - `settings_file.rs`: `\Rustfw\settings.bin`, the settings' file (`SettingsCopy`: two copies, magic, version,
     length, sequence number, CRC-32; read with the pages' file, written between rides; which wins over the
     registers; the migration from them).
@@ -66,6 +68,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `Setting` (label, choice or number with range and step). A new setting is a `Setting` variant, its row in a table,
   and its arms in `Settings::text` / `cycle` / `step`: never a row number. Back pops a screen stack (`App::open` /
   `close`), so no screen knows where Back goes.
+- `src/ui/theme.rs`: colour themes (`Theme`: what each built-in colour is drawn as, `Canvas::ink`), the built-in
+  DARK (identity) and OUTDOOR, the INI parser and the whole-theme checks (contrast, red only for alarms).
 - `src/ui/text.rs`: text in the pixel font at a scale (`text::draw`, a `Style`, `Align`), one panel window per glyph.
   For a value that changes, `text::draw_in` (a fixed box, the rest painted with the background) and
   `text::Line` (`write!` into a stack buffer, no heap). Float formatting (`{:.1}`) costs a few KB of image.
@@ -232,6 +236,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
+  `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR shots, a theme file picked from the card and kept),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
   climb, calibrations and file),
   `phone_tests.rs` (the phone link against `ble_sim.rs`: the chip's BLE side and a scripted phone).

@@ -326,7 +326,7 @@ impl App {
             // under a banner or a call: not drawn, and drawn whole when it goes (unbanner, end_ring); nor under the
             // editor's hint, and drawn whole when the editor is left (App::show)
             ui::draw_strip_changes(
-                &mut Panel(b, (self.area().0, ui::H), self.settings.smooth),
+                &mut Panel(b, (self.area().0, ui::H), self.look()),
                 &self.strip,
                 Some(&self.strip_shown),
             );

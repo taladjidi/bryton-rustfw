@@ -130,7 +130,7 @@ pub enum Align {
 
 /// Draws `s` in `style` with its cells' top at `y`, and returns its width. Callers keep it on screen.
 pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s: &str) -> u32 {
-    let Style { fg, bg, .. } = *style;
+    let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let smooth = c.smooth();
     let width = style.width(s);
     let mut x = match align {
@@ -154,7 +154,7 @@ pub fn draw(c: &mut impl Canvas, style: &Style, x: u32, y: u32, align: Align, s:
 /// Draws `s` from `x` as [`draw`] does, but nothing at or right of `right`: the last glyph's cell is cut there (its
 /// blank columns, when the text was laid out by its ink). Returns where the text drawn ends.
 pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s: &str) -> u32 {
-    let Style { fg, bg, .. } = *style;
+    let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let smooth = c.smooth();
     let mut palette = [bg; 16];
     for (a, p) in palette.iter_mut().enumerate() {
@@ -177,7 +177,7 @@ pub fn draw_clipped(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u
 /// not the whole cell (the rest of the cell is the background in both). A digit of the pixel font is 5 x 7 of its
 /// 6 x 10 cell: 58 % of the pixels. Nothing at or right of `right`.
 pub fn redraw_char(c: &mut impl Canvas, style: &Style, (x, y, right): (u32, u32, u32), old: char, new: char) {
-    let Style { fg, bg, .. } = *style;
+    let (fg, bg) = (c.ink(style.fg), c.ink(style.bg));
     let smooth = c.smooth();
     let ((_, a, ka), (font, g, k)) = (pick(style, smooth, old), pick(style, smooth, new));
     // each glyph's ink box in screen pixels from the cell's corner (the two may be drawn at different factors)

@@ -10,12 +10,13 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (31 in version 1, at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (43 now: 31 in the first build, THEME's 12 bytes appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
 //! 28   settings        in [`NUMBERS`]' order: the wheel (mm), then the numbers (u16 each); then the choices, a
-//!                      byte each ([`SettingsCopy::to_sector`]); a value out of its range reads as its default
+//!                      byte each ([`SettingsCopy::to_sector`]), then THEME's name (12 bytes, NUL padded; a file
+//!                      only, no register); a value out of its range reads as its default
 //! 508  CRC-32 of 0..508
 //! ```
 //!
@@ -115,6 +116,7 @@ impl SettingsCopy {
         let (light, off, auto, avg) = (s.light_level as u8, s.light_timeout as u8, s.auto_off as u8, s.wkt_avg as u8);
         put(&[light, off, auto, avg, r0, r1, r2, r3]);
         put(&[u8::from(s.touch), profile, u8::from(s.ahead), u8::from(s.smooth), gps]);
+        put(&s.theme);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -169,6 +171,17 @@ impl SettingsCopy {
         s.ahead = byte(2).map_or(d.ahead, |v| v == 1);
         s.smooth = byte(2).map_or(d.smooth, |v| v == 1);
         s.gps_power = byte(GPS_POWERS.len()).and_then(|v| GPS_POWERS.get(v).copied()).unwrap_or(d.gps_power);
+        // THEME (appended after the first build's 31 bytes): a name of letters, digits, - and _, else DARK
+        let mut name = [0u8; 12];
+        for n in name.iter_mut() {
+            *n = data.next().unwrap_or(0);
+        }
+        let n = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        if name.get(..n).is_some_and(|s| s.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+            && name.get(n..).is_some_and(|s| s.iter().all(|&b| b == 0))
+        {
+            s.theme = name;
+        }
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -205,6 +218,8 @@ pub(crate) struct SettingsStore {
     /// registers' tags lacked).
     pub(crate) boot: [u32; 4],
     pub(crate) boot_words: [u32; 4],
+    /// THEME was picked (the file may not be read yet): the file's name of it does not win.
+    pub(crate) theme_set: bool,
     /// The file was read whole: written over in place (as `PageStore::sound`).
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
@@ -347,10 +362,13 @@ impl App {
         st.seq = c.seq;
         // the registers lost: the file's whole; else each register that changed since the copy gives its fields
         let (merged, took) = if st.lost { (c.settings, [false; 4]) } else { c.settings.with_registers(c.words, regs) };
-        // the file gets the registers' fields, or words that say what the registers now hold
-        st.dirty = self.card_writable && (took.contains(&true) || merged.register_words() != c.words);
         let was = self.settings;
-        self.settings = Settings { alt_m: was.alt_m, ..merged };
+        // a theme picked before the file was read stays and goes to the file (the registers carry no theme)
+        let theme = if st.theme_set { was.theme } else { merged.theme };
+        // the file gets the registers' fields, or words that say what the registers now hold, or the theme picked
+        st.dirty = self.card_writable
+            && (took.contains(&true) || merged.register_words() != c.words || theme != c.settings.theme);
+        self.settings = Settings { alt_m: was.alt_m, theme, ..merged };
         if (st.lost || self.card_writable) && self.settings.register_words() != regs {
             // put right from the result (lost, or a register some fields missed); a build that may not write the
             // card leaves them as another build wrote them, but not stock's import over lost ones (the next
@@ -360,7 +378,9 @@ impl App {
         if self.settings != was {
             self.update_light(b);
             self.gps.reconfig = true;
-            if self.settings.smooth != was.smooth {
+            if self.settings.theme != was.theme {
+                self.apply_theme(b, false);
+            } else if self.settings.smooth != was.smooth {
                 self.font_changed(b);
             }
         }
@@ -449,7 +469,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 31);
+        assert_eq!(len, 43);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);

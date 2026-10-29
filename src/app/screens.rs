@@ -354,13 +354,13 @@ impl App {
                 continue;
             }
             let (x, y, bw, bh) = bx;
-            let mut p = Panel(b, self.area(), self.settings.smooth);
+            let mut p = Panel(b, self.area(), self.look());
             p.fill(x, y, bw, bh, ui::BLACK); // the label may be shorter now
             let now = self.now_drawn(bx, w);
             if let Some(d) = self.drawn.get_mut(i) {
                 *d = now;
             }
-            self.draw_widget(&mut Panel(b, self.area(), self.settings.smooth), i, bx, w);
+            self.draw_widget(&mut Panel(b, self.area(), self.look()), i, bx, w);
         }
         self.update_page(b); // the gauge and the pacer follow
     }
@@ -437,7 +437,7 @@ impl App {
 
     /// The banner's rows drawn again from what the screen shows: the strip, the page's top, the banner if one is up.
     pub(crate) fn redraw_top(&mut self, b: &mut impl Board) {
-        let mut p = Panel(b, (0, ui::BANNER_H), self.settings.smooth);
+        let mut p = Panel(b, (0, ui::BANNER_H), self.look());
         p.fill(0, 0, ui::W, ui::BANNER_H, ui::BLACK);
         if !self.hint_shown {
             self.strip_shown = self.strip; // not drawn while covered (update_strip)
@@ -526,7 +526,7 @@ impl App {
             let view = m.view;
             self.render_basemap(b, map::area(bx), view);
         }
-        let mut p = Panel(b, self.area(), self.settings.smooth);
+        let mut p = Panel(b, self.area(), self.look());
         match self.screen {
             // a menu's rows paint their whole boxes: clearing under them first doubled a menu's cost (2026-10-26)
             Screen::Menu(..) => ui::clear_menu(&mut p),
@@ -540,7 +540,7 @@ impl App {
             // into the editor or out of it: its hint in the strip's place, or the strip back
             self.hint_shown = hint;
             self.strip_shown = self.strip;
-            self.draw_top(&mut Panel(b, self.area(), self.settings.smooth));
+            self.draw_top(&mut Panel(b, self.area(), self.look()));
         }
         if let Screen::Menu(menu, sel) = self.screen {
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
@@ -579,7 +579,7 @@ impl App {
                         self.render_basemap(b, area, view);
                     }
                     let (base, route) = ((first == Some(i)).then_some(&self.basemap), self.route());
-                    let mut p = Panel(b, self.area(), self.settings.smooth);
+                    let mut p = Panel(b, self.area(), self.look());
                     map::update(&mut p, area, &self.track, &mut m, base, route.as_ref(), zoom, follow);
                     Drawn::Map(m)
                 }
@@ -590,12 +590,12 @@ impl App {
                 (Widget::Field(f), Drawn::Value(was, was_fg, was_bar)) => {
                     let (text, fg, bar) = (self.field_text(f), self.field_color(f), self.field_bar(f));
                     if bar != was_bar {
-                        ui::draw_zone_bar(&mut Panel(b, self.area(), self.settings.smooth), bx, bar); // a zone changed: the bar only
+                        ui::draw_zone_bar(&mut Panel(b, self.area(), self.look()), bx, bar); // a zone changed: the bar only
                     }
                     if (was, was_fg) != (text, fg) {
                         let old = if was_fg == fg { was.as_str() } else { "" }; // a new colour: all of it
                         ui::draw_field_value_changes(
-                            &mut Panel(b, self.area(), self.settings.smooth),
+                            &mut Panel(b, self.area(), self.look()),
                             bx,
                             old,
                             text.as_str(),
@@ -610,7 +610,7 @@ impl App {
                         if let Some(d) = self.drawn.get_mut(i) {
                             *d = now;
                         }
-                        self.draw_widget(&mut Panel(b, self.area(), self.settings.smooth), i, bx, w);
+                        self.draw_widget(&mut Panel(b, self.area(), self.look()), i, bx, w);
                     }
                     now
                 }
@@ -619,7 +619,7 @@ impl App {
                 *d = now;
             }
             if selected == Some(i) && now != old {
-                ui::draw_cell_frame(&mut Panel(b, self.area(), self.settings.smooth), bx, ui::ACCENT);
+                ui::draw_cell_frame(&mut Panel(b, self.area(), self.look()), bx, ui::ACCENT);
             }
         }
     }
@@ -627,7 +627,7 @@ impl App {
     /// Row `y` of the screen as the app drew it: the screenshot source.
     pub fn render_row(&self, y: u32) -> Row {
         let mut row = Row::new(y);
-        row.smooth = self.settings.smooth;
+        row.look = self.look();
         self.draw_top(&mut row);
         self.draw_screen(&mut row);
         row
