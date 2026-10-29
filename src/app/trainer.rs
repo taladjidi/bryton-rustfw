@@ -146,7 +146,11 @@ impl App {
         if self.ble.is_some() {
             self.step_ftms(b);
         }
+        let adjust = self.trainer.adjust_w();
         self.send_trainer(b);
+        // a new workout step (a Lap) drops the rider's adjust of the old one: the target shows now, not at the next
+        // second (the menu fuzz caught the stale target: 2026-10-29)
+        self.tlink.second |= adjust != self.trainer.adjust_w();
         self.tlink.pm_ms += self.dt_ms;
         if self.tlink.pm_ms >= 1000 {
             self.tlink.pm_ms -= 1000;
