@@ -139,7 +139,7 @@ fn erg_follows_the_workout_and_the_ride_records_the_trainer() {
     assert_eq!(cmds.first(), Some(&[0x31, 255, 255, 255, 255, 255, 0xb8, 0x01]), "110 W: 100-120 W, in 0.25 W");
     assert_eq!(sim.nordic.trainer.power, 110);
     assert!(cmds.iter().all(|p| p[0] == 0x31));
-    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "110W");
+    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "110 W");
     // the workout page opens with a trainer heard, first in the round
     assert_eq!(app.screen(), Screen::Ride(crate::WORKOUT));
     super::tests::assert_consistent(&sim, &app);
@@ -370,7 +370,7 @@ fn trainer_fields_on_a_page() {
     run(&mut sim, &mut app, 1100);
     sim.save("trainer_fields");
     super::tests::assert_consistent(&sim, &app);
-    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "105W");
+    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "105 W");
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1459,7 +1459,7 @@ fn power_match_brings_the_meter_to_the_target() {
     let (mut sim, mut app, meter) = erg_with_a_low_meter(true, 75);
     assert!((194..=206).contains(&meter), "the meter reads {meter} W for a 200 W target (3 %)");
     assert!(sim.nordic.trainer.target_w >= 215, "the trainer was asked for {} W", sim.nordic.trainer.target_w);
-    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "200W", "the rider's target is shown");
+    assert_eq!(app.field_text(Field::TrainerTarget).as_str(), "200 W", "the rider's target is shown");
     let pm = app.with_trainer_now(|n| n.pm.to_string());
     assert!(pm.starts_with("PM+") && pm.ends_with('%'), "{pm}");
     assert!(

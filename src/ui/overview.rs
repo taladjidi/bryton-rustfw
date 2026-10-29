@@ -204,9 +204,28 @@ pub fn draw_notices(c: &mut impl Canvas, notices: &[&str]) {
         let y = NOTICES_Y + 4 + r as u32 * LIST_ROW;
         let (time, text) = n.split_at(n.find(' ').map_or(0, |i| i + 1));
         let tw = small.width("00:00 ");
+        let text = notice_fit(&style, text, W - 8 - tw);
         text::draw_in(c, &small, 4, y + style.height() - small.height(), tw, Align::Left, time);
         text::draw_in(c, &style, 4 + tw, y, W - 8 - tw, Align::Left, text);
     }
+}
+
+/// The part of a notice that fits `w`: cut at the last word that fits ("Remote control", not "Remote control e"). A
+/// word cut under 4 characters ("Re:" before a long name) is not enough to read, so the text is cut at its last
+/// character instead, as draw_in does.
+fn notice_fit<'a>(style: &Style, text: &'a str, w: u32) -> &'a str {
+    let t = text.trim_start();
+    let (word, _) = lines(style, t, w);
+    if word.chars().count() >= 4 {
+        return word;
+    }
+    let cut = t
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(core::iter::once(t.len()))
+        .take_while(|&i| style.width(t.get(..i).unwrap_or("")) <= w)
+        .last();
+    t.get(..cut.unwrap_or(0)).unwrap_or("")
 }
 
 /// Text lines the notification detail shows at once.
@@ -235,5 +254,30 @@ pub fn draw_notif<'a>(
     for (r, (line, head)) in lines.take(NOTIF_LINES).enumerate() {
         let style = Style { fg: if head { ACCENT } else { WHITE }, ..LABEL };
         text::draw_in(c, &style, 4, LIST_Y + LIST_ROW * (r as u32 + 1), W - 8, Align::Left, line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use super::*;
+
+    /// A notice too long for its row is cut at a space, and a short one is drawn whole.
+    #[test]
+    fn a_long_notice_is_cut_at_a_word() {
+        let style = Style { fg: WHITE, ..LABEL };
+        let w = W - 8 - LABEL.width("00:00 ");
+        let long = "Remote control entering the room now";
+        let (cut, _) = lines(&style, long, w);
+        assert!(style.width(cut) <= w && cut.len() < long.len(), "{cut}");
+        assert_eq!(long.as_bytes().get(cut.len()), Some(&b' '), "cut at a word: {cut}");
+        assert_eq!(lines(&style, "Mum", w), ("Mum", ""));
+        // "Re:" alone would hide the name: the text is cut at its last character instead
+        let name = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn";
+        let re = std::format!("Re: {name}");
+        assert!(notice_fit(&style, &re, w).len() > 4, "{}", notice_fit(&style, &re, w));
+        // leading spaces (the text after the time) are not a cut
+        assert_eq!(notice_fit(&style, &std::format!("  {long}"), w), notice_fit(&style, long, w));
+        assert!(!notice_fit(&style, &std::format!("  {name}"), w).is_empty());
     }
 }
