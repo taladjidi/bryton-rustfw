@@ -219,9 +219,12 @@ fn notice_fit<'a>(style: &Style, text: &'a str, w: u32) -> &'a str {
     if word.chars().count() >= 4 {
         return word;
     }
-    let cut = t.char_indices().map(|(i, _)| i).chain(core::iter::once(t.len())).take_while(|&i| {
-        style.width(t.get(..i).unwrap_or("")) <= w
-    }).last();
+    let cut = t
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(core::iter::once(t.len()))
+        .take_while(|&i| style.width(t.get(..i).unwrap_or("")) <= w)
+        .last();
     t.get(..cut.unwrap_or(0)).unwrap_or("")
 }
 
