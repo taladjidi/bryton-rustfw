@@ -56,15 +56,15 @@ type Moved = (u32, u32, Option<u16>);
 /// The move under way: the ride's name (`YYMMDDhhmmss`), the suffix of the new name, and per file of [`FROM`]
 /// what moves (None: no such file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Rec {
-    pending: bool,
-    name: [u8; 12],
-    suffix: u8,
-    files: [Option<Moved>; 2],
+pub(crate) struct Rec {
+    pub(crate) pending: bool,
+    pub(crate) name: [u8; 12],
+    pub(crate) suffix: u8,
+    pub(crate) files: [Option<Moved>; 2],
 }
 
 impl Rec {
-    fn to_sector(self) -> [u8; SECTOR] {
+    pub(crate) fn to_sector(self) -> [u8; SECTOR] {
         let mut s = [0u8; SECTOR];
         s[..4].copy_from_slice(&TAG);
         s[4] = u8::from(self.pending);
@@ -85,7 +85,7 @@ impl Rec {
         s
     }
 
-    fn from_sector(s: &[u8; SECTOR]) -> Option<Rec> {
+    pub(crate) fn from_sector(s: &[u8; SECTOR]) -> Option<Rec> {
         if s[..4] != TAG || crate::fit::crc(0, &s[..SECTOR - 2]).to_le_bytes() != s[SECTOR - 2..] {
             return None;
         }
