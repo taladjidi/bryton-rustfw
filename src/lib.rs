@@ -64,7 +64,7 @@ pub trait Board {
     fn rtc(&mut self) -> (u32, u32);
     /// Sets the RTC to RTC_TR / RTC_DR values ([`rtc_words`]): the clock keeps running from there.
     fn rtc_set(&mut self, tr: u32, dr: u32);
-    /// Busy wait.
+    /// Sleeps `ms` milliseconds (SysTick and WFI on the unit; the simulator advances its clock).
     fn delay_ms(&mut self, ms: u32);
     /// Microseconds the CPU has been awake (working, not asleep in a wait) since start-up, wrapping: what a pass's
     /// work took, so the app can bound its background work by time and count a key's hold in real time (a long

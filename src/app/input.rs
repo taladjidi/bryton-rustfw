@@ -299,7 +299,7 @@ impl App {
         }
     }
 
-    /// Acts on an input: Next goes from the main screen through the ride pages and back, Menu opens the menu, Back
+    /// Acts on an input: Next goes from the main screen to the first ride page and round the ride pages (Back returns to the overview), Menu opens the menu, Back
     /// goes from a ride page to the overview; in the menus Next / Prev move down / up, Select opens or changes, Back goes out; a
     /// number being edited goes up with Prev, down with Next. Off switches off anywhere.
     pub fn input(&mut self, b: &mut impl Board, i: Input) {
