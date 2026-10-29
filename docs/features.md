@@ -130,8 +130,8 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   5 s (not on one sample), re-arms once the value is back inside by 5 % of the limit (at least 1), and says at most
   once a minute; no reading from a sensor, no alert; only while the ride runs (not paused, not outside a ride).
   Each is a red banner ("POWER HIGH", "POWER LOW", "CADENCE HIGH", "CADENCE UNDER", "SPEED HIGH", "SPEED LOW",
-  "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (every 5 km), kcal and kJ
-  (every 50) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
+  "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (EACH KM, 1 km steps), kcal and kJ
+  (10 steps) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
   step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
