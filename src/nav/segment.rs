@@ -787,7 +787,7 @@ pub(crate) mod tests {
     /// gives an error, never a panic or a loop.
     #[test]
     fn reads_in_pieces() {
-        let f = synth(60, &[*b"07", *b"05", *b"12"]);
+        let f = synth(120, &[*b"07", *b"05", *b"12"]);
         let mut whole = Segment::new();
         whole.parse(&f).unwrap();
         for piece in [1usize, 3, 7, 512, 1024, 5000] {
@@ -799,6 +799,7 @@ pub(crate) mod tests {
             });
             assert_eq!(r, Ok(()), "piece {piece}");
             assert_eq!((s.npoints, s.lat, s.times), (whole.npoints, whole.lat, whole.times));
+            assert_eq!((s.dist_m, s.kept, s.header), (whole.dist_m, whole.kept, whole.header));
         }
         let mut s = Segment::new();
         assert_eq!(s.parse_with(f.len(), |_, _| None), Err(Error::Io));

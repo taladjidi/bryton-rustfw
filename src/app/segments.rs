@@ -62,6 +62,8 @@ pub struct Segments {
     pub skipped: u16,
     /// Segments dropped after they started (their file could not be loaded, or never came).
     pub dropped: u16,
+    /// Files read for a started segment (a failing one is read once: it leaves the index).
+    pub loads: u16,
     /// The segment waiting for its file, and the seconds it has waited.
     want: Option<u32>,
     waited: u32,
@@ -109,6 +111,7 @@ impl Segments {
             passed: 0,
             skipped: 0,
             dropped: 0,
+            loads: 0,
             want: None,
             waited: 0,
             // not an Option, and the filler is the variant that holds the others' niche: the static must start as zeros
@@ -170,6 +173,28 @@ impl Segments {
             self.waited = 0;
             // the file loaded last is this one: nothing to read (the index is fixed during a ride, so is the file)
             self.want = (!(loaded && self.seg.header.id == id)).then_some(id);
+        }
+    }
+
+    /// The ride is over: no segment is active, none waits for its file (not a failure: not counted).
+    fn stop(&mut self) {
+        self.matcher.reset();
+        self.want = None;
+    }
+
+    /// Takes segment `id` out of the index for the rest of the run: its file failed to load, so it is not tried again.
+    #[cfg(test)]
+    pub(crate) fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.index.iter().take(self.len).map(|e| e.id)
+    }
+
+    fn forget(&mut self, id: u32) {
+        if let Some(i) = self.index.get(..self.len).and_then(|ix| ix.iter().position(|e| e.id == id)) {
+            self.len -= 1;
+            self.index.swap(i, self.len);
+            if let Some(last) = self.index.get_mut(self.len) {
+                *last = Entry::ZERO;
+            }
         }
     }
 
@@ -257,7 +282,7 @@ impl Segments {
 
     /// The file of segment `id` read into the active segment.
     #[inline(never)] // its chunk buffer and the FIT reader in a frame of their own
-    fn load(&mut self, d: &mut impl Disk, id: u32) -> Result<(), ()> {
+    pub(crate) fn load(&mut self, d: &mut impl Disk, id: u32) -> Result<(), ()> {
         let mut fat = Fat::mount(d).map_err(drop)?;
         let dir = fat.open(d, DIR).map_err(drop)?;
         let mut name = Line::<16>::new();
@@ -295,9 +320,11 @@ impl App {
     pub(crate) fn segment_fix(&mut self) {
         let fix = self.gps.pvt.filter(|p| p.good());
         let clock = self.up_ms / 1000;
-        if let (true, ride::State::Running, Some(s), Some(p)) =
-            (LIVE_SEGMENTS, self.ride.state(), self.segments.as_deref_mut(), fix)
-        {
+        let state = self.ride.state();
+        let Some(s) = self.segments.as_deref_mut() else { return };
+        if state == ride::State::Idle {
+            s.stop(); // stopped or saved: a new ride starts with none
+        } else if let (true, ride::State::Running, Some(p)) = (LIVE_SEGMENTS, state, fix) {
             s.fix(p.lat, p.lon, clock);
         }
     }
@@ -309,7 +336,9 @@ impl App {
         let Some(s) = self.segments.as_deref_mut() else { return };
         let mut d = emmc::Volume(&mut self.emmc, b);
         if let Some(id) = s.want.take() {
+            s.loads = s.loads.saturating_add(1);
             if s.load(&mut d, id).is_err() {
+                s.forget(id);
                 s.drop_active();
             }
         } else if s.build != Build::Done && idle && due {

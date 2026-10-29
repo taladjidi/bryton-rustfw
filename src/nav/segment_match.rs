@@ -128,6 +128,13 @@ pub fn near(h: &Header, lat: i32, lon: i32) -> bool {
     Entry::of(h).is_some_and(|e| e.near(lat, lon))
 }
 
+/// [`APPROACH_M`] in degrees x 1e-7 of latitude and of longitude at `lat` (1 m is 89.8e-7 degrees of latitude; a degree
+/// of longitude is shorter by the cosine).
+fn reach(lat: i32) -> (i64, i64) {
+    let dlat = i64::from(APPROACH_M) * 1_000_000 / 11_132;
+    (dlat, dlat * 65_536 / cos_q16(lat).max(1000))
+}
+
 /// What the idle matcher needs of a segment: 32 bytes, so the index of 128 segments is 4 KB (a [`Header`] is about
 /// 450). The box of the start pairs, the first pair, and the direction to the next one in use (scaled down to fit
 /// two i16, which keeps the bearing).
@@ -184,9 +191,12 @@ impl Entry {
 
     /// Whether (`lat`, `lon`) is within [`APPROACH_M`] of the box of the start pairs: the index's first filter.
     pub fn near(&self, lat: i32, lon: i32) -> bool {
-        // 1 m is 89.8e-7 degrees of latitude; a degree of longitude is shorter by the cosine
-        let dlat = i64::from(APPROACH_M) * 1_000_000 / 11_132;
-        let dlon = dlat * 65_536 / cos_q16(lat).max(1000);
+        self.near_in(lat, lon, reach(lat).1)
+    }
+
+    /// [`Entry::near`] with the longitude reach at `lat` (from [`reach`]), worked out once for all entries.
+    fn near_in(&self, lat: i32, lon: i32, dlon: i64) -> bool {
+        let dlat = reach(lat).0;
         let (la, lo_) = (i64::from(lat), i64::from(lon));
         la >= i64::from(self.lo.0) - dlat
             && la <= i64::from(self.hi.0) + dlat
@@ -318,7 +328,8 @@ impl Matcher {
         }
         let prev = self.prev.replace((lat, lon, t));
         let (mut approach, mut seen) = (None, false);
-        for h in headers.into_iter().filter_map(AsEntry::entry).filter(|h| h.near(lat, lon)) {
+        let dlon = reach(lat).1;
+        for h in headers.into_iter().filter_map(AsEntry::entry).filter(|h| h.near_in(lat, lon, dlon)) {
             if let Some(ms) = prev.and_then(|p| start_ms(&h, p, (lat, lon, t))) {
                 let still_at = (lat, lon);
                 let (id, last_t, prev) = (h.id, t, still_at);

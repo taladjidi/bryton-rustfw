@@ -1725,7 +1725,8 @@ fn make_ahead() -> &'static mut bryton_rustfw::climbs_ahead::Ahead {
     AHEAD.take()
 }
 
-/// The live segments (app/segments.rs `Segments`: index and active segment, about 13 KB).
+/// The live segments (app/segments.rs `Segments`: index and active segment, about 13 KB). Must start as zeros to stay
+/// in .bss: link.x ASSERTs that the cell is in AXI SRAM, so a field that is not zero at start fails the link.
 fn make_segments() -> &'static mut bryton_rustfw::Segments {
     static SEGMENTS: static_cell::ConstStaticCell<bryton_rustfw::Segments> =
         static_cell::ConstStaticCell::new(bryton_rustfw::Segments::new());

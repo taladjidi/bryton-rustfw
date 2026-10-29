@@ -58,8 +58,12 @@ fn leaves(ms: u64) -> (i32, i32, i32) {
 }
 
 fn ride(route: fn(u64) -> (i32, i32, i32), seconds: u64, memory: bool) -> (Sim, App) {
+    ride_on(good_card(), route, seconds, memory)
+}
+
+fn ride_on(image: Vec<u8>, route: fn(u64) -> (i32, i32, i32), seconds: u64, memory: bool) -> (Sim, App) {
     let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = good_card();
+    sim.emmc.image = image;
     sim.gnss.route = Some(route);
     let mut app = App::start(&mut sim, None);
     if memory {
@@ -180,5 +184,35 @@ fn reset_drops_the_segment() {
     let mut app = App::start(&mut sim, None);
     app.set_segment_memory(Box::leak(Box::new(Segments::new())));
     run(&mut sim, &mut app, 1000);
+    assert!(app.segment_now().is_none());
+}
+
+/// A good header over a broken body (a flipped byte in the FIT course, or in the time table): the file is read once,
+/// the segment dropped and counted, taken out of the index (no read every second in the start zone), the matcher
+/// idle, and the ride goes on recording.
+#[test]
+fn broken_body_is_dropped_once() {
+    for at in [|len: usize| len - 5, |_: usize| 0x208 + 65 + 3 * 4 * 5 + 2] {
+        let mut f = synth(20, &CODES);
+        let i = at(f.len());
+        f[i] ^= 0x5a;
+        let (sim, app) = ride_on(card(&[("4000000001.seg", f)]), pr_pace, 120, true);
+        let s = app.segments().unwrap();
+        assert_eq!((s.dropped, s.loads, s.indexed()), (1, 1, 0), "flip at {i}");
+        assert!(app.segment_now().is_none());
+        assert_eq!(app.ride.state(), ride::State::Running);
+        assert!(app.ride.timer_s() > 90, "{}", app.ride.timer_s());
+        drop(sim);
+    }
+}
+
+/// The ride ends (paused, then saved) while a segment is active: it does not outlive the ride.
+#[test]
+fn segment_ends_with_the_ride() {
+    let (mut sim, mut app) = ride(pr_pace, 110, true);
+    assert!(app.segment_now().is_some());
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    app.end_ride();
+    run(&mut sim, &mut app, 2000);
     assert!(app.segment_now().is_none());
 }

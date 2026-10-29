@@ -180,7 +180,7 @@ Decided in S3 (2026-10-30), memory and placement: one static `Segments` (main.rs
 line there like the other cells; 12,904 B, all zeros at start: `Effort` counts from 1 so that `None` is 0, and the event ring is
 not an `Option`) holds the index (128 `segment_match::Entry`, 32 B each = 4 KB: the id, the box of the start pairs, the first
 pair and the direction to the next one as two i16; the name, distance and gain are not kept, S4's list reads a header when it
-shows it), the one active `Segment` (8.6 KB), the matcher and the counters. AXI SRAM has 1.6 KB left after it (it had 15 KB).
+shows it), the one active `Segment` (8.6 KB), the matcher and the counters. AXI SRAM has 1.6 KB left after it (it had 15 KB before S3, 1.6 KB after).
 No buffer of the whole file: `Segment::parse_with` reads 1 KB at a time (`segment::CHUNK`), so a 64 KB file loads with about 3 KB
 of stack, in `Segments::load` (`#[inline(never)]`). The index is built 8 files a pass (worst pass in the sim: 19 KB read, 8 ms at
 the unit's 2.5 MB/s) 5 s after the start, only with no ride open; a computer that wrote to the drive restarts the unit, which
