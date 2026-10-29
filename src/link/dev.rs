@@ -44,6 +44,7 @@
 //! - `stackfault`: `ok`, then the firmware runs its stack down past the stack canary on purpose ([`Effect::StackFault`],
 //!   main.rs `stack_fault`) and returns, so the pass's check must find it. Pass: the unit resets and RTC backup
 //!   register 29 (`peek 0x580040c4`) reads 0xfa0000nn within a minute (the app clears it after a minute of running).
+//!   A reset with no marker is a miss of the test (about 1 build in 38: main.rs `stack_fault`).
 //!   `err ride open` while a ride runs or waits to be saved.
 //! - `peek <addr> [n]`: `n` (default 1, at most 64) words from `addr` on, in hex, one per line; `addr` in the
 //!   peripheral space or the SDRAM (read only). `poke <addr>

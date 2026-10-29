@@ -1753,9 +1753,11 @@ fn stack_check() {
 }
 
 /// Runs the stack down past its canary on purpose (the dev link's `stackfault`, never the UI), then returns, so the
-/// pass's [`stack_check`] must reset the unit. 128 B a call, all written before the next call (black_box), so the
-/// frames cover the canary's word; it stops in the first frame that reaches below the canary, so less than a frame
-/// of `.bss` under it is overwritten before the check, which follows at once.
+/// pass's [`stack_check`] must reset the unit. A frame is about 152 B: the 128 B array and the pushed registers,
+/// written before the next call (black_box), and one alignment pad word never written. It stops in the first frame
+/// that reaches below the canary, so less than a frame of `.bss` under it is overwritten before the check, which
+/// follows at once. When a build puts the canary on that pad word (about 1 build in 38) the test misses: no marker,
+/// only the plain reset after it. That is this test's frame, not a hole in the per-pass check.
 #[inline(never)]
 fn stack_fault(canary: u32) -> u32 {
     let mut frame = [canary; 32];
@@ -1823,6 +1825,9 @@ fn main() -> ! {
     let (mut awake, mut ran, mut window_ms) = (0u32, 0u32, 0u32);
     let mut since_touch = 0u32; // ms slept since the panel was last read
     loop {
+        // before the step too: an overflow in the last pass's sleep loop (USB, the touch) is caught before the
+        // recorder runs on what it overwrote
+        stack_check();
         let t0 = cycles();
         app.step(&mut board);
         stack_check();
@@ -1877,7 +1882,9 @@ fn main() -> ! {
                         Effect::StackFault => {
                             l.linger(50);
                             stack_fault(hw::stack_canary());
-                            stack_check(); // resets; if it does not, the unit keeps running: the test failed
+                            stack_check(); // a pass: resets with the fault marker
+                            // a miss (no marker): the tail of .bss is overwritten all the same, so never run on
+                            system_reset();
                         }
                         Effect::Run(size) => {
                             l.linger(50);
