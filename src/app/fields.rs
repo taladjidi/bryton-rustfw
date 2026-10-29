@@ -139,8 +139,24 @@ impl App {
                 }
                 return l;
             }
-            Field::Timer | Field::LapTime => {
-                push_duration(&mut l, if f == Field::Timer { r.timer_s() } else { r.lap_s() }, true);
+            Field::Timer | Field::LapTime | Field::TripTime => {
+                let s = match f {
+                    Field::Timer => r.timer_s(),
+                    Field::TripTime => r.elapsed_s(),
+                    _ => r.lap_s(),
+                };
+                push_duration(&mut l, s, true);
+                return l;
+            }
+            Field::LastLap => {
+                match r.last_lap_s() {
+                    Some(s) => push_duration(&mut l, s, true),
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
+            Field::UphillKm | Field::DownhillKm => {
+                push_km(&mut l, if f == Field::UphillKm { r.uphill_m() } else { r.downhill_m() });
                 return l;
             }
             Field::Dist | Field::LapDist => {
@@ -242,6 +258,14 @@ impl App {
             Field::AvgHr => (r.avg_hr().map(u32::from), false),
             Field::AvgPower => (r.avg_power().map(u32::from), false),
             Field::Ascent => (Some(r.ascent_m()), false),
+            Field::Descent => (Some(r.descent_m()), false),
+            Field::LapAscent => (Some(r.lap_ascent_m()), false),
+            Field::LapDescent => (Some(r.lap_descent_m()), false),
+            Field::Laps => (Some(r.laps()), false),
+            Field::LapAvgPower => (r.lap_avg_power().map(u32::from), false),
+            Field::LastLapAvgPower => (r.last_lap_avg_power().map(u32::from), false),
+            Field::LapNp => (r.lap_np().map(u32::from), false),
+            Field::MaxCadence => (r.max_cadence().map(u32::from), false),
             // "--" once the strap is silent, else 2 decimals
             Field::Dfa => match self.hrv.alpha1().filter(|_| self.live.get(Metric::Hr).is_some()) {
                 Some(a) => {
@@ -291,16 +315,17 @@ impl App {
                 }
                 return l;
             }
-            Field::Wbal | Field::Vam | Field::Grade => {
+            Field::Wbal | Field::Vam | Field::Grade | Field::MaxAlt => {
                 let v = match f {
                     Field::Wbal => p.wbal_j().map(|j| j / 100), // kJ x 10
                     Field::Vam => r.vam(),
+                    Field::MaxAlt => r.max_alt_m(),
                     _ => r.grade_x10(),
                 };
                 if v.is_some_and(|v| v < 0) {
                     l.push_str("-");
                 }
-                (v.map(i32::unsigned_abs), f != Field::Vam)
+                (v.map(i32::unsigned_abs), !matches!(f, Field::Vam | Field::MaxAlt))
             }
         };
         match v {
@@ -365,6 +390,17 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_field_ids_keep_their_fields() {
+        // a page keeps each field as its index in ALL: the ids of the fields before this build's stay put
+        assert_eq!(
+            [Field::from_index(0), Field::from_index(14), Field::from_index(65)],
+            [Field::Time, Field::Ascent, Field::ClimbProfile]
+        );
+        assert_eq!(Field::from_index(66), Field::TripTime);
+        assert_eq!(Field::ALL.len(), 79);
+    }
 
     #[test]
     fn durations() {

@@ -10,6 +10,10 @@ A feature not listed here was seen on the unit.
 
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.
+- **The trip, lap and slope fields (training/ride.rs, app/fields.rs; the page with trip time, laps, last lap, lap power
+  and NP, top cadence and altitude, descent, lap ascent and descent, uphill and downhill)**: sim only. Still to see:
+  on a real ride, the trip time through an auto-pause and a Start pause, each lap's power and NP against the power
+  meter's own figures, and the uphill and downhill split on a real descent (the 30 s grade lags about 15 s at a change).
 
 - **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: seen on the unit 2026-10-29 from a
   RAM run: `info` and `prof` as before (0.98 % awake idle on the overview), `dev.py stackfault` reset the unit and

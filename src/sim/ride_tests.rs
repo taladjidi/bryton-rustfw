@@ -607,3 +607,42 @@ fn settings_words_round_trip() {
     }
     assert_eq!(Settings::from_word(0).with_power_word(0xa000_c000).wkt_avg, 0, "an old NOW is 3 s");
 }
+
+/// The trip, lap and slope fields on a ride page: a minute, a lap, a minute, over a climb that gains 0.2 m a second.
+/// The trip time runs through the lap, the last lap is the first minute, and the climb is all uphill.
+#[test]
+fn trip_lap_and_slope_fields() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(ride_route);
+    sim.gnss.alt = Some(climb);
+    sim.bus.baro_alt = Some(climb); // the barometer climbs with the receiver
+    sim.gnss.fix = Some(8000);
+    sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_lr, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = PageCfg { layout: 6, fields: [TripTime, Laps, LastLap, LapAvgPower, LapNp, LastLapAvgPower] }.into();
+    app.pages[1] = PageCfg { layout: 6, fields: [MaxAlt, Descent, LapAscent, UphillKm, DownhillKm, MaxCadence] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    assert_eq!(
+        (text(&app, TripTime), text(&app, Laps), text(&app, LastLap)),
+        ("00:00".into(), "0".into(), "--".into())
+    );
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 60_000);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    run(&mut sim, &mut app, 60_000);
+    let secs = app.ride.elapsed_s();
+    assert!((119..=121).contains(&secs), "trip {secs} s");
+    assert_eq!(text(&app, Laps), "1");
+    let last = app.ride.last_lap_s().unwrap_or(0);
+    assert!((59..=61).contains(&last), "the last lap {last} s");
+    assert_ne!(text(&app, LapAvgPower), "--", "power on the lap");
+    assert_ne!(text(&app, LastLapAvgPower), "--", "the last lap's power");
+    assert!(app.ride.uphill_m() > 300, "uphill {} m", app.ride.uphill_m());
+    assert_eq!(app.ride.downhill_m(), 0, "no descent");
+    assert_ne!(text(&app, MaxAlt), "--", "a highest altitude");
+    sim.save("ride_trip_fields");
+}

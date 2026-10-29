@@ -57,9 +57,9 @@ Time
 
 - [x] Time of day (stock, all): unit
 - [x] Ride timer, moving time (stock, all): unit
-- [ ] Trip time, elapsed with stops (stock, all)
+- [x] Trip time, elapsed with stops (stock, all): sim
 - [x] Lap time and lap distance (stock, all): unit
-- [ ] Last lap time, lap count (stock, all)
+- [x] Last lap time, lap count (stock, all): sim
 - [ ] Sunrise, sunset, time to sunset (stock, Garmin)
 - [ ] Time and distance to destination, estimated arrival (stock, Garmin, Wahoo, Karoo)
 
@@ -67,9 +67,9 @@ Altitude and climbing
 
 - [x] Ascent (stock, all): sim, from the barometric altitude, GPS as the fallback
 - [x] Altitude (stock, all): unit, barometric, calibrated by hand
-- [ ] Descent, max altitude (stock, all)
-- [ ] Lap ascent and descent (stock)
-- [ ] Uphill and downhill distance (stock)
+- [x] Descent, max altitude (stock, all): sim
+- [x] Lap ascent and descent (stock): sim
+- [x] Uphill and downhill distance (stock): sim
 - [x] Grade (stock, all): sim
 - [x] VAM (Garmin, Karoo): sim
 
@@ -85,7 +85,7 @@ Heart rate
 Cadence
 
 - [x] Cadence and average cadence (stock, all): sim
-- [ ] Maximum cadence (stock)
+- [x] Maximum cadence (stock): sim
 
 Power
 
@@ -103,7 +103,7 @@ Power
 - [ ] % of FTP: current, average, lap, last lap, 3 / 10 / 30 s (stock)
 - [~] Power zone (stock, all): sim; colour only, no zone number field
 - [ ] Time in each power zone (stock, Garmin)
-- [ ] Lap power, last lap power, lap NP (stock, Garmin, Wahoo)
+- [x] Lap power, last lap power, lap NP (stock, Garmin, Wahoo): sim
 - [ ] Real-time stamina (Garmin)
 - [ ] Power curve, best efforts this ride (Karoo, Garmin)
 
