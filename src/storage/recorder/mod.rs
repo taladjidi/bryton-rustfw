@@ -688,7 +688,7 @@ impl Recorder {
     /// The ride named in [`RESCUE_PATHS`] (module doc, "GIVE UP SAVE"): the record "done" first, then the link.
     fn rescue(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), Error> {
         let (first, size) = (self.file.map_or(0, |h| h.first), self.len);
-        if first < 2 || self.still_ours(fat, d, first, size)?.is_none() {
+        if first < 2 || self.still_ours(fat, d, first, size, None)?.is_none() {
             return Err(Error::Corrupt); // no chain, or no longer the ride's: never an entry on it
         }
         // never a second entry on the chain: both folders that may name it read whole, neither does
@@ -1152,7 +1152,7 @@ impl Recorder {
             Ok(h) if h.first == first => {}
             Ok(_) => return Err(Error::Refused), // its name another file's: never a second entry, tried again
             Err(Error::NotFound) => {
-                if self.still_ours(fat, d, first, size)?.is_none() {
+                if self.still_ours(fat, d, first, size, None)?.is_none() {
                     // no longer the ride's (a computer removed it): never linked, the record done, nothing named
                     self.write_record(fat, d, Phase::Done, first)?;
                     (self.phase, self.stuck) = (Phase::Done, false);
@@ -1181,7 +1181,8 @@ impl Recorder {
     /// or taken by another file: written or linked then, it would overwrite that file or cross-link the next one.
     /// Taken, long enough, and its sector 0 as the latest record's copy wherever no later checkpoint rewrites it:
     /// the header but its size and CRC, the data before the trailer (as trash.rs checks a chain with `first_crc`;
-    /// a cut during the next checkpoint may have left that one's header there).
+    /// a cut during the next checkpoint may have left that one's header there). `marked` ([`Rec::checked`]): a
+    /// repair a cut tore may have left sector 0 anything, so sector 1's CRC instead, which the repair never writes.
     #[inline(never)] // its two sectors in its own frame
     fn still_ours(
         &self,
@@ -1189,6 +1190,7 @@ impl Recorder {
         d: &mut impl DiskWrite,
         first: u32,
         size: u32,
+        marked: Option<u16>,
     ) -> Result<Option<Handle>, Error> {
         let h = match fat.chain(d, first) {
             Ok(h) => h,
@@ -1199,6 +1201,10 @@ impl Recorder {
             return Ok(None);
         }
         let (rec, mut copy, mut s) = (self.rec.ok_or(Error::NotFound)?, [0u8; SECTOR], [0u8; SECTOR]);
+        if let Some(crc) = marked {
+            fat.read_sector(d, &h, 1, &mut s)?;
+            return Ok((fit::crc(0, &s) == crc).then_some(h));
+        }
         fat.read_sector(d, &rec, 3 * (self.seq % 2), &mut copy)?;
         fat.read_sector(d, &h, 0, &mut s)?;
         let end = (size.saturating_sub(2) as usize).clamp(14, SECTOR);
@@ -1206,15 +1212,29 @@ impl Recorder {
         Ok((same(0..4) && same(8..12) && same(14..end)).then_some(h))
     }
 
-    /// The record `seq` (a ride left open, its chain named by it alone) written again, its copies with it, marked
-    /// [`Rec::checked`]: the chain found still the ride's, before its repair rewrites sector 0.
+    /// The record `seq` (a ride left open, its chain `h` of `size` bytes named by it alone) written again, its copies
+    /// with it, marked [`Rec::checked`] with the CRC of the file's sector 1: the chain found still the ride's,
+    /// before its repair rewrites sector 0. Not for a file whose repair writes sector 1 (under 3 sectors: a few
+    /// seconds of ride), which a torn repair then lets go.
     #[inline(never)] // its sectors in its own frame
-    fn mark_checked(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, seq: u32, cluster: u32) -> Result<(), Error> {
+    fn mark_checked(
+        &mut self,
+        fat: &mut Fat,
+        d: &mut impl DiskWrite,
+        seq: u32,
+        h: &Handle,
+        size: u32,
+    ) -> Result<(), Error> {
+        if size.saturating_sub(2) / SECTOR_U32 < 2 {
+            return Ok(());
+        }
         let (rec, slot) = (self.rec.ok_or(Error::NotFound)?, 3 * (seq % 2));
         let (mut first, mut last) = ([0u8; SECTOR], [0u8; SECTOR]);
+        fat.read_sector(d, h, 1, &mut first)?;
+        let crc = fit::crc(0, &first);
         fat.read_sector(d, &rec, slot, &mut first)?;
         fat.read_sector(d, &rec, slot + 1, &mut last)?;
-        self.write_record_with(fat, d, Phase::Recording, cluster, Some((&first, &last)), true)
+        self.write_record_with(fat, d, Phase::Recording, h.first, Some((&first, &last)), Some(crc))
     }
 
     /// Makes `\Rustfw`, `\Rustfw\ride.rec` (two zeroed sectors), `\Rustfw\Rides`, `\Activities` and
@@ -1280,7 +1300,7 @@ impl Recorder {
     }
 
     fn write_record(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, phase: Phase, cluster: u32) -> Result<(), Error> {
-        self.write_record_with(fat, d, phase, cluster, None, false)
+        self.write_record_with(fat, d, phase, cluster, None, None)
     }
 
     /// The record in its slot (module doc), after the copies of the file's sector 0 and last sector when given:
@@ -1292,7 +1312,7 @@ impl Recorder {
         phase: Phase,
         cluster: u32,
         copies: Option<(&[u8; SECTOR], &[u8; SECTOR])>,
-        checked: bool,
+        checked: Option<u16>,
     ) -> Result<(), Error> {
         let mut rec = self.rec.ok_or(Error::NotFound)?;
         let seq = self.seq.wrapping_add(1);
@@ -1339,7 +1359,7 @@ impl Recorder {
         let from = (next - self.tail_off) as usize;
         let mut last = [0u8; SECTOR];
         last.copy_from_slice(self.tail.get(from..from + SECTOR).ok_or(Error::Corrupt)?);
-        self.write_record_with(fat, d, phase, file.first, Some((&first, &last)), false)?;
+        self.write_record_with(fat, d, phase, file.first, Some((&first, &last)), None)?;
         // the buffer keeps the sector the next byte (over the trailer) goes in
         self.tail.copy_within(from.., 0);
         let keep = (self.len - next) as usize;
@@ -1382,7 +1402,7 @@ impl Recorder {
         // a chain the save's step 4 left named by the record alone may have been freed by a computer since (its
         // clusters still reading as the ride): moved (5), it would be linked onto free clusters. Not the ride's:
         // left to keep_in_rides, which names it only where its entry still is
-        if !self.checked && self.still_ours(fat, d, first, size)?.is_none() {
+        if !self.checked && self.still_ours(fat, d, first, size, None)?.is_none() {
             return self.keep_in_rides(fat, d, t);
         }
         // 2: read back whole, through the buffer (the file is all on the card by now); once a run (a retry would
@@ -1530,6 +1550,25 @@ impl Recorder {
         }
     }
 
+    /// Whether the card's record says a ride is left unfinished (recording or saving; or the record cannot be read),
+    /// read only: one the boot did not take up (its marker lost, a flat battery), which the next Start does. While
+    /// so, the card is not lent writable: a computer could free or reuse the chain the record alone may name (the
+    /// review of 2026-10-29, S3).
+    #[inline(never)]
+    pub fn left_open(&mut self, d: &mut impl DiskWrite) -> bool {
+        let read = |s: &mut Self, d: &mut _| -> Result<bool, Error> {
+            let mut fat = Fat::mount(d)?;
+            let dir = fat.open(d, DIR)?;
+            s.rec = Some(fat.locate(d, dir, s.kind.rec())?);
+            Ok(s.read_records(&mut fat, d)?.is_some_and(|r| r.phase != Phase::Done))
+        };
+        match read(self, d) {
+            Ok(open) => open,
+            Err(Error::NotFound) => false, // never recorded here
+            Err(_) => true,
+        }
+    }
+
     /// Waiting before trying the card again after a failure.
     pub fn waiting(&self) -> bool {
         self.wait > 0
@@ -1574,15 +1613,10 @@ impl Recorder {
                 };
                 let mut file = match entry {
                     Some(h) => h,
-                    // checked by an earlier boot, whose repair below a cut may have torn (sector 0 then no longer
-                    // the record's copy): the repair redone
-                    None if r.checked => {
-                        self.writer = w;
-                        self.saving(r.cluster, size);
-                        fat.chain(d, r.cluster)?
-                    }
                     None => {
-                        let Some(h) = self.still_ours(fat, d, r.cluster, size)? else {
+                        // checked by an earlier boot (its mark), whose repair below a cut may have torn: sector 1
+                        // checked instead of sector 0, the repair redone
+                        let Some(h) = self.still_ours(fat, d, r.cluster, size, r.checked)? else {
                             // freed, or another file's now: nothing written on it, the record done
                             self.write_record(fat, d, Phase::Done, r.cluster)?;
                             return Ok(Outcome::Nothing);
@@ -1590,7 +1624,9 @@ impl Recorder {
                         // named by the record alone: a save from here, never given up as a ride left open
                         self.writer = w;
                         self.saving(r.cluster, size);
-                        self.mark_checked(fat, d, r.seq, r.cluster)?; // before the repair's first write
+                        if r.checked.is_none() {
+                            self.mark_checked(fat, d, r.seq, &h, size)?; // before the repair's first write
+                        }
                         h
                     }
                 };

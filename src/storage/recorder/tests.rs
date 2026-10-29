@@ -1308,7 +1308,7 @@ fn a_ride_resumed_on_a_full_card_is_saved() {
 fn a_damaged_record_is_refused() {
     let r = |seq, phase| {
         let ride = [seq; RIDE_WORDS];
-        Rec { seq, phase, name: NAME, cluster: 7, fit: [0; RECORD_LEN], ride, discard: false, checked: false }
+        Rec { seq, phase, name: NAME, cluster: 7, fit: [0; RECORD_LEN], ride, discard: false, checked: None }
     };
     let s = r(5, Phase::Recording).to_sector();
     assert_eq!(Rec::from_sector(&s), Some(r(5, Phase::Recording)));
@@ -1316,7 +1316,7 @@ fn a_damaged_record_is_refused() {
     let d = Rec { discard: true, ..r(6, Phase::Saving) };
     assert_eq!((d.to_sector()[22], s[22]), (1, 0));
     // the chain's mark, byte 23; 0 in the records of the builds before it, which ignore it
-    let c = Rec { checked: true, ..r(7, Phase::Recording) };
+    let c = Rec { checked: Some(0xbeef), ..r(7, Phase::Recording) };
     assert_eq!((c.to_sector()[23], s[23]), (1, 0));
     assert_eq!(Rec::from_sector(&c.to_sector()), Some(c));
     assert_eq!(Rec::from_sector(&d.to_sector()), Some(d));
@@ -2213,4 +2213,44 @@ fn a_read_error_while_checking_the_chain_keeps_the_record() {
     assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Saved(NAME), "the record not done");
     assert!(saved(&d.card.img, SAVED).is_ok_and(|s| s.0.len() >= 200 - CHECKPOINT_S as usize));
     assert_eq!(check_clean(&d.card.img, "after"), 0);
+}
+
+/// The newer valid record in `ride.rec` on `img`.
+fn best_rec(img: &[u8]) -> Rec {
+    let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut ram).unwrap();
+    let v = crate::fat::tests::read_all(&mut fat, &mut ram, "Rustfw/ride.rec").unwrap();
+    let rec = |k: usize| Rec::from_sector(v[(3 * k + 2) * SECTOR..(3 * k + 3) * SECTOR].try_into().unwrap());
+    [rec(0), rec(1)].into_iter().flatten().max_by_key(|r| r.seq).unwrap()
+}
+
+/// The second review of the S1 fix, finding 1: a record marked checked (the boot cut right after the mark, before
+/// its repair), then the card in other hands (a computer, stock): the ride's chain freed, or given to another file.
+/// The mark does not make the chain the ride's: sector 1's CRC, which the repair never writes, no longer matches,
+/// so nothing is written on the chain or linked onto it, the other file whole, the ride let go, the volume clean.
+#[test]
+fn a_marked_record_whose_chain_a_computer_freed_or_reused_is_let_go() {
+    for reuse in [false, true] {
+        let mut d = card(crate::fat::tests::image());
+        let first = open_ride(&mut d, 200).file.unwrap().first;
+        let mut img = d.img;
+        remove_ride_entry(&mut img);
+        // the boot cut at its first write after the mark (copies and record, one write)
+        let mut img = (0..20)
+            .map(|b| {
+                let mut c = Card { budget: Some(b), ..card(img.clone()) };
+                Recorder::new().recover(&mut c, local(300));
+                c.img
+            })
+            .find(|i| best_rec(i).checked.is_some())
+            .expect("a boot cut after the mark");
+        assert_eq!(best_rec(&img).phase, Phase::Recording);
+        let len = free_chain(&mut img, first);
+        let other = reuse.then(|| other_file(&mut img, first, len));
+        let what = if reuse { "reused" } else { "freed" };
+        let mut d = card(img);
+        assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Nothing, "{what}");
+        let_go(&d.img, &other, what);
+        assert_eq!(best_rec(&d.img).phase, Phase::Done, "{what}");
+    }
 }

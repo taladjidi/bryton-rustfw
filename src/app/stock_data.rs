@@ -121,15 +121,14 @@ impl App {
         {
             self.stock.start(self.date);
         }
-        if self.stock.status() == stock::Status::Running
-            && self.stock.read_bytes() == 0
-            && self.trash_check
-            && self.ride_settled()
-        {
+        let running = self.stock.status() == stock::Status::Running;
+        self.trash_tried &= running; // a new scan, a new try
+        if running && !self.trash_tried && self.trash_check && self.ride_settled() {
             // a delete a cut left (trash.rs): finished before the scan reads the rides (it then drops the ride); not
             // at boot (the card is not touched then), not during a ride (it makes the FATs equal first). Once a
-            // scan (before its first read): a lasting error is not tried every pass. Failed: kept, tried again at
-            // the next scan and before the drive is lent, read only meanwhile (drive_on; the review of 2026-10-29, S4)
+            // scan: a lasting error is not tried every pass. Failed: kept, tried again at the next scan and before
+            // the drive is lent, read only meanwhile (drive_on; the review of 2026-10-29, S4)
+            self.trash_tried = true;
             let t = fat::write::dos_time(self.rec_time().0);
             self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t).is_err();
         }

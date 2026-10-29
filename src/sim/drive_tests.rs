@@ -161,6 +161,45 @@ fn a_cut_delete_not_finished_lends_the_drive_read_only() {
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
 }
 
+/// The review of 2026-10-29, S3: a reset mid-ride that lost the boot's marker (a flat battery), so no ride comes
+/// back, while the card's record says "recording": USB DRIVE lends it write protected (no computer's fsck frees the
+/// chain the record may name alone). The next ride's Start takes the old one up; once saved, the drive is writable.
+#[test]
+fn a_ride_left_open_without_its_marker_lends_the_drive_read_only() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 90_000); // a checkpoint on the card
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+    let mut sim2 = Sim::new(9, 3, 0); // the backup registers lost
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    let mut app = App::start(&mut sim2, None);
+    app.set_usb(&mut sim2, UsbDot::Ready);
+    run(&mut sim2, &mut app, 1000);
+    assert_eq!(app.ride.state(), ride::State::Idle, "nothing resumed");
+    assert_eq!(app.drive_on(&mut sim2), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE READ ONLY");
+    let mut h = Host::default();
+    command(&mut sim2, &mut app, &mut h, 1, 0, false, &[0; 6]);
+    let (ms, _) = command(&mut sim2, &mut app, &mut h, 2, 192, true, &[0x1a, 0, 0x3f, 0, 192, 0]);
+    assert_eq!(ms[2], 0x80, "write protected");
+    app.drive_off();
+    assert!(!app.drive_lent());
+    app.press(&mut sim2, Press::Short(Key::Start)); // the next ride: the old one taken up first
+    run(&mut sim2, &mut app, 10_000);
+    if app.ride.state() == ride::State::Running {
+        app.press(&mut sim2, Press::Short(Key::Start)); // pause (the old ride resumed in its place comes back paused)
+    }
+    save_ride(&mut sim2, &mut app);
+    run(&mut sim2, &mut app, 5000);
+    assert_eq!(app.ride.state(), ride::State::Idle);
+    assert_eq!(app.drive_on(&mut sim2), Ok(()));
+    assert_eq!(app.notes.text.as_str(), "USB DRIVE ON");
+    assert_eq!(crate::fat::write::tests::fsck(&sim2.emmc.image), Ok(0));
+}
+
 /// USB DRIVE in the SYSTEM menu: Select lends the card (the row says ON), Select again takes it back.
 #[test]
 fn the_device_menu_row() {

@@ -31,16 +31,21 @@ impl App {
                 self.trash_check = trash::finish(&mut emmc::Volume(&mut self.emmc, b), t).is_err();
             }
             self.past.stop(); // a past ride being read
-            if self.ride_settled() && !self.trash_check {
+            // a ride the records say is left open though none is here (the boot's marker lost: a flat battery), a
+            // chain only its record may name: not lent writable until the next Start takes it up (review S3)
+            let open = |a: &mut Self, b: &mut _| {
+                a.rec.clean.left_open(&mut emmc::Volume(&mut a.emmc, b))
+                    || a.rec.full.left_open(&mut emmc::Volume(&mut a.emmc, b))
+            };
+            if self.ride_settled() && !self.trash_check && !open(self, b) {
                 self.emmc.lend(true);
             } else {
-                // a save stuck, or a delete left halfway: what is on the card copied, nothing written
+                // a save stuck, a delete left halfway, a ride left open: what is on the card copied, nothing written
                 self.emmc.lend_read_only();
             }
             self.drive.insert();
         }
-        let writable = self.ride_settled() && !self.trash_check;
-        self.say(if writable { "USB DRIVE ON" } else { "USB DRIVE READ ONLY" });
+        self.say(if self.emmc.read_only() { "USB DRIVE READ ONLY" } else { "USB DRIVE ON" });
         Ok(())
     }
 
