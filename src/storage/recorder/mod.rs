@@ -707,10 +707,12 @@ impl Recorder {
                 }
             }
         }
-        // a folder made or grown takes a cluster: never from the reserve the next ride's clean copy needs
+        // a folder made or grown takes a cluster: never from the reserve the next ride's clean copy needs. FSInfo's
+        // count counted again after any card error (a failed FSInfo write after a grow leaves it high: the second
+        // review of S5 and S6); a rescue follows errors as a rule: a whole FAT read, once, on the owner's request
         let free = match fat.free_clusters(d)? {
-            Some(n) => Some(n),
-            None => {
+            Some(n) if self.errors == 0 => Some(n),
+            _ => {
                 fat.sync_fats(d)?;
                 fat.free_clusters(d)?
             }
@@ -1508,6 +1510,17 @@ impl Recorder {
         let linked = linked.ok_or(Error::Refused)?; // ten names taken: never "done" without the link
         let dir = fat.open(d, self.kind.rides().1)?;
         if !linked {
+            // its rides entry gone: a GIVE UP SAVE's rescue whose record a cut left "saving" is done now, before a
+            // `make_room` that could grow a folder on the card that failed
+            match fat.locate(d, dir, file_name(&self.name, &mut buf)?) {
+                Ok(h) if h.first == first => {}
+                Ok(_) | Err(Error::NotFound | Error::Corrupt) => {
+                    if let Some(o) = self.rescued(fat, d, first)? {
+                        return Ok(o);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
             // the entry's room before 4, in the folder it goes to and in the one it leaves (to be named there again if
             // 5 cannot be done: [`Recorder::keep_in_rides`]): a folder that must grow (a cluster) on a full card fails
             // here, the ride still named where it is, never between 4 and 5
@@ -1517,12 +1530,7 @@ impl Recorder {
         // 4: the entry in the folder, if still there and still this chain
         match fat.locate(d, dir, file_name(&self.name, &mut buf)?) {
             Ok(h) if h.first == first => fat.remove(d, &h)?,
-            // gone, or its sector torn (the record is the name); or rescued (GIVE UP SAVE), its record not done
-            Ok(_) | Err(Error::NotFound | Error::Corrupt) => {
-                if !linked && let Some(o) = self.rescued(fat, d, first)? {
-                    return Ok(o);
-                }
-            }
+            Ok(_) | Err(Error::NotFound | Error::Corrupt) => {} // gone, or its sector torn (the record is the name)
             Err(e) => return Err(e),
         }
         // 5: the new entry

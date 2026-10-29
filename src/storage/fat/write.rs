@@ -88,6 +88,9 @@ pub struct Handle {
     /// The first cluster of the folder its entry is in (0: none, a chain without an entry): [`Fat::remove`] walks
     /// back through it to the long name's first pieces.
     pub dir: u32,
+    /// The cluster a grow was taking when its FAT writes failed part way (0: none): taken up by the next grow if it
+    /// is still this chain's to take ([`Fat::write_sectors`]).
+    pub pending: u32,
 }
 
 /// Marks deleted (0xe5) the long name pieces before entry `slot` of directory sector `s` that carry checksum
@@ -331,22 +334,39 @@ impl Fat {
         r
     }
 
-    /// [`Fat::grow`]'s clusters, `taken` counting them. Clusters an earlier grow linked to `h`'s last in the first FAT
-    /// before failing (the second copy's write) are taken up first and counted: else a retry from the
-    /// stale handle takes another cluster and relinks the last to it, the first one left named by nothing.
+    /// [`Fat::grow`]'s clusters, `taken` counting them. The cluster an earlier grow was taking when its FAT writes
+    /// failed part way (`h.pending`: its end marker or its link in one FAT copy, or in one of its two FAT sectors) is
+    /// taken up first, both entries written again to every copy, and counted: else a retry takes another cluster and
+    /// relinks the last to it, the first one left named by nothing. Only that cluster, and only as an end of chain
+    /// linked from `h.last` or from nothing: any other link after `h.last` (a FAT sector gone wrong) is `Corrupt`,
+    /// never followed nor written into (another file's clusters).
     fn take(&mut self, d: &mut impl DiskWrite, h: &mut Handle, want: u32, taken: &mut i64) -> Result<(), Error> {
-        while h.clusters > 0
-            && let Some(n) = self.next(d, h.last)?
-        {
-            self.set_entries(d, &[(h.last, n)])?; // the link's sector again, to every copy: the FATs equal
-            (h.last, h.clusters, *taken) = (n, h.clusters + 1, *taken + 1);
-            if h.clusters > self.clusters {
-                return Err(Error::Corrupt); // a loop
+        let p = core::mem::take(&mut h.pending);
+        let end = |fat: &mut Self, d: &mut _, c: u32| -> Result<bool, Error> {
+            Ok(fat.valid(c) && fat.entry(d, c)? >= 0x0fff_fff8)
+        };
+        if h.clusters > 0 {
+            let up = match self.next(d, h.last)? {
+                None => p != 0 && end(self, d, p)?,
+                Some(n) if n == p && end(self, d, p)? => true,
+                Some(_) => return Err(Error::Corrupt),
+            };
+            if up {
+                self.set_entries(d, &[(p, EOC), (h.last, p)])?;
+                (h.last, h.clusters, *taken) = (p, h.clusters + 1, *taken + 1);
             }
+        } else if p != 0 && end(self, d, p)? {
+            self.set_entries(d, &[(p, EOC)])?;
+            h.first = p;
+            if h.entry_lba != 0 {
+                self.set_first(d, h)?;
+            }
+            (h.last, h.clusters, *taken) = (p, 1, *taken + 1);
         }
         while h.clusters < want {
             let from = if h.clusters == 0 { self.hint(d)? } else { h.last + 1 };
             let c = self.find_free(d, from)?;
+            h.pending = c; // until both entries are on every copy
             if h.clusters == 0 {
                 self.set_entries(d, &[(c, EOC)])?;
                 h.first = c;
@@ -359,7 +379,7 @@ impl Fat {
             } else {
                 self.set_entries(d, &[(c, EOC), (h.last, c)])?;
             }
-            (h.last, h.clusters, *taken) = (c, h.clusters + 1, *taken + 1);
+            (h.last, h.clusters, *taken, h.pending) = (c, h.clusters + 1, *taken + 1, 0);
         }
         Ok(())
     }
@@ -484,7 +504,7 @@ impl Fat {
                 let slot = u8::try_from(c.entry.checked_sub(1).ok_or(Error::Corrupt)?).map_err(|_| Error::Corrupt)?;
                 let entry_lba = self.lba(c.cluster) + c.sector;
                 let (first, size) = (f.cluster, f.size);
-                return Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster });
+                return Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster, pending: 0 });
             }
         }
         Err(Error::NotFound)
@@ -666,7 +686,7 @@ impl Fat {
         let (entries, n) = dir_entries(name, short, attr, first, size, time);
         let (entry_lba, slot) = self.add_entries(d, dir, entries.get(..n).ok_or(Error::Corrupt)?)?;
         let (last, clusters) = self.chain_end(d, first)?;
-        Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster })
+        Ok(Handle { entry_lba, slot, first, last, clusters, size, dir: dir.cluster, pending: 0 })
     }
 
     /// Creates file `name` in `dir`, empty, with one cluster taken (so its entry never changes cluster).
@@ -865,30 +885,37 @@ pub(crate) mod tests {
     }
 
     /// What fsck would say of a volume: Err on a chain into a free cluster or out of the volume, a cross-link, a
-    /// size past its chain or on cluster 0, a chain past its size (truncated by chkdsk), FATs that differ; Ok(lost clusters: taken, named by no entry). Walks
-    /// every directory.
+    /// size past its chain or on cluster 0, a chain past its size (truncated by chkdsk), FATs that differ; Ok(lost
+    /// clusters: taken, named by no entry). Walks every directory.
     pub fn fsck(img: &[u8]) -> Result<u32, std::string::String> {
-        fsck_with(img, true)
+        fsck_with(img, true, false).map(|(lost, _)| lost)
+    }
+
+    /// [`fsck`] of the volume a power cut left, before any boot: the FATs may differ (the first one read) and a chain
+    /// may run past its size (a cut between a checkpoint's data and its size, which the boot's recovery trims): Ok(lost
+    /// clusters, the most clusters a chain runs past its size), the whole volume scanned.
+    pub fn fsck_cut(img: &[u8]) -> Result<(u32, u32), std::string::String> {
+        fsck_with(img, true, true)
     }
 
     /// [`fsck`] without the orphan long name check: after a cut that tore a directory sector (garbage in it, which
     /// may read as anything), as the torn-sector power-cut tests make.
     pub fn fsck_torn(img: &[u8]) -> Result<u32, std::string::String> {
-        fsck_with(img, false)
+        fsck_with(img, false, false).map(|(lost, _)| lost)
     }
 
-    fn fsck_with(img: &[u8], orphans: bool) -> Result<u32, std::string::String> {
+    fn fsck_with(img: &[u8], orphans: bool, cut: bool) -> Result<(u32, u32), std::string::String> {
         let mut d = Ram(img.to_vec(), 0);
         let mut fat = Fat::mount(&mut d).map_err(|e| std::format!("mount {e:?}"))?;
         let fs = fat.fat_size as usize * SECTOR;
         let start = fat.fat_start as usize * SECTOR;
-        if fat.fats == 2 && img[start..start + fs] != img[start + fs..start + 2 * fs] {
+        if !cut && fat.fats == 2 && img[start..start + fs] != img[start + fs..start + 2 * fs] {
             return Err("the FATs differ".into());
         }
         let n = fat.clusters + 2;
         let mut owner = std::vec![0u32; n as usize];
         let mut dirs = std::vec![fat.root()];
-        let mut id = 0;
+        let (mut id, mut excess) = (0, 0);
         while let Some(dir) = dirs.pop() {
             if orphans {
                 orphan_long_names(&mut fat, &mut d, dir.cluster)?;
@@ -935,9 +962,11 @@ pub(crate) mod tests {
                     return Err(std::format!("file at {first}: size {size} past its chain of {len}"));
                 }
                 // chkdsk and fsck_msdos truncate it (the clusters past the size freed)
-                if size != u32::MAX && size.div_ceil(fat.spc * SECTOR as u32).max(1) < len {
+                let need = if size == u32::MAX { len } else { size.div_ceil(fat.spc * SECTOR as u32).max(1) };
+                if need < len && !cut {
                     return Err(std::format!("file at {first}: chain of {len} past its size {size}"));
                 }
+                excess = excess.max(len.saturating_sub(need));
             }
         }
         // The lost clusters (taken, named by no entry, not bad): each must lead to an end of chain without meeting a
@@ -978,7 +1007,7 @@ pub(crate) mod tests {
         if let Some(c) = (2..n).find(|&c| is_lost(c) && !reached[c as usize]) {
             return Err(std::format!("lost chain in a loop at {c}"));
         }
-        Ok(lost)
+        Ok((lost, excess))
     }
 
     /// Long name pieces not followed by the 8.3 entry whose checksum they carry (chkdsk and fsck_msdos report
@@ -1049,6 +1078,86 @@ pub(crate) mod tests {
     /// fsck itself: a lost chain (taken, named by no entry: what a cut in a move leaves) is only lost while it ends
     /// alone; one that runs into a file's chain, another lost chain, a free cluster, out of the volume or round in a
     /// loop is an error, as fsck_msdos says of it (cross-linked, ...). Before, only the named chains were walked.
+    /// A disk whose writes to one sector fail (`.1`), the rest as the RAM image.
+    struct FailAt(Ram, u32);
+
+    impl Disk for FailAt {
+        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+            self.0.read(lba, buf)
+        }
+    }
+
+    impl DiskWrite for FailAt {
+        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+            if (lba..lba + (buf.len() / SECTOR) as u32).contains(&self.1) {
+                return Err(Error::Io);
+            }
+            self.0.write(lba, buf)
+        }
+    }
+
+    /// The review of S5 and S6 (2026-10-29): a grow whose FAT writes fail part way, the new cluster's entry and the
+    /// link to it in two FAT sectors, either copy of either: the retry takes that cluster up (not the next one), the
+    /// FATs equal, nothing lost, FSInfo exact.
+    #[test]
+    fn a_grow_failing_part_way_takes_its_cluster_up() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let mut h = fat.create(&mut d, root, "GROW.BIN", (0, 0)).unwrap();
+        let per = SECTOR_U32 / 4;
+        // grown a cluster at a time until its last entry ends a FAT sector, the next cluster free
+        for _ in 0..4 * per {
+            let at = h.clusters * fat.spc;
+            fat.write_sectors(&mut d, &mut h, at, &[7; SECTOR]).unwrap();
+            if h.last % per == per - 1 && fat.find_free(&mut d, h.last + 1) == Ok(h.last + 1) {
+                break;
+            }
+        }
+        let c = h.last + 1;
+        assert_eq!(c % per, 0, "the next cluster in the next FAT sector");
+        let base = d.0.clone();
+        let sector = |copy: u32, x: u32| fat.fat_start + copy * fat.fat_size + x / per;
+        for (what, bad) in [
+            ("the new cluster's sector, first FAT", sector(0, c)),
+            ("the new cluster's sector, second FAT", sector(1, c)),
+            ("the link's sector, first FAT", sector(0, h.last)),
+            ("the link's sector, second FAT", sector(1, h.last)),
+        ] {
+            let mut d = FailAt(Ram(base.clone(), 0), bad);
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let mut g = h;
+            let at = g.clusters * fat.spc;
+            assert_eq!(fat.write_sectors(&mut d, &mut g, at, &[9; SECTOR]), Err(Error::Io), "{what}");
+            d.1 = u32::MAX;
+            fat.write_sectors(&mut d, &mut g, at, &[9; SECTOR]).unwrap();
+            assert_eq!((g.last, g.clusters, g.pending), (c, h.clusters + 1, 0), "{what}: that cluster taken up");
+            let size = g.clusters * fat.cluster_bytes();
+            fat.set_size(&mut d, &mut g, size, (0, 0)).unwrap();
+            assert_eq!(fsck(&d.0.0), Ok(0), "{what}");
+            assert_eq!(free_counts(&d.0.0).0, free_counts(&d.0.0).1, "{what}: FSInfo's free count");
+        }
+    }
+
+    /// The same review, finding 1: a link after a file's last cluster that its grow did not write (a FAT sector gone
+    /// wrong) is never followed nor written into: `Corrupt`, the other file's clusters untouched.
+    #[test]
+    fn a_grow_never_takes_up_a_link_it_did_not_write() {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let root = fat.root();
+        let mut a = fat.create(&mut d, root, "A.BIN", (0, 0)).unwrap();
+        fat.write_sectors(&mut d, &mut a, 0, &[1; SECTOR]).unwrap();
+        let mut b = fat.create(&mut d, root, "B.BIN", (0, 0)).unwrap();
+        fat.write_sectors(&mut d, &mut b, 0, &[2; SECTOR]).unwrap();
+        fat.set_entries(&mut d, &[(a.last, b.first)]).unwrap();
+        let at = a.clusters * fat.spc;
+        assert_eq!(fat.write_sectors(&mut d, &mut a, at, &[3; SECTOR]), Err(Error::Corrupt));
+        let mut s = [0u8; SECTOR];
+        fat.read_sector(&mut d, &b, 0, &mut s).unwrap();
+        assert_eq!(s, [2; SECTOR], "the other file's data");
+    }
+
     #[test]
     fn fsck_follows_the_lost_chains() {
         let img = image();

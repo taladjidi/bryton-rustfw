@@ -3,7 +3,7 @@
 extern crate std;
 use super::*;
 use crate::fat::Disk;
-use crate::fat::write::tests::{fill, free_counts, fsck, fsck_torn};
+use crate::fat::write::tests::{fill, free_counts, fsck, fsck_cut, fsck_torn};
 use crate::fit::RECORD_LEN;
 use crate::fitread::{Msg, Reader};
 use crate::ride::Profile;
@@ -328,14 +328,10 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         let mut d =
             Card { img: img.clone(), budget: Some(cut), written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
         assert!(ride(&mut Recorder::new(), &mut d, 0).is_none(), "{what}: the card died");
-        // the volume as the cut left it: readable, at most a FAT sector apart, or a chain grown past its size (a cut
-        // between a checkpoint's data and its size: the boot's recovery trims it)
-        if let Err(e) = fsck(&d.img)
-            && !e.contains("FATs differ")
-            && !e.contains("past its size")
-        {
-            panic!("{what}: {e}");
-        }
+        // the volume as the cut left it: readable, the FATs at most a sector apart, a chain at most one cluster past
+        // its size (a cut between a checkpoint's data and its size: the boot's recovery trims it)
+        let (_, excess) = fsck_cut(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(excess <= 1, "{what}: a chain {excess} clusters past its size");
         // reboot; and the reboot cut too, at each of its own writes, then again: the same outcome
         let cut_img = d.img;
         let mut d =
@@ -2510,7 +2506,7 @@ fn give_up_saves_rescue_cut_at_every_sector() {
     };
     let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.card, act, "Rustfw/Rescue/261023100000.fit");
     // the rescue folder's entry in \Rustfw: one sector, its tear S7's
-    assert_eq!((total, s7), (38, 1), "a write added or dropped");
+    assert_eq!((total, s7), (39, 1), "a write added or dropped");
     assert!(lost <= 1, "{lost} lost");
 }
 
