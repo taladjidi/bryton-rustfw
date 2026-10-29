@@ -511,3 +511,47 @@ mod auto_off_tests {
         assert!((0..5000).all(|_| a.second(0, true) == OffStep::Wait), "0: never");
     }
 }
+
+/// The climb page's place in the round (app/profile.rs).
+pub(crate) struct ClimbPage {
+    /// The climb page is in the round.
+    pub(crate) on: bool,
+    /// The ride page it follows.
+    pub(crate) after: usize,
+    /// The climb handled: its start (m) and whether the page opened, or was skipped, for it.
+    pub(crate) handled: Option<(u32, bool)>,
+}
+
+impl ClimbPage {
+    /// Not in the round, after page 0, no climb handled.
+    pub(crate) fn new() -> Self {
+        ClimbPage { on: false, after: 0, handled: None }
+    }
+}
+
+/// CPU time of the road ahead's tile loads, in microseconds ([`App::ahead_tile_us`]).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AheadUs {
+    /// The last tile, all its slices.
+    pub(crate) last: u32,
+    /// The longest tile so far.
+    pub(crate) max: u32,
+    /// The longest single call on a tile.
+    pub(crate) slice: u32,
+}
+
+/// When the ride started: its card's title.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct RideStart {
+    /// Year, month, day.
+    pub(crate) date: (u16, u8, u8),
+    /// Hours and minutes.
+    pub(crate) time: (u8, u8),
+}
+
+impl RideStart {
+    /// A date and a time of day.
+    pub(crate) fn new(date: (u16, u8, u8), time: (u8, u8)) -> Self {
+        RideStart { date, time }
+    }
+}

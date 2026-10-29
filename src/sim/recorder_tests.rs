@@ -28,7 +28,7 @@ fn a_ride_reset_resumed_and_saved() {
     assert_eq!(app.ride.state(), ride::State::Paused);
     let back = app.ride.timer_s();
     assert!(back <= timer && back + 60 >= timer, "timer {back} of {timer}");
-    assert_eq!(app.ride_started, ((2026, 10, 23), (9, 0)));
+    assert_eq!(app.ride_started, RideStart::new((2026, 10, 23), (9, 0)));
 
     app.press(&mut sim2, Press::Short(Key::Start)); // resume
     run(&mut sim2, &mut app, 30_000);
@@ -271,7 +271,7 @@ fn start_while_the_card_failed_at_boot() {
     sim.emmc.dead = false;
     run(&mut sim, &mut app, 10_000);
     assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")), "{:?}", app.notes.list[0].as_str());
-    assert_eq!((app.ride.state(), app.ride_started), (ride::State::Paused, ((2026, 10, 23), (9, 0))));
+    assert_eq!((app.ride.state(), app.ride_started), (ride::State::Paused, RideStart::new((2026, 10, 23), (9, 0))));
     assert!(app.ride.timer_s() + 60 >= timer);
     save_ride(&mut sim, &mut app); // end
     run(&mut sim, &mut app, 2000);

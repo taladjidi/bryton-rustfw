@@ -242,7 +242,7 @@ pub struct App {
     /// The set the ride pages on screen were taken from at the last pass ([`App::ride_profile`] then).
     set_shown: ride::Profile,
     /// The climb page is in the round, the page it follows, and the climb handled: its start (m) and whether the page opened, or was skipped, for it.
-    climb: (bool, usize, Option<(u32, bool)>),
+    climb: ClimbPage,
     /// The ride page whose MORE variant is up: only while that page is the screen (App::more_shown).
     more_on: Option<usize>,
     /// `\Rustfw\pages.bin` (app/editor.rs): read yet, to be written, its copies.
@@ -275,7 +275,7 @@ pub struct App {
     /// The AUTO OFF timer (app/device.rs).
     auto_off: AutoOff,
     /// When the ride started: date, hours and minutes (its card's title).
-    ride_started: ((u16, u8, u8), (u8, u8)),
+    ride_started: RideStart,
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
     graph_whole: bool,
     /// A graph's plot chosen by a tap, per page (the overview last) and box: shown instead of the page's until the
@@ -355,7 +355,7 @@ pub struct App {
     /// The road ahead: climbs found with no course followed (memory from main.rs: [`App::set_ahead_memory`]).
     ahead: Option<(&'static mut climbs_ahead::Ahead, &'static mut [u16])>,
     /// The last and the longest tile load of the road ahead, and the longest slice, us ([`App::ahead_tile_us`]).
-    ahead_us: (u32, u32, u32),
+    ahead_us: AheadUs,
     /// The time spent so far on the tile being loaded, us.
     ahead_acc: u32,
     /// Where the CPU's time goes, by section of the pass (link/prof.rs; the dev link's `prof`).
@@ -447,7 +447,7 @@ impl App {
             mtb: page::Set::mtb_default(),
             pages_set: ride::Profile::Road,
             set_shown: ride::Profile::Road,
-            climb: (false, 0, None),
+            climb: ClimbPage::new(),
             more_on: None,
             store,
             settings_store,
@@ -459,7 +459,7 @@ impl App {
             told_low: false,
             graph_whole: false,
             plot_taps: [[None; page::CELLS]; PAGES + 1],
-            ride_started: ((2000, 1, 1), (0, 0)),
+            ride_started: RideStart::new((2000, 1, 1), (0, 0)),
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,
             auto_off: AutoOff::new(),
@@ -500,7 +500,7 @@ impl App {
             pace: PaceState::new(),
             thresholds: None,
             ahead: None,
-            ahead_us: (0, 0, 0),
+            ahead_us: AheadUs::default(),
             ahead_acc: 0,
             drive: msc::Drive::new(),
             restart: false,

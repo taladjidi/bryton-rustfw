@@ -928,7 +928,7 @@ fn climb_page_opens_once_per_climb() {
     run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 3000);
-    app.climb.2 = None;
+    app.climb.handled = None;
     run(&mut sim, &mut app, 3000);
     assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "not again");
 
