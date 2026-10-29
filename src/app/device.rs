@@ -219,6 +219,7 @@ impl App {
         }
         self.light.ms = self.light.ms.saturating_add(self.dt_ms);
         let wanted = (self.settings.light_level == LIGHT_AUTO && self.light.shown != 0)
+            || self.settings.auto_theme
             || matches!(self.screen, Screen::Menu(Menu::BuiltIn, _));
         match (wanted, self.light.measuring) {
             (true, false) => {
@@ -228,7 +229,9 @@ impl App {
             (true, true) if self.light.ms >= LIGHT_MS => {
                 if let Some(lux10) = ambient::light_read(b) {
                     self.light.auto_level = self.light.auto.update(lux10);
+                    let dt = self.light.ms;
                     self.light.ms = 0;
+                    self.follow_light(b, lux10, dt);
                 }
             }
             (false, true) => {

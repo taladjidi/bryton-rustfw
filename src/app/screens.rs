@@ -7,6 +7,9 @@ use crate::*;
 /// How long a banner stays up, unless an input dismisses it first.
 pub const BANNER_MS: u32 = 4000;
 
+/// How long a lap's summary stays up.
+pub const LAP_BANNER_MS: u32 = 8000;
+
 /// A banner's kind, lowest first: a higher one is not covered by a lower one ([`App::say_as`]). An incoming call is
 /// above them all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -17,6 +20,8 @@ pub(crate) enum Banner {
     Cue,
     /// What the ride says: a workout step, a reminder, a climb.
     Ride,
+    /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said and under a turn now.
+    Summary,
     /// A turn now.
     Now,
     /// An alarm (heart rate high, off course, the battery low, a ride not saving): white on red.
@@ -24,6 +29,11 @@ pub(crate) enum Banner {
 }
 
 impl Banner {
+    /// How long this kind stays up.
+    pub(crate) fn ms(self) -> u32 {
+        if self == Banner::Summary { LAP_BANNER_MS } else { BANNER_MS }
+    }
+
     /// A turn cue, ahead or now: good for its moment only.
     pub(crate) fn is_cue(self) -> bool {
         matches!(self, Banner::Cue | Banner::Now)

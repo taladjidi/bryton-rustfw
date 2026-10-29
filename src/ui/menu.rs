@@ -111,8 +111,13 @@ pub enum Setting {
     ClimbsAhead,
     /// The font of every text: PIXEL (dot matrix, the default) or SMOOTH ([`crate::fonts::smooth`]).
     Font,
-    /// The colour theme: DARK, OUTDOOR or a file of `\Rustfw\Themes` ([`crate::theme`]).
+    /// The colour theme: AUTO (day or night by the ambient light), DARK, OUTDOOR or a file of `\Rustfw\Themes`
+    /// ([`crate::theme`]).
     Theme,
+    /// The theme AUTO uses by day, and by night (the same choices as THEME, without AUTO).
+    DayTheme,
+    /// The theme AUTO uses by night.
+    NightTheme,
     /// The GPS receiver's power mode: AUTO (the default: cyclic tracking while riding fast and straight), FULL
     /// (continuous tracking) or SAVER (cyclic tracking) ([`crate::GpsPower`]).
     GpsPower,
@@ -120,6 +125,12 @@ pub enum Setting {
     PowerMatch,
     /// The window of the big power value: the live reading, 3, 5 or 10 s (app/settings.rs, POWER_SMOOTH_S).
     PowerSmooth,
+    /// AUTO LAP: OFF, BY DISTANCE or BY TIME (`auto_lap`).
+    AutoLap,
+    /// The distance of a BY DISTANCE auto lap, km.
+    LapKm,
+    /// The moving time of a BY TIME auto lap, minutes.
+    LapMin,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -231,8 +242,13 @@ impl Setting {
             Setting::PowerMatch => "POWER MATCH",
             Setting::Lthr => "LTHR",
             Setting::PowerSmooth => "POWER SMOOTH",
+            Setting::AutoLap => "AUTO LAP",
+            Setting::LapKm => "LAP EVERY",
+            Setting::LapMin => "LAP EVERY",
             Setting::Font => "FONT",
             Setting::Theme => "THEME",
+            Setting::DayTheme => "DAY THEME",
+            Setting::NightTheme => "NIGHT THEME",
             Setting::GpsPower => "GPS POWER",
             Setting::Remote(n) => ["L PRESS", "R PRESS", "L HOLD", "R HOLD"].get(usize::from(n)).copied().unwrap_or(""),
         }
@@ -257,6 +273,8 @@ impl Setting {
             Setting::WPrime => " KJ",
             Setting::Eat | Setting::Drink => " MIN",
             Setting::Altitude => " M",
+            Setting::LapKm => " KM",
+            Setting::LapMin => " MIN",
             _ => "",
         }
     }
@@ -282,6 +300,8 @@ impl Setting {
             Setting::Limit(10) => Some((0..=100, 5)),
             // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 1 m steps (a known height to the metre; a held key repeats)
             Setting::Altitude => Some((0..=9500, 1)),
+            Setting::LapKm => Some((1..=50, 1)),
+            Setting::LapMin => Some((1..=60, 1)),
             _ => None,
         }
     }
@@ -658,17 +678,19 @@ pub const ALERTS: [Row; 14] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 5] = [
+pub const DISPLAY: [Row; 7] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
     Row::Set(Setting::Font),
     Row::Set(Setting::Theme),
+    Row::Set(Setting::DayTheme),
+    Row::Set(Setting::NightTheme),
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 9] = [
+pub const BIKE: [Row; 12] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -678,6 +700,9 @@ pub const BIKE: [Row; 9] = [
     Row::Set(Setting::GpsPower),
     Row::Set(Setting::PowerMatch),
     Row::Set(Setting::PowerSmooth),
+    Row::Set(Setting::AutoLap),
+    Row::Set(Setting::LapKm),
+    Row::Set(Setting::LapMin),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

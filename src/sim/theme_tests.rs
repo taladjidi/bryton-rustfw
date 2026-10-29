@@ -135,7 +135,7 @@ fn kept(sim: &Sim) -> Option<SettingsCopy> {
     SettingsCopy::newest(&v.try_into().ok()?)
 }
 
-/// THEME cycles DARK, OUTDOOR, the card's files; a refused file gives DARK and a notice; the name is kept in
+/// THEME cycles AUTO, DARK, OUTDOOR, the card's files; a refused file gives DARK and a notice; the name is kept in
 /// settings.bin and applied after a restart; an older file (31 bytes of settings) reads with DARK.
 #[test]
 fn theme_from_the_card_is_picked_and_kept() {
@@ -148,17 +148,19 @@ fn theme_from_the_card_is_picked_and_kept() {
         app.press(&mut sim, Press::Short(Key::Start));
         run(&mut sim, &mut app, 100);
         super::tests::assert_consistent(&sim, &app);
-        seen.push((app.settings.theme_name().to_string(), app.theme));
+        let name = if app.settings.auto_theme { "AUTO" } else { app.settings.theme_name() };
+        seen.push((name.to_string(), app.theme));
     }
     let names: Vec<&str> = seen.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names, ["OUTDOOR", "LIGHT", "SUNNY", "REDZONE", "DARK"], "NOTES.TXT is no theme");
+    assert_eq!(names, ["OUTDOOR", "LIGHT", "SUNNY", "REDZONE", "AUTO"], "NOTES.TXT is no theme");
+    assert_eq!(seen[4].1, Theme::OUTDOOR, "AUTO by day: the day theme");
     assert_eq!(seen[0].1, Theme::OUTDOOR);
     assert_eq!(seen[1].1, Theme::LIGHT);
     let sunny = crate::theme::parse(SUNNY.as_bytes()).unwrap();
     assert_eq!(seen[2].1, sunny);
     assert_eq!(seen[3].1, Theme::DARK, "refused: DARK drawn");
-    // on to SUNNY (three more presses), kept, and applied after a restart
-    for _ in 0..3 {
+    // on to SUNNY (four more presses: DARK, OUTDOOR, LIGHT, SUNNY), kept, and applied after a restart
+    for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Start));
     }
     assert_eq!(app.settings.theme_name(), "SUNNY");
@@ -294,7 +296,7 @@ fn a_theme_picked_before_the_file_is_read_is_kept() {
         sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
         let mut app2 = App::start(&mut sim2, None);
         app2.settings.set_theme_name(first);
-        app2.next_theme(&mut sim2); // the other of the two
+        app2.next_theme(&mut sim2, Setting::Theme); // the other of the two
         let picked = app2.settings.theme_name().to_string();
         assert_ne!(picked, first);
         for _ in 0..200 {
@@ -479,4 +481,25 @@ fn light_map_page() {
     assert!(count(ink[4]) > 20, "the track in LIGHT's accent: {}", count(ink[4]));
     assert!(count(ink[1]) > 40, "the arrow and the buttons in LIGHT's text: {}", count(ink[1]));
     assert_eq!(count(crate::ui::ACCENT), 0, "no built-in accent left");
+}
+
+/// AUTO (THEME) follows the ambient light: dark for 30 s switches to the night theme (DARK), redrawn with its background;
+/// light for 30 s is not enough, a minute must pass since the switch; then the day theme (OUTDOOR) again.
+#[test]
+fn auto_theme_follows_the_light_with_a_hold_and_a_gap() {
+    let (mut sim, mut app) = unit(None);
+    app.settings.auto_theme = true;
+    app.apply_theme(&mut sim, false); // the theme in use, as the settings file read does
+    sim.bus.lux10 = Some(50); // 5 lux: dark
+    run(&mut sim, &mut app, 20_000);
+    assert_eq!(app.theme, Theme::OUTDOOR, "20 s of dark: the hold is not over");
+    run(&mut sim, &mut app, 15_000);
+    assert_eq!(app.theme, Theme::DARK, "after the hold: the night theme");
+    assert_eq!(sim.screen[0], Theme::DARK.ink(crate::ui::BLACK), "a background pixel in the night theme");
+    sim.bus.lux10 = Some(2000); // 200 lux
+    run(&mut sim, &mut app, 30_000);
+    assert_eq!(app.theme, Theme::DARK, "30 s of light: the hold is met, the minute from the switch is not");
+    run(&mut sim, &mut app, 40_000);
+    assert_eq!(app.theme, Theme::OUTDOOR, "back to the day theme");
+    assert_eq!(sim.screen[0], Theme::OUTDOOR.ink(crate::ui::BLACK), "a background pixel in the day theme");
 }

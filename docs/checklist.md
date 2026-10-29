@@ -26,8 +26,8 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [x] Banners over any page for a few seconds (stock, Garmin): sim
 - [~] Quick Status panel (stock): sim; a swipe-down panel, no chosen fields
 - [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim
-- [ ] Lap summary banner (Garmin, Wahoo)
-- [ ] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours): sim
+- [x] Lap summary banner (Garmin, Wahoo): sim
+- [x] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours), and THEME AUTO switches them from the light: sim
 - [ ] Ring and bar gauges for speed, cadence, heart rate, power (stock)
 - [x] Graphs on a page: power, heart rate, W' balance, DFA a1, elevation (stock, ours): sim
 - [x] Values in zone colours (stock): unit
@@ -158,7 +158,7 @@ Others
 - [x] Start, pause, resume, lap, end (stock, all): unit
 - [x] Auto pause under 2 km/h (stock, all): unit
 - [ ] Auto pause threshold set by hand (Garmin, Wahoo)
-- [ ] Auto lap by distance, time or position (Garmin, Wahoo, Karoo)
+- [~] Auto lap by distance or time (Garmin, Wahoo, Karoo): sim; by position is not in
 - [ ] Start reminder when the bike moves (stock, Garmin)
 - [~] FIT activity file written as the ride goes (stock, all): sim
 - [~] Checkpoint every minute, two copies of the recovery record, resume after any reset (stock): sim, power cut tested after every sector

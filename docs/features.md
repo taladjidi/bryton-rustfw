@@ -243,7 +243,11 @@ moves; the screen is redrawn at once and the choice is kept through a restart (r
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
-**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through DARK (the colours as they were), OUTDOOR (lighter notes
+**Theme AUTO.** THEME's list starts with AUTO: the day theme (DAY THEME, OUTDOOR at first) and the night one (NIGHT THEME,
+DARK at first) then follow the ambient light: night under 20 lux, day again over 50 lux, each held 30 s, at most one
+switch a minute, a full redraw at each. The light sensor measures while AUTO is on. Details: theming.md 4b.
+
+**Theme.** THEME in SETTINGS > DISPLAY (Select) goes through AUTO (when on, see above), DARK (the colours as they were), OUTDOOR (lighter notes
 and lines, brighter zones), LIGHT (black on white, for the sun) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
 `-` and `_`, 12 characters at most), drawing the screen again at once. The choice is kept by name in settings.bin (not
 in the backup registers), and a file is read again at each start. A file is an INI, read, never written:
@@ -462,6 +466,16 @@ lose it at once (the scan's cache drops its entry, no ride read again), and the 
 built from the FIT files it finds, so the ride goes from it too (inferred). A power cut during the move loses
 nothing: `\Rustfw\delete.rec` says what is being moved, and the next start finishes it (tested by cutting the
 power after every sector written).
+
+## Laps
+
+- **AUTO LAP** (SETTINGS > BIKE): OFF (the default), BY DISTANCE or BY TIME, with LAP EVERY 1 to 50 km (5) or 1 to 60 min (10). An auto lap is the Lap key's lap (`Ride::lap`, the same recorder event), so the FIT file holds the same lap message; it does not move a workout on. Only while the ride runs.
+- **BY DISTANCE** counts from the last lap, manual or auto, not from the ride's total (as Garmin restarts it after a manual lap): with 5 km, a manual lap at 7 km makes the next at 12 km. The lap falls on the first second past the step, so it can be a few metres over.
+- **BY TIME** counts moving time (the lap time field): a stop or a pause does not count.
+- **The lap banner** (Lap key or auto lap, 8 s or until a key): lap number, lap time and distance, then average power (speed without power) and average heart rate if a strap was heard. A workout's step laps do not show it.
+- Kept in settings.bin at data 94 (mode), 95 (km) and 96 (minutes); an older file reads OFF, 5 km, 10 min. Not yet: the lap list of a past ride.
+
+![Lap banner](img/auto-lap.png)
 
 ## Power match (ERG)
 

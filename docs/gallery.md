@@ -115,3 +115,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | SETTINGS > DISPLAY > THEME cycles DARK, OUTDOOR, LIGHT and the files of `\Rustfw\Themes` (sim) | A theme file from the card: SUNNY, OUTDOOR with a blue accent (sim) | LIGHT: black on white for the sun (sim) |
 | ![LIGHT, a ride page](img/theme-light-ride.png) | ![LIGHT menu](img/theme-light-menu.png) | ![LIGHT map](img/theme-light-map.png) |
 | LIGHT on a ride page (sim) | LIGHT menu (sim) | LIGHT map page: the basemap stays a picture (sim) |
+
+## Laps
+
+| | |
+|:-:|:-:|
+| ![Lap banner](img/auto-lap.png) | |
+| AUTO LAP BY DISTANCE 5 km: the banner of lap 1 with its number, time, distance and average speed (sim) | |

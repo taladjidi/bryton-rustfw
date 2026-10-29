@@ -812,3 +812,37 @@ fn auto_off_waits_for_the_recorder() {
     assert!(sim.standby, "AUTO OFF 5 did not switch off within its time");
     assert_eq!(sim.backup[RIDE_BKP], 0);
 }
+
+/// AUTO LAP BY DISTANCE 5 km on a ride of 11 km at 28.8 km/h: laps fire at 5 and 10 km exactly as the Lap key does
+/// (the same recorder event), so the FIT file holds the two laps and the one that closes the ride; each lap's
+/// summary is in the banner (screenshot `auto_lap`).
+#[test]
+fn auto_lap_by_distance_writes_a_lap_message_per_5_km() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.gnss.route = Some(super::map_tests::ride_route);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 2000);
+    app.settings.auto_lap = 1;
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut shot = false;
+    while app.ride.dist_m() < 11_000 {
+        run(&mut sim, &mut app, 1000);
+        if app.ride.laps() == 1 && !shot {
+            shot = true;
+            run(&mut sim, &mut app, 1000);
+            assert!(app.notes.text.as_str().starts_with("LAP 1 "), "{}", app.notes.text.as_str());
+            assert_eq!(app.notes.kind, Banner::Summary);
+            sim.save("auto_lap");
+        }
+    }
+    assert_eq!(app.ride.laps(), 2, "laps at 5 and 10 km");
+    let name = app.rec.clean.name();
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 3000);
+    let file = ride_file(&sim, "Activities", name).expect("saved");
+    assert_eq!(lap_count(&file), 3, "the two auto laps and the last, closed at the save");
+}

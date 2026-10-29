@@ -61,7 +61,7 @@ impl App {
                     self.notes.kind == Banner::Alarm,
                 );
             }
-            self.notes.ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < BANNER_MS);
+            self.notes.ms = Some(ms.saturating_add(pass_ms)).filter(|&ms| ms < self.notes.kind.ms());
             if self.notes.ms.is_none() {
                 self.unbanner(b);
             }

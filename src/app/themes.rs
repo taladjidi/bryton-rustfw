@@ -74,8 +74,9 @@ impl App {
     /// Makes the theme THEME names the one drawn (DARK when its file is missing or refused, with a notice when
     /// `said`), and draws the screen again whole.
     pub(crate) fn apply_theme(&mut self, b: &mut impl Board, said: bool) {
+        let in_use = self.theme_in_use();
         let mut name = text::Line::<12>::new();
-        name.push_str(self.settings.theme_name());
+        name.push_str(Settings::name_of(&in_use));
         let t = match Theme::builtin(name.as_str()) {
             Some(t) => Ok(t),
             None if self.emmc.lent() => Err(None),
@@ -88,9 +89,33 @@ impl App {
         }
     }
 
-    /// THEME's Select: the next of DARK, OUTDOOR, LIGHT and the card's files, applied at once and kept.
-    pub(crate) fn next_theme(&mut self, b: &mut impl Board) {
+    /// The name in use: THEME's, or with AUTO the day or the night one, by the light ([`ui::theme::DayNight`]).
+    pub(crate) fn theme_in_use(&self) -> [u8; 12] {
+        let s = &self.settings;
+        match (s.auto_theme, self.light.day_night.night) {
+            (false, _) => s.theme,
+            (true, false) => s.day_theme,
+            (true, true) => s.night_theme,
+        }
+    }
+
+    /// AUTO (THEME): one light reading, `dt_ms` after the last. The theme follows it, drawn again when it changes.
+    pub(crate) fn follow_light(&mut self, b: &mut impl Board, lux10: u32, dt_ms: u32) {
+        if !self.settings.auto_theme {
+            return;
+        }
+        let was = self.theme_in_use();
+        if self.light.day_night.update(lux10, dt_ms).is_some() && self.theme_in_use() != was {
+            self.apply_theme(b, false);
+        }
+    }
+
+    /// THEME's, DAY THEME's or NIGHT THEME's Select: the next name of the list, applied at once and kept. THEME's list
+    /// starts with AUTO; the others are DARK, OUTDOOR, LIGHT and the card's files.
+    pub(crate) fn next_theme(&mut self, b: &mut impl Board, s: menu::Setting) {
         let (files, n) = self.theme_files(b);
+        let auto_first = s == menu::Setting::Theme;
+        let off = usize::from(auto_first);
         let name = |i: usize| -> &str {
             match i {
                 0 => "DARK",
@@ -103,10 +128,31 @@ impl App {
                     .unwrap_or("DARK"),
             }
         };
-        let now = (0..3 + n).find(|&i| name(i).eq_ignore_ascii_case(self.settings.theme_name())).unwrap_or(0);
-        let mut next = text::Line::<12>::new();
-        next.push_str(name((now + 1) % (3 + n)));
-        self.settings.set_theme_name(next.as_str());
+        let cur = match s {
+            menu::Setting::DayTheme => self.settings.day_theme,
+            menu::Setting::NightTheme => self.settings.night_theme,
+            _ => self.settings.theme,
+        };
+        let now = if auto_first && self.settings.auto_theme {
+            0
+        } else {
+            off + (0..3 + n).find(|&i| name(i).eq_ignore_ascii_case(Settings::name_of(&cur))).unwrap_or(0)
+        };
+        let next = (now + 1) % (off + 3 + n);
+        if auto_first && next == 0 {
+            self.settings.auto_theme = true;
+            self.light.day_night = Default::default();
+        } else {
+            let picked = Settings::name_bytes(name(next - off));
+            match s {
+                menu::Setting::DayTheme => self.settings.day_theme = picked,
+                menu::Setting::NightTheme => self.settings.night_theme = picked,
+                _ => {
+                    self.settings.theme = picked;
+                    self.settings.auto_theme = false;
+                }
+            }
+        }
         self.settings_store.theme_set = true;
         self.save_misc(b);
         self.apply_theme(b, true);

@@ -66,9 +66,55 @@ impl App {
     /// its next step (an open step ends here).
     pub(crate) fn lap(&mut self) {
         let Some(ev) = self.ride.lap() else { return };
-        self.say("LAP");
         self.recorder(ev);
+        self.lap_summary();
         self.next_step();
+    }
+
+    /// An auto lap (AUTO LAP in BIKE) once this lap passed its distance or moving time: the Lap key's path to the
+    /// recorder (`Ride::lap`, then `App::recorder`), without moving a workout on.
+    pub(crate) fn auto_lap(&mut self) {
+        let (m, s) = self.settings.auto_lap_limits();
+        if self.ride.lap_reached(m, s)
+            && let Some(ev) = self.ride.lap()
+        {
+            self.recorder(ev);
+            self.lap_summary();
+        }
+    }
+
+    /// The lap that just ended, in a banner of 8 s (or until a key): number, time and distance, then average power
+    /// (speed without power) and heart rate.
+    fn lap_summary(&mut self) {
+        let r = &self.ride;
+        let (s, m) = (r.last_lap_s().unwrap_or(0), r.last_lap_dist_m());
+        let mut l = Line::<40>::new();
+        l.push_str("LAP ");
+        l.push_u32(r.laps());
+        l.push_str(" ");
+        push_clock(&mut l, s);
+        l.push_str(" ");
+        push_km(&mut l, m);
+        l.push_str("KM\n");
+        match r.last_lap_avg_power() {
+            Some(w) => {
+                l.push_u32(u32::from(w));
+                l.push_str("W");
+            }
+            None => {
+                let v = if s > 0 { m * 36 / s } else { 0 }; // km/h x 10
+                l.push_u32(v / 10);
+                l.push_str(".");
+                l.push_u32(v % 10);
+                l.push_str("KMH");
+            }
+        }
+        if let Some(hr) = r.last_lap_hr() {
+            l.push_str(" ");
+            l.push_u32(u32::from(hr));
+            l.push_str("BPM");
+        }
+        self.say_as(l.as_str(), Banner::Summary);
     }
 
     /// A lap at a workout's step change (and at its start and end), as Garmin and Wahoo record them, so each interval
@@ -515,6 +561,7 @@ impl App {
             self.recorder(ev);
         }
         if self.ride.state() == ride::State::Running {
+            self.auto_lap();
             let s = &self.settings;
             let due = self.alerts.second(self.ride.timer_s(), input.hr, s.eat_min, s.drink_min, s.hr_alert);
             self.alert.push(due);
