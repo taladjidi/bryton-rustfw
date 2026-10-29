@@ -11,6 +11,7 @@ impl App {
             // every second gone, not one a pass: a pass that took longer (an eMMC or radio wait) loses no ride time;
             // more than MAX_CATCH_UP is the clock set, not riding
             let gone = (sec + 60 - self.seconds) % 60;
+            self.value_due = true; // the pages show this second's readings
             self.seconds = sec; // the time the recorder reads goes with the minute already read
             // each with its own time for the recorder: the first was `n - 1` seconds ago (the second review, R5)
             let n = gone.clamp(1, MAX_CATCH_UP);

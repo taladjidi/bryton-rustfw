@@ -165,7 +165,7 @@ fn prof_times_the_sections_and_answers() {
         assert!(slot(s).total >= 4000 && slot(s).max >= 1000, "{s:?}: {:?}", slot(s));
         assert!(slot(s).max < 1 << 20, "{s:?}: no wrap mistaken for a 21 s run");
     }
-    assert_eq!(slot(Sec::Light).count, 8, "light twice a pass");
+    assert_eq!(slot(Sec::Light).count, 4, "light once a pass");
     assert_eq!(slot(Sec::Step).count, 0, "the main loop times the whole step");
     let mut pc = Pc::default();
     let mut s = Session::new();

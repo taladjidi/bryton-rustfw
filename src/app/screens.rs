@@ -212,7 +212,7 @@ impl App {
 
     /// The boxes of the page on screen and what each holds (none on a menu or a list). The status strip is not
     /// one.
-    pub(crate) fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + use<> {
+    pub(crate) fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + Clone + use<> {
         let mut all = [((0, 0, 0, 0), Widget::Today); BOXES];
         let (page, fixed): (_, &[Widget]) = match self.screen {
             Screen::Main => (OVERVIEW, &[Widget::Today, Widget::Date, Widget::Notices]),
@@ -459,6 +459,7 @@ impl App {
 
     /// A notice, its banner of `kind`.
     fn notice_as(&mut self, text: &str, kind: Banner) {
+        self.value_due = true; // the overview's notices box follows
         let mut l = Line::new();
         l.push_str(hm_text(self.strip.time).as_str());
         l.push_str(" ");
@@ -566,15 +567,27 @@ impl App {
         if self.screen == Screen::Main {
             self.refresh_calendar(b, false); // after the start, midnight, or new zones: the card follows
         }
-        let first = self.first_map();
+        // Everything but the map follows the readings of the second (the pages show one reading a second, bars and
+        // the workout move by the second); between seconds only an input (it acts at once) or the map needs a look.
+        let due = core::mem::take(&mut self.value_due) || self.light.idle_ms < 1000;
+        let widgets = self.widgets(); // built once a pass
+        let first = widgets.clone().position(|(_, w)| w == Widget::Field(Field::Map));
         let selected = if let Screen::Edit(_, k) = self.screen { Some(k) } else { None };
-        for (i, (bx, w)) in self.widgets().enumerate() {
+        for (i, (bx, w)) in widgets.enumerate() {
             let Some(&old) = self.drawn.get(i) else { break };
+            if !due && !matches!(old, Drawn::Map(_)) {
+                continue;
+            }
             let now = match (w, old) {
                 (_, Drawn::Map(mut m)) => {
                     let area = map::area(bx);
-                    let (zoom, route, follow) = (self.zoom(), self.route(), self.page_follow());
-                    if first == Some(i) && map::refit(area, &self.track, &m, route.as_ref(), zoom, follow) {
+                    let (zoom, follow) = (self.zoom(), self.page_follow());
+                    let refit = first == Some(i) && {
+                        let route = self.route();
+                        map::refit(area, &self.track, &m, route.as_ref(), zoom, follow)
+                    };
+                    if refit {
+                        let route = self.route();
                         let view = map::Shown::of(&self.track, area, route.as_ref(), zoom, follow).view;
                         self.render_basemap(b, area, view);
                     }

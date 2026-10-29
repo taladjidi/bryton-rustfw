@@ -167,6 +167,8 @@ pub struct App {
     /// The ANT+ sensors and the search.
     radio: Radio,
     redraw_ms: u32,
+    /// A second ticked since the page's boxes were last looked at (app/screens.rs `update_page`).
+    value_due: bool,
     list_dirty: bool,
     /// ANT started (needs BLE and a built-in ANT+ key).
     ant: bool,
@@ -405,6 +407,7 @@ impl App {
             di2_key,
             radio: Radio::new(sensors),
             redraw_ms: 0,
+            value_due: true,
             list_dirty: false,
             ant,
             di2,
@@ -582,8 +585,7 @@ impl App {
             return; // empty: switched off
         }
         t = self.timed(b, Sec::Battery, t);
-        self.poll_light(b);
-        t = self.timed(b, Sec::Light, t);
+        self.poll_light(b); // timed with the battery: one Light section a pass, the backlight's at the end
         if self.ble.is_some() {
             self.poll_nrf(b);
         }
