@@ -3851,3 +3851,60 @@ fn segment_files() {
     }
     assert!(reached.iter().all(|&c| c > 0), "every error and the Ok path reached: {reached:?}");
 }
+
+/// The segment matcher (nav/segment_match.rs) against a parsed segment, fed random fixes: a rider that follows the
+/// track with noise, then wanders (jumps, U-turns, stops, a clock that stands or jumps), with a second header of
+/// another id. No input panics; the events come in a valid order (an Approach or a Start while idle, then a Lost or
+/// a Finish, the segment active between), and over the seeds starts, finishes and losses are all reached.
+#[test]
+fn segment_matcher() {
+    use crate::segment_match::tests::{at, seg};
+    use crate::segment_match::{Event, Matcher};
+    let s = seg(20);
+    let mut other = seg(20);
+    other.header.id = 9;
+    let (mut starts, mut finishes, mut losts) = (0, 0, 0);
+    for seed in 1..=1500u32 {
+        let mut next = xorshift(seed);
+        let mut m = Matcher::new();
+        let (mut pos, mut t, mut active) = (-300.0f64, 0u32, false);
+        for _ in 0..400 {
+            let speed = 3.0 + f64::from(next() % 5);
+            let noise = |v: u32| f64::from(v % 41) - 20.0;
+            match next() % 40 {
+                0 => pos = f64::from(next() % 2000) - 500.0, // a jump
+                1 => pos -= 60.0,                            // a step back
+                2 => t = t.saturating_add(next() % 400),     // a gap in the fixes
+                3 => {}                                      // a stopped clock, same fix
+                _ => pos += speed,
+            }
+            if !next().is_multiple_of(40) {
+                t += 1;
+            }
+            let side = if next().is_multiple_of(25) { 70.0 } else { noise(next()) * 0.3 };
+            let (lat, lon) = at(pos + noise(next()) * 0.3, side);
+            let ev = if m.active_id().is_some() {
+                m.step_active(&s, lat, lon, t)
+            } else {
+                m.step_idle([&s.header, &other.header], lat, lon, t)
+            };
+            match ev {
+                Some(Event::Start(id)) => {
+                    assert!(!active && m.active_id() == Some(id));
+                    (active, starts) = (true, starts + 1);
+                }
+                Some(Event::Lost(_)) => {
+                    assert!(active && m.active_id().is_none());
+                    (active, losts) = (false, losts + 1);
+                }
+                Some(Event::Finish { .. }) => {
+                    assert!(active && m.active_id().is_none());
+                    (active, finishes) = (false, finishes + 1);
+                }
+                Some(Event::Approach(_)) => assert!(!active),
+                None => assert_eq!(active, m.active_id().is_some()),
+            }
+        }
+    }
+    assert!(starts > 100 && finishes > 20 && losts > 20, "{starts} {finishes} {losts}");
+}
