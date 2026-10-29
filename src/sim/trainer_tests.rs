@@ -1485,3 +1485,25 @@ fn power_match_off_sends_the_target_as_set() {
     assert_eq!(meter, 180);
     assert_eq!(app.with_trainer_now(|n| n.pm.to_string()), "");
 }
+
+/// A Lap on the trainer screen moves the workout on and drops the hand adjust of the old step: the target on the
+/// panel is the new step's at once, not at the next second (found by the menu fuzz, 2026-10-29).
+#[test]
+fn a_lap_on_the_trainer_screen_redraws_the_target_at_once() {
+    let (mut sim, mut app) = unit();
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Workouts));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start)); // SHORT INTERVALS
+    app.press(&mut sim, Press::Short(Key::Start)); // START
+    run(&mut sim, &mut app, 8000);
+    app.open(Screen::Trainer);
+    app.press(&mut sim, Press::Short(Key::Page)); // +5 W on the first step
+    run(&mut sim, &mut app, 1500);
+    app.press(&mut sim, Press::Short(Key::Lap));
+    app.step(&mut sim); // one pass, less than a second: the second's tick is not what redraws
+    assert_eq!(app.field_text(Field::ErgTarget).as_str(), "210", "the second step, no adjust");
+    // what the panel was told equals what the screen means now (the LAP banner over the top is not the trainer's)
+    assert_eq!(app.tlink.shown, app.with_trainer_now(ui::trainer::shown));
+}

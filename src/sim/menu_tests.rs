@@ -746,3 +746,26 @@ fn cog_opens_settings_while_recording() {
     assert_eq!(app.ride.state(), crate::ride::State::Running, "still recording");
     assert_eq!(app.rec.clean.phase(), crate::recorder::Phase::Recording);
 }
+
+/// SYSTEM scrolled to its last row: the last screen is full (the last `MENU_ROWS` rows, AUTO OFF at the bottom), not
+/// one row at the top and empty slots under it (2026-10-29).
+#[test]
+fn last_screen_of_system_is_full() {
+    let mut sim = Sim::new(9, 0, 0);
+    let mut app = App::start(&mut sim, None);
+    app.press(&mut sim, Press::Long(Key::Page)); // the main menu
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::System));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..menu::SYSTEM.len() - 1 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    let last = menu::SYSTEM.len() - 1;
+    assert_eq!(app.screen(), Screen::Menu(Menu::System, last));
+    let first = menu::first_shown(last, ui::MENU_ROWS, app.rows(Menu::System));
+    assert_eq!(first, menu::SYSTEM.len() - ui::MENU_ROWS);
+    for slot in 0..ui::MENU_ROWS {
+        assert!(app.menu_row(Menu::System, first + slot).is_some(), "slot {slot} is empty");
+    }
+    let bottom = app.menu_row(Menu::System, first + ui::MENU_ROWS - 1).map(|r| r.0.as_str() == "AUTO OFF");
+    assert_eq!(bottom, Some(true));
+}
