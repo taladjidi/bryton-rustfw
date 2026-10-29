@@ -69,12 +69,10 @@ impl App {
 
     /// A trainer is paired and a TRAINER MODE or TARGET field of the page shown is at (`x`, `y`).
     pub(crate) fn trainer_field_at(&self, x: u16, y: u16) -> bool {
-        let (x, y) = (u32::from(x), u32::from(y));
         self.trainer_on()
-            && self.widgets().any(|((bx, by, bw, bh), w)| {
+            && self.widgets().any(|(r, w)| {
                 matches!(w, Widget::Field(Field::TrainerMode | Field::TrainerTarget))
-                    && (bx..bx + bw).contains(&x)
-                    && (by..by + bh).contains(&y)
+                    && ui::Rect::from(r).contains(x, y)
             })
     }
 

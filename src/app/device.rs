@@ -142,7 +142,7 @@ impl App {
 
     /// Sets the backlight to what it should be now: the chosen level, unless timed out.
     pub(crate) fn update_light(&mut self, b: &mut impl Board) {
-        let timeout_ms = LIGHT_TIMEOUTS_S[self.settings.light_timeout] * 1000;
+        let timeout_ms = LIGHT_TIMEOUTS_S.get(self.settings.light_timeout).copied().unwrap_or(0) * 1000;
         let on = timeout_ms == 0 || self.light.idle_ms < timeout_ms || self.light.wake;
         let level = match LIGHT_LEVELS.get(self.settings.light_level) {
             _ if !on => 0,

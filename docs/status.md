@@ -47,8 +47,7 @@ A feature not listed here was seen on the unit.
 
 - **The profiler (link/prof.rs, `tools/dev.py prof`, tools/profile.py)**: seen on the unit 2026-10-29: section overhead
   15 cycles; the rows sum to 1.508 % against 1.51 % awake. Idle overview 21.2 passes/s, 1.51 % awake; ride page 1 1.46 %;
-  ride page 5 1.37 %; menu 2.69 %; ride discarded 4.98 %. Still to do: the key figures in README.md filled in from these
-  (they still hold the 2026-10-27 numbers).
+  ride page 5 1.37 %; menu 2.69 %; ride discarded 4.98 %. The key figures in README.md hold these numbers (2026-10-29).
 
 - **The ascent filter on a ride (altitude.rs, ride.rs)**: the median of 5, the 1/6 average, the slewed reference and the
   3 m hysteresis are tuned on the records of one real ride (341 m became 123 m on a real 60 km ride, offline); on the
@@ -57,7 +56,7 @@ A feature not listed here was seen on the unit.
   tile took up to 238 ms in one pass on a ride; the longest slice is estimated at about 3 ms (host instruction counts,
   scaled). On a ride, `tools/dev.py info` ends with "climb tile us last N max M slice max S": S is to be seen under a few ms.
 
-- **The ramp test (ramp.rs, app/ramp.rs, WORKOUTS > RAMP TEST)**: only on the simulator. On the unit with the D500 or
+- **The ramp test (ramp.rs, app/ramp.rs, WORKOUTS > RAMP TEST)**: only on the simulator. On the unit with the D900 or
   another trainer: the 5 min at 50 %, the one-minute steps in ERG, the stop on cadence under 60 rpm, on power under half
   the target, on Lap and on STOP WORKOUT (the cool-down target at once), the result (FTP at 75 % of the best minute,
   HRVT1 with a strap), APPLY and KEEP by touch, and the trainer released afterwards.
@@ -81,8 +80,8 @@ A feature not listed here was seen on the unit.
   directory sectors fail to write or read). On the unit it needs a card that really fails, so it may never be seen:
   the row appearing in SYSTEM while stuck, the four banners, and `\Rustfw\Rescue` or the lost chain checked from a
   computer (fsck's `FILE0000.CHK`).
-- **The trainer's release (app/trainer.rs, nrf.rs `ant_tx_completed`)** on the Van Rysel D500: the release at stop, end,
-  pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D500 free
+- **The trainer's release (app/trainer.rs, nrf.rs `ant_tx_completed`)** on the Van Rysel D900: the release at stop, end,
+  pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D900 free
   in the next seconds with the ride saved (ANT+ and over Bluetooth), the 330 ms wait enough. `TX_COMPLETED`'s layout
   (`[0x40, ch, 0x01, 5]`, ANT Message Protocol 9.5.6.1) is read from the document, not seen.
 - **Power meter calibration (src/drivers/powercal.rs, app/powercal.rs, SENSORS > CALIBRATE POWER)**: only on the simulator. The page 0x01 layouts (ids
@@ -126,13 +125,13 @@ A feature not listed here was seen on the unit.
   yet: the chip's EVENT_TRANSFER_TX_COMPLETED (code 5; the layout `[0x40, ch, 0x01, 5]` is from the ANT Message
   Protocol document), which stops the release being sent again (five times at most without it).
 - **The trainer in the full copy (storage/fit.rs "The trainer", app/riding.rs `trainer_sample`)**: only against the
-  simulator's trainer. On the unit: one ERG ride on the Van Rysel D500 with the power meter, then read
+  simulator's trainer. On the unit: one ERG ride on the Van Rysel D900 with the power meter, then read
   `\Rustfw\Activities\<name>.fit` (`tools/fit_check.py`'s decoders, or Intervals.icu's fields): `target_w`,
   `trainer_w`, `meter_w`, `fe_state`, `trn_stat`, `link`, `cmd_sent`, `ack_fail` every second the trainer is heard
-  and none after it stops; the `device_info` with the D500's pages 80 and 81 (the software version's scale from
+  and none after it stops; the `device_info` with the D900's pages 80 and 81 (the software version's scale from
   openant is inferred); the clean copy in `\Activities` unchanged and still synced by Bryton's app.
 - **Spin-down calibration of the ANT+ FE-C trainer (trainer.rs `Cal`, drivers/fec.rs pages 1 and 2, app/trainer.rs,
-  ui/trainer.rs)**: only against the simulator's trainer. On the Van Rysel D500 showing CALIBRATE: CALIBRATE beside
+  ui/trainer.rs)**: only against the simulator's trainer. On the Van Rysel D900 showing CALIBRATE: CALIBRATE beside
   MODE (or Start held) sends page 1 with the spin-down bit (0x80), and the trainer answers with page 2 (the layout is
   GoldenCheetah's, from the profile rev 4.1, fec.rs doc; the temperature and speed condition bits and the target speed
   in 0.001 m/s are to be seen on a real trainer); the screen says PEDAL TO nn KM/H, then STOP PEDALLING, then
@@ -152,7 +151,7 @@ A feature not listed here was seen on the unit.
   Inferred and to check there: the cadence bit of Indoor Bike Data read as present when set (pycycling's reading,
   the specification's table says the opposite), a resistance level spread over the trainer's own range, Cw 0.51.
 - **The Bluetooth trainer without FTMS, FE-C over BLE (drivers/fecble.rs, app/ftms.rs; phase 2)**: only against the
-  simulator's D500 (`FtmsSim::new_fec`). On the unit with the owner's Van Rysel D500 (its older model has no FTMS;
+  simulator's D500 (`FtmsSim::new_fec`). On the unit with the owner's Van Rysel D900 (it has no FTMS;
   2026-10-26 from a computer: name `VANRYSEL-HT-xxxx`, 0x1818 and 0x1816 and the 128-bit 6e40fec1-b5a3-f393-e0a9-
   e50e24dcca9e in its advertising or scan response, characteristics 6e40fec2 notify and 6e40fec3 write):
   Seen from the computer the same night (bleak, no bike on it): its notifications are `A4 09 4F 00 <page> <xor>`
@@ -350,7 +349,7 @@ A feature not listed here was seen on the unit.
   - touch gestures by feel and their axes;
   - the overview and its notices;
   - banners (ride start, pause, lap, end);
-  - eleven page layouts;
+  - the page layouts;
   - graphs (five plots by tap, the whole ride by hold);
   - derived power fields and W' balance on a ride with a power meter;
   - DFA a1 and RMSSD from the owner's strap (needs a few minutes of real beats);

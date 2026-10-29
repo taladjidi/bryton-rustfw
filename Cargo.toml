@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.92"
 license = "MIT AND OFL-1.1"
 publish = false
-description = "Minimal from-scratch firmware for the Bryton Rider S510: shows the RTC time"
+description = "Firmware in safe Rust for the Bryton Rider S510 bike computer: rides, sensors, maps, workouts, courses, a phone link"
 
 [[bin]]
 name = "bryton-rustfw"

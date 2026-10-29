@@ -256,7 +256,7 @@ libraries that already do it; use or adapt them when they fit (no_std, no heap, 
   critical-section).
   - Each new one needs a reason and must be a well-known embedded crate (embassy, heapless, embedded-hal).
   - Its own `unsafe` is part of what we trust.
-  - `cargo deny check` in check.sh (when installed) checks advisories, licences and duplicates.
+  - `cargo deny check` in check.sh (when installed) checks advisories and licences, and warns on duplicate crate versions (deny.toml).
   - **gzip is our own** (`src/storage/inflate.rs`): `miniz_oxide` was not taken (its Zlib licence is not in
     `deny.toml`, it needs `adler2`, its decoder wants the whole compressed tile in RAM). The need is one small reader,
     tested against Python's gzip and fuzzed, that pulls bytes from the card as `ign::lz4` does.
