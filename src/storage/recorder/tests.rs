@@ -332,11 +332,8 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
         // its size (a cut between a checkpoint's data and its size: the boot's recovery trims it)
         let c = fsck_cut(&d.img).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(c.apart <= 1, "{what}: {} FAT sectors apart", c.apart);
-        let mine = {
-            let mut ram = crate::fat::tests::Ram(d.img.clone(), 0);
-            let mut fat = Fat::mount(&mut ram).unwrap();
-            fat.open(&mut ram, "Rustfw/Rides/261023100000.fit").map_or(0, |f| f.cluster)
-        };
+        // the ride's chain as the recovery finds it: its record's cluster (not its name: none before the create)
+        let mine = newest_rec(&d.img).map_or(0, |r| r.cluster);
         assert!(
             c.past.iter().all(|&(first, n)| first == mine && n <= 1),
             "{what}: chains past their size {:?}",
@@ -2276,11 +2273,17 @@ fn a_read_error_while_checking_the_chain_keeps_the_record() {
 
 /// The newer valid record in `ride.rec` on `img`.
 fn best_rec(img: &[u8]) -> Rec {
+    newest_rec(img).unwrap()
+}
+
+/// The newer valid record of the two copies in `ride.rec` on `img`, as `Recorder::recover` reads them; None
+/// before the first (no `ride.rec`, or neither copy whole).
+fn newest_rec(img: &[u8]) -> Option<Rec> {
     let mut ram = crate::fat::tests::Ram(img.to_vec(), 0);
-    let mut fat = Fat::mount(&mut ram).unwrap();
-    let v = crate::fat::tests::read_all(&mut fat, &mut ram, "Rustfw/ride.rec").unwrap();
-    let rec = |k: usize| Rec::from_sector(v[(3 * k + 2) * SECTOR..(3 * k + 3) * SECTOR].try_into().unwrap());
-    [rec(0), rec(1)].into_iter().flatten().max_by_key(|r| r.seq).unwrap()
+    let mut fat = Fat::mount(&mut ram).ok()?;
+    let v = crate::fat::tests::read_all(&mut fat, &mut ram, "Rustfw/ride.rec").ok()?;
+    let rec = |k: usize| Rec::from_sector(v.get((3 * k + 2) * SECTOR..(3 * k + 3) * SECTOR)?.try_into().ok()?);
+    [rec(0), rec(1)].into_iter().flatten().max_by_key(|r| r.seq)
 }
 
 /// The second review of the S1 fix, finding 1: a record marked checked (the boot cut right after the mark, before
@@ -2339,14 +2342,15 @@ fn a_marked_one_cluster_ride_whose_cluster_a_small_file_took_is_let_go() {
     assert_eq!(best_rec(&d.img).phase, Phase::Done);
 }
 
-/// The review of 2026-10-29, S5: a checkpoint that grows the ride's chain into a new cluster, then fails once (its
-/// new cluster's data, sector 0, the size or the record), used to forget the grown chain: the retry took another
-/// cluster and relinked the last one to it, the first one left taken, named by nothing (16 KB per failure, counted
-/// used by FSInfo). The retry goes on from the grown chain: the ride saved whole, no cluster lost, FSInfo exact.
-/// The second FAT's sector failing twice in a row (the third review, finding 1): the retry's take-up fails too, and
-/// the one after it still takes the cluster up, the ride recorded on.
+/// The review of 2026-10-29, S5: a checkpoint that grows the ride's chain into a new cluster, then fails (its new
+/// cluster's data, sector 0, the size or the record), used to forget the grown chain: the retry took another
+/// cluster and relinked the last one to it, the first one left taken, named by nothing (16 KB per failure). The
+/// retry goes on from the grown chain: the ride recorded on and saved whole, no cluster lost, FSInfo exact. A
+/// failure inside the grow's own FAT writes (either copy, twice in a row too) may leave the cluster it was taking
+/// lost (never taken up: `Fat::grow`): at most one lost cluster per failed grow, never a cross-link, FSInfo's count
+/// as many high until the next boot's FAT sync makes it exact.
 #[test]
-fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
+fn a_checkpoint_failing_after_growing_loses_at_most_one_cluster() {
     const SECS: u32 = 900;
     // the second whose checkpoint takes the second cluster, and that cluster, on a card that never fails
     let mut d = card(crate::fat::tests::image());
@@ -2414,7 +2418,13 @@ fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
         r.end(T0 + SECS, words(SECS));
         assert_eq!(io_all(&mut r, &mut d, SECS + 1), [Outcome::Saved(NAME)], "{what}");
         assert_eq!(saved(&d.card.img, SAVED).map(|s| s.0.len()), Ok(SECS as usize), "{what}: whole");
-        assert_eq!(check_clean(&d.card.img, what), 0, "{what}: no cluster lost");
+        let lost = fsck(&d.card.img).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let (free, info) = free_counts(&d.card.img);
+        let in_fat = if what.contains("FAT") { fails } else { 0 }; // one cluster per failed grow at most
+        assert!(lost <= in_fat, "{what}: {lost} clusters lost");
+        assert!(free <= info && info - free <= in_fat, "{what}: FSInfo {info}, {free} free");
+        assert_eq!(Recorder::new().recover(&mut d.card, local(SECS + 5)), Outcome::Nothing, "{what}");
+        assert_eq!(check_clean(&d.card.img, what), lost, "{what}: after the boot's sync");
     }
 }
 
