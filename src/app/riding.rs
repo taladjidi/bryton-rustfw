@@ -548,12 +548,6 @@ impl App {
         self.ramp_second(ticked);
         let (cp, wprime) = self.cp_model();
         self.power.second(input.power, &self.ride, cp, wprime);
-        // the time in each zone: the moving seconds (a Start or a resume clears it)
-        if self.ride.state() == ride::State::Running && self.ride.moving() {
-            let hr = input.hr.map(|b| ride::hr_zone(b, self.settings.max_hr));
-            let pw = self.power_now().map(|w| ride::power_zone(w, self.settings.ftp));
-            self.zone_s.second(hr, pw);
-        }
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
         // each bar zones exactly the number its box shows: live power, the 3, 10 and 30 s averages, heart rate
         let p = &self.power;
@@ -564,6 +558,10 @@ impl App {
         }
         if let Some(hold) = self.zones.get_mut(4) {
             hold.update(self.live.shown(Metric::Hr), hm, |v| ride::hr_zone(v, max_hr));
+        }
+        // the time in each zone: the moving seconds, in the zone the bars show (a Start or a resume clears it)
+        if self.ride.state() == ride::State::Running && self.ride.moving() {
+            self.zone_s.second(self.zone_now(4), self.zone_now(0));
         }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);

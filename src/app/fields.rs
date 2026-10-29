@@ -138,6 +138,11 @@ impl App {
         }
     }
 
+    /// The zone the bar of the held zone `i` (0 power, 4 heart rate, see [`App::field_bar`]) shows now, None for none.
+    pub(crate) fn zone_now(&self, i: usize) -> Option<u8> {
+        self.zones.get(i).map(ride::ZoneHold::shown).filter(|&z| z > 0)
+    }
+
     /// The text of ride field `f` now ("--" without a value).
     pub(crate) fn field_text(&self, f: Field) -> Line<8> {
         let mut l = Line::new();
@@ -268,10 +273,9 @@ impl App {
             Field::Power => (self.power_now().map(u32::from), false),
             Field::PctMaxHr => (self.live.shown(Metric::Hr).and_then(|b| pct_of(b, self.settings.max_hr)), false),
             Field::PctLthr => (self.live.shown(Metric::Hr).and_then(|b| pct_of(b, self.settings.lthr)), false),
-            Field::HrZone => {
-                (self.live.shown(Metric::Hr).map(|b| u32::from(ride::hr_zone(b, self.settings.max_hr))), false)
-            }
-            Field::PowerZone => (self.power_now().map(|w| u32::from(ride::power_zone(w, ftp))), false),
+            // the zones the bars show (the held zone, [`App::zone_now`]), so the number, the colour and the time agree
+            Field::HrZone => (self.zone_now(4).map(u32::from), false),
+            Field::PowerZone => (self.zone_now(0).map(u32::from), false),
             Field::PctFtp => (p.rolling(0).and_then(|w| pct_of(w, ftp)), false),
             Field::PctFtpAvg => (r.avg_power().and_then(|w| pct_of(w, ftp)), false),
             Field::PctFtpLap => (r.lap_avg_power().and_then(|w| pct_of(w, ftp)), false),
@@ -279,11 +283,9 @@ impl App {
             Field::PctFtp30s => (p.rolling(2).and_then(|w| pct_of(w, ftp)), false),
             Field::HrZoneTime | Field::PowerZoneTime => {
                 let secs = if f == Field::HrZoneTime {
-                    let z = self.live.shown(Metric::Hr).map(|b| ride::hr_zone(b, self.settings.max_hr));
-                    z.and_then(|z| self.zone_s.hr_s(z))
+                    self.zone_now(4).and_then(|z| self.zone_s.hr_s(z))
                 } else {
-                    let z = self.power_now().map(|w| ride::power_zone(w, ftp));
-                    z.and_then(|z| self.zone_s.power_s(z))
+                    self.zone_now(0).and_then(|z| self.zone_s.power_s(z))
                 };
                 match secs {
                     Some(s) => push_duration(&mut l, s, true),

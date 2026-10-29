@@ -679,6 +679,7 @@ fn heart_rate_and_power_fields_against_the_numbers() {
     assert_eq!(text(&app, PctFtp), "150", "3 s power 300 W at 200 W");
     assert_eq!(text(&app, PctFtpAvg), "150", "average power 300 W");
     assert_eq!(text(&app, PowerZone), "6", "150 % of the FTP is zone 6 (121 to 150 %)");
+    assert_eq!(text(&app, HrZone), app.zones[4].shown().to_string(), "the zone the HR bar shows");
     assert_eq!(text(&app, BalanceAvg), "52/48", "the left 52 % and the right 48 %");
     assert_eq!(text(&app, Power), "300", "the big power value, live at 1 s");
     let secs = app.ride.timer_s();

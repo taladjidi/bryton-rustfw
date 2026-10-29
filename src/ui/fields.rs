@@ -403,11 +403,11 @@ impl Field {
             "PWR ZONE",
             "HR Z TIME",
             "PW Z TIME",
-            "% FTP",
+            "3S % FTP",
             "AVG % FTP",
             "LAP % FTP",
-            "10S %FTP",
-            "30S %FTP",
+            "10S % FTP",
+            "30S % FTP",
             "AVG L/R",
         ];
         LABELS[self as usize]

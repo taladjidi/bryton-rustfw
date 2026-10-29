@@ -83,7 +83,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
   max altitude, descent, lap ascent and descent, uphill and downhill distance~~ done, sim (features.md; they restart
   from zero after a resume);
 - ~~heart rate and power: % of max HR and of LTHR, the HR and power zone numbers, time in each zone, % of FTP (now,
-  average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5)~~ done, sim (features.md; the zone times are the zone of now and restart from zero after a resume);
+  average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5)~~ done, sim (features.md; the zone times and the average balance restart from zero after a resume);
 - heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
   the destination and the arrival time on a course, the unit's and each sensor's battery as fields;
 - trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight

@@ -203,7 +203,8 @@ impl SettingsCopy {
         }
         // LTHR (2 bytes) and POWER SMOOTH (a byte), appended after the limits: a file without them reads 0 and the live
         // reading; an LTHR out of range reads unset
-        let lthr = u16::from_le_bytes([data.next().unwrap_or(0), data.next().unwrap_or(0)]);
+        // (both bytes or none: a file cut inside LTHR reads the default)
+        let lthr = data.next().zip(data.next()).map_or(d.lthr, |(a, b)| u16::from_le_bytes([a, b]));
         s.lthr = Some(lthr).filter(|&v| v == 0 || menu::LTHR_RANGE.contains(&v)).unwrap_or(d.lthr);
         s.power_smooth = data.next().map(usize::from).filter(|&v| v < POWER_SMOOTH_S.len()).unwrap_or(d.power_smooth);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
@@ -535,6 +536,8 @@ mod tests {
         let wild_limit =
             with(&|sec| sec[DATA_AT + 44..DATA_AT + 46].copy_from_slice(&60_000u16.to_le_bytes())).unwrap();
         assert_eq!((wild_limit.limits[0], wild_limit.limits[1]), (0, s.limits[1]), "out of range: OFF");
+        let v67 = with(&|sec| sec[6] = 67).unwrap(); // LTHR cut after one byte
+        assert_eq!((v67.limits, v67.lthr, v67.power_smooth), (s.limits, 0, 0), "a cut LTHR reads the default");
         let v66 = with(&|sec| sec[6] = 66).unwrap();
         assert_eq!(
             (v66.limits, v66.lthr, v66.power_smooth),
