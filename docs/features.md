@@ -439,6 +439,19 @@ built from the FIT files it finds, so the ride goes from it too (inferred). A po
 nothing: `\Rustfw\delete.rec` says what is being moved, and the next start finishes it (tested by cutting the
 power after every sector written).
 
+## Power match (ERG)
+
+A trainer's own power is a little off from a power meter's (the owner's D900 holds about 20 W from the Sigeyi). With
+**SETTINGS > BIKE > POWER MATCH** ON (the default), ERG corrects the target it sends so the **power meter** reads the
+workout's target (Garmin's power match, Zwift's "power meter as the power source"). Once a second, with ERG held, the
+meter and the trainer both heard within 2 s, pedalling, and both powers above 30 W, the ratio trainer / meter feeds an
+average (about 30 s, kept between 0.85 and 1.15); the target sent is the rider's times it. Nothing is sampled for 5 s
+after a target change or a resume. A meter lost keeps the ratio 60 s, then it eases back to 1.0 over 30 s; a new
+trainer or meter, or a new ride, starts at 1.0. A page 49 goes out only when the corrected target moves by 2 W, or
+at a step or the 4 s resend. The trainer screen shows the correction ("PM+6%") left of the source line; the target
+shown, recorded (`target_w`) and compared is always the rider's. Kept in `\Rustfw\settings.bin` only (an older file
+reads ON). Code: `src/training/power_match.rs`.
+
 ## FTP ramp test
 
 Indoors, with a trainer heard: **WORKOUTS > RAMP TEST** (last row, its FTP in white), or RAMP TEST beside MODE on the trainer screen

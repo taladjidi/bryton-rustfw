@@ -8,6 +8,7 @@ pub mod hrvt;
 pub mod pacing;
 pub mod power;
 pub mod power_curve;
+pub mod power_match;
 pub mod ramp;
 pub mod ride;
 pub mod trainer;

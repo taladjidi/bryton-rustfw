@@ -128,6 +128,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/training/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.
+- `src/training/power_match.rs`: ERG power match: the trainer / meter ratio from a 30 s average, the corrected target (Q16, pure).
 - `src/training/trainer.rs`: the home trainer whatever the link (what is read, what is commanded: ERG, resistance, SIM; when to
   send again; nothing is sent until the rider or a workout or course takes it over). Pure logic.
   `src/drivers/fec.rs`: ANT+ FE-C pages as bytes, sources in its module doc; `src/drivers/ftms.rs`: its Bluetooth

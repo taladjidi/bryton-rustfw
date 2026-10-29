@@ -119,7 +119,8 @@ impl App {
             .and_then(|c| c.course.grade_ahead(self.ride.dist_m()))
             .map(|g| (g * 10).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16);
         let riding = self.ride.state() != ride::State::Idle;
-        Drive { erg_w, step: step.unwrap_or(0), grade_x100, riding, paused: riding && !self.ride.moving() }
+        let match_q16 = self.settings.power_match.then(|| self.tlink.pm.ratio());
+        Drive { erg_w, step: step.unwrap_or(0), grade_x100, riding, paused: riding && !self.ride.moving(), match_q16 }
     }
 
     /// The trainer's readings into the live values, where nothing better is heard: power from a power meter, cadence
@@ -148,9 +149,30 @@ impl App {
             self.step_ftms(b);
         }
         self.send_trainer(b);
+        self.tlink.pm_ms += self.dt_ms;
+        if self.tlink.pm_ms >= 1000 {
+            self.tlink.pm_ms -= 1000;
+            self.power_match_tick();
+        }
         if core::mem::take(&mut self.tlink.second) && self.screen == Screen::Trainer {
             self.update_trainer(b); // power and cadence are the second's snapshot: nothing new between two ticks
         }
+    }
+
+    /// Once a second: power match's estimate ([`power_match`]) from the meter's and the trainer's power, both heard
+    /// within 2 s; nothing is sent from here, the commands read the ratio ([`Drive::match_q16`]).
+    fn power_match_tick(&mut self) {
+        if !self.settings.power_match {
+            self.tlink.pm = power_match::PowerMatch::new();
+            return;
+        }
+        let d = self.trainer_drive();
+        let t = &self.trainer;
+        let erg = self.trainer_heard() && t.engaged(&d) && t.mode(&d) == Mode::Erg && !t.calibrating();
+        let fresh = |k: Kind| self.radio.heard_ms.get(k as usize).is_some_and(|&ms| ms < 2000);
+        let meter = if fresh(Kind::Power) { self.live.get(Metric::Power) } else { None };
+        let trainer = if fresh(Kind::Trainer) { t.reading.power } else { None };
+        self.tlink.pm.update(erg, t.target_w(&d), meter, trainer, t.reading.cadence.unwrap_or(0));
     }
 
     /// The trainer's set-up when it is first heard, and the command that is due: one acknowledged message at most
@@ -408,7 +430,14 @@ impl App {
             let s = self.ride.timer_s();
             if s >= 3600 { push_hm(&mut timer, s) } else { push_clock(&mut timer, s) }
         }
+        let mut pm = Line::<8>::new();
+        if let Some(p) = self.settings.power_match.then(|| self.tlink.pm.pct()).flatten() {
+            pm.push_str(if p < 0 { "PM-" } else { "PM+" });
+            pm.push_u32(p.unsigned_abs());
+            pm.push_str("%");
+        }
         f(&Now {
+            pm: pm.as_str(),
             timer: timer.as_str(),
             mode: t.mode(&d).name(),
             source,

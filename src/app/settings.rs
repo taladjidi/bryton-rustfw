@@ -274,6 +274,9 @@ pub struct Settings {
     /// THEME (DISPLAY): the name of the colour theme, NUL padded; empty is DARK. A built-in's name, or a file's in
     /// `\Rustfw\Themes` without `.ini` ([`crate::theme`]). Kept in settings.bin only (the registers have no room).
     pub theme: [u8; 12],
+    /// POWER MATCH (BIKE): ERG targets corrected so the power meter reads them ([`crate::power_match`]). Kept in
+    /// settings.bin only, after THEME; ON in a file that predates it.
+    pub power_match: bool,
 }
 
 impl Settings {
@@ -360,6 +363,7 @@ impl Settings {
             smooth: false,
             gps_power: GpsPower::Auto,
             theme: [0; 12],
+            power_match: true,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -592,6 +596,7 @@ impl Settings {
             },
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
+            Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
             Setting::Theme => l.push_str(self.theme_name()),
             Setting::GpsPower => l.push_str(match self.gps_power {
@@ -672,6 +677,7 @@ impl Settings {
             Setting::AutoOff => self.auto_off = (self.auto_off + 1) % AUTO_OFF_MIN.len(),
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
+            Setting::PowerMatch => self.power_match = !self.power_match,
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme => {

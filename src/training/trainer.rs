@@ -216,6 +216,8 @@ pub struct Drive {
     pub riding: bool,
     /// The ride is paused or auto-paused: ERG lets go.
     pub paused: bool,
+    /// Power match's ratio, Q16 ([`crate::power_match`]): the ERG target is sent times it. None: 1.0.
+    pub match_q16: Option<i32>,
 }
 
 /// What to send once after the trainer is heard.
@@ -355,7 +357,10 @@ impl Trainer {
     /// ```
     pub fn command(&self, d: &Drive) -> Command {
         match self.mode(d) {
-            Mode::Erg => Command::Power(self.target_w(d) * 4),
+            Mode::Erg => {
+                let w = crate::power_match::apply(self.target_w(d), d.match_q16.unwrap_or(crate::power_match::ONE));
+                Command::Power(w.min(MAX_W) * 4)
+            }
             Mode::Resistance => Command::Resistance(self.res_half),
             Mode::Sim => Command::Track { grade_x100: self.grade(d), crr: CRR },
         }

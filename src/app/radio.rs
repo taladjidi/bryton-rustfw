@@ -74,6 +74,9 @@ impl App {
         if let Some(other) = other.filter(|&o| want != Sensor::Off && self.radio.sensors[o as usize] != Sensor::Off) {
             self.set_sensor(b, other, Sensor::Off);
         }
+        if matches!(kind, Kind::Trainer | Kind::Power) {
+            self.tlink.pm = power_match::PowerMatch::new(); // another sensor: its offset is not this one's
+        }
         let i = kind as usize;
         self.watch.owed[i] = Sensor::Off; // what the rider asks for now is what is wanted
         let resting = self.radio.resting_ms[i] != u32::MAX;

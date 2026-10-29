@@ -29,6 +29,7 @@ impl App {
             self.track = track;
             (self.map_zoom, self.map_centre, self.map_whole) = (None, None, false); // a new map: fitted until "+" (review)
             self.new_ride = true;
+            self.tlink.pm = power_match::PowerMatch::new();
             let now = self.now_s();
             self.alt.ride_start(now); // a calibration older than three hours is made again from the receiver
         }

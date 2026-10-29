@@ -10,13 +10,13 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (43 now: 31 in the first build, THEME's 12 bytes appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (44 now: 31 in the first build, THEME's 12 bytes, then POWER MATCH's byte appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
 //! 28   settings        in [`NUMBERS`]' order: the wheel (mm), then the numbers (u16 each); then the choices, a
 //!                      byte each ([`SettingsCopy::to_sector`]), then THEME's name (12 bytes, NUL padded; a file
-//!                      only, no register); a value out of its range reads as its default
+//!                      only, no register), then POWER MATCH (a byte, file only); a value out of its range reads as its default
 //! 508  CRC-32 of 0..508
 //! ```
 //!
@@ -117,6 +117,7 @@ impl SettingsCopy {
         put(&[light, off, auto, avg, r0, r1, r2, r3]);
         put(&[u8::from(s.touch), profile, u8::from(s.ahead), u8::from(s.smooth), gps]);
         put(&s.theme);
+        put(&[u8::from(s.power_match)]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -182,6 +183,8 @@ impl SettingsCopy {
         {
             s.theme = name;
         }
+        // POWER MATCH (appended after THEME): a byte, 0 or 1; a file without it reads ON
+        s.power_match = data.next().map_or(d.power_match, |v| if v < 2 { v == 1 } else { d.power_match });
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -432,6 +435,7 @@ mod tests {
             ahead: false,
             smooth: true,
             gps_power: GpsPower::Saver,
+            power_match: false,
             ..Settings::from_word(0)
         }
     }
@@ -469,7 +473,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 43);
+        assert_eq!(len, 44);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -484,10 +488,15 @@ mod tests {
         let none = with(&|sec| sec[6] = 0).unwrap();
         assert_eq!(none, d, "nothing: the defaults");
         let long = with(&|sec| {
-            sec[6] = 40;
-            sec[DATA_AT + 31..DATA_AT + 40].fill(0xee);
+            sec[6] = 48;
+            sec[DATA_AT + 44..DATA_AT + 48].fill(0xee);
         });
         assert_eq!(long, Some(s), "a later build's settings past the ones known are left");
+        let old = with(&|sec| sec[6] = 43).unwrap();
+        assert!(old.power_match && !s.power_match, "a file from before POWER MATCH reads ON, the rest as it was");
+        assert_eq!(Settings { power_match: false, ..old }, s);
+        let wild = with(&|sec| sec[DATA_AT + 43] = 7).unwrap();
+        assert!(wild.power_match, "a byte out of range reads the default, ON");
         let odd = with(&|sec| {
             sec[DATA_AT..DATA_AT + 2].copy_from_slice(&1234u16.to_le_bytes()); // no such wheel
             sec[DATA_AT + 4..DATA_AT + 6].copy_from_slice(&9999u16.to_le_bytes()); // FTP out of range

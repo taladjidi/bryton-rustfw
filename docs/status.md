@@ -8,6 +8,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Power match (training/power_match.rs, BIKE > POWER MATCH)**: an ERG ride with the Sigeyi paired: the power
+  meter reads the workout's target within a few % after a minute, the "PM+x%" on the trainer screen, the correction
+  held then eased back when the meter is unplugged, OFF sending the target as set.
+
 - **Themes (ui/theme.rs, app/themes.rs; T1)**: OUTDOOR read in the sun (is it better than DARK on the transflective
   panel?); a theme file loaded from `\Rustfw\Themes` on the card (listed, picked, kept in settings.bin, applied
   after a restart); the redraw at the first pass when the settings file names a file theme (one flash of DARK).
