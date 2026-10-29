@@ -8,9 +8,36 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
-- **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: the image runs as before
-  (`info`, `prof`), and `dev.py stackfault` resets the unit with the fault marker (`peek 0x580040c4`: 0xfa0000nn,
-  read within a minute of the reset).
+- **The stack canary (review S8; link.x `_stack_canary`, main.rs `stack_check`)**: seen on the unit 2026-10-29 from a
+  RAM run: `info` and `prof` as before (0.98 % awake idle on the overview), `dev.py stackfault` reset the unit and
+  `peek 0x580040c4` read 0xfa000001. Still to see: a DIAG_STOP-free cold boot of an installed build with it (nothing
+  changed in the boot, so low risk).
+
+- **The main loop's policy in the library (app/loop_policy.rs, review A8)**: seen on the unit 2026-10-29 from a RAM
+  run: 21 passes a second with the cable in, 0.98 % awake idle, a key acted on at once, the awake and CPU per mille of
+  `info` sane after 40 s. Still to see: a real key press after 30 s idle waking the loop at once, a touch read during
+  a USB drive copy, unplugging resetting the unit outside a ride and not during one (nothing in those rules changed,
+  the code moved).
+
+- **The recovery's chain check and the read-only drive (storage/recorder/mod.rs `still_ours`, the record's checked
+  mark, app/drive.rs `left_open`; review S1 to S6)**: host tests only (cut at every sector, chains freed or reused by
+  another file). On the unit: a ride left open, the unit restarted, the card lent to a computer (expected: USB DRIVE
+  READ ONLY with "RIDE LEFT OPEN: START A RIDE"), then the ride deleted from the computer after a Start, and the next
+  boot letting it go without touching the file that took its clusters; GIVE UP SAVE's new order (the link, then the
+  record "done") needs a card that really fails, so it may never be seen.
+
+- **The smaller repaints (review P1 to P5: the page's value boxes once a second, a banner's dismissal skipping the
+  boxes under it, a menu value in its own box, the BLE list by row; app/screens.rs, app/menus.rs, ui/mod.rs)**:
+  measured from RAM 2026-10-29: `draw` 125 to 52 us a pass on the overview, awake 1.10 to 0.90 % with the cable in.
+  Still to see: the SENSORS and BLE NEARBY menus updating live with no flicker, a banner dismissed over a graph page
+  leaving the graph whole, and the key figures of README.md measured again with tools/profile.py from RAM (they hold
+  the 2026-10-29 morning numbers).
+
+- **The app's state files made at a ride's start (storage/recorder/mod.rs `make_kept`; review S7)**: host tests only
+  (a card without them, cut at every sector, plain and torn). On the owner's card the first ride start after this
+  build writes `\Rustfw`'s directory sector once (the six files and `Deleted\Full` created zeroed; the files already
+  there are left as they are). Still to see: that start, then `dev.py ls \Rustfw` showing all of them, and the pages,
+  the bond and the sensors still read and saved afterwards.
 
 - **Power match (training/power_match.rs, BIKE > POWER MATCH)**: an ERG ride with the Sigeyi paired: the power
   meter reads the workout's target within a few % after a minute, the "PM+x%" on the trainer screen, the correction
@@ -51,7 +78,8 @@ A feature not listed here was seen on the unit.
 
 - **The profiler (link/prof.rs, `tools/dev.py prof`, tools/profile.py)**: seen on the unit 2026-10-29: section overhead
   15 cycles; the rows sum to 1.508 % against 1.51 % awake. Idle overview 21.2 passes/s, 1.51 % awake; ride page 1 1.46 %;
-  ride page 5 1.37 %; menu 2.69 %; ride discarded 4.98 %. The key figures in README.md hold these numbers (2026-10-29).
+  ride page 5 1.37 %; menu 2.69 %; ride discarded 4.98 %. Measured again in the evening on build 13fec4c after the review's repaint changes: idle overview 0.98 %, ride page
+  0.93 %, menu 1.37 % (21 passes/s with the cable in); README.md holds these.
 
 - **The ascent filter on a ride (altitude.rs, ride.rs)**: the median of 5, the 1/6 average, the slewed reference and the
   3 m hysteresis are tuned on the records of one real ride (341 m became 123 m on a real 60 km ride, offline); on the

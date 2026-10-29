@@ -39,20 +39,20 @@ The newest features are seen in the simulator only so far (docs/status.md). It s
 
 ## Key figures
 
-Measured on the unit (2026-10-29, `tools/profile.py` from RAM, 30 s windows; the CPU sleeps between passes, 50 ms, or 250 ms when idle):
+Measured on the unit (2026-10-29 evening, build 13fec4c, `tools/profile.py` from RAM, 30 s windows; the CPU sleeps between passes, 50 ms, or 250 ms when idle):
 
 | | |
 |---|---|
-| CPU awake, overview idle | 1.51 % |
-| CPU awake, a ride page | 1.46 % |
-| CPU awake, menus (a key every 0.5 s) | 2.69 % |
+| CPU awake, overview idle | 0.98 % |
+| CPU awake, a ride page | 0.93 % |
+| CPU awake, menus (a key every 0.5 s) | 1.37 % |
 | A menu move | 4 ms mean (two rows redrawn; the panel's SPI link, about 1 us a pixel, sets it) |
 | Panel traffic, a ride page | about 740 pixels a second (only what changed, in the smallest box) |
 | Climb pacer, one plan | about 75 us (estimated from operation counts) |
 | A map tile for climbs ahead | at most about 3 ms a slice (estimated; one tile took 238 ms in one go before) |
 | Image | <!-- n:image -->644 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
 | Code | about <!-- n:rust_lines -->90,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
-| Tests | <!-- n:tests -->914<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->159<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+| Tests | <!-- n:tests -->915<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->159<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 
 
 | Read | For |
