@@ -64,9 +64,10 @@
 //! card that keeps failing, after copying it (the drive lent read only): the ride named where it was recorded
 //! (`keep_in_rides`, once more); else under a free name in `\Rustfw\Rescue` (`Rescue\Full` for the full copy),
 //! only if neither folder that may name the chain does (both read whole: never a second entry on it) and the card
-//! has [`FULL_RESERVE`] free (the folder made or grown takes a cluster), its record "done" written before the link
-//! (a cut between leaves the chain lost, never named twice: a record still "saving" would have the next start save
-//! it into `\Activities` beside the rescue entry); else the record "done" alone, the chain left lost (a computer's
+//! has [`FULL_RESERVE`] free (the folder made or grown takes a cluster), the link, then its record "done" (a cut
+//! between leaves the record "saving": the next save, a boot's or a start's, finds the chain named in the rescue
+//! folder and only writes the record "done", never a second entry; the review of 2026-10-29, S6, where the
+//! opposite order lost the ride to a cut at the link); else the record "done" alone, the chain left lost (a computer's
 //! fsck may make it `FILE0000.CHK`: a lost chain, nothing cross-linked). Either way the stuck state ends: a ride held
 //! behind it starts, and the drive is lent writable again.
 //!
@@ -685,7 +686,7 @@ impl Recorder {
         GaveUp::Lost
     }
 
-    /// The ride named in [`RESCUE_PATHS`] (module doc, "GIVE UP SAVE"): the record "done" first, then the link.
+    /// The ride named in [`RESCUE_PATHS`] (module doc, "GIVE UP SAVE"): the link, then the record "done".
     fn rescue(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), Error> {
         let (first, size) = (self.file.map_or(0, |h| h.first), self.len);
         if first < 2 || self.still_ours(fat, d, first, size, None)?.is_none() {
@@ -735,10 +736,33 @@ impl Recorder {
             return Err(Error::Refused); // ten names taken
         }
         fat.make_room(d, dir, n)?;
-        self.write_record(fat, d, Phase::Done, first)?;
         fat.link(d, dir, n, &Handle { first, size, ..Handle::default() }, t)?;
         self.name = name;
+        // named: a record left "saving" (this write failing) is done by the next save, which finds it here
+        if self.write_record(fat, d, Phase::Done, first).is_err() {
+            self.errors = self.errors.saturating_add(1);
+        }
         Ok(())
+    }
+
+    /// The record "done" if GIVE UP SAVE's rescue named the chain at `first` in this copy's [`RESCUE_PATHS`] folder
+    /// (its link done, its record not: a cut or a failure between): `Kept`, never a second entry on the chain. A
+    /// folder that cannot be read is an error, tried again.
+    fn rescued(&mut self, fat: &mut Fat, d: &mut impl DiskWrite, first: u32) -> Result<Option<Outcome>, Error> {
+        let dir = match fat.open(d, self.kind.rescue_path()) {
+            Ok(dir) => dir,
+            Err(Error::NotFound) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut c = fat.cursor(dir)?;
+        while let Some(e) = fat.list(d, &mut c)? {
+            if e.file.cluster == first {
+                self.write_record(fat, d, Phase::Done, first)?;
+                (self.phase, self.stuck) = (Phase::Done, false);
+                return Ok(Some(Outcome::Kept(self.name)));
+            }
+        }
+        Ok(None)
     }
 
     /// A Start is waiting for the last ride's save ([`Recorder::start`]).
@@ -1124,6 +1148,9 @@ impl Recorder {
         if first < 2 {
             return Err(Error::Corrupt); // no chain to name (cluster 0 or 1): never an entry on it
         }
+        if let Some(o) = self.rescued(fat, d, first)? {
+            return Ok(o);
+        }
         let mut buf = [0u8; 16];
         let target = if self.discard { self.kind.discarded_path() } else { self.kind.saved() };
         match fat.open(d, target) {
@@ -1351,7 +1378,12 @@ impl Recorder {
         // the sectors from the buffer's start to the end of the file, then sector 0's header, then the size
         let n = (self.len - self.tail_off).div_ceil(SECTOR_U32) as usize;
         let bytes = self.tail.get(..n * SECTOR).ok_or(Error::Corrupt)?;
-        fat.write_sectors(d, &mut file, self.tail_off / SECTOR_U32, bytes)?;
+        let wrote = fat.write_sectors(d, &mut file, self.tail_off / SECTOR_U32, bytes);
+        // the chain as grown, kept whatever fails from here: a retry from the old one would take another cluster and
+        // relink the last to it, the one taken left named by nothing (the review of 2026-10-29, S5). The handle's
+        // chain may then be longer than its size: the next checkpoint's `set_size`, or a recovery, trims it
+        self.file = Some(file);
+        wrote?;
         let mut first = [0u8; SECTOR];
         if self.tail_off > 0 {
             fat.read_sector(d, &file, 0, &mut first)?;
@@ -1407,6 +1439,9 @@ impl Recorder {
         size: u32,
     ) -> Result<Outcome, Error> {
         self.len = size; // what keep_in_rides names, if it comes to that (a save as it is: less than the buffer's)
+        if let Some(o) = self.rescued(fat, d, first)? {
+            return Ok(o);
+        }
         // a chain the save's step 4 left named by the record alone may have been freed by a computer since (its
         // clusters still reading as the ride): moved (5), it would be linked onto free clusters. Not the ride's:
         // left to keep_in_rides, which names it only where its entry still is

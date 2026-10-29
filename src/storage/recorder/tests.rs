@@ -574,29 +574,33 @@ fn a_save_that_keeps_failing_is_given_up() {
     assert_eq!(io_all(&mut r, &mut d, 1003), [Outcome::Saved(*b"261023110000")]);
 }
 
-/// A checkpoint that fails as `Corrupt` at the size, after its data sectors, when the last checkpoint's trailer
-/// straddled two sectors (its length % 512 == 1): the next checkpoint's data went over the trailer's second byte,
-/// and the save as it is writes it again ([`trailer_end`]), so the ride is saved, not kept.
-#[test]
-fn a_ride_stopped_with_its_trailer_across_two_sectors_is_saved() {
-    struct Bad(Card, core::ops::Range<u32>, bool);
-    impl Disk for Bad {
-        fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
-            self.0.read(lba, buf)
-        }
+/// A card whose writes in a sector range fail as `Corrupt` while on (`.2`): what the card says of a write it
+/// refuses for good, as a checkpoint's size into a damaged directory.
+struct Refuse(Card, core::ops::Range<u32>, bool);
+
+impl Disk for Refuse {
+    fn read(&mut self, lba: u32, buf: &mut [u8]) -> Result<(), Error> {
+        self.0.read(lba, buf)
     }
-    impl DiskWrite for Bad {
-        fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
-            if self.2 && self.1.contains(&lba) {
-                return Err(Error::Corrupt); // the ride's directory: its size
-            }
-            self.0.write(lba, buf)
+}
+
+impl DiskWrite for Refuse {
+    fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+        if self.2 && self.1.contains(&lba) {
+            return Err(Error::Corrupt); // the ride's directory: its size
         }
+        self.0.write(lba, buf)
     }
+}
+
+/// A ride whose checkpoint fails as `Corrupt` at the size, after its data sectors, when the last checkpoint's
+/// trailer straddled two sectors (its length % 512 == 1): the recorder stopped, its save as it is next (the card's
+/// refusal over), and the seconds on the card.
+fn stopped_on_two_sectors() -> (Recorder, Refuse, u32) {
     let d = card(crate::fat::tests::image());
     let mut r = Recorder::new();
     r.start(T0 - 1, NAME, false);
-    let mut d = Bad(d, 0..0, false);
+    let mut d = Refuse(d, 0..0, false);
     // a checkpoint every second, a gear change (odd size) now and then, until the file is 512 n + 1 long
     let mut t = 0;
     while r.on_card % SECTOR as u32 != 1 {
@@ -606,16 +610,25 @@ fn a_ride_stopped_with_its_trailer_across_two_sectors_is_saved() {
             r.gear(T0 + t, false, 1, (t % 11) as u8 + 1);
         }
         r.checkpoint_now();
-        assert_eq!(io_all(&mut r, &mut d, t), [], "t {t}");
+        assert_eq!(r.io(&mut d, local(t)), Outcome::Nothing, "t {t}");
         t += 1;
     }
-    let saved_len = r.on_card;
     let dir = first_lba(&d.0.img, "Rustfw/Rides") as u32;
     (d.1, d.2) = (dir..dir + 64, true);
     r.second(&sample(t), words(t)); // over the trailer's second byte, in the next sector
     r.checkpoint_now();
     assert_eq!(r.io(&mut d, local(t)), Outcome::Stopped(Error::Corrupt));
     d.2 = false; // the save's own writes go through
+    (r, d, t)
+}
+
+/// A checkpoint that fails as `Corrupt` at the size, after its data sectors, when the last checkpoint's trailer
+/// straddled two sectors (its length % 512 == 1): the next checkpoint's data went over the trailer's second byte,
+/// and the save as it is writes it again ([`trailer_end`]), so the ride is saved, not kept.
+#[test]
+fn a_ride_stopped_with_its_trailer_across_two_sectors_is_saved() {
+    let (mut r, mut d, t) = stopped_on_two_sectors();
+    let saved_len = r.on_card;
     assert_eq!(io_all(&mut r, &mut d, t), [Outcome::Saved(NAME)]);
     let (times, _) = saved(&d.0.img, SAVED).unwrap();
     assert_eq!((times.len() as u32, saved_len % SECTOR as u32), (t, 1));
@@ -2316,4 +2329,210 @@ fn a_marked_one_cluster_ride_whose_cluster_a_small_file_took_is_let_go() {
     assert_eq!(Recorder::new().recover(&mut d, local(301)), Outcome::Nothing);
     let_go(&d.img, &other, "a small file");
     assert_eq!(best_rec(&d.img).phase, Phase::Done);
+}
+
+/// The review of 2026-10-29, S5: a checkpoint that grows the ride's chain into a new cluster, then fails once (its
+/// new cluster's data, sector 0, the size or the record), used to forget the grown chain: the retry took another
+/// cluster and relinked the last one to it, the first one left taken, named by nothing (16 KB per failure, counted
+/// used by FSInfo). The retry goes on from the grown chain: the ride saved whole, no cluster lost, FSInfo exact.
+#[test]
+fn a_checkpoint_failing_once_after_growing_loses_no_cluster() {
+    const SECS: u32 = 900;
+    // the second whose checkpoint takes the second cluster, and that cluster, on a card that never fails
+    let mut d = card(crate::fat::tests::image());
+    let mut r = Recorder::new();
+    r.start(T0 - 1, NAME, false);
+    let mut grows = None;
+    for t in 0..SECS {
+        r.second(&sample(t), words(t));
+        if r.due() {
+            assert_eq!(r.io(&mut d, local(t)), Outcome::Nothing);
+            if grows.is_none() && r.file.is_some_and(|h| h.clusters == 2) {
+                grows = r.file.map(|h| (t, h.last));
+            }
+        }
+    }
+    let (at, new) = grows.expect("a checkpoint grows the chain");
+    let img = d.img;
+    let lba = |img: &[u8], path: &str| first_lba(img, path) as u32;
+    let new_lba = {
+        let mut ram = crate::fat::tests::Ram(img.clone(), 0);
+        Fat::mount(&mut ram).unwrap().lba(new)
+    };
+    let fresh = crate::fat::tests::image();
+    // the ride's folders and record are made at the first checkpoint: their places taken from the ride done
+    let rides = dir_lbas(&img, "Rustfw/Rides");
+    let rec = lba(&img, "Rustfw/ride.rec");
+    let sector0 = lba(&img, "Rustfw/Rides/261023100000.fit");
+    for (what, bad) in [
+        ("the new cluster's data", new_lba..new_lba + 1),
+        ("sector 0", sector0..sector0 + 1),
+        ("the size", rides),
+        ("the record", rec..rec + 6),
+    ] {
+        let mut d = Bad { card: card(fresh.clone()), bad: std::vec![bad], unread: Vec::new(), on: false };
+        let mut r = Recorder::new();
+        r.start(T0 - 1, NAME, false);
+        let mut failed = 0;
+        for t in 0..SECS {
+            r.second(&sample(t), words(t));
+            if r.due() {
+                d.on = t == at; // the growing checkpoint fails once
+                match r.io(&mut d, local(t)) {
+                    Outcome::Nothing => {}
+                    Outcome::Failed(Error::Io) if t == at => failed += 1,
+                    o => panic!("{what}: {o:?} at {t}"),
+                }
+                d.on = false;
+                // its retry, after the wait, within the second (the main loop's passes): nothing dropped
+                assert!(io_all(&mut r, &mut d, t).is_empty(), "{what}");
+            }
+        }
+        assert_eq!((failed, r.dropped), (1, 0), "{what}: the checkpoint at {at} failed");
+        r.end(T0 + SECS, words(SECS));
+        assert_eq!(io_all(&mut r, &mut d, SECS + 1), [Outcome::Saved(NAME)], "{what}");
+        assert_eq!(saved(&d.card.img, SAVED).map(|s| s.0.len()), Ok(SECS as usize), "{what}: whole");
+        assert_eq!(check_clean(&d.card.img, what), 0, "{what}: no cluster lost");
+    }
+}
+
+/// The ride whole (`want`, its record times) in exactly one of the places it may be named: saved, kept where it was
+/// recorded, or rescued.
+fn whole_once(img: &[u8], want: &[u32], what: &str) {
+    let at: Vec<&str> = [SAVED, "Rustfw/Rides/261023100000.fit", "Rustfw/Rescue/261023100000.fit"]
+        .into_iter()
+        .filter(|p| saved(img, p).is_ok_and(|s| s.0 == want))
+        .collect();
+    assert_eq!(at.len(), 1, "{what}: the ride whole in {at:?}");
+}
+
+/// The boot after a cut, the card well again: a ride it reopens is ended at its last record and saved, as the
+/// owner would; a rescue's record left "saving" is done (`Kept`).
+fn boot_and_settle(d: &mut Card, what: &str) {
+    let mut r = Recorder::new();
+    match r.recover(d, local(SECS + 5)) {
+        Outcome::Resumed(w, name) => {
+            r.end(r.writer.last_time(), w);
+            assert_eq!(io_all(&mut r, d, SECS + 6), [Outcome::Saved(name)], "{what}");
+        }
+        Outcome::Saved(_) | Outcome::Nothing | Outcome::Kept(_) => {}
+        o => panic!("{what}: the boot: {o:?}"),
+    }
+}
+
+/// The review of 2026-10-29, S6: the writes of a path cut at every sector, plain and torn. `setup` brings a
+/// recorder and its card (`inner`) to the path, `act` runs it. After the cut, the boot ([`boot_and_settle`]): the
+/// ride whole in one place, as the path without a cut leaves it at `want_at`; the volume clean (no cross-link, no
+/// chain into a free cluster, FSInfo exact). A torn sector of `\Rustfw`'s directory (a folder made there: the
+/// rescue's) is left out, its loss known (`ride.rec`'s entry with it: the review of 2026-10-29, S7). The cut points,
+/// the torn ones left out, and the most clusters a cut left lost.
+fn cut_every_sector<D: DiskWrite>(
+    setup: impl Fn() -> (Recorder, D),
+    inner: fn(&mut D) -> &mut Card,
+    act: impl Fn(&mut Recorder, &mut D),
+    want_at: &str,
+) -> (u64, u32, u32) {
+    let (mut r, mut d) = setup();
+    let mine = {
+        let mut ram = crate::fat::tests::Ram(inner(&mut d).img.clone(), 0);
+        let mut fat = Fat::mount(&mut ram).unwrap();
+        let c = fat.open(&mut ram, DIR).unwrap().cluster;
+        let lba = fat.lba(c);
+        lba..lba + fat.cluster_bytes() / SECTOR as u32
+    };
+    let from = inner(&mut d).written;
+    act(&mut r, &mut d);
+    let total = inner(&mut d).written - from;
+    let mut b = card(inner(&mut d).img.clone());
+    boot_and_settle(&mut b, "no cut");
+    let want = saved(&b.img, want_at).unwrap_or_else(|e| panic!("no cut: {e}")).0;
+    let (mut lost, mut s7) = (0, 0);
+    for cut in 0..total {
+        for torn in [false, true] {
+            let what = std::format!("cut {cut} of {total}, torn {torn}");
+            let (mut r, mut d) = setup();
+            let c = inner(&mut d);
+            (c.budget, c.torn) = (Some(c.written + cut), torn);
+            act(&mut r, &mut d);
+            if torn && mine.contains(&inner(&mut d).cut_at) {
+                s7 += 1;
+                continue;
+            }
+            let mut b = card(inner(&mut d).img.clone());
+            boot_and_settle(&mut b, &what);
+            whole_once(&b.img, &want, &what);
+            let l = if torn { fsck_torn(&b.img) } else { fsck(&b.img) }.unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(free_counts(&b.img).0, free_counts(&b.img).1, "{what}: FSInfo's free count");
+            lost = lost.max(l);
+        }
+    }
+    std::println!("{total} cut points, plain and torn: lost clusters at most {lost}; {s7} torn in \\Rustfw left out");
+    (total, s7, lost)
+}
+
+/// S6 (a): the save of a ride the card stopped ([`Recorder::save_as_is`], [`trailer_end`]: its last sector and
+/// sector 0 from the record, then the save) cut at every sector: saved whole, or resumed from its record at the
+/// boot and saved.
+#[test]
+fn a_stopped_rides_save_cut_at_every_sector() {
+    let setup = || {
+        let (r, d, _) = stopped_on_two_sectors();
+        (r, d)
+    };
+    let act = |r: &mut Recorder, d: &mut Refuse| {
+        io_all(r, d, 3000);
+    };
+    let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.0, act, SAVED);
+    assert!(total > 5 && s7 == 0 && lost <= 1, "{total} cuts, {s7} left out, {lost} lost");
+}
+
+/// S6 (b): GIVE UP SAVE's rescue (`\Rustfw\Rescue`, the record "done" then the link) cut at every sector: the ride
+/// rescued, or saved by the boot from its record "saving".
+#[test]
+fn give_up_saves_rescue_cut_at_every_sector() {
+    let setup = || {
+        let (mut r, d) = stuck_save(false);
+        r.start(T0 + 1000, *b"261023110000", false);
+        (r, d)
+    };
+    let act = |r: &mut Recorder, d: &mut Bad| {
+        r.give_up_save(d, local(300));
+    };
+    let (total, s7, lost) = cut_every_sector(setup, |d| &mut d.card, act, "Rustfw/Rescue/261023100000.fit");
+    // the rescue folder's entry in \Rustfw: one sector, its tear S7's
+    assert!(total > 5 && s7 <= 1 && lost <= 1, "{total} cuts, {s7} left out, {lost} lost");
+}
+
+/// S6 (c): a Start finding the last ride unfinished (left open two days ago: ended and saved; or its save cut:
+/// finished), then its own Starting record, its file and first checkpoint, cut at every sector: the old ride saved
+/// whole, by the Start or by the boot after the cut.
+#[test]
+fn a_start_after_an_unfinished_ride_cut_at_every_sector() {
+    let img = crate::fat::tests::image();
+    let mut open = card(img.clone());
+    let _ = open_ride(&mut open, 200);
+    let mut full = card(img.clone());
+    ride(&mut Recorder::new(), &mut full, 0).unwrap();
+    let save_cut = (0..full.written)
+        .rev()
+        .map(|cut| {
+            let mut d = Card { budget: Some(cut), ..card(img.clone()) };
+            let _ = ride(&mut Recorder::new(), &mut d, 0);
+            d.img
+        })
+        .find(|i| best_rec(i).phase == Phase::Saving)
+        .unwrap();
+    for (what, old, later, marker) in [("left open", open.img, 2 * 86_400, false), ("save cut", save_cut, 5000, true)] {
+        let setup = || {
+            let mut r = Recorder::new();
+            r.start(T0 + 200 + later, *b"261025100000", marker);
+            r.second(&sample(200 + later), words(0));
+            (r, card(old.clone()))
+        };
+        let act = |r: &mut Recorder, d: &mut Card| {
+            io_all(r, d, 200 + later);
+        };
+        let (total, s7, lost) = cut_every_sector(setup, |d| d, act, SAVED);
+        assert!(total > 5 && s7 == 0 && lost <= 1, "{what}: {total} cuts, {s7} left out, {lost} lost");
+    }
 }
