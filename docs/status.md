@@ -9,14 +9,23 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 A feature not listed here was seen on the unit.
 
 - **AUTO LAP and the lap banner (app/riding.rs `auto_lap`, `lap_summary`)**: sim only. Still to see: a lap at each 5 km or 10 min on a real ride, its banner for 8 s, and the lap messages in the saved file on Intervals.icu.
+- **Live segments, detection (app/segments.rs, step S3; nothing drawn, no effort written)**: sim only. Still to see: the index built
+  from `\Rustfw\Segments\` on the card 5 s after the start (no pass slower), the load at a start, the events (`dev.py` reads
+  them), no lost ride on a segment's start or finish; AXI SRAM has 1.6 KB left.
 - **THEME AUTO (ui/theme.rs `DayNight`, app/themes.rs; theming.md 4b)**: sim only. Still to see: the switch at dusk
   (night under 20 lux for 30 s, day back over 50 lux for 30 s, at most one switch a minute), the screen redrawn once
   in each theme, and the cost of the light sensor measuring all the time while AUTO is on (its time awake, measured
-  on the unit with the light on AUTO and with THEME off).
+  on the unit with the light on AUTO and with THEME off). Also the sensor with the screen white at 30 % backlight in
+  the dark: the panel's own light reaching the sensor against the 20 and 50 lux thresholds (assumed: the sensor sees
+  the room, not the panel).
 
 - **The heart rate and power fields, POWER SMOOTH, LTHR and the balance average (training/ride.rs ZoneTime, app/fields.rs,
   app/settings_file.rs)**: sim only. Still to see: the zone numbers and times against the strap's zones on a real ride,
   the average balance against the meter's own figure, and LTHR and POWER SMOOTH kept through a switch-off and a switch to stock.
+
+- **The sun, heading, arrival and battery fields (nav/sun.rs, app/fields.rs)**: sim only. Still to see: sunrise and sunset
+  against the clock on a real fix (the zone learnt from the phone), the time to sunset, the heading on a ride, the ETA on
+  a followed course, and the power meter's and the strap's battery status on the unit.
 
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.

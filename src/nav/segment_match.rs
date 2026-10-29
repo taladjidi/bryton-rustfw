@@ -125,18 +125,84 @@ fn used(p: &&(i32, i32)) -> bool {
 /// assert!(!near(&s.header, 0, 100_000_000 + 40_000)); // 440 m east
 /// ```
 pub fn near(h: &Header, lat: i32, lon: i32) -> bool {
-    let mut it = h.start.iter().filter(used);
-    let Some(&first) = it.next() else { return false };
-    let (lo, hi) =
-        it.fold((first, first), |(lo, hi), &(a, b)| ((lo.0.min(a), lo.1.min(b)), (hi.0.max(a), hi.1.max(b))));
-    // 1 m is 89.8e-7 degrees of latitude; a degree of longitude is shorter by the cosine
+    Entry::of(h).is_some_and(|e| e.near(lat, lon))
+}
+
+/// [`APPROACH_M`] in degrees x 1e-7 of latitude and of longitude at `lat` (1 m is 89.8e-7 degrees of latitude; a degree
+/// of longitude is shorter by the cosine).
+fn reach(lat: i32) -> (i64, i64) {
     let dlat = i64::from(APPROACH_M) * 1_000_000 / 11_132;
-    let dlon = dlat * 65_536 / cos_q16(lat).max(1000);
-    let (la, lo_) = (i64::from(lat), i64::from(lon));
-    la >= i64::from(lo.0) - dlat
-        && la <= i64::from(hi.0) + dlat
-        && lo_ >= i64::from(lo.1) - dlon
-        && lo_ <= i64::from(hi.1) + dlon
+    (dlat, dlat * 65_536 / cos_q16(lat).max(1000))
+}
+
+/// What the idle matcher needs of a segment: 32 bytes, so the index of 128 segments is 4 KB (a [`Header`] is about
+/// 450). The box of the start pairs, the first pair, and the direction to the next one in use (scaled down to fit
+/// two i16, which keeps the bearing).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Entry {
+    /// The segment's id.
+    pub id: u32,
+    lo: (i32, i32),
+    hi: (i32, i32),
+    first: (i32, i32),
+    dir: (i16, i16),
+}
+
+/// Something the idle matcher takes as a segment: a [`Header`] (tests) or an [`Entry`] (the index).
+pub trait AsEntry {
+    /// The entry, or None when the segment has no start pair in use.
+    fn entry(&self) -> Option<Entry>;
+}
+
+impl AsEntry for Entry {
+    fn entry(&self) -> Option<Entry> {
+        Some(*self)
+    }
+}
+
+impl AsEntry for Header {
+    fn entry(&self) -> Option<Entry> {
+        Entry::of(self)
+    }
+}
+
+impl Entry {
+    /// Nothing (the index's empty slots).
+    pub const ZERO: Entry = Entry { id: 0, lo: (0, 0), hi: (0, 0), first: (0, 0), dir: (0, 0) };
+
+    /// The entry of a header; None when no start pair is in use (such a segment can neither approach nor start).
+    pub fn of(h: &Header) -> Option<Entry> {
+        let mut it = h.start.iter().filter(used);
+        let &first = it.next()?;
+        let (lo, hi) = h
+            .start
+            .iter()
+            .filter(used)
+            .fold((first, first), |(lo, hi), &(a, b)| ((lo.0.min(a), lo.1.min(b)), (hi.0.max(a), hi.1.max(b))));
+        let mut d = it
+            .find(|p| **p != first)
+            .map_or((0, 0), |n| (i64::from(n.0) - i64::from(first.0), i64::from(n.1) - i64::from(first.1)));
+        while d.0.abs() > i64::from(i16::MAX) || d.1.abs() > i64::from(i16::MAX) {
+            d = (d.0 / 2, d.1 / 2);
+        }
+        let dir = (i16::try_from(d.0).unwrap_or(0), i16::try_from(d.1).unwrap_or(0));
+        Some(Entry { id: h.id, lo, hi, first, dir })
+    }
+
+    /// Whether (`lat`, `lon`) is within [`APPROACH_M`] of the box of the start pairs: the index's first filter.
+    pub fn near(&self, lat: i32, lon: i32) -> bool {
+        self.near_in(lat, lon, reach(lat).1)
+    }
+
+    /// [`Entry::near`] with the longitude reach at `lat` (from [`reach`]), worked out once for all entries.
+    fn near_in(&self, lat: i32, lon: i32, dlon: i64) -> bool {
+        let dlat = reach(lat).0;
+        let (la, lo_) = (i64::from(lat), i64::from(lon));
+        la >= i64::from(self.lo.0) - dlat
+            && la <= i64::from(self.hi.0) + dlat
+            && lo_ >= i64::from(self.lo.1) - dlon
+            && lo_ <= i64::from(self.hi.1) + dlon
+    }
 }
 
 /// A kept target's time at distance `d` m along the segment, s, interpolated between the points around it; None for
@@ -189,11 +255,13 @@ fn ms_to_s(ms: u64) -> u32 {
 /// The time (ms of the ride clock) a rider going from fix `a` to fix `b` starts segment `h`, if that pass starts it:
 /// closest approach to the first point within [`START_M`], moving at least 2 m, heading within [`HEADING_DEG`] of the
 /// first bearing (the first point to the next one in use).
-fn start_ms(h: &Header, a: (i32, i32, u32), b: (i32, i32, u32)) -> Option<u64> {
-    let first = *h.start.iter().find(used)?;
-    let next = h.start.iter().find(|p| used(p) && **p != first)?;
+fn start_ms(e: &Entry, a: (i32, i32, u32), b: (i32, i32, u32)) -> Option<u64> {
+    if e.dir == (0, 0) {
+        return None; // no second pair: no bearing
+    }
+    let first = e.first;
     let o = (first.0, first.1, cos_q16(first.0));
-    let v = mm(o, next.0, next.1);
+    let v = mm(o, first.0.saturating_add(i32::from(e.dir.0)), first.1.saturating_add(i32::from(e.dir.1)));
     let (pa, pb) = (mm(o, a.0, a.1), mm(o, b.0, b.1));
     let m = (pb.0 - pa.0, pb.1 - pa.1);
     let l2 = i128::from(m.0) * i128::from(m.0) + i128::from(m.1) * i128::from(m.1);
@@ -248,9 +316,9 @@ impl Matcher {
 
     /// One fix (degrees x 1e-7, ride clock `t` s) while no segment is active: [`Event::Start`] of the first header
     /// that starts, else [`Event::Approach`] of the first one newly near. Ignored while a segment is active.
-    pub fn step_idle<'a>(
+    pub fn step_idle<'a, E: AsEntry + 'a>(
         &mut self,
-        headers: impl IntoIterator<Item = &'a Header>,
+        headers: impl IntoIterator<Item = &'a E>,
         lat: i32,
         lon: i32,
         t: u32,
@@ -260,8 +328,9 @@ impl Matcher {
         }
         let prev = self.prev.replace((lat, lon, t));
         let (mut approach, mut seen) = (None, false);
-        for h in headers.into_iter().filter(|h| near(h, lat, lon)) {
-            if let Some(ms) = prev.and_then(|p| start_ms(h, p, (lat, lon, t))) {
+        let dlon = reach(lat).1;
+        for h in headers.into_iter().filter_map(AsEntry::entry).filter(|h| h.near_in(lat, lon, dlon)) {
+            if let Some(ms) = prev.and_then(|p| start_ms(&h, p, (lat, lon, t))) {
                 let still_at = (lat, lon);
                 let (id, last_t, prev) = (h.id, t, still_at);
                 let a = Active {
@@ -280,8 +349,7 @@ impl Matcher {
                 self.approached = id; // no banner after a lost segment, near its start
                 return Some(Event::Start(id));
             }
-            let Some(first) = h.start.iter().find(used) else { continue };
-            if step_mm((lat, lon), *first) <= u64::from(APPROACH_M) * 1000 {
+            if step_mm((lat, lon), h.first) <= u64::from(APPROACH_M) * 1000 {
                 seen |= h.id == self.approached;
                 if approach.is_none() && h.id != self.approached {
                     approach = Some(h.id);

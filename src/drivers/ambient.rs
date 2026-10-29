@@ -128,7 +128,8 @@ pub const AUTO_BANDS: [(u32, u8); 5] = [(50, 8), (200, 20), (500, 30), (1200, 1)
 
 /// Readings a band is chosen from: stock decides once a measurement, one 400 ms conversion a second (MEAS_RATE 0x05,
 /// `Sensor_LightSensorCmd` 0xd023e024; rate field 5 is 1000 ms in DFRobot's LTR-308 driver, `eRate_1000ms`); this
-/// firmware reads every [`crate::LIGHT_MS`], so the band follows the mean of a second of readings.
+/// firmware reads every [`crate::LIGHT_MS`] (once a second when only THEME AUTO wants the light: `THEME_LIGHT_MS` in
+/// device.rs), so the band follows the mean of a second of readings.
 pub const AUTO_READS: u32 = 1000 / crate::LIGHT_MS;
 
 /// Stock's automatic backlight: the band of the light measured, chosen once a second ([`AUTO_READS`]). No other

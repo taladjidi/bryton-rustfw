@@ -25,7 +25,7 @@ pub mod ui;
 // the modules by their own names too (crate::ambient, bryton_rustfw::fit): the folders only sort the files
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
 pub use link::{dev, msc, phone, prof};
-pub use nav::{altitude, climbs_ahead, course, segment, segment_match};
+pub use nav::{altitude, climbs_ahead, course, segment, segment_match, sun};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
 pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
 pub use ui::{fonts, map, menu, page, text, theme, tiles};
@@ -139,6 +139,9 @@ pub trait Board {
     fn touch_int(&mut self) -> bool;
 }
 
+/// The sun key (local date and minute) and its rise and set (local minutes), see [`App::refresh_sun`].
+type SunNow = (((u16, u8, u8), (u8, u8)), Option<(u32, u32)>);
+
 /// The app: what is on screen, the keys, the sensors and what the Nordic chip reported.
 pub struct App {
     keys: Keys,
@@ -212,6 +215,9 @@ pub struct App {
     settings: Settings,
     /// The colour theme in use (THEME), DARK until the settings file is read ([`App::look`]).
     theme: ui::Theme,
+    /// AUTO's day and night themes, resolved into RAM between rides ([`App::load_day_night`]): the switch never reads
+    /// the card. Built-in defaults until the settings are loaded (OUTDOOR by day, DARK by night).
+    auto_themes: [ui::Theme; 2],
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     editing: bool,
     /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
@@ -259,6 +265,11 @@ pub struct App {
     hint_shown: bool,
     /// Today (RTC), for the overview.
     date: (u16, u8, u8),
+    /// The sun's rise and set (local minutes) for the date and minute of the last pass that changed it: the key, then
+    /// the times (None without a fix, the zone learnt, or in polar day or night). Worked out at most once a minute.
+    sun: Option<SunNow>,
+    /// The compass point on the screen for the heading (app/fields.rs `held_point`), None without a course.
+    heading: Option<u8>,
     /// The notices and the banner over the screen.
     notes: Notices,
     /// The battery was reported low.
@@ -349,6 +360,8 @@ pub struct App {
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course_file::Courses>,
+    /// The live segments: index, active segment, matcher (memory from main.rs: [`App::set_segment_memory`]).
+    segments: Option<&'static mut Segments>,
     /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
     /// main.rs: [`App::set_threshold_memory`], 5 KB the app has no room for).
     thresholds: Option<&'static mut thresholds::Scan>,
@@ -436,6 +449,7 @@ impl App {
             up_ms: 0,
             settings: misc,
             theme: ui::Theme::DARK,
+            auto_themes: [ui::Theme::OUTDOOR, ui::Theme::DARK],
             editing: false,
             menu_chosen: false,
             confirm: None,
@@ -458,6 +472,8 @@ impl App {
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
+            sun: None,
+            heading: None,
             notes: Notices::new(),
             told_low: false,
             graph_whole: false,
@@ -500,6 +516,7 @@ impl App {
             rec: Recording::new(),
             card_writable: false,
             courses: None,
+            segments: None,
             pace: PaceState::new(),
             thresholds: None,
             ahead: None,
@@ -584,6 +601,8 @@ impl App {
         let (h, m, sec) = rtc_time_from_tr(tr);
         self.strip.time = (h, m);
         self.date = rtc_date_from_dr(dr);
+        self.refresh_sun();
+        self.refresh_heading();
         self.catch_up_seconds(sec);
         self.settle_set(b);
         self.settle_climb(b);
@@ -628,6 +647,7 @@ impl App {
             self.step_stock(b);
             t = self.timed(b, Sec::Scan, t);
             self.step_courses(b);
+            self.step_segments(b);
             t = self.timed(b, Sec::Files, t);
             self.step_ahead(b);
             t = self.timed(b, Sec::Ahead, t);

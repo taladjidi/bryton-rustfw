@@ -8,7 +8,7 @@
    copies and the staging area) is the map's memory, handed out once by hw.rs map_memory: nothing is linked there
    either. AXISRAM (D1, 512 KB, unused by this firmware otherwise) holds the app itself (main.rs make_app's static
    cell), the course memory (make_courses), the scan's cache of stock's rides (make_scan_cache), the road ahead
-   (make_ahead) and FITNESS's reading of the recent rides (make_thresholds; sizes: tools/numbers.py), in DTCM's .bss the app left too little
+   (make_ahead), the live segments (make_segments) and FITNESS's reading of the recent rides (make_thresholds; sizes: tools/numbers.py), in DTCM's .bss the app left too little
    stack (2026-10-24, an overflow on opening a workout). It is
    zeroed at reset as .bss is (hw.rs). Its top 4 KB (PANELDMA) are the panel DMA's buffers (hw.rs PanelDma). */
 MEMORY
@@ -53,12 +53,16 @@ SECTIONS
     _sthresholds = .;
     *(.bss._ZN13bryton_rustfw15make_thresholds4SCAN*)
     _ethresholds = .;
+    _ssegments = .;
+    *(.bss._ZN13bryton_rustfw13make_segments8SEGMENTS*)
+    _esegments = .;
     . = ALIGN(4); _eaxi = .;
   } > AXISRAM
   ASSERT(_eaxi > _saxi, "the app's cell is not in AXISRAM: its section name changed (main.rs make_app)")
   ASSERT(_escan > _sscan, "the scan's cache is not in AXISRAM: its section name changed (main.rs make_scan_cache)")
   ASSERT(_eahead > _sahead, "the road ahead is not in AXISRAM: its section name changed (main.rs make_ahead)")
   ASSERT(_ethresholds > _sthresholds, "the HRV thresholds' reading is not in AXISRAM: its section name changed (main.rs make_thresholds)")
+  ASSERT(_esegments > _ssegments, "the live segments are not in AXISRAM: their section name changed (main.rs make_segments)")
   ASSERT(_ecourses > _scourses, "the course memory is not in AXISRAM: its section name changed (main.rs make_courses)")
   .bss (NOLOAD) : ALIGN(4) { _sbss = .; *(.bss .bss.*) *(COMMON); . = ALIGN(4); _ebss = .; } > DTCM
   _image_size = LOADADDR(.data) + SIZEOF(.data) - ORIGIN(SDRAM);

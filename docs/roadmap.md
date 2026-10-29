@@ -71,7 +71,7 @@ after the save, `tools/segments.py`, then own-ride segments and the licensed fee
 decide on a Strava subscription (the API's Standard tier needs one since 30 June 2026), and email Strava for a Live
 Segments licence.
 
-Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30).
+Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30); ~~S3, `src/app/segments.rs`: the index, the active segment, the ride's feed (sim tests and fuzz; not yet on the unit)~~ (2026-10-30).
 
 ### Block 3: what is left on the unit, easiest first
 
@@ -84,8 +84,9 @@ fields of one kind into one step. Settings these need go in the settings file (T
   from zero after a resume);
 - ~~heart rate and power: % of max HR and of LTHR, the HR and power zone numbers, time in each zone, % of FTP (now,
   average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5)~~ done, sim (features.md; the zone times and the average balance restart from zero after a resume);
-- heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
-  the destination and the arrival time on a course, the unit's and each sensor's battery as fields;
+- ~~heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
+  the destination and the arrival time on a course, the unit's and each sensor's battery as fields~~ done, sim (features.md;
+  the distance to the destination is the course's distance to go, not a new field);
 - trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
   saving and the date and time formats; key click; sound on or off; backlight always on; the auto pause threshold;
   the climb filter (all, or medium and above); the CLIMB page's off switch;
