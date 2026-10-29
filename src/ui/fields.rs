@@ -155,12 +155,40 @@ pub enum Field {
     /// The climb the rider is on (else the next), from its start to its top: each column coloured by its grade,
     /// the rider's place white, the climb's gain, length and average grade over it (the CLIMB page).
     ClimbProfile,
+    // the ride's totals, laps and slopes (ride.rs). Appended: a page keeps a field's index in ALL. None of these is
+    // kept over a resume (the recovery record has no room for them): they restart from zero then.
+    /// The ride's elapsed time, h:mm:ss: auto-pauses count, a Start pause does not.
+    TripTime,
+    /// Laps taken.
+    Laps,
+    /// The last lap's moving time.
+    LastLap,
+    /// This lap's average power, W.
+    LapAvgPower,
+    /// The last lap's average power, W.
+    LastLapAvgPower,
+    /// This lap's normalized power, W.
+    LapNp,
+    /// The top cadence, rpm.
+    MaxCadence,
+    /// The highest altitude, m.
+    MaxAlt,
+    /// Altitude lost, m (the ascent's hysteresis).
+    Descent,
+    /// This lap's ascent, m.
+    LapAscent,
+    /// This lap's descent, m.
+    LapDescent,
+    /// Distance ridden uphill (grade of +1 % or more), km.
+    UphillKm,
+    /// Distance ridden downhill (grade of -1 % or less), km.
+    DownhillKm,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 66] = {
+    pub const ALL: [Field; 79] = {
         use Field::*;
         [
             Time,
@@ -229,6 +257,19 @@ impl Field {
             WorkoutLeft,
             ClimbPace,
             ClimbProfile,
+            TripTime,
+            Laps,
+            LastLap,
+            LapAvgPower,
+            LastLapAvgPower,
+            LapNp,
+            MaxCadence,
+            MaxAlt,
+            Descent,
+            LapAscent,
+            LapDescent,
+            UphillKm,
+            DownhillKm,
         ]
     };
 
@@ -306,6 +347,19 @@ impl Field {
             "WKT LEFT",
             "TOP",
             "CLIMB",
+            "TRIP TIME",
+            "LAPS",
+            "LAST LAP",
+            "LAP AVG W",
+            "LAST W",
+            "LAP NP",
+            "MAX RPM",
+            "MAX ALT M",
+            "DESCENT M",
+            "LAP ASC M",
+            "LAP DSC M",
+            "UP KM",
+            "DOWN KM",
         ];
         LABELS[self as usize]
     }
@@ -326,6 +380,7 @@ impl Field {
             "888.8K", // the trainer:
             "ERG", "-10.0 %", // the widest target: a grade (a power is "2000 W")
             "888|+88", "88:88|88", "", "", // the workout and ERG again, the climb pacer, the climb profile
+            "88:88", "888", "88:88", "888", "888", "888", "888", "-888", "8888", "888", "888", "88.88", "88.88",
         ];
         WIDEST[self as usize]
     }
@@ -379,11 +434,34 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
     [
         (
             "RIDE",
-            &[Time, Timer, Speed, Dist, AvgSpeed, MaxSpeed, Cadence, AvgCadence, LapTime, LapDist, Kcal, Temp, Map],
+            &[
+                Time, Timer, TripTime, Laps, LastLap, Speed, Dist, AvgSpeed, MaxSpeed, MaxCadence, Cadence, AvgCadence,
+                LapTime, LapDist, Kcal, Temp, Map,
+            ],
         ),
-        ("POWER", &[Power, Power3s, Power10s, Power30s, AvgPower, MaxPower, Np, If, Tss, Kj, Wkg, Wbal, Balance]),
+        (
+            "POWER",
+            &[
+                Power,
+                Power3s,
+                Power10s,
+                Power30s,
+                AvgPower,
+                MaxPower,
+                Np,
+                If,
+                Tss,
+                Kj,
+                Wkg,
+                Wbal,
+                Balance,
+                LapAvgPower,
+                LastLapAvgPower,
+                LapNp,
+            ],
+        ),
         ("HEART", &[Hr, AvgHr, MaxHr, Dfa, Rmssd]),
-        ("CLIMB", &[Ascent, Vam, Grade]),
+        ("CLIMB", &[Ascent, Vam, Grade, MaxAlt, Descent, LapAscent, LapDescent, UphillKm, DownhillKm]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
         ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile, ClimbPace, ClimbProfile]),

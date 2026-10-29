@@ -87,6 +87,10 @@ pub const ASCENT_HYSTERESIS_MM: i32 = 5000;
 /// with barometric data after its own smoothing (support.strava.com/hc/en-us/articles/216919447).
 pub const BARO_HYSTERESIS_MM: i32 = 3000;
 
+/// Uphill and downhill distance count the moving seconds at a grade of at least this much (per mille, as
+/// [`Ride::grade_x10`]: 10 is 1 %, the grade of the last 30 s). Under 1 % a road is flat for a rider.
+pub const SLOPE_X10: i32 = 10;
+
 /// A sum and a count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Avg {
@@ -127,6 +131,23 @@ pub struct Ride {
     lap_dist9: u64,
     max_hr: u16,
     climb: Climb,
+    /// Seconds running, auto-pauses included (a Start pause is not): the trip time.
+    elapsed_s: u32,
+    laps: u32,
+    last_lap_s: Option<u32>,
+    last_lap_w: Option<u16>,
+    /// The lap's power, its own [`Power`]: average and NP over the lap's moving seconds.
+    lap_power: crate::power::Power,
+    lap_ascent_mm: u32,
+    lap_descent_mm: u32,
+    descent_mm: u32,
+    /// The highest point since the last low point's hysteresis: the descent counts from it.
+    alt_high: Option<i32>,
+    max_cadence: u16,
+    max_alt_mm: Option<i32>,
+    /// Distance (1/9 mm) at a grade up to +1 % ([`SLOPE_X10`]), and down to -1 %.
+    up9: u64,
+    down9: u64,
 }
 
 impl Default for Ride {
@@ -155,6 +176,19 @@ impl Ride {
             lap_dist9: 0,
             max_hr: 0,
             climb: Climb::new(),
+            elapsed_s: 0,
+            laps: 0,
+            last_lap_s: None,
+            last_lap_w: None,
+            lap_power: crate::power::Power::new(),
+            lap_ascent_mm: 0,
+            lap_descent_mm: 0,
+            descent_mm: 0,
+            alt_high: None,
+            max_cadence: 0,
+            max_alt_mm: None,
+            up9: 0,
+            down9: 0,
         }
     }
 
@@ -179,7 +213,11 @@ impl Ride {
     /// The Lap key: a new lap while running.
     pub fn lap(&mut self) -> Option<Event> {
         (self.state == State::Running).then(|| {
+            // the lap that ends keeps its time and average; the new one starts from zero
+            (self.last_lap_s, self.last_lap_w) = (Some(self.lap_s()), self.lap_power.avg());
+            self.laps = self.laps.saturating_add(1);
             (self.lap_timer_s, self.lap_dist9) = (self.timer_s, self.dist9);
+            (self.lap_power, self.lap_ascent_mm, self.lap_descent_mm) = (crate::power::Power::new(), 0, 0);
             Event::Lap
         })
     }
@@ -198,11 +236,14 @@ impl Ride {
             if let Some(low) = &mut self.alt_low {
                 *low = low.saturating_add(i.alt_corr_mm);
             }
+            self.alt_high = self.alt_high.map(|h| h.saturating_add(i.alt_corr_mm));
+            self.max_alt_mm = self.max_alt_mm.map(|h| h.saturating_add(i.alt_corr_mm));
             self.climb.shift(i.alt_corr_mm);
         }
         if self.state != State::Running {
             return None;
         }
+        self.elapsed_s = self.elapsed_s.saturating_add(1);
         // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
         let slow = i.speed_x10.is_some_and(|v| v < AUTO_PAUSE_X10);
         match i.profile {
@@ -225,27 +266,49 @@ impl Ride {
         if self.moving {
             self.timer_s = self.timer_s.saturating_add(1);
             let v = i.speed_x10.unwrap_or(0);
-            self.dist9 = self.dist9.saturating_add(u64::from(v) * 250);
+            let step9 = u64::from(v) * 250;
+            self.dist9 = self.dist9.saturating_add(step9);
             self.max_speed = self.max_speed.max(v);
             self.hr.add(i.hr);
             self.max_hr = self.max_hr.max(i.hr.unwrap_or(0));
             // an altitude no road has (a receiver's garbage) is no altitude: every difference below stays in range
             let alt_mm = i.alt_mm.filter(|a| ALT_RANGE_MM.contains(a));
             if i.alt_ref != self.alt_ref {
-                (self.alt_ref, self.alt_low) = (i.alt_ref, None);
+                (self.alt_ref, self.alt_low, self.alt_high, self.max_alt_mm) = (i.alt_ref, None, None, None);
                 self.climb.second(None, self.dist9); // starts again
             }
             let hysteresis = if self.alt_ref == 0 { ASCENT_HYSTERESIS_MM } else { BARO_HYSTERESIS_MM };
             self.climb.second(alt_mm, self.dist9);
+            // the grade of the climbing window (None until it spans 20 m): the second's distance goes up or down
+            match self.climb.grade_x10() {
+                Some(g) if g >= SLOPE_X10 => self.up9 = self.up9.saturating_add(step9),
+                Some(g) if g <= -SLOPE_X10 => self.down9 = self.down9.saturating_add(step9),
+                _ => {}
+            }
             self.power.add(i.power); // zeros count: coasting is part of the average power
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
+            self.max_cadence = self.max_cadence.max(i.cadence.unwrap_or(0));
+            self.lap_power.sample(i.power, true);
             if let Some(alt) = alt_mm {
+                self.max_alt_mm = Some(self.max_alt_mm.map_or(alt, |m| m.max(alt)));
                 let low = self.alt_low.get_or_insert(alt);
                 if alt < *low {
                     *low = alt;
                 } else if alt - *low >= hysteresis {
-                    self.ascent_mm = self.ascent_mm.saturating_add((alt - *low) as u32);
+                    let up = (alt - *low) as u32;
+                    self.ascent_mm = self.ascent_mm.saturating_add(up);
+                    self.lap_ascent_mm = self.lap_ascent_mm.saturating_add(up);
                     *low = alt;
+                }
+                // the same with the high point: a fall of the hysteresis is descent
+                let high = self.alt_high.get_or_insert(alt);
+                if alt > *high {
+                    *high = alt;
+                } else if high.saturating_sub(alt) >= hysteresis {
+                    let down = high.saturating_sub(alt) as u32;
+                    self.descent_mm = self.descent_mm.saturating_add(down);
+                    self.lap_descent_mm = self.lap_descent_mm.saturating_add(down);
+                    *high = alt;
                 }
             }
         }
@@ -361,6 +424,71 @@ impl Ride {
     /// Altitude gained, metres.
     pub fn ascent_m(&self) -> u32 {
         self.ascent_mm / 1000
+    }
+
+    /// Seconds running since the start, auto-pauses included (a Start pause is not). Not kept over a resume.
+    pub fn elapsed_s(&self) -> u32 {
+        self.elapsed_s
+    }
+
+    /// Laps taken (the Lap key, a workout's steps). Not kept over a resume.
+    pub fn laps(&self) -> u32 {
+        self.laps
+    }
+
+    /// The last lap's moving time, seconds (None before a lap).
+    pub fn last_lap_s(&self) -> Option<u32> {
+        self.last_lap_s
+    }
+
+    /// The last lap's average power, W (None before a lap with power).
+    pub fn last_lap_avg_power(&self) -> Option<u16> {
+        self.last_lap_w
+    }
+
+    /// This lap's average power, W (zeros counted, as [`Ride::avg_power`]).
+    pub fn lap_avg_power(&self) -> Option<u16> {
+        self.lap_power.avg()
+    }
+
+    /// This lap's normalized power, W (None before 30 s with power).
+    pub fn lap_np(&self) -> Option<u16> {
+        self.lap_power.np()
+    }
+
+    /// Top cadence, rpm (None before one).
+    pub fn max_cadence(&self) -> Option<u16> {
+        (self.max_cadence > 0).then_some(self.max_cadence)
+    }
+
+    /// Highest altitude, metres (None before a reading; from the current altitude source).
+    pub fn max_alt_m(&self) -> Option<i32> {
+        self.max_alt_mm.map(|a| a / 1000)
+    }
+
+    /// Altitude lost, metres: the same hysteresis as [`Ride::ascent_m`].
+    pub fn descent_m(&self) -> u32 {
+        self.descent_mm / 1000
+    }
+
+    /// This lap's ascent, metres.
+    pub fn lap_ascent_m(&self) -> u32 {
+        self.lap_ascent_mm / 1000
+    }
+
+    /// This lap's descent, metres.
+    pub fn lap_descent_m(&self) -> u32 {
+        self.lap_descent_mm / 1000
+    }
+
+    /// Distance ridden at a grade of +1 % or more, metres.
+    pub fn uphill_m(&self) -> u32 {
+        (self.up9 / 9000).min(u64::from(u32::MAX)) as u32
+    }
+
+    /// Distance ridden at a grade of -1 % or less, metres.
+    pub fn downhill_m(&self) -> u32 {
+        (self.down9 / 9000).min(u64::from(u32::MAX)) as u32
     }
 
     /// This lap's moving time, seconds.
@@ -1075,6 +1203,72 @@ mod tests {
         }
         assert_eq!(r.ascent_m(), 52 + 20, "the garbage dropped");
         assert!(r.vam().is_none_or(|v| v.abs() < 10_000) && r.grade_x10().is_none_or(|g| g.abs() < 1000));
+    }
+
+    /// Descent counts the falls of the hysteresis from the high point, as ascent counts the rises from the low one.
+    #[test]
+    fn descent_with_hysteresis() {
+        let mut r = Ride::new();
+        r.start_pause();
+        for a in [100, 102, 98, 101, 99, 110, 130, 150, 148, 151, 120, 125, 140] {
+            r.second(&Input { alt_mm: Some(a * 1000), ..at(200) });
+        }
+        assert_eq!(r.descent_m(), 31, "151 to 120; the noise under 5 m is nothing");
+        assert_eq!(r.ascent_m(), 72, "as ascent_with_hysteresis: the fall is not a rise");
+        for a in [i32::MAX, i32::MIN, 100_000, i32::MAX, 0] {
+            r.second(&Input { alt_mm: Some(a), ..at(200) });
+        }
+        assert_eq!(r.descent_m(), 31 + 40 + 100, "140 to 100, 100 to 0; the garbage is dropped, no panic");
+    }
+
+    /// The lap's own fields: its average and NP, its ascent and descent, its time kept as the last lap when it ends,
+    /// and the count; a new lap starts from zero. Max cadence and max altitude are the ride's.
+    #[test]
+    fn lap_fields_and_the_last_lap() {
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..30 {
+            r.second(&Input { alt_mm: Some(100_000), cadence: Some(80), power: Some(100), ..at(200) });
+        }
+        assert_eq!((r.laps(), r.last_lap_s(), r.last_lap_avg_power()), (0, None, None));
+        r.lap();
+        assert_eq!((r.laps(), r.last_lap_s(), r.last_lap_avg_power()), (1, Some(30), Some(100)));
+        assert_eq!((r.lap_avg_power(), r.lap_np(), r.lap_ascent_m()), (None, None, 0));
+        // 60 s climbing 0.5 m a second at 300 W and 110 rpm
+        let (a0, d0) = (r.ascent_mm, r.descent_mm);
+        for i in 0..60 {
+            r.second(&Input { alt_mm: Some(100_000 + i * 500), cadence: Some(110), power: Some(300), ..at(200) });
+        }
+        assert_eq!((r.lap_avg_power(), r.lap_np()), (Some(300), Some(300)));
+        assert_eq!(r.lap_ascent_mm, r.ascent_mm - a0, "this lap's ascent is the ride's since the lap");
+        assert_eq!((r.descent_mm, r.lap_descent_m()), (d0, 0));
+        assert_eq!((r.max_cadence(), r.max_alt_m()), (Some(110), Some(129)));
+        r.lap();
+        assert_eq!((r.laps(), r.last_lap_s(), r.last_lap_avg_power()), (2, Some(60), Some(300)));
+        assert_eq!((r.lap_avg_power(), r.lap_ascent_m(), r.lap_descent_m()), (None, 0, 0));
+    }
+
+    /// Uphill and downhill: the distance at a grade of +1 % or more, and at -1 % or less; flat riding is neither.
+    #[test]
+    fn uphill_and_downhill_distance() {
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..40 {
+            r.second(&Input { alt_mm: Some(100_000), ..at(200) });
+        }
+        assert_eq!((r.uphill_m(), r.downhill_m()), (0, 0), "flat");
+        // 0.5 m a second over 5.6 m a second: about 9 %
+        for i in 0..60 {
+            r.second(&Input { alt_mm: Some(100_000 + i * 500), ..at(200) });
+        }
+        assert!(r.uphill_m() > 150 && r.downhill_m() == 0, "up {} down {}", r.uphill_m(), r.downhill_m());
+        // then the same down: the grade of the window turns once it is all descent
+        let up = r.uphill_m();
+        for i in 0..60 {
+            r.second(&Input { alt_mm: Some(129_500 - i * 500), ..at(200) });
+        }
+        assert!(r.downhill_m() > 150, "down {}", r.downhill_m());
+        assert!(r.uphill_m() >= up && r.uphill_m() < up + 100, "the 30 s window lags about 15 s");
     }
 
     #[test]

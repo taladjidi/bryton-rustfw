@@ -77,8 +77,9 @@ From checklist.md's open lines and the phases below. Each bullet is one step unl
 fields of one kind into one step. Settings these need go in the settings file (T0).
 
 **3a. Fields and small settings** (pure logic plus a field or a row; implementer on Haiku, one step per group):
-- ride fields: trip time (with stops), lap count, last lap time, lap power, last lap power, lap NP, max cadence,
-  max altitude, descent, lap ascent and descent, uphill and downhill distance;
+- ~~ride fields: trip time (with stops), lap count, last lap time, lap power, last lap power, lap NP, max cadence,
+  max altitude, descent, lap ascent and descent, uphill and downhill distance~~ done, sim (features.md; they restart
+  from zero after a resume);
 - heart rate and power: % of max HR and of LTHR, the HR and power zone numbers, time in each zone, % of FTP (now,
   average, lap, 3 / 10 / 30 s), average left / right balance, the power smoothing chosen and kept (patch P5);
 - heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to

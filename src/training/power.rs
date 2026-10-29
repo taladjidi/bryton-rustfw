@@ -36,7 +36,7 @@ pub const BIKE_HG: u16 = 90;
 pub const WEIGHT_KG: u16 = 75;
 
 /// The power metrics, live and over the ride.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Power {
     ring: [u16; RING],
     /// The slot the next second goes into.
