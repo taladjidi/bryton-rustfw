@@ -543,6 +543,12 @@ impl App {
 
     /// A fingerprint of screen row `slot` as it would be drawn (FNV-1a over its text, colour and selection).
     pub(crate) fn menu_row_print(&self, menu: Menu, sel: usize, slot: usize) -> u32 {
+        self.menu_print(menu, sel, slot, true)
+    }
+
+    /// [`App::menu_row_print`] with or without the value; without it, a changed value leaves the print as it was (the
+    /// label is cut by a long value, so then the value counts too).
+    pub(crate) fn menu_print(&self, menu: Menu, sel: usize, slot: usize, with_value: bool) -> u32 {
         let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
         let mut h = 0x811c_9dc5u32;
         let mut eat = |bytes: &[u8]| {
@@ -554,7 +560,11 @@ impl App {
             Some((label, value, color)) => {
                 eat(label.as_str().as_bytes());
                 eat(&[0]);
-                eat(value.as_str().as_bytes());
+                let cut = ui::menu_label_w(label.as_str(), value.as_str()) < ui::menu_label_w(label.as_str(), "");
+                let workout = matches!(self.row(menu, i), Some(menu::Row::Workout(_)));
+                if with_value || cut || workout {
+                    eat(value.as_str().as_bytes());
+                }
                 eat(&color.to_le_bytes());
                 eat(&[u8::from(i == sel)]);
             }
@@ -568,7 +578,17 @@ impl App {
         for i in 0..ui::MENU_ROWS {
             let print = self.menu_row_print(menu, sel, i);
             if self.menu_shown[i] != print {
-                self.draw_menu_row(&mut Panel(b, self.area(), self.look()), menu, sel, i);
+                let mut p = Panel(b, self.area(), self.look());
+                // only the value changed: its own box, not the 240 x 43 row
+                if self.menu_print(menu, sel, i, false) == self.menu_head[i] {
+                    let at = menu::first_shown(sel, ui::MENU_ROWS) + i;
+                    if let Some((label, value, color)) = self.menu_row(menu, at) {
+                        ui::draw_menu_value(&mut p, i, label.as_str(), value.as_str(), color, at == sel);
+                    }
+                } else {
+                    self.draw_menu_row(&mut p, menu, sel, i);
+                }
+                self.menu_head[i] = self.menu_print(menu, sel, i, false);
                 self.menu_shown[i] = print;
             }
         }

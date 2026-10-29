@@ -246,15 +246,45 @@ pub fn clear_menu(c: &mut impl Canvas) {
     c.fill(0, end, W, H - end, BLACK);
 }
 
+/// How many rows [`draw_list`] has.
+pub const LIST_ROWS: usize = ((H - LIST_Y) / LIST_ROW) as usize;
+
+/// A device's row as a fingerprint (FNV-1a over what the row shows; the RSSI in buckets of 4 dBm, so a jitter does not
+/// redraw); 1 for a row with no device.
+fn list_print(d: Option<&crate::nrf::Device>) -> u32 {
+    let Some(d) = d else { return 1 };
+    let mut h = 0x811c_9dc5u32;
+    let bucket = (i32::from(d.rssi) >> 2).to_le_bytes();
+    let maker = d.maker.unwrap_or("").as_bytes();
+    for &x in d.name().as_bytes().iter().chain(&[0]).chain(maker).chain(&d.addr).chain(&bucket) {
+        h = (h ^ u32::from(x)).wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+/// The fingerprints of the rows [`draw_list`] would draw now.
+pub fn list_prints(nearby: &crate::nrf::Nearby) -> [u32; LIST_ROWS] {
+    let mut devices = nearby.strongest();
+    core::array::from_fn(|_| list_print(devices.next().as_ref()))
+}
+
 /// The devices heard, strongest first, one per row: the name (white); for one that sent none (phones, laptops),
 /// what kind of device it is from its manufacturer data, else its address (grey); and the RSSI in dBm on the right. As many as fit; the rows left are cleared.
-pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby) {
-    let rows = (H - LIST_Y) / LIST_ROW;
+/// With `shown` (the fingerprints on screen), only the rows that differ are drawn, and it is updated.
+pub fn draw_list(c: &mut impl Canvas, nearby: &crate::nrf::Nearby, mut shown: Option<&mut [u32; LIST_ROWS]>) {
     let mut devices = nearby.strongest();
     let name_w = LIST_NAME * CELL * LABEL.scale;
-    for r in 0..rows {
-        let y = LIST_Y + r * LIST_ROW;
-        let Some(d) = devices.next() else {
+    for r in 0..LIST_ROWS {
+        let y = LIST_Y + r as u32 * LIST_ROW;
+        let d = devices.next();
+        if let Some(s) = shown.as_deref_mut().and_then(|s| s.get_mut(r)) {
+            let print = list_print(d.as_ref());
+            if *s == print {
+                continue;
+            }
+            *s = print;
+        }
+        let Some(d) = d else {
             c.fill(NEARBY.0, y, NEARBY.2, LIST_ROW, BLACK);
             continue;
         };
@@ -542,10 +572,62 @@ pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, va
     c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
 }
 
+/// Only the value of [`draw_menu_row`]`(i, label, ..)`, in its own box (which `draw_in` clears): the row's label,
+/// selection and colour are as drawn.
+pub fn draw_menu_value(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
+    let y = LIST_Y + i as u32 * MENU_ROW;
+    let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, value_color) };
+    let name_w = menu_label_w(label, value);
+    let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
+    text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, ty, NEARBY.2 - name_w, Align::Right, value);
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     extern crate std;
     use super::*;
+
+    /// A menu value changed in its own box paints what a whole row would, in fewer pixels (P4).
+    #[test]
+    fn a_menu_value_repaints_in_its_own_box() {
+        for selected in [false, true] {
+            let (mut whole, mut part) = (Frame::new(), Frame::new());
+            draw_menu_row(&mut whole, 2, "HEART RATE", "FOUND", GREY, selected);
+            draw_menu_row(&mut part, 2, "HEART RATE", "FOUND", GREY, selected);
+            let before = part.painted;
+            draw_menu_row(&mut whole, 2, "HEART RATE", "PAIRED", WHITE, selected);
+            draw_menu_value(&mut part, 2, "HEART RATE", "PAIRED", WHITE, selected);
+            assert_eq!(whole.px, part.px, "same screen");
+            let (row, value) = (240 * 43, part.painted - before);
+            std::println!("menu value: {value} px for the value, {row} for the row");
+            assert!(value < row / 2);
+        }
+    }
+
+    /// The nearby list draws only the rows that changed: an RSSI jitter nothing, a new device one row (P5).
+    #[test]
+    fn the_nearby_list_draws_only_changed_rows() {
+        use crate::nrf::{AdvReport, Nearby};
+        let report = |a: u8, rssi: i8| AdvReport { addr_type: 0, addr: [a; 6], rssi, data: &[] };
+        let mut n = Nearby::new();
+        n.add(&report(1, -50));
+        n.add(&report(2, -70));
+        let mut f = Frame::new();
+        let mut shown = list_prints(&n);
+        draw_list(&mut f, &n, None);
+        let all = f.painted;
+        n.add(&report(1, -51)); // same bucket
+        draw_list(&mut f, &n, Some(&mut shown));
+        assert_eq!(f.painted, all, "a jitter draws nothing");
+        n.add(&report(3, -80));
+        draw_list(&mut f, &n, Some(&mut shown));
+        let one = f.painted - all;
+        std::println!("nearby: first draw {all} px, new device {one} px");
+        assert!(one > 0 && one < all, "{one} of {all}");
+        n.add(&report(1, -60)); // a new bucket: the row changes
+        draw_list(&mut f, &n, Some(&mut shown));
+        assert!(f.painted > all + one);
+    }
 
     #[test]
     fn rect_contains_and_grows() {

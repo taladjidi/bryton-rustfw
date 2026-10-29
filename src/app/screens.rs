@@ -150,7 +150,13 @@ impl App {
     pub(crate) fn draw_screen(&self, c: &mut impl Canvas) {
         match self.screen {
             Screen::Main | Screen::Ride(_) | Screen::Edit(..) => {
+                let (_, cy, _, ch) = c.clip();
                 for (i, (bx, w)) in self.widgets().enumerate() {
+                    // a box wholly outside the clip (a banner's redraw over the page's lower half) would be computed
+                    // (every graph bar) then discarded by the panel: not drawn
+                    if matches!(w, Widget::Field(_)) && (bx.1 >= cy + ch || bx.1 + bx.3 <= cy) {
+                        continue;
+                    }
                     self.draw_widget(c, i, bx, w);
                 }
                 self.draw_edit_frame(c);
@@ -199,7 +205,7 @@ impl App {
                 if self.ble.is_some() {
                     ui::draw_nearby(c, self.radio.nearby.count(), self.radio.scanning);
                 }
-                ui::draw_list(c, &self.radio.nearby);
+                ui::draw_list(c, &self.radio.nearby, None);
             }
         }
         if self.notes.ms.is_some() && self.notes.drawn {
@@ -544,8 +550,12 @@ impl App {
             self.strip_shown = self.strip;
             self.draw_top(&mut Panel(b, self.area(), self.look()));
         }
+        if self.screen == Screen::Nearby {
+            self.list_shown = ui::list_prints(&self.radio.nearby); // drawn whole by draw_screen
+        }
         if let Screen::Menu(menu, sel) = self.screen {
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, i));
+            self.menu_head = core::array::from_fn(|i| self.menu_print(menu, sel, i, false));
         }
         if self.screen == Screen::Media {
             self.phone.shown = ui::media::shown(&self.media_now());
