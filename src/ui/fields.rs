@@ -324,7 +324,7 @@ impl Field {
             "88:88", // electronic shifting:
             "8-88", "8888", "GOOD",   // the course followed again:
             "888.8K", // the trainer:
-            "ERG", "-10.0%", // the widest target: a grade (a power is "2000W")
+            "ERG", "-10.0 %", // the widest target: a grade (a power is "2000 W")
             "888|+88", "88:88|88", "", "", // the workout and ERG again, the climb pacer, the climb profile
         ];
         WIDEST[self as usize]
