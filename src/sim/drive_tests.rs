@@ -191,7 +191,7 @@ fn a_ride_left_open_without_its_marker_lends_the_drive_read_only() {
     app.press(&mut sim2, Press::Short(Key::Start));
     run(&mut sim2, &mut app, 10_000);
     assert_eq!(app.ride.state(), ride::State::Paused, "the old ride taken up");
-    assert_eq!(app.ride_started, ((2026, 10, 23), (9, 0)), "the old ride's start");
+    assert_eq!(app.ride_started, RideStart::new((2026, 10, 23), (9, 0)), "the old ride's start");
     assert!(app.ride.timer_s() >= 60, "its checkpoint: {} s", app.ride.timer_s());
     save_ride(&mut sim2, &mut app);
     run(&mut sim2, &mut app, 5000);

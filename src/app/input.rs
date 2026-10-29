@@ -201,12 +201,12 @@ impl App {
         match (self.screen, next) {
             (Screen::Main, true) => self.ride_page(0, 1),
             // the climb page sits right after the page it was opened from (profile.rs `settle_climb`)
-            (Screen::Ride(CLIMB), true) => self.ride_page(place(self.climb.1) + 1, 1),
-            (Screen::Ride(CLIMB), false) => Screen::Ride(self.climb.1),
-            (Screen::Ride(n), true) if n == self.climb.1 && self.page_on(CLIMB) => Screen::Ride(CLIMB),
+            (Screen::Ride(CLIMB), true) => self.ride_page(place(self.climb.after) + 1, 1),
+            (Screen::Ride(CLIMB), false) => Screen::Ride(self.climb.after),
+            (Screen::Ride(n), true) if n == self.climb.after && self.page_on(CLIMB) => Screen::Ride(CLIMB),
             (Screen::Ride(n), true) => self.ride_page(place(n) + 1, 1),
             (Screen::Ride(n), false) => match self.ride_page(place(n) + ROUND - 1, ROUND - 1) {
-                Screen::Ride(p) if p == self.climb.1 && self.page_on(CLIMB) => Screen::Ride(CLIMB),
+                Screen::Ride(p) if p == self.climb.after && self.page_on(CLIMB) => Screen::Ride(CLIMB),
                 s => s,
             },
             (s, _) => s,

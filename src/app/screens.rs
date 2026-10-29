@@ -111,7 +111,7 @@ impl App {
     pub(crate) fn ride_card(&self) -> ui::card::Card {
         let (r, p) = (&self.ride, &self.power);
         ui::card::Card::of(&ui::card::Stats {
-            start: self.ride_started,
+            start: (self.ride_started.date, self.ride_started.time),
             timer_s: r.timer_s(),
             dist_m: r.dist_m(),
             avg_speed_x10: r.avg_speed_x10(),
