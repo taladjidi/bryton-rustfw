@@ -248,9 +248,8 @@ zone1 = #4A9283      ; zone 1 to 7 (zone2 ..): power and heart rate zones, grade
 
 A value that is not a colour or a key that is not in the list is ignored. A file that is not a theme, over 4 KB, with a
 version above 1, or that fails the whole-theme checks is refused, with the reason in a notice, and DARK is drawn:
-`text` on `background`, `on_accent` on `accent` and `on_alarm` on `alarm` must have a contrast ratio of 4.5:1 (WCAG 2;
-a pair left as the base has it is not checked, since DARK's white on red is 4.0:1), and red is for alarms only (`alarm`
-is no other colour of the file) and no two zones are alike. Pictures (the basemap, IGN tiles) are never recoloured.
+Text (`text`, `dim`, `accent`, `alarm`, `ok` and `warn` on `background`; `on_accent` on `accent`, `ok` and `warn`;
+`on_alarm` on `alarm`) needs a contrast ratio of 4.5:1 and the rest (`line`, `ferris`, `cog`, `course`, the zones, on `background`) 3:1 (WCAG 2.1 1.4.3 and 1.4.11; a pair whose two colours are the base's is not checked: DARK's white on red is 4.0:1, its `line` and `zone7` are under 3:1); red is for alarms (`alarm` is no other colour of the file) and no two zones are alike. Pictures (the basemap, IGN tiles) are never recoloured.
 Built-in names cannot be a file's. LIGHT, fonts and metrics in a theme come later (docs/theming.md).
 
 ## Ride

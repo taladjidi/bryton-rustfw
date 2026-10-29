@@ -218,6 +218,8 @@ pub(crate) struct SettingsStore {
     /// registers' tags lacked).
     pub(crate) boot: [u32; 4],
     pub(crate) boot_words: [u32; 4],
+    /// THEME was picked (the file may not be read yet): the file's name of it does not win.
+    pub(crate) theme_set: bool,
     /// The file was read whole: written over in place (as `PageStore::sound`).
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
@@ -360,11 +362,12 @@ impl App {
         st.seq = c.seq;
         // the registers lost: the file's whole; else each register that changed since the copy gives its fields
         let (merged, took) = if st.lost { (c.settings, [false; 4]) } else { c.settings.with_registers(c.words, regs) };
-        // the file gets the registers' fields, or words that say what the registers now hold
-        st.dirty = self.card_writable && (took.contains(&true) || merged.register_words() != c.words);
         let was = self.settings;
-        // a theme picked before the file was read stays (the file has no newer word of it)
-        let theme = if was.theme == [0; 12] { merged.theme } else { was.theme };
+        // a theme picked before the file was read stays and goes to the file (the registers carry no theme)
+        let theme = if st.theme_set { was.theme } else { merged.theme };
+        // the file gets the registers' fields, or words that say what the registers now hold, or the theme picked
+        st.dirty = self.card_writable
+            && (took.contains(&true) || merged.register_words() != c.words || theme != c.settings.theme);
         self.settings = Settings { alt_m: was.alt_m, theme, ..merged };
         if (st.lost || self.card_writable) && self.settings.register_words() != regs {
             // put right from the result (lost, or a register some fields missed); a build that may not write the

@@ -193,6 +193,13 @@ fn luminance(c: u16) -> u64 {
     2126 * at(&LIN5, c >> 11) + 7152 * at(&LIN6, c >> 5 & 63) + 722 * at(&LIN5, c & 31)
 }
 
+/// Whether `a` and `b` have a contrast ratio of at least `min` / 10 (the ratio is that of WCAG 2).
+fn contrast(a: u16, b: u16, min: u64) -> bool {
+    let (hi, lo) = (luminance(a).max(luminance(b)), luminance(a).min(luminance(b)));
+    // (hi + 0.05) / (lo + 0.05) >= min / 10, with 0.05 as 5 * 10^6 in the unit above
+    10 * (hi + 5_000_000) >= min * (lo + 5_000_000)
+}
+
 /// Whether `a` on `b` has a contrast ratio of at least 4.5:1 (WCAG 2 AA for text).
 ///
 /// ```
@@ -201,25 +208,51 @@ fn luminance(c: u16) -> u64 {
 /// assert!(!readable(0x8410, 0x0000 + 0x39e7), "grey on dark grey");
 /// ```
 pub fn readable(a: u16, b: u16) -> bool {
-    let (hi, lo) = (luminance(a).max(luminance(b)), luminance(a).min(luminance(b)));
-    // (hi + 0.05) / (lo + 0.05) >= 4.5, with 0.05 as 5 * 10^6 in the unit above
-    10 * (hi + 5_000_000) >= 45 * (lo + 5_000_000)
+    contrast(a, b, 45)
 }
 
-/// The whole-theme checks (module doc) of `t`, a theme file's values over `base`. A text and background pair that
-/// is the base's is not checked: the built-ins are trusted, and DARK's white on pure red is 4.0:1 (it is today's
-/// look, kept as it is), so a file that leaves the alarm pair alone must not be refused for it.
+/// The pairs [`check`] tests: a foreground role (a position in [`KEYS`]), the role it is drawn on, and the least
+/// contrast ratio x 10. Text (the text, notes, accent and alarm drawn as text on the background, and the text on the
+/// accent, the alarm, ok and warn fills) needs 4.5:1, WCAG 2 success criterion 1.4.3; what is not text (lines, Ferris,
+/// the cog, the course, the zones) needs 3:1, the non-text minimum of criterion 1.4.11
+/// (<https://www.w3.org/TR/WCAG21/#non-text-contrast>).
+pub const PAIRS: [(usize, usize, u64); 21] = [
+    (TEXT, BG, 45),
+    (3, BG, 45),
+    (ACC, BG, 45),
+    (ALARM, BG, 45),
+    (8, BG, 45),
+    (9, BG, 45),
+    (ON_ACC, ACC, 45),
+    (ON_ACC, 8, 45),
+    (ON_ACC, 9, 45),
+    (ON_AL, ALARM, 45),
+    (2, BG, 30),
+    (10, BG, 30),
+    (11, BG, 30),
+    (12, BG, 30),
+    (13, BG, 30),
+    (14, BG, 30),
+    (15, BG, 30),
+    (16, BG, 30),
+    (17, BG, 30),
+    (18, BG, 30),
+    (19, BG, 30),
+];
+
+/// The whole-theme checks (module doc) of `t`, a theme file's values over `base`: red only for alarms (no other role
+/// has the alarm's colour), then every pair of [`PAIRS`], then no two zones alike. A pair whose two colours are both
+/// the base's is not checked: the built-ins are trusted, and DARK's white on pure red is 4.0:1 and its lines 1.9:1
+/// (today's look, kept as it is), so a file that leaves a pair alone must not be refused for it.
 pub fn check(t: &Theme, base: &Theme) -> Result<(), Refused> {
     let k = &t.ink;
     let at = |i: usize| k.get(i).copied().unwrap_or(0);
-    let same = |a: usize, b: usize| k.get(a) == base.ink.get(a) && k.get(b) == base.ink.get(b);
-    let pair = |a: usize, b: usize| same(a, b) || readable(at(a), at(b));
-    if !(pair(TEXT, BG) && pair(ON_ACC, ACC) && pair(ON_AL, ALARM)) {
-        return Err(Refused::Contrast);
-    }
-    // alarm against the accent, ok, warn, Ferris, the course and the zones (positions 4, and 8 to 19 but the cog's)
-    if k.iter().enumerate().any(|(i, &c)| matches!(i, ACC | 8..=10 | 12..) && c == at(ALARM)) {
+    if k.iter().enumerate().any(|(i, &c)| i != ALARM && c == at(ALARM)) {
         return Err(Refused::RedNotAlarm);
+    }
+    let same = |a: usize, b: usize| k.get(a) == base.ink.get(a) && k.get(b) == base.ink.get(b);
+    if PAIRS.iter().any(|&(a, b, min)| !same(a, b) && !contrast(at(a), at(b), min)) {
+        return Err(Refused::Contrast);
     }
     let zones = k.get(ZONE0..).unwrap_or(&[]);
     if zones.iter().enumerate().any(|(i, z)| zones.iter().skip(i + 1).any(|o| o == z)) {
@@ -284,6 +317,24 @@ mod tests {
         assert_eq!(identity(0x1234), 0x1234);
     }
 
+    /// Which pairs of the built-ins fail on their own (no base to excuse them), for the commit message.
+    #[test]
+    fn builtin_pairs() {
+        let none = Theme { ink: [0; N], smooth: false };
+        for (name, t) in [("DARK", Theme::DARK), ("OUTDOOR", Theme::OUTDOOR)] {
+            let failing: std::vec::Vec<_> = PAIRS
+                .iter()
+                .filter(|&&(a, b, m)| !contrast(t.ink[a], t.ink[b], m))
+                .map(|&(a, b, _)| (NAMES[a], NAMES[b]))
+                .collect();
+            std::println!("{name} fails: {failing:?}");
+            if name == "OUTDOOR" {
+                assert_eq!(failing, [("on_alarm", "alarm")], "OUTDOOR inherits DARK white on red");
+            }
+        }
+        assert_eq!(check(&Theme::DARK, &none), Err(Refused::Contrast), "DARK is excused by the base only");
+    }
+
     #[test]
     fn contrast_ratios() {
         assert!(readable(WHITE, BLACK) && readable(BLACK, ACCENT) && readable(BLACK, GREEN));
@@ -314,11 +365,19 @@ mod tests {
         };
         assert_eq!(f("text=#303030"), Err(Refused::Contrast));
         assert_eq!(f("on_accent=#FFA500"), Err(Refused::Contrast));
-        assert_eq!(f("on_alarm=#FF0000"), Err(Refused::Contrast));
+        assert_eq!(f("on_alarm=#F04040"), Err(Refused::Contrast));
         assert_eq!(f("accent=#FF0000"), Err(Refused::RedNotAlarm));
         assert_eq!(f("zone3=#FF0000"), Err(Refused::RedNotAlarm));
         assert_eq!(f("ferris=#FF0000"), Err(Refused::RedNotAlarm));
-        assert_eq!(f("zone2=#123456\nzone1=#123456"), Err(Refused::SameZones));
+        assert_eq!(f("background=#FF0000"), Err(Refused::RedNotAlarm), "a red background");
+        assert_eq!(f("text=#FF0000"), Err(Refused::RedNotAlarm), "red text");
+        assert_eq!(f("dim=#FF0000"), Err(Refused::RedNotAlarm));
+        assert_eq!(f("cog=#FF0000"), Err(Refused::RedNotAlarm));
+        assert_eq!(f("ok=#101010"), Err(Refused::Contrast), "ok on black");
+        assert_eq!(f("ok=#006000"), Err(Refused::Contrast), "black text on a dark ok");
+        assert_eq!(f("line=#101010"), Err(Refused::Contrast), "a line under 3:1");
+        assert_eq!(f("zone4=#202020"), Err(Refused::Contrast), "a zone under 3:1");
+        assert_eq!(f("zone2=#4488CC\nzone1=#4488CC"), Err(Refused::SameZones));
         assert!(f("accent=#00AAFF").is_ok());
     }
 }

@@ -3058,6 +3058,7 @@ fn settings_file() {
     let mut next = xorshift(0x5e77);
     let d = crate::Settings::from_word(0);
     let (mut refused, mut whole, mut short, mut defaulted) = (0u32, 0u32, 0u32, 0u32);
+    let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
     for _ in 0..20_000 {
         let mut file = [0u8; 1024];
         let mut want: Option<u32> = None; // the newest copy built whole
@@ -3078,6 +3079,7 @@ fn settings_file() {
             for b in s[12..508].iter_mut() {
                 *b = next() as u8;
             }
+            let mut theme: Option<([u8; 12], bool)> = None; // a name written at 59, and whether it reads as one
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
             if !next().is_multiple_of(4) {
                 let ok = crate::Settings { ftp: 100 + 5 * (next() % 80) as u16, ..d };
@@ -3086,6 +3088,27 @@ fn settings_file() {
                 s[28..28 + n].copy_from_slice(&good[28..28 + n]);
                 if next().is_multiple_of(3) {
                     s[28 + (next() % 31) as usize] = next() as u8; // one byte out of its range, maybe
+                }
+                if len >= 43 {
+                    // THEME's name: a valid stem (padded or all 12), a bad byte, or a NUL and then a byte
+                    let stem = |next: &mut dyn FnMut() -> u32, n: usize| {
+                        let mut name = [0u8; 12];
+                        for b in name.iter_mut().take(n) {
+                            *b = b"AZaz09-_"[(next() % 8) as usize];
+                        }
+                        name
+                    };
+                    let n = 1 + (next() % 12) as usize;
+                    let mut name = stem(&mut next, n);
+                    match next() % 4 {
+                        0 => name[(next() % n as u32) as usize] = [b'/', 0xff, b' ', b'.'][(next() % 4) as usize],
+                        1 if n < 11 => name[n + 1 + (next() % (11 - n as u32)) as usize] = b'X',
+                        _ => {}
+                    };
+                    let bad = name.iter().any(|&b| !(b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == 0))
+                        || name.iter().skip_while(|&&b| b != 0).any(|&b| b != 0);
+                    s[28 + 31..28 + 43].copy_from_slice(&name);
+                    theme = Some((name, !bad));
                 }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
@@ -3116,6 +3139,17 @@ fn settings_file() {
                     {
                         st.text(k, &mut l);
                     }
+                    match theme {
+                        Some((name, true)) => {
+                            kept += 1;
+                            assert_eq!(st.theme, name, "a valid name is kept");
+                        }
+                        Some((_, false)) => {
+                            fell_back += 1;
+                            assert_eq!(st.theme, [0; 12], "a bad name falls back to DARK");
+                        }
+                        None => {}
+                    }
                     if len < 31 {
                         short += 1;
                     } else {
@@ -3133,7 +3167,9 @@ fn settings_file() {
         }
     }
     std::println!("settings copies: {refused} refused, {whole} whole, {short} short, {defaulted} with a default");
+    std::println!("theme names: {kept} kept, {fell_back} fallen back");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
+    assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");
 }
 
 /// Which wins at a start (app/settings_file.rs), by chance: random backup registers (each tagged as some build writes

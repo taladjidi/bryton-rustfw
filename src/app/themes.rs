@@ -19,9 +19,12 @@ impl App {
     /// The names of the `.ini` files of the themes folder (up to [`MAX_FILES`], 12 characters of letters, digits, `-`
     /// and `_`; not the built-ins' names), without the extension.
     #[inline(never)]
-    fn theme_files(&mut self, b: &mut impl Board) -> ([[u8; 12]; MAX_FILES], usize) {
+    pub(crate) fn theme_files(&mut self, b: &mut impl Board) -> ([[u8; 12]; MAX_FILES], usize) {
         let mut out = [[0u8; 12]; MAX_FILES];
         let mut n = 0;
+        if self.emmc.lent() {
+            return (out, 0);
+        }
         let mut d = emmc::Volume(&mut self.emmc, b);
         let Ok(mut fat) = fat::Fat::mount(&mut d) else { return (out, 0) };
         let Ok(dir) = fat.open(&mut d, THEMES_DIR) else { return (out, 0) };
@@ -103,6 +106,7 @@ impl App {
         let mut next = text::Line::<12>::new();
         next.push_str(name((now + 1) % (2 + n)));
         self.settings.set_theme_name(next.as_str());
+        self.settings_store.theme_set = true;
         self.save_misc(b);
         self.apply_theme(b, true);
     }

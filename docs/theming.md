@@ -54,12 +54,10 @@ on_accent = #FFFFFF
 zone1 = #2F6259
 ```
 
-**Location.** `\Rustfw\Themes\*.ini`, this firmware's own folder (AGENTS.md, share the storage with stock:
-stock never sees it). The firmware only reads them. The theme chosen is kept by name in `\Rustfw\theme.bin` (one
-sector: magic, name, CRC), written between rides only, as `pages.bin` is; the backup registers have no room
-(app/settings.rs). The settings file planned later can take it over.
+stock never sees it). The firmware only reads them. The theme chosen is kept by name (12 bytes) in `\Rustfw\settings.bin`,
+appended after the first build's 31 bytes of settings (built, T1), written between rides only as that file is; the backup registers have no room (app/settings.rs).
 
-**Reading.** At the first main loop pass, with `pages.bin` (the card is not touched at boot): `theme.bin`, then
+**Reading.** At the first main loop pass, with `pages.bin` (the card is not touched at boot): `settings.bin`, then
 the named file, parsed into a `Theme`. Until then the screen is in DARK, so a file theme costs one full redraw at
 the start. The file is parsed again at each start, so a theme edited over USB applies after the eject (the drive
 restarts the unit when the computer wrote).
@@ -171,7 +169,7 @@ every test that compares a colour. For colours alone it buys nothing the table d
 - **Fuzz** (src/sim/fuzz.rs, AGENTS.md "every new input path"): files generated from the key table (sections, known
   and unknown keys, good, cut and wild hex values, long lines, NULs, CRLF), parsed; asserts: no panic, the result
   passes the whole-theme checks or is DARK, and a count over the seeds that every key was set from a file at least
-  once. Plus damaged `theme.bin` sectors.
+  once. Plus damaged names in `settings.bin`.
 
 ## 4. Built-in themes, and making one
 
@@ -199,7 +197,7 @@ path in an environment variable), so a theme is seen before the ride. No theme w
 enters the repository.
 
 **Picking.** SETTINGS > DISPLAY > THEME: the row shows the name; it opens a list (the built-ins, then the files,
-16 at most) as COURSES does. A tap applies it at once (full redraw); `theme.bin` is written when no ride is open.
+16 at most) as COURSES does. A tap applies it at once (full redraw); `settings.bin` is written when no ride is open.
 FONT stays its own setting; a theme's `font` key (level b) only sets its default.
 
 ## 5. Phases
@@ -208,7 +206,7 @@ FONT stays its own setting; a theme's `font` key (level b) only sets its default
 
 - Split the shared roles (`ON_ACCENT`, `ON_ALARM`, the cog), `Canvas::ink`, `Theme` in src/ui/theme.rs, `Panel` and
   `Row` carrying it, `text::draw` and the two colour-making blits translating.
-- The parser, the whole-theme checks, `\Rustfw\Themes` listed, `theme.bin`, the THEME row.
+- The parser, the whole-theme checks, `\Rustfw\Themes` listed, the name in `settings.bin`, the THEME row.
 - DARK and OUTDOOR. LIGHT once the black-background assumptions are fixed (1b, after a look at every screen in
   the scramble test's shots).
 - Tests: identity, scramble, parser units, contrast, fuzz, gallery shots per theme; on the unit, OUTDOOR and LIGHT

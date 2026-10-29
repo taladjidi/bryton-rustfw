@@ -57,38 +57,41 @@ pub fn gauge_cols(bx: (u32, u32, u32, u32)) -> u32 {
 /// Pixel (`i`, `dy`) of a gauge bar `h` high: the marker (a white tick through the track with a black column each
 /// side, its ends out of the track in the state's colour) over all; else black above and below the track, the target
 /// band's white outline (its inside shows the zones), and the zone's colour.
-fn gauge_px(g: &GaugeBar, h: u32, i: u32, dy: u32) -> u16 {
+fn gauge_px(g: &GaugeBar, ink: (u16, u16, u16), h: u32, i: u32, dy: u32) -> u16 {
+    let (white, black, dark) = ink;
     let over = (h / 4).min(OVERSHOOT);
     let track = dy >= over && dy + over < h;
     if let Some((m, color)) = g.marker.filter(|&(m, _)| i + MARK_W / 2 + 1 >= m && i <= m + MARK_W / 2 + 1) {
         let core = i + MARK_W / 2 >= m && i <= m + MARK_W / 2;
         return match (core, track) {
-            (true, true) => WHITE,
+            (true, true) => white,
             (true, false) => color,
-            _ => BLACK,
+            _ => black,
         };
     }
     if !track {
-        return BLACK;
+        return black;
     }
     let (a, b) = g.band;
     let edge = dy < over + BRACKET || dy + over + BRACKET >= h;
     if (a..=b).contains(&i) && (edge || i < a + BRACKET || i + BRACKET > b) {
-        return WHITE;
+        return white;
     }
-    g.zones.iter().rev().find(|z| z.0 <= i).map_or(DARK, |z| z.1)
+    g.zones.iter().rev().find(|z| z.0 <= i).map_or(dark, |z| z.1)
 }
 
 /// Columns `from` to `to` (included) of the gauge bar `bar` showing `g`.
 fn draw_gauge_columns(c: &mut impl Canvas, bar: (u32, u32, u32, u32), g: &GaugeBar, from: u32, to: u32) {
     let to = to.min(bar.2.saturating_sub(1));
     if from <= to {
-        // the keys' translations once, not a call into the canvas per pixel
-        let table = theme::KEYS.map(|k| c.ink(k));
-        c.blit(bar.0 + from, bar.1, to - from + 1, bar.3, &mut |i, dy| {
-            let p = gauge_px(g, bar.3, from + i, dy);
-            theme::KEYS.iter().position(|&k| k == p).and_then(|k| table.get(k).copied()).unwrap_or(p)
-        });
+        // the colours as the canvas draws them, translated once per redraw, not per pixel
+        let ink = (c.ink(WHITE), c.ink(BLACK), c.ink(DARK));
+        let g = &GaugeBar {
+            marker: g.marker.map(|(m, k)| (m, c.ink(k))),
+            zones: g.zones.map(|(x, k)| (x, c.ink(k))),
+            ..*g
+        };
+        c.blit(bar.0 + from, bar.1, to - from + 1, bar.3, &mut |i, dy| gauge_px(g, ink, bar.3, from + i, dy));
     }
 }
 
