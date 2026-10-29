@@ -37,7 +37,7 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
   between rides, read when `pages.bin` is (the card is not touched at boot), merged with the registers register by
   register; registers 11, 16, 28 and 18's AUTO OFF bits stay as a mirror (app/settings.rs says why). Left: a
   mechanic moves the "Settings registers" section of features.md to the new store.
-- **T1. Colours** (theming.md phase 1): split the shared roles (`ON_ACCENT`, `ON_ALARM`, the cog), `Canvas::ink`,
+- ~~**T1. Colours**~~ done, sim only (theming.md phase 1): split the shared roles (`ON_ACCENT`, `ON_ALARM`, the cog), `Canvas::ink`,
   `Theme` in `src/ui/theme.rs`, `Panel` and `Row` carrying it, `text::draw` and the colour-making blits translating;
   the INI parser and the whole-theme checks (contrast 4.5:1, red only for alarms); `\Rustfw\Themes\*.ini` listed;
   SETTINGS > DISPLAY > THEME; DARK (identity) and OUTDOOR. Tests: identity, scramble, parser, contrast, fuzz, a

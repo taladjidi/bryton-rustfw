@@ -207,7 +207,7 @@ impl App {
                 let area = self.area();
                 for j in [sel, k] {
                     if let Some(Some(l)) = labels.get(j) {
-                        ui::draw_end_button(&mut Panel(b, area, self.settings.smooth), j, l, j == k);
+                        ui::draw_end_button(&mut Panel(b, area, self.look()), j, l, j == k);
                     }
                 }
                 return;

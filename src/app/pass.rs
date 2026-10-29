@@ -59,7 +59,7 @@ impl App {
         if let Some(ms) = self.notes.ms.filter(|_| !self.phone.ringing) {
             if !core::mem::replace(&mut self.notes.drawn, true) {
                 ui::draw_banner(
-                    &mut Panel(b, (0, ui::H), self.settings.smooth),
+                    &mut Panel(b, (0, ui::H), self.look()),
                     self.notes.text.as_str(),
                     self.notes.kind == Banner::Alarm,
                 );
@@ -77,11 +77,11 @@ impl App {
             Screen::Main | Screen::Ride(_) | Screen::Edit(..) => self.update_page(b),
             Screen::Summary => {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
-                let area = self.area();
+                let (area, look) = (self.area(), self.look());
                 if let Some((m, _)) = &mut self.summary {
                     let (base, view) = (Some(&self.basemap), m.view);
                     map::update(
-                        &mut Panel(b, area, self.settings.smooth),
+                        &mut Panel(b, area, look),
                         map::area(ui::card::MAP),
                         &self.track,
                         m,
@@ -96,7 +96,7 @@ impl App {
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, self.area(), self.settings.smooth), &self.radio.nearby);
+                ui::draw_list(&mut Panel(b, self.area(), self.look()), &self.radio.nearby);
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }

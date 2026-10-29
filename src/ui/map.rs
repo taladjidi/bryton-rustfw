@@ -587,6 +587,10 @@ impl Canvas for Clip<'_> {
     fn smooth(&self) -> bool {
         self.c.smooth()
     }
+
+    fn ink(&self, c: u16) -> u16 {
+        self.c.ink(c)
+    }
 }
 
 /// `r` cut to `k` (empty: zero width or height).

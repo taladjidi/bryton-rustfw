@@ -3254,3 +3254,74 @@ fn settings_decision() {
     std::println!("settings at a start: {lost} lost, registers took {took:?}, {file_wins} file, {migrated} migrated");
     assert!(lost > 0 && file_wins > 0 && migrated > 0 && took.iter().all(|&n| n > 0));
 }
+
+/// Theme files (ui/theme.rs `parse`, `\Rustfw\Themes\*.ini`): generated from the key table (sections, known and
+/// unknown keys, good, cut and wild colour values, comments, long lines, NULs, CRLF, bad versions and bases), never a
+/// panic; an accepted theme passes the whole-theme checks; and the seeds reach both ends (accepted, and each
+/// refusal), every key set from a file at least once.
+#[test]
+fn theme_files() {
+    use crate::theme::{NAMES, Refused, Theme, check, parse};
+    let mut accepted = 0;
+    let mut refused = [0usize; 5];
+    let mut set = [false; NAMES.len()];
+    for seed in 1..4000u32 {
+        let mut rnd = xorshift(seed.wrapping_mul(2_654_435_761));
+        let mut f = std::string::String::new();
+        let nl = if rnd().is_multiple_of(3) { "\r\n" } else { "\n" };
+        if !rnd().is_multiple_of(8) {
+            f.push_str("[theme]");
+            f.push_str(nl);
+            match rnd() % 6 {
+                0 => {}
+                1 => f.push_str(&std::format!("version = {}{nl}", rnd() % 4)),
+                2 => f.push_str(&std::format!("version = x{}{nl}", rnd() % 4)),
+                _ => f.push_str(&std::format!("version = 1{nl}name = T{}{nl}", rnd() % 100)),
+            }
+            if rnd().is_multiple_of(3) {
+                f.push_str(["base = outdoor", "base = dark", "base = ??"][rnd() as usize % 3]);
+                f.push_str(nl);
+            }
+        }
+        f.push_str("[colors]");
+        f.push_str(nl);
+        for _ in 0..rnd() % 24 {
+            let name = if rnd().is_multiple_of(6) { "unknown" } else { NAMES[rnd() as usize % NAMES.len()] };
+            let rgb = rnd() & 0xff_ffff;
+            let value = match rnd() % 8 {
+                0 => std::format!("#{rgb:06X}"),
+                1 => std::format!("{rgb:06x}"),
+                2 => std::format!("#{:05X}", rgb & 0xf_ffff),
+                3 => std::format!("#{rgb:06X} ; note"),
+                4 => std::format!("#{}", "G".repeat(1 + rnd() as usize % 8)),
+                5 => std::string::String::new(),
+                // readable pairs and red often enough for both checks to bite
+                6 => ["#FFFFFF", "#000000", "#FF0000", "#F80000"][rnd() as usize % 4].into(),
+                _ => "x".repeat(rnd() as usize % 600),
+            };
+            f.push_str(&std::format!("{name} = {value}{nl}"));
+            if rnd().is_multiple_of(40) {
+                f.push('\0');
+            }
+        }
+        let bytes = f.as_bytes();
+        let bytes = &bytes[..if rnd().is_multiple_of(10) { rnd() as usize % (bytes.len() + 1) } else { bytes.len() }];
+        match parse(bytes) {
+            Ok(t) => {
+                accepted += 1;
+                assert!(check(&t, &Theme::DARK).is_ok() || check(&t, &Theme::OUTDOOR).is_ok(), "seed {seed}");
+                for (s, (c, d)) in set.iter_mut().zip(t.ink.iter().zip(Theme::DARK.ink)) {
+                    *s |= *c != d;
+                }
+            }
+            Err(Refused::NotATheme) => refused[0] += 1,
+            Err(Refused::TooNew) => refused[1] += 1,
+            Err(Refused::Contrast) => refused[2] += 1,
+            Err(Refused::RedNotAlarm) => refused[3] += 1,
+            Err(Refused::SameZones) => refused[4] += 1,
+        }
+    }
+    assert!(accepted > 100, "accepted {accepted}");
+    assert!(refused.iter().all(|&n| n > 0), "every refusal reached: {refused:?}");
+    assert!(set.iter().filter(|&&s| s).count() >= NAMES.len() - 2, "keys set from a file: {set:?}");
+}

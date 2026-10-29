@@ -9,6 +9,7 @@ pub mod menu;
 pub mod page;
 pub mod quick;
 pub mod text;
+pub mod theme;
 pub mod tiles;
 pub mod trainer;
 
@@ -20,6 +21,7 @@ pub use fields::*;
 pub use gauge::*;
 pub use overview::*;
 pub use strip::*;
+pub use theme::Theme;
 
 use crate::fonts::PIXEL;
 use crate::storage::workout_file::{PROF_H, unpack_bar};
@@ -48,6 +50,14 @@ pub const GREY: u16 = 0x8410;
 pub const DARK: u16 = 0x39e7;
 /// RGB565 yellow.
 pub const YELLOW: u16 = 0xffe0;
+
+/// Text on the accent (a selected row, a banner, a button): black, one step off [`BLACK`] so the theme tells it from
+/// the background ([`Theme`]); DARK draws it as black.
+pub const ON_ACCENT: u16 = 0x0020;
+/// Text on the alarm red: white, one step off [`WHITE`] for the same reason.
+pub const ON_ALARM: u16 = 0xffdf;
+/// The overview's menu cog.
+pub const COG_COLOR: u16 = 0xc618;
 
 /// A climb's colour by its grade (% x 10), in the bands climbing apps use: under 6 %, under 9 %, under 12 %, above
 /// (Garmin's ClimbPro colours its climbs by grade the same way; the bands here are this firmware's). The zone
@@ -88,6 +98,11 @@ pub trait Canvas {
     /// otherwise.
     fn smooth(&self) -> bool {
         false
+    }
+    /// The colour the built-in colour `c` is drawn in: the theme's ([`Theme`]); `c` itself unless a theme is on.
+    /// Drawing code that makes colours itself (a blit) asks once before the blit, never per pixel.
+    fn ink(&self, c: u16) -> u16 {
+        c
     }
 }
 
@@ -275,19 +290,20 @@ pub struct Row {
     pub y: u32,
     /// Its pixels, RGB565.
     pub px: [u16; W as usize],
-    /// Text takes the smooth font ([`Canvas::smooth`]).
-    pub smooth: bool,
+    /// The font and colours ([`Canvas::smooth`], [`Canvas::ink`]).
+    pub look: Theme,
 }
 
 impl Row {
-    /// Row `y`, all black.
+    /// Row `y`, all black, in DARK.
     pub fn new(y: u32) -> Self {
-        Row { y, px: [BLACK; W as usize], smooth: false }
+        Row { y, px: [BLACK; W as usize], look: Theme::DARK }
     }
 }
 
 impl Canvas for Row {
     fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
+        let color = self.look.ink(color);
         self.blit(x, y, w, h, &mut |_, _| color);
     }
 
@@ -305,7 +321,11 @@ impl Canvas for Row {
     }
 
     fn smooth(&self) -> bool {
-        self.smooth
+        self.look.smooth
+    }
+
+    fn ink(&self, c: u16) -> u16 {
+        self.look.ink(c)
     }
 }
 
@@ -342,7 +362,7 @@ pub fn lines<'a>(style: &Style, text: &'a str, w: u32) -> (&'a str, &'a str) {
 /// A banner over the top of the screen: `text` on one or two lines ([`lines`]) at 2x, black on orange, or white on
 /// red for an `alarm` (heart rate high, off course, the battery low, a ride not saving).
 pub fn draw_banner(c: &mut impl Canvas, text: &str, alarm: bool) {
-    let (fg, bg) = if alarm { (WHITE, RED) } else { (BLACK, ACCENT) };
+    let (fg, bg) = if alarm { (ON_ALARM, RED) } else { (ON_ACCENT, ACCENT) };
     let style = Style { fg, bg, ..LABEL };
     let lh = style.height();
     let (a, b) = lines(&style, text, W - 12);
@@ -381,7 +401,7 @@ pub fn draw_call(c: &mut impl Canvas, who: &str) {
     draw_banner(c, l.as_str(), false);
     c.fill(0, CALL_Y, W, H - CALL_Y, BLACK);
     for (i, &(x, y, w, h)) in CALL_BUTTONS.iter().enumerate() {
-        let (bg, fg, key) = if i == 0 { (RED, WHITE, "BACK") } else { (GREEN, BLACK, "START") };
+        let (bg, fg, key) = if i == 0 { (RED, ON_ALARM, "BACK") } else { (GREEN, ON_ACCENT, "START") };
         c.fill(x, y, w, h, bg);
         draw_bitmap(c, &HANDSET, x + w / 2 - 16, y + 6, 2, fg);
         text::draw_in(c, &Style { fg, bg, ..LABEL }, x + 2, y + h - 4 - LABEL.height(), w - 4, Align::Centre, key);
@@ -433,7 +453,7 @@ pub fn draw_end_button(c: &mut impl Canvas, k: usize, label: &str, selected: boo
     let Some(&(x, y, w, h)) = END_BUTTONS.get(k) else { return };
     let ty = y + (h - LABEL.height()) / 2;
     let (bg, fg) = match (selected, label) {
-        (true, _) => (ACCENT, BLACK),
+        (true, _) => (ACCENT, ON_ACCENT),
         (false, "DISCARD") => (BLACK, RED),
         _ => (BLACK, WHITE),
     };
@@ -508,13 +528,13 @@ pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, va
     let y = LIST_Y + i as u32 * MENU_ROW;
     // a row with no value and a grey one is a note (an empty list), not a choice
     let note = value.is_empty() && value_color == GREY;
-    let (bg, fg) = if selected { (ACCENT, BLACK) } else { (BLACK, if note { GREY } else { WHITE }) };
+    let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, if note { GREY } else { WHITE }) };
     let name_w = menu_label_w(label, value);
     let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
     c.fill(0, y, W, ty - y, bg);
     c.fill(0, ty, NEARBY.0, LABEL.height(), bg);
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty, name_w, Align::Left, label);
-    let fg = if selected { BLACK } else { value_color };
+    let fg = if selected { ON_ACCENT } else { value_color };
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, ty, NEARBY.2 - name_w, Align::Right, value);
     c.fill(NEARBY.0 + NEARBY.2, ty, W - NEARBY.0 - NEARBY.2, LABEL.height(), bg);
     let below = ty + LABEL.height();
@@ -611,6 +631,7 @@ pub(crate) mod tests {
 
     impl Canvas for Frame {
         fn fill(&mut self, x: u32, y: u32, w: u32, h: u32, color: u16) {
+            let color = self.ink(color);
             self.blit(x, y, w, h, &mut |_, _| color);
         }
 
@@ -627,6 +648,11 @@ pub(crate) mod tests {
 
         fn smooth(&self) -> bool {
             self.smooth
+        }
+
+        /// As the panel in DARK draws it, so a test compares the same pixels.
+        fn ink(&self, c: u16) -> u16 {
+            Theme::DARK.ink(c)
         }
     }
 

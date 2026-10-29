@@ -271,6 +271,30 @@ pub struct Settings {
     pub smooth: bool,
     /// GPS POWER (BIKE): kept in register 16, bits 25 (SAVER) and 26 (FULL); neither is AUTO.
     pub gps_power: GpsPower,
+    /// THEME (DISPLAY): the name of the colour theme, NUL padded; empty is DARK. A built-in's name, or a file's in
+    /// `\Rustfw\Themes` without `.ini` ([`crate::theme`]). Kept in settings.bin only (the registers have no room).
+    pub theme: [u8; 12],
+}
+
+impl Settings {
+    /// The theme's name as the menu shows it.
+    pub fn theme_name(&self) -> &str {
+        let n = self.theme.iter().position(|&b| b == 0).unwrap_or(self.theme.len());
+        match self.theme.get(..n).and_then(|b| core::str::from_utf8(b).ok()) {
+            Some(s) if !s.is_empty() => s,
+            _ => "DARK",
+        }
+    }
+
+    /// Sets the theme by name (up to 12 characters; DARK is the empty name).
+    pub fn set_theme_name(&mut self, name: &str) {
+        self.theme = [0; 12];
+        if !name.eq_ignore_ascii_case("DARK") {
+            for (t, b) in self.theme.iter_mut().zip(name.bytes()) {
+                *t = b;
+            }
+        }
+    }
 }
 
 /// GPS POWER: the receiver's power mode ([`crate::gnss::config`]).
@@ -335,6 +359,7 @@ impl Settings {
             ahead: true,
             smooth: false,
             gps_power: GpsPower::Auto,
+            theme: [0; 12],
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -568,6 +593,7 @@ impl Settings {
             Setting::Touch => l.push_str(if self.touch { "ON" } else { "OFF" }),
             Setting::ClimbsAhead => l.push_str(if self.ahead { "ON" } else { "OFF" }),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
+            Setting::Theme => l.push_str(self.theme_name()),
             Setting::GpsPower => l.push_str(match self.gps_power {
                 GpsPower::Auto => "AUTO",
                 GpsPower::Full => "FULL",
@@ -647,6 +673,11 @@ impl Settings {
             Setting::Touch => self.touch = !self.touch,
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::Font => self.smooth = !self.smooth,
+            // the built-ins only; the card's files are added by the app (App::next_theme)
+            Setting::Theme => {
+                let next = if self.theme_name().eq_ignore_ascii_case("DARK") { "OUTDOOR" } else { "DARK" };
+                self.set_theme_name(next);
+            }
             Setting::GpsPower => {
                 self.gps_power = match self.gps_power {
                     GpsPower::Auto => GpsPower::Full,

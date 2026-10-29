@@ -135,7 +135,7 @@ impl App {
         if self.powercal.asking() {
             btn(c, MAIN_BTN, ui::DARK, ui::WHITE, "CANCEL");
         } else {
-            btn(c, MAIN_BTN, ui::ACCENT, ui::BLACK, "CALIBRATE");
+            btn(c, MAIN_BTN, ui::ACCENT, ui::ON_ACCENT, "CALIBRATE");
         }
     }
 }

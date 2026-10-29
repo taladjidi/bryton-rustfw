@@ -500,7 +500,7 @@ impl App {
     pub(crate) fn update_gauge(&self, b: &mut impl Board, old: GaugeShown, bx: (u32, u32, u32, u32)) -> Drawn {
         let cols = ui::gauge_cols(bx);
         let now = if old.pace.is_some() { self.pace_now(cols) } else { self.gauge_now(cols) };
-        let mut p = Panel(b, self.area(), self.settings.smooth);
+        let mut p = Panel(b, self.area(), self.look());
         if !now.same_frame(&old) {
             self.draw_gauge(&mut p, bx, now);
             return Drawn::Gauge(now);

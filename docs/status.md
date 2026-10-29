@@ -8,6 +8,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Themes (ui/theme.rs, app/themes.rs; T1)**: OUTDOOR read in the sun (is it better than DARK on the transflective
+  panel?); a theme file loaded from `\Rustfw\Themes` on the card (listed, picked, kept in settings.bin, applied
+  after a restart); the redraw at the first pass when the settings file names a file theme (one flash of DARK).
+
 - **The settings' file (`\Rustfw\settings.bin`, app/settings_file.rs)**: seen on the unit 2026-10-29 (RAM run,
   EMMC_WRITE=1). The first start created the file (seq 1). A FONT change wrote seq 2 into the other copy. After
   `dev.py reset` the older installed build b0861d8 booted, and re-running f5d7f3e kept the change. Changing it back wrote

@@ -568,7 +568,7 @@ impl App {
         for i in 0..ui::MENU_ROWS {
             let print = self.menu_row_print(menu, sel, i);
             if self.menu_shown[i] != print {
-                self.draw_menu_row(&mut Panel(b, self.area(), self.settings.smooth), menu, sel, i);
+                self.draw_menu_row(&mut Panel(b, self.area(), self.look()), menu, sel, i);
                 self.menu_shown[i] = print;
             }
         }
@@ -754,6 +754,8 @@ impl App {
             if !self.editing {
                 self.save_misc(b);
             }
+        } else if s == menu::Setting::Theme {
+            self.next_theme(b);
         } else {
             self.settings.cycle(s);
             self.save_misc(b);
@@ -769,7 +771,7 @@ impl App {
     pub(crate) fn font_changed(&mut self, b: &mut impl Board) {
         self.notes.drawn = false; // the banner too, if one is up
         self.strip_shown = self.strip;
-        ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
+        ui::draw_strip(&mut Panel(b, (0, ui::H), self.look()), &self.strip);
         self.show(b);
     }
 

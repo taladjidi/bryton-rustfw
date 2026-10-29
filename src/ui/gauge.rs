@@ -83,7 +83,12 @@ fn gauge_px(g: &GaugeBar, h: u32, i: u32, dy: u32) -> u16 {
 fn draw_gauge_columns(c: &mut impl Canvas, bar: (u32, u32, u32, u32), g: &GaugeBar, from: u32, to: u32) {
     let to = to.min(bar.2.saturating_sub(1));
     if from <= to {
-        c.blit(bar.0 + from, bar.1, to - from + 1, bar.3, &mut |i, dy| gauge_px(g, bar.3, from + i, dy));
+        // the keys' translations once, not a call into the canvas per pixel
+        let table = theme::KEYS.map(|k| c.ink(k));
+        c.blit(bar.0 + from, bar.1, to - from + 1, bar.3, &mut |i, dy| {
+            let p = gauge_px(g, bar.3, from + i, dy);
+            theme::KEYS.iter().position(|&k| k == p).and_then(|k| table.get(k).copied()).unwrap_or(p)
+        });
     }
 }
 

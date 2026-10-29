@@ -153,7 +153,7 @@ impl App {
         ask.push_str(" W?");
         draw_in(c, &ui::LABEL, 0, y, ui::W, Align::Centre, ask.as_str());
         for (k, (&(bx, by, bw, bh), label)) in RAMP_BUTTONS.iter().zip(["APPLY", "KEEP"]).enumerate() {
-            let (bg, fg) = if k == 0 { (ui::ACCENT, ui::BLACK) } else { (ui::BLACK, ui::WHITE) };
+            let (bg, fg) = if k == 0 { (ui::ACCENT, ui::ON_ACCENT) } else { (ui::BLACK, ui::WHITE) };
             let frame = if k == 0 { ui::ACCENT } else { ui::GREY };
             c.fill(bx, by, bw, bh, frame);
             c.fill(bx + 2, by + 2, bw - 4, bh - 4, bg);

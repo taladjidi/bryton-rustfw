@@ -332,7 +332,7 @@ fn gauge_shows_the_zones() {
     };
     let cases = [((160, 180), 140), ((160, 180), 210), ((215, 235), 190), ((215, 235), 260)];
     // full width: two gauges on top of each other, then the half-width ones side by side
-    let mut p = Panel(&mut sim, (0, ui::H), false);
+    let mut p = Panel(&mut sim, (0, ui::H), ui::Theme::DARK);
     p.fill(0, 0, ui::W, ui::H, ui::BLACK);
     let full = [(0, 24, 240, 118), (0, 160, 240, 118)];
     let half = [(0, 24, 120, 100), (120, 24, 120, 100), (0, 160, 120, 100), (120, 160, 120, 100)];
@@ -340,13 +340,13 @@ fn gauge_shows_the_zones() {
         app.draw_gauge(&mut p, bx, shown(band, w, bx, None));
     }
     sim.save("gauge_zones_full_a");
-    let mut p = Panel(&mut sim, (0, ui::H), false);
+    let mut p = Panel(&mut sim, (0, ui::H), ui::Theme::DARK);
     p.fill(0, 0, ui::W, ui::H, ui::BLACK);
     for (bx, (band, w)) in full.into_iter().zip([cases[1], cases[3]]) {
         app.draw_gauge(&mut p, bx, shown(band, w, bx, None));
     }
     sim.save("gauge_zones_full_b");
-    let mut p = Panel(&mut sim, (0, ui::H), false);
+    let mut p = Panel(&mut sim, (0, ui::H), ui::Theme::DARK);
     p.fill(0, 0, ui::W, ui::H, ui::BLACK);
     for (bx, (band, w)) in half.into_iter().zip(cases) {
         app.draw_gauge(&mut p, bx, shown(band, w, bx, Some(754)));
@@ -357,8 +357,8 @@ fn gauge_shows_the_zones() {
     let bx = full[0];
     let z = crate::ride::power_color;
     let screen_of = |sim: &mut Sim, app: &App| {
-        Panel(&mut *sim, (0, ui::H), false).fill(0, 0, ui::W, ui::H, ui::BLACK);
-        app.draw_gauge(&mut Panel(&mut *sim, (0, ui::H), false), bx, shown((160, 180), 140, bx, None));
+        Panel(&mut *sim, (0, ui::H), ui::Theme::DARK).fill(0, 0, ui::W, ui::H, ui::BLACK);
+        app.draw_gauge(&mut Panel(&mut *sim, (0, ui::H), ui::Theme::DARK), bx, shown((160, 180), 140, bx, None));
         sim.screen.clone()
     };
     let column = |screen: &[u16], ftp: u16| {

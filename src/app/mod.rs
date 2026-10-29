@@ -34,6 +34,7 @@ mod screens;
 mod settings;
 mod settings_file;
 mod stock_data;
+mod themes;
 mod trainer;
 mod workouts;
 

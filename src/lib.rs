@@ -28,7 +28,7 @@ pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
 pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, ramp, ride, trainer, workout};
-pub use ui::{fonts, map, menu, page, text, tiles};
+pub use ui::{fonts, map, menu, page, text, theme, tiles};
 // the app's parts (app/mod.rs), at the root as before the split
 pub use app::*;
 
@@ -206,6 +206,8 @@ pub struct App {
     up_ms: u32,
     /// Wheel, backlight, max heart rate, FTP.
     settings: Settings,
+    /// The colour theme in use (THEME), DARK until the settings file is read ([`App::look`]).
+    theme: ui::Theme,
     /// The selected menu row's number is being changed (Lap up, Page down, Start or Back to leave).
     editing: bool,
     /// The selected menu row was chosen (by a key or a tap) since the menu opened: a tap on it acts. A tap on another
@@ -418,6 +420,7 @@ impl App {
             gps: Gps::new(gnss::Aid::from_words(AID_BKP.map(|r| b.backup_read(r)))),
             up_ms: 0,
             settings: misc,
+            theme: ui::Theme::DARK,
             editing: false,
             menu_chosen: false,
             confirm: None,
@@ -538,7 +541,7 @@ impl App {
             self.phone_setup(b);
         }
         self.strip_shown = self.strip;
-        ui::draw_strip(&mut Panel(b, (0, ui::H), self.settings.smooth), &self.strip);
+        ui::draw_strip(&mut Panel(b, (0, ui::H), self.look()), &self.strip);
         self.show(b);
         self.update_light(b);
     }

@@ -604,15 +604,12 @@ impl App {
     /// The call's overlay goes (answered, declined, missed, the link lost): what was under it drawn again.
     pub(crate) fn end_ring(&mut self, b: &mut impl Board) {
         if core::mem::take(&mut self.phone.ringing) {
-            let mut p = Panel(b, (ui::CALL_Y, ui::H), self.settings.smooth);
+            let mut p = Panel(b, (ui::CALL_Y, ui::H), self.look());
             p.fill(0, ui::CALL_Y, ui::W, ui::H - ui::CALL_Y, ui::BLACK);
             self.draw_screen(&mut p);
             if self.screen == Screen::Main {
                 // the date row left out under the call's banner, drawn again (its top rows come with redraw_top)
-                ui::draw_date(
-                    &mut Panel(b, (ui::BANNER_H, ui::CALL_Y), self.settings.smooth),
-                    date_text(self.date).as_str(),
-                );
+                ui::draw_date(&mut Panel(b, (ui::BANNER_H, ui::CALL_Y), self.look()), date_text(self.date).as_str());
             }
             self.redraw_top(b); // the strip and the page's top, or a banner said meanwhile
         }
@@ -936,7 +933,7 @@ impl App {
                     // over whatever screen is up: the page between keeps updating (area()); a banner waits under it
                     self.notes.drawn = false;
                     self.phone.ringing = true;
-                    let mut p = Panel(b, (0, ui::H), self.settings.smooth);
+                    let mut p = Panel(b, (0, ui::H), self.look());
                     ui::draw_call(&mut p, who.as_str());
                     if self.screen == Screen::Main {
                         p.fill(0, ui::BANNER_H, ui::W, ui::TODAY_BOX.1 - ui::BANNER_H, ui::BLACK); // the date row's lower half
@@ -1008,7 +1005,7 @@ impl App {
     /// Redraws what changed on the media screen (the time and the bar's new columns, a second).
     pub(crate) fn update_media(&mut self, b: &mut impl Board) {
         let mut shown = self.phone.shown;
-        ui::media::update(&mut Panel(b, self.area(), self.settings.smooth), &self.media_now(), &mut shown, false);
+        ui::media::update(&mut Panel(b, self.area(), self.look()), &self.media_now(), &mut shown, false);
         self.phone.shown = shown;
     }
 }

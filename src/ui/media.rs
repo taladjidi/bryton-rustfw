@@ -202,7 +202,7 @@ fn split(s: &str, w: u32) -> (&str, &str) {
 pub fn button(c: &mut impl Canvas, b: Button, (x, y, w, h): (u32, u32, u32, u32), playing: bool, dim: bool) {
     let (bg, fg) = match (b, dim) {
         (_, true) => (DARK, GREY),
-        (Button::Play, _) => (ACCENT, BLACK),
+        (Button::Play, _) => (ACCENT, super::ON_ACCENT),
         _ => (DARK, WHITE),
     };
     c.fill(x, y, w, h, bg);
