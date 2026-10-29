@@ -859,15 +859,13 @@ impl App {
         self.settings_store.lost = false; // the rider's change: the registers hold it, a late read must not undo it
     }
 
-    /// Writes the settings to their backup registers.
-    /// Writes the settings to their backup registers (before the file is read, only those a change touched:
-    /// `SettingsStore::writes`).
+    /// Writes the settings to their backup registers (before the file is read, those no change touched as they were
+    /// at the start: `SettingsStore::writes`; a change undone puts the start's word back).
     pub(crate) fn write_settings_registers(&self, b: &mut impl Board) {
+        let st = &self.settings_store;
         let w = self.settings.register_words();
         for (k, (r, word)) in [WHEEL_BKP, POWER_BKP, ALERTS_BKP].into_iter().zip(w).enumerate() {
-            if self.settings_store.writes(k, word) {
-                b.backup_write(r, word);
-            }
+            b.backup_write(r, if st.writes(k, word) { word } else { st.boot.get(k).copied().unwrap_or(word) });
         }
         self.write_aid(b);
     }

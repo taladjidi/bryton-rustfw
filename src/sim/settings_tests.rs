@@ -204,6 +204,26 @@ fn aiding_written_before_the_read_keeps_auto_off_unknown() {
     assert_eq!(app3.settings.auto_off, 3, "the file's");
 }
 
+/// With the drive lent (the file not read yet), SMOOTH turned on and off again, then a restart: the file's FONT, the
+/// register put back as it was at the start rather than left with the undone change.
+#[test]
+fn a_change_undone_before_the_read_leaves_the_files() {
+    let (sim, _) = started(Settings { smooth: false, ..some() }, false);
+    assert!(!file(&sim).unwrap().settings.smooth);
+    let mut s2 = Sim::new(9, 5, 0);
+    (s2.emmc.image, s2.backup) = (sim.emmc.image.clone(), sim.backup);
+    let mut app2 = App::start(&mut s2, None);
+    app2.emmc.lend(true);
+    for smooth in [true, false] {
+        app2.settings.smooth = smooth;
+        app2.save_misc(&mut s2);
+    }
+    run(&mut s2, &mut app2, u64::from(PAGES_LOAD_MS) + 200);
+    assert!(!app2.settings_store.loaded, "the drive lent: not read");
+    let (_, app3) = reboot(&mut s2, false);
+    assert!(!app3.settings.smooth, "the file's");
+}
+
 /// Register by register: register 18 rewritten by a build without AUTO OFF (its bits gone) keeps the file's AUTO OFF;
 /// register 16 changed alone gives only its fields (the weight), the others staying the file's; the file then has
 /// both and the registers agree with it.
