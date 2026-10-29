@@ -321,10 +321,67 @@ impl Tracker {
 
 /// The nearest point found: its segment, its distance along the course and from it.
 #[derive(Clone, Copy, Debug)]
-struct Hit {
-    seg: usize,
-    along_m: u32,
-    off_m: u32,
+pub(crate) struct Hit {
+    pub(crate) seg: usize,
+    pub(crate) along_m: u32,
+    pub(crate) off_m: u32,
+}
+
+/// The nearest point of the step from `a` to `b` (plane metres, at distances `da` and `db` along the track) to `p`:
+/// squared distance and distance along. Shared with the segment matcher (`segment_match`).
+pub(crate) fn seg_hit(a: (i32, i32), b: (i32, i32), (da, db): (u32, u32), p: (i32, i32)) -> (i64, u32) {
+    let (abx, aby) = (i64::from(b.0) - i64::from(a.0), i64::from(b.1) - i64::from(a.1));
+    let (apx, apy) = (i64::from(p.0) - i64::from(a.0), i64::from(p.1) - i64::from(a.1));
+    let l2 = abx * abx + aby * aby;
+    // where along the segment, 0 to 65536 (every value here is within 4e6 m: no overflow)
+    let t = if l2 == 0 { 0 } else { ((apx * abx + apy * aby).clamp(0, l2) << 16) / l2 };
+    let (cx, cy) = (apx - ((abx * t) >> 16), apy - ((aby * t) >> 16));
+    let along = i64::from(da) + ((i64::from(db.saturating_sub(da)) * t) >> 16);
+    (cx * cx + cy * cy, along.clamp(0, i64::from(u32::MAX)) as u32)
+}
+
+/// The nearest segment among `ranges`, `on(i)` giving segment `i`'s [`seg_hit`] to the fix. The segments about as
+/// near as the nearest ([`TIE_M`]) make runs of consecutive segments, one per pass of the track near the fix; each
+/// run's nearest segment stands for it, and the pass nearest to `along` (where the rider was) wins.
+pub(crate) fn nearest_by(
+    on: impl Fn(usize) -> Option<(i64, u32)>,
+    ranges: &[core::ops::Range<usize>],
+    along: u32,
+    n: &mut u32,
+) -> Option<Hit> {
+    let segs = || ranges.iter().flat_map(|r| r.clone()).filter_map(|i| Some((i, on(i)?)));
+    let mut best_d2 = i64::MAX;
+    for (_, (d2, _)) in segs() {
+        *n = n.saturating_add(1);
+        best_d2 = best_d2.min(d2);
+    }
+    let off = best_d2.unsigned_abs().isqrt();
+    let tie = (off + u64::from(TIE_M)).saturating_mul(off + u64::from(TIE_M));
+    let mut pick: Option<Hit> = None;
+    let mut close = |run: Option<(usize, i64, Hit)>| {
+        if let Some((_, _, h)) = run
+            && pick.is_none_or(|k| h.along_m.abs_diff(along) < k.along_m.abs_diff(along))
+        {
+            pick = Some(h);
+        }
+    };
+    let mut run: Option<(usize, i64, Hit)> = None;
+    for (i, (d2, a)) in segs() {
+        let h = Hit { seg: i, along_m: a, off_m: d2.unsigned_abs().isqrt() as u32 };
+        run = match run {
+            _ if d2.unsigned_abs() > tie => {
+                close(run);
+                None
+            }
+            Some((last, rd2, rh)) if last + 1 == i => Some(if d2 < rd2 { (i, d2, h) } else { (i, rd2, rh) }),
+            _ => {
+                close(run);
+                Some((i, d2, h))
+            }
+        };
+    }
+    close(run);
+    pick
 }
 
 /// A course: its points, their distances, altitudes and ascent, the chunks' boxes and the climbs.
@@ -630,53 +687,12 @@ impl Course {
         }
         let (&a, &b) = (self.xy.get(i)?, self.xy.get(i + 1)?);
         let (&da, &db) = (self.dist.get(i)?, self.dist.get(i + 1)?);
-        let (abx, aby) = (i64::from(b.0) - i64::from(a.0), i64::from(b.1) - i64::from(a.1));
-        let (apx, apy) = (i64::from(p.0) - i64::from(a.0), i64::from(p.1) - i64::from(a.1));
-        let l2 = abx * abx + aby * aby;
-        // where along the segment, 0 to 65536 (every value here is within 4e6 m: no overflow)
-        let t = if l2 == 0 { 0 } else { ((apx * abx + apy * aby).clamp(0, l2) << 16) / l2 };
-        let (cx, cy) = (apx - ((abx * t) >> 16), apy - ((aby * t) >> 16));
-        let along = i64::from(da) + ((i64::from(db.saturating_sub(da)) * t) >> 16);
-        Some((cx * cx + cy * cy, along.clamp(0, i64::from(u32::MAX)) as u32))
+        Some(seg_hit(a, b, (da, db), p))
     }
 
-    /// The nearest segment to `p` among `ranges`. The segments about as near as the nearest ([`TIE_M`]) make runs
-    /// of consecutive segments, one per pass of the course near `p`; each run's nearest segment stands for it, and
-    /// the pass nearest to `along` (where the rider was) wins.
+    /// The nearest segment to `p` among `ranges` ([`nearest_by`]).
     fn nearest(&self, p: (i32, i32), ranges: &[core::ops::Range<usize>], along: u32, n: &mut u32) -> Option<Hit> {
-        let segs = || ranges.iter().flat_map(|r| r.clone()).filter_map(|i| Some((i, self.on_segment(i, p)?)));
-        let mut best_d2 = i64::MAX;
-        for (_, (d2, _)) in segs() {
-            *n = n.saturating_add(1);
-            best_d2 = best_d2.min(d2);
-        }
-        let off = best_d2.unsigned_abs().isqrt();
-        let tie = (off + u64::from(TIE_M)).saturating_mul(off + u64::from(TIE_M));
-        let mut pick: Option<Hit> = None;
-        let mut close = |run: Option<(usize, i64, Hit)>| {
-            if let Some((_, _, h)) = run
-                && pick.is_none_or(|k| h.along_m.abs_diff(along) < k.along_m.abs_diff(along))
-            {
-                pick = Some(h);
-            }
-        };
-        let mut run: Option<(usize, i64, Hit)> = None;
-        for (i, (d2, a)) in segs() {
-            let h = Hit { seg: i, along_m: a, off_m: d2.unsigned_abs().isqrt() as u32 };
-            run = match run {
-                _ if d2.unsigned_abs() > tie => {
-                    close(run);
-                    None
-                }
-                Some((last, rd2, rh)) if last + 1 == i => Some(if d2 < rd2 { (i, d2, h) } else { (i, rd2, rh) }),
-                _ => {
-                    close(run);
-                    Some((i, d2, h))
-                }
-            };
-        }
-        close(run);
-        pick
+        nearest_by(|i| self.on_segment(i, p), ranges, along, n)
     }
 
     /// The nearest segment among [`SEARCH_CHUNKS`] chunks: of the chunks whose boxes are about as near to `p` as the

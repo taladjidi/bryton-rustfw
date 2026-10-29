@@ -3885,3 +3885,88 @@ fn segment_files() {
     }
     assert!(reached.iter().all(|&c| c > 0), "every error and the Ok path reached: {reached:?}");
 }
+
+/// The segment matcher (nav/segment_match.rs) against parsed segments, fed random fixes: a rider that follows the
+/// track with noise, then wanders (jumps, U-turns, stops, a clock that stands or jumps), at up to 30 m/s, in the
+/// lane of one segment or of a second one of another geometry. In some seeds the segment is a 2 or 3 point one, and
+/// in some the wrong file is handed in. No input panics; the events come in a valid order (an Approach or a Start
+/// while idle, then a Lost or a Finish, the segment active between), a wrong file only ever loses the segment, a
+/// finish's deltas are the elapsed time minus a time inside the segment's span, and over the seeds starts (by both
+/// segments), finishes and losses are all reached.
+#[test]
+fn segment_matcher() {
+    use crate::segment::{Segment, tests::synth};
+    use crate::segment_match::tests::{at, seg};
+    use crate::segment_match::{Event, Matcher};
+    let mut other = seg(12);
+    other.header.id = 9;
+    for p in other.header.start.iter_mut().filter(|p| **p != (0, 0)) {
+        p.0 += 8983; // 100 m north
+    }
+    other.lat.iter_mut().for_each(|v| *v += 8983);
+    let (mut starts, mut finishes, mut losts, mut by_other) = (0, 0, 0, 0);
+    for seed in 1..=1500u32 {
+        let mut next = xorshift(seed);
+        let mut m = Matcher::new();
+        let mut s = seg(20);
+        if seed % 9 == 0 {
+            // a tiny segment (2 or 3 points; the reader takes no fewer)
+            let mut tiny = Segment::new();
+            if tiny.parse(&synth(2 + (next() % 2) as usize, &[*b"07", *b"05"])).is_ok() {
+                s = tiny;
+            }
+        }
+        let wrong = seed % 7 == 0; // the file handed in is not the active one's
+        let lane = if next().is_multiple_of(2) { 0.0 } else { 100.0 };
+        let (mut pos, mut t, mut active) = (-300.0f64, 0u32, false);
+        for _ in 0..400 {
+            let speed = 3.0 + f64::from(next() % 28);
+            let noise = |v: u32| f64::from(v % 41) - 20.0;
+            match next() % 40 {
+                0 => pos = f64::from(next() % 2000) - 500.0, // a jump
+                1 => pos -= 60.0,                            // a step back
+                2 => t = t.saturating_add(next() % 400),     // a gap in the fixes
+                3 => {}                                      // a stopped clock, same fix
+                _ => pos += speed,
+            }
+            if !next().is_multiple_of(40) {
+                t += 1;
+            }
+            let side = lane + if next().is_multiple_of(25) { 70.0 } else { noise(next()) * 0.3 };
+            let (lat, lon) = at(pos + noise(next()) * 0.3, side);
+            let ev = match m.active_id() {
+                Some(id) => {
+                    let file = if wrong == (id == s.header.id) { &other } else { &s };
+                    m.step_active(file, lat, lon, t)
+                }
+                None => m.step_idle([&s.header, &other.header], lat, lon, t),
+            };
+            match ev {
+                Some(Event::Start(id)) => {
+                    assert!(!active && m.active_id() == Some(id));
+                    (active, starts) = (true, starts + 1);
+                    by_other += usize::from(id == 9);
+                }
+                Some(Event::Lost(_)) => {
+                    assert!(active && m.active_id().is_none());
+                    (active, losts) = (false, losts + 1);
+                }
+                Some(Event::Finish { id, elapsed_s, deltas }) => {
+                    assert!(active && !wrong && m.active_id().is_none());
+                    (active, finishes) = (false, finishes + 1);
+                    let file = if id == 9 { &other } else { &s };
+                    let last = file.npoints - 1;
+                    for (c, d) in deltas.iter().enumerate() {
+                        if let Some(d) = d {
+                            let target = i64::from(elapsed_s) - i64::from(*d);
+                            assert!((0..=i64::from(file.times[last][c])).contains(&target), "{d} {elapsed_s}");
+                        }
+                    }
+                }
+                Some(Event::Approach(_)) => assert!(!active),
+                None => assert_eq!(active, m.active_id().is_some()),
+            }
+        }
+    }
+    assert!(starts > 100 && finishes > 20 && losts > 20 && by_other > 10, "{starts} {finishes} {losts} {by_other}");
+}

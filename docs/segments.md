@@ -1,6 +1,6 @@
 # Live segments: a plan
 
-Status: S1 built (2026-10-29: `src/nav/segment.rs`, the reader, its unit tests and fuzz; nothing on the unit yet). S2 next.
+Status: S1 and S2 built (2026-10-29/30: `src/nav/segment.rs` the reader, `src/nav/segment_match.rs` the matcher, their tests and fuzz; nothing on the unit yet). S3 next.
 Order of work: docs/roadmap.md, "Order of work", block 2.
 Not here: how stock does it in detail (bryton repo ghidra/recovered_src/ride/live_segments.c), the comparison with
 other units (checklist.md, "Climbs ahead and live segments").
@@ -146,7 +146,7 @@ docs/sync.md); the cache and the downloaded segments live in the user's home, ne
 | Step | What | Agent |
 |---|---|---|
 | S1 (done 2026-10-29) | `src/nav/segment.rs`: the `.seg` reader (pure, over a byte slice), the checks above; unit tests, doc tests; fuzz (src/sim/fuzz.rs): files generated from the layout (header fields, counts, times, a FIT course), cut, wild values; a count that every check is reached | implementer |
-| S2 | The matcher in `src/nav/segment.rs`: near, start, progress (course.rs's code), lost, finish, the ghost's delta; host tests with synthetic tracks: a clean pass, a start missed by 30 m, a U-turn, a stop, lost and found, two overlapping segments, a segment along a course | implementer (sonnet) |
+| S2 (done 2026-10-30) | The matcher in `src/nav/segment_match.rs` (decisions below the table): near, start, progress (course.rs's code), lost, finish, the ghost's delta; host tests with synthetic tracks: a clean pass, a start missed by 30 m, a U-turn, a stop, lost and found, two overlapping segments, a segment along a course | implementer (sonnet) |
 | S3 | `src/app/segments.rs`: the index at the first pass, the active segment loaded, fed from the GNSS fix each second; nothing written; sim tests over a whole ride on a synthetic segment | implementer (sonnet) |
 | S4 | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |
 | S5 | The efforts written after the save (`.pr`, `efforts.csv`), the per-segment enable byte | critical, then reviewer on opus |
@@ -154,6 +154,20 @@ docs/sync.md); the cache and the downloaded segments live in the user's home, ne
 | S7 | Segments from the rider's own rides, no Strava: stretches ridden at least twice (the overlap of two rides' tracks over 1 km), made into `.seg` files by `segments.py own` on the computer first; on the unit later if wanted | implementer (sonnet) |
 | S8 | Licensed Live Segments, if Strava grants it: `segments.py live` fills carrot, wolf, most recent, best of 5 and the KOM's real splits from `/live/segments/:id`; later the phone app does the same over BLE | implementer |
 | S9 | Optional: stock's imported segments (`\PlanTrip\LiveSegment\`) read too, read only | implementer |
+
+Decided in S2 (2026-10-30), API for S3: `Matcher::new` (about 90 bytes, a field of App), `step_idle(headers, lat, lon, t)`
+(an iterator of `&Header`, the index; gives `Approach(id)` or `Start(id)`), then the caller parses the file into the
+segment's cell and feeds `step_active(&Segment, lat, lon, t)` (gives `Lost(id)` or `Finish{id, elapsed_s, deltas}`);
+`active_id`, `along_m`, `elapsed_s(now)` for the page; `target_s` / `delta_s(seg, column, distance, elapsed)` for the
+ghost; `near(header, lat, lon)` is the index's filter. Time `t` is whole seconds of the ride clock. Course.rs's matcher
+is shared, not copied: `Course::nearest` became `course::nearest_by` over a closure, and `seg_hit` is the projection
+on one step. Choices: the "bounding box" is that of the header's 40 start pairs (the header holds no other point); a
+start needs 2 m of movement between two fixes and the closest approach inside the pass (the start time is
+interpolated there); lost is 10 s beyond 50 m of the track, or 10 s back more than 50 m behind the furthest point
+(a U-turn rides the track the wrong way), or 300 s still (within 10 m of one spot, so GNSS jitter at a stop counts) or without a fix; the finish is the
+crossing of the last point's perpendicular, within 25 m of the last point at the crossing (so a 30 m/s rider finishes) (stopping short never finishes), its time interpolated between the fixes; the
+Approach banner is said once per segment, the next one only when the rider is beyond 300 m of the one said, and not again after a lost segment near
+its start. After any Lost or Finish the matcher is idle again and the segment is the caller's to drop.
 
 On the unit after S5 (docs/status.md, "Not yet seen on the unit"): a ride over two known segments with an EMMC_WRITE=1
 build: the approach banner, the page opening, the delta against a ride's split, the finish, the `.pr` written after
