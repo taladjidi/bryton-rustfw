@@ -112,20 +112,52 @@ fn nordic_packets() {
 #[test]
 fn heart_rate_beats() {
     use crate::sensors::{Beats, Decoders, Kind, Live};
-    for seed in 1..=4u32 {
+    // index 0: the random broadcasts (seeds 1 to 4), 1: the structured ones (seeds 5 to 8)
+    let (mut beats, mut alphas, mut rmssds) = ([0usize; 2], [0usize; 2], [0usize; 2]);
+    for seed in 1..=8u32 {
+        let random = seed <= 4;
+        let k = usize::from(!random);
         let (mut dec, mut live, mut hrv) = (Decoders::default(), Live::default(), crate::hrv::Hrv::default());
-        let v: std::vec::Vec<u8> = bytes(seed, 1 << 18).collect();
-        for c in v.chunks_exact(8) {
-            let d = core::array::from_fn(|i| c[i]);
+        let mut r = xorshift(seed);
+        let (mut t, mut count) = (0u16, 0u8);
+        let frames: std::vec::Vec<[u8; 8]> = if random {
+            let v: std::vec::Vec<u8> = bytes(seed, 1 << 18).collect();
+            v.chunks_exact(8).map(|c| core::array::from_fn(|i| c[i])).collect()
+        } else {
+            // a strap's broadcasts: the beat time and count in step (one beat, or two on page 4 with the earlier
+            // one), spans of about 800 ms with a few percent of jitter, so the DFA and RMSSD see clean beats
+            (0..1 << 14)
+                .map(|_| -> [u8; 8] {
+                    let span = 780 + (r() % 60) as u16;
+                    let t1 = t.wrapping_add(span);
+                    let p = t.wrapping_add(1 + (r() % u32::from(span - 1)) as u16);
+                    let two = r().is_multiple_of(4);
+                    let d = if two {
+                        [4, 0, p as u8, (p >> 8) as u8, t1 as u8, (t1 >> 8) as u8, count.wrapping_add(2), 60]
+                    } else {
+                        [0, 0, 0, 0, t1 as u8, (t1 >> 8) as u8, count.wrapping_add(1), 60]
+                    };
+                    (t, count) = (t1, d[6]);
+                    d
+                })
+                .collect()
+        };
+        for d in frames {
             dec.decode(Kind::Hr, d, 2105, &mut live);
             for &rr in dec.beats.rr() {
                 assert!(Beats::RANGE.contains(&rr));
                 hrv.push(rr);
+                beats[k] += 1;
             }
-            hrv.push(u16::from_le_bytes([d[0], d[1]]));
-            let _ = (hrv.alpha1(), hrv.rmssd());
+            if random {
+                hrv.push(u16::from_le_bytes([d[0], d[1]])); // raw intervals, 0 and 0xffff too
+            }
+            alphas[k] += usize::from(hrv.alpha1().is_some());
+            rmssds[k] += usize::from(hrv.rmssd().is_some());
         }
     }
+    assert!(beats[0] > 0 && beats[1] >= 10_000, "beats: {beats:?}");
+    assert!(alphas[1] > 0 && rmssds[1] > 0, "alpha1 and rmssd values, structured: {alphas:?} {rmssds:?}");
 }
 
 /// Random beat streams (gaps, bursts, zeros, 0xffff, very long intervals) into the full copy's `hrv` messages
@@ -1082,8 +1114,13 @@ fn lz4_blocks() {
     }
     let tiles: Vec<Vec<u8>> = crate::ign::tests::fixture().into_iter().map(|(_, p)| p).collect();
     let mut next = move || u32::from_le_bytes([0; 4].map(|_| noise.next().unwrap_or(0)));
+    let (mut decoded, mut still_decoded, mut refused) = (0usize, 0usize, 0usize);
     for good in &tiles {
-        let blob = &good[8208..]; // the first tile (the packer writes it first)
+        let (off, len) = (0..1024)
+            .find_map(|i| crate::ign::entry(good[16 + 8 * i..24 + 8 * i].try_into().unwrap(), good.len() as u32))
+            .unwrap();
+        let blob = &good[off as usize..(off + len) as usize]; // the first tile the index names
+        decoded += usize::from(crate::ign::decode(&mut blob.iter().copied(), &mut out));
         for _ in 0..200 {
             let mut bad = blob.to_vec();
             for _ in 0..1 + next() % 8 {
@@ -1092,9 +1129,13 @@ fn lz4_blocks() {
             }
             let cut = next() as usize % (bad.len() + 1);
             let _ = crate::ign::decode(&mut bad[..cut].iter().copied(), &mut out);
-            let _ = crate::ign::decode(&mut bad.iter().copied(), &mut out);
+            let ok = crate::ign::decode(&mut bad.iter().copied(), &mut out);
+            still_decoded += usize::from(ok);
+            refused += usize::from(!ok);
         }
     }
+    assert_eq!(decoded, tiles.len(), "every fixture's first tile decodes");
+    assert!(still_decoded > 0 && refused > 0, "reached: {still_decoded} mutations decode, {refused} refused");
 }
 
 /// The USB drive (msc.rs): random command blocks behind a valid CBW header, and damaged CBWs, with random host
@@ -1102,8 +1143,11 @@ fn lz4_blocks() {
 #[test]
 fn usb_drive_commands() {
     use crate::msc::tests::{Host, cbw, ram};
-    use crate::msc::{Drive, PACKET};
+    use crate::msc::{Drive, LOG, PACKET};
     const OPS: [u8; 13] = [0x00, 0x03, 0x12, 0x1a, 0x1b, 0x1e, 0x23, 0x25, 0x28, 0x2a, 0x2f, 0x35, 0x5a];
+    // what the drive logged: READ(10) and WRITE(10) that passed, those that failed, an opcode it does not have
+    // (refused), a CBW not valid (0xfd)
+    let (mut reads, mut writes, mut failed, mut refused, mut damaged) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for seed in 1..=4u32 {
         let v: Vec<u8> = bytes(seed, 1 << 18).collect();
         let (mut d, mut h, mut m) = (Drive::new(), Host::default(), ram());
@@ -1113,6 +1157,9 @@ fn usb_drive_commands() {
             let mut cb = [0u8; 16];
             cb.copy_from_slice(&c[2..18]);
             cb[0] = OPS.get(usize::from(c[2] % 14)).copied().unwrap_or(c[3]);
+            if c[3] % 6 == 0 {
+                cb[0] = 0x7f; // not an opcode the drive has
+            }
             let n = 1 + usize::from(c[18] % 16);
             let mut packet = cbw(k as u32, len, c[19] & 1 == 0, &cb[..n]);
             if c[20] % 16 == 0 {
@@ -1124,7 +1171,20 @@ fn usb_drive_commands() {
                 .map(|i| std::vec![i; if odd { 1 + usize::from(i) * 37 % PACKET } else { PACKET }])
                 .collect();
             h.stalled = false;
+            let before = d.log.n;
             d.packet(&packet, &mut h, &mut m);
+            // every entry this packet logged (the ring keeps the last LOG)
+            for i in before.max(d.log.n.saturating_sub(LOG as u32))..d.log.n {
+                let (op, _, _, status, _) = d.log.ring[i as usize % LOG];
+                match (op, status) {
+                    (0x28, 0) => reads += 1,
+                    (0x2a, 0) => writes += 1,
+                    (0x28 | 0x2a, _) => failed += 1,
+                    (0x7f, _) => refused += usize::from(status != 0),
+                    (0xfd, _) => damaged += 1,
+                    _ => {}
+                }
+            }
             if let Some(csw) = h.got.pop() {
                 assert_eq!((&csw[..4], csw.len()), (&b"USBS"[..], 13));
                 assert!(csw[12] <= 2);
@@ -1136,6 +1196,10 @@ fn usb_drive_commands() {
         }
         assert_eq!(m.0.len(), 100 * 512, "the disk never grows");
     }
+    assert!(
+        reads > 0 && writes > 0 && failed > 0 && refused > 0 && damaged > 0,
+        "reached: {reads} {writes} {failed} {refused} {damaged}"
+    );
 }
 
 /// Random BLE events from the chip (every id the phone link decodes, random bodies) into the decoder and into the
@@ -1148,9 +1212,10 @@ fn phone_link_events() {
         0x10, 0x11, 0x13, 0x14, 0x19, 0x1a, 0x1b, 0x1f, 0x21, 0x23, 0x01, 0x50, 0x52, 0x55, 0x56, 0x30, 0x32, 0x33,
         0x36, 0x38, 0x39, 0x3b,
     ];
+    let (mut answers, mut notifs, mut fresh, mut stored, mut rejected, mut bonds) = (0usize, 0, 0, 0, 0, 0);
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
-    for seed in 1..=4u32 {
+    for seed in 1..=8u32 {
         let v: Vec<u8> = bytes(seed, 1 << 16).collect();
         for c in v.chunks_exact(48) {
             let id = IDS[usize::from(c[0]) % IDS.len()];
@@ -1177,7 +1242,73 @@ fn phone_link_events() {
         }
         s[..4].copy_from_slice(b"RBL1");
         let _ = crate::phone::Stored::from_sector(&s);
+        if seed > 4 {
+            // structured: an answer (uid, then the three attributes with random lengths) in fragments of 1 to 20 bytes,
+            // a notification of 0 to 11 bytes (short ones are refused), and a stored sector, half of them damaged
+            let mut r = xorshift(seed);
+            let mut ds2 = crate::phone::DataSource::default();
+            for _ in 0..200 {
+                let mut frame = std::vec![0u8];
+                frame.extend(r().to_le_bytes());
+                for id in [0u8, 1, 3] {
+                    let n = (r() % 40) as usize;
+                    frame.push(id);
+                    frame.extend((n as u16).to_le_bytes());
+                    frame.extend((0..n).map(|_| b'a' + (r() % 26) as u8));
+                }
+                let mut rest = frame.as_slice();
+                while !rest.is_empty() {
+                    let k = (1 + (r() % 20) as usize).min(rest.len());
+                    let (c, tail) = rest.split_at(k);
+                    rest = tail;
+                    answers += usize::from(ds2.push(c).is_some());
+                }
+                let mut note = [0u8; 12];
+                note[0] = (r() % 3) as u8;
+                note[1] = r() as u8;
+                note[2] = (r() % 8) as u8;
+                for b in note[4..].iter_mut() {
+                    *b = r() as u8;
+                }
+                let len = (r() % 12) as usize;
+                let parsed = crate::phone::Notif::parse(&note[..len]);
+                assert_eq!(parsed.is_some(), len >= 8, "{len} bytes");
+                if let Some(n) = parsed {
+                    notifs += 1;
+                    fresh += usize::from(n.fresh());
+                }
+                let mut sector = [0u8; 512];
+                sector[..4].copy_from_slice(b"RBL1");
+                let end = 40 + crate::phone::ATTRS;
+                for b in sector[4..end].iter_mut() {
+                    *b = r() as u8;
+                }
+                let crc = crate::fit::crc(0, &sector[..end]);
+                sector[end..end + 2].copy_from_slice(&crc.to_le_bytes());
+                let damaged = r().is_multiple_of(2);
+                if damaged {
+                    let at = r() as usize % (end + 2);
+                    sector[at] ^= (r() as u8) | 1; // a CRC-16 catches any one byte
+                }
+                match crate::phone::Stored::from_sector(&sector) {
+                    Some(st) => {
+                        assert!(!damaged, "a damaged sector was accepted");
+                        stored += 1;
+                        bonds += usize::from(st.bond.is_some());
+                    }
+                    None => {
+                        assert!(damaged, "an intact sector was refused");
+                        rejected += 1;
+                    }
+                }
+            }
+        }
     }
+    assert!(
+        answers > 0 && notifs > 0 && fresh > 0,
+        "reached: {answers} answers, {notifs} notifications, {fresh} fresh"
+    );
+    assert!(stored > 0 && rejected > 0 && bonds > 0, "reached: {stored} stored, {rejected} rejected, {bonds} bonds");
 }
 
 /// Keys and gestures in any order through the menus and pages (UI review, steps 4, 5 and 7): taps on the 44 px rows,
@@ -3384,4 +3515,39 @@ fn theme_files() {
     assert!(accepted > 100, "accepted {accepted}");
     assert!(refused.iter().all(|&n| n > 0), "every refusal reached: {refused:?}");
     assert!(set.iter().filter(|&&s| s).count() >= NAMES.len() - 2, "keys set from a file: {set:?}");
+}
+
+/// Random raw readings through the sensor conversions: the battery's `millivolts` (the ADC words, any reference) and
+/// `percent` of its voltage, the light's `lux10`, and the barometer's 24-bit pressure word (what `baro_read_raw`
+/// returns with its temperature) into `alt_mm`. No panic; a percent is at most 100, the calibrated battery reading
+/// at most 4950 mV, and a plausible pressure (500 to 1100 hPa) reads between -1000 m and 6000 m.
+#[test]
+fn raw_samples() {
+    let mut r = xorshift(9);
+    let (mut volts, mut plausible, mut altitudes) = (0usize, 0usize, 0usize);
+    for _ in 0..1 << 18 {
+        let (raw, vref, cal) = (r() as u16, r() as u16, r() as u16);
+        if let Some(mv) = crate::battery::millivolts(raw, vref, cal) {
+            assert!(crate::battery::percent(mv) <= 100, "{mv} mV");
+            // VDDA is 3300 mV x cal / vref, and the battery channel is at most 1.5 times it
+            assert!(u64::from(mv) <= 4950 * u64::from(cal) / u64::from(vref) + 1, "{mv} mV, cal {cal}, vref {vref}");
+            volts += 1;
+        }
+        // VREFINT at its calibration value: VDDA is 3.3 V, the pin's full scale 4.95 V on the battery
+        assert!(crate::battery::millivolts(raw, 24000, 24000).is_some_and(|mv| mv <= 4950));
+        let w = r();
+        assert_eq!(crate::ambient::lux10(w), w & 0x3_ffff);
+        let p = w & 0xff_ffff; // the chip's 24-bit pressure word
+        if let Some(h) = crate::altitude::alt_mm(p, crate::altitude::P_STD) {
+            if (500 * 4096..=1100 * 4096).contains(&p) {
+                assert!((-1_000_000..=6_000_000).contains(&h), "{p} -> {h} mm");
+                plausible += 1;
+            }
+            altitudes += 1;
+        }
+    }
+    assert!(
+        volts > 0 && plausible > 0 && altitudes > 0,
+        "reached: {volts} volts, {plausible} plausible, {altitudes} altitudes"
+    );
 }
