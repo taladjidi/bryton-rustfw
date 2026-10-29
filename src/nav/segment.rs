@@ -62,8 +62,6 @@ const ENABLED_AT: usize = 0x1fd;
 /// The data section: npoints and ntargets (u32 each), then a 13-byte descriptor per target, then the times.
 const DATA: usize = HEADER;
 const DESC: usize = 13;
-/// A point of nothing: the storage's start.
-const PT0: Pt = Pt { lat: 0, lon: 0, alt_dm: None, split: false, dist_m: None };
 
 /// What a target measures: stock's type codes, which are Strava's effort types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,8 +131,8 @@ pub struct Header {
     pub distance_m: u32,
     /// The elevation gain, m.
     pub elevation_m: u32,
-    /// The first (lat, lon) pairs, degrees x 1e-7, as the file has them (stock's start detection reads them). Each is
-    /// on the globe; an unused pair is whatever the file holds (inferred: zeros).
+    /// The first (lat, lon) pairs, degrees x 1e-7 (stock's start detection reads them). A pair that is not finite or
+    /// not on the globe is stored as (0, 0) and ignored (an unused pair is zeros in the files seen: inferred).
     pub start: [(i32, i32); START_PAIRS],
     /// The targets in the file, 1 to [`TARGETS`].
     pub ntargets: usize,
@@ -170,7 +168,11 @@ impl Header {
         let mut start = [(0, 0); START_PAIRS];
         for (i, pair) in start.iter_mut().enumerate() {
             let at = 0x39 + 8 * i;
-            *pair = (e7(f32_at(b, at)?, 90.0)?, e7(f32_at(b, at + 4)?, 180.0)?);
+            // an unused or broken pair is (0, 0): stock's start detection never reads it (inferred)
+            *pair = match (e7(f32_at(b, at)?, 90.0), e7(f32_at(b, at + 4)?, 180.0)) {
+                (Ok(lat), Ok(lon)) => (lat, lon),
+                _ => (0, 0),
+            };
         }
         Ok(Header {
             id: u32_at(b, 0x01)?,
@@ -213,18 +215,25 @@ impl Header {
     }
 }
 
-/// A parsed segment: its header, its points, and the times of the kept targets at each point.
-#[derive(Clone, Copy, Debug)]
+/// A parsed segment: its header, its points, and the times of the kept targets at each point. About 8.6 KB: keep it
+/// in a static cell. Not `Copy`: copying it would copy that much.
+#[derive(Debug)]
 pub struct Segment {
     /// The header of the file.
     pub header: Header,
-    /// Points in use (`points[..npoints]`); 0 when the last [`Segment::parse`] failed.
+    /// Points in use (`[..npoints]` of each array); 0 when the last [`Segment::parse`] failed.
     pub npoints: usize,
-    /// The points, from the start: the FIT course's positions (degrees x 1e-7) and altitudes.
-    pub points: [Pt; POINTS],
+    /// Latitude of each point, degrees x 1e-7.
+    pub lat: [i32; POINTS],
+    /// Longitude of each point, degrees x 1e-7.
+    pub lon: [i32; POINTS],
+    /// Distance of each point from the start of the segment, m: the FIT record's distance, else the length of the
+    /// steps before it ([`crate::course::step_mm`]).
+    pub dist_m: [u32; POINTS],
     /// The effort of each kept column of `times` (None: no such target in the file).
     pub kept: [Option<Effort>; KEPT],
-    /// `times[point][column]`: the elapsed seconds of the kept effort in that column at that point.
+    /// `times[point][column]`: the elapsed seconds of the kept effort in that column at that point (0 in a column
+    /// with no effort).
     pub times: [[u16; KEPT]; POINTS],
 }
 
@@ -240,16 +249,37 @@ impl Segment {
         Segment {
             header: Header::blank(),
             npoints: 0,
-            points: [PT0; POINTS],
+            lat: [0; POINTS],
+            lon: [0; POINTS],
+            dist_m: [0; POINTS],
             kept: [None; KEPT],
             times: [[0; KEPT]; POINTS],
         }
     }
 
-    /// Parses a whole file into `self`, with every check of the module doc. Nothing is written but `self`. On an
-    /// error the segment has no points (`npoints` is 0).
+    /// Point `i` as a course point ([`Pt`]: position and distance along the segment; no altitude is kept), or None
+    /// past [`Segment::npoints`].
+    pub fn pt(&self, i: usize) -> Option<Pt> {
+        if i >= self.npoints {
+            return None;
+        }
+        Some(Pt {
+            lat: *self.lat.get(i)?,
+            lon: *self.lon.get(i)?,
+            alt_dm: None,
+            split: false,
+            dist_m: self.dist_m.get(i).copied(),
+        })
+    }
+
+    /// Parses a whole file into `self`, with every check of the module doc. Everything from an earlier parse is
+    /// cleared first, so a failed parse or a file with fewer targets never shows the last file's data. On an error
+    /// the segment has no points (`npoints` is 0).
     pub fn parse(&mut self, b: &[u8]) -> Result<(), Error> {
         self.npoints = 0;
+        self.header = Header::blank();
+        self.kept = [None; KEPT];
+        self.times = [[0; KEPT]; POINTS];
         if b.len() > MAX_BYTES {
             return Err(Error::TooBig);
         }
@@ -269,7 +299,8 @@ impl Segment {
         let times = b.get(DATA + 8 + DESC * n..fit_at).ok_or(Error::Short)?;
         let fit = b.get(fit_at..).ok_or(Error::Short)?;
 
-        // the times: each target's must not fall along the points; the kept ones fit a u16
+        // the times: each target's must not fall along the points; the kept ones fit a u16 (a time past 65535 s
+        // rejects the file). The total time of a target is not checked against its column's last time.
         let cols = keep(&header);
         let mut prev = [0u32; TARGETS];
         for (k, chunk) in times.chunks_exact(4).enumerate() {
@@ -290,7 +321,7 @@ impl Segment {
         // the course: its records are the points, one each, with a position on the globe
         let mut rd = Reader::with_position();
         let (mut got, mut bad) = (0usize, None::<Error>);
-        let pts = &mut self.points;
+        let (la, lo, di) = (&mut self.lat, &mut self.lon, &mut self.dist_m);
         let used = rd.push_slice(fit, |m| {
             let Msg::Record(r) = m else { return };
             if bad.is_some() {
@@ -305,12 +336,26 @@ impl Segment {
                 bad = Some(Error::Earth);
                 return;
             }
-            let Some(p) = pts.get_mut(got).filter(|_| got < np) else {
+            if got >= np {
                 bad = Some(Error::Points);
                 return;
+            }
+            let prev = got.checked_sub(1).and_then(|j| Some((*la.get(j)?, *lo.get(j)?, *di.get(j)?)));
+            let dist = match (r.dist_cm, prev) {
+                (Some(cm), _) => cm / 100,
+                (None, Some((pla, plo, pd))) => {
+                    let step_m = u32::try_from(crate::course::step_mm((pla, plo), (lat, lon)) / 1000);
+                    pd.saturating_add(step_m.unwrap_or(u32::MAX))
+                }
+                (None, None) => 0,
             };
-            *p = Pt { lat, lon, alt_dm: r.alt_dm, split: false, dist_m: r.dist_cm.map(|cm| cm / 100) };
-            got += 1;
+            match (la.get_mut(got), lo.get_mut(got), di.get_mut(got)) {
+                (Some(a), Some(o), Some(d)) => {
+                    (*a, *o, *d) = (lat, lon, dist);
+                    got += 1;
+                }
+                _ => bad = Some(Error::Points),
+            }
         });
         if let Some(e) = bad {
             return Err(e);
@@ -525,9 +570,12 @@ pub(crate) mod tests {
             assert_eq!(s.times[i], want, "point {i}");
         }
         // positions go through FIT's semicircles (1e-7 degree each): within 2 units
-        assert!(s.points[0].lat.abs() <= 2 && (s.points[0].lon - 100_000_000).abs() <= 2);
-        assert!((s.points[4].lon - (100_000_000 + 4 * 4500)).abs() <= 2, "lon {}", s.points[4].lon);
-        assert!(!s.points[3].split);
+        assert!(s.lat[0].abs() <= 2 && (s.lon[0] - 100_000_000).abs() <= 2);
+        assert!((s.lon[4] - (100_000_000 + 4 * 4500)).abs() <= 2, "lon {}", s.lon[4]);
+        // the distance along: FIT's distance, 50 m a record
+        assert_eq!(s.dist_m[..5], [0, 50, 100, 150, 200]);
+        assert_eq!(s.pt(4).map(|p| (p.lon, p.dist_m)), Some((s.lon[4], Some(200))));
+        assert_eq!(s.pt(5), None);
         // the header alone: the index reads it from the first 0x200 bytes
         let h = Header::parse(&f[..HEADER]).unwrap();
         assert_eq!((h.id, h.fit_offset, h.ntargets), (4_000_000_001, s.header.fit_offset, 5));
@@ -564,11 +612,11 @@ pub(crate) mod tests {
         g[0x17a..0x17c].copy_from_slice(b"99");
         assert_eq!(err(&g), Error::Target);
         let mut g = f.clone();
+        // a start pair off the globe, or NaN, is unused: (0, 0), and the file still parses
         g[0x39..0x3d].copy_from_slice(&91f32.to_le_bytes());
-        assert_eq!(err(&g), Error::Earth);
-        let mut g = f.clone();
         g[0x3d..0x41].copy_from_slice(&f32::NAN.to_le_bytes());
-        assert_eq!(Header::parse(&g), Err(Error::Earth));
+        assert_eq!(Header::parse(&g).map(|h| (h.start[0], h.start[1])), Ok(((0, 0), (0, 100_004_501))));
+        assert_eq!(Segment::new().parse(&g), Ok(()));
         let mut g = f.clone();
         g[0x09..0x0d].copy_from_slice(&0x1234u32.to_le_bytes());
         assert_eq!(err(&g), Error::FitOffset);
@@ -636,6 +684,30 @@ pub(crate) mod tests {
         assert_eq!(s.parse(&f), Ok(()));
         assert_eq!(s.kept, [None; KEPT]);
         assert_eq!(s.npoints, 3);
+    }
+
+    #[test]
+    fn a_parse_clears_the_last_one() {
+        // a 4-target file, then a 1-target file: the columns the second file does not have are zero and None
+        let mut s = Segment::new();
+        assert_eq!(s.parse(&synth(4, &VALID)), Ok(()));
+        assert_eq!(s.times[3][3], 33);
+        assert_eq!(s.parse(&synth(3, &[*b"07"])), Ok(()));
+        assert_eq!(s.kept, [Some(Effort::Pr), None, None, None]);
+        for i in 0..3 {
+            assert_eq!(s.times[i][1..], [0, 0, 0], "point {i}");
+        }
+        assert_eq!(s.times[2][0], 20);
+        // a failed parse leaves nothing of the last file either
+        assert!(s.parse(&[0u8; 10]).is_err());
+        assert_eq!((s.kept, s.header.ntargets, s.times[0]), ([None; KEPT], 0, [0; KEPT]));
+    }
+
+    #[test]
+    fn size_is_bounded() {
+        // 400 x (lat, lon, distance: 4 bytes each) + 400 x 4 kept times (2 bytes): 8000 bytes of arrays, the header
+        // about 600 more. 6 KB is below the arrays' own size, so the bound is what the layout costs.
+        assert!(core::mem::size_of::<Segment>() <= 9 * 1024, "{} bytes", core::mem::size_of::<Segment>());
     }
 
     #[test]

@@ -3819,6 +3819,9 @@ fn segment_files() {
         let k = match seg.parse(&f) {
             Ok(()) => {
                 assert!((2..=POINTS).contains(&seg.npoints), "seed {seed}: points {}", seg.npoints);
+                for i in 0..seg.npoints {
+                    assert!(seg.lat[i].unsigned_abs() <= 900_000_000 && seg.lon[i].unsigned_abs() <= 1_800_000_000);
+                }
                 for i in 1..seg.npoints {
                     for c in (0..KEPT).filter(|&c| seg.kept[c].is_some()) {
                         assert!(seg.times[i - 1][c] <= seg.times[i][c], "seed {seed}: times fall");

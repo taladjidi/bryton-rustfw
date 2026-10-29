@@ -61,6 +61,11 @@ Limits checked on read (anything else: the file is skipped and counted, never a 
 course's record count; `ntargets` 1 to 7; times rising along the points; positions on Earth; the FIT CRCs. The tool
 decimates a segment to 400 points at most (a 10 km segment at 25 m spacing).
 
+Decided in S1 (2026-10-29): a start pair of the header that is not finite or not on the globe is unused: stored as
+(0, 0) and ignored, not a rejection (stock's start detection never reads an unused pair: inferred). A kept target's
+time over 65535 s rejects the file (`Error::Times`), since the segment keeps u16 seconds. `total_s` (the target's total
+time) is not checked against its column's last time: the file's own figure is shown as it is.
+
 Stock reads its own copies in `\PlanTrip\LiveSegment\` (`LSshortcut.bin`, `%d.data`) and `\PlanTrip\%d.fit`, written
 by its import. This firmware never writes there (AGENTS.md, never break it for stock). Reading stock's imported
 segments too is S9, optional.
