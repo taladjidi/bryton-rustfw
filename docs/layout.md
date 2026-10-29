@@ -230,6 +230,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   climb said once. About <!-- n:ahead -->106 KB<!-- /n --> in AXI SRAM from main.rs `make_ahead` (all-zero start: no `Option`, so it stays in `.bss`).
   `src/app/ahead.rs`: its glue, the work spread over the main loop's passes (a tile, the snap, the trace), the banner and
   beep at a climb's start and the CLIMB fields when no course is followed.
+- `src/nav/segment.rs`: a live segment file, `\Rustfw\Segments\<id>.seg` (stock's live segment package unzipped; docs/segments.md,
+  "The file"; the layout checked against stock's live_segments.c): the header (the index reads its 0x200 bytes), the points and the
+  times of the four kept efforts, every check of the file (`Error`), parsed into a caller's storage (about 16 KB, a static
+  cell). Pure logic; step S1, nothing on the unit calls it yet.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait; `App::serve` there answers the effects that need the app and the card (main.rs keeps the keys, the reset
   and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from

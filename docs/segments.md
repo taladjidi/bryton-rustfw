@@ -1,6 +1,7 @@
 # Live segments: a plan
 
-Status: a design, nothing built yet (2026-10-29). Order of work: docs/roadmap.md, "Order of work", block 2.
+Status: S1 built (2026-10-29: `src/nav/segment.rs`, the reader, its unit tests and fuzz; nothing on the unit yet). S2 next.
+Order of work: docs/roadmap.md, "Order of work", block 2.
 Not here: how stock does it in detail (bryton repo ghidra/recovered_src/ride/live_segments.c), the comparison with
 other units (checklist.md, "Climbs ahead and live segments").
 
@@ -44,6 +45,10 @@ other units (checklist.md, "Climbs ahead and live segments").
 `\Rustfw\Segments\<id>.seg`, one per segment, `<id>` the source's decimal id (Strava's segment id; own segments
 from 4 000 000 000 down, so they never collide). Layout: stock's `LiveSegmentData.bin` (live_segments.c), little
 endian:
+Checked against stock's `live_segments.c` (2026-10-29, S1): no difference in offsets, sizes, types or the fit_offset
+formula. Left as inferred: the enabled bytes' meaning (its comment gives 1/2/3), the u32 at 0x31, the byte after each
+target's type, and the data section's ntargets (its comment says the low byte is used; read as a whole word that must
+equal the header's).
 
 | Part | Offset | Content |
 |---|---|---|
@@ -55,6 +60,11 @@ Limits checked on read (anything else: the file is skipped and counted, never a 
 `fit_offset` = 0x200 + 8 + 13 x `ntargets` + 4 x `npoints` x `ntargets`; `npoints` 2 to 400 and equal to the
 course's record count; `ntargets` 1 to 7; times rising along the points; positions on Earth; the FIT CRCs. The tool
 decimates a segment to 400 points at most (a 10 km segment at 25 m spacing).
+
+Decided in S1 (2026-10-29): a start pair of the header that is not finite or not on the globe is unused: stored as
+(0, 0) and ignored, not a rejection (stock's start detection never reads an unused pair: inferred). A kept target's
+time over 65535 s rejects the file (`Error::Times`), since the segment keeps u16 seconds. `total_s` (the target's total
+time) is not checked against its column's last time: the file's own figure is shown as it is.
 
 Stock reads its own copies in `\PlanTrip\LiveSegment\` (`LSshortcut.bin`, `%d.data`) and `\PlanTrip\%d.fit`, written
 by its import. This firmware never writes there (AGENTS.md, never break it for stock). Reading stock's imported
@@ -135,7 +145,7 @@ docs/sync.md); the cache and the downloaded segments live in the user's home, ne
 
 | Step | What | Agent |
 |---|---|---|
-| S1 | `src/nav/segment.rs`: the `.seg` reader (pure, over a byte slice), the checks above; unit tests, doc tests; fuzz (src/sim/fuzz.rs): files generated from the layout (header fields, counts, times, a FIT course), cut, wild values; a count that every check is reached | implementer |
+| S1 (done 2026-10-29) | `src/nav/segment.rs`: the `.seg` reader (pure, over a byte slice), the checks above; unit tests, doc tests; fuzz (src/sim/fuzz.rs): files generated from the layout (header fields, counts, times, a FIT course), cut, wild values; a count that every check is reached | implementer |
 | S2 | The matcher in `src/nav/segment.rs`: near, start, progress (course.rs's code), lost, finish, the ghost's delta; host tests with synthetic tracks: a clean pass, a start missed by 30 m, a U-turn, a stop, lost and found, two overlapping segments, a segment along a course | implementer (sonnet) |
 | S3 | `src/app/segments.rs`: the index at the first pass, the active segment loaded, fed from the GNSS fix each second; nothing written; sim tests over a whole ride on a synthetic segment | implementer (sonnet) |
 | S4 | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |

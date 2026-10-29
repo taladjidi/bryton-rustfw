@@ -71,6 +71,8 @@ after the save, `tools/segments.py`, then own-ride segments and the licensed fee
 decide on a Strava subscription (the API's Standard tier needs one since 30 June 2026), and email Strava for a Live
 Segments licence.
 
+Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29).
+
 ### Block 3: what is left on the unit, easiest first
 
 From checklist.md's open lines and the phases below. Each bullet is one step unless it says otherwise; group small

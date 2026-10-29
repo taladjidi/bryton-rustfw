@@ -3722,3 +3722,132 @@ fn recovery_records() {
         assert!(c[3] * 1600 <= c[1], "accepted {} of {} damaged", c[3], c[1]);
     }
 }
+
+/// A live segment file (nav/segment.rs) generated from its layout: the header and the data section with random
+/// counts, target codes (some not stock's), times (some falling, some past a u16), a FIT course of the same points,
+/// one record more or fewer, without positions or off the globe. Then cut, flipped, its fields set to wild values,
+/// appended to, or left whole. Every error the reader can give and the Ok path are reached (counted over the seeds),
+/// and no input panics.
+#[test]
+fn segment_files() {
+    use crate::segment::{Error, HEADER, Header, KEPT, POINTS, Segment, tests::raw};
+    const CODES: [[u8; 2]; 9] = [*b"05", *b"06", *b"07", *b"09", *b"11", *b"12", *b"13", *b"99", *b"01"];
+    // reached: Ok, then each error in the order of the match below
+    let mut reached = [0usize; 15];
+    for seed in 1..=2000u32 {
+        let mut next = xorshift(seed);
+        // most files are valid, and each kind of break is rare: a file breaks in a few places, not everywhere
+        let np = (next() % 430) as usize;
+        let n = 1 + (next() % 7) as usize;
+        let codes: Vec<[u8; 2]> = (0..n)
+            .map(
+                |_| if next().is_multiple_of(12) { CODES[(next() % 9) as usize] } else { CODES[(next() % 7) as usize] },
+            )
+            .collect();
+        let corrupt_times = next().is_multiple_of(8);
+        let times: Vec<u32> = (0..np * n)
+            .map(|k| {
+                let v = 10 * (k / n) as u32 + (k % n) as u32;
+                match next() % 300 {
+                    0 if corrupt_times => next() % 80_000,
+                    1 if corrupt_times => next() % 50,
+                    _ => v,
+                }
+            })
+            .collect();
+        let records =
+            (np + usize::from(next().is_multiple_of(10))).saturating_sub(usize::from(next().is_multiple_of(10)));
+        let pos = !next().is_multiple_of(12);
+        let lat = if next().is_multiple_of(15) { 95.0 } else { 0.0 };
+        let ntf = if next().is_multiple_of(20) { next() % 9 } else { n as u32 };
+        let np_field = if next().is_multiple_of(40) { next() % 500 } else { np as u32 };
+        let mut f = raw(np_field, ntf, &codes, &times, records, pos, lat);
+        let fit_at = HEADER + 8 + 13 * n + 4 * np * n;
+        if next().is_multiple_of(3) {
+            match next() % 13 {
+                0 => f.truncate(next() as usize % (f.len() + 1)),
+                1 => {
+                    let i = next() as usize % f.len();
+                    f[i] ^= 0x5a;
+                }
+                2 => {
+                    if let Some(b) = f.get_mut(fit_at + 8) {
+                        *b ^= 1;
+                    }
+                }
+                3 => {
+                    if let Some(b) = f.last_mut() {
+                        *b ^= 1;
+                    }
+                }
+                4 => {
+                    if let Some(b) = f.get_mut(fit_at + 12) {
+                        *b = 0;
+                    }
+                }
+                5 => f.push(next() as u8),
+                6 => {
+                    if let Some(s) = f.get_mut(9..13) {
+                        s.copy_from_slice(&next().to_le_bytes());
+                    }
+                }
+                7 => {
+                    if let Some(b) = f.get_mut(0x179) {
+                        *b = (next() % 10) as u8;
+                    }
+                }
+                8 => {
+                    if let Some(s) = f.get_mut(0x17a..0x17c) {
+                        s.copy_from_slice(&[b'0' + (next() % 10) as u8, b'0' + (next() % 10) as u8]);
+                    }
+                }
+                9 => {
+                    let i = next() as usize % HEADER;
+                    f[i] ^= 0xa5;
+                }
+                10 => {
+                    if f.len() > fit_at {
+                        let i = fit_at + next() as usize % (f.len() - fit_at);
+                        f[i] ^= 0x3c;
+                    }
+                }
+                11 => f.resize(65_537, 0),
+                _ => {}
+            }
+        }
+        let mut seg = Segment::new();
+        let k = match seg.parse(&f) {
+            Ok(()) => {
+                assert!((2..=POINTS).contains(&seg.npoints), "seed {seed}: points {}", seg.npoints);
+                for i in 0..seg.npoints {
+                    assert!(seg.lat[i].unsigned_abs() <= 900_000_000 && seg.lon[i].unsigned_abs() <= 1_800_000_000);
+                }
+                for i in 1..seg.npoints {
+                    for c in (0..KEPT).filter(|&c| seg.kept[c].is_some()) {
+                        assert!(seg.times[i - 1][c] <= seg.times[i][c], "seed {seed}: times fall");
+                    }
+                }
+                0
+            }
+            Err(e) => match e {
+                Error::TooBig => 1,
+                Error::Short => 2,
+                Error::Targets => 3,
+                Error::Target => 4,
+                Error::Points => 5,
+                Error::FitOffset => 6,
+                Error::Times => 7,
+                Error::Earth => 8,
+                Error::NoPosition => 9,
+                Error::FitHeader => 10,
+                Error::FitUndefined => 11,
+                Error::FitTruncated => 12,
+                Error::FitCrc => 13,
+                Error::Trailing => 14,
+            },
+        };
+        reached[k] += 1;
+        let _ = Header::parse(&f);
+    }
+    assert!(reached.iter().all(|&c| c > 0), "every error and the Ok path reached: {reached:?}");
+}
