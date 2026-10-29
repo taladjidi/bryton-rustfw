@@ -281,8 +281,7 @@ fn gear_on_the_overview_opens_the_menu() {
 /// A USB drop the board recovered from is counted in its backup register (tag 0x0b, over stock's leftovers) and said.
 #[test]
 fn usb_drops_are_counted() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     sim.backup[USB_DROPS_BKP] = 0x3c5; // a value stock left there
     app.usb_dropped(&mut sim);
     app.usb_dropped(&mut sim);
@@ -295,8 +294,7 @@ fn usb_drops_are_counted() {
 /// after them counts from 1 (the review of 2026-10-25).
 #[test]
 fn the_standby_flags_are_no_usb_drop_count() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     sim.backup[STANDBY_FLAGS_BKP] = standby_flags_word(0x0b00_0000, 0x40); // pin and power-on resets, standby
     app.usb_dropped(&mut sim);
     assert_eq!(sim.backup[USB_DROPS_BKP], 0x0b00_0001);
@@ -324,8 +322,7 @@ fn quick_taps_and_swipes() {
 #[test]
 fn a_tap_at_the_bottom_stays_on_the_screen() {
     for y in [ui::H - 1, ui::LIST_Y + ui::MENU_ROWS as u32 * ui::MENU_ROW] {
-        let mut sim = Sim::new(9, 0, 0);
-        let mut app = App::start(&mut sim, None);
+        let (mut sim, mut app) = started();
         app.press(&mut sim, Press::Long(Key::Page));
         to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
         app.press(&mut sim, Press::Short(Key::Start));
@@ -478,8 +475,7 @@ fn every_layout_draws() {
 /// while charging.
 #[test]
 fn battery_in_the_strip_and_off_when_empty() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.step(&mut sim);
     assert_eq!(app.strip.battery, Some(63), "3.9 V");
     sim.charger = true;
@@ -497,8 +493,7 @@ fn battery_in_the_strip_and_off_when_empty() {
 /// what it covered is drawn again. A key dismisses it and acts (Start on a ride must start it).
 #[test]
 fn notice_banner_over_a_ride_page() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 3000);
     app.notice("STRAP PAIRED");
@@ -522,8 +517,7 @@ fn notice_banner_over_a_ride_page() {
 /// notice (the strip says it).
 #[test]
 fn overview_notices_and_fields() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 3000);
     sim.gnss.fix = Some(7000);
     run(&mut sim, &mut app, 2000);
@@ -625,8 +619,7 @@ fn gps_fix_and_speed() {
 /// send the configuration again at once; kept in register 16, and the next power-up sends SAVER's.
 #[test]
 fn gps_power_from_the_menu() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 3000);
     let count = |sim: &Sim, f: [u8; 32]| sim.gnss.got.windows(32).filter(|w| *w == f).count();
     let (full, saver) = (crate::gnss::config(false), crate::gnss::config(true));
@@ -662,8 +655,7 @@ fn gps_power_from_the_menu() {
 #[test]
 fn gps_off_when_idle() {
     use crate::{GNSS_IDLE_MS, GNSS_SEARCH_MS};
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.settings.light_timeout = 0;
     run(&mut sim, &mut app, u64::from(GNSS_SEARCH_MS) - 2000);
     assert!(sim.gnss.powered, "searching for 5 minutes");
@@ -816,8 +808,7 @@ fn a_stuck_key_lets_the_light_time_out() {
 /// brings it back (and acts), Back only brings it back.
 #[test]
 fn backlight_level_and_timeout() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     let s = app.settings;
     assert_eq!(
         (s.light_level, LIGHT_TIMEOUTS_S[s.light_timeout]),
@@ -859,8 +850,7 @@ fn backlight_level_and_timeout() {
 /// sensor measures only now and then, and not at all while the backlight is off.
 #[test]
 fn auto_backlight_follows_the_ambient_light() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     assert_eq!(sim.bus.accel_ctrl1, 0x07, "the accelerometer switched off");
     (app.settings.light_level, app.settings.light_timeout) = (0, 0); // 100 %, never off (a fresh unit has AUTO)
     run(&mut sim, &mut app, 30_000);
@@ -940,8 +930,7 @@ fn missing_sensor_chips() {
 /// The barometer converts once per reading (one-shot), every 10 s.
 #[test]
 fn barometer_one_shot() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 60_000);
     assert!((6..=8).contains(&sim.bus.baro_conversions), "{}", sim.bus.baro_conversions);
     assert_eq!(app.baro, Some((10_132, 2150)));
@@ -1034,8 +1023,7 @@ fn lap_on_the_overview_marks_a_lap() {
 /// once, and a ringing call's Back still declines.
 #[test]
 fn back_clearing_a_banner_only_clears_it() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(0));
     app.say("EAT REMINDER");
@@ -1149,8 +1137,7 @@ fn silent_speed_sensor_falls_back_to_gps() {
 /// switches off. With no ride, the first hold does.
 #[test]
 fn off_during_a_ride_asks_twice() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Start));
     app.press(&mut sim, Press::Long(Key::Back));
     assert!(!sim.standby && app.notes.text.as_str() == "HOLD BACK AGAIN TO SWITCH OFF", "warned");
@@ -1269,8 +1256,7 @@ fn eat_reminder_on_a_ride() {
 /// one said meanwhile does not push out the one waiting; then the page is whole again.
 #[test]
 fn banners_wait_their_turn() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1000);
     let shown = |sim: &mut Sim, app: &mut App, ms| {
@@ -1296,8 +1282,7 @@ fn banners_wait_their_turn() {
 /// turn; LAP said twice showed 8 s).
 #[test]
 fn banners_replaced_do_not_come_back() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 1000);
     let shown = |sim: &mut Sim, app: &mut App, ms| {
@@ -1331,8 +1316,7 @@ fn banners_replaced_do_not_come_back() {
 /// on the gear included; the keys turn it on again.
 #[test]
 fn touch_can_be_switched_off() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::Touch));
     assert_eq!(main_row(&app, row_of(menu::Row::Set(Setting::Touch))), "TOUCH ON");
@@ -1398,8 +1382,7 @@ fn import_asks_first() {
 /// (review 2: two players cut each other off).
 #[test]
 fn tones_do_not_cut_each_other() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     let t0 = sim.tones.len();
     app.workout_event(workout::Event::Done);
     app.alert.push(Some(alerts::Alert::Eat));
@@ -1410,8 +1393,7 @@ fn tones_do_not_cut_each_other() {
 /// Two alerts due in the same second are both said, one after the other (the second was thrown away).
 #[test]
 fn two_alerts_in_one_second_are_both_said() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.alert.push(Some(alerts::Alert::CadenceLow));
     app.alert.push(Some(alerts::Alert::HrHigh));
     run(&mut sim, &mut app, 200);
@@ -1430,8 +1412,7 @@ fn two_alerts_in_one_second_are_both_said() {
 /// holding a key repeats, Start keeps it; kept in the wheel's register beside the other settings.
 #[test]
 fn max_hr_and_ftp_from_the_menu() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::Wheel));
     app.press(&mut sim, Press::Short(Key::Start)); // wheel: next size
@@ -1480,8 +1461,7 @@ fn record_a_run() {
 /// menu. The panel equals a full redraw.
 #[test]
 fn about_screen() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::About);
     app.press(&mut sim, Press::Short(Key::Start));
@@ -1566,8 +1546,7 @@ pub(super) fn run_passes(sim: &mut Sim, app: &mut App, ms: u64, pass: u32) {
 fn timers_count_real_time_in_long_passes() {
     const PASS: u32 = 400;
     // a banner
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     run_passes(&mut sim, &mut app, 3000, PASS);
     app.notice("STRAP PAIRED");
@@ -1593,8 +1572,7 @@ fn timers_count_real_time_in_long_passes() {
     let played = sim.ms - t1;
     assert!((1000..=1000 + 2 * u64::from(PASS)).contains(&played), "tone {played} ms");
     // the backlight: 10 s of no key
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.settings.light_level = 2;
     app.settings.light_timeout = 1;
     run_passes(&mut sim, &mut app, 1, PASS);
@@ -1627,8 +1605,7 @@ fn timers_count_real_time_in_long_passes() {
 /// Start, pause and resume each beep: rising for a start or a resume, falling for a pause (the owner, 2026-10-25).
 #[test]
 fn start_and_pause_beep() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 1000);
     for want in [[1800, 2600, 0], [2600, 1800, 0], [1800, 2600, 0]] {
         let t0 = sim.tones.len();
@@ -1850,8 +1827,7 @@ fn idle_loop_ignores_bytes_from_a_chip_not_started() {
 /// (review of d28032a: the pass before was taken off it, so it lasted 0 to 50 ms).
 #[test]
 fn alert_beep_from_an_idle_pass_keeps_its_length() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run_main(&mut sim, &mut app, 40_000);
     assert_eq!(app.pass_ms(), IDLE_POLL_MS);
     app.tones.play(&BEEP_ALERT);

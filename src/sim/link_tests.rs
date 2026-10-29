@@ -102,8 +102,7 @@ fn a_quiet_healthy_link_is_left_alone() {
     assert_eq!((app.watch.resets, app.watch.resyncs), (0, 0));
     let asked = sim.nordic.got.iter().filter(|p| p[..2] == [0, 0x65]).count();
     assert!(asked > 2, "the quiet link was asked {asked} times");
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     run(&mut sim, &mut app, 30 * 60 * 1000);
     assert_eq!((app.watch.resets, app.watch.resyncs), (0, 0), "no ANT, no phone");
 }

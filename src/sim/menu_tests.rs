@@ -11,8 +11,7 @@ use crate::ui::Field;
 /// three reports, strongest first, "2 NEARBY..." until the timeout. Back goes out level by level.
 #[test]
 fn menu_lists_the_devices_nearby() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     assert_eq!(app.screen(), Screen::Menu(Menu::Main, 0));
     assert_consistent(&sim, &app);
@@ -60,8 +59,7 @@ fn menu_lists_the_devices_nearby() {
 /// Back returns to where the menu was opened, row by row: a submenu to its row, the menu to the ride page.
 #[test]
 fn back_returns_where_it_came_from() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Page));
     assert_eq!(app.screen(), Screen::Ride(1));
@@ -751,8 +749,7 @@ fn cog_opens_settings_while_recording() {
 /// one row at the top and empty slots under it (2026-10-29).
 #[test]
 fn last_screen_of_system_is_full() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page)); // the main menu
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::System));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -774,8 +771,7 @@ fn last_screen_of_system_is_full() {
 /// whole menu draws (P4).
 #[test]
 fn a_live_menu_value_repaints_its_own_box() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::BuiltIn));
     app.press(&mut sim, Press::Short(Key::Start));

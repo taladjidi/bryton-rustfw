@@ -232,8 +232,7 @@ fn ahead_route(ms: u64) -> (i32, i32, i32) {
 /// An MTB ride turns climbs ahead's trails mode on; a road ride leaves it off.
 #[test]
 fn an_mtb_ride_follows_trails_ahead() {
-    let mut sim = Sim::new(9, 0, 0);
-    let mut app = App::start(&mut sim, None);
+    let (mut sim, mut app) = started();
     app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
     let trails = |app: &App| app.ahead.as_ref().unwrap().0.trails();
     app.press(&mut sim, Press::Short(Key::Start));
