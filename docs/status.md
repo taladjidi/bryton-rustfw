@@ -48,7 +48,7 @@ A feature not listed here was seen on the unit.
   meter reads the workout's target within a few % after a minute, the "PM+x%" on the trainer screen, the correction
   held then eased back when the meter is unplugged, OFF sending the target as set.
 
-- **Themes (ui/theme.rs, app/themes.rs; T1)**: OUTDOOR read in the sun (is it better than DARK on the transflective
+- **Themes (ui/theme.rs, app/themes.rs; T1)**: OUTDOOR and LIGHT (T2) read in the sun (is either better than DARK on the transflective
   panel?); a theme file loaded from `\Rustfw\Themes` on the card (listed, picked, kept in settings.bin, applied
   after a restart); the redraw at the first pass when the settings file names a file theme (one flash of DARK).
 

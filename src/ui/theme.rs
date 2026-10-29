@@ -137,9 +137,36 @@ impl Theme {
         Theme { ink, smooth: false }
     };
 
+    /// LIGHT: black on white for the sun (the panel is transflective). Every colour is darkened to hold 4.5:1 (text)
+    /// or 3:1 (lines, zones, the course) on white; the zones are Intervals.icu's own values, made for white pages.
+    pub const LIGHT: Theme = {
+        let mut ink = Theme::DARK.ink;
+        ink[0] = WHITE;
+        ink[1] = BLACK;
+        ink[2] = rgb(140, 140, 140);
+        ink[3] = rgb(96, 96, 96);
+        ink[4] = rgb(176, 64, 0);
+        ink[5] = WHITE;
+        ink[6] = rgb(208, 0, 0);
+        ink[7] = WHITE;
+        ink[8] = rgb(0, 112, 0);
+        ink[9] = rgb(138, 100, 0);
+        ink[10] = rgb(192, 72, 0);
+        ink[11] = rgb(112, 112, 112);
+        ink[12] = rgb(112, 0, 192);
+        ink[13] = rgb(47, 98, 89);
+        ink[14] = rgb(47, 98, 35);
+        ink[15] = rgb(148, 125, 49);
+        ink[16] = rgb(143, 87, 42);
+        ink[17] = rgb(124, 32, 59);
+        ink[18] = rgb(68, 45, 124);
+        ink[19] = rgb(60, 55, 72);
+        Theme { ink, smooth: false }
+    };
+
     /// The built-in theme called `name` (ASCII case ignored).
     pub fn builtin(name: &str) -> Option<Theme> {
-        [("DARK", Theme::DARK), ("OUTDOOR", Theme::OUTDOOR)]
+        [("DARK", Theme::DARK), ("OUTDOOR", Theme::OUTDOOR), ("LIGHT", Theme::LIGHT)]
             .into_iter()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, t)| t)
@@ -262,7 +289,7 @@ pub fn check(t: &Theme, base: &Theme) -> Result<(), Refused> {
 }
 
 /// A theme file's text (an INI, see features.md for the keys) as a theme: the colours of `[colors]` over those of
-/// `[theme] base` (dark or outdoor, else dark); a value that is not `#RRGGBB` or a key not in the table is ignored.
+/// `[theme] base` (dark, outdoor or light, else dark); a value that is not `#RRGGBB` or a key not in the table is ignored.
 /// Refused when it is not a theme, is too new, or fails [`check`].
 ///
 /// ```
@@ -287,6 +314,7 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
     }
     let base = match value("theme", "base") {
         Some(b) if b.eq_ignore_ascii_case(b"outdoor") => Theme::OUTDOOR,
+        Some(b) if b.eq_ignore_ascii_case(b"light") => Theme::LIGHT,
         _ => Theme::DARK,
     };
     let mut t = base;
@@ -308,7 +336,9 @@ mod tests {
         for (i, k) in KEYS.iter().enumerate() {
             assert!(!KEYS[i + 1..].contains(k), "key {i} repeated");
         }
-        for t in [Theme::DARK, Theme::OUTDOOR] {
+        let none = Theme { ink: [0; N], smooth: false };
+        assert_eq!(check(&Theme::LIGHT, &none), Ok(()), "LIGHT passes every check on its own, no base to excuse it");
+        for t in [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT] {
             assert_eq!(check(&t, &t), Ok(()));
         }
         let identity = |c: u16| Theme::DARK.ink(c);

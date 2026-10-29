@@ -653,6 +653,7 @@ impl App {
     pub fn render_row(&self, y: u32) -> Row {
         let mut row = Row::new(y);
         row.look = self.look();
+        row.px = [row.look.ink(ui::BLACK); ui::W as usize]; // the gaps nothing draws are the background
         self.draw_top(&mut row);
         self.draw_screen(&mut row);
         row

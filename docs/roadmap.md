@@ -42,7 +42,7 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
   the INI parser and the whole-theme checks (contrast 4.5:1, red only for alarms); `\Rustfw\Themes\*.ini` listed;
   SETTINGS > DISPLAY > THEME; DARK (identity) and OUTDOOR. Tests: identity, scramble, parser, contrast, fuzz, a
   gallery shot per theme. Agent: implementer (sonnet).
-- **T2. LIGHT**: fix what assumes a black background (the cog's blend, the zone colours tuned for black, the map's
+- ~~**T2. LIGHT**~~ done, sim only: fix what assumes a black background (the cog's blend, the zone colours tuned for black, the map's
   track and edges), using the scramble test's shots of every screen; then LIGHT built in. Agent: implementer
   (sonnet).
 - **T3. Fonts**: `tools/font.py` generates more smooth fonts into the pixel font's cells (the rule

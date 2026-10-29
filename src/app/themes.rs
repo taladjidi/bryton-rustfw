@@ -88,23 +88,24 @@ impl App {
         }
     }
 
-    /// THEME's Select: the next of DARK, OUTDOOR and the card's files, applied at once and kept.
+    /// THEME's Select: the next of DARK, OUTDOOR, LIGHT and the card's files, applied at once and kept.
     pub(crate) fn next_theme(&mut self, b: &mut impl Board) {
         let (files, n) = self.theme_files(b);
         let name = |i: usize| -> &str {
             match i {
                 0 => "DARK",
                 1 => "OUTDOOR",
+                2 => "LIGHT",
                 _ => files
-                    .get(i - 2)
+                    .get(i - 3)
                     .and_then(|f| f.split(|&c| c == 0).next())
                     .and_then(|s| core::str::from_utf8(s).ok())
                     .unwrap_or("DARK"),
             }
         };
-        let now = (0..2 + n).find(|&i| name(i).eq_ignore_ascii_case(self.settings.theme_name())).unwrap_or(0);
+        let now = (0..3 + n).find(|&i| name(i).eq_ignore_ascii_case(self.settings.theme_name())).unwrap_or(0);
         let mut next = text::Line::<12>::new();
-        next.push_str(name((now + 1) % (2 + n)));
+        next.push_str(name((now + 1) % (3 + n)));
         self.settings.set_theme_name(next.as_str());
         self.settings_store.theme_set = true;
         self.save_misc(b);

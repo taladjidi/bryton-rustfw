@@ -228,7 +228,7 @@ text), the cue arrows and, from scale 5, characters a value never shows stay pix
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 
 **Theme.** THEME in SETTINGS > DISPLAY (Select) goes through DARK (the colours as they were), OUTDOOR (lighter notes
-and lines, brighter zones) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
+and lines, brighter zones), LIGHT (black on white, for the sun) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
 `-` and `_`, 12 characters at most), drawing the screen again at once. The choice is kept by name in settings.bin (not
 in the backup registers), and a file is read again at each start. A file is an INI, read, never written:
 
@@ -236,7 +236,7 @@ in the backup registers), and a file is read again at each start. A file is an I
 [theme]
 version = 1          ; above 1 is refused (THEME TOO NEW)
 name = SUNNY
-base = outdoor       ; dark or outdoor: the values the file does not give
+base = outdoor       ; dark, outdoor or light: the values the file does not give
 [colors]             ; #RRGGBB, any key left out keeps the base's
 background = #000000 ; every screen's background
 text = #FFFFFF       ; labels and values
