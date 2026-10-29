@@ -512,7 +512,7 @@ impl App {
 
     /// Screen row `slot` of `menu` (the menu turns a screen at a time: [`menu::first_shown`]).
     pub(crate) fn draw_menu_row(&self, c: &mut impl Canvas, menu: Menu, sel: usize, slot: usize) {
-        let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
+        let i = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu)) + slot;
         match self.menu_row(menu, i) {
             Some((label, value, color)) => {
                 let inert = matches!(self.row(menu, i), Some(menu::Row::Empty(_))); // a note is not selected
@@ -543,7 +543,7 @@ impl App {
 
     /// A fingerprint of screen row `slot` as it would be drawn (FNV-1a over its text, colour and selection).
     pub(crate) fn menu_row_print(&self, menu: Menu, sel: usize, slot: usize) -> u32 {
-        let i = menu::first_shown(sel, ui::MENU_ROWS) + slot;
+        let i = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu)) + slot;
         let mut h = 0x811c_9dc5u32;
         let mut eat = |bytes: &[u8]| {
             for &x in bytes {

@@ -361,7 +361,7 @@ impl App {
         let d = self.trainer_drive();
         let (t, r) = (&self.trainer, &self.trainer.reading);
         let mut target = Line::<12>::new();
-        self.push_trainer_target(&mut target, true);
+        self.push_trainer_target(&mut target);
         let engaged = t.engaged(&d);
         // the calibration's steps: the status line and, under the mode, what the trainer is doing
         let (mut stat, mut src) = (Line::<20>::new(), Line::<20>::new());
@@ -476,14 +476,12 @@ impl App {
         }
     }
 
-    /// The target as text: "250 W", "40 %", "-2.5 %" (`unit` with a space; the page field without).
-    fn push_trainer_target(&self, l: &mut Line<12>, spaced: bool) {
+    /// The target as text: "250 W", "40 %", "-2.5 %" (the page field too: a space before the unit, as the menus).
+    fn push_trainer_target(&self, l: &mut Line<12>) {
         let d = self.trainer_drive();
         let t = &self.trainer;
         let unit = |l: &mut Line<12>, u: &str| {
-            if spaced {
-                l.push_str(" ");
-            }
+            l.push_str(" ");
             l.push_str(u);
         };
         match t.mode(&d) {
@@ -520,7 +518,7 @@ impl App {
             l.push_str(self.trainer.mode(&self.trainer_drive()).name());
         } else {
             let mut t = Line::<12>::new();
-            self.push_trainer_target(&mut t, false);
+            self.push_trainer_target(&mut t);
             l.push_str(t.as_str());
         }
         l
