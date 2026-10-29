@@ -16,12 +16,12 @@ pub const LAP_BANNER_MS: u32 = 8000;
 pub(crate) enum Banner {
     /// What a key just did, a notice.
     Info,
+    /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said, under a turn, a workout step or an alarm.
+    Summary,
     /// A turn ahead.
     Cue,
     /// What the ride says: a workout step, a reminder, a climb.
     Ride,
-    /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said and under a turn now.
-    Summary,
     /// A turn now.
     Now,
     /// An alarm (heart rate high, off course, the battery low, a ride not saving): white on red.

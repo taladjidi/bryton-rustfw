@@ -219,7 +219,7 @@ fn workout_graph_field() {
     for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Lap));
     }
-    run(&mut sim, &mut app, 10_000); // the step's banner, then the one that waited for it
+    run(&mut sim, &mut app, 20_000); // the step banner, then the lap summaries that waited for it (8 s each)
     let (at, px0, s0) = (rider(&app).unwrap(), sim.pixels, sim.ms);
     assert!(at > now + 30, "Lap jumps it: column {now}, then {at}");
     run(&mut sim, &mut app, 30_000);

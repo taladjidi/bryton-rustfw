@@ -228,7 +228,8 @@ impl Ride {
         (self.state == State::Running).then(|| {
             // the lap that ends keeps its time and average; the new one starts from zero
             (self.last_lap_s, self.last_lap_w) = (Some(self.lap_s()), self.lap_power.avg());
-            (self.last_lap_m, self.last_lap_hr, self.lap_hr) = (self.lap_dist_m(), self.lap_hr.get(), Avg { sum: 0, n: 0 });
+            (self.last_lap_m, self.last_lap_hr, self.lap_hr) =
+                (self.lap_dist_m(), self.lap_hr.get(), Avg { sum: 0, n: 0 });
             self.laps = self.laps.saturating_add(1);
             (self.lap_timer_s, self.lap_dist9) = (self.timer_s, self.dist9);
             (self.lap_power, self.lap_ascent_mm, self.lap_descent_mm) = (crate::power::Power::new(), 0, 0);

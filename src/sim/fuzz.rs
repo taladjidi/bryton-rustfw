@@ -3406,7 +3406,11 @@ fn settings_file() {
                 for (k, (slot, top)) in lap_w.iter_mut().zip([2u8, 50, 60]).enumerate() {
                     if usize::from(len) >= 95 + k {
                         // in range, or one past it (and 0 for the two numbers)
-                        let v = if next().is_multiple_of(3) { top + 1 + (next() % 100) as u8 % 100 } else { (next() % 3) as u8 };
+                        let v = if next().is_multiple_of(3) {
+                            top + 1 + (next() % 100) as u8 % 100
+                        } else {
+                            (next() % 3) as u8
+                        };
                         let v = if k > 0 && v == 0 && next().is_multiple_of(2) { top } else { v };
                         s[28 + 94 + k] = v;
                         *slot = Some((v, if k == 0 { v <= top } else { (1..=top).contains(&v) }));

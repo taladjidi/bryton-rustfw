@@ -316,7 +316,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The auto lap's limits for [`Ride::lap_reached`]: metres and seconds, 0 for none.
+    /// The auto lap's limits for [`ride::Ride::lap_reached`]: metres and seconds, 0 for none.
     pub fn auto_lap_limits(&self) -> (u32, u32) {
         match self.auto_lap {
             1 => (u32::from(self.lap_km) * 1000, 0),
@@ -673,7 +673,9 @@ impl Settings {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
             }
-            Setting::AutoLap => l.push_str(["OFF", "BY DISTANCE", "BY TIME"].get(self.auto_lap).copied().unwrap_or("OFF")),
+            Setting::AutoLap => {
+                l.push_str(["OFF", "BY DISTANCE", "BY TIME"].get(self.auto_lap).copied().unwrap_or("OFF"))
+            }
             Setting::LapKm => l.push_u32(u32::from(self.lap_km)),
             Setting::LapMin => l.push_u32(u32::from(self.lap_min)),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
