@@ -1388,7 +1388,7 @@ fn menu_touch_and_keys() {
                     backs += 1
                 }
                 (Screen::Menu(m, s), Input::Touch(Gesture::Tap(_, y))) if !editing && u32::from(y) >= ui::LIST_Y => {
-                    let r = menu::first_shown(s, ui::MENU_ROWS) + ((u32::from(y) - ui::LIST_Y) / ui::MENU_ROW) as usize;
+                    let r = menu::first_shown(s, ui::MENU_ROWS, app.rows(m)) + ((u32::from(y) - ui::LIST_Y) / ui::MENU_ROW) as usize;
                     if r == s && chosen {
                         acts += 1;
                     } else if r != s && app.screen() == Screen::Menu(m, r) {
