@@ -44,13 +44,19 @@ def main():
     sp, reset = struct.unpack_from('<2I', raw, 0)
     tag = bytes(raw[0x94:0x98])
     size, = struct.unpack_from('<I', raw, 0x98)
-    assert 0x20000000 < sp <= 0x20020000, f'initial SP 0x{sp:08x} not in DTCM'
-    assert BASE <= reset < BASE + end and reset & 1, f'reset vector 0x{reset:08x} not Thumb code in the image'
-    assert tag[:1] == b'R' and tag[1:].isdigit(), f'0x94 holds {tag!r}, the updater needs "R" + 3 digits'
-    assert size == end, f'image size word 0x{size:x} != loaded end 0x{end:x}'
+    if not (0x20000000 < sp <= 0x20020000):
+        sys.exit(f'pack.py: initial SP 0x{sp:08x} not in DTCM')
+    if not (BASE <= reset < BASE + end and reset & 1):
+        sys.exit(f'pack.py: reset vector 0x{reset:08x} not Thumb code in the image')
+    if not (tag[:1] == b'R' and tag[1:].isdigit()):
+        sys.exit(f'pack.py: 0x94 holds {tag!r}, the updater needs "R" + 3 digits')
+    if size != end:
+        sys.exit(f'pack.py: image size word 0x{size:x} != loaded end 0x{end:x}')
     img = bytes(raw) + (sum(raw) & 0xffffffff).to_bytes(4, 'little')   # 1 MB + trailer: the updater wants > 1 MB
-    assert MIN_SIZE <= len(img) < 0xa00001
-    assert sum(img[:-4]) & 0xffffffff == int.from_bytes(img[-4:], 'little')
+    if not (MIN_SIZE <= len(img) < 0xa00001):
+        sys.exit(f'pack.py: image of {len(img)} B outside {MIN_SIZE}..0xa00000')
+    if (sum(img[:-4]) & 0xffffffff) != int.from_bytes(img[-4:], 'little'):
+        sys.exit('pack.py: image sum does not match its last 4 bytes')
     os.makedirs(OUT, exist_ok=True)
     open(os.path.join(OUT, 'IMG.bin'), 'wb').write(img)
     open(os.path.join(OUT, 'update.ini'), 'w', newline='\r\n').write(
