@@ -1388,7 +1388,8 @@ fn menu_touch_and_keys() {
                     backs += 1
                 }
                 (Screen::Menu(m, s), Input::Touch(Gesture::Tap(_, y))) if !editing && u32::from(y) >= ui::LIST_Y => {
-                    let r = menu::first_shown(s, ui::MENU_ROWS) + ((u32::from(y) - ui::LIST_Y) / ui::MENU_ROW) as usize;
+                    let r = menu::first_shown(s, ui::MENU_ROWS, app.rows(m))
+                        + ((u32::from(y) - ui::LIST_Y) / ui::MENU_ROW) as usize;
                     if r == s && chosen {
                         acts += 1;
                     } else if r != s && app.screen() == Screen::Menu(m, r) {
@@ -1889,7 +1890,7 @@ fn page_editor_inputs() {
     let (mut splits, mut merges, mut added, mut deleted) = (0, 0, 0, 0);
     let (mut mores, mut more_edits, mut more_kept) = (0, 0, 0);
     let (mut indoor_edits, mut indoor_changed, mut mtb_edits) = (0, 0, 0);
-    for seed in 1..=24u32 {
+    for seed in 1..=48u32 {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         sim.own_settings();

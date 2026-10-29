@@ -1384,7 +1384,9 @@ fn import_asks_first() {
     app.input(&mut sim, Input::Select);
     assert_ne!(app.settings.ftp, 55, "Start twice: imported");
     app.settings.ftp = 55;
-    let y = (ui::LIST_Y + (import % ui::MENU_ROWS) as u32 * ui::MENU_ROW + 20) as u16;
+    let y = (ui::LIST_Y
+        + (import - menu::first_shown(import, ui::MENU_ROWS, app.rows(Menu::System))) as u32 * ui::MENU_ROW
+        + 20) as u16;
     app.input(&mut sim, Input::Select); // asks
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, y))); // the row chosen and asking: a tap confirms
     assert_ne!(app.settings.ftp, 55, "imported again");
