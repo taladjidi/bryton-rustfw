@@ -279,11 +279,14 @@ impl Ride {
             }
             let hysteresis = if self.alt_ref == 0 { ASCENT_HYSTERESIS_MM } else { BARO_HYSTERESIS_MM };
             self.climb.second(alt_mm, self.dist9);
-            // the grade of the climbing window (None until it spans 20 m): the second's distance goes up or down
-            match self.climb.grade_x10() {
-                Some(g) if g >= SLOPE_X10 => self.up9 = self.up9.saturating_add(step9),
-                Some(g) if g <= -SLOPE_X10 => self.down9 = self.down9.saturating_add(step9),
-                _ => {}
+            // the grade of the climbing window (None until it spans 20 m) and its rise or fall past the ascent's
+            // hysteresis: flat noise is no slope, so the second's distance goes up or down only with both
+            if let (Some(g), Some(rise)) = (self.climb.grade_x10(), self.climb.rise_mm()) {
+                if g >= SLOPE_X10 && rise >= hysteresis {
+                    self.up9 = self.up9.saturating_add(step9);
+                } else if g <= -SLOPE_X10 && rise <= -hysteresis {
+                    self.down9 = self.down9.saturating_add(step9);
+                }
             }
             self.power.add(i.power); // zeros count: coasting is part of the average power
             self.cadence.add(i.cadence.filter(|&c| c > 0)); // zeros do not: coasting is not a cadence
@@ -347,6 +350,7 @@ impl Ride {
         Ride {
             state: State::Paused,
             timer_s: w[0],
+            elapsed_s: w[0], // the trip time starts from the moving time: it is never less than the timer's
             dist9,
             max_speed: w[3] as u16,
             hr: avg(4),
@@ -426,7 +430,8 @@ impl Ride {
         self.ascent_mm / 1000
     }
 
-    /// Seconds running since the start, auto-pauses included (a Start pause is not). Not kept over a resume.
+    /// Seconds running since the start, auto-pauses included (a Start pause is not). Over a resume it starts from the
+    /// moving time (the timer), the stops before the reset not being in the recovery record.
     pub fn elapsed_s(&self) -> u32 {
         self.elapsed_s
     }
@@ -463,7 +468,7 @@ impl Ride {
 
     /// Highest altitude, metres (None before a reading; from the current altitude source).
     pub fn max_alt_m(&self) -> Option<i32> {
-        self.max_alt_mm.map(|a| a / 1000)
+        self.max_alt_mm.map(|a| a.div_euclid(1000))
     }
 
     /// Altitude lost, metres: the same hysteresis as [`Ride::ascent_m`].
@@ -602,6 +607,12 @@ impl Climb {
         let run = d1.saturating_sub(d0);
         // alt mm x 1000 / (dist9 / 9) mm = per mille: x 9000 / dist9
         (run >= GRADE_MIN_DIST9).then(|| (i64::from(a1 - a0) * 9000 / run as i64) as i32)
+    }
+
+    /// The altitude change over the grade's window, mm (None before the window spans 20 m).
+    fn rise_mm(&self) -> Option<i32> {
+        let ((a0, d0), (a1, d1)) = self.span(GRADE_BACK)?;
+        (d1.saturating_sub(d0) >= GRADE_MIN_DIST9).then(|| a1 - a0)
     }
 }
 
@@ -1269,6 +1280,32 @@ mod tests {
         }
         assert!(r.downhill_m() > 150, "down {}", r.downhill_m());
         assert!(r.uphill_m() >= up && r.uphill_m() < up + 100, "the 30 s window lags about 15 s");
+    }
+
+    /// A resumed ride's trip time is never less than its timer, and the flat ground with GNSS noise of 4 m (under the
+    /// 5 m hysteresis) is neither uphill nor downhill.
+    #[test]
+    fn resumed_trip_time_and_flat_noise() {
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..50 {
+            r.second(&Input { alt_mm: Some(100_000), ..at(200) });
+        }
+        let back = Ride::resumed(&r.to_words());
+        assert!(
+            back.elapsed_s() >= back.timer_s() && back.elapsed_s() == 50,
+            "trip {} timer {}",
+            back.elapsed_s(),
+            back.timer_s()
+        );
+        // +-4 m every second, alternating: the 30 s window starts and ends on the same phase, so no rise
+        let mut r = Ride::new();
+        r.start_pause();
+        for i in 0..240 {
+            let alt = if i % 2 == 0 { 104_000 } else { 96_000 };
+            r.second(&Input { alt_mm: Some(alt), ..at(200) });
+        }
+        assert_eq!((r.uphill_m(), r.downhill_m()), (0, 0), "noise under the hysteresis");
     }
 
     #[test]

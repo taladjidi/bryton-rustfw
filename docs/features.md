@@ -53,9 +53,12 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   grade; and the trip and the laps: trip time (seconds running, auto-pauses in, a Start pause out), lap count, last
   lap time, lap average power, last lap average power, lap NP, top cadence, top altitude, total descent (the ascent's
   hysteresis: 5 m from GNSS, 3 m from the barometer), lap ascent and lap descent, and the distance uphill and downhill
-  (the grade of the last 30 s at +1 % or more, and at -1 % or less; flat riding counts in neither). **None of these is
-  kept over a resume** (the recovery record has no room for them): after a resume they restart from zero, the trip
-  time and the laps too. **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
+  (the grade of the last 30 s at +1 % or more, and at -1 % or less, and the 30 s window must also rise or fall by the
+  ascent's hysteresis; flat riding and GNSS noise count in neither). **Not kept over a resume** (the recovery record
+  has no room for them): after a resume the laps, the last lap, the lap's power and NP, the top cadence and altitude,
+  the descent, the lap's ascent and descent, and the uphill and downhill restart from zero. The trip time restarts
+  from the moving time (the timer), so it is never less than the timer. Top altitude and the descent's high point also
+  restart when the altitude source switches from GNSS to the barometer (or back). **Default pages** (as Garmin, Wahoo and Hammerhead ship theirs: data, climbing, map): 1, speed, moving
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
