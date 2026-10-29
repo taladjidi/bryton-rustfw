@@ -161,18 +161,30 @@ def ls(s, path):
 
 
 def get(s, path, progress=False):
-    """A file of the eMMC FAT volume, 4 KB an answer (tools/sync.py uses it too)."""
+    """A file of the eMMC FAT volume, 4 KB an answer (tools/sync.py uses it too). Its size is the one `ls` gives its
+    folder: an answer cut by a dropped link is raised here, never copied short (AGENTS.md, Project rules)."""
+    folder, _, name = path.replace('/', '\\').rpartition('\\')
+    sizes = {n.upper(): size for size, is_dir, n in ls(s, folder or '\\') if not is_dir}
+    if name.upper() not in sizes:
+        raise OSError(f'get {path}: not in its folder')
+    size = sizes[name.upper()]
     data = bytearray()
-    while True:
+    while len(data) < size:
         answer = command(s, f'get {path} {len(data)} 4096')
         if answer.startswith('err'):
             raise OSError(f'get {path}: {answer}')
-        chunk = bytes.fromhex(answer)
+        try:
+            chunk = bytes.fromhex(answer)
+        except ValueError:
+            raise OSError(f'get {path}: malformed answer at {len(data)}') from None
+        if not chunk:
+            break
         data += chunk
-        if len(chunk) < 4096:
-            return bytes(data)
         if progress and len(data) % (256 * 1024) == 0:
             print(f'{len(data) // 1024} KB...', file=sys.stderr)
+    if len(data) != size:
+        raise OSError(f'get {path}: {len(data)} of {size} bytes')
+    return bytes(data)
 
 
 def prof_read(s):
@@ -235,6 +247,40 @@ def selftest():
     assert '| draw | 20.0 | 25.0 | 45 | 0.050 |' in t, t
     assert '| step, not in a section | | | | 0.150 |' in t and '**0.30**' in t and 'tiles' not in t, t
     assert '2400 px/s' in t and '1.5 sectors/s' in t, t
+    class Link:
+        """The dev link's computer side for `ls` and `get`: one file of `data`. fault 'short' cuts the answer at 4096
+        (100 bytes, then nothing); fault 'odd' answers an odd number of hex digits there."""
+        def __init__(self, data, fault=None):
+            self.data, self.fault, self.out = data, fault, []
+
+        def reset_input_buffer(self):
+            self.out = []
+
+        def write(self, cmd):
+            word = cmd.decode().split()
+            if word[0] == 'ls':
+                self.out = [f'{len(self.data):x} f FILE.FIT', 'end']
+                return
+            off, n = int(word[2]), 4096
+            if self.fault == 'short' and off >= 4096:
+                n = 100 if off == 4096 else 0
+            hexed = self.data[off:off + n].hex()
+            if self.fault == 'odd' and off == 4096:
+                hexed = 'abc'
+            self.out = [hexed]
+
+        def readline(self):
+            return (self.out.pop(0) + '\n').encode()
+
+    blob = bytes(range(256)) * 40                       # 10240 bytes: two answers and a part
+    assert get(Link(blob), 'Activities\\FILE.FIT') == blob
+    for fault, want in (('short', '4196 of 10240 bytes'), ('odd', 'malformed answer at 4096')):
+        try:
+            get(Link(blob, fault), 'Activities\\FILE.FIT')
+        except OSError as e:
+            assert want in str(e), e
+        else:
+            raise AssertionError(f'{fault}: a cut answer was copied')
     print('dev.py selftest ok')
 
 
