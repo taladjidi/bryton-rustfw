@@ -57,7 +57,7 @@
 //! **The trainer** ([`Sample::trainer`], the full copy only, a file that describes `ArtPct`): while a trainer is
 //! connected, to diagnose ERG (the target, what the trainer and the meter say, what went out and failed), every record
 //! also carries eight more developer fields after those three, numbers 3 to 10 of developer data index 0:
-//! `target_w` (uint16, W: the ERG target last sent, 0 none), `trainer_w` (uint16, W: the trainer's own power),
+//! `target_w` (uint16, W: the ERG target the trainer should hold, invalid when not in ERG), `trainer_w` (uint16, W: the trainer's own power),
 //! `meter_w` (uint16, W: the power meter's, invalid when not heard), `fe_state` (uint8: FE-C page 25 byte 7 bits
 //! 4-6), `trn_stat` (uint8: page 25 byte 6 bits 4-6, the trainer status, in bits 4-6; byte 7 bits 0-1, the target
 //! power limits, in bits 0-1), `link` (uint8: 0 ANT+, 1 Bluetooth), `cmd_sent` (uint8: [`cmd_bit`] of each control
@@ -68,7 +68,7 @@
 //! the record again); a resume after a build that dropped the bit describes them again, which readers take (a later
 //! description of a field replaces the earlier one). A second without a trainer is the three-field record (a new
 //! definition at each change). With the trainer's common page 80 heard, a `device_info` (global 23: device_index 1,
-//! device_type 17 fitness_equipment, manufacturer, serial_number, product (the model number), software_version
+//! device_type antplus fitness_equipment (17) or ble bike_trainer (7), manufacturer, serial_number, product (the model number), software_version
 //! (scale 100), hardware_version, source_type antplus (1) or bluetooth_low_energy (3); garmin_fit_sdk/profile.py
 //! 21.218) goes before the first record that has it, once a run of the writer (a resume may write it again).
 //!
@@ -164,8 +164,8 @@ pub struct Sample {
 /// One second of the trainer (module doc, "The trainer"): plain values the app took from the trainer's reading.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TrainerSample {
-    /// The ERG target last sent, W; 0: none.
-    pub target_w: u16,
+    /// The ERG target the trainer should hold this second, W (None: not in ERG). Whether it went out is `cmds`.
+    pub target_w: Option<u16>,
     /// The trainer's own power, W.
     pub trainer_w: Option<u16>,
     /// The power meter's power, W (None: not heard).
@@ -724,7 +724,7 @@ impl Writer {
                 alpha,
                 s.rmssd_ms.map_or(0xffff, u32::from),
                 s.artifacts_pct.map_or(0xff, |p| u32::from(p.min(100))),
-                w(Some(t.target_w)),
+                w(t.target_w),
                 w(t.trainer_w),
                 w(t.meter_w),
                 u32::from(t.fe_state & 7),
@@ -766,16 +766,19 @@ impl Writer {
 
     /// The trainer's `device_info` (module doc); a field not known is FIT's invalid (uint32z 0).
     fn device_info(&mut self, sink: &mut impl Sink, time: u32, d: &TrainerDevice, ble: bool) -> Result<(), Error> {
+        // device_type follows source_type: ble_device_type bike_trainer (7) over bluetooth_low_energy (3),
+        // antplus_device_type fitness_equipment (17) over antplus (1)
+        let (ty, src) = if ble { (7, 3) } else { (17, 1) };
         let v = [
             time,
-            1,  // device_index: not the creator (0)
-            17, // antplus_device_type fitness_equipment
+            1, // device_index: not the creator (0)
+            ty,
             u32::from(d.maker),
             d.serial.unwrap_or(0),
             d.model.map_or(0xffff, u32::from),
             d.sw_x100.map_or(0xffff, u32::from),
             d.hw.map_or(0xff, u32::from),
-            if ble { 3 } else { 1 }, // source_type bluetooth_low_energy, antplus
+            src,
         ];
         self.message(sink, L_DEVICE, 23, &DEVICE, &v)
     }
@@ -1304,7 +1307,7 @@ pub(crate) mod tests {
     /// TX_FAILED every 7.
     pub(crate) fn trainer(t: u32) -> Option<TrainerSample> {
         ((100..300).contains(&t) && !(150..160).contains(&t)).then(|| TrainerSample {
-            target_w: 200,
+            target_w: Some(200),
             trainer_w: Some(195 + (t % 10) as u16),
             meter_w: (t >= 120).then_some(190 + (t % 10) as u16),
             fe_state: 3,
@@ -1675,6 +1678,11 @@ pub(crate) mod tests {
                     let rr = m.iter().filter(|x| x.0 == 78).flat_map(|x| x.1.iter().map(|f| f.1));
                     let fed = samples.iter().flat_map(|s| beats(s.time)).map(u64::from);
                     assert!(rr.filter(|&v| v != 0xffff).eq(fed), "cut at {budget}");
+                    // the trainer's fields described before the first record that has them, a resume or not
+                    let desc = m.iter().position(|x| x.0 == 206 && field(x, 1) == Some(3));
+                    let first = m.iter().position(|x| x.0 == 20 && field(x, 233).is_some());
+                    assert!(first.is_some(), "cut at {budget}: the test ride has a trainer");
+                    assert!(desc < first && desc.is_some(), "cut at {budget}: target_w described before use");
                 }
             }
             resumed += 1;

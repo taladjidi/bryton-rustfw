@@ -139,7 +139,7 @@ fn beat_streams_into_the_full_copy() {
     // a trainer that comes and goes (fit.rs, "The trainer"), any values, its pages 80 / 81 sometimes
     let trainer = |rnd: &mut dyn FnMut() -> u32| {
         (!rnd().is_multiple_of(4)).then(|| crate::fit::TrainerSample {
-            target_w: rnd() as u16,
+            target_w: rnd().is_multiple_of(2).then(|| rnd() as u16),
             trainer_w: (!rnd().is_multiple_of(3)).then(|| rnd() as u16),
             meter_w: (!rnd().is_multiple_of(3)).then(|| rnd() as u16),
             fe_state: rnd() as u8,

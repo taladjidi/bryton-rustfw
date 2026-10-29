@@ -339,10 +339,12 @@ impl App {
         if !self.tlink.up {
             return None;
         }
-        let r = &self.trainer.reading;
+        let (t, d) = (&self.trainer, self.trainer_drive());
+        let r = &t.reading;
         let meter = self.radio.heard_ms.get(Kind::Power as usize).is_some_and(|&ms| ms < sensors::STALE_MS);
         Some(fit::TrainerSample {
-            target_w: self.trainer.target_sent_w(),
+            // what it should hold (cleared by no resend or loss of the link); whether it went out is `cmds`
+            target_w: (t.engaged(&d) && t.mode(&d) == trainer::Mode::Erg).then(|| t.target_w(&d)),
             trainer_w: r.power,
             // a meter heard is what the live power is (app/trainer.rs `fold_trainer`)
             meter_w: self.live.get(Metric::Power).filter(|_| meter),

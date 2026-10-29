@@ -229,8 +229,8 @@ fn the_full_copy_records_the_trainer_for_erg() {
     assert!(rec.len() > 15, "{} records", rec.len());
     assert!(rec.iter().all(|r| field(r, 233).is_some()), "the trainer heard every second");
     let col = |f: u8| rec.iter().map(|r| field(r, f).unwrap()).collect::<Vec<_>>();
-    assert!(col(233).contains(&110), "target_w, the workout's first step: {:?}", col(233));
-    assert!(col(233).iter().all(|&w| w == 0 || w == 110), "{:?}", col(233));
+    // the target held, every second of the first step, a resend or not (the review of 842e73f)
+    assert!(col(233).iter().all(|&w| w == 110), "target_w, the workout's first step: {:?}", col(233));
     assert!(col(234).iter().filter(|&&w| w == 110).count() > 10, "trainer_w holds the target: {:?}", col(234));
     assert!(col(235).iter().all(|&w| w == 210), "meter_w, the meter's: {:?}", col(235));
     assert!(col(236).iter().all(|&s| s == 3), "fe_state in use: {:?}", col(236));

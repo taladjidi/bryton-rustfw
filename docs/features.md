@@ -307,7 +307,7 @@ Built-in names cannot be a file's. LIGHT, fonts and metrics in a theme come late
   `ArtPct` (the share of beats the live DFA a1 dropped), from the strap's beats; and every beat itself, raw, in
   standard `hrv` messages as Garmin's units write them (about 20 KB an hour), for tools that compute DFA a1
   offline. While a home trainer is connected (ANT+ FE-C or Bluetooth), to diagnose ERG drops, each record also
-  carries `target_w` (the ERG target sent, 0 none), `trainer_w` (the trainer's power), `meter_w` (the power
+  carries `target_w` (the ERG target the trainer should hold, invalid outside ERG), `trainer_w` (the trainer's power), `meter_w` (the power
   meter's), `fe_state`, `trn_stat` (the trainer status bits and the target power limits of FE-C page 25),
   `link` (0 ANT+, 1 Bluetooth), `cmd_sent` (a bit per control page sent that second: 1 resistance, 2 target
   power, 4 track, 8 set-up) and `ack_fail` (ANT TX_FAILED events that second): 11 bytes a second, about 40 KB an

@@ -367,14 +367,6 @@ impl Trainer {
         (self.engaged || d.erg_w.is_some() || d.grade_x100.is_some()) && !(d.paused && self.mode(d) == Mode::Erg)
     }
 
-    /// The ERG target last sent and not known to have failed, W (the ride file's `target_w`); 0: none.
-    pub fn target_sent_w(&self) -> u16 {
-        match self.last {
-            Some(Command::Power(q)) => q / 4,
-            _ => 0,
-        }
-    }
-
     /// What was sent may still hold the trainer: it was engaged at the last pass, or its release is not known to
     /// have arrived (the switch-off lets it go).
     pub fn holding(&self) -> bool {
