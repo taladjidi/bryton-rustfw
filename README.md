@@ -51,7 +51,7 @@ Measured on the unit (2026-10-29, `tools/profile.py` from RAM, 30 s windows; the
 | Climb pacer, one plan | about 75 us (estimated from operation counts) |
 | A map tile for climbs ahead | at most about 3 ms a slice (estimated; one tile took 238 ms in one go before) |
 | Image | <!-- n:image -->640 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
-| Code | about <!-- n:rust_lines -->88,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
+| Code | about <!-- n:rust_lines -->89,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
 | Tests | <!-- n:tests -->887<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->8<!-- /n --> need files outside the repo), <!-- n:doctests -->157<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 
 

@@ -146,11 +146,13 @@ impl App {
         if self.ble.is_some() {
             self.step_ftms(b);
         }
-        let adjust = self.trainer.adjust_w();
+        let before = (self.screen == Screen::Trainer).then(|| self.with_trainer_now(ui::trainer::shown));
         self.send_trainer(b);
-        // a new workout step (a Lap) drops the rider's adjust of the old one: the target shows now, not at the next
-        // second (the menu fuzz caught the stale target: 2026-10-29)
-        self.tlink.second |= adjust != self.trainer.adjust_w();
+        // a Lap moves the workout on (and drops the rider's adjust of the old step): the target shows now, not at the
+        // next second (the menu fuzz caught the stale target: 2026-10-29)
+        if before.is_some_and(|s| s != self.with_trainer_now(ui::trainer::shown)) {
+            self.tlink.second = true;
+        }
         self.tlink.pm_ms += self.dt_ms;
         if self.tlink.pm_ms >= 1000 {
             self.tlink.pm_ms -= 1000;

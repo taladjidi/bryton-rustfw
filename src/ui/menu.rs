@@ -693,10 +693,11 @@ pub const GPS: [Reading; 7] =
 ///
 /// ```
 /// use bryton_rustfw::menu::first_shown;
-/// assert_eq!([0, 5, 6, 12].map(|s| first_shown(s, 6, 13)), [0, 0, 6, 7]);
+/// assert_eq!([0, 5, 6, 7, 12].map(|s| first_shown(s, 6, 13)), [0, 0, 6, 7, 7]);
 /// assert_eq!(first_shown(3, 6, 4), 0);
 /// ```
 pub fn first_shown(sel: usize, rows: usize, total: usize) -> usize {
     let rows = rows.max(1);
-    if total > rows { (sel / rows * rows).min(total - rows) } else { 0 }
+    // the shift to the last screen happens once, at its first row: inside it, moving costs two rows
+    if total > rows { if sel >= total - rows { total - rows } else { sel / rows * rows } } else { 0 }
 }
