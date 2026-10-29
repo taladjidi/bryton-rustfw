@@ -96,7 +96,7 @@ impl App {
                 }
             }
             Screen::Nearby if self.list_dirty && self.redraw_ms >= LIST_REDRAW_MS => {
-                ui::draw_list(&mut Panel(b, self.area(), self.look()), &self.radio.nearby);
+                ui::draw_list(&mut Panel(b, self.area(), self.look()), &self.radio.nearby, Some(&mut self.list_shown));
                 self.list_dirty = false;
                 self.redraw_ms = 0;
             }
