@@ -1549,6 +1549,8 @@ mod perf_tests;
 #[cfg(test)]
 mod ride_tests;
 #[cfg(test)]
+mod segment_tests;
+#[cfg(test)]
 mod stock_tests;
 #[cfg(test)]
 mod tests;

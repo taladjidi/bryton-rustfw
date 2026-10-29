@@ -347,6 +347,8 @@ pub struct App {
     /// The courses on the card, the one followed and where the rider is on it (memory from main.rs:
     /// [`App::set_course_memory`]).
     courses: Option<&'static mut storage::course_file::Courses>,
+    /// The live segments: index, active segment, matcher (memory from main.rs: [`App::set_segment_memory`]).
+    segments: Option<&'static mut Segments>,
     /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
     /// main.rs: [`App::set_threshold_memory`], 5 KB the app has no room for).
     thresholds: Option<&'static mut thresholds::Scan>,
@@ -497,6 +499,7 @@ impl App {
             rec: Recording::new(),
             card_writable: false,
             courses: None,
+            segments: None,
             pace: PaceState::new(),
             thresholds: None,
             ahead: None,
@@ -625,6 +628,7 @@ impl App {
             self.step_stock(b);
             t = self.timed(b, Sec::Scan, t);
             self.step_courses(b);
+            self.step_segments(b);
             t = self.timed(b, Sec::Files, t);
             self.step_ahead(b);
             t = self.timed(b, Sec::Ahead, t);

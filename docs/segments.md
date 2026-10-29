@@ -1,6 +1,6 @@
 # Live segments: a plan
 
-Status: S1 and S2 built (2026-10-29/30: `src/nav/segment.rs` the reader, `src/nav/segment_match.rs` the matcher, their tests and fuzz; nothing on the unit yet). S3 next.
+Status: S1, S2 and S3 built (2026-10-29/30: `src/nav/segment.rs` the reader, `src/nav/segment_match.rs` the matcher, `src/app/segments.rs` the index and the ride's feed; tests and fuzz; not yet seen on the unit). S4 next.
 Order of work: docs/roadmap.md, "Order of work", block 2.
 Not here: how stock does it in detail (bryton repo ghidra/recovered_src/ride/live_segments.c), the comparison with
 other units (checklist.md, "Climbs ahead and live segments").
@@ -168,13 +168,25 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
 |---|---|---|
 | S1 (done 2026-10-29) | `src/nav/segment.rs`: the `.seg` reader (pure, over a byte slice), the checks above; unit tests, doc tests; fuzz (src/sim/fuzz.rs): files generated from the layout (header fields, counts, times, a FIT course), cut, wild values; a count that every check is reached | implementer |
 | S2 (done 2026-10-30) | The matcher in `src/nav/segment_match.rs` (decisions below the table): near, start, progress (course.rs's code), lost, finish, the ghost's delta; host tests with synthetic tracks: a clean pass, a start missed by 30 m, a U-turn, a stop, lost and found, two overlapping segments, a segment along a course | implementer (sonnet) |
-| S3 | `src/app/segments.rs`: the index at the first pass, the active segment loaded, fed from the GNSS fix each second; nothing written; sim tests over a whole ride on a synthetic segment | implementer (sonnet) |
+| S3 (done 2026-10-30) | `src/app/segments.rs`: the index at the first pass, the active segment loaded, fed from the GNSS fix each second; nothing written; sim tests over a whole ride on a synthetic segment | implementer (sonnet) |
 | S4 | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |
 | S5 | The efforts written after the save (`.pr`, `efforts.csv`), the per-segment enable byte | critical, then reviewer on opus |
 | S6 (done 2026-10-30) | `tools/segments.py` from Intervals.icu (fetch, build, write); selftest in check.sh | implementer (sonnet) |
 | S7 | Segments from the rider's own rides, no Strava: stretches ridden at least twice (the overlap of two rides' tracks over 1 km), made into `.seg` files by `segments.py own` on the computer first; on the unit later if wanted | implementer (sonnet) |
 | S8 | Licensed Live Segments, if Strava grants it: `segments.py live` fills carrot, wolf, most recent, best of 5 and the KOM's real splits from `/live/segments/:id`; later the phone app does the same over BLE | implementer |
 | S9 | Optional: stock's imported segments (`\PlanTrip\LiveSegment\`) read too, read only | implementer |
+
+Decided in S3 (2026-10-30), memory and placement: one static `Segments` (main.rs `make_segments`, link.x `.axibss`, a new
+line there like the other cells; 12,904 B, all zeros at start: `Effort` counts from 1 so that `None` is 0, and the event ring is
+not an `Option`) holds the index (128 `segment_match::Entry`, 32 B each = 4 KB: the id, the box of the start pairs, the first
+pair and the direction to the next one as two i16; the name, distance and gain are not kept, S4's list reads a header when it
+shows it), the one active `Segment` (8.6 KB), the matcher and the counters. AXI SRAM has 1.6 KB left after it (it had 15 KB).
+No buffer of the whole file: `Segment::parse_with` reads 1 KB at a time (`segment::CHUNK`), so a 64 KB file loads with about 3 KB
+of stack, in `Segments::load` (`#[inline(never)]`). The index is built 8 files a pass (worst pass in the sim: 19 KB read, 8 ms at
+the unit's 2.5 MB/s) 5 s after the start, only with no ride open; a computer that wrote to the drive restarts the unit, which
+rebuilds it. The per-segment enabled bytes are not read yet. The idle matcher takes `Entry` (or `Header`, through `AsEntry`).
+API for S4: `App::segment_now()` (name, elapsed, delta against AUTO = PR else KOM, target, along, left, ghost), `App::segments()`
+with `events()` (the last 4 with their clock), `indexed()`, `skipped`, `dropped`. LIVE SEGMENTS and TARGET are consts for now.
 
 Decided in S2 (2026-10-30), API for S3: `Matcher::new` (about 90 bytes, a field of App), `step_idle(headers, lat, lon, t)`
 (an iterator of `&Header`, the index; gives `Approach(id)` or `Start(id)`), then the caller parses the file into the

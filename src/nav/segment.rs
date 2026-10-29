@@ -44,6 +44,8 @@ pub const MAX_BYTES: usize = 64 * 1024;
 pub const HEADER: usize = 0x200;
 /// Points at most, and at least 2 (a segment has a start and a finish).
 pub const POINTS: usize = 400;
+/// Bytes read from the card at a time by [`Segment::parse_with`].
+pub const CHUNK: usize = 1024;
 /// Targets in a file at most (the header area after 0x17a ends at 0x1fd).
 pub const TARGETS: usize = 7;
 /// Targets whose times are kept per point (the first of each effort in [`PREFER`]).
@@ -64,10 +66,13 @@ const DATA: usize = HEADER;
 const DESC: usize = 13;
 
 /// What a target measures: stock's type codes, which are Strava's effort types.
+// Discriminants from 1: an `Option<Effort>` is None at 0, so a `Segment` of zeros is the empty one (a static in
+// AXI SRAM, which starts all zeros: AGENTS.md, Memory).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Effort {
     /// `05`: the KOM (the fastest time of all).
-    Kom,
+    Kom = 1,
     /// `06`: the QOM (the fastest woman's time).
     Qom,
     /// `07`: the rider's own best.
@@ -276,45 +281,79 @@ impl Segment {
     /// cleared first, so a failed parse or a file with fewer targets never shows the last file's data. On an error
     /// the segment has no points (`npoints` is 0).
     pub fn parse(&mut self, b: &[u8]) -> Result<(), Error> {
+        self.parse_with(b.len(), |at, buf| {
+            let src = b.get(at..)?;
+            let n = src.len().min(buf.len());
+            buf.get_mut(..n)?.copy_from_slice(src.get(..n)?);
+            Some(n)
+        })
+    }
+
+    /// [`Segment::parse`] of a file of `size` bytes that is read in pieces of [`CHUNK`] bytes, so the caller needs no
+    /// buffer of the whole file (up to [`MAX_BYTES`]). `read(at, buf)` fills `buf` from byte `at` of the file and gives
+    /// the bytes it put there (0 at the end), or None when the card failed ([`Error::Io`]).
+    pub fn parse_with(
+        &mut self,
+        size: usize,
+        mut read: impl FnMut(usize, &mut [u8]) -> Option<usize>,
+    ) -> Result<(), Error> {
         self.npoints = 0;
         self.header = Header::blank();
         self.kept = [None; KEPT];
         self.times = [[0; KEPT]; POINTS];
-        if b.len() > MAX_BYTES {
+        if size > MAX_BYTES {
             return Err(Error::TooBig);
         }
-        let header = Header::parse(b)?;
+        let mut head = [0u8; DATA + 8];
+        read_all(&mut read, 0, &mut head)?;
+        let header = Header::parse(&head)?;
         let n = header.ntargets;
-        let np = usize::try_from(u32_at(b, DATA)?).map_err(|_| Error::Points)?;
+        let np = usize::try_from(u32_at(&head, DATA)?).map_err(|_| Error::Points)?;
         if !(2..=POINTS).contains(&np) {
             return Err(Error::Points);
         }
-        if usize::try_from(u32_at(b, DATA + 4)?) != Ok(n) {
+        if usize::try_from(u32_at(&head, DATA + 4)?) != Ok(n) {
             return Err(Error::Targets);
         }
-        let fit_at = DATA + 8 + DESC * n + 4 * np * n;
+        let times_at = DATA + 8 + DESC * n;
+        let fit_at = times_at + 4 * np * n;
         if usize::try_from(header.fit_offset) != Ok(fit_at) {
             return Err(Error::FitOffset);
         }
-        let times = b.get(DATA + 8 + DESC * n..fit_at).ok_or(Error::Short)?;
-        let fit = b.get(fit_at..).ok_or(Error::Short)?;
+        if fit_at > size {
+            return Err(Error::Short);
+        }
+        let mut chunk = [0u8; CHUNK];
 
         // the times: each target's must not fall along the points; the kept ones fit a u16 (a time past 65535 s
         // rejects the file). The total time of a target is not checked against its column's last time.
         let cols = keep(&header);
         let mut prev = [0u32; TARGETS];
-        for (k, chunk) in times.chunks_exact(4).enumerate() {
-            let v = u32::from_le_bytes(*chunk.first_chunk::<4>().ok_or(Error::Short)?);
-            let (i, t) = (k / n, k % n);
-            let last = prev.get_mut(t).ok_or(Error::Times)?;
-            if v < *last {
-                return Err(Error::Times);
-            }
-            *last = v;
-            if let Some(c) = cols.iter().position(|&x| x == Some(t)) {
-                let w = u16::try_from(v).map_err(|_| Error::Times)?;
-                let cell = self.times.get_mut(i).and_then(|row| row.get_mut(c)).ok_or(Error::Times)?;
-                *cell = w;
+        let (mut word, mut have, mut k) = ([0u8; 4], 0usize, 0usize);
+        let mut at = times_at;
+        while at < fit_at {
+            let part = chunk.get_mut(..CHUNK.min(fit_at - at)).ok_or(Error::Short)?;
+            read_all(&mut read, at, part)?;
+            at += part.len();
+            for &byte in part.iter() {
+                *word.get_mut(have).ok_or(Error::Short)? = byte;
+                have += 1;
+                if have < 4 {
+                    continue;
+                }
+                (have, k) = (0, k + 1);
+                let (i, t) = ((k - 1) / n, (k - 1) % n);
+                let v = u32::from_le_bytes(word);
+                let last = prev.get_mut(t).ok_or(Error::Times)?;
+                if v < *last {
+                    return Err(Error::Times);
+                }
+                *last = v;
+                if let Some(c) = cols.iter().position(|&x| x == Some(t)) {
+                    let w = u16::try_from(v).map_err(|_| Error::Times)?;
+                    let cell = self.times.get_mut(i).and_then(|row| row.get_mut(c)).ok_or(Error::Times)?;
+                    *cell = w;
+                }
             }
         }
 
@@ -322,41 +361,51 @@ impl Segment {
         let mut rd = Reader::with_position();
         let (mut got, mut bad) = (0usize, None::<Error>);
         let (la, lo, di) = (&mut self.lat, &mut self.lon, &mut self.dist_m);
-        let used = rd.push_slice(fit, |m| {
-            let Msg::Record(r) = m else { return };
-            if bad.is_some() {
-                return;
-            }
-            let Some((lat, lon)) = r.pos else {
-                bad = Some(Error::NoPosition);
-                return;
-            };
-            let (lat, lon) = (degrees_e7(lat), degrees_e7(lon));
-            if lat.unsigned_abs() > 900_000_000 || lon.unsigned_abs() > 1_800_000_000 {
-                bad = Some(Error::Earth);
-                return;
-            }
-            if got >= np {
-                bad = Some(Error::Points);
-                return;
-            }
-            let prev = got.checked_sub(1).and_then(|j| Some((*la.get(j)?, *lo.get(j)?, *di.get(j)?)));
-            let dist = match (r.dist_cm, prev) {
-                (Some(cm), _) => cm / 100,
-                (None, Some((pla, plo, pd))) => {
-                    let step_m = u32::try_from(crate::course::step_mm((pla, plo), (lat, lon)) / 1000);
-                    pd.saturating_add(step_m.unwrap_or(u32::MAX))
+        let (mut at, mut used) = (fit_at, 0usize);
+        while at < size && bad.is_none() {
+            let part = chunk.get_mut(..CHUNK.min(size - at)).ok_or(Error::Short)?;
+            read_all(&mut read, at, part)?;
+            at += part.len();
+            let took = rd.push_slice(part, |m| {
+                let Msg::Record(r) = m else { return };
+                if bad.is_some() {
+                    return;
                 }
-                (None, None) => 0,
-            };
-            match (la.get_mut(got), lo.get_mut(got), di.get_mut(got)) {
-                (Some(a), Some(o), Some(d)) => {
-                    (*a, *o, *d) = (lat, lon, dist);
-                    got += 1;
+                let Some((lat, lon)) = r.pos else {
+                    bad = Some(Error::NoPosition);
+                    return;
+                };
+                let (lat, lon) = (degrees_e7(lat), degrees_e7(lon));
+                if lat.unsigned_abs() > 900_000_000 || lon.unsigned_abs() > 1_800_000_000 {
+                    bad = Some(Error::Earth);
+                    return;
                 }
-                _ => bad = Some(Error::Points),
+                if got >= np {
+                    bad = Some(Error::Points);
+                    return;
+                }
+                let prev = got.checked_sub(1).and_then(|j| Some((*la.get(j)?, *lo.get(j)?, *di.get(j)?)));
+                let dist = match (r.dist_cm, prev) {
+                    (Some(cm), _) => cm / 100,
+                    (None, Some((pla, plo, pd))) => {
+                        let step_m = u32::try_from(crate::course::step_mm((pla, plo), (lat, lon)) / 1000);
+                        pd.saturating_add(step_m.unwrap_or(u32::MAX))
+                    }
+                    (None, None) => 0,
+                };
+                match (la.get_mut(got), lo.get_mut(got), di.get_mut(got)) {
+                    (Some(a), Some(o), Some(d)) => {
+                        (*a, *o, *d) = (lat, lon, dist);
+                        got += 1;
+                    }
+                    _ => bad = Some(Error::Points),
+                }
+            });
+            used += took;
+            if took < part.len() {
+                break; // the reader is done: what follows is trailing
             }
-        });
+        }
         if let Some(e) = bad {
             return Err(e);
         }
@@ -368,7 +417,7 @@ impl Segment {
             Some(Err(fitread::Error::Crc)) => return Err(Error::FitCrc),
             Some(Ok(())) => {}
         }
-        if used != fit.len() {
+        if used != size - fit_at {
             return Err(Error::Trailing);
         }
         if got != np {
@@ -379,6 +428,20 @@ impl Segment {
         self.npoints = np;
         Ok(())
     }
+}
+
+/// Fills `buf` from byte `at` of the file in as many reads as it takes; each must give bytes (the loop ends).
+fn read_all(read: &mut impl FnMut(usize, &mut [u8]) -> Option<usize>, at: usize, buf: &mut [u8]) -> Result<(), Error> {
+    let mut done = 0;
+    while done < buf.len() {
+        let rest = buf.get_mut(done..).ok_or(Error::Io)?;
+        match read(at + done, rest).ok_or(Error::Io)? {
+            0 => return Err(Error::Short),
+            n if n <= rest.len() => done += n,
+            _ => return Err(Error::Io),
+        }
+    }
+    Ok(())
 }
 
 /// The kept targets: for each of [`PREFER`], the index of the file's first target of that effort (None if none).
@@ -422,6 +485,8 @@ pub enum Error {
     FitCrc,
     /// Bytes follow the FIT course's end (its CRC).
     Trailing,
+    /// The card failed while the file was read.
+    Io,
 }
 
 fn le<const N: usize>(b: &[u8], at: usize) -> Result<[u8; N], Error> {
@@ -715,6 +780,38 @@ pub(crate) mod tests {
         let mut s = Segment::new();
         assert_eq!(s.parse(&synth(4, &VALID)), Ok(()));
         assert_eq!(s.parse(&[0u8; 10]), Err(Error::Short));
+        assert_eq!(s.npoints, 0);
+    }
+
+    /// Reading in pieces: any read size gives the same segment as the whole file, and a card that fails or ends early
+    /// gives an error, never a panic or a loop.
+    #[test]
+    fn reads_in_pieces() {
+        let f = synth(60, &[*b"07", *b"05", *b"12"]);
+        let mut whole = Segment::new();
+        whole.parse(&f).unwrap();
+        for piece in [1usize, 3, 7, 512, 1024, 5000] {
+            let mut s = Segment::new();
+            let r = s.parse_with(f.len(), |at, buf| {
+                let n = piece.min(buf.len()).min(f.len().saturating_sub(at));
+                buf.get_mut(..n)?.copy_from_slice(f.get(at..at + n)?);
+                Some(n)
+            });
+            assert_eq!(r, Ok(()), "piece {piece}");
+            assert_eq!((s.npoints, s.lat, s.times), (whole.npoints, whole.lat, whole.times));
+        }
+        let mut s = Segment::new();
+        assert_eq!(s.parse_with(f.len(), |_, _| None), Err(Error::Io));
+        assert_eq!(s.parse_with(f.len(), |_, _| Some(0)), Err(Error::Short));
+        assert_eq!(s.parse_with(f.len(), |_, b| Some(b.len() + 1)), Err(Error::Io));
+        let mut n = 0;
+        let mut dies = |at: usize, buf: &mut [u8]| {
+            n += 1;
+            let k = buf.len().min(f.len() - at);
+            buf.get_mut(..k)?.copy_from_slice(f.get(at..at + k)?);
+            (n < 4).then_some(k)
+        };
+        assert_eq!(s.parse_with(f.len(), &mut dies), Err(Error::Io));
         assert_eq!(s.npoints, 0);
     }
 

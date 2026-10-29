@@ -71,7 +71,7 @@ after the save, `tools/segments.py`, then own-ride segments and the licensed fee
 decide on a Strava subscription (the API's Standard tier needs one since 30 June 2026), and email Strava for a Live
 Segments licence.
 
-Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30).
+Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30); ~~S3, `src/app/segments.rs`: the index, the active segment, the ride's feed (sim tests and fuzz; not yet on the unit)~~ (2026-10-30).
 
 ### Block 3: what is left on the unit, easiest first
 
