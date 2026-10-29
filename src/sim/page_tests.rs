@@ -1380,3 +1380,18 @@ fn the_power_word_is_never_a_page() {
     };
     assert_eq!(boot(true), boot(false));
 }
+
+/// The editor draws the boxes of the page it edits, not another screen's (EDITED once shared the workout page's index).
+#[test]
+fn editor_draws_the_edited_pages_boxes() {
+    let (mut sim, mut app) = started();
+    press(&mut sim, &mut app, Key::Page);
+    assert_eq!(app.screen(), Screen::Ride(0));
+    let ride: Vec<_> = app.widgets().map(|(r, _)| r).collect();
+    let (x, y) = centre(&app, 1);
+    app.input(&mut sim, Input::Touch(Gesture::Hold(x, y)));
+    assert_eq!(app.screen(), Screen::Edit(0, 1));
+    let edited: Vec<_> = app.widgets().map(|(r, _)| r).collect();
+    assert!(!edited.is_empty());
+    assert_eq!(edited, ride, "the editor's boxes are ride page 0's");
+}
