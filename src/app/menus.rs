@@ -133,7 +133,9 @@ impl App {
             Menu::Pages => [ride::Profile::Road, ride::Profile::Indoor, ride::Profile::Mtb]
                 .get(i)
                 .map(|&p| Row::Open(Menu::PageList(p)))
-                .or_else(|| (i == 3).then_some(Row::AutoScroll)),
+                .or_else(|| (i == 3).then_some(Row::AutoScroll))
+                .or_else(|| (i == 4).then_some(Row::Set(menu::Setting::QuickStatus)))
+                .or_else(|| (i == 5).then_some(Row::Open(Menu::Page(QUICK)))),
             Menu::PageList(_) => match i {
                 0 => Some(Row::Open(Menu::Page(OVERVIEW))),
                 _ if i <= self.view_count() => Some(Row::Open(Menu::Page(i - 1))),
@@ -245,6 +247,7 @@ impl App {
             }
             Menu::BtTrainers => (i < self.ftms.n_found).then_some(Row::BtFound(i)),
             Menu::Page(OVERVIEW) => (i < 4).then_some(Row::Field(OVERVIEW, i)), // always four
+            Menu::Page(QUICK) => (i < 6).then_some(Row::Field(QUICK, i)),       // always six
             Menu::Page(n) => match i {
                 0 => Some(Row::EditPage(n)),
                 1 => Some(Row::Layout(n)),
@@ -285,7 +288,7 @@ impl App {
                     value.push_str(if self.indoors() { "ON" } else { "OFF" });
                 }
             }
-            Row::Open(Menu::Page(OVERVIEW)) => {}
+            Row::Open(Menu::Page(OVERVIEW | QUICK)) => {}
             Row::Open(Menu::Page(n)) => {
                 self.page_label(n, &mut label);
                 layout_text(&mut value, self.page_ref(n)?);

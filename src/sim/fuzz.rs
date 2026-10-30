@@ -1373,6 +1373,7 @@ fn menu_touch_and_keys() {
     use super::*;
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
+    let mut status = (0, 0); // QUICK STATUS opened by a tap on a ride page, left by an input
     let (mut locks, mut locked_touches) = (0, 0);
     let mut reach = [0usize; 6]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif, a tap on POWER
     let mut arms = [0usize; 6]; // and an arm taken there: left, asked, left, left, scrolled, ZERO armed or asked
@@ -1516,7 +1517,12 @@ fn menu_touch_and_keys() {
                 _ => {}
             }
             locks += u32::from(i == Input::TouchLock);
-            let same = app.screen() == before && app.pages == pages && app.graph_whole == whole;
+            let opened = matches!(before, Screen::Ride(_)) && app.screen() == Screen::Status;
+            status.0 += u32::from(opened);
+            status.1 += u32::from(before == Screen::Status && app.screen() != Screen::Status);
+            // QUICK STATUS only reads: the pages as they were; and it opens on a tap (never a key), under no lock
+            assert!(!opened || matches!(i, Input::Touch(Gesture::Tap(..))) && app.settings.touch && !was_locked);
+            let same = (app.screen() == before || opened) && app.pages == pages && app.graph_whole == whole;
             if let Input::Touch(g) = i {
                 if was_locked {
                     assert!(same, "locked: {g:?} did something");
@@ -1605,6 +1611,8 @@ fn menu_touch_and_keys() {
     assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
     assert!(off > 50 && riding > 5, "touch off {off}, taps and holds while recording {riding}");
+    std::println!("QUICK STATUS: opened {}, left {}", status.0, status.1);
+    assert!(status.0 > 5 && status.1 > 5, "QUICK STATUS reached: opened {}, left {}", status.0, status.1);
 }
 
 /// Keys and taps by chance through the whole menu tree (UI review steps 6 and 8), a ride started and ended, workouts

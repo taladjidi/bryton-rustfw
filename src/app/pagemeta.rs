@@ -191,6 +191,14 @@ impl App {
 
     /// The auto scroll's count: one pass of `dt` ms. During a ride, on a ride page, with nothing over it.
     pub(crate) fn auto_scroll(&mut self, b: &mut impl Board, dt: u32) {
+        if self.screen == Screen::Status {
+            // QUICK STATUS closes on its own after STATUS_MS without an input (every input zeroes the count)
+            self.sw.auto_ms = self.sw.auto_ms.saturating_add(dt);
+            if self.sw.auto_ms >= super::status::STATUS_MS {
+                self.close_status(b);
+            }
+            return;
+        }
         let secs = self.auto_secs();
         let idle = matches!(self.screen, Screen::Ride(n) if n < PAGES)
             && secs > 0

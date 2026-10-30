@@ -41,6 +41,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
   - `notifs.rs`: the phone's last notifications kept (`phone::Inbox`), the NOTIFICATIONS list (a tap on the overview's
     notices, or PHONE in the menu) and a notification's detail.
+  - `status.rs`: QUICK STATUS, the six chosen fields over a ride page by a tap on a plain field (`Screen::Status`).
   - `start_cues.rs`: the START REMINDER (the bike moves with no ride) and the READY CHECK card at a new ride's start.
   - `riding.rs`: Start / pause, the end-ride screen (RESUME, SAVE, DISCARD), the second tick, the recorder glue.
     `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
@@ -267,7 +268,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
-  `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
+  `status_tests.rs` (QUICK STATUS), `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's

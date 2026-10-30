@@ -165,6 +165,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Page menu](img/page-switches-menu.png) | ![Renamed page](img/page-renamed-list.png) |
 | PAGES > ROAD PAGES > a page: SHOW, MOVE UP, MOVE DOWN and RENAME under its fields (sim) | A page renamed "CA B" in the list (four characters at most; sim) |
 
+## Quick Status
+
+| | |
+|:-:|:-:|
+| ![Quick Status](img/quick-status.png) | |
+| A tap on a plain field of a ride page: the six chosen fields in a 2 x 3 grid, closed by Back, a tap or 10 s (sim) | |
+
 ## Start reminder and ready check
 
 | | |

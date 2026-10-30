@@ -28,6 +28,7 @@ mod phone;
 mod powercal;
 mod profile;
 mod start_cues;
+mod status;
 mod survey;
 pub use profile::ClimbNow;
 mod quick;

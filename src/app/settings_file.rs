@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (156 now, with CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (163 now, with CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 156 and its six fields at 157..162, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -99,7 +99,7 @@ impl SettingsCopy {
     pub fn to_sector(&self) -> [u8; 512] {
         let s = self.settings;
         let mut out = [0u8; 512];
-        let mut data = [0u8; 160];
+        let mut data = [0u8; 192];
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             for &b in bytes {
@@ -146,6 +146,8 @@ impl SettingsCopy {
         put(&[u8::from(s.start_reminder), u8::from(s.ready_check)]);
         put(&[u8::from(s.climbs_medium), u8::from(s.climb_page), s.date_fmt as u8]);
         put(&[s.sunset_alert as u8]);
+        put(&[u8::from(s.quick_status)]);
+        put(&s.quick_page.fields.map(|f| f as u8)[..6]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -284,6 +286,14 @@ impl SettingsCopy {
         s.date_fmt = data.next().and_then(crate::DateFormat::from_byte).unwrap_or(d.date_fmt);
         // SUNSET ALERT (after DATE FORMAT): a file without it reads OFF; a byte out of its range reads OFF
         s.sunset_alert = data.next().map(usize::from).filter(|&v| v < SUNSET_LEAD_MIN.len()).unwrap_or(d.sunset_alert);
+        // QUICK STATUS and its six fields (after SUNSET ALERT): a file without them reads ON and the default fields; a
+        // file cut inside the fields, or a byte past the last field, keeps the default for that field
+        s.quick_status = flag(data.next(), d.quick_status);
+        let mut q = QUICK_FIELDS;
+        for f in q.iter_mut() {
+            *f = data.next().and_then(|v| Field::ALL.get(usize::from(v)).copied()).unwrap_or(*f);
+        }
+        s.quick_page = quick_page(q);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -1027,5 +1037,37 @@ mod day_night_file_tests {
         let crc = inflate::crc32(wild[..CRC_AT].iter().copied());
         wild[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(read(&wild), Some(0), "a byte out of range reads OFF");
+    }
+
+    /// QUICK STATUS (after SUNSET ALERT, bytes 156 to 162): kept and read back; a file without it (or cut inside the
+    /// fields) reads ON and the default fields; a byte out of range keeps that field's default.
+    #[test]
+    fn quick_status_round_trips_and_older_files_read_defaults() {
+        let mut f = QUICK_FIELDS;
+        f[1] = Field::Cadence;
+        let s = Settings { quick_status: false, quick_page: quick_page(f), ..Settings::from_word(0) };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!((sec[28 + 156], sec[28 + 158]), (0, Field::Cadence as u8));
+        let read =
+            |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.quick_status, c.settings.quick_page));
+        assert_eq!(read(&sec), Some((false, quick_page(f))));
+        let d = Settings::from_word(0);
+        let cut = |sec: &[u8; 512], len: u16| {
+            let mut c = *sec;
+            c[6..8].copy_from_slice(&len.to_le_bytes());
+            let crc = inflate::crc32(c[..CRC_AT].iter().copied());
+            c[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
+            c
+        };
+        for len in [155u16, 156] {
+            assert_eq!(read(&cut(&sec, len)), Some((true, d.quick_page)), "a {len}-byte file");
+        }
+        // cut inside the fields: the flag is read, the fields past the cut are the defaults
+        assert_eq!(read(&cut(&sec, 158)).map(|r| r.0), Some(false), "a 158-byte file");
+        let mut wild = sec;
+        wild[28 + 157] = 250;
+        let crc = inflate::crc32(wild[..CRC_AT].iter().copied());
+        wild[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(read(&wild).map(|r| r.1.fields[0]), Some(QUICK_FIELDS[0]), "a byte out of range");
     }
 }
