@@ -26,6 +26,25 @@ pub(crate) fn push_fixed(l: &mut Line<12>, v: i32, shift: u32, decimals: u32) {
     }
 }
 
+/// BATT HRS's text: "45M" under an hour, "9.5H" under 10 hours, then "12H" (99H at most); "--" for None.
+pub(crate) fn left_text(l: &mut Line<8>, minutes: Option<u32>) {
+    match minutes {
+        Some(m) if m < 60 => {
+            l.push_u32(m);
+            l.push_str("M");
+        }
+        Some(m) if m < 600 => {
+            push_fixed_u(l, m / 6, 1);
+            l.push_str("H");
+        }
+        Some(m) => {
+            l.push_u32((m / 60).min(99));
+            l.push_str("H");
+        }
+        None => l.push_str("--"),
+    }
+}
+
 /// `v / 10^decimals` with its decimals ("0.75").
 pub(crate) fn push_fixed_u(l: &mut Line<8>, v: u32, decimals: u32) {
     let unit = 10u32.pow(decimals);
@@ -464,21 +483,7 @@ impl App {
             }
             Field::BattHrs => {
                 // the drain of drivers/battery.rs; the charger's minutes are left out there, the strip says it now too
-                match self.battery.minutes_left().filter(|_| !self.strip.charging) {
-                    Some(m) if m < 60 => {
-                        l.push_u32(m);
-                        l.push_str("M");
-                    }
-                    Some(m) if m < 600 => {
-                        push_fixed_u(&mut l, m / 6, 1);
-                        l.push_str("H");
-                    }
-                    Some(m) => {
-                        l.push_u32((m / 60).min(99));
-                        l.push_str("H");
-                    }
-                    None => l.push_str("--"),
-                }
+                left_text(&mut l, self.battery.minutes_left().filter(|_| !self.strip.charging));
                 return l;
             }
             Field::UnitBatt => {
@@ -719,6 +724,23 @@ mod tests {
         assert_eq!([Field::from_index(100), Field::from_index(104)], [Field::Trip1, Field::Trip2Time]);
         assert_eq!([Field::from_index(107), Field::from_index(108)], [Field::ClimbLeft, Field::BattHrs]);
         assert_eq!(Field::ALL.len(), 109);
+    }
+
+    #[test]
+    fn battery_hours_text_has_its_units() {
+        let text = |m| {
+            let mut l = Line::new();
+            left_text(&mut l, m);
+            l
+        };
+        assert_eq!([text(Some(45)).as_str(), text(Some(59)).as_str()], ["45M", "59M"], "under an hour");
+        assert_eq!([text(Some(60)).as_str(), text(Some(570)).as_str()], ["1H", "9.5H"], "one decimal under 10 hours");
+        assert_eq!(
+            [text(Some(599)).as_str(), text(Some(600)).as_str(), text(Some(720)).as_str()],
+            ["9.9H", "10H", "12H"]
+        );
+        assert_eq!([text(Some(6000)).as_str(), text(Some(9000)).as_str()], ["99H", "99H"], "the cap");
+        assert_eq!(text(None).as_str(), "--");
     }
 
     #[test]

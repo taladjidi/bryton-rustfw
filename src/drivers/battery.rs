@@ -70,15 +70,10 @@ pub const MIN_MINUTES: usize = 10;
 /// The drain is fitted over the last this many minutes on the battery (a ride's minutes, not the whole history).
 pub const WINDOW: usize = 20;
 
-/// A drain under this, tenths of a percent an hour (1.5 %), is a plateau: the cell barely moves, the model answers.
-pub const MIN_RATE: i64 = 15;
-
-/// The cell's capacity, mAh: estimated (docs/power.md, "The battery": the claim of 30 h at the measured draw).
-pub const CAPACITY_MAH: i64 = 1200;
-
-/// The model's draw, mA: the idle overview measured 2026-10-28 (3.4 % of the cell an hour, docs/power.md). A ride
-/// draws more; the fitted drain replaces the model once the cell moves.
-pub const MODEL_MA: i64 = 41;
+/// A drain under this, tenths of a percent an hour, is not shown: the cell has not measurably dropped. 3.4 % an hour
+/// is the idle overview's drain, measured 2026-10-28 (docs/power.md, "The main loop while idle"). The cell's capacity
+/// is unknown (inferred: about 1200 mAh, docs/power.md), so no model answers in its place.
+pub const MODEL_RATE: i64 = 34;
 
 /// Below this, on battery, the unit switches off (stock: at 0 %), before the cell is drawn too low.
 pub const EMPTY_MV: u16 = 3300;
@@ -142,10 +137,10 @@ impl Battery {
     }
 
     /// The time left on the battery, minutes; None while charging (the last run on the battery is cut by the
-    /// charger's entries) or before [`MIN_MINUTES`] of it. The drain is the least-squares slope of the last
-    /// [`WINDOW`] minutes, in tenths of a percent an hour, so one dip in the window moves it little and the curve's
-    /// steps do not matter. A drain under [`MIN_RATE`] is a plateau: the charge left at [`CAPACITY_MAH`] over
-    /// [`MODEL_MA`] answers instead.
+    /// charger's entries), before [`MIN_MINUTES`] of it, or while the drain is under [`MODEL_RATE`] (the cell has not
+    /// measurably dropped, so no time is given). The drain is the least-squares slope of the last [`WINDOW`]
+    /// minutes, in tenths of a percent an hour, so one dip in the window moves it little and the curve's steps do not
+    /// matter.
     ///
     /// ```
     /// use bryton_rustfw::battery::Battery;
@@ -183,9 +178,11 @@ impl Battery {
         let den = nn * sxx - sx * sx; // positive: MIN_MINUTES points at distinct minutes
         let num = nn * sxy - sx * sy; // drain a minute x den, in tenths
         let rate = num * 60 / den; // tenths of a percent an hour
+        if rate < MODEL_RATE {
+            return None;
+        }
         let now = ((sy * den - num * sx) / (nn * den)).max(0); // the fitted charge at the newest minute, tenths
-        let minutes = if rate >= MIN_RATE { now * 60 / rate } else { now * CAPACITY_MAH * 60 / (1000 * MODEL_MA) };
-        u32::try_from(minutes).ok()
+        u32::try_from(now * 60 / rate).ok()
     }
 }
 
@@ -261,11 +258,49 @@ mod tests {
     }
 
     #[test]
-    fn a_plateau_takes_the_model_not_a_zero_drain() {
-        // 3850 mV for an hour: the percent does not move, the model says 55 % of 1200 mAh at 41 mA
+    fn a_plateau_gives_no_time_until_the_cell_drops() {
+        // 3850 mV for an hour: the percent does not move, so no time is given
         let mut b = Battery::default();
         feed(&mut b, 0, 60, false, |_| 3850);
-        assert_eq!(b.minutes_left(), Some(965));
+        assert_eq!(b.minutes_left(), None);
+    }
+
+    #[test]
+    fn a_rising_voltage_gives_no_time_and_a_long_history_still_does() {
+        let mut b = Battery::default();
+        feed(&mut b, 0, 60, false, |m| 3800 + m / 3);
+        assert_eq!(b.minutes_left(), None, "rising: no drain");
+        // 300 minutes wrap the ring (LOG entries): the last 20 still fit a steady 30 mV an hour
+        let mut b = Battery::default();
+        feed(&mut b, 0, 300, false, |m| 4000 - m / 2);
+        let left = b.minutes_left().unwrap();
+        assert!((500..=1000).contains(&left), "{left} minutes");
+    }
+
+    #[test]
+    fn percent_matches_the_old_curve() {
+        // the percent as it was before the tenths: the integer steps of each segment
+        fn old(mv: u16) -> u8 {
+            let mut prev = CURVE[0];
+            for (v, p) in CURVE {
+                if mv <= v {
+                    if v == prev.0 {
+                        return p;
+                    }
+                    let t = u32::from(mv.saturating_sub(prev.0)) * u32::from(p - prev.1) / u32::from(v - prev.0);
+                    return prev.1 + t as u8;
+                }
+                prev = (v, p);
+            }
+            100
+        }
+        let mut last = 0;
+        for mv in 0..=u16::MAX {
+            assert_eq!(percent(mv), old(mv), "{mv} mV");
+            assert!(tenths(mv) >= last, "{mv} mV");
+            assert_eq!(tenths(mv) / 10, u32::from(percent(mv)), "{mv} mV");
+            last = tenths(mv);
+        }
     }
 
     #[test]
@@ -273,9 +308,9 @@ mod tests {
         let mut b = Battery::default();
         feed(&mut b, 0, 30, true, |_| 4100);
         assert_eq!(b.minutes_left(), None, "on the charger");
-        feed(&mut b, 30, 39, false, |_| 4100);
+        feed(&mut b, 30, 39, false, |m| 4100 - m);
         assert_eq!(b.minutes_left(), None, "nine minutes off it");
-        feed(&mut b, 39, 40, false, |_| 4100);
+        feed(&mut b, 39, 40, false, |m| 4100 - m);
         assert!(b.minutes_left().is_some(), "ten minutes off it, the charger's are left out");
     }
 }

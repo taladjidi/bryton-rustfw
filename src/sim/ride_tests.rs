@@ -804,11 +804,15 @@ fn battery_hours_field_waits_for_the_drain_and_not_on_usb() {
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, Some(KEY));
     let text = |app: &App| std::string::String::from(app.field_text(Field::BattHrs).as_str());
+    sim.battery_mv = Some(4000);
     run(&mut sim, &mut app, 5_000);
     assert_eq!(text(&app), "--", "too little history after a start");
-    // the sim's cell holds 3900 mV: a plateau, so the model answers (63 % of 1200 mAh at 41 mA: 1106 min)
-    run(&mut sim, &mut app, 11 * 60_000);
-    assert_eq!(text(&app), "18H", "after ten minutes on the battery");
+    // the cell falls 1 mV a minute (90 tenths of a percent an hour): a drain, so a time after the window
+    for m in 0..12 {
+        sim.battery_mv = Some(4000 - m);
+        run(&mut sim, &mut app, 60_000);
+    }
+    assert!(text(&app).ends_with('H'), "after the window: {}", text(&app));
     sim.charger = true;
     run(&mut sim, &mut app, 120_000);
     assert_eq!(text(&app), "--", "on USB");

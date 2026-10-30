@@ -86,8 +86,9 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   is the least-squares slope of the last 20 minutes on the battery (one smoothed reading a minute, in tenths of a
   percent on the same curve as the strip), so a load sag of 10 mV in the window moves it about 14 %. Shown as "45M"
   under an hour, "9.5H" under 10 h, then "12H" (99H at most). "--" on the charger (or the minutes just after it), before
-  10 minutes on the battery after a start, and while the drain is a plateau the model covers: 1200 mAh at 41 mA (the
-  idle draw measured 2026-10-28), so a ride's real draw will read longer than it lasts until the cell moves.
+  10 minutes on the battery after a start, and until the cell has measurably dropped: a drain under 3.4 % an hour (the
+  idle overview's, measured 2026-10-28) gives no time. No model stands in: the capacity is unknown (inferred: about
+  1200 mAh), so a guessed draw would read optimistic. A dropping cell is the only source of a number.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
