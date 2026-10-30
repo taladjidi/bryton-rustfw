@@ -94,7 +94,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|:-:|
 | ![Sensors](img/sensors.png) | ![GPS](img/gps.png) | ![Power meter calibration](img/power-zero.png) |
 | Sensors and built-in readings (sim) | Speed page (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
-| ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |  |
+| ![Sensor names](img/sensors-names.png) | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |
+| SENSORS with the strap's maker from ANT+ common page 80 (POLAR HR, device number 9: synthetic) (sim) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |
 
 ## Alerts

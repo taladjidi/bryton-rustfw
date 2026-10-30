@@ -385,7 +385,15 @@ impl App {
             }
             Row::Sensor(k) => {
                 let kind = *Kind::ALL.get(k)?;
-                label.push_str(kind.name());
+                // the maker's short name once the paired sensor has sent common page 80 (16 columns: maker, short name)
+                match self.decoders.maker(kind).and_then(sensors::maker_name) {
+                    Some(m) => {
+                        label.push_str(m);
+                        label.push_str(" ");
+                        label.push_str(kind.short());
+                    }
+                    None => label.push_str(kind.name()),
+                }
                 match (self.ant, self.radio.sensors.get(k)?) {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),

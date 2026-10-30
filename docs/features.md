@@ -21,7 +21,12 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   phone); the **power meter** when one is paired (the 3 s watts, its battery, and ZERO, which runs the zero-offset
   calibration in place and writes "ZERO -12 OK", "FAILED" or "NO ANSWER" on the same block; refused while the ride
   runs); one line per **paired sensor** (heart rate, speed, cadence, speed and cadence, shifting, trainer: its value or
-  SEARCHING, and its battery when the sensor said it, ANT+ common page 82: bars, or LOW in red); **GPS** (satellites),
+  SEARCHING, and its battery when the sensor said it, ANT+ common page 82: bars, or LOW in red); the heart rate strap's
+  battery in percent from its page 7 (HR BATT shows it, else the page 82 status; layout as openant reads it,
+  `devices/heart_rate.py`, checked 2026-10-30, not yet against the ANT+ HRM document); SENSORS names a paired sensor
+  with its maker's short name from common page 80 (manufacturer id in bytes 4-5, `devices/common.py`; the FIT SDK
+  list: POLAR HR, SRAM SPD+CAD; device number as the value; unknown ids keep the type name), and the panel's lines
+  keep their type; **GPS** (satellites),
   the **phone** link and the unit's battery; and **brightness** buttons (the levels, AUTO at the bright end). Each box
   is redrawn alone, a second at most. PROFILE, USB DRIVE, NOTIFICATIONS (still a tap on the overview's notices) and
   TRAINER CONTROL stay in their menus.

@@ -8,6 +8,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Sensor names and the strap's battery (drivers/sensors.rs pages 7 and 80, app/menus.rs SENSORS row, app/fields.rs HR BATT)**: sim only. Still to see: the strap's percent on HR BATT (its page 7 on the owner's strap, ANT+ profile layout as openant reads it), a SENSORS row reading "POLAR HR" after the strap sends page 80, and the row back to "HEART RATE" after a forget.
 - **Units, sound, auto pause, trips (app/fields.rs, app/settings.rs, features.md "Units, sound, trips")**: sim only. Still to see: IMPERIAL on a real ride (the values and labels fit their boxes), SOUND OFF with an alert due, an AUTO PAUSE of 5 km/h at a stop, and a trip and the odometer growing after a save and surviving a restart.
 - **Next-step strip and two targets per step (app/workouts.rs `ahead`, ui/strip.rs `draw_next_strip`, workout_file.rs
   fields 19 to 22)**: sim only. Still to see: the strip over the status strip for the last 9 s of a step and its

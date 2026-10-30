@@ -237,7 +237,7 @@ impl App {
                 let k = (i - B_ROWS) / 3;
                 match self.quick_kinds().nth(k) {
                     Some(kind) if (i - B_ROWS).is_multiple_of(3) => {
-                        put(&mut l, ["HR", "SPEED", "CAD", "SPD+CAD", "POWER", "SHIFT", "DI2", "TRAIN"][kind as usize]);
+                        put(&mut l, kind.short());
                         ui::GREY
                     }
                     Some(kind) => {

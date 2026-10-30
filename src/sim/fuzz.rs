@@ -300,6 +300,47 @@ fn ant_decoders() {
     assert!(statuses > 1000, "page 82 reached on the profiles: {statuses}");
 }
 
+/// Random broadcasts with the structure of the strap's page 7 (battery, with or without the toggle bit) and of common
+/// page 80 (a maker's id from the table or a random one, 0 and 0xffff among them) into every kind's decoder: no panic,
+/// a percent at most 100 and only the heart rate's, a maker id that is none of 0 and 0xffff. The test checks both
+/// pages were reached (their counts over the seeds), and that the names resolve for the ids of the table.
+#[test]
+fn strap_battery_and_maker_pages() {
+    use crate::sensors::{Decoders, Kind, Live, maker_name};
+    const MAKERS: [u16; 15] = [1, 6, 7, 9, 32, 51, 69, 70, 107, 112, 115, 123, 263, 267, 268];
+    let (mut percents, mut makers, mut names) = (0usize, 0usize, 0usize);
+    for seed in 1..=8u32 {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let v: std::vec::Vec<u8> = bytes(seed, 1 << 17).collect();
+        for c in v.chunks_exact(9) {
+            let kind = Kind::ALL[usize::from(c[8]) % Kind::ALL.len()];
+            let mut d: [u8; 8] = core::array::from_fn(|i| c[i]);
+            match c[8] >> 5 {
+                0 => d[0] = 7,
+                1 => d[0] = 0x87,
+                2 => {
+                    d[0] = 0x50;
+                    if c[6] & 1 == 0 {
+                        d[4..6].copy_from_slice(&MAKERS[usize::from(c[7]) % MAKERS.len()].to_le_bytes());
+                    }
+                }
+                _ => {}
+            }
+            dec.decode(kind, d, 2105, &mut live);
+            if let Some(p) = dec.battery_percent(kind) {
+                assert!(p <= 100 && kind == Kind::Hr, "percent {p} of {kind:?}");
+                percents += 1;
+            }
+            if let Some(m) = dec.maker(kind) {
+                assert!(m != 0 && m != 0xffff, "maker {m:x}");
+                makers += 1;
+                names += usize::from(maker_name(m).is_some());
+            }
+        }
+    }
+    assert!(percents > 100 && makers > 1000 && names > 1000, "reached: {percents} {makers} {names}");
+}
+
 /// Random calibration pages (power meter page 0x01, ids mixed in so the replies are reached) into the reply decoder
 /// and the calibration state machine, with requests, retries and time passing: no panic, and every reply kind seen.
 #[test]
