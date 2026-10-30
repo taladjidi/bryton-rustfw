@@ -9,7 +9,7 @@ use crate::ui::Field::{self, *};
 
 /// A unit with this firmware's settings and the classic pages (speed over heart rate and cadence; four fields; the
 /// map) on the synthetic volume, past the pages' file's read.
-fn started() -> (Sim, App) {
+pub(super) fn started() -> (Sim, App) {
     started_on(false)
 }
 
@@ -28,7 +28,7 @@ fn started_on(reliable: bool) -> (Sim, App) {
 }
 
 /// The same unit started again on the same card and backup registers.
-fn reboot(sim: &mut Sim) -> (Sim, App) {
+pub(super) fn reboot(sim: &mut Sim) -> (Sim, App) {
     let mut sim2 = Sim::new(9, 5, 0);
     sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
     sim2.backup = sim.backup;
@@ -39,7 +39,7 @@ fn reboot(sim: &mut Sim) -> (Sim, App) {
 }
 
 /// The file as on the card, if it is there.
-fn file(sim: &Sim) -> Option<Saved> {
+pub(super) fn file(sim: &Sim) -> Option<Saved> {
     let mut d = Ram(sim.emmc.image.clone(), 0);
     let mut fat = crate::fat::Fat::mount(&mut d).ok()?;
     let v = read_all(&mut fat, &mut d, "Rustfw/pages.bin").ok()?;
@@ -51,7 +51,7 @@ fn pages(app: &App) -> Vec<Page> {
     app.pages()[..app.page_count()].to_vec()
 }
 
-fn press(sim: &mut Sim, app: &mut App, k: Key) {
+pub(super) fn press(sim: &mut Sim, app: &mut App, k: Key) {
     app.press(sim, Press::Short(k));
 }
 
@@ -785,6 +785,7 @@ fn a_tiny_row_is_refused_and_drawn_safely() {
         more: [None; PAGES],
         indoor: None,
         mtb: None,
+        meta: crate::page::Meta::DEFAULT,
     };
     assert_eq!(Saved::from_sector(&s.to_sector()), None);
     let (mut sim, mut app) = started();
@@ -882,7 +883,11 @@ fn a_swipe_up_shows_more() {
     super::tests::assert_consistent(&sim, &app);
     sim.save("page_more");
     swipe(&mut sim, &mut app, Dir::Up);
-    assert_eq!(app.more_shown(), Some(0), "up again changes nothing");
+    assert_eq!((app.screen(), app.more_shown()), (Screen::Main, None), "up again goes home");
+    app.screen = Screen::Ride(0);
+    app.show(&mut sim);
+    swipe(&mut sim, &mut app, Dir::Up);
+    assert_eq!(app.more_shown(), Some(0));
     run(&mut sim, &mut app, 5000);
     super::tests::assert_consistent(&sim, &app);
     assert_eq!(app.ride.state(), ride::State::Running, "recording unaffected");
@@ -1161,7 +1166,7 @@ fn the_pages_menu_edits_the_set_it_names() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::PageList(ride::Profile::Indoor)));
     let label = |app: &App, i| app.menu_row(Menu::Pages, i).map(|(l, ..)| std::string::String::from(l.as_str()));
     assert_eq!((label(&app, 0).as_deref(), label(&app, 1).as_deref()), (Some("ROAD PAGES"), Some("INDOOR PAGES")));
-    assert_eq!((app.rows(Menu::Pages), label(&app, 2).as_deref()), (3, Some("MTB PAGES")));
+    assert_eq!((app.rows(Menu::Pages), label(&app, 2).as_deref()), (4, Some("MTB PAGES")));
     press(&mut sim, &mut app, Key::Start);
     assert_eq!(app.screen(), Screen::Menu(Menu::PageList(ride::Profile::Indoor), 0));
     assert!(app.pages_set == ride::Profile::Indoor, "the editor works on the indoor set");

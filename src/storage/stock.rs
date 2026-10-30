@@ -448,6 +448,10 @@ impl Cache {
 }
 
 /// A scan of stock's rides, a bounded amount per [`Scan::step`], over the [`Cache`] when it has one.
+///
+/// Past the cache's capacity ([`CACHE_RIDES`]) the rides left out are read in a second pass: between the end of
+/// the first pass and the end of the second, [`Scan::out`] and [`Scan::index`] are the cache's count and the rides
+/// of the second pass read so far, so the totals, the curve and the history can be short for that while.
 pub struct Scan {
     status: Status,
     fat: Option<Fat>,
@@ -638,10 +642,17 @@ impl Scan {
             (c.len, c.hint) = (len - 1, 0);
             self.dirty = true;
         }
-        if self.status == Status::Running || self.over {
+        // with rides past the cache, `out` stays as it was until the scan ends (counted from the cache alone, the
+        // history and the curve would lose the rides left out of it for that while), but the history loses the
+        // ride deleted at once, so it cannot be opened or deleted again
+        self.index.remove(file, start);
+        let over = self.over;
+        if self.status == Status::Running || over {
             self.start(date);
         }
-        self.recount();
+        if !over {
+            self.recount();
+        }
     }
 
     /// Goes on for about `budget` bytes read (a directory entry counts 32); false once it is done or failed.
@@ -733,8 +744,10 @@ impl Scan {
             Ok(n) => n,
             Err(_) if self.cache.is_some() => {
                 // the card or the FAT failed (a read error, a chain changed under a FAT sector kept): not kept as
-                // not a ride, or it would stay out for good; read again at the next start (2026-10-25 review)
+                // not a ride, or it would stay out for good; read again at the next start (2026-10-25 review). In
+                // the second pass, `out` now lacks a ride the cache does not hold either: a new day scans again
                 self.file = None;
+                self.over |= self.second;
                 return Ok(());
             }
             Err(_) => {
@@ -785,7 +798,9 @@ impl Scan {
             self.dirty |= c.keep_seen();
             self.recount();
             if self.over {
-                (self.second, self.dir) = (true, None);
+                // set again by a ride that still finds no room ([`Scan::end_file`]): once all fit, a new day or a
+                // delete counts from the cache alone again
+                (self.second, self.dir, self.over) = (true, None, false);
                 return;
             }
         }
@@ -1318,7 +1333,7 @@ pub(crate) mod tests {
     /// The test volume with `k` more ride names, each an entry pointing at the 10-minute ride of 2025 (its chain
     /// shared, which a scan does not mind): a minute apart from 2024-01-01 00:00, so a volume past the cache's
     /// capacity is built and read in seconds.
-    fn with_links(k: usize) -> std::vec::Vec<u8> {
+    pub(crate) fn with_links(k: usize) -> std::vec::Vec<u8> {
         let mut d = Ram(image(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let dir = fat.open(&mut d, "Activities").unwrap();
@@ -1364,18 +1379,28 @@ pub(crate) mod tests {
         assert_eq!(s.status(), Status::Running);
         while s.step(&mut d, 1 << 20) {}
         assert_eq!((s.read, s.out.all), (8, want.all));
-        // a ride deleted makes room: the 8 left out then fit but one
-        let mut fat = Fat::mount(&mut d).unwrap();
-        let dir = fat.open(&mut d, "Activities").unwrap();
-        let r = s.index.get(0).copied().unwrap();
-        let (y, mo, dd, h, mi) = r.start;
-        let gone = fat.locate(&mut d, dir, &std::format!("{:02}{mo:02}{dd:02}{h:02}{mi:02}00.fit", y % 100)).unwrap();
-        fat.remove(&mut d, &gone).unwrap();
-        s.forget(&r.file, r.start, TODAY);
-        while s.step(&mut d, 1 << 20) {}
-        let (none, _) = scan(&mut d, None, 1 << 20);
-        assert_eq!((s.out.all, s.out.curve), (none.out.all, none.out.curve));
-        assert_eq!(s.cache().map(Cache::len), Some(CACHE_RIDES));
+        // each ride deleted (the newest) makes room for one left out; once all 8 fit, no second pass any more
+        for k in 1..=8 {
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let dir = fat.open(&mut d, "Activities").unwrap();
+            let r = s.index.get(0).copied().unwrap();
+            let (y, mo, dd, h, mi) = r.start;
+            let name = std::format!("{:02}{mo:02}{dd:02}{h:02}{mi:02}00.fit", y % 100);
+            let gone = fat.locate(&mut d, dir, &name).unwrap();
+            fat.remove(&mut d, &gone).unwrap();
+            let shown = s.index.len();
+            s.forget(&r.file, r.start, TODAY);
+            assert_eq!(s.index.len(), shown - 1, "{k}: the ride gone from the history at once, not the rides left out");
+            while s.step(&mut d, 1 << 20) {}
+            let (none, _) = scan(&mut d, None, 1 << 20);
+            assert_eq!(Summary { bytes: 0, ..s.out }, Summary { bytes: 0, ..none.out }, "{k} deleted");
+            assert_eq!(s.index.len(), none.index.len());
+            assert!((0..none.index.len()).all(|i| s.index.get(i) == none.index.get(i)), "{k} deleted");
+            assert_eq!(s.cache().map(Cache::len), Some(CACHE_RIDES));
+            assert_eq!(s.over, k < 8, "{k} deleted");
+        }
+        s.new_day((2026, 10, 24));
+        assert_eq!((s.status(), s.out.all.rides), (Status::Done, want.all.rides - 8), "counted from the cache alone");
     }
 
     /// A cache file of an older build that kept 4096 rides, more than this one takes: ignored whole (never read in

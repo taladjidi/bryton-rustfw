@@ -639,3 +639,49 @@ fn a_cut_delete_whose_finish_fails_is_tried_again() {
     assert!(file(&sim.emmc.image, "Rustfw/Deleted/261020080000.fit").is_some());
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image), Ok(0));
 }
+
+/// DELETE with more rides than the scan's cache holds (storage/stock.rs `CACHE_RIDES`): the scan starts again to
+/// count the rides left out of the cache, and HISTORY loses the ride deleted at once, not when that scan ends.
+#[test]
+fn delete_past_the_cache() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::stock::tests::with_links(crate::stock::CACHE_RIDES + 2);
+    let mut app = App::start(&mut sim, None);
+    app.set_scan_cache(crate::stock::tests::cache());
+    run(&mut sim, &mut app, u64::from(STOCK_SCAN_MS) + 1000);
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 600_000);
+    }
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::History));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..5 {
+        if app.screen() != Screen::Menu(Menu::History, 1) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+    }
+    assert_eq!(app.screen(), Screen::Menu(Menu::History, 1));
+    let row = |app: &App| app.menu_row(Menu::History, 1).map(|(l, v, _)| std::format!("{} {}", l.as_str(), v.as_str()));
+    let (first, all0) = (row(&app), app.stock.out.all);
+    assert_eq!(first.as_deref(), Some("THU 22 OCT 5.0"));
+    app.press(&mut sim, Press::Short(Key::Start)); // row 1: the newest ride's card
+    for _ in 0..100 {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        if app.screen() == Screen::Past {
+            break;
+        }
+    }
+    assert_eq!(app.screen(), Screen::Past);
+    app.press(&mut sim, Press::Long(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.notes.text.as_str(), "RIDE DELETED");
+    assert_eq!(app.stock.status(), crate::stock::Status::Running, "rides past the cache: read again");
+    assert_eq!(row(&app).as_deref(), Some("TUE 20 OCT 14.4"), "gone from the list at once");
+    while app.stock.status() == crate::stock::Status::Running {
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        assert!(sim.ms < 1_200_000);
+    }
+    assert_eq!(row(&app).as_deref(), Some("TUE 20 OCT 14.4"));
+    assert_eq!((app.stock.out.all.rides, app.stock.out.all.dist_m), (all0.rides - 1, all0.dist_m - 5000));
+}

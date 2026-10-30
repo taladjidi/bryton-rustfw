@@ -144,3 +144,9 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|
 | ![Imperial units](img/imperial-units.png) | |
 | UNITS IMPERIAL and TEMPERATURE F on a ride page: mph, miles, feet, F and a trip in miles, with their labels (sim) | |
+## Page switches
+
+| | |
+|:-:|:-:|
+| ![Page menu](img/page-switches-menu.png) | ![Renamed page](img/page-renamed-list.png) |
+| PAGES > ROAD PAGES > a page: SHOW, MOVE UP, MOVE DOWN and RENAME under its fields (sim) | A page renamed "CA B" in the list (four characters at most; sim) |

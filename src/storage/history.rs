@@ -231,6 +231,17 @@ impl Index {
         }
         self.len = (self.len + 1).min(RIDES);
     }
+
+    /// Drops the ride of `file` started at `start`, if it is kept (a ride deleted, before a scan counts again).
+    pub fn remove(&mut self, file: &File, start: Start) {
+        let kept = self.rides.get(..self.len).unwrap_or(&[]);
+        let same = |r: &Ride| (r.file.cluster, r.file.size, r.start) == (file.cluster, file.size, start);
+        if let Some(i) = kept.iter().position(same) {
+            self.rides.copy_within(i + 1..self.len, i);
+            self.len -= 1;
+            self.rev = self.rev.wrapping_add(1);
+        }
+    }
 }
 
 /// FIT semicircles to degrees x 1e-7 (2^31 semicircles are 180 degrees).

@@ -373,6 +373,31 @@ pub enum Reading {
     Date,
 }
 
+/// What a page's switch rows do (app/pagemeta.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageOp {
+    /// ON or OFF: the paging skips a page that is OFF.
+    Show,
+    /// One place earlier.
+    Up,
+    /// One place later.
+    Down,
+    /// Type a short name.
+    Rename,
+}
+
+impl PageOp {
+    /// The row's text.
+    pub fn label(self) -> &'static str {
+        match self {
+            PageOp::Show => "SHOW",
+            PageOp::Up => "MOVE UP",
+            PageOp::Down => "MOVE DOWN",
+            PageOp::Rename => "RENAME",
+        }
+    }
+}
+
 /// What a menu row is: the app draws it and acts on Select by its kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
@@ -411,6 +436,10 @@ pub enum Row {
     EditPage(usize),
     /// Adds a ride page after the last and opens the editor on it.
     AddPage,
+    /// A row of ride page `n`'s menu that switches, moves or renames it (app/pagemeta.rs).
+    PageOp(usize, PageOp),
+    /// AUTO SCROLL in PAGES: Select steps OFF, 5, 10, 20 s.
+    AutoScroll,
     /// A row of the page editor's actions ([`EDIT_ROWS`]).
     Edit(EditRow),
     /// Ride page `n`'s field `i`.
@@ -485,6 +514,8 @@ impl Row {
             Row::Layout(_) => "LAYOUT",
             Row::EditPage(_) => "EDIT ON PAGE",
             Row::AddPage => "ADD PAGE",
+            Row::PageOp(_, o) => o.label(),
+            Row::AutoScroll => "AUTO SCROLL",
             Row::Edit(r) => r.label(),
             Row::Stock(r) => r.label(),
             Row::WorkoutStart => "START",
