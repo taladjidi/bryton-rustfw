@@ -1203,3 +1203,98 @@ fn climbs_medium_keeps_only_medium_plus() {
     assert_eq!(found(false), 1, "ALL keeps the climb");
     assert_eq!(found(true), 0, "MEDIUM+ drops it");
 }
+
+/// The hill ridden the other way: 1 km west, 2 km south, 2 km west, at 8 m/s.
+fn reverse_route(ms: u64) -> (i32, i32, i32) {
+    let s = ms as f64 * 0.008;
+    let (x, y, heading) = match s {
+        s if s < 1000.0 => (1000.0 - s, 500.0, 270.0),
+        s if s < 3000.0 => (0.0, 500.0 - (s - 1000.0), 180.0),
+        s => (-(s - 3000.0), -1500.0, 270.0),
+    };
+    ((y / 0.011_132) as i32, (x / 0.011_132) as i32, (heading * 1e5) as i32)
+}
+
+/// 400 m south of the hill's start (2 km west, 1.5 km south of the origin), still.
+fn south_of_start(_: u64) -> (i32, i32, i32) {
+    ((-1900.0 / 0.011_132) as i32, (-2000.0 / 0.011_132) as i32, 0)
+}
+
+fn course_app(sim: &mut Sim) -> App {
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    app.open_courses(sim);
+    run(sim, &mut app, 1000);
+    app.follow_course(hill(&app));
+    run(sim, &mut app, 200);
+    app
+}
+
+/// REVERSE COURSE in the course menu: the hill followed backwards, the rider placed on it ridden the other way, the
+/// distance to go counted from the far end.
+#[test]
+fn reversed_course_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(reverse_route);
+    let mut app = course_app(&mut sim);
+    let n = app.courses.as_deref().unwrap().course.points().len();
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::CourseNow));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Ride(menu::RideRow::Reverse));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.courses.as_deref().unwrap().course.points().len(), n);
+    while sim.ms < 30_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    let c = app.courses.as_deref().unwrap();
+    assert!((150..=250).contains(&c.at.along_m) && c.at.off_m.is_some_and(|m| m < 15), "{:?}", c.at);
+    assert!(!c.course.cues().is_empty());
+    assert_eq!(app.field_text(Field::ToGo).as_str().chars().next(), Some('4'), "about 4.8 km to go");
+    sim.save("course_reversed");
+    // not assert_consistent: the default course page's profile leaves one pixel stale in its first column on main too
+}
+
+/// Off the start of the course: the way to it (compass point and distance) in the next turn field, until joined.
+#[test]
+fn navigate_to_the_start() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(south_of_start);
+    let mut app = course_app(&mut sim);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    while sim.ms < 20_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    let t = std::string::String::from(app.field_text(Field::NextTurn).as_str());
+    assert_eq!(t, "N390M", "the start is due north");
+    sim.save("course_to_start");
+}
+
+/// BACK TO START in the ride menu after a ride out: a course that ends at the start, with its cues.
+#[test]
+fn back_to_start_after_a_ride() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.route = Some(course_route);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.set_course_memory(crate::storage::course_file::tests::memory());
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    while sim.ms < 400_000 {
+        run(&mut sim, &mut app, 1000);
+    }
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Ride(menu::RideRow::BackToStart));
+    app.press(&mut sim, Press::Short(Key::Start));
+    let c = app.courses.as_deref().unwrap();
+    assert!(c.on.is_some());
+    let (pts, here) = (c.course.points(), app.track.points());
+    assert_eq!(pts.last(), here.first(), "ends where the ride began");
+    assert!((3100..=3500).contains(&c.course.len_m()), "{}", c.course.len_m());
+    assert!(c.course.cues().iter().any(|q| q.turn.is_turn()), "the corner, the other way round");
+}

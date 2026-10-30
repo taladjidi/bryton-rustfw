@@ -113,7 +113,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - history (phase 4b): the ride index with TSS, the power curve screen, personal records and best efforts, this
   ride's power curve, training load (CTL, ATL, TSB) with its chart and fields, month totals, each ride matched to
   the planned workout; the scan's results written by critical;
-- courses: reverse, navigate to the start, the way back drawn, retrace along the ride's own track, turn cues from
+- courses: ~~reverse, navigate to the start (straight line), retrace along the ride's own track~~ done, sim (features.md, ride menu: REVERSE COURSE, BACK TO START); the way back drawn differently from the course, routed navigation (3d), turn cues from
   stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;
 - the map: ~~north up or heading up, pinch to zoom~~ done, sim (features.md, Map); our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
 - field sizes that follow the box, ring and bar gauges;

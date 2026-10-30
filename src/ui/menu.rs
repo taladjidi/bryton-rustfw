@@ -621,6 +621,8 @@ impl Row {
                 R::NextStep => "NEXT STEP",
                 R::StopWorkout => "STOP WORKOUT",
                 R::StopCourse => "STOP FOLLOWING",
+                R::Reverse => "REVERSE COURSE",
+                R::BackToStart => "BACK TO START",
                 R::Trainer => "TRAINER CONTROL",
                 R::CalPower => "CALIBRATE POWER",
                 R::Indoor => "INDOOR",
@@ -653,6 +655,10 @@ pub enum RideRow {
     StopWorkout,
     /// Stops following the course; the ride goes on.
     StopCourse,
+    /// Follows the course the other way ([`crate::course::Course::reverse`]).
+    Reverse,
+    /// The ride's own track back to its start, as a course (app/courses.rs).
+    BackToStart,
     /// Opens the trainer screen (app/trainer.rs).
     Trainer,
     /// Opens the power meter calibration screen (app/powercal.rs).
@@ -665,7 +671,7 @@ pub enum RideRow {
 pub const WORKOUT_NOW: [Row; 2] = [Row::Ride(RideRow::NextStep), Row::Ride(RideRow::StopWorkout)];
 
 /// The course menu of a ride (while one is followed).
-pub const COURSE_NOW: [Row; 1] = [Row::Ride(RideRow::StopCourse)];
+pub const COURSE_NOW: [Row; 2] = [Row::Ride(RideRow::StopCourse), Row::Ride(RideRow::Reverse)];
 
 /// What the phone menu shows ([`PHONE`]): the link (app/phone.rs) and its settings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -183,3 +183,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|
 | ![Start reminder](img/start-reminder.png) | ![Ready card](img/ready-card.png) |
 | START THE RIDE? after 10 s of pedalling with no ride (sim) | The ready card over a new ride: GPS, battery 12 %, a power meter not heard (sim) |
+
+## Course: reversed, and the way to its start
+
+| | |
+|:-:|:-:|
+| ![Reversed course](img/course-reversed.png) | ![To the start](img/course-to-start.png) |
+| The synthetic hill followed backwards (COURSE > REVERSE COURSE): the profile runs downhill, the first turn is a right (sim) | Off the start: NEXT TURN shows the way to it, a compass point and the distance (N390M), until the course is joined (sim) |

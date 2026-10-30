@@ -303,6 +303,8 @@ pub struct Tracker {
     speed: u32,
     /// Fixes in a row placed back before the last cue passed ([`cues::BACK_FIXES`]).
     back_s: u8,
+    /// The last fix on the course's plane (metres), for [`Course::to_start`].
+    here: (i32, i32),
 }
 
 impl Tracker {
@@ -322,7 +324,13 @@ impl Tracker {
             cue_said: 0,
             speed: 0,
             back_s: 0,
+            here: (0, 0),
         }
+    }
+
+    /// The course was joined (within [`BACK_M`]) at least once.
+    pub fn joined(&self) -> bool {
+        self.joined
     }
 
     /// Off course was said and the rider is not back yet.
@@ -560,6 +568,13 @@ impl Course {
                 *d = (u64::from(*d) * u64::from(len) / u64::from(sum)).min(u64::from(u32::MAX)) as u32;
             }
         }
+        self.derive(n);
+        self.finish_cues();
+        self.id = self.id.wrapping_add(1);
+    }
+
+    /// The profile, boxes and climbs of the first `n` points: from their altitudes (gaps filled) and positions.
+    fn derive(&mut self, n: usize) {
         let alts = self.alt.get_mut(..n).unwrap_or(&mut []);
         let first = alts.iter().copied().find(|&a| a != NO_ALT);
         self.has_alt = first.is_some();
@@ -596,8 +611,64 @@ impl Course {
             });
         }
         (self.climbs, self.n_climbs) = self.find_climbs();
-        self.finish_cues();
+    }
+
+    /// The course followed the other way: points, distances, altitudes, gaps, ascent, boxes and climbs of the
+    /// reversed profile, and the turns found again on the reversed shape (a right turn is a left one). The file's own
+    /// cues are dropped (their turns would be the wrong way round). The plane's origin stays where it was.
+    pub fn reverse(&mut self) {
+        let n = self.len.min(POINTS);
+        let total = self.len_m();
+        if let Some(s) = self.xy.get_mut(..n) {
+            s.reverse();
+        }
+        if let Some(s) = self.alt.get_mut(..n) {
+            s.reverse();
+        }
+        if let Some(s) = self.dist.get_mut(..n) {
+            s.reverse();
+            for d in s {
+                *d = total.saturating_sub(*d);
+            }
+        }
+        // no segment between new points i - 1 and i = none between old points n - i and n - 1 - i
+        let old = core::mem::replace(&mut self.gaps, [0; POINTS / 32]);
+        for i in 1..n {
+            if is_gap(&old, n - i) {
+                self.mark_gap(i);
+            }
+        }
+        let had_alt = self.has_alt;
+        self.derive(n);
+        self.has_alt = had_alt;
+        self.recue();
         self.id = self.id.wrapping_add(1);
+    }
+
+    /// The course from a track: `pts` (metres east and north of `origin`, degrees x 1e-7), in the order to follow
+    /// them, thinned to [`POINTS`] as a file's are. No altitudes, no cues of a file: the shape's turns.
+    pub fn from_plane(&mut self, origin: (i32, i32), pts: impl Iterator<Item = (i32, i32)>) {
+        self.clear();
+        self.origin = Some((origin.0, origin.1, cos_q16(origin.0)));
+        let (mut d, mut prev) = (0u32, None::<(i32, i32)>);
+        for p in pts {
+            if let Some(q) = prev {
+                let (dx, dy) = (i64::from(p.0) - i64::from(q.0), i64::from(p.1) - i64::from(q.1));
+                d = d.saturating_add(((dx * dx + dy * dy) as u64).isqrt().min(u64::from(u32::MAX)) as u32);
+            }
+            self.put(p, d, NO_ALT);
+            prev = Some(p);
+        }
+        self.finish();
+    }
+
+    /// While the rider has not joined the course: the bearing (degrees clockwise from north) and the distance (m)
+    /// of its start from the last fix, in a straight line (routing is not here). None once joined.
+    pub fn to_start(&self, t: &Tracker) -> Option<(u32, u32)> {
+        let s = self.xy.first().filter(|_| self.len >= 2 && t.off_m.is_some() && !t.joined)?;
+        let (dx, dy) = (i64::from(s.0) - i64::from(t.here.0), i64::from(s.1) - i64::from(t.here.1));
+        let m = ((dx * dx + dy * dy) as u64).isqrt().min(u64::from(u32::MAX)) as u32;
+        Some(((-angle_deg((0, 1), (dx, dy))).rem_euclid(360) as u32, m))
     }
 
     /// The points kept, metres east and north of the first.
@@ -738,6 +809,7 @@ impl Course {
         let was = t.off_m.map(|_| t.along_m);
         let o = self.origin.filter(|_| self.len >= 2)?;
         let p = project(o, lat, lon);
+        t.here = p;
         let segs = self.len - 1;
         let window = t.seg.saturating_sub(BEHIND)..(t.seg + AHEAD).min(segs);
         let mut hit = self.nearest(p, &[window], t.along_m, &mut t.examined);
@@ -863,6 +935,57 @@ pub(crate) mod tests {
 
     fn fix(x: f64, y: f64) -> (i32, i32) {
         ((y * NORTH) as i32, (x * NORTH) as i32)
+    }
+
+    /// Reversed: the same length, the ends swapped, the ascent and climbs of the profile read downhill, and the
+    /// turns found again on the reversed shape: an L whose corner turns left is, the other way, a right turn.
+    #[test]
+    fn reversed_course() {
+        let mut c = course(&lines(&[(0.0, 0.0, 0.0), (3000.0, 0.0, 100.0), (3000.0, 3000.0, 100.0)], 10.0));
+        assert_eq!(c.cues().iter().map(|q| q.turn).collect::<Vec<_>>(), [Turn::Left]);
+        let (len, first, last, id) = (c.len_m(), c.points()[0], *c.points().last().unwrap(), c.id());
+        assert!(c.ascent_left(&Tracker::new()) >= 95 && !c.climbs().is_empty());
+        c.reverse();
+        assert_eq!((c.len_m(), c.points()[0], *c.points().last().unwrap()), (len, last, first));
+        assert_ne!(c.id(), id, "the map fits it again");
+        assert_eq!(c.cues().iter().map(|q| q.turn).collect::<Vec<_>>(), [Turn::Right]);
+        let q = c.cues()[0].at_m;
+        assert!((2990..=3010).contains(&q), "the corner is 3 km from the new start: {q}");
+        assert_eq!(c.ascent_left(&Tracker::new()), 0, "downhill all the way");
+        assert!(c.climbs().is_empty(), "the climb is a descent now");
+        assert!(c.dist[..c.points().len()].windows(2).all(|w| w[0] <= w[1]), "distances rise");
+        // twice: the original again
+        c.reverse();
+        assert_eq!(c.cues().iter().map(|q| q.turn).collect::<Vec<_>>(), [Turn::Left]);
+        assert_eq!((c.points()[0], c.len_m()), (first, len));
+    }
+
+    /// The way back: a track in the order of its end to its start, thinned to the memory, ending at the start.
+    #[test]
+    fn course_from_a_track_is_bounded() {
+        let track: Vec<(i32, i32)> = (0..POINTS as i32 * 3).map(|k| (k, 0)).collect();
+        let mut c = Course::new();
+        c.from_plane((0, 0), track.iter().rev().copied());
+        assert!(c.points().len() <= POINTS && c.points().len() >= POINTS / 2, "{}", c.points().len());
+        assert_eq!((c.points()[0], c.len_m()), (track[track.len() - 1], track.len() as u32 - 1));
+        assert!(c.points().last().is_some_and(|p| p.0 < 4), "ends at the start (thinned: within a step)");
+        c.from_plane((0, 0), core::iter::empty());
+        assert!(c.points().is_empty() && c.len_m() == 0);
+    }
+
+    /// Not on the course yet: the bearing and distance of its start, until the course is joined.
+    #[test]
+    fn straight_to_the_start() {
+        let c = course(&lines(&[(0.0, 0.0, 0.0), (2000.0, 0.0, 0.0)], 10.0));
+        let mut t = Tracker::new();
+        assert_eq!(c.to_start(&t), None, "no fix yet");
+        let (lat, lon) = fix(-300.0, -300.0); // south west of the start, the course going east
+        c.follow(&mut t, lat, lon);
+        let (b, m) = c.to_start(&t).unwrap();
+        assert!((44..=46).contains(&b) && (420..=428).contains(&m), "{b} {m}");
+        let (lat, lon) = fix(200.0, 10.0);
+        c.follow(&mut t, lat, lon);
+        assert_eq!(c.to_start(&t), None, "joined");
     }
 
     /// Distance, the plane, the ascent: 3 km east then 4 km north, rising 100 m on the second leg.
