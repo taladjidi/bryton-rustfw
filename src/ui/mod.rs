@@ -881,7 +881,7 @@ pub(crate) mod tests {
         for theme in metric_ends() {
             let mut f = Frame::themed(theme);
             for (&bx, field) in table.iter().zip(TABLE) {
-                draw_field_frame_bar(&mut f, bx, field, GREEN);
+                draw_field_frame_bar(&mut f, bx, field, GREEN, (true, true)); // imperial: the longer unit labels
                 draw_field_value(&mut f, bx, field.widest(), WHITE);
                 assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{field:?} readable at bar {}", theme.zone_bar);
             }
