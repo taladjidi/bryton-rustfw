@@ -1931,3 +1931,50 @@ fn alerts_menu_lists_the_limits() {
     app.settings.text(menu::Setting::Limit(10), &mut l);
     assert_eq!(l.as_str(), "0.75");
 }
+
+/// SUNSET ALERT (training/alerts.rs): a ride from 35 minutes before the sunset to 5 after it says the 30-minute banner
+/// once, and a pause and a resume inside the window do not say it again; OFF says nothing, a ride without a fix (no sun
+/// times) says nothing, and a ride starting after the set says nothing.
+#[test]
+fn sunset_alert_says_once_before_the_set() {
+    // the sun's set for this place and day, from a probe ride with a fix (the times do not depend on the clock)
+    let mut probe = Sim::new(9, 0, 0);
+    probe.gnss.route = Some(ride_route);
+    probe.gnss.fix = Some(8000);
+    let mut app = App::start(&mut probe, None);
+    run(&mut probe, &mut app, 120_000);
+    let (_, set) = app.sun_times().expect("a fix and a learnt zone give the sun");
+    // (banners said, the ride runs): the ride starts `start` minutes from the sunset, with a fix or not, a SUNSET ALERT
+    // choice (an index), and a pause and a resume 100 s in if `pause`
+    let says = |choice: usize, fix: bool, start: i64, pause: bool| {
+        let t = i64::from(set) + start;
+        let mut sim = Sim::new((t / 60) as u64, (t % 60) as u64, 0);
+        sim.gnss.route = Some(ride_route);
+        if fix {
+            sim.gnss.fix = Some(8000);
+        }
+        let mut app = App::start(&mut sim, None);
+        app.settings.sunset_alert = choice;
+        run(&mut sim, &mut app, 2000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 500);
+        let (mut said, mut on) = (0, false);
+        for i in 0..4800 {
+            if pause && i == 200 {
+                app.press(&mut sim, Press::Short(Key::Start)); // pause
+                run(&mut sim, &mut app, 2000);
+                app.press(&mut sim, Press::Short(Key::Start)); // resume
+            }
+            run(&mut sim, &mut app, 500);
+            let now = app.notes.text.as_str() == "SUNSET SOON";
+            said += usize::from(now && !on);
+            on = now;
+        }
+        (said, app.ride.state() == crate::ride::State::Running)
+    };
+    assert_eq!(says(2, true, -35, false), (1, true), "30 MIN: once, the ride still running");
+    assert_eq!(says(2, true, -35, true), (1, true), "a pause and a resume inside the window: still once");
+    assert_eq!(says(0, true, -35, false), (0, true), "OFF: never");
+    assert_eq!(says(2, false, -35, false), (0, true), "no fix, no sun times: never");
+    assert_eq!(says(2, true, 5, false), (0, true), "a ride starting after the set: never");
+}

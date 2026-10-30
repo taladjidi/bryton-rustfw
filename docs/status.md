@@ -64,6 +64,7 @@ A feature not listed here was seen on the unit.
   against the clock on a real fix (the zone learnt from the phone), the time to sunset, the heading on a ride, the ETA on
   a followed course, and the power meter's and the strap's battery status on the unit.
 
+- **The sunset alert (ALERTS > SUNSET ALERT)**: sim only. Still to see: "SUNSET SOON" and its three beeps on a ride about 30 minutes before the set, once, and not again after a pause.
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.
 - **The trip, lap and slope fields (training/ride.rs, app/fields.rs; the page with trip time, laps, last lap, lap power

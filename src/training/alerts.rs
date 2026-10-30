@@ -121,11 +121,13 @@ pub enum Alert {
     Kcal,
     /// Another kJ step done.
     Kj,
+    /// The sun sets within the SUNSET ALERT's minutes (once a ride).
+    Sunset,
 }
 
 impl Alert {
     /// Every alert, in the order they are said (the heart rate first).
-    pub const ALL: [Alert; 15] = [
+    pub const ALL: [Alert; 16] = [
         Alert::HrHigh,
         Alert::HrLow,
         Alert::PowerHigh,
@@ -141,11 +143,12 @@ impl Alert {
         Alert::Dist,
         Alert::Kcal,
         Alert::Kj,
+        Alert::Sunset,
     ];
 
     /// Whether this one is an alarm (a limit passed, red) and not a reminder.
     pub fn alarm(self) -> bool {
-        !matches!(self, Alert::Eat | Alert::Drink | Alert::Dist | Alert::Kcal | Alert::Kj)
+        !matches!(self, Alert::Eat | Alert::Drink | Alert::Dist | Alert::Kcal | Alert::Kj | Alert::Sunset)
     }
 
     /// Whether `text` is one of the banners of an alert.
@@ -171,6 +174,7 @@ impl Alert {
             Alert::Dist => "DISTANCE REMINDER",
             Alert::Kcal => "KCAL REMINDER",
             Alert::Kj => "KJ REMINDER",
+            Alert::Sunset => "SUNSET SOON",
         }
     }
 }
@@ -212,6 +216,9 @@ pub struct Alerts {
     /// The distance (km), kcal and kJ at the last call, and whether there was one.
     prev: [u32; 3],
     primed: bool,
+    /// The sunset alert has said its one this ride (a pause and a resume keep it; a reset-resume is a new [`Alerts`],
+    /// so it says again if still within the window).
+    sun_said: bool,
 }
 
 impl Alerts {
@@ -228,6 +235,7 @@ impl Alerts {
             bands: [Band::NEW; 8],
             prev: [0; 3],
             primed: false,
+            sun_said: false,
         }
     }
 
@@ -311,6 +319,26 @@ impl Alerts {
             return Some(Alert::CadenceLow);
         }
         None
+    }
+
+    /// One second of a moving ride: the sunset alert, `lead_min` minutes before the sunset (0: off), `left_min` the
+    /// minutes to it (None once it has set, and without a fix: no sun times, no alert). Said once a ride.
+    ///
+    /// ```
+    /// use bryton_rustfw::alerts::{Alert, Alerts};
+    /// let mut a = Alerts::new();
+    /// assert_eq!(a.sunset(Some(30), 30), Some(Alert::Sunset));
+    /// assert_eq!(a.sunset(Some(5), 30), None, "once a ride");
+    /// assert_eq!(Alerts::new().sunset(Some(90), 30), None, "not yet");
+    /// assert_eq!(Alerts::new().sunset(Some(10), 0), None, "OFF");
+    /// assert_eq!(Alerts::new().sunset(None, 30), None, "no fix, or set");
+    /// ```
+    pub fn sunset(&mut self, left_min: Option<u32>, lead_min: u16) -> Option<Alert> {
+        if self.sun_said || lead_min == 0 || left_min.is_none_or(|m| m > u32::from(lead_min)) {
+            return None;
+        }
+        self.sun_said = true;
+        Some(Alert::Sunset)
     }
 
     /// One second of a moving ride: `timer_s` the ride's timer after it, `hr` the heart rate; the settings `eat_min`
