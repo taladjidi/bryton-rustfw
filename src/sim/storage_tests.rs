@@ -14,7 +14,9 @@ use crate::volume::{OLDEST, size_text};
 fn storage_lists_the_card_and_opens_its_oldest_ride() {
     let (mut sim, mut app) = started();
     sim.emmc.image = crate::storage::trash::tests::volume();
-    run(&mut sim, &mut app, 3000); // the app's own card work (the scan's cache) ends before the figures are compared
+    // the app's first card write after boot (the scan's cache file in \Rustfw) comes in the first seconds: waited out
+    // before the figures are read, the survey reads the volume after it
+    run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Long(Key::Page));
     to_row(&mut sim, &mut app, Row::Open(Menu::Storage));
     app.press(&mut sim, Press::Short(Key::Start));
@@ -26,11 +28,10 @@ fn storage_lists_the_card_and_opens_its_oldest_ride() {
     let mut fat = Fat::mount(&mut d).unwrap();
     let (mut next, mut free) = (2, 0);
     assert!(fat.count_free(&mut d, &mut next, &mut free, u32::MAX).unwrap());
-    // the free space is FSInfo's count when it is whole (the Sim's card: FSInfo is about 16 KB off the FAT's own count,
-    // as a hint is when a writer left it stale; the FAT is what the survey counts without FSInfo: volume.rs)
+    // the survey counts the FAT (FSInfo is only an estimate until then); on the Sim FSInfo and the FAT agree exactly
     let info = fat.fsinfo_free(&mut d).expect("the Sim's FSInfo is whole");
-    assert_eq!(app.survey.free(), Some(fat.clusters_bytes(info)), "the free space: FSInfo's count");
-    assert!(free.abs_diff(info) < 64, "the FAT's count is near it");
+    assert_eq!(free, info, "the Sim's FSInfo is exact");
+    assert_eq!(app.survey.free(), Some(fat.clusters_bytes(free)), "the free space: the FAT's count");
     assert_eq!(app.survey.total(), Some(fat.clusters_bytes(fat.clusters())));
 
     let mut names: Vec<std::string::String> = Vec::new();
@@ -75,10 +76,17 @@ fn about_has_the_notices() {
     to_row(&mut sim, &mut app, Row::About);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::About);
-    assert!(ui::ABOUT_NOTICES.contains(&"(c) OpenStreetMap contributors (ODbL)"));
-    assert!(ui::ABOUT_NOTICES.contains(&"(c) OpenMapTiles"));
-    assert!(ui::ABOUT_NOTICES.contains(&"(c) IGN (Plan IGN v2, Etalab 2.0)"));
-    assert!(ui::ABOUT_NOTICES.contains(&"BARLOW, SIL OFL 1.1"));
+    assert_eq!(
+        ui::ABOUT_NOTICES,
+        [
+            "(c) OpenStreetMap",
+            "contributors (ODbL)",
+            "(c) OpenMapTiles",
+            "(c) IGN (Plan IGN",
+            "v2, Etalab 2.0)",
+            "BARLOW, SIL OFL 1.1"
+        ]
+    );
     sim.save("about");
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Menu(Menu::System, row_of(Row::About)), "Back returns to SYSTEM");

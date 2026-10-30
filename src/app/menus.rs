@@ -318,7 +318,12 @@ impl App {
             }
             Row::Storage(s) => match s {
                 menu::StorageRow::Total => volume::size_text(&mut value, self.survey.total()),
-                menu::StorageRow::Free => volume::size_text(&mut value, self.survey.free()),
+                menu::StorageRow::Free => {
+                    if self.survey.free_estimate() {
+                        value.push_str("~"); // FSInfo's count, the FAT not yet counted
+                    }
+                    volume::size_text(&mut value, self.survey.free());
+                }
                 menu::StorageRow::Rides => match self.survey.rides() {
                     Some(n) => value.push_u32(n),
                     None => value.push_str("--"),

@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->59 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->12 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->58 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->0 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -201,8 +201,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/trash.rs`: HISTORY's DELETE: a ride moved (never erased) into `\Rustfw\Deleted` (its full copy
   into `\Rustfw\Deleted\Full`), `\Rustfw\delete.rec` naming the move so the next start finishes one a cut left;
   stock's `.sum` / `.csum` left as they are (module doc: why).
-- `src/storage/volume.rs`: STORAGE's survey of the card, read a pass at a time: the size and free space (FSInfo's count
-  when whole, else the FAT counted), the rides in `\Activities` and the oldest five by name; the size and day texts.
+- `src/storage/volume.rs`: STORAGE's survey of the card, read a pass at a time: the size and free space (FSInfo's count as an estimate, then the FAT counted), the rides in `\Activities` and the oldest five by name; the size and day texts.
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).
 - `src/storage/workout_file.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
@@ -237,10 +236,17 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/nav/segment.rs`: a live segment file, `\Rustfw\Segments\<id>.seg` (stock's live segment package unzipped; docs/segments.md,
   "The file"; the layout checked against stock's live_segments.c): the header (the index reads its 0x200 bytes), the points and the
   times of the four kept efforts, every check of the file (`Error`), parsed into a caller's storage (about 16 KB, a static
-  cell). Pure logic; step S1, nothing on the unit calls it yet.
+  cell), read in 1 KB pieces (`parse_with`). Pure logic; step S1.
 - `src/nav/segment_match.rs`: the live segment matcher (docs/segments.md, "Detection", "Ghost"): `Matcher` (near, approach,
+  start, progress by `course::nearest_by`, lost, finish), the compact index `Entry` and the ghost's `target_s` / `delta_s`. Pure
+  logic; step S2, fed by `app/segments.rs`.
+- `src/app/segments.rs`: the live segments on the unit (docs/segments.md, "On the unit"; step S3): the index of `\Rustfw\Segments\`
+  read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
+  the screens (S4) read (`segment_now`, `events`). Nothing drawn, nothing written.
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
+- `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the
+  module): local minutes, None in polar day and night. Pure logic; `App::refresh_sun` works it out once a minute.
 - `src/link/dev.rs`: the USB dev link protocol (commands, screenshot rows, image load and checks), against the
   `Host` trait; `App::serve` there answers the effects that need the app and the card (main.rs keeps the keys, the reset
   and the image run). `src/link/prof.rs`: the profiler the dev link's `prof` reads (sections of the pass, DWT cycles from
@@ -261,7 +267,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
   tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `ride_tests.rs` (zone colours and bar,
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
-  `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
+  `segment_tests.rs` (live segments: the index, a ride along a synthetic segment), `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.

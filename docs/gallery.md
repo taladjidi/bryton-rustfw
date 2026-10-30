@@ -29,6 +29,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | Trip time, laps, last lap, lap power and lap NP on a ride page (sim) |  |  |
 | ![Heart rate and power against the numbers](img/ride-zone-fields.png) |  |  |
 | % of max HR (LTHR not set: "--"), heart-rate zone and its time, % of FTP and the power zone on a ride page (sim) |  |  |
+| ![Heading, sun and battery fields](img/ride-sun-fields.png) |  |  |
+| Heading, sunrise, sunset, time to sunset, ETA ("--" off course) and the unit's battery on a ride page (sim) |  |  |
 
 ## Page editor
 

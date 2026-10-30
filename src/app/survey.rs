@@ -18,6 +18,9 @@ impl App {
 
     /// STORAGE's oldest ride `k` opens as HISTORY's: read over the next passes (App::step_past).
     pub(crate) fn read_old_ride(&mut self, k: usize) {
+        if !self.ride_settled() {
+            return self.notice("CARD BUSY");
+        }
         let Some(e) = self.survey.oldest(k) else { return };
         let Some(start) = stock::ride_start(e.name()) else { return };
         let r = history::Ride { file: e.file, start, ..history::NONE };

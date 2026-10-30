@@ -69,6 +69,15 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   time, distance, average speed, heart rate, power; 2, the elevation profile with ascent, grade, VAM and cadence;
   3, the map, whole. While a course is followed, a course page joins the round after the ride pages (and opens
   when the course is loaded): its profile large, the next turn, the distance to go, the climb pacer (TOP, below) and moving time.
+- **Sun, heading, arrival and batteries (nav/sun.rs, app/fields.rs)**: heading as one of 8 compass points (N first)
+  from the GNSS course over ground, "--" under 5 km/h or without a fix. Sunrise and sunset in local time, and the time
+  left to today's sunset (h:mm, "--" once it has set): NOAA's solar equations (Meeus, ch. 25 and 28, as NOAA's calculator
+  writes them; cited in the module), from the fix's place and the RTC's date. The RTC is local time, so the zone is the
+  offset learnt from the phone or the fix; no fix, no zone, or polar day or night: "--". The sun is worked out once a
+  minute, not per pass. On a course: the time to the end at the average moving speed ("--" under 5 km/h average) and the
+  clock of arrival (ETA); the distance to go is the course's own field. Batteries: the unit's percent (the status bar's),
+  and the power meter's and the heart-rate strap's ANT+ status (page 82: NEW, GOOD, OK, LOW, CRIT). The Di2 battery is the
+  shifting field. Not yet: the sunset alert.
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
@@ -411,8 +420,8 @@ MENU
   altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
   build is made from and its date; `tools/dev.py info` gives the same commit; the notices of the map data, "(c)
   OpenStreetMap contributors (ODbL)", "(c) OpenMapTiles", "(c) IGN (Plan IGN v2, Etalab 2.0)", and the font's, "BARLOW,
-  SIL OFL 1.1"; drawn once when it opens), STORAGE (the card: TOTAL and FREE from the volume, FREE from FSInfo when it is
-  whole and else counted in the FAT over the passes, RIDES in `\Activities`, then the five oldest by name, each as its
+  SIL OFL 1.1"; drawn once when it opens), STORAGE (the card: TOTAL and FREE from the volume, FREE shows FSInfo's count with a
+  "~" (only a hint: stale after a power cut) until the FAT is counted over the passes, then the counted value, RIDES in `\Activities`, then the five oldest by name, each as its
   day and size; a tap opens the ride's HISTORY card, where DELETE is). STORAGE is read only, a pass at a time while the
   screen is open and no ride runs or waits to be saved (`--` until then, or while the card is lent to the computer);
   DELETE restarts the count.

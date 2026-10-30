@@ -1,11 +1,11 @@
-//! What the card's volume holds, for STORAGE (SYSTEM > STORAGE): its size, its free space (FSInfo's free count when
-//! it is whole, else the FAT counted a pass at a time), the rides in `\Activities`, and the oldest of them.
+//! What the card's volume holds, for STORAGE (SYSTEM > STORAGE): its size, its free space (FSInfo's count as an
+//! estimate, then the FAT counted a pass at a time: FSInfo is only a hint), the rides in `\Activities`, the oldest of them.
 //!
 //! Read only, a bounded amount a pass ([`Survey::step`]); the app runs it while the card is idle, never during a
-//! ride (app/storage.rs). A damaged volume shows "--" (the survey stops, [`Survey::failed`]), never a panic.
+//! ride (app/survey.rs). A damaged volume shows "--" (the survey stops, [`Survey::failed`]), never a panic.
 //! Formats: Microsoft's FAT32 specification (FSInfo) and the FAT as fat/mod.rs reads it.
 
-use crate::fat::{Cursor, Disk, Entry, Error, Fat};
+use crate::fat::{Disk, Entry, Error, Fat};
 use crate::history::Start;
 use crate::stock::ride_start;
 use crate::ui::text::Line;
@@ -25,8 +25,6 @@ enum Stage {
 pub struct Survey {
     stage: Stage,
     fat: Option<Fat>,
-    /// The listing of `\Activities`, opened in the rides stage.
-    dir: Option<Cursor>,
     /// The next FAT cluster to count, and the free clusters counted so far.
     next: u32,
     counted: u32,
@@ -50,7 +48,6 @@ impl Survey {
         Survey {
             stage: Stage::Mount,
             fat: None,
-            dir: None,
             next: 2,
             counted: 0,
             free: None,
@@ -90,9 +87,11 @@ impl Survey {
     fn run(&mut self, d: &mut impl Disk, sectors: u32) -> Result<bool, Error> {
         if self.stage == Stage::Mount {
             let fat = Fat::mount(d)?;
+            // FSInfo's count is only a hint (stale after a power cut, or a writer that did not keep it): shown as an
+            // estimate ([`Survey::free_estimate`]) while the FAT is counted, which always happens
             self.free = fat.fsinfo_free(d);
             self.fat = Some(fat);
-            self.stage = if self.free.is_some() { Stage::Rides } else { Stage::Free };
+            self.stage = Stage::Free;
         }
         if self.stage == Stage::Free {
             let fat = self.fat.as_ref().ok_or(Error::Corrupt)?;
@@ -103,31 +102,30 @@ impl Survey {
             return Ok(false);
         }
         if self.stage == Stage::Rides {
-            let fat = self.fat.as_mut().ok_or(Error::Corrupt)?;
-            if self.dir.is_none() {
-                match fat.open(d, "Activities") {
-                    Ok(dir) => self.dir = Some(fat.cursor(dir)?),
-                    Err(Error::NotFound) => {
-                        self.stage = Stage::Done; // no rides yet
-                        return Ok(true);
-                    }
-                    Err(e) => return Err(e),
-                }
+            match self.list_rides(d) {
+                Ok(()) | Err(Error::NotFound) => {} // no \Activities: no rides
+                Err(e) => return Err(e),
             }
-            let c = self.dir.as_mut().ok_or(Error::Corrupt)?;
-            // a listing sector holds 16 entries: at most `sectors` of them read, a call an entry
-            for _ in 0..sectors.saturating_mul(16) {
-                let Some(e) = fat.list(d, c)? else {
-                    self.stage = Stage::Done;
-                    return Ok(true);
-                };
-                if !e.file.dir && ride_start(e.name()).is_some() {
-                    self.rides += 1;
-                    keep(&mut self.oldest, e);
-                }
-            }
+            self.stage = Stage::Done;
+            return Ok(true);
         }
         Ok(false)
+    }
+
+    /// The rides of `\Activities` in one pass (a few ms for a long one). Its cursor lives on this frame, not in the
+    /// survey: the survey sits in the app's cell, and AXI SRAM has no room for a second sector buffer and LFN table.
+    #[inline(never)]
+    fn list_rides(&mut self, d: &mut impl Disk) -> Result<(), Error> {
+        let fat = self.fat.as_mut().ok_or(Error::Corrupt)?;
+        let dir = fat.open(d, "Activities")?;
+        let mut c = fat.cursor(dir)?;
+        while let Some(e) = fat.list(d, &mut c)? {
+            if !e.file.dir && ride_start(e.name()).is_some() {
+                self.rides += 1;
+                keep(&mut self.oldest, e, Entry::name);
+            }
+        }
+        Ok(())
     }
 
     /// The volume's data size, bytes; None until read or after a failure.
@@ -136,10 +134,16 @@ impl Survey {
         Some(fat.clusters_bytes(fat.clusters()))
     }
 
-    /// The free space, bytes; None until counted or after a failure.
+    /// The free space, bytes: FSInfo's count while the FAT is counted ([`Survey::free_estimate`]), then the counted
+    /// one; None before the volume is read or after a failure.
     pub fn free(&self) -> Option<u64> {
         let (fat, n) = (self.fat.as_ref().filter(|_| !self.failed)?, self.free?);
         Some(fat.clusters_bytes(n))
+    }
+
+    /// The free space is still FSInfo's (not yet counted): shown with a "~".
+    pub fn free_estimate(&self) -> bool {
+        !self.done() && self.free.is_some()
     }
 
     /// The rides in `\Activities`, once all are counted.
@@ -153,9 +157,22 @@ impl Survey {
     }
 }
 
-/// Keeps the [`OLDEST`] rides by name: `YYMMDDhhmmss.fit` sorts by date, so the oldest first.
-fn keep(oldest: &mut [Option<Entry>; OLDEST], e: Entry) {
-    let Some(at) = oldest.iter().position(|o| o.is_none_or(|o| o.name() > e.name())) else { return };
+/// Order of a ride's name `YYMMDDhhmmss.fit`: by date. The year is read as 19YY from 70 up and 20YY below (the
+/// rides of the unit's life; 1970 is the first year a clock can say), so 99 is before 00.
+fn older(a: &[u8], b: &[u8]) -> bool {
+    let century = |n: &[u8]| {
+        let yy = match (n.first(), n.get(1)) {
+            (Some(a), Some(b)) if a.is_ascii_digit() && b.is_ascii_digit() => (a - b'0') * 10 + (b - b'0'),
+            _ => 0,
+        };
+        if yy < 70 { yy + 100 } else { yy }
+    };
+    (century(a), a.get(2..)) < (century(b), b.get(2..))
+}
+
+/// Keeps the [`OLDEST`] rides by name (`older`), the oldest first; `name` gives a ride's name.
+fn keep<T: Copy>(oldest: &mut [Option<T>; OLDEST], e: T, name: fn(&T) -> &[u8]) {
+    let Some(at) = oldest.iter().position(|o| o.is_none_or(|o| older(name(&e), name(&o)))) else { return };
     // at < OLDEST: the rides from `at` on move one place down, the last one falls off
     oldest.copy_within(at..OLDEST - 1, at + 1);
     if let Some(slot) = oldest.get_mut(at) {
@@ -273,6 +290,23 @@ mod tests {
             assert_eq!(s.oldest(k).map(|e| e.name().to_vec()), Some(want.as_bytes().to_vec()));
         }
         assert!(s.oldest(OLDEST).is_none());
+    }
+
+    #[test]
+    fn the_oldest_five_of_six_out_of_order_across_99_and_00() {
+        // names by date; 98 and 99 are 1998 and 1999, 00 is 2000 (YY below 70 is 20YY): 99 comes before 00
+        #[derive(Clone, Copy)]
+        struct Named(&'static [u8]);
+        let name = |n: &Named| n.0;
+        let input: [&[u8]; 6] =
+            [b"250601080000", b"990101000000", b"699999999999", b"980202100000", b"000101000000", b"001231235959"];
+        let mut kept = [None; OLDEST];
+        for n in input {
+            keep(&mut kept, Named(n), name);
+        }
+        let got: Vec<&[u8]> = kept.iter().flatten().map(|n| n.0).collect();
+        let want: [&[u8]; 5] = [b"980202100000", b"990101000000", b"000101000000", b"001231235959", b"250601080000"];
+        assert_eq!(got, want, "the 2069 ride is the newest and falls off");
     }
 
     #[test]

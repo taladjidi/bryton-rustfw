@@ -500,36 +500,38 @@ pub fn draw_end_button(c: &mut impl Canvas, k: usize, label: &str, selected: boo
 /// ABOUT: Ferris large, the firmware's name, its version and commit (`describe`: "1a2b3c4", "-dirty" when built
 /// from changes not committed) and the commit's date, and where it lives.
 pub fn draw_about(c: &mut impl Canvas, version: &str, describe: &str, date: &str) {
-    const BIG: u32 = 6; // Ferris 96 x 66: the notices below fit the 320 px panel
-    draw_crab(c, (W - 16 * BIG) / 2, PAGE_Y + 16, BIG, RUST);
-    let mut y = PAGE_Y + 16 + 11 * BIG + 16;
+    // Ferris 64 x 44 and the lines close: the six notice lines (scale 2, the pixel font's) fill the panel's lower part
+    const BIG: u32 = 4;
+    draw_crab(c, (W - 16 * BIG) / 2, PAGE_Y + 8, BIG, RUST);
+    let mut y = PAGE_Y + 8 + 11 * BIG + 8;
     let mut line = |style: &Style, s: &str| {
         text::draw_in(c, style, 0, y, W, Align::Centre, s);
-        y += style.height() + 8;
+        y += style.height() + 2;
     };
     line(&LABEL, "BRYTON-RUSTFW");
     let mut v = text::Line::<24>::new();
     v.push_str("V");
     v.push_str(version);
+    v.push_str(" SAFE RUST");
     line(&LABEL, v.as_str());
     line(&LABEL, describe);
     let grey = Style { fg: GREY, ..LABEL };
     line(&grey, date);
-    line(&grey, "SAFE RUST");
-    // the notices small (scale 1): licences are read once, and four of them must fit under the five lines above
-    let small = Style { scale: 1, ..grey };
+    // the notices at the pixel font's scale 2, a line each (about 19 characters fit the panel's width)
     for notice in ABOUT_NOTICES {
-        text::draw_in(c, &small, 0, y, W, Align::Centre, notice);
-        y += small.height() + 4;
+        text::draw_in(c, &grey, 0, y, W, Align::Centre, notice);
+        y += grey.height();
     }
 }
 
 /// ABOUT's notices: the map data's licences (OpenStreetMap's ODbL, OpenMapTiles, IGN's Plan IGN v2 under Etalab 2.0)
 /// and the font's (Barlow, SIL Open Font License 1.1).
-pub const ABOUT_NOTICES: [&str; 4] = [
-    "(c) OpenStreetMap contributors (ODbL)",
+pub const ABOUT_NOTICES: [&str; 6] = [
+    "(c) OpenStreetMap",
+    "contributors (ODbL)",
     "(c) OpenMapTiles",
-    "(c) IGN (Plan IGN v2, Etalab 2.0)",
+    "(c) IGN (Plan IGN",
+    "v2, Etalab 2.0)",
     "BARLOW, SIL OFL 1.1",
 ];
 
