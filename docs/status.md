@@ -14,6 +14,7 @@ A feature not listed here was seen on the unit.
   on the panel (11 rows, a bound edited and kept in settings.bin data 123..150), ZONES BY LTHR on a ride (bars, HR ZONE field,
   time in zone move with it), and the TSS field and the end card showing hrTSS on a ride with a strap and no power meter.
 
+- **Start reminder and ready check (app/start_cues.rs, features.md "Start reminder and ready check")**: sim only. Still to see: START THE RIDE? and its beep a few seconds into a real ride's first pedalling (and not again for 5 minutes), the ready card's two lines fitting the banner with real sensor names, the "+N" cut of a long list of missing names, Shifting or Di2 listed only when heard, and the sensors it calls missing being the ones not yet heard at the press.
 - **Units, sound, auto pause, trips (app/fields.rs, app/settings.rs, features.md "Units, sound, trips")**: sim only. Still to see: IMPERIAL on a real ride (the values and labels fit their boxes), SOUND OFF with an alert due, an AUTO PAUSE of 5 km/h at a stop, and a trip and the odometer growing after a save and surviving a restart.
 - **Next-step strip and two targets per step (app/workouts.rs `ahead`, ui/strip.rs `draw_next_strip`, workout_file.rs
   fields 19 to 22)**: sim only. Still to see: the strip over the status strip for the last 9 s of a step and its

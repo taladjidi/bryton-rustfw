@@ -135,6 +135,7 @@ fn refused_while_riding() {
     let (mut sim, mut app) = unit(MeterAnswer::Zero(5));
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 3500); // the ready card first
     app.open_powercal();
     assert_ne!(app.screen(), Screen::PowerCal);
     assert_eq!(app.notes.text.as_str(), "NO CALIBRATION RIDING");

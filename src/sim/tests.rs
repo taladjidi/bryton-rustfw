@@ -380,9 +380,10 @@ fn start_from_the_overview() {
     assert_eq!(app.screen(), Screen::Ride(0));
     assert_eq!(app.ride.state(), ride::State::Running);
     run(&mut sim, &mut app, 200);
-    assert_eq!(app.notes.text.as_str(), "RIDE STARTED");
+    assert_eq!(app.notes.kind, Banner::Ready, "the ready card over the ride that runs from the press");
     assert_consistent(&sim, &app);
     sim.save("ride_started");
+    run(&mut sim, &mut app, 3500);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.notes.text.as_str(), "PAUSED: HOLD START TO END");
     save_ride(&mut sim, &mut app);

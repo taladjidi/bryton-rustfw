@@ -111,6 +111,7 @@ fn the_zone_bar_follows_its_number_and_is_all_that_is_redrawn() {
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_edge, network: 0, ack: &[] });
     sim.gnss.fix = Some(8000); // a fix: the strip's "GPS" does not blink (720 px a second) under the count
     let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.start_reminder = false; // the fix moves: the reminder would be a banner over the bar
     app.pages[0] = crate::page::Page::preset(
         1,
         [Field::Hr, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time],

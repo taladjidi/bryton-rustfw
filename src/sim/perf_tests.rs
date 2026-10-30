@@ -177,7 +177,10 @@ fn perf_budgets() {
         sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
         type Broadcast = fn(u64) -> [u8; 8]; // a sensor's page at a time
         let (power_fn, hr_fn): (Broadcast, Broadcast) = if fast { (power_fast, hr_fast) } else { (power_noisy, hr72) };
-        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fn, network: 0, ack: &[] });
+        let idle = screen == PAGES; // the overview with no ride: a bike at a standstill, no pedalling
+        if !idle {
+            sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power_fn, network: 0, ack: &[] });
+        }
         sim.backup[Kind::Hr.backup()] = STRAP.to_word();
         sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
@@ -192,7 +195,7 @@ fn perf_budgets() {
             }
             assert!(app.courses.as_deref().unwrap().on.is_some());
         }
-        sim.gnss.fix = Some(8000);
+        sim.gnss.fix = Some(if idle { 0 } else { 8000 });
         if screen != PAGES {
             app.press(&mut sim, Press::Short(Key::Start));
             app.screen = Screen::Ride(screen); // the page measured (a course loaded opens the course page)

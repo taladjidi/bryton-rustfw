@@ -793,6 +793,7 @@ fn auto_off_waits_for_the_recorder() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
     assert!(app.rec.clean.stuck() && app.rec.clean.held());
+    run(&mut sim, &mut app, 3500); // the ready card goes by itself (a key on it only skips it)
     app.open(Screen::Menu(Menu::System, 0));
     app.show(&mut sim);
     for _ in 0..5 {
@@ -901,4 +902,29 @@ fn auto_lap_by_distance_writes_a_lap_message_per_5_km() {
         let sum: u32 = laps.iter().map(|l| get(l, n)).sum();
         assert!(sum.abs_diff(get(session, n)) <= 2000, "field {n}: laps {sum}, session {}", get(session, n));
     }
+}
+
+/// The ready card is up for 3 s over a ride that runs from the press: after 70 s a checkpoint exists (the ride open on
+/// the card) and a reset resumes the ride at it, the card changing nothing for the recorder.
+#[test]
+fn the_ready_card_changes_nothing_for_the_recorder() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    app.settings.ready_check = true;
+    run(&mut sim, &mut app, 2000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.notes.kind, Banner::Ready);
+    assert_eq!(app.ride.state(), ride::State::Running);
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!(app.notes.ms, None, "the card has gone");
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN, "a checkpoint: the ride is open on the card");
+    let timer = app.ride.timer_s();
+    assert!(timer >= 60, "the timer ran from the press: {timer}");
+    let (sim2, app2) = reboot(&mut sim, 3);
+    let mut app2 = app2;
+    let mut sim2 = sim2;
+    run(&mut sim2, &mut app2, 1000);
+    assert_eq!(app2.ride.state(), ride::State::Paused, "resumed at the checkpoint");
+    assert!(app2.ride.timer_s() <= timer && app2.ride.timer_s() + 60 >= timer);
 }

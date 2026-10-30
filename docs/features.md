@@ -708,6 +708,10 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
 - **SOUND** (DISPLAY, ON): OFF drops every tone the app plays (alerts, course and workout tones, the start and pause beeps) and cuts
   the one sounding. The alerts' banners still show. It also silences the heart rate alarm, the off-course alarm and the low battery tone: only
   the banner shows. The power-on and power-off melodies stay (they play before the settings are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.
+- **Start reminder and ready check** (SETTINGS > BIKE: START REMINDER and READY CHECK, both ON; app/start_cues.rs). Neither starts, stops or touches the recording by itself.
+  - START REMINDER: with no ride (not running, not paused), on the overview or a ride page, the cable out, the bike moving for 10 s in a row (GPS speed over 8 km/h, a paired wheel sensor turning, or power above 0) says START THE RIDE? in a banner with one beep (SOUND OFF: the banner only), at most every 5 minutes. Start then starts the ride as it always does. A menu open, USB power in, or a ride running or paused: nothing, and the count starts again.
+  - READY CHECK: Start on a new ride (a resume or a pause shows nothing) shows a two-line card for 3 s: the GPS fix (YES / NO) and the unit's battery, then the warning: LOW BATT at 15 % or less, NO and the names of the paired sensors not heard in the last 5 s, else the sensors found and OK (NO SENSORS PAIRED with none). Names are written while they fit the banner, then "+N" for the rest. Shifting and Di2 count only when heard (they may stay silent at a standstill, which cannot be told from the sensor being gone without the unit). Any input skips it; Start on it only skips it, with a short tone (SOUND) and a RECORDING notice, so a rider who meant to pause knows it did not. **The recording starts at the press**, in the same call as without the card (the FIT start is the press, no data is lost); the card is a banner over the ride page, so it can neither delay nor prevent the start. The sensors are judged as heard at the press: the channels that were resting search again from it. Kept in settings.bin data 150 and 151 (ON in a file that predates them).
+  ![Start reminder](img/start-reminder.png) ![Ready card](img/ready-card.png)
 - **BACKLIGHT ALWAYS ON** is LIGHT OFF NEVER (SETTINGS > DISPLAY), as before.
 - **AUTO PAUSE** (SETTINGS > BIKE): AUTO (the profile's own rule: road under 2 km/h at once, MTB under 2 km/h for 5 s, indoor
   on no power and cadence for 3 s), OFF (the timer never auto-pauses, any profile), or 2, 3, 5 or 8 km/h replacing the 2
@@ -874,7 +878,7 @@ weight, bike weight, W', eat, drink, heart rate alert), then the choices, one by
 before the limits (an earlier build's) reads them OFF. A later build appends its settings and raises the length: SOUND,
 UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
-C, AUTO and zeros.
+C, AUTO and zeros. START REMINDER and READY CHECK are the last two bytes (150, 151; 152 in all) and read ON when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers

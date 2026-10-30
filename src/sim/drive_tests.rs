@@ -43,6 +43,7 @@ fn no_workout_while_the_card_is_lent() {
 #[test]
 fn lent_to_the_computer_one_owner_at_a_time() {
     let (mut sim, mut app) = started(true);
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     app.set_usb(&mut sim, UsbDot::Powered);
     assert_eq!(app.drive_on(&mut sim), Err("CONNECT USB"));
     app.set_usb(&mut sim, UsbDot::Ready);
@@ -397,6 +398,7 @@ fn fits_in(img: &[u8], path: &str) -> usize {
 #[test]
 fn discarding_a_held_ride_saves_the_last_one() {
     let (mut sim, mut app) = started(true);
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     let before = [fits_in(&sim.emmc.image, "Activities"), fits_in(&sim.emmc.image, "Rustfw/Activities")];
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 30_000);
@@ -474,6 +476,7 @@ fn give_up_save_frees_a_stuck_save() {
         app.press(&mut sim, Press::Short(Key::Start)); // a new ride, held
         assert!(app.rec.clean.held() && app.ride.state() == ride::State::Running);
         assert_eq!(rows(&app)[0], menu::Row::GiveUpSave);
+        run(&mut sim, &mut app, 3500); // the ready card goes by itself (a key on it only skips it)
 
         app.open(Screen::Menu(Menu::System, 0));
         app.show(&mut sim);

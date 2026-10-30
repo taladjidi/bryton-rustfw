@@ -164,3 +164,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|
 | ![Page menu](img/page-switches-menu.png) | ![Renamed page](img/page-renamed-list.png) |
 | PAGES > ROAD PAGES > a page: SHOW, MOVE UP, MOVE DOWN and RENAME under its fields (sim) | A page renamed "CA B" in the list (four characters at most; sim) |
+
+## Start reminder and ready check
+
+| | |
+|:-:|:-:|
+| ![Start reminder](img/start-reminder.png) | ![Ready card](img/ready-card.png) |
+| START THE RIDE? after 10 s of pedalling with no ride (sim) | The ready card over a new ride: GPS, battery 12 %, a power meter not heard (sim) |
