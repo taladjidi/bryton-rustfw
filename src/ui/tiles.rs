@@ -376,9 +376,10 @@ impl Basemap {
         }
         let (Some(z), Some((_, Some((hdir, pdir))))) = (found, self.dirs) else { return Ok(false) };
         self.stats.zoom = z;
-        // the tiles on screen: at most 2 x 2 around the centre's, as tiles are drawn wider than the map
+        // the tiles on screen: 2 x 2 around the centre's, up to SLOTS of the 3 x 3 when the view is turned (at 45 degrees
+        // five overlap the map)
         let (cx, cy) = frame.centre_tile(z);
-        let mut tiles = [(0u32, 0u32, Proj::default()); 4];
+        let mut tiles = [(0u32, 0u32, Proj::default()); SLOTS];
         let mut n = 0;
         for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (0, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
             let (x, y) = (cx as i64 + dx, cy as i64 + dy);
@@ -395,7 +396,7 @@ impl Basemap {
         let Some((px, store)) = mem.split_at_mut_checked(PIXELS) else { return Ok(false) };
         // the tiles not held go into the slots used longest ago (not one of these)
         self.tick = self.tick.wrapping_add(1);
-        let mut at = [usize::MAX; 4];
+        let mut at = [usize::MAX; SLOTS];
         for (i, &(x, y, _)) in tiles.iter().take(n).enumerate() {
             if let Some(s) = self.slots.iter().position(|s| s.key == (z, x, y)) {
                 at[i] = s;
@@ -431,7 +432,7 @@ impl Basemap {
         px.fill(BACKGROUND);
         self.stats.px += (w * h) as u32;
         let style = Style::of(frame.display_zoom);
-        let mut cursor = [0usize; 4];
+        let mut cursor = [0usize; SLOTS];
         let mut buf = Raster { px, w, h, written: 0 };
         for key in 0..KEYS {
             for (i, &(_, _, proj)) in tiles.iter().take(n).enumerate() {
@@ -632,8 +633,10 @@ fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
 }
 
 /// [`raster`] with the screen turned ([`Proj::rot`]): each pixel of the tile's turned box is turned back about the
-/// centre (x256) to the plane the tile is laid on, then looked up as there. One division a pixel and axis, in the
-/// box of the tile's four corners only; done once per view (a step of the heading), not per second.
+/// centre (x256) to the plane the tile is laid on, then looked up as there. Two divisions a row and axis, then the
+/// quotient steps along the row by adding (the pixel's quotient and remainder, as Bresenham does), so a pixel is
+/// about 25 cycles: adds, two compares, the bounds checks and one load and store. Only the box of the tile's four
+/// corners is visited, and the callers skip tiles off the area ([`Proj::on_screen`]).
 fn raster_turned(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
     let (c, s) = rot_cs(p.rot);
     let (c, s) = (i64::from(c), i64::from(s));
@@ -642,22 +645,39 @@ fn raster_turned(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 
     let hi = |f: fn(&(i64, i64)) -> i64| corners.iter().map(f).max().unwrap_or(0);
     let (x0, x1) = (lo(|p| p.0).clamp(0, i64::from(w)) as i32, (hi(|p| p.0) + 1).clamp(0, i64::from(w)) as i32);
     let (y0, y1) = (lo(|p| p.1).clamp(0, i64::from(h)) as i32, (hi(|p| p.1) + 1).clamp(0, i64::from(h)) as i32);
-    // the unturned 16.16 coordinate a to the tile's pixel (as in [`raster`]); None outside the tile
-    let at = |t: i64, a: i64, b: i64| {
-        let t = if a > 0 { (t - b).div_euclid(a * 16) } else { -1 };
-        usize::try_from(t).ok().filter(|&t| t < ign::SIDE)
-    };
+    // a tile axis: the 16.16 coordinate t of the pixel's centre gives the tile pixel (t - b) / (16 a), a > 0
+    let (da, db) = (p.ax * 16, p.ay * 16);
+    if da <= 0 || db <= 0 {
+        return 0;
+    }
+    // per pixel step along x (the unturned 16.16 offset changes by c, s x 65536 / 256 x 256) as quotient and remainder
+    let (sx, sy) = ((c * 256).div_euclid(da), (c * 256).rem_euclid(da));
+    let (ty, tyr) = ((s * 256).div_euclid(db), (s * 256).rem_euclid(db));
     let mut written = 0;
     for y in y0..y1 {
+        // the row's first pixel's centre from the area's, 1/256 pixel: X = c X' - s Y', Y = s X' + c Y'
+        let (rx, ry) = ((i64::from(x0) - p.half.0) * 256 + 128, (i64::from(y) - p.half.1) * 256 + 128);
+        let tx = c * rx - s * ry + (p.half.0 << 16) - p.bx;
+        let uy = s * rx + c * ry + (p.half.1 << 16) - p.by;
+        let (mut qx, mut rx) = (tx.div_euclid(da), tx.rem_euclid(da));
+        let (mut qy, mut ry) = (uy.div_euclid(db), uy.rem_euclid(db));
+        // the row's step in y: s per pixel in x (X' grows), c per ...: Y = s X' + c Y', so d/dx is s
         for x in x0..x1 {
-            // the pixel's centre from the area's, in 1/256 pixel: X = c X' - s Y', Y = s X' + c Y'
-            let (rx, ry) = ((i64::from(x) - p.half.0) * 256 + 128, (i64::from(y) - p.half.1) * 256 + 128);
-            let (ux, uy) = (c * rx - s * ry, s * rx + c * ry); // x 65536 pixel: the 16.16 offset
-            let (tx, ty) = (ux + (p.half.0 << 16), uy + (p.half.1 << 16));
-            let (Some(col), Some(row)) = (at(tx, p.ax, p.bx), at(ty, p.ay, p.by)) else { continue };
-            if let (Some(d), Some(&t)) = (px.get_mut((y * w + x) as usize), tile.get(row * ign::SIDE + col)) {
+            if let (Ok(col), Ok(row)) = (usize::try_from(qx), usize::try_from(qy))
+                && col < ign::SIDE
+                && row < ign::SIDE
+                && let (Some(d), Some(&t)) = (px.get_mut((y * w + x) as usize), tile.get(row * ign::SIDE + col))
+            {
                 *d = t;
                 written += 1;
+            }
+            (qx, rx) = (qx + sx, rx + sy);
+            if rx >= da {
+                (qx, rx) = (qx + 1, rx - da);
+            }
+            (qy, ry) = (qy + ty, ry + tyr);
+            if ry >= db {
+                (qy, ry) = (qy + 1, ry - db);
             }
         }
     }
@@ -1316,6 +1336,67 @@ pub(crate) mod tests {
         assert!(matches!(b.layer(AREA, View { cx: 1, cy: 0, mpp16: 48, rot: 0 }, ORIGIN), Layer::None));
     }
 
+    /// Turned views need more stock tiles than north up ones: at every step, centres on a grid round a tile corner
+    /// and all scales, the 3 x 3 tiles round the centre's that overlap the map are at most [`SLOTS`], so none is
+    /// dropped (a hole); five do overlap at some 45 degree steps.
+    #[test]
+    fn turned_views_keep_every_stock_tile() {
+        let (mut most, mut views) = (0, 0);
+        for mpp16 in [16, 24, 32, 48, 64, 128, 256, 512] {
+            for rot in 0..16u8 {
+                for k in 0..64i32 {
+                    let (cx, cy) = (k % 8 * 90 - 360, k / 8 * 90 - 360);
+                    let f = Frame::new(View { cx, cy, mpp16, rot }, ORIGIN, AREA.2, AREA.3);
+                    let (tx, ty) = f.centre_tile(f.zoom);
+                    let n = (-1..=1i64)
+                        .flat_map(|dy| (-1..=1i64).map(move |dx| (dx, dy)))
+                        .filter(|&(dx, dy)| {
+                            f.proj(f.zoom, (i64::from(tx) + dx) as u32, (i64::from(ty) + dy) as u32)
+                                .on_screen(AREA.2, AREA.3)
+                        })
+                        .count();
+                    (most, views) = (most.max(n), views + 1);
+                    assert!(n <= SLOTS, "{n} tiles at rot {rot}, {mpp16}, ({cx}, {cy})");
+                }
+            }
+        }
+        std::println!("most stock tiles overlapping a turned map: {most} in {views} views");
+        assert!(most >= 4, "the sweep reaches the 2 x 2 views: {most}");
+    }
+
+    /// Any step, centre (to two map widths off the tiles), scale and pack: no panic, and over the seeds both kinds of
+    /// tile are drawn in turned views (the reach count).
+    #[test]
+    fn turned_views_fuzz() {
+        let mut seed = 0x2545_f491u32;
+        let mut next = move |m: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % m
+        };
+        let (mut ign, mut stock) = (0u64, 0u64);
+        for image in [image_with_packs(), image()] {
+            let mut d = Ram(image, 0);
+            let mut b = basemap();
+            for _ in 0..60 {
+                let mpp16 = [16, 24, 32, 48, 64, 128, 256][next(7) as usize];
+                let reach = 2 * 240 * mpp16 / 16;
+                let v = View {
+                    cx: next(2 * reach as u32) as i32 - reach - 1500,
+                    cy: next(2 * reach as u32) as i32 - reach - 700,
+                    mpp16: i64::from(mpp16),
+                    rot: next(16) as u8,
+                };
+                b.render(&mut d, AREA, v, ORIGIN);
+                if let Layer::Map(px) = b.layer(AREA, v, ORIGIN) {
+                    stock += u64::from(count(px, MINOR) as u32 + count(px, MAJOR) as u32 + count(px, WATER) as u32);
+                }
+                ign += u64::from(b.stats.px) * u64::from(b.stats.ign);
+            }
+        }
+        std::println!("turned fuzz: {ign} IGN pixels written, {stock} stock feature pixels");
+        assert!(ign > 100_000 && stock > 10_000, "the fuzz draws turned tiles: {ign}, {stock}");
+    }
+
     /// No volume on the card: NO MAP, and no more tries.
     #[test]
     fn no_volume_no_map() {
@@ -1438,7 +1519,6 @@ pub(crate) mod tests {
         assert!(k * 1024 >= need, "MAP {k} KB, the basemap and the route buffer need {need} B");
     }
 
-    /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m,
     /// A view turned by a quarter (rot 4, riding east) is the north up view turned about the area's centre: the IGN
     /// raster's pixels agree (all but the seam of the half pixel), and a 22.5 degree step draws the screen.
     #[test]
@@ -1472,6 +1552,7 @@ pub(crate) mod tests {
         assert!(b.stats.px > 40_000, "a 22.5 degree step draws the screen: {}", b.stats.px);
     }
 
+    /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m,
     /// 3 m and 4 m a pixel (zooms 16 at 305 and 204 pixels wide, 15 at 305); "(c) IGN" in the corner; held tiles
     /// not read again; the tile missing from the pack shows stock's map under it.
     #[test]

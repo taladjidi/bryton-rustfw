@@ -124,6 +124,9 @@ pub enum Gesture {
 pub const PINCH_RATIO: (u32, u32) = (3, 2);
 /// Two fingers closer than this, pixels, are not a pinch (one broad fingertip, or a glitch).
 pub const PINCH_MIN_PX: u32 = 30;
+/// The second finger must be there this many samples in a row before two fingers act: one sample of it (a palm, a
+/// glitch) never drops a tap, a swipe or a drag.
+pub const PINCH_SAMPLES: u8 = 2;
 
 /// A finger on the panel.
 #[derive(Clone, Copy)]
@@ -143,6 +146,8 @@ pub struct Recogniser {
     drag: Option<((u16, u16), (i16, i16))>,
     /// Two fingers are down: the squared distance they are compared with (from landing or the last pinch).
     span: Option<u32>,
+    /// Consecutive samples with a second finger: it counts from [`PINCH_SAMPLES`].
+    second: u8,
 }
 
 impl Recogniser {
@@ -161,10 +166,14 @@ impl Recogniser {
     /// swipe and drag are dropped (it is a pinch), until both are lifted, and the distance between them gives
     /// [`Gesture::Pinch`] each time it changes by [`PINCH_RATIO`] from where it was.
     pub fn feed2(&mut self, p: Option<(u16, u16)>, q: Option<(u16, u16)>, dt_ms: u32) -> Option<Gesture> {
-        let (Some(p), Some(q)) = (p, q) else {
-            self.span = None;
+        let (Some(p), Some(q)) = (p, q.filter(|_| p.is_some())) else {
+            (self.span, self.second) = (None, 0);
             return self.feed(p, dt_ms);
         };
+        self.second = self.second.saturating_add(1);
+        if self.second < PINCH_SAMPLES {
+            return self.feed(Some(p), dt_ms); // not yet two fingers: the first one's gestures stay whole
+        }
         self.feed(Some(p), dt_ms);
         if let Some(f) = &mut self.finger {
             (f.dragged, f.held) = (false, true); // no tap or swipe at the release, no pan
@@ -260,6 +269,7 @@ mod tests {
     fn pinch_by_distance_and_no_tap_after() {
         let mut r = Recogniser::default();
         let at = |r: &mut Recogniser, d: u16| r.feed2(Some((100, 100)), Some((100 + d, 100)), 50);
+        assert_eq!(at(&mut r, 60), None, "the second finger's first sample");
         assert_eq!(at(&mut r, 60), None, "landed");
         assert_eq!(at(&mut r, 80), None, "1.33 times");
         assert_eq!(at(&mut r, 90), Some(Gesture::Pinch(true)), "1.5 times");
@@ -270,8 +280,29 @@ mod tests {
         assert_eq!(r.take_drag(), None);
         let mut r = Recogniser::default();
         assert_eq!(at(&mut r, 10), None);
+        assert_eq!(at(&mut r, 10), None);
         assert_eq!(at(&mut r, 40), None, "from 10 px apart the base follows");
         assert_eq!(at(&mut r, 20), Some(Gesture::Pinch(false)), "halved from 40");
+    }
+
+    /// A one-sample blip of a second finger never drops a tap, a swipe or a drag.
+    #[test]
+    fn a_second_finger_blip_changes_nothing() {
+        let blip = |points: &[(u16, u16)], at: usize| {
+            let mut r = Recogniser::default();
+            let mut out: Vec<_> = points
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &p)| r.feed2(Some(p), (i == at).then_some((p.0 + 80, p.1)), 50))
+                .collect();
+            out.extend(r.feed2(None, None, 50));
+            (out, r.take_drag())
+        };
+        assert_eq!(blip(&[(100, 100), (103, 98), (101, 99)], 1).0, [Gesture::Tap(101, 99)], "a tap still taps");
+        let swipe: Vec<_> = (0..=4).map(|i| (120 - 15 * i, 160)).collect();
+        assert_eq!(blip(&swipe, 2).0, [Gesture::Swipe(Dir::Left)], "a swipe still swipes");
+        let drag: Vec<_> = (0..=2).map(|i| (100 + 12 * i, 100 + 5 * i)).collect();
+        assert_eq!(blip(&drag, 1).1, Some(((100, 100), (24, 10))), "a drag still pans");
     }
 
     /// The drag released is kept once, whether it was a swipe or too short for one; a tap or a hold leaves none.

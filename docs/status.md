@@ -383,6 +383,14 @@ A feature not listed here was seen on the unit.
   on the card, with Alpha1 from a real strap; `tools/sync.py` against the real Intervals.icu and Strava (DFA a1
   charted from the upload), and the workouts it writes listed in WORKOUTS (and by stock, which may want the `.json`
   beside them).
+- **Map HEADING UP and PINCH (DISPLAY > MAP, touch.rs `feed2`)**: sim only. Still to see on the unit:
+  - heading up: on a ride, the top follows the course in steps, stays put at a stop, the red north arrow points the
+    right way; the time awake of one step (`tools/dev.py info`, DWT cycle counter). The sim says one map redraw of
+    79 k panel pixels about every 18 s on a winding ride. On an IGN view add `raster_turned`: about 25 cycles a pixel
+    over the tiles' boxes, so about 2.5 M cycles (6 ms at 400 MHz), estimated by counting operations (two divisions
+    a row, then adds), not measured;
+  - two fingers (pinch): whether the chip reports both (slot 2 at 0x16, inferred from the protocol doc and 0x3f = 5)
+    and a pinch steps the zoom one level; the second finger must show in 2 samples in a row.
 - **IGN maps** (`\Rustfw\Maps`): the packs found, a view drawn from them, its time (simulated: one index sector and
   about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
   decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the

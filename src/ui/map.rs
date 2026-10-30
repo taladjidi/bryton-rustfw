@@ -866,7 +866,7 @@ pub fn draw(
     }
     scale_bar(&mut c, k, area, &v);
     if v.rot != 0 {
-        // heading up: where north is, a red tip with a white one opposite, left under "NO MAP"'s line
+        // heading up: where north is, a red arrow with a black outline, left under "NO MAP"'s line
         let n = Arrow { x: area.0 + 20, y: area.1 + 40, dir: (16 - usize::from(v.rot % 16)) % 16, stale: false };
         triangle(&mut c, k, n.corners(ARROW + 3), ui::BLACK);
         triangle(&mut c, k, n.corners(ARROW), 0xf800);
@@ -1138,6 +1138,27 @@ mod tests {
         assert_eq!(Arrow::of(&v, area, &t).unwrap().dir, 0, "on course: up");
         t.heading = 18_000_000;
         assert_eq!(Arrow::of(&v, area, &t).unwrap().dir, 4, "heading south while the map's top is east: right");
+    }
+
+    /// A drag moves the map with the finger whatever step the map is turned to: finger up moves the content up, and
+    /// at rot 4 (top east) up is east, so the centre goes west; at 12 east; at 8 (top south) north; at 0 south.
+    #[test]
+    fn pan_follows_the_finger_turned() {
+        let area = (0, 0, 240, 296);
+        let mut t = Track::new();
+        t.add(0, 0, 0);
+        for (rot, want) in [(0, (0, -50)), (4, (-50, 0)), (8, (0, 50)), (12, (50, 0))] {
+            let v = View { cx: 0, cy: 0, mpp16: 16, rot };
+            let shown = Shown { zoomed: true, view: Some(v), ..Shown::default() };
+            assert_eq!(pan(&t, area, None, &shown, (0, -50)), Some(want), "rot {rot}, finger up");
+        }
+        let v = View { cx: 0, cy: 0, mpp16: 16, rot: 4 };
+        let shown = Shown { zoomed: true, view: Some(v), ..Shown::default() };
+        assert_eq!(
+            pan(&t, area, None, &shown, (50, 0)),
+            Some((0, 50)),
+            "rot 4, finger right: the top is east, so the centre goes north"
+        );
     }
 
     /// The step rule: a few degrees do not turn the map, nor a turn before 3 fixes have passed, nor a stop; a bigger
