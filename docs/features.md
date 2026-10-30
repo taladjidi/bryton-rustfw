@@ -265,34 +265,41 @@ switch a minute, a full redraw at each. The light sensor measures while AUTO is 
 **Theme.** THEME in SETTINGS > DISPLAY (Select) goes through AUTO (when on, see above), DARK (the colours as they were), OUTDOOR (lighter notes
 and lines, brighter zones), LIGHT (black on white, for the sun) and the `.ini` files of `\Rustfw\Themes` on the drive (up to 14, names of letters, digits,
 `-` and `_`, 12 characters at most), drawing the screen again at once. The choice is kept by name in settings.bin (not
-in the backup registers), and a file is read again at each start. A file is an INI, read, never written:
+in the backup registers), and a file is read again at each start. A file is an INI, read, never written. `tools/theme.py examples` writes the three built-in themes as files with every key
+set (a comment line per key); copy one to `\Rustfw\Themes` and edit the copy. The keys are in `[theme]`, `[metrics]` and
+`[colors]`; the defaults are DARK's values in those files. `[metrics]` values are whole px, clamped into their range.
+Colours are `#RRGGBB`. A key left out keeps the base's value.
 
-```ini
-[theme]
-version = 1          ; above 1 is refused (THEME TOO NEW)
-name = SUNNY
-overview = classic   ; classic (the TODAY card) or fields (a 2 x 2 table of time, next workout, year km, week hours in its place; the Workout cell shows the step counter or DONE, not the card's done mark)
-base = outdoor       ; dark, outdoor or light: the values the file does not give
-[metrics]            ; whole px, outside the range is clamped, left out keeps the base's (8, 3, 44)
-zone_bar = 8         ; height of a field's zone bar, 4 to 8
-frame = 3            ; the page editor's frame round a cell, 1 to 4
-menu_row = 44        ; menu row pitch, 44 to 56 (a taller row shows fewer rows: 4 at 56)
-[colors]             ; #RRGGBB, any key left out keeps the base's
-background = #000000 ; every screen's background
-text = #FFFFFF       ; labels and values
-line = #393D39       ; menu row lines, empty bars
-dim = #848284        ; notes, axes
-accent = #FFA500     ; the selected row, banners, frames
-on_accent = #000000  ; text on the accent
-alarm = #FF0000      ; alarm banners, BACK, bad readings
-on_alarm = #FFFFFF   ; text on the alarm
-ok = #00FF00         ; the strip's good dots
-warn = #FFFF00       ; the trainer's states
-ferris = #F74D00     ; Ferris
-cog = #C5C2C5        ; the overview's menu cog
-course = #CE00FF     ; the course on the map
-zone1 = #4A9283      ; zone 1 to 7 (zone2 ..): power and heart rate zones, grade, gauge, W' balance
-```
+| Key | Meaning | Range |
+|---|---|---|
+| `version` | the format; above 1 the file is refused (THEME TOO NEW) | 1 |
+| `name` | a label; THEME shows the file's own name | any text |
+| `base` | the built-in theme the keys left out are taken from | dark, outdoor or light |
+| `overview` | the overview's layout: classic (the TODAY card over four fields) or fields (a 2 x 2 table; the Workout cell shows the step counter or DONE) | classic or fields |
+| `zone_bar` | height of a field's zone bar, px | 4 to 8 |
+| `frame` | the page editor's frame round a cell, px | 1 to 4 |
+| `menu_row` | menu row pitch, px; a taller row shows fewer rows (4 at 56) | 44 to 56 |
+| `background` | every screen's background | colour, 4.5:1 for the text on it |
+| `text` | labels and values | colour, 4.5:1 on background |
+| `line` | menu row lines, empty bars | colour, 3:1 on background |
+| `dim` | notes and axes | colour, 4.5:1 on background |
+| `accent` | the selected row, banners, frames | colour; on_accent on it needs 4.5:1 |
+| `on_accent` | text on the accent | colour, 4.5:1 on accent |
+| `alarm` | alarm banners, BACK, bad readings: the only red | colour, 4.5:1 on background |
+| `on_alarm` | text on the alarm | colour, 4.5:1 on alarm |
+| `ok` | the strip's good dots | colour, 4.5:1 on background |
+| `warn` | the trainer's states | colour, 4.5:1 on background |
+| `ferris` | Ferris | colour, 3:1 on background |
+| `cog` | the overview's menu cog | colour, 3:1 on background |
+| `course` | the course on the map | colour, 3:1 on background |
+| `zone1` | power and heart rate zone 1 (also grade, gauge, W' balance) | colour, 3:1 on background, all zones distinct |
+| `zone2` | power and heart rate zone 2 | colour, 3:1 on background, all zones distinct |
+| `zone3` | power and heart rate zone 3 | colour, 3:1 on background, all zones distinct |
+| `zone4` | power and heart rate zone 4 | colour, 3:1 on background, all zones distinct |
+| `zone5` | power and heart rate zone 5 | colour, 3:1 on background, all zones distinct |
+| `zone6` | power and heart rate zone 6 | colour, 3:1 on background, all zones distinct |
+| `zone7` | power and heart rate zone 7 | colour, 3:1 on background, all zones distinct |
+
 
 A value that is not a colour or a key that is not in the list is ignored. A file that is not a theme, over 4 KB, with a
 version above 1, or that fails the whole-theme checks is refused, with the reason in a notice, and DARK is drawn:

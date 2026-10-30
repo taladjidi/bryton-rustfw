@@ -59,9 +59,9 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
   one switch a minute, a full redraw each. Agent: implementer.
 - ~~**T6. Overview variants**~~ done, sim only (theming.md phase 3): `[theme] overview = classic | fields` (ui/overview.rs
   `TABLE`, `table_box`), each a table of boxes checked like page.rs at both ends of the metrics.
-- **T7. Tools and docs**: `tools/theme.py` writes the built-in themes as example files to a mounted drive and
-  renders a file through the simulator (`preview FILE`); features.md lists every key, kept in step by a test.
-  Agent: mechanic.
+- ~~**T7. Tools and docs**~~ done, 2026-10-30: `tools/theme.py examples` writes the built-in themes as example files,
+  `preview FILE` draws a file through the simulator; features.md's theme table is checked against the parser by a test
+  (theming.md, section 4).
 - On the unit: OUTDOOR and LIGHT read in the sun, THEME AUTO switching at dusk (status.md lines).
 
 ### Block 2: live segments (docs/segments.md)

@@ -199,12 +199,23 @@ every test that compares a colour. For colours alone it buys nothing the table d
 - The ST7789's inversion (INVOFF instead of INVON) is not a theme: it inverts every colour, the zones and the map
   included.
 
-**Making one.** A new section in docs/features.md lists every key, its default and what it colours (the table
-above, kept in step by a test). `tools/sync.py themes` (or a small `tools/theme.py`) writes the built-in themes as
-example files to `\Rustfw\Themes` on the mounted drive, to copy and edit; or the rider copies a file over USB.
-`tools/theme.py preview FILE` could render it on the computer through the simulator (`cargo test` with the file
-path in an environment variable), so a theme is seen before the ride. No theme with a place or a person in it
-enters the repository.
+**Making one (T7, built).** docs/features.md's theme table lists every key with its meaning and range; a test
+(`features_lists_every_theme_key`) fails when that table and the parser's keys differ.
+1. `python3 tools/theme.py examples OUT_DIR` writes `DARK.ini`, `OUTDOOR.ini` and `LIGHT.ini`: each built-in theme with
+   every key set and a comment line above each. It writes to a folder you name, never to a mounted drive (`/Volumes`)
+   unless you pass `--drive`.
+2. Copy one to `\Rustfw\Themes\` on the drive, rename it (12 characters at most,
+   letters, digits, `-` and `_`), and edit the copy. A key you delete keeps the base's value (`base = dark, outdoor or
+   light`).
+3. `python3 tools/theme.py preview FILE [--out PNG]` runs the ignored test `theme_preview` (`THEME_FILE` names the file):
+   the overview, a ride page and the menu drawn by the simulator, as `target/sim/theme_preview_*.bmp`, and one PNG of
+   the three when PIL is installed. A file the checks refuse makes the test fail with the reason.
+4. Put it on the drive, then pick it in SETTINGS > DISPLAY > THEME.
+
+The fixture `test-data/themes/` is `examples` run into the repository: `tools/theme.py selftest` checks it equals a fresh
+build, and `examples_parse_back_to_the_builtins` (ui/theme.rs) parses it back to the built-in themes, so the Python
+values and the Rust constants cannot drift apart unnoticed. No theme with a place or a person in it enters the
+repository.
 
 **Picking.** SETTINGS > DISPLAY > THEME: the row shows the name; it opens a list (the built-ins, then the files,
 16 at most) as COURSES does. A tap applies it at once (full redraw); `settings.bin` is written when no ride is open.

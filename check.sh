@@ -57,6 +57,7 @@ python3 -I tools/segments.py selftest  # the live segment writer on synthetic ef
 python3 -I tools/s810_probe.py selftest  # the S810 owner's probe on a made-up volume: nothing personal comes out
 python3 -I tools/route_pack.py selftest  # the synthetic map file (test-data/route) built and read back by an independent reader
 python3 -I tools/ign_pack.py selftest
+python3 -I tools/theme.py selftest  # the example theme files: the committed fixture equals a fresh build (ui/theme.rs parses it)
 # the test rides decoded by independent readers (fitdecode, Garmin's FIT SDK): FIT_PYTHON may name a Python that has
 # them (a venv); skipped when neither has them
 PY="${FIT_PYTHON:-python3}"
