@@ -4267,6 +4267,7 @@ fn recovery_records() {
                 ride,
                 discard: next().is_multiple_of(2),
                 checked: (next().is_multiple_of(2)).then(|| next() as u16),
+                lap: core::array::from_fn(|_| next()),
             };
             recovery_sectors(&mut next, &r, r.to_sector(), Rec::from_sector, &mut recorder);
 

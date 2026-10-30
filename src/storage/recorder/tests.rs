@@ -221,6 +221,35 @@ fn saved(img: &[u8], name: &str) -> Result<(Vec<u32>, bool), std::string::String
     }
 }
 
+/// Each lap of the saved file `name` carries the average and maximum heart rate (fields 15, 16) and power (19, 20)
+/// of the file's own records in it (from the lap before's time, excluded, to its own), FIT's invalid when none
+/// had one: after a cut and a resume too, the lap's sums before the cut kept in the recovery record. The laps.
+fn laps_match_records(img: &[u8], name: &str, what: &str) -> usize {
+    use crate::fit::tests::field;
+    let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let v = crate::fat::tests::read_all(&mut fat, &mut d, name).unwrap();
+    let m = crate::fit::tests::decode(&v).unwrap();
+    let mut from = 0;
+    let laps: Vec<_> = m.iter().filter(|x| x.0 == 19).collect();
+    for lap in &laps {
+        let to = field(lap, 253).unwrap();
+        let recs: Vec<_> =
+            m.iter().filter(|x| x.0 == 20 && (from + 1..=to).contains(&field(x, 253).unwrap())).collect();
+        for (f, avg, max, none) in [(3, 15, 16, 0xff), (7, 19, 20, 0xffff)] {
+            let x: Vec<u64> = recs.iter().filter_map(|r| field(r, f)).collect();
+            let want = if x.is_empty() {
+                (none, none)
+            } else {
+                (x.iter().sum::<u64>() / x.len() as u64, *x.iter().max().unwrap())
+            };
+            assert_eq!((field(lap, avg), field(lap, max)), (Some(want.0), Some(want.1)), "{what}: lap to {to}, {f}");
+        }
+        from = to;
+    }
+    laps.len()
+}
+
 const SAVED: &str = "Activities/261023100000.fit";
 const SAVED_FULL: &str = "Rustfw/Activities/261023100000.fit";
 
@@ -323,6 +352,8 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
     let total = full.written;
     let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
     let (mut resumed, mut saved_at_boot, mut nothing, mut max_lost, mut twice_cuts) = (0, 0, 0, 0, 0);
+    assert_eq!(laps_match_records(&full.img, SAVED, "uncut"), 2);
+    let mut mid_lap = 0; // resumed in the second lap, its sums from the record
     for cut in 0..total {
         let what = std::format!("cut {cut} of {total}");
         let mut d =
@@ -362,6 +393,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
                 assert_eq!(name, NAME);
                 assert_eq!((r.profile(), r.by_hand()), (profile, by_hand), "{what}: profile back");
                 resumed += 1;
+                mid_lap += usize::from(w[0] > LAP && best_rec(&cut_img).lap[1] > 0);
                 let from = w[0] + 1;
                 let from = if (PAUSE + 1..RESUME).contains(&from) { RESUME } else { from };
                 assert!(ride(&mut r, &mut d, from).is_some(), "{what}");
@@ -372,12 +404,14 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
                 let lost = all.len() - times.len();
                 assert!(lost <= CHECKPOINT_S as usize, "{what}: {lost} s lost");
                 assert!(times.iter().all(|t| all.contains(t)), "{what}");
+                assert_eq!(laps_match_records(&d.img, SAVED, &what), 2, "{what}");
             }
             Outcome::Saved(name) => {
                 assert_eq!(name, NAME);
                 saved_at_boot += 1;
                 let (times, session) = saved(&d.img, SAVED).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(session && times == all, "{what}: the whole ride");
+                assert_eq!(laps_match_records(&d.img, SAVED, &what), 2, "{what}");
                 assert_eq!(sub_sport(&d.img, SAVED), sub, "{what}");
             }
             Outcome::Nothing => {
@@ -402,6 +436,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
          checkpoint; lost clusters at most {max_lost}; {twice_cuts} cuts of a reboot"
     );
     assert!(resumed > 50 && saved_at_boot > 0);
+    assert!(mid_lap > 5, "{mid_lap} resumes in the second lap");
     assert!(max_lost <= 2);
 }
 
@@ -1326,7 +1361,17 @@ fn a_ride_resumed_on_a_full_card_is_saved() {
 fn a_damaged_record_is_refused() {
     let r = |seq, phase| {
         let ride = [seq; RIDE_WORDS];
-        Rec { seq, phase, name: NAME, cluster: 7, fit: [0; RECORD_LEN], ride, discard: false, checked: None }
+        Rec {
+            seq,
+            phase,
+            name: NAME,
+            cluster: 7,
+            fit: [0; RECORD_LEN],
+            ride,
+            discard: false,
+            checked: None,
+            lap: [seq; 9],
+        }
     };
     let s = r(5, Phase::Recording).to_sector();
     assert_eq!(Rec::from_sector(&s), Some(r(5, Phase::Recording)));

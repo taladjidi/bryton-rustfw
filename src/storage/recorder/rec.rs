@@ -3,8 +3,12 @@
 
 use super::{Local, Phase, TAG};
 use crate::fat::{Error, SECTOR};
-use crate::fit::{self, RECORD_LEN};
+use crate::fit::{self, LAP_WORDS, RECORD_LEN};
 use crate::ride::RIDE_WORDS;
+
+/// Where [`Rec::lap`] starts: after the ride words, in bytes every build before left zero.
+const LAP_AT: usize = 192;
+const _: () = assert!(128 + 4 * RIDE_WORDS <= LAP_AT && LAP_AT + 4 * LAP_WORDS <= SECTOR - 2);
 
 /// One recovery record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +27,9 @@ pub(crate) struct Rec {
     /// never writes: a repair a cut tore is redone, never on a chain whose sector 1 changed since (another file's).
     /// 0 in the records of the builds before it, which ignore these bytes (only the record's CRC covers them).
     pub(crate) checked: Option<u16>,
+    /// The current lap's sums ([`fit::Writer::lap_words`]), bytes 192..228, after the ride words: zeros in the
+    /// records of the builds before them, which ignore these bytes (the lap then averages from the resume).
+    pub(crate) lap: [u32; LAP_WORDS],
 }
 
 impl Rec {
@@ -39,6 +46,9 @@ impl Rec {
         s[24..28].copy_from_slice(&self.cluster.to_le_bytes());
         s[32..32 + RECORD_LEN].copy_from_slice(&self.fit);
         for (c, w) in s[128..128 + 4 * RIDE_WORDS].chunks_exact_mut(4).zip(self.ride) {
+            c.copy_from_slice(&w.to_le_bytes());
+        }
+        for (c, w) in s[LAP_AT..LAP_AT + 4 * LAP_WORDS].chunks_exact_mut(4).zip(self.lap) {
             c.copy_from_slice(&w.to_le_bytes());
         }
         let crc = fit::crc(0, &s[..SECTOR - 2]);
@@ -70,6 +80,7 @@ impl Rec {
             ride: core::array::from_fn(|k| word(128 + 4 * k)),
             discard: s[22] == 1,
             checked: (s[23] == 1).then(|| u16::from_le_bytes([s[28], s[29]])),
+            lap: core::array::from_fn(|k| word(LAP_AT + 4 * k)),
         };
         r.name.copy_from_slice(&s[9..21]);
         r.fit.copy_from_slice(&s[32..32 + RECORD_LEN]);
