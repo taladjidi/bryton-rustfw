@@ -344,6 +344,7 @@ impl App {
         } else if boot != s.words {
             self.save_page_registers_from(b, &s); // cut between the file and the registers: put right
         }
+        self.sw.meta = s.meta;
         self.indoor = s.indoor.unwrap_or_else(page::Set::indoor_default);
         self.mtb = s.mtb.unwrap_or_else(page::Set::mtb_default);
         self.set_shown = self.ride_profile(); // the pages on screen are drawn below
@@ -361,6 +362,7 @@ impl App {
         }
         self.more = more;
         self.page_count = n;
+        self.sw.meta.keep_one(n);
         self.plot_taps = [[None; page::CELLS]; PAGES + 1];
         if let Screen::Ride(k) = self.screen {
             if k < PAGES && !self.page_on(k) {
@@ -395,6 +397,7 @@ impl App {
             more: self.more,
             indoor: Some(self.indoor),
             mtb: Some(self.mtb),
+            meta: self.sw.meta,
         };
         // no volume (a card stock never formatted, the tests' blank one): the registers only, nothing to say
         let Some(r) = self.write_copy(b, page::FILE, s.seq % 2, &s.to_sector()) else {
@@ -623,6 +626,9 @@ impl App {
             (*p, *m) = (new, None);
         }
         *count += 1;
+        if which == ride::Profile::Road {
+            self.sw.meta.insert(at);
+        }
         self.pages_changed(b);
         let mut l = Line::<20>::new();
         l.push_str("PAGE ");
@@ -642,6 +648,11 @@ impl App {
             more.copy_within(e.page + 1..PAGES, e.page);
             more[PAGES - 1] = None;
             *count -= 1;
+            if which == ride::Profile::Road {
+                self.sw.meta.remove(e.page);
+                let n = self.page_count;
+                self.sw.meta.keep_one(n);
+            }
             self.pages_changed(b);
         }
         self.leave_editor(b, false);

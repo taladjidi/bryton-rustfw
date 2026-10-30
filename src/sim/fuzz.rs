@@ -1571,6 +1571,9 @@ fn menu_tree_by_chance() {
                 assert!(s < app.rows(m).max(1), "{m:?} row {s}: inside the menu");
                 let name = std::format!("{m:?}");
                 *reached.entry(name.split('(').next().unwrap_or("").into()).or_default() += 1;
+                // the page switch rows (SHOW, MOVE, RENAME) and AUTO SCROLL, selected
+                let ops = matches!(app.row(m, s), Some(crate::menu::Row::PageOp(..) | crate::menu::Row::AutoScroll));
+                *reached.entry("switch rows".into()).or_default() += u32::from(ops);
             }
             rides += u32::from(app.screen() == Screen::Summary);
             for _ in 0..1 + b % 3 {
@@ -1622,6 +1625,7 @@ fn menu_tree_by_chance() {
     for m in all {
         assert!(reached.contains_key(m), "{m} never reached: {reached:?}");
     }
+    assert!(reached.get("switch rows").is_some_and(|&n| n > 10), "page switch rows reached: {reached:?}");
     assert!(acts > 50 && rides > 5, "{acts} settings stored, {rides} rides ended");
 }
 
@@ -1769,6 +1773,7 @@ fn pages_file() {
     use crate::page::{Page, Saved};
     use crate::ui::Field;
     let (mut good, mut bad, mut more_read, mut indoor_read, mut mtb_read) = (0u32, 0u32, 0usize, 0usize, 0usize);
+    let mut meta_read = 0usize;
     let p = Page::preset(5, [Field::Hr; 8]).unwrap();
     let whole = Saved {
         seq: 9,
@@ -1779,6 +1784,7 @@ fn pages_file() {
         more: [None; crate::PAGES],
         indoor: Some(crate::page::Set::indoor_default()),
         mtb: Some(crate::page::Set::mtb_default()),
+        meta: crate::page::Meta::DEFAULT,
     }
     .to_sector();
     let mut sim = super::Sim::new(9, 0, 0);
@@ -1882,6 +1888,23 @@ fn pages_file() {
             let crc = crate::fit::crc(ind_crc, &s[mtb..mtb_end]);
             let crc = if seed % 17 == 0 { crc ^ 1 } else { crc };
             s[mtb_end..mtb_end + 2].copy_from_slice(&crc.to_le_bytes());
+            // and the switches behind that: flags (the present bit now and then missing), an OFF mask, names of random
+            // codes (now and then out of the alphabet), a CRC chained to the MTB part's (now and then wrong)
+            let meta = mtb_end + 2;
+            let meta_end = meta + 2 + crate::PAGES * 3;
+            s[meta] = if seed % 19 == 0 { s[meta] & 0x7f } else { s[meta] | 0x80 };
+            for (k, name) in s[meta + 2..meta_end].chunks_exact_mut(3).enumerate() {
+                // four character codes of the alphabet (37 of 64 values), now and then raw bytes
+                let codes = bytes(seed * 7 + k as u32, 4);
+                let bits = codes.enumerate().fold(0u32, |acc, (i, x)| acc | (u32::from(x) % 37) << (6 * i));
+                if seed % 23 != 0 {
+                    name.copy_from_slice(&bits.to_le_bytes()[..3]);
+                }
+            }
+            let mtb_good = crate::fit::crc(ind_crc, &s[mtb..mtb_end]);
+            let crc = crate::fit::crc(mtb_good, &s[meta..meta_end]);
+            let crc = if seed % 29 == 0 { crc ^ 1 } else { crc };
+            s[meta_end..meta_end + 2].copy_from_slice(&crc.to_le_bytes());
         }
         let mut file = [0u8; 1024];
         file[..512].copy_from_slice(&s);
@@ -1891,6 +1914,9 @@ fn pages_file() {
                 assert!(saved.pages[..saved.count].iter().all(|p| p.well_formed() && p.roomy()));
                 assert!(saved.more.iter().flatten().all(|p| p.well_formed() && p.roomy()));
                 more_read += saved.more.iter().flatten().count();
+                assert!(saved.meta.off < 1 << crate::PAGES && saved.meta.auto < 4);
+                assert!(saved.meta.names.iter().flatten().all(|c| crate::page::ALPHABET.contains(c)));
+                meta_read += usize::from(saved.meta != crate::page::Meta::DEFAULT);
                 if let Some(m) = saved.mtb {
                     assert!((1..=crate::page::MTB_PAGES).contains(&m.count));
                     assert!(m.pages[..m.count].iter().all(|p| p.well_formed() && p.roomy()));
@@ -1954,6 +1980,7 @@ fn pages_file() {
     assert!(good > 20 && bad > 1000 && drawn > 20 && more_read > 20, "{good} {bad} {drawn} {more_read}");
     assert!(indoor_read > 20, "the indoor part reached: {indoor_read}");
     assert!(mtb_read > 20, "the MTB part reached: {mtb_read}");
+    assert!(meta_read > 20, "the switches part reached: {meta_read}");
 }
 
 /// Keys and taps by chance in the page editor and its actions (app/editor.rs), with a ride started and paused at

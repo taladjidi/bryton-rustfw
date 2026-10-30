@@ -97,8 +97,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - alerts: ~~power, cadence and speed high / low, heart rate low; reminders by distance, kcal and kJ; the DFA a1 alert
   at the aerobic threshold (patch P9)~~ (done, sim); a sunset alert;
 - laps: ~~auto lap by distance or time, the lap summary banner~~ done, sim (features.md); the lap list of a past ride (sonnet);
-- pages: switched off and reordered, renamed, auto scroll, a tap on a field opens Quick Status with chosen fields,
-  swipe up to go home, the Page key acting on the press (patch P14);
+- pages: ~~switched off and reordered, renamed, auto scroll, swipe up to go home~~ done, sim (features.md); a tap on a field opens Quick Status with chosen fields,
+  the Page key acting on the press (patch P14);
 - start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start (sonnet);
 - workouts: the next-step strip instead of a popup (patch P3), two targets per step;
 - zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;

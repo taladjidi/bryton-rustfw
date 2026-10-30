@@ -214,6 +214,7 @@ or write waiting and no movement; details: docs/power.md.
   its field count, six fields at most). At a start the registers give the pages at once, the file 2 s later (the
   card is not touched at boot) and wins, unless another build changed the registers since: then its pages there
   win, the file's others kept. A build that may not write the card keeps its pages (three) in the registers only.
+- **Page switches (PAGES > ROAD PAGES > a page):** SHOW (ON or OFF: Page and the swipes skip a page that is OFF; at least one stays ON), MOVE UP and MOVE DOWN (the page swaps places with its neighbour, its MORE variant, switch and name with it; every set), RENAME (a name of up to four characters, A to Z, 0 to 9 and space: Page steps the character, Start goes to the next, Back ends; the name shows in the list and the page's menu title, "PAGE n" while empty). PAGES > AUTO SCROLL (OFF, 5, 10, 20 s): during a ride the next ON ride page comes by itself; it waits on the overview, a menu, a banner, MORE, the CLIMB, course and workout pages, and a key or a touch starts the count again. Switches and names are the road set's and are kept in `pages.bin` after the MTB part (a flags byte, the OFF mask, six names of 24 bits, a CRC of their own; an older file gives every page ON and no names; the sector has room for four characters, not eight). A swipe up on a ride page shows its MORE variant, a second one (or one on the course, workout or climb page) goes home, to the overview.
 - **Pages per profile:** an INDOOR ride (a trainer heard at Start, or INDOOR set by hand or in BIKE) has its own set
   of up to six pages beside the road set: the trainer (3 s power large, the trainer's target, heart rate, cadence,
   timer, work), the power numbers (average, NP, W' balance, IF, work, TSS) and the power and heart rate graphs, with
@@ -234,7 +235,7 @@ or write waiting and no movement; details: docs/power.md.
 |---|---|---|---|
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
-| swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE | the next / previous screen of rows (up closes the quick panel) | one step up / down |
+| swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE, then the overview | the next / previous screen of rows (up closes the quick panel) | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
 | tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
 

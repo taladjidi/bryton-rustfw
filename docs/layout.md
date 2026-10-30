@@ -24,6 +24,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
+  - `pagemeta.rs`: the page switches (SHOW, MOVE UP / DOWN, RENAME, the road set's names and OFF mask in `pages.bin`) and AUTO SCROLL.
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
     the ride card, the basemap, `render_row` (screenshots). `fields.rs`: a ride field's text and colour, number
     formatting. `graphs.rs`: the graph fields and the course profile.
@@ -253,6 +254,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
+  `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's
