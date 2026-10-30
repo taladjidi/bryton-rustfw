@@ -96,6 +96,7 @@ fn sample(t: u32) -> Sample {
         trainer: crate::fit::tests::trainer(t),
         profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
+        auto_paused: false,
     }
 }
 
@@ -1370,7 +1371,7 @@ fn a_damaged_record_is_refused() {
             ride,
             discard: false,
             checked: None,
-            lap: [seq; 9],
+            lap: [seq; crate::fit::LAP_WORDS],
         }
     };
     let s = r(5, Phase::Recording).to_sector();
@@ -1383,6 +1384,12 @@ fn a_damaged_record_is_refused() {
     assert_eq!((c.to_sector()[23], s[23]), (1, 0));
     assert_eq!(Rec::from_sector(&c.to_sector()), Some(c));
     assert_eq!(Rec::from_sector(&d.to_sector()), Some(d));
+    // the lap sums, bytes 192..228: zero in the records of the builds before them, read as no sums (no new tag)
+    let mut old = s;
+    old[192..228].fill(0);
+    let crc = crate::fit::crc(0, &old[..SECTOR - 2]);
+    old[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+    assert_eq!(Rec::from_sector(&old).map(|r| r.lap), Some([0; crate::fit::LAP_WORDS]));
     for at in [0, 4, 8, 9, 24, 40, 100, 511] {
         let mut bad = s;
         bad[at] ^= 0x10;

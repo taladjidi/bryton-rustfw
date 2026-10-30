@@ -323,7 +323,10 @@ const RECORD_MAX: usize = 6 + 3 * 10 + 10 + 1 + 27 + 7 + 2;
 /// RR intervals waiting for an `hrv` message ([`Recorder::beat`]): 16 s at 150 bpm, while the buffer has no room.
 pub const BEATS_QUEUED: usize = 40;
 /// Record tag and layout version: change it with any change of [`Rec`]'s layout or of `ride::Ride::to_words`
-/// (the record also holds [`RIDE_WORDS`], byte 21, checked).
+/// (the record also holds [`RIDE_WORDS`], byte 21, checked). One exception: a new field may go in bytes every
+/// earlier build writes as zero (`to_sector` starts from a zeroed sector, the CRC covers the whole sector and
+/// earlier builds ignore those bytes), provided all zeros reads as "absent" and is harmless: `checked` (bytes 23,
+/// 28..30), the lap sums (192..228, rec.rs `LAP_AT`).
 const TAG: [u8; 4] = *b"RFR2";
 const _: () = assert!(128 + 4 * RIDE_WORDS <= SECTOR - 2 && RIDE_WORDS < 256);
 

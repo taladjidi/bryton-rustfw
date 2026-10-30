@@ -27,8 +27,10 @@
 //! rpm) and power (19 / 20, uint16, W) over the records written since the last lap (FIT profile 21.218 `lap`,
 //! garmin_fit_sdk/profile.py; invalid 0xff / 0xffff, never 0, when no record had the value). The lap definition
 //! always had these fields (written invalid before), so no new definition: every file of every build stays as it
-//! was. Records are written every running second, auto-paused ones included, never while paused by hand: the
-//! averages cover what the lap's timer time covers, and the laps add up to the session. The lap's sums survive a
+//! was. Records are written every running second, auto-paused ones included, never while paused by hand; a lap's
+//! averages leave out the auto-paused ones too ([`Sample::auto_paused`]), so they are the lap banner's numbers
+//! (`ride::Ride`'s lap power and heart rate, over the moving seconds), while the session's cover every record. The
+//! lap's sums survive a
 //! reset beside the recovery record ([`Writer::lap_words`]: the recorder stores them after the ride words, a record
 //! of a build before has zeros there and its lap averages from the resume). The last lap of a ride with one lap
 //! is the session's values.
@@ -169,6 +171,9 @@ pub struct Sample {
     /// The rider set that profile by hand (the app's `profile_by_hand`): only kept in the recovery record, so a
     /// resumed ride is not given back to the automatic choice.
     pub by_hand: bool,
+    /// Auto-paused this second (the app's `Ride::moving` false): recorded, but left out of the lap's averages, as
+    /// the lap banner leaves it out (module doc, "Laps"). False (the default): a moving second.
+    pub auto_paused: bool,
 }
 
 /// One second of the trainer (module doc, "The trainer"): plain values the app took from the trainer's reading.
@@ -720,10 +725,14 @@ impl Writer {
             self.ascent_m = self.ascent_m.max(a.min(ASCENT_MAX));
         }
         self.set_profile(s.profile, s.by_hand);
-        for st in [&mut self.stats, &mut self.lap_stats] {
-            st[0].add(s.hr.map(u32::from));
-            st[1].add(s.cadence.map(u32::from));
-            st[2].add(s.power.map(u32::from));
+        // the session's over every record; the lap's over the moving ones, as the lap banner (module doc)
+        let lap: &mut [Stat] = if s.auto_paused { &mut [] } else { &mut self.lap_stats };
+        for st in [&mut self.stats[..], lap] {
+            if let [h, c, p] = st {
+                h.add(s.hr.map(u32::from));
+                c.add(s.cadence.map(u32::from));
+                p.add(s.power.map(u32::from));
+            }
         }
 
         let (lat, lon) = s.pos.map_or((None, None), |(a, o)| (Some(semicircles(a)), Some(semicircles(o))));
@@ -1341,6 +1350,7 @@ pub(crate) mod tests {
                 trainer: trainer(t),
                 profile: ride::Profile::Road,
                 by_hand: false,
+                auto_paused: false,
             })
             .collect()
     }
@@ -1605,7 +1615,7 @@ pub(crate) mod tests {
         // the lap definition: local 3, global 19, the four fields as the profile types them
         let def = f.windows(6).position(|b| b == [0x40 | L_LAP, 0, 0, 19, 0, 18]).expect("lap definition");
         let fields: Vec<&[u8]> = f[def + 6..def + 6 + 18 * 3].chunks(3).collect();
-        for want in [[15, 1, U8], [16, 1, U8], [19, 2, U16], [20, 2, U16]] {
+        for want in [[15, 1, U8], [16, 1, U8], [17, 1, U8], [18, 1, U8], [19, 2, U16], [20, 2, U16]] {
             assert!(fields.contains(&&want[..]), "{want:?} in {fields:?}");
         }
         let laps = |f: &[u8]| -> Vec<[Option<u64>; 4]> {
@@ -1619,6 +1629,45 @@ pub(crate) mod tests {
         assert_eq!(laps(&run(Some(true))), [none, whole, none], "resumed with the lap's sums: as never cut");
         // a record without the sums: 26..=40 only (8 x 140, 7 x 160 bpm; power 126..140), still that lap's own, never the ride's
         assert_eq!(laps(&run(Some(false))), [none, [Some(149), Some(160), Some(133), Some(140)], none]);
+    }
+
+    /// A lap with an auto-paused stop (a minute at 0 km/h, zero power, the strap still on): the lap's average power
+    /// and heart rate in the file are the lap banner's (`Ride`'s, over the moving seconds), the stop's zeros left
+    /// out; the session's cover every record.
+    #[test]
+    fn lap_averages_are_the_banners() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        let mut ride = ride::Ride::new();
+        ride.start_pause();
+        for t in 1..=200u32 {
+            let stop = (60..120).contains(&t);
+            let i = ride::Input {
+                speed_x10: Some(if stop { 0 } else { 250 }),
+                hr: Some(if stop { 100 } else { 140 + (t % 7) as u16 }),
+                power: Some(if stop { 0 } else { 180 + (t % 50) as u16 }),
+                ..ride::Input::default()
+            };
+            ride.second(&i);
+            let s = Sample {
+                time: T0 + t,
+                speed_mm_s: i.speed_x10.map(|v| u32::from(v) * 1000 / 36),
+                hr: i.hr.map(|v| v as u8),
+                power: i.power,
+                auto_paused: !ride.moving(),
+                ..Sample::default()
+            };
+            w.record(&mut f, &s).unwrap();
+        }
+        assert!(ride.lap().is_some());
+        w.lap(&mut f, T0 + 200).unwrap();
+        w.finish(&mut f, T0 + 201).unwrap();
+        let m = decode(&f).unwrap();
+        let lap = m.iter().find(|x| x.0 == 19).unwrap();
+        assert_eq!(field(lap, 19), ride.last_lap_avg_power().map(u64::from), "the banner's lap power");
+        assert_eq!(field(lap, 15), ride.last_lap_hr().map(u64::from), "the banner's lap heart rate");
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert!(field(session, 20) < field(lap, 19), "the session's average has the stop's zeros");
     }
 
     /// A pause (timer stop and start events, left out of the timer time), a lap, temperatures below zero; and the

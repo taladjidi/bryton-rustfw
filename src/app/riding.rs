@@ -409,6 +409,7 @@ impl App {
             trainer: self.trainer_sample(),
             profile: self.ride_profile(),
             by_hand: self.profile_by_hand,
+            auto_paused: !self.ride.moving(), // the lap's averages over the moving seconds, as its banner
         }
     }
 
