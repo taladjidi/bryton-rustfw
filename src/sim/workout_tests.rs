@@ -70,7 +70,9 @@ fn workout_from_the_calendar() {
         "210 W over 100-120: white digits, the bar says over"
     );
     let (mut ms, start) = (0, sim.ms);
+    let mut was_top = false;
     while app.plan.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
+        was_top = app.plan.top.is_some();
         run(&mut sim, &mut app, 50);
         ms += 50;
         assert!(ms < 30_000, "the warm-up ends");
@@ -81,6 +83,7 @@ fn workout_from_the_calendar() {
         [1800, 2600, 0, 2500, 0, 2000, 0, 2000, 0, 2500],
         "the ride's start, the step's start, beep at 2 and 1 s left, the next step"
     );
+    assert!(was_top, "the strip was up just before the step changed");
     assert_ne!(app.notes.text.as_str(), "2/6 200-220W", "the next-step strip told it already: no banner");
     run(&mut sim, &mut app, 5000);
     assert_eq!(fields(&app), ["210|+-10", "0:25", "150|0:15", "2/6"]);
@@ -478,4 +481,37 @@ fn two_targets_shown() {
             sim.save("workout_two_targets");
         }
     }
+}
+
+/// The strip's left part keeps every number: "NEXT " goes first, then the unit; a 150 bpm 10:00 step, a 1 h step, a
+/// 12.5 km step. The status strip is whole again once the strip goes.
+#[test]
+fn next_step_strip_text_and_return() {
+    use crate::storage::workout_file::{Kind as TKind, Length, Step, Target, Workout};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app = App::start(&mut sim, None);
+    let t = |kind, lo, len| Step {
+        len,
+        target: Target { kind, lo, hi: lo, pct: false },
+        target2: Target::OPEN,
+        intensity: 0,
+    };
+    app.plan.workout = Workout::built(
+        "T",
+        &[
+            t(TKind::Hr, 150, Length::Time(600)),
+            t(TKind::Power, 275, Length::Time(3600)),
+            t(TKind::Hr, 150, Length::Distance(12_500)),
+            t(TKind::Power, 275, Length::Time(600)),
+        ],
+    );
+    let head = |app: &App, next| {
+        let a = crate::app::Ahead { next, left: 5, metres: false };
+        std::string::String::from(app.ahead_head(&a).as_str())
+    };
+    assert_eq!(head(&app, 0), "150BPM 10:00", "NEXT dropped, no number cut");
+    assert_eq!(head(&app, 1), "275W 1:00:00");
+    assert_eq!(head(&app, 2), "150BPM 12.50K");
+    assert_eq!(head(&app, 3), "NEXT 275W 10:00");
 }

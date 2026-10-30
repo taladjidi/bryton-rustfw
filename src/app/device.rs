@@ -372,8 +372,8 @@ impl App {
             self.plan.top = want;
         }
         if self.strip != self.strip_shown && !self.hint_shown && self.plan.top.is_none() {
-            // under a banner or a call: not drawn, nor under the next-step strip, and drawn whole when it goes (unbanner, end_ring); nor under the
-            // editor's hint, and drawn whole when the editor is left (App::show)
+            // under a banner or a call: not drawn, nor under the next-step strip, and drawn whole when it goes
+            // (unbanner, end_ring); nor under the editor's hint, and drawn whole when the editor is left (App::show)
             ui::draw_strip_changes(
                 &mut Panel(b, (self.area().0, ui::H), self.look()),
                 &self.strip,

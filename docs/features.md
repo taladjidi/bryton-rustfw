@@ -574,7 +574,7 @@ TrainingPeaks), read only:
   and a countdown at the right ("  7S", " 45M"); a second redraws one cell (240 px, sim; the strip whole is 10 560 px,
   once). The status strip comes back at the step change, with no banner then (the beeps stay). A step that was not
   announced (the first, a Lap skip) still gets the banner with the new step and its target ("2/6 200-220W"). A banner
-  over the strip hides it, and the strip is drawn again when the banner goes. Lap goes to the next
+  over the strip hides it, and the status strip's icons (pause, USB, lock, time) wait while it is up, and the strip is drawn again when the banner goes. Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
 - **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, olive within 5 %, the zone 1 colour (teal) under, the zone 5 colour (wine) over,
   from the power over the tapped window (3, 10 or 30 s), the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and

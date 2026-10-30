@@ -158,7 +158,8 @@ pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
 /// use bryton_rustfw::storage::workout_file::{Kind, Length, Step, Target};
 /// use bryton_rustfw::{ride, ui, workout::column};
 /// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true };
-/// let steps = [50, 160].map(|pct| Step { len: Length::Time(60), target: target(pct), target2: Target::OPEN, intensity: 0 });
+/// let steps = [50, 160]
+///     .map(|pct| Step { len: Length::Time(60), target: target(pct), target2: Target::OPEN, intensity: 0 });
 /// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 3), (100, ride::ZONE_COLORS[6]), "160 %: the top, Z7");
 /// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 1).1, ui::WHITE, "the rider");
 /// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 0), (33, ui::DARK), "done");

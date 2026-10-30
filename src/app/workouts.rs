@@ -281,37 +281,50 @@ impl App {
         }
     }
 
-    /// The strip's left part: the next step's target middle with its unit, and its length ("NEXT 275W 10:00", "NEXT
-    /// OPEN LAP", "END" after the last step).
-    pub(crate) fn ahead_head(&self, a: &Ahead) -> Line<16> {
+    /// The strip's left part (16 characters at most): the next step's target middle with its unit, and its length
+    /// ("NEXT 275W 10:00", "NEXT OPEN LAP", "LAST STEP" after the last step). Too long: "NEXT " goes, then the unit;
+    /// the numbers are never cut.
+    pub(crate) fn ahead_head(&self, a: &Ahead) -> Line<24> {
         use storage::workout_file::{Kind, Length};
-        let mut l = Line::<16>::new();
         let Some(s) = self.plan.steps().get(a.next) else {
+            let mut l = Line::<24>::new();
             l.push_str("LAST STEP");
             return l;
         };
-        l.push_str("NEXT ");
-        match s.target.range(self.settings.ftp, self.settings.max_hr) {
-            Some((lo, hi)) => {
-                l.push_u32(u32::from(lo).midpoint(u32::from(hi)));
-                l.push_str(match s.target.kind {
-                    Kind::Power => "W",
-                    Kind::Hr => "BPM",
-                    _ => "RPM",
-                });
+        let build = |prefix: bool, unit: bool| {
+            let mut l = Line::<24>::new();
+            if prefix {
+                l.push_str("NEXT ");
             }
-            None => l.push_str("OPEN"),
-        }
-        l.push_str(" ");
-        match s.len {
-            Length::Time(t) => push_clock(&mut l, t),
-            Length::Distance(m) => {
-                push_km(&mut l, m);
-                l.push_str("K");
+            match s.target.range(self.settings.ftp, self.settings.max_hr) {
+                Some((lo, hi)) => {
+                    l.push_u32(u32::from(lo).midpoint(u32::from(hi)));
+                    if unit {
+                        l.push_str(match s.target.kind {
+                            Kind::Power => "W",
+                            Kind::Hr => "BPM",
+                            _ => "RPM",
+                        });
+                    }
+                }
+                None => l.push_str("OPEN"),
             }
-            Length::Open => l.push_str("LAP"),
-        }
-        l
+            l.push_str(" ");
+            match s.len {
+                Length::Time(t) => push_clock(&mut l, t),
+                Length::Distance(m) => {
+                    push_km(&mut l, m);
+                    l.push_str("K");
+                }
+                Length::Open => l.push_str("LAP"),
+            }
+            l
+        };
+        [(true, true), (false, true), (false, false)]
+            .into_iter()
+            .map(|(p, u)| build(p, u))
+            .find(|l| l.as_str().len() <= 16)
+            .unwrap_or_else(|| build(false, false))
     }
 
     /// Shows and sounds what the player said: a banner and a long tone for a new step ("3/14 210-230W"), a short
@@ -334,7 +347,9 @@ impl App {
                 l.push_str("WORKOUT DONE")
             }
             // the strip announced it (a Lap skip or the start had none): no banner, the beep stays
-            workout::Event::Step(_) if self.plan.top.is_some() => return self.tones.play(&Self::STEP_TONE),
+            workout::Event::Step(_) if self.plan.top.is_some() && !self.hint_shown => {
+                return self.tones.play(&Self::STEP_TONE);
+            }
             workout::Event::Step(i) => {
                 l.push_u32(i as u32 + 1);
                 l.push_str("/");
