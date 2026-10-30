@@ -137,3 +137,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The SEGMENT page ahead of the PR: the delta in green, the two marks on the bar (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
 | ![SEGMENTS menu](img/segment-menu.png) | | |
 | MENU > SEGMENTS: the two settings, the segments of the card, the skipped files (sim) | | |
+
+## Units
+
+| | |
+|:-:|:-:|
+| ![Imperial units](img/imperial-units.png) | |
+| UNITS IMPERIAL and TEMPERATURE F on a ride page: mph, miles, feet, F and a trip in miles, with their labels (sim) | |

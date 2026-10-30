@@ -812,7 +812,7 @@ pub(crate) mod tests {
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
                 let mut f = Frame::new();
                 for (&bx, field) in b.iter().flat_map(|bx| Field::ALL.iter().map(move |f| (bx, f))) {
-                    draw_field_frame(&mut f, bx, *field);
+                    draw_field_frame(&mut f, bx, *field, (false, false));
                     draw_field_value(&mut f, bx, field.widest(), WHITE);
                     assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{n} fields: {field:?} readable");
                     if field.widest().len() as u32 <= VALUE_CHARS {

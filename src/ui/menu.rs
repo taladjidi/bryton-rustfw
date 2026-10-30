@@ -135,6 +135,18 @@ pub enum Setting {
     LiveSegments,
     /// The effort a live segment is ridden against: AUTO, PR, KOM, QOM or RECENT (`seg_target`).
     SegTarget,
+    /// SOUND: the buzzer on or off (`sound`).
+    Sound,
+    /// UNITS: METRIC or IMPERIAL (`imperial`).
+    Units,
+    /// TEMPERATURE: C or F (`temp_f`).
+    Temp,
+    /// AUTO PAUSE: AUTO, OFF or a speed (`auto_pause`, [`crate::AUTO_PAUSE_KMH`]).
+    AutoPause,
+    /// TRIP 1 or TRIP 2 (0, 1): the distance ridden since it was reset; Select (twice) resets it.
+    Trip(u8),
+    /// ODOMETER: the distance of every ride saved; never reset.
+    Odometer,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -249,6 +261,13 @@ impl Setting {
             Setting::AutoLap => "AUTO LAP",
             Setting::LiveSegments => "LIVE SEGMENTS",
             Setting::SegTarget => "TARGET",
+            Setting::Sound => "SOUND",
+            Setting::Units => "UNITS",
+            Setting::Temp => "TEMPERATURE",
+            Setting::AutoPause => "AUTO PAUSE",
+            Setting::Trip(0) => "TRIP 1",
+            Setting::Trip(_) => "TRIP 2",
+            Setting::Odometer => "ODOMETER",
             Setting::LapKm => "LAP KM",
             Setting::LapMin => "LAP MIN",
             Setting::Font => "FONT",
@@ -701,7 +720,7 @@ pub const ALERTS: [Row; 14] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 7] = [
+pub const DISPLAY: [Row; 10] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
@@ -709,11 +728,14 @@ pub const DISPLAY: [Row; 7] = [
     Row::Set(Setting::Theme),
     Row::Set(Setting::DayTheme),
     Row::Set(Setting::NightTheme),
+    Row::Set(Setting::Units),
+    Row::Set(Setting::Temp),
+    Row::Set(Setting::Sound),
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 12] = [
+pub const BIKE: [Row; 16] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -726,6 +748,10 @@ pub const BIKE: [Row; 12] = [
     Row::Set(Setting::AutoLap),
     Row::Set(Setting::LapKm),
     Row::Set(Setting::LapMin),
+    Row::Set(Setting::AutoPause),
+    Row::Set(Setting::Trip(0)),
+    Row::Set(Setting::Trip(1)),
+    Row::Set(Setting::Odometer),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

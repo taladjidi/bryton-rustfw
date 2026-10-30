@@ -710,6 +710,14 @@ impl App {
                 self.open(Screen::Nearby);
             }
             Some(Row::AltGps) => self.alt_from_gps(),
+            Some(Row::Set(menu::Setting::Trip(n)))
+                if self.confirmed(menu, sel, if n == 0 { "RESET TRIP 1" } else { "RESET TRIP 2" }) =>
+            {
+                self.settings.reset_trip(usize::from(n));
+                self.save_misc(b);
+                self.say(if n == 0 { "TRIP 1 RESET" } else { "TRIP 2 RESET" });
+            }
+            Some(Row::Set(menu::Setting::Trip(_) | menu::Setting::Odometer)) => {}
             Some(Row::Set(s)) => self.activate_setting(b, s),
             Some(Row::Sensor(k)) => self.activate_sensor(b, menu, sel, k),
             Some(Row::Layout(n)) => self.next_layout(b, n),

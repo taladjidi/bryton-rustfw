@@ -87,9 +87,11 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
   the destination and the arrival time on a course, the unit's and each sensor's battery as fields~~ done, sim (features.md;
   the distance to the destination is the course's distance to go, not a new field);
-- trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
-  saving and the date and time formats; key click; sound on or off; backlight always on; the auto pause threshold;
-  the climb filter (all, or medium and above); the CLIMB page's off switch;
+- ~~trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; sound on or off;
+  backlight always on (LIGHT OFF NEVER); the auto pause threshold~~ done, sim (features.md "Units, sound, trips"); still open: time
+  zone, daylight saving and the date and time formats; key click (the unit's keys have no beep to switch); the climb filter
+  (all, or medium and above: no climb has a category yet); the CLIMB page's off switch (CLIMBS AHEAD already turns the road
+  ahead off);
 - ~~the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
   to delete (DELETE exists in HISTORY)~~ done, sim (features.md: ABOUT and STORAGE under SYSTEM; the oldest ride's DELETE is HISTORY's).
 

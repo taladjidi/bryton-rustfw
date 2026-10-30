@@ -318,6 +318,45 @@ pub struct Settings {
     pub live_segments: bool,
     /// TARGET (SEGMENTS menu): the index in [`SEGMENT_TARGETS`]; 0 (AUTO) in a file that predates it.
     pub seg_target: usize,
+    /// SOUND (DISPLAY): the buzzer plays the alerts, the course and workout tones and the start / pause beeps (the
+    /// power-on and power-off melodies stay). Kept in settings.bin only (data 99); ON in a file that predates it.
+    pub sound: bool,
+    /// UNITS (DISPLAY): the fields show miles, mph and feet (data 100); the FIT file stays metric. METRIC in a file
+    /// that predates it.
+    pub imperial: bool,
+    /// TEMPERATURE (DISPLAY): the temperature field in F (data 101); C in a file that predates it.
+    pub temp_f: bool,
+    /// AUTO PAUSE (BIKE): an index in [`AUTO_PAUSE_KMH`] (data 102); 0, the profile's own rule, in a file that predates
+    /// it.
+    pub auto_pause: usize,
+    /// TRIP 1 and TRIP 2: the distance (m) of the rides saved since each was reset (data 103 and 111, u32; 0 in a file
+    /// that predates them), with the moving time (s) beside it (data 107 and 115).
+    pub trip_m: [u32; 2],
+    /// The time of each trip, s of moving time.
+    pub trip_s: [u32; 2],
+    /// ODOMETER: the distance (m) of every ride saved on this unit since this build had it (data 119, u32); never reset.
+    pub odo_m: u32,
+}
+
+/// AUTO PAUSE's choices as the ride gets them ([`ride::Input::pause_kmh`]): 0 the profile's own rule, 255 never, else
+/// the km/h under which a ride is paused.
+pub const AUTO_PAUSE_KMH: [u8; 6] = [0, 255, 2, 3, 5, 8];
+
+impl Settings {
+    /// A saved ride's distance (m) and moving time (s) added to both trips and the odometer (saturating).
+    pub fn add_ride(&mut self, m: u32, s: u32) {
+        for (tm, ts) in self.trip_m.iter_mut().zip(self.trip_s.iter_mut()) {
+            (*tm, *ts) = (tm.saturating_add(m), ts.saturating_add(s));
+        }
+        self.odo_m = self.odo_m.saturating_add(m);
+    }
+
+    /// Trip `n` (0 or 1) back to zero.
+    pub fn reset_trip(&mut self, n: usize) {
+        if let (Some(m), Some(s)) = (self.trip_m.get_mut(n), self.trip_s.get_mut(n)) {
+            (*m, *s) = (0, 0);
+        }
+    }
 }
 
 /// TARGET's choices: AUTO is the PR if the file has one, else the KOM.
@@ -444,6 +483,13 @@ impl Settings {
             lap_min: 10,
             live_segments: true,
             seg_target: 0,
+            sound: true,
+            imperial: false,
+            temp_f: false,
+            auto_pause: 0,
+            trip_m: [0; 2],
+            trip_s: [0; 2],
+            odo_m: 0,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -688,6 +734,26 @@ impl Settings {
             }
             Setting::LiveSegments => l.push_str(if self.live_segments { "ON" } else { "OFF" }),
             Setting::SegTarget => l.push_str(SEGMENT_TARGETS.get(self.seg_target).copied().unwrap_or("AUTO")),
+            Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),
+            Setting::Units => l.push_str(if self.imperial { "IMPERIAL" } else { "METRIC" }),
+            Setting::Temp => l.push_str(if self.temp_f { "F" } else { "C" }),
+            Setting::AutoPause => match AUTO_PAUSE_KMH.get(self.auto_pause) {
+                Some(0) | None => l.push_str("AUTO"), // the profile's own rule
+                Some(255) => l.push_str("OFF"),
+                Some(&k) => {
+                    l.push_u32(u32::from(k));
+                    l.push_str(" KM/H");
+                }
+            },
+            Setting::Trip(n) => {
+                let m = self.trip_m.get(usize::from(n)).copied().unwrap_or(0);
+                super::fields::push_trip(l, m, self.imperial);
+                l.push_str(if self.imperial { " MI" } else { " KM" });
+            }
+            Setting::Odometer => {
+                super::fields::push_trip(l, self.odo_m, self.imperial);
+                l.push_str(if self.imperial { " MI" } else { " KM" });
+            }
             Setting::LapKm => l.push_u32(u32::from(self.lap_km)),
             Setting::LapMin => l.push_u32(u32::from(self.lap_min)),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
@@ -789,6 +855,10 @@ impl Settings {
             Setting::AutoLap => self.auto_lap = (self.auto_lap + 1) % 3,
             Setting::LiveSegments => self.live_segments = !self.live_segments,
             Setting::SegTarget => self.seg_target = (self.seg_target + 1) % SEGMENT_TARGETS.len(),
+            Setting::Sound => self.sound = !self.sound,
+            Setting::Units => self.imperial = !self.imperial,
+            Setting::Temp => self.temp_f = !self.temp_f,
+            Setting::AutoPause => self.auto_pause = (self.auto_pause + 1) % AUTO_PAUSE_KMH.len(),
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme | Setting::DayTheme | Setting::NightTheme => {

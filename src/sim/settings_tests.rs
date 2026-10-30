@@ -386,6 +386,8 @@ fn start_until_fat2_written(sim: &mut Sim, app: &mut App) {
 /// The ride paused, saved, its card closed; then GPS POWER changed: written after the FAT copies were compared
 /// (the second one read), and the volume clean.
 fn save_then_settings_compare_the_fats(sim: &mut Sim, app: &mut App) {
+    // the saved ride's trips are the first settings write, after the copies were compared: from the start
+    let from = sim.emmc.cmds.len();
     run(sim, app, 70_000);
     app.press(sim, Press::Short(Key::Start)); // pause
     super::save_ride(sim, app);
@@ -393,7 +395,6 @@ fn save_then_settings_compare_the_fats(sim: &mut Sim, app: &mut App) {
     assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
     app.press(sim, Press::Short(Key::Back)); // the banner
     app.press(sim, Press::Short(Key::Back)); // the summary
-    let from = sim.emmc.cmds.len();
     app.press(sim, Press::Long(Key::Page));
     to_row(sim, app, menu::Row::Open(Menu::Settings));
     app.press(sim, Press::Short(Key::Start));
@@ -447,4 +448,51 @@ fn a_failed_folder_at_a_ride_start_has_the_settings_write_compare_the_fats() {
     start_until_fat2_written(&mut sim, &mut app); // the folder made again: its cluster's FAT sector, once
     assert_eq!((app.rec.clean.errors, app.rec.clean.fails()), (errors + 1, 0), "an error gone on after");
     save_then_settings_compare_the_fats(&mut sim, &mut app);
+}
+
+/// TRIP 1, TRIP 2 and the ODOMETER grow by a saved ride's totals once it is saved (never while it runs), are written to
+/// the file, and a trip resets by hand (asked twice) while the odometer stays.
+#[test]
+fn trips_and_the_odometer_grow_at_a_save_and_a_trip_resets_by_hand() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!((app.settings.trip_m, app.settings.odo_m), ([0; 2], 0), "nothing while the ride runs");
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (m, s) = (app.ride.dist_m(), app.ride.timer_s());
+    assert!(m > 300 && s > 30, "a ride: {m} m {s} s");
+    super::save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 10_000);
+    settle(&mut sim, &mut app);
+    let got = |st: &Settings| (st.trip_m, st.trip_s, st.odo_m);
+    assert_eq!(got(&app.settings), ([m; 2], [s; 2], m), "added at the save");
+    assert_eq!(file(&sim).map(|c| got(&c.settings)), Some(([m; 2], [s; 2], m)), "and written");
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::Trip(0)));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.settings.trip_m, [m; 2], "asked first");
+    app.press(&mut sim, Press::Short(Key::Start));
+    settle(&mut sim, &mut app);
+    assert_eq!(got(&app.settings), ([0, m], [0, s], m), "TRIP 1 reset, TRIP 2 and the odometer kept");
+    assert_eq!(file(&sim).map(|c| got(&c.settings)), Some(([0, m], [0, s], m)), "written");
+}
+
+/// SOUND OFF silences every tone (an alert's too); ON plays them.
+#[test]
+fn sound_off_silences_the_tones() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    for sound in [false, true] {
+        app.settings.sound = sound;
+        sim.tones.clear();
+        app.tones.play(&crate::BEEP_ALERT);
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(sim.tones.iter().any(|&hz| hz != 0), sound, "sound {sound}: {:?}", sim.tones);
+    }
 }

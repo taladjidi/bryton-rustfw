@@ -3323,6 +3323,7 @@ fn settings_file() {
     let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
     let (mut lap_kept, mut lap_fell_back) = (0u32, 0u32); // AUTO LAP's three bytes
     let (mut seg_kept, mut seg_fell_back) = (0u32, 0u32); // LIVE SEGMENTS' and TARGET's bytes
+    let (mut un_kept, mut un_fell_back, mut trips_read) = (0u32, 0u32, 0u32); // SOUND, UNITS, TEMP, AUTO PAUSE; the trips
     let (mut auto_on, mut day_night_kept, mut day_night_fell_back) = (0u32, 0u32, 0u32); // AUTO, and DAY and NIGHT's names
     let (mut with_limit, mut wild_limit) = (0u32, 0u32); // limits read, and out of range ones read as 0
     let (mut with_lthr, mut wild_lthr, mut with_smooth, mut wild_smooth) = (0u32, 0u32, 0u32, 0u32);
@@ -3338,7 +3339,7 @@ fn settings_file() {
                 0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
                 1 => (next() % 31) as u16,      // an earlier build's
                 2 => 31 + (next() % 60) as u16, // a later build's
-                3 => 44 + (next() % 58) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO, the names and the segments' bytes: whole or cut
+                3 => 44 + (next() % 82) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO, the names and the segments' bytes: whole or cut
                 _ => 31,
             };
             s[6..8].copy_from_slice(&len.to_le_bytes());
@@ -3354,6 +3355,7 @@ fn settings_file() {
             let mut auto_w = None::<u8>; // AUTO at 69 (a byte: 0, 1, or out of its form)
             let mut lap_w = [None::<(u8, bool)>; 3]; // AUTO LAP, km, min at 94, 95, 96: written, and in range
             let mut seg_w = [None::<(u8, bool)>; 2]; // LIVE SEGMENTS, TARGET at 97, 98: written, and in range
+            let mut un_w = [None::<(u8, bool)>; 4]; // SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102: written, in range
             let mut day_w = None::<([u8; 12], bool)>; // DAY THEME at 70, NIGHT THEME at 82: the name, and whether it is one
             let mut night_w = None::<([u8; 12], bool)>;
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
@@ -3461,6 +3463,17 @@ fn settings_file() {
                         *slot = Some((v, v < top));
                     }
                 }
+                for (k, (slot, top)) in un_w.iter_mut().zip([2u8, 2, 2, 6]).enumerate() {
+                    if usize::from(len) >= 100 + k {
+                        let v = if next().is_multiple_of(3) {
+                            top + (next() % 200) as u8
+                        } else {
+                            (next() % u32::from(top)) as u8
+                        };
+                        s[28 + 99 + k] = v;
+                        *slot = Some((v, v < top));
+                    }
+                }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
             let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
@@ -3551,6 +3564,41 @@ fn settings_file() {
                             None => {}
                         }
                     }
+                    for (k, (w, got, def, top)) in [
+                        (un_w[0], u8::from(st.sound), 1, 2),
+                        (un_w[1], u8::from(st.imperial), 0, 2),
+                        (un_w[2], u8::from(st.temp_f), 0, 2),
+                        (un_w[3], st.auto_pause as u8, 0, 6),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        match w {
+                            Some((v, ok)) => {
+                                assert_eq!(got, if ok { v } else { def }, "units byte {k} written {v} of {top}");
+                                un_kept += u32::from(ok);
+                                un_fell_back += u32::from(!ok);
+                            }
+                            None if usize::from(len) < 100 + k => assert_eq!(got, def, "a cut file: the default"),
+                            None => {}
+                        }
+                    }
+                    // the trips and the odometer are whatever the file holds (random bytes), a cut one reads 0
+                    for (k, got) in
+                        [st.trip_m[0], st.trip_s[0], st.trip_m[1], st.trip_s[1], st.odo_m].into_iter().enumerate()
+                    {
+                        let at = 28 + 103 + 4 * k;
+                        let bytes = s.get(at..at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok());
+                        let want = if usize::from(len) >= 107 + 4 * k && bytes.is_some() {
+                            bytes.map_or(0, u32::from_le_bytes)
+                        } else {
+                            0
+                        };
+                        if usize::from(len) >= 107 + 4 * k {
+                            trips_read += 1;
+                        }
+                        assert_eq!(got, want, "trip word {k}, length {len}");
+                    }
                     let again = SettingsCopy::from_sector(&SettingsCopy { seq: c.seq, ..c }.to_sector());
                     assert_eq!(again.map(|a| a.settings.limits), Some(st.limits), "the limits round trip");
                     assert!(st.light_level <= crate::LIGHT_AUTO && st.light_timeout < crate::LIGHT_TIMEOUTS_S.len());
@@ -3595,6 +3643,13 @@ fn settings_file() {
     assert!(lap_kept > 0 && lap_fell_back > 0, "AUTO LAP's bytes reached");
     std::println!("LIVE SEGMENTS and TARGET bytes kept {seg_kept}, fallen back {seg_fell_back}");
     assert!(seg_kept > 100 && seg_fell_back > 100, "the segments' bytes reached: {seg_kept} {seg_fell_back}");
+    std::println!(
+        "SOUND, UNITS, TEMP, AUTO PAUSE bytes kept {un_kept}, fallen back {un_fell_back}; trip words read {trips_read}"
+    );
+    assert!(
+        un_kept > 100 && un_fell_back > 100 && trips_read > 100,
+        "the units' bytes: {un_kept} {un_fell_back} {trips_read}"
+    );
     assert!(auto_on > 0 && day_night_kept > 0 && day_night_fell_back > 0, "every new path reached");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
     assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");

@@ -191,6 +191,10 @@ impl App {
     /// the last of a melody for a pass, then the next melody queued starts. Nothing waits: the loop goes on meanwhile.
     pub(crate) fn play_tones(&mut self, b: &mut impl Board) {
         let (t, dt) = (&mut self.tones, self.dt_ms);
+        if !self.settings.sound {
+            // SOUND OFF: what was asked is dropped, the tone sounding is cut (alerts included)
+            (t.queue, t.left, t.ms) = ([&[][..]; TONES_QUEUED], &[][..], 0);
+        }
         if t.ms > 0 {
             t.ms = t.ms.saturating_sub(dt);
             if t.ms > 0 {

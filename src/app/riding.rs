@@ -149,6 +149,8 @@ impl App {
     /// card shows (until Back or Start).
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
+        let owed = &mut self.settings_store.owed; // the trips get it once the save is done
+        *owed = (owed.0.saturating_add(self.ride.dist_m()), owed.1.saturating_add(self.ride.timer_s()));
         self.recorder(ev);
         self.plan.player = None;
         (self.depth, self.screen) = (0, Screen::Summary);
@@ -475,6 +477,7 @@ impl App {
             }
             recorder::Outcome::Saved(_) => {
                 self.notice("RIDE SAVED");
+                self.settings_store.pay = true;
                 if let Some(t) = self.thresholds.as_deref_mut() {
                     t.reset(); // its full copy read too, when FITNESS next shows
                 }
@@ -560,6 +563,7 @@ impl App {
             alt_ref: alt.1,
             alt_corr_mm: self.alt.corr(),
             profile: self.ride_profile(),
+            pause_kmh: AUTO_PAUSE_KMH.get(self.settings.auto_pause).copied().unwrap_or(0),
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {

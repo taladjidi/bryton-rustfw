@@ -8,6 +8,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Units, sound, auto pause, trips (app/fields.rs, app/settings.rs, features.md "Units, sound, trips")**: sim only. Still to see: IMPERIAL on a real ride (the values and labels fit their boxes), SOUND OFF with an alert due, an AUTO PAUSE of 5 km/h at a stop, and a trip and the odometer growing after a save and surviving a restart.
 - **AUTO LAP and the lap banner (app/riding.rs `auto_lap`, `lap_summary`)**: sim only. Still to see: a lap at each 5 km or 10 min on a real ride, its banner for 8 s, and the lap messages in the saved file on Intervals.icu.
 - **Live segments, screens (app/segment_ui.rs, ui/segment.rs, step S4)**: sim only. Still to see: a ride over a known segment: the approach
   banner with the name, the page opening by itself, the delta ahead and behind, the finish banner and the card, back to the page

@@ -317,6 +317,7 @@ impl App {
                     bx,
                     self.avg_field(f),
                     if let Drawn::Value(_, _, bar) = d { bar } else { ui::BLACK },
+                    (self.settings.imperial, self.settings.temp_f),
                 );
                 match d {
                     Drawn::Map(m) => {

@@ -643,6 +643,34 @@ copied over USB into `\Courses`, read only:
   it the rider is in to the end, the rider's place, the ridden part dark, the climbs in the zone 2 to 5 colours by
   grade.
 
+## Units, sound, trips
+
+- **UNITS** (SETTINGS > DISPLAY): METRIC (the default) or IMPERIAL, and **TEMPERATURE** C or F. One place formats every value (`app/fields.rs`
+  `field_text`, with `mph_x10`, `feet`, `fahrenheit_x10`, `push_dist`): speed (KM/H, AVG, MAX) in mph with one decimal, distance
+  (KM, LAP KM, UP KM, DOWN KM) in miles with 2 decimals under 100 then 1 (truncated, as the metric one is), ascent, descent, lap
+  ascent and descent, max altitude and VAM in feet (rounded), the whole-unit totals (WEEK, YEAR, TOTAL) in miles, the temperature
+  in F. The labels follow (`Field::label_in`: MPH, MI, FT, TEMP F). The FIT file, the history and the summaries stay metric, and
+  so do the course fields (TO GO KM, OFF CRS M, CLIMB M, UP LEFT M), the settings' own units (wheel mm, weight kg, LAP KM, the
+  speed alert limits) and the sensors screens. Feet are 4 or 5 digits where metres were 3 or 4: the value takes a smaller size
+  past the box's width, as every long value does.
+  ![Imperial units](img/imperial-units.png)
+- **SOUND** (DISPLAY, ON): OFF drops every tone the app plays (alerts, course and workout tones, the start and pause beeps) and cuts
+  the one sounding. The alerts' banners still show. The power-on and power-off melodies stay (they play before the settings
+  are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.
+- **BACKLIGHT ALWAYS ON** is LIGHT OFF NEVER (SETTINGS > DISPLAY), as before.
+- **AUTO PAUSE** (SETTINGS > BIKE): AUTO (the profile's own rule: road under 2 km/h at once, MTB under 2 km/h for 5 s, indoor
+  on no power and cadence for 3 s), OFF (the timer never auto-pauses, any profile), or 2, 3, 5 or 8 km/h replacing the 2
+  km/h of the road and MTB rules (the indoor rule is power and cadence, not speed, and stays).
+- **TRIP 1, TRIP 2 and the ODOMETER** (SETTINGS > BIKE, and the fields TRIP1 KM, TRIP2 KM, ODO KM, TRIP1 H, TRIP2 H in the TOTALS group):
+  the distance (and moving time) of the rides saved since each trip was reset, and of every ride saved. A ride is added only
+  when its save is done (`App::pay_trips`; a discarded ride adds nothing, a ride kept in `\Rustfw\Rides` adds with the next
+  save), and the totals reach `settings.bin` between rides: nothing is written to the card during a ride. The fields show the
+  saved total plus the ride running, as WEEK KM does. Select on a TRIP row asks twice (START: YES) and resets it; the ODOMETER
+  is never reset. They count from the build that has them: earlier rides are not added.
+- **Not done:** the CLIMB filter (no climb has a category today, so "medium and above" needs thresholds chosen) and the time zone,
+  daylight saving and the date and time formats (the clock takes its offset from the GPS fix; a 12 h or DD/MM format touches
+  every time and date text).
+
 ## Live segments
 
 Segment files in `\Rustfw\Segments\` (`<id>.seg`, docs/segments.md) are matched against the ride once a second while it
@@ -785,7 +813,10 @@ point leaves the newest copy before it whole. The file is read when `\Rustfw\pag
 the start (never at boot), and written between rides only. Its settings: the wheel size, the numbers (max HR, FTP,
 weight, bike weight, W', eat, drink, heart rate alert), then the choices, one byte each, then the 11 alert limits
 (`Settings::limits`, u16 each, after POWER MATCH). A value out of its range reads as its default, and a file that ends
-before the limits (an earlier build's) reads them OFF. A later build appends its settings and raises the length.
+before the limits (an earlier build's) reads them OFF. A later build appends its settings and raises the length: SOUND,
+UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
+and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
+C, AUTO and zeros.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers
