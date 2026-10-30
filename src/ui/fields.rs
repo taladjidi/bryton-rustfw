@@ -537,7 +537,7 @@ impl Field {
             "88/88", "888-888", "88:88", "888-888", // the course followed:
             "888.8", "8888", "8.8K 88%", "8888", "8888", "", "", "8888",  // the phone:
             "88:88", // electronic shifting:
-            "8-88", "8888", "GOOD",   // the course followed again:
+            "88x88", "8888", "GOOD",   // the course followed again:
             "888.8K", // the trainer:
             "ERG", "-10.0 %", // the widest target: a grade (a power is "2000 W")
             "888|+88", "88:88|88", "", "", // the workout and ERG again, the climb pacer, the climb profile

@@ -104,10 +104,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start~~ done, sim (features.md "Start reminder and ready check");
 - workouts: ~~the next-step strip instead of a popup (patch P3), two targets per step~~ done, sim (features.md);
 - zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;
-- ~~the heart rate strap's battery (ANT+ page 7); sensor names~~ done, sim (features.md); Di2 gear teeth and hood button actions (patch P12), the
+- ~~the heart rate strap's battery (ANT+ page 7); sensor names~~ done, sim (features.md); Di2 hood button actions and the media remote done earlier, gear teeth by presets done, sim (teeth from the Di2 itself open, status.md);
 - ~~zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power~~ done, sim (features.md "Zones");
-- the heart rate strap's battery (ANT+ page 7); sensor names; Di2 gear teeth and hood button actions (patch P12), the
-  media remote from Di2 buttons;
 - ~~screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical)~~ done, sim
   (features.md, SYSTEM > SCREENSHOT and "Fault log").
 

@@ -409,16 +409,23 @@ impl App {
                 return self.course_text(f);
             }
             Field::Gear => {
-                match self.live.get(Metric::Gear) {
+                let gear = self.live.get(Metric::Gear);
+                let teeth = gear.and_then(|g| gear_teeth(self.settings.chainrings, self.settings.cassette, g));
+                match (gear, teeth) {
+                    (_, Some((ring, cog))) => {
+                        l.push_u32(u32::from(ring));
+                        l.push_str("x");
+                        l.push_u32(u32::from(cog));
+                    }
                     // a 1x system (no front, 0): the rear alone, "11" (sensors.rs)
-                    Some(g) => {
+                    (Some(g), None) => {
                         if g >> 8 != 0 {
                             l.push_u32(u32::from(g >> 8));
                             l.push_str("-");
                         }
                         l.push_u32(u32::from(g & 0xff));
                     }
-                    None => l.push_str("--"),
+                    (None, None) => l.push_str("--"),
                 }
                 return l;
             }

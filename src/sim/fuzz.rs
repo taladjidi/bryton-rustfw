@@ -5139,3 +5139,31 @@ fn settings_file_sunset_byte() {
     }
     assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
 }
+
+/// CHAINRINGS and CASSETTE (settings.bin bytes 156 and 157): any length from 155 to 159 and any bytes read as the
+/// module doc says (in range is the choice, anything else or a cut file OFF). Reaches both, a wild byte, a cut file.
+#[test]
+fn settings_file_gear_bytes() {
+    use crate::SettingsCopy;
+    let mut next = xorshift(0x9ea4);
+    let (mut choice, mut wild, mut short) = (0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 155 + (next() % 5) as usize; // 155..=159
+        let (a, b) = ((next() % 12) as u8, (next() % 12) as u8);
+        sec[28 + 156] = a;
+        sec[28 + 157] = b;
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let ok = |v: u8, n: usize| usize::from(v) < n;
+        let want_a = if len > 156 && ok(a, crate::CHAINRINGS.len()) { usize::from(a) } else { 0 };
+        let want_b = if len > 157 && ok(b, crate::CASSETTES.len()) { usize::from(b) } else { 0 };
+        assert_eq!((st.chainrings, st.cassette), (want_a, want_b), "len {len}, bytes {a} {b}");
+        choice += u32::from(want_a > 0 && want_b > 0);
+        wild += u32::from(len > 157 && !ok(b, crate::CASSETTES.len()));
+        short += u32::from(len <= 157);
+    }
+    assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
+}
