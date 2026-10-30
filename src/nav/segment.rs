@@ -624,7 +624,8 @@ impl<'a> PrCopy<'a> {
     pub fn newest(file: &'a [u8]) -> Option<Self> {
         let (a, b) = (file.get(..PR_COPY)?, file.get(PR_COPY..PR_FILE)?);
         match (Self::parse(a).ok(), Self::parse(b).ok()) {
-            (Some(x), Some(y)) => Some(if y.seq > x.seq { y } else { x }),
+            // serial number order (RFC 1982): a sequence that wrapped past u32::MAX is still newer
+            (Some(x), Some(y)) => Some(if (y.seq.wrapping_sub(x.seq) as i32) > 0 { y } else { x }),
             (x, y) => x.or(y),
         }
     }
@@ -994,6 +995,9 @@ pub(crate) mod tests {
         let b = pr_copy(5, 9, 78, &times).unwrap();
         let mut file = [a, b].concat();
         assert_eq!(PrCopy::newest(&file).unwrap().seq, 5);
+        // a sequence past u32::MAX is newer still
+        let wrapped = [pr_copy(u32::MAX, 9, 0, &times).unwrap(), pr_copy(0, 9, 0, &times).unwrap()].concat();
+        assert_eq!(PrCopy::newest(&wrapped).unwrap().seq, 0);
         file[PR_COPY + 100] ^= 1; // the newer torn by a cut
         assert_eq!(PrCopy::newest(&file).unwrap().seq, 4);
         file[3] ^= 1;

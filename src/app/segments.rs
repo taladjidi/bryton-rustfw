@@ -143,6 +143,8 @@ pub struct Segments {
     pub pr_files: u16,
     /// The index build found a file of the efforts a cut left unfinished (app: the FATs compared before a write).
     suspect: bool,
+    /// See [`Segments::new_pr`].
+    new_pr: bool,
 }
 
 impl Default for Segments {
@@ -202,6 +204,7 @@ impl Segments {
             prs: 0,
             pr_files: 0,
             suspect: false,
+            new_pr: false,
         }
     }
 
@@ -304,6 +307,7 @@ impl Segments {
         let Some(ev) = ev else { return };
         self.note(t, ev);
         if let Event::Finish { id, elapsed_s, .. } = ev {
+            self.new_pr = false; // until the effort is kept and beats the PR
             if record {
                 self.keep_effort(id, elapsed_s, date.saturating_sub(elapsed_s));
             } else {
@@ -349,12 +353,19 @@ impl Segments {
         };
         let (a0, e0) = self.last;
         let ok = self.seg.header.id == id && np >= 2;
-        let (Some(&len), Ok(total), Some(e), true) =
-            (self.seg.dist_m.get(last), u16::try_from(elapsed_s), self.efforts.get_mut(self.kept), ok)
+        let (Some(&len), Ok(total), true, true) =
+            (self.seg.dist_m.get(last), u16::try_from(elapsed_s), self.kept < EFFORTS, ok)
         else {
             self.unkept = self.unkept.saturating_add(1);
             return;
         };
+        // the result card's NEW PR, by the rule the PR file is written with: faster than the PR loaded and than the
+        // efforts kept on these points before it (written first)
+        let before = self.efforts.get(..self.kept).unwrap_or(&[]);
+        let best = before.iter().filter(|k| k.id == id && usize::from(k.npoints) == np).map(|k| k.elapsed_s).min();
+        let best = [best, (pr_s > 0).then_some(pr_s)].into_iter().flatten().min();
+        let new_pr = best.is_none_or(|b| elapsed_s < b);
+        let Some(e) = self.efforts.get_mut(self.kept) else { return };
         let (Some(times), Some(dist)) = (e.times.get_mut(..np), self.seg.dist_m.get(..np)) else { return };
         let mut prev = 0u16;
         for (i, (t, &d)) in times.iter_mut().zip(dist).enumerate() {
@@ -371,6 +382,12 @@ impl Segments {
         (e.id, e.date, e.elapsed_s, e.pr_s) = (id, date, elapsed_s, pr_s);
         e.npoints = u16::try_from(np).unwrap_or(0);
         self.kept += 1;
+        self.new_pr = new_pr;
+    }
+
+    /// Whether the last finish was kept and beats the PR (the result card's NEW PR; the PR file follows the same rule).
+    pub(crate) fn new_pr(&self) -> bool {
+        self.new_pr
     }
 
     /// The ride was saved: its efforts are written once the card is free.
@@ -509,7 +526,8 @@ impl Segments {
             let n = e.name();
             let ends = |x: &[u8]| n.get(n.len().saturating_sub(x.len())..).is_some_and(|y| y.eq_ignore_ascii_case(x));
             if !e.file.dir && (ends(b".pr") || n.eq_ignore_ascii_case(CSV.as_bytes())) && !self.suspect {
-                self.suspect = !whole(&mut fat, d, &e.file, ends(b".pr"))?;
+                // a chain that cannot be read counts as unfinished, and the build goes on
+                self.suspect = !whole(&mut fat, d, &e.file, ends(b".pr")).unwrap_or(false);
             }
             if e.file.dir || !ends(b".seg") {
                 continue;
@@ -613,7 +631,7 @@ fn push_iso(l: &mut Line<48>, fit: u32) {
 
 /// `line` appended to [`CSV`] in `dir` (made, with its header line, if missing): the last sector written again with
 /// it, then the size, so a cut before the size leaves the file as it was. Header and line fit in two sectors.
-fn append_line(
+pub(crate) fn append_line(
     fat: &mut Fat,
     d: &mut impl DiskWrite,
     dir: fat::File,

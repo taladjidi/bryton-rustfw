@@ -81,6 +81,36 @@ fn events(app: &App) -> Vec<Event> {
     app.segments().unwrap().events().map(|(_, e)| e).collect()
 }
 
+/// efforts.csv with its chain looped, listed before the segment: the index build goes on (the segment indexed), and
+/// the file counts as unfinished (the FATs compared before the next write).
+#[test]
+fn a_broken_csv_does_not_stop_the_index() {
+    let mut image = card(&[("efforts.csv", b"id,date,elapsed_s\n".to_vec()), ("4000000001.seg", synth(20, &CODES))]);
+    let first = {
+        use crate::fat::{Fat, tests::Ram};
+        let mut d = Ram(image.clone(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, crate::app::DIR).unwrap();
+        fat.locate(&mut d, dir, "efforts.csv").unwrap().first as usize
+    };
+    let u =
+        |img: &[u8], at: usize, n: usize| img[at..at + n].iter().rev().fold(0usize, |v, &b| v << 8 | usize::from(b));
+    let (fat0, fat_len) = (u(&image, 14, 2) * 512, u(&image, 36, 4) * 512);
+    for k in [0, fat_len] {
+        let at = fat0 + k + 4 * first;
+        image[at..at + 4].copy_from_slice(&(first as u32).to_le_bytes()); // the cluster names itself next
+    }
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = image;
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 9000);
+    let s = app.segments().unwrap();
+    assert!(s.ready());
+    assert_eq!(s.ids().collect::<Vec<_>>(), [ID]);
+    assert!(app.fats_suspect);
+}
+
 /// The index holds the one good file; the broken ones are counted, the text file is not a candidate.
 #[test]
 fn index_skips_broken_files() {
@@ -301,6 +331,9 @@ fn off_and_dismissed() {
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 200_000);
     assert!(events(&app).is_empty() && !matches!(app.screen(), Screen::Segment | Screen::SegmentResult));
+    end_until_settled(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    assert_eq!((app.segments().unwrap().written, csv(&sim.emmc.image)), (0, None));
     let (mut sim, mut app, ..) = watch(pr_pace, 120);
     assert_eq!(app.screen(), Screen::Segment);
     app.press(&mut sim, Press::Short(Key::Page));
@@ -717,7 +750,7 @@ fn a_cut_at_every_sector_of_the_effort() {
     // the last line's time padded with zeros to end 20 bytes before the cluster does
     long.push_str(&std::format!("4000000001,2026-10-01T08:00:00Z,1{}\n", "0".repeat(cluster - 20 - long.len() - 34)));
     assert_eq!(long.len(), cluster - 20);
-    let mut apart_seen = 0;
+    let (mut apart_seen, mut past_seen) = (0, 0);
     for (case, old_csv) in [(0, std::string::String::new()), (1, std::format!("id,date,elapsed_s\n{line}")), (2, long)]
     {
         let had = case > 0;
@@ -779,6 +812,17 @@ fn a_cut_at_every_sector_of_the_effort() {
             assert!(scan.past.len() <= 1 && scan.past.iter().all(|p| p.1 == 1), "{at}: past its size {:?}", scan.past);
             assert!(scan.lost <= 1 && scan.apart <= 1, "{at}: {} lost, {} apart", scan.lost, scan.apart);
             worst = (worst.0.max(scan.lost), worst.1.max(scan.apart));
+            if !scan.past.is_empty() {
+                use crate::fat::{Fat, tests::Ram};
+                let mut d = Ram(img.clone(), 0);
+                let mut fat = Fat::mount(&mut d).unwrap();
+                fat.sync_fats(&mut d).unwrap();
+                let dir = fat.open(&mut d, crate::app::DIR).unwrap();
+                crate::app::append_line(&mut fat, &mut d, dir, line.as_bytes(), (0, 0)).unwrap();
+                assert_eq!(crate::fat::write::tests::fsck(&d.0), Ok(0), "{at}: the next append");
+                assert_eq!(csv(&d.0).unwrap(), std::format!("{old_csv}{line}"), "{at}: the next append");
+                past_seen += 1;
+            }
             // a restart on the card: nothing to resume, the ride where it was, the PR file as read above
             let mut sim2 = Sim::new(9, 5, 0);
             sim2.emmc.image = img;
@@ -803,6 +847,7 @@ fn a_cut_at_every_sector_of_the_effort() {
         assert!(total > 0 && news > 0 && (olds > 0 || !had));
     }
     assert!(apart_seen > 0, "a cut between the two FATs' writes was reached");
+    assert!(past_seen > 0, "a cut leaving a cluster past the csv's size was reached");
 }
 
 /// A PR file for other points (the segment rebuilt with 19, its copy numbered 2 in slot 0): a faster effort goes over
@@ -828,4 +873,34 @@ fn a_pr_file_for_other_points_is_replaced() {
     run(&mut sim, &mut app, ms);
     assert_eq!(app.segments().unwrap().pr_files, 1);
     assert!(finish(&app).1[0].unwrap().abs() <= 2);
+}
+
+/// [`faster`] (158 s), then in the same ride again from 400 s at 5.5 m/s (173 s) or at 7 m/s (136 s).
+fn twice_then_slower(ms: u64) -> (i32, i32, i32) {
+    if ms < 400_000 { faster(ms) } else { east(ms - 400_000, 5.5) }
+}
+fn twice_then_faster(ms: u64) -> (i32, i32, i32) {
+    if ms < 400_000 { faster(ms) } else { east(ms - 400_000, 7.0) }
+}
+
+/// The result card's NEW PR follows the rule the PR file is written with: the first pass beats the file's PR (190 s);
+/// a second pass in the same ride says NEW PR only if it beats the first too, and only it is written as the PR.
+#[test]
+fn new_pr_twice_in_a_ride() {
+    for (route, second_new) in [(twice_then_slower as fn(u64) -> (i32, i32, i32), false), (twice_then_faster, true)] {
+        let (mut sim, mut app) = ride_on(card(&[("4000000001.seg", synth(20, &CODES))]), route, 260, true);
+        assert!(app.segments().unwrap().new_pr(), "the first pass beats the file's PR");
+        run(&mut sim, &mut app, 420_000);
+        let (elapsed, deltas) = finish(&app);
+        assert!(deltas[0].unwrap() < 0, "{deltas:?}: faster than the file's PR either way");
+        let s = app.segments().unwrap();
+        assert_eq!((s.efforts(), s.new_pr()), (2, second_new), "{elapsed}");
+        end_until_settled(&mut sim, &mut app);
+        run(&mut sim, &mut app, 3000);
+        let s = app.segments().unwrap();
+        assert_eq!((s.written, s.prs), (2, 1 + u16::from(second_new)));
+        let best = if second_new { elapsed } else { pr(&sim.emmc.image).unwrap().1 };
+        assert_eq!(pr(&sim.emmc.image).unwrap().1, best);
+        assert!(best < 160, "{best}");
+    }
 }
