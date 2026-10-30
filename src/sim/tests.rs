@@ -139,7 +139,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     );
     let _ = s;
     crate::ui::draw_today(&mut f, crate::ui::Today::Pending);
-    crate::ui::draw_date(&mut f, crate::date_numbers(rtc_date_from_dr(sim.rtc().1), crate::DateFormat::Dmy).as_str());
+    crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
     // the barometer is read a second after the start: the temperature is there by the time the tests look
     let temp = app.field_text(Field::Temp);
     let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, temp.as_str())];

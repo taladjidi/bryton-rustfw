@@ -437,7 +437,7 @@ impl Settings {
     }
 }
 
-/// DATE FORMAT: how the dates are drawn (`fields::date_text`).
+/// DATE FORMAT: how the dates are drawn (`fields::date_numbers`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DateFormat {
     /// 23/10/2026: the default.

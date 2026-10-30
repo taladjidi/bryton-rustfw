@@ -1050,3 +1050,25 @@ fn the_pacer_follows_the_segment() {
     let (_, app) = ride(faster, 120, true);
     assert!(app.segment_now().is_some() && app.pace.key.is_none(), "no altitudes: no plan");
 }
+
+/// CLIMB PAGE off: a live segment still opens the page (the road climb's latch does not, see climb_page_off_is_skipped).
+#[test]
+fn climb_page_off_still_opens_for_a_segment() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(faster);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    app.settings.climb_page = false;
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut screens = Vec::<Screen>::new();
+    for _ in 0..240 {
+        run(&mut sim, &mut app, 1000);
+        if screens.last() != Some(&app.screen()) {
+            screens.push(app.screen());
+        }
+    }
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Ride(CLIMB)).count(), 1, "{screens:?}");
+}

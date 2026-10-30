@@ -322,7 +322,7 @@ impl App {
             (Widget::Today, _) => self.draw_today(c),
             // under a call's two-line banner the date row would show its lower half: left out, the box cleared
             (Widget::Date, _) if self.phone.ringing => {}
-            (Widget::Date, _) => ui::draw_date(c, date_numbers(self.date, self.settings.date_fmt).as_str()),
+            (Widget::Date, _) => ui::draw_date(c, date_text(self.date).as_str()),
             (Widget::Notices, _) => {
                 let mut n: [&str; ui::NOTICES] = [""; ui::NOTICES];
                 for (slot, line) in n.iter_mut().zip(&self.notes.list) {

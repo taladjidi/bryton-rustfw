@@ -21,6 +21,7 @@ impl App {
     /// Gives the road ahead its memory (main.rs: about 110 KB in AXI SRAM) and the buffer map tiles are inflated
     /// into (64 KB or more of the map's SDRAM); without them there are no climbs ahead.
     pub fn set_ahead_memory(&mut self, mem: &'static mut climbs_ahead::Ahead, scratch: &'static mut [u16]) {
+        mem.preset_medium(self.settings.climbs_medium);
         self.ahead = Some((mem, scratch));
     }
 

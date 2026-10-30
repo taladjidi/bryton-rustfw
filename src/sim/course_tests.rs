@@ -1151,22 +1151,26 @@ fn climb_page_off_is_skipped() {
     assert!(!a.climbs().is_empty(), "the climbs ahead are still found");
 }
 
-/// CLIMBS MEDIUM+: the climbs ahead that are kept are category 3 and harder only.
+/// CLIMBS MEDIUM+: the road ahead's climb (score under 16000) is kept with ALL and dropped with MEDIUM+.
 #[test]
 fn climbs_medium_keeps_only_medium_plus() {
-    let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = crate::route::tests::image_with_map();
-    sim.gnss.route = Some(ahead_route);
-    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
-    [sim.backup[17], sim.backup[18]] = aid.to_words();
-    let mut app = App::start(&mut sim, None);
-    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
-    app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
-    app.settings.climbs_medium = true;
-    sim.gnss.fix = Some(8000);
-    run(&mut sim, &mut app, 3000);
-    app.press(&mut sim, Press::Short(Key::Start));
-    run(&mut sim, &mut app, 120_000);
-    let (a, _) = app.ahead.as_ref().unwrap();
-    assert!(a.climbs().iter().all(|c| c.medium_plus()), "only MEDIUM+ kept: {:?}", a.climbs());
+    let found = |medium: bool| {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::route::tests::image_with_map();
+        sim.gnss.route = Some(ahead_route);
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        let mut app = App::start(&mut sim, None);
+        app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+        app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+        app.settings.climbs_medium = medium;
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 3000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 120_000);
+        let (a, _) = app.ahead.as_ref().unwrap();
+        a.climbs().len()
+    };
+    assert_eq!(found(false), 1, "ALL keeps the climb");
+    assert_eq!(found(true), 0, "MEDIUM+ drops it");
 }

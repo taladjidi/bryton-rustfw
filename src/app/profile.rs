@@ -231,7 +231,7 @@ impl App {
                 if inside && !done {
                     if !can {
                         done = true;
-                    } else if ready {
+                    } else if ready && self.settings.climb_page {
                         (open, done) = (true, true);
                     }
                 }

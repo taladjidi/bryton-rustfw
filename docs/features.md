@@ -971,10 +971,11 @@ area. A build without EMMC_WRITE=1 offers it write protected.
   is 100 x the gain (m); category 4 from 8000, 3 from 16000, 2 from 32000, 1 from 64000, HC from 80000 (search results
   citing cyclingmagazine.ca and cycling forums; climbfinder.com uses other points). Course climbs are the route's own
   and are not filtered.
-- **CLIMB PAGE** (BIKE, ours): ON (the default) or OFF. Off, the climb page is skipped in the paging; the climbs ahead,
-  the pacer and the climb fields keep working. Segments on the same page still open it.
-- **DATE FORMAT** (DISPLAY, ours): D/M/Y (the default, 23/10/2026), M/D/Y or Y-M-D. It applies to the history and the
-  workouts' dates and the phone's date. The overview's row is too short for the weekday at its 3x scale, so it shows
-  the numbers alone.
+- **CLIMB PAGE** (BIKE, ours): ON (the default) or OFF. Off, the climb page is skipped in the paging and a road climb
+  does not open it; the climbs ahead, the pacer and the climb fields keep working. A live segment still opens it (LIVE
+  SEGMENTS has its own switch).
+- **DATE FORMAT** (DISPLAY, ours): D/M/Y (the default, 23/10/2026), M/D/Y or Y-M-D. It applies to the dates of the history
+  and the workouts' rows (numbers, no weekday). The overview, the phone's date and the ride card's title ("SAT 24 OCT")
+  keep the month's name.
 - Still open: TIME ZONE and DAYLIGHT SAVING (the RTC keeps local time, so the zone needs the learned offset; default
   CLOCK = no change), and the 12 h time format (the strip's layout).
