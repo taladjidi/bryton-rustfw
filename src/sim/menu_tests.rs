@@ -797,3 +797,16 @@ fn a_live_menu_value_repaints_its_own_box() {
         assert_consistent(&sim, &app);
     }
 }
+
+/// The History and Workout rows show the date in each DATE FORMAT, numbers only: beside the distance or the time, the
+/// label fits its row.
+#[test]
+fn date_rows_fit_in_each_format() {
+    use crate::DateFormat::{Dmy, Mdy, Ymd};
+    for f in [Dmy, Mdy, Ymd] {
+        let label = crate::date_numbers((2026, 12, 31), f);
+        for value in ["123.4", "10:30"] {
+            assert!(ui::LABEL.width(label.as_str()) <= ui::menu_label_w(label.as_str(), value), "{f:?} {value}");
+        }
+    }
+}

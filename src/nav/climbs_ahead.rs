@@ -167,6 +167,8 @@ pub struct Ahead {
     end: End,
     climbs: [Climb; KEPT],
     n_climbs: usize,
+    /// CLIMBS MEDIUM+: only the climbs of [`Climb::medium_plus`] are kept (set by the app, see [`Ahead::set_medium`]).
+    medium: bool,
     along_m: u32,
     seg: usize,
     off_s: u8,
@@ -264,6 +266,7 @@ impl Ahead {
             end: End::Length,
             climbs: [Climb { start_m: 0, len_m: 0, gain_m: 0 }; KEPT],
             n_climbs: 0,
+            medium: false,
             along_m: 0,
             seg: 0,
             off_s: 0,
@@ -294,6 +297,20 @@ impl Ahead {
     #[cfg(test)]
     pub fn trails(&self) -> bool {
         self.trails
+    }
+
+    /// CLIMBS MEDIUM+ as the settings say, before any trace (no abort: `App::set_ahead_memory` calls it).
+    pub fn preset_medium(&mut self, on: bool) {
+        self.medium = on;
+    }
+
+    /// CLIMBS MEDIUM+ on or off; a change drops the trace (and the climbs found) so it is made again.
+    pub fn set_medium(&mut self, on: bool) {
+        if self.medium != on {
+            self.medium = on;
+            self.maps.abort(&mut self.graph);
+            (self.phase, self.n, self.have, self.n_climbs, self.retry_s) = (Phase::Idle, 0, false, 0, 0);
+        }
     }
 
     /// Trails mode on or off; a change drops the trace (and what it found) so it is made again, the tiles stay.
@@ -712,10 +729,8 @@ impl Ahead {
         self.smooth();
         let total = self.len_m();
         let (all, n) = Course::climbs_of(total, |d| self.alt_at(d));
-        for (slot, c) in self.climbs.iter_mut().zip(all.iter().take(n.min(CLIMBS))) {
-            *slot = *c;
-        }
-        (self.n_climbs, self.end, self.have) = (n.min(KEPT), end, true);
+        let kept = keep_climbs(all.get(..n.min(CLIMBS)).unwrap_or(&[]), self.medium, &mut self.climbs);
+        (self.n_climbs, self.end, self.have) = (kept, end, true);
         (self.seg, self.along_m, self.off_s) = (0, 0, 0);
     }
 
@@ -1448,5 +1463,33 @@ pub(crate) mod tests {
             grades.last()
         );
         assert!(made > 100);
+    }
+}
+
+/// The climbs kept, in order, into `out` (from its start): all of them, or with `medium` only those of
+/// [`Climb::medium_plus`]. Returns how many; a climb past the end of `out` is dropped.
+pub fn keep_climbs(all: &[Climb], medium: bool, out: &mut [Climb]) -> usize {
+    let mut kept = 0;
+    for c in all.iter().filter(|c| !medium || c.medium_plus()) {
+        let Some(slot) = out.get_mut(kept) else { break };
+        *slot = *c;
+        kept += 1;
+    }
+    kept
+}
+
+#[cfg(test)]
+mod medium_tests {
+    use super::*;
+
+    /// CLIMBS MEDIUM+ keeps the climb of 160 m of gain (score 16000) and over, not the one under it.
+    #[test]
+    fn only_the_medium_climb_is_kept() {
+        let all = [Climb { start_m: 0, len_m: 1000, gain_m: 100 }, Climb { start_m: 5000, len_m: 2000, gain_m: 200 }];
+        let mut out = [Climb { start_m: 0, len_m: 0, gain_m: 0 }; 2];
+        assert_eq!(keep_climbs(&all, false, &mut out), 2);
+        assert_eq!(keep_climbs(&all, true, &mut out), 1);
+        assert_eq!(out[0], all[1]);
+        assert_eq!(keep_climbs(&all, true, &mut out[..0]), 0, "no room, nothing kept");
     }
 }

@@ -153,7 +153,7 @@ fn long_reads_spread_over_passes() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Workouts));
     pass(&mut sim, &mut app, w, "workouts", |sim, app| app.press(sim, Press::Short(Key::Start)));
     assert_eq!(app.screen(), Screen::Menu(Menu::Workouts, 0));
-    assert_eq!(app.menu_row(Menu::Workouts, 0).unwrap().0.as_str(), "FRI 23 OCT", "today's still first");
+    assert_eq!(app.menu_row(Menu::Workouts, 0).unwrap().0.as_str(), "23/10/2026", "today's still first");
     std::println!("the most read in a pass: {} KB ({})", worst.0 / 1024, worst.1);
     assert!(worst.0 <= MAX, "{} B in one pass ({})", worst.0, worst.1);
 }

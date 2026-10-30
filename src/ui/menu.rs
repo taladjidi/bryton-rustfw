@@ -122,6 +122,12 @@ pub enum Setting {
     BikeProfile,
     /// Climbs found on the road ahead when no course is followed, on or off (`climbs_ahead`).
     ClimbsAhead,
+    /// CLIMBS (BIKE): the climbs ahead are ALL or MEDIUM+ (category 3 and harder).
+    ClimbsMedium,
+    /// CLIMB PAGE (BIKE): the climb page is on or off (off, it is skipped in the paging).
+    ClimbPage,
+    /// DATE FORMAT (DISPLAY): D/M/Y, M/D/Y or Y-M-D.
+    DateFormat,
     /// The font of every text: PIXEL (dot matrix, the default) or BARLOW ([`crate::fonts::smooth`]).
     Font,
     /// The colour theme: AUTO (day or night by the ambient light), DARK, OUTDOOR or a file of `\Rustfw\Themes`
@@ -272,6 +278,9 @@ impl Setting {
             Setting::Altitude => "ALTITUDE",
             Setting::BikeProfile => "PROFILE",
             Setting::ClimbsAhead => "CLIMBS AHEAD",
+            Setting::ClimbsMedium => "CLIMBS",
+            Setting::ClimbPage => "CLIMB PAGE",
+            Setting::DateFormat => "DATE FORMAT",
             Setting::PowerMatch => "POWER MATCH",
             Setting::Lthr => "LTHR",
             Setting::ZonesBy => "ZONES BY",
@@ -830,7 +839,7 @@ pub const ALERTS: [Row; 14] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 10] = [
+pub const DISPLAY: [Row; 11] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
@@ -839,19 +848,22 @@ pub const DISPLAY: [Row; 10] = [
     Row::Set(Setting::DayTheme),
     Row::Set(Setting::NightTheme),
     Row::Set(Setting::Units),
+    Row::Set(Setting::DateFormat),
     Row::Set(Setting::Temp),
     Row::Set(Setting::Sound),
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 18] = [
+pub const BIKE: [Row; 20] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
     Row::AltGps,
     Row::Set(Setting::BikeProfile),
     Row::Set(Setting::ClimbsAhead),
+    Row::Set(Setting::ClimbsMedium),
+    Row::Set(Setting::ClimbPage),
     Row::Set(Setting::GpsPower),
     Row::Set(Setting::PowerMatch),
     Row::Set(Setting::PowerSmooth),
