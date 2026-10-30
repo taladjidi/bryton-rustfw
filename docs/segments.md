@@ -73,7 +73,7 @@ segments too is S9, optional.
 ## On the unit
 
 **Memory.** AXI SRAM had about 15 KB left before the segments took 12.9 KB; the scan's cache then went from
-4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->66 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
+4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->63 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
 bounding box, distance, name's first 12 characters, enabled: 32 bytes) for at most 128 segments is 4 KB; the active
 segment (400 points as i32 lat / lon = 3.2 KB, times as u16 seconds for up to 4 targets = 3.2 KB) is 6.4 KB. One
 active segment at a time. If it does not fit next to the courses, stop and report the numbers before moving any
@@ -115,11 +115,41 @@ for alarms only, features.md).
   the target are kept in the settings file (roadmap block 1, step T0); the per-segment enable in the index, written
   as the header's 0x1fd byte between rides.
 
-**Efforts.** At the finish the effort (id, date, time, and its time at each point as u16) is kept in RAM. After the
-ride is saved, never before, it is written to `\Rustfw\Segments\<id>.pr` when it beats the PR or there is none
-(two copies with a CRC, as the settings file), and `\Rustfw\Segments\efforts.csv` gets a line (id, date, time) for
-the computer tool. The `.pr` file becomes the PR target the next time (it wins over the source's PR). A ride
-discarded writes nothing. A FIT `segment_lap` message in the ride file: not in v1.
+**Efforts** (S5, done 2026-10-30; app/segments.rs). While a segment is ridden, its time at each point is kept as the
+rider passes it (interpolated between the two fixes around the point; the points left at the finish between the last
+fix and the finish), in one of 4 slots (820 B each, 3.3 KB in all beside the segments' static); a fifth finish in a
+ride, or one over 65535 s, is counted and dropped. At the finish the effort (id, start date, time, the times) is kept.
+Written only once the ride is saved: the clean copy's save done (read back whole, named in `\Activities`), then both
+copies done and no ride open (`App::ride_settled`), one effort a pass, on an `EMMC_WRITE=1` build. A ride discarded,
+kept in `\Rustfw\Rides` or given up has its efforts dropped, unwritten; a reset loses those not written yet, never
+the ride. For each:
+- `\Rustfw\Segments\<id>.pr` when it beats the PR (strictly faster than the newest whole `.pr` for the same points,
+  and than the PR the segment had when ridden), the copy with the higher sequence number written over the other;
+- a line `id,date,elapsed_s` appended to `\Rustfw\Segments\efforts.csv` (made with that header line if missing; the
+  date is the effort's start, UTC, `2026-10-30T09:12:05Z`): the last sector written again, then the size.
+
+The folder is never made there (a segment was loaded from it) and nothing goes in `\Rustfw` itself. A failure (a card
+full, an error) is counted and the effort dropped, never tried again. Cut at every sector (segment_tests.rs): the ride
+file and its records as they were, the `.pr` old or new and whole, the csv with or without the line, at most one FAT
+sector apart and one cluster lost (the cut inside a cluster's taking, as any FAT write).
+
+At the next load of the segment, a `.pr` whose id and point count are the segment's gives the PR column (it wins over
+the source's PR, or fills it); anything else is ignored. The per-segment enable byte (0x1fd) is not written yet (its
+meaning is S4's). A FIT `segment_lap` message in the ride file: not in v1.
+
+The `.pr` file: 2048 bytes, two copies of 1024 (nav/segment.rs `PrCopy`), little endian:
+
+| Offset | Content |
+|---|---|
+| 0 | `RSPR` |
+| 4 | version u16, 1 |
+| 6 | npoints u16, 2 to 400 |
+| 8 | seq u32 (higher is newer) |
+| 12 | id u32 |
+| 16 | date u32, FIT time of the start |
+| 20 | total u32 s, the last point's time |
+| 24 | npoints x u16 s, the first 0, never falling |
+| 1020 | CRC-32 of 0..1020 |
 
 ## On the computer: tools/segments.py
 
@@ -171,7 +201,7 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
 | S2 (done 2026-10-30) | The matcher in `src/nav/segment_match.rs` (decisions below the table): near, start, progress (course.rs's code), lost, finish, the ghost's delta; host tests with synthetic tracks: a clean pass, a start missed by 30 m, a U-turn, a stop, lost and found, two overlapping segments, a segment along a course | implementer (sonnet) |
 | S3 (done 2026-10-30) | `src/app/segments.rs`: the index at the first pass, the active segment loaded, fed from the GNSS fix each second; nothing written; sim tests over a whole ride on a synthetic segment | implementer (sonnet) |
 | S4 | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |
-| S5 | The efforts written after the save (`.pr`, `efforts.csv`), the per-segment enable byte | critical, then reviewer on opus |
+| S5 (done 2026-10-30) | The efforts written after the save (`.pr`, `efforts.csv`); the per-segment enable byte left to S4 | critical, then reviewer on opus |
 | S6 (done 2026-10-30) | `tools/segments.py` from Intervals.icu (fetch, build, write); selftest in check.sh | implementer (sonnet) |
 | S7 | Segments from the rider's own rides, no Strava: stretches ridden at least twice (the overlap of two rides' tracks over 1 km), made into `.seg` files by `segments.py own` on the computer first; on the unit later if wanted | implementer (sonnet) |
 | S8 | Licensed Live Segments, if Strava grants it: `segments.py live` fills carrot, wolf, most recent, best of 5 and the KOM's real splits from `/live/segments/:id`; later the phone app does the same over BLE | implementer |

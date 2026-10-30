@@ -441,6 +441,7 @@ impl App {
         self.rec.clean.keep_up(&self.rec.full);
         self.rec.full.keep_up(&self.rec.clean);
         let was_held = self.rec.clean.held();
+        let recovering = self.rec.resume_pending;
         let o = if self.rec.resume_pending {
             let o = self.rec.clean.recover(&mut emmc::Volume(&mut self.emmc, b), local);
             // a card that failed at boot is tried again (the marker stays until the ride is found)
@@ -475,6 +476,11 @@ impl App {
             }
             recorder::Outcome::Saved(_) => {
                 self.notice("RIDE SAVED");
+                if !recovering {
+                    // this run's ride, read back whole and named in \Activities: its segment efforts may be written
+                    // (app/segments.rs, once both copies are done); never an earlier run's ride the boot saved
+                    self.segments_ride_saved();
+                }
                 if let Some(t) = self.thresholds.as_deref_mut() {
                     t.reset(); // its full copy read too, when FITNESS next shows
                 }

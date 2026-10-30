@@ -254,8 +254,7 @@ impl App {
     }
 
     /// Copy `slot` (0 or 1) of `\Rustfw\<name>` written with `sector`, the other untouched; the file created (or
-    /// grown) with both, the other zeros, when it is not whole. None: no volume.
-    #[inline(never)] // its 1 KB buffer in its own frame
+    /// grown) with both, the other zeros, when it is not whole ([`write_copy_in`]). None: no volume.
     pub(crate) fn write_copy(
         &mut self,
         b: &mut impl Board,
@@ -266,21 +265,10 @@ impl App {
         let t = fat::write::dos_time(self.rec_time().0);
         let mut d = emmc::Volume(&mut self.emmc, b);
         let mut fat = fat::Fat::mount(&mut d).ok()?;
-        Some((|| {
-            let dir = fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)?;
-            let mut h = match fat.locate(&mut d, dir, name) {
-                Err(fat::Error::NotFound) => fat.create(&mut d, dir, name, t)?,
-                other => other?,
-            };
-            if h.size == 1024 {
-                return fat.write_sectors(&mut d, &mut h, slot, sector); // the other copy untouched
-            }
-            let mut both = [0u8; 1024];
-            let at = 512 * (slot as usize % 2);
-            both[at..at + 512].copy_from_slice(sector);
-            fat.write_sectors(&mut d, &mut h, 0, &both)?;
-            fat.set_size(&mut d, &mut h, 1024, t)
-        })())
+        Some(
+            fat.ensure_dir(&mut d, fat.root(), recorder::DIR, t)
+                .and_then(|dir| write_copy_in(&mut fat, &mut d, dir, name, slot, sector, t)),
+        )
     }
 
     /// The file read now if it was not yet: before any change to the pages, so a change made in the first seconds
@@ -729,4 +717,34 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// Copy `slot` (0 or 1) of file `name` in `dir`, a file of two copies of `copy.len()` bytes (whole sectors: pages.bin,
+/// settings.bin, a segment's `.pr`), written with `copy`, the other untouched; the file created (or made whole) with
+/// both, the other zeros, when it is not twice that size. Its size is written last, so a reader (which takes only a
+/// whole file) sees the file as it was until then; over a whole file only the copy's own sectors are written.
+pub(crate) fn write_copy_in(
+    fat: &mut fat::Fat,
+    d: &mut impl fat::DiskWrite,
+    dir: fat::File,
+    name: &str,
+    slot: u32,
+    copy: &[u8],
+    t: (u16, u16),
+) -> Result<(), fat::Error> {
+    let k = u32::try_from(copy.len() / 512).map_err(|_| fat::Error::Corrupt)?;
+    let whole = 2 * k * 512;
+    let mut h = match fat.locate(d, dir, name) {
+        Err(fat::Error::NotFound) => fat.create(d, dir, name, t)?,
+        other => other?,
+    };
+    let (mine, other) = if slot.is_multiple_of(2) { (0, k) } else { (k, 0) };
+    fat.write_sectors(d, &mut h, mine, copy)?;
+    if h.size == whole {
+        return Ok(()); // the other copy untouched
+    }
+    for s in 0..k {
+        fat.write_sectors(d, &mut h, other + s, &[0u8; 512])?;
+    }
+    fat.set_size(d, &mut h, whole, t)
 }

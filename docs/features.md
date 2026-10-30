@@ -668,6 +668,19 @@ Hammerhead's Climber do.
   class (index 1, inferred paths and steps) only when the rider is on one already.
 - **BIKE > CLIMBS AHEAD** turns it off (ON by default; kept in register 11's tag).
 
+## Live segments
+
+Segments from `\Rustfw\Segments\<id>.seg` (docs/segments.md; made by `tools/segments.py` from Intervals.icu), found
+and followed while riding: the start, the delta against the PR (else the KOM) along the way, the finish. The page,
+banners and menu are step S4 (not built yet).
+- **Efforts:** at a finish the effort (its time at each of the segment's points, as ridden) is kept in RAM, at most 4
+  a ride. Only after the ride is saved (read back whole, in `\Activities`) and never for a ride discarded, each is
+  written between rides: `\Rustfw\Segments\<id>.pr` when it beats the PR (two copies with a CRC, as settings.bin, so
+  a cut leaves the old PR or the new one), and a line `id,date,elapsed_s` in `\Rustfw\Segments\efforts.csv` for the
+  computer. A write that fails (a card full) drops the effort, never the ride.
+- **Your PR is the target:** the next time the segment is loaded, its `.pr` times are the PR column (in place of the
+  source's, or where it had none); a `.pr` for other points (the segment rebuilt) is ignored.
+
 ## Stock data
 
 What Bryton's firmware left on the card, read only (nothing of stock's is ever written; HISTORY's DELETE moves a ride's file, above), from HISTORY > FITNESS (and SETTINGS > SYSTEM > IMPORT FROM
