@@ -867,6 +867,27 @@ pub(crate) mod tests {
         }
     }
 
+    /// Both overview variants are tables of boxes that tile their area (the TODAY card's, the four fields' below),
+    /// touch nothing else, and hold their values at both ends of the metrics (Frame panics off screen).
+    #[test]
+    fn overview_variants_tile_and_fit() {
+        let table: Vec<_> = (0..).map_while(table_box).collect();
+        let fields: Vec<_> = (0..).map_while(overview_box).collect();
+        assert_eq!((table.len(), fields.len()), (TABLE.len(), 4));
+        for (boxes, (ay, ah)) in [(&table, (TODAY_BOX.1, TODAY_BOX.3)), (&fields, (OVERVIEW_Y, OVERVIEW_H))] {
+            assert_eq!(boxes.iter().map(|b| b.2 * b.3).sum::<u32>(), W * ah, "the boxes tile their area");
+            assert!(boxes.iter().all(|b| b.0 + b.2 <= W && b.1 >= ay && b.1 + b.3 <= ay + ah));
+        }
+        for theme in metric_ends() {
+            let mut f = Frame::themed(theme);
+            for (&bx, field) in table.iter().zip(TABLE) {
+                draw_field_frame_bar(&mut f, bx, field, GREEN);
+                draw_field_value(&mut f, bx, field.widest(), WHITE);
+                assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{field:?} readable at bar {}", theme.zone_bar);
+            }
+        }
+    }
+
     /// The ride boxes tile the field area exactly, every value fits its box, and the top line stays
     /// clear (Frame panics on anything off screen).
     #[test]

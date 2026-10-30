@@ -27,6 +27,17 @@ pub fn overview_box(i: usize) -> Option<(u32, u32, u32, u32)> {
     Some((x, y - RIDE_Y + OVERVIEW_Y, w, h))
 }
 
+/// What the `fields` overview's table holds, box by box (the TODAY card's place, 2 x 2 like the fields below it):
+/// the time of day, the next workout's length, this year's km and this week's hours (the four fields below keep
+/// the user's own choice).
+pub const TABLE: [Field; 4] = [Field::Time, Field::Workout, Field::YearKm, Field::WeekH];
+
+/// Box `i` of the `fields` overview's table: [`TODAY_BOX`]'s rows, the width of the screen like the fields'.
+pub fn table_box(i: usize) -> Option<(u32, u32, u32, u32)> {
+    let (x, y, w, h) = rows_box(&[(1, 2), (1, 2)], TODAY_BOX.3, i)?;
+    Some((x, y - RIDE_Y + TODAY_BOX.1, w, h))
+}
+
 /// The date row: the date centred in the row left of the cog (the screen's centre would run a 10-character date at
 /// 3x into it), white, the cog right.
 pub fn draw_date(c: &mut impl Canvas, date: &str) {

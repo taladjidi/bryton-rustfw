@@ -57,8 +57,8 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
 - ~~**T5. Day and night**~~ done, sim only (theming.md section 4b): THEME AUTO, DAY THEME and NIGHT THEME, switched from
   the ambient light (ui/theme.rs `DayNight`, app/themes.rs): night under 20 lux, day over 50 lux, each held 30 s, at most
   one switch a minute, a full redraw each. Agent: implementer.
-- **T6. Overview variants** (theming.md phase 3): `overview = classic | fields`, each a table of boxes checked like
-  page.rs. Agent: implementer (sonnet).
+- ~~**T6. Overview variants**~~ done, sim only (theming.md phase 3): `[theme] overview = classic | fields` (ui/overview.rs
+  `TABLE`, `table_box`), each a table of boxes checked like page.rs at both ends of the metrics.
 - **T7. Tools and docs**: `tools/theme.py` writes the built-in themes as example files to a mounted drive and
   renders a file through the simulator (`preview FILE`); features.md lists every key, kept in step by a test.
   Agent: mechanic.

@@ -4038,7 +4038,7 @@ fn settings_decision() {
 #[test]
 fn theme_files() {
     use crate::theme::{NAMES, Refused, Theme, check, parse};
-    let (mut accepted, mut light, mut clamped) = (0, 0usize, 0usize);
+    let (mut accepted, mut light, mut clamped, mut fields) = (0, 0usize, 0usize, 0usize);
     let (mut refused, mut metric_reach) = ([0usize; 5], [0usize; 3]);
     let mut set = [false; NAMES.len()];
     for seed in 1..4000u32 {
@@ -4056,6 +4056,12 @@ fn theme_files() {
             }
             if rnd().is_multiple_of(3) {
                 f.push_str(["base = outdoor", "base = dark", "base = ??", "base = light"][rnd() as usize % 4]);
+                f.push_str(nl);
+            }
+            if rnd().is_multiple_of(3) {
+                f.push_str(
+                    ["overview = fields", "overview = classic", "overview = grid", "overview = "][rnd() as usize % 4],
+                );
                 f.push_str(nl);
             }
         }
@@ -4102,6 +4108,7 @@ fn theme_files() {
             Ok(t) => {
                 accepted += 1;
                 assert!((4..=8).contains(&t.zone_bar) && (1..=4).contains(&t.frame) && (44..=56).contains(&t.menu_row));
+                fields += usize::from(t.overview == crate::theme::Overview::Fields);
                 metric_reach[0] += usize::from(t.zone_bar != 8);
                 metric_reach[1] += usize::from(t.frame != 3);
                 metric_reach[2] += usize::from(t.menu_row != 44);
@@ -4124,6 +4131,7 @@ fn theme_files() {
     }
     assert!(accepted > 100, "accepted {accepted}");
     assert!(light > 0, "a theme accepted over the light base");
+    assert!(fields > 20, "overview = fields reached: {fields}");
     assert!(metric_reach.iter().all(|&n| n > 5) && clamped > 20, "metrics set: {metric_reach:?}, at an end {clamped}");
     assert!(refused.iter().all(|&n| n > 0), "every refusal reached: {refused:?}");
     assert!(set.iter().filter(|&&s| s).count() >= NAMES.len() - 2, "keys set from a file: {set:?}");

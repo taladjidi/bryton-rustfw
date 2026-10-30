@@ -104,6 +104,17 @@ impl Refused {
     }
 }
 
+/// How the overview is laid out (`[theme] overview`): `Classic` is the TODAY card over the four chosen fields; `Fields`
+/// swaps the card for a 2 x 2 table of field boxes ([`crate::ui::TABLE`]: the time, the next workout, the year's km,
+/// the week's hours).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Overview {
+    /// The TODAY card.
+    Classic,
+    /// A table of field boxes in the card's place.
+    Fields,
+}
+
 /// A theme, resolved: the colour each key is drawn in (and the font, from the FONT setting). Copy, no heap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -117,6 +128,8 @@ pub struct Theme {
     pub frame: u32,
     /// Menu row pitch, px ([`MENU_ROW`] range): what is drawn and the rows a tap lands on.
     pub menu_row: u32,
+    /// The overview's layout ([`Overview`]).
+    pub overview: Overview,
 }
 
 /// Bounds of the metrics a theme file may set, as (least, built-in, most) in px. A value outside is clamped (a colour
@@ -132,8 +145,14 @@ pub const MENU_ROW: (u32, u32, u32) = (44, 44, 56);
 
 impl Theme {
     /// The built-in metrics (the colours of the struct are filled in over them).
-    const METRICS: Theme =
-        Theme { ink: KEYS, smooth: false, zone_bar: ZONE_BAR.1, frame: FRAME.1, menu_row: MENU_ROW.1 };
+    const METRICS: Theme = Theme {
+        ink: KEYS,
+        smooth: false,
+        zone_bar: ZONE_BAR.1,
+        frame: FRAME.1,
+        menu_row: MENU_ROW.1,
+        overview: Overview::Classic,
+    };
 
     /// DARK: today's colours exactly (the text colours on the accent and the alarm are black and white).
     pub const DARK: Theme = {
@@ -345,6 +364,11 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
             *slot = c;
         }
     }
+    match value("theme", "overview") {
+        Some(v) if v.eq_ignore_ascii_case(b"fields") => t.overview = Overview::Fields,
+        Some(v) if v.eq_ignore_ascii_case(b"classic") => t.overview = Overview::Classic,
+        _ => {} // anything else: ignored, as a colour that does not parse
+    }
     for (key, range, slot) in [
         ("zone_bar", ZONE_BAR, &mut t.zone_bar),
         ("frame", FRAME, &mut t.frame),
@@ -446,6 +470,16 @@ impl DayNight {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn overview_is_classic_or_fields() {
+        let o = |v: &str| parse(std::format!("[theme]\nversion=1\noverview={v}\n").as_bytes()).unwrap().overview;
+        assert_eq!(
+            (o("fields"), o("FIELDS ; x"), o("classic")),
+            (Overview::Fields, Overview::Fields, Overview::Classic)
+        );
+        assert_eq!((o("grid"), o(""), Theme::DARK.overview), (Overview::Classic, Overview::Classic, Overview::Classic));
+    }
 
     /// The metrics of `[metrics]`: clamped to their range, a word that is no number ignored, the built-ins as they were.
     #[test]
