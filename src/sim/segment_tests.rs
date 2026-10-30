@@ -6,6 +6,7 @@ use super::tests::run; // not the parent's `run`, which the glob would give
 use super::*;
 use crate::segment::tests::synth;
 use crate::segment_match::{Event, tests::at};
+use std::string::{String, ToString};
 
 const ID: u32 = 4_000_000_001;
 const CODES: [[u8; 2]; 5] = [*b"07", *b"05", *b"06", *b"12", *b"13"];
@@ -215,4 +216,128 @@ fn segment_ends_with_the_ride() {
     app.end_ride();
     run(&mut sim, &mut app, 2000);
     assert!(app.segment_now().is_none());
+}
+
+fn slower(ms: u64) -> (i32, i32, i32) {
+    east(ms, 4.0)
+}
+
+/// Pixels of `color` in the delta's box (the page's big line).
+fn in_delta_box(sim: &Sim, color: u16) -> usize {
+    let (y0, y1) = (ui::PAGE_Y + 26, ui::PAGE_Y + 90);
+    (y0..y1).map(|y| (0..ui::W).filter(|&x| sim.screen[(y * ui::W + x) as usize] == color).count()).sum()
+}
+
+/// Rides `route` for `seconds`, one second at a time, and collects the banners said and the screens visited.
+fn watch(route: fn(u64) -> (i32, i32, i32), seconds: u64) -> (Sim, App, Vec<String>, Vec<Screen>) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(route);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (mut banners, mut screens) = (Vec::<String>::new(), Vec::<Screen>::new());
+    for _ in 0..seconds {
+        run(&mut sim, &mut app, 1000);
+        if app.notes.ms.is_some() && banners.last().map(String::as_str) != Some(app.notes.text.as_str()) {
+            banners.push(app.notes.text.as_str().to_string());
+        }
+        if screens.last() != Some(&app.screen()) {
+            screens.push(app.screen());
+        }
+    }
+    (sim, app, banners, screens)
+}
+
+/// The approach banner with the name, the page over the ride page, the finish banner and the card, then back.
+#[test]
+fn page_banners_card_and_back() {
+    let (mut sim, mut app, banners, screens) = watch(faster, 240);
+    assert!(banners.iter().any(|b| b == "SEGMENT Test climb 300 M"), "{banners:?}");
+    let fin = banners.iter().find(|b| b.starts_with("SEGMENT 2:")).unwrap_or_else(|| panic!("{banners:?}"));
+    assert!(fin.contains(" -0:"), "ahead: {fin}");
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Segment).count(), 1, "{screens:?}");
+    assert_eq!(screens.last(), Some(&Screen::SegmentResult), "{screens:?}");
+    sim.save("segment_card");
+    app.press(&mut sim, Press::Short(Key::Page)); // any key
+    run(&mut sim, &mut app, 500);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "{:?}", app.screen());
+    // the card closes by itself after 10 s
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    run(&mut sim, &mut app, 11_000);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "{:?}", app.screen());
+}
+
+/// Ahead is green, behind is the accent, never red; the sign is in the text.
+#[test]
+fn delta_sign_and_colour() {
+    let (sim, app, ..) = watch(faster, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    assert!(app.segment_now().unwrap().delta_s.unwrap() < 0);
+    sim.save("segment_ahead");
+    assert!(in_delta_box(&sim, ui::GREEN) > 100 && in_delta_box(&sim, ui::ACCENT) == 0);
+    let (sim, app, ..) = watch(slower, 140);
+    assert_eq!(app.screen(), Screen::Segment);
+    assert!(app.segment_now().unwrap().delta_s.unwrap() > 0);
+    sim.save("segment_behind");
+    assert!(in_delta_box(&sim, ui::ACCENT) > 100 && in_delta_box(&sim, ui::GREEN) == 0);
+    assert_eq!(in_delta_box(&sim, ui::RED), 0);
+}
+
+/// LIVE SEGMENTS off: no event, no page, no banner. A key dismisses the page and it does not come back.
+#[test]
+fn off_and_dismissed() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    app.settings.live_segments = false;
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200_000);
+    assert!(events(&app).is_empty() && !matches!(app.screen(), Screen::Segment | Screen::SegmentResult));
+    let (mut sim, mut app, ..) = watch(pr_pace, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "dismissed");
+}
+
+/// The page's second costs a few boxes, not a screen (docs/devloop.md: pixels a second).
+#[test]
+fn page_redraw_cost() {
+    let (mut sim, mut app, ..) = watch(pr_pace, 110);
+    assert_eq!(app.screen(), Screen::Segment);
+    let (px, w0, t0) = (sim.pixels, sim.windows, sim.ms);
+    run(&mut sim, &mut app, 20_000);
+    let (per_s, win_s) = ((sim.pixels - px) * 1000 / (sim.ms - t0), (sim.windows - w0) * 1000 / (sim.ms - t0));
+    std::println!("segment page: {per_s} px/s, {win_s} windows/s");
+    assert!(per_s < 8000, "{per_s} px/s");
+}
+
+/// The SEGMENTS menu: the two settings, the segment with its distance and gain, the skipped files.
+#[test]
+fn segments_menu_lists_the_card() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 9000);
+    app.open(Screen::Menu(Menu::Segments, 2));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 1500);
+    let row = |i| app.menu_row(Menu::Segments, i).map(|(l, v, _)| (l.as_str().to_string(), v.as_str().to_string()));
+    assert_eq!(row(0), Some(("LIVE SEGMENTS".into(), "ON".into())));
+    assert_eq!(row(1), Some(("TARGET".into(), "AUTO".into())));
+    let (name, value) = row(2).unwrap();
+    assert_eq!(name, "Test climb");
+    assert!(value.ends_with('M') && value.contains("K "), "{value}");
+    assert_eq!(row(3), Some(("SKIPPED FILES".into(), "3".into())));
+    assert_eq!(row(4), None);
+    sim.save("segment_menu");
 }

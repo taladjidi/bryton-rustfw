@@ -124,3 +124,12 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|
 | ![Lap banner](img/auto-lap.png) | |
 | AUTO LAP BY DISTANCE 5 km: the banner of lap 1 with its number, time, distance and average speed (sim) | |
+
+## Live segments
+
+| | | |
+|:-:|:-:|:-:|
+| ![Segment page, ahead](img/segment-ahead.png) | ![Segment page, behind](img/segment-behind.png) | ![Result card](img/segment-card.png) |
+| The SEGMENT page ahead of the PR: the delta in green, the two marks on the bar (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
+| ![SEGMENTS menu](img/segment-menu.png) | | |
+| MENU > SEGMENTS: the two settings, the segments of the card, the skipped files (sim) | | |

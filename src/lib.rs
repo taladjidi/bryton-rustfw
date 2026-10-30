@@ -362,6 +362,8 @@ pub struct App {
     courses: Option<&'static mut storage::course_file::Courses>,
     /// The live segments: index, active segment, matcher (memory from main.rs: [`App::set_segment_memory`]).
     segments: Option<&'static mut Segments>,
+    /// The live segment screens' state (app/segment_ui.rs).
+    seg_ui: SegUi,
     /// The recent full copies read for the heart rate variability thresholds (FITNESS, app/fitness.rs; memory from
     /// main.rs: [`App::set_threshold_memory`], 5 KB the app has no room for).
     thresholds: Option<&'static mut thresholds::Scan>,
@@ -517,6 +519,7 @@ impl App {
             card_writable: false,
             courses: None,
             segments: None,
+            seg_ui: SegUi::new(),
             pace: PaceState::new(),
             thresholds: None,
             ahead: None,
@@ -606,6 +609,7 @@ impl App {
         self.catch_up_seconds(sec);
         self.settle_set(b);
         self.settle_climb(b);
+        self.settle_segment(b);
         if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);
@@ -648,6 +652,7 @@ impl App {
             t = self.timed(b, Sec::Scan, t);
             self.step_courses(b);
             self.step_segments(b);
+            self.step_segment_ui(b);
             t = self.timed(b, Sec::Files, t);
             self.step_ahead(b);
             t = self.timed(b, Sec::Ahead, t);

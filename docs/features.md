@@ -366,6 +366,8 @@ ROAD PAGES > PAGE 1 > LAYOUT), the diagnostics under SYSTEM:
 MENU
  +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step; last row RAMP TEST
  +- COURSES >      the course files (green: followed); Start follows or stops
+ +- SEGMENTS >     LIVE SEGMENTS on / off, TARGET (AUTO, PR, KOM, QOM, RECENT), the segments of the card (name, distance,
+ |                 gain; read only), the files skipped
  +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, EST FTP, MODEL, APPLY FTP, APPLY W', HRVT1 AET, HRVT2,
  |                 RIDES, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
  +- PAGES >        ROAD PAGES >, INDOOR PAGES > -> OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT,
@@ -634,6 +636,24 @@ copied over USB into `\Courses`, read only:
   or the next climb's), UP LEFT M (the course's ascent left), and PROFILE: the course's elevation from the eighth of
   it the rider is in to the end, the rider's place, the ridden part dark, the climbs in the zone 2 to 5 colours by
   grade.
+
+## Live segments
+
+Segment files in `\Rustfw\Segments\` (`<id>.seg`, docs/segments.md) are matched against the ride once a second while it
+runs (SEGMENTS > LIVE SEGMENTS, ON by default). Put them on the card with `tools/segments.py` (`fetch`, `build`, `write
+--volume`, docs/segments.md): the unit never writes there.
+- **Approach**: a banner `SEGMENT <name> 300 M`, once. **Lost** (off the track 10 s, a U-turn, stopped 5 min): `SEGMENT LOST`.
+- **The SEGMENT page** opens by itself at the start, over the ride page the rider was on (only while recording, not over
+  a menu), and goes back at the end or when lost. Name, the delta in big digits (`-0:12` ahead in GREEN, `+0:08` behind in
+  the accent, never red), the target's label (`VS PR`), a bar with two marks (white: the rider, grey: the target's ghost),
+  the time and the distance left. Start and Lap keep their ride meaning; any other key closes the page, and it does not
+  reopen for that segment. Only the changed characters and marks are redrawn, once a second.
+- **The finish**: a banner with the time and the delta, then the result card (the time, the delta against each target
+  the file keeps, NEW PR when the PR is beaten), closed by any key or after 10 s. The effort is not saved yet (S5).
+- **TARGET**: AUTO is the PR if the file has one, else the KOM; a target the file lacks falls back to AUTO.
+- LIVE SEGMENTS and TARGET are in settings.bin at data 97 and 98; an older file reads ON and AUTO.
+
+![Segment page, ahead](img/segment-ahead.png) ![Segment page, behind](img/segment-behind.png) ![Result card](img/segment-card.png) ![SEGMENTS menu](img/segment-menu.png)
 
 ## Climbs ahead (no course)
 

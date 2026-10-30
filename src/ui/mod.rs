@@ -8,6 +8,7 @@ pub mod media;
 pub mod menu;
 pub mod page;
 pub mod quick;
+pub mod segment;
 pub mod text;
 pub mod theme;
 pub mod tiles;

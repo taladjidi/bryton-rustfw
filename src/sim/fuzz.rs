@@ -3291,6 +3291,7 @@ fn settings_file() {
     let (mut refused, mut whole, mut short, mut defaulted) = (0u32, 0u32, 0u32, 0u32);
     let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
     let (mut lap_kept, mut lap_fell_back) = (0u32, 0u32); // AUTO LAP's three bytes
+    let (mut seg_kept, mut seg_fell_back) = (0u32, 0u32); // LIVE SEGMENTS' and TARGET's bytes
     let (mut auto_on, mut day_night_kept, mut day_night_fell_back) = (0u32, 0u32, 0u32); // AUTO, and DAY and NIGHT's names
     let (mut with_limit, mut wild_limit) = (0u32, 0u32); // limits read, and out of range ones read as 0
     let (mut with_lthr, mut wild_lthr, mut with_smooth, mut wild_smooth) = (0u32, 0u32, 0u32, 0u32);
@@ -3306,7 +3307,7 @@ fn settings_file() {
                 0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
                 1 => (next() % 31) as u16,      // an earlier build's
                 2 => 31 + (next() % 60) as u16, // a later build's
-                3 => 44 + (next() % 54) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO and the names: whole or cut
+                3 => 44 + (next() % 58) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO, the names and the segments' bytes: whole or cut
                 _ => 31,
             };
             s[6..8].copy_from_slice(&len.to_le_bytes());
@@ -3321,6 +3322,7 @@ fn settings_file() {
             let mut ps_w = None::<(u8, bool)>;
             let mut auto_w = None::<u8>; // AUTO at 69 (a byte: 0, 1, or out of its form)
             let mut lap_w = [None::<(u8, bool)>; 3]; // AUTO LAP, km, min at 94, 95, 96: written, and in range
+            let mut seg_w = [None::<(u8, bool)>; 2]; // LIVE SEGMENTS, TARGET at 97, 98: written, and in range
             let mut day_w = None::<([u8; 12], bool)>; // DAY THEME at 70, NIGHT THEME at 82: the name, and whether it is one
             let mut night_w = None::<([u8; 12], bool)>;
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
@@ -3416,6 +3418,18 @@ fn settings_file() {
                         *slot = Some((v, if k == 0 { v <= top } else { (1..=top).contains(&v) }));
                     }
                 }
+                for (k, (slot, top)) in seg_w.iter_mut().zip([2u8, 5]).enumerate() {
+                    if usize::from(len) >= 98 + k {
+                        // in range, or one past it
+                        let v = if next().is_multiple_of(3) {
+                            top + (next() % 200) as u8
+                        } else {
+                            (next() % u32::from(top)) as u8
+                        };
+                        s[28 + 97 + k] = v;
+                        *slot = Some((v, v < top));
+                    }
+                }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
             let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
@@ -3491,6 +3505,21 @@ fn settings_file() {
                             None => {}
                         }
                     }
+                    for (k, (w, got, def)) in
+                        [(seg_w[0], u8::from(st.live_segments), 1), (seg_w[1], st.seg_target as u8, 0)]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        match w {
+                            Some((v, ok)) => {
+                                assert_eq!(got, if ok { v } else { def }, "segments byte {k} written {v}");
+                                seg_kept += u32::from(ok);
+                                seg_fell_back += u32::from(!ok);
+                            }
+                            None if usize::from(len) < 98 + k => assert_eq!(got, def, "a cut file: the default"),
+                            None => {}
+                        }
+                    }
                     let again = SettingsCopy::from_sector(&SettingsCopy { seq: c.seq, ..c }.to_sector());
                     assert_eq!(again.map(|a| a.settings.limits), Some(st.limits), "the limits round trip");
                     assert!(st.light_level <= crate::LIGHT_AUTO && st.light_timeout < crate::LIGHT_TIMEOUTS_S.len());
@@ -3533,6 +3562,8 @@ fn settings_file() {
     std::println!("AUTO on {auto_on}, day and night names kept {day_night_kept}, fallen back {day_night_fell_back}");
     std::println!("AUTO LAP bytes kept {lap_kept}, fallen back {lap_fell_back}");
     assert!(lap_kept > 0 && lap_fell_back > 0, "AUTO LAP's bytes reached");
+    std::println!("LIVE SEGMENTS and TARGET bytes kept {seg_kept}, fallen back {seg_fell_back}");
+    assert!(seg_kept > 100 && seg_fell_back > 100, "the segments' bytes reached: {seg_kept} {seg_fell_back}");
     assert!(auto_on > 0 && day_night_kept > 0 && day_night_fell_back > 0, "every new path reached");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
     assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");

@@ -157,6 +157,10 @@ pub enum Screen {
     About,
     /// Notification `k` of the inbox in full (app/notifs.rs), its first line shown `top`.
     Notif(usize, usize),
+    /// The live SEGMENT page (app/segment_ui.rs), over the ride page it opened at.
+    Segment,
+    /// The result card of a segment just finished.
+    SegmentResult,
 }
 
 /// Places in the round of the ride pages: the workout page, the pages, then the course page.
@@ -372,6 +376,7 @@ impl App {
             Screen::RampResult => self.input_ramp(b, i, shown),
             Screen::PowerCal => self.input_powercal(b, i, shown),
             Screen::Trainer => self.input_trainer(b, i, shown),
+            Screen::Segment | Screen::SegmentResult => self.input_segment(b, i),
             Screen::Edit(..) => self.editor_input(b, i),
             Screen::End(_) | Screen::Discard(_) => self.end_input(b, i),
             Screen::Menu(..) => self.input_menu(b, i, armed, shown),
