@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->59 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->65 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->59 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->61 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -129,6 +129,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   request sent as an acknowledged message on the power channel.
 - `src/training/ramp.rs`: the FTP ramp test: its workout, the stop rules, the best minute and FTP, HRVT1 from DFA a1. Pure logic.
   `src/app/ramp.rs`: it played through the workout player, and the result screen (APPLY).
+- `src/training/hrtss.rs`: hrTSS, a training stress score from heart rate for a ride without power (Banister TRIMP against an
+  hour at LTHR; sex picks the constant). Pure logic.
 - `src/training/hrv.rs`: heart rate variability from the strap's RR intervals (`sensors::Beats`): RMSSD and DFA a1 (P9's
   algorithm), recomputed every 5 beats. Pure logic.
 - `src/drivers/battery.rs`: battery millivolts from the ADC readings, the charge estimate, when to switch off.

@@ -224,6 +224,12 @@ impl App {
         }
     }
 
+    /// The ride's TSS: from power, else (a ride without power) the hrTSS from heart rate and the LTHR ([`hrtss`]).
+    pub(crate) fn tss_now(&self) -> Option<u32> {
+        let s = &self.settings;
+        self.power.tss(s.ftp).or_else(|| self.hrtss.score(s.lthr, s.max_hr, s.female))
+    }
+
     /// The zone the bar of the held zone `i` (0 power, 4 heart rate, see [`App::field_bar`]) shows now, None for none.
     pub(crate) fn zone_now(&self, i: usize) -> Option<u8> {
         self.zones.get(i).map(ride::ZoneHold::shown).filter(|&z| z > 0)
@@ -518,7 +524,7 @@ impl App {
                 }
                 return l;
             }
-            Field::Tss => (p.tss(ftp), false),
+            Field::Tss => (self.tss_now(), false),
             Field::Kj => (Some(p.kj()), false),
             Field::Kcal => (Some(p.kcal()), false),
             Field::Wkg => (p.rolling(0).map(|w| power::wkg_x10(w, self.settings.weight_kg)), true),
@@ -584,14 +590,14 @@ impl App {
             (z, false) => ride::hr_color(z),
         };
         let held = |i: usize| self.zones.get(i).map_or(0, ride::ZoneHold::shown);
-        let (p, ftp) = (&self.power, self.settings.ftp);
+        let (p, zones) = (&self.power, self.settings.zones());
         match f {
             Field::Power => zone(held(0), true),
             Field::Power3s | Field::Power10s | Field::Power30s => zone(held(1 + self.settings.wkt_avg), true),
             Field::Hr => zone(held(4), false),
-            Field::Np => p.np().map_or(ui::BLACK, |w| ride::power_zone_color(w, ftp)),
-            Field::MaxPower => p.max().map_or(ui::BLACK, |w| ride::power_zone_color(w, ftp)),
-            Field::MaxHr => self.ride.max_hr().map_or(ui::BLACK, |v| ride::hr_zone_color(v, self.settings.max_hr)),
+            Field::Np => p.np().map_or(ui::BLACK, |w| zones.power_color(w)),
+            Field::MaxPower => p.max().map_or(ui::BLACK, |w| zones.power_color(w)),
+            Field::MaxHr => self.ride.max_hr().map_or(ui::BLACK, |v| zones.hr_color(v)),
             Field::Wbal => p.wbal_j().map_or(ui::BLACK, |j| power::wbal_color(j, self.cp_model().1)),
             // in ERG the trainer sets the watts: what the rider controls is cadence, and under 60 rpm the resistance
             // climbs (an alarm, so red)

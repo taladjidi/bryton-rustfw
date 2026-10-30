@@ -73,7 +73,7 @@ fn calendar(app: &App, days: &[(u8, &Workout)]) -> Calendar {
     let file = crate::fat::File { cluster: 0, size: 0, dir: false };
     for &(d, w) in days {
         let day = (app.date.0, app.date.1, app.date.2 + d);
-        c.add(Planned::of(day, file, w, (app.settings.ftp, app.settings.max_hr)));
+        c.add(Planned::of(day, file, w, app.settings.zones()));
     }
     c
 }
@@ -81,7 +81,7 @@ fn calendar(app: &App, days: &[(u8, &Workout)]) -> Calendar {
 /// Puts `c` where the app has it after reading the card.
 fn plan(app: &mut App, days: &[(u8, &Workout)]) {
     app.plan.calendar = calendar(app, days);
-    (app.plan.day, app.plan.zones) = (Some(app.date), (app.settings.ftp, app.settings.max_hr));
+    (app.plan.day, app.plan.zones) = (Some(app.date), app.settings.zones());
     app.plan.done_key = None;
 }
 
@@ -105,7 +105,13 @@ fn the_card_shows_todays_workout() {
     let p = app.today().unwrap().prof;
     for (k, &byte) in p.iter().enumerate() {
         let (h, color) = crate::storage::workout_file::unpack_bar(byte);
-        let (want_h, want_c) = crate::workout::column(w.steps(), (200, 190), (PROF as u32, PROF_H), None, k as u32);
+        let (want_h, want_c) = crate::workout::column(
+            w.steps(),
+            crate::ride::Zones::standard(200, 190),
+            (PROF as u32, PROF_H),
+            None,
+            k as u32,
+        );
         assert_eq!((u32::from(h), color), (want_h, want_c), "column {k}");
         assert_eq!(card_pixel(&sim, k), color, "column {k} on the panel");
     }
@@ -276,7 +282,8 @@ fn zones_and_days_read_the_calendar_again() {
         }],
     );
     let file = crate::fat::File { cluster: 0, size: 0, dir: false };
-    let [z200, z300] = [200, 300].map(|ftp| Planned::of((2026, 10, 23), file, &w, (ftp, 190)).prof[0]);
+    let [z200, z300] =
+        [200, 300].map(|ftp| Planned::of((2026, 10, 23), file, &w, crate::ride::Zones::standard(ftp, 190)).prof[0]);
     assert_ne!(z200, z300, "250 W is Z5 at FTP 200 and Z3 at 300");
 
     let mut sim = Sim::new(9, 0, 0);
@@ -284,13 +291,13 @@ fn zones_and_days_read_the_calendar_again() {
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
     run(&mut sim, &mut app, 10_000);
-    assert_eq!(app.plan.zones.0, 200);
+    assert_eq!(app.plan.zones.ftp, 200);
     sim.emmc.cmds.clear();
     run(&mut sim, &mut app, 2000);
     assert!(sim.emmc.cmds.is_empty(), "nothing read while nothing changes");
     app.settings.ftp = 300;
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.plan.zones.0, 300, "read again with the new FTP");
+    assert_eq!(app.plan.zones.ftp, 300, "read again with the new FTP");
     assert!(!sim.emmc.cmds.is_empty());
     assert_consistent(&mut sim, &mut app);
 }

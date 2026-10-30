@@ -1428,6 +1428,8 @@ fn max_hr_and_ftp_from_the_menu() {
     sim.save("max_hr_edit");
     app.press(&mut sim, Press::Short(Key::Start)); // kept
     app.press(&mut sim, Press::Short(Key::Page)); // LTHR, now the row after MAX HR
+    app.press(&mut sim, Press::Short(Key::Page)); // ZONES BY
+    app.press(&mut sim, Press::Short(Key::Page)); // ZONES
     app.press(&mut sim, Press::Short(Key::Page)); // FTP row
     app.press(&mut sim, Press::Short(Key::Start));
     for _ in 0..200 {

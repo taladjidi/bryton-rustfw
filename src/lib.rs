@@ -27,7 +27,7 @@ pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, pan
 pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course, segment, segment_match, sun};
 pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash, volume};
-pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
+pub use training::{alerts, hrtss, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
 pub use ui::{fonts, map, menu, page, text, theme, tiles};
 // the app's parts (app/mod.rs), at the root as before the split
 pub use app::*;
@@ -201,6 +201,8 @@ pub struct App {
     zones: [ride::ZoneHold; 5],
     /// The seconds the ride spent in each heart-rate and power zone (app/riding.rs): cleared at a Start and a resume.
     zone_s: ride::ZoneTime,
+    /// hrTSS of the ride so far (app/riding.rs), cleared with `zone_s`: the TSS fields show it for a ride without power.
+    hrtss: hrtss::Hrtss,
     decoders: Decoders,
     /// RMSSD and DFA alpha1 from the strap's beats.
     hrv: hrv::Hrv,
@@ -447,6 +449,7 @@ impl App {
             live: Live::default(),
             zones: [ride::ZoneHold::default(); 5],
             zone_s: ride::ZoneTime::default(),
+            hrtss: hrtss::Hrtss::default(),
             decoders: Decoders::default(),
             hrv: hrv::Hrv::default(),
             battery: battery::Battery::default(),

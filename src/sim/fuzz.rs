@@ -3757,6 +3757,66 @@ fn settings_file() {
     assert!(with_smooth > 100 && wild_smooth > 100, "POWER SMOOTH {with_smooth} read, {wild_smooth} out of range");
 }
 
+/// The zones, SEX, BIRTH YEAR and HEIGHT bytes of `\Rustfw\settings.bin` (data 123..149), built by structure: the two
+/// flags each right or out of form, the ten bounds rising (the form ZONES writes), unsorted, zero or cut short, the
+/// year and height in and out of range, the length anywhere from 123 to 149. No panic; whatever is read is what the
+/// module doc says (custom zones only from whole, rising bounds and a custom flag of 1; the year and height unset out
+/// of range), and the zones every consumer reads rise; and the fuzz reaches custom zones, refused bounds and a cut.
+#[test]
+fn settings_file_zone_bytes() {
+    use crate::SettingsCopy;
+    let mut next = xorshift(0x20e5);
+    let (mut custom, mut refused, mut cut, mut years, mut wild_years) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    for _ in 0..60_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 123 + (next() % 27) as usize;
+        let flags = [(next() % 3) as u8, (next() % 3) as u8]; // 0, 1, or 2 (out of form)
+        let mut up = [0u16; 10];
+        let rising = !next().is_multiple_of(3);
+        let (mut h, mut p) = (40 + (next() % 30) as u16, 50 + (next() % 50) as u16);
+        for (i, v) in up.iter_mut().enumerate() {
+            let at = if i < 4 { &mut h } else { &mut p };
+            *at += 1 + (next() % 30) as u16;
+            *v = if rising { *at } else { (next() % 300) as u16 };
+        }
+        let year = if next().is_multiple_of(4) { (next() % 3000) as u16 } else { 1920 + (next() % 101) as u16 };
+        let height = (next() % 256) as u8;
+        let mut bytes = std::vec![flags[0], flags[1]];
+        bytes.extend(up.iter().flat_map(|v| v.to_le_bytes()));
+        bytes.push((next() % 2) as u8);
+        bytes.extend(year.to_le_bytes());
+        bytes.push(height);
+        sec[28 + 123..28 + 123 + 26].copy_from_slice(&bytes);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let z = st.zones().upper();
+        assert!(z[..4].windows(2).all(|w| w[0] < w[1]) && z[4..].windows(2).all(|w| w[0] < w[1]), "{z:?} rises");
+        let whole = len >= 125 + 20;
+        let want_custom = whole && flags[1] == 1 && rising;
+        assert_eq!(st.zone_custom, want_custom, "len {len}, flag {}, rising {rising}", flags[1]);
+        if want_custom {
+            assert_eq!(st.zones().upper(), up);
+            custom += 1;
+        } else {
+            refused += u32::from(whole && flags[1] == 1);
+            cut += u32::from(!whole);
+        }
+        assert_eq!(st.zones_lthr, len > 123 && flags[0] == 1);
+        if len >= 148 {
+            let ok = (1920..=2020).contains(&year);
+            assert_eq!(st.birth_year, if ok { year } else { 0 });
+            years += u32::from(ok);
+            wild_years += u32::from(!ok);
+        } else {
+            assert_eq!(st.birth_year, 0, "cut before the year");
+        }
+        assert_eq!(st.height_cm, if len >= 149 && (100..=230).contains(&height) { u16::from(height) } else { 0 });
+    }
+    assert!(custom > 1000 && refused > 500 && cut > 1000 && years > 1000 && wild_years > 100);
+}
+
 /// Which wins at a start (app/settings_file.rs), by chance: random backup registers (each tagged as some build writes
 /// it, or not: register 11 untagged is a flat backup battery, register 18 without the aiding's tag carries no AUTO
 /// OFF) and a random `\Rustfw\settings.bin` (none, whole with the registers' words, whole with one of them changed,

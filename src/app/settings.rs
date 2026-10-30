@@ -336,6 +336,19 @@ pub struct Settings {
     pub trip_s: [u32; 2],
     /// ODOMETER: the distance (m) of every ride saved on this unit since this build had it (data 119, u32); never reset.
     pub odo_m: u32,
+    /// ZONES BY (ME): the heart-rate zones come from the LTHR, not the maximum (data 123; MAX HR in a file that predates it).
+    pub zones_lthr: bool,
+    /// ZONES (ME): the rider's own bounds in `zone_up` are in use (data 124); the computed zones when not.
+    pub zone_custom: bool,
+    /// The upper bound of heart-rate zones 1 to 4 (bpm) then power zones 1 to 6 (W), u16 each (data 125..145); read
+    /// only while `zone_custom` (use [`Settings::zones`]).
+    pub zone_up: [u16; 10],
+    /// SEX (ME): female (data 145); TRIMP's constant for hrTSS ([`crate::hrtss`]).
+    pub female: bool,
+    /// BIRTH YEAR (ME): 0 until set (data 146, u16).
+    pub birth_year: u16,
+    /// HEIGHT (ME), cm: 0 until set (data 148, a byte).
+    pub height_cm: u16,
 }
 
 /// AUTO PAUSE's choices as the ride gets them ([`ride::Input::pause_kmh`]): 0 the profile's own rule, 255 never, else
@@ -490,6 +503,12 @@ impl Settings {
             trip_m: [0; 2],
             trip_s: [0; 2],
             odo_m: 0,
+            zones_lthr: false,
+            zone_custom: false,
+            zone_up: [0; 10],
+            female: false,
+            birth_year: 0,
+            height_cm: 0,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -725,6 +744,12 @@ impl Settings {
             Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
             Setting::Lthr if self.lthr == 0 => l.push_str("--"),
             Setting::Lthr => l.push_u32(u32::from(self.lthr)),
+            Setting::ZonesBy => l.push_str(if self.zones_lthr { "LTHR" } else { "MAX HR" }),
+            Setting::Zone(n) => l.push_u32(u32::from(self.zones().upper().get(usize::from(n)).copied().unwrap_or(0))),
+            Setting::ZonesReset => l.push_str(if self.zone_custom { "CUSTOM" } else { "DEFAULT" }),
+            Setting::Sex => l.push_str(if self.female { "FEMALE" } else { "MALE" }),
+            Setting::BirthYear | Setting::Height if self.number_get(s) == 0 => l.push_str("--"),
+            Setting::BirthYear | Setting::Height => l.push_u32(u32::from(self.number_get(s))),
             Setting::PowerSmooth => {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
@@ -860,6 +885,9 @@ impl Settings {
             Setting::LiveSegments => self.live_segments = !self.live_segments,
             Setting::SegTarget => self.seg_target = (self.seg_target + 1) % SEGMENT_TARGETS.len(),
             Setting::Sound => self.sound = !self.sound,
+            Setting::ZonesBy => self.zones_lthr = !self.zones_lthr,
+            Setting::ZonesReset => self.zone_custom = false,
+            Setting::Sex => self.female = !self.female,
             Setting::Units => self.imperial = !self.imperial,
             Setting::Temp => self.temp_f = !self.temp_f,
             Setting::AutoPause => self.auto_pause = (self.auto_pause + 1) % AUTO_PAUSE_KMH.len(),
@@ -908,8 +936,72 @@ impl Settings {
     /// assert_eq!((s.ftp, s.max_hr), (205, 189));
     /// ```
     pub fn step(&mut self, s: Setting, up: bool) {
+        if let Setting::Zone(n) = s {
+            return self.step_zone(usize::from(n), up);
+        }
+        // a birth year or a height not set yet starts from a typical one, not from the bottom of its range
+        if let (Setting::BirthYear | Setting::Height, Some(v)) = (s, self.number_mut(s))
+            && *v == 0
+        {
+            *v = if s == Setting::Height { 170 } else { 1985 };
+            return;
+        }
         let (Some((range, step)), Some(v)) = (s.number(), self.number_mut(s)) else { return };
         *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
+    }
+
+    /// The maximum heart rate from the age (220 minus the years, Fox and Haskell's rule of thumb, clamped to
+    /// [`menu::MAX_HR_RANGE`]) in `year`, but only while MAX HR is still the unset default ([`ride::MAX_HR`]): a
+    /// maximum the rider set or measured is never replaced.
+    ///
+    /// ```
+    /// use bryton_rustfw::Settings;
+    /// let mut s = Settings { birth_year: 1986, ..Settings::from_word(0) };
+    /// s.max_hr_from_age(2026);
+    /// assert_eq!(s.max_hr, 180, "220 - 40");
+    /// s.max_hr = 183;
+    /// s.birth_year = 1996;
+    /// s.max_hr_from_age(2026);
+    /// assert_eq!(s.max_hr, 183, "a maximum that was set is kept");
+    /// ```
+    pub fn max_hr_from_age(&mut self, year: u16) {
+        if self.birth_year > 0 && self.max_hr == ride::MAX_HR {
+            let age = year.saturating_sub(self.birth_year);
+            self.max_hr = 220u16.saturating_sub(age).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end());
+        }
+    }
+
+    /// The value of a number setting, 0 for none.
+    fn number_get(&self, s: Setting) -> u16 {
+        let mut c = *self;
+        c.number_mut(s).map_or(0, |v| *v)
+    }
+
+    /// The zones every consumer reads: the rider's own bounds (ME > ZONES) while `zone_custom`, else the computed ones
+    /// for ZONES BY.
+    pub fn zones(&self) -> ride::Zones {
+        let by = if self.zones_lthr { ride::ZonesBy::Lthr } else { ride::ZonesBy::MaxHr };
+        let computed = ride::Zones::computed(self.ftp, self.max_hr, self.lthr, by);
+        if self.zone_custom {
+            ride::Zones::custom(self.ftp, self.max_hr, self.zone_up).unwrap_or(computed)
+        } else {
+            computed
+        }
+    }
+
+    /// Zone bound `n` (0 to 3 heart rate, 4 to 9 power) one step up or down, between its neighbours. The first edit
+    /// takes the computed zones as the rider's own.
+    fn step_zone(&mut self, n: usize, up: bool) {
+        let mut z = self.zones().upper();
+        let (first, last, min, max, step) =
+            if n < 4 { (0, 3, menu::ZONE_HR_MIN, menu::ZONE_HR_MAX, 1) } else { (4, 9, 1, menu::ZONE_PW_MAX, 5) };
+        let lo = if n == first { min } else { z.get(n - 1).map_or(min, |v| v + 1) };
+        let hi = if n == last { max } else { z.get(n + 1).map_or(max, |v| v.saturating_sub(1)) };
+        let Some(v) = z.get_mut(n) else { return };
+        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(lo, hi.max(lo));
+        if ride::Zones::custom(self.ftp, self.max_hr, z).is_some() && z != self.zones().upper() {
+            (self.zone_custom, self.zone_up) = (true, z);
+        }
     }
 
     pub(crate) fn number_mut(&mut self, s: Setting) -> Option<&mut u16> {
@@ -917,6 +1009,8 @@ impl Settings {
             Setting::MaxHr => Some(&mut self.max_hr),
             Setting::Ftp => Some(&mut self.ftp),
             Setting::Lthr => Some(&mut self.lthr),
+            Setting::BirthYear => Some(&mut self.birth_year),
+            Setting::Height => Some(&mut self.height_cm),
             Setting::Weight => Some(&mut self.weight_kg),
             Setting::BikeWeight => Some(&mut self.bike_hg),
             Setting::WPrime => Some(&mut self.wprime_j),

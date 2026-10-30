@@ -209,12 +209,12 @@ Others
 ## Training: zones, workouts, plans, metrics
 
 - [x] Heart rate zones from max HR (stock, all): sim
-- [ ] Heart rate zones from LTHR, zones edited one by one (stock, Garmin)
+- [x] Heart rate zones from LTHR (Friel), zones edited one by one (stock, Garmin): sim
 - [x] Power zones from FTP (Coggan) (stock, all): sim
-- [ ] Power zones edited one by one (stock, Garmin)
+- [x] Power zones edited one by one (stock, Garmin): sim
 - [x] Weight and W' settings (Garmin, ours): sim
 - [x] Bike weight setting for the climb pacer and the trainer (ours): unit
-- [ ] Rider profile: sex, birthday, height (stock, Garmin)
+- [x] Rider profile: sex, birth year, height (stock, Garmin): sim
 - [x] Structured workouts from FIT files, step targets (stock, all): sim
 - [x] Countdown beeps before a step ends (patch P1, Garmin, Wahoo): sim
 - [x] Workout profile graph with the rider's place (Garmin, Wahoo, Karoo): sim
@@ -241,7 +241,7 @@ Others
 - [~] VO2max and FTP estimates from rides (Garmin): sim; no VO2max
 - [x] Aerobic and anaerobic thresholds from DFA a1 over recent rides (ours): sim; not yet on real rides
 - [ ] Heat and altitude acclimation (Garmin)
-- [ ] hrTSS when there is no power meter (ours, intervals.icu)
+- [x] hrTSS when there is no power meter (ours, intervals.icu): sim
 - [x] DFA a1 against the aerobic threshold during a ride (patch P9): sim; banner under a set limit (default off), hold 5 s, hysteresis
 
 ## Climbing

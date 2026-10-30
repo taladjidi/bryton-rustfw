@@ -26,6 +26,8 @@ pub enum Menu {
     Settings,
     /// The rider's numbers ([`menu::ME`]).
     Me,
+    /// The zones' bounds, one by one ([`menu::ZONES`]).
+    Zones,
     /// The backlight, the touch panel, the gauge ([`menu::DISPLAY`]).
     Display,
     /// The wheel ([`menu::BIKE`]).
@@ -89,6 +91,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::PageList(ride::Profile::Mtb) => "MTB PAGES",
         Menu::Settings => "SETTINGS",
         Menu::Me => "ME",
+        Menu::Zones => "ZONES",
         Menu::Display => "DISPLAY",
         Menu::Bike => "BIKE",
         Menu::System => "SYSTEM",
@@ -143,6 +146,7 @@ impl App {
             Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
             Menu::Me => menu::ME.get(i).copied(),
+            Menu::Zones => menu::ZONES.get(i).copied(),
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
             // GIVE UP SAVE first, only while a save is stuck (app/riding.rs)
@@ -863,6 +867,9 @@ impl App {
                 self.editing = self.alt_edit_start(); // from the altitude the barometer reads
             }
             if !self.editing {
+                if s == menu::Setting::BirthYear {
+                    self.settings.max_hr_from_age(self.date.0);
+                }
                 self.save_misc(b);
             }
         } else if matches!(s, menu::Setting::Theme | menu::Setting::DayTheme | menu::Setting::NightTheme) {

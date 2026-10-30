@@ -133,24 +133,25 @@ pub fn graph_total_s(steps: &[Step]) -> u32 {
 /// A step's level on the workout graph (per mille of its height) and its colour, for this FTP and max heart rate:
 /// power from 0 to 150 % of FTP (zone 7 at the top), heart rate from half the max to it, in their zone colours; a
 /// step without a power or heart-rate target a quarter high, grey when open, white for cadence (no zones).
-pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
+pub fn level(s: &Step, z: &ride::Zones) -> (u32, u16) {
+    let (ftp, max_hr) = (z.ftp, z.max_hr);
     let per_mille = |v: u32, lo: u32, hi: u32| v.saturating_sub(lo) * 1000 / hi.saturating_sub(lo).max(1);
     let (ftp32, max32) = (u32::from(ftp), u32::from(max_hr));
     match (s.target.kind, s.target.range(ftp, max_hr)) {
         (Kind::Power, Some((lo, hi))) => {
             let mid = lo.midpoint(hi);
-            (per_mille(mid.into(), 0, ftp32 * 3 / 2), ride::power_zone_color(mid, ftp))
+            (per_mille(mid.into(), 0, ftp32 * 3 / 2), z.power_color(mid))
         }
         (Kind::Hr, Some((lo, hi))) => {
             let mid = lo.midpoint(hi);
-            (per_mille(mid.into(), max32 / 2, max32), ride::hr_zone_color(mid, max_hr))
+            (per_mille(mid.into(), max32 / 2, max32), z.hr_color(mid))
         }
         (Kind::Open, _) => (250, ui::GREY),
         _ => (250, ui::WHITE),
     }
 }
 
-/// Column `k` of a workout graph `cols` wide and `h` high over the whole of `steps` (zones from `ftp`, `max_hr`):
+/// Column `k` of a workout graph `cols` wide and `h` high over the whole of `steps` (the zones of `z`):
 /// its bar's height and colour ([`level`]); the rider's column (`rider`) white, the part done dark. `rider` is
 /// `cols` once the workout is done.
 ///
@@ -160,17 +161,11 @@ pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
 /// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true };
 /// let steps = [50, 160]
 ///     .map(|pct| Step { len: Length::Time(60), target: target(pct), target2: Target::OPEN, intensity: 0 });
-/// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 3), (100, ride::ZONE_COLORS[6]), "160 %: the top, Z7");
-/// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 1).1, ui::WHITE, "the rider");
-/// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 0), (33, ui::DARK), "done");
+/// assert_eq!(column(&steps, ride::Zones::standard(200, 190), (4, 100), Some(1), 3), (100, ride::ZONE_COLORS[6]), "160 %: the top, Z7");
+/// assert_eq!(column(&steps, ride::Zones::standard(200, 190), (4, 100), Some(1), 1).1, ui::WHITE, "the rider");
+/// assert_eq!(column(&steps, ride::Zones::standard(200, 190), (4, 100), Some(1), 0), (33, ui::DARK), "done");
 /// ```
-pub fn column(
-    steps: &[Step],
-    (ftp, max_hr): (u16, u16),
-    (cols, h): (u32, u32),
-    rider: Option<u32>,
-    k: u32,
-) -> (u32, u16) {
+pub fn column(steps: &[Step], z: ride::Zones, (cols, h): (u32, u32), rider: Option<u32>, k: u32) -> (u32, u16) {
     let total = graph_total_s(steps);
     let t = (u64::from(k) * u64::from(total) / u64::from(cols.max(1))) as u32;
     let mut end = 0u32;
@@ -180,7 +175,7 @@ pub fn column(
     }) else {
         return ui::progress_column(rider, k, h, (0, ui::BLACK));
     };
-    let (level, color) = level(s, ftp, max_hr);
+    let (level, color) = level(s, &z);
     ui::progress_column(rider, k, h, ((level * h / 1000).clamp(1, h.max(1)), color))
 }
 
@@ -236,18 +231,18 @@ pub fn gauge_x(v: u16, (a, b): (u32, u32), cols: u32) -> u32 {
 /// ```
 /// use bryton_rustfw::{ride::ZONE_COLORS as Z, storage::workout_file::Kind, workout::gauge_zones};
 /// // 200-220 W, FTP 200: the scale is 80 to 330 W on 250 columns, a watt a column
-/// let z = gauge_zones(Kind::Power, (200, 220), 250, 200, 190);
+/// let z = gauge_zones(Kind::Power, (200, 220), 250, &bryton_rustfw::ride::Zones::standard(200, 190));
 /// assert_eq!(z[1], (32, Z[1]), "zone 2 from 112 W");
 /// assert_eq!(z[2], (72, Z[2]), "zone 3 from 152 W");
 /// assert_eq!(z[4], (132, Z[4]), "zone 5 from 212 W");
 /// assert_eq!(z[6], (222, Z[6]), "zone 7 from 302 W, on the scale too");
 /// ```
-pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, ftp: u16, max_hr: u16) -> [(u32, u16); 7] {
-    let (a, b) = gauge_scale(kind, band, ftp, max_hr);
-    let (pcts, base): (&[u32], u32) = match kind {
-        Kind::Power => (&ride::POWER_ZONE_PCT, u32::from(ftp.max(1))),
-        Kind::Hr => (&ride::HR_ZONE_PCT, u32::from(max_hr.max(1))),
-        _ => (&[], 1),
+pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, zones: &ride::Zones) -> [(u32, u16); 7] {
+    let (a, b) = gauge_scale(kind, band, zones.ftp, zones.max_hr);
+    let edges: &[u16] = match kind {
+        Kind::Power => zones.power_edges(),
+        Kind::Hr => zones.hr_edges(),
+        _ => &[],
     };
     let col_of = |w: u32| match w {
         w if w <= a => 0,
@@ -255,9 +250,9 @@ pub fn gauge_zones(kind: Kind, band: (u16, u16), cols: u32, ftp: u16, max_hr: u1
         w => (u64::from(w - a) * u64::from(cols) / u64::from(b - a)) as u32,
     };
     let mut z = [(u32::MAX, ui::DARK); 7];
-    z[0] = (0, if pcts.is_empty() { ui::DARK } else { zone_color(kind, 1) });
-    for (k, pct) in pcts.iter().enumerate() {
-        z[k + 1] = (col_of((pct * base).div_ceil(100)), zone_color(kind, k as u8 + 2));
+    z[0] = (0, if edges.is_empty() { ui::DARK } else { zone_color(kind, 1) });
+    for (k, &w) in edges.iter().enumerate() {
+        z[k + 1] = (col_of(u32::from(w)), zone_color(kind, k as u8 + 2));
     }
     z
 }
@@ -372,7 +367,7 @@ mod tests {
         ];
         // 300 s, 2400 m at 8 m/s: 300 s, open: 300 s; 9 columns of 100 s each
         assert_eq!(graph_total_s(&steps), 900);
-        let col = |rider, k| column(&steps, (200, 180), (9, 60), rider, k);
+        let col = |rider, k| column(&steps, ride::Zones::standard(200, 180), (9, 60), rider, k);
         let bars: Vec<_> = (0..9).map(|k| col(None, k)).collect();
         let z2 = ride::power_color(2); // 130 W of 200
         let hr = ride::hr_zone_color(162, 180);
@@ -403,7 +398,7 @@ mod tests {
         for ftp in [120, 200, 250, 310] {
             let (a, b) = gauge_scale(Kind::Power, band, ftp, 190);
             let cols = (b - a) * 2; // a watt is two columns: no two edges share one
-            let z = gauge_zones(Kind::Power, band, cols, ftp, 190);
+            let z = gauge_zones(Kind::Power, band, cols, &ride::Zones::standard(ftp, 190));
             assert!(z.iter().all(|z| z.0 != u32::MAX), "all seven zones on the scale at FTP {ftp}");
             for v in a..b {
                 let col = gauge_x(v as u16, (a, b), cols);
@@ -413,7 +408,7 @@ mod tests {
         }
         for max in [170, 190] {
             let (a, b) = gauge_scale(Kind::Hr, (150, 160), 200, max);
-            let z = gauge_zones(Kind::Hr, (150, 160), (b - a) * 2, 200, max);
+            let z = gauge_zones(Kind::Hr, (150, 160), (b - a) * 2, &ride::Zones::standard(200, max));
             for v in a..b {
                 let col = gauge_x(v as u16, (a, b), (b - a) * 2);
                 let zone = z.iter().rev().find(|z| z.0 <= col).unwrap().1;
@@ -421,7 +416,11 @@ mod tests {
             }
             assert_eq!(z[5].0, u32::MAX, "only five heart-rate zones");
         }
-        assert_eq!(gauge_zones(Kind::Cadence, (85, 95), 100, 200, 190)[1].0, u32::MAX, "cadence: one grey");
+        assert_eq!(
+            gauge_zones(Kind::Cadence, (85, 95), 100, &ride::Zones::standard(200, 190))[1].0,
+            u32::MAX,
+            "cadence: one grey"
+        );
     }
 
     #[test]

@@ -502,7 +502,7 @@ pub struct Planned {
 
 impl Planned {
     /// The entry for workout `w` of `file` on `day`, its profile coloured for these zones (FTP, maximum heart rate).
-    pub fn of(day: (u16, u8, u8), file: File, w: &Workout, zones: (u16, u16)) -> Self {
+    pub fn of(day: (u16, u8, u8), file: File, w: &Workout, zones: crate::ride::Zones) -> Self {
         let mut name = crate::text::Line::new();
         name.push_str(w.name());
         let prof = core::array::from_fn(|k| {
@@ -576,7 +576,7 @@ pub const LOADS: usize = 2 * DAYS;
 /// no workout are left out. Bounded whatever the card holds (review 2: every future file was read): the day
 /// folders are listed first (32 bytes each), then only the earliest [`DAYS`] are looked into, earliest first, and at
 /// most [`LOADS`] files of [`FILE_MAX`] are read: about 130 KB, some 50 ms on the unit.
-pub fn calendar(d: &mut impl Disk, today: (u16, u8, u8), zones: (u16, u16)) -> Result<Calendar, fat::Error> {
+pub fn calendar(d: &mut impl Disk, today: (u16, u8, u8), zones: crate::ride::Zones) -> Result<Calendar, fat::Error> {
     let mut fat = Fat::mount(d)?;
     let dir = fat.open(d, "Workout/calendar")?;
     let mut days = fat.cursor(dir)?;
@@ -822,15 +822,27 @@ pub(crate) mod tests {
     #[test]
     fn calendar_of_the_synthetic_card() {
         let mut d = crate::fat::tests::Ram(crate::fat::tests::image(), 0);
-        let c = calendar(&mut d, (2026, 10, 23), (200, 190)).unwrap();
+        let c = calendar(&mut d, (2026, 10, 23), crate::ride::Zones::standard(200, 190)).unwrap();
         let got: Vec<_> = c.iter().map(|p| (p.day, p.total_s, p.steps)).collect();
         assert_eq!(got, [((2026, 10, 23), 20 + 2 * 45, 6), ((2026, 10, 25), 5400, 1)]);
         let mut fat = Fat::mount(&mut d).unwrap();
         let w = load(&mut fat, &mut d, &c.get(1).unwrap().file).unwrap();
         assert_eq!(w.name(), "LONG RIDE ? E", "15 bytes, the 3 of the dash as one mark");
         assert_eq!(w.steps()[0].target, Target { kind: Kind::Power, lo: 65, hi: 75, pct: true });
-        assert_eq!(calendar(&mut d, (2026, 10, 26), (200, 190)).unwrap(), Calendar::default(), "none planned");
-        assert!(calendar(&mut crate::fat::tests::Ram(Vec::new(), 0), (2026, 10, 23), (200, 190)).is_err(), "no volume");
+        assert_eq!(
+            calendar(&mut d, (2026, 10, 26), crate::ride::Zones::standard(200, 190)).unwrap(),
+            Calendar::default(),
+            "none planned"
+        );
+        assert!(
+            calendar(
+                &mut crate::fat::tests::Ram(Vec::new(), 0),
+                (2026, 10, 23),
+                crate::ride::Zones::standard(200, 190)
+            )
+            .is_err(),
+            "no volume"
+        );
     }
 
     #[test]
