@@ -2,6 +2,7 @@
 //! time, checked on what the panel shows.
 
 use super::*;
+use crate::text::Face;
 // Helpers that moved with their tests; the other test files still reach them as `tests::X`.
 pub(super) use super::course_tests::hill;
 use super::map_tests::ride_route;
@@ -270,10 +271,10 @@ fn gear_on_the_overview_opens_the_menu() {
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| a(ms).or(b(ms)));
     let mut app = App::start(&mut sim, None);
     sim.save("overview_gear");
-    app.settings.smooth = true;
+    app.settings.face = Face::Barlow;
     app.show(&mut sim);
     sim.save("overview_gear_smooth");
-    app.settings.smooth = false;
+    app.settings.face = Face::Pixel;
     app.show(&mut sim);
     let left = 5500 - sim.ms;
     run(&mut sim, &mut app, left);
@@ -1737,12 +1738,12 @@ fn font_smooth_keeps_layouts() {
             app.press(&mut sim, Press::Short(Key::Page));
         }
         run(&mut sim, &mut app, 200);
-        assert!(!app.settings.smooth, "PIXEL by default");
+        assert_eq!(app.settings.face, Face::Pixel, "PIXEL by default");
         let pixel = render_all(&app);
         let menu_shot = toggle(&mut sim, &mut app);
-        assert!(app.settings.smooth);
+        assert_eq!(app.settings.face, Face::Barlow);
         assert_ne!(sim.backup[POWER_BKP] & 1 << 24, 0, "kept");
-        assert!(Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).smooth);
+        assert_eq!(Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).face, Face::Barlow);
         let smooth = render_all(&app);
         let diff: Vec<usize> = (0..pixel.len()).filter(|&i| pixel[i] != smooth[i]).collect();
         assert!(diff.len() > 1000, "the text changed: {} pixels", diff.len());
@@ -1767,8 +1768,12 @@ fn font_smooth_keeps_layouts() {
             )
             .unwrap();
         }
-        toggle(&mut sim, &mut app);
-        assert!(!app.settings.smooth && sim.backup[POWER_BKP] & 1 << 24 == 0);
+        for _ in 0..2 {
+            if app.settings.face != Face::Pixel {
+                toggle(&mut sim, &mut app);
+            }
+        }
+        assert!(app.settings.face == Face::Pixel && sim.backup[POWER_BKP] & 1 << 24 == 0);
         let again = render_all(&app);
         assert!(again.iter().zip(&pixel).filter(|(a, b)| a != b).count() < 200, "PIXEL back (only the clock moved)");
     }
@@ -1777,16 +1782,28 @@ fn font_smooth_keeps_layouts() {
 /// The font choice in register 16: bit 24 of the tag 0xa word; words written before have it clear (PIXEL).
 #[test]
 fn font_choice_register_round_trip() {
-    let s = Settings { smooth: true, ..Settings::from_word(0) };
+    let s = Settings { face: Face::Barlow, ..Settings::from_word(0) };
     assert_eq!(s.power_word() >> 24, 0xa1);
-    assert!(Settings::from_word(0).with_power_word(s.power_word()).smooth);
-    assert!(!Settings::from_word(0).with_power_word(Settings::from_word(0).power_word()).smooth);
-    assert!(!Settings::from_word(0).with_power_word(0xa0_00_00_00).smooth, "an earlier word: PIXEL");
+    assert_eq!(Settings::from_word(0).with_power_word(s.power_word()).face, Face::Barlow);
+    assert_eq!(Settings::from_word(0).with_power_word(Settings::from_word(0).power_word()).face, Face::Pixel);
+    assert_eq!(Settings::from_word(0).with_power_word(0xa0_00_00_00).face, Face::Pixel, "an earlier word: PIXEL");
     let mut a = Settings::from_word(0);
     a.cycle(Setting::Font);
     let mut l = crate::text::Line::<12>::new();
     a.text(Setting::Font, &mut l);
-    assert_eq!((a.smooth, l.as_str()), (true, "SMOOTH"));
+    assert_eq!((a.face, l.as_str()), (Face::Barlow, "BARLOW"));
+}
+
+/// FONT cycles PIXEL and BARLOW, one step a press.
+#[test]
+fn font_cycles_two_faces() {
+    let mut a = Settings::from_word(0);
+    let mut faces = Vec::new();
+    for _ in 0..4 {
+        a.cycle(Setting::Font);
+        faces.push(a.face);
+    }
+    assert_eq!(faces, [Face::Barlow, Face::Pixel, Face::Barlow, Face::Pixel]);
 }
 
 /// main.rs's loop: a pass, then a sleep of [`App::pass_ms`] in [`TOUCH_MS`] slices, ended at once while idle by a

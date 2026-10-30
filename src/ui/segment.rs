@@ -202,6 +202,7 @@ pub fn draw_card(c: &mut impl Canvas, card: &Card) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::Face;
     use crate::ui::tests::Frame;
 
     fn head(delta: i32) -> (Line<8>, u16) {
@@ -250,9 +251,9 @@ mod tests {
     fn update_equals_whole_draw_and_is_small() {
         let bx = (0, crate::ui::PAGE_Y, W, 98);
         let name = "A LONG SEGMENT NAME THAT IS CUT";
-        for smooth in [false, true] {
+        for face in [Face::Pixel, Face::Barlow] {
             let mut f = Frame::new();
-            f.smooth = smooth;
+            f.face = face;
             let (a, b) = (head(-69), head(-68));
             fn h<'a>(name: &'a str, d: &'a (Line<8>, u16)) -> Head<'a> {
                 Head { top: name, big: d.0.as_str(), ink: d.1, sub: "VS RECENT", keep: false }
@@ -262,9 +263,9 @@ mod tests {
             update_head(&mut f, bx, &h(name, &a).shown(), &h(name, &b));
             let cost = f.filled() - before;
             let mut whole = Frame::new();
-            whole.smooth = smooth;
+            whole.face = face;
             draw_head(&mut whole, bx, &h(name, &b));
-            assert!(f.px == whole.px, "smooth {smooth}");
+            assert!(f.px == whole.px, "face {face:?}");
             assert!(cost < 4000, "{cost} px for a second");
             update_head(&mut f, bx, &h(name, &b).shown(), &h(name, &b));
             assert_eq!(f.filled() - before, cost, "nothing changed, nothing drawn");
@@ -272,11 +273,11 @@ mod tests {
             let c = head(5);
             update_head(&mut f, bx, &h(name, &b).shown(), &h(name, &c));
             let mut whole = Frame::new();
-            whole.smooth = smooth;
+            whole.face = face;
             draw_head(&mut whole, bx, &h(name, &c));
-            assert!(f.px == whole.px, "colour, smooth {smooth}");
+            assert!(f.px == whole.px, "colour, face {face:?}");
             let mut card = Frame::new();
-            card.smooth = smooth;
+            card.face = face;
             let rows = [Some(("PR", -31)), Some(("KOM", 5)), Some(("QOM", -33)), Some(("RECENT", -34))];
             draw_card(&mut card, &Card { name, elapsed_s: 5999, rows, new_pr: true });
             draw_card(&mut Frame::new(), &Card { name: "X", elapsed_s: 6300, rows, new_pr: false });

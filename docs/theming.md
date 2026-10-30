@@ -1,7 +1,7 @@
 # Theming: a plan
 
 Status: phase 1 built and sim-tested: T1 (colours, DARK, OUTDOOR, files) and T2 (LIGHT, the black-background
-assumptions fixed), 2026-10-29, and T5 (THEME AUTO: day and night by the light), 2026-10-30; fonts, metrics and layouts are not (first written 2026-10-26). The owner's wish: "the UI layout / look could be defined from a
+assumptions fixed), 2026-10-29, and T5 (THEME AUTO: day and night by the light), 2026-10-30; T3 fonts (PIXEL, BARLOW; sim only) and T4 metrics are built; layouts are not (first written 2026-10-26). The owner's wish: "the UI layout / look could be defined from a
 theme file on the SD card, and the user could pick whatever theme suits them". The "SD card" is the eMMC's FAT
 volume (the BRYTON drive); this firmware reads files from it with src/storage/fat/ and keeps its own in `\Rustfw`.
 
@@ -24,7 +24,7 @@ volume (the BRYTON drive); this firmware reads files from it with src/storage/fa
 | Level | What | Cost | Risk |
 |---|---|---|---|
 | a. Colours | background, text, dim text, lines, accent and the text on it, alarm and the text on it, ok / warn, Ferris, the cog, the course, zones 1 to 7 | small: about 20 values, one lookup per `fill` and per glyph | none to the redraw model: a theme change is a full redraw, as a screen opening is |
-| b. Fonts and scales | PIXEL or SMOOTH (FONT today), the label and value scales | small for the font (the choice exists: `Canvas::smooth`); scales change what fits | text widths feed `menu_label_w`, `box_scale`, `lines`, the "every row fits" tests |
+| b. Fonts and scales | PIXEL or BARLOW (FONT today, T3), the label and value scales | small for the font (the choice exists: `Canvas::face`); scales change what fits | text widths feed `menu_label_w`, `box_scale`, `lines`, the "every row fits" tests |
 | c. Metrics | zone bar thickness (`ZONE_BAR_H` 8), frame (`FRAME` 3), menu row (`MENU_ROW` 44), strip height (`STRIP_H` 22), margins | medium: consts become fields read through the canvas and through `App` for touch | hit boxes (44 px targets), `page::min_size` / `fits`, every layout test; a value the tests never ran is a screen nobody saw |
 | d. Layouts | the overview's boxes (`DATE`, `TODAY_BOX`, `OVERVIEW_Y`, `NOTICES`), where the card goes, the ride page presets | large if free coordinates: the file would need a layout checker as strict as page.rs (no overlap, every field big enough, every target 44 px) | high: each box is also a dirty box (`App::update_page`) and a touch box |
 
@@ -123,7 +123,7 @@ pub struct Theme {
     /// The built-in colours (keys) and what each is drawn as, same order as `KEYS`.
     pub ink: [u16; KEYS.len()],
     /// The font (level b).
-    pub smooth: bool,
+    pub face: Face,
 }
 
 trait Canvas {
@@ -219,7 +219,7 @@ repository.
 
 **Picking.** SETTINGS > DISPLAY > THEME: the row shows the name; it opens a list (the built-ins, then the files,
 16 at most) as COURSES does. A tap applies it at once (full redraw); `settings.bin` is written when no ride is open.
-FONT stays its own setting; a theme's `font` key (level b) only sets its default.
+FONT stays its own setting; a theme's `font` key (level b) sets FONT when the theme is picked (T3), not on an AUTO switch.
 
 **4b. THEME AUTO (T5, built).** THEME's list starts with AUTO. With it, the theme in use is DAY THEME (OUTDOOR at
 first) or NIGHT THEME (DARK at first), each picked as THEME is (the built-ins, then the files), and the ambient light
@@ -252,9 +252,9 @@ NIGHT THEME (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 
 
 ### Phase 2: fonts and bounded metrics
 
-Bounded metrics are done (T4, sim only; fonts are not): `[metrics]` in the file, below.
+Fonts (T3, sim only: PIXEL and BARLOW) and bounded metrics (T4, sim only, `[metrics]` in the file, below) are done.
 
-- `font = pixel | smooth` in the file, as the FONT setting's default.
+- `font = pixel | barlow` in the file, as the FONT setting's default.
 - A few metrics, each a range every test runs at both ends: `zone_bar` 4 to 12 (today 8; built as 4 to 8, see below), `frame` 1 to 4 (3),
   `menu_row` 44 to 56 (44: never under a fingertip). Here `Canvas` gets `fn theme(&self) -> &Theme`, the consts
   become fields read through it, and the touch code reads the same values from `App`.

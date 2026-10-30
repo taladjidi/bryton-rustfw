@@ -5,6 +5,7 @@
 use super::*;
 use crate::fat::tests::{Ram, read_all};
 use crate::page::{Page, Saved};
+use crate::text::Face;
 use crate::ui::Field::{self, *};
 
 /// A unit with this firmware's settings and the classic pages (speed over heart rate and cadence; four fields; the
@@ -1374,16 +1375,16 @@ fn the_mtb_set_survives_a_cut_with_its_pages() {
 /// registers of the pages empty, it was read as a third page (and the boot saved it as one). Never now.
 #[test]
 fn the_power_word_is_never_a_page() {
-    let boot = |smooth: bool| {
+    let boot = |face: Face| {
         let mut sim = Sim::new(9, 0, 0);
         sim.emmc.image = crate::fat::tests::image();
         sim.own_settings();
-        sim.backup[crate::POWER_BKP] = crate::Settings { smooth, ..crate::Settings::from_word(0) }.power_word();
+        sim.backup[crate::POWER_BKP] = crate::Settings { face, ..crate::Settings::from_word(0) }.power_word();
         let mut app = App::start(&mut sim, None);
         run(&mut sim, &mut app, PAGES_LOAD_MS as u64 + 200);
         (pages(&app), sim.backup[PAGE_BKP[2][0]])
     };
-    assert_eq!(boot(true), boot(false));
+    assert_eq!(boot(Face::Barlow), boot(Face::Pixel));
 }
 
 /// A page with nothing changing sends the panel nothing between seconds or across them (the boxes are only looked

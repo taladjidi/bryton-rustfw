@@ -350,6 +350,7 @@ Storage, USB and updates
 - [x] Overview fields and pages (stock): sim
 - [x] Menus in groups, one screen each (Garmin, Wahoo): sim
 - [x] The menu tree: WORKOUTS, COURSES, HISTORY, PAGES, SENSORS, SETTINGS (ME, ALERTS, DISPLAY, BIKE, SYSTEM): sim
+- [x] FONT (DISPLAY): PIXEL or BARLOW, kept in the settings file, the smooth cells the same size as the pixel ones: sim
 - [x] ABOUT and STORAGE (SYSTEM): the version and commit, the map and font notices; the card's size, free space, rides and
   oldest rides (each opens HISTORY's card, DELETE there), read over the passes: sim
 - [x] A ride menu while riding (Garmin, Karoo): sim
