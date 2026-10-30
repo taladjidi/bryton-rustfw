@@ -672,7 +672,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 156);
+        assert_eq!(len, 163);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -793,7 +793,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 156);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
@@ -834,7 +834,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 156);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -858,7 +858,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 156);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -892,7 +892,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 156, "the length: 69 + 1 + 12 + 12 + 3 + 2 + 3 + 1");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163, "the length: 69 + 1 + 12 + 12 + 3 + 2 + 3 + 1");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -934,7 +934,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 156);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
         assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| {
