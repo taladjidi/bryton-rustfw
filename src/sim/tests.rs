@@ -59,6 +59,11 @@ pub(super) fn back(sim: &mut Sim, app: &mut App) {
 }
 
 /// The screen drawn step by step on the panel equals the screen drawn at once from the state (the screenshot).
+/// Whether [`assert_consistent`] would pass.
+pub(super) fn is_consistent(sim: &Sim, app: &App) -> bool {
+    (0..H).all(|y| app.render_row(y).px[..W as usize] == sim.screen[(y * W) as usize..((y + 1) * W) as usize])
+}
+
 pub(super) fn assert_consistent(sim: &Sim, app: &App) {
     for y in 0..H {
         let (drawn, panel) = (app.render_row(y).px, &sim.screen[(y * W) as usize..((y + 1) * W) as usize]);
@@ -92,7 +97,7 @@ pub(super) fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: b
         let bx = <(u32, u32, u32, u32)>::from(page.cell_box(i).unwrap());
         // heart rate and power show their zone as a bar along the box's top, the number white (steady test
         // sensors: the 3 s average the power's box takes equals the live value)
-        crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v));
+        crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v), (false, false));
         crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     f.px
@@ -139,7 +144,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, temp.as_str())];
     for (i, (field, v)) in values.into_iter().enumerate() {
         let bx = crate::ui::overview_box(i).unwrap();
-        crate::ui::draw_field_frame(&mut f, bx, field);
+        crate::ui::draw_field_frame(&mut f, bx, field, (false, false));
         crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     f.px
@@ -1428,6 +1433,8 @@ fn max_hr_and_ftp_from_the_menu() {
     sim.save("max_hr_edit");
     app.press(&mut sim, Press::Short(Key::Start)); // kept
     app.press(&mut sim, Press::Short(Key::Page)); // LTHR, now the row after MAX HR
+    app.press(&mut sim, Press::Short(Key::Page)); // ZONES BY
+    app.press(&mut sim, Press::Short(Key::Page)); // ZONES
     app.press(&mut sim, Press::Short(Key::Page)); // FTP row
     app.press(&mut sim, Press::Short(Key::Start));
     for _ in 0..200 {
@@ -1446,6 +1453,41 @@ fn max_hr_and_ftp_from_the_menu() {
         (LIGHT_AUTO, 2),
         "the backlight settings untouched"
     );
+}
+
+/// ME > BORN: the first year (1985) sets MAX HR from the age with a banner; a changed year recomputes it while it came
+/// from the age; a MAX HR set by hand is never replaced again; the clock unset says so and changes nothing.
+#[test]
+fn born_sets_max_hr_from_the_age_until_it_is_set_by_hand() {
+    let (mut sim, mut app) = started();
+    let year = app.date.0;
+    assert!(year >= 2024, "the sim's clock is set");
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::BirthYear));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Lap)); // unset -> 1985
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.settings.birth_year, app.settings.max_hr), (1985, 220 - (year - 1985)));
+    assert!(app.settings.max_hr_age);
+    assert_eq!(app.notes.text.as_str(), std::format!("MAX HR {} FROM AGE", app.settings.max_hr));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page)); // 1984: a year older
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.settings.max_hr, 220 - (year - 1984), "recomputed");
+    for _ in 0..12 {
+        app.press(&mut sim, Press::Short(Key::Lap)); // back to the first row
+    }
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::MaxHr));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Lap));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(!app.settings.max_hr_age, "set by hand");
+    let by_hand = app.settings.max_hr;
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::BirthYear));
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.settings.max_hr, by_hand, "never replaced");
 }
 
 /// Continuous capture: 4 s with a Page press, one BMP per changed frame in target/sim/run/.

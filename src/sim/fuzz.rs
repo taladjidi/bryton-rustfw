@@ -300,6 +300,48 @@ fn ant_decoders() {
     assert!(statuses > 1000, "page 82 reached on the profiles: {statuses}");
 }
 
+/// Random broadcasts with the structure of the strap's page 7 (battery, with or without the toggle bit) and of common
+/// page 80 (a maker's id from the table or a random one, 0 and 0xffff among them) into every kind's decoder: no panic,
+/// a percent at most 100 and only the heart rate's, a maker id that is none of 0 and 0xffff. The test checks both
+/// pages were reached (their counts over the seeds), and that the names resolve for the ids of the table.
+#[test]
+fn strap_battery_and_maker_pages() {
+    use crate::sensors::{Decoders, Kind, Live, maker_name};
+    const MAKERS: [u16; 22] =
+        [1, 6, 7, 9, 32, 41, 51, 69, 70, 107, 112, 115, 123, 134, 135, 140, 263, 267, 268, 310, 0, 0xffff];
+    let (mut percents, mut makers, mut names) = (0usize, 0usize, 0usize);
+    for seed in 1..=8u32 {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let v: std::vec::Vec<u8> = bytes(seed, 1 << 17).collect();
+        for c in v.chunks_exact(9) {
+            let kind = Kind::ALL[usize::from(c[8]) % Kind::ALL.len()];
+            let mut d: [u8; 8] = core::array::from_fn(|i| c[i]);
+            match c[8] >> 5 {
+                0 => d[0] = 7,
+                1 => d[0] = 0x87,
+                2 => {
+                    d[0] = 0x50;
+                    if c[6] & 1 == 0 {
+                        d[4..6].copy_from_slice(&MAKERS[usize::from(c[7]) % MAKERS.len()].to_le_bytes());
+                    }
+                }
+                _ => {}
+            }
+            dec.decode(kind, d, 2105, &mut live);
+            if let Some(p) = dec.battery_percent(kind) {
+                assert!(p <= 100 && kind == Kind::Hr, "percent {p} of {kind:?}");
+                percents += 1;
+            }
+            if let Some(m) = dec.maker(kind) {
+                assert!(m != 0 && m != 0xffff, "maker {m:x}");
+                makers += 1;
+                names += usize::from(maker_name(m).is_some());
+            }
+        }
+    }
+    assert!(percents > 100 && makers > 1000 && names > 1000, "reached: {percents} {makers} {names}");
+}
+
 /// Random calibration pages (power meter page 0x01, ids mixed in so the replies are reached) into the reply decoder
 /// and the calibration state machine, with requests, retries and time passing: no panic, and every reply kind seen.
 #[test]
@@ -412,7 +454,9 @@ fn fit_files() {
         }
         let file = crate::fat::File { cluster: 0, size: 0, dir: false };
         if let Some(ride) = acc.ride(file, (2026, 1, 1, 0, 0)) {
-            let _ = crate::ui::card::Card::of(&ride.stats(250));
+            for imperial in [false, true] {
+                let _ = crate::ui::card::Card::of(&ride.stats(250), imperial);
+            }
         }
         let _ = crate::map::View::fit_whole(&track, (0, 0, 240, 110));
         let _ = crate::power_curve::fit_cp(&crate::power_curve::Curve { watts: roll.best, day: [0; 13] });
@@ -940,7 +984,7 @@ fn ride_scan_on_a_damaged_volume() {
         let mut past = crate::history::Past::new();
         for i in 0..scan.index.len() {
             let r = *scan.index.get(i).unwrap();
-            past.start(&r, 250);
+            past.start(&r, 250, true);
             for _ in 0..1000 {
                 if past.step(&mut d, 1 << 16).is_some() {
                     break;
@@ -3417,6 +3461,7 @@ fn settings_file() {
     let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
     let (mut lap_kept, mut lap_fell_back) = (0u32, 0u32); // AUTO LAP's three bytes
     let (mut seg_kept, mut seg_fell_back) = (0u32, 0u32); // LIVE SEGMENTS' and TARGET's bytes
+    let (mut un_kept, mut un_fell_back, mut trips_read) = (0u32, 0u32, 0u32); // SOUND, UNITS, TEMP, AUTO PAUSE; the trips
     let (mut auto_on, mut day_night_kept, mut day_night_fell_back) = (0u32, 0u32, 0u32); // AUTO, and DAY and NIGHT's names
     let (mut with_limit, mut wild_limit) = (0u32, 0u32); // limits read, and out of range ones read as 0
     let (mut with_lthr, mut wild_lthr, mut with_smooth, mut wild_smooth) = (0u32, 0u32, 0u32, 0u32);
@@ -3432,7 +3477,7 @@ fn settings_file() {
                 0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
                 1 => (next() % 31) as u16,      // an earlier build's
                 2 => 31 + (next() % 60) as u16, // a later build's
-                3 => 44 + (next() % 58) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO, the names and the segments' bytes: whole or cut
+                3 => 44 + (next() % 82) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO, the names and the segments' bytes: whole or cut
                 _ => 31,
             };
             s[6..8].copy_from_slice(&len.to_le_bytes());
@@ -3448,6 +3493,7 @@ fn settings_file() {
             let mut auto_w = None::<u8>; // AUTO at 69 (a byte: 0, 1, or out of its form)
             let mut lap_w = [None::<(u8, bool)>; 3]; // AUTO LAP, km, min at 94, 95, 96: written, and in range
             let mut seg_w = [None::<(u8, bool)>; 2]; // LIVE SEGMENTS, TARGET at 97, 98: written, and in range
+            let mut un_w = [None::<(u8, bool)>; 4]; // SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102: written, in range
             let mut day_w = None::<([u8; 12], bool)>; // DAY THEME at 70, NIGHT THEME at 82: the name, and whether it is one
             let mut night_w = None::<([u8; 12], bool)>;
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
@@ -3555,6 +3601,17 @@ fn settings_file() {
                         *slot = Some((v, v < top));
                     }
                 }
+                for (k, (slot, top)) in un_w.iter_mut().zip([2u8, 2, 2, 6]).enumerate() {
+                    if usize::from(len) >= 100 + k {
+                        let v = if next().is_multiple_of(3) {
+                            top + (next() % 200) as u8
+                        } else {
+                            (next() % u32::from(top)) as u8
+                        };
+                        s[28 + 99 + k] = v;
+                        *slot = Some((v, v < top));
+                    }
+                }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
             let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
@@ -3645,6 +3702,41 @@ fn settings_file() {
                             None => {}
                         }
                     }
+                    for (k, (w, got, def, top)) in [
+                        (un_w[0], u8::from(st.sound), 1, 2),
+                        (un_w[1], u8::from(st.imperial), 0, 2),
+                        (un_w[2], u8::from(st.temp_f), 0, 2),
+                        (un_w[3], st.auto_pause as u8, 0, 6),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        match w {
+                            Some((v, ok)) => {
+                                assert_eq!(got, if ok { v } else { def }, "units byte {k} written {v} of {top}");
+                                un_kept += u32::from(ok);
+                                un_fell_back += u32::from(!ok);
+                            }
+                            None if usize::from(len) < 100 + k => assert_eq!(got, def, "a cut file: the default"),
+                            None => {}
+                        }
+                    }
+                    // the trips and the odometer are whatever the file holds (random bytes), a cut one reads 0
+                    for (k, got) in
+                        [st.trip_m[0], st.trip_s[0], st.trip_m[1], st.trip_s[1], st.odo_m].into_iter().enumerate()
+                    {
+                        let at = 28 + 103 + 4 * k;
+                        let bytes = s.get(at..at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok());
+                        let want = if usize::from(len) >= 107 + 4 * k && bytes.is_some() {
+                            bytes.map_or(0, u32::from_le_bytes)
+                        } else {
+                            0
+                        };
+                        if usize::from(len) >= 107 + 4 * k {
+                            trips_read += 1;
+                        }
+                        assert_eq!(got, want, "trip word {k}, length {len}");
+                    }
                     let again = SettingsCopy::from_sector(&SettingsCopy { seq: c.seq, ..c }.to_sector());
                     assert_eq!(again.map(|a| a.settings.limits), Some(st.limits), "the limits round trip");
                     assert!(st.light_level <= crate::LIGHT_AUTO && st.light_timeout < crate::LIGHT_TIMEOUTS_S.len());
@@ -3689,6 +3781,13 @@ fn settings_file() {
     assert!(lap_kept > 0 && lap_fell_back > 0, "AUTO LAP's bytes reached");
     std::println!("LIVE SEGMENTS and TARGET bytes kept {seg_kept}, fallen back {seg_fell_back}");
     assert!(seg_kept > 100 && seg_fell_back > 100, "the segments' bytes reached: {seg_kept} {seg_fell_back}");
+    std::println!(
+        "SOUND, UNITS, TEMP, AUTO PAUSE bytes kept {un_kept}, fallen back {un_fell_back}; trip words read {trips_read}"
+    );
+    assert!(
+        un_kept > 100 && un_fell_back > 100 && trips_read > 100,
+        "the units' bytes: {un_kept} {un_fell_back} {trips_read}"
+    );
     assert!(auto_on > 0 && day_night_kept > 0 && day_night_fell_back > 0, "every new path reached");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
     assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");
@@ -3698,6 +3797,119 @@ fn settings_file() {
     );
     assert!(with_lthr > 100 && wild_lthr > 100, "LTHR {with_lthr} read, {wild_lthr} out of range");
     assert!(with_smooth > 100 && wild_smooth > 100, "POWER SMOOTH {with_smooth} read, {wild_smooth} out of range");
+}
+
+/// The zones, SEX, BIRTH YEAR and HEIGHT bytes of `\Rustfw\settings.bin` (data 123..150, with MAX HR FROM AGE), built by structure: the two
+/// flags each right or out of form, the ten bounds rising (the form ZONES writes), unsorted, zero or cut short, the
+/// year and height in and out of range, the length anywhere from 123 to 150. No panic; whatever is read is what the
+/// module doc says (custom zones only from whole, rising bounds and a custom flag of 1; the year and height unset out
+/// of range), and the zones every consumer reads rise; and the fuzz reaches custom zones, refused bounds and a cut.
+#[test]
+fn settings_file_zone_bytes() {
+    use crate::SettingsCopy;
+    let mut next = xorshift(0x20e5);
+    let (mut custom, mut refused, mut cut, mut years, mut wild_years) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    for _ in 0..60_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 123 + (next() % 28) as usize;
+        let age_flag = (next() % 3) as u8;
+        let flags = [(next() % 3) as u8, (next() % 3) as u8]; // 0, 1, or 2 (out of form)
+        let mut up = [0u16; 10];
+        let rising = !next().is_multiple_of(3);
+        let (mut h, mut p) = (40 + (next() % 30) as u16, 50 + (next() % 50) as u16);
+        for (i, v) in up.iter_mut().enumerate() {
+            let at = if i < 4 { &mut h } else { &mut p };
+            *at += 1 + (next() % 30) as u16;
+            *v = if rising { *at } else { (next() % 300) as u16 };
+        }
+        let year = if next().is_multiple_of(4) { (next() % 3000) as u16 } else { 1920 + (next() % 101) as u16 };
+        let height = (next() % 256) as u8;
+        let mut bytes = std::vec![flags[0], flags[1]];
+        bytes.extend(up.iter().flat_map(|v| v.to_le_bytes()));
+        bytes.push((next() % 2) as u8);
+        bytes.extend(year.to_le_bytes());
+        bytes.push(height);
+        bytes.push(age_flag);
+        sec[28 + 123..28 + 123 + 27].copy_from_slice(&bytes);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let z = st.zones().upper();
+        assert!(z[..4].windows(2).all(|w| w[0] < w[1]) && z[4..].windows(2).all(|w| w[0] < w[1]), "{z:?} rises");
+        let whole = len >= 125 + 20;
+        let want_custom = whole && flags[1] == 1 && rising;
+        assert_eq!(st.zone_custom, want_custom, "len {len}, flag {}, rising {rising}", flags[1]);
+        if want_custom {
+            assert_eq!(st.zones().upper(), up);
+            custom += 1;
+        } else {
+            refused += u32::from(whole && flags[1] == 1);
+            cut += u32::from(!whole);
+        }
+        assert_eq!(st.zones_lthr, len > 123 && flags[0] == 1);
+        if len >= 148 {
+            let ok = (1920..=2020).contains(&year);
+            assert_eq!(st.birth_year, if ok { year } else { 0 });
+            years += u32::from(ok);
+            wild_years += u32::from(!ok);
+        } else {
+            assert_eq!(st.birth_year, 0, "cut before the year");
+        }
+        assert_eq!(st.max_hr_age, len >= 150 && age_flag == 1);
+        assert_eq!(st.height_cm, if len >= 149 && (100..=230).contains(&height) { u16::from(height) } else { 0 });
+    }
+    assert!(custom > 1000 && refused > 500 && cut > 1000 && years > 1000 && wild_years > 100);
+}
+
+/// The ZONES menu's edits (`Settings::step` on `Setting::Zone`, ZONES BY, RESET, and FTP, MAX HR and LTHR moving under
+/// them), in random order: no panic; the zones every consumer reads always rise and stay in what ZONES offers, a bound
+/// never crosses its neighbours, the file round trip keeps them; and the fuzz reaches the first edit (computed zones
+/// taken as the rider's), a bound held at its neighbour, RESET, and a custom table kept while
+/// FTP, MAX HR and LTHR change.
+#[test]
+fn zones_menu_edits() {
+    use crate::{Settings, SettingsCopy, menu};
+    use menu::Setting;
+    let mut next = xorshift(0x20ae5);
+    let (mut first, mut held, mut reset, mut kept) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..3000 {
+        let mut s = Settings::from_word(0);
+        for _ in 0..200 {
+            let before = (s.zone_custom, s.zones().upper());
+            match next() % 12 {
+                0 => s.cycle(Setting::ZonesBy),
+                1 => {
+                    s.cycle(Setting::ZonesReset);
+                    reset += u32::from(before.0);
+                }
+                2 => s.step(Setting::Ftp, next().is_multiple_of(2)),
+                3 => s.step(Setting::MaxHr, next().is_multiple_of(2)),
+                4 => s.step(Setting::Lthr, next().is_multiple_of(2)),
+                _ => {
+                    let n = (next() % 10) as u8;
+                    let up = !next().is_multiple_of(3);
+                    s.step(Setting::Zone(n), up);
+                    let after = s.zones().upper();
+                    first += u32::from(!before.0 && s.zone_custom);
+                    held += u32::from(before.0 && after == before.1);
+
+                    for (k, (a, b)) in after.iter().zip(&before.1).enumerate() {
+                        assert!(k == usize::from(n) || a == b, "only bound {n} moves, not {k}");
+                    }
+                }
+            }
+            let z = s.zones().upper();
+            assert!(z[..4].windows(2).all(|w| w[0] < w[1]) && z[4..].windows(2).all(|w| w[0] < w[1]), "{z:?} rises");
+            if s.zone_custom {
+                assert!(Settings::zone_bounds_ok(&z), "{z:?} in range");
+                kept += u32::from(before.0 && z == before.1 && matches!(s.zone_up, u if u == z));
+            }
+        }
+        let back = SettingsCopy::from_sector(&SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector()).unwrap();
+        assert_eq!(back.settings.zones(), s.zones(), "kept through the file");
+    }
+    assert!(first > 1000 && held > 100 && reset > 100 && kept > 1000, "{first} {held} {reset} {kept}");
 }
 
 /// Which wins at a start (app/settings_file.rs), by chance: random backup registers (each tagged as some build writes
@@ -4182,6 +4394,99 @@ fn segment_files() {
         let _ = Header::parse(&f);
     }
     assert!(reached.iter().all(|&c| c > 0), "every error and the Ok path reached: {reached:?}");
+}
+
+/// A segment's PR file (nav/segment.rs `PrCopy`, read at a segment's load and before an effort is written)
+/// generated from its layout: two copies, each valid, absent, or with one field broken (magic, version, the point
+/// count, a time falling, the first time or the total, a flipped byte with or without its CRC put right), the file
+/// cut or grown. Every check and the Ok path of a copy are reached (counted over the seeds), and the newest whole
+/// copy is always one that parses on its own, the one with the higher sequence number.
+#[test]
+fn pr_files() {
+    use crate::segment::{POINTS, PR_COPY, PrCopy, PrError, pr_copy};
+    let mut reached = [0usize; 7]; // Ok, Size, Magic, Version, Points, Crc, Times
+    let mut newest = [0usize; 3]; // none, the first, the second
+    for seed in 1..=3000u32 {
+        let mut next = xorshift(seed);
+        let copy = |next: &mut dyn FnMut() -> u32| -> Vec<u8> {
+            let np = 2 + (next() as usize % (POINTS - 1));
+            let mut t = 0u16;
+            let times: Vec<u16> = (0..np)
+                .map(|i| {
+                    if i > 0 {
+                        t = t.saturating_add(1 + (next() % 40) as u16);
+                    }
+                    t
+                })
+                .collect();
+            let mut c = pr_copy(next() % 50, next() % 3, next(), &times).unwrap().to_vec();
+            let crc_fixed = next().is_multiple_of(2);
+            let at = |next: &mut dyn FnMut() -> u32| 24 + 2 * (next() as usize % np);
+            match next() % 12 {
+                0 => c[next() as usize % 4] ^= 1 + (next() % 255) as u8,
+                1 => c[4] = (next() % 4) as u8,
+                2 => c[6..8].copy_from_slice(&((next() % 3) as u16 * 401).to_le_bytes()),
+                3 => {
+                    let i = at(next);
+                    c[i..i + 2].copy_from_slice(&((next() % 2) as u16).to_le_bytes());
+                }
+                4 => c[20..24].copy_from_slice(&(next() % 3).to_le_bytes()),
+                5 => {
+                    let i = next() as usize % 1020;
+                    c[i] ^= 1 + (next() % 255) as u8;
+                }
+                6 => c.truncate(next() as usize % PR_COPY),
+                7 => c = std::vec![0u8; PR_COPY], // a copy never written
+                _ => {}
+            }
+            if crc_fixed && c.len() == PR_COPY {
+                let crc = crate::inflate::crc32(c[..1020].iter().copied());
+                c[1020..].copy_from_slice(&crc.to_le_bytes());
+            }
+            c
+        };
+        let (a, b) = (copy(&mut next), copy(&mut next));
+        for c in [&a, &b] {
+            reached[match PrCopy::parse(c) {
+                Ok(p) => {
+                    assert!(p.npoints() >= 2 && p.iter().last() == Some(p.total_s as u16), "seed {seed}");
+                    assert!(p.iter().zip(p.iter().skip(1)).all(|(x, y)| x <= y), "seed {seed}: falling");
+                    0
+                }
+                Err(PrError::Size) => 1,
+                Err(PrError::Magic) => 2,
+                Err(PrError::Version) => 3,
+                Err(PrError::Points) => 4,
+                Err(PrError::Crc) => 5,
+                Err(PrError::Times) => 6,
+            }] += 1;
+        }
+        // the file: both copies padded to their place, sometimes cut or grown
+        let mut file = std::vec![0u8; 2 * PR_COPY];
+        file[..a.len().min(PR_COPY)].copy_from_slice(&a[..a.len().min(PR_COPY)]);
+        file[PR_COPY..PR_COPY + b.len().min(PR_COPY)].copy_from_slice(&b[..b.len().min(PR_COPY)]);
+        match next() % 8 {
+            0 => file.truncate(next() as usize % (2 * PR_COPY)),
+            1 => file.extend((0..next() % 600).map(|_| next() as u8)),
+            _ => {}
+        }
+        let whole = |c: &[u8]| c.len() == PR_COPY && PrCopy::parse(c).is_ok();
+        let n = PrCopy::newest(&file);
+        newest[match n {
+            None => 0,
+            Some(p) if file.len() >= PR_COPY && PrCopy::parse(&file[..PR_COPY]) == Ok(p) => 1,
+            Some(_) => 2,
+        }] += 1;
+        if let Some(p) = n {
+            let (x, y) = (&file[..PR_COPY], &file[PR_COPY..2 * PR_COPY]);
+            assert!(whole(x) || whole(y), "seed {seed}");
+            for other in [x, y].into_iter().filter_map(|c| PrCopy::parse(c).ok()) {
+                assert!(other.seq <= p.seq, "seed {seed}: not the newest");
+            }
+        }
+    }
+    assert!(reached.iter().all(|&c| c > 0), "every check and the Ok path reached: {reached:?}");
+    assert!(newest.iter().all(|&c| c > 0), "none, the first and the second won: {newest:?}");
 }
 
 /// The segment matcher (nav/segment_match.rs) against parsed segments, fed random fixes: a rider that follows the

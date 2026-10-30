@@ -86,14 +86,14 @@ pub const HOLD_S: u32 = 3;
 /// let w = ramp::workout();
 /// let steps = w.steps();
 /// assert_eq!(steps.len(), 32);
-/// let watts = |k: usize| steps[k].target.range(250, 190).map(|(lo, _)| lo);
+/// let watts = |k: usize| steps[k].target.range(&bryton_rustfw::ride::Zones::standard(250, 190)).map(|(lo, _)| lo);
 /// assert_eq!([0, 1, 2, 3, 30, 31].map(watts), [125, 140, 155, 170, 575, 113].map(Some), "FTP 250 W");
 /// assert_eq!(watts(1).map(|w| w * 100 / 250), Some(56));
 /// ```
 pub fn workout() -> Workout {
     let step = |len, pct, intensity| Step {
         len,
-        target: Target { kind: Kind::Power, lo: pct, hi: pct, pct: true },
+        target: Target { kind: Kind::Power, lo: pct, hi: pct, pct: true, zone: 0 },
         target2: Target::OPEN,
         intensity,
     };
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(s.get(COOL).map(|s| s.len), Some(Length::Time(COOL_S)));
         assert!(s.iter().skip(FIRST).take(RAMP_STEPS - 1).all(|s| s.len == Length::Time(STEP_S)));
         // a stale FTP of 120 and a strong one of 400: the start follows
-        let start = |ftp| s[FIRST].target.range(ftp, 190).map(|r| r.0);
+        let start = |ftp| s[FIRST].target.range(&crate::ride::Zones::standard(ftp, 190)).map(|r| r.0);
         assert_eq!([start(120), start(250), start(400)], [67, 140, 224].map(Some));
         assert_eq!(w.total_s(), WARMUP_S + STEP_S * (RAMP_STEPS as u32 - 1) + COOL_S);
     }

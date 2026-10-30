@@ -40,7 +40,7 @@ pub(crate) struct ProfileShown {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WorkoutShown {
     file: Option<fat::File>,
-    zones: (u16, u16),
+    zones: ride::Zones,
     pub(crate) rider: Option<u32>,
 }
 
@@ -206,8 +206,8 @@ impl App {
             return (0, ui::BLACK);
         }
         let color = match g.plot {
-            Plot::Power => ride::power_zone_color(v, self.settings.ftp),
-            Plot::Hr => ride::hr_zone_color(v, self.settings.max_hr),
+            Plot::Power => self.settings.zones().power_color(v),
+            Plot::Hr => self.settings.zones().hr_color(v),
             Plot::Wbal => power::wbal_color(i32::from(v) * 10, self.cp_model().1),
             Plot::Dfa => ride::dfa_color(v),
             Plot::Alt => ui::GREY,
@@ -442,7 +442,7 @@ impl App {
             at if at >= total => cols, // done: all of it dark
             at => (u64::from(at) * u64::from(cols) / u64::from(total)) as u32,
         });
-        let zones = (self.settings.ftp, self.settings.max_hr);
+        let zones = self.settings.zones();
         WorkoutShown { file: self.plan.file.filter(|_| total > 0), zones, rider }
     }
 

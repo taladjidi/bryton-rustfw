@@ -43,6 +43,65 @@ fn hr_edge(ms: u64) -> [u8; 8] {
     [4, 0, 0, 0, 0, 0, 0, bpm]
 }
 
+/// One zones table: a bound edited in ME > ZONES moves the bar's colour, the zone field and the time in zone together,
+/// and RESET puts the computed zones back. 125 bpm is zone 2 of 190 (114 to 132); with zone 1 raised to end at 126 it
+/// is zone 1.
+#[test]
+fn a_custom_zone_bound_moves_the_bar_the_zone_field_and_the_time() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_edge, network: 0, ack: &[] });
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = crate::page::Page::preset(1, [Hr, HrZone, HrZoneTime, Time, Time, Time, Time, Time]).unwrap();
+    app.press(&mut sim, Press::Short(Key::Page));
+    for _ in 0..13 {
+        app.settings.step(crate::menu::Setting::Zone(0), true); // 113 -> 126
+    }
+    assert_eq!(app.settings.zones().upper()[0], 126);
+    let bx = app.pages()[0].cell_box(0).unwrap();
+    let bar_at = |sim: &Sim| sim.screen[((bx.1 + 1) * W + bx.0 + 10) as usize];
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 9000);
+    assert_eq!(bar_at(&sim), crate::ride::hr_color(1), "the bar in the rider's zone 1");
+    assert_eq!(text(&app, HrZone), "1");
+    assert!(app.zone_s.hr_s(1) > Some(0) && app.zone_s.hr_s(2) == Some(0), "the time counted in zone 1");
+    app.settings.cycle(crate::menu::Setting::ZonesReset);
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(bar_at(&sim), crate::ride::hr_color(2), "the computed zones again");
+    assert_eq!(text(&app, HrZone), "2");
+}
+
+/// A ride without power: the TSS field and the end card show the hrTSS from the strap and the LTHR (training/hrtss.rs),
+/// "--" while LTHR is unset; with a power meter the power TSS stays.
+#[test]
+fn tss_from_heart_rate_when_there_is_no_power() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.backup[Kind::Hr.backup()] = STRAP.to_word();
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_ramp, network: 0, ack: &[] });
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = crate::page::Page::preset(1, [Tss, Hr, Time, Time, Time, Time, Time, Time]).unwrap();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    assert_eq!(text(&app, Tss), "--", "LTHR unset");
+    app.settings.lthr = 150;
+    let mut want = crate::hrtss::Hrtss::default();
+    for s in 0..app.ride.timer_s() {
+        want.second(Some(90 + (s % 120) as u16), 190, false);
+    }
+    let tss = text(&app, Tss);
+    assert_ne!(tss, "--", "the hrTSS once LTHR is set");
+    assert!(tss.parse::<u32>().unwrap().abs_diff(want.score(150, 190, false).unwrap()) <= 1, "{tss}");
+    let card = app.ride_card();
+    assert_eq!(card.stats.iter().find(|s| s.0 == "TSS").map(|s| s.1.as_str()), Some(tss.as_str()), "the end card");
+}
+
 /// The heart rate's zone bar follows its number at once, but a value on a zone's edge (within 1 % of max HR) does not
 /// flip it, and the bar is all that is redrawn when it does change: the number, white, is redrawn on its own.
 #[test]
@@ -737,4 +796,44 @@ fn sun_heading_arrival_and_battery_fields() {
     assert_eq!(text(&app, HrBatt), "--", "the strap sends no battery status in this run");
     assert!(text(&app, UnitBatt).ends_with('%'), "the status bar's percent");
     sim.save("sun_fields");
+}
+
+/// UNITS IMPERIAL and TEMPERATURE F: the ride page shows mph, miles, feet and F with their labels; the same ride in
+/// metric shows the km values; the FIT file's units are not a setting (docs/features.md).
+#[test]
+fn imperial_units_on_a_ride_page() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = PageCfg { layout: 6, fields: [Speed, Dist, MaxSpeed, Ascent, Temp, Trip1] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    let metric: std::vec::Vec<_> = [Speed, Dist, MaxSpeed, Ascent, Temp, Trip1].map(|f| text(&app, f)).into();
+    assert_eq!(&metric[..3], ["28.8", "0.94", "28.8"], "8 m/s for 120 s");
+    app.settings.imperial = true;
+    app.settings.temp_f = true;
+    let imp: std::vec::Vec<_> = [Speed, Dist, MaxSpeed, Ascent, Temp, Trip1].map(|f| text(&app, f)).into();
+    assert_eq!(&imp[..3], ["17.9", "0.58", "17.9"], "28.8 km/h is 17.9 mph, 940 m is 0.58 mi");
+    assert_eq!(Speed.label_in(true, true), "MPH");
+    assert_eq!(
+        (Dist.label_in(true, false), Temp.label_in(false, true), Temp.label_in(true, false)),
+        ("MI", "TEMP F", "TEMP C")
+    );
+    assert_eq!(Speed.label_in(false, false), "KM/H");
+    if metric[4] != "--" {
+        assert_ne!(imp[4], metric[4], "F is not C");
+    }
+    assert!(app.end_stats().as_str().ends_with(" MI"), "the end-ride screen");
+    let card = app.ride_card();
+    assert_eq!((card.stats[1].0, card.stats[2].0, card.stats[3].0), ("MI", "AVG MPH", "ASCENT FT"), "the summary card");
+    app.settings.limits[4] = 30;
+    let mut l = crate::Line::<12>::new();
+    app.settings.text(crate::menu::Setting::Limit(4), &mut l);
+    assert_eq!((l.as_str(), crate::menu::Setting::Limit(4).unit_in(true)), ("19", " MPH"), "30 km/h in mph");
+    app.font_changed(&mut sim); // the page drawn whole again, with the new labels
+    run(&mut sim, &mut app, 1000);
+    sim.save("imperial_page");
 }

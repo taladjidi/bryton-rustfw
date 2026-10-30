@@ -81,8 +81,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|:-:|
 | ![Menu](img/menu.png) | ![Ride menu](img/ride-menu.png) | ![ME settings](img/settings.png) |
 | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap acts on a row (sim) | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS > ME: values with their units, edited in place (sim) |
-| ![SETTINGS menu](img/menu-settings.png) | ![BIKE menu](img/menu-bike.png) |  |
-| SETTINGS: a menu per subject, any setting three levels down at most (sim) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) |  |
+| ![SETTINGS menu](img/menu-settings.png) | ![BIKE menu](img/menu-bike.png) | ![ME menu](img/me-menu.png) |
+| SETTINGS: a menu per subject, any setting three levels down at most (sim) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) | SETTINGS > ME: MAX HR, LTHR, ZONES BY, ZONES, FTP, then sex, birth year and height (sim) |
+| ![ZONES menu](img/zones-edit-menu.png) |  |  |
+| ME > ZONES: the top of each heart-rate and power zone, edited one by one (an edited bound is kept; RESET at the end) (sim) |  |  |
 | | | |
 |:-:|:-:|:-:|
 | ![ABOUT](img/about.png) | ![STORAGE](img/storage.png) | ![STORAGE's oldest ride](img/storage-ride.png) |
@@ -94,7 +96,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|:-:|
 | ![Sensors](img/sensors.png) | ![GPS](img/gps.png) | ![Power meter calibration](img/power-zero.png) |
 | Sensors and built-in readings (sim) | Speed page (sim) | SENSORS > CALIBRATE POWER: zero offset and auto zero (sim meter) |
-| ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |  |
+| ![Sensor names](img/sensors-names.png) | ![Media remote](img/phone-media.png) | ![A call](img/phone-call.png) |
+| SENSORS with the strap's maker from ANT+ common page 80 (POLAR HR, device number 9: synthetic) (sim) | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |
 | The phone's media remote: what plays (AMS), the keys (sim) | An incoming call from the phone (ANCS): the banner at the top, the buttons name their keys (sim) |  |
 
 ## Alerts
@@ -141,6 +144,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The SEGMENT page ahead of the PR: the delta in green, the two marks on the bar (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
 | ![SEGMENTS menu](img/segment-menu.png) | | |
 | MENU > SEGMENTS: the two settings, the segments of the card, the skipped files (sim) | | |
+
+## Units
+
+| | |
+|:-:|:-:|
+| ![Imperial units](img/imperial-units.png) | |
+| UNITS IMPERIAL and TEMPERATURE F on a ride page: mph, miles, feet, F and a trip in miles, with their labels (sim) | |
 ## Workouts
 
 | | |

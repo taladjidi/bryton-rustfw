@@ -83,6 +83,19 @@ pub enum Setting {
     Ftp,
     /// Lactate threshold heart rate (a number, bpm; 0 until set, the LTHR fields show "--").
     Lthr,
+    /// ZONES BY: the heart-rate zones from the MAX HR or the LTHR (a choice).
+    ZonesBy,
+    /// Bound `n` of the zones table (0 to 3 the heart-rate zones 1 to 4, 4 to 9 the power zones 1 to 6): the highest
+    /// bpm or W in the zone, a number edited in place (app/settings.rs `step_zone`).
+    Zone(u8),
+    /// RESET TO DEFAULT: Select goes back to the computed zones; the value says which are in use.
+    ZonesReset,
+    /// SEX: male or female (TRIMP's constant for hrTSS).
+    Sex,
+    /// BIRTH YEAR: 0 until set; sets the maximum heart rate (220 minus the age) while that is still the default.
+    BirthYear,
+    /// HEIGHT, cm: 0 until set (kept for formulas that need it; none does yet).
+    Height,
     // power.rs
     /// Rider weight (a number), for W/kg.
     Weight,
@@ -135,6 +148,18 @@ pub enum Setting {
     LiveSegments,
     /// The effort a live segment is ridden against: AUTO, PR, KOM, QOM or RECENT (`seg_target`).
     SegTarget,
+    /// SOUND: the buzzer on or off (`sound`).
+    Sound,
+    /// UNITS: METRIC or IMPERIAL (`imperial`).
+    Units,
+    /// TEMPERATURE: C or F (`temp_f`).
+    Temp,
+    /// AUTO PAUSE: AUTO, OFF or a speed (`auto_pause`, [`crate::AUTO_PAUSE_KMH`]).
+    AutoPause,
+    /// TRIP 1 or TRIP 2 (0, 1): the distance ridden since it was reset; Select (twice) resets it.
+    Trip(u8),
+    /// ODOMETER: the distance of every ride saved; never reset.
+    Odometer,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -245,10 +270,32 @@ impl Setting {
             Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::PowerMatch => "POWER MATCH",
             Setting::Lthr => "LTHR",
+            Setting::ZonesBy => "ZONES BY",
+            Setting::Zone(0) => "HR Z1",
+            Setting::Zone(1) => "HR Z2",
+            Setting::Zone(2) => "HR Z3",
+            Setting::Zone(3) => "HR Z4",
+            Setting::Zone(4) => "PWR Z1",
+            Setting::Zone(5) => "PWR Z2",
+            Setting::Zone(6) => "PWR Z3",
+            Setting::Zone(7) => "PWR Z4",
+            Setting::Zone(8) => "PWR Z5",
+            Setting::Zone(_) => "PWR Z6",
+            Setting::ZonesReset => "RESET",
+            Setting::Sex => "SEX",
+            Setting::BirthYear => "BORN",
+            Setting::Height => "HEIGHT",
             Setting::PowerSmooth => "POWER SMOOTH",
             Setting::AutoLap => "AUTO LAP",
             Setting::LiveSegments => "LIVE SEGMENTS",
             Setting::SegTarget => "TARGET",
+            Setting::Sound => "SOUND",
+            Setting::Units => "UNITS",
+            Setting::Temp => "TEMPERATURE",
+            Setting::AutoPause => "AUTO PAUSE",
+            Setting::Trip(0) => "TRIP 1",
+            Setting::Trip(_) => "TRIP 2",
+            Setting::Odometer => "ODOMETER",
             Setting::LapKm => "LAP KM",
             Setting::LapMin => "LAP MIN",
             Setting::Font => "FONT",
@@ -270,7 +317,9 @@ impl Setting {
         match self {
             Setting::Wheel => " MM",
             Setting::Light => "%",
-            Setting::MaxHr | Setting::HrAlert | Setting::Lthr | Setting::Limit(6) => " BPM",
+            Setting::MaxHr | Setting::HrAlert | Setting::Lthr | Setting::Limit(6) | Setting::Zone(0..=3) => " BPM",
+            Setting::Zone(_) => " W",
+            Setting::Height => " CM",
             Setting::Limit(0 | 1) => " W",
             Setting::Limit(2 | 3) => " RPM",
             Setting::Limit(4 | 5) => " KMH",
@@ -285,12 +334,24 @@ impl Setting {
         }
     }
 
+    /// [`Setting::unit`] with the speed limits in mph when `imperial` (they are kept in km/h).
+    pub fn unit_in(self, imperial: bool) -> &'static str {
+        match self {
+            Setting::Limit(4 | 5) if imperial => " MPH",
+            _ => self.unit(),
+        }
+    }
+
     /// For a number edited in place (Select, then up and down): its range and step. None for a choice, which
     /// Select moves to the next value.
     pub fn number(self) -> Option<(core::ops::RangeInclusive<u16>, u16)> {
         match self {
             Setting::MaxHr => Some((MAX_HR_RANGE, 1)),
             Setting::Lthr => Some((LTHR_RANGE, 1)),
+            Setting::Zone(0..=3) => Some((ZONE_HR_MIN..=ZONE_HR_MAX, 1)),
+            Setting::Zone(_) => Some((1..=ZONE_PW_MAX, 5)),
+            Setting::BirthYear => Some((1920..=2020, 1)),
+            Setting::Height => Some((100..=230, 1)),
             Setting::Ftp => Some((FTP_RANGE, 5)),
             Setting::Weight => Some((WEIGHT_RANGE, 1)),
             Setting::WPrime => Some((WPRIME_RANGE, 500)),
@@ -312,6 +373,13 @@ impl Setting {
         }
     }
 }
+
+/// Heart-rate zone bounds offered, bpm.
+pub const ZONE_HR_MIN: u16 = 40;
+/// See [`ZONE_HR_MIN`].
+pub const ZONE_HR_MAX: u16 = 250;
+/// Power zone bounds offered, W.
+pub const ZONE_PW_MAX: u16 = 2000;
 
 /// Max heart rates offered, bpm.
 pub const MAX_HR_RANGE: core::ops::RangeInclusive<u16> = 100..=230;
@@ -705,12 +773,33 @@ pub const SETTINGS: [Row; 5] = [
 ];
 
 /// ME: the rider's numbers the metrics are computed from.
-pub const ME: [Row; 5] = [
+pub const ME: [Row; 10] = [
     Row::Set(Setting::MaxHr),
     Row::Set(Setting::Lthr),
+    Row::Set(Setting::ZonesBy),
+    Row::Open(Menu::Zones),
     Row::Set(Setting::Ftp),
     Row::Set(Setting::Weight),
     Row::Set(Setting::WPrime),
+    Row::Set(Setting::Sex),
+    Row::Set(Setting::BirthYear),
+    Row::Set(Setting::Height),
+];
+
+/// ZONES (ME > ZONES): the top of each heart-rate zone 1 to 4 and power zone 1 to 6 (zone 5 and 7 have none), each edited
+/// in place, then RESET ZONES.
+pub const ZONES: [Row; 11] = [
+    Row::Set(Setting::Zone(0)),
+    Row::Set(Setting::Zone(1)),
+    Row::Set(Setting::Zone(2)),
+    Row::Set(Setting::Zone(3)),
+    Row::Set(Setting::Zone(4)),
+    Row::Set(Setting::Zone(5)),
+    Row::Set(Setting::Zone(6)),
+    Row::Set(Setting::Zone(7)),
+    Row::Set(Setting::Zone(8)),
+    Row::Set(Setting::Zone(9)),
+    Row::Set(Setting::ZonesReset),
 ];
 
 /// ALERTS: the reminders and the limits (the list scrolls).
@@ -732,7 +821,7 @@ pub const ALERTS: [Row; 14] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 7] = [
+pub const DISPLAY: [Row; 10] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
@@ -740,11 +829,14 @@ pub const DISPLAY: [Row; 7] = [
     Row::Set(Setting::Theme),
     Row::Set(Setting::DayTheme),
     Row::Set(Setting::NightTheme),
+    Row::Set(Setting::Units),
+    Row::Set(Setting::Temp),
+    Row::Set(Setting::Sound),
 ];
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 12] = [
+pub const BIKE: [Row; 16] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -757,6 +849,10 @@ pub const BIKE: [Row; 12] = [
     Row::Set(Setting::AutoLap),
     Row::Set(Setting::LapKm),
     Row::Set(Setting::LapMin),
+    Row::Set(Setting::AutoPause),
+    Row::Set(Setting::Trip(0)),
+    Row::Set(Setting::Trip(1)),
+    Row::Set(Setting::Odometer),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

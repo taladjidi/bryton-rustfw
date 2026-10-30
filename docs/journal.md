@@ -294,3 +294,12 @@ build (POWER_STEPS=15) gives the wall time.
 - **The ULPI pins' slew rate:** already very high speed, as stock sets them.
 - **A CBW not valid leaving the drive deaf after a bus reset:** fixed; a bus reset clears it now (msc.rs
   `Drive::bus_reset`).
+
+## 2026-10-30: the heart rate intervals counted again on every power broadcast (main, fixed in this branch)
+
+Found on the host (not on the unit): after each beat of the strap, the radio path pushed the beat's RR interval into
+the HRV and the full copy's hrv messages again after every message of any kind. With a power meter paired, each
+interval went in once per power-meter broadcast: 38 instead of 19 in the test `each_interval_once`. So rides recorded
+with a power meter and the strap may carry duplicate hrv messages, and their DFA a1 and RMSSD are skewed. Fixed in the
+sensor names branch: the intervals are taken once per message, and only from the strap. Rides before the fix are not
+re-read; the next ride checks the count.

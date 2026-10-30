@@ -88,6 +88,7 @@ impl App {
         self.radio.misses[i] = 0; // the rider's action: from the first rest again
         self.radio.sensors[i] = Sensor::Off;
         self.radio.heard_ms[i] = u32::MAX;
+        self.decoders.forget_ids(kind); // the percent and maker of the sensor it was
         let id = match want {
             Sensor::Off => None,
             Sensor::Search => None,
@@ -144,7 +145,7 @@ impl App {
                         fec::decode(data, &mut self.trainer.reading);
                         self.fold_trainer();
                     }
-                    for &rr in self.decoders.beats.rr() {
+                    for &rr in self.decoders.beats.rr().iter().filter(|_| kind == Kind::Hr) {
                         self.hrv.push(rr);
                         self.rec.full.beat(rr); // raw, into the full copy's hrv messages (RAM only: storage/recorder/mod.rs)
                     }

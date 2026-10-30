@@ -106,7 +106,7 @@ impl App {
         let erg_w = step
             .and_then(|i| steps.get(i))
             .filter(|s| s.target.kind == storage::workout_file::Kind::Power)
-            .and_then(|s| s.target.range(self.settings.ftp, self.settings.max_hr))
+            .and_then(|s| s.target.range(&self.settings.zones()))
             .map(|(lo, hi)| lo.midpoint(hi));
         // % x 10 to % x 100
         // not before the ride starts: the course's first grade would be put on the trainer while the rider sits

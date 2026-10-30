@@ -48,8 +48,8 @@ impl App {
         if !ticked {
             return self.finish_ramp();
         }
-        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
-        let target = steps.get(i).and_then(|s| s.target.range(ftp, max_hr)).map_or(0, |(lo, hi)| lo.midpoint(hi));
+        let target =
+            steps.get(i).and_then(|s| s.target.range(&self.settings.zones())).map_or(0, |(lo, hi)| lo.midpoint(hi));
         let hr = self.live.get(Metric::Hr);
         let a1 = self.hrv.alpha1().filter(|_| hr.is_some()).map(|a| (a * 100.0 + 0.5) as u16);
         let (power, cadence) = (self.live.get(Metric::Power), self.live.get(Metric::Cadence));

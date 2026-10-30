@@ -71,7 +71,7 @@ after the save, `tools/segments.py`, then own-ride segments and the licensed fee
 decide on a Strava subscription (the API's Standard tier needs one since 30 June 2026), and email Strava for a Live
 Segments licence.
 
-Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30); ~~S3, `src/app/segments.rs`: the index, the active segment, the ride's feed (sim tests and fuzz; not yet on the unit)~~ (2026-10-30); ~~S4, the SEGMENT page, banners, result card and MENU > SEGMENTS (sim tests; not yet on the unit)~~ (2026-10-30).
+Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30); ~~S3, `src/app/segments.rs`: the index, the active segment, the ride's feed (sim tests and fuzz; not yet on the unit)~~ (2026-10-30); ~~S4, the SEGMENT page, banners, result card and MENU > SEGMENTS (sim tests; not yet on the unit)~~ (2026-10-30); ~~S5, the efforts written after the save (`<id>.pr`, `efforts.csv`; power cut tests, fuzz; not yet on the unit; the per-segment enable byte left to S4)~~ (2026-10-30).
 
 ### Block 3: what is left on the unit, easiest first
 
@@ -87,9 +87,11 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
   the destination and the arrival time on a course, the unit's and each sensor's battery as fields~~ done, sim (features.md;
   the distance to the destination is the course's distance to go, not a new field);
-- trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
-  saving and the date and time formats; key click; sound on or off; backlight always on; the auto pause threshold;
-  the climb filter (all, or medium and above); the CLIMB page's off switch;
+- ~~trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; sound on or off;
+  backlight always on (LIGHT OFF NEVER); the auto pause threshold~~ done, sim (features.md "Units, sound, trips"); still open: time
+  zone, daylight saving and the date and time formats; key click (the unit's keys have no beep to switch); the climb filter
+  (all, or medium and above: no climb has a category yet); the CLIMB page's off switch (CLIMBS AHEAD already turns the road
+  ahead off);
 - ~~the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
   to delete (DELETE exists in HISTORY)~~ done, sim (features.md: ABOUT and STORAGE under SYSTEM; the oldest ride's DELETE is HISTORY's).
 
@@ -102,6 +104,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start (sonnet);
 - workouts: ~~the next-step strip instead of a popup (patch P3), two targets per step~~ done, sim (features.md);
 - zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;
+- ~~the heart rate strap's battery (ANT+ page 7); sensor names~~ done, sim (features.md); Di2 gear teeth and hood button actions (patch P12), the
+- ~~zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power~~ done, sim (features.md "Zones");
 - the heart rate strap's battery (ANT+ page 7); sensor names; Di2 gear teeth and hood button actions (patch P12), the
   media remote from Di2 buttons;
 - screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical).
