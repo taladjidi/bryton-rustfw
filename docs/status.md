@@ -65,6 +65,11 @@ A feature not listed here was seen on the unit.
   against the clock on a real fix (the zone learnt from the phone), the time to sunset, the heading on a ride, the ETA on
   a followed course, and the power meter's and the strap's battery status on the unit.
 
+- **ZONE and SUMMER TIME (DISPLAY, app/clock.rs)**: sim only. Still to see: with ZONE +1 and SUMMER TIME EU, the
+  strip at UTC + 1 after the last Sunday of March's change (2027-03-28 01:00 UTC) and the next October one
+  (2027-10-31), without the phone setting the RTC; the RTC itself unchanged (stock shows it as is); a ride across the
+  change keeping its name, its FIT times read in the Bryton app or Intervals.icu without a jump; the sun's times on
+  the new hour.
 - **The sunset alert (ALERTS > SUNSET ALERT)**: sim only. Still to see: "SUNSET SOON" and its three beeps on a ride about 30 minutes before the set, once, and not again after a pause.
 - **The limit alerts and the distance, kcal and kJ reminders (ALERTS menu)**: sim only. Still to see: the buzzer and
   the red banner on the unit for a limit crossed on a ride.

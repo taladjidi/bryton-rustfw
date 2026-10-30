@@ -974,18 +974,20 @@ impl App {
         if self.ride.state() != ride::State::Idle || self.rec.clean.phase() != recorder::Phase::Done {
             return;
         }
-        if let Some(t) = current.and_then(ph::current_time) {
+        let set = current.and_then(ph::current_time);
+        if let Some(t) = set {
             let (tr, dr) = rtc_words(t);
             b.rtc_set(tr, dr);
-            self.date = (t.0, t.1, t.2);
-            self.strip.time = (t.3, t.4);
-            self.seconds = t.5;
         }
         if let Some(offset) = local.and_then(ph::local_offset)
             && self.gps.aid.offset_15min != Some(offset)
         {
             self.gps.aid.offset_15min = Some(offset);
             self.write_aid(b);
+        }
+        if let Some(t) = set {
+            self.show_clock(t); // with the offset just learnt (a TIME ZONE needs it)
+            self.seconds = t.5;
         }
     }
 

@@ -128,6 +128,11 @@ pub enum Setting {
     ClimbPage,
     /// DATE FORMAT (DISPLAY): D/M/Y, M/D/Y or Y-M-D.
     DateFormat,
+    /// ZONE (DISPLAY), the time zone: CLOCK (the RTC shown as is) or a zone, UTC - 12:00 to + 14:00 in quarter hours (a number,
+    /// `tz`; app/clock.rs).
+    TimeZone,
+    /// SUMMER TIME (DISPLAY): OFF, EU or US, with a TIME ZONE ([`crate::Dst`]).
+    DaylightSaving,
     /// The font of every text: PIXEL (dot matrix, the default) or BARLOW ([`crate::fonts::smooth`]).
     Font,
     /// The colour theme: AUTO (day or night by the ambient light), DARK, OUTDOOR or a file of `\Rustfw\Themes`
@@ -289,6 +294,8 @@ impl Setting {
             Setting::ClimbsMedium => "CLIMBS",
             Setting::ClimbPage => "CLIMB PAGE",
             Setting::DateFormat => "DATE FORMAT",
+            Setting::TimeZone => "ZONE",
+            Setting::DaylightSaving => "SUMMER TIME",
             Setting::PowerMatch => "POWER MATCH",
             Setting::Lthr => "LTHR",
             Setting::ZonesBy => "ZONES BY",
@@ -395,6 +402,7 @@ impl Setting {
             Setting::Altitude => Some((0..=9500, 1)),
             Setting::LapKm => Some((1..=50, 1)),
             Setting::LapMin => Some((1..=60, 1)),
+            Setting::TimeZone => Some((0..=crate::TZ_MAX, 1)),
             _ => None,
         }
     }
@@ -851,7 +859,7 @@ pub const ALERTS: [Row; 15] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 11] = [
+pub const DISPLAY: [Row; 13] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
@@ -861,6 +869,8 @@ pub const DISPLAY: [Row; 11] = [
     Row::Set(Setting::NightTheme),
     Row::Set(Setting::Units),
     Row::Set(Setting::DateFormat),
+    Row::Set(Setting::TimeZone),
+    Row::Set(Setting::DaylightSaving),
     Row::Set(Setting::Temp),
     Row::Set(Setting::Sound),
 ];
