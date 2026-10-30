@@ -694,7 +694,7 @@ copied over USB into `\Courses`, read only:
 
 Segment files in `\Rustfw\Segments\` (`<id>.seg`, docs/segments.md) are matched against the ride once a second while it
 runs (SEGMENTS > LIVE SEGMENTS, ON by default). Put them on the card with `tools/segments.py` (`fetch`, `build`, `write
---volume`, docs/segments.md): the unit never writes there.
+--volume`, docs/segments.md): the unit writes there only the rider's efforts (below), after a ride is saved.
 - **Approach**: a banner `SEGMENT <name> 300 M`, once. **Lost** (off the track 10 s, a U-turn, stopped 5 min): `SEGMENT LOST`.
 - **The SEGMENT page** opens by itself at the start, over the ride page the rider was on (only while recording, not over
   a menu), and goes back at the end or when lost. Name, the delta in big digits (`-0:12` ahead in GREEN, `+0:08` behind in
@@ -702,7 +702,14 @@ runs (SEGMENTS > LIVE SEGMENTS, ON by default). Put them on the card with `tools
   the time and the distance left. Start and Lap keep their ride meaning; any other key closes the page, and it does not
   reopen for that segment. Only the changed characters and marks are redrawn, once a second.
 - **The finish**: a banner with the time and the delta, then the result card (the time, the delta against each target
-  the file keeps, NEW PR when the PR is beaten), closed by any key or after 10 s. The effort is not saved yet (S5).
+  the file keeps, NEW PR when the PR is beaten or there was none: the same rule as the `.pr` written), closed by any key or after 10 s.
+- **Efforts:** at a finish the effort (its time at each of the segment's points, as ridden) is kept in RAM, at most 4
+  a ride. Only after the ride is saved (read back whole, in `\Activities`) and never for a ride discarded, each is
+  written between rides: `\Rustfw\Segments\<id>.pr` when it beats the PR (two copies with a CRC, as settings.bin, so
+  a cut leaves the old PR or the new one), and a line `id,date,elapsed_s` in `\Rustfw\Segments\efforts.csv` for the
+  computer. A write that fails (a card full) drops the effort, never the ride.
+- **Your PR is the target:** the next time the segment is loaded, its `.pr` times are the PR column (in place of the
+  source's, or where it had none); a `.pr` for other points (the segment rebuilt) is ignored.
 - **TARGET**: AUTO is the PR if the file has one, else the KOM; a target the file lacks falls back to AUTO.
 - LIVE SEGMENTS and TARGET are in settings.bin at data 97 and 98; an older file reads ON and AUTO.
 
