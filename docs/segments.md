@@ -196,9 +196,27 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
   before the rename, and only names `<digits>.seg` are ever deleted. It refuses a `--volume` that is not an existing
   directory holding `Rustfw/` (`--init` creates it) and an empty build (`--prune` allows it). An eMMC write: only
   with the owner present.
+- `segments.py own (--rides DIR | --volume PATH) [--dry-run | --list] [--min-km 1] [--min-gain-m 0] [--min-rides 2] [--max 128] [--out DIR]`
+  (S7, no Strava, no network): the rider's own FIT rides, from `--rides` or the drive's `Activities/` (whole files only,
+  not indoor, each ride once; the FIT records are read by the tool itself, `fit_records`).
+  - **Finding**: each ride is thinned to a point every 30 m and put in a grid of 75 m cells, so a point meets only the
+    points of the other rides around it (no all-pairs scan; 60 rides of 5 km take under a second). Two points match
+    when they are within **25 m** (the unit's `START_M`, so a file is matched the way it was found; GNSS error is 3 to
+    5 m a pass) and head the same way (within 45 degrees). A run of matches along two rides over **1 km** is an overlap;
+    the opposite direction never matches.
+  - **Merging**: the longest overlap claims its stretch with every ride that covers 90 % of it, the stretch ending where
+    all of them are within the tolerance; an overlap more than half claimed already is the same stretch and is dropped,
+    so a stretch ridden 10 times is one segment. Each stretch then goes through the S6 `build_segment`: same sanity
+    drop, geometry (the fastest ride), altitude profile and gain, targets PR, RECENT, BEST5 (no KOM); the best effort
+    is the ghost.
+  - **Output**: `<id>.seg`, ids from 4 000 000 000 down (longest stretch first; they can change when rides are added),
+    named `OWN <km> KM <index>`; default folder `~/.cache/bryton-rustfw/segments/own` (not `out`, which `build` owns).
+    `--dry-run` (or `--list`) prints the stretches and writes nothing. Put them on the drive with `write --out DIR`.
 - `segments.py selftest` (check.sh): synthetic efforts (straight lines at 0 N 10 E, invented ids): grouping, the sanity
   drop, thresholds, decimation, rising times, the layout read by an independent reader, write and verify into a temp
-  dir, and the committed fixture equal to a fresh one.
+  dir, and the committed fixture equal to a fresh one. The `own` cases write synthetic FIT rides (made-up place) and check: two rides
+  sharing 2 km give one segment of about 2 km, a shared 500 m none, the opposite direction none, three rides one segment
+  whose PR is the fastest ride's time; the written file is read back by the independent reader.
 - `segments.py fixture [OUT]` writes `test-data/segment/synthetic.seg`, which `src/nav/segment.rs` parses in a unit
   test. An ignored test there, `built_files_parse` (`SEGMENTS_DIR=... cargo test-host -- --ignored built_files_parse`),
   parses a real output directory.
@@ -213,7 +231,7 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
 | S4 (done 2026-10-30) | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |
 | S5 (done 2026-10-30) | The efforts written after the save (`.pr`, `efforts.csv`); the per-segment enable byte left to S4 | critical, then reviewer on opus |
 | S6 (done 2026-10-30) | `tools/segments.py` from Intervals.icu (fetch, build, write); selftest in check.sh | implementer (sonnet) |
-| S7 | Segments from the rider's own rides, no Strava: stretches ridden at least twice (the overlap of two rides' tracks over 1 km), made into `.seg` files by `segments.py own` on the computer first; on the unit later if wanted | implementer (sonnet) |
+| S7 (done 2026-10-30) | Segments from the rider's own rides, no Strava: `segments.py own` reads the FIT rides, finds stretches ridden at least twice in the same direction (overlap of two tracks over 1 km, 25 m tolerance, near-duplicates merged) and writes `.seg` files with the same writer as S6; selftest in check.sh. On the unit later if wanted | implementer (sonnet) |
 | S8 | Licensed Live Segments, if Strava grants it: `segments.py live` fills carrot, wolf, most recent, best of 5 and the KOM's real splits from `/live/segments/:id`; later the phone app does the same over BLE | implementer |
 | S9 | Optional: stock's imported segments (`\PlanTrip\LiveSegment\`) read too, read only | implementer |
 
