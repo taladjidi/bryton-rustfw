@@ -5132,7 +5132,7 @@ fn settings_file_quick_status_bytes() {
         let flag = [0u8, 1, 2 + (next() % 200) as u8][(next() % 3) as usize];
         let mut bytes = [0u8; 6];
         for b in bytes.iter_mut() {
-            *b = if next() % 3 == 0 { 108 + (next() % 100) as u8 } else { (next() % 108) as u8 };
+            *b = if next().is_multiple_of(3) { 108 + (next() % 100) as u8 } else { (next() % 108) as u8 };
         }
         sec[28 + 158] = flag;
         sec[28 + 159..28 + 165].copy_from_slice(&bytes);
