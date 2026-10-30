@@ -164,7 +164,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   power fields (cycle the window), the TRAINER MODE / TARGET fields (open the trainer), every picture (the map's buttons
   and zoom, a graph's next plot) and the overview and the fixed course, workout and climb pages. Stock's Quick Status is
   the overview's widget list (our swipe-down panel); this tap-opened field view is ours, the 10 s is our choice. Kept in
-  settings.bin at bytes 156 (on / off) and 157 to 162 (the fields); a file without them reads ON and Hr, Power, Avg speed,
+  settings.bin at bytes 158 (on / off) and 159 to 164 (the fields; 156 and 157 are the Di2 teeth); a file without them reads ON and Hr, Power, Avg speed,
   Ascent, Kcal, Time. Sim only (`status_tests.rs`, `menu_touch_and_keys`'s count).
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
@@ -924,7 +924,7 @@ before the limits (an earlier build's) reads them OFF. A later build appends its
 UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
 C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
-DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; QUICK STATUS is byte 156 and its six fields 157 to 162 (163 in all).
+DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; QUICK STATUS is byte 158 and its six fields 159 to 164 (165 in all).
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers

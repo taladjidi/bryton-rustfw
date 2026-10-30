@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (163 now, with CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 156 and its six fields at 157..162, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (165 now, with CLIMBS, CLIMB PAGE and DATE FORMAT at 152..154, SUNSET ALERT at 155, QUICK STATUS at 158 and its six fields at 159..164, the Di2 teeth at 156 and 157, START REMINDER and READY CHECK at 150..152, ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -146,6 +146,7 @@ impl SettingsCopy {
         put(&[u8::from(s.start_reminder), u8::from(s.ready_check)]);
         put(&[u8::from(s.climbs_medium), u8::from(s.climb_page), s.date_fmt as u8]);
         put(&[s.sunset_alert as u8]);
+        put(&[0, 0]); // bytes 156 and 157: the Di2 chainrings and cassette (another branch); zero until it merges
         put(&[u8::from(s.quick_status)]);
         put(&s.quick_page.fields.map(|f| f as u8)[..6]);
         out[..4].copy_from_slice(MAGIC);
@@ -288,6 +289,8 @@ impl SettingsCopy {
         s.sunset_alert = data.next().map(usize::from).filter(|&v| v < SUNSET_LEAD_MIN.len()).unwrap_or(d.sunset_alert);
         // QUICK STATUS and its six fields (after SUNSET ALERT): a file without them reads ON and the default fields; a
         // file cut inside the fields, or a byte past the last field, keeps the default for that field
+        data.next(); // the Di2 chainrings and cassette (bytes 156, 157)
+        data.next();
         s.quick_status = flag(data.next(), d.quick_status);
         let mut q = QUICK_FIELDS;
         for f in q.iter_mut() {
@@ -672,7 +675,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 163);
+        assert_eq!(len, 165);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -793,7 +796,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 165);
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
@@ -834,7 +837,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 165);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -858,7 +861,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 165);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -892,7 +895,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163, "the length: 69 + 1 + 12 + 12 + 3 + 2 + 3 + 1");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 165, "the length: 69 + 1 + 12 + 12 + 3 + 2 + 3 + 1");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -934,7 +937,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 163);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 165);
         assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| {
@@ -1039,7 +1042,7 @@ mod day_night_file_tests {
         assert_eq!(read(&wild), Some(0), "a byte out of range reads OFF");
     }
 
-    /// QUICK STATUS (after SUNSET ALERT, bytes 156 to 162): kept and read back; a file without it (or cut inside the
+    /// QUICK STATUS (after SUNSET ALERT, bytes 158 to 164): kept and read back; a file without it (or cut inside the
     /// fields) reads ON and the default fields; a byte out of range keeps that field's default.
     #[test]
     fn quick_status_round_trips_and_older_files_read_defaults() {
@@ -1047,7 +1050,7 @@ mod day_night_file_tests {
         f[1] = Field::Cadence;
         let s = Settings { quick_status: false, quick_page: quick_page(f), ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!((sec[28 + 156], sec[28 + 158]), (0, Field::Cadence as u8));
+        assert_eq!((sec[28 + 158], sec[28 + 160]), (0, Field::Cadence as u8));
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.quick_status, c.settings.quick_page));
         assert_eq!(read(&sec), Some((false, quick_page(f))));
@@ -1059,13 +1062,13 @@ mod day_night_file_tests {
             c[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
             c
         };
-        for len in [155u16, 156] {
+        for len in [155u16, 156, 158] {
             assert_eq!(read(&cut(&sec, len)), Some((true, d.quick_page)), "a {len}-byte file");
         }
         // cut inside the fields: the flag is read, the fields past the cut are the defaults
-        assert_eq!(read(&cut(&sec, 158)).map(|r| r.0), Some(false), "a 158-byte file");
+        assert_eq!(read(&cut(&sec, 160)).map(|r| r.0), Some(false), "a 160-byte file");
         let mut wild = sec;
-        wild[28 + 157] = 250;
+        wild[28 + 159] = 250;
         let crc = inflate::crc32(wild[..CRC_AT].iter().copied());
         wild[CRC_AT..].copy_from_slice(&crc.to_le_bytes());
         assert_eq!(read(&wild).map(|r| r.1.fields[0]), Some(QUICK_FIELDS[0]), "a byte out of range");
