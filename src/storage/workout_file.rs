@@ -299,6 +299,14 @@ fn uint(b: &[u8], big: bool) -> Option<u32> {
 
 /// Decodes a whole workout file.
 pub fn parse(file: &[u8]) -> Result<Workout, Error> {
+    let mut w = Workout::new();
+    parse_into(file, &mut w)?;
+    Ok(w)
+}
+
+/// [`parse`] into `w`, so no second copy of the steps sits in the frame beside the tables and the file buffer.
+#[inline(never)]
+fn parse_into(file: &[u8], w: &mut Workout) -> Result<(), Error> {
     let hs = usize::from(*file.first().ok_or(Error::Header)?);
     let head = file.get(..hs).filter(|_| hs == 12 || hs == 14).ok_or(Error::Header)?;
     if head.get(8..12) != Some(b".FIT") {
@@ -313,7 +321,7 @@ pub fn parse(file: &[u8]) -> Result<Workout, Error> {
     let data = whole.get(..end).ok_or(Error::Truncated)?;
     let mut defs = [Def::default(); 16];
     let mut raw = [Raw::default(); RAW];
-    let (mut n_raw, mut is_workout, mut w) = (0usize, false, Workout::new());
+    let (mut n_raw, mut is_workout) = (0usize, false);
     let mut p = hs;
     let byte = |p: usize| data.get(p).copied().ok_or(Error::Truncated);
     while p < end {
@@ -409,8 +417,8 @@ pub fn parse(file: &[u8]) -> Result<Workout, Error> {
     if !is_workout {
         return Err(Error::NotWorkout);
     }
-    expand(&mut w, raw.get(..n_raw).unwrap_or(&[]));
-    Ok(w)
+    expand(w, raw.get(..n_raw).unwrap_or(&[]));
+    Ok(())
 }
 
 /// Writes out `raw` into `w`: each repeat step copies the steps written since the step it repeats from.
@@ -591,7 +599,9 @@ pub fn load(fat: &mut Fat, d: &mut impl Disk, f: &File) -> Option<Workout> {
     }
     let mut buf = [0u8; FILE_MAX];
     let n = fat.read_at(d, f, 0, &mut buf).ok()?;
-    parse(buf.get(..n)?).ok()
+    let mut w = Workout::new();
+    parse_into(buf.get(..n)?, &mut w).ok()?;
+    Some(w)
 }
 
 /// Workout files read at most for a calendar: twice [`DAYS`], so a few that are no workout still leave a full one.
