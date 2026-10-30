@@ -107,6 +107,7 @@ impl App {
                 | Menu::Segments
                 | Menu::System
                 | Menu::BuiltIn
+                | Menu::Storage
                 | Menu::Ride(_)
                 | Menu::Phone
                 | Menu::BtTrainers),

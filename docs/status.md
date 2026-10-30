@@ -12,6 +12,10 @@ A feature not listed here was seen on the unit.
 - **Live segments, screens (app/segment_ui.rs, ui/segment.rs, step S4)**: sim only. Still to see: a ride over a known segment: the approach
   banner with the name, the page opening by itself, the delta ahead and behind, the finish banner and the card, back to the page
   ridden; the page's redraw cost on the unit.
+- **STORAGE and ABOUT (SYSTEM; storage/volume.rs, app/survey.rs)**: sim only. Still to see: TOTAL, FREE and RIDES against
+  the owner's card (FSInfo's count against the FAT's count there), the survey's passes and their time awake on the unit,
+  and the oldest ride's card opened from STORAGE and its DELETE.
+
 - **Live segments, detection (app/segments.rs, step S3; no effort written)**: sim only. Still to see: the index built
   from `\Rustfw\Segments\` on the card 5 s after the start (no pass slower), the load at a start, the events (`dev.py` reads
   them), no lost ride on a segment's start or finish; AXI SRAM has 1.6 KB left.

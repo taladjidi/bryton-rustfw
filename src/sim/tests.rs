@@ -1467,8 +1467,16 @@ fn about_screen() {
     to_row(&mut sim, &mut app, menu::Row::About);
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::About);
-    let rust = sim.screen.iter().filter(|&&p| p == ui::RUST).count();
-    assert!(rust > 64 * 64, "Ferris, large: {rust} px");
+    // Ferris (64 x 44 px, 4 px a cell): the box of its red pixels
+    let (mut lo, mut hi) = ((u32::MAX, u32::MAX), (0u32, 0u32));
+    for (i, &p) in sim.screen.iter().enumerate() {
+        if p == ui::RUST {
+            let (x, y) = (i as u32 % ui::W, i as u32 / ui::W);
+            lo = (lo.0.min(x), lo.1.min(y));
+            hi = (hi.0.max(x), hi.1.max(y));
+        }
+    }
+    assert!(hi.0.saturating_sub(lo.0) >= 56 && hi.1.saturating_sub(lo.1) >= 36, "Ferris, large: {lo:?}..{hi:?}");
     assert_consistent(&sim, &app);
     sim.save("about");
     app.press(&mut sim, Press::Short(Key::Back));

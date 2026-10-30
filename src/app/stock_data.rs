@@ -182,7 +182,7 @@ impl App {
         if !self.past.reading() {
             return;
         }
-        if !matches!(self.screen, Screen::Menu(Menu::History, _)) {
+        if !matches!(self.screen, Screen::Menu(Menu::History | Menu::Storage, _)) {
             return self.past.stop();
         }
         match self.past.step(&mut emmc::Volume(&mut self.emmc, b), Self::SCAN_IDLE) {
@@ -216,6 +216,7 @@ impl App {
                 self.stock.forget(&r.file, r.start, self.date);
                 self.notice("RIDE DELETED");
                 self.close();
+                self.survey.start(); // the count and the oldest rides changed (STORAGE, if it is under this card)
                 self.clamp_menu(); // the list one ride shorter: the selection on the next one, or the last
             }
             Err(_) => {

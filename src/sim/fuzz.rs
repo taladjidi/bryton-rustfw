@@ -1322,11 +1322,17 @@ fn menu_touch_and_keys() {
     let (mut locks, mut locked_touches) = (0, 0);
     let mut reach = [0usize; 5]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif
     let mut arms = [0usize; 5]; // and an arm taken there: left, asked, left, left, scrolled
-    for seed in 1..=12u32 {
+    // STORAGE: the menu reached by an input, an oldest ride's row selected, its card opened (read over the passes)
+    let mut storage = [0usize; 3];
+    for seed in 1..=16u32 {
         let mut sim = Sim::new(9, 0, 0);
+        if seed.is_multiple_of(2) {
+            sim.emmc.image = crate::storage::trash::tests::volume(); // rides: STORAGE's oldest rows exist
+        }
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
         let mut noise = bytes(seed * 7919, 1 << 13);
         let mut next = || noise.next().unwrap_or(0);
+        let mut from_storage = false;
         for k in 0..300 {
             let (a, b) = (next(), next());
             let row_y = |r: u8| (ui::LIST_Y + u32::from(r % ui::MENU_ROWS as u8) * ui::MENU_ROW + 10) as u16;
@@ -1339,6 +1345,12 @@ fn menu_touch_and_keys() {
                     (Menu::System, import.unwrap_or(0)),
                 ];
                 app.open(Screen::Menu(at[usize::from(b) % 3].0, at[usize::from(b) % 3].1));
+                app.show(&mut sim);
+            }
+            if a % 37 == 5 {
+                // STORAGE opened at a row of its own (the rows of the rides on the card, on the even seeds)
+                let rows = app.rows(Menu::Storage).max(1);
+                app.open(Screen::Menu(Menu::Storage, usize::from(b) % rows));
                 app.show(&mut sim);
             }
             if a % 47 == 11 {
@@ -1392,8 +1404,15 @@ fn menu_touch_and_keys() {
             let (before, chosen, editing) = (app.screen(), app.menu_chosen, app.editing);
             let (pages, whole) = (app.pages, app.graph_whole);
             let recording = app.ride.state() == crate::ride::State::Running;
+            let on_old = matches!(before, Screen::Menu(Menu::Storage, s)
+                if matches!(app.row(Menu::Storage, s), Some(menu::Row::OldRide(_))));
+            storage[0] += usize::from(matches!(before, Screen::Menu(Menu::Storage, _)));
             let was_locked = app.strip.locked;
             app.input(&mut sim, i);
+            if on_old && matches!(i, Input::Select | Input::Touch(_)) {
+                storage[1] += 1;
+                from_storage = true; // the card reads over later passes: the flag waits for it
+            }
             // the screen the input found, and an arm of its own taken: left (Quick, RampResult, About), the meter
             // asked (PowerCal), a scroll (Notif)
             match before {
@@ -1463,10 +1482,21 @@ fn menu_touch_and_keys() {
                 app.step(&mut sim);
                 sim.delay_ms(POLL_MS);
             }
+            if from_storage && app.screen() == Screen::Past {
+                storage[2] += 1;
+                from_storage = false;
+            }
+            if !matches!(app.screen(), Screen::Menu(Menu::Storage, _) | Screen::Past) {
+                from_storage = false;
+            }
             // the device list is redrawn once a second at most (LIST_REDRAW_MS): a report may wait for it
             // (a banner said by this input is drawn by the next pass: skipped until it is)
             let waiting = app.notes.ms.is_some() && !app.notes.drawn;
-            if k % 60 == 0 && !(app.screen() == Screen::Nearby && app.list_dirty) && !waiting {
+            // STORAGE's rows and figures change as its survey goes on (redrawn once a second, LIST_REDRAW_MS)
+            let surveying = matches!(app.screen(), Screen::Menu(Menu::Storage, _)) && !app.survey.done();
+            let nearby_list = app.screen() == Screen::Nearby && app.list_dirty;
+            let quiet = !(waiting || surveying || nearby_list);
+            if k % 60 == 0 && quiet {
                 super::tests::assert_consistent(&sim, &app);
             }
         }
@@ -1489,6 +1519,7 @@ fn menu_touch_and_keys() {
         arms[4]
     );
     assert!(reach.iter().all(|&n| n > 0), "every screen reached: {reach:?}");
+    assert!(storage.iter().all(|&n| n > 0), "STORAGE, an oldest ride selected, its card opened: {storage:?}");
     assert!(arms.iter().all(|&n| n > 0), "every arm taken: {arms:?}");
     std::println!("touch lock: {locks} toggles, {locked_touches} touches while locked");
     assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
@@ -4149,6 +4180,140 @@ fn auto_lap_on_a_ride_with_keys() {
         auto += app.ride.laps().saturating_sub(manual.min(app.ride.laps()));
     }
     assert!(auto > 0, "auto laps fired over the seeds");
+}
+
+/// STORAGE's survey on a damaged card: FSInfo's count or signature damaged, FAT entries and directory bytes random.
+/// Every seed ends (no panic, no hang), and both the FSInfo path and the FAT count and the listing are reached.
+#[test]
+fn card_survey_on_damaged_volumes() {
+    use crate::fat::tests::Ram;
+    use crate::volume::Survey;
+    let base = crate::storage::trash::tests::volume();
+    let (mut fsinfo_ok, mut counted, mut listed, mut failed) = (0, 0, 0, 0);
+    for seed in 1..=200u32 {
+        let mut next = xorshift(seed);
+        let mut img = base.clone();
+        let le16 = |i: usize| usize::from(u16::from_le_bytes([img[i], img[i + 1]]));
+        let (info, fat0) = (le16(48) * 512, le16(14) * 512);
+        let fat_len = (u32::from_le_bytes([img[36], img[37], img[38], img[39]]) as usize) * 512;
+        match next() % 3 {
+            0 => {}
+            1 => img[info + 488..info + 492].copy_from_slice(&next().to_le_bytes()),
+            _ => img[info] = next() as u8,
+        }
+        // half the seeds: the FAT entry of \Activities' first cluster (its listing follows the chain)
+        if next().is_multiple_of(2) {
+            let mut d = Ram(base.clone(), 0);
+            let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+            let first = fat.open(&mut d, "Activities").unwrap().cluster;
+            img[fat0 + first as usize * 4 + (next() % 4) as usize] = next() as u8;
+        }
+        // one seed in eight: BPB_RootClus out of range, the volume refused
+        if next().is_multiple_of(8) {
+            img[44..48].copy_from_slice(&next().to_le_bytes());
+        }
+        // and a few random FAT bytes
+        for _ in 0..(next() % 64) {
+            let i = fat0 + next() as usize % fat_len.min(2048);
+            img[i] = next() as u8;
+        }
+        let whole_info = crate::fat::Fat::mount(&mut Ram(img.clone(), 0))
+            .is_ok_and(|f| f.fsinfo_free(&mut Ram(img.clone(), 0)).is_some());
+        let mut d = Ram(img, 0);
+        let mut s = Survey::new();
+        let mut passes = 0;
+        while !s.step(&mut d, 1 + seed % 4) {
+            passes += 1;
+            assert!(passes < 100_000, "the survey ends");
+        }
+        fsinfo_ok += u32::from(whole_info);
+        counted += u32::from(s.free().is_some());
+        listed += u32::from(s.rides().is_some());
+        failed += u32::from(s.failed());
+    }
+    assert!(
+        fsinfo_ok > 20 && fsinfo_ok < 180 && counted > 40 && listed > 40 && failed > 10,
+        "{fsinfo_ok} {counted} {listed} {failed}"
+    );
+}
+
+/// STORAGE's glue on a damaged card (app/survey.rs): the survey's passes, the oldest rows, their cards and Back from
+/// a card to STORAGE, with FSInfo and the FAT damaged on some seeds. Nothing panics, the survey stays consistent with
+/// the screen, and each step of the glue is reached over the seeds.
+#[test]
+fn storage_glue_on_a_damaged_card() {
+    use super::*;
+    use crate::ui::menu::{Input, Row};
+    let base = crate::storage::trash::tests::volume();
+    let (mut opened, mut back, mut done) = (0u32, 0u32, 0u32);
+    for seed in 1..=24u32 {
+        let mut next = xorshift(seed * 31 + 7);
+        let mut img = base.clone();
+        let info = usize::from(u16::from_le_bytes([img[48], img[49]])) * 512;
+        let fat0 = usize::from(u16::from_le_bytes([img[14], img[15]])) * 512;
+        let fat_len = (u32::from_le_bytes([img[36], img[37], img[38], img[39]]) as usize) * 512;
+        if next().is_multiple_of(2) {
+            img[info + 488..info + 492].copy_from_slice(&next().to_le_bytes());
+        }
+        if next().is_multiple_of(4) {
+            for _ in 0..32 {
+                let i = fat0 + next() as usize % fat_len.min(2048);
+                img[i] = next() as u8;
+            }
+        }
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = img;
+        let mut app = App::start(&mut sim, None);
+        // the card's start-up work (the recorder checks the card) ends before STORAGE is read: the survey waits for it
+        super::tests::run(&mut sim, &mut app, 3000);
+        app.open(Screen::Menu(Menu::Storage, 0));
+        app.show(&mut sim);
+        let mut pending = false;
+        for k in 0..400 {
+            let (a, b) = (next(), next());
+            if !matches!(app.screen(), Screen::Menu(Menu::Storage, _) | Screen::Past) {
+                // a walk off STORAGE (Back to the overview, where Select starts a ride): back to it, the rides untouched
+                app.open(Screen::Menu(Menu::Storage, 0));
+                app.show(&mut sim);
+            }
+            let before = app.screen();
+            let i = match a % 10 {
+                0..=2 => Input::Prev,
+                3..=5 => Input::Select,
+                // DELETE is asked on a card (End), never a ride key: the ride screens are not this fuzz's
+                6 if before == Screen::Past => Input::End,
+                6 | 7 => Input::Prev,
+                _ => Input::Touch(crate::touch::Gesture::Tap(120, (ui::LIST_Y + 10 + 44 * (b % 6)) as u16)),
+            };
+            let on_old = matches!(before, Screen::Menu(Menu::Storage, s)
+                if matches!(app.row(Menu::Storage, s), Some(Row::OldRide(_))));
+            app.input(&mut sim, i);
+            if on_old && matches!(i, Input::Select | Input::Touch(_)) {
+                pending = true; // the card reads over later passes
+            }
+            if before == Screen::Past && matches!(app.screen(), Screen::Menu(Menu::Storage, _)) {
+                back += 1; // a card closed (Start, Back, or a delete): STORAGE again, its survey restarted or going on
+            }
+            for _ in 0..(b % 4) as usize {
+                app.step(&mut sim);
+                sim.delay_ms(POLL_MS);
+            }
+            if pending && app.screen() == Screen::Past {
+                opened += 1;
+                pending = false;
+            }
+            if !matches!(app.screen(), Screen::Menu(Menu::Storage, _) | Screen::Past) {
+                pending = false;
+            }
+            let surveying = matches!(app.screen(), Screen::Menu(Menu::Storage, _)) && !app.survey.done();
+            if k % 50 == 0 && !surveying {
+                super::tests::assert_consistent(&sim, &app);
+            }
+        }
+        done += u32::from(app.survey.done());
+    }
+    std::println!("storage glue: {opened} cards opened from the rows, {back} back to STORAGE, {done} surveys done");
+    assert!(opened > 0 && back > 0 && done > 0, "opened {opened}, back {back}, done {done}");
 }
 
 /// The segment index (app/segments.rs): folders of segment files with broken headers and names (a flipped byte
