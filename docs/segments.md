@@ -73,7 +73,7 @@ segments too is S9, optional.
 ## On the unit
 
 **Memory.** AXI SRAM had about 15 KB left before the segments took 12.9 KB; the scan's cache then went from
-4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->66 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
+4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->65 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
 bounding box, distance, name's first 12 characters, enabled: 32 bytes) for at most 128 segments is 4 KB; the active
 segment (400 points as i32 lat / lon = 3.2 KB, times as u16 seconds for up to 4 targets = 3.2 KB) is 6.4 KB. One
 active segment at a time. If it does not fit next to the courses, stop and report the numbers before moving any

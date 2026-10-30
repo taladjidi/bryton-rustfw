@@ -121,6 +121,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | SETTINGS > DISPLAY > THEME cycles DARK, OUTDOOR, LIGHT and the files of `\Rustfw\Themes` (sim) | A theme file from the card: SUNNY, OUTDOOR with a blue accent (sim) | LIGHT: black on white for the sun (sim) |
 | ![LIGHT, a ride page](img/theme-light-ride.png) | ![LIGHT menu](img/theme-light-menu.png) | ![LIGHT map](img/theme-light-map.png) |
 | LIGHT on a ride page (sim) | LIGHT menu (sim) | LIGHT map page: the basemap stays a picture (sim) |
+| ![Menu, 44 px rows](img/metrics-menu-44.png) | ![Menu, 56 px rows](img/metrics-menu-56.png) | ![Zone bar 4 px](img/metrics-ride-bar4.png) |
+| `menu_row = 44` (the built-ins): six rows (sim) | `menu_row = 56`: four rows, a tap lands on the row drawn (sim) | `zone_bar = 4`, the thinnest, on the heart rate box (sim) |
 
 ## Laps
 
@@ -144,6 +146,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 |:-:|:-:|
 | ![Imperial units](img/imperial-units.png) | |
 | UNITS IMPERIAL and TEMPERATURE F on a ride page: mph, miles, feet, F and a trip in miles, with their labels (sim) | |
+## Workouts
+
+| | |
+|:-:|:-:|
+| ![Next-step strip](img/workout-next-strip.png) | ![Two targets](img/workout-two-targets.png) |
+| The next-step strip in the status strip's place, 6 s before the step ends (sim) | A step with two targets: "200-250/90-100RPM" under the bar (sim) |
+
 ## Page switches
 
 | | |

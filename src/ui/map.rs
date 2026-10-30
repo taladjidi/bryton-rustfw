@@ -591,6 +591,10 @@ impl Canvas for Clip<'_> {
     fn ink(&self, c: u16) -> u16 {
         self.c.ink(c)
     }
+
+    fn theme(&self) -> &crate::ui::Theme {
+        self.c.theme()
+    }
 }
 
 /// `r` cut to `k` (empty: zero width or height).

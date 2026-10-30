@@ -219,8 +219,8 @@ Others
 - [x] Countdown beeps before a step ends (patch P1, Garmin, Wahoo): sim
 - [x] Workout profile graph with the rider's place (Garmin, Wahoo, Karoo): sim
 - [x] Target gauge: power or heart rate on a bar around the step's band (Garmin, Wahoo, Karoo): sim
-- [ ] Next-step strip instead of a full-screen popup (patch P3)
-- [ ] Multiple targets per step (power and cadence) (Garmin)
+- [x] Next-step strip instead of a full-screen popup (patch P3): sim
+- [x] Multiple targets per step (power and cadence) (Garmin): sim
 - [ ] ZWO / ERG / MRC workouts, converted on the computer (Wahoo, Karoo)
 - [x] Workouts synced from TrainingPeaks, intervals.icu (stock, all): sim
 - [x] Workout calendar: today and the next days (stock, Garmin, Wahoo): sim

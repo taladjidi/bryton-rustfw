@@ -803,11 +803,12 @@ fn draw_cells(c: &mut impl Canvas, style: &Style, x: u32, y: u32, right: u32, s:
 
 /// Height of a zone bar along the top of a box (above the label, a pixel apart from it: the labels of the value fields
 /// start 9 px down). 8 px: 4 was too thin to see on the bike (owner, 2026-10-26).
-pub const ZONE_BAR_H: u32 = 8;
+pub const ZONE_BAR_H: u32 = theme::ZONE_BAR.1;
 
 /// The zone bar of box `bx` in `color` (BLACK clears it): the box's full width less its right rule.
 pub fn draw_zone_bar(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), color: u16) {
-    c.fill(x, y, w - u32::from(x + w < W), ZONE_BAR_H, color);
+    let bar = c.theme().zone_bar;
+    c.fill(x, y, w - u32::from(x + w < W), bar, color);
 }
 
 /// A field's frame with its zone bar (`bar`; BLACK: none), for the plain power and heart rate fields.
@@ -833,19 +834,13 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
         c.fill(x, y + h - 1, w, 1, GREY);
     }
     if !field.is_picture() {
-        text::draw(
-            c,
-            &Style { fg: GREY, ..LABEL },
-            x + 6,
-            y + ZONE_BAR_H + 1,
-            Align::Left,
-            field.label_in(units.0, units.1),
-        );
+        let bar = c.theme().zone_bar;
+        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + bar + 1, Align::Left, field.label_in(units.0, units.1));
     }
 }
 
 /// Width of the page editor's frame round the selected cell (UI review 2, 5.2 point 5).
-pub const FRAME: u32 = 3;
+pub const FRAME: u32 = theme::FRAME.1;
 
 /// The inside of a field box: without its rules (right and bottom edges, [`draw_field_frame`]).
 pub fn box_inside((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
@@ -855,10 +850,11 @@ pub fn box_inside((x, y, w, h): (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
 /// The page editor's frame round box `bx`, inside its rules, in `color`.
 pub fn draw_cell_frame(c: &mut impl Canvas, bx: (u32, u32, u32, u32), color: u16) {
     let (x, y, w, h) = box_inside(bx);
-    c.fill(x, y, w, FRAME, color);
-    c.fill(x, y + h - FRAME, w, FRAME, color);
-    c.fill(x, y + FRAME, FRAME, h - 2 * FRAME, color);
-    c.fill(x + w - FRAME, y + FRAME, FRAME, h - 2 * FRAME, color);
+    let f = c.theme().frame;
+    c.fill(x, y, w, f, color);
+    c.fill(x, y + h - f, w, f, color);
+    c.fill(x, y + f, f, h - 2 * f, color);
+    c.fill(x + w - f, y + f, f, h - 2 * f, color);
 }
 
 /// The page editor's hint in the strip's place, over its orange line: what the keys do.
@@ -874,7 +870,8 @@ pub fn draw_split_icon(c: &mut impl Canvas, i: usize, stacked: bool, selected: b
     let (iw, ih) = (24, 16);
     let ink = if selected { ON_ACCENT } else { WHITE };
     let x = NEARBY.0 + NEARBY.2 - iw;
-    let y = LIST_Y + i as u32 * MENU_ROW + (MENU_ROW - 1 - ih) / 2;
+    let row = c.theme().menu_row;
+    let y = LIST_Y + i as u32 * row + (row - 1 - ih) / 2;
     c.fill(x, y, iw, 2, ink);
     c.fill(x, y + ih - 2, iw, 2, ink);
     c.fill(x, y, 2, ih, ink);

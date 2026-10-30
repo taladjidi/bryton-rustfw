@@ -353,9 +353,31 @@ impl App {
 
     /// Redraws the status strip if what it shows changed.
     pub(crate) fn update_strip(&mut self, b: &mut impl Board) {
-        if self.strip != self.strip_shown && !self.hint_shown {
-            // under a banner or a call: not drawn, and drawn whole when it goes (unbanner, end_ring); nor under the
-            // editor's hint, and drawn whole when the editor is left (App::show)
+        let want = self.ahead();
+        if want != self.plan.top && !self.hint_shown && self.area().0 == 0 {
+            // the next-step strip takes the status strip's place for the last seconds of a step: whole when it
+            // appears, its countdown's changed cells each second, the status strip back when it goes
+            let mut p = Panel(b, (0, ui::H), self.look());
+            match want {
+                Some(a) => {
+                    let old = self.plan.top.filter(|o| o.next == a.next && o.metres == a.metres).map(|o| o.count());
+                    ui::draw_next_strip(
+                        &mut p,
+                        self.ahead_head(&a).as_str(),
+                        a.count().as_str(),
+                        old.as_ref().map(|o| o.as_str()),
+                    );
+                }
+                None => {
+                    ui::draw_strip_whole(&mut p, &self.strip);
+                    self.strip_shown = self.strip;
+                }
+            }
+            self.plan.top = want;
+        }
+        if self.strip != self.strip_shown && !self.hint_shown && self.plan.top.is_none() {
+            // under a banner or a call: not drawn, nor under the next-step strip, and drawn whole when it goes
+            // (unbanner, end_ring); nor under the editor's hint, and drawn whole when the editor is left (App::show)
             ui::draw_strip_changes(
                 &mut Panel(b, (self.area().0, ui::H), self.look()),
                 &self.strip,

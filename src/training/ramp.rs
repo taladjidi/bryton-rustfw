@@ -94,6 +94,7 @@ pub fn workout() -> Workout {
     let step = |len, pct, intensity| Step {
         len,
         target: Target { kind: Kind::Power, lo: pct, hi: pct, pct: true },
+        target2: Target::OPEN,
         intensity,
     };
     let mut all = [step(Length::Time(STEP_S), 0, 5); RAMP_STEPS + 2];

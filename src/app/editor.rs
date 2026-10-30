@@ -527,6 +527,8 @@ impl App {
             l.push_u32(self.edit.map_or(0, |e| e.page) as u32 + 1);
             l.push_str("  START: MENU");
             ui::draw_edit_hint(c, l.as_str());
+        } else if let Some(a) = self.plan.top {
+            ui::draw_next_strip(c, self.ahead_head(&a).as_str(), a.count().as_str(), None);
         } else {
             ui::draw_strip_whole(c, &self.strip_shown);
         }

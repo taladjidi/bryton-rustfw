@@ -127,10 +127,11 @@ pub fn draw_workout_row(
     prof: &[u8],
     done: bool,
 ) {
-    let y = LIST_Y + slot as u32 * MENU_ROW;
+    let row = c.theme().menu_row;
+    let y = LIST_Y + slot as u32 * row;
     let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, WHITE) };
-    c.fill(0, y, W, MENU_ROW - 1, bg);
-    c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
+    c.fill(0, y, W, row - 1, bg);
+    c.fill(0, y + row - 1, W, 1, DARK);
     let style = Style { fg, bg, ..LABEL };
     text::draw(c, &style, NEARBY.0, y + 1, Align::Left, day);
     text::draw(c, &style, NEARBY.0, y + 21, Align::Left, length);
@@ -138,8 +139,8 @@ pub fn draw_workout_row(
         draw_tick(c, 96, y + 16);
     }
     let (bx, bw) = (W - 8 - 2 * prof.len() as u32 - 4, 2 * prof.len() as u32 + 4);
-    c.fill(bx, y + 3, bw, MENU_ROW - 7, BLACK);
-    draw_profile_bars(c, (bx + 2, y + 5, MENU_ROW - 11), 2, prof);
+    c.fill(bx, y + 3, bw, row - 7, BLACK);
+    draw_profile_bars(c, (bx + 2, y + 5, row - 11), 2, prof);
 }
 
 /// The menu button on the overview: a cog, [`COG`] px square.
