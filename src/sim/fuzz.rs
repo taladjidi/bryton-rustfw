@@ -207,7 +207,14 @@ fn beat_streams_into_the_full_copy() {
             let trainer = trainer(&mut rnd);
             w.record(
                 &mut f,
-                &Sample { time: t, hr: Some(150), artifacts_pct: Some(rnd() as u8), trainer, ..Default::default() },
+                &Sample {
+                    time: t,
+                    hr: Some(150),
+                    artifacts_pct: Some(rnd() as u8),
+                    trainer,
+                    auto_paused: rnd().is_multiple_of(4),
+                    ..Default::default()
+                },
             )
             .unwrap();
             let n = match rnd() % 8 {
@@ -222,6 +229,9 @@ fn beat_streams_into_the_full_copy() {
                 w.hrv(&mut f, &batch).unwrap();
                 fed.extend(batch.iter().copied().filter(|&v| v != 0xffff));
                 messages += 1;
+            }
+            if rnd().is_multiple_of(40) {
+                w.lap(&mut f, t).unwrap(); // its averages over the seconds not auto-paused
             }
             if rnd().is_multiple_of(30) {
                 w.checkpoint(&mut f).unwrap();
@@ -244,7 +254,14 @@ fn beat_streams_into_the_full_copy() {
         r.start(t0, *b"261023100000", false);
         for s in 0..400 {
             let trainer = trainer(&mut rnd);
-            r.second(&Sample { time: t0 + 1 + s, trainer, ..Default::default() }, [0; crate::ride::RIDE_WORDS]);
+            let auto_paused = rnd().is_multiple_of(4);
+            r.second(
+                &Sample { time: t0 + 1 + s, trainer, auto_paused, ..Default::default() },
+                [0; crate::ride::RIDE_WORDS],
+            );
+            if rnd().is_multiple_of(50) {
+                r.lap(t0 + 1 + s);
+            }
             for _ in 0..rnd() % 8 {
                 r.beat(beat(&mut rnd));
             }
@@ -483,7 +500,16 @@ fn fit_files() {
     let mut ride = Vec::new();
     let (mut w, _) = crate::fit::Writer::start(&mut ride, 1_000_000).unwrap();
     for t in 0..300u32 {
-        let s = crate::fit::Sample { time: 1_000_001 + t, power: Some(t as u16), hr: Some(120), ..Default::default() };
+        let s = crate::fit::Sample {
+            time: 1_000_001 + t,
+            power: Some(t as u16),
+            hr: Some(120),
+            auto_paused: t % 9 == 0,
+            ..Default::default()
+        };
+        if t % 100 == 99 {
+            w.lap(&mut ride, s.time).unwrap();
+        }
         w.record(&mut ride, &s).unwrap();
     }
     w.finish(&mut ride, 1_000_400).unwrap();
@@ -4267,6 +4293,7 @@ fn recovery_records() {
                 ride,
                 discard: next().is_multiple_of(2),
                 checked: (next().is_multiple_of(2)).then(|| next() as u16),
+                lap: core::array::from_fn(|_| next()),
             };
             recovery_sectors(&mut next, &r, r.to_sector(), Rec::from_sector, &mut recorder);
 

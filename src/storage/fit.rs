@@ -23,6 +23,18 @@
 //! (storage/recorder/mod.rs: never the larger [`Writer::data_len`], so a finished ride's record cannot pass for a new ride's).
 //! Doing this twice is harmless.
 //!
+//! **Laps.** A lap carries its own avg / max heart rate (fields 15 / 16, uint8, bpm), cadence (17 / 18, uint8,
+//! rpm) and power (19 / 20, uint16, W) over the records written since the last lap (FIT profile 21.218 `lap`,
+//! garmin_fit_sdk/profile.py; invalid 0xff / 0xffff, never 0, when no record had the value). The lap definition
+//! always had these fields (written invalid before), so no new definition: every file of every build stays as it
+//! was. Records are written every running second, auto-paused ones included, never while paused by hand; a lap's
+//! averages leave out the auto-paused ones too ([`Sample::auto_paused`]), so they are the lap banner's numbers
+//! (`ride::Ride`'s lap power and heart rate, over the moving seconds; until a reset: the banner then starts again
+//! from the resume), while the session's cover every record. The lap's sums survive a reset beside the recovery
+//! record ([`Writer::lap_words`]: the recorder stores them after the ride words, a record
+//! of a build before has zeros there and its lap averages from the resume). The last lap of a ride with one lap
+//! is the session's values.
+//!
 //! **The record across builds.** Its third word holds the record mask (bits 0..9), bit 11 (MTB), bit 12 (the full
 //! copy describes `ArtPct`: `ARTIFACTS`), bit 13 (the profile set by hand), bit 14 (this layout: lap and session with total_ascent, sport and sub_sport), bit 15 (indoor), bit 16
 //! (developer fields), the ascent (17..30) and bit 31 (the build before sub_sport: total_ascent, no sport). A record
@@ -159,6 +171,9 @@ pub struct Sample {
     /// The rider set that profile by hand (the app's `profile_by_hand`): only kept in the recovery record, so a
     /// resumed ride is not given back to the automatic choice.
     pub by_hand: bool,
+    /// Auto-paused this second (the app's `Ride::moving` false): recorded, but left out of the lap's averages, as
+    /// the lap banner leaves it out (module doc, "Laps"). False (the default): a moving second.
+    pub auto_paused: bool,
 }
 
 /// One second of the trainer (module doc, "The trainer"): plain values the app took from the trainer's reading.
@@ -217,6 +232,8 @@ pub fn cmd_bit(page: u8) -> u8 {
 
 /// Size of a recovery record ([`Writer::checkpoint`]).
 pub const RECORD_LEN: usize = 4 * WORDS + 4;
+/// Words of the current lap's sums ([`Writer::lap_words`]), stored beside the recovery record.
+pub const LAP_WORDS: usize = 9;
 
 /// The ride's ascent in a recovery record: bits 17..30 of its third word, m (16383 m at most).
 const ASCENT_MAX: u32 = 0x3fff;
@@ -496,6 +513,9 @@ pub struct Writer {
     max_speed: u32,
     /// heart rate, cadence, power
     stats: [Stat; 3],
+    /// The same over the current lap's records (module doc, "Laps"); not in the recovery record, in
+    /// [`Writer::lap_words`].
+    lap_stats: [Stat; 3],
     /// The current lap's start (FIT time) and distance then (mm); laps ended so far.
     lap_start: u32,
     lap_dist: u32,
@@ -536,6 +556,7 @@ impl Writer {
             dist_mm: 0,
             max_speed: 0,
             stats: [S; 3],
+            lap_stats: [S; 3],
             lap_start: 0,
             lap_dist: 0,
             laps: 0,
@@ -601,16 +622,43 @@ impl Writer {
         Ok(())
     }
 
-    /// A lap ended at `time` (the Lap key): a lap message from the last one. Its averages and maxima are left out
-    /// (invalid; the session has the ride's): they would cost three more stats in the recovery record.
+    /// A lap ended at `time` (the Lap key): a lap message from the last one, with the lap's own heart rate, cadence
+    /// and power (module doc, "Laps").
     pub fn lap(&mut self, sink: &mut impl Sink, time: u32) -> Result<(), Error> {
         self.last = self.last.max(time);
-        let mut v = self.lap_values();
-        v[7..13].fill(u32::MAX);
-        v[15] = u32::MAX; // the lap's own ascent is not kept: left out, as its averages
+        let v = self.this_lap();
         self.message(sink, L_LAP, 19, &LAP, &v)?;
         (self.lap_start, self.lap_dist, self.laps) = (self.last, self.dist_mm, self.laps + 1);
+        self.lap_stats = [Stat::default(); 3];
         Ok(())
+    }
+
+    /// [`Writer::lap_values`] with the lap's own averages and maxima instead of the ride's; its ascent is not kept
+    /// (left out).
+    fn this_lap(&self) -> [u32; 18] {
+        let mut v = self.lap_values();
+        for (k, (a, m)) in self.lap_stats.map(|s| s.avg_max()).into_iter().enumerate() {
+            if let Some(s) = v.get_mut(7 + 2 * k..9 + 2 * k) {
+                s.copy_from_slice(&[a, m]);
+            }
+        }
+        v[15] = u32::MAX;
+        v
+    }
+
+    /// The current lap's sums for the recovery record (module doc, "Laps"): heart rate, cadence, power, each sum,
+    /// count, maximum. Kept out of [`Writer::to_record`], whose size the records of every build share.
+    pub fn lap_words(&self) -> [u32; LAP_WORDS] {
+        let [a, b, c] = self.lap_stats;
+        [a.sum, a.n, a.max, b.sum, b.n, b.max, c.sum, c.n, c.max]
+    }
+
+    /// This writer with the lap sums [`Writer::lap_words`] gave (all zeros in a record of a build before them: the
+    /// lap then averages from the resume).
+    pub fn with_lap_words(self, w: &[u32; LAP_WORDS]) -> Writer {
+        let s = |[sum, n, max]: [u32; 3]| Stat { sum, n, max };
+        let [a, b, c, d, e, f, g, h, i] = *w;
+        Writer { lap_stats: [s([a, b, c]), s([d, e, f]), s([g, h, i])], ..self }
     }
 
     /// A gear change at `time` (the front one if `front`, else the rear): event front_gear_change (42) or
@@ -677,9 +725,15 @@ impl Writer {
             self.ascent_m = self.ascent_m.max(a.min(ASCENT_MAX));
         }
         self.set_profile(s.profile, s.by_hand);
-        self.stats[0].add(s.hr.map(u32::from));
-        self.stats[1].add(s.cadence.map(u32::from));
-        self.stats[2].add(s.power.map(u32::from));
+        // the session's over every record; the lap's over the moving ones, as the lap banner (module doc)
+        let lap: &mut [Stat] = if s.auto_paused { &mut [] } else { &mut self.lap_stats };
+        for st in [&mut self.stats[..], lap] {
+            if let [h, c, p] = st {
+                h.add(s.hr.map(u32::from));
+                c.add(s.cadence.map(u32::from));
+                p.add(s.power.map(u32::from));
+            }
+        }
 
         let (lat, lon) = s.pos.map_or((None, None), |(a, o)| (Some(semicircles(a)), Some(semicircles(o))));
         // altitude: (m + 500) x 5, rounded
@@ -831,11 +885,8 @@ impl Writer {
             self.event(sink, self.last, 4)?; // timer, stop all
             self.paused_at = self.last;
         }
-        let mut lap = self.lap_values();
-        if self.laps > 0 {
-            lap[7..13].fill(u32::MAX);
-            lap[15] = u32::MAX;
-        }
+        // the only lap is the ride (its sums survive any resume); a last lap after others has its own
+        let lap = if self.laps > 0 { self.this_lap() } else { self.lap_values() };
         self.message(sink, L_LAP, 19, &LAP, &lap)?;
         // the ride as one lap: the session's values
         let whole = Writer { lap_start: self.start, lap_dist: 0, ..*self }.lap_values();
@@ -949,6 +1000,7 @@ impl Writer {
             dist_mm: w[5],
             max_speed: w[6],
             stats: [s([w[7], w[8], w[9]]), s([w[10], w[11], w[12]]), s([w[13], w[14], w[15]])],
+            lap_stats: [Stat::default(); 3], // [`Writer::with_lap_words`]
             lap_start: w[16],
             lap_dist: w[17],
             laps: w[18],
@@ -1298,6 +1350,7 @@ pub(crate) mod tests {
                 trainer: trainer(t),
                 profile: ride::Profile::Road,
                 by_hand: false,
+                auto_paused: false,
             })
             .collect()
     }
@@ -1528,8 +1581,98 @@ pub(crate) mod tests {
         assert_eq!(Writer::from_record(&rec).map(|w| w.data_len() as usize), Some(f.len() - 16));
     }
 
+    /// The lap's heart rate and power as the FIT profile has them (21.218 `lap`, garmin_fit_sdk/profile.py):
+    /// avg_heart_rate 15 and max_heart_rate 16 uint8 (0x02), avg_power 19 and max_power 20 uint16 (0x84), in the
+    /// one lap definition the file has always had; a lap without a meter or a strap is invalid (0xff, 0xffff),
+    /// never 0. A resume from a record of a build before the lap sums (zeros beside it) averages the lap from the
+    /// resume; with them, across it, as if never cut.
+    #[test]
+    fn lap_heart_rate_and_power() {
+        let plain = |t: u32| Sample { time: T0 + t, speed_mm_s: Some(5000), ..Sample::default() };
+        let with = |t: u32| Sample { hr: Some(140 + 20 * (t % 2) as u8), power: Some(100 + t as u16), ..plain(t) };
+        // (resume at 25 s: None never cut, Some(true) with the lap sums, Some(false) a record without them)
+        let run = |resume: Option<bool>| {
+            let mut f = Vec::new();
+            let mut w = Writer::begin(&mut f, T0).unwrap();
+            for t in 1..=10 {
+                w.record(&mut f, &plain(t)).unwrap();
+            }
+            w.lap(&mut f, T0 + 10).unwrap();
+            for t in 11..=40 {
+                w.record(&mut f, &with(t)).unwrap();
+                if let (25, Some(kept)) = (t, resume) {
+                    let rec = w.checkpoint(&mut f).unwrap();
+                    let words = if kept { w.lap_words() } else { [0; LAP_WORDS] };
+                    w = Writer::from_record(&rec).unwrap().with_lap_words(&words);
+                    w.checkpoint(&mut f).unwrap();
+                }
+            }
+            w.lap(&mut f, T0 + 40).unwrap();
+            w.finish(&mut f, T0 + 41).unwrap();
+            f
+        };
+        let f = run(None);
+        // the lap definition: local 3, global 19, the four fields as the profile types them
+        let def = f.windows(6).position(|b| b == [0x40 | L_LAP, 0, 0, 19, 0, 18]).expect("lap definition");
+        let fields: Vec<&[u8]> = f[def + 6..def + 6 + 18 * 3].chunks(3).collect();
+        for want in [[15, 1, U8], [16, 1, U8], [17, 1, U8], [18, 1, U8], [19, 2, U16], [20, 2, U16]] {
+            assert!(fields.contains(&&want[..]), "{want:?} in {fields:?}");
+        }
+        let laps = |f: &[u8]| -> Vec<[Option<u64>; 4]> {
+            let m = decode(f).unwrap();
+            m.iter().filter(|x| x.0 == 19).map(|l| [15, 16, 19, 20].map(|n| field(l, n))).collect()
+        };
+        let none = [Some(0xff), Some(0xff), Some(0xffff), Some(0xffff)];
+        // 11..=40: heart rate 140 / 160 in turn, power 111..140; the first lap had neither, the last is empty
+        let whole = [Some(150), Some(160), Some(125), Some(140)];
+        assert_eq!(laps(&f), [none, whole, none]);
+        assert_eq!(laps(&run(Some(true))), [none, whole, none], "resumed with the lap's sums: as never cut");
+        // a record without the sums: 26..=40 only (8 x 140, 7 x 160 bpm; power 126..140), still that lap's own, never the ride's
+        assert_eq!(laps(&run(Some(false))), [none, [Some(149), Some(160), Some(133), Some(140)], none]);
+    }
+
+    /// A lap with an auto-paused stop (a minute at 0 km/h, zero power, the strap still on): the lap's average power
+    /// and heart rate in the file are the lap banner's (`Ride`'s, over the moving seconds), the stop's zeros left
+    /// out; the session's cover every record.
+    #[test]
+    fn lap_averages_are_the_banners() {
+        let mut f = Vec::new();
+        let mut w = Writer::begin(&mut f, T0).unwrap();
+        let mut ride = ride::Ride::new();
+        ride.start_pause();
+        for t in 1..=200u32 {
+            let stop = (60..120).contains(&t);
+            let i = ride::Input {
+                speed_x10: Some(if stop { 0 } else { 250 }),
+                hr: Some(if stop { 100 } else { 140 + (t % 7) as u16 }),
+                power: Some(if stop { 0 } else { 180 + (t % 50) as u16 }),
+                ..ride::Input::default()
+            };
+            ride.second(&i);
+            let s = Sample {
+                time: T0 + t,
+                speed_mm_s: i.speed_x10.map(|v| u32::from(v) * 1000 / 36),
+                hr: i.hr.map(|v| v as u8),
+                power: i.power,
+                auto_paused: !ride.moving(),
+                ..Sample::default()
+            };
+            w.record(&mut f, &s).unwrap();
+        }
+        assert!(ride.lap().is_some());
+        w.lap(&mut f, T0 + 200).unwrap();
+        w.finish(&mut f, T0 + 201).unwrap();
+        let m = decode(&f).unwrap();
+        let lap = m.iter().find(|x| x.0 == 19).unwrap();
+        assert_eq!(field(lap, 19), ride.last_lap_avg_power().map(u64::from), "the banner's lap power");
+        assert_eq!(field(lap, 15), ride.last_lap_hr().map(u64::from), "the banner's lap heart rate");
+        let session = m.iter().find(|x| x.0 == 18).unwrap();
+        assert!(field(session, 20) < field(lap, 19), "the session's average has the stop's zeros");
+    }
+
     /// A pause (timer stop and start events, left out of the timer time), a lap, temperatures below zero; and the
-    /// writer survives a recovery record taken while paused.
+    /// writer survives a recovery record taken while paused, the lap's sums with it: each lap's heart rate and power
+    /// are its own records', the first lap's across the resume.
     #[test]
     fn pauses_laps_and_temperature() {
         let mut f = Vec::new();
@@ -1545,7 +1688,7 @@ pub(crate) mod tests {
                 100 => {
                     w.pause(&mut f, s.time).unwrap();
                     let rec = w.checkpoint(&mut f).unwrap();
-                    w = Writer::from_record(&rec).unwrap();
+                    w = Writer::from_record(&rec).unwrap().with_lap_words(&w.lap_words());
                 }
                 161 => w.resume(&mut f, s.time).unwrap(),
                 200 => w.lap(&mut f, s.time).unwrap(),
@@ -1560,7 +1703,22 @@ pub(crate) mod tests {
         assert_eq!(laps.len(), 2);
         assert_eq!(field(laps[0], 2), Some(u64::from(T0)), "the first lap from the start");
         assert_eq!(field(laps[1], 2), Some(u64::from(T0 + 200)));
-        assert_eq!(field(laps[0], 15), Some(0xff), "no averages per lap");
+        // (avg, max) of the records from `a` to `b` s (times from T0), as the lap must carry them
+        let over = |a: u32, b: u32, v: &dyn Fn(&Sample) -> Option<u16>| {
+            let x: Vec<u64> = samples
+                .iter()
+                .filter(|s| (a..=b).contains(&(s.time - T0)) && !(101..161).contains(&(s.time - T0)))
+                .filter_map(|s| v(s).map(u64::from))
+                .collect();
+            (Some(x.iter().sum::<u64>() / x.len() as u64), x.iter().max().copied())
+        };
+        for (lap, (a, b)) in laps.iter().zip([(1, 200), (201, 300)]) {
+            assert_eq!((field(lap, 15), field(lap, 16)), over(a, b, &|s| s.hr.map(u16::from)), "lap HR {a}");
+            assert_eq!((field(lap, 17), field(lap, 18)), over(a, b, &|s| s.cadence.map(u16::from)), "cadence {a}");
+            assert_eq!((field(lap, 19), field(lap, 20)), over(a, b, &|s| s.power), "lap power {a}");
+            assert_eq!(field(lap, 21), Some(0xffff), "the lap's own ascent is not kept");
+        }
+        assert_ne!(field(laps[0], 19), field(laps[1], 19), "the laps' own, not the ride's");
         let session = m.iter().find(|x| x.0 == 18).unwrap();
         assert_eq!(field(session, 7), Some(301_000), "elapsed");
         assert_eq!(field(session, 8), Some(240_000), "timer: the 61 s pause left out");

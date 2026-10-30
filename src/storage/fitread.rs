@@ -734,8 +734,8 @@ mod tests {
         read(f).0.into_iter().filter_map(|m| if let Msg::Lap(l) = m { Some(l) } else { None }).collect()
     }
 
-    /// Our writer's laps (two Lap keys, then the last lap at the end): timer time, distance and speed; no power or
-    /// heart rate (fit.rs leaves a lap's averages out).
+    /// Our writer's laps (two Lap keys, then the last lap at the end): timer time, distance and speed, the lap's
+    /// own average power and heart rate.
     #[test]
     fn laps_of_our_writer() {
         let mut f = Vec::new();
@@ -753,7 +753,7 @@ mod tests {
         assert_eq!(l.len(), 3);
         assert_eq!((l[0].timer_ms, l[1].timer_ms), (Some(30_000), Some(30_000)));
         assert_eq!((l[0].dist_cm, l[0].speed_mm_s), (Some(15_000), Some(5000)));
-        assert_eq!((l[0].avg_power, l[0].avg_hr), (None, None));
+        assert!(l.iter().all(|l| (l.avg_power, l.avg_hr) == (Some(200), Some(130))), "{l:?}");
         assert!(l[2].timer_ms.is_some_and(|ms| (29_000..=31_000).contains(&ms)), "{l:?}");
     }
 
