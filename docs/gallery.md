@@ -9,7 +9,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Overview](img/overview.png) | ![Rest day](img/overview-rest.png) | ![Overview cog](img/overview-cog.png) |
 | Overview: the date, today's planned workout with its profile, four fields, notices (sim) | The overview's TODAY card with nothing planned (sim) | The overview's cog opens the menu (sim) |
 | ![Overview, SMOOTH font](img/overview-cog-smooth.png) | ![WORKOUTS list](img/workouts-list.png) | ![Quick panel](img/quick-panel.png) |
-| The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | WORKOUTS: each day's profile beside its date and length; a rest day's card gets here, else it opens today's workout (sim) | The quick panel, a swipe down anywhere: the media remote, the power meter with ZERO and its result, each sensor with its battery (LOW in red), GPS, phone, battery and the brightness (sim) |
+| The same with FONT = SMOOTH (Barlow Semi Condensed Bold) (sim) | WORKOUTS: each day's profile beside its date and length; a rest day's card gets here, else it opens today's workout (sim) | The quick panel, a swipe down anywhere: the media remote, the power meter with ZERO and its result, each sensor with its battery (LOW in red) and the brightness; a long title scrolls (sim) |
 | ![No notifications](img/notifs-empty.png) | ![Touch lock](img/touch-lock.png) |  |
 | An empty list says so in a row: no notifications (sim) | The touch lock: a padlock in the strip (sim) |  |
 

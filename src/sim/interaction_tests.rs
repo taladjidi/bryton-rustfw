@@ -254,6 +254,33 @@ fn the_quick_panel_shows_only_what_is_paired() {
     sim.save("quick_panel_empty");
 }
 
+/// A title wider than its box scrolls (a step every 250 ms, a hold at each end) and redraws only its own box; a
+/// title that fits never moves.
+#[test]
+fn a_long_title_scrolls_and_a_short_one_does_not() {
+    use crate::touch::Dir;
+    let (mut sim, mut app) = quick_unit(true);
+    swipe(&mut app, &mut sim, Dir::Down);
+    run(&mut sim, &mut app, 1500);
+    assert_eq!(app.quick_text(0).0.as_str(), "Song");
+    let px = sim.pixels;
+    run(&mut sim, &mut app, 5000);
+    let quiet = sim.pixels - px;
+    let at = sim.ms + 100;
+    let song = Act::Track("A VERY LONG SONG TITLE THAT OVERFLOWS", "Band");
+    sim.nordic.phone.as_mut().unwrap().script.push((at, song));
+    run(&mut sim, &mut app, 1000);
+    let first = std::string::String::from(app.quick_text(0).0.as_str());
+    super::tests::assert_consistent(&sim, &app);
+    let px = sim.pixels;
+    run(&mut sim, &mut app, 4000);
+    let later = std::string::String::from(app.quick_text(0).0.as_str());
+    assert_ne!(first, later, "the visible text moved");
+    assert!(sim.pixels - px > quiet, "the scroll redraws its box");
+    run(&mut sim, &mut app, 30_000);
+    super::tests::assert_consistent(&sim, &app);
+}
+
 /// Item 4: SENSORS puts its actions first. With a meter heard and a trainer paired, CALIBRATE POWER was row
 /// ALL + 2 (a second screen of rows, that many Page presses) and TRAINER CONTROL row ALL + 1, ALL being the number
 /// of sensor kinds; now rows 0 and 1, so the first one is selected when the menu opens.

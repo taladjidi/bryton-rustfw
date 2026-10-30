@@ -194,6 +194,8 @@ pub struct App {
     /// What the quick panel shows, box by box, and its shape (app/quick.rs).
     quick_shown: [u32; app::QUICK_BOXES],
     quick_shape: u8,
+    /// The title and artist scroll: the track's fingerprint and the steps since it began (app/quick.rs).
+    quick_scroll: (u32, u32),
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -546,6 +548,7 @@ impl App {
             powercal_shown: None,
             quick_shown: [0; app::QUICK_BOXES],
             quick_shape: 0,
+            quick_scroll: (0, 0),
             ftms: Ftms::default(),
             prof: prof::Prof::default(),
         }
@@ -707,7 +710,7 @@ impl App {
             self.update_media(b);
             self.redraw_ms = 0;
         }
-        if self.screen == Screen::Quick && self.redraw_ms >= LIST_REDRAW_MS {
+        if self.screen == Screen::Quick && self.redraw_ms >= app::QUICK_STEP_MS {
             self.update_quick(b);
             self.redraw_ms = 0;
         }

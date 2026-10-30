@@ -61,7 +61,7 @@ pub use nrf_watch::*;
 pub(crate) use pace::PaceState;
 pub(crate) use pagemeta::Switches;
 pub use phone::*;
-pub(crate) use quick::QUICK_BOXES;
+pub(crate) use quick::{QUICK_BOXES, QUICK_STEP_MS};
 pub use radio::*;
 pub use riding::*;
 pub use screens::*;

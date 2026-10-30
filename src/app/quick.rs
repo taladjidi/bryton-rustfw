@@ -4,11 +4,14 @@
 //! 2. the power meter, when one is paired: watts, its battery and ZERO, which runs the zero-offset calibration in
 //!    place (app/powercal.rs: the request, the retries, the answer) and writes its result on the same block;
 //! 3. one line per paired sensor: its value or SEARCHING, and its battery when it said (ANT+ common page 82);
-//! 4. GPS, phone link and unit battery, and the brightness buttons.
+//! 4. the brightness buttons.
 //!
 //! Every box has a fingerprint ([`App::quick_prints`]); the screen is drawn whole when it opens (or when a sensor is
 //! paired or forgotten under it, which moves the lines) and then a second's update, and a tap's, redraws only the boxes
-//! whose fingerprint changed, each in its own fixed box.
+//! whose fingerprint changed, each in its own fixed box. A title or artist wider than its box scrolls (ui::quick::window):
+//! `QUICK_STEP_MS` is one step, 4 characters a second: readable, and the idle pass (250 ms, `IDLE_POLL_MS`) is the
+//! slowest the loop wakes, so a faster step would only be skipped. The window is part of the box's fingerprint, so a
+//! step redraws that one 224 x 14 box, and text that fits never moves.
 
 use crate::*;
 use phone::Media;
@@ -16,17 +19,18 @@ use powercal::Phase;
 use text::{Align, Line};
 use ui::quick::{self as q, Battery, Hit};
 
+/// How often the open panel looks for changes, and so the scroll's step (see the module doc).
+pub(crate) const QUICK_STEP_MS: u32 = 250;
 /// The boxes: now playing's title and artist, the media buttons, the power block (watts, battery, ZERO and its
-/// result), the status line's three, the brightness level, then three a sensor line (name, value, battery).
+/// result), the brightness level, then three a sensor line (name, value, battery).
 const B_TITLE: usize = 0;
 const B_ARTIST: usize = 1;
 const B_MEDIA: usize = 2;
 const B_WATTS: usize = 3;
 const B_PBATT: usize = 4;
 const B_ZERO: usize = 5;
-const B_STATUS: usize = 6; // three
-const B_LEVEL: usize = 9;
-const B_ROWS: usize = 10;
+const B_LEVEL: usize = 6;
+const B_ROWS: usize = 7;
 /// The boxes in all.
 pub(crate) const QUICK_BOXES: usize = B_ROWS + 3 * q::ROWS;
 
@@ -41,7 +45,7 @@ impl App {
         matches!(self.radio.sensors.get(Kind::Power as usize), Some(Sensor::Paired(_)))
     }
 
-    /// The paired sensors with a line (the power meter has its block), at most [`q::ROWS`].
+    /// The paired sensors with a line (the power meter has its block), at most [`q::ROWS`], [`q::ROWS_WITH_POWER`] under the block.
     fn quick_kinds(&self) -> impl Iterator<Item = Kind> + '_ {
         Kind::ALL
             .into_iter()
@@ -50,7 +54,7 @@ impl App {
                 Kind::Trainer => self.trainer_on(),
                 _ => matches!(self.radio.sensors.get(k as usize), Some(Sensor::Paired(_))),
             })
-            .take(q::ROWS)
+            .take(if self.quick_power() { q::ROWS_WITH_POWER } else { q::ROWS })
     }
 
     /// What the panel's lines are: the power block (bit 7) and the number of sensor lines.
@@ -61,6 +65,7 @@ impl App {
     /// Opens the panel, with no calibration result left from before.
     pub(crate) fn open_quick(&mut self) {
         self.powercal.reset();
+        self.quick_scroll = (0, 0);
         self.open(Screen::Quick);
     }
 
@@ -158,11 +163,12 @@ impl App {
                         ui::GREY
                     }
                     (B_TITLE, Some(t)) => {
-                        put(&mut l, t);
+                        put(&mut l, q::window(t, ui::W - 16, self.quick_scroll.1));
                         ui::WHITE
                     }
                     _ => {
-                        put(&mut l, if n.title.is_some() { n.artist } else { "" });
+                        let a = if n.title.is_some() { n.artist } else { "" };
+                        put(&mut l, q::window(a, ui::W - 16, self.quick_scroll.1));
                         ui::GREY
                     }
                 }
@@ -181,46 +187,6 @@ impl App {
                 put(&mut l, r.as_str());
                 c
             }
-            _ if (B_STATUS..B_STATUS + 3).contains(&i) => match i - B_STATUS {
-                0 => {
-                    let sats = self.gps.pvt.filter(|p| p.good()).map(|p| p.sats);
-                    put(&mut l, "GPS ");
-                    match sats {
-                        Some(n) => l.push_u32(u32::from(n)),
-                        None => put(&mut l, "--"),
-                    }
-                    if sats.is_some() { ui::WHITE } else { ui::GREY }
-                }
-                1 => match self.phone.link() {
-                    Link::Secure => {
-                        put(&mut l, "PHONE");
-                        ui::WHITE
-                    }
-                    Link::Pairing => {
-                        put(&mut l, "PAIRING");
-                        ui::GREY
-                    }
-                    _ => {
-                        put(&mut l, "PHONE");
-                        ui::GREY
-                    }
-                },
-                _ => match self.strip.battery {
-                    Some(p) => {
-                        l.push_u32(u32::from(p));
-                        put(&mut l, "%");
-                        match (self.strip.charging, p <= LOW_BATTERY_PERCENT) {
-                            (true, _) => ui::GREEN,
-                            (_, true) => ui::RED,
-                            _ => ui::WHITE,
-                        }
-                    }
-                    None => {
-                        put(&mut l, "--");
-                        ui::GREY
-                    }
-                },
-            },
             B_LEVEL => {
                 match LIGHT_LEVELS.get(self.settings.light_level) {
                     Some(&v) => {
@@ -286,6 +252,11 @@ impl App {
                 }
             };
         }
+        // The label font's cell is 20 px high, taller than the 16 px step between the lines: a box redrawn alone clears
+        // the top of the one below (and the artist's the buttons'), so each box also changes with the one above it: a scroll step
+        // redraws the title, the artist and the buttons (about 16 k px, 4 times a second, while a long title scrolls).
+        p[B_ARTIST] = fnv(p[B_ARTIST], &p[B_TITLE].to_le_bytes()) | 1;
+        p[B_MEDIA] = fnv(p[B_MEDIA], &p[B_ARTIST].to_le_bytes()) | 1;
         p
     }
 
@@ -314,11 +285,6 @@ impl App {
                 q::draw_zero(c, self.quick_zero_ok());
                 q::draw_text(c, (q::RESULT.0, q::RESULT.1, q::RESULT.2), Align::Left, color, s);
             }
-            _ if (B_STATUS..B_STATUS + 3).contains(&i) => {
-                let (x, w) = q::STATUS[i - B_STATUS];
-                let align = [Align::Left, Align::Centre, Align::Right][i - B_STATUS];
-                q::draw_text(c, (x, q::STATUS_Y, w), align, color, s);
-            }
             B_LEVEL => q::draw_text(c, q::LEVEL, Align::Centre, color, s),
             _ if i >= B_ROWS => {
                 let (k, part) = ((i - B_ROWS) / 3, (i - B_ROWS) % 3);
@@ -345,6 +311,7 @@ impl App {
 
     /// What the panel shows has been drawn: the fingerprints and the shape to compare with.
     pub(crate) fn quick_drawn(&mut self) {
+        self.quick_scroll = (0, 0); // the panel was drawn from the start of both lines (the track is compared next step)
         (self.quick_shown, self.quick_shape) = (self.quick_prints(), self.quick_shape());
     }
 
@@ -354,6 +321,10 @@ impl App {
         if self.quick_shape != self.quick_shape() {
             return self.show(b);
         }
+        // a new track starts both lines over; else the scroll takes a step
+        let track = fnv(fnv(0, self.media_now().title.unwrap_or("").as_bytes()), self.media_now().artist.as_bytes());
+        self.quick_scroll =
+            if track == self.quick_scroll.0 { (track, self.quick_scroll.1.wrapping_add(1)) } else { (track, 0) };
         let now = self.quick_prints();
         let mut p = Panel(b, self.area(), self.look());
         for (i, (&a, &s)) in now.iter().zip(&self.quick_shown).enumerate() {
