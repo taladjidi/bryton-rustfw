@@ -4967,6 +4967,122 @@ fn fault_log_files() {
     assert!(created > 10 && appended > 10 && rotated > 10, "{created} {appended} {rotated}");
 }
 
+/// Lap lists (a past ride's LAPS, fitread.rs `lap` into history.rs `lap_row` and the card's list): FIT files built
+/// from structure, not bytes: definitions of `lap` messages with random field sets, byte orders, wrong sizes and
+/// developer fields, among `record`, `session` and unknown messages, data on undefined local types, a wrong data
+/// size, cut files; read in random chunks and drawn at random scroll places. The count asserts the laps are reached.
+#[test]
+fn lap_lists() {
+    use crate::fitread::{Msg, Reader};
+    let mut x = 0x9e37_79b9u32;
+    let mut rnd = move || {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        x
+    };
+    // (field, natural size): the lap's, then ones it does not read
+    const LAP: [(u8, u8); 9] = [(253, 4), (8, 4), (9, 4), (110, 4), (13, 2), (19, 2), (15, 1), (7, 4), (2, 4)];
+    let (mut files, mut laps, mut full, mut with_power, mut cut_files) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    // files by mode: 0 every definition big endian, 1 every one with a developer field, 2 free
+    let (mut big_laps, mut dev_laps, mut no_timer) = (0u32, 0u32, 0u32);
+    for iter in 0..4000 {
+        let mode = iter % 3;
+        let mut body: Vec<u8> = Vec::new();
+        let mut defs: [Option<(Vec<u8>, bool)>; 4] = [None, None, None, None];
+        for _ in 0..4 + rnd() % 40 {
+            let local = (rnd() % 4) as usize;
+            if rnd() % 5 == 0 || defs[local].is_none() {
+                let big = mode == 0 || rnd() % 3 == 0;
+                let global: u16 = [19, 19, 19, 20, 18, 21, 49][(rnd() % 7) as usize];
+                let mut fields: Vec<(u8, u8)> = LAP.iter().copied().filter(|_| rnd() % 3 != 0).collect();
+                for f in &mut fields {
+                    if rnd() % 6 == 0 {
+                        f.1 = 1 + (rnd() % 8) as u8; // a size the type does not have
+                    }
+                }
+                let dev = mode == 1 || rnd() % 4 == 0;
+                body.extend([0x40 | local as u8 | if dev { 0x20 } else { 0 }, 0, big as u8]);
+                body.extend(if big { global.to_be_bytes() } else { global.to_le_bytes() });
+                body.push(fields.len() as u8);
+                for &(n, s) in &fields {
+                    body.extend([n, s, 0x86]);
+                }
+                let mut size: usize = fields.iter().map(|f| usize::from(f.1)).sum();
+                if dev {
+                    body.extend([1, 0, 2, 0]);
+                    size += 2;
+                }
+                defs[local] = Some((std::vec![0; size], big));
+            } else if let Some((tmpl, _)) = &defs[local] {
+                body.push(local as u8);
+                // values: random, or all ones (invalid), or small
+                let mode = rnd() % 4;
+                body.extend((0..tmpl.len()).map(|_| match mode {
+                    0 => 0xff,
+                    1 => (rnd() % 4) as u8,
+                    _ => rnd() as u8,
+                }));
+            }
+            if rnd() % 9 == 0 {
+                body.push(3 << 4 | 0x0f); // data on a local type with no definition, or a compressed header
+            }
+        }
+        let mut f = std::vec![14u8, 0x10, 0, 0];
+        let declared = if rnd() % 8 == 0 { rnd() % 4000 } else { body.len() as u32 };
+        f.extend(declared.to_le_bytes());
+        f.extend(b".FIT");
+        f.extend(crate::fit::crc(0, &f).to_le_bytes());
+        f.extend(&body);
+        f.extend(crate::fit::crc(0, &f).to_le_bytes());
+        if rnd() % 4 == 0 {
+            f.truncate(14 + rnd() as usize % (f.len() - 14));
+            cut_files += 1;
+        }
+        let (mut r, mut rows) = (Reader::with_position(), Vec::new());
+        let mut at = 0;
+        while at < f.len() {
+            let n = (1 + rnd() as usize % 300).min(f.len() - at);
+            r.push_slice(&f[at..at + n], |m| {
+                if let Msg::Lap(l) = m {
+                    rows.push(crate::history::lap_row(&l));
+                }
+            });
+            at += n;
+        }
+        files += 1;
+        laps += rows.len() as u32;
+        big_laps += if mode == 0 { rows.len() as u32 } else { 0 };
+        dev_laps += if mode == 1 { rows.len() as u32 } else { 0 };
+        no_timer += rows.iter().filter(|l| l.timer_s().is_none()).count() as u32;
+        big_laps += if mode == 0 { rows.len() as u32 } else { 0 };
+        dev_laps += if mode == 1 { rows.len() as u32 } else { 0 };
+        no_timer += rows.iter().filter(|l| l.timer_s().is_none()).count() as u32;
+        full += rows.iter().filter(|l| l.speed_x10().is_some() && l.timer_s().is_some_and(|t| t > 0)).count() as u32;
+        with_power += rows.iter().filter(|l| l.power().is_some() || l.hr().is_some()).count() as u32;
+        rows.truncate(crate::history::MAX_LAPS);
+        for top in [0, rows.len() / 2, rows.len() + 5] {
+            for imperial in [false, true] {
+                let mut fr = crate::ui::tests::Frame::new();
+                crate::ui::card::draw_lap_list(&mut fr, (&rows, rows.len() + 3), top, imperial);
+            }
+        }
+    }
+    assert!(files == 4000 && cut_files > 800, "{files} files, {cut_files} cut");
+    assert!(
+        big_laps > 200 && dev_laps > 200 && no_timer > 200,
+        "{big_laps} big endian, {dev_laps} developer, {no_timer} no timer"
+    );
+    assert!(
+        big_laps > 200 && dev_laps > 200 && no_timer > 200,
+        "{big_laps} big endian, {dev_laps} developer, {no_timer} no timer"
+    );
+    assert!(
+        laps > 5000 && full > 1000 && with_power > 1000,
+        "{laps} laps, {full} with time and speed, {with_power} with power or hr"
+    );
+}
+
 /// SUNSET ALERT (settings.bin byte 155, after DATE FORMAT): any length from 152 to 157 and any byte read as the module
 /// doc says (a byte under 4 is the choice, another value or a file cut before it reads OFF). The fuzz reaches a choice,
 /// a wild byte and a file cut before the byte.

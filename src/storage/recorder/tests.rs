@@ -213,7 +213,7 @@ fn saved(img: &[u8], name: &str) -> Result<(Vec<u32>, bool), std::string::String
     rd.push_slice(&v, |m| match m {
         Msg::Record(r) => times.push(r.time),
         Msg::Session(_) => session = true,
-        Msg::CoursePoint { .. } => {}
+        Msg::CoursePoint { .. } | Msg::Lap(_) => {}
     });
     match rd.result() {
         Some(Ok(())) => Ok((times, session)),
