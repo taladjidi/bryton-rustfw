@@ -670,6 +670,7 @@ impl App {
                         if s == menu::Setting::Altitude && matches!(i, Input::Select | Input::Touch(Gesture::Tap(..))) {
                             self.alt_typed();
                         }
+                        self.setting_edited(s);
                         self.save_misc(b);
                     }
                     _ => {}

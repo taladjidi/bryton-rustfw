@@ -131,7 +131,7 @@ impl App {
                 avg_power: r.avg_power(),
                 avg_hr: r.avg_hr(),
                 max_hr: r.max_hr(),
-                tss: p.tss(self.settings.ftp),
+                tss: self.tss_now(),
                 kj: Some(p.kj()),
             },
             self.settings.imperial,

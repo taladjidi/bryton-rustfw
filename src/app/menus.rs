@@ -26,6 +26,8 @@ pub enum Menu {
     Settings,
     /// The rider's numbers ([`menu::ME`]).
     Me,
+    /// The zones' bounds, one by one ([`menu::ZONES`]).
+    Zones,
     /// The backlight, the touch panel, the gauge ([`menu::DISPLAY`]).
     Display,
     /// The wheel ([`menu::BIKE`]).
@@ -89,6 +91,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::PageList(ride::Profile::Mtb) => "MTB PAGES",
         Menu::Settings => "SETTINGS",
         Menu::Me => "ME",
+        Menu::Zones => "ZONES",
         Menu::Display => "DISPLAY",
         Menu::Bike => "BIKE",
         Menu::System => "SYSTEM",
@@ -143,6 +146,7 @@ impl App {
             Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
             Menu::Me => menu::ME.get(i).copied(),
+            Menu::Zones => menu::ZONES.get(i).copied(),
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
             // GIVE UP SAVE first, only while a save is stuck (app/riding.rs)
@@ -863,6 +867,25 @@ impl App {
         }
     }
 
+    /// A number setting's editing ended: what follows from it (BORN gives MAX HR, a MAX HR by hand is no longer the age's).
+    pub(crate) fn setting_edited(&mut self, s: menu::Setting) {
+        match s {
+            menu::Setting::BirthYear => match self.settings.max_hr_from_age(self.date.0) {
+                None if self.settings.birth_year > 0 => self.say("SET THE CLOCK"),
+                Some(true) => {
+                    let mut l = crate::text::Line::<24>::new();
+                    l.push_str("MAX HR ");
+                    l.push_u32(u32::from(self.settings.max_hr));
+                    l.push_str(" FROM AGE");
+                    self.say(l.as_str());
+                }
+                _ => {}
+            },
+            menu::Setting::MaxHr => self.settings.max_hr_age = false, // set by hand: no longer the age's
+            _ => {}
+        }
+    }
+
     /// Select on a setting: a number starts or ends its editing, a choice cycles.
     fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
         if s.number().is_some() {
@@ -871,6 +894,7 @@ impl App {
                 self.editing = self.alt_edit_start(); // from the altitude the barometer reads
             }
             if !self.editing {
+                self.setting_edited(s);
                 self.save_misc(b);
             }
         } else if matches!(s, menu::Setting::Theme | menu::Setting::DayTheme | menu::Setting::NightTheme) {

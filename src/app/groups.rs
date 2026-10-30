@@ -294,7 +294,7 @@ pub(crate) struct Plan {
     /// The day the calendar was read for.
     pub(crate) day: Option<(u16, u8, u8)>,
     /// The FTP and maximum heart rate the calendar's profiles were coloured with: another pair reads it again.
-    pub(crate) zones: (u16, u16),
+    pub(crate) zones: ride::Zones,
     /// The workout opened (its steps menu) or running.
     pub(crate) workout: storage::workout_file::Workout,
     /// Its file.
@@ -321,7 +321,7 @@ impl Plan {
         Plan {
             calendar: Default::default(),
             day: None,
-            zones: (0, 0),
+            zones: ride::Zones::standard(0, 0),
             workout: storage::workout_file::Workout::new(),
             file: None,
             player: None,

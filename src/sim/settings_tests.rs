@@ -571,3 +571,64 @@ fn the_ended_rides_queue_pays_saved_ones_only() {
     st.done(true); // a save with nothing ended: nothing
     assert_eq!(st.due, (10, 1));
 }
+
+/// ME > ZONES: the computed bounds are listed, a bound is edited in place between its neighbours, it is back after a
+/// restart from the file alone, and RESET goes back to the computed zones. Screenshots: `me_menu`, `zones_edit_menu`.
+#[test]
+fn zones_menu_edits_one_bound_keeps_it_and_resets() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    let value = |app: &App, n: u8| {
+        let i = menu::ZONES.iter().position(|&r| r == menu::Row::Set(Setting::Zone(n))).unwrap();
+        std::string::String::from(
+            app.menu_row(Menu::Zones, i)
+                .unwrap()
+                .1
+                .as_str()
+                .split(' ')
+                .find(|w| w.parse::<u32>().is_ok())
+                .unwrap_or(""),
+        )
+    };
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Me));
+    app.press(&mut sim, Press::Short(Key::Start));
+    sim.save("me_menu");
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Zones));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.screen(), Screen::Menu(Menu::Zones, 0));
+    let shown = [0, 3, 4, 9].map(|n| value(&app, n));
+    assert_eq!(shown, ["113", "170", "111", "301"], "190 bpm and 200 W: 60, 90 % and 55, 150 % of them, less one");
+    app.press(&mut sim, Press::Short(Key::Start)); // edit HR Z1
+    for _ in 0..5 {
+        app.press(&mut sim, Press::Short(Key::Page)); // down: 113 -> 108
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(app.settings.zone_custom);
+    assert_eq!((value(&app, 0).as_str(), value(&app, 1).as_str()), ("108", "132"), "the others keep their bounds");
+    // a bound stops one under the next: zone 2 ends at 132, so zone 1 cannot pass 131
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..40 {
+        app.press(&mut sim, Press::Short(Key::Lap));
+    }
+    assert_eq!(value(&app, 0), "131");
+    app.press(&mut sim, Press::Short(Key::Start));
+    sim.save("zones_edit_menu");
+    run(&mut sim, &mut app, 1000);
+    let image = sim.emmc.image.clone();
+    let (_, kept) = reboot(&mut sim, false);
+    assert_eq!((kept.settings.zone_custom, kept.settings.zones().upper()[0]), (true, 131), "kept");
+    sim.emmc.image = image;
+    let (_, from_file) = reboot(&mut sim, true);
+    assert_eq!(
+        (from_file.settings.zone_custom, from_file.settings.zones().upper()[0]),
+        (true, 131),
+        "from the file alone"
+    );
+    // RESET
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::ZonesReset));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert!(!app.settings.zone_custom);
+    assert_eq!(value(&app, 0), "113", "the computed bound again");
+}

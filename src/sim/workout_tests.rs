@@ -386,7 +386,7 @@ fn next_step_strip() {
     let mut sim = Sim::new(9, 0, 0);
     sim.own_settings();
     let mut app = App::start(&mut sim, None);
-    let pw = |lo, hi| Target { kind: TKind::Power, lo, hi, pct: false };
+    let pw = |lo, hi| Target { kind: TKind::Power, lo, hi, pct: false, zone: 0 };
     let st = |len, target| Step { len, target, target2: Target::OPEN, intensity: 0 };
     app.plan.workout = Workout::built(
         "STRIP",
@@ -493,7 +493,7 @@ fn next_step_strip_text_and_return() {
     let mut app = App::start(&mut sim, None);
     let t = |kind, lo, len| Step {
         len,
-        target: Target { kind, lo, hi: lo, pct: false },
+        target: Target { kind, lo, hi: lo, pct: false, zone: 0 },
         target2: Target::OPEN,
         intensity: 0,
     };

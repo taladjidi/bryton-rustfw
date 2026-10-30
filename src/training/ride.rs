@@ -743,6 +743,114 @@ pub const POWER_ZONE_PCT: [u32; 6] = [56, 76, 91, 106, 121, 151];
 /// Where heart-rate zones 2 to 5 start, % of the maximum.
 pub const HR_ZONE_PCT: [u32; 4] = [60, 70, 80, 90];
 
+/// Where heart-rate zones 2 to 5 start, % of the lactate threshold heart rate: Friel's cycling zones 2, 3, 4 and 5
+/// (81, 90, 94 and 100 %; his Z1 is under 81 %, Z5a, 5b and 5c, from 100, 103 and 107 %, are one here, since the bars,
+/// colours and times have five heart-rate zones). Source: Joe Friel, "Quick guide to setting zones" (TrainingPeaks,
+/// trainingpeaks.com/learn/articles/joe-friel-s-quick-guide-to-setting-zones/) and the 220 Triathlon table of his
+/// cycling zones (220triathlon.com/?p=2068), which give 81 / 89 / 93 / 99 % as the zones' tops and 100 to 102 % for Z5a.
+pub const HR_LTHR_PCT: [u32; 4] = [81, 90, 94, 100];
+
+/// What the heart-rate zones are worked out from (ME > ZONES BY).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZonesBy {
+    /// Percent of the maximum heart rate ([`HR_ZONE_PCT`]).
+    MaxHr,
+    /// Percent of the lactate threshold heart rate ([`HR_LTHR_PCT`]); the maximum's while LTHR is unset.
+    Lthr,
+}
+
+/// The one zones table: where each heart-rate zone 2 to 5 and power zone 2 to 7 starts (bpm, W), with the FTP and
+/// maximum they were worked out for. Every consumer (the bars, the zone fields, the time in zone, the graphs, the
+/// workout profiles and the gauge) reads it from `Settings::zones`, which gives the computed zones or the rider's own
+/// (ME > ZONES), so a bound edited there moves all of them.
+///
+/// ```
+/// use bryton_rustfw::ride::Zones;
+/// let z = Zones::standard(200, 190);
+/// assert_eq!([100, 114, 140, 160, 175].map(|b| z.hr_zone(b)), [1, 2, 3, 4, 5]);
+/// assert_eq!(z.upper()[..4], [113, 132, 151, 170], "zone 1 to 4 end under 60, 70, 80, 90 % of 190");
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Zones {
+    /// FTP, W.
+    pub ftp: u16,
+    /// Maximum heart rate, bpm.
+    pub max_hr: u16,
+    hr: [u16; 4],
+    power: [u16; 6],
+}
+
+/// First value at or over `pct` % of `base`: the reading whose whole percent reaches `pct` (`bpm * 100 / base >= pct`).
+const fn edge(pct: u32, base: u16) -> u16 {
+    let v = (pct * base as u32).div_ceil(100);
+    if v > u16::MAX as u32 { u16::MAX } else { v as u16 }
+}
+
+impl Zones {
+    /// Heart-rate zones as a share of the maximum, power zones of the FTP.
+    pub fn standard(ftp: u16, max_hr: u16) -> Zones {
+        Zones::computed(ftp, max_hr, 0, ZonesBy::MaxHr)
+    }
+
+    /// The zones `by` the rule: LTHR's need `lthr` above 0, else they are the maximum's.
+    pub fn computed(ftp: u16, max_hr: u16, lthr: u16, by: ZonesBy) -> Zones {
+        let (pcts, base) = if by == ZonesBy::Lthr && lthr > 0 { (HR_LTHR_PCT, lthr) } else { (HR_ZONE_PCT, max_hr) };
+        Zones {
+            ftp,
+            max_hr,
+            hr: pcts.map(|p| edge(p, base.max(1))),
+            power: POWER_ZONE_PCT.map(|p| edge(p, ftp.max(1))),
+        }
+    }
+
+    /// The zones whose heart-rate zones 1 to 4 and power zones 1 to 6 end at `upper` (bpm then W): the next zone
+    /// starts one over. None unless each list rises strictly from 1 ([`Zones::upper`] of a table is always valid).
+    pub fn custom(ftp: u16, max_hr: u16, upper: [u16; 10]) -> Option<Zones> {
+        let [h0, h1, h2, h3, p0, p1, p2, p3, p4, p5] = upper;
+        let rises = |l: &[u16]| l.first().is_some_and(|&v| v > 0) && l.windows(2).all(|w| w[0] < w[1]);
+        (rises(&[h0, h1, h2, h3]) && rises(&[p0, p1, p2, p3, p4, p5]) && h3 < u16::MAX && p5 < u16::MAX).then(|| {
+            Zones { ftp, max_hr, hr: [h0, h1, h2, h3].map(|v| v + 1), power: [p0, p1, p2, p3, p4, p5].map(|v| v + 1) }
+        })
+    }
+
+    /// Where heart-rate zones 1 to 4 and power zones 1 to 6 end (bpm then W), the numbers ZONES edits.
+    pub fn upper(&self) -> [u16; 10] {
+        let [h0, h1, h2, h3] = self.hr.map(|v| v.saturating_sub(1));
+        let [p0, p1, p2, p3, p4, p5] = self.power.map(|v| v.saturating_sub(1));
+        [h0, h1, h2, h3, p0, p1, p2, p3, p4, p5]
+    }
+
+    /// Heart-rate zone 1 to 5 of `bpm`.
+    pub fn hr_zone(&self, bpm: u16) -> u8 {
+        self.hr.iter().filter(|&&e| bpm >= e).count() as u8 + 1
+    }
+
+    /// Power zone 1 to 7 of `w`.
+    pub fn power_zone(&self, w: u16) -> u8 {
+        self.power.iter().filter(|&&e| w >= e).count() as u8 + 1
+    }
+
+    /// The colour of the heart-rate zone of `bpm`.
+    pub fn hr_color(&self, bpm: u16) -> u16 {
+        hr_color(self.hr_zone(bpm))
+    }
+
+    /// The colour of the power zone of `w` watts.
+    pub fn power_color(&self, w: u16) -> u16 {
+        power_color(self.power_zone(w))
+    }
+
+    /// Where power zones 2 to 7 start, W.
+    pub fn power_edges(&self) -> &[u16; 6] {
+        &self.power
+    }
+
+    /// Where heart-rate zones 2 to 5 start, bpm.
+    pub fn hr_edges(&self) -> &[u16; 4] {
+        &self.hr
+    }
+}
+
 /// Heart-rate zone 1 to 5 of `bpm` for a maximum of `max`: under 60, 70, 80, 90 % of it, then above
 /// (conventional percent-of-max zones; stock's own default is seven zones).
 ///
@@ -751,8 +859,7 @@ pub const HR_ZONE_PCT: [u32; 4] = [60, 70, 80, 90];
 /// assert_eq!([100, 114, 140, 160, 175].map(|b| hr_zone(b, 190)), [1, 2, 3, 4, 5]);
 /// ```
 pub fn hr_zone(bpm: u16, max: u16) -> u8 {
-    let pct = u32::from(bpm) * 100 / u32::from(max.max(1));
-    HR_ZONE_PCT.iter().filter(|&&t| pct >= t).count() as u8 + 1
+    Zones::standard(0, max).hr_zone(bpm)
 }
 
 /// Power zone 1 to 7 of `w` for an FTP of `ftp` (Coggan's: 55, 75, 90, 105, 120, 150 % of FTP).
@@ -762,8 +869,7 @@ pub fn hr_zone(bpm: u16, max: u16) -> u8 {
 /// assert_eq!([100, 120, 170, 200, 220, 280, 320].map(|w| power_zone(w, 200)), [1, 2, 3, 4, 5, 6, 7]);
 /// ```
 pub fn power_zone(w: u16, ftp: u16) -> u8 {
-    let pct = u32::from(w) * 100 / u32::from(ftp.max(1));
-    POWER_ZONE_PCT.iter().filter(|&&t| pct >= t).count() as u8 + 1
+    Zones::standard(ftp, 0).power_zone(w)
 }
 
 /// The colour of a DFA alpha1 reading (x 100): above the aerobic threshold's 0.75 green, between it and 0.5 olive,
@@ -1110,6 +1216,39 @@ fn mean(a: u16, b: u16) -> u16 {
 mod tests {
     extern crate std;
     use super::*;
+
+    /// The zone tables for both rules against the cited percentages: the max-HR rule's 60, 70, 80 and 90 % of 190, and
+    /// Friel's cycling zones from an LTHR of 170 (81, 90, 94, 100 %); a zone starts at the first whole bpm at or over
+    /// its percent, so its top is one under.
+    #[test]
+    fn zone_tables_follow_their_percentages() {
+        let by_max = Zones::computed(200, 190, 170, ZonesBy::MaxHr);
+        assert_eq!(by_max.upper()[..4], [113, 132, 151, 170]);
+        let by_lthr = Zones::computed(200, 190, 170, ZonesBy::Lthr);
+        // 81 % of 170 = 137.7, 90 % = 153, 94 % = 159.8, 100 % = 170: the zones start at 138, 153, 160 and 170
+        assert_eq!(by_lthr.upper()[..4], [137, 152, 159, 169]);
+        assert_eq!([137, 138, 152, 153, 159, 160, 169, 170].map(|b| by_lthr.hr_zone(b)), [1, 2, 2, 3, 3, 4, 4, 5]);
+        assert_eq!(Zones::computed(200, 190, 0, ZonesBy::Lthr), by_max, "LTHR unset: the maximum's");
+        // Coggan's power zones: 55, 75, 90, 105, 120, 150 % of 200 W, less one
+        assert_eq!(by_max.upper()[4..], [111, 151, 181, 211, 241, 301]);
+        for ftp in [150, 200, 247, 310] {
+            for w in 0..500 {
+                assert_eq!(Zones::standard(ftp, 190).power_zone(w), power_zone(w, ftp));
+            }
+        }
+    }
+
+    /// Custom bounds make the zones they say; bounds that do not rise are refused.
+    #[test]
+    fn custom_zones_are_the_bounds_plus_one() {
+        let up = [100, 120, 140, 160, 90, 130, 170, 210, 250, 300];
+        let z = Zones::custom(200, 190, up).unwrap();
+        assert_eq!(z.upper(), up);
+        assert_eq!([100, 101, 160, 161].map(|b| z.hr_zone(b)), [1, 2, 4, 5]);
+        assert_eq!([90, 91, 300, 301].map(|w| z.power_zone(w)), [1, 2, 6, 7]);
+        assert_eq!(Zones::custom(200, 190, [100, 100, 140, 160, 90, 130, 170, 210, 250, 300]), None);
+        assert_eq!(Zones::custom(200, 190, [0, 120, 140, 160, 90, 130, 170, 210, 250, 300]), None);
+    }
 
     #[test]
     fn balance_average_ignores_samples_without_one() {
