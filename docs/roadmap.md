@@ -90,8 +90,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
   saving and the date and time formats; key click; sound on or off; backlight always on; the auto pause threshold;
   the climb filter (all, or medium and above); the CLIMB page's off switch;
-- the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
-  to delete (DELETE exists in HISTORY).
+- ~~the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
+  to delete (DELETE exists in HISTORY)~~ done, sim (features.md: ABOUT and STORAGE under SYSTEM; the oldest ride's DELETE is HISTORY's).
 
 **3b. Small features** (implementer, sonnet where it says screens):
 - alerts: ~~power, cadence and speed high / low, heart rate low; reminders by distance, kcal and kJ; the DFA a1 alert

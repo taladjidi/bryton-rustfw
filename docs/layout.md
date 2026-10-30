@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->57 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->1 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->58 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->0 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -146,6 +146,8 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   over BLE the vendor UUID base is registered once per chip start, no Request Control, and app/trainer.rs writes
   the ANT+ path's pages as frames, one write in flight; ANT+ first when both are paired, both kept in
   `\Rustfw\sensors.bin`. Tests: `src/sim/ftms_tests.rs` and `src/sim/fecble_tests.rs` against `ble_sim.rs`'s `FtmsSim` (`new` and `new_fec`).
+  `src/app/survey.rs`: STORAGE's glue: the survey's passes while its screen is open and no ride runs, and the oldest
+  ride's card (HISTORY's, DELETE there).
   `src/app/trainer.rs`: the glue (readings into `Live` where no meter or sensor is heard, the commands sent as
   acknowledged messages, the workout's power step and the course's grade as drives) and the trainer screen and
   fields; `src/ui/trainer.rs` draws the screen. One acknowledged message per 250 ms on its channel; its pairing is in
@@ -200,6 +202,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/storage/trash.rs`: HISTORY's DELETE: a ride moved (never erased) into `\Rustfw\Deleted` (its full copy
   into `\Rustfw\Deleted\Full`), `\Rustfw\delete.rec` naming the move so the next start finishes one a cut left;
   stock's `.sum` / `.csum` left as they are (module doc: why).
+- `src/storage/volume.rs`: STORAGE's survey of the card, read a pass at a time: the size and free space (FSInfo's count as an estimate, then the FAT counted), the rides in `\Activities` and the oldest five by name; the size and day texts.
 - `src/storage/history.rs`: the ride history: the index of stock's rides (filled by that scan, newest first) and a
   past ride's card, its file read once with the position (`fitread::Reader::with_position`).
 - `src/storage/workout_file.rs`: stock's planned workouts (`\Workout\calendar\YYYYMMDD\*.fit`): a FIT workout file read
@@ -263,7 +266,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `interaction_tests.rs` (how many keys and taps each task takes, docs/features.md "Interactions": a menu that gets deeper fails it).
 - `src/sim/tests.rs` keeps the shared helpers (`run`, `assert_consistent`, `back`, `KEY`, `STRAP`...) and the boot, key, touch,
   banner, light and misc tests; the rest is by concern: `stock_tests.rs` (the overview's totals, STOCK DATA, fitness, ride
-  history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `menu_tests.rs` (the menu
+  history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
   tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `ride_tests.rs` (zone colours and bar,
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
   `segment_tests.rs` (live segments: the index, a ride along a synthetic segment), `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).

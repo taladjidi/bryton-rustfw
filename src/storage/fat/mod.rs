@@ -188,6 +188,54 @@ impl Fat {
         Ok(fat)
     }
 
+    /// The bytes of `n` clusters.
+    pub fn clusters_bytes(&self, n: u32) -> u64 {
+        u64::from(n) * u64::from(self.spc) * SECTOR as u64
+    }
+
+    /// The volume's data clusters (the FAT's entries that count).
+    pub fn clusters(&self) -> u32 {
+        self.clusters
+    }
+
+    /// The free cluster count of the FSInfo sector, if the sector is whole and the count is in range (Microsoft's
+    /// FAT32 specification: the three signatures at 0, 484 and 508, the count at 488; 0xffffffff is "not known").
+    /// None otherwise, and when the volume has no FSInfo sector.
+    pub fn fsinfo_free(&self, d: &mut impl Disk) -> Option<u32> {
+        if self.fsinfo == 0 {
+            return None;
+        }
+        let mut s = [0u8; SECTOR];
+        self.read(d, self.fsinfo, &mut s).ok()?;
+        let sig = |at: usize, v: u32| u32_at(&s, at) == v;
+        if !(sig(0, 0x4161_5252) && sig(484, 0x6141_7272) && sig(508, 0xaa55_0000)) {
+            return None;
+        }
+        let n = u32_at(&s, 488);
+        (n <= self.clusters).then_some(n)
+    }
+
+    /// Counts the free clusters (FAT entries of 0) from cluster `*next` on, at most `sectors` FAT sectors a call: the
+    /// count so far is `*free`, and `*next` starts at 2. True once all are counted. Reads the first FAT copy only.
+    pub fn count_free(&self, d: &mut impl Disk, next: &mut u32, free: &mut u32, sectors: u32) -> Result<bool, Error> {
+        let (per, end) = (SECTOR_U32 / 4, self.clusters + 2);
+        for _ in 0..sectors {
+            if *next >= end {
+                break;
+            }
+            let mut s = [0u8; SECTOR];
+            self.read(d, self.fat_start + *next / per, &mut s)?;
+            let stop = (*next / per + 1).saturating_mul(per).min(end);
+            for c in *next..stop {
+                if u32_at(&s, (c % per) as usize * 4) & 0x0fff_ffff == 0 {
+                    *free += 1;
+                }
+            }
+            *next = stop;
+        }
+        Ok(*next >= end)
+    }
+
     /// The root directory.
     pub fn root(&self) -> File {
         File { cluster: self.root, size: 0, dir: true }
