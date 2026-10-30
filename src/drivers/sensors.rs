@@ -14,6 +14,10 @@
 //! bit 7 is a toggle) also carries the beat before it in bytes 2-3. The RR intervals ([`Beats`]) follow the patch
 //! project's P8 (bryton-S510-mods `patches/P8-hrv-recording.c`): one new beat gives one interval; after missed
 //! broadcasts, page 4's previous beat still gives the last one, and with two new beats the first one too.
+//! Page 7 (the strap's battery: percent in byte 1, 0xff or more: none; openant `devices/heart_rate.py`, the
+//! `dp == 0x07` branch, checked 2026-10-30) and common page 80 (manufacturer id in bytes 4-5, little endian; openant
+//! `devices/common.py`, `data[0] == 80`) are kept per kind for the screens. Common pages carry no beat, so the
+//! strap's common pages (0x50 and up, page 82 too) are not beats: they set no interval and no rate.
 //!
 //! **Electronic shifting**, two channels as stock opens them (BOARD.md 11):
 //! - [`Kind::Shifting`], the public ANT+ Shifting profile (device type 34, 4 Hz; SRAM AXS, Campagnolo, any system
@@ -108,6 +112,11 @@ impl Kind {
     /// Its name in the sensors menu.
     pub fn name(self) -> &'static str {
         ["HEART RATE", "SPEED", "CADENCE", "SPEED+CAD", "POWER", "SHIFTING", "DI2", "TRAINER"][self as usize]
+    }
+
+    /// Its short name: the panel's sensor lines, and after a maker's name in the sensors menu.
+    pub fn short(self) -> &'static str {
+        ["HR", "SPEED", "CAD", "SPD+CAD", "POWER", "SHIFT", "DI2", "TRAIN"][self as usize]
     }
 
     /// The RTC backup register that keeps the paired sensor (none of them is used by stock, BOARD.md 8). The two
@@ -205,6 +214,42 @@ pub fn bt_from_sector(s: &[u8; 512]) -> Option<([u8; 7], bool)> {
     addr.copy_from_slice(&s[11..18]);
     (matches!(s[10], b'B' | b'F') && s[18..20] == crate::fit::crc(0, &s[10..18]).to_le_bytes())
         .then_some((addr, s[10] == b'F'))
+}
+
+/// The short name of an ANT+ manufacturer id (common page 80), for the common makers only: the ids are the manufacturer
+/// type of Garmin's FIT SDK profile (garmin/fit-python-sdk, `garmin_fit_sdk/profile.py`, checked 2026-10-30): 1 garmin,
+/// 6 srm, 7 quarq, 9 saris, 32 wahoo_fitness, 41 shimano, 51 4iiiis, 69 stages_cycling, 70 sigmasport, 107 magene,
+/// 112 bryton_sensors, 115 igpsport, 123 polar_electro, 134 sigeyi, 135 coospo, 140 decathlon_byte, 263
+/// favero_electronics, 267 bryton, 268 sram, 310 decathlon. Any other id reads as no name, and the menu keeps the
+/// device type.
+///
+/// ```
+/// assert_eq!(bryton_rustfw::sensors::maker_name(123), Some("POLAR"));
+/// assert_eq!(bryton_rustfw::sensors::maker_name(2), None);
+/// ```
+pub fn maker_name(id: u16) -> Option<&'static str> {
+    Some(match id {
+        1 => "GARMIN",
+        6 => "SRM",
+        7 => "QUARQ",
+        9 => "SARIS",
+        32 => "WAHOO",
+        41 => "SHIMANO",
+        51 => "4IIII",
+        69 => "STAGES",
+        70 => "SIGMA",
+        107 => "MAGENE",
+        112 => "BRYTON",
+        115 => "IGPSPORT",
+        123 => "POLAR",
+        134 => "SIGEYI",
+        135 => "COOSPO",
+        140 | 310 => "DECATH",
+        263 => "FAVERO",
+        267 => "BRYTON",
+        268 => "SRAM",
+        _ => return None,
+    })
 }
 
 /// What a ride page can show from the sensors.
@@ -405,6 +450,10 @@ pub struct Decoders {
     battery: [u8; 16],
     /// The last battery status each kind sent (common page 82; 0: not heard), what the quick panel shows.
     status: [u8; Kind::ALL.len()],
+    /// The strap's battery in percent (page 7), per kind (only the heart rate sends it).
+    percent: [Option<u8>; Kind::ALL.len()],
+    /// The manufacturer id each kind sent on common page 80 ([`maker_name`]).
+    maker: [Option<u16>; Kind::ALL.len()],
     /// A shifter button pressed, per side (right, left), for the app to take: the newest of each side since it last
     /// took them, so both buttons changing in one page, or a press on each side in one pass, are both kept.
     pub press: [Option<Press>; 2],
@@ -435,6 +484,22 @@ impl Decoders {
         }
     }
 
+    /// `kind`'s sensor was paired or forgotten: the percent and manufacturer heard from the last one go.
+    pub fn forget_ids(&mut self, kind: Kind) {
+        self.percent[kind as usize] = None;
+        self.maker[kind as usize] = None;
+    }
+
+    /// The heart-rate strap's battery in percent (page 7), if it has sent one.
+    pub fn battery_percent(&self, kind: Kind) -> Option<u8> {
+        self.percent.get(kind as usize).copied().flatten()
+    }
+
+    /// The manufacturer id `kind`'s sensor sent on common page 80, if it has.
+    pub fn maker(&self, kind: Kind) -> Option<u16> {
+        self.maker.get(kind as usize).copied().flatten()
+    }
+
     /// `kind`'s last battery status from page 82: 1 new, 2 good, 3 ok, 4 low, 5 critical; None if never heard
     /// (a Di2 reports a percent in [`Metric::ShiftBattery`] instead).
     pub fn battery_status(&self, kind: Kind) -> Option<u8> {
@@ -443,6 +508,8 @@ impl Decoders {
 
     /// Takes the 8 data bytes of a broadcast from `kind` into `live`.
     pub fn decode(&mut self, kind: Kind, d: [u8; 8], wheel_mm: u16, live: &mut Live) {
+        // the intervals are those of this message only: the caller takes [`Beats::rr`] after every message
+        self.beats.n = 0;
         // common page 82 (0x52), battery status, from any profile (the ANT+ common pages; openant `devices/common.py`
         // reads byte 7 bits 4-6 as the status, bits 0-3 as the coarse voltage, byte 6 the fraction / 256): the
         // status 1 new to 5 critical is kept per kind (6 charging and 7 invalid are not a level). The shifting
@@ -453,14 +520,26 @@ impl Decoders {
         {
             *slot = d[7] >> 4 & 7;
         }
+        // common page 80 (0x50): the manufacturer id in bytes 4-5, 0 and 0xffff are none (openant `common.py`)
+        if d[0] == 0x50 {
+            let m = u16::from_le_bytes([d[4], d[5]]);
+            if let Some(slot) = self.maker.get_mut(kind as usize).filter(|_| m != 0 && m != 0xffff) {
+                *slot = Some(m);
+            }
+        }
         let u16_at = |i: usize| u16::from_le_bytes([d[i], d[i + 1]]);
         let rpm = |r: u32| (r / 100) as u16;
         match kind {
-            // computed heart rate in byte 7; 0 means no reading
+            // common pages carry no beat (bytes 4-7 are no beat time or count): not a rate, not an interval
+            Kind::Hr if d[0] & 0x7f > 7 => {}
+            // computed heart rate in byte 7; 0 means no reading. Page 7: the battery in percent in byte 1
             Kind::Hr => {
                 self.beats.update(d);
                 if d[7] > 0 {
                     live.set(Metric::Hr, u16::from(d[7]));
+                }
+                if d[0] & 0x7f == 7 {
+                    self.percent[kind as usize] = (d[1] <= 100).then_some(d[1]);
                 }
             }
             // every page: event time in bytes 4-5, cumulative count in 6-7
@@ -706,6 +785,53 @@ mod tests {
         assert_eq!((live.get(Metric::Gear), live.get(Metric::ShiftBattery)), (None, None));
         dec.decode(Kind::Di2, [0, 0, 2, 11, 60, 0, 0, 0], 2105, &mut live);
         assert_eq!((live.get(Metric::Gear), live.get(Metric::ShiftBattery)), (Some(0x020b), Some(60)));
+    }
+
+    /// The app's radio path takes [`Beats::rr`] after every message, whatever its kind (app/radio.rs): each beat's
+    /// interval must come out once, however many other broadcasts (the power meter, the strap's common pages)
+    /// follow it. Beats 1024 ticks (1 s) apart with the count, so every interval is 1000 ms; 20 beats, 19 intervals.
+    #[test]
+    fn each_interval_once() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let (mut got, mut n) = ([0u16; 64], 0usize);
+        let mut feed = |dec: &mut Decoders, kind: Kind, d: [u8; 8]| {
+            dec.decode(kind, d, 2105, &mut live);
+            for &rr in dec.beats.rr() {
+                if let Some(slot) = got.get_mut(n) {
+                    *slot = rr;
+                }
+                n += 1;
+            }
+        };
+        for k in 1..=20u16 {
+            let t = k * 1024;
+            feed(&mut dec, Kind::Hr, [0, 0, 0, 0, t as u8, (t >> 8) as u8, k as u8, 70]);
+            feed(&mut dec, Kind::Power, [0x10, 1, 0xff, 85, 0, 0, 0x2c, 0x01]);
+            feed(&mut dec, Kind::Hr, [0x50, 0xff, 0xff, 1, 123, 0, 2, 1]);
+            feed(&mut dec, Kind::Hr, [0x51, 0xff, 0xff, 1, 2, 0, 0, 0]);
+            feed(&mut dec, Kind::Hr, [0x52, 0, 0xff, 0, 0, 0, 0x20, 0x13]);
+        }
+        assert_eq!(n, 19, "one interval per beat after the first");
+        assert!(got[..19].iter().all(|&r| r == 1000), "{:?}", &got[..19]);
+    }
+
+    /// The strap's page 7 (openant `devices/heart_rate.py`: the battery percent in byte 1, toggled or not) and common
+    /// page 80 (the manufacturer id in bytes 4-5, `devices/common.py`), and what they give; a common page is no beat.
+    #[test]
+    fn strap_battery_and_maker_pages() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        dec.decode(Kind::Hr, [0x87, 87, 0x40, 0x42, 0, 0, 0, 72], 2105, &mut live);
+        assert_eq!(dec.battery_percent(Kind::Hr), Some(87));
+        dec.decode(Kind::Hr, [7, 101, 0, 0, 0, 0, 0, 0], 2105, &mut live);
+        assert_eq!(dec.battery_percent(Kind::Hr), None, "above 100: none");
+        dec.decode(Kind::Hr, [0x50, 0xff, 0xff, 1, 123, 0, 2, 1], 2105, &mut live);
+        assert_eq!(dec.maker(Kind::Hr).and_then(maker_name), Some("POLAR"));
+        dec.decode(Kind::Speed, [0x50, 0xff, 0xff, 1, 0xff, 0xff, 2, 1], 2105, &mut live);
+        assert_eq!(dec.maker(Kind::Speed), None, "0xffff: none");
+        assert_eq!(live.get(Metric::Hr), Some(72), "the common pages set no rate");
+        dec.forget_ids(Kind::Hr);
+        assert_eq!((dec.battery_percent(Kind::Hr), dec.maker(Kind::Hr)), (None, None));
+        assert_eq!((maker_name(1), maker_name(2)), (Some("GARMIN"), None));
     }
 
     #[test]

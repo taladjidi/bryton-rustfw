@@ -417,11 +417,17 @@ impl App {
             }
             Field::PowerBatt | Field::HrBatt => {
                 let kind = if f == Field::PowerBatt { sensors::Kind::Power } else { sensors::Kind::Hr };
-                match self.decoders.battery_status(kind) {
-                    Some(s) => l.push_str(
-                        ["?", "NEW", "GOOD", "OK", "LOW", "CRIT"].get(usize::from(s)).copied().unwrap_or("?"),
-                    ),
-                    None => l.push_str("--"),
+                // the strap's percent (page 7) when it sends one, else the page 82 status
+                if let Some(p) = self.decoders.battery_percent(kind) {
+                    l.push_u32(u32::from(p));
+                    l.push_str("%");
+                } else {
+                    match self.decoders.battery_status(kind) {
+                        Some(s) => l.push_str(
+                            ["?", "NEW", "GOOD", "OK", "LOW", "CRIT"].get(usize::from(s)).copied().unwrap_or("?"),
+                        ),
+                        None => l.push_str("--"),
+                    }
                 }
                 return l;
             }

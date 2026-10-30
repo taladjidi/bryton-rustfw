@@ -308,3 +308,36 @@ fn power_high_alert_shows_the_banner() {
     assert!(sim.tones.len() > t0, "the beeps");
     sim.save("alert_power_high");
 }
+
+/// A strap that sends its battery (page 7: 87 %) and its maker (common page 80: POLAR) between its beats.
+fn strap_pages(t: u64) -> [u8; 8] {
+    match t / 250 % 4 {
+        1 => [0x87, 87, 0x40, 0x42, 0, 0, 0, 0],
+        2 => [0x50, 0xff, 0xff, 1, 123, 0, 2, 1],
+        _ => [0, 0, 0, 0, 0, 0, 0, 72],
+    }
+}
+
+/// The strap's battery in percent and its maker, from its pages: the HR BATT field shows the percent, and the
+/// SENSORS row names the maker (its device number is the value), which the screen shows.
+#[test]
+fn strap_name_and_battery() {
+    const STRAP: SensorId = SensorId { device: 9, trans: 1 };
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.own_settings();
+    sim.backup[Kind::Hr.backup()] = Kind::Hr.to_word(STRAP);
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 9, data: strap_pages, network: 0, ack: &[] });
+    let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8]));
+    run(&mut sim, &mut app, 5000);
+    assert_eq!((app.decoders.maker(Kind::Hr), app.decoders.battery_percent(Kind::Hr)), (Some(123), Some(87)));
+    assert_eq!(app.field_text(crate::ui::Field::HrBatt).as_str(), "87%");
+    let i = super::tests::row_in(&app, Menu::Sensors, crate::menu::Row::Sensor(Kind::Hr as usize));
+    let (label, value, _) = app.menu_row(Menu::Sensors, i).unwrap();
+    assert_eq!((label.as_str(), value.as_str()), ("POLAR HR", "9"));
+    run(&mut sim, &mut app, 4000);
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, crate::menu::Row::Open(Menu::Sensors));
+    app.press(&mut sim, Press::Short(Key::Start));
+    sim.save("sensors_names");
+}

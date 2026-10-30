@@ -126,9 +126,9 @@ Others
 - [x] ANT+ speed, cadence, speed and cadence (stock, all): sim
 - [x] ANT+ power (stock, all): sim
 - [~] Power meter calibration: zero offset, auto zero (stock, Garmin, Wahoo, Karoo): sim; not yet seen on the unit
-- [~] Sensor pairing menu: pair, forget (stock, all): unit; one sensor per kind, no names
+- [~] Sensor pairing menu: pair, forget (stock, all): unit; one sensor per kind; the maker's short name in the row (ANT+ common page 80): sim
 - [ ] Sensor pool: several of a kind, switch when another is found (stock, Garmin)
-- [~] Sensor battery levels (ANT+ common page, stock, all): sim; heart rate page 7 not decoded; not seen on the unit
+- [~] Sensor battery levels (ANT+ common page, stock, all): sim; the heart rate strap's percent (page 7) on HR BATT too; not seen on the unit
 - [ ] BLE heart rate, speed and cadence, power (stock, all)
 - [~] BLE scan of nearby devices with signal strength and kind (ours): unit; no connection yet
 - [ ] ANT+ radar (Garmin, Wahoo, Karoo, Coros): vehicles beside the page, threat colours
