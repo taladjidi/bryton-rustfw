@@ -499,12 +499,12 @@ impl App {
             }
             recorder::Outcome::Saved(_) => {
                 self.notice("RIDE SAVED");
+                self.settings_store.done(true);
                 if !recovering {
                     // this run's ride, read back whole and named in \Activities: its segment efforts may be written
                     // (app/segments.rs, once both copies are done); never an earlier run's ride the boot saved
                     self.segments_ride_saved();
                 }
-                self.settings_store.done(true);
                 if let Some(t) = self.thresholds.as_deref_mut() {
                     t.reset(); // its full copy read too, when FITNESS next shows
                 }
