@@ -245,6 +245,9 @@ impl App {
 
     /// Opens screen `s` over this one: Back returns here.
     pub(crate) fn open(&mut self, s: Screen) {
+        if s != Screen::Status {
+            self.drop_status(); // a card or menu over QUICK STATUS replaces it: it does not return after
+        }
         if let Some(u) = self.under.get_mut(self.depth) {
             *u = self.screen;
             self.depth += 1;
@@ -358,6 +361,16 @@ impl App {
             }
             _ => None,
         };
+        // a tap that cleared a banner only clears it (a field's own tap above still acts): it must not open QUICK STATUS
+        if cleared
+            && let (Screen::Ride(n), Input::Touch(Gesture::Tap(x, y))) = (self.screen, i)
+            && n < PAGES
+            && self.quick_at(x, y)
+            && !self.wkt_avg_at(x, y)
+            && !self.trainer_field_at(x, y)
+        {
+            return;
+        }
         let call = call_choice(i);
         match (self.screen, i) {
             // during a ride (or on its card), a first hold only warns: switching off ends the riding (the recorder

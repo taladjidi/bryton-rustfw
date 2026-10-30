@@ -381,6 +381,42 @@ fn page_leaves_the_round_at_the_finish_and_at_a_loss() {
     assert!(events(&app).contains(&Event::Lost(ID)));
 }
 
+/// QUICK STATUS up at the segment's start and at its finish: the CLIMB page opens over it, and the card comes over the
+/// page it was on, not over QUICK STATUS (which does not return after either).
+#[test]
+fn page_and_card_over_quick_status() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(faster);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 7000);
+    super::status_tests::open_by_tap(&mut sim, &mut app);
+    let mut t = 0;
+    while app.screen() == Screen::Status && t < 120 {
+        super::status_tests::keep_up(&mut sim, &mut app);
+        run(&mut sim, &mut app, 1000);
+        t += 1;
+    }
+    assert_eq!(app.screen(), Screen::Ride(CLIMB), "the page opened over QUICK STATUS");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert!(matches!(app.screen(), Screen::Ride(n) if n != CLIMB), "{:?}", app.screen());
+    super::status_tests::open_by_tap(&mut sim, &mut app);
+    let mut t = 0;
+    while app.screen() == Screen::Status && t < 200 {
+        super::status_tests::keep_up(&mut sim, &mut app);
+        run(&mut sim, &mut app, 1000);
+        t += 1;
+    }
+    assert_eq!(app.screen(), Screen::SegmentResult, "the card over the page");
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 500);
+    assert!(matches!(app.screen(), Screen::Ride(n) if n != CLIMB), "{:?}", app.screen());
+}
+
 /// A menu up at the start: not opened over it for this segment, but the page is in the round.
 #[test]
 fn page_not_over_a_menu() {

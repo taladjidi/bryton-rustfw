@@ -5116,3 +5116,40 @@ fn settings_file_sunset_byte() {
     }
     assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
 }
+
+/// QUICK STATUS (settings.bin bytes 156 to 162, after SUNSET ALERT): any length from 150 to 169, the flag byte 0, 1 or
+/// wild and each field byte in range or 108 and over. The flag reads as the other flags do (wild: the default ON), a
+/// field is `Field::ALL[v]` or its default when the file is cut before it or the byte is out of range. The fuzz reaches
+/// in-range and wild fields, a wild flag and files cut before the flag and inside the fields.
+#[test]
+fn settings_file_quick_status_bytes() {
+    use crate::{QUICK_FIELDS, SettingsCopy, ui::Field};
+    let mut next = xorshift(0x9c1a);
+    let (mut good, mut wild, mut wild_flag, mut cut) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 150 + (next() % 20) as usize;
+        let flag = [0u8, 1, 2 + (next() % 200) as u8][(next() % 3) as usize];
+        let mut bytes = [0u8; 6];
+        for b in bytes.iter_mut() {
+            *b = if next() % 3 == 0 { 108 + (next() % 100) as u8 } else { (next() % 108) as u8 };
+        }
+        sec[28 + 156] = flag;
+        sec[28 + 157..28 + 163].copy_from_slice(&bytes);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let want_flag = if len > 156 && flag < 2 { flag == 1 } else { true };
+        assert_eq!(st.quick_status, want_flag, "len {len}, flag {flag}");
+        for (k, &b) in bytes.iter().enumerate() {
+            let want = if len > 157 + k { Field::ALL.get(usize::from(b)).copied() } else { None };
+            assert_eq!(st.quick_page.fields[k], want.unwrap_or(QUICK_FIELDS[k]), "len {len}, field {k} byte {b}");
+            good += u32::from(want.is_some());
+            wild += u32::from(len > 157 + k && want.is_none());
+        }
+        wild_flag += u32::from(len > 156 && flag >= 2);
+        cut += u32::from(len <= 156 || len < 163);
+    }
+    assert!(good > 1000 && wild > 1000 && wild_flag > 1000 && cut > 1000, "{good} {wild} {wild_flag} {cut}");
+}

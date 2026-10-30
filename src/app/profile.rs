@@ -203,6 +203,7 @@ impl App {
             && match self.screen {
                 Screen::Main => true,
                 Screen::Ride(p) => p != CLIMB,
+                Screen::Status => true, // over a ride page of the rider's: dropped below
                 _ => false,
             };
         let ready = self.ride.state() == ride::State::Running && !self.touch.down() && !self.keys.any_down();
@@ -239,6 +240,7 @@ impl App {
             }
         }
         if open {
+            self.drop_status();
             self.screen = Screen::Ride(CLIMB);
             self.show(b);
         }
