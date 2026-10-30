@@ -763,6 +763,35 @@ fn climb_page_opens_at_the_start() {
     }
 }
 
+/// QUICK STATUS up when the climb starts: the CLIMB page still opens (Status dropped from the stack, not under it).
+#[test]
+fn climb_page_opens_over_quick_status() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::route::tests::image_with_map();
+    sim.gnss.route = Some(ahead_route);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.ms;
+    while !app.page_on(crate::CLIMB) && sim.ms - t0 < 300_000 {
+        run(&mut sim, &mut app, 500);
+    }
+    assert_eq!(app.screen(), Screen::Ride(0), "the warning does not move the screen");
+    app.open_status(&mut sim);
+    while app.screen() == Screen::Status && sim.ms - t0 < 300_000 {
+        super::status_tests::keep_up(&mut sim, &mut app); // an input every few seconds: it stays up till the climb
+        run(&mut sim, &mut app, 500);
+    }
+    assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened over QUICK STATUS");
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert_ne!(app.screen(), Screen::Status, "QUICK STATUS is not under it");
+}
+
 /// A fresh unit has climbs ahead on, and so does a word written before the setting (tags 0xa7 to 0xa9).
 #[test]
 fn climbs_ahead_default_on() {

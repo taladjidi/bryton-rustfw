@@ -1373,6 +1373,7 @@ fn menu_touch_and_keys() {
     use super::*;
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
+    let mut status = (0, 0); // QUICK STATUS opened by a tap on a ride page, left by an input
     let (mut locks, mut locked_touches) = (0, 0);
     let mut reach = [0usize; 6]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif, a tap on POWER
     let mut arms = [0usize; 6]; // and an arm taken there: left, asked, left, left, scrolled, ZERO armed or asked
@@ -1516,7 +1517,12 @@ fn menu_touch_and_keys() {
                 _ => {}
             }
             locks += u32::from(i == Input::TouchLock);
-            let same = app.screen() == before && app.pages == pages && app.graph_whole == whole;
+            let opened = matches!(before, Screen::Ride(_)) && app.screen() == Screen::Status;
+            status.0 += u32::from(opened);
+            status.1 += u32::from(before == Screen::Status && app.screen() != Screen::Status);
+            // QUICK STATUS only reads: the pages as they were; and it opens on a tap (never a key), under no lock
+            assert!(!opened || matches!(i, Input::Touch(Gesture::Tap(..))) && app.settings.touch && !was_locked);
+            let same = (app.screen() == before || opened) && app.pages == pages && app.graph_whole == whole;
             if let Input::Touch(g) = i {
                 if was_locked {
                     assert!(same, "locked: {g:?} did something");
@@ -1605,6 +1611,8 @@ fn menu_touch_and_keys() {
     assert!(locks > 30 && locked_touches > 30, "the lock reached: {locks} toggles, {locked_touches} touches");
     assert!(selects > 50 && acts > 20 && backs > 20 && asks > 10, "{selects} {acts} {backs} {asks}");
     assert!(off > 50 && riding > 5, "touch off {off}, taps and holds while recording {riding}");
+    std::println!("QUICK STATUS: opened {}, left {}", status.0, status.1);
+    assert!(status.0 > 5 && status.1 > 5, "QUICK STATUS reached: opened {}, left {}", status.0, status.1);
 }
 
 /// Keys and taps by chance through the whole menu tree (UI review steps 6 and 8), a ride started and ended, workouts
@@ -5109,6 +5117,43 @@ fn settings_file_sunset_byte() {
     assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
 }
 
+/// QUICK STATUS (settings.bin bytes 158 to 164, after the Di2 teeth): any length from 150 to 169, the flag byte 0, 1 or
+/// wild and each field byte in range or 108 and over. The flag reads as the other flags do (wild: the default ON), a
+/// field is `Field::ALL[v]` or its default when the file is cut before it or the byte is out of range. The fuzz reaches
+/// in-range and wild fields, a wild flag and files cut before the flag and inside the fields.
+#[test]
+fn settings_file_quick_status_bytes() {
+    use crate::{QUICK_FIELDS, SettingsCopy, ui::Field};
+    let mut next = xorshift(0x9c1a);
+    let (mut good, mut wild, mut wild_flag, mut cut) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 150 + (next() % 20) as usize;
+        let flag = [0u8, 1, 2 + (next() % 200) as u8][(next() % 3) as usize];
+        let mut bytes = [0u8; 6];
+        for b in bytes.iter_mut() {
+            *b = if next().is_multiple_of(3) { 108 + (next() % 100) as u8 } else { (next() % 108) as u8 };
+        }
+        sec[28 + 158] = flag;
+        sec[28 + 159..28 + 165].copy_from_slice(&bytes);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let want_flag = if len > 158 && flag < 2 { flag == 1 } else { true };
+        assert_eq!(st.quick_status, want_flag, "len {len}, flag {flag}");
+        for (k, &b) in bytes.iter().enumerate() {
+            let want = if len > 159 + k { Field::ALL.get(usize::from(b)).copied() } else { None };
+            assert_eq!(st.quick_page.fields[k], want.unwrap_or(QUICK_FIELDS[k]), "len {len}, field {k} byte {b}");
+            good += u32::from(want.is_some());
+            wild += u32::from(len > 159 + k && want.is_none());
+        }
+        wild_flag += u32::from(len > 158 && flag >= 2);
+        cut += u32::from(len <= 158 || len < 165);
+    }
+    assert!(good > 1000 && wild > 1000 && wild_flag > 1000 && cut > 1000, "{good} {wild} {wild_flag} {cut}");
+}
+
 /// CHAINRINGS and CASSETTE (settings.bin bytes 156 and 157): any length from 155 to 159 and any bytes read as the
 /// module doc says (in range is the choice, anything else or a cut file OFF). Reaches both, a wild byte, a cut file.
 #[test]
@@ -5173,4 +5218,4 @@ fn settings_file_time_zone_bytes() {
 }
 
 /// Where TIME ZONE is in the settings data.
-const TZ_AT: usize = 158;
+const TZ_AT: usize = 165;

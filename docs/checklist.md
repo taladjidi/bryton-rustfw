@@ -24,7 +24,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [~] Rename pages (Garmin): sim, four characters
 - [ ] Field size follows the box, wide boxes show more (Garmin, Karoo)
 - [x] Banners over any page for a few seconds (stock, Garmin): sim
-- [~] Quick Status panel (stock): sim; a swipe-down panel, no chosen fields
+- [~] Quick Status panel (stock): sim; a swipe-down panel, and a tap on a field opens six chosen fields
 - [x] Ride summary at the end (stock, Garmin, Wahoo, Karoo): sim
 - [x] Lap summary banner (Garmin, Wahoo): sim
 - [x] Day and night colour modes (stock, Garmin); themes DARK, OUTDOOR and LIGHT and theme files on the card are in (ours), and THEME AUTO switches them from the light: sim
@@ -323,7 +323,7 @@ Touch and buttons
 - [x] Four keys: Page, Lap, Start, Back, with holds (stock): unit
 - [x] Touch: swipe between pages, hold for the menu, tap a menu row (stock): sim
 - [~] Swipe up from the bottom to go home (stock): sim, on a ride page after MORE
-- [ ] Tap a field to open Quick Status (stock)
+- [x] Tap a field to open Quick Status (stock): sim (PAGES > QUICK STATUS, QUICK FIELDS; Back, tap or 10 s closes)
 - [ ] Long press a field to change it (stock, Garmin, Karoo)
 - [ ] Pinch to zoom the map (Wahoo, Garmin)
 - [ ] Digital dial (Coros): no such hardware

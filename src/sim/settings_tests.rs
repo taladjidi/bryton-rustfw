@@ -673,3 +673,55 @@ fn time_zone_with_eu_summer_time_moves_the_strip_at_the_change() {
         assert!(ui::LABEL.width("ZONE") <= ui::menu_label_w("ZONE", &edited), "{edited}");
     }
 }
+
+/// The unit at 2026-10-25 00:59 UTC on an RTC kept on UTC (an offset of 0 learnt), ZONE +1 and SUMMER TIME EU.
+fn on_utc_with_eu_zone() -> (Sim, App) {
+    let mut sim = Sim::new(48, 59, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    app.gps.aid.offset_15min = Some(0);
+    (app.settings.tz, app.settings.dst) = (crate::TZ_UTC + 4, crate::Dst::Eu);
+    run(&mut sim, &mut app, 1000);
+    (sim, app)
+}
+
+/// `now_s` (a calibration's age, the quick panel's ZERO window) stays on the RTC through a DST change with a ZONE: one
+/// a second while the strip goes back an hour, so a calibration made before the change is judged by its true age (it
+/// read as made in the future, never fresh, when `now_s` followed the shown clock).
+#[test]
+fn now_s_stays_on_the_rtc_through_a_dst_change() {
+    let (mut sim, mut app) = on_utc_with_eu_zone();
+    assert_eq!(app.strip.time, (2, 59), "summer: UTC + 2 h");
+    let t0 = app.now_s();
+    let cal = crate::altitude::Cal { p0: 101_325, when_s: t0, by: crate::altitude::By::Typed };
+    let mut last = t0;
+    for k in 1..=120 {
+        run(&mut sim, &mut app, 1000);
+        let now = app.now_s();
+        assert_eq!(now, last + 1, "second {k}");
+        last = now;
+    }
+    assert_eq!(app.strip.time, (2, 1), "winter: UTC + 1 h");
+    assert_eq!(last - cal.when_s, 120);
+    assert!(cal.fresh(last), "two minutes old");
+}
+
+/// With a ZONE but no offset learnt the strip is the RTC's; an offset at the end of its range (i8::MIN quarter hours)
+/// moves nothing it should not: the FIT times go on one a second.
+#[test]
+fn a_zone_without_an_offset_or_with_a_wild_one() {
+    let (mut sim, mut app) = on_utc_with_eu_zone();
+    app.gps.aid.offset_15min = None;
+    run(&mut sim, &mut app, 1000);
+    let (h, m, _) = crate::rtc_time_from_tr(sim.rtc().0);
+    assert_eq!(app.strip.time, (h, m), "no offset: the RTC as is");
+    app.gps.aid.offset_15min = Some(i8::MIN);
+    run(&mut sim, &mut app, 1000);
+    let mut fit = Vec::new();
+    for _ in 0..3 {
+        run(&mut sim, &mut app, 1000);
+        fit.push(app.rec_time().1);
+    }
+    assert!(fit.windows(2).all(|p| p[1] == p[0] + 1), "{fit:?}");
+}

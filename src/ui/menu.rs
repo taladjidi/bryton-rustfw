@@ -126,6 +126,8 @@ pub enum Setting {
     ClimbsMedium,
     /// CLIMB PAGE (BIKE): the climb page is on or off (off, it is skipped in the paging).
     ClimbPage,
+    /// QUICK STATUS (PAGES): a tap on a plain field of a ride page opens the overlay, on or off.
+    QuickStatus,
     /// DATE FORMAT (DISPLAY): D/M/Y, M/D/Y or Y-M-D.
     DateFormat,
     /// ZONE (DISPLAY), the time zone: CLOCK (the RTC shown as is) or a zone, UTC - 12:00 to + 14:00 in quarter hours (a number,
@@ -293,6 +295,7 @@ impl Setting {
             Setting::ClimbsAhead => "CLIMBS AHEAD",
             Setting::ClimbsMedium => "CLIMBS",
             Setting::ClimbPage => "CLIMB PAGE",
+            Setting::QuickStatus => "QUICK STATUS",
             Setting::DateFormat => "DATE FORMAT",
             Setting::TimeZone => "ZONE",
             Setting::DaylightSaving => "SUMMER TIME",
@@ -568,6 +571,7 @@ impl Row {
         Some(match self {
             Row::Open(Menu::Main) => "ALL SETTINGS",
             Row::Open(Menu::Page(crate::OVERVIEW)) => "OVERVIEW",
+            Row::Open(Menu::Page(crate::QUICK)) => "QUICK FIELDS",
             Row::Open(Menu::Page(_)) => return None,
             Row::Open(m) => crate::menu_title(m),
             Row::Empty(text) => text,

@@ -158,6 +158,10 @@ pub fn standby_flags_word(rsr: u32, cpucr: u32) -> u32 {
 /// The page the editor works on (its copy, kept or dropped when it is left): the field picker's page number then.
 pub const EDITED: usize = PAGES + 4;
 
+/// QUICK STATUS's page ([`Screen::Status`]): a fixed 2 x 3 layout whose six fields the rider picks (the picker's page
+/// number then); kept in settings.bin, not in `pages.bin`.
+pub const QUICK: usize = PAGES + 5;
+
 // Each screen's page is its own index: a clash sends one screen's boxes to another's (the editor drew the workout page's).
 const _: () = assert!(
     OVERVIEW != COURSE
@@ -170,6 +174,11 @@ const _: () = assert!(
         && WORKOUT != CLIMB
         && WORKOUT != EDITED
         && CLIMB != EDITED
+        && QUICK != OVERVIEW
+        && QUICK != COURSE
+        && QUICK != WORKOUT
+        && QUICK != CLIMB
+        && QUICK != EDITED
 );
 
 /// The backup registers of the first ride pages and the overview, two each ([`PageCfg::to_words`]).
@@ -335,6 +344,12 @@ pub struct Settings {
     pub chainrings: usize,
     /// CASSETTE: an index into [`CASSETTES`] (0: OFF); settings.bin only.
     pub cassette: usize,
+    /// QUICK STATUS (PAGES): a tap on a plain field of a ride page opens the overlay (data 156); ON in a file that
+    /// predates it.
+    pub quick_status: bool,
+    /// The overlay's page: layout 6 (2 x 3) and its six fields (data 157 to 162); [`QUICK_FIELDS`] in a file that
+    /// predates it.
+    pub quick_page: Page,
     /// CLIMBS (BIKE): the climbs ahead are MEDIUM+ (category 3 and harder, a score of 16000 or more) or all of them
     /// (data 152); ALL in a file that predates it.
     pub climbs_medium: bool,
@@ -614,6 +629,8 @@ impl Settings {
             sunset_alert: 0,
             chainrings: 0,
             cassette: 0,
+            quick_status: true,
+            quick_page: quick_page(QUICK_FIELDS),
             climbs_medium: false,
             climb_page: true,
             date_fmt: DateFormat::Dmy,
@@ -902,6 +919,7 @@ impl Settings {
             },
             Setting::ClimbsMedium => l.push_str(if self.climbs_medium { "MEDIUM+" } else { "ALL" }),
             Setting::ClimbPage => l.push_str(if self.climb_page { "ON" } else { "OFF" }),
+            Setting::QuickStatus => l.push_str(if self.quick_status { "ON" } else { "OFF" }),
             Setting::DateFormat => l.push_str(match self.date_fmt {
                 DateFormat::Dmy => "D/M/Y",
                 DateFormat::Mdy => "M/D/Y",
@@ -1053,6 +1071,7 @@ impl Settings {
             Setting::StartReminder => self.start_reminder = !self.start_reminder,
             Setting::ClimbsMedium => self.climbs_medium = !self.climbs_medium,
             Setting::ClimbPage => self.climb_page = !self.climb_page,
+            Setting::QuickStatus => self.quick_status = !self.quick_status,
             Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
             Setting::DaylightSaving => self.dst = self.dst.next(),
             Setting::ReadyCheck => self.ready_check = !self.ready_check,
@@ -1355,6 +1374,17 @@ pub(crate) fn register_words(pages: &[Page], count: usize) -> [u32; 2 * REG_PAGE
         out.copy_from_slice(&c.to_words());
     }
     w
+}
+
+/// QUICK STATUS's default fields: what a rider glances for that the pages seldom show.
+pub const QUICK_FIELDS: [Field; 6] =
+    [Field::Hr, Field::Power, Field::AvgSpeed, Field::Ascent, Field::Kcal, Field::Time];
+
+/// QUICK STATUS's page with these fields: layout 6, 2 x 3 (a layout that failed would be [`BLANK`]).
+pub fn quick_page(f: [Field; 6]) -> Page {
+    let mut fields = [Field::Time; page::CELLS];
+    fields[..6].copy_from_slice(&f);
+    Page::preset(6, fields).unwrap_or(BLANK)
 }
 
 /// A page of one cell showing the time: what a page that cannot be read becomes.

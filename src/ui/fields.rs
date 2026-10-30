@@ -500,7 +500,7 @@ impl Field {
             ("YEAR KM", "YEAR MI"),
             ("TOTAL KM", "TOTAL MI"),
             ("MAX ALT M", "MAX ALT FT"),
-            ("DESCENT M", "DESCENT FT"),
+            ("DESCENT M", "DESC FT"),
             ("LAP ASC M", "LAP ASC FT"),
             ("LAP DSC M", "LAP DSC FT"),
             ("UP KM", "UP MI"),

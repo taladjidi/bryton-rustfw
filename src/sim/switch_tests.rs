@@ -182,6 +182,7 @@ fn auto_scroll_turns_pages_by_itself() {
     app.show(&mut sim);
     run(&mut sim, &mut app, 4_500);
     assert_eq!(app.screen(), Screen::Ride(0));
+    app.settings.quick_status = false; // a tap on a plain field would open QUICK STATUS
     // a touch starts the count again
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, 200)));
     run(&mut sim, &mut app, 4_500);
