@@ -115,7 +115,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
   the planned workout; the scan's results written by critical;
 - courses: reverse, navigate to the start, the way back drawn, retrace along the ride's own track, turn cues from
   stock's `voiceTrip.fit`, POIs and peaks along a course where the map has them;
-- the map: north up or heading up, pinch to zoom; our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
+- the map: ~~north up or heading up, pinch to zoom~~ done, sim (features.md, Map); our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
 - field sizes that follow the box, ring and bar gauges;
 - ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
 - torque effectiveness and pedal smoothness (page 0x13), torque pages; climbs: completed climbs listed with their

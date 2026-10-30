@@ -92,6 +92,8 @@ pub struct TouchChip {
     /// When the reset was released (None: held in reset, or never released).
     run_since: Option<u64>,
     finger: FingerScript,
+    /// A second finger, for a pinch.
+    finger2: FingerScript,
     /// Point reads so far (the app reads only while a finger is down).
     pub reads: u32,
 }
@@ -111,6 +113,9 @@ impl TouchChip {
         regs[0x3f] = 2;
         if let Some((x, y)) = (self.finger)(ms).filter(|_| self.ready(ms)) {
             regs[0x12..0x15].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
+        }
+        if let Some((x, y)) = (self.finger2)(ms).filter(|_| self.ready(ms)) {
+            regs[0x16..0x19].copy_from_slice(&[0x80 | (x >> 4 & 0x70) as u8 | (y >> 8 & 7) as u8, x as u8, y as u8]);
         }
         if reg == 0x12 {
             self.reads += 1;
@@ -1192,7 +1197,7 @@ impl Sim {
                 baro_conversions: 0,
                 accel_ctrl1: 0x77,
             },
-            touch: TouchChip { run_since: None, finger: Box::new(|_| None), reads: 0 },
+            touch: TouchChip { run_since: None, finger: Box::new(|_| None), finger2: Box::new(|_| None), reads: 0 },
             work_ns_per_byte: 0,
             awake_ns: 0,
             cycles: 0,
@@ -1204,6 +1209,12 @@ impl Sim {
     /// The finger on the touch panel as a function of the simulated time in ms (None: lifted).
     pub fn finger(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
         self.touch.finger = Box::new(f);
+        self
+    }
+
+    /// A second finger on the touch panel, as [`Sim::finger`].
+    pub fn finger2(mut self, f: impl Fn(u64) -> Option<(u16, u16)> + 'static) -> Self {
+        self.touch.finger2 = Box::new(f);
         self
     }
 

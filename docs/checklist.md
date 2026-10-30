@@ -179,7 +179,8 @@ Others
 - [x] Track since power-on on a map, heading arrow, fitted view, scale bar (stock, all): unit
 - [x] Last known position before a fix (ours): unit
 - [~] Basemap: roads and water from stock's tile cache (stock, all): sim with real tiles; not seen on the unit
-- [~] Map zoom and pan by touch (stock, all): sim; no pinch
+- [~] Map zoom and pan by touch (stock, all): sim; pinch to zoom in the driver (two fingers not seen on the unit)
+- [~] Map heading up or north up (Garmin, Wahoo): sim (DISPLAY > MAP; turned basemap, track, arrow, north arrow)
 - [ ] North up, heading up (stock, all)
 - [~] IGN Plan v2 maps from packs made on the computer, "(c) IGN" on the map (ours): sim; not seen on the unit
 - [ ] Our own OpenStreetMap packs over USB (all have region maps)

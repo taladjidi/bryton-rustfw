@@ -51,7 +51,7 @@
 use crate::fat::{self, Disk, Fat, File, Seek};
 use crate::fonts::PIXEL;
 use crate::ign;
-use crate::map::{Rect, View, cos_q16};
+use crate::map::{Rect, View, cos_q16, rot_cs};
 use crate::text::{self, Align, Line};
 use crate::ui::{self, Canvas};
 
@@ -599,6 +599,9 @@ impl Ign {
 /// Draws IGN tile `tile` (256 x 256 RGB565) at `p` into the area's pixels, each pixel the tile's pixel under its
 /// centre (nearest, 0.78x to 2x: [`RASTER_PX`]); the pixels written.
 fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
+    if p.rot != 0 {
+        return raster_turned(px, w, h, p, tile);
+    }
     // grid unit u lands at (a u + b) >> 16, so pixel s's centre is at u = ((s + 1/2) 2^16 - b) / a, 16 a pixel
     let at = |s: i32, a: i64, b: i64| {
         let t = if a > 0 { ((i64::from(s) << 16) + 0x8000 - b).div_euclid(a * 16) } else { -1 };
@@ -624,6 +627,39 @@ fn raster(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
             *d = src.get(usize::from(c)).copied().unwrap_or(BACKGROUND);
         }
         written += cols.len() as u32;
+    }
+    written
+}
+
+/// [`raster`] with the screen turned ([`Proj::rot`]): each pixel of the tile's turned box is turned back about the
+/// centre (x256) to the plane the tile is laid on, then looked up as there. One division a pixel and axis, in the
+/// box of the tile's four corners only; done once per view (a step of the heading), not per second.
+fn raster_turned(px: &mut [u16], w: i32, h: i32, p: &Proj, tile: &[u16]) -> u32 {
+    let (c, s) = rot_cs(p.rot);
+    let (c, s) = (i64::from(c), i64::from(s));
+    let corners = [(0, 0), (4096, 0), (0, 4096), (4096, 4096)].map(|(u, v)| p.at(u, v));
+    let lo = |f: fn(&(i64, i64)) -> i64| corners.iter().map(f).min().unwrap_or(0);
+    let hi = |f: fn(&(i64, i64)) -> i64| corners.iter().map(f).max().unwrap_or(0);
+    let (x0, x1) = (lo(|p| p.0).clamp(0, i64::from(w)) as i32, (hi(|p| p.0) + 1).clamp(0, i64::from(w)) as i32);
+    let (y0, y1) = (lo(|p| p.1).clamp(0, i64::from(h)) as i32, (hi(|p| p.1) + 1).clamp(0, i64::from(h)) as i32);
+    // the unturned 16.16 coordinate a to the tile's pixel (as in [`raster`]); None outside the tile
+    let at = |t: i64, a: i64, b: i64| {
+        let t = if a > 0 { (t - b).div_euclid(a * 16) } else { -1 };
+        usize::try_from(t).ok().filter(|&t| t < ign::SIDE)
+    };
+    let mut written = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            // the pixel's centre from the area's, in 1/256 pixel: X = c X' - s Y', Y = s X' + c Y'
+            let (rx, ry) = ((i64::from(x) - p.half.0) * 256 + 128, (i64::from(y) - p.half.1) * 256 + 128);
+            let (ux, uy) = (c * rx - s * ry, s * rx + c * ry); // x 65536 pixel: the 16.16 offset
+            let (tx, ty) = (ux + (p.half.0 << 16), uy + (p.half.1 << 16));
+            let (Some(col), Some(row)) = (at(tx, p.ax, p.bx), at(ty, p.ay, p.by)) else { continue };
+            if let (Some(d), Some(&t)) = (px.get_mut((y * w + x) as usize), tile.get(row * ign::SIDE + col)) {
+                *d = t;
+                written += 1;
+            }
+        }
     }
     written
 }
@@ -833,17 +869,30 @@ struct Proj {
     bx: i64,
     ay: i64,
     by: i64,
+    /// The view's [`View::rot`] and the area's centre, pixels: the screen is turned about it after the affine map
+    /// (0: north up, the map above unchanged).
+    rot: u8,
+    half: (i64, i64),
 }
 
 impl Proj {
     fn at(&self, u: u16, v: u16) -> (i64, i64) {
-        ((self.ax * i64::from(u as i16) + self.bx) >> 16, (self.ay * i64::from(v as i16) + self.by) >> 16)
+        let (x, y) = (self.ax * i64::from(u as i16) + self.bx, self.ay * i64::from(v as i16) + self.by);
+        if self.rot == 0 {
+            return (x >> 16, y >> 16);
+        }
+        // turned about the centre in 16.16, as [`View::px`] turns metres: X' = c X + s Y, Y' = c Y - s X
+        let (c, s) = rot_cs(self.rot);
+        let (c, s) = (i64::from(c), i64::from(s));
+        let (rx, ry) = (x - (self.half.0 << 16), y - (self.half.1 << 16));
+        (((c * rx + s * ry) >> 24) + self.half.0, ((c * ry - s * rx) >> 24) + self.half.1)
     }
 
-    /// The tile overlaps the area.
+    /// The tile overlaps the area (the box of its four corners, turned).
     fn on_screen(&self, w: i32, h: i32) -> bool {
-        let (x0, y0) = self.at(0, 0);
-        let (x1, y1) = self.at(4096, 4096);
+        let c = [(0, 0), (4096, 0), (0, 4096), (4096, 4096)].map(|(u, v)| self.at(u, v));
+        let (x0, x1) = (c.iter().map(|p| p.0).min().unwrap_or(0), c.iter().map(|p| p.0).max().unwrap_or(0));
+        let (y0, y1) = (c.iter().map(|p| p.1).min().unwrap_or(0), c.iter().map(|p| p.1).max().unwrap_or(0));
         x0 < i64::from(w) && x1 > 0 && y0 < i64::from(h) && y1 > 0
     }
 }
@@ -864,6 +913,8 @@ struct Frame {
     cx: f64,
     cy: f64,
     half: (f64, f64),
+    /// The view's [`View::rot`].
+    rot: u8,
     /// The zoom whose tiles are drawn about 512 pixels wide (up to 15), and the finest cached one for it.
     display_zoom: u8,
     zoom: u8,
@@ -897,6 +948,7 @@ impl Frame {
             cx: f64::from(view.cx),
             cy: f64::from(view.cy),
             half: (f64::from(w / 2), f64::from(h / 2)),
+            rot: view.rot,
             display_zoom,
             zoom: display_zoom.min(MAX_ZOOM),
             raster_zoom,
@@ -923,7 +975,14 @@ impl Frame {
         let ay = -(bottom - top) / 4096.0 * self.scale;
         let y0 = -(top - self.cy) * self.scale;
         let q = |v: f64| (v * 65_536.0) as i64;
-        Proj { ax: q(ax), bx: q(x0 + self.half.0), ay: q(ay), by: q(y0 + self.half.1) }
+        Proj {
+            ax: q(ax),
+            bx: q(x0 + self.half.0),
+            ay: q(ay),
+            by: q(y0 + self.half.1),
+            rot: self.rot,
+            half: (self.half.0 as i64, self.half.1 as i64),
+        }
     }
 
     /// The tile of zoom `z` under the view's centre.
@@ -1211,7 +1270,7 @@ pub(crate) mod tests {
         for (mpp16, zoom, name) in [(32, 14, "basemap_z14_2m"), (48, 14, "basemap_z14_3m"), (128, 12, "basemap_z12_8m")]
         {
             // centred on the south-west tile's lake and tunnel at zoom 14
-            let v = View { cx: -2000, cy: -700, mpp16 };
+            let v = View { cx: -2000, cy: -700, mpp16, rot: 0 };
             b.render(&mut d, AREA, v, ORIGIN);
             std::println!("{name}: {:?}", b.stats);
             assert_eq!(b.stats.zoom, zoom, "{name}");
@@ -1244,17 +1303,17 @@ pub(crate) mod tests {
             }
         }
         // the same view again: nothing read, nothing drawn
-        let (reads, v) = (d.1, View { cx: -2000, cy: -700, mpp16: 128 });
+        let (reads, v) = (d.1, View { cx: -2000, cy: -700, mpp16: 128, rot: 0 });
         b.render(&mut d, AREA, v, ORIGIN);
         assert_eq!(d.1, reads);
         // a view nearby: the tiles held are not read again
-        b.render(&mut d, AREA, View { cx: -1900, cy: -700, mpp16: 48 }, ORIGIN);
+        b.render(&mut d, AREA, View { cx: -1900, cy: -700, mpp16: 48, rot: 0 }, ORIGIN);
         assert_eq!(b.stats.tiles_read, 0, "held");
         // nowhere near the tiles: NO MAP
-        let far = View { cx: 50_000, cy: 0, mpp16: 48 };
+        let far = View { cx: 50_000, cy: 0, mpp16: 48, rot: 0 };
         b.render(&mut d, AREA, far, ORIGIN);
         assert!(matches!(b.layer(AREA, far, ORIGIN), Layer::NoMap));
-        assert!(matches!(b.layer(AREA, View { cx: 1, cy: 0, mpp16: 48 }, ORIGIN), Layer::None));
+        assert!(matches!(b.layer(AREA, View { cx: 1, cy: 0, mpp16: 48, rot: 0 }, ORIGIN), Layer::None));
     }
 
     /// No volume on the card: NO MAP, and no more tries.
@@ -1262,7 +1321,7 @@ pub(crate) mod tests {
     fn no_volume_no_map() {
         let mut d = Ram(vec![0u8; 4096], 0);
         let mut b = basemap();
-        let v = View { cx: 0, cy: 0, mpp16: 48 };
+        let v = View { cx: 0, cy: 0, mpp16: 48, rot: 0 };
         b.render(&mut d, AREA, v, ORIGIN);
         assert!(matches!(b.layer(AREA, v, ORIGIN), Layer::NoMap));
         let reads = d.1;
@@ -1292,7 +1351,12 @@ pub(crate) mod tests {
         }
         // the tile under a position, as the OSM wiki's formula (made-up places)
         for (lat, lon) in [(-0.0001, 0.0001), (33.3, -100.0), (60.0, 25.5), (-45.1, 170.2)] {
-            let f = Frame::new(View { cx: 0, cy: 0, mpp16: 48 }, ((lat * 1e7) as i32, (lon * 1e7) as i32), 240, 296);
+            let f = Frame::new(
+                View { cx: 0, cy: 0, mpp16: 48, rot: 0 },
+                ((lat * 1e7) as i32, (lon * 1e7) as i32),
+                240,
+                296,
+            );
             for z in [9u8, 12, 14] {
                 let (x, y) = osm_tile(z, lat, lon);
                 assert_eq!(f.centre_tile(z), (x as u32, y as u32), "{lat},{lon} zoom {z}");
@@ -1305,7 +1369,7 @@ pub(crate) mod tests {
     #[test]
     fn tiles_meet_the_track_projection() {
         let origin = (472_345_600, 81_234_500); // 47.23456 N 8.12345 E, made up
-        let v = View { cx: 0, cy: 0, mpp16: 16 }; // 1 m a pixel
+        let v = View { cx: 0, cy: 0, mpp16: 16, rot: 0 }; // 1 m a pixel
         let f = Frame::new(v, origin, 240, 296);
         let (tx, ty) = osm_tile(14, 47.23456, 8.12345);
         let lat = |ty: f64| {
@@ -1360,7 +1424,7 @@ pub(crate) mod tests {
     #[test]
     fn ign_zoom_by_scale() {
         let at45 = (450_000_000, 60_000_000);
-        let z = |mpp16| Frame::new(View { cx: 0, cy: 0, mpp16 }, at45, 240, 296).raster_zoom;
+        let z = |mpp16| Frame::new(View { cx: 0, cy: 0, mpp16, rot: 0 }, at45, 240, 296).raster_zoom;
         assert_eq!([24, 32, 48, 64, 96].map(z), [16, 16, 15, 15, 14]);
     }
 
@@ -1375,6 +1439,39 @@ pub(crate) mod tests {
     }
 
     /// IGN tiles from the synthetic packs: each pixel the synthetic formula's at the tile pixel under it, at 2 m,
+    /// A view turned by a quarter (rot 4, riding east) is the north up view turned about the area's centre: the IGN
+    /// raster's pixels agree (all but the seam of the half pixel), and a 22.5 degree step draws the screen.
+    #[test]
+    fn turned_views_are_the_north_up_view_turned() {
+        let mut d = Ram(image_with_packs(), 0);
+        let mut b = basemap();
+        let v = View { cx: 100, cy: 50, mpp16: 32, rot: 0 };
+        b.render(&mut d, AREA, v, ORIGIN);
+        let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
+        let north = px.to_vec();
+        let turned = View { rot: 4, ..v };
+        b.render(&mut d, AREA, turned, ORIGIN);
+        assert_eq!(b.stats.ign_tiles, 0, "the same tiles, held");
+        let Layer::Map(px) = b.layer(AREA, turned, ORIGIN) else { panic!("no map") };
+        save(px, AREA, "ign_turned_4");
+        let (w, h) = (AREA.2, AREA.3);
+        let (mut same, mut checked) = (0, 0);
+        // rotated pixel (x, y) is north up pixel (120 + 148 - y - 1, 148 + x - 120): the centre is (120, 148)
+        for y in 0..h - 12 {
+            for x in 0..w - 30 {
+                let (ux, uy) = (120 + 148 - y - 1, 148 + x - 120);
+                if (0..w - 30).contains(&ux) && (0..h - 12).contains(&uy) {
+                    checked += 1;
+                    same += u32::from(px[(y * w + x) as usize] == north[(uy * w + ux) as usize]);
+                }
+            }
+        }
+        std::println!("turned ign: {same} of {checked} pixels as the north up view's");
+        assert!(checked > 40_000 && same * 100 >= checked * 99, "{same} of {checked}");
+        b.render(&mut d, AREA, View { rot: 1, ..v }, ORIGIN);
+        assert!(b.stats.px > 40_000, "a 22.5 degree step draws the screen: {}", b.stats.px);
+    }
+
     /// 3 m and 4 m a pixel (zooms 16 at 305 and 204 pixels wide, 15 at 305); "(c) IGN" in the corner; held tiles
     /// not read again; the tile missing from the pack shows stock's map under it.
     #[test]
@@ -1383,7 +1480,7 @@ pub(crate) mod tests {
         let mut b = basemap();
         let h = 1u32 << 15;
         for (mpp16, z, read) in [(32, 16u8, 4), (48, 16, 0), (64, 15, 4)] {
-            let v = View { cx: 100, cy: 50, mpp16 };
+            let v = View { cx: 100, cy: 50, mpp16, rot: 0 };
             let reads = d.1;
             b.render(&mut d, AREA, v, ORIGIN);
             std::println!("ign z{z}: {:?}, {} sector reads", b.stats, d.1 - reads);
@@ -1416,7 +1513,7 @@ pub(crate) mod tests {
             assert_eq!((b.stats.ign_tiles, b.stats.bytes_read), (0, 0), "held");
         }
         // south, over tile (16, h, h + 1), left out of the pack: stock's tiles there (zoom 14), IGN's elsewhere
-        let v = View { cx: 100, cy: -500, mpp16: 32 };
+        let v = View { cx: 100, cy: -500, mpp16: 32, rot: 0 };
         b.render(&mut d, AREA, v, ORIGIN);
         assert!(b.stats.ign && b.stats.tiles_read > 0, "{:?}", b.stats);
         let Layer::Map(px) = b.layer(AREA, v, ORIGIN) else { panic!("no map") };
@@ -1436,7 +1533,7 @@ pub(crate) mod tests {
         assert!(stock > 5000 && ign > 5000, "stock {stock}, ign {ign}");
         // zoomed out past the packs (IGN's zoom 12, its fall-backs 11 and 10: none packed): stock's alone (none
         // cached that coarse either: NO MAP)
-        let v = View { cx: 100, cy: 50, mpp16: 512 };
+        let v = View { cx: 100, cy: 50, mpp16: 512, rot: 0 };
         b.render(&mut d, AREA, v, ORIGIN);
         assert!(!b.stats.ign && matches!(b.layer(AREA, v, ORIGIN), Layer::NoMap), "{:?}", b.stats);
     }
@@ -1454,7 +1551,7 @@ pub(crate) mod tests {
             fat.read_at(d, &f, off & !511, &mut s).unwrap();
             (0..d.0.len() / 512).find(|&k| d.0[k * 512..k * 512 + 512] == s).unwrap()
         };
-        let v = View { cx: 100, cy: 50, mpp16: 32 };
+        let v = View { cx: 100, cy: 50, mpp16: 32, rot: 0 };
         for (off, seed) in [(0u32, 1u32), (16, 2), (8208 + 600, 3), (8208 + 2000, 4)] {
             let k = lba(&mut fat, &mut d, off);
             let mut img = clean.clone();
@@ -1535,7 +1632,7 @@ pub(crate) mod tests {
                 let feats = feats.as_chunks_mut::<4>().0;
                 let k = load(&mut Files(h, p), feats, pts, &mut [0; IO], &mut stats).unwrap();
                 // the tile over the area
-                let proj = Proj { ax: 240 * 16, bx: 0, ay: 296 * 16, by: 0 };
+                let proj = Proj { ax: 240 * 16, bx: 0, ay: 296 * 16, by: 0, ..Proj::default() };
                 for zoom in 1..=15 {
                     let mut r = Raster { px: &mut px, w: 240, h: 296, written: 0 };
                     for f in &feats[..k] {
