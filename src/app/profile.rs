@@ -114,15 +114,6 @@ impl App {
         }
     }
 
-    /// The climb page's fields: the pacer's cell is the ascent where no course is followed (no plan there).
-    pub(crate) fn climb_cfg(&self) -> PageCfg {
-        let mut c = CLIMB_PAGE;
-        if self.courses.as_deref().is_none_or(|c| c.on.is_none()) {
-            c.fields[2] = Field::Ascent;
-        }
-        c
-    }
-
     /// One of the rider's ride pages already shows the climb: no second page for it.
     pub(crate) fn has_climb_page(&self) -> bool {
         (0..self.ride_count()).any(|n| {

@@ -684,7 +684,8 @@ fn climb_page_without_a_course() {
     run(&mut sim, &mut app, 15_000);
     assert!(app.page_on(crate::CLIMB));
     assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
-    assert_eq!(app.climb_cfg().fields[2], Field::Ascent, "no pacer plan without a course");
+    // the road ahead's climb has a plan too (the pacer's cell stays on the page)
+    assert!(app.pace.key.is_some() && app.pace.plan.n > 0, "a plan for the road-ahead climb: {:?}", app.pace.key);
     while app.page_on(crate::CLIMB) && sim.ms - t0 < 600_000 {
         run(&mut sim, &mut app, 1000);
     }

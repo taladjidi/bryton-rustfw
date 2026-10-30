@@ -4274,10 +4274,12 @@ fn recovery_records() {
 /// and no input panics.
 #[test]
 fn segment_files() {
-    use crate::segment::{Error, HEADER, Header, KEPT, POINTS, Segment, tests::raw};
+    use crate::segment::{Error, HEADER, Header, KEPT, POINTS, Segment, tests::raw_alt};
     const CODES: [[u8; 2]; 9] = [*b"05", *b"06", *b"07", *b"09", *b"11", *b"12", *b"13", *b"99", *b"01"];
     // reached: Ok, then each error in the order of the match below
     let mut reached = [0usize; 15];
+    // files whose altitudes were read whole, and files whose altitudes had a hole (no profile)
+    let (mut profiles, mut holes) = (0usize, 0usize);
     for seed in 1..=2000u32 {
         let mut next = xorshift(seed);
         // most files are valid, and each kind of break is rare: a file breaks in a few places, not everywhere
@@ -4305,7 +4307,11 @@ fn segment_files() {
         let lat = if next().is_multiple_of(15) { 95.0 } else { 0.0 };
         let ntf = if next().is_multiple_of(20) { next() % 9 } else { n as u32 };
         let np_field = if next().is_multiple_of(40) { next() % 500 } else { np as u32 };
-        let mut f = raw(np_field, ntf, &codes, &times, records, pos, lat);
+        let with_alt = next().is_multiple_of(2);
+        let hole = if next().is_multiple_of(5) { 1 + next() as usize % 400 } else { usize::MAX };
+        let base = next() % 3000;
+        let alt = |r: usize| (r != hole).then(|| (base + 3 * r as u32) as u16);
+        let mut f = raw_alt(np_field, ntf, &codes, &times, records, pos, lat, with_alt.then_some(&alt));
         let fit_at = HEADER + 8 + 13 * n + 4 * np * n;
         if next().is_multiple_of(3) {
             match next() % 13 {
@@ -4371,6 +4377,15 @@ fn segment_files() {
                         assert!(seg.times[i - 1][c] <= seg.times[i][c], "seed {seed}: times fall");
                     }
                 }
+                if seg.has_alt {
+                    profiles += 1;
+                    for d in [0, 1, 77, 5000, 20_000, u32::MAX] {
+                        assert!(seg.alt_at(d).is_some(), "seed {seed}: profile without a value at {d}");
+                    }
+                } else {
+                    assert!(seg.alt_at(10).is_none());
+                    holes += usize::from(with_alt && hole < seg.npoints);
+                }
                 0
             }
             Err(e) => match e {
@@ -4394,6 +4409,7 @@ fn segment_files() {
         let _ = Header::parse(&f);
     }
     assert!(reached.iter().all(|&c| c > 0), "every error and the Ok path reached: {reached:?}");
+    assert!(profiles > 100 && holes > 10, "the altitudes reached: {profiles} profiles, {holes} holes");
 }
 
 /// A segment's PR file (nav/segment.rs `PrCopy`, read at a segment's load and before an effort is written)

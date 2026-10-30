@@ -1,5 +1,6 @@
-//! The climb pacer's glue ([`crate::pacing`]): the climb of the followed course the rider is on, or within
-//! [`AHEAD_M`] of, cut into sections; the plan made again once a section (and, before the climb, every 30 s as W'
+//! The climb pacer's glue ([`crate::pacing`]): the profile the rider is on, or within [`AHEAD_M`] of, cut into
+//! sections. The source, in order: the live segment being ridden (from the rider to its finish, on the segment's own
+//! grid; needs the file's altitudes), else the followed course's climb, else the road ahead's climb; the plan made again once a section (and, before the climb, every 30 s as W'
 //! recovers) from the W' balance then; and the gauge field ([`Field::ClimbPace`]).
 //!
 //! The whole W' balance goes to the climb in hand, even if a bigger one follows on the course: the pacer does not look
@@ -17,7 +18,7 @@ const BAND_PCT: u16 = 5;
 /// The plan in force, and what it was made for.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PaceState {
-    /// What the plan is for: the climb's start (m), the section the rider is in, and the 30 s before the climb.
+    /// What the plan is for: the segment's id or the climb's start (m), the section the rider is in, and the 30 s before the climb.
     pub(crate) key: Option<(u32, u8, u16)>,
     /// The plan from where the rider was to the top (its first power is the target now).
     pub(crate) plan: pacing::Plan,
@@ -57,26 +58,40 @@ impl App {
         let mut n = 0;
         let mut on = false;
         let key = 'k: {
-            let Some((c, at)) = self.on_course() else { break 'k None };
-            let d = at.along_m;
-            let Some(cl) = c.climb_at(d).and_then(|(k, _)| c.climbs().get(k).copied()) else { break 'k None };
-            on = d >= cl.start_m;
-            if !on && cl.start_m - d > AHEAD_M {
+            // the source: a segment ridden (with a profile), else the climb in view (course, else road ahead)
+            let seg =
+                self.segment_now().filter(|n| self.segments.as_deref().is_some_and(|s| s.alt_at(n.along_m).is_some()));
+            let climb = self.climb_now();
+            let by_seg = |m| self.segments.as_deref()?.alt_at(m);
+            let by_climb = |m| climb.as_ref().and_then(|n| self.climb_alt(n, m));
+            let alt: &dyn Fn(u32) -> Option<i32>;
+            let (id, start, end, d);
+            if let Some(n) = seg {
+                (id, start, end, d) = (n.id, 0, n.along_m.saturating_add(n.left_m), n.along_m);
+                alt = &by_seg;
+            } else if let Some(n) = &climb {
+                (id, start, end, d) = (n.climb.start_m, n.climb.start_m, n.climb.end_m(), n.along);
+                alt = &by_climb;
+            } else {
                 break 'k None;
             }
-            let count = cl.len_m.div_ceil(SECTION_M).clamp(1, pacing::MAX as u32);
-            let len = (cl.len_m / count).max(1);
-            let idx = if on { ((d - cl.start_m) / len).min(count - 1) } else { 0 };
-            let key = (cl.start_m, idx as u8, if on { 0 } else { (timer / 30) as u16 });
+            on = d >= start;
+            if !on && start - d > AHEAD_M {
+                break 'k None;
+            }
+            let count = (end - start).div_ceil(SECTION_M).clamp(1, pacing::MAX as u32);
+            let len = ((end - start) / count).max(1);
+            let idx = if on { ((d - start) / len).min(count - 1) } else { 0 };
+            let key = (id, idx as u8, if on { 0 } else { (timer / 30) as u16 });
             if self.pace.key == Some(key) {
                 return;
             }
-            // the first section starts where the rider is, the others on the climb's grid
-            let first = if on { d } else { cl.start_m };
+            // the first section starts where the rider is, the others on the source's grid
+            let first = if on { d } else { start };
             for (i, s) in secs.iter_mut().enumerate().take(count as usize).skip(idx as usize) {
-                let from = if i as u32 == idx { first } else { cl.start_m + i as u32 * len };
-                let to = if i as u32 + 1 == count { cl.end_m() } else { cl.start_m + (i as u32 + 1) * len };
-                let (Some(a), Some(b)) = (c.alt_at(from), c.alt_at(to)) else { break 'k None };
+                let from = if i as u32 == idx { first } else { start + i as u32 * len };
+                let to = if i as u32 + 1 == count { end } else { start + (i as u32 + 1) * len };
+                let (Some(a), Some(b)) = (alt(from), alt(to)) else { break 'k None };
                 let grade = (b - a) * 100 / to.saturating_sub(from).max(1) as i32; // dm over m: % x 10
                 *s = pacing::Sec {
                     len_m: to.saturating_sub(from).min(65_535) as u16,

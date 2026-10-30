@@ -73,7 +73,7 @@ segments too is S9, optional.
 ## On the unit
 
 **Memory.** AXI SRAM had about 15 KB left before the segments took 12.9 KB; the scan's cache then went from
-4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->61 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
+4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->59 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
 bounding box, distance, name's first 12 characters, enabled: 32 bytes) for at most 128 segments is 4 KB; the active
 segment (400 points as i32 lat / lon = 3.2 KB, times as u16 seconds for up to 4 targets = 3.2 KB) is 6.4 KB. One
 active segment at a time. If it does not fit next to the courses, stop and report the numbers before moving any
@@ -214,7 +214,7 @@ Decided in S3 (2026-10-30), memory and placement: one static `Segments` (main.rs
 line there like the other cells; 12,904 B, all zeros at start: `Effort` counts from 1 so that `None` is 0, and the event ring is
 not an `Option`) holds the index (128 `segment_match::Entry`, 32 B each = 4 KB: the id, the box of the start pairs, the first
 pair and the direction to the next one as two i16; the name, distance and gain are not kept, S4's list reads a header when it
-shows it), the one active `Segment` (8.6 KB), the matcher and the counters. AXI SRAM has 1.6 KB left after it (it had 15 KB before S3, 1.6 KB after).
+shows it), the one active `Segment` (10.2 KB: each point's altitude is kept, 1.6 KB, so the climb pacer can plan the rest of the segment; a file whose records lack an altitude parses without a profile), the matcher and the counters. AXI SRAM has 1.6 KB left after it (it had 15 KB before S3, 1.6 KB after).
 No buffer of the whole file: `Segment::parse_with` reads 1 KB at a time (`segment::CHUNK`), so a 64 KB file loads with about 3 KB
 of stack, in `Segments::load` (`#[inline(never)]`). The index is built 8 files a pass (worst pass in the sim: 19 KB read, 8 ms at
 the unit's 2.5 MB/s) 5 s after the start, only with no ride open; a computer that wrote to the drive restarts the unit, which

@@ -4,7 +4,7 @@
 
 use super::tests::run; // not the parent's `run`, which the glob would give
 use super::*;
-use crate::segment::tests::synth;
+use crate::segment::tests::{synth, synth_alt};
 use crate::segment_match::{Event, tests::at};
 use std::string::{String, ToString};
 
@@ -903,4 +903,22 @@ fn new_pr_twice_in_a_ride() {
         assert_eq!(pr(&sim.emmc.image).unwrap().1, best);
         assert!(best < 160, "{best}");
     }
+}
+
+/// The climb pacer takes the profile of the segment being ridden (its file's altitudes): a plan from the rider to the
+/// finish keyed by the segment's id, with a target on it; leaving the segment drops the plan (no course, no climb
+/// ahead here); a segment file without altitudes gives none.
+#[test]
+fn the_pacer_follows_the_segment() {
+    let up = |r: usize| Some(((600 + 4 * r) * 5) as u16); // 8 % over 950 m
+    let with = card(&[("4000000001.seg", synth_alt(20, &CODES, &up))]);
+    let (_, app) = ride_on(with.clone(), faster, 120, true);
+    assert_eq!(app.segment_now().map(|n| n.id), Some(ID));
+    assert_eq!(app.pace.key.map(|k| k.0), Some(ID), "keyed by the segment");
+    assert!(app.pace.plan.n > 0 && app.pace_now(100).step, "a target on the segment");
+    let (_, app) = ride_on(with, leaves, 200, true);
+    assert!(app.segment_now().is_none());
+    assert!(app.pace.key.is_none() && app.pace.plan.n == 0, "off the segment: no plan");
+    let (_, app) = ride(faster, 120, true);
+    assert!(app.segment_now().is_some() && app.pace.key.is_none(), "no altitudes: no plan");
 }

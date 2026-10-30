@@ -24,7 +24,7 @@
 //! inferred: the meaning of the enabled bytes, the byte at 0x31, and the target's byte after its type. The checks of
 //! "Limits checked on read" are this firmware's own (stock checks none of them: inferred, it trusts its own imports).
 //!
-//! **Storage:** a [`Segment`] is about 16 KB, so a caller keeps one in a static cell and parses into it
+//! **Storage:** a [`Segment`] is about 10 KB, so a caller keeps one in a static cell and parses into it
 //! ([`Segment::parse`]); nothing is allocated. Points are the course model's [`Pt`] (degrees x 1e-7, as
 //! [`crate::course`] reads them), so the matcher can reuse the course code. The times of the kept targets are u16
 //! seconds: [`PREFER`] names the kept ones, PR first, then KOM, QOM and the most recent.
@@ -220,7 +220,7 @@ impl Header {
     }
 }
 
-/// A parsed segment: its header, its points, and the times of the kept targets at each point. About 8.6 KB: keep it
+/// A parsed segment: its header, its points, and the times of the kept targets at each point. About 10.2 KB (the altitudes 1.6 KB of it): keep it
 /// in a static cell. Not `Copy`: copying it would copy that much.
 #[derive(Debug)]
 pub struct Segment {
@@ -235,6 +235,10 @@ pub struct Segment {
     /// Distance of each point from the start of the segment, m: the FIT record's distance, else the length of the
     /// steps before it ([`crate::course::step_mm`]).
     pub dist_m: [u32; POINTS],
+    /// Altitude of each point, dm (the FIT record's; meaningful only when `has_alt`).
+    pub alt_dm: [i32; POINTS],
+    /// Every point of the file had an altitude: the profile ([`Segment::alt_at`]) exists.
+    pub has_alt: bool,
     /// The effort of each kept column of `times` (None: no such target in the file).
     pub kept: [Option<Effort>; KEPT],
     /// `times[point][column]`: the elapsed seconds of the kept effort in that column at that point (0 in a column
@@ -257,12 +261,14 @@ impl Segment {
             lat: [0; POINTS],
             lon: [0; POINTS],
             dist_m: [0; POINTS],
+            alt_dm: [0; POINTS],
+            has_alt: false,
             kept: [None; KEPT],
             times: [[0; KEPT]; POINTS],
         }
     }
 
-    /// Point `i` as a course point ([`Pt`]: position and distance along the segment; no altitude is kept), or None
+    /// Point `i` as a course point ([`Pt`]: position, altitude if the file has them, distance along the segment), or None
     /// past [`Segment::npoints`].
     pub fn pt(&self, i: usize) -> Option<Pt> {
         if i >= self.npoints {
@@ -271,10 +277,28 @@ impl Segment {
         Some(Pt {
             lat: *self.lat.get(i)?,
             lon: *self.lon.get(i)?,
-            alt_dm: None,
+            alt_dm: self.has_alt.then(|| self.alt_dm.get(i).copied()).flatten(),
             split: false,
             dist_m: self.dist_m.get(i).copied(),
         })
+    }
+
+    /// The altitude `d` m along the segment, dm, interpolated between the two points around it; None without altitudes.
+    pub fn alt_at(&self, d: u32) -> Option<i32> {
+        let n = self.npoints.min(POINTS);
+        if !self.has_alt || n == 0 {
+            return None;
+        }
+        let dist = self.dist_m.get(..n)?;
+        let i = dist.partition_point(|&x| x <= d);
+        let a0 = *self.alt_dm.get(i.checked_sub(1)?)?;
+        let (d0, d1) = (*dist.get(i - 1)?, dist.get(i).copied());
+        let (Some(d1), Some(&a1)) = (d1, self.alt_dm.get(i)) else { return Some(a0) };
+        if d1 <= d0 {
+            return Some(a0);
+        }
+        let step = (i64::from(a1) - i64::from(a0)) * i64::from(d.saturating_sub(d0)) / i64::from(d1 - d0);
+        i32::try_from(i64::from(a0) + step).ok().or(Some(a0))
     }
 
     /// Parses a whole file into `self`, with every check of the module doc. Everything from an earlier parse is
@@ -301,6 +325,7 @@ impl Segment {
         self.header = Header::blank();
         self.kept = [None; KEPT];
         self.times = [[0; KEPT]; POINTS];
+        self.has_alt = false;
         if size > MAX_BYTES {
             return Err(Error::TooBig);
         }
@@ -360,7 +385,8 @@ impl Segment {
         // the course: its records are the points, one each, with a position on the globe
         let mut rd = Reader::with_position();
         let (mut got, mut bad) = (0usize, None::<Error>);
-        let (la, lo, di) = (&mut self.lat, &mut self.lon, &mut self.dist_m);
+        let (la, lo, di, al) = (&mut self.lat, &mut self.lon, &mut self.dist_m, &mut self.alt_dm);
+        let mut alts = 0usize;
         let (mut at, mut used) = (fit_at, 0usize);
         while at < size && bad.is_none() {
             let part = chunk.get_mut(..CHUNK.min(size - at)).ok_or(Error::Short)?;
@@ -393,9 +419,11 @@ impl Segment {
                     }
                     (None, None) => 0,
                 };
-                match (la.get_mut(got), lo.get_mut(got), di.get_mut(got)) {
-                    (Some(a), Some(o), Some(d)) => {
+                match (la.get_mut(got), lo.get_mut(got), di.get_mut(got), al.get_mut(got)) {
+                    (Some(a), Some(o), Some(d), Some(h)) => {
                         (*a, *o, *d) = (lat, lon, dist);
+                        // the profile exists only when every point had an altitude
+                        (*h, alts) = r.alt_dm.map_or((0, alts), |v| (v, alts + 1));
                         got += 1;
                     }
                     _ => bad = Some(Error::Points),
@@ -423,6 +451,7 @@ impl Segment {
         if got != np {
             return Err(Error::Points);
         }
+        self.has_alt = alts == np;
         self.kept = cols.map(|c| c.and_then(|t| header.targets().nth(t)).map(|g| g.effort));
         self.header = header;
         self.npoints = np;
@@ -704,6 +733,32 @@ pub(crate) mod tests {
         pos: bool,
         lat_deg: f64,
     ) -> Vec<u8> {
+        raw_alt(np, ntargets_field, codes, times, records, pos, lat_deg, None)
+    }
+
+    /// Altitude of record `r` in FIT's units ((m + 500) x 5), for [`raw_alt`].
+    pub(crate) type AltFn<'a> = &'a dyn Fn(usize) -> Option<u16>;
+
+    /// [`synth`] with a FIT altitude (field 2) in each record where `alt` gives one.
+    pub(crate) fn synth_alt(np: usize, codes: &[[u8; 2]], alt: AltFn) -> Vec<u8> {
+        let n = codes.len();
+        let times: Vec<u32> = (0..np * n).map(|k| 10 * (k / n) as u32 + (k % n) as u32).collect();
+        raw_alt(np as u32, n as u32, codes, &times, np, true, 0.0, Some(alt))
+    }
+
+    /// [`raw`] with the altitude of each record, when `alt` is given (a record it gives None for carries the field
+    /// with FIT's invalid value 0xFFFF).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn raw_alt(
+        np: u32,
+        ntargets_field: u32,
+        codes: &[[u8; 2]],
+        times: &[u32],
+        records: usize,
+        pos: bool,
+        lat_deg: f64,
+        alt: Option<AltFn>,
+    ) -> Vec<u8> {
         let n = codes.len();
         let mut f = std::vec![0u8; HEADER];
         let fit_at = DATA + 8 + DESC * n + 4 * (np as usize) * n;
@@ -731,10 +786,11 @@ pub(crate) mod tests {
             put(&mut f, DATA + 8 + DESC * n + 4 * k, &t.to_le_bytes());
         }
         // the FIT course: a definition of record (global 20) with 253 time, 0 and 1 position, 5 distance
-        let fields: &[(u8, u8, u8)] = if pos {
-            &[(253, 4, 0x86), (0, 4, 0x85), (1, 4, 0x85), (5, 4, 0x86)]
-        } else {
-            &[(253, 4, 0x86), (5, 4, 0x86)]
+        let fields: &[(u8, u8, u8)] = match (pos, alt.is_some()) {
+            (true, false) => &[(253, 4, 0x86), (0, 4, 0x85), (1, 4, 0x85), (5, 4, 0x86)],
+            (true, true) => &[(253, 4, 0x86), (0, 4, 0x85), (1, 4, 0x85), (5, 4, 0x86), (2, 2, 0x84)],
+            (false, false) => &[(253, 4, 0x86), (5, 4, 0x86)],
+            (false, true) => &[(253, 4, 0x86), (5, 4, 0x86), (2, 2, 0x84)],
         };
         let mut body = std::vec![0x40, 0, 0, 20, 0, fields.len() as u8];
         for &(num, size, base) in fields {
@@ -750,6 +806,9 @@ pub(crate) mod tests {
                 body.extend_from_slice(&lon.to_le_bytes());
             }
             body.extend_from_slice(&(r as u32 * 5000).to_le_bytes());
+            if let Some(alt) = alt {
+                body.extend_from_slice(&alt(r).unwrap_or(0xFFFF).to_le_bytes());
+            }
         }
         let mut fit = std::vec![12u8, 0x10, 0, 0];
         fit.extend_from_slice(&(body.len() as u32).to_le_bytes());
@@ -922,11 +981,38 @@ pub(crate) mod tests {
         assert_eq!((s.kept, s.header.ntargets, s.times[0]), ([None; KEPT], 0, [0; KEPT]));
     }
 
+    /// Altitudes: kept per point in dm and interpolated along the distance; a file without them (or with a hole)
+    /// parses with no profile.
+    #[test]
+    fn altitude_profile() {
+        let codes = [*b"07"];
+        // 100 m at point 0, rising 1 m per 50 m point
+        let up = |r: usize| Some(((600 + r) * 5) as u16);
+        let mut s = Segment::new();
+        s.parse(&synth_alt(20, &codes, &up)).unwrap();
+        assert!(s.has_alt);
+        assert_eq!(s.pt(3).and_then(|p| p.alt_dm), Some(1030));
+        assert_eq!(
+            (s.alt_at(0), s.alt_at(50), s.alt_at(75), s.alt_at(950)),
+            (Some(1000), Some(1010), Some(1015), Some(1190))
+        );
+        assert_eq!(s.alt_at(5000), Some(1190), "past the end: the last");
+        let mut hole = Segment::new();
+        hole.parse(&synth_alt(20, &codes, &|r| (r != 7).then(|| up(r)).flatten())).unwrap();
+        assert!(!hole.has_alt && hole.alt_at(100).is_none() && hole.pt(2).unwrap().alt_dm.is_none());
+        let mut none = Segment::new();
+        none.parse(&synth(20, &codes)).unwrap();
+        assert!(none.alt_at(100).is_none());
+        none.parse(&synth_alt(20, &codes, &up)).unwrap();
+        none.parse(&synth(20, &codes)).unwrap();
+        assert!(!none.has_alt, "a later file without them clears the profile");
+    }
+
     #[test]
     fn size_is_bounded() {
         // 400 x (lat, lon, distance: 4 bytes each) + 400 x 4 kept times (2 bytes): 8000 bytes of arrays, the header
         // about 600 more. 6 KB is below the arrays' own size, so the bound is what the layout costs.
-        assert!(core::mem::size_of::<Segment>() <= 9 * 1024, "{} bytes", core::mem::size_of::<Segment>());
+        assert!(core::mem::size_of::<Segment>() <= 11 * 1024, "{} bytes", core::mem::size_of::<Segment>());
     }
 
     #[test]

@@ -638,7 +638,8 @@ copied over USB into `\Courses`, read only:
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
 - **CLIMB page:** opens once at a climb's start (a followed course, or climbs ahead without one): the climb's profile coloured by grade with the part done darker, gain, length and grade on it, the grade and the climb coach below; not added when one of the rider's pages already shows climb fields.
 - **Climb pacer** (pacing.rs, the TOP field, on the course page in place of the distance): within 5 km of a climb
-  and on it, the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
+  and on it (the followed course's, else the road ahead's; and, in a live segment being ridden, the rest of the segment
+  from its file's altitudes, on its own 200 m grid, until it ends or is lost), the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
   rider's bests when it is trusted, else FTP and the W' setting, taken at the ride's start and kept to its end: it
   also drains the W' balance) and the W' balance
   now, planned again at each section from where the rider is, with the rider's weight plus the bike's (SETTINGS >

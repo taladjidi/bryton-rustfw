@@ -509,6 +509,12 @@ impl Segments {
         Some(at(last)?.1)
     }
 
+    /// The loaded segment's altitude `d` m along it, dm (None without a profile; the caller checks the segment is
+    /// the active one, as [`Segments::now`] does).
+    pub(crate) fn alt_at(&self, d: u32) -> Option<i32> {
+        self.seg.alt_at(d)
+    }
+
     /// Reads [`SLICE`] more files' headers into the index; true when the folder is done.
     fn scan_slice(&mut self, d: &mut impl Disk) -> Result<bool, fat::Error> {
         let mut fat = Fat::mount(d)?;
