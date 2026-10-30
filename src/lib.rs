@@ -276,8 +276,10 @@ pub struct App {
     edit: Option<Editing>,
     /// The strip's place shows the editor's hint (app/editor.rs), not the strip.
     hint_shown: bool,
-    /// Today (RTC), for the overview.
+    /// Today as shown (the RTC, moved by TIME ZONE: app/clock.rs [`App::show_clock`]), for the overview.
     date: (u16, u8, u8),
+    /// The shown clock minus the RTC, seconds (0 under TIME ZONE CLOCK or before an offset from UTC is learnt).
+    clock_delta_s: i32,
     /// The sun's rise and set (local minutes) for the date and minute of the last pass that changed it: the key, then
     /// the times (None without a fix, the zone learnt, or in polar day or night). Worked out at most once a minute.
     sun: Option<SunNow>,
@@ -495,6 +497,7 @@ impl App {
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
+            clock_delta_s: 0, // the registers hold no TIME ZONE: CLOCK until the settings file is read
             sun: None,
             heading: None,
             notes: Notices::new(),
@@ -626,10 +629,7 @@ impl App {
         self.dt_ms = pass_ms;
         let up_before = self.up_ms;
         self.up_ms = self.up_ms.saturating_add(pass_ms);
-        let (tr, dr) = b.rtc();
-        let (h, m, sec) = rtc_time_from_tr(tr);
-        self.strip.time = (h, m);
-        self.date = rtc_date_from_dr(dr);
+        let sec = self.read_clock(b);
         self.refresh_sun();
         self.refresh_heading();
         self.catch_up_seconds(sec);

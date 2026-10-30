@@ -923,7 +923,9 @@ before the limits (an earlier build's) reads them OFF. A later build appends its
 UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
 C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
-DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; QUICK STATUS is byte 158 and its six fields 159 to 164 (165 in all).
+DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
+QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are the last bytes (165 and 166; 167 in
+all) and read CLOCK and OFF when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers
@@ -1012,5 +1014,13 @@ area. A build without EMMC_WRITE=1 offers it write protected.
 - **DATE FORMAT** (DISPLAY, ours): D/M/Y (the default, 23/10/2026), M/D/Y or Y-M-D. It applies to the dates of the history
   and the workouts' rows (numbers, no weekday). The overview, the phone's date and the ride card's title ("SAT 24 OCT")
   keep the month's name.
-- Still open: TIME ZONE and DAYLIGHT SAVING (the RTC keeps local time, so the zone needs the learned offset; default
-  CLOCK = no change), and the 12 h time format (the strip's layout).
+- **ZONE and SUMMER TIME** (DISPLAY, ours): the time zone, CLOCK (the default: the RTC shown as it is, as before) or
+  UTC - 12 to UTC + 14 in quarter hours (shown +1, -3:30, +5:45; from CLOCK the first step is UTC + 0); SUMMER TIME OFF
+  (the default), EU (last Sunday of March to last Sunday of October, 01:00 UTC, Directive 2000/84/EC) or US (second
+  Sunday of March to first Sunday of November, 02:00 local, 15 U.S.C. 260a). With a zone, the shown clock is UTC (the
+  RTC less its offset from UTC, learnt at a GPS fix or from the phone) in that zone, an hour more in summer, so a DST
+  change moves the strip without the phone or stock setting the RTC. The RTC itself is never written for it: the FIT
+  times stay UTC and monotonic through a change mid-ride, and a ride keeps the name it started with, also after a reset
+  (app/clock.rs module doc). The strip, the dates, the ride file's name and the sun's times follow the shown clock.
+  Until an offset is learnt, and for the 2 s after a start before the settings file is read, the RTC is shown as is.
+- Still open: the 12 h time format (the strip's layout).

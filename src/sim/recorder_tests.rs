@@ -928,3 +928,57 @@ fn the_ready_card_changes_nothing_for_the_recorder() {
     assert_eq!(app2.ride.state(), ride::State::Paused, "resumed at the checkpoint");
     assert!(app2.ride.timer_s() <= timer && app2.ride.timer_s() + 60 >= timer);
 }
+
+/// A ride across the EU's October change (2026-10-25 01:00 UTC) with TIME ZONE +1 and SUMMER TIME EU, the RTC
+/// on summer time as the phone left it (the sim's receiver: UTC + 2 h, learnt at the fix): it keeps the name it
+/// started with (02:57 summer time), the strip goes from 02:59 to 02:00 while its FIT times go on one a second, and
+/// a reset after the change resumes the same file, saved under its first name with times that never go back.
+#[test]
+fn a_ride_across_the_dst_change_keeps_its_name_and_times() {
+    let mut sim = Sim::new(50, 57, 0); // the RTC at 2026-10-25 02:57:00, summer time: 00:57 UTC
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.fix = Some(5000);
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, 1000);
+    (app.settings.tz, app.settings.dst) = (crate::TZ_UTC + 4, crate::Dst::Eu);
+    app.settings_store.dirty = true; // as the menu does: into the file before the ride
+    run(&mut sim, &mut app, 2000);
+    assert_eq!(app.gps.aid.offset_15min, Some(8), "UTC + 2 h learnt at the fix");
+    assert_eq!(app.strip.time, (2, 57), "summer: UTC + 2 h");
+    app.press(&mut sim, Press::Short(Key::Start));
+    let name = crate::recorder::ride_name(app.rec_time().0);
+    assert_eq!(&name[..8], b"26102502");
+    let mut shown = Vec::new();
+    for _ in 0..270 {
+        run(&mut sim, &mut app, 1000);
+        shown.push(app.strip.time);
+    }
+    assert!(shown.contains(&(2, 59)) && shown.ends_with(&[(2, 1)]), "{shown:?}");
+    assert_eq!(sim.backup[RIDE_BKP], RIDE_OPEN);
+
+    // a reset after the change: the RTC still on summer time (03:02), the shown clock on winter time (02:02)
+    let mut sim2 = Sim::new(51, 2, 0);
+    sim2.emmc.image = core::mem::take(&mut sim.emmc.image);
+    (sim2.emmc.rel_param, sim2.emmc.rel_sectors) = (sim.emmc.rel_param, sim.emmc.rel_sectors);
+    sim2.backup = sim.backup;
+    sim2.gnss.fix = Some(5000);
+    let mut app = App::start(&mut sim2, None);
+    run(&mut sim2, &mut app, 3000);
+    assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE RESUMED")));
+    assert_eq!(app.rec.clean.name(), name, "the same file reopened");
+    assert_eq!((app.settings.tz, app.strip.time), (crate::TZ_UTC + 4, (2, 2)), "the zone back from the file");
+    app.press(&mut sim2, Press::Short(Key::Start)); // resume
+    run(&mut sim2, &mut app, 30_000);
+    app.press(&mut sim2, Press::Short(Key::Start)); // pause
+    save_ride(&mut sim2, &mut app);
+    run(&mut sim2, &mut app, 2000);
+    assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    let path = std::format!("Activities/{}.fit", core::str::from_utf8(&name).unwrap());
+    let times = record_times(&sim2.emmc.image, &path);
+    assert!(times.windows(2).all(|p| p[1] > p[0]), "monotonic: {times:?}");
+    let change = crate::fit::fit_time((2026, 10, 25, 1, 0, 0));
+    let at = times.iter().position(|&t| t == change).expect("a record at the change");
+    assert!(times[at - 60..at + 60].windows(2).all(|p| p[1] == p[0] + 1), "one a second through the change");
+    assert!(times.last().is_some_and(|&t| t >= crate::fit::fit_time((2026, 10, 25, 1, 2, 30))), "the resumed part");
+    assert_eq!(crate::fat::write::tests::fsck(&sim2.emmc.image), Ok(0));
+}

@@ -275,6 +275,8 @@ Others
 - [ ] Bike alarm, find my Edge (Garmin)
 - [ ] Assistance request to contacts (Garmin)
 - [x] Sunset alert (Garmin): sim (ALERTS > SUNSET ALERT, 15 / 30 / 60 min before the set, once a ride)
+- [x] Time zone and summer time (Garmin, Wahoo): sim (DISPLAY > ZONE, CLOCK or UTC - 12 to + 14 in quarter hours;
+  SUMMER TIME OFF, EU or US; a ride across the change keeps its name and its FIT times)
 
 ## Phone and connectivity
 

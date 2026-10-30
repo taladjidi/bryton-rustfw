@@ -277,10 +277,11 @@ impl App {
     }
 
     /// The sun's rise and set for the minute, worked out once a minute (not per pass). Needs a fix and a learnt zone
-    /// (the RTC is local time: the offset comes from the phone or the fix); without them nothing is kept, so the first
-    /// fix shows its times at once. In polar day or night the None is kept for the minute.
+    /// (the RTC is local time: the offset comes from the phone or the fix), in the shown clock's time (TIME ZONE,
+    /// app/clock.rs); without them nothing is kept, so the first fix shows its times at once. In polar day or night the
+    /// None is kept for the minute.
     pub(crate) fn refresh_sun(&mut self) {
-        let Some((p, o)) = self.gps.pvt.filter(|p| p.good()).zip(self.gps.aid.offset_15min) else {
+        let Some((p, _)) = self.gps.pvt.filter(|p| p.good()).zip(self.gps.aid.offset_15min) else {
             self.sun = None;
             return;
         };
@@ -289,7 +290,7 @@ impl App {
             return;
         }
         let (y, m, d) = self.date;
-        let times = crate::sun::rise_set(p.lat, p.lon, days_from_civil(y, m, d), i32::from(o) * 15);
+        let times = crate::sun::rise_set(p.lat, p.lon, days_from_civil(y, m, d), (self.shown_offset_s() / 60) as i32);
         self.sun = Some((key, times));
     }
 

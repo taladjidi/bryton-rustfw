@@ -357,6 +357,11 @@ pub struct Settings {
     pub climb_page: bool,
     /// DATE FORMAT (DISPLAY): how every date is drawn (data 154); D/M/Y in a file that predates it.
     pub date_fmt: DateFormat,
+    /// TIME ZONE (DISPLAY): 0 CLOCK (the RTC as is), else zone `(tz - 1) * 15 - 720` minutes east of UTC, 1 to
+    /// [`TZ_MAX`] (app/clock.rs); CLOCK in a file that predates it.
+    pub tz: u16,
+    /// SUMMER TIME (DISPLAY): the daylight saving rule with a TIME ZONE; OFF in a file that predates it.
+    pub dst: Dst,
     /// UNITS (DISPLAY): the fields show miles, mph and feet (data 100); the FIT file stays metric. METRIC in a file
     /// that predates it.
     pub imperial: bool,
@@ -496,6 +501,25 @@ impl Settings {
     }
 }
 
+/// TIME ZONE's last value, UTC + 14:00 (Kiribati's Line Islands, the easternmost zone in use); its first, 1, is
+/// UTC - 12:00 (0 is CLOCK).
+pub const TZ_MAX: u16 = 105;
+/// TIME ZONE's UTC + 0:00.
+pub const TZ_UTC: u16 = 49;
+
+impl Settings {
+    /// TIME ZONE in minutes east of UTC, None for CLOCK.
+    ///
+    /// ```
+    /// use bryton_rustfw::{Settings, TZ_MAX, TZ_UTC};
+    /// let zone = |tz| Settings { tz, ..Settings::from_word(0) }.zone_min();
+    /// assert_eq!([0, 1, TZ_UTC, TZ_UTC + 4, TZ_MAX].map(zone), [None, Some(-720), Some(0), Some(60), Some(840)]);
+    /// ```
+    pub fn zone_min(&self) -> Option<i16> {
+        (1..=TZ_MAX).contains(&self.tz).then(|| (self.tz as i16 - 1) * 15 - 720)
+    }
+}
+
 /// DATE FORMAT: how the dates are drawn (`fields::date_numbers`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DateFormat {
@@ -610,6 +634,8 @@ impl Settings {
             climbs_medium: false,
             climb_page: true,
             date_fmt: DateFormat::Dmy,
+            tz: 0,
+            dst: Dst::Off,
             imperial: false,
             temp_f: false,
             auto_pause: 0,
@@ -899,6 +925,24 @@ impl Settings {
                 DateFormat::Mdy => "M/D/Y",
                 DateFormat::Ymd => "Y-M-D",
             }),
+            Setting::TimeZone => match self.zone_min() {
+                None => l.push_str("CLOCK"),
+                // "+1", "-3:30", "+12:45": short enough for the row while it is edited
+                Some(z) => {
+                    let (h, m) = (u32::from(z.unsigned_abs() / 60), u32::from(z.unsigned_abs() % 60));
+                    l.push_str(if z < 0 { "-" } else { "+" });
+                    l.push_u32(h);
+                    if m > 0 {
+                        l.push_str(":");
+                        l.push_u32(m);
+                    }
+                }
+            },
+            Setting::DaylightSaving => l.push_str(match self.dst {
+                Dst::Off => "OFF",
+                Dst::Eu => "EU",
+                Dst::Us => "US",
+            }),
             Setting::Units => l.push_str(if self.imperial { "IMPERIAL" } else { "METRIC" }),
             Setting::Temp => l.push_str(if self.temp_f { "F" } else { "C" }),
             Setting::AutoPause => match AUTO_PAUSE_KMH.get(self.auto_pause) {
@@ -1029,6 +1073,7 @@ impl Settings {
             Setting::ClimbPage => self.climb_page = !self.climb_page,
             Setting::QuickStatus => self.quick_status = !self.quick_status,
             Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
+            Setting::DaylightSaving => self.dst = self.dst.next(),
             Setting::ReadyCheck => self.ready_check = !self.ready_check,
             Setting::SunsetAlert => self.sunset_alert = (self.sunset_alert + 1) % SUNSET_LEAD_MIN.len(),
             Setting::Chainrings => self.chainrings = (self.chainrings + 1) % CHAINRINGS.len(),
@@ -1092,6 +1137,10 @@ impl Settings {
             && *v == 0
         {
             *v = if s == Setting::Height { 170 } else { 1985 };
+            return;
+        }
+        if s == Setting::TimeZone && self.tz == 0 {
+            self.tz = TZ_UTC; // from CLOCK: UTC first, not UTC - 12
             return;
         }
         let (Some((range, step)), Some(v)) = (s.number(), self.number_mut(s)) else { return };
@@ -1182,6 +1231,7 @@ impl Settings {
             Setting::Altitude => Some(&mut self.alt_m),
             Setting::LapKm => Some(&mut self.lap_km),
             Setting::LapMin => Some(&mut self.lap_min),
+            Setting::TimeZone => Some(&mut self.tz),
             _ => None,
         }
     }

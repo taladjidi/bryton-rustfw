@@ -633,3 +633,95 @@ fn zones_menu_edits_one_bound_keeps_it_and_resets() {
     assert!(!app.settings.zone_custom);
     assert_eq!(value(&app, 0), "113", "the computed bound again");
 }
+
+/// SETTINGS > DISPLAY > TIME ZONE and SUMMER TIME, the RTC on UTC (an offset of 0 learnt): under CLOCK the strip
+/// shows the RTC; at +1:00 with EU it shows UTC + 2 h in summer and UTC + 1 h once the clock passes the October change
+/// (2026-10-25 01:00 UTC); both are in the file and back after a restart.
+#[test]
+fn time_zone_with_eu_summer_time_moves_the_strip_at_the_change() {
+    let mut sim = Sim::new(48, 57, 0); // the RTC at 2026-10-25 00:57:00, on UTC
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    settle(&mut sim, &mut app);
+    app.gps.aid.offset_15min = Some(0); // as a fix learns it
+    run(&mut sim, &mut app, 1000);
+    assert_eq!((app.date, app.strip.time), ((2026, 10, 25), (0, 57)), "CLOCK: the RTC as is");
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::TimeZone));
+    app.press(&mut sim, Press::Short(Key::Start));
+    for _ in 0..5 {
+        app.press(&mut sim, Press::Short(Key::Lap)); // CLOCK to UTC, then four quarter hours up
+    }
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.press(&mut sim, Press::Short(Key::Page)); // the next row: SUMMER TIME
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.settings.zone_min(), app.settings.dst), (Some(60), crate::Dst::Eu));
+    run(&mut sim, &mut app, 1000);
+    assert_eq!((app.date, app.strip.time), ((2026, 10, 25), (2, 57)), "summer: UTC + 2 h");
+    run(&mut sim, &mut app, 4 * 60_000);
+    assert_eq!(app.strip.time, (2, 1), "after 01:00 UTC: UTC + 1 h");
+    let c = file(&sim).unwrap();
+    assert_eq!((c.settings.tz, c.settings.dst), (crate::TZ_UTC + 4, crate::Dst::Eu), "written");
+    let (_, app2) = reboot(&mut sim, false);
+    assert_eq!((app2.settings.tz, app2.settings.dst), (crate::TZ_UTC + 4, crate::Dst::Eu), "back");
+    // every zone's row whole while it is edited (the menu tree test tries the ends of the range only)
+    for tz in 0..=crate::TZ_MAX {
+        let mut v = crate::text::Line::<12>::new();
+        Settings { tz, ..Settings::from_word(0) }.text(Setting::TimeZone, &mut v);
+        let edited = std::format!("< {} >", v.as_str());
+        assert!(ui::LABEL.width("ZONE") <= ui::menu_label_w("ZONE", &edited), "{edited}");
+    }
+}
+
+/// The unit at 2026-10-25 00:59 UTC on an RTC kept on UTC (an offset of 0 learnt), ZONE +1 and SUMMER TIME EU.
+fn on_utc_with_eu_zone() -> (Sim, App) {
+    let mut sim = Sim::new(48, 59, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    let mut app = App::start(&mut sim, None);
+    run(&mut sim, &mut app, u64::from(PAGES_LOAD_MS) + 200);
+    app.gps.aid.offset_15min = Some(0);
+    (app.settings.tz, app.settings.dst) = (crate::TZ_UTC + 4, crate::Dst::Eu);
+    run(&mut sim, &mut app, 1000);
+    (sim, app)
+}
+
+/// `now_s` (a calibration's age, the quick panel's ZERO window) stays on the RTC through a DST change with a ZONE: one
+/// a second while the strip goes back an hour, so a calibration made before the change is judged by its true age (it
+/// read as made in the future, never fresh, when `now_s` followed the shown clock).
+#[test]
+fn now_s_stays_on_the_rtc_through_a_dst_change() {
+    let (mut sim, mut app) = on_utc_with_eu_zone();
+    assert_eq!(app.strip.time, (2, 59), "summer: UTC + 2 h");
+    let t0 = app.now_s();
+    let cal = crate::altitude::Cal { p0: 101_325, when_s: t0, by: crate::altitude::By::Typed };
+    let mut last = t0;
+    for k in 1..=120 {
+        run(&mut sim, &mut app, 1000);
+        let now = app.now_s();
+        assert_eq!(now, last + 1, "second {k}");
+        last = now;
+    }
+    assert_eq!(app.strip.time, (2, 1), "winter: UTC + 1 h");
+    assert_eq!(last - cal.when_s, 120);
+    assert!(cal.fresh(last), "two minutes old");
+}
+
+/// With a ZONE but no offset learnt the strip is the RTC's; an offset at the end of its range (i8::MIN quarter hours)
+/// moves nothing it should not: the FIT times go on one a second.
+#[test]
+fn a_zone_without_an_offset_or_with_a_wild_one() {
+    let (mut sim, mut app) = on_utc_with_eu_zone();
+    app.gps.aid.offset_15min = None;
+    run(&mut sim, &mut app, 1000);
+    let (h, m, _) = crate::rtc_time_from_tr(sim.rtc().0);
+    assert_eq!(app.strip.time, (h, m), "no offset: the RTC as is");
+    app.gps.aid.offset_15min = Some(i8::MIN);
+    run(&mut sim, &mut app, 1000);
+    let mut fit = Vec::new();
+    for _ in 0..3 {
+        run(&mut sim, &mut app, 1000);
+        fit.push(app.rec_time().1);
+    }
+    assert!(fit.windows(2).all(|p| p[1] == p[0] + 1), "{fit:?}");
+}

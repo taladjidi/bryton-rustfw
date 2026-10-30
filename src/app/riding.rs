@@ -377,12 +377,13 @@ impl App {
         }
     }
 
-    /// Local time now (the RTC as last read) and its FIT time (UTC from the offset learnt at a fix; the RTC as is
-    /// before one), less the seconds being caught up ([`App::step`]).
+    /// Local time now (the shown clock as last read, app/clock.rs) and its FIT time (UTC: the RTC less the offset
+    /// learnt at a fix, whatever TIME ZONE shows; the RTC as is before one), less the seconds being caught up
+    /// ([`App::step`]).
     pub(crate) fn rec_time(&self) -> (recorder::Local, u32) {
         let ((y, mo, d), (h, mi)) = (self.date, self.strip.time);
         let local = (y, mo, d, h, mi, self.seconds);
-        let offset = i64::from(self.gps.aid.offset_15min.unwrap_or(0)) * 900 + i64::from(self.rec.lag_s);
+        let offset = self.shown_offset_s() + i64::from(self.rec.lag_s);
         (local, fit::fit_time(from_epoch_s(epoch_s(local) - offset)))
     }
 

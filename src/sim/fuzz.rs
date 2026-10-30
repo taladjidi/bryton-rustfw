@@ -5181,3 +5181,41 @@ fn settings_file_gear_bytes() {
     }
     assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
 }
+
+/// TIME ZONE and SUMMER TIME (settings.bin bytes [`TZ_AT`] and the next, after SUNSET ALERT): any length around
+/// them and any bytes read as the module doc says (a zone up to `TZ_MAX` and a rule under 3 are kept, another byte or a
+/// file cut before it reads CLOCK or OFF), and the shown clock of every zone and rule is a whole number of quarter
+/// hours from UTC, within a day. The fuzz reaches kept zones, kept rules, wild bytes and cut files.
+#[test]
+fn settings_file_time_zone_bytes() {
+    use crate::{Dst, SettingsCopy, TZ_MAX};
+    let mut next = xorshift(0x7a2e);
+    let (mut zones, mut rules, mut wild, mut short) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = TZ_AT - 2 + (next() % 6) as usize;
+        let (tz, dst) = ((next() % 128) as u8, (next() % 6) as u8);
+        sec[28 + TZ_AT..28 + TZ_AT + 2].copy_from_slice(&[tz, dst]);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let keep_tz = len > TZ_AT && u16::from(tz) <= TZ_MAX;
+        let keep_dst = len > TZ_AT + 1 && dst < 3;
+        assert_eq!(st.tz, if keep_tz { u16::from(tz) } else { 0 }, "len {len}, byte {tz}");
+        assert_eq!(st.dst, if keep_dst { Dst::from_byte(dst).unwrap() } else { Dst::Off }, "len {len}, byte {dst}");
+        if let Some(zone) = st.zone_min() {
+            let utc = 1_700_000_000 + i64::from(next() % 400_000_000);
+            let off = crate::local_time(utc, zone, st.dst) - utc;
+            assert!(off % 900 == 0 && off.abs() <= 15 * 3600, "{zone} {:?}: {off}", st.dst);
+        }
+        zones += u32::from(keep_tz && tz > 0);
+        rules += u32::from(keep_dst && dst > 0);
+        wild += u32::from(len > TZ_AT + 1 && (u16::from(tz) > TZ_MAX || dst >= 3));
+        short += u32::from(len <= TZ_AT);
+    }
+    assert!(zones > 1000 && rules > 1000 && wild > 1000 && short > 1000, "{zones} {rules} {wild} {short}");
+}
+
+/// Where TIME ZONE is in the settings data.
+const TZ_AT: usize = 165;

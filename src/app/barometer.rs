@@ -35,9 +35,10 @@ pub(crate) struct AltStore {
 }
 
 impl App {
-    /// Seconds since 1970 on the unit's clock (what a calibration's age is counted in).
+    /// Seconds since 1970 on the unit's clock, the RTC (what a calibration's age is counted in): not the shown clock,
+    /// which a DST change, a ZONE edit or the settings file read moves (app/clock.rs).
     pub(crate) fn now_s(&self) -> u32 {
-        epoch_s(self.rec_time().0).clamp(0, i64::from(u32::MAX)) as u32
+        (epoch_s(self.rec_time().0) - i64::from(self.clock_delta_s)).clamp(0, i64::from(u32::MAX)) as u32
     }
 
     /// The receiver's altitude when it is good enough to calibrate by: a valid 3D fix with six satellites or more
