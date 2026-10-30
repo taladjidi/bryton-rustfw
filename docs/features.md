@@ -455,7 +455,7 @@ MENU
   read-only build. Less than the file and 8 MB free (the recorder's reserve) is CARD FULL: NO SCREENSHOT, nothing
   written (the FAT counted first after a failed write, so a stale count never lets it in); a second shot in the same
   second is SCREENSHOT: TRY AGAIN. The file's entry is written last, so a power cut or a write error never leaves a
-  partial picture (a failed write frees what it took).
+  partial picture (a failed write of the pixels frees what it took; a failed entry leaves its clusters lost, never freed, since the entry may be on the card unseen).
 - **Fault log:** after a reset that followed a fault or a panic (the banner FAULT RESET n), one line goes to
   `\Rustfw\Log\faults.log` once the card is quiet (no ride open or waiting to be saved: a ride resumed after the fault
   is saved first): the time of the restart, what it was (a panic and its source line; a CPU fault and its CFSR bits,

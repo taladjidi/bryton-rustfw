@@ -269,9 +269,9 @@ pub struct App {
     fats_suspect: bool,
     /// SYSTEM > SCREENSHOT asked for a screenshot at the next pass (app/screenshot.rs).
     shot_due: bool,
-    /// A fault marker found at the start and its time, its line not yet in the fault log, and the uptime (ms) to try
-    /// at (app/faultlog.rs).
-    fault_due: Option<(u32, recorder::Local, u32)>,
+    /// A fault marker found at the start and its time, its line not yet in the fault log, the uptime (ms) to try at
+    /// and the tries that failed (app/faultlog.rs).
+    fault_due: Option<(u32, recorder::Local, u32, u8)>,
     /// The page editor's work, while it is open.
     edit: Option<Editing>,
     /// The strip's place shows the editor's hint (app/editor.rs), not the strip.

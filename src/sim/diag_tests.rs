@@ -319,6 +319,14 @@ fn fault_log_retried_after_a_failure() {
     assert_eq!(log(&sim.emmc.image), Some(text), "once");
     let notes = app.notes.list.iter().filter(|n| n.as_str().ends_with("FAULT LOG NOT SAVED")).count();
     assert_eq!(notes, 1, "said once");
+
+    // a card that keeps failing: three tries again, then left to the next start
+    let (mut sim, mut app) = faulted(crate::fat::tests::image(), [0; 32], marker(0, Kind::Panic, 3));
+    sim.emmc.bad = std::vec![0..u32::MAX];
+    run(&mut sim, &mut app, 150_000); // tried at 2 s, 62 s and 122 s: the third try again due at 182 s
+    assert!(app.fault_due.is_some_and(|f| f.3 == 3), "{:?}", app.fault_due);
+    run(&mut sim, &mut app, 100_000);
+    assert_eq!(app.fault_due, None, "given up for this boot");
 }
 
 /// Two screenshots in one second: the second finds the name taken, says so, and writes nothing.
@@ -339,9 +347,55 @@ fn second_screenshot_in_the_same_second() {
     app.shot_due = true;
     let name = screenshot::name(app.rec_time().0);
     app.step(&mut sim);
-    if first.iter().any(|(n, _)| n.as_str() == name.as_str()) {
-        assert!(newest_notice(&app).ends_with("SCREENSHOT: TRY AGAIN"), "{}", newest_notice(&app));
-        assert_eq!(files(&sim.emmc.image, "Screenshot").unwrap(), first, "nothing written");
-    }
+    assert!(first.iter().any(|(n, _)| n.as_str() == name.as_str()), "the same second: {name:?} in {first:?}");
+    assert!(newest_notice(&app).ends_with("SCREENSHOT: TRY AGAIN"), "{}", newest_notice(&app));
+    assert_eq!(files(&sim.emmc.image, "Screenshot").unwrap(), first, "nothing written");
     assert_eq!(fsck(&sim.emmc.image), Ok(0));
+}
+
+/// A link whose entry lands in the folder's next sector, and whose write of the slots before it (the 0xe5 that makes it
+/// visible) fails: the entry is on the card but hidden behind a 0x00 slot, so the chain it names must stay taken (a
+/// lost chain), never freed; the next shot's entry goes over the hidden one, and no cluster is in two chains.
+#[test]
+fn screenshot_link_failure_keeps_the_chain() {
+    let mut d = Ram(crate::fat::tests::image(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let dir = fat.ensure_dir(&mut d, fat.root(), screenshot::DIR, (0, 0)).unwrap();
+    for k in 0..6 {
+        fat.create(&mut d, dir, &std::format!("f{k}.txt"), (0, 0)).unwrap(); // a long name piece and the 8.3 entry
+    }
+    let lba = fat.lba(dir.cluster);
+    let fat0 = u32::from(u16::from_le_bytes([d.0[14], d.0[15]])) as usize * 512;
+    let (mut sim, mut app) = started();
+    sim.emmc.image = d.0;
+    assert_eq!(sim.emmc.image[(lba as usize) * 512 + 14 * 32], 0, "slots 0..13 used, 14 free");
+    run(&mut sim, &mut app, 3000);
+    sim.emmc.bad = std::vec![lba..lba + 1];
+    app.shot_due = true;
+    app.step(&mut sim);
+    assert!(newest_notice(&app).ends_with("SCREENSHOT NOT SAVED"), "{}", newest_notice(&app));
+    sim.emmc.bad.clear();
+    let img = &sim.emmc.image;
+    assert_eq!(files(img, "Screenshot").unwrap().len(), 6, "the shot not seen");
+    let next = (lba as usize + 1) * 512;
+    assert_eq!(img[next] & 0x40, 0x40, "its entry in slot 0 of the next sector");
+    let e = &img[next + 64..next + 96];
+    let mut c = u32::from(u16::from_le_bytes([e[20], e[21]])) << 16 | u32::from(u16::from_le_bytes([e[26], e[27]]));
+    let at =
+        |img: &[u8], c: u32| u32::from_le_bytes(img[fat0 + 4 * c as usize..][..4].try_into().unwrap()) & 0x0fff_ffff;
+    let mut n = 0;
+    while c >= 2 && c < 0x0fff_fff8 && n < 100 {
+        let v = at(img, c);
+        assert_ne!(v, 0, "cluster {c} of the hidden entry's chain freed");
+        (c, n) = (v, n + 1);
+    }
+    assert!(n > 0);
+    assert!(fsck(img).unwrap() > 0, "the chain lost, not freed");
+
+    run(&mut sim, &mut app, 1000); // the next second
+    app.shot_due = true;
+    app.step(&mut sim);
+    assert!(newest_notice(&app).ends_with("SCREENSHOT SAVED"), "{}", newest_notice(&app));
+    assert_eq!(files(&sim.emmc.image, "Screenshot").unwrap().len(), 7);
+    fsck(&sim.emmc.image).expect("no cluster in two chains");
 }
