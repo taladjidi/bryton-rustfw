@@ -34,11 +34,14 @@ impl App {
             self.alt.ride_start(now); // a calibration older than three hours is made again from the receiver
         }
         self.tones.play(if ev == ride::Event::Pause { &BEEP_PAUSE } else { &BEEP_START });
-        self.say(match ev {
-            ride::Event::Start => "RIDE STARTED",
-            ride::Event::Pause => "PAUSED: HOLD START TO END",
-            _ => "RESUMED",
-        });
+        // a new ride: the ready card replaces RIDE STARTED (the recording starts below, at the press, in either case)
+        if ev != ride::Event::Start || !self.ready_card() {
+            self.say(match ev {
+                ride::Event::Start => "RIDE STARTED",
+                ride::Event::Pause => "PAUSED: HOLD START TO END",
+                _ => "RESUMED",
+            });
+        }
         if ev == ride::Event::Start {
             self.power.new_ride();
             self.zone_s = ride::ZoneTime::default();
@@ -578,6 +581,7 @@ impl App {
     pub(crate) fn second(&mut self) {
         self.alt_second();
         self.profile_second();
+        self.start_reminder_second();
         if self.ride.state() != ride::State::Idle {
             self.alt_follow();
         }

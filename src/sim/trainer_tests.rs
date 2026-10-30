@@ -941,6 +941,7 @@ fn the_map_page_is_skipped_indoors() {
     sim.backup[14] = Kind::Trainer.to_word(ID);
     sim.nordic.sensors.push(trainer_sensor());
     let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     run(&mut sim, &mut app, 3000);
     app.indoor.pages[2] = app.pages[2]; // a rider who put the map in the indoor set too
     assert!(app.trainer_heard(), "the trainer is heard");
@@ -1004,6 +1005,7 @@ fn mtb_gives_way_to_a_trainer_and_comes_back() {
     sim.backup[14] = Kind::Trainer.to_word(ID);
     sim.nordic.sensors.push(trainer_sensor());
     let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     app.settings.profile = Some(crate::ride::Profile::Mtb);
     run(&mut sim, &mut app, 3000);
     app.press(&mut sim, Press::Short(Key::Start));
@@ -1020,6 +1022,7 @@ fn mtb_gives_way_to_a_trainer_and_comes_back() {
     let mut sim = Sim::new(9, 0, 0);
     sim.own_settings();
     let mut app = App::start(&mut sim, Some(KEY));
+    app.settings.ready_check = false;
     app.settings.profile = Some(crate::ride::Profile::Mtb);
     run(&mut sim, &mut app, 1000);
     app.press(&mut sim, Press::Short(Key::Start));

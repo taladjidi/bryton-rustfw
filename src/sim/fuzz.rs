@@ -4825,3 +4825,30 @@ fn sun_times_anywhere() {
     }
     assert!(rose > 0 && rose < total, "the sun up and the polar days both reached: {rose} of {total}");
 }
+
+/// START REMINDER and READY CHECK (settings.bin data 150, 151): any length of file and any bytes read as the module
+/// doc says (a byte of 0 or 1 is the setting, a byte of another value or none its default ON); the fuzz reaches OFF,
+/// ON, a byte out of form and a file cut before and between the two.
+#[test]
+fn settings_file_start_cue_bytes() {
+    use crate::SettingsCopy;
+    let mut next = xorshift(0x5ca7);
+    let (mut off, mut on, mut wild, mut cut) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 148 + (next() % 5) as usize; // 148..=152
+        let bytes = [(next() % 4) as u8, (next() % 4) as u8];
+        sec[28 + 150..28 + 152].copy_from_slice(&bytes);
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let want = |k: usize| if len > 150 + k && bytes[k] < 2 { bytes[k] == 1 } else { true };
+        assert_eq!((st.start_reminder, st.ready_check), (want(0), want(1)), "len {len}, bytes {bytes:?}");
+        off += u32::from(!st.start_reminder) + u32::from(!st.ready_check);
+        on += u32::from(len > 150 && bytes[0] == 1);
+        wild += u32::from(len > 150 && bytes[0] > 1);
+        cut += u32::from(len <= 150 || (len == 151));
+    }
+    assert!(off > 1000 && on > 1000 && wild > 1000 && cut > 1000, "{off} {on} {wild} {cut}");
+}

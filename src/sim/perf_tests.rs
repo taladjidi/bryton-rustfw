@@ -182,6 +182,7 @@ fn perf_budgets() {
         sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_fn, network: 0, ack: &[] });
         let mut app = App::start(&mut sim, Some(KEY));
         app.settings.light_level = 0; // steps without simulated time below: the light sensor not read early
+        app.settings.start_reminder = false; // a sensor broadcasting at a standstill: the reminder is measured elsewhere
         app.pages[..3].copy_from_slice(&pages);
         if course {
             app.set_course_memory(crate::storage::course_file::tests::memory());

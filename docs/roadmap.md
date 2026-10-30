@@ -101,7 +101,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - laps: ~~auto lap by distance or time, the lap summary banner~~ done, sim (features.md); the lap list of a past ride (sonnet);
 - pages: ~~switched off and reordered, renamed, auto scroll, swipe up to go home~~ done, sim (features.md); a tap on a field opens Quick Status with chosen fields,
   the Page key acting on the press (patch P14);
-- start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start (sonnet);
+- ~~start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start~~ done, sim (features.md "Start reminder and ready check");
 - workouts: ~~the next-step strip instead of a popup (patch P3), two targets per step~~ done, sim (features.md);
 - zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;
 - ~~the heart rate strap's battery (ANT+ page 7); sensor names~~ done, sim (features.md); Di2 gear teeth and hood button actions (patch P12), the

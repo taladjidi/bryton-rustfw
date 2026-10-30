@@ -1551,6 +1551,8 @@ mod ride_tests;
 #[cfg(test)]
 mod segment_tests;
 #[cfg(test)]
+mod start_cue_tests;
+#[cfg(test)]
 mod stock_tests;
 #[cfg(test)]
 mod storage_tests;

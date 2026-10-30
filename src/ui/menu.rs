@@ -150,6 +150,10 @@ pub enum Setting {
     SegTarget,
     /// SOUND: the buzzer on or off (`sound`).
     Sound,
+    /// START REMINDER (BIKE): a banner and a beep when the bike moves with no ride (`start_reminder`).
+    StartReminder,
+    /// READY CHECK (BIKE): the card at a ride's start, GPS, sensors and battery (`ready_check`).
+    ReadyCheck,
     /// UNITS: METRIC or IMPERIAL (`imperial`).
     Units,
     /// TEMPERATURE: C or F (`temp_f`).
@@ -290,6 +294,8 @@ impl Setting {
             Setting::LiveSegments => "LIVE SEGMENTS",
             Setting::SegTarget => "TARGET",
             Setting::Sound => "SOUND",
+            Setting::StartReminder => "START REMINDER",
+            Setting::ReadyCheck => "READY CHECK",
             Setting::Units => "UNITS",
             Setting::Temp => "TEMPERATURE",
             Setting::AutoPause => "AUTO PAUSE",
@@ -836,7 +842,7 @@ pub const DISPLAY: [Row; 10] = [
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 16] = [
+pub const BIKE: [Row; 18] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -850,6 +856,8 @@ pub const BIKE: [Row; 16] = [
     Row::Set(Setting::LapKm),
     Row::Set(Setting::LapMin),
     Row::Set(Setting::AutoPause),
+    Row::Set(Setting::StartReminder),
+    Row::Set(Setting::ReadyCheck),
     Row::Set(Setting::Trip(0)),
     Row::Set(Setting::Trip(1)),
     Row::Set(Setting::Odometer),

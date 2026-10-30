@@ -327,6 +327,7 @@ impl App {
             self.strip.locked = !self.strip.locked; // the strip shows it; the banner says it
             return self.say(if self.strip.locked { "TOUCH LOCKED" } else { "TOUCH UNLOCKED" });
         }
+        let card = self.notes.ms.is_some() && self.notes.kind == Banner::Ready;
         let cleared = self.notes.ms.take().is_some();
         if cleared {
             self.unbanner(b); // and the input acts, except Back (below)
@@ -337,6 +338,10 @@ impl App {
             && !matches!(i, Input::Select | Input::Touch(Gesture::Tap(..)))
         {
             self.update_menu_rows(b, menu, sel); // its "SURE?" goes
+        }
+        // the ready card: the ride runs since the press, so Start on it only skips the card (it must not pause)
+        if card && i == Input::Select {
+            return;
         }
         // Back that clears a banner only clears it (it is "NO" to a confirmation); a call's Back declines
         if cleared && i == Input::Back && !self.phone.ringing {

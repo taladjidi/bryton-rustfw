@@ -27,6 +27,7 @@ mod pass;
 mod phone;
 mod powercal;
 mod profile;
+mod start_cues;
 mod survey;
 pub use profile::ClimbNow;
 mod quick;
@@ -68,6 +69,7 @@ pub(crate) use segment_ui::{FIXED_ROWS, SegUi};
 pub use segments::*;
 pub use settings::*;
 pub use settings_file::*;
+pub(crate) use start_cues::StartCues;
 pub use stock_data::*;
 pub(crate) use trainer::SensorStore;
 #[cfg(test)]

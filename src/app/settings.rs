@@ -321,6 +321,12 @@ pub struct Settings {
     /// SOUND (DISPLAY): the buzzer plays the alerts, the course and workout tones and the start / pause beeps (the
     /// power-on and power-off melodies stay). Kept in settings.bin only (data 99); ON in a file that predates it.
     pub sound: bool,
+    /// START REMINDER (BIKE): with no ride, the bike moving for 10 s says START THE RIDE? (data 150); ON in a file that
+    /// predates it.
+    pub start_reminder: bool,
+    /// READY CHECK (BIKE): a new ride's start shows the GPS, sensors and battery for 3 s (data 151); ON in a file that
+    /// predates it.
+    pub ready_check: bool,
     /// UNITS (DISPLAY): the fields show miles, mph and feet (data 100); the FIT file stays metric. METRIC in a file
     /// that predates it.
     pub imperial: bool,
@@ -499,6 +505,8 @@ impl Settings {
             live_segments: true,
             seg_target: 0,
             sound: true,
+            start_reminder: true,
+            ready_check: true,
             imperial: false,
             temp_f: false,
             auto_pause: 0,
@@ -763,6 +771,8 @@ impl Settings {
             Setting::LiveSegments => l.push_str(if self.live_segments { "ON" } else { "OFF" }),
             Setting::SegTarget => l.push_str(SEGMENT_TARGETS.get(self.seg_target).copied().unwrap_or("AUTO")),
             Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),
+            Setting::StartReminder => l.push_str(if self.start_reminder { "ON" } else { "OFF" }),
+            Setting::ReadyCheck => l.push_str(if self.ready_check { "ON" } else { "OFF" }),
             Setting::Units => l.push_str(if self.imperial { "IMPERIAL" } else { "METRIC" }),
             Setting::Temp => l.push_str(if self.temp_f { "F" } else { "C" }),
             Setting::AutoPause => match AUTO_PAUSE_KMH.get(self.auto_pause) {
@@ -888,6 +898,8 @@ impl Settings {
             Setting::LiveSegments => self.live_segments = !self.live_segments,
             Setting::SegTarget => self.seg_target = (self.seg_target + 1) % SEGMENT_TARGETS.len(),
             Setting::Sound => self.sound = !self.sound,
+            Setting::StartReminder => self.start_reminder = !self.start_reminder,
+            Setting::ReadyCheck => self.ready_check = !self.ready_check,
             Setting::ZonesBy => self.zones_lthr = !self.zones_lthr,
             Setting::ZonesReset => self.zone_custom = false,
             Setting::Sex => self.female = !self.female,

@@ -770,6 +770,7 @@ fn auto_off_waits_for_the_recorder() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     run(&mut sim, &mut app, 2000);
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 70_000);

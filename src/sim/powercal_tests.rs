@@ -133,6 +133,7 @@ fn request_sent_again() {
 #[test]
 fn refused_while_riding() {
     let (mut sim, mut app) = unit(MeterAnswer::Zero(5));
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.ride.state(), ride::State::Running);
     app.open_powercal();

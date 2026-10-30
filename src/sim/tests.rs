@@ -376,6 +376,7 @@ fn start_from_the_overview() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
     let mut app = App::start(&mut sim, None);
+    app.settings.ready_check = false; // these tests are about what the start does, not the card
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::Ride(0));
     assert_eq!(app.ride.state(), ride::State::Running);

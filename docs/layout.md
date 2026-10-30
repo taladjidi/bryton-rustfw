@@ -41,6 +41,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
     discovered one procedure at a time, then its operations queued), media keys, the call and media screens.
   - `notifs.rs`: the phone's last notifications kept (`phone::Inbox`), the NOTIFICATIONS list (a tap on the overview's
     notices, or PHONE in the menu) and a notification's detail.
+  - `start_cues.rs`: the START REMINDER (the bike moves with no ride) and the READY CHECK card at a new ride's start.
   - `riding.rs`: Start / pause, the end-ride screen (RESUME, SAVE, DISCARD), the second tick, the recorder glue.
     `stock_data.rs`: the scan of stock's rides and the import of its settings. `workouts.rs`, `courses.rs`: the workout played and the course followed.
   - `ahead.rs`: climbs ahead, with no course followed: the memory (main.rs), the second's step (the rider on the trace,
@@ -275,7 +276,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/sim/tests.rs` keeps the shared helpers (`run`, `assert_consistent`, `back`, `KEY`, `STRAP`...) and the boot, key, touch,
   banner, light and misc tests; the rest is by concern: `stock_tests.rs` (the overview's totals, STOCK DATA, fitness, ride
   history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
-  tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `ride_tests.rs` (zone colours and bar,
+  tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `start_cue_tests.rs` (the start reminder and the ready card), `ride_tests.rs` (zone colours and bar,
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
   `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter

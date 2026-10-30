@@ -10,6 +10,9 @@ pub const BANNER_MS: u32 = 4000;
 /// How long a lap's summary stays up.
 pub const LAP_BANNER_MS: u32 = 8000;
 
+/// How long the ready card stays up (app/start_cues.rs).
+pub const READY_BANNER_MS: u32 = 3000;
+
 /// A banner's kind, lowest first: a higher one is not covered by a lower one ([`App::say_as`]). An incoming call is
 /// above them all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -18,6 +21,8 @@ pub(crate) enum Banner {
     Info,
     /// A lap's summary: stays [`LAP_BANNER_MS`], over what a key said, under a turn, a workout step or an alarm.
     Summary,
+    /// The ready card at a ride's start: stays [`READY_BANNER_MS`], over what a key said, under everything the ride says.
+    Ready,
     /// A turn ahead.
     Cue,
     /// What the ride says: a workout step, a reminder, a climb.
@@ -31,7 +36,11 @@ pub(crate) enum Banner {
 impl Banner {
     /// How long this kind stays up.
     pub(crate) fn ms(self) -> u32 {
-        if self == Banner::Summary { LAP_BANNER_MS } else { BANNER_MS }
+        match self {
+            Banner::Summary => LAP_BANNER_MS,
+            Banner::Ready => READY_BANNER_MS,
+            _ => BANNER_MS,
+        }
     }
 
     /// A turn cue, ahead or now: good for its moment only.

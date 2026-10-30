@@ -293,6 +293,8 @@ pub struct App {
     auto_off: AutoOff,
     /// When the ride started: date, hours and minutes (its card's title).
     ride_started: RideStart,
+    /// The start reminder's count (app/start_cues.rs).
+    cues: StartCues,
     /// The graphs show the whole ride rather than the last minutes (a hold on a graph toggles it).
     graph_whole: bool,
     /// A graph's plot chosen by a tap, per page (the overview last) and box: shown instead of the page's until the
@@ -489,6 +491,7 @@ impl App {
             graph_whole: false,
             plot_taps: [[None; page::CELLS]; PAGES + 1],
             ride_started: RideStart::new((2000, 1, 1), (0, 0)),
+            cues: StartCues::new(),
             alerts: alerts::Alerts::new(),
             off_armed_ms: 0,
             auto_off: AutoOff::new(),

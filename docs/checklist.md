@@ -35,7 +35,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [x] Cog on the overview opens the menu (ours): sim
 - [~] Auto scroll through pages (stock, Garmin): sim
 - [x] Screen lock by holding Back and Lap (stock, Garmin): sim
-- [ ] Ready-to-ride dashboard: sensors, battery, GPS before the start (Wahoo)
+- [x] Ready-to-ride dashboard: sensors, battery, GPS before the start (Wahoo): sim; a two-line card over the ride, which starts at the press
 - [x] Indoor mode pages (stock, Garmin, Wahoo): unit
 - [ ] Languages other than English (stock)
 - [~] Imperial units (stock): sim; speed, distance, ascent and altitude, the totals and the trips; the course fields stay metric
@@ -159,7 +159,7 @@ Others
 - [x] Auto pause under 2 km/h (stock, all): unit
 - [x] Auto pause threshold set by hand (Garmin, Wahoo): sim; AUTO, OFF, 2, 3, 5, 8 km/h
 - [~] Auto lap by distance or time (Garmin, Wahoo, Karoo): sim; by position is not in
-- [ ] Start reminder when the bike moves (stock, Garmin)
+- [x] Start reminder when the bike moves (stock, Garmin): sim
 - [~] FIT activity file written as the ride goes (stock, all): sim
 - [~] Checkpoint every minute, two copies of the recovery record, resume after any reset (stock): sim, power cut tested after every sector
 - [~] Rides saved to \Activities, readable by stock and the computer (stock, all): sim
