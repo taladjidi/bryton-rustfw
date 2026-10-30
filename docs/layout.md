@@ -304,7 +304,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `\Workout\calendar`. Dry run unless `--go`; keys and tokens only in `~/.config/bryton-rustfw/` (0600), never in
   the repository. `sync.py selftest` (check.sh) runs against a fake server on 127.0.0.1.
 - `tools/segments.py`: the live segment files (docs/segments.md): fetches the rider's segment efforts from Intervals.icu, builds
-  `<id>.seg` files, writes them to the drive verified. `segments.py selftest` (check.sh) is synthetic; its fixture is
+  `<id>.seg` files (also from the rider's own FIT rides, `own`), writes them to the drive verified. `segments.py selftest` (check.sh) is synthetic; its fixture is
   `test-data/segment/synthetic.seg`.
 - `tools/theme.py`: the built-in colour themes as example files (`examples OUT_DIR`, never a mounted drive by default),
   a theme file drawn through the simulator (`preview FILE`, the ignored test `theme_preview`), and its selftest; the
