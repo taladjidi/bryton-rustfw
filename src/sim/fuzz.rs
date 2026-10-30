@@ -4924,13 +4924,16 @@ fn lap_lists() {
     // (field, natural size): the lap's, then ones it does not read
     const LAP: [(u8, u8); 9] = [(253, 4), (8, 4), (9, 4), (110, 4), (13, 2), (19, 2), (15, 1), (7, 4), (2, 4)];
     let (mut files, mut laps, mut full, mut with_power, mut cut_files) = (0u32, 0u32, 0u32, 0u32, 0u32);
-    for _ in 0..4000 {
+    // files by mode: 0 every definition big endian, 1 every one with a developer field, 2 free
+    let (mut big_laps, mut dev_laps, mut no_timer) = (0u32, 0u32, 0u32);
+    for iter in 0..4000 {
+        let mode = iter % 3;
         let mut body: Vec<u8> = Vec::new();
         let mut defs: [Option<(Vec<u8>, bool)>; 4] = [None, None, None, None];
         for _ in 0..4 + rnd() % 40 {
             let local = (rnd() % 4) as usize;
             if rnd() % 5 == 0 || defs[local].is_none() {
-                let big = rnd() % 3 == 0;
+                let big = mode == 0 || rnd() % 3 == 0;
                 let global: u16 = [19, 19, 19, 20, 18, 21, 49][(rnd() % 7) as usize];
                 let mut fields: Vec<(u8, u8)> = LAP.iter().copied().filter(|_| rnd() % 3 != 0).collect();
                 for f in &mut fields {
@@ -4938,7 +4941,7 @@ fn lap_lists() {
                         f.1 = 1 + (rnd() % 8) as u8; // a size the type does not have
                     }
                 }
-                let dev = rnd() % 4 == 0;
+                let dev = mode == 1 || rnd() % 4 == 0;
                 body.extend([0x40 | local as u8 | if dev { 0x20 } else { 0 }, 0, big as u8]);
                 body.extend(if big { global.to_be_bytes() } else { global.to_le_bytes() });
                 body.push(fields.len() as u8);
@@ -4989,17 +4992,31 @@ fn lap_lists() {
         }
         files += 1;
         laps += rows.len() as u32;
-        full += rows.iter().filter(|l| l.speed_x10.is_some() && l.timer_s > 0).count() as u32;
-        with_power += rows.iter().filter(|l| l.power.is_some() || l.hr.is_some()).count() as u32;
+        big_laps += if mode == 0 { rows.len() as u32 } else { 0 };
+        dev_laps += if mode == 1 { rows.len() as u32 } else { 0 };
+        no_timer += rows.iter().filter(|l| l.timer_s().is_none()).count() as u32;
+        big_laps += if mode == 0 { rows.len() as u32 } else { 0 };
+        dev_laps += if mode == 1 { rows.len() as u32 } else { 0 };
+        no_timer += rows.iter().filter(|l| l.timer_s().is_none()).count() as u32;
+        full += rows.iter().filter(|l| l.speed_x10().is_some() && l.timer_s().is_some_and(|t| t > 0)).count() as u32;
+        with_power += rows.iter().filter(|l| l.power().is_some() || l.hr().is_some()).count() as u32;
         rows.truncate(crate::history::MAX_LAPS);
         for top in [0, rows.len() / 2, rows.len() + 5] {
             for imperial in [false, true] {
                 let mut fr = crate::ui::tests::Frame::new();
-                crate::ui::card::draw_lap_list(&mut fr, &rows, top, imperial);
+                crate::ui::card::draw_lap_list(&mut fr, (&rows, rows.len() + 3), top, imperial);
             }
         }
     }
     assert!(files == 4000 && cut_files > 800, "{files} files, {cut_files} cut");
+    assert!(
+        big_laps > 200 && dev_laps > 200 && no_timer > 200,
+        "{big_laps} big endian, {dev_laps} developer, {no_timer} no timer"
+    );
+    assert!(
+        big_laps > 200 && dev_laps > 200 && no_timer > 200,
+        "{big_laps} big endian, {dev_laps} developer, {no_timer} no timer"
+    );
     assert!(
         laps > 5000 && full > 1000 && with_power > 1000,
         "{laps} laps, {full} with time and speed, {with_power} with power or hr"

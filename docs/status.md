@@ -8,7 +8,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
-- **The lap list of a past ride (sim only)**: HISTORY > a ride > LAPS (tap the label or Page). Still to see: on a ride recorded here with Lap presses, the times and distances of its laps; on a stock ride, whether its laps carry average power, heart rate and speed (fitread.rs reads `lap` fields 8, 9, 13 or 110, 15, 19 as the SDK profile has them; stock's layout is not checked on a real file).
+- **The lap list of a past ride (sim only)**: HISTORY > a ride > LAPS (tap the label or Page). Still to see: on a ride recorded here with Lap presses, the times and distances of its laps; on a stock ride, whether its laps carry average power, heart rate and speed (fitread.rs reads `lap` fields 8, 9, 13 or 110, 15, 19 as the SDK profile has them; stock's layout is not checked on a real file). Open: the recorder writes no avg_power (19) or avg_heart_rate (15) in its lap message, so own rides show "--"; to add from the lap's own samples (storage-writing: critical, plus an Opus review).
 
 - **FONT = BARLOW (T3, sim only)**: DISPLAY > FONT cycles PIXEL and BARLOW, and the smooth text draws in the pixel cells. Still to see: the labels and values on the ride page and the menus with BARLOW (no box moves, the strip and the fields redraw whole once), and a restart with BARLOW kept (the file read, then the register mirror).
 - **Heart rate intervals with a power meter paired (sensors.rs `each_interval_once`, radio.rs)**: sim only. Still to see: DFA a1 and the hrv messages on a ride with the strap and a power meter after the fix, each interval once (the count of hrv intervals against the beats).

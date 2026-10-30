@@ -266,6 +266,8 @@ pub struct Past {
     /// The ride's `lap` messages (the first [`MAX_LAPS`]) and how many there are ([`Past::laps`]).
     laps: [LapRow; MAX_LAPS],
     n_laps: usize,
+    /// Laps the file has (more than the list keeps).
+    n_total: u16,
     /// The ride being read ([`Past::step`]): it, the FTP for its TSS, its reader and totals so far.
     reading: Option<(Ride, (u16, bool), Reader, Acc)>,
     /// The ride last asked for (the one the card shows once read): what DELETE moves.
@@ -290,6 +292,7 @@ impl Past {
             samples: Samples::new(),
             laps: [LapRow::EMPTY; MAX_LAPS],
             n_laps: 0,
+            n_total: 0,
             reading: None,
             ride: NONE,
         }
@@ -299,13 +302,18 @@ impl Past {
     /// [`Past::step`]s.
     pub fn start(&mut self, ride: &Ride, ftp: u16, imperial: bool) {
         (self.track, self.samples, self.bytes, self.ride) = (Track::new(), Samples::new(), 0, *ride);
-        self.n_laps = 0;
+        (self.n_laps, self.n_total) = (0, 0);
         self.reading = Some((*ride, (ftp, imperial), Reader::with_position(), Acc::new()));
     }
 
     /// The laps of the ride on the card, in file order.
     pub fn laps(&self) -> &[LapRow] {
         self.laps.get(..self.n_laps).unwrap_or(&[])
+    }
+
+    /// How many laps the file has, the list holding the first [`MAX_LAPS`].
+    pub fn laps_total(&self) -> usize {
+        usize::from(self.n_total)
     }
 
     /// A ride is being read.
@@ -343,14 +351,16 @@ impl Past {
                 }
             };
             (self.bytes, spent) = (self.bytes.saturating_add(n as u32), spent.saturating_add(n as u32));
-            let (track, samples, laps, n_laps) = (&mut self.track, &mut self.samples, &mut self.laps, &mut self.n_laps);
+            let (track, samples, laps, (n_laps, n_total)) =
+                (&mut self.track, &mut self.samples, &mut self.laps, (&mut self.n_laps, &mut self.n_total));
             reader.push_slice(io.get(..n).unwrap_or(&[]), |m| {
                 acc.take(&m);
-                if let Msg::Lap(l) = m
-                    && let Some(slot) = laps.get_mut(*n_laps)
-                {
-                    *slot = lap_row(&l);
-                    *n_laps += 1;
+                if let Msg::Lap(l) = m {
+                    *n_total = n_total.saturating_add(1);
+                    if let Some(slot) = laps.get_mut(*n_laps) {
+                        *slot = lap_row(&l);
+                        *n_laps += 1;
+                    }
                 }
                 let Msg::Record(r) = m else { return };
                 if let Some((lat, lon)) = r.pos.filter(|p| p.0.unsigned_abs() <= 1 << 30) {
@@ -392,14 +402,18 @@ impl Past {
 
 /// A `lap` message as a row of the list: the speed from the message, else from its distance and time.
 pub(crate) fn lap_row(l: &Lap) -> LapRow {
-    let timer_s = l.timer_ms.map_or(0, |ms| ms / 1000);
-    let dist_m = l.dist_cm.map_or(0, |cm| cm / 100);
     let speed_x10 = match (l.speed_mm_s, l.dist_cm, l.timer_ms) {
         (Some(v), ..) => Some(u64::from(v) * 36 / 1000),
         (None, Some(cm), Some(ms)) if ms > 0 => Some(u64::from(cm) * 360 / u64::from(ms)),
         _ => None,
     };
-    LapRow { timer_s, dist_m, speed_x10: speed_x10.map(|v| v.min(9999) as u16), power: l.avg_power, hr: l.avg_hr }
+    LapRow::new(
+        l.timer_ms.map(|ms| ms / 1000),
+        l.dist_cm.map(|cm| cm / 100),
+        speed_x10.map(|v| v.min(0xfffe) as u32),
+        l.avg_power,
+        l.avg_hr,
+    )
 }
 
 /// Altitudes, one every `every` given, thinned to every other one when full.

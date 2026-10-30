@@ -778,8 +778,12 @@ impl App {
                 self.confirm = armed;
                 self.delete_past(b);
             }
-            (Screen::Past, Input::Next) => self.open(Screen::Laps(0)),
+            (Screen::Past, Input::Next) => {
+                self.confirm = None; // an armed DELETE is not carried over to the list and back
+                self.open(Screen::Laps(0))
+            }
             (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::LAPS_TAP, x, y) => {
+                self.confirm = None;
                 self.open(Screen::Laps(0))
             }
             (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::DELETE_TAP, x, y) => {

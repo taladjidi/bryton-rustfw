@@ -75,30 +75,80 @@ pub const LAP_ROWS: usize = ((H - LAPS_Y) / LAP_ROW) as usize;
 const LAP_ROW: u32 = 20;
 const LAPS_Y: u32 = super::LIST_Y + 16;
 
-/// One lap of a past ride as its list shows it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// One lap of a past ride as its list shows it, in 10 bytes: a field all ones is not known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LapRow {
-    /// Moving time, s.
-    pub timer_s: u32,
-    /// Distance, m.
-    pub dist_m: u32,
-    /// Average speed, km/h x 10.
-    pub speed_x10: Option<u16>,
-    /// Average power, W.
-    pub power: Option<u16>,
-    /// Average heart rate, bpm.
-    pub hr: Option<u8>,
+    timer_s: u16,
+    dist_10m: u16,
+    speed_x10: u16,
+    power: u16,
+    hr: u8,
 }
 
 impl LapRow {
-    /// A lap with nothing in it (the array's filler).
-    pub const EMPTY: LapRow = LapRow { timer_s: 0, dist_m: 0, speed_x10: None, power: None, hr: None };
+    /// A lap with nothing known (the array's filler).
+    pub const EMPTY: LapRow =
+        LapRow { timer_s: u16::MAX, dist_10m: u16::MAX, speed_x10: u16::MAX, power: u16::MAX, hr: u8::MAX };
+
+    /// A lap from its values (moving time s, distance m, speed km/h x 10, power W, heart rate bpm), each saturating
+    /// under the "not known" all ones.
+    pub fn new(
+        timer_s: Option<u32>,
+        dist_m: Option<u32>,
+        speed_x10: Option<u32>,
+        power: Option<u16>,
+        hr: Option<u8>,
+    ) -> Self {
+        let u16_ = |v: Option<u32>| v.map_or(u16::MAX, |v| v.min(0xfffe) as u16);
+        LapRow {
+            timer_s: u16_(timer_s),
+            dist_10m: u16_(dist_m.map(|m| m / 10)),
+            speed_x10: u16_(speed_x10),
+            power: u16_(power.map(u32::from)),
+            hr: hr.map_or(u8::MAX, |v| v.min(0xfe)),
+        }
+    }
+
+    /// Moving time, s.
+    pub fn timer_s(&self) -> Option<u32> {
+        (self.timer_s != u16::MAX).then_some(u32::from(self.timer_s))
+    }
+
+    /// Distance, m (to 10 m).
+    pub fn dist_m(&self) -> Option<u32> {
+        (self.dist_10m != u16::MAX).then_some(u32::from(self.dist_10m) * 10)
+    }
+
+    /// Average speed, km/h x 10.
+    pub fn speed_x10(&self) -> Option<u16> {
+        (self.speed_x10 != u16::MAX).then_some(self.speed_x10)
+    }
+
+    /// Average power, W.
+    pub fn power(&self) -> Option<u16> {
+        (self.power != u16::MAX).then_some(self.power)
+    }
+
+    /// Average heart rate, bpm.
+    pub fn hr(&self) -> Option<u8> {
+        (self.hr != u8::MAX).then_some(self.hr)
+    }
 }
 
 /// The list of a past ride's laps from row `top`: number, time, distance, average speed, power and heart rate (a
-/// missing one "--"); "NO LAPS" for a ride with none. Drawn whole (a screen opens or scrolls).
-pub fn draw_lap_list(c: &mut impl Canvas, laps: &[LapRow], top: usize, imperial: bool) {
-    super::draw_title(c, "LAPS");
+/// missing one "--"); "NO LAPS" for a ride with none; the title says "FIRST 99 OF 120" when `total` laps are more than
+/// `laps`. Drawn whole (a screen opens or scrolls).
+pub fn draw_lap_list(c: &mut impl Canvas, (laps, total): (&[LapRow], usize), top: usize, imperial: bool) {
+    let mut title = Line::<20>::new();
+    if total > laps.len() {
+        title.push_str("FIRST ");
+        title.push_u32(laps.len() as u32);
+        title.push_str(" OF ");
+        title.push_u32(total.min(99_999) as u32);
+    } else {
+        title.push_str("LAPS");
+    }
+    super::draw_title(c, title.as_str());
     let grey = Style { fg: super::GREY, scale: 1, ..LABEL };
     if laps.is_empty() {
         text::draw_in(c, &grey, 0, super::LIST_Y + 20, W, Align::Centre, "NO LAPS");
@@ -116,33 +166,41 @@ pub fn draw_lap_list(c: &mut impl Canvas, laps: &[LapRow], top: usize, imperial:
         let mut cells = [Line::<10>::new(); 6];
         let [no, time, dist, speed, power, hr] = &mut cells;
         no.push_u32(i as u32 + 1);
-        let (h, m, sec) = (l.timer_s / 3600, l.timer_s / 60 % 60, l.timer_s % 60);
-        if h > 0 {
-            time.push_u32(h);
-            time.push_str(":");
-            time.push_str(super::DIGITS[(m / 10) as usize]);
+        // time to 99:59:59, distance to 999.9 km, power to 9999 W: what a column holds
+        match l.timer_s().map(|t| t.min(99 * 3600 + 3599)) {
+            Some(t) => {
+                let (h, m, sec) = (t / 3600, t / 60 % 60, t % 60);
+                if h > 0 {
+                    time.push_u32(h);
+                    time.push_str(":");
+                    time.push_str(super::DIGITS[(m / 10) as usize]);
+                    time.push_str(super::DIGITS[(m % 10) as usize]);
+                } else {
+                    time.push_u32(m);
+                }
+                time.push_str(":");
+                time.push_str(super::DIGITS[(sec / 10) as usize]);
+                time.push_str(super::DIGITS[(sec % 10) as usize]);
+            }
+            None => time.push_str("--"),
         }
-        time.push_str(if h > 0 { super::DIGITS[(m % 10) as usize] } else { "" });
-        if h == 0 {
-            time.push_u32(m);
+        match l.dist_m() {
+            Some(m) => crate::push_trip(dist, m.min(999_900), imperial),
+            None => dist.push_str("--"),
         }
-        time.push_str(":");
-        time.push_str(super::DIGITS[(sec / 10) as usize]);
-        time.push_str(super::DIGITS[(sec % 10) as usize]);
-        crate::push_trip(dist, l.dist_m, imperial);
-        match l.speed_x10.map(|v| if imperial { crate::mph_x10(u32::from(v)) } else { u32::from(v) }) {
+        match l.speed_x10().map(|v| if imperial { crate::mph_x10(u32::from(v)) } else { u32::from(v) }) {
             Some(v) => {
-                speed.push_u32(v / 10);
+                speed.push_u32(v.min(9999) / 10);
                 speed.push_str(".");
-                speed.push_u32(v % 10);
+                speed.push_u32(v.min(9999) % 10);
             }
             None => speed.push_str("--"),
         }
-        match l.power {
-            Some(v) => power.push_u32(u32::from(v)),
+        match l.power() {
+            Some(v) => power.push_u32(u32::from(v.min(9999))),
             None => power.push_str("--"),
         }
-        match l.hr {
+        match l.hr() {
             Some(v) => hr.push_u32(u32::from(v)),
             None => hr.push_str("--"),
         }

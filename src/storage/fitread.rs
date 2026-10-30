@@ -789,6 +789,17 @@ mod tests {
                 Lap { timer_ms: Some(60_000), ..Lap::default() },
             ]
         );
+        // the list's row: a distance of all ones is not known (not 0.0 km), the time is
+        let row = crate::history::lap_row(&l[1]);
+        assert_eq!(
+            (row.timer_s(), row.dist_m(), row.speed_x10(), row.power(), row.hr()),
+            (Some(60), None, None, None, None)
+        );
+        let row = crate::history::lap_row(&l[0]);
+        assert_eq!(
+            (row.dist_m(), row.speed_x10(), row.power(), row.hr()),
+            (Some(2500), Some(216), Some(300), Some(150))
+        );
         // damaged: cut inside the second lap, the first is still given
         let cut = file_of(&b)[..b.len() + 14 - 5].to_vec();
         assert_eq!(laps(&cut).len(), 1);

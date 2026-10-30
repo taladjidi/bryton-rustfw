@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->62 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->57 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->61 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->58 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.

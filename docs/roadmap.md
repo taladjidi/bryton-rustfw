@@ -98,7 +98,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 **3b. Small features** (implementer, sonnet where it says screens):
 - alerts: ~~power, cadence and speed high / low, heart rate low; reminders by distance, kcal and kJ; the DFA a1 alert
   at the aerobic threshold (patch P9)~~ (done, sim); ~~a sunset alert~~ (done, sim, features.md);
-- laps: ~~auto lap by distance or time, the lap summary banner~~ done, sim (features.md); ~~the lap list of a past ride~~ done, sim (features.md "Laps of a past ride");
+- laps: ~~auto lap by distance or time, the lap summary banner~~ done, sim (features.md); ~~the lap list of a past ride~~ done, sim (features.md "Laps of a past ride"); recorder: avg_power (19) and avg_heart_rate (15) in the lap message, from the lap's own samples (storage-writing: critical, plus an Opus review);
 - pages: ~~switched off and reordered, renamed, auto scroll, swipe up to go home~~ done, sim (features.md); a tap on a field opens Quick Status with chosen fields,
   the Page key acting on the press (patch P14);
 - ~~start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start~~ done, sim (features.md "Start reminder and ready check");

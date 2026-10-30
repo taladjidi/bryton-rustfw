@@ -213,7 +213,9 @@ impl App {
                 ui::card::draw_delete(c);
                 ui::card::draw_laps_label(c);
             }
-            Screen::Laps(top) => ui::card::draw_lap_list(c, self.past.laps(), top, self.settings.imperial),
+            Screen::Laps(top) => {
+                ui::card::draw_lap_list(c, (self.past.laps(), self.past.laps_total()), top, self.settings.imperial)
+            }
             Screen::Media => {
                 ui::media::draw(c, &self.media_now());
             }
