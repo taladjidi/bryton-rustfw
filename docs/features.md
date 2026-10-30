@@ -507,6 +507,12 @@ ascent, NP (from the ride's records), average power, average and max heart rate,
 The ride's file is read once to draw it, 96 KB a main loop pass ("READING RIDE", about 0.1 s for a 300 KB ride;
 a long ride takes a few passes, the loop never stalls); the card opens when it is read. Back returns to the list.
 
+**Laps of a past ride** (storage/fitread.rs `lap`, ui/card.rs `draw_lap_list`): LAPS, a label at the left of the card's
+title (a 64 x 44 px touch box; or Page), lists the ride's laps from its `lap` messages, read in the same pass as the
+card: number, time, distance, average speed, average power and heart rate ("--" where the lap has none; this firmware's
+laps carry none of the averages, stock's may). The first 99 laps; Page and a swipe up or down scroll, Back, "<" or a swipe
+right return to the card. A ride with no lap messages says NO LAPS; a damaged file lists the laps read before the damage.
+
 **Delete** (storage/trash.rs): on a ride's card, Start dismisses the card (as on the ride just ended), and DELETE (a red
 label at the right of the title, a 88 x 44 px touch box; or Start held) asks "DELETE RIDE? START: YES BACK: NO" (any other
 input drops it), Start (or a tap on DELETE again) moves the ride out of sight, never erases it: `\Activities\<name>.fit` into `\Rustfw\Deleted\`,

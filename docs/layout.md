@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->60 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->59 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->61 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->58 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -286,7 +286,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   history and delete), `workout_tests.rs` (workouts from the calendar, the graph and gauge fields), `storage_tests.rs` (STORAGE and ABOUT: the card's figures, its oldest ride), `menu_tests.rs` (the menu
   tree, pairing, pages from the menu, HRV fields, the RIDE menu; `to_row`, `row_in`), `start_cue_tests.rs` (the start reminder and the ready card), `ride_tests.rs` (zone colours and bar,
   live readings, laps, power, climb and graph fields), `map_tests.rs` (basemap, IGN tiles, zoom, pan; `drag`, `tiles_route`),
-  `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
+  `segment_tests.rs` (live segments: the index, a ride along a synthetic segment, the efforts written after the save and cut at every sector), `course_tests.rs` (the followed course, its cues; `hill`), `laps_tests.rs` (a past ride's lap list) and `perf_tests.rs` (time budgets of a pass, a menu, idle).
 - `src/sim/overview_tests.rs` (the overview's TODAY card and the WORKOUTS thumbnails), `powercal_tests.rs` (power meter
   zero offset), `ramp_tests.rs` (the FTP ramp test), `trainer_tests.rs` (the home trainer: FE-C pairing, ERG, SIM).
 - `src/sim/power_tests.rs`: AUTO OFF: the unit switches itself off after its time-out of quiet, and only then.
