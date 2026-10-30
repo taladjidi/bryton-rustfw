@@ -143,6 +143,8 @@ pub enum Screen {
     Summary,
     /// The card of a past ride (`App::past`); Back returns to the history.
     Past,
+    /// The laps of the past ride on its card (`App::past`), the first one shown `top`.
+    Laps(usize),
     /// The phone's media remote (app/phone.rs).
     Media,
     /// QUICK STATUS (app/status.rs): the rider's six fields over the page a tap opened it on.
@@ -384,6 +386,7 @@ impl App {
             Screen::Quick => self.input_quick(b, i, shown),
             Screen::Status => self.input_status(b, i),
             Screen::Notif(..) => self.input_notif(b, i),
+            Screen::Laps(_) => self.input_laps(b, i),
             Screen::RampResult => self.input_ramp(b, i, shown),
             Screen::PowerCal => self.input_powercal(b, i, shown),
             Screen::Trainer => self.input_trainer(b, i, shown),
@@ -584,6 +587,29 @@ impl App {
         self.reshow(b, shown);
     }
 
+    /// A past ride's lap list: scrolled by Page and the swipes, left by Back.
+    fn input_laps(&mut self, b: &mut impl Board, i: Input) {
+        let Screen::Laps(top) = self.screen else { return };
+        let top = match i {
+            Input::Next | Input::Touch(Gesture::Swipe(Dir::Up)) => top + 1,
+            Input::Prev | Input::Touch(Gesture::Swipe(Dir::Down)) => top.saturating_sub(1),
+            Input::Back | Input::Touch(Gesture::Swipe(Dir::Right)) => {
+                self.close();
+                return self.show(b);
+            }
+            Input::Touch(Gesture::Tap(x, y)) if inside(ui::BACK_TAP, x, y) => {
+                self.close();
+                return self.show(b);
+            }
+            _ => return,
+        };
+        let top = top.min(self.past.laps().len().saturating_sub(ui::card::LAP_ROWS));
+        if self.screen != Screen::Laps(top) {
+            self.screen = Screen::Laps(top);
+            self.show(b);
+        }
+    }
+
     /// A notification's detail: scrolled by Page and the swipes, left by Back.
     fn input_notif(&mut self, b: &mut impl Board, i: Input) {
         let Screen::Notif(k, top) = self.screen else {
@@ -760,6 +786,14 @@ impl App {
             (Screen::Past, Input::Select | Input::End) => {
                 self.confirm = armed;
                 self.delete_past(b);
+            }
+            (Screen::Past, Input::Next) => {
+                self.confirm = None; // an armed DELETE is not carried over to the list and back
+                self.open(Screen::Laps(0))
+            }
+            (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::LAPS_TAP, x, y) => {
+                self.confirm = None;
+                self.open(Screen::Laps(0))
             }
             (Screen::Past, Input::Touch(Gesture::Tap(x, y))) if inside(ui::card::DELETE_TAP, x, y) => {
                 self.confirm = armed;
