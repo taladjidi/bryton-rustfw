@@ -92,7 +92,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   when even that does not fit. No 1x text on the ride pages: graph scales, spans and figures are 2x, drawn on graphs
   across the screen at least 120 px tall (a smaller graph shows its title and bars), and the workout gauge's target
   line only in a box 100 px tall or more.
-- **Map:** the track since power-on, north up, about 1 km across around the rider (fitted to the whole track until a fix), an arrow for position and heading, a
+- **Map:** the track since power-on, north up (or heading up, below), about 1 km across around the rider (fitted to the whole track until a fix), an arrow for position and heading, a
   scale bar. Before a fix, a grey dot at the last known position. Under it, a basemap:
   - **IGN Plan v2** (France: roads, paths, buildings, names, contour lines, hill shading) where the owner copied
     packs to `\Rustfw\Maps` (made on the computer by `tools/ign_pack.py`, docs/install.md, "IGN maps"): zooms 11
@@ -116,6 +116,17 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
     middle three fifths; no fix yet: the whole track fitted. With a course followed, the crosshair toggles between
     that view and the whole route (fitted) and back. A hold on the map opens the page
     editor with the map's box selected (not while a ride records, as on any box); a map of half a page or less has no buttons. The fitted map keeps the arrow clear of the buttons.
+  - **Orientation** (DISPLAY > MAP, byte 167 of settings.bin; an older file reads NORTH UP): NORTH UP (the default) or
+    HEADING UP. Heading up turns the map (basemap, IGN raster, track, course, arrow) so the top is the GNSS course, in
+    22.5 degree steps (the rotation is done when projecting: integer sin and cos x 256, exact at 90 degrees, the tiles
+    sampled with the turned coordinates). It turns only above 3.6 km/h (stopped, the course is noise: the last step
+    is kept), only when the course is more than 18 degrees from the step shown, and at most once every 3 fixes. A
+    step is one whole redraw like a re-centre (sim, a ride with 30 m wiggles: 22 steps in 400 s, 79 k pixels a step,
+    the map being 71 k, 1.0 k pixels a second between). A red arrow top left points to north. The fitted view (the
+    whole route, the ride's card, indoors) stays north up. A pan drag turns with the map.
+  - **Pinch:** two fingers apart or together on a ride page with a full-size map step the zoom one level (1.5 times
+    the distance between them each, from landing or the last step) like "+" and "-". The chip reports up to 5 points
+    (BOARD.md 17); the driver reads the first two slots. Sim only: two fingers have not been seen on the unit.
   - **Pan:** at a zoom set by hand, drag the map: it moves with the finger, redrawn once when the finger lifts
     (one new basemap, no redraw while dragging), at most two map widths past the track and the course. The map
     then stays put instead of following; "+" and "-" zoom around the centre panned to; the crosshair goes back to
@@ -925,7 +936,7 @@ UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trip
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
 C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
 DATE FORMAT are 152 to 154; SUNSET ALERT is byte 155 and reads OFF when missing; CHAINRINGS and CASSETTE are 156 and 157;
-QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are the last bytes (165 and 166; 167 in
+QUICK STATUS is byte 158 and its six fields 159 to 164; ZONE and SUMMER TIME are bytes 165 and 166, MAP the last (167; 168 in
 all) and read CLOCK and OFF when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):

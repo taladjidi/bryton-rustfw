@@ -90,6 +90,7 @@ impl App {
                         .any(|&k| self.radio.heard_ms.get(k as usize).is_some_and(|&ms| ms < sensors::STALE_MS));
                     if pvt.good() {
                         self.track.add(pvt.lat, pvt.lon, pvt.heading);
+                        self.track.orient(self.settings.map_up, pvt.heading, pvt.speed_mm_s);
                         self.gps.fixed = true;
                     }
                     if pvt.good() && !sensor {
