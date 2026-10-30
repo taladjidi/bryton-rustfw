@@ -393,6 +393,38 @@ fn power_calibration_pages() {
     assert!(zero > 500 && auto > 500 && done > 50, "reached: {zero} {auto} {done}");
 }
 
+/// Random power meter pages (0x10, 0x12 and 0x13 mixed, the pedal smoothness combined with 0xfe, invalid bytes, a short
+/// page with bytes 6-7 zero) into the decoder: no panic, a torque or smoothness kept only as a percent (at most 200),
+/// and the torque page reached (its count over the seeds).
+#[test]
+fn power_pages_mixed() {
+    use crate::sensors::{Decoders, Kind, Live, Metric};
+    let (mut torque, mut combined) = (0, 0);
+    for seed in 13..=16u32 {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let v: std::vec::Vec<u8> = bytes(seed, 1 << 16).collect();
+        for c in v.chunks_exact(9) {
+            let mut d: [u8; 8] = core::array::from_fn(|i| c[i]);
+            d[0] = [0x10, 0x12, 0x13][usize::from(c[8]) % 3];
+            if d[0] == 0x13 && c[8] & 0x08 != 0 {
+                d[5] = 0xfe;
+            }
+            if c[8] & 0x40 != 0 {
+                d[6] = 0;
+                d[7] = 0;
+            }
+            live.tick(1000); // values age out within 5 messages
+            dec.decode(Kind::Power, d, 2105, &mut live);
+            for m in [Metric::TorqueL, Metric::TorqueR, Metric::SmoothL, Metric::SmoothR, Metric::SmoothC] {
+                assert!(live.get(m).is_none_or(|v| v <= 200), "{m:?} {:?}", live.get(m));
+            }
+            torque += usize::from(live.get(Metric::TorqueL).is_some() && d[0] == 0x13);
+            combined += live.get(Metric::SmoothC).is_some() as usize;
+        }
+    }
+    assert!(torque > 1000 && combined > 100, "reached: {torque} {combined}");
+}
+
 /// Random bytes from the computer, with command words mixed in, into the dev link protocol.
 #[test]
 fn dev_link_input() {

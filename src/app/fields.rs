@@ -599,6 +599,17 @@ impl App {
                 }
                 return l;
             }
+            Field::TorqueEff => {
+                pair_text(&mut l, self.live.get(Metric::TorqueL), self.live.get(Metric::TorqueR));
+                return l;
+            }
+            Field::PedalSmooth => {
+                match self.live.get(Metric::SmoothC) {
+                    Some(c) => l.push_u32(u32::from(c / 2)),
+                    None => pair_text(&mut l, self.live.get(Metric::SmoothL), self.live.get(Metric::SmoothR)),
+                }
+                return l;
+            }
             Field::Balance => {
                 match self.live.get(Metric::Balance) {
                     Some(right) => {
@@ -683,6 +694,19 @@ impl App {
     }
 }
 
+/// Two percents as "L/R" (0.5 % units as sent, shown whole); each side "--" when missing ("88/--").
+fn pair_text(l: &mut Line<8>, a: Option<u16>, b: Option<u16>) {
+    match a {
+        Some(a) => l.push_u32(u32::from(a / 2)),
+        None => l.push_str("--"),
+    }
+    l.push_str("/");
+    match b {
+        Some(b) => l.push_u32(u32::from(b / 2)),
+        None => l.push_str("--"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,7 +722,8 @@ mod tests {
         assert_eq!([Field::from_index(79), Field::from_index(90)], [Field::PctMaxHr, Field::BalanceAvg]);
         assert_eq!([Field::from_index(91), Field::from_index(99)], [Field::Heading, Field::HrBatt]);
         assert_eq!([Field::from_index(100), Field::from_index(104)], [Field::Trip1, Field::Trip2Time]);
-        assert_eq!(Field::ALL.len(), 108);
+        assert_eq!([Field::from_index(108), Field::from_index(109)], [Field::TorqueEff, Field::PedalSmooth]);
+        assert_eq!(Field::ALL.len(), 110);
     }
 
     #[test]

@@ -98,7 +98,7 @@ Power
 - [x] W' balance (patch P10, Garmin, Karoo, Wahoo): sim
 - [x] Left / right balance (stock, Garmin): sim
 - [x] Average left / right balance (stock): sim
-- [ ] Torque effectiveness and pedal smoothness (stock, Garmin)
+- [~] Torque effectiveness and pedal smoothness (stock, Garmin): sim; not yet seen on the unit (a meter may not send page 0x13)
 - [ ] Cycling dynamics: power phase, platform centre offset, seated / standing (Garmin, S800)
 - [~] % of FTP: current, average, lap, 3 / 10 / 30 s (stock): sim; no last lap's
 - [x] Power zone (stock, all): sim

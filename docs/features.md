@@ -53,7 +53,8 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   ascent, a zone graph; heart rate variability from a strap's beats: DFA a1 (the aerobic threshold marker, about
   0.75 at the threshold, from the last 2 minutes once 64 clean beats are in) and RMSSD (ms, the last minute); and
   from the power meter and the ride: 3, 10 and 30 s power, NP, IF, TSS, kJ, kcal, W/kg, W' balance (kJ, green,
-  the zone colours as it drains), max power, max heart rate, average cadence, left / right pedal balance, VAM and
+  the zone colours as it drains), max power, max heart rate, average cadence, left / right pedal balance, left / right torque
+  effectiveness and pedal smoothness (page 0x13; the combined smoothness when the meter sends one), VAM and
   grade; and the trip and the laps: trip time (seconds running, auto-pauses in, a Start pause out), lap count, last
   lap time, lap average power, last lap average power, lap NP, top cadence, top altitude, total descent (the ascent's
   hysteresis: 5 m from GNSS, 3 m from the barometer), lap ascent and lap descent, and the distance uphill and downhill
