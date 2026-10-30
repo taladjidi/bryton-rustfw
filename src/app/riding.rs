@@ -230,7 +230,10 @@ impl App {
                 self.settings_store.done(false);
                 self.notice("KEPT IN RUSTFW/RESCUE");
             }
-            Some(GaveUp::Lost) => self.alarm_notice("GIVEN UP: COPY THE CARD"),
+            Some(GaveUp::Lost) => {
+                self.settings_store.done(false);
+                self.alarm_notice("GIVEN UP: COPY THE CARD");
+            }
             None => {}
         }
     }

@@ -547,7 +547,9 @@ fn trips_pay_once_per_saved_ride_and_a_discarded_ride_pays_nothing() {
     app.press(&mut sim, Press::Short(Key::Back));
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 20_000);
+    assert!(app.ride.state() == crate::ride::State::Running && app.ride.dist_m() > 50, "C is riding");
     app.press(&mut sim, Press::Short(Key::Start)); // pause
+    assert!(app.ride.dist_m() > 50 && app.ride.state() != crate::ride::State::Idle, "C is paused");
     app.discard_ride();
     run(&mut sim, &mut app, 20_000);
     settle(&mut sim, &mut app);
