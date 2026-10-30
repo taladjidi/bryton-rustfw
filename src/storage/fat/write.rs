@@ -435,6 +435,23 @@ impl Fat {
         self.trim(d, h, size)
     }
 
+    /// Frees the whole chain of `h`, a chain no entry names (a write given up before its entry: a screenshot): its
+    /// tail first ([`Fat::trim`]), then its first cluster, then FSInfo. A cut between leaves that cluster lost, never
+    /// a free one in a chain. [`Error::Refused`] for a handle with an entry.
+    pub fn free_chain(&mut self, d: &mut impl DiskWrite, h: &mut Handle) -> Result<(), Error> {
+        if h.entry_lba != 0 {
+            return Err(Error::Refused);
+        }
+        if h.clusters == 0 {
+            return Ok(());
+        }
+        self.trim(d, h, 0)?;
+        self.set_entries(d, &[(h.first, 0)])?;
+        let first = h.first;
+        *h = Handle::default();
+        self.fsinfo_update(d, -1, first, None)
+    }
+
     /// Cuts `h`'s chain after the clusters `size` bytes need (at least one) and frees the rest: its size already
     /// that, or no entry at all ([`Fat::chain`]).
     pub fn trim(&mut self, d: &mut impl DiskWrite, h: &mut Handle, size: u32) -> Result<(), Error> {

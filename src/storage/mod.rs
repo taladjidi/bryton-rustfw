@@ -4,6 +4,7 @@
 
 pub mod course_file;
 pub mod fat;
+pub mod faultlog;
 pub mod fit;
 pub mod fitread;
 pub mod history;
@@ -12,6 +13,7 @@ pub mod inflate;
 pub mod ini;
 pub mod recorder;
 pub mod route;
+pub mod screenshot;
 pub mod stock;
 pub mod thresholds;
 pub mod trash;
