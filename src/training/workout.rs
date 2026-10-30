@@ -137,7 +137,7 @@ pub fn level(s: &Step, z: &ride::Zones) -> (u32, u16) {
     let (ftp, max_hr) = (z.ftp, z.max_hr);
     let per_mille = |v: u32, lo: u32, hi: u32| v.saturating_sub(lo) * 1000 / hi.saturating_sub(lo).max(1);
     let (ftp32, max32) = (u32::from(ftp), u32::from(max_hr));
-    match (s.target.kind, s.target.range(ftp, max_hr)) {
+    match (s.target.kind, s.target.range(z)) {
         (Kind::Power, Some((lo, hi))) => {
             let mid = lo.midpoint(hi);
             (per_mille(mid.into(), 0, ftp32 * 3 / 2), z.power_color(mid))
@@ -158,7 +158,7 @@ pub fn level(s: &Step, z: &ride::Zones) -> (u32, u16) {
 /// ```
 /// use bryton_rustfw::storage::workout_file::{Kind, Length, Step, Target};
 /// use bryton_rustfw::{ride, ui, workout::column};
-/// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true };
+/// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true, zone: 0 };
 /// let steps = [50, 160]
 ///     .map(|pct| Step { len: Length::Time(60), target: target(pct), target2: Target::OPEN, intensity: 0 });
 /// assert_eq!(column(&steps, ride::Zones::standard(200, 190), (4, 100), Some(1), 3), (100, ride::ZONE_COLORS[6]), "160 %: the top, Z7");
@@ -181,8 +181,8 @@ pub fn column(steps: &[Step], z: ride::Zones, (cols, h): (u32, u32), rider: Opti
 
 /// What the workout gauge field measures and its target band, during step `s` (None: no workout running), for this
 /// FTP and max heart rate: the step's own kind and range; power without a band for an open step or no workout.
-pub fn gauge_target(s: Option<&Step>, ftp: u16, max_hr: u16) -> (Kind, Option<(u16, u16)>) {
-    match s.map(|s| (s.target.kind, s.target.range(ftp, max_hr))) {
+pub fn gauge_target(s: Option<&Step>, z: &ride::Zones) -> (Kind, Option<(u16, u16)>) {
+    match s.map(|s| (s.target.kind, s.target.range(z))) {
         Some((kind, Some((lo, hi)))) if kind != Kind::Open => (kind, Some((lo.min(hi), lo.max(hi)))),
         _ => (Kind::Power, None),
     }
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn graph_columns_and_the_riders_place() {
-        let t = |kind, lo, hi| Target { kind, lo, hi, pct: true };
+        let t = |kind, lo, hi| Target { kind, lo, hi, pct: true, zone: 0 };
         let steps = [
             Step { len: Length::Time(300), target: t(Kind::Power, 60, 70), target2: Target::OPEN, intensity: 2 },
             Step { len: Length::Distance(2400), target: t(Kind::Hr, 85, 95), target2: Target::OPEN, intensity: 0 },
@@ -425,15 +425,31 @@ mod tests {
 
     #[test]
     fn gauge_follows_the_steps_target() {
-        let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct };
+        let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct, zone: 0 };
         let step = |target| Step { len: Length::Time(60), target, target2: Target::OPEN, intensity: 0 };
         let (power, hr) = (step(t(Kind::Power, 100, 110, true)), step(t(Kind::Hr, 150, 160, false)));
-        assert_eq!(gauge_target(Some(&power), 200, 190), (Kind::Power, Some((200, 220))), "% of FTP to W");
-        assert_eq!(gauge_target(Some(&hr), 200, 190), (Kind::Hr, Some((150, 160))), "a heart-rate step: bpm");
-        assert_eq!(gauge_target(Some(&step(Target::OPEN)), 200, 190), (Kind::Power, None), "open: power, no band");
-        assert_eq!(gauge_target(None, 200, 190), (Kind::Power, None), "no workout");
+        assert_eq!(
+            gauge_target(Some(&power), &ride::Zones::standard(200, 190)),
+            (Kind::Power, Some((200, 220))),
+            "% of FTP to W"
+        );
+        assert_eq!(
+            gauge_target(Some(&hr), &ride::Zones::standard(200, 190)),
+            (Kind::Hr, Some((150, 160))),
+            "a heart-rate step: bpm"
+        );
+        assert_eq!(
+            gauge_target(Some(&step(Target::OPEN)), &ride::Zones::standard(200, 190)),
+            (Kind::Power, None),
+            "open: power, no band"
+        );
+        assert_eq!(gauge_target(None, &ride::Zones::standard(200, 190)), (Kind::Power, None), "no workout");
         let swapped = step(t(Kind::Power, 220, 200, false));
-        assert_eq!(gauge_target(Some(&swapped), 200, 190).1, Some((200, 220)), "a band written high to low");
+        assert_eq!(
+            gauge_target(Some(&swapped), &ride::Zones::standard(200, 190)).1,
+            Some((200, 220)),
+            "a band written high to low"
+        );
 
         // cadence 150-160: 105 to 208 over 103 columns, a column a unit
         assert_eq!(gauge_scale(Kind::Cadence, (150, 160), 200, 190), (105, 208));

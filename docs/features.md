@@ -671,16 +671,18 @@ times, the graphs, the workout profiles and gauge read it, so a change moves all
 - **ZONES** (ME > ZONES): the top of each heart-rate zone 1 to 4 (bpm, step 1) and power zone 1 to 6 (W, step 5), edited in place
   between the neighbouring bounds, and RESET (back to the computed zones). The list shows the computed bounds until one is edited;
   the first edit makes all of them the rider's own, which stay as they are when FTP, MAX HR, LTHR or ZONES BY change, until RESET.
-  Workout files' own zone targets (`target_value`) keep the percent definition.
+  A workout file's zone target (a zone number, `target_value`) takes its band from these zones (`Target::range`), so the step's
+  band, target and colours agree with the bars; a target written as a range is as written.
 - **SEX, BORN (year) and HEIGHT** (ME): male or female, a year (1920 to 2020) and cm; unset until the first press (1985, 170).
-  SEX picks hrTSS's constant; BORN sets MAX HR to 220 minus the age when it is still the unset default 190 (a maximum that was
-  set is never replaced). HEIGHT is kept for later: no formula uses it yet, and kcal come from the work (power) only, so none uses
+  SEX picks hrTSS's constant; BORN sets MAX HR to 220 minus the age (banner "MAX HR n FROM AGE") when it is still the unset default 190 or was itself
+  worked out from the age (a flag, data 149, recomputed when BORN changes; a MAX HR edit by hand clears it, so a maximum that was
+  set is never replaced). With the clock unset (year before 2024) or an age under 5 it says "SET THE CLOCK" / does nothing. HEIGHT is kept for later: no formula uses it yet, and kcal come from the work (power) only, so none uses
   sex or age.
 - **hrTSS** (training/hrtss.rs): on a ride without power the TSS field and the end card show the TRIMP of the ride's moving seconds
   (Banister, k 1.92 men and 1.67 women, a resting rate of 60 bpm assumed) against an hour at LTHR, times 100. "--" while LTHR is unset.
-  It restarts after a resume, as the zone times do; past rides in HISTORY keep "--" without power. The FIT file is unchanged.
+  It restarts after a resume, as the zone times do; HISTORY's TSS stays power-only (hrTSS is live and on the end card only), so past rides without power show "--". The FIT file is unchanged.
 - **Kept** in settings.bin after the odometer: ZONES BY (data 123), a custom flag (124), the ten bounds (u16, 125..145), SEX (145), BORN
-  (u16, 146) and HEIGHT (a byte, 148): 149 bytes. A file of 44 to 123 bytes reads the computed zones, MAX HR, male and none set;
+  (u16, 146), HEIGHT (a byte, 148) and MAX HR FROM AGE (a byte, 149): 150 bytes. A file of 44 to 123 bytes reads the computed zones, MAX HR, male and none set;
   bounds that do not rise read as the computed zones. Fuzzed (`settings_file_zone_bytes`).
 
 ## Units, sound, trips

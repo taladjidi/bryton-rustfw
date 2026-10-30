@@ -349,6 +349,8 @@ pub struct Settings {
     pub birth_year: u16,
     /// HEIGHT (ME), cm: 0 until set (data 148, a byte).
     pub height_cm: u16,
+    /// MAX HR was worked out from BORN (data 149, a byte); a manual MAX HR edit clears it.
+    pub max_hr_age: bool,
 }
 
 /// AUTO PAUSE's choices as the ride gets them ([`ride::Input::pause_kmh`]): 0 the profile's own rule, 255 never, else
@@ -509,6 +511,7 @@ impl Settings {
             female: false,
             birth_year: 0,
             height_cm: 0,
+            max_hr_age: false,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -951,24 +954,33 @@ impl Settings {
     }
 
     /// The maximum heart rate from the age (220 minus the years, Fox and Haskell's rule of thumb, clamped to
-    /// [`menu::MAX_HR_RANGE`]) in `year`, but only while MAX HR is still the unset default ([`ride::MAX_HR`]): a
-    /// maximum the rider set or measured is never replaced.
+    /// [`menu::MAX_HR_RANGE`]) in `year`, while MAX HR is the unset default ([`ride::MAX_HR`]) or was itself worked out
+    /// from the age (`max_hr_age`, so a changed BORN recomputes it): a maximum the rider set or measured is never
+    /// replaced. None when `year` is not a real clock year (under 2024: the clock is not set) or the age is under 5;
+    /// else whether MAX HR changed.
     ///
     /// ```
     /// use bryton_rustfw::Settings;
     /// let mut s = Settings { birth_year: 1986, ..Settings::from_word(0) };
-    /// s.max_hr_from_age(2026);
-    /// assert_eq!(s.max_hr, 180, "220 - 40");
-    /// s.max_hr = 183;
+    /// assert_eq!(s.max_hr_from_age(2026), Some(true));
+    /// assert_eq!((s.max_hr, s.max_hr_age), (180, true), "220 - 40");
     /// s.birth_year = 1996;
-    /// s.max_hr_from_age(2026);
-    /// assert_eq!(s.max_hr, 183, "a maximum that was set is kept");
+    /// assert_eq!(s.max_hr_from_age(2026), Some(true), "recomputed while it came from the age");
+    /// assert_eq!(s.max_hr, 190);
+    /// s.max_hr = 183;
+    /// s.max_hr_age = false;
+    /// assert_eq!(s.max_hr_from_age(2026), Some(false), "a maximum that was set is kept");
+    /// assert_eq!(s.max_hr_from_age(1970), None, "the clock is not set");
     /// ```
-    pub fn max_hr_from_age(&mut self, year: u16) {
-        if self.birth_year > 0 && self.max_hr == ride::MAX_HR {
-            let age = year.saturating_sub(self.birth_year);
-            self.max_hr = 220u16.saturating_sub(age).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end());
+    pub fn max_hr_from_age(&mut self, year: u16) -> Option<bool> {
+        let age = year.checked_sub(self.birth_year).filter(|&a| year >= 2024 && a >= 5 && self.birth_year > 0)?;
+        if !self.max_hr_age && self.max_hr != ride::MAX_HR {
+            return Some(false);
         }
+        let hr = 220u16.saturating_sub(age).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end());
+        let changed = hr != self.max_hr;
+        (self.max_hr, self.max_hr_age) = (hr, true);
+        Some(changed)
     }
 
     /// The value of a number setting, 0 for none.
@@ -982,11 +994,15 @@ impl Settings {
     pub fn zones(&self) -> ride::Zones {
         let by = if self.zones_lthr { ride::ZonesBy::Lthr } else { ride::ZonesBy::MaxHr };
         let computed = ride::Zones::computed(self.ftp, self.max_hr, self.lthr, by);
-        if self.zone_custom {
-            ride::Zones::custom(self.ftp, self.max_hr, self.zone_up).unwrap_or(computed)
-        } else {
-            computed
-        }
+        let custom = Some(self.zone_up).filter(|u| self.zone_custom && Self::zone_bounds_ok(u));
+        custom.and_then(|u| ride::Zones::custom(self.ftp, self.max_hr, u)).unwrap_or(computed)
+    }
+
+    /// Whether `up` (the ten bounds, bpm then W) are in what ZONES offers: heart rate [`menu::ZONE_HR_MIN`] to
+    /// [`menu::ZONE_HR_MAX`], power up to [`menu::ZONE_PW_MAX`]. A file's bounds out of it read as the computed zones.
+    pub(crate) fn zone_bounds_ok(up: &[u16; 10]) -> bool {
+        up[..4].iter().all(|v| (menu::ZONE_HR_MIN..=menu::ZONE_HR_MAX).contains(v))
+            && up[4..].iter().all(|&v| v <= menu::ZONE_PW_MAX)
     }
 
     /// Zone bound `n` (0 to 3 heart rate, 4 to 9 power) one step up or down, between its neighbours. The first edit

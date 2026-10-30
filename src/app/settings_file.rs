@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (149 now, with ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) at 123..149; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (150 now, with ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -141,7 +141,7 @@ impl SettingsCopy {
         }
         put(&[u8::from(s.female)]);
         put(&s.birth_year.to_le_bytes());
-        put(&[s.height_cm as u8]);
+        put(&[s.height_cm as u8, u8::from(s.max_hr_age)]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -261,12 +261,15 @@ impl SettingsCopy {
             up.iter_mut().all(|v| data.next().zip(data.next()).map(|(a, b)| *v = u16::from_le_bytes([a, b])).is_some());
         if whole {
             s.zone_up = up;
-            s.zone_custom = custom && crate::ride::Zones::custom(s.ftp, s.max_hr, up).is_some();
+            s.zone_custom =
+                custom && Settings::zone_bounds_ok(&up) && crate::ride::Zones::custom(s.ftp, s.max_hr, up).is_some();
         }
         s.female = flag(data.next(), false);
         let year = data.next().zip(data.next()).map_or(0, |(a, b)| u16::from_le_bytes([a, b]));
         s.birth_year = Some(year).filter(|y| (1920..=2020).contains(y)).unwrap_or(0);
         s.height_cm = data.next().map(u16::from).filter(|h| (100..=230).contains(h)).unwrap_or(0);
+        // MAX HR from age (a byte after HEIGHT): a file without it reads off
+        s.max_hr_age = flag(data.next(), false);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -645,7 +648,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 149);
+        assert_eq!(len, 150);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -721,7 +724,7 @@ mod tests {
 mod day_night_file_tests {
     use super::*;
 
-    /// ZONES BY, the custom zones, SEX, BIRTH YEAR and HEIGHT are kept at data 123..149 and read back; a file of 44 to
+    /// ZONES BY, the custom zones, SEX, BIRTH YEAR and HEIGHT are kept at data 123..150 and read back; a file of 44 to
     /// 123 bytes reads the computed zones, MAX HR, male and none set; bounds that do not rise read as the computed zones.
     #[test]
     fn zones_sex_year_and_height_round_trip_and_older_files_read_defaults() {
@@ -737,7 +740,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 149);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
         assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
         let back = SettingsCopy::from_sector(&sec).unwrap().settings;
         assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
@@ -756,6 +759,19 @@ mod day_night_file_tests {
         recrc(&mut bad);
         let o = SettingsCopy::from_sector(&bad).unwrap().settings;
         assert!(!o.zone_custom, "bounds that do not rise: the computed zones");
+        for (at, v) in [(0usize, 30u16), (3, 300), (9, 2500)] {
+            // heart rate under 40 or over 250, power over 2000, still rising
+            let mut wild = sec;
+            let mut b = up;
+            b[at] = v;
+            for (k, x) in b.iter().enumerate() {
+                wild[28 + 125 + 2 * k..28 + 127 + 2 * k].copy_from_slice(&x.to_le_bytes());
+            }
+            recrc(&mut wild);
+            let o = SettingsCopy::from_sector(&wild).unwrap().settings;
+            assert!(!o.zone_custom, "bound {at} = {v} is out of what ZONES offers");
+        }
+        assert!(SettingsCopy::from_sector(&sec).unwrap().settings.zone_custom, "the good ones are read");
         assert!(o.zones_lthr && o.female, "the rest kept");
     }
 
@@ -765,7 +781,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 149);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -789,7 +805,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 149);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -823,7 +839,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 149, "the length: 69 + 1 + 12 + 12 + 3 + 2");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150, "the length: 69 + 1 + 12 + 12 + 3 + 2");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -865,7 +881,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 149);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
         assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| {

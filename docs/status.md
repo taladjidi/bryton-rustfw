@@ -9,7 +9,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 A feature not listed here was seen on the unit.
 
 - **Zones (training/ride.rs `Zones`, app/settings.rs `zones`, training/hrtss.rs, features.md "Zones")**: sim only. Still to see: ME > ZONES
-  on the panel (11 rows, a bound edited and kept in settings.bin data 123..149), ZONES BY LTHR on a ride (bars, HR ZONE field,
+  on the panel (11 rows, a bound edited and kept in settings.bin data 123..150), ZONES BY LTHR on a ride (bars, HR ZONE field,
   time in zone move with it), and the TSS field and the end card showing hrTSS on a ride with a strap and no power meter.
 
 - **Units, sound, auto pause, trips (app/fields.rs, app/settings.rs, features.md "Units, sound, trips")**: sim only. Still to see: IMPERIAL on a real ride (the values and labels fit their boxes), SOUND OFF with an alert due, an AUTO PAUSE of 5 km/h at a stop, and a trip and the odometer growing after a save and surviving a restart.

@@ -303,7 +303,7 @@ fn long_target_and_grade_texts_are_not_cut() {
     let mut app = App::start(&mut sim, None);
     let power = |lo, hi| Step {
         len: Length::Time(60),
-        target: Target { kind: Kind::Power, lo, hi, pct: false },
+        target: Target { kind: Kind::Power, lo, hi, pct: false, zone: 0 },
         target2: Target::OPEN,
         intensity: 5,
     };

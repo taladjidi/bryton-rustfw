@@ -105,25 +105,50 @@ pub struct Target {
     pub hi: u16,
     /// `lo` and `hi` are % of FTP (power) or of max heart rate.
     pub pct: bool,
+    /// 1 to 7 (power) or 1 to 5 (heart rate) when the file asked for a zone, not a range: [`Target::range`] then
+    /// takes the zone's bounds from the rider's zones (ME > ZONES), so the band agrees with the bars. `lo` and `hi`
+    /// keep the default zone's percents. 0 for a range.
+    pub zone: u8,
 }
 
 impl Target {
     /// No target.
-    pub const OPEN: Target = Target { kind: Kind::Open, lo: 0, hi: 0, pct: false };
+    pub const OPEN: Target = Target { kind: Kind::Open, lo: 0, hi: 0, pct: false, zone: 0 };
 
-    /// The range in W, bpm or rpm for this FTP and max heart rate; None for no target.
+    /// The range in W, bpm or rpm for these zones (their FTP and max heart rate; a zone target takes its bounds from
+    /// them); None for no target.
     ///
     /// ```
+    /// use bryton_rustfw::ride::Zones;
     /// use bryton_rustfw::storage::workout_file::{Kind, Target};
-    /// let t = Target { kind: Kind::Power, lo: 88, hi: 93, pct: true };
-    /// assert_eq!(t.range(250, 190), Some((220, 233)));
-    /// assert_eq!(Target::OPEN.range(250, 190), None);
+    /// let z = Zones::standard(250, 190);
+    /// let t = Target { kind: Kind::Power, lo: 88, hi: 93, pct: true, zone: 0 };
+    /// assert_eq!(t.range(&z), Some((220, 233)));
+    /// assert_eq!(Target::OPEN.range(&z), None);
+    /// let zone3 = Target { kind: Kind::Power, lo: 76, hi: 90, pct: true, zone: 3 };
+    /// assert_eq!(zone3.range(&z), Some((190, 227)), "zone 3: from 76 % to one under 91 %");
     /// ```
-    pub fn range(self, ftp: u16, max_hr: u16) -> Option<(u16, u16)> {
+    pub fn range(self, z: &crate::ride::Zones) -> Option<(u16, u16)> {
+        let (ftp, max_hr) = (z.ftp, z.max_hr);
         let of = |v: u16, base: u16| (u32::from(v) * u32::from(base) + 50) / 100;
         let to = |v: u32| v.min(u32::from(u16::MAX)) as u16;
+        let zi = usize::from(self.zone).checked_sub(1);
         match (self.kind, self.pct) {
             (Kind::Open, _) => None,
+            // zone z is from the edge before it to one under the edge after it; zone 1 from 0 (power) or half the max
+            // (heart rate), the last up to twice the FTP or the max, as the file's default zones are
+            (Kind::Power, _) if zi.is_some() => {
+                let e = z.power_edges();
+                let lo = zi.and_then(|i| i.checked_sub(1)).and_then(|i| e.get(i)).copied().unwrap_or(0);
+                let hi = zi.and_then(|i| e.get(i)).map_or(to(u32::from(ftp) * 2), |&v| v.saturating_sub(1));
+                Some((lo, hi.max(lo)))
+            }
+            (Kind::Hr, _) if zi.is_some() => {
+                let e = z.hr_edges();
+                let lo = zi.and_then(|i| i.checked_sub(1)).and_then(|i| e.get(i)).copied().unwrap_or(max_hr / 2);
+                let hi = zi.and_then(|i| e.get(i)).map_or(max_hr, |&v| v.saturating_sub(1));
+                Some((lo, hi.max(lo)))
+            }
             (Kind::Power, true) => Some((to(of(self.lo, ftp)), to(of(self.hi, ftp)))),
             (Kind::Hr, true) => Some((to(of(self.lo, max_hr)), to(of(self.hi, max_hr)))),
             _ => Some((self.lo, self.hi)),
@@ -445,23 +470,23 @@ fn target_of(tt: Option<u32>, tv: Option<u32>, lo: Option<u32>, hi: Option<u32>)
     let zone = |table: &[u16], kind| {
         let z = usize::try_from(tv?).ok()?;
         let (lo, hi) = (*table.get(z.checked_sub(1)?)?, *table.get(z)?);
-        Some(Target { kind, lo, hi: hi.saturating_sub(1).max(lo), pct: true })
+        Some(Target { kind, lo, hi: hi.saturating_sub(1).max(lo), pct: true, zone: z as u8 })
     };
     // % below the offset, else the unit plus the offset
     let offset = |kind, (lo, hi): (u32, u32), off: u32| {
         let pct = hi <= off;
         let v = |x: u32| u(if pct || x <= off { x } else { x - off });
-        Target { kind, lo: v(lo), hi: v(hi), pct }
+        Target { kind, lo: v(lo), hi: v(hi), pct, zone: 0 }
     };
     match (tt, custom) {
         (Some(4 | 7..=10), Some(c)) => Some(offset(Kind::Power, c, 1000)),
         (Some(4 | 7..=10), None) => zone(&POWER_ZONES, Kind::Power),
         (Some(1 | 13), Some(c)) => Some(offset(Kind::Hr, c, 100)),
         (Some(1 | 13), None) => zone(&HR_ZONES, Kind::Hr),
-        (Some(3), Some((lo, hi))) => Some(Target { kind: Kind::Cadence, lo: u(lo), hi: u(hi), pct: false }),
+        (Some(3), Some((lo, hi))) => Some(Target { kind: Kind::Cadence, lo: u(lo), hi: u(hi), pct: false, zone: 0 }),
         // Bryton's: 100000 + % FTP (inferred, see the module doc)
         (Some(245), Some((lo, hi))) if lo >= 100_000 => {
-            Some(Target { kind: Kind::Power, lo: u(lo - 100_000), hi: u(hi - 100_000), pct: true })
+            Some(Target { kind: Kind::Power, lo: u(lo - 100_000), hi: u(hi - 100_000), pct: true, zone: 0 })
         }
         _ => None,
     }
@@ -728,14 +753,18 @@ pub(crate) mod tests {
             s[0],
             Step {
                 len: Length::Time(300),
-                target: Target { kind: Kind::Power, lo: 50, hi: 75, pct: true },
+                target: Target { kind: Kind::Power, lo: 50, hi: 75, pct: true, zone: 0 },
                 target2: Target::OPEN,
                 intensity: 2
             }
         );
         for k in 0..3 {
-            assert_eq!(s[1 + 2 * k].target, Target { kind: Kind::Power, lo: 105, hi: 110, pct: true });
-            assert_eq!(s[2 + 2 * k].target, Target { kind: Kind::Power, lo: 150, hi: 150, pct: false }, "W + 1000");
+            assert_eq!(s[1 + 2 * k].target, Target { kind: Kind::Power, lo: 105, hi: 110, pct: true, zone: 0 });
+            assert_eq!(
+                s[2 + 2 * k].target,
+                Target { kind: Kind::Power, lo: 150, hi: 150, pct: false, zone: 0 },
+                "W + 1000"
+            );
             assert_eq!(s[2 + 2 * k].len, Length::Time(60));
         }
         assert_eq!((s[7].len, s[7].target, s[7].intensity), (Length::Open, Target::OPEN, 3));
@@ -753,12 +782,29 @@ pub(crate) mod tests {
         )
     }
 
+    /// A zone target is the zone, not its default percents: the band follows the rider's custom bounds and ZONES BY.
+    #[test]
+    fn a_zone_target_follows_the_riders_zones() {
+        let w = parse(&two_targets()).unwrap();
+        let hr3 = w.steps()[1].target2;
+        assert_eq!((hr3.kind, hr3.zone), (Kind::Hr, 3));
+        let std = crate::ride::Zones::standard(250, 190);
+        assert_eq!(hr3.range(&std), Some((133, 151)), "70 to 79 % of 190: zone 3");
+        let lthr = crate::ride::Zones::computed(250, 190, 170, crate::ride::ZonesBy::Lthr);
+        assert_eq!(hr3.range(&lthr), Some((153, 159)), "90 to 93 % of an LTHR of 170");
+        let custom = crate::ride::Zones::custom(250, 190, [100, 120, 140, 160, 90, 130, 170, 210, 250, 300]).unwrap();
+        assert_eq!(hr3.range(&custom), Some((121, 140)), "the zone between the rider's bounds");
+        let pw = Target { kind: Kind::Power, lo: 56, hi: 75, pct: true, zone: 2 };
+        assert_eq!(pw.range(&custom), Some((91, 130)));
+        assert_eq!(Target { zone: 7, ..pw }.range(&custom), Some((301, 500)), "the last zone to twice the FTP");
+    }
+
     #[test]
     fn reads_the_secondary_target() {
         let w = parse(&two_targets()).unwrap();
         let s = w.steps();
-        assert_eq!(s[0].target.range(250, 190), Some((200, 250)));
-        assert_eq!(s[0].target2, Target { kind: Kind::Cadence, lo: 90, hi: 100, pct: false });
+        assert_eq!(s[0].target.range(&crate::ride::Zones::standard(250, 190)), Some((200, 250)));
+        assert_eq!(s[0].target2, Target { kind: Kind::Cadence, lo: 90, hi: 100, pct: false, zone: 0 });
         // heart rate zone 3 without custom values
         assert_eq!(s[1].target2.kind, Kind::Hr);
         assert!(s[1].target2.pct && s[1].target2.lo < s[1].target2.hi);
@@ -768,19 +814,19 @@ pub(crate) mod tests {
     #[test]
     fn targets_by_kind() {
         let one = |st: S| parse(&file(5, "x", &[st])).unwrap().steps()[0];
-        let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct };
+        let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct, zone: 0 };
         assert_eq!(one((0, 1000, 1, 0, 235, 255, 0)).target, t(Kind::Hr, 135, 155, false), "bpm + 100");
         assert_eq!(one((0, 1000, 1, 0, 70, 80, 0)).target, t(Kind::Hr, 70, 80, true), "% max");
-        assert_eq!(one((0, 1000, 1, 2, 0, 0, 0)).target, t(Kind::Hr, 60, 69, true), "zone 2");
-        assert_eq!(one((0, 1000, 4, 4, 0, 0, 0)).target, t(Kind::Power, 91, 105, true), "zone 4");
+        assert_eq!(one((0, 1000, 1, 2, 0, 0, 0)).target, Target { zone: 2, ..t(Kind::Hr, 60, 69, true) }, "zone 2");
+        assert_eq!(one((0, 1000, 4, 4, 0, 0, 0)).target, Target { zone: 4, ..t(Kind::Power, 91, 105, true) }, "zone 4");
         assert_eq!(one((0, 1000, 4, 9, 0, 0, 0)).target, Target::OPEN, "no zone 9");
         assert_eq!(one((0, 1000, 3, 0, 85, 95, 0)).target, t(Kind::Cadence, 85, 95, false));
         assert_eq!(one((0, 1000, 0, 0, 5556, 6944, 0)).target, Target::OPEN, "speed: not followed");
         assert_eq!(one((0, 1000, 245, 0, 100_045, 100_080, 2)).target, t(Kind::Power, 45, 80, true), "Bryton's");
         assert_eq!(one((1, 150_000, 2, 0, 0, 0, 0)).len, Length::Distance(1500));
         assert_eq!(one((2, 140, 2, 0, 0, 0, 0)).len, Length::Open, "heart rate below: ends on Lap");
-        assert_eq!(t(Kind::Hr, 70, 80, true).range(250, 190), Some((133, 152)));
-        assert_eq!(t(Kind::Cadence, 85, 95, false).range(250, 190), Some((85, 95)));
+        assert_eq!(t(Kind::Hr, 70, 80, true).range(&crate::ride::Zones::standard(250, 190)), Some((133, 152)));
+        assert_eq!(t(Kind::Cadence, 85, 95, false).range(&crate::ride::Zones::standard(250, 190)), Some((85, 95)));
     }
 
     #[test]
@@ -828,7 +874,7 @@ pub(crate) mod tests {
         let mut fat = Fat::mount(&mut d).unwrap();
         let w = load(&mut fat, &mut d, &c.get(1).unwrap().file).unwrap();
         assert_eq!(w.name(), "LONG RIDE ? E", "15 bytes, the 3 of the dash as one mark");
-        assert_eq!(w.steps()[0].target, Target { kind: Kind::Power, lo: 65, hi: 75, pct: true });
+        assert_eq!(w.steps()[0].target, Target { kind: Kind::Power, lo: 65, hi: 75, pct: true, zone: 0 });
         assert_eq!(
             calendar(&mut d, (2026, 10, 26), crate::ride::Zones::standard(200, 190)).unwrap(),
             Calendar::default(),

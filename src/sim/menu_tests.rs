@@ -504,9 +504,6 @@ fn menu_tree_reaches_everything() {
     let mut app = App::start(&mut sim, Some(KEY));
     run(&mut sim, &mut app, 3000);
     for &(m, depth) in &menus {
-        // the GPS values change each second and the list is redrawn each second: the panel is equal to a redraw only at
-        // some phases of the two, which the menus before it set (a longer ME menu moved it)
-        run(&mut sim, &mut app, if m == Menu::Gps { 900 } else { 0 });
         app.press(&mut sim, Press::Long(Key::Page));
         if m != Menu::Main {
             to_row(&mut sim, &mut app, Row::Open(m));
@@ -521,6 +518,14 @@ fn menu_tree_reaches_everything() {
             continue;
         }
         run(&mut sim, &mut app, u64::from(LIST_REDRAW_MS) + 100); // a list that changes: redrawn once a second
+        // values that change each second (GPS) are redrawn each second: the panel equals a redraw right after one, so
+        // step until it does (bounded), whatever the phase of the two
+        for _ in 0..40 {
+            if is_consistent(&sim, &app) {
+                break;
+            }
+            run(&mut sim, &mut app, 50);
+        }
         assert_consistent(&sim, &app);
         let mut title = Line::<16>::new();
         title.push_str(match m {
