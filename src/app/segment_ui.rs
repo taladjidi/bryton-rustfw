@@ -96,12 +96,19 @@ pub(crate) struct HeadText {
     big: Line<8>,
     ink: u16,
     sub: Line<16>,
+    keep: bool,
 }
 
 impl HeadText {
     /// The lines as the box draws them.
     pub(crate) fn head(&self) -> ui::segment::Head<'_> {
-        ui::segment::Head { top: self.top.as_str(), big: self.big.as_str(), ink: self.ink, sub: self.sub.as_str() }
+        ui::segment::Head {
+            top: self.top.as_str(),
+            big: self.big.as_str(),
+            ink: self.ink,
+            sub: self.sub.as_str(),
+            keep: self.keep,
+        }
     }
 }
 
@@ -109,11 +116,12 @@ impl App {
     /// What the head box of the CLIMB page shows: the segment ridden (its name, the delta against the target, the
     /// target's label), else the climb (its title, the time to the top); None with neither.
     pub(crate) fn head_text(&self) -> Option<HeadText> {
-        let mut h = HeadText { top: Line::new(), big: Line::new(), ink: ui::WHITE, sub: Line::new() };
+        let mut h = HeadText { top: Line::new(), big: Line::new(), ink: ui::WHITE, sub: Line::new(), keep: false };
         if let Some(n) = self.segment_now() {
             h.top.push_str(ascii(n.name.get(..n.name.len().min(32)).unwrap_or(&[])));
             h.big.push_str(ui::segment::delta_text(n.delta_s).as_str());
             h.ink = ui::segment::delta_color(n.delta_s);
+            h.keep = n.delta_s.is_some_and(|d| d.abs() <= 2);
             match n.target {
                 Some(e) => {
                     h.sub.push_str("VS ");
@@ -123,20 +131,22 @@ impl App {
             }
             return Some(h);
         }
-        let k = self.climb_view()?.climb;
+        let n = self.climb_view()?;
+        let k = &n.climb;
         h.top.push_str("CLIMB ");
         ui::card::push_km(&mut h.top, k.len_m);
         h.top.push_str(" KM ");
         h.top.push_u32(k.grade_x10().div_ceil(10).max(1));
         h.top.push_str("%");
-        match self.pace_now(0).pace {
-            // in steps of 5 s: the plan is an estimate, and a big digit a second is the page's dearest redraw
-            Some(s) if self.pace.plan.n > 0 => {
-                h.big.push_str(ui::segment::time_text(u32::from(s).next_multiple_of(5).min(3599)).as_str())
+        // the gain still to climb, in whole metres (the profile is in dm); the time to the top is the gauge's title
+        match (self.climb_alt(&n, n.climb.end_m()), self.climb_alt(&n, n.along.max(n.climb.start_m))) {
+            (Some(top), Some(here)) => {
+                h.big.push_u32(((top - here) / 10).max(0) as u32);
+                h.big.push_str(" M");
             }
             _ => h.big.push_str("--"),
         }
-        h.sub.push_str("TO THE TOP");
+        h.sub.push_str("GAIN LEFT");
         Some(h)
     }
 

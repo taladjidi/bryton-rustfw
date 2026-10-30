@@ -677,7 +677,8 @@ pub const LAYOUTS: [Layout; 17] = [
     // registers never keep them (crate::page::Page::to_cfg)
     (&[(1, 1), (1, 2), (1, 2), (1, 2)], "1+2X3"),
     (&[(1, 2), (1, 2), (1, 2), (1, 2)], "2X4"),
-    // id 15: the CLIMB page's (not in the menu's order, never stored): the profile 60 %, two values under it
+    // id 15: the CLIMB page's before the live segment joined it (id 16); no page uses it now, kept so the ids stay
+    // stable (not in the menu's order, never stored): the profile 60 %, two values under it
     (&[(3, 1), (2, 2)], "CLIMB"),
     // id 16: the CLIMB page's, the live segment fused with the pacer (not in the menu's order, never stored): the
     // head (name, delta, target) 33 %, the profile 23 %, the gauge 27 %, two values 17 %

@@ -104,14 +104,17 @@ elapsed time minus the target's. Shown as `-0:12` (ahead) or `+0:08` (behind). C
 for alarms only, features.md).
 
 **Screens.**
-- The segment's page is the CLIMB page (one page for segments and climbs, 2026-10-30): it opens by itself at the
-  start, as it does at a climb, stays in the round of ride pages (paging away and on finds it again) and leaves it at
-  the finish or when lost, the card following the finish. It is built of fields (layout 16, `Field::SegHead`,
-  `ClimbProfile`, `ClimbPace`, `ClimbTime`, `ClimbLeft`): the name, the delta (largest) and the target's label; the
-  segment's profile (the file's altitudes, `Segments::alt_at`) with the rider white and the ghost a grey mark, or,
-  without altitudes, the bar with both marks; the pacer's gauge (the power for the ideal pacing over the segment, the
-  time to the top); the time on the segment and the distance left. Redraw: the head's changed characters, and each
-  field's own change (AGENTS.md, redraw only what changes).
+- The segment's page is the CLIMB page (one page for segments and climbs, 2026-10-30): one page in the round of ride
+  pages, it opens by itself at the segment's start (as at a climb's), over the ride page or the overview the rider is
+  on; paging away and back finds it again, and it leaves the round at the finish or when lost, the card following the
+  finish. It is built of fields (layout 16, `Field::SegHead`, `ClimbProfile`, `ClimbPace`, `ClimbTime`, `ClimbLeft`):
+  the head (the name, the delta in big digits, the largest, and the target's label; within 2 s of target the delta keeps
+  the colour it had, so a flip between ahead and behind does not redraw it); the segment's profile (the file's
+  altitudes, `Segments::alt_at`) with the rider white and the ghost a grey mark, or, without altitudes, the bar with both
+  marks; the pacer's gauge (its target over the segment, the time to the top in its title); the elapsed time on the
+  segment and the distance left. On a climb alone the head shows its title and the gain left in whole metres. Redraw:
+  the head's changed characters, and each field's own change (AGENTS.md, redraw only what changes): 4650 px/s measured
+  in the sim's ride (`page_redraw_cost`).
 - The result: a banner with the time and the delta, and a result card (time, against each target, the new PR if
   any), closed by any key or after 10 s.
 - MENU > SEGMENTS (the main menu has no NAVIGATION row: it sits beside COURSES): LIVE SEGMENTS on / off; TARGET (AUTO: the

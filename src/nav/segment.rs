@@ -291,8 +291,10 @@ impl Segment {
         }
         let dist = self.dist_m.get(..n)?;
         let i = dist.partition_point(|&x| x <= d);
-        let a0 = *self.alt_dm.get(i.checked_sub(1)?)?;
-        let (d0, d1) = (*dist.get(i - 1)?, dist.get(i).copied());
+        // before the first point: its altitude
+        let Some(p) = i.checked_sub(1) else { return self.alt_dm.first().copied() };
+        let a0 = *self.alt_dm.get(p)?;
+        let (d0, d1) = (*dist.get(p)?, dist.get(i).copied());
         let (Some(d1), Some(&a1)) = (d1, self.alt_dm.get(i)) else { return Some(a0) };
         if d1 <= d0 {
             return Some(a0);
@@ -997,6 +999,9 @@ pub(crate) mod tests {
             (Some(1000), Some(1010), Some(1015), Some(1190))
         );
         assert_eq!(s.alt_at(5000), Some(1190), "past the end: the last");
+        // below the first point's distance: the first point's altitude
+        s.dist_m[0] = 10;
+        assert_eq!(s.alt_at(5), Some(1000));
         let mut hole = Segment::new();
         hole.parse(&synth_alt(20, &codes, &|r| (r != 7).then(|| up(r)).flatten())).unwrap();
         assert!(!hole.has_alt && hole.alt_at(100).is_none() && hole.pt(2).unwrap().alt_dm.is_none());

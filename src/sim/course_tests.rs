@@ -752,6 +752,7 @@ fn climb_page_opens_at_the_start() {
             continue;
         }
         assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+        assert_eq!(app.head_text().unwrap().head().sub, "GAIN LEFT");
         let n = app.climb_now().unwrap();
         check_progress(&app, &n);
         app.press(&mut sim, Press::Short(Key::Page));

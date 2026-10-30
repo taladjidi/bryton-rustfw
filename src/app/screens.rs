@@ -657,8 +657,9 @@ impl App {
                 (_, Drawn::Gauge(g)) => self.update_gauge(b, g, bx),
                 (_, Drawn::Head(was)) => match self.head_text() {
                     Some(h) => {
-                        ui::segment::update_head(&mut Panel(b, self.area(), self.look()), bx, &was, &h.head());
-                        Drawn::Head(h.head().shown())
+                        let shown =
+                            ui::segment::update_head(&mut Panel(b, self.area(), self.look()), bx, &was, &h.head());
+                        Drawn::Head(shown)
                     }
                     None => Drawn::Head(was), // the segment just ended: the page leaves at this pass
                 },

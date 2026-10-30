@@ -448,16 +448,12 @@ impl App {
             // the columns of the rider's move and of the target's (its mark is two wide), as one run
             let (r, g) = (moved(old.rider, now.rider), moved(old.ghost, now.ghost));
             let g = g.start..g.end.saturating_add(u32::from(!g.is_empty()));
-            let cols = match (r.is_empty(), g.is_empty()) {
-                (_, true) => r,
-                (true, false) => g,
-                (false, false) => r.start.min(g.start)..r.end.max(g.end),
-            };
-            for k in cols.clone().filter(|&k| k < a.2) {
+            for k in r.clone().chain(g.clone()).filter(|&k| k < a.2) {
                 ui::draw_graph_column(&mut p, a, k, self.profile_bar(old, a, k), self.profile_bar(now, a, k));
             }
             if now.climb {
-                self.draw_climb_text(&mut p, a, cols);
+                self.draw_climb_text(&mut p, a, r);
+                self.draw_climb_text(&mut p, a, g);
             }
         }
         Drawn::Profile(now)

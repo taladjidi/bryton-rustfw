@@ -11,7 +11,7 @@ On the road ahead, even without a course, the bike computer finds the climbs (Ga
 stock's own routing map), says the next one, and when it starts opens the **CLIMB page** once:
 - the climb's profile, coloured by grade, the part done dark and the rider's place in white, as on the workout page;
 - its gain, length and average grade written on the graph;
-- above, the climb's title and the time to the top; below, the **climb coach**: the power to hold for this section,
+- above, the climb's title and the gain left; below, the **climb coach**: the power to hold for this section (its gauge has the time to the top),
   from CP and W' (the time to the top, the target and a gauge), so the climb is ridden at the pace that gets to the top
   soonest, then the time on the climb and the distance left. A live segment uses the same page (its name and the delta
   against your best), so you can pace against both the best time and the ideal power.
@@ -54,7 +54,7 @@ Measured on the unit (2026-10-29 evening, build 13fec4c, `tools/profile.py` from
 | A map tile for climbs ahead | at most about 3 ms a slice (estimated; one tile took 238 ms in one go before) |
 | Image | <!-- n:image -->717 KB<!-- /n --> (stock's: over 3 MB), running from the unit's 64 MB SDRAM |
 | Code | about <!-- n:rust_lines -->103,000<!-- /n --> lines of Rust (tests included), `unsafe` only in `src/board/hw.rs` (and one marker line in usb.rs) |
-| Tests | <!-- n:tests -->1,100<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->10<!-- /n --> need files outside the repo), <!-- n:doctests -->174<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
+| Tests | <!-- n:tests -->1,102<!-- /n --> host and simulator tests (<!-- n:tests_ignored -->10<!-- /n --> need files outside the repo), <!-- n:doctests -->174<!-- /n --> doc tests, fuzzing of every input path, the ride recorder cut after every sector written |
 
 
 | Read | For |

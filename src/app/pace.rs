@@ -1,7 +1,8 @@
 //! The climb pacer's glue ([`crate::pacing`]): the profile the rider is on, or within [`AHEAD_M`] of, cut into
 //! sections. The source, in order: the live segment being ridden (from the rider to its finish, on the segment's own
-//! grid; needs the file's altitudes), else the followed course's climb, else the road ahead's climb; the plan made again once a section (and, before the climb, every 30 s as W'
-//! recovers) from the W' balance then; and the gauge field ([`Field::ClimbPace`]).
+//! grid; needs the file's altitudes), else the followed course's climb, else the road ahead's climb; the plan made
+//! again once a section (and, before the climb, every 30 s as W' recovers) from the W' balance then; and the gauge
+//! field ([`Field::ClimbPace`]).
 //!
 //! The whole W' balance goes to the climb in hand, even if a bigger one follows on the course: the pacer does not look
 //! past the top. The one CP / W' model ([`App::cp_model`]) drains the balance and sizes the plan.
@@ -18,7 +19,8 @@ const BAND_PCT: u16 = 5;
 /// The plan in force, and what it was made for.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PaceState {
-    /// What the plan is for: the segment's id or the climb's start (m), the section the rider is in, and the 30 s before the climb.
+    /// What the plan is for: the segment's id with its top bit set (so no climb's start in m equals it), the section
+    /// the rider is in, and the 30 s before the climb.
     pub(crate) key: Option<(u32, u8, u16)>,
     /// The plan from where the rider was to the top (its first power is the target now).
     pub(crate) plan: pacing::Plan,
@@ -61,13 +63,18 @@ impl App {
             // the source: a segment ridden (with a profile), else the climb in view (course, else road ahead)
             let seg =
                 self.segment_now().filter(|n| self.segments.as_deref().is_some_and(|s| s.alt_at(n.along_m).is_some()));
+            // a segment without altitudes gives no plan, not another climb's
+            if self.segment_now().is_some() && seg.is_none() {
+                break 'k None;
+            }
             let climb = self.climb_view();
             let by_seg = |m| self.segments.as_deref()?.alt_at(m);
             let by_climb = |m| climb.as_ref().and_then(|n| self.climb_alt(n, m));
             let alt: &dyn Fn(u32) -> Option<i32>;
             let (id, start, end, d);
             if let Some(n) = seg {
-                (id, start, end, d) = (n.id, 0, n.along_m.saturating_add(n.left_m), n.along_m);
+                // the id's top bit set: a key no climb's start (m) can equal
+                (id, start, end, d) = (n.id ^ 0x8000_0000, 0, n.along_m.saturating_add(n.left_m), n.along_m);
                 alt = &by_seg;
             } else if let Some(n) = &climb {
                 (id, start, end, d) = (n.climb.start_m, n.climb.start_m, n.climb.end_m(), n.along);

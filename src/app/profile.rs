@@ -198,7 +198,13 @@ impl App {
     /// start, the rider outside it) or none is in view; the rider stepping back over the start does not reopen it,
     /// and a trace made again inside the climb moves its start without a new climb.
     fn open_climb(&mut self, on: bool, b: &mut impl Board) {
-        let can = on && matches!(self.screen, Screen::Ride(p) if p != CLIMB);
+        // over the overview too: a ride's Back goes there, and the page opens over it as over a ride page
+        let can = on
+            && match self.screen {
+                Screen::Main => true,
+                Screen::Ride(p) => p != CLIMB,
+                _ => false,
+            };
         let ready = self.ride.state() == ride::State::Running && !self.touch.down() && !self.keys.any_down();
         let mut open = false;
         if self.climb.seg {
@@ -212,9 +218,6 @@ impl App {
             None => (self.climb.handled, self.climb.t0) = (None, None),
             Some(n) => {
                 let (start, inside) = (n.climb.start_m, n.along >= n.climb.start_m);
-                if self.climb.handled.map(|h| h.0) != Some(start) {
-                    self.climb.t0 = None;
-                }
                 self.climb.t0 = match (inside, self.climb.t0) {
                     (true, None) => Some(self.ride.timer_s()),
                     (true, t) => t,

@@ -29,6 +29,9 @@ pub struct Head<'a> {
     pub ink: u16,
     /// The small grey line under it: "VS PR", "TO THE TOP".
     pub sub: &'a str,
+    /// Keeps the colour the box shows when the delta is within 2 s: the colour flips between ahead and behind at the
+    /// line, and each flip would redraw every character of the delta.
+    pub keep: bool,
 }
 
 /// What is on screen of a head box: a fingerprint of each line, the big line's characters and its ink. The default is
@@ -126,9 +129,11 @@ pub fn draw_head(c: &mut impl Canvas, bx: (u32, u32, u32, u32), h: &Head) {
 }
 
 /// The head box `bx` as `old` was drawn: the lines whose text changed, and the characters of the big line that did
-/// (all of them in a new colour), never a whole line for one character.
-pub fn update_head(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), old: &HeadShown, h: &Head) {
-    let new = h.shown();
+/// (all of them in a new colour), never a whole line for one character. Returns what is on screen now.
+pub fn update_head(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), old: &HeadShown, h: &Head) -> HeadShown {
+    // a kept colour is the one on screen (ink 0 is nothing drawn)
+    let ink = if h.keep && old.ink != 0 { old.ink } else { h.ink };
+    let new = HeadShown { ink, ..h.shown() };
     let inner = w.saturating_sub(16);
     if new.prints[0] != old.prints[0] {
         text::draw_in(c, &LABEL, x + 8, y + TOP_Y, inner, Align::Centre, h.top);
@@ -136,7 +141,7 @@ pub fn update_head(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), old:
     if new.prints[1] != old.prints[1] {
         text::draw_in(c, &Style { fg: GREY, ..LABEL }, x + 8, y + SUB_Y, inner, Align::Centre, h.sub);
     }
-    let big = Style { fg: h.ink, ..BIG };
+    let big = Style { fg: ink, ..BIG };
     let cw = big.width("8");
     let left = x + w.saturating_sub(CELLS as u32 * cw) / 2;
     for (k, (a, b)) in new.big.iter().zip(&old.big).enumerate() {
@@ -147,6 +152,7 @@ pub fn update_head(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), old:
             text::draw_in(c, &big, left + k as u32 * cw, y + BIG_Y, cw, Align::Left, t);
         }
     }
+    new
 }
 
 /// The result card.
@@ -217,6 +223,27 @@ mod tests {
         assert_eq!(left_text(1250).0.as_str(), "1.2");
     }
 
+    /// A delta that goes -1, +1, -1 keeps its colour: no flip, and the step to +1 draws less than a flip does.
+    #[test]
+    fn a_delta_within_two_seconds_keeps_its_colour() {
+        let bx = (0, crate::ui::PAGE_Y, W, 98);
+        fn k<'a>(d: &'a (Line<8>, u16), keep: bool) -> Head<'a> {
+            Head { top: "NAME", big: d.0.as_str(), ink: d.1, sub: "VS PR", keep }
+        }
+        // the same steps drawn twice: kept, and with the colour flipping
+        let (mut f, mut g) = (Frame::new(), Frame::new());
+        let mut shown = update_head(&mut f, bx, &HeadShown::default(), &k(&head(-1), true));
+        let mut flip = update_head(&mut g, bx, &HeadShown::default(), &k(&head(-1), false));
+        for d in [1, -1] {
+            let (kept0, flip0) = (f.filled(), g.filled());
+            shown = update_head(&mut f, bx, &shown, &k(&head(d), true));
+            flip = update_head(&mut g, bx, &flip, &k(&head(d), false));
+            assert_eq!(shown.ink, GREEN, "kept at {d}");
+            // the sign's cell only, against every character of the delta
+            assert!(f.filled() - kept0 < g.filled() - flip0, "a step to {d} redraws only its sign");
+        }
+    }
+
     /// Updating character by character gives the picture of drawing whole, at both fonts, and a second costs a few
     /// cells.
     #[test]
@@ -228,7 +255,7 @@ mod tests {
             f.smooth = smooth;
             let (a, b) = (head(-69), head(-68));
             fn h<'a>(name: &'a str, d: &'a (Line<8>, u16)) -> Head<'a> {
-                Head { top: name, big: d.0.as_str(), ink: d.1, sub: "VS RECENT" }
+                Head { top: name, big: d.0.as_str(), ink: d.1, sub: "VS RECENT", keep: false }
             }
             draw_head(&mut f, bx, &h(name, &a));
             let before = f.filled();

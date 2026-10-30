@@ -55,7 +55,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | ![Course](img/course.png) | ![Course profile](img/course-profile.png) | ![Course fields](img/course-fields.png) |
 | A course followed: the line under the track (sim) | The course profile: climbs by grade, the rider's place (sim) | Distance to go, off course, the climb ahead, the climb pacer's TOP field (sim) |
 | ![Courses](img/courses.png) | ![CLIMB page](img/climb-page.png) |  |
-| Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title and the time to the top, its profile by grade, the part done dark and the rider white, gain, length and grade, then the climb coach's gauge, the time on the climb and the distance left (sim, made-up road) |  |
+| Courses on the card: stock's routes, FIT, GPX (sim) | The CLIMB page, opened when the climb starts: the climb's title (length, grade) and the gain left in metres, its profile by grade with the part done dark and the rider white, the climb coach's gauge, the elapsed time and the distance left (sim, made-up road) |  |
 
 ## Workouts and training
 
@@ -141,7 +141,7 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | | | |
 |:-:|:-:|:-:|
 | ![CLIMB page on a segment, ahead](img/segment-ahead.png) | ![CLIMB page on a segment, behind](img/segment-behind.png) | ![Result card](img/segment-card.png) |
-| The CLIMB page on a segment ahead of the PR: the delta in green, the segment's profile with the rider (white) and the PR's ghost (grey), the coach's gauge (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
+| The CLIMB page on a segment ahead of the PR: the delta in green, the segment's profile with the rider (white) and the PR's ghost (grey), the pacer's gauge with its target, the elapsed time and the distance left (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
 | ![SEGMENTS menu](img/segment-menu.png) | | |
 | MENU > SEGMENTS: the two settings, the segments of the card, the skipped files (sim) | | |
 

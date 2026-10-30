@@ -400,6 +400,32 @@ fn page_not_over_a_menu() {
     assert!(app.page_on(CLIMB), "but in the round");
 }
 
+/// Back to the overview while the segment's ride goes on: the page still opens over it at the segment's start.
+#[test]
+fn page_opens_over_the_overview_while_riding() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(faster);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 1000);
+    app.press(&mut sim, Press::Short(Key::Back));
+    run(&mut sim, &mut app, 500);
+    app.press(&mut sim, Press::Short(Key::Back));
+    assert_eq!(app.screen(), Screen::Main, "the overview while riding");
+    let mut screens = std::vec::Vec::new();
+    for _ in 0..110 {
+        run(&mut sim, &mut app, 1000);
+        if screens.last() != Some(&app.screen()) {
+            screens.push(app.screen());
+        }
+    }
+    assert!(screens.contains(&Screen::Ride(CLIMB)), "opened over the overview: {screens:?}");
+}
+
 /// The profile of a segment with altitudes is its own, the target's place is a grey mark on it and the rider's a
 /// white one; a segment without altitudes shows its bar with both marks.
 #[test]
@@ -450,8 +476,9 @@ fn page_redraw_cost() {
     let (per_s, win_s) = ((sim.pixels - px) * 1000 / (sim.ms - t0), (sim.windows - w0) * 1000 / (sim.ms - t0));
     std::println!("segment page: {per_s} px/s, {win_s} windows/s");
     // 4400 px/s with the old page (delta, time, distance and the bar); the CLIMB page adds the profile, the gauge and
-    // two values, and the PR-pace ghost flips the delta's colour (every character again) most seconds
-    assert!(per_s < 9000, "{per_s} px/s");
+    // two values (4650 px/s measured); the delta's colour is kept within 2 s, so a flip of the ghost's sign redraws
+    // one character, not all of them
+    assert!(per_s < 5000, "{per_s} px/s");
 }
 
 /// The SEGMENTS menu: the two settings, the segment with its distance and gain, the skipped files.
@@ -1015,7 +1042,7 @@ fn the_pacer_follows_the_segment() {
     let with = card(&[("4000000001.seg", synth_alt(20, &CODES, &up))]);
     let (_, app) = ride_on(with.clone(), faster, 120, true);
     assert_eq!(app.segment_now().map(|n| n.id), Some(ID));
-    assert_eq!(app.pace.key.map(|k| k.0), Some(ID), "keyed by the segment");
+    assert_eq!(app.pace.key.map(|k| k.0), Some(ID ^ 0x8000_0000), "keyed by the segment");
     assert!(app.pace.plan.n > 0 && app.pace_now(100).step, "a target on the segment");
     let (_, app) = ride_on(with, leaves, 200, true);
     assert!(app.segment_now().is_none());
