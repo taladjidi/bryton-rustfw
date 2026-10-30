@@ -28,6 +28,10 @@ pub struct ClimbNow {
     pub(crate) along: u32,
     /// Of the followed course (else the road ahead's).
     pub(crate) course: bool,
+    /// The live segment being ridden stands for the climb: its id.
+    pub(crate) seg: Option<u32>,
+    /// The segment's target now, m along it.
+    pub(crate) ghost: Option<u32>,
 }
 
 impl App {
@@ -95,35 +99,62 @@ impl App {
         }) == Some(true)
     }
 
-    /// The climb the CLIMB page shows: the followed course's (the one the rider is on, else the next), else the road
-    /// ahead's; where the rider is on it (m from the trace's or course's start).
+    /// What the CLIMB page shows: the live segment being ridden (its whole length is the "climb", from 0), else
+    /// [`App::climb_view`].
     pub(crate) fn climb_now(&self) -> Option<ClimbNow> {
+        if let Some(s) = self.segment_now() {
+            let gain_m = self.segments()?.seg().header.elevation_m;
+            let climb = course::Climb { start_m: 0, len_m: s.along_m.saturating_add(s.left_m), gain_m };
+            return Some(ClimbNow { climb, along: s.along_m, course: false, seg: Some(s.id), ghost: s.ghost_m });
+        }
+        self.climb_view()
+    }
+
+    /// The climb in view: the followed course's (the one the rider is on, else the next), else the road ahead's;
+    /// where the rider is on it (m from the trace's or course's start).
+    pub(crate) fn climb_view(&self) -> Option<ClimbNow> {
         if let Some((c, at)) = self.on_course() {
             let climb = *c.climbs().get(c.climb_at(at.along_m)?.0)?;
-            return Some(ClimbNow { climb, along: at.along_m, course: true });
+            return Some(ClimbNow { climb, along: at.along_m, course: true, seg: None, ghost: None });
         }
         let a = self.ahead.as_ref().map(|(a, _)| &**a).filter(|a| a.on_road() && !self.indoors())?;
-        Some(ClimbNow { climb: a.climb_at(a.along_m())?.0, along: a.along_m(), course: false })
+        let climb = a.climb_at(a.along_m())?.0;
+        Some(ClimbNow { climb, along: a.along_m(), course: false, seg: None, ghost: None })
     }
 
     /// The altitude at `d` m of the climb in hand, dm.
     pub(crate) fn climb_alt(&self, n: &ClimbNow, d: u32) -> Option<i32> {
-        match n.course {
-            true => self.courses.as_deref()?.course.alt_at(d),
-            false => self.ahead.as_ref()?.0.alt_at(d),
+        match (n.seg, n.course) {
+            (Some(_), _) => self.segments()?.alt_at(d),
+            (None, true) => self.courses.as_deref()?.course.alt_at(d),
+            (None, false) => self.ahead.as_ref()?.0.alt_at(d),
         }
     }
 
-    /// The climb page's fields: the pacer's cell is the ascent where no course is followed (no plan there).
-    pub(crate) fn climb_cfg(&self) -> PageCfg {
-        let mut c = CLIMB_PAGE;
-        if self.courses.as_deref().is_none_or(|c| c.on.is_none()) {
-            c.fields[2] = Field::Ascent;
+    /// The time on the segment or the climb (ClimbTime) and the distance left to its end (ClimbLeft).
+    pub(crate) fn climb_text(&self, f: Field) -> Line<8> {
+        let mut l = Line::new();
+        let Some(n) = self.climb_now() else {
+            l.push_str("--");
+            return l;
+        };
+        if f == Field::ClimbLeft {
+            let (v, unit) = ui::segment::left_text(n.climb.end_m().saturating_sub(n.along));
+            l.push_str(v.as_str());
+            l.push_str("|");
+            l.push_str(unit);
+        } else {
+            let s = match self.segment_now() {
+                Some(s) => s.elapsed_s,
+                None => self.climb.t0.map_or(0, |t| self.ride.timer_s().saturating_sub(t)),
+            };
+            l.push_str(ui::segment::time_text(s).as_str());
         }
-        c
+        l
     }
 
-    /// One of the rider's ride pages already shows the climb: no second page for it.
+    /// One of the rider's ride pages already shows the climb: no second page for a climb alone (a segment's page
+    /// always opens: no rider page shows its delta).
     pub(crate) fn has_climb_page(&self) -> bool {
         (0..self.ride_count()).any(|n| {
             self.ride_page_ref(n).is_some_and(|p| {
@@ -160,29 +191,57 @@ impl App {
     }
 
     /// The CLIMB page opens once per climb, when the rider is seen to reach its start (an edge: first seen inside, as
-    /// after a resume or a late trace, only presets the latch). Kept per climb (`climb.2`: its start, done): done
-    /// when the page opened, or when it cannot for this climb (a menu or other screen is up, the page is not in the
-    /// round); a finger or key down, or a pause, retries at the next pass. The latch lives until another climb (a
-    /// later start, the rider outside it) or none is in view; the rider stepping back over the start does not
-    /// reopen it, and a trace made again inside the climb moves its start without a new climb.
+    /// after a resume or a late trace, only presets the latch), and once per live segment, when it starts
+    /// (`climb.seg`, set by app/segment_ui.rs). Kept per climb (`climb.2`: its start, done): done when the page
+    /// opened, or when it cannot for this climb (a menu or other screen is up, the page is not in the round); a
+    /// finger or key down, or a pause, retries at the next pass. The latch lives until another climb (a later
+    /// start, the rider outside it) or none is in view; the rider stepping back over the start does not reopen it,
+    /// and a trace made again inside the climb moves its start without a new climb.
     fn open_climb(&mut self, on: bool, b: &mut impl Board) {
-        let Some(n) = self.climb_now() else { return self.climb.handled = None };
-        let (start, inside) = (n.climb.start_m, n.along >= n.climb.start_m);
-        let mut done = match self.climb.handled {
-            Some((k, d)) if k == start => d,
-            Some((_, d)) if inside => d,
-            _ => inside,
-        };
-        if inside && !done {
-            if !on || !matches!(self.screen, Screen::Ride(p) if p != CLIMB) {
-                done = true;
-            } else if self.ride.state() == ride::State::Running && !self.touch.down() && !self.keys.any_down() {
-                self.screen = Screen::Ride(CLIMB);
-                self.show(b);
-                done = true;
+        // over the overview too: a ride's Back goes there, and the page opens over it as over a ride page
+        let can = on
+            && match self.screen {
+                Screen::Main => true,
+                Screen::Ride(p) => p != CLIMB,
+                _ => false,
+            };
+        let ready = self.ride.state() == ride::State::Running && !self.touch.down() && !self.keys.any_down();
+        let mut open = false;
+        if self.climb.seg {
+            if !can {
+                self.climb.seg = false; // not for this segment
+            } else if ready {
+                (self.climb.seg, open) = (false, true);
             }
         }
-        self.climb.handled = Some((start, done));
+        match self.climb_view() {
+            None => (self.climb.handled, self.climb.t0) = (None, None),
+            Some(n) => {
+                let (start, inside) = (n.climb.start_m, n.along >= n.climb.start_m);
+                self.climb.t0 = match (inside, self.climb.t0) {
+                    (true, None) => Some(self.ride.timer_s()),
+                    (true, t) => t,
+                    (false, _) => None,
+                };
+                let mut done = match self.climb.handled {
+                    Some((k, d)) if k == start => d,
+                    Some((_, d)) if inside => d,
+                    _ => inside,
+                };
+                if inside && !done {
+                    if !can {
+                        done = true;
+                    } else if ready {
+                        (open, done) = (true, true);
+                    }
+                }
+                self.climb.handled = Some((start, done));
+            }
+        }
+        if open {
+            self.screen = Screen::Ride(CLIMB);
+            self.show(b);
+        }
     }
 
     /// Each pass: when the profile in force changed (a trainer heard or lost, by hand), the ride pages on screen

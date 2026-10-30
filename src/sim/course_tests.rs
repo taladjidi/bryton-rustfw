@@ -684,7 +684,8 @@ fn climb_page_without_a_course() {
     run(&mut sim, &mut app, 15_000);
     assert!(app.page_on(crate::CLIMB));
     assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
-    assert_eq!(app.climb_cfg().fields[2], Field::Ascent, "no pacer plan without a course");
+    // the road ahead's climb has a plan too (the pacer's cell stays on the page)
+    assert!(app.pace.key.is_some() && app.pace.plan.n > 0, "a plan for the road-ahead climb: {:?}", app.pace.key);
     while app.page_on(crate::CLIMB) && sim.ms - t0 < 600_000 {
         run(&mut sim, &mut app, 1000);
     }
@@ -751,6 +752,7 @@ fn climb_page_opens_at_the_start() {
             continue;
         }
         assert_eq!(app.screen(), Screen::Ride(crate::CLIMB), "opened at the start");
+        assert_eq!(app.head_text().unwrap().head().sub, "GAIN LEFT");
         let n = app.climb_now().unwrap();
         check_progress(&app, &n);
         app.press(&mut sim, Press::Short(Key::Page));
@@ -841,7 +843,7 @@ fn climb_page_picture() {
     app.press(&mut sim, Press::Short(Key::Start));
     let t0 = sim.ms;
     let boxes = |app: &App| {
-        let a = ui::climb_area(ui::field_box(15, ui::RIDE_H, 0).unwrap());
+        let a = ui::climb_area(ui::field_box(16, ui::RIDE_H, 1).unwrap());
         (a, app.climb_text_boxes(a).unwrap().map(|(b, _)| b))
     };
     // the figures just after the climb's start (the bar at its foot: columns 3 on of the left box are clear of it)

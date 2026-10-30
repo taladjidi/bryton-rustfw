@@ -531,12 +531,16 @@ pub(crate) struct ClimbPage {
     pub(crate) after: usize,
     /// The climb handled: its start (m) and whether the page opened, or was skipped, for it.
     pub(crate) handled: Option<(u32, bool)>,
+    /// A segment started and the page has not opened for it yet (a finger or key down: the next pass tries again).
+    pub(crate) seg: bool,
+    /// The ride's timer (s) when the rider reached the climb's start (the time on the climb).
+    pub(crate) t0: Option<u32>,
 }
 
 impl ClimbPage {
     /// Not in the round, after page 0, no climb handled.
     pub(crate) fn new() -> Self {
-        ClimbPage { on: false, after: 0, handled: None }
+        ClimbPage { on: false, after: 0, handled: None, seg: false, t0: None }
     }
 }
 

@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->60 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->61 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->60 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->59 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -121,7 +121,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `src/training/pacing.rs`: the climb pacer: the power for each section of a climb that gets to the top soonest with the W' the
   rider has left (Martin's power equation for the speed; with the budget spent above CP every section not at a bound
   rides at one speed, so a plan is one bisection on it). Pure logic;
-  `src/app/pace.rs` cuts the followed course's climb into sections, plans again at each one, and draws the TOP gauge
+  `src/app/pace.rs` cuts the segment being ridden (its altitudes), else the followed course's or the road ahead's climb, into sections, plans again at each one, and draws the TOP gauge
   (`Field::ClimbPace`, the workout gauge's widget).
 - `src/training/alerts.rs`: reminders during a ride (eat and drink every so many minutes, heart rate over a limit), fed a second
   at a time, and `Queue`, which keeps several due at once to be said one after the other. Pure logic.
@@ -240,7 +240,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   beep at a climb's start and the CLIMB fields when no course is followed.
 - `src/nav/segment.rs`: a live segment file, `\Rustfw\Segments\<id>.seg` (stock's live segment package unzipped; docs/segments.md,
   "The file"; the layout checked against stock's live_segments.c): the header (the index reads its 0x200 bytes), the points and the
-  times of the four kept efforts, every check of the file (`Error`), parsed into a caller's storage (about 16 KB, a static
+  times of the four kept efforts, every check of the file (`Error`), parsed into a caller's storage (about 10 KB with each point's altitude, a static
   cell), read in 1 KB pieces (`parse_with`); the rider's PR file `<id>.pr` (`PrCopy`, `pr_copy`: two CRC'd copies, step S5).
   Pure logic; step S1.
 - `src/nav/segment_match.rs`: the live segment matcher (docs/segments.md, "Detection", "Ghost"): `Matcher` (near, approach,
@@ -250,9 +250,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
   the screens (S4) read (`segment_now`, `events`); the efforts (S5): each finish's times kept in RAM, written after the
   ride's save (`<id>.pr`, `efforts.csv`), the `.pr` the PR target at the next load. Nothing drawn.
-- `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the SEGMENT page opened
-  at a start and closed at the end, the result card, the SEGMENTS menu's list rows (headers read from the card).
-- `src/ui/segment.rs`: the SEGMENT page (character cells redrawn when they change, the bar's marks) and the result card.
+- `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the head box of the CLIMB page
+  (`head_text`), the result card, the SEGMENTS menu's list rows (headers read from the card).
+- `src/ui/segment.rs`: the CLIMB page's head box (`SegHead`: the name, the delta in big digits, the target; characters
+  redrawn when they change) and the result card.
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
 - `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the

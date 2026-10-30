@@ -1115,11 +1115,13 @@ pub(crate) const COURSE_PAGE: PageCfg = {
     PageCfg { layout: 12, fields: [Profile, NextTurn, ToGo, ClimbPace, Timer, AvgSpeed] }
 };
 
-/// The climb page ([`CLIMB`]): the climb's profile (60 %, with its gain, length and grade), under it the grade under
-/// the wheel and the pacer's power (the ascent where no course is followed). Not configurable.
+/// The climb page ([`CLIMB`]), shown while a live segment is ridden or a climb is on: the head (the segment's name,
+/// the delta against its target and the target; on a climb, its title and the time to the top), the profile of the
+/// segment or the climb with the rider's place (and the target's, on a segment), the pacer's gauge, then the time on
+/// it and the distance left. Not configurable.
 pub(crate) const CLIMB_PAGE: PageCfg = {
     use Field::*;
-    PageCfg { layout: 15, fields: [ClimbProfile, Grade, ClimbPace, Time, Time, Time] }
+    PageCfg { layout: 16, fields: [SegHead, ClimbProfile, ClimbPace, ClimbTime, ClimbLeft, Time] }
 };
 
 /// The workout page, first in the round while a workout runs ([`WORKOUT`]): the reading the step targets in its gauge

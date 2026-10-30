@@ -238,12 +238,20 @@ pub enum Field {
     Trip1Time,
     /// TRIP 2's moving time, hours.
     Trip2Time,
+    // the CLIMB page's (it fuses the live segment and the climb pacer; appended)
+    /// The live segment's head: its name, the delta against the target in big digits and the target's label; on a
+    /// climb without a segment, the climb's title and the time to its top. Shows nothing without either.
+    SegHead,
+    /// The time on the segment or the climb being ridden, since its start.
+    ClimbTime,
+    /// The distance left to the end of the segment, or to the top of the climb.
+    ClimbLeft,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 105] = {
+    pub const ALL: [Field; 108] = {
         use Field::*;
         [
             Time,
@@ -351,6 +359,9 @@ impl Field {
             Odo,
             Trip1Time,
             Trip2Time,
+            SegHead,
+            ClimbTime,
+            ClimbLeft,
         ]
     };
 
@@ -467,6 +478,9 @@ impl Field {
             "ODO KM",
             "TRIP1 H",
             "TRIP2 H",
+            "SEGMENT",
+            "ELAPSED",
+            "LEFT",
         ];
         LABELS[self as usize]
     }
@@ -522,7 +536,7 @@ impl Field {
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
             "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
-            "888.8",
+            "888.8", "", "88:88", "88.8|KM",
         ];
         WIDEST[self as usize]
     }
@@ -542,6 +556,7 @@ impl Field {
                 | Field::WktPower
                 | Field::ClimbPace
                 | Field::ClimbProfile
+                | Field::SegHead
         )
     }
 
@@ -615,7 +630,23 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
         ("CLIMB", &[Ascent, Vam, Grade, MaxAlt, Descent, LapAscent, LapDescent, UphillKm, DownhillKm]),
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
-        ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile, ClimbPace, ClimbProfile]),
+        (
+            "COURSE",
+            &[
+                ToGo,
+                NextTurn,
+                OffCourse,
+                Climb,
+                ClimbGain,
+                UpToGo,
+                Profile,
+                ClimbPace,
+                ClimbProfile,
+                SegHead,
+                ClimbTime,
+                ClimbLeft,
+            ],
+        ),
         ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm, Trip1, Trip2, Odo, Trip1Time, Trip2Time]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
@@ -628,7 +659,7 @@ pub type Layout = (&'static [(u8, u8)], &'static str);
 
 /// The layouts by the id a page keeps ([`crate::PageCfg::layout`]); 0 is a page switched off. Ids 1, 2, 3, 4 and 6
 /// are the layouts of earlier builds, whose id was their field count, so pages kept then read the same.
-pub const LAYOUTS: [Layout; 16] = [
+pub const LAYOUTS: [Layout; 17] = [
     (&[], "OFF"),
     (&[(1, 1)], "1"),
     (&[(1, 1), (1, 1)], "2"),
@@ -646,9 +677,17 @@ pub const LAYOUTS: [Layout; 16] = [
     // registers never keep them (crate::page::Page::to_cfg)
     (&[(1, 1), (1, 2), (1, 2), (1, 2)], "1+2X3"),
     (&[(1, 2), (1, 2), (1, 2), (1, 2)], "2X4"),
-    // id 15: the CLIMB page's (not in the menu's order, never stored): the profile 60 %, two values under it
+    // id 15: the CLIMB page's before the live segment joined it (id 16); no page uses it now, kept so the ids stay
+    // stable (not in the menu's order, never stored): the profile 60 %, two values under it
     (&[(3, 1), (2, 2)], "CLIMB"),
+    // id 16: the CLIMB page's, the live segment fused with the pacer (not in the menu's order, never stored): the
+    // head (name, delta, target) 33 %, the profile 23 %, the gauge 27 %, two values 17 %
+    (&[(10, 1), (7, 1), (8, 1), (5, 2)], "SEGMENT"),
 ];
+
+/// The layouts below this id are the rider's (the page menu, the editor, the readability rules: a picture 118 px
+/// high); the ones from it on are fixed pages (id 16, the CLIMB page: four boxes the rules would refuse).
+pub const USER_LAYOUTS: u8 = 16;
 
 /// The order the page menu goes through the layouts: by field count (none is off: a page is deleted instead).
 pub const LAYOUT_ORDER: [u8; 14] = [1, 2, 8, 3, 7, 9, 4, 10, 5, 11, 6, 12, 13, 14];

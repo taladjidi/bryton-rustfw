@@ -330,6 +330,7 @@ impl App {
             | Field::AltGraph
             | Field::Profile
             | Field::ClimbProfile
+            | Field::SegHead
             | Field::WorkoutGraph => {
                 return l;
             }
@@ -355,6 +356,7 @@ impl App {
             }
             Field::WktPower => return self.gauge_now(0).value,
             Field::ClimbPace => return self.pace_now(0).value,
+            Field::ClimbTime | Field::ClimbLeft => return self.climb_text(f),
             Field::TrainerMode | Field::TrainerTarget => return self.trainer_field(f),
             Field::ErgTarget => return self.erg_field(),
             Field::Music if self.phone.now.title.as_str().is_empty() => (None, false),
@@ -647,7 +649,7 @@ mod tests {
         assert_eq!([Field::from_index(79), Field::from_index(90)], [Field::PctMaxHr, Field::BalanceAvg]);
         assert_eq!([Field::from_index(91), Field::from_index(99)], [Field::Heading, Field::HrBatt]);
         assert_eq!([Field::from_index(100), Field::from_index(104)], [Field::Trip1, Field::Trip2Time]);
-        assert_eq!(Field::ALL.len(), 105);
+        assert_eq!(Field::ALL.len(), 108);
     }
 
     #[test]

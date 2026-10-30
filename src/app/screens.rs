@@ -83,6 +83,8 @@ pub(crate) enum Drawn {
     Workout(WorkoutShown),
     /// The workout gauge.
     Gauge(GaugeShown),
+    /// The CLIMB page's head (the segment's name and delta, or the climb's title).
+    Head(ui::segment::HeadShown),
 }
 
 /// Boxes on a page at most.
@@ -215,7 +217,6 @@ impl App {
             }
             Screen::Quick => self.draw_quick(c),
             Screen::Trainer => self.draw_trainer(c),
-            Screen::Segment => self.draw_segment(c),
             Screen::SegmentResult => self.draw_segment_result(c),
             Screen::RampResult => self.draw_ramp(c),
             Screen::PowerCal => self.draw_powercal(c),
@@ -252,7 +253,7 @@ impl App {
         let more = self.more_shown() == Some(page);
         let p = match page {
             COURSE => page::Page::from_cfg(COURSE_PAGE).unwrap_or(BLANK),
-            CLIMB => page::Page::from_cfg(self.climb_cfg()).unwrap_or(BLANK),
+            CLIMB => page::Page::from_cfg(CLIMB_PAGE).unwrap_or(BLANK),
             WORKOUT => page::Page::from_cfg(WORKOUT_PAGE).unwrap_or(BLANK),
             EDITED => self.page_ref(EDITED).copied().unwrap_or(BLANK),
             n if more => self.more_page(n),
@@ -302,6 +303,9 @@ impl App {
                 Drawn::Profile(self.profile_now(ui::plot_area(bx).2, f == Field::ClimbProfile))
             }
             Widget::Field(Field::WorkoutGraph) => Drawn::Workout(self.workout_now(ui::plot_area(bx).2)),
+            Widget::Field(Field::SegHead) => {
+                Drawn::Head(self.head_text().map_or_else(Default::default, |h| h.head().shown()))
+            }
             Widget::Field(Field::WktPower) => Drawn::Gauge(self.gauge_now(ui::gauge_cols(bx))),
             Widget::Field(Field::ClimbPace) => Drawn::Gauge(self.pace_now(ui::gauge_cols(bx))),
             Widget::Field(f) => match graph_plot(f) {
@@ -351,6 +355,11 @@ impl App {
                     Drawn::Profile(p) => self.draw_profile(c, bx, p),
                     Drawn::Workout(w) => self.draw_workout_graph(c, bx, w),
                     Drawn::Gauge(g) => self.draw_gauge(c, bx, g),
+                    Drawn::Head(_) => {
+                        if let Some(h) = self.head_text() {
+                            ui::segment::draw_head(c, bx, &h.head());
+                        }
+                    }
                     Drawn::Graph(g) => {
                         self.draw_graph_axes(c, bx, g);
                         let a = ui::graph_area(bx);
@@ -601,9 +610,6 @@ impl App {
         if self.screen == Screen::Trainer {
             self.trainer_printed();
         }
-        if self.screen == Screen::Segment {
-            self.segment_printed();
-        }
         if self.strip.more != self.strip_shown.more {
             self.update_strip(b); // the MORE marker
         }
@@ -649,6 +655,14 @@ impl App {
                 (_, Drawn::Profile(p)) => self.update_profile(b, p, bx),
                 (_, Drawn::Workout(w)) => self.update_workout_graph(b, w, bx),
                 (_, Drawn::Gauge(g)) => self.update_gauge(b, g, bx),
+                (_, Drawn::Head(was)) => match self.head_text() {
+                    Some(h) => {
+                        let shown =
+                            ui::segment::update_head(&mut Panel(b, self.area(), self.look()), bx, &was, &h.head());
+                        Drawn::Head(shown)
+                    }
+                    None => Drawn::Head(was), // the segment just ended: the page leaves at this pass
+                },
                 (Widget::Field(f), Drawn::Value(was, was_fg, was_bar)) => {
                     let (text, fg, bar) = (self.field_text(f), self.field_color(f), self.field_bar(f));
                     if bar != was_bar {
