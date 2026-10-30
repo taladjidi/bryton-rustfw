@@ -26,6 +26,10 @@ A feature not listed here was seen on the unit.
 - **Live segments, detection (app/segments.rs, step S3; no effort written)**: sim only. Still to see: the index built
   from `\Rustfw\Segments\` on the card 5 s after the start (no pass slower), the load at a start, the events (`dev.py` reads
   them), no lost ride on a segment's start or finish; AXI SRAM has 1.6 KB left.
+- **Live segments, efforts (app/segments.rs, step S5)**: sim only. Still to see, with an `EMMC_WRITE=1` build: a segment
+  ridden faster than its PR, the ride saved, then `\Rustfw\Segments\<id>.pr` and a line of `efforts.csv` written after
+  the save only (never during the ride, nothing for a ride discarded), read back on the computer; the next pass over
+  the segment with the `.pr` as its PR target (a delta about 0 at the same pace); stock still reads the card.
 - **THEME AUTO (ui/theme.rs `DayNight`, app/themes.rs; theming.md 4b)**: sim only. Still to see: the switch at dusk
   (night under 20 lux for 30 s, day back over 50 lux for 30 s, at most one switch a minute), the screen redrawn once
   in each theme, and the cost of the light sensor measuring all the time while AUTO is on (its time awake, measured

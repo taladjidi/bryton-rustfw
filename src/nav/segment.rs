@@ -1,6 +1,6 @@
 //! A live segment file, `\Rustfw\Segments\<id>.seg` (docs/segments.md, "The file"): the reader of stock's live segment
-//! package, `LiveSegmentData.bin` unzipped. Pure logic over a byte slice: nothing here touches the card, and nothing on
-//! the unit calls it yet (S1).
+//! package, `LiveSegmentData.bin` unzipped; and the rider's PR file beside it, `<id>.pr` ([`PrCopy`], step S5). Pure
+//! logic over a byte slice: nothing here touches the card (app/segments.rs reads and writes).
 //!
 //! **Source:** stock's reconstruction `ghidra/recovered_src/ride/live_segments.c` (bryton repo, read 2026-10-29). Facts
 //! only (offsets, sizes, types); no code copied. Its layout, as this module reads it, little endian:
@@ -515,6 +515,160 @@ fn e7(v: f32, limit: f32) -> Result<i32, Error> {
     }
 }
 
+/// Bytes of one copy of a `.pr` file (two sectors: the header and up to [`POINTS`] u16 times fit).
+pub const PR_COPY: usize = 1024;
+/// Bytes of a whole `.pr` file: two copies.
+pub const PR_FILE: usize = 2 * PR_COPY;
+const PR_MAGIC: &[u8; 4] = b"RSPR";
+const PR_VERSION: u16 = 1;
+const PR_TIMES: usize = 24;
+const PR_CRC: usize = PR_COPY - 4;
+
+/// Why a copy of a `.pr` file is not read (each check its own, so the fuzz can count them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrError {
+    /// Not [`PR_COPY`] bytes.
+    Size,
+    /// Not "RSPR".
+    Magic,
+    /// Another layout.
+    Version,
+    /// `npoints` not 2 to [`POINTS`].
+    Points,
+    /// The CRC-32 of the copy is wrong (a copy torn by a cut, or never written).
+    Crc,
+    /// The times fall along the points, the first is not 0, or the last is not the total (0 included).
+    Times,
+}
+
+/// One copy of `\Rustfw\Segments\<id>.pr`, the rider's best effort on a segment (docs/segments.md, "Efforts"),
+/// written by app/segments.rs after a ride is saved, read when the segment is loaded. Two copies of 1024 bytes, the
+/// settings file's scheme (app/settings_file.rs): the newest whole copy wins, a write goes over the other one.
+/// A copy, little endian:
+///
+/// ```text
+/// 0    "RSPR"           magic
+/// 4    version (u16)    1
+/// 6    npoints (u16)    2 to 400: the segment's points the times are for
+/// 8    seq (u32)        higher is newer
+/// 12   id (u32)         the segment's id (the file's name)
+/// 16   date (u32)       FIT time of the effort's start (s since 1989-12-31 00:00 UTC)
+/// 20   total (u32)      the effort's time, s: the last point's time
+/// 24   times            npoints x u16: the elapsed seconds at each point, the first 0, never falling
+/// 1020 CRC-32 of 0..1020
+/// ```
+///
+/// ```
+/// use bryton_rustfw::segment::{PrCopy, pr_copy};
+/// let copy = pr_copy(1, 7, 1_000, &[0, 30, 61]).unwrap();
+/// let p = PrCopy::parse(&copy).unwrap();
+/// assert_eq!((p.id, p.total_s, p.npoints()), (7, 61, 3));
+/// assert_eq!(p.time(1), Some(30));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrCopy<'a> {
+    /// Higher is newer.
+    pub seq: u32,
+    /// The segment.
+    pub id: u32,
+    /// FIT time of the effort's start.
+    pub date: u32,
+    /// The effort's time, s.
+    pub total_s: u32,
+    times: &'a [u8],
+}
+
+impl<'a> PrCopy<'a> {
+    /// Reads one copy ([`PR_COPY`] bytes), every check of the layout done.
+    pub fn parse(c: &'a [u8]) -> Result<Self, PrError> {
+        if c.len() != PR_COPY {
+            return Err(PrError::Size);
+        }
+        let u16_at = |at: usize| c.get(at..).and_then(|s| s.first_chunk::<2>()).map(|b| u16::from_le_bytes(*b));
+        let u32_at = |at: usize| c.get(at..).and_then(|s| s.first_chunk::<4>()).map(|b| u32::from_le_bytes(*b));
+        if c.get(..4) != Some(&PR_MAGIC[..]) {
+            return Err(PrError::Magic);
+        }
+        if u16_at(4) != Some(PR_VERSION) {
+            return Err(PrError::Version);
+        }
+        let np = usize::from(u16_at(6).ok_or(PrError::Size)?);
+        if !(2..=POINTS).contains(&np) {
+            return Err(PrError::Points);
+        }
+        if u32_at(PR_CRC) != Some(crate::inflate::crc32(c.iter().take(PR_CRC).copied())) {
+            return Err(PrError::Crc);
+        }
+        let times = c.get(PR_TIMES..PR_TIMES + 2 * np).ok_or(PrError::Size)?;
+        let p = PrCopy {
+            seq: u32_at(8).ok_or(PrError::Size)?,
+            id: u32_at(12).ok_or(PrError::Size)?,
+            date: u32_at(16).ok_or(PrError::Size)?,
+            total_s: u32_at(20).ok_or(PrError::Size)?,
+            times,
+        };
+        let mut prev = 0u16;
+        for (i, t) in p.iter().enumerate() {
+            if t < prev || (i == 0 && t != 0) {
+                return Err(PrError::Times);
+            }
+            prev = t;
+        }
+        if p.total_s == 0 || u32::from(prev) != p.total_s {
+            return Err(PrError::Times);
+        }
+        Ok(p)
+    }
+
+    /// The newer of a file's two copies that check out ([`PR_FILE`] bytes), if any.
+    pub fn newest(file: &'a [u8]) -> Option<Self> {
+        let (a, b) = (file.get(..PR_COPY)?, file.get(PR_COPY..PR_FILE)?);
+        match (Self::parse(a).ok(), Self::parse(b).ok()) {
+            // serial number order (RFC 1982): a sequence that wrapped past u32::MAX is still newer
+            (Some(x), Some(y)) => Some(if (y.seq.wrapping_sub(x.seq) as i32) > 0 { y } else { x }),
+            (x, y) => x.or(y),
+        }
+    }
+
+    /// The points it has times for.
+    pub fn npoints(&self) -> usize {
+        self.times.len() / 2
+    }
+
+    /// The time at point `i`, s.
+    pub fn time(&self, i: usize) -> Option<u16> {
+        self.times.get(2 * i..).and_then(|s| s.first_chunk::<2>()).map(|b| u16::from_le_bytes(*b))
+    }
+
+    /// The times, point by point.
+    pub fn iter(&self) -> impl Iterator<Item = u16> + '_ {
+        self.times.chunks_exact(2).map(|b| b.first_chunk::<2>().map_or(0, |x| u16::from_le_bytes(*x)))
+    }
+}
+
+/// A copy of a `.pr` file ([`PrCopy`]) for `times` (2 to [`POINTS`], the first 0, never falling): None for times
+/// that are not those.
+pub fn pr_copy(seq: u32, id: u32, date: u32, times: &[u16]) -> Option<[u8; PR_COPY]> {
+    let np = u16::try_from(times.len()).ok().filter(|&n| (2..=POINTS).contains(&usize::from(n)))?;
+    let mut c = [0u8; PR_COPY];
+    fn put(c: &mut [u8], at: usize, v: &[u8]) -> Option<()> {
+        c.get_mut(at..at + v.len()).map(|d| d.copy_from_slice(v))
+    }
+    put(&mut c, 0, PR_MAGIC)?;
+    put(&mut c, 4, &PR_VERSION.to_le_bytes())?;
+    put(&mut c, 6, &np.to_le_bytes())?;
+    put(&mut c, 8, &seq.to_le_bytes())?;
+    put(&mut c, 12, &id.to_le_bytes())?;
+    put(&mut c, 16, &date.to_le_bytes())?;
+    put(&mut c, 20, &u32::from(*times.last()?).to_le_bytes())?;
+    for (i, t) in times.iter().enumerate() {
+        put(&mut c, PR_TIMES + 2 * i, &t.to_le_bytes())?;
+    }
+    let crc = crate::inflate::crc32(c.iter().take(PR_CRC).copied());
+    put(&mut c, PR_CRC, &crc.to_le_bytes())?;
+    PrCopy::parse(&c).ok().map(|_| c)
+}
+
 /// Test builders: a valid file and any file the checks can be broken on. Shared with the fuzz (src/sim/fuzz.rs).
 #[cfg(test)]
 pub(crate) mod tests {
@@ -827,6 +981,55 @@ pub(crate) mod tests {
         assert_eq!(s.kept, [Some(Effort::Pr), Some(Effort::Kom), None, Some(Effort::Recent)]);
         assert_eq!(s.times.get(81).copied(), Some([370, 330, 0, 415]));
         assert_eq!(s.dist_m.get(81).copied(), Some(2000));
+    }
+
+    /// A PR file: a copy round-trips, the newest whole copy wins, a torn one leaves the other, and each check fails
+    /// on its own field.
+    #[test]
+    fn pr_copies() {
+        let times: Vec<u16> = (0..20).map(|i| 8 * i).collect();
+        let a = pr_copy(4, 9, 77, &times).unwrap();
+        let p = PrCopy::parse(&a).unwrap();
+        assert_eq!((p.seq, p.id, p.date, p.total_s, p.npoints()), (4, 9, 77, 152, 20));
+        assert_eq!(p.iter().collect::<Vec<_>>(), times);
+        let b = pr_copy(5, 9, 78, &times).unwrap();
+        let mut file = [a, b].concat();
+        assert_eq!(PrCopy::newest(&file).unwrap().seq, 5);
+        // a sequence past u32::MAX is newer still
+        let wrapped = [pr_copy(u32::MAX, 9, 0, &times).unwrap(), pr_copy(0, 9, 0, &times).unwrap()].concat();
+        assert_eq!(PrCopy::newest(&wrapped).unwrap().seq, 0);
+        file[PR_COPY + 100] ^= 1; // the newer torn by a cut
+        assert_eq!(PrCopy::newest(&file).unwrap().seq, 4);
+        file[3] ^= 1;
+        assert_eq!(PrCopy::newest(&file), None);
+        assert_eq!(PrCopy::newest(&file[..PR_COPY]), None, "not whole");
+        // the writer refuses what the reader would
+        assert!(pr_copy(1, 9, 0, &[0]).is_none());
+        assert!(pr_copy(1, 9, 0, &[0, 5, 4]).is_none());
+        assert!(pr_copy(1, 9, 0, &[1, 5]).is_none());
+        assert!(pr_copy(1, 9, 0, &[0, 0]).is_none(), "a time of 0");
+        assert!(pr_copy(1, 9, 0, &[0; POINTS + 1]).is_none());
+        let recrc = |c: &mut [u8]| {
+            let crc = crate::inflate::crc32(c[..PR_CRC].iter().copied());
+            c[PR_CRC..].copy_from_slice(&crc.to_le_bytes());
+        };
+        let broken = |at: usize, v: &[u8], crc: bool| {
+            let mut c = a;
+            c[at..at + v.len()].copy_from_slice(v);
+            if crc {
+                recrc(&mut c);
+            }
+            PrCopy::parse(&c).err()
+        };
+        assert_eq!(PrCopy::parse(&a[..1000]).err(), Some(PrError::Size));
+        assert_eq!(broken(0, b"RSPQ", true), Some(PrError::Magic));
+        assert_eq!(broken(4, &2u16.to_le_bytes(), true), Some(PrError::Version));
+        assert_eq!(broken(6, &1u16.to_le_bytes(), true), Some(PrError::Points));
+        assert_eq!(broken(6, &401u16.to_le_bytes(), true), Some(PrError::Points));
+        assert_eq!(broken(30, &[1], false), Some(PrError::Crc));
+        assert_eq!(broken(20, &153u32.to_le_bytes(), true), Some(PrError::Times), "the total not the last time");
+        assert_eq!(broken(PR_TIMES + 4, &200u16.to_le_bytes(), true), Some(PrError::Times), "falling");
+        assert_eq!(broken(PR_TIMES, &1u16.to_le_bytes(), true), Some(PrError::Times), "a first time");
     }
 
     /// Every file of the directory named by `SEGMENTS_DIR` parses (the tool's real output; not in the default run).

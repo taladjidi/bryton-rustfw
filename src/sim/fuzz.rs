@@ -4176,6 +4176,99 @@ fn segment_files() {
     assert!(reached.iter().all(|&c| c > 0), "every error and the Ok path reached: {reached:?}");
 }
 
+/// A segment's PR file (nav/segment.rs `PrCopy`, read at a segment's load and before an effort is written)
+/// generated from its layout: two copies, each valid, absent, or with one field broken (magic, version, the point
+/// count, a time falling, the first time or the total, a flipped byte with or without its CRC put right), the file
+/// cut or grown. Every check and the Ok path of a copy are reached (counted over the seeds), and the newest whole
+/// copy is always one that parses on its own, the one with the higher sequence number.
+#[test]
+fn pr_files() {
+    use crate::segment::{POINTS, PR_COPY, PrCopy, PrError, pr_copy};
+    let mut reached = [0usize; 7]; // Ok, Size, Magic, Version, Points, Crc, Times
+    let mut newest = [0usize; 3]; // none, the first, the second
+    for seed in 1..=3000u32 {
+        let mut next = xorshift(seed);
+        let copy = |next: &mut dyn FnMut() -> u32| -> Vec<u8> {
+            let np = 2 + (next() as usize % (POINTS - 1));
+            let mut t = 0u16;
+            let times: Vec<u16> = (0..np)
+                .map(|i| {
+                    if i > 0 {
+                        t = t.saturating_add(1 + (next() % 40) as u16);
+                    }
+                    t
+                })
+                .collect();
+            let mut c = pr_copy(next() % 50, next() % 3, next(), &times).unwrap().to_vec();
+            let crc_fixed = next().is_multiple_of(2);
+            let at = |next: &mut dyn FnMut() -> u32| 24 + 2 * (next() as usize % np);
+            match next() % 12 {
+                0 => c[next() as usize % 4] ^= 1 + (next() % 255) as u8,
+                1 => c[4] = (next() % 4) as u8,
+                2 => c[6..8].copy_from_slice(&((next() % 3) as u16 * 401).to_le_bytes()),
+                3 => {
+                    let i = at(next);
+                    c[i..i + 2].copy_from_slice(&((next() % 2) as u16).to_le_bytes());
+                }
+                4 => c[20..24].copy_from_slice(&(next() % 3).to_le_bytes()),
+                5 => {
+                    let i = next() as usize % 1020;
+                    c[i] ^= 1 + (next() % 255) as u8;
+                }
+                6 => c.truncate(next() as usize % PR_COPY),
+                7 => c = std::vec![0u8; PR_COPY], // a copy never written
+                _ => {}
+            }
+            if crc_fixed && c.len() == PR_COPY {
+                let crc = crate::inflate::crc32(c[..1020].iter().copied());
+                c[1020..].copy_from_slice(&crc.to_le_bytes());
+            }
+            c
+        };
+        let (a, b) = (copy(&mut next), copy(&mut next));
+        for c in [&a, &b] {
+            reached[match PrCopy::parse(c) {
+                Ok(p) => {
+                    assert!(p.npoints() >= 2 && p.iter().last() == Some(p.total_s as u16), "seed {seed}");
+                    assert!(p.iter().zip(p.iter().skip(1)).all(|(x, y)| x <= y), "seed {seed}: falling");
+                    0
+                }
+                Err(PrError::Size) => 1,
+                Err(PrError::Magic) => 2,
+                Err(PrError::Version) => 3,
+                Err(PrError::Points) => 4,
+                Err(PrError::Crc) => 5,
+                Err(PrError::Times) => 6,
+            }] += 1;
+        }
+        // the file: both copies padded to their place, sometimes cut or grown
+        let mut file = std::vec![0u8; 2 * PR_COPY];
+        file[..a.len().min(PR_COPY)].copy_from_slice(&a[..a.len().min(PR_COPY)]);
+        file[PR_COPY..PR_COPY + b.len().min(PR_COPY)].copy_from_slice(&b[..b.len().min(PR_COPY)]);
+        match next() % 8 {
+            0 => file.truncate(next() as usize % (2 * PR_COPY)),
+            1 => file.extend((0..next() % 600).map(|_| next() as u8)),
+            _ => {}
+        }
+        let whole = |c: &[u8]| c.len() == PR_COPY && PrCopy::parse(c).is_ok();
+        let n = PrCopy::newest(&file);
+        newest[match n {
+            None => 0,
+            Some(p) if file.len() >= PR_COPY && PrCopy::parse(&file[..PR_COPY]) == Ok(p) => 1,
+            Some(_) => 2,
+        }] += 1;
+        if let Some(p) = n {
+            let (x, y) = (&file[..PR_COPY], &file[PR_COPY..2 * PR_COPY]);
+            assert!(whole(x) || whole(y), "seed {seed}");
+            for other in [x, y].into_iter().filter_map(|c| PrCopy::parse(c).ok()) {
+                assert!(other.seq <= p.seq, "seed {seed}: not the newest");
+            }
+        }
+    }
+    assert!(reached.iter().all(|&c| c > 0), "every check and the Ok path reached: {reached:?}");
+    assert!(newest.iter().all(|&c| c > 0), "none, the first and the second won: {newest:?}");
+}
+
 /// The segment matcher (nav/segment_match.rs) against parsed segments, fed random fixes: a rider that follows the
 /// track with noise, then wanders (jumps, U-turns, stops, a clock that stands or jumps), at up to 30 m/s, in the
 /// lane of one segment or of a second one of another geometry. In some seeds the segment is a 2 or 3 point one, and

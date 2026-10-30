@@ -134,11 +134,8 @@ impl App {
         for ((row, e), d) in rows.iter_mut().zip(seg.kept).zip(deltas) {
             *row = e.zip(d).map(|(e, d): (Effort, i32)| (effort_label(e), d));
         }
-        let new_pr = seg
-            .kept
-            .iter()
-            .zip(deltas)
-            .any(|(&e, d): (&Option<Effort>, Option<i32>)| e == Some(Effort::Pr) && d.is_some_and(|d| d < 0));
+        // as app/segments.rs writes the PR file: kept, and faster than the PR loaded and this ride's earlier efforts
+        let new_pr = s.new_pr();
         ui::segment::draw_card(c, &ui::segment::Card { name: ascii(seg.header.name()), elapsed_s, rows, new_pr });
     }
 
