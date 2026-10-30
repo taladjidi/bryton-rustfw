@@ -1,10 +1,13 @@
 //! The quick panel (`Screen::Quick`): a swipe down opens it on the overview and on every ride page, a swipe up or
 //! Back closes it. What the rider wants to see right away, top to bottom (ui/quick.rs has the geometry):
 //! 1. media: now playing and the remote's buttons (the same actions as the media screen, [`App::media`]);
-//! 2. the power meter, when one is paired: watts, its battery and ZERO, which runs the zero-offset calibration in
-//!    place (app/powercal.rs: the request, the retries, the answer) and writes its result on the same block;
-//! 3. one line per paired sensor: its value or SEARCHING, and its battery when it said (ANT+ common page 82);
-//! 4. the brightness buttons.
+//! 2. one line per paired sensor: its value or SEARCHING, and its battery when it said (ANT+ common page 82). The
+//!    power meter's line is POWER, no watts: its value box is a ZERO button that runs the zero-offset calibration in
+//!    place (app/powercal.rs: the request, the retries, the answer) and then shows the result for 5 s. A tap anywhere
+//!    on the line arms it ("SURE?" for 3 s), a second tap in time calibrates: zeroing with the cranks turning gives
+//!    a wrong offset, and the line sits under the volume buttons, which a thumb mistaps. The line sits where the
+//!    power meter falls in `Kind::ALL`'s order;
+//! 3. the brightness buttons.
 //!
 //! Every box has a fingerprint ([`App::quick_prints`]); the screen is drawn whole when it opens (or when a sensor is
 //! paired or forgotten under it, which moves the lines) and then a second's update, and a tap's, redraws only the boxes
@@ -22,18 +25,24 @@ use ui::quick::{self as q, Battery, Hit};
 
 /// How often the open panel looks for changes, and so the scroll's step (see the module doc).
 pub(crate) const QUICK_STEP_MS: u32 = 250;
-/// The boxes: now playing's title and artist, the media buttons, the power block (watts, battery, ZERO and its
-/// result), the brightness level, then three a sensor line (name, value, battery).
+/// How long ZERO stays armed, and how long a calibration's result stays on the button, in seconds (the clock counts whole
+/// seconds, so the arming lasts 2 to 3 s).
+const ARM_S: u32 = 3;
+const RESULT_S: u32 = 5;
+/// The boxes: now playing's title and artist, the media buttons, the brightness level, then three a sensor line (name,
+/// value, battery).
 const B_TITLE: usize = 0;
 const B_ARTIST: usize = 1;
 const B_MEDIA: usize = 2;
-const B_WATTS: usize = 3;
-const B_PBATT: usize = 4;
-const B_ZERO: usize = 5;
-const B_LEVEL: usize = 6;
-const B_ROWS: usize = 7;
+const B_LEVEL: usize = 3;
+const B_ROWS: usize = 4;
 /// The boxes in all.
 pub(crate) const QUICK_BOXES: usize = B_ROWS + 3 * q::ROWS;
+
+/// `t` (epoch seconds) has passed `now`.
+fn expired(t: u32, now: u32) -> bool {
+    now.wrapping_sub(t) as i32 >= 0
+}
 
 /// The fingerprint of a box's text and colour.
 fn print(s: &str, color: u16) -> u32 {
@@ -41,32 +50,31 @@ fn print(s: &str, color: u16) -> u32 {
 }
 
 impl App {
-    /// A power meter is paired: the panel has its block.
-    fn quick_power(&self) -> bool {
-        matches!(self.radio.sensors.get(Kind::Power as usize), Some(Sensor::Paired(_)))
+    /// The POWER line's index among the sensor lines, when a meter is paired.
+    pub(crate) fn quick_power(&self) -> Option<usize> {
+        self.quick_kinds().position(|k| k == Kind::Power)
     }
 
-    /// The paired sensors with a line (the power meter has its block), at most [`q::ROWS`], or
-    /// [`q::ROWS_WITH_POWER`] under the block.
+    /// The paired sensors with a line, at most [`q::ROWS`].
     fn quick_kinds(&self) -> impl Iterator<Item = Kind> + '_ {
         Kind::ALL
             .into_iter()
             .filter(|&k| match k {
-                Kind::Power => false,
                 Kind::Trainer => self.trainer_on(),
                 _ => matches!(self.radio.sensors.get(k as usize), Some(Sensor::Paired(_))),
             })
-            .take(if self.quick_power() { q::ROWS_WITH_POWER } else { q::ROWS })
+            .take(q::ROWS)
     }
 
-    /// What the panel's lines are: the power block (bit 7) and the number of sensor lines.
+    /// What the panel's lines are: the number of sensor lines.
     pub(crate) fn quick_shape(&self) -> u8 {
-        u8::from(self.quick_power()) << 7 | self.quick_kinds().count() as u8
+        self.quick_kinds().count() as u8
     }
 
     /// Opens the panel, with no calibration result left from before.
     pub(crate) fn open_quick(&mut self) {
         self.powercal.reset();
+        self.quick_zero = (None, None);
         self.quick_scroll = (0, 0);
         self.open(Screen::Quick);
     }
@@ -113,34 +121,76 @@ impl App {
         }
     }
 
-    /// The zero calibration's result on the power block, and its colour.
-    fn quick_result(&self) -> (Line<16>, u16) {
+    /// The ZERO button's label, text colour and fill: the calibration in progress or its result (until
+    /// `update_quick` takes it back after [`RESULT_S`]), else SURE? when armed, else ZERO.
+    pub(crate) fn quick_button(&self) -> (Line<16>, u16, u16) {
         let mut l = Line::<16>::new();
-        let color = match self.powercal.phase() {
+        let now = self.now_s();
+        let armed = self.quick_zero_ok() && self.quick_zero.0.is_some_and(|t| !expired(t, now));
+        let (fg, bg) = match self.powercal.phase() {
             Phase::Asking => {
                 l.push_str("ASKING...");
-                ui::GREY
+                (ui::GREY, ui::DARK)
+            }
+            _ if armed => {
+                l.push_str("SURE?");
+                (ui::ON_ACCENT, ui::ACCENT)
             }
             Phase::Done(offset, _) => {
-                l.push_str("ZERO ");
                 if offset < 0 {
                     l.push_str("-");
                 }
                 l.push_u32(u32::from(offset.unsigned_abs()));
                 l.push_str(" OK");
-                ui::WHITE
+                (ui::WHITE, ui::DARK)
             }
             Phase::Failed => {
                 l.push_str("FAILED");
-                ui::RED
+                (ui::RED, ui::DARK)
             }
             Phase::NoAnswer => {
                 l.push_str("NO ANSWER");
-                ui::RED
+                (ui::RED, ui::DARK)
             }
-            Phase::Ready | Phase::AutoSet => ui::GREY,
+            Phase::Ready | Phase::AutoSet => {
+                l.push_str("ZERO");
+                if self.quick_zero_ok() { (ui::ON_ACCENT, ui::ACCENT) } else { (ui::GREY, ui::DARK) }
+            }
         };
-        (l, color)
+        (l, fg, bg)
+    }
+
+    /// A tap on the POWER line: the first arms ZERO, a second within [`ARM_S`] calibrates. Nothing when it cannot.
+    fn quick_zero_tap(&mut self) {
+        if !self.quick_zero_ok() {
+            return;
+        }
+        let now = self.now_s();
+        if self.quick_zero.0.is_some_and(|t| !expired(t, now)) {
+            self.quick_zero = (None, None);
+            self.powercal_go();
+        } else {
+            self.powercal.reset(); // a result on the button gives way to SURE?
+            self.quick_zero = (Some(now.wrapping_add(ARM_S)), None);
+        }
+    }
+
+    /// Takes back an expired arming, and a result shown for [`RESULT_S`].
+    fn quick_zero_tick(&mut self) {
+        let now = self.now_s();
+        if !self.quick_zero_ok() || self.quick_zero.0.is_some_and(|t| expired(t, now)) {
+            self.quick_zero.0 = None;
+        }
+        if matches!(self.powercal.phase(), Phase::Done(..) | Phase::Failed | Phase::NoAnswer) {
+            match self.quick_zero.1 {
+                None => self.quick_zero.1 = Some(now.wrapping_add(RESULT_S)),
+                Some(t) if expired(t, now) => {
+                    self.powercal.reset();
+                    self.quick_zero.1 = None;
+                }
+                Some(_) => {}
+            }
+        }
     }
 
     /// ZERO can be pressed: the meter is heard, no ride runs, no request is out.
@@ -175,20 +225,6 @@ impl App {
                     }
                 }
             }
-            B_WATTS => {
-                if let Some(w) = self.power.rolling(0) {
-                    l.push_u32(u32::from(w)); // the 3 s power, whatever window a tap chose for the fields
-                } else {
-                    l.push_str("--");
-                }
-                put(&mut l, "W");
-                ui::WHITE
-            }
-            B_ZERO => {
-                let (r, c) = self.quick_result();
-                put(&mut l, r.as_str());
-                c
-            }
             B_LEVEL => {
                 match LIGHT_LEVELS.get(self.settings.light_level) {
                     Some(&v) => {
@@ -199,7 +235,7 @@ impl App {
                 }
                 ui::WHITE
             }
-            _ if i < B_ROWS => ui::BLACK, // the media buttons, the power battery: no text
+            _ if i < B_ROWS => ui::BLACK, // the media buttons: no text
             _ => {
                 // a sensor line: name (3k), value (3k + 1)
                 let k = (i - B_ROWS) / 3;
@@ -228,16 +264,6 @@ impl App {
         for (i, slot) in p.iter_mut().enumerate() {
             *slot = match i {
                 B_MEDIA => 1 + u32::from(n.title.is_none()) * 2 + u32::from(n.playing),
-                B_PBATT if power => 1 + self.decoders.battery_status(Kind::Power).map_or(0, u32::from),
-                B_WATTS if power => {
-                    let (l, c) = self.quick_text(i);
-                    print(l.as_str(), c)
-                }
-                B_ZERO if power => {
-                    let (l, c) = self.quick_text(i);
-                    print(l.as_str(), c) ^ u32::from(self.quick_zero_ok()) << 1
-                }
-                B_WATTS | B_PBATT | B_ZERO => 0,
                 _ if i >= B_ROWS && (i - B_ROWS) % 3 == 2 => {
                     // a sensor line's battery
                     let k = (i - B_ROWS) / 3;
@@ -248,6 +274,11 @@ impl App {
                     })
                 }
                 _ if i >= B_ROWS && self.quick_kinds().nth((i - B_ROWS) / 3).is_none() => 0,
+                _ if i >= B_ROWS && (i - B_ROWS) % 3 == 1 && power == Some((i - B_ROWS) / 3) => {
+                    // the ZERO button: its fill too (the text and colour do not tell ready from greyed out)
+                    let (l, c, bg) = self.quick_button();
+                    print(l.as_str(), c ^ bg.rotate_left(3))
+                }
                 _ => {
                     let (l, c) = self.quick_text(i);
                     print(l.as_str(), c)
@@ -267,10 +298,9 @@ impl App {
         p
     }
 
-    /// Draws box `i` (the media buttons and ZERO whole, each other box in its fixed place).
+    /// Draws box `i` (the media buttons whole, each other box in its fixed place).
     fn quick_draw_box(&self, c: &mut impl Canvas, i: usize) {
-        let power = self.quick_power();
-        let sens_y = q::SENSORS_Y[usize::from(!power)];
+        let sens_y = q::SENSORS_Y;
         let (text, color) = self.quick_text(i);
         let s = text.as_str();
         match i {
@@ -280,18 +310,6 @@ impl App {
                 let n = self.media_now();
                 q::draw_media_buttons(c, n.playing, n.title.is_none());
             }
-            B_WATTS if power => {
-                let style = text::Style { scale: 3, fg: color, ..ui::LABEL };
-                text::draw_in(c, &style, q::WATTS.0, q::WATTS.1, q::WATTS.2, Align::Left, s);
-            }
-            B_PBATT if power => {
-                let tag = self.decoders.battery_status(Kind::Power).map_or(Battery::Unknown, q::battery_of_status);
-                q::draw_battery(c, q::POWER_BATT.0, q::POWER_BATT.1, tag);
-            }
-            B_ZERO if power => {
-                q::draw_zero(c, self.quick_zero_ok());
-                q::draw_text(c, (q::RESULT.0, q::RESULT.1, q::RESULT.2), Align::Left, color, s);
-            }
             B_LEVEL => q::draw_text(c, q::LEVEL, Align::Centre, color, s),
             _ if i >= B_ROWS => {
                 let (k, part) = ((i - B_ROWS) / 3, (i - B_ROWS) % 3);
@@ -300,6 +318,11 @@ impl App {
                 let (x, w) = q::SENSOR_BOXES[part];
                 match part {
                     2 => q::draw_battery(c, x, y, self.quick_battery(kind)),
+                    // the button fills its own 16 px row only: the next line's ink is not touched
+                    1 if kind == Kind::Power => {
+                        let (l, fg, bg) = self.quick_button();
+                        q::draw_button(c, (x, y, w, q::ROW), bg, fg, l.as_str());
+                    }
                     _ => q::draw_text(c, (x, y, w), Align::Left, color, s),
                 }
             }
@@ -327,6 +350,7 @@ impl App {
         if self.quick_shape != self.quick_shape() {
             return self.show(b);
         }
+        self.quick_zero_tick();
         // a new track starts both lines over; else the scroll takes a step
         let track = fnv(fnv(0, self.media_now().title.unwrap_or("").as_bytes()), self.media_now().artist.as_bytes());
         self.quick_scroll =
@@ -361,7 +385,7 @@ impl App {
                         };
                         self.media(b, key, false);
                     }
-                    Some(Hit::Zero) => self.powercal_go(),
+                    Some(Hit::Zero) => self.quick_zero_tap(),
                     Some(Hit::Light(up)) => {
                         // dim to bright: the levels from the last (10 %) to the first (100 %), then AUTO
                         let n = LIGHT_LEVELS.len();

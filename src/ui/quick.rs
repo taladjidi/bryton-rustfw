@@ -1,10 +1,10 @@
 //! The quick panel's geometry and drawing: what the rider wants to see right away, top to bottom: the media
-//! remote (now playing and five touch buttons), the power meter (watts, battery, ZERO), the paired sensors (one line
-//! each) and the brightness buttons. Pure drawing against [`Canvas`];
+//! remote (now playing and five touch buttons), the paired sensors (one line each, the power meter's with its ZERO
+//! button; no watts) and the brightness buttons. Pure drawing against [`Canvas`];
 //! the app (app/quick.rs) decides what each box says and redraws only the ones that changed.
 
 use super::media::{self, Button};
-use super::{ACCENT, BLACK, Canvas, DARK, GREY, LABEL, PAGE_Y, RED, Rect, WHITE};
+use super::{BLACK, Canvas, DARK, LABEL, PAGE_Y, RED, Rect, WHITE};
 use crate::text::{self, Align, Style};
 
 /// Now playing: the title, then the artist, one line each.
@@ -24,24 +24,12 @@ pub const MEDIA: [(Button, u32, u32, u32, u32); 5] = {
         (Button::VolUp, 124, VY, 112, 44),
     ]
 };
-/// The power meter's block starts here (44 px high); the sensors follow it, or take its place.
-pub const POWER_Y: u32 = MEDIA[3].2 + 44 + 4;
-/// The ZERO button, in the power block's right side.
-pub const ZERO: (u32, u32, u32, u32) = (150, POWER_Y, 86, 44);
-/// The watts (3x): x, y, width.
-pub const WATTS: (u32, u32, u32) = (8, POWER_Y + 2, 72);
-/// The power meter's battery tag.
-pub const POWER_BATT: (u32, u32) = (88, POWER_Y + 6);
-/// The calibration's result under the watts: x, y, width.
-pub const RESULT: (u32, u32, u32) = (8, POWER_Y + 28, 138);
 /// A sensor line's height.
 pub const ROW: u32 = 16;
-/// Where the sensor lines start with the power block, and without it.
-pub const SENSORS_Y: [u32; 2] = [POWER_Y + 44 + 4, POWER_Y];
-/// The most sensor lines (one a kind but the power meter); under the power block, [`ROWS_WITH_POWER`].
+/// Where the sensor lines start: right under the volume row.
+pub const SENSORS_Y: u32 = MEDIA[3].2 + 44 + 4;
+/// The most sensor lines: the power meter's (POWER, with its ZERO button) and one a kind.
 pub const ROWS: usize = 6;
-/// The most sensor lines under the power block.
-pub const ROWS_WITH_POWER: usize = 4;
 /// A sensor line's name, value and battery boxes (x, width).
 pub const SENSOR_BOXES: [(u32, u32); 3] = [(4, 84), (92, 108), (202, 38)];
 /// The brightness row: the two buttons (44 px high), the level between.
@@ -56,20 +44,22 @@ pub const LEVEL: (u32, u32, u32) = (76, BRIGHT_Y + 15, 88);
 pub enum Hit {
     /// A media button.
     Media(Button),
-    /// ZERO.
+    /// The POWER line (anywhere on it): arms ZERO, then confirms it.
     Zero,
     /// Brightness down (false) or up (true).
     Light(bool),
 }
 
-/// The control under a touch at (`x`, `y`), if any (`zero`: the power block is shown).
-pub fn hit(x: u16, y: u16, zero: bool) -> Option<Hit> {
+/// The control under a touch at (`x`, `y`), if any (`power`: the POWER line's index among the sensor lines).
+pub fn hit(x: u16, y: u16, power: Option<usize>) -> Option<Hit> {
     let at = |(bx, by, w, h): (u32, u32, u32, u32)| Rect(bx, by, w, h).contains(x, y);
     MEDIA
         .iter()
         .find(|&&(_, bx, by, w, h)| at((bx, by, w, h)))
         .map(|b| Hit::Media(b.0))
-        .or_else(|| (zero && at(ZERO)).then_some(Hit::Zero))
+        .or_else(|| {
+            power.filter(|&k| Rect(0, SENSORS_Y + k as u32 * ROW, super::W, ROW).contains(x, y)).map(|_| Hit::Zero)
+        })
         .or_else(|| BRIGHT.iter().position(|&r| at(r)).map(|i| Hit::Light(i == 1)))
 }
 
@@ -156,13 +146,7 @@ pub fn draw_battery(c: &mut impl Canvas, x: u32, y: u32, b: Battery) {
 pub fn draw_button(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), bg: u16, fg: u16, label: &str) {
     c.fill(x, y, w, h, bg);
     let st = Style { fg, bg, ..LABEL };
-    text::draw_in(c, &st, x + 2, y + (h - st.height()) / 2, w - 4, Align::Centre, label);
-}
-
-/// The ZERO button: the accent
-pub fn draw_zero(c: &mut impl Canvas, can: bool) {
-    let (bg, fg) = if can { (ACCENT, super::ON_ACCENT) } else { (DARK, GREY) };
-    draw_button(c, ZERO, bg, fg, "ZERO");
+    text::draw_in(c, &st, x + 2, y + h.saturating_sub(st.height()) / 2, w - 4, Align::Centre, label);
 }
 
 /// The brightness buttons.
@@ -183,16 +167,9 @@ mod tests {
     #[test]
     fn layout_fits_and_hits() {
         assert!(BRIGHT[0].1 + BRIGHT[0].3 <= super::super::H, "the brightness row fits");
-        assert!(SENSORS_Y[0] + ROWS_WITH_POWER as u32 * ROW <= BRIGHT_Y, "four sensor lines with the power block");
-        assert!(SENSORS_Y[1] + ROWS as u32 * ROW <= BRIGHT_Y, "six without");
-        assert!(SENSORS_Y[0] + (ROWS_WITH_POWER as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell");
-        assert!(SENSORS_Y[1] + (ROWS as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell, no power");
-        assert!(
-            POWER_Y + 44 <= SENSORS_Y[0]
-                && TITLE_Y + 20 <= ARTIST_Y
-                && ARTIST_Y + 20 <= MEDIA[0].2
-                && MEDIA[4].2 + 44 <= POWER_Y
-        );
+        assert!(SENSORS_Y + ROWS as u32 * ROW <= BRIGHT_Y, "six sensor lines");
+        assert!(SENSORS_Y + (ROWS as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell");
+        assert!(TITLE_Y + 20 <= ARTIST_Y && ARTIST_Y + 20 <= MEDIA[0].2 && MEDIA[4].2 + 44 <= SENSORS_Y);
         for (i, a) in MEDIA.iter().enumerate() {
             for m in &MEDIA[i + 1..] {
                 assert!(a.1 + a.3 <= m.1 || m.1 + m.3 <= a.1 || a.2 + a.4 <= m.2 || m.2 + m.4 <= a.2, "no overlap");
@@ -200,18 +177,21 @@ mod tests {
         }
         for &(b, x, y, w, h) in &MEDIA {
             assert!(w >= 44 && h >= 44, "a 44 px target");
-            assert_eq!(hit((x + w / 2) as u16, (y + h / 2) as u16, true), Some(Hit::Media(b)));
+            assert_eq!(hit((x + w / 2) as u16, (y + h / 2) as u16, None), Some(Hit::Media(b)));
         }
         // the gaps between buttons hit nothing
-        assert_eq!(hit(80, (MEDIA[0].2 + 20) as u16, true), None);
-        assert_eq!(hit(160, (MEDIA[1].2 + 20) as u16, true), None);
-        assert_eq!(hit(120, (MEDIA[3].2 + 20) as u16, true), None);
-        assert_eq!(hit(100, (MEDIA[0].2 + 47) as u16, true), None);
-        assert_eq!(hit(190, (ZERO.1 + 20) as u16, true), Some(Hit::Zero));
-        assert_eq!(hit(190, (ZERO.1 + 20) as u16, false), None);
-        assert_eq!(hit(40, (BRIGHT_Y + 20) as u16, false), Some(Hit::Light(false)));
-        assert_eq!(hit(200, (BRIGHT_Y + 20) as u16, false), Some(Hit::Light(true)));
-        assert_eq!(hit(120, TITLE_Y as u16, true), None);
+        assert_eq!(hit(80, (MEDIA[0].2 + 20) as u16, Some(0)), None);
+        assert_eq!(hit(160, (MEDIA[1].2 + 20) as u16, Some(0)), None);
+        assert_eq!(hit(120, (MEDIA[3].2 + 20) as u16, Some(0)), None);
+        assert_eq!(hit(100, (MEDIA[0].2 + 47) as u16, Some(0)), None);
+        let row = |k: u32| (SENSORS_Y + k * ROW + ROW / 2) as u16;
+        assert_eq!(hit(2, row(2), Some(2)), Some(Hit::Zero), "anywhere on the line");
+        assert_eq!(hit(237, row(2), Some(2)), Some(Hit::Zero));
+        assert_eq!(hit(120, row(2), Some(1)), None, "another line");
+        assert_eq!(hit(120, row(2), None), None, "no power meter");
+        assert_eq!(hit(40, (BRIGHT_Y + 20) as u16, None), Some(Hit::Light(false)));
+        assert_eq!(hit(200, (BRIGHT_Y + 20) as u16, None), Some(Hit::Light(true)));
+        assert_eq!(hit(120, TITLE_Y as u16, Some(0)), None);
     }
 
     #[test]

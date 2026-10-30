@@ -19,10 +19,8 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   a way to the settings (a swipe up or Back closes it). Top to bottom: **media** (the title and the artist, one line
   each, which scroll at 4 characters a second with 2 s holds at each end when wider than the screen; a row of previous,
   play / pause and next, then VOL- and VOL+ below it, 44 px high with 8 px between, the media remote's actions; greyed
-  without a phone); the **power meter** when one is paired (the 3 s watts, its battery, and ZERO, which runs the zero-offset
-  calibration in place and writes "ZERO -12 OK", "FAILED" or "NO ANSWER" on the same block; refused while the ride
-  runs); one line per **paired sensor** (at most 4 under the power block, 6 without; heart rate, speed, cadence, speed and cadence, shifting, trainer: its value or
-  SEARCHING, and its battery when the sensor said it, ANT+ common page 82: bars, or LOW in red); the heart rate strap's
+  without a phone); one line per **paired sensor** (at most 6; heart rate, speed, cadence, speed and cadence, power, shifting, trainer: its value or
+  SEARCHING, and its battery when the sensor said it, ANT+ common page 82: bars, or LOW in red). The power meter's line is **POWER**, with no watts: its value is a ZERO button. A tap anywhere on the line arms it (SURE? for 3 s), a second tap in time runs the zero-offset calibration in place and the button shows "-12 OK", "FAILED" or "NO ANSWER" for 5 s, then ZERO again; nothing while the ride runs or the meter is not heard (zeroing with the cranks turning gives a wrong offset, and the line sits under the volume buttons); the heart rate strap's
   battery in percent from its page 7 (HR BATT shows it, else the page 82 status; layout as openant reads it,
   `devices/heart_rate.py`, checked 2026-10-30, not yet against the ANT+ HRM document); SENSORS names a paired sensor
   with its maker's short name from common page 80 (manufacturer id in bytes 4-5, `devices/common.py`; the FIT SDK
@@ -325,7 +323,7 @@ Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md)
   values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
-- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and CLIMB pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window; the quick panel's watts stay 3 s.
+- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and CLIMB pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window. 
 - Power (src/training/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and
@@ -466,7 +464,7 @@ again fails a test. A key press or a tap is one, a swipe is one, Page held is on
 | A menu row acts (PAGES from the overview, touch) | 3 (hold, tap selects, tap acts) | 2 | `one_tap_acts_on_a_row_unless_the_ride_moves` |
 | Today's workout started, touch | 5 | 2 (the card, START) | `todays_workout_in_two_inputs` |
 | Today's workout started, keys | 4 | 2 (Start held, Start) | `todays_workout_in_two_inputs` |
-| Calibrate the power meter from the overview, touch | 6 | 2 (swipe down, ZERO; result in place) | `the_quick_panel_has_the_remote_the_meter_and_the_light` |
+| Calibrate the power meter from the overview, touch | 6 | 3 (swipe down, two taps on the POWER line; result in place) | `the_quick_panel_has_the_remote_the_meter_and_the_light` |
 | Play / pause the phone's media, touch (overview or any ride page) | 2 (swipe down, a tap; a ride page: swipe down, a tap on the remote) | 2 (swipe down, a tap), the panel also shows the meter, sensors and light | same |
 | The same by keys (meter heard) | 17 | 7 (SENSORS lists it first) | `sensors_actions_come_first` |
 | TRAINER CONTROL from the overview, keys | 4 (a MAIN row) | 7 (SENSORS row 0); 2 touches by the quick panel | `the_trainer_screen_is_one_step_from_the_menu_and_the_fields` |

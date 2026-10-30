@@ -1374,8 +1374,8 @@ fn menu_touch_and_keys() {
     use crate::touch::Dir;
     let (mut selects, mut acts, mut backs, mut asks, mut off, mut riding) = (0, 0, 0, 0, 0, 0);
     let (mut locks, mut locked_touches) = (0, 0);
-    let mut reach = [0usize; 5]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif
-    let mut arms = [0usize; 5]; // and an arm taken there: left, asked, left, left, scrolled
+    let mut reach = [0usize; 6]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif, a tap on POWER
+    let mut arms = [0usize; 6]; // and an arm taken there: left, asked, left, left, scrolled, ZERO armed or asked
     // STORAGE: the menu reached by an input, an oldest ride's row selected, its card opened (read over the passes)
     let mut storage = [0usize; 3];
     for seed in 1..=16u32 {
@@ -1414,7 +1414,15 @@ fn menu_touch_and_keys() {
                 // the screens no walk of rows and gestures reaches by chance: each opened as its row or gesture
                 // opens it (the panel: a swipe down; CALIBRATE POWER; ABOUT; a notice tapped), with the state it shows
                 match b % 5 {
-                    0 => app.open_quick(),
+                    0 => {
+                        if b % 2 == 0 {
+                            // a meter paired and heard: the POWER line is there to tap
+                            app.radio.sensors[crate::sensors::Kind::Power as usize] =
+                                Sensor::Paired(SensorId { device: 7, trans: 5 });
+                            app.radio.heard_ms[crate::sensors::Kind::Power as usize] = 0;
+                        }
+                        app.open_quick();
+                    }
                     1 => {
                         // a power meter paired and heard (as powercal_tests' unit): CALIBRATE POWER asks
                         app.radio.sensors[crate::sensors::Kind::Power as usize] =
@@ -1444,7 +1452,12 @@ fn menu_touch_and_keys() {
             if a % 31 == 1 {
                 app.settings.touch = !app.settings.touch; // TOUCH off and on
             }
+            let power_line = (app.screen() == Screen::Quick).then(|| app.quick_power()).flatten();
             let i = match a % 14 {
+                _ if a % 19 == 4 && power_line.is_some() => {
+                    let y = ui::quick::SENSORS_Y + power_line.unwrap_or(0) as u32 * ui::quick::ROW + 8;
+                    Input::Touch(Gesture::Tap(120, y as u16))
+                }
                 _ if a % 23 == 3 => Input::TouchLock,
                 0 | 1 => Input::Next,
                 2 => Input::Prev,
@@ -1476,6 +1489,13 @@ fn menu_touch_and_keys() {
                 Screen::Quick => {
                     reach[0] += 1;
                     arms[0] += usize::from(app.screen() != Screen::Quick);
+                    if let (Some(k), Input::Touch(Gesture::Tap(x, y))) = (power_line, i) {
+                        let r = ui::Rect(0, ui::quick::SENSORS_Y + k as u32 * ui::quick::ROW, ui::W, ui::quick::ROW);
+                        if r.contains(x, y) {
+                            reach[5] += 1;
+                            arms[5] += usize::from(app.quick_zero.0.is_some() || app.powercal.asking());
+                        }
+                    }
                 }
                 Screen::PowerCal => {
                     reach[1] += 1;
@@ -1561,20 +1581,22 @@ fn menu_touch_and_keys() {
     }
     std::println!("reached: {selects} selects, {acts} acts, {backs} backs, {asks} asked, {off} off, {riding} riding");
     std::println!(
-        "screens reached (inputs): quick {}, power cal {}, ramp result {}, about {}, notif {}",
+        "screens reached (inputs): quick {}, power cal {}, ramp result {}, about {}, notif {}, POWER tap {}",
         reach[0],
         reach[1],
         reach[2],
         reach[3],
-        reach[4]
+        reach[4],
+        reach[5]
     );
     std::println!(
-        "arms taken: quick left {}, asked {}, ramp left {}, about left {}, notif scrolled {}",
+        "arms taken: quick left {}, asked {}, ramp left {}, about left {}, notif scrolled {}, ZERO armed {}",
         arms[0],
         arms[1],
         arms[2],
         arms[3],
-        arms[4]
+        arms[4],
+        arms[5]
     );
     assert!(reach.iter().all(|&n| n > 0), "every screen reached: {reach:?}");
     assert!(storage.iter().all(|&n| n > 0), "STORAGE, an oldest ride selected, its card opened: {storage:?}");
