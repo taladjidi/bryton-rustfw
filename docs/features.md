@@ -214,6 +214,7 @@ or write waiting and no movement; details: docs/power.md.
   its field count, six fields at most). At a start the registers give the pages at once, the file 2 s later (the
   card is not touched at boot) and wins, unless another build changed the registers since: then its pages there
   win, the file's others kept. A build that may not write the card keeps its pages (three) in the registers only.
+- **Page switches (PAGES > ROAD PAGES > a page):** SHOW (ON or OFF: Next and the swipes skip a page that is OFF; at least one stays ON), MOVE UP and MOVE DOWN (the page swaps places with its neighbour, its MORE variant, switch and name with it; every set), RENAME (a name of up to four characters, A to Z, 0 to 9 and space: Next and Prev step the character, Start goes to the next one, Back ends; the name shows in the list and the page's menu title, "PAGE n" while empty). PAGES > AUTO SCROLL (OFF, 5, 10, 20 s): during a ride the next ON ride page comes by itself; it waits on the overview, a menu, a banner, MORE, the CLIMB, course and workout pages, and a key or a touch starts the count again. Switches and names are the road set's and are kept in `pages.bin` after the MTB part (a flags byte, the OFF mask, six names of 24 bits, a CRC of their own; an older file gives every page ON and no names; the sector has room for four characters, not eight). A swipe up on a ride page shows its MORE variant, a second one (or one on the course, workout or climb page) goes home, to the overview.
 - **Pages per profile:** an INDOOR ride (a trainer heard at Start, or INDOOR set by hand or in BIKE) has its own set
   of up to six pages beside the road set: the trainer (3 s power large, the trainer's target, heart rate, cadence,
   timer, work), the power numbers (average, NP, W' balance, IF, work, TSS) and the power and heart rate graphs, with
@@ -234,7 +235,7 @@ or write waiting and no movement; details: docs/power.md.
 |---|---|---|---|
 | swipe left | next page (as Page) | | |
 | swipe right | previous ride page (round) | back (as Back) | keep it |
-| swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE | the next / previous screen of rows (up closes the quick panel) | one step up / down |
+| swipe up / down | down on the overview before a ride: the quick panel; down on a ride page: the media remote; up on a ride page: MORE, then the overview | the next / previous screen of rows (up closes the quick panel) | one step up / down |
 | hold (600 ms, still) | on a ride page's box: the page editor, that box selected (on a graph: the whole ride or the last minutes); on the overview: the menu; not while a ride records | | |
 | tap | the cog ending the overview's date row (a 44 x 44 px touch box): the menu; a graph: its next plot; neither while a ride records | acts on the row touched (as Start on it; a destructive row asks first); while the ride runs and moves, it selects and a second tap on the row acts; the "<" left of the title: back | keep it |
 
@@ -366,6 +367,8 @@ ROAD PAGES > PAGE 1 > LAYOUT), the diagnostics under SYSTEM:
 MENU
  +- WORKOUTS >     the planned workouts, from today -> a workout's steps: START, or start from a step; last row RAMP TEST
  +- COURSES >      the course files (green: followed); Start follows or stops
+ +- SEGMENTS >     LIVE SEGMENTS on / off, TARGET (AUTO, PR, KOM, QOM, RECENT), the segments of the card (name, distance,
+ |                 gain; read only), the files skipped
  +- HISTORY >      FITNESS > (READ RIDES, CP, W', CP FIT, EST FTP, MODEL, APPLY FTP, APPLY W', HRVT1 AET, HRVT2,
  |                 RIDES, WEEK / YEAR / TOTAL KM and H), then the rides -> a card
  +- PAGES >        ROAD PAGES >, INDOOR PAGES > -> OVERVIEW (four fields), PAGE 1..6 (EDIT ON PAGE, LAYOUT,
@@ -641,6 +644,31 @@ copied over USB into `\Courses`, read only:
   it the rider is in to the end, the rider's place, the ridden part dark, the climbs in the zone 2 to 5 colours by
   grade.
 
+## Live segments
+
+Segment files in `\Rustfw\Segments\` (`<id>.seg`, docs/segments.md) are matched against the ride once a second while it
+runs (SEGMENTS > LIVE SEGMENTS, ON by default). Put them on the card with `tools/segments.py` (`fetch`, `build`, `write
+--volume`, docs/segments.md): the unit writes there only the rider's efforts (below), after a ride is saved.
+- **Approach**: a banner `SEGMENT <name> 300 M`, once. **Lost** (off the track 10 s, a U-turn, stopped 5 min): `SEGMENT LOST`.
+- **The SEGMENT page** opens by itself at the start, over the ride page the rider was on (only while recording, not over
+  a menu), and goes back at the end or when lost. Name, the delta in big digits (`-0:12` ahead in GREEN, `+0:08` behind in
+  the accent, never red), the target's label (`VS PR`), a bar with two marks (white: the rider, grey: the target's ghost),
+  the time and the distance left. Start and Lap keep their ride meaning; any other key closes the page, and it does not
+  reopen for that segment. Only the changed characters and marks are redrawn, once a second.
+- **The finish**: a banner with the time and the delta, then the result card (the time, the delta against each target
+  the file keeps, NEW PR when the PR is beaten or there was none: the same rule as the `.pr` written), closed by any key or after 10 s.
+- **Efforts:** at a finish the effort (its time at each of the segment's points, as ridden) is kept in RAM, at most 4
+  a ride. Only after the ride is saved (read back whole, in `\Activities`) and never for a ride discarded, each is
+  written between rides: `\Rustfw\Segments\<id>.pr` when it beats the PR (two copies with a CRC, as settings.bin, so
+  a cut leaves the old PR or the new one), and a line `id,date,elapsed_s` in `\Rustfw\Segments\efforts.csv` for the
+  computer. A write that fails (a card full) drops the effort, never the ride.
+- **Your PR is the target:** the next time the segment is loaded, its `.pr` times are the PR column (in place of the
+  source's, or where it had none); a `.pr` for other points (the segment rebuilt) is ignored.
+- **TARGET**: AUTO is the PR if the file has one, else the KOM; a target the file lacks falls back to AUTO.
+- LIVE SEGMENTS and TARGET are in settings.bin at data 97 and 98; an older file reads ON and AUTO.
+
+![Segment page, ahead](img/segment-ahead.png) ![Segment page, behind](img/segment-behind.png) ![Result card](img/segment-card.png) ![SEGMENTS menu](img/segment-menu.png)
+
 ## Climbs ahead (no course)
 
 Riding outdoors with no course followed, the unit finds the climbs on the road ahead from the routing graph and
@@ -667,19 +695,6 @@ Hammerhead's Climber do.
 - **Roads:** edges stock marks not routable (speed index 0, 6 or over 14) are never taken or snapped to, and the slow
   class (index 1, inferred paths and steps) only when the rider is on one already.
 - **BIKE > CLIMBS AHEAD** turns it off (ON by default; kept in register 11's tag).
-
-## Live segments
-
-Segments from `\Rustfw\Segments\<id>.seg` (docs/segments.md; made by `tools/segments.py` from Intervals.icu), found
-and followed while riding: the start, the delta against the PR (else the KOM) along the way, the finish. The page,
-banners and menu are step S4 (not built yet).
-- **Efforts:** at a finish the effort (its time at each of the segment's points, as ridden) is kept in RAM, at most 4
-  a ride. Only after the ride is saved (read back whole, in `\Activities`) and never for a ride discarded, each is
-  written between rides: `\Rustfw\Segments\<id>.pr` when it beats the PR (two copies with a CRC, as settings.bin, so
-  a cut leaves the old PR or the new one), and a line `id,date,elapsed_s` in `\Rustfw\Segments\efforts.csv` for the
-  computer. A write that fails (a card full) drops the effort, never the ride.
-- **Your PR is the target:** the next time the segment is loaded, its `.pr` times are the PR column (in place of the
-  source's, or where it had none); a `.pr` for other points (the segment rebuilt) is ignored.
 
 ## Stock data
 

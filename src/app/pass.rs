@@ -104,6 +104,7 @@ impl App {
                 | Menu::Stock
                 | Menu::History
                 | Menu::Courses
+                | Menu::Segments
                 | Menu::System
                 | Menu::BuiltIn
                 | Menu::Storage

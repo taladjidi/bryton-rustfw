@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->58 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->63 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->58 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->62 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -24,6 +24,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   - `input.rs`: `Key`, `Press`, `Keys`, `Screen`, the screen stack (`open` / `close`), `press`, `input` (global arms, then one `input_<screen>` per screen), `touch`.
   - `editor.rs`: the page editor on the page (`Screen::Edit`, its actions, keep or drop), pages added and deleted,
     and `\Rustfw\pages.bin` (read after the start, written between rides, the backup registers after it).
+  - `pagemeta.rs`: the page switches (SHOW, MOVE UP / DOWN, RENAME, the road set's names and OFF mask in `pages.bin`) and AUTO SCROLL.
   - `screens.rs`: `show` (a screen whole), `update_page` (only the boxes that changed), the page widgets, the banner,
     the ride card, the basemap, `render_row` (screenshots). `fields.rs`: a ride field's text and colour, number
     formatting. `graphs.rs`: the graph fields and the course profile.
@@ -246,6 +247,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
   the screens (S4) read (`segment_now`, `events`); the efforts (S5): each finish's times kept in RAM, written after the
   ride's save (`<id>.pr`, `efforts.csv`), the `.pr` the PR target at the next load. Nothing drawn.
+- `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the SEGMENT page opened
+  at a start and closed at the end, the result card, the SEGMENTS menu's list rows (headers read from the card).
+- `src/ui/segment.rs`: the SEGMENT page (character cells redrawn when they change, the bar's marks) and the result card.
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
 - `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the
@@ -259,6 +263,7 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   `Media` (sectors: `emmc::Lent`) traits. Its own code, not `usbd-storage` (module doc: why).
 - `src/sim/mod.rs` (tests only): a simulated board (`Sim`) and computer (`Pc`), see Tests. Its tests are in `src/sim/`:
   `tests.rs` (the app on the Sim), `page_tests.rs` (the page editor and `pages.bin`, cut at every sector),
+  `switch_tests.rs` (page switches, names, moves, the auto scroll, swipe up),
   `settings_tests.rs` (`settings.bin`: a menu change back after a restart, the migration, cut at every sector),
   `theme_tests.rs` (the scramble theme, DARK as it was, OUTDOOR and LIGHT shots, a theme file picked from the card and kept),
   `dev_tests.rs`, `drive_tests.rs`, `emmc_tests.rs`, `fuzz.rs`, `recorder_tests.rs`, `altitude_tests.rs` (the barometer's

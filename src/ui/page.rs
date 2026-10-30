@@ -435,6 +435,127 @@ fn mtb_crc(s: &[u8; 512]) -> u16 {
     crate::fit::crc(indoor_crc(s), &s[MTB_AT..MTB_CRC_AT])
 }
 
+/// The rider's page switches, after the MTB CRC (a file of an earlier build has zeros there: every page ON, the
+/// default names, no auto scroll): a flags byte (bit 7 set when present, bits 0 and 1 the auto scroll step), the
+/// OFF mask, the six names (four characters of [`ALPHABET`], 6 bits each, 3 bytes a page), and a CRC-16 continuing
+/// the MTB part's. A bad one gives [`Meta::DEFAULT`], everything above it untouched. Ends at byte 511 of 512: the
+/// sector has room for four characters a name, not eight.
+const META_AT: usize = MTB_CRC_AT + 2;
+const META_CRC_AT: usize = META_AT + 2 + crate::PAGES * 3;
+
+/// The switches part's CRC.
+fn meta_crc(s: &[u8; 512]) -> u16 {
+    crate::fit::crc(mtb_crc(s), &s[META_AT..META_CRC_AT])
+}
+
+/// Characters of a page name.
+pub const NAME_CHARS: usize = 4;
+
+/// The characters a name may hold, in the order the rename cycles them (the space is the padding).
+pub const ALPHABET: &[u8; 37] = b" ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+/// The auto scroll steps in seconds (0: off); [`Meta::auto`] indexes them.
+pub const AUTO_SECS: [u8; 4] = [0, 5, 10, 20];
+
+/// Which road pages are ON, their short names, and the auto scroll step: kept in pages.bin after the MTB part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Meta {
+    /// Bit k set: ride page k is switched OFF (zero in an old file: all ON).
+    pub off: u8,
+    /// Each page's name, space padded; all spaces: the default label.
+    pub names: [[u8; NAME_CHARS]; crate::PAGES],
+    /// Index into [`AUTO_SECS`].
+    pub auto: u8,
+}
+
+impl Meta {
+    /// Every page ON, no names, no auto scroll.
+    pub const DEFAULT: Meta = Meta { off: 0, names: [[b' '; NAME_CHARS]; crate::PAGES], auto: 0 };
+
+    /// Page `k` is ON.
+    pub fn on(&self, k: usize) -> bool {
+        k >= crate::PAGES || self.off >> k & 1 == 0
+    }
+
+    /// Page `k`'s name without its padding; empty for the default label.
+    pub fn name(&self, k: usize) -> &str {
+        let n = self.names.get(k).map_or(&[][..], |n| &n[..]);
+        core::str::from_utf8(n).unwrap_or("").trim_end()
+    }
+
+    /// Pages `a` and `b` swapped (a page moved): switch and name go with the page.
+    pub fn swap(&mut self, a: usize, b: usize) {
+        if a < crate::PAGES && b < crate::PAGES {
+            self.names.swap(a, b);
+            let (x, y) = (self.off >> a & 1, self.off >> b & 1);
+            self.off = self.off & !(1 << a | 1 << b) | y << a | x << b;
+        }
+    }
+
+    /// A page inserted at `at` (the ones after shift up; the new one is ON, unnamed).
+    pub fn insert(&mut self, at: usize) {
+        if at < crate::PAGES {
+            self.names.copy_within(at..crate::PAGES - 1, at + 1);
+            self.names[at] = [b' '; NAME_CHARS];
+            let low = (1u8 << at) - 1;
+            self.off = (self.off & low | (self.off & !low) << 1) & ((1u8 << crate::PAGES) - 1);
+        }
+    }
+
+    /// Page `at` removed (the ones after shift down).
+    pub fn remove(&mut self, at: usize) {
+        if at < crate::PAGES {
+            self.names.copy_within(at + 1.., at);
+            self.names[crate::PAGES - 1] = [b' '; NAME_CHARS];
+            let low = (1u8 << at) - 1;
+            self.off = self.off & low | (self.off >> 1) & !low;
+        }
+    }
+
+    /// Page 0 ON again when none of the first `count` is (a delete, or a file that switched them all off).
+    pub fn keep_one(&mut self, count: usize) {
+        if (0..count).all(|k| !self.on(k)) {
+            self.off &= !1;
+        }
+    }
+
+    /// The bytes of [`META_AT`] (without the CRC).
+    fn write(&self, out: &mut [u8]) {
+        let mut put = |i: usize, v: u8| {
+            if let Some(o) = out.get_mut(i) {
+                *o = v;
+            }
+        };
+        put(0, 0x80 | self.auto & 3);
+        put(1, self.off);
+        for (k, n) in self.names.iter().enumerate() {
+            let mut bits = 0u32;
+            for (i, &c) in n.iter().enumerate() {
+                bits |= (ALPHABET.iter().position(|&a| a == c).unwrap_or(0) as u32) << (6 * i);
+            }
+            for (j, byte) in bits.to_le_bytes().iter().take(3).enumerate() {
+                put(2 + 3 * k + j, *byte);
+            }
+        }
+    }
+
+    /// From a sector: None where absent, damaged or holding a character code the alphabet does not have.
+    fn read(s: &[u8; 512]) -> Option<Meta> {
+        let b = s.get(META_AT..META_CRC_AT + 2)?;
+        if b[0] & 0x80 == 0 || b[META_CRC_AT - META_AT..] != meta_crc(s).to_le_bytes() {
+            return None;
+        }
+        let mut m = Meta { off: b[1] & ((1u8 << crate::PAGES) - 1), auto: b[0] & 3, ..Meta::DEFAULT };
+        for (n, c) in m.names.iter_mut().zip(b.get(2..)?.chunks_exact(3)) {
+            let bits = u32::from_le_bytes([c[0], c[1], c[2], 0]);
+            for (i, ch) in n.iter_mut().enumerate() {
+                *ch = *ALPHABET.get((bits >> (6 * i) & 63) as usize)?;
+            }
+        }
+        Some(m)
+    }
+}
+
 /// A set of ride pages with their MORE variants: the indoor and the MTB profiles' (the road set lives in the app's own fields,
 /// where the backup registers can reach its first pages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -518,6 +639,8 @@ pub struct Saved {
     pub indoor: Option<Set>,
     /// The MTB profile's set (at most [`MTB_PAGES`]), if the copy has a good one (else [`Set::mtb_default`]).
     pub mtb: Option<Set>,
+    /// The page switches and names ([`Meta`]); the default where the copy has none.
+    pub meta: Meta,
 }
 
 /// `p` as a copy keeps it.
@@ -552,7 +675,7 @@ impl Saved {
     /// ```
     /// use bryton_rustfw::{page::*, ui::Field};
     /// let p = Page::preset(4, [Field::Hr; 8]).unwrap();
-    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6], indoor: None, mtb: None };
+    /// let s = Saved { seq: 7, pages: [p; 6], count: 2, words: [1, 2, 3, 4, 5, 6], was: [0; 6], more: [None; 6], indoor: None, mtb: None, meta: Meta::DEFAULT };
     /// let mut sector = s.to_sector();
     /// assert_eq!(Saved::from_sector(&sector), Some(s));
     /// sector[70] ^= 1;
@@ -617,6 +740,9 @@ impl Saved {
             let crc = mtb_crc(&s);
             s[MTB_CRC_AT..MTB_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
         }
+        self.meta.write(&mut s[META_AT..META_CRC_AT]);
+        let crc = meta_crc(&s);
+        s[META_CRC_AT..META_CRC_AT + 2].copy_from_slice(&crc.to_le_bytes());
         s
     }
 
@@ -703,6 +829,7 @@ impl Saved {
             more,
             indoor: Self::read_indoor(s),
             mtb: Self::read_mtb(s),
+            meta: Meta::read(s).unwrap_or(Meta::DEFAULT),
         })
     }
 
@@ -814,6 +941,7 @@ mod tests {
             more: [None; 6],
             indoor: None,
             mtb: None,
+            meta: Meta::DEFAULT,
         };
         let b = Saved { seq: 4, pages: [p(4); crate::PAGES], count: 3, ..a };
         let mut file = [0u8; 1024];
@@ -855,6 +983,7 @@ mod tests {
             more: [None, Some(m), None, None, None, Some(p)],
             indoor: None,
             mtb: None,
+            meta: Meta::DEFAULT,
         };
         let sector = s.to_sector();
         assert_eq!(Saved::from_sector(&sector), Some(s));
@@ -887,6 +1016,7 @@ mod tests {
             more,
             indoor: None,
             mtb: None,
+            meta: Meta::DEFAULT,
         };
         let old = mk(4, p, [None, Some(w), None, None, None, None]).to_sector();
         let new = mk(6, q, [None; crate::PAGES]).to_sector();
@@ -917,6 +1047,7 @@ mod tests {
             more: [None, Some(m), None, None, None, None],
             indoor: Some(set),
             mtb: None,
+            meta: Meta::DEFAULT,
         };
         let sector = s.to_sector();
         const { assert!(INDOOR_CRC_AT + 2 <= 512) } // fits the sector
@@ -969,6 +1100,7 @@ mod tests {
             more: [None, Some(m), None, None, None, None],
             indoor: Some(Set::indoor_default()),
             mtb: Some(set),
+            meta: Meta::DEFAULT,
         };
         let sector = s.to_sector();
         const { assert!(MTB_CRC_AT + 2 == 489) }

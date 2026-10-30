@@ -244,7 +244,7 @@ fn touch_swipes_pages_and_taps_menu_rows() {
     assert_eq!(app.screen(), Screen::Ride(2), "swipe right: the previous ride page, round");
     assert_consistent(&sim, &app);
 
-    let row3 = ui::LIST_Y as u16 + 3 * ui::MENU_ROW as u16 + 5; // PAGES
+    let row3 = ui::LIST_Y as u16 + 4 * ui::MENU_ROW as u16 + 5; // PAGES
     let taps = |ms: u64| (5000..5100).contains(&ms);
     let mut sim = Sim::new(9, 0, 0).finger(move |ms| taps(ms).then_some((120, row3)));
     let mut app = App::start(&mut sim, None);

@@ -6,6 +6,7 @@ use super::tests::run; // not the parent's `run`, which the glob would give
 use super::*;
 use crate::segment::tests::synth;
 use crate::segment_match::{Event, tests::at};
+use std::string::{String, ToString};
 
 const ID: u32 = 4_000_000_001;
 const CODES: [[u8; 2]; 5] = [*b"07", *b"05", *b"06", *b"12", *b"13"];
@@ -217,14 +218,285 @@ fn segment_ends_with_the_ride() {
     assert!(app.segment_now().is_none());
 }
 
+fn slower(ms: u64) -> (i32, i32, i32) {
+    east(ms, 4.0)
+}
+
+/// Pixels of `color` in the delta's box (the page's big line).
+fn in_delta_box(sim: &Sim, color: u16) -> usize {
+    let (y0, y1) = (ui::PAGE_Y + 26, ui::PAGE_Y + 90);
+    (y0..y1).map(|y| (0..ui::W).filter(|&x| sim.screen[(y * ui::W + x) as usize] == color).count()).sum()
+}
+
+/// Rides `route` for `seconds`, one second at a time, and collects the banners said and the screens visited.
+fn watch(route: fn(u64) -> (i32, i32, i32), seconds: u64) -> (Sim, App, Vec<String>, Vec<Screen>) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(route);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (mut banners, mut screens) = (Vec::<String>::new(), Vec::<Screen>::new());
+    for _ in 0..seconds {
+        run(&mut sim, &mut app, 1000);
+        if app.notes.ms.is_some() && banners.last().map(String::as_str) != Some(app.notes.text.as_str()) {
+            banners.push(app.notes.text.as_str().to_string());
+        }
+        if screens.last() != Some(&app.screen()) {
+            screens.push(app.screen());
+        }
+    }
+    (sim, app, banners, screens)
+}
+
+/// The approach banner with the name, the page over the ride page, the finish banner and the card, then back.
+#[test]
+fn page_banners_card_and_back() {
+    let (mut sim, mut app, banners, screens) = watch(faster, 240);
+    assert!(banners.iter().any(|b| b == "SEGMENT Test climb 300 M"), "{banners:?}");
+    let fin = banners.iter().find(|b| b.starts_with("SEGMENT 2:")).unwrap_or_else(|| panic!("{banners:?}"));
+    assert!(fin.contains(" -0:"), "ahead: {fin}");
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Segment).count(), 1, "{screens:?}");
+    assert_eq!(screens.last(), Some(&Screen::SegmentResult), "{screens:?}");
+    sim.save("segment_card");
+    app.press(&mut sim, Press::Short(Key::Page)); // any key
+    run(&mut sim, &mut app, 500);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "{:?}", app.screen());
+    // the card closes by itself after 10 s
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    run(&mut sim, &mut app, 11_000);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "{:?}", app.screen());
+}
+
+/// Ahead is green, behind is the accent, never red; the sign is in the text.
+#[test]
+fn delta_sign_and_colour() {
+    let (sim, app, ..) = watch(faster, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    assert!(app.segment_now().unwrap().delta_s.unwrap() < 0);
+    sim.save("segment_ahead");
+    assert!(in_delta_box(&sim, ui::GREEN) > 100 && in_delta_box(&sim, ui::ACCENT) == 0);
+    let (sim, app, ..) = watch(slower, 140);
+    assert_eq!(app.screen(), Screen::Segment);
+    assert!(app.segment_now().unwrap().delta_s.unwrap() > 0);
+    sim.save("segment_behind");
+    assert!(in_delta_box(&sim, ui::ACCENT) > 100 && in_delta_box(&sim, ui::GREEN) == 0);
+    assert_eq!(in_delta_box(&sim, ui::RED), 0);
+}
+
+/// LIVE SEGMENTS off: no event, no page, no banner. A key dismisses the page and it does not come back.
+#[test]
+fn off_and_dismissed() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    app.settings.live_segments = false;
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200_000);
+    assert!(events(&app).is_empty() && !matches!(app.screen(), Screen::Segment | Screen::SegmentResult));
+    let (mut sim, mut app, ..) = watch(pr_pace, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "dismissed");
+}
+
+/// The page's second costs a few boxes, not a screen (docs/devloop.md: pixels a second).
+#[test]
+fn page_redraw_cost() {
+    let (mut sim, mut app, ..) = watch(pr_pace, 110);
+    assert_eq!(app.screen(), Screen::Segment);
+    let (px, w0, t0) = (sim.pixels, sim.windows, sim.ms);
+    run(&mut sim, &mut app, 20_000);
+    let (per_s, win_s) = ((sim.pixels - px) * 1000 / (sim.ms - t0), (sim.windows - w0) * 1000 / (sim.ms - t0));
+    std::println!("segment page: {per_s} px/s, {win_s} windows/s");
+    assert!(per_s < 8000, "{per_s} px/s");
+}
+
+/// The SEGMENTS menu: the two settings, the segment with its distance and gain, the skipped files.
+#[test]
+fn segments_menu_lists_the_card() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 9000);
+    app.open(Screen::Menu(Menu::Segments, 2));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 1500);
+    let row = |i| app.menu_row(Menu::Segments, i).map(|(l, v, _)| (l.as_str().to_string(), v.as_str().to_string()));
+    assert_eq!(row(0), Some(("LIVE SEGMENTS".into(), "ON".into())));
+    assert_eq!(row(1), Some(("TARGET".into(), "AUTO".into())));
+    let (name, value) = row(2).unwrap();
+    assert_eq!(name, "Test climb");
+    assert!(value.ends_with('M') && value.contains("K "), "{value}");
+    assert_eq!(row(3), Some(("SKIPPED FILES".into(), "3".into())));
+    assert_eq!(row(4), None);
+    sim.save("segment_menu");
+}
+
+/// Start and Lap on the page and on the card act on the ride; a tap on the page while recording does nothing.
+#[test]
+fn keys_and_taps_on_the_page_and_the_card() {
+    use crate::touch::Gesture;
+    let (mut sim, mut app, ..) = watch(faster, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    let laps = app.ride.laps();
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, 200)));
+    app.input(&mut sim, Input::NextHeld);
+    assert_eq!(app.screen(), Screen::Segment, "a tap or a held key does not close it");
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.ride.laps(), laps + 1, "Lap on the page is a lap");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused, "Start on the page pauses");
+    // the card: Start and Lap close it and still act
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, 200)));
+    assert_eq!(app.screen(), Screen::SegmentResult, "a tap does not close the card while recording");
+    let laps = app.ride.laps();
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!((app.ride.laps(), app.screen() != Screen::SegmentResult), (laps + 1, true));
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), app.screen() != Screen::SegmentResult), (ride::State::Paused, true));
+}
+
+/// The page opened over a page that is off by the end (a CLIMB whose climb ended): the finish returns to a live page.
+#[test]
+fn return_to_a_page_that_went() {
+    let (mut sim, mut app, ..) = watch(faster, 120);
+    app.seg_ui.set_prev(Screen::Ride(CLIMB));
+    run(&mut sim, &mut app, 125_000);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert!(matches!(app.screen(), Screen::Ride(n) if app.page_on(n)), "{:?}", app.screen());
+}
+
+/// A name with a byte past ASCII is cut there, not emptied.
+#[test]
+fn utf8_names_are_cut_not_blanked() {
+    let mut f = synth(20, &CODES);
+    f[0x0d..0x0d + 5].copy_from_slice(&[b'A', b'B', 0xc3, 0xa9, 0]);
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = card(&[("4000000001.seg", f)]);
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut banners = Vec::<String>::new();
+    for _ in 0..110 {
+        run(&mut sim, &mut app, 1000);
+        if app.notes.ms.is_some() && banners.last().map(String::as_str) != Some(app.notes.text.as_str()) {
+            banners.push(app.notes.text.as_str().to_string());
+        }
+    }
+    assert!(banners.iter().any(|b| b == "SEGMENT AB 300 M"), "{banners:?}");
+}
+
+/// The list shows the id and "--" while a ride runs (no header is read then).
+#[test]
+fn list_during_a_ride_shows_the_id() {
+    let (mut sim, mut app, ..) = watch(pr_pace, 20);
+    app.open(Screen::Menu(Menu::Segments, 2));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 2000);
+    let (l, v, _) = app.menu_row(Menu::Segments, 2).unwrap();
+    assert_eq!((l.as_str(), v.as_str()), ("4000000001", "--"));
+}
+
+/// The approach banner's header read: bytes read in its pass (mount, folder, one sector).
+#[test]
+fn approach_read_cost() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut read = 0;
+    for _ in 0..4000 {
+        let before = sim.emmc.bytes_read;
+        app.step(&mut sim);
+        sim.delay_ms(POLL_MS);
+        if app.notes.ms.is_some() && app.notes.text.as_str().ends_with("300 M") {
+            read = sim.emmc.bytes_read - before;
+            break;
+        }
+    }
+    std::println!("approach banner: its pass reads {read} B");
+    assert!(read > 0 && read < 20_000, "{read}");
+}
+
+/// Random inputs over a ride along the segment, the page and the card up at times: no panic, the ride is not ended,
+/// and both screens were reached.
+#[test]
+fn fuzz_inputs_over_the_page_and_the_card() {
+    use crate::touch::{Dir, Gesture};
+    let (mut page, mut card) = (0u32, 0u32);
+    for seed in 1..=60u32 {
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = good_card();
+        sim.gnss.route = Some(faster);
+        let mut app = App::start(&mut sim, None);
+        app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+        run(&mut sim, &mut app, 8000);
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        for _ in 0..330 {
+            run(&mut sim, &mut app, 800);
+            match app.screen() {
+                Screen::Segment => page += 1,
+                Screen::SegmentResult => card += 1,
+                _ => {}
+            }
+            if next() % 6 == 0 {
+                let i = match next() % 12 {
+                    0 => Input::Select,
+                    1 => Input::Prev,
+                    2 => Input::Next,
+                    3 => Input::Back,
+                    4 => Input::Media,
+                    5 => Input::NextHeld,
+                    6 => Input::PrevHeld,
+                    7 => Input::Touch(Gesture::Tap(120, 160)),
+                    8 => Input::Touch(Gesture::Swipe(Dir::Left)),
+                    9 => Input::Touch(Gesture::Swipe(Dir::Right)),
+                    10 => Input::Touch(Gesture::Hold(100, 100)),
+                    _ => Input::Touch(Gesture::Drag(100, 100, 5, 5)),
+                };
+                app.input(&mut sim, i);
+            }
+        }
+        assert_ne!(app.ride.state(), ride::State::Idle, "seed {seed}");
+    }
+    std::println!("segment fuzz: {page} page seconds, {card} card seconds");
+    assert!(page > 100 && card > 20, "{page} {card}");
+}
+
 // Efforts (step S5): kept at the finish, written after the ride's save (app/segments.rs, "Efforts").
 
 const PR: &str = "Rustfw/Segments/4000000001.pr";
 const CSV: &str = "Rustfw/Segments/efforts.csv";
 
-fn slower(ms: u64) -> (i32, i32, i32) {
-    east(ms, 4.0)
-}
 /// [`faster`], then again from the start 400 s later: two rides over the segment in one run.
 fn faster_twice(ms: u64) -> (i32, i32, i32) {
     faster(ms % 400_000)
@@ -424,15 +696,32 @@ fn a_full_card_drops_the_effort() {
     assert_eq!(app.ride.state(), ride::State::Running);
 }
 
-/// A power cut after every sector written in the pass that writes the effort, on a card with no PR file yet and on
-/// one with a slower PR file and a csv line: the saved ride and its records as they were, the PR file read whole as
+/// A power cut after every sector written in the pass that writes the effort, on a card with no PR file yet, on one
+/// with a slower PR file and a csv line, and on one whose csv ends 20 bytes before its cluster does (the line takes a
+/// new cluster): the saved ride and its records as they were, the PR file read whole as
 /// the old one (or none) or the new one, the csv as it was or with the new line, a restart that resumes nothing, and
-/// the volume as a cut may leave it (at most the FAT sector being written apart, a cluster lost). The unit's card
-/// has the reliable write (BOARD.md, "Reliable write"), so the sector being written keeps its old data.
+/// the volume as a cut may leave it (at most the FAT sector being written apart, a cluster lost), and when the FATs
+/// were left apart, the restart's index build finding the file unfinished so that the next write compares them. The
+/// unit's card has the reliable write (BOARD.md, "Reliable write"), so the sector being written keeps its old data.
 #[test]
 fn a_cut_at_every_sector_of_the_effort() {
-    let old_csv = "id,date,elapsed_s\n4000000001,2026-10-01T08:00:00Z,190\n";
-    for had in [false, true] {
+    let cluster = {
+        let mut d = crate::fat::tests::Ram(card(&[]), 0);
+        crate::fat::Fat::mount(&mut d).unwrap().cluster_bytes() as usize
+    };
+    let line = "4000000001,2026-10-01T08:00:00Z,190\n";
+    let mut long = "id,date,elapsed_s\n".to_string();
+    while long.len() + 2 * line.len() < cluster - 20 {
+        long.push_str(line);
+    }
+    // the last line's time padded with zeros to end 20 bytes before the cluster does
+    long.push_str(&std::format!("4000000001,2026-10-01T08:00:00Z,1{}\n", "0".repeat(cluster - 20 - long.len() - 34)));
+    assert_eq!(long.len(), cluster - 20);
+    let mut apart_seen = 0;
+    for (case, old_csv) in [(0, std::string::String::new()), (1, std::format!("id,date,elapsed_s\n{line}")), (2, long)]
+    {
+        let had = case > 0;
+        let old_csv = old_csv.as_str();
         let setup = || {
             let mut files = std::vec![("4000000001.seg", synth(20, &CODES))];
             if had {
@@ -461,7 +750,7 @@ fn a_cut_at_every_sector_of_the_effort() {
         app.step(&mut sim);
         let total = sim.emmc.sectors_written - base;
         let s = app.segments().unwrap();
-        assert_eq!((s.written, s.prs), (1, 1), "had {had}");
+        assert_eq!((s.written, s.prs), (1, 1), "case {case}");
         let new_pr = pr(&sim.emmc.image).unwrap();
         let new_csv = csv(&sim.emmc.image).unwrap();
         let old_pr = had.then(|| pr(&card(&[("4000000001.pr", pr_file(190, 1))])).unwrap());
@@ -473,7 +762,7 @@ fn a_cut_at_every_sector_of_the_effort() {
             app.step(&mut sim);
             run(&mut sim, &mut app, 1000);
             let img = sim.emmc.image.clone();
-            let at = std::format!("had {had}, cut {cut}");
+            let at = std::format!("case {case}, cut {cut}");
             assert_eq!(super::recorder_tests::ride_file(&sim, "Activities", name), Some(ride.clone()), "{at}");
             assert_eq!(records(&img), recs, "{at}: the ride's records");
             let got = pr(&img);
@@ -484,10 +773,10 @@ fn a_cut_at_every_sector_of_the_effort() {
                 news += 1;
             }
             let lines = csv(&img).unwrap_or_default();
-            let old = if had { old_csv } else { "" };
-            assert!(lines == old || lines == new_csv, "{at}: csv {lines:?}");
+            assert!(lines == old_csv || lines == new_csv, "{at}: csv {lines:?}");
             let scan = crate::fat::write::tests::fsck_cut(&img).unwrap_or_else(|e| panic!("{at}: {e}"));
-            assert!(scan.past.is_empty(), "{at}: a chain past its size {:?}", scan.past);
+            // a cluster linked past the csv's size (a grow cut before the size): the next append writes over it
+            assert!(scan.past.len() <= 1 && scan.past.iter().all(|p| p.1 == 1), "{at}: past its size {:?}", scan.past);
             assert!(scan.lost <= 1 && scan.apart <= 1, "{at}: {} lost, {} apart", scan.lost, scan.apart);
             worst = (worst.0.max(scan.lost), worst.1.max(scan.apart));
             // a restart on the card: nothing to resume, the ride where it was, the PR file as read above
@@ -495,14 +784,48 @@ fn a_cut_at_every_sector_of_the_effort() {
             sim2.emmc.image = img;
             sim2.emmc.rel_param = crate::emmc::EN_REL_WR;
             let mut app2 = App::start(&mut sim2, None);
+            app2.set_segment_memory(Box::leak(Box::new(Segments::new())));
             run(&mut sim2, &mut app2, 10_000);
+            assert!(app2.segments().unwrap().ready(), "{at}");
+            if scan.apart > 0 {
+                // a file left unfinished is seen; a cluster taken for a new file before its entry is lost, named by
+                // no file, which nothing can see but a whole compare (as any FAT create's)
+                assert!(app2.fats_suspect || scan.lost > 0, "{at}: the FATs apart, unseen");
+                apart_seen += usize::from(app2.fats_suspect);
+            }
             assert_eq!(app2.ride.state(), ride::State::Idle, "{at}");
             assert_eq!(super::recorder_tests::places(&sim2, name)[0], ["Activities"], "{at}");
             assert_eq!(pr(&sim2.emmc.image), got, "{at}");
         }
         std::println!(
-            "effort write (a PR file before: {had}): {total} sectors, {olds} cuts read the old, {news} the new, worst (lost, apart) {worst:?}"
+            "effort write (case {case}): {total} sectors, {olds} cuts read the old, {news} the new, worst (lost, apart) {worst:?}"
         );
         assert!(total > 0 && news > 0 && (olds > 0 || !had));
     }
+    assert!(apart_seen > 0, "a cut between the two FATs' writes was reached");
+}
+
+/// A PR file for other points (the segment rebuilt with 19, its copy numbered 2 in slot 0): a faster effort goes over
+/// the other slot numbered 3, so it is the newest, and the next ride over the segment takes it as its PR.
+#[test]
+fn a_pr_file_for_other_points_is_replaced() {
+    let times: Vec<u16> = (0..19).map(|i| (300 * i / 18) as u16).collect();
+    let mut stale = std::vec![0u8; crate::segment::PR_FILE];
+    stale[..1024].copy_from_slice(&crate::segment::pr_copy(2, ID, 0, &times).unwrap());
+    let image = card(&[("4000000001.seg", synth(20, &CODES)), ("4000000001.pr", stale)]);
+    let (mut sim, mut app) = ride_on(image, faster_twice, 260, true);
+    let (elapsed, _) = finish(&app);
+    assert_eq!(app.segments().unwrap().pr_files, 0, "the stale file ignored");
+    end_until_settled(&mut sim, &mut app);
+    run(&mut sim, &mut app, 2000);
+    let (seq, total, times) = pr(&sim.emmc.image).unwrap();
+    assert_eq!((seq, total, times.len()), (3, elapsed, 20));
+    let ms = 395_000 - sim.ms;
+    run(&mut sim, &mut app, ms);
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
+    app.press(&mut sim, Press::Short(Key::Start));
+    let ms = 665_000 - sim.ms;
+    run(&mut sim, &mut app, ms);
+    assert_eq!(app.segments().unwrap().pr_files, 1);
+    assert!(finish(&app).1[0].unwrap().abs() <= 2);
 }

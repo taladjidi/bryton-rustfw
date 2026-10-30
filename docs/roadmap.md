@@ -71,7 +71,7 @@ after the save, `tools/segments.py`, then own-ride segments and the licensed fee
 decide on a Strava subscription (the API's Standard tier needs one since 30 June 2026), and email Strava for a Live
 Segments licence.
 
-Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30); ~~S3, `src/app/segments.rs`: the index, the active segment, the ride's feed (sim tests and fuzz; not yet on the unit)~~ (2026-10-30); ~~S5, the efforts written after the save (`<id>.pr`, `efforts.csv`; power cut tests, fuzz; not yet on the unit; the per-segment enable byte left to S4)~~ (2026-10-30).
+Done: ~~S1, the `.seg` reader (src/nav/segment.rs, unit tests and fuzz; not yet on the unit)~~ (2026-10-29); ~~S2, the matcher (src/nav/segment_match.rs, course.rs's matcher shared; tests and fuzz)~~ (2026-10-30); ~~S3, `src/app/segments.rs`: the index, the active segment, the ride's feed (sim tests and fuzz; not yet on the unit)~~ (2026-10-30); ~~S4, the SEGMENT page, banners, result card and MENU > SEGMENTS (sim tests; not yet on the unit)~~ (2026-10-30); ~~S5, the efforts written after the save (`<id>.pr`, `efforts.csv`; power cut tests, fuzz; not yet on the unit; the per-segment enable byte left to S4)~~ (2026-10-30).
 
 ### Block 3: what is left on the unit, easiest first
 
@@ -97,8 +97,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - alerts: ~~power, cadence and speed high / low, heart rate low; reminders by distance, kcal and kJ; the DFA a1 alert
   at the aerobic threshold (patch P9)~~ (done, sim); a sunset alert;
 - laps: ~~auto lap by distance or time, the lap summary banner~~ done, sim (features.md); the lap list of a past ride (sonnet);
-- pages: switched off and reordered, renamed, auto scroll, a tap on a field opens Quick Status with chosen fields,
-  swipe up to go home, the Page key acting on the press (patch P14);
+- pages: ~~switched off and reordered, renamed, auto scroll, swipe up to go home~~ done, sim (features.md); a tap on a field opens Quick Status with chosen fields,
+  the Page key acting on the press (patch P14);
 - start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start (sonnet);
 - workouts: the next-step strip instead of a popup (patch P3), two targets per step;
 - zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;

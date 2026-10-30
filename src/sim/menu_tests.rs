@@ -474,7 +474,7 @@ fn menu_tree_reaches_everything() {
     for m in [Menu::Workouts, Menu::Courses, Menu::History, Menu::Stock] {
         assert!(menus.iter().any(|&(x, _)| x == m), "{m:?} reached");
     }
-    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS, "the main menu: one screen");
+    assert_eq!(menu::MAIN.len(), ui::MENU_ROWS + 1, "the main menu: a screen and the SEGMENTS row, which scrolls in");
     // whole on the row: label and value side by side, numbers at the end of their range, and edited
     let whole = |label: &str, value: &str| {
         assert!(ui::LABEL.width(label) <= ui::menu_label_w(label, value), "{label} {value}: the label cut");

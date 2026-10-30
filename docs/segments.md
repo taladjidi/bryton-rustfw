@@ -73,7 +73,7 @@ segments too is S9, optional.
 ## On the unit
 
 **Memory.** AXI SRAM had about 15 KB left before the segments took 12.9 KB; the scan's cache then went from
-4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->63 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
+4096 rides to 3072 (2026-10-30), and about <!-- n:axi_free -->62 KB<!-- /n --> is left (AGENTS.md, Memory). The index of all segments (id, start lat / lon,
 bounding box, distance, name's first 12 characters, enabled: 32 bytes) for at most 128 segments is 4 KB; the active
 segment (400 points as i32 lat / lon = 3.2 KB, times as u16 seconds for up to 4 targets = 3.2 KB) is 6.4 KB. One
 active segment at a time. If it does not fit next to the courses, stop and report the numbers before moving any
@@ -110,8 +110,8 @@ for alarms only, features.md).
   delta's and the numbers' own cells only (AGENTS.md, redraw only what changes).
 - The result: a banner with the time and the delta, and a result card (time, against each target, the new PR if
   any), closed by any key or after 10 s.
-- MENU > NAVIGATION > SEGMENTS: LIVE SEGMENTS on / off; TARGET (PR, KOM, QOM, BEST OF 5, RECENT, CARROT, AUTO: the
-  PR if there is one, else the KOM); the list of segments (name, distance, gain), each enabled or not. On / off and
+- MENU > SEGMENTS (the main menu has no NAVIGATION row: it sits beside COURSES): LIVE SEGMENTS on / off; TARGET (AUTO: the
+  PR if there is one, else the KOM; PR, KOM, QOM, RECENT in S4; the others when the file keeps them); the list of segments (name, distance, gain), each enabled or not (the enable: S5). On / off and
   the target are kept in the settings file (roadmap block 1, step T0); the per-segment enable in the index, written
   as the header's 0x1fd byte between rides.
 
@@ -131,7 +131,10 @@ the ride. For each:
 The folder is never made there (a segment was loaded from it) and nothing goes in `\Rustfw` itself. A failure (a card
 full, an error) is counted and the effort dropped, never tried again. Cut at every sector (segment_tests.rs): the ride
 file and its records as they were, the `.pr` old or new and whole, the csv with or without the line, at most one FAT
-sector apart and one cluster lost (the cut inside a cluster's taking, as any FAT write).
+sector apart and one cluster lost (the cut inside a cluster's taking, as any FAT write); a csv whose new line takes a
+new cluster is cut too. The index build at the next start finds a `.pr` or the csv a cut left unfinished (its size, or
+a chain longer than its size) and has the next settings or pages write compare the two FATs first; a cluster taken
+for a new file before its entry is a lost cluster no file names, seen only by a whole compare (as any FAT create).
 
 At the next load of the segment, a `.pr` whose id and point count are the segment's gives the PR column (it wins over
 the source's PR, or fills it); anything else is ignored. The per-segment enable byte (0x1fd) is not written yet (its
@@ -200,7 +203,7 @@ ghost is the owner's own best effort. The cache lives in `~/.cache/bryton-rustfw
 | S1 (done 2026-10-29) | `src/nav/segment.rs`: the `.seg` reader (pure, over a byte slice), the checks above; unit tests, doc tests; fuzz (src/sim/fuzz.rs): files generated from the layout (header fields, counts, times, a FIT course), cut, wild values; a count that every check is reached | implementer |
 | S2 (done 2026-10-30) | The matcher in `src/nav/segment_match.rs` (decisions below the table): near, start, progress (course.rs's code), lost, finish, the ghost's delta; host tests with synthetic tracks: a clean pass, a start missed by 30 m, a U-turn, a stop, lost and found, two overlapping segments, a segment along a course | implementer (sonnet) |
 | S3 (done 2026-10-30) | `src/app/segments.rs`: the index at the first pass, the active segment loaded, fed from the GNSS fix each second; nothing written; sim tests over a whole ride on a synthetic segment | implementer (sonnet) |
-| S4 | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |
+| S4 (done 2026-10-30) | The SEGMENT page, the banners, the result card, the menu; sim screenshots to the gallery; redraw cost measured with the profiler in the simulator | implementer (sonnet) |
 | S5 (done 2026-10-30) | The efforts written after the save (`.pr`, `efforts.csv`); the per-segment enable byte left to S4 | critical, then reviewer on opus |
 | S6 (done 2026-10-30) | `tools/segments.py` from Intervals.icu (fetch, build, write); selftest in check.sh | implementer (sonnet) |
 | S7 | Segments from the rider's own rides, no Strava: stretches ridden at least twice (the overlap of two rides' tracks over 1 km), made into `.seg` files by `segments.py own` on the computer first; on the unit later if wanted | implementer (sonnet) |
@@ -217,7 +220,7 @@ of stack, in `Segments::load` (`#[inline(never)]`). The index is built 8 files a
 the unit's 2.5 MB/s) 5 s after the start, only with no ride open; a computer that wrote to the drive restarts the unit, which
 rebuilds it. The per-segment enabled bytes are not read yet. The idle matcher takes `Entry` (or `Header`, through `AsEntry`).
 API for S4: `App::segment_now()` (name, elapsed, delta against AUTO = PR else KOM, target, along, left, ghost), `App::segments()`
-with `events()` (the last 4 with their clock), `indexed()`, `skipped`, `dropped`. LIVE SEGMENTS and TARGET are consts for now.
+with `events()` (the last 4 with their clock), `indexed()`, `skipped`, `dropped`. LIVE SEGMENTS and TARGET are settings since S4.
 
 Decided in S2 (2026-10-30), API for S3: `Matcher::new` (about 90 bytes, a field of App), `step_idle(headers, lat, lon, t)`
 (an iterator of `&Header`, the index; gives `Approach(id)` or `Start(id)`), then the caller parses the file into the
@@ -236,3 +239,18 @@ its start. After any Lost or Finish the matcher is idle again and the segment is
 On the unit after S5 (docs/status.md, "Not yet seen on the unit"): a ride over two known segments with an EMMC_WRITE=1
 build: the approach banner, the page opening, the delta against a ride's split, the finish, the `.pr` written after
 the save and used as the target on the next pass.
+
+Decided in S4 (2026-10-30): the page is its own `Screen::Segment` (not a `PageCfg` page: it has a bar), opened as the CLIMB page
+is (once per start, over a ride page of a running ride, not while a key or finger is down), latched until the segment ends so a
+dismissed page stays closed; Start and Lap keep their ride meaning on it, any other input closes it. The result card is
+`Screen::SegmentResult` (any input, or 10 s). The delta, the time and the distance left are drawn per character cell (only a
+changed character), the bar's marks 4 px wide: measured in the simulator 4,400 px and 9 panel windows a second on the page
+(a whole-box redraw of the same boxes was 18,700 px). The approach banner's name and the list's distance and gain come from one
+read of the file's header in the pass loop (`Segments::header`: mount, folder lookup and one sector, 3 KB in the sim's pass), the list only with no ride running and for the rows
+around the selection. Settings: LIVE SEGMENTS at data 97 (0 off, 1 on), TARGET at 98 (0 to 4); older files read ON and AUTO.
+MAIN got a seventh row (SEGMENTS, after COURSES), so it scrolls. A TARGET the file lacks falls back to AUTO.
+A climb and a segment that start together: the SEGMENT page wins (decided in S4); the CLIMB page does not open for that climb
+(the segment page is the screen then, and the CLIMB latch counts it as handled). Times from an hour show as `h:mm:ss` (the
+page's time cell is seven characters wide; the card draws it at the smaller size). Input on the page and the card: Start and
+Lap are the ride's and never swallowed (the card closes first); Lap held, Page held and Start held go to the ride page after
+the screen closes; Page and Lap still held are ignored; while recording a tap, hold or drag is ignored and only a swipe closes.

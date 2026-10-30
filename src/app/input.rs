@@ -157,6 +157,10 @@ pub enum Screen {
     About,
     /// Notification `k` of the inbox in full (app/notifs.rs), its first line shown `top`.
     Notif(usize, usize),
+    /// The live SEGMENT page (app/segment_ui.rs), over the ride page it opened at.
+    Segment,
+    /// The result card of a segment just finished.
+    SegmentResult,
 }
 
 /// Places in the round of the ride pages: the workout page, the pages, then the course page.
@@ -197,7 +201,7 @@ impl App {
 
     /// The screen Page (`next`) or a swipe right (back) goes to from a ride page or the overview: the next or the
     /// previous ride page in the round, the first one from the overview (none before it); else the screen as is.
-    fn paged(&self, next: bool) -> Screen {
+    pub(crate) fn paged(&self, next: bool) -> Screen {
         match (self.screen, next) {
             (Screen::Main, true) => self.ride_page(0, 1),
             // the climb page sits right after the page it was opened from (profile.rs `settle_climb`)
@@ -215,6 +219,7 @@ impl App {
 
     /// The next or the previous ride page ([`App::paged`]), drawn: a shifter's press ([`App::remote`]).
     pub(crate) fn page_by(&mut self, b: &mut impl Board, next: bool) {
+        self.sw.auto_ms = 0;
         let before = self.screen;
         self.screen = self.paged(next);
         if self.screen != before {
@@ -230,7 +235,7 @@ impl App {
             COURSE => self.courses.as_deref().is_some_and(|c| c.on.is_some()),
             WORKOUT => self.plan.player.is_some(),
             CLIMB => self.on_climb() && !self.has_climb_page(),
-            n => n < self.ride_count() && !(self.indoors() && self.indoor_blank(n)),
+            n => n < self.ride_count() && self.switched_on(n) && !(self.indoors() && self.indoor_blank(n)),
         }
     }
 
@@ -311,6 +316,7 @@ impl App {
         let recording = self.ride.state() == ride::State::Running;
         let woke = self.light.shown == 0;
         self.light.idle_ms = 0;
+        self.sw.auto_ms = 0; // a key or a touch starts the auto scroll's count again
         if woke {
             self.update_light(b); // an input after the time-out: the light comes back (and the input acts)
             if i == Input::Back {
@@ -372,6 +378,7 @@ impl App {
             Screen::RampResult => self.input_ramp(b, i, shown),
             Screen::PowerCal => self.input_powercal(b, i, shown),
             Screen::Trainer => self.input_trainer(b, i, shown),
+            Screen::Segment | Screen::SegmentResult => self.input_segment(b, i, recording, graph_hit, shown),
             Screen::Edit(..) => self.editor_input(b, i),
             Screen::End(_) | Screen::Discard(_) => self.end_input(b, i),
             Screen::Menu(..) => self.input_menu(b, i, armed, shown),
@@ -388,7 +395,7 @@ impl App {
 
     /// The overview and the ride pages: the pages round, MORE, the map, the graphs, the editor, the menu, the
     /// ride's keys.
-    fn input_page(
+    pub(crate) fn input_page(
         &mut self,
         b: &mut impl Board,
         i: Input,
@@ -406,6 +413,10 @@ impl App {
             }
             (Screen::Ride(_), Input::Back | Input::Touch(Gesture::Swipe(Dir::Down))) if self.more_shown().is_some() => {
                 self.more_on = None
+            }
+            // any other swipe up on a ride page (MORE is up already, or the page has none): home, the overview
+            (Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Up))) => {
+                (self.screen, self.more_on) = (Screen::Main, None)
             }
             // a swipe down opens the quick panel, everywhere (the media remote is at its top)
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Swipe(Dir::Down))) => self.open_quick(),
@@ -629,7 +640,18 @@ impl App {
 
     /// A menu: a number being edited, the rows (Page and Prev, the swipes, a tap, Start) and Back.
     fn input_menu(&mut self, b: &mut impl Board, i: Input, armed: Option<(Menu, usize)>, shown: Seen) {
+        // a rename left behind (the menu closed by a touch or a pop) never captures another menu's input
+        if let Some((n, _)) = self.sw.rename
+            && !matches!(self.screen, Screen::Menu(Menu::Page(m), _) if m == n)
+        {
+            self.sw.rename = None;
+            self.pages_changed(b);
+        }
         match (self.screen, i) {
+            (Screen::Menu(menu, sel), _) if self.sw.rename.is_some() => {
+                self.rename_input(b, i);
+                return self.update_menu_rows(b, menu, sel);
+            }
             (Screen::Menu(menu, sel), _) if self.editing => {
                 let Some(menu::Row::Set(s)) = self.row(menu, sel) else {
                     self.editing = false;

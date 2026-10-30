@@ -313,7 +313,15 @@ pub struct Settings {
     pub lap_km: u16,
     /// LAP EVERY, minutes of moving time (1 to 60) for BY TIME; 10 in a file that predates it.
     pub lap_min: u16,
+    /// LIVE SEGMENTS (SEGMENTS menu): the matcher runs during a ride. Kept in settings.bin only (data 97, with the byte
+    /// after it); ON in a file that predates it.
+    pub live_segments: bool,
+    /// TARGET (SEGMENTS menu): the index in [`SEGMENT_TARGETS`]; 0 (AUTO) in a file that predates it.
+    pub seg_target: usize,
 }
+
+/// TARGET's choices: AUTO is the PR if the file has one, else the KOM.
+pub const SEGMENT_TARGETS: [&str; 5] = ["AUTO", "PR", "KOM", "QOM", "RECENT"];
 
 impl Settings {
     /// The auto lap's limits for [`ride::Ride::lap_reached`]: metres and seconds, 0 for none.
@@ -434,6 +442,8 @@ impl Settings {
             auto_lap: 0,
             lap_km: 5,
             lap_min: 10,
+            live_segments: true,
+            seg_target: 0,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -676,6 +686,8 @@ impl Settings {
             Setting::AutoLap => {
                 l.push_str(["OFF", "BY DISTANCE", "BY TIME"].get(self.auto_lap).copied().unwrap_or("OFF"))
             }
+            Setting::LiveSegments => l.push_str(if self.live_segments { "ON" } else { "OFF" }),
+            Setting::SegTarget => l.push_str(SEGMENT_TARGETS.get(self.seg_target).copied().unwrap_or("AUTO")),
             Setting::LapKm => l.push_u32(u32::from(self.lap_km)),
             Setting::LapMin => l.push_u32(u32::from(self.lap_min)),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
@@ -775,6 +787,8 @@ impl Settings {
             Setting::PowerMatch => self.power_match = !self.power_match,
             Setting::PowerSmooth => self.power_smooth = (self.power_smooth + 1) % POWER_SMOOTH_S.len(),
             Setting::AutoLap => self.auto_lap = (self.auto_lap + 1) % 3,
+            Setting::LiveSegments => self.live_segments = !self.live_segments,
+            Setting::SegTarget => self.seg_target = (self.seg_target + 1) % SEGMENT_TARGETS.len(),
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme | Setting::DayTheme | Setting::NightTheme => {

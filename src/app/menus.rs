@@ -66,6 +66,8 @@ pub enum Menu {
     Steps,
     /// The course files on the card ([`storage::course_file`]).
     Courses,
+    /// LIVE SEGMENTS, TARGET, then the segments of the card (name, distance, gain), then the files skipped.
+    Segments,
     /// The phone link ([`menu::PHONE`]).
     Phone,
     /// What the Di2 buttons do ([`menu::REMOTE`]).
@@ -106,6 +108,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Workouts => "WORKOUTS",
         Menu::Steps => "WORKOUT",
         Menu::Courses => "COURSES",
+        Menu::Segments => "SEGMENTS",
         Menu::Phone => "PHONE",
         Menu::Remote => "DI2 KEYS",
         Menu::Notifs => "NOTIFICATIONS",
@@ -126,7 +129,8 @@ impl App {
             Menu::Main => menu::MAIN.get(i).copied(),
             Menu::Pages => [ride::Profile::Road, ride::Profile::Indoor, ride::Profile::Mtb]
                 .get(i)
-                .map(|&p| Row::Open(Menu::PageList(p))),
+                .map(|&p| Row::Open(Menu::PageList(p)))
+                .or_else(|| (i == 3).then_some(Row::AutoScroll)),
             Menu::PageList(_) => match i {
                 0 => Some(Row::Open(Menu::Page(OVERVIEW))),
                 _ if i <= self.view_count() => Some(Row::Open(Menu::Page(i - 1))),
@@ -212,6 +216,20 @@ impl App {
                 (k < self.plan.steps().len()).then_some(Row::Step(k))
             }
             Menu::Courses => self.courses.as_deref()?.list.get(i).map(|_| Row::Course(i)),
+            Menu::Segments => {
+                let s = self.segments();
+                let (n, k) = (s.map_or(0, Segments::indexed), i.checked_sub(FIXED_ROWS));
+                match (i, k) {
+                    (0, _) => Some(Row::Set(menu::Setting::LiveSegments)),
+                    (1, _) => Some(Row::Set(menu::Setting::SegTarget)),
+                    (_, Some(0)) if n == 0 => {
+                        Some(Row::Empty(if s.is_some_and(Segments::ready) { "NONE ON CARD" } else { "READING CARD" }))
+                    }
+                    (_, Some(k)) if k < n => Some(Row::Seg(k)),
+                    (_, Some(k)) if k == n && s.is_some_and(|s| s.skipped > 0) => Some(Row::SegSkipped),
+                    _ => None,
+                }
+            }
             Menu::Phone => menu::PHONE
                 .get(i)
                 .map(|&r| Row::Phone(r))
@@ -227,7 +245,7 @@ impl App {
                 0 => Some(Row::EditPage(n)),
                 1 => Some(Row::Layout(n)),
                 _ if i - 2 < self.page_ref(n)?.cells() => Some(Row::Field(n, i - 2)),
-                _ => None,
+                _ => self.page_ops(n).nth(i - 2 - self.page_ref(n)?.cells()).map(|o| Row::PageOp(n, o)),
             },
         }
     }
@@ -265,10 +283,21 @@ impl App {
             }
             Row::Open(Menu::Page(OVERVIEW)) => {}
             Row::Open(Menu::Page(n)) => {
-                label.push_str("PAGE ");
-                label.push_u32(n as u32 + 1);
+                self.page_label(n, &mut label);
                 layout_text(&mut value, self.page_ref(n)?);
             }
+            Row::AutoScroll => match self.auto_secs() {
+                0 => value.push_str("OFF"),
+                s => {
+                    value.push_u32(s);
+                    value.push_str(" S");
+                }
+            },
+            Row::PageOp(n, o) => match o {
+                menu::PageOp::Show => value.push_str(if self.sw.meta.on(n) { "ON" } else { "OFF" }),
+                menu::PageOp::Rename => self.rename_text(n, &mut value),
+                _ => {}
+            },
             Row::AddPage => {
                 value.push_u32(self.view_count() as u32);
                 value.push_str("/");
@@ -464,6 +493,8 @@ impl App {
             }
             Row::Step(k) => color = self.step_row(self.plan.steps().get(k)?, &mut label, &mut value),
             Row::Course(k) => color = self.course_row(k, &mut label, &mut value)?,
+            Row::Seg(k) => self.segment_row(k, &mut label, &mut value)?,
+            Row::SegSkipped => value.push_u32(u32::from(self.segments()?.skipped)),
             Row::Group(g) => {
                 label.push_str(ui::FIELD_GROUPS.get(g)?.0);
                 // the field the box shows now, beside its group
@@ -696,6 +727,13 @@ impl App {
             Some(Row::Layout(n)) => self.next_layout(b, n),
             Some(Row::EditPage(n)) => self.edit_page(b, n, 0),
             Some(Row::AddPage) => self.add_page(b, PAGES), // after the last, as many as the file has
+            Some(Row::AutoScroll) => self.cycle_auto(b),
+            Some(Row::PageOp(n, o)) => match o {
+                menu::PageOp::Show => self.toggle_page(b, n),
+                menu::PageOp::Up => self.move_page(b, n, true),
+                menu::PageOp::Down => self.move_page(b, n, false),
+                menu::PageOp::Rename => self.start_rename(b, n),
+            },
             Some(Row::Edit(r)) => {
                 if let Menu::Edit(k) = menu {
                     self.edit_action(b, menu, sel, k, r);
@@ -729,7 +767,7 @@ impl App {
                 self.apply_estimate(b, menu, sel, r)
             }
             Some(Row::Phone(r)) => self.activate_phone(b, menu, sel, r),
-            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_)) | None => {}
+            Some(Row::Read(_) | Row::Stock(_) | Row::Empty(_) | Row::Seg(_) | Row::SegSkipped) | None => {}
         }
     }
 

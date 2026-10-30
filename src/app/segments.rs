@@ -4,8 +4,9 @@
 //!
 //! **Memory** (all in the one static [`Segments`], main.rs `make_segments`, AXI SRAM, link.x `.axibss`): the index
 //! of at most [`MAX_INDEX`] segments as [`Entry`] (32 B each: 4 KB), the one active [`Segment`] (about 8.6 KB), the
-//! efforts waiting for the save ([`EFFORTS`] x 820 B: 3.2 KB), the matcher and some counters. No buffer of the whole file: [`Segment::parse_with`] reads the file 1 KB at a time, so
-//! the load needs about 3 KB of stack, in its own function.
+//! efforts waiting for the save ([`EFFORTS`] x 820 B: 3.2 KB), the matcher and some counters. No buffer of the whole
+//! file: [`Segment::parse_with`] reads the file 1 KB at a time, so the load needs about 3 KB of stack, in its own
+//! function. The screens are app/segment_ui.rs.
 //!
 //! **Index.** Built from the headers only (the first 0x200 bytes of each `.seg` in `\Rustfw\Segments\`), [`SLICE`]
 //! files a pass, not before [`START_AT_MS`] after the start and only while no ride is open (so it is fixed for a
@@ -38,7 +39,9 @@
 //! never made here: a segment was loaded from it. A write that fails (a card full, an error) is counted
 //! ([`Segments::unwritten`]) and the effort dropped, never tried again: the next ride starts as ever. A cut during it
 //! leaves the `.pr`'s old copy or its new one whole (the newest whole copy wins), and the csv's lines as they were or
-//! with the new one (its size is written last); the ride's files and records are not touched.
+//! with the new one (its size is written last); the ride's files and records are not touched. The index build finds
+//! a `.pr` or the csv a cut left unfinished (its size, or a chain longer than it needs) and has the next settings or
+//! pages write compare the FATs first (`App::fats_unsure`): a FAT sector may then be in FAT 1 only.
 //!
 //! **The PR file is the PR target** at the next load ([`Segments::load`]): its times replace the PR column (or fill
 //! it, the segment having none), when its id and point count are the segment's; anything else in it is ignored.
@@ -58,8 +61,6 @@ const START_AT_MS: u32 = 5_000;
 const LOAD_WAIT_S: u32 = 10;
 /// The folder of the segment files.
 pub const DIR: &str = "Rustfw/Segments";
-/// LIVE SEGMENTS (a setting in S4): on.
-const LIVE_SEGMENTS: bool = true;
 /// Events kept for the screens.
 pub const NOTES: usize = 4;
 /// Efforts kept at most until they are written (a ride rarely finishes more; the rest are counted).
@@ -118,6 +119,8 @@ pub struct Segments {
     /// The segment waiting for its file, and the seconds it has waited.
     want: Option<u32>,
     waited: u32,
+    /// TARGET (settings.seg_target, set each second): 0 AUTO, 1 PR, 2 KOM, 3 QOM, 4 RECENT.
+    pub(crate) target: u8,
     /// The last events with the clock (s) they came at; `n` of them in all (a ring).
     notes: [(u32, Event); NOTES],
     n: usize,
@@ -138,6 +141,8 @@ pub struct Segments {
     pub prs: u16,
     /// Loads that took the rider's PR file as the PR target.
     pub pr_files: u16,
+    /// The index build found a file of the efforts a cut left unfinished (app: the FATs compared before a write).
+    suspect: bool,
 }
 
 impl Default for Segments {
@@ -182,6 +187,7 @@ impl Segments {
             loads: 0,
             want: None,
             waited: 0,
+            target: 0,
             // not an Option, and the filler is the variant that holds the others' niche: the static must start as zeros
             notes: [(0, Event::Finish { id: 0, elapsed_s: 0, deltas: [None; crate::segment::KEPT] }); NOTES],
             n: 0,
@@ -195,6 +201,7 @@ impl Segments {
             written: 0,
             prs: 0,
             pr_files: 0,
+            suspect: false,
         }
     }
 
@@ -221,10 +228,47 @@ impl Segments {
         self.n = self.n.wrapping_add(1);
     }
 
-    /// The column of [`Segment::kept`] AUTO targets: the PR, else the KOM.
-    fn column(&self) -> Option<usize> {
+    /// The column of [`Segment::kept`] the target names; AUTO, and a target the file lacks (shortcut: no message
+    /// about it, the label on the page says which one is used), take the PR, else the KOM.
+    pub(crate) fn column(&self) -> Option<usize> {
         let at = |e| self.seg.kept.iter().position(|&k| k == Some(e));
-        at(Effort::Pr).or_else(|| at(Effort::Kom))
+        let chosen = match self.target {
+            1 => at(Effort::Pr),
+            2 => at(Effort::Kom),
+            3 => at(Effort::Qom),
+            4 => at(Effort::Recent),
+            _ => None,
+        };
+        chosen.or_else(|| at(Effort::Pr)).or_else(|| at(Effort::Kom))
+    }
+
+    /// Events seen in all (the ring keeps the last [`NOTES`]).
+    pub(crate) fn count(&self) -> usize {
+        self.n
+    }
+
+    /// The segment loaded last (the finished one, for the result card).
+    pub(crate) fn seg(&self) -> &Segment {
+        &self.seg
+    }
+
+    /// The id of indexed segment `k`.
+    pub fn id_at(&self, k: usize) -> Option<u32> {
+        self.index.get(..self.len)?.get(k).map(|e| e.id)
+    }
+
+    /// The header of segment `id`'s file (the banner's name, the list's distance and gain): the volume mounted, the folder looked up, the file's first sector read (3 KB in the sim's pass).
+    #[inline(never)]
+    pub(crate) fn header(d: &mut impl Disk, id: u32) -> Option<Header> {
+        let mut fat = Fat::mount(d).ok()?;
+        let dir = fat.open(d, DIR).ok()?;
+        let mut name = Line::<16>::new();
+        name.push_u32(id);
+        name.push_str(".seg");
+        let f = fat.open_in(d, dir, name.as_str()).ok()?;
+        let mut head = [0u8; HEADER];
+        (!f.dir && fat.read_at(d, &f, 0, &mut head).ok()? == HEADER).then_some(())?;
+        Header::parse(&head).ok()
     }
 
     /// Efforts finished and not written yet (of a saved ride, or of the one open).
@@ -344,9 +388,10 @@ impl Segments {
         self.saved = self.saved.saturating_sub(1);
     }
 
-    /// The oldest effort to the card: its `.pr` if it beats the PR, then its csv line. Ok(true): a new PR.
+    /// The oldest effort to the card: its `.pr` if it beats the PR ([`Segments::prs`] counted once it is written),
+    /// then its csv line.
     #[inline(never)] // its 2 KB buffer in a frame of its own
-    fn write_effort(&mut self, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<bool, fat::Error> {
+    fn write_effort(&mut self, d: &mut impl DiskWrite, t: (u16, u16)) -> Result<(), fat::Error> {
         let e = self.efforts.first().copied().ok_or(fat::Error::NotFound)?;
         let mut fat = Fat::mount(d)?;
         let dir = fat.open(d, DIR)?; // never made here: the segment was loaded from it
@@ -355,23 +400,25 @@ impl Segments {
         name.push_str(".pr");
         let np = usize::from(e.npoints);
         let mut file = [0u8; PR_FILE];
-        // the PR now: the newest whole copy for these points (a failed read writes nothing: it may hold the newer)
-        let old = match fat.open_in(d, dir, name.as_str()) {
+        // the PR now: the newest whole copy, its time only if for these points; its number whatever it holds, so the
+        // new copy is the newest (a failed read writes nothing: it may hold the newer)
+        let (seq, old) = match fat.open_in(d, dir, name.as_str()) {
             Ok(f) if !f.dir && f.size as usize == PR_FILE => {
                 if fat.read_at(d, &f, 0, &mut file)? != PR_FILE {
                     return Err(fat::Error::Io);
                 }
-                PrCopy::newest(&file).filter(|p| p.id == e.id && p.npoints() == np).map(|p| (p.seq, p.total_s))
+                let newest = PrCopy::newest(&file);
+                let fits = newest.filter(|p| p.id == e.id && p.npoints() == np).map(|p| p.total_s);
+                (newest.map_or(1, |p| p.seq.wrapping_add(1)), fits)
             }
-            Ok(_) | Err(fat::Error::NotFound) => None,
+            Ok(_) | Err(fat::Error::NotFound) => (1, None),
             Err(err) => return Err(err),
         };
-        let best = [old.map(|o| o.1), (e.pr_s > 0).then_some(e.pr_s)].into_iter().flatten().min();
-        let new = best.is_none_or(|b| e.elapsed_s < b);
-        if new {
-            let seq = old.map_or(1, |o| o.0.wrapping_add(1));
+        let best = [old, (e.pr_s > 0).then_some(e.pr_s)].into_iter().flatten().min();
+        if best.is_none_or(|b| e.elapsed_s < b) {
             let copy = pr_copy(seq, e.id, e.date, e.times.get(..np).unwrap_or(&[])).ok_or(fat::Error::Corrupt)?;
             crate::app::editor::write_copy_in(&mut fat, d, dir, name.as_str(), seq % 2, &copy, t)?;
+            self.prs = self.prs.saturating_add(1);
             if self.seg.header.id == e.id {
                 self.seg.npoints = 0; // loaded again at its next start, with this PR
             }
@@ -383,8 +430,7 @@ impl Segments {
         line.push_str(",");
         line.push_u32(e.elapsed_s);
         line.push_str("\n");
-        append_line(&mut fat, d, dir, line.as_str().as_bytes(), t)?;
-        Ok(new)
+        append_line(&mut fat, d, dir, line.as_str().as_bytes(), t)
     }
 
     /// The ride is over: no segment is active, none waits for its file (not a failure: not counted).
@@ -461,7 +507,11 @@ impl Segments {
             let Some(e) = fat.list(d, &mut c)? else { return Ok(true) };
             self.passed += 1;
             let n = e.name();
-            if e.file.dir || !n.get(n.len().saturating_sub(4)..).is_some_and(|x| x.eq_ignore_ascii_case(b".seg")) {
+            let ends = |x: &[u8]| n.get(n.len().saturating_sub(x.len())..).is_some_and(|y| y.eq_ignore_ascii_case(x));
+            if !e.file.dir && (ends(b".pr") || n.eq_ignore_ascii_case(CSV.as_bytes())) && !self.suspect {
+                self.suspect = !whole(&mut fat, d, &e.file, ends(b".pr"))?;
+            }
+            if e.file.dir || !ends(b".seg") {
                 continue;
             }
             read += 1;
@@ -535,6 +585,18 @@ impl Segments {
     }
 }
 
+/// Whether a file of the efforts (a `.pr` if `pr`, else efforts.csv) is as a finished write leaves it: a `.pr` of
+/// [`PR_FILE`] bytes, a csv not empty, and a chain no longer than its size needs. Else a write was cut (the file made,
+/// or a cluster taken, the size not written yet), maybe between the two FATs' writes of a cluster.
+fn whole(fat: &mut Fat, d: &mut impl Disk, f: &fat::File, pr: bool) -> Result<bool, fat::Error> {
+    let size_ok = if pr { f.size as usize == PR_FILE } else { f.size > 0 };
+    if !size_ok || f.cluster < 2 {
+        return Ok(false);
+    }
+    let need = f.size.div_ceil(fat.cluster_bytes()).max(1);
+    Ok(fat.chain(d, f.cluster)?.clusters == need)
+}
+
 /// FIT time `fit` as ISO 8601 UTC (`2026-10-30T09:12:05Z`).
 fn push_iso(l: &mut Line<48>, fit: u32) {
     let (y, mo, d, h, mi, s) = from_epoch_s(i64::from(fit) + 631_065_600);
@@ -597,14 +659,16 @@ impl App {
 
     /// One fix of a running ride (once a second, `App::second`): the matcher takes it.
     pub(crate) fn segment_fix(&mut self) {
+        let (live, target) = (self.settings.live_segments, self.settings.seg_target as u8);
         let fix = self.gps.pvt.filter(|p| p.good());
         let clock = self.up_ms / 1000;
         let (date, record) = (self.rec_time().1, !self.rec.clean.pending());
         let state = self.ride.state();
         let Some(s) = self.segments.as_deref_mut() else { return };
-        if state == ride::State::Idle {
-            s.stop(); // stopped or saved: a new ride starts with none
-        } else if let (true, ride::State::Running, Some(p)) = (LIVE_SEGMENTS, state, fix) {
+        s.target = target;
+        if state == ride::State::Idle || !live {
+            s.stop(); // stopped or saved: a new ride starts with none; LIVE SEGMENTS off drops the one ridden
+        } else if let (ride::State::Running, Some(p)) = (state, fix) {
             s.fix(p.lat, p.lon, clock, date, record);
         }
     }
@@ -625,7 +689,7 @@ impl App {
         if settled && s.saved > 0 {
             // one effort a pass, after the ride's save; a failure drops it (counted, never tried again)
             match writable.then(|| s.write_effort(&mut d, t)) {
-                Some(Ok(pr)) => (s.written, s.prs) = (s.written.saturating_add(1), s.prs.saturating_add(u16::from(pr))),
+                Some(Ok(())) => s.written = s.written.saturating_add(1),
                 Some(Err(_)) => (s.unwritten, failed) = (s.unwritten.saturating_add(1), true),
                 None => {}
             }
@@ -645,8 +709,9 @@ impl App {
                 s.build = Build::Done;
             }
         }
-        if failed {
-            self.fats_unsure(); // a FAT sector may have reached the first copy only
+        // a write failed now, or one was cut before this start: a FAT sector may have reached the first copy only
+        if failed || self.segments.as_deref_mut().is_some_and(|s| core::mem::take(&mut s.suspect)) {
+            self.fats_unsure();
         }
     }
 
