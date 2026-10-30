@@ -1733,7 +1733,7 @@ fn make_segments() -> &'static mut bryton_rustfw::Segments {
     SEGMENTS.take()
 }
 
-/// The scan's cache of stock's rides (storage/stock.rs `Cache`, 256 KB), in AXI SRAM (link.x `.axibss`). A const
+/// The scan's cache of stock's rides (storage/stock.rs `Cache`, 192 KB), in AXI SRAM (link.x `.axibss`). A const
 /// cell: zeroed with the section at reset, never built on the stack.
 fn make_scan_cache() -> &'static mut bryton_rustfw::stock::Cache {
     static CACHE: static_cell::ConstStaticCell<bryton_rustfw::stock::Cache> =

@@ -3,7 +3,7 @@
 What each file holds. The rules (what goes where, the `App` budget, the `Board` primitives) are in AGENTS.md,
 "Layout". Read the entries for the files you touch.
 
-- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->58 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->0 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
+- `src/lib.rs`: the `Board` trait and `App` (its state, `App::start`, `App::step`). The app's cell is <!-- n:app -->58 KB<!-- /n --> in AXI SRAM, with <!-- n:axi_free -->66 KB<!-- /n --> free after the cells (sizes: `tools/numbers.py`).
 - `src/board/mod.rs`: the binary's side of the board: the unsafe primitives (hw.rs, the only `unsafe` in the firmware) and the USB link (usb.rs); `main.rs` implements `Board` with them.
 - `src/drivers/mod.rs`: the chips and radios, each one's protocol against the `Board` primitives (panel, touch, sensor bus, battery, GNSS, the Nordic chip, the ANT+ sensors, the eMMC).
 - `src/link/mod.rs`: the links to the outside, as bytes: the USB dev link, USB mass storage, the phone link's formats, and the profiler.
@@ -191,8 +191,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   the position) and the session, the CRCs checked. `src/storage/ini.rs`: a tiny INI reader.
 - `src/storage/stock.rs`: what stock left on the volume: the scan of its rides (a bounded amount per call, spread
   over the main loop's passes, each pass bounded by `Board::awake_us`) and the import of its settings. Its cache
-  (`Cache`, `\Rustfw\scan.bin`, <!-- n:scan_cache -->263 KB<!-- /n --> in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
-  (totals, history, best powers), so each ride is decoded once ever and a start reads only new or changed rides. `src/training/power_curve.rs`: best powers per duration in
+  (`Cache`, `\Rustfw\scan.bin`, <!-- n:scan_cache -->198 KB<!-- /n --> in AXI SRAM from main.rs `make_scan_cache`): an entry of 64 bytes per ride
+  (totals, history, best powers), at most 3072 rides (rides past that are read and counted again at every start,
+  in a second pass), so each ride is decoded once ever and a start reads only new or changed rides. `src/training/power_curve.rs`: best powers per duration in
   one pass, merged across rides, and the 2-parameter CP / W' fit (an envelope, the reference tools in its module
   doc). Pure logic. `src/training/hrvt.rs`: HRVT1 / HRVT2 (DFA alpha1 0.75 / 0.5) from a ride's alpha1 and power, the median
   over recent rides, pure logic; `src/storage/thresholds.rs` reads the recent full copies for it (memory from

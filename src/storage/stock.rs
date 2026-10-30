@@ -118,10 +118,13 @@ pub fn ride_start(name: &[u8]) -> Option<Start> {
 /// Stock's data pages at most (`[Page1]` to `[Page4]`).
 pub const STOCK_PAGES: usize = 4;
 
-/// Rides the cache keeps at most (`CACHE_RIDES` x [`ENTRY`] bytes: 256 KB in AXI SRAM, main.rs
-/// `make_scan_cache`). Past it, a new ride is read at every start and not counted.
-// ponytail: 4096 rides is 20 years at 200 a year; a bigger table (or one paged from the file) when that is near.
-pub const CACHE_RIDES: usize = 4096;
+/// Rides the cache keeps at most (`CACHE_RIDES` x [`ENTRY`] bytes: 192 KB in AXI SRAM, main.rs
+/// `make_scan_cache`). Past it, the rides left out are read and counted again at every start, in a second pass
+/// over the folder ([`Scan`]): slower, never missing. An older build's file of up to 4096 entries holds more than
+/// this one takes: it is ignored whole and written again ([`Cache::read`]).
+// shortcut: 3072 rides is 15 years at 200 a year; a bigger table (or one paged from the file) when that is near.
+pub const CACHE_RIDES: usize = 3072;
+const _: () = assert!(CACHE_RIDES.is_multiple_of(32), "`Cache::seen` is a bit per entry in whole words");
 /// Bytes of a ride in the cache ([`Entry`]).
 pub const ENTRY: usize = 64;
 /// Bytes of the cache file's header.
@@ -376,7 +379,7 @@ impl Cache {
         let ok = ok && self.crc() == u16::from_le_bytes([b[12], b[13]]);
         if !ok {
             self.len = 0;
-            self.bytes.fill(0); // in place: a 256 KB temporary would not fit the stack
+            self.bytes.fill(0); // in place: a 192 KB temporary would not fit the stack
         }
         self.bytes.get_mut(HEAD + self.len * ENTRY..).unwrap_or(&mut []).fill(0);
         (self.seen, self.hint, self.whole) = ([0; CACHE_RIDES / 32], 0, ok);
@@ -465,6 +468,10 @@ pub struct Scan {
     loaded: bool,
     dirty: bool,
     shown: bool,
+    /// Rides past the cache's capacity were left out of this scan's first pass: they are counted in a second pass
+    /// (`second`), on top of the cache's entries, so `out` is no longer the cache's alone.
+    over: bool,
+    second: bool,
     /// Files listed so far (shown as progress).
     pub listed: u16,
     /// Rides read (not found in the cache) since the scan started.
@@ -506,6 +513,8 @@ impl Scan {
             loaded: false,
             dirty: false,
             shown: false,
+            over: false,
+            second: false,
             listed: 0,
             read: 0,
             out: Summary {
@@ -584,6 +593,9 @@ impl Scan {
         let (y, m, d) = date;
         let today = u16::try_from(crate::epoch_s((y, m, d, 0, 0, 0)) / 86_400).unwrap_or(0);
         if today != self.today && self.cache.is_some() && self.shown && self.status != Status::Running {
+            if self.over {
+                return self.start(date); // the rides past the cache are not in it: read again
+            }
             self.set_today(date);
             self.recount();
         }
@@ -593,8 +605,8 @@ impl Scan {
     /// what it shows stays until the scan ends.
     pub fn start(&mut self, date: (u16, u8, u8)) {
         self.set_today(date);
-        (self.status, self.fat, self.dir, self.file, self.listed, self.read) =
-            (Status::Running, None, None, None, 0, 0);
+        (self.status, self.fat, self.dir, self.file, self.listed, self.read, self.over, self.second) =
+            (Status::Running, None, None, None, 0, 0, false, false);
         self.out.bytes = 0;
         match &mut self.cache {
             Some(c) => (c.seen, c.hint) = ([0; CACHE_RIDES / 32], 0),
@@ -615,8 +627,8 @@ impl Scan {
 
     /// A ride moved away (HISTORY's DELETE, [`crate::trash`]): its entry dropped from the cache, and the totals, the
     /// power curve and the index counted again at once, no ride read; the cache written later ([`Scan::save`]). A
-    /// scan running starts again (its marks follow the entries' places). Without a cache the sums cannot be
-    /// undone: the rides are read again from `date`.
+    /// scan running starts again (its marks follow the entries' places), as one that counted rides past the cache
+    /// does. Without a cache the sums cannot be undone: the rides are read again from `date`.
     pub fn forget(&mut self, file: &File, start: Start, date: (u16, u8, u8)) {
         let Some(c) = &mut self.cache else { return self.start(date) };
         if let Some(i) = c.find(&key(file, start)) {
@@ -626,7 +638,7 @@ impl Scan {
             (c.len, c.hint) = (len - 1, 0);
             self.dirty = true;
         }
-        if self.status == Status::Running {
+        if self.status == Status::Running || self.over {
             self.start(date);
         }
         self.recount();
@@ -695,12 +707,18 @@ impl Scan {
                 None => self.finish(),
                 Some(e) => {
                     if let (false, Some(day), Some(start)) = (e.file.dir, ride_day(e.name()), ride_start(e.name())) {
-                        self.listed = self.listed.saturating_add(1);
-                        if let Some(c) = &mut self.cache
-                            && let Some(i) = c.find(&key(&e.file, start))
-                        {
-                            c.mark(i); // read before, unchanged
-                            return Ok(());
+                        if !self.second {
+                            self.listed = self.listed.saturating_add(1);
+                        }
+                        if let Some(c) = &mut self.cache {
+                            if let Some(i) = c.find(&key(&e.file, start)) {
+                                c.mark(i); // read before, unchanged
+                                return Ok(());
+                            }
+                            if !self.second && c.len() >= CACHE_RIDES {
+                                self.over = true; // read in the second pass, once the gone rides made room
+                                return Ok(());
+                            }
                         }
                         self.file = Some((e.file, 0, day, start));
                         (self.reader, self.acc, self.seek) = (Reader::new(), Acc::new(), Seek::new());
@@ -741,8 +759,8 @@ impl Scan {
         Ok(())
     }
 
-    /// The ride read: its entry kept in the cache (counted at the end), or counted now without one. Counted only
-    /// if it was whole, with a session.
+    /// The ride read: its entry kept in the cache (counted at the end of the first pass), or counted now without
+    /// one or in the second pass (on top of the cache's count). Counted only if it was whole, with a session.
     fn end_file(&mut self, whole: bool) {
         let Some((file, _, _, start)) = self.file.take() else { return };
         self.read = self.read.saturating_add(1);
@@ -750,20 +768,28 @@ impl Scan {
         let counted = ride.is_some();
         let ride = ride.unwrap_or(Ride { file, start, ..crate::history::NONE });
         let e = Entry { ride, counted, best: self.rolling.best };
-        match &mut self.cache {
-            // ponytail: a full cache keeps no more (CACHE_RIDES)
-            Some(c) => self.dirty |= c.push(&e),
-            None => self.count(&e),
+        let kept = self.cache.as_mut().map(|c| c.push(&e));
+        self.dirty |= kept == Some(true);
+        self.over |= kept == Some(false); // full: read again in the second pass
+        if kept.is_none() || self.second {
+            self.count(&e);
         }
     }
 
-    /// Every ride listed: the cache keeps those (gone files dropped) and counts them all again.
+    /// Every ride listed: the cache keeps those (gone files dropped) and counts them all again; then, if rides were
+    /// left out for want of room, the folder is listed once more to read and count them (the second pass).
     fn finish(&mut self) {
-        self.status = Status::Done;
-        if let Some(c) = &mut self.cache {
+        if !self.second
+            && let Some(c) = &mut self.cache
+        {
             self.dirty |= c.keep_seen();
             self.recount();
+            if self.over {
+                (self.second, self.dir) = (true, None);
+                return;
+            }
         }
+        self.status = Status::Done;
         self.shown = true;
     }
 
@@ -1286,6 +1312,117 @@ pub(crate) mod tests {
             s.save(&mut d, (0, 0), u32::MAX).unwrap();
             let (c, _) = scan(&mut d, Some(cache()), 4096);
             assert_eq!(c.read, 0, "written whole again");
+        }
+    }
+
+    /// The test volume with `k` more ride names, each an entry pointing at the 10-minute ride of 2025 (its chain
+    /// shared, which a scan does not mind): a minute apart from 2024-01-01 00:00, so a volume past the cache's
+    /// capacity is built and read in seconds.
+    fn with_links(k: usize) -> std::vec::Vec<u8> {
+        let mut d = Ram(image(), 0);
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Activities").unwrap();
+        let ride = fat.locate(&mut d, dir, "250315090000.fit").unwrap();
+        for i in 0..k {
+            let name = std::format!("2401{:02}{:02}{:02}00.fit", 1 + i / 1440, i / 60 % 24, i % 60);
+            let h = fat.create(&mut d, dir, &name, (0, 0)).unwrap();
+            let at = h.entry_lba as usize * fat::SECTOR + usize::from(h.slot) * 32;
+            let e = &mut d.0[at..at + 32];
+            e[20..22].copy_from_slice(&((ride.first >> 16) as u16).to_le_bytes());
+            e[26..28].copy_from_slice(&(ride.first as u16).to_le_bytes());
+            e[28..32].copy_from_slice(&ride.size.to_le_bytes());
+        }
+        d.0
+    }
+
+    /// More rides than the cache holds: the ones past it are read and counted at every start (a second pass), so
+    /// the totals, the curve and the history are those of a scan without a cache, after a new day and a delete too.
+    #[test]
+    fn rides_past_the_cache_are_counted() {
+        let mut d = Ram(with_links(CACHE_RIDES + 2), 0); // and the 6 ride names of the image: 8 past the cache
+        let (none, _) = scan(&mut d, None, 1 << 20);
+        assert_eq!(usize::from(none.listed), CACHE_RIDES + 8);
+        let want = Summary { bytes: 0, ..none.out };
+        assert_eq!(usize::from(want.all.rides), CACHE_RIDES + 2 + 4, "the 2 ride names that are not rides skipped");
+        let same = |s: &Scan| {
+            assert_eq!(Summary { bytes: 0, ..s.out }, want);
+            assert_eq!(s.index.len(), none.index.len());
+            assert!((0..none.index.len()).all(|i| s.index.get(i) == none.index.get(i)));
+        };
+        let (mut s, _) = scan(&mut d, Some(cache()), 1 << 20);
+        assert_eq!(
+            (s.cache().map(Cache::len), s.read, s.listed),
+            (Some(CACHE_RIDES), CACHE_RIDES as u16 + 8, none.listed)
+        );
+        same(&s);
+        s.save(&mut d, (0, 0), u32::MAX).unwrap();
+        let (mut s, _) = scan(&mut d, Some(cache()), 1 << 20);
+        assert_eq!(s.read, 8, "only the rides past the cache, at every start");
+        same(&s);
+        // a new day cannot count again from the cache alone: the rides are listed again
+        s.new_day((2026, 10, 24));
+        assert_eq!(s.status(), Status::Running);
+        while s.step(&mut d, 1 << 20) {}
+        assert_eq!((s.read, s.out.all), (8, want.all));
+        // a ride deleted makes room: the 8 left out then fit but one
+        let mut fat = Fat::mount(&mut d).unwrap();
+        let dir = fat.open(&mut d, "Activities").unwrap();
+        let r = s.index.get(0).copied().unwrap();
+        let (y, mo, dd, h, mi) = r.start;
+        let gone = fat.locate(&mut d, dir, &std::format!("{:02}{mo:02}{dd:02}{h:02}{mi:02}00.fit", y % 100)).unwrap();
+        fat.remove(&mut d, &gone).unwrap();
+        s.forget(&r.file, r.start, TODAY);
+        while s.step(&mut d, 1 << 20) {}
+        let (none, _) = scan(&mut d, None, 1 << 20);
+        assert_eq!((s.out.all, s.out.curve), (none.out.all, none.out.curve));
+        assert_eq!(s.cache().map(Cache::len), Some(CACHE_RIDES));
+    }
+
+    /// A cache file of an older build that kept 4096 rides, more than this one takes: ignored whole (never read in
+    /// part), the rides read again, and written again in a size the older build still reads.
+    #[test]
+    fn an_older_bigger_cache_is_ignored_whole() {
+        for n in [CACHE_RIDES + 1, 4096] {
+            let mut d = Ram(image(), 0);
+            let (mut first, _) = scan(&mut d, Some(cache()), 1 << 20);
+            first.save(&mut d, (0, 0), u32::MAX).unwrap();
+            let e = first.cache().and_then(|c| c.get(0)).unwrap();
+            // n entries of that ride, each its own start: a file the older build took whole
+            let mut f = std::vec![0u8; HEAD + n * ENTRY];
+            f[..4].copy_from_slice(&MAGIC);
+            f[4..6].copy_from_slice(&VERSION.to_le_bytes());
+            f[6..8].copy_from_slice(&(ENTRY as u16).to_le_bytes());
+            f[8..12].copy_from_slice(&(n as u32).to_le_bytes());
+            for i in 0..n {
+                let mut e = e;
+                e.ride.start = (2020, 1, 1 + (i / 1440) as u8, (i / 60 % 24) as u8, (i % 60) as u8);
+                f[HEAD + i * ENTRY..HEAD + (i + 1) * ENTRY].copy_from_slice(&e.to_bytes());
+            }
+            let crc = crate::fit::crc(crate::fit::crc(0, &f[..12]), &f[HEAD..]);
+            f[12..14].copy_from_slice(&crc.to_le_bytes());
+            let mut fat = Fat::mount(&mut d).unwrap();
+            let dir = fat.open(&mut d, CACHE_DIR).unwrap();
+            let old = fat.locate(&mut d, dir, CACHE_NAME).unwrap();
+            fat.remove(&mut d, &old).unwrap();
+            let mut h = fat.create(&mut d, dir, CACHE_NAME, (0, 0)).unwrap();
+            let mut padded = f.clone();
+            padded.resize(f.len().next_multiple_of(fat::SECTOR), 0);
+            fat.write_sectors(&mut d, &mut h, 0, &padded).unwrap();
+            fat.set_size(&mut d, &mut h, f.len() as u32, (0, 0)).unwrap();
+            let mut s = Scan::new();
+            s.set_cache(cache());
+            s.load(&mut d, TODAY);
+            assert!(!s.ready(), "{n} entries: not taken");
+            assert_eq!((s.out.all, s.cache().map(Cache::len)), (Totals::default(), Some(0)));
+            s.start(TODAY);
+            while s.step(&mut d, 1 << 20) {}
+            assert_eq!((s.read, s.out.all), (6, first.out.all), "every ride read again");
+            s.save(&mut d, (0, 0), u32::MAX).unwrap();
+            let f = Fat::mount(&mut d).unwrap().open(&mut d, "Rustfw/scan.bin").unwrap();
+            assert_eq!(f.size as usize, HEAD + 6 * ENTRY, "count within what both builds take");
+            let (c, _) = scan(&mut d, Some(cache()), 1 << 20);
+            assert_eq!((c.read, c.out.all), (0, first.out.all), "written whole again");
+            assert_eq!(crate::fat::write::tests::fsck(&d.0), Ok(1), "the old cache's chain: the test's remove");
         }
     }
 
