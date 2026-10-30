@@ -80,8 +80,19 @@ fn effort_label(e: Effort) -> &'static str {
     }
 }
 
+/// The ASCII start of `b` (a name is ASCII in the files; a byte past it cuts the name there, so a name never goes
+/// blank).
 fn ascii(b: &[u8]) -> &str {
-    core::str::from_utf8(b).unwrap_or("")
+    let n = b.iter().take_while(|c| c.is_ascii()).count();
+    core::str::from_utf8(b.get(..n).unwrap_or(&[])).unwrap_or("")
+}
+
+impl SegUi {
+    /// The screen the page returns to (tests).
+    #[cfg(test)]
+    pub(crate) fn set_prev(&mut self, s: Screen) {
+        self.prev = s;
+    }
 }
 
 impl App {
@@ -239,24 +250,44 @@ impl App {
     pub(crate) fn leave_segment(&mut self, b: &mut impl Board) {
         self.seg_ui.result = None;
         self.screen = match self.seg_ui.prev {
-            Screen::Ride(n) if n < PAGES && !self.page_on(n) => self.ride_page(0, 1),
+            Screen::Ride(n) if n != OVERVIEW && !self.page_on(n) => self.ride_page(0, 1),
             s => s,
         };
         self.show(b);
     }
 
-    /// The page or the card on screen: Start and Lap keep the ride's meaning on the page; any other input closes it,
-    /// and so does any input on the card.
-    pub(crate) fn input_segment(&mut self, b: &mut impl Board, i: Input) {
+    /// The page or the card on screen. Start and Lap are the ride's (pause, lap) on both, never swallowed while a ride
+    /// runs (the card closes first); the long presses (Lap held, Page held, Start held) go to the ride page the
+    /// screen was over, after it closes; Page and Lap still held are ignored; while recording a tap, hold or drag is
+    /// ignored (rain, gloves) and only a swipe closes. Anything else closes.
+    pub(crate) fn input_segment(
+        &mut self,
+        b: &mut impl Board,
+        i: Input,
+        recording: bool,
+        graph_hit: Option<(usize, Field)>,
+        shown: Seen,
+    ) {
         let running = self.ride.state() != ride::State::Idle;
-        match (self.screen, i) {
-            (Screen::Segment, Input::Select) if running => self.start_key(b),
-            (Screen::Segment, Input::Prev) if running => self.lap(),
+        let card = self.screen == Screen::SegmentResult;
+        match i {
+            Input::NextHeld | Input::PrevHeld => {}
+            Input::Touch(Gesture::Tap(..) | Gesture::Hold(..) | Gesture::Drag(..)) if recording => {}
+            Input::Select | Input::Prev if running => {
+                if card {
+                    self.leave_segment(b);
+                }
+                if i == Input::Select { self.start_key(b) } else { self.lap() }
+            }
+            Input::Media | Input::Menu | Input::End => {
+                self.leave_segment(b);
+                self.input_page(b, i, recording, graph_hit, shown);
+            }
             _ => self.leave_segment(b),
         }
     }
 
-    /// The pass loop's part: the name of a segment the rider approaches (one sector of the card), and the rows of
+    /// The pass loop's part: the name of a segment the rider approaches (a mount, a folder lookup and one sector of the card: 3 KB in the sim), and the rows of
     /// SEGMENTS menu that are on screen. Nothing while a ride runs but the name (the card is read, never written).
     pub(crate) fn step_segment_ui(&mut self, b: &mut impl Board) {
         let announce = self.seg_ui.announce.take();

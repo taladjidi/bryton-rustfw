@@ -173,7 +173,7 @@ impl Segments {
         self.index.get(..self.len)?.get(k).map(|e| e.id)
     }
 
-    /// The header of segment `id`'s file (the banner's name, the list's distance and gain): one sector.
+    /// The header of segment `id`'s file (the banner's name, the list's distance and gain): the volume mounted, the folder looked up, the file's first sector read (3 KB in the sim's pass).
     #[inline(never)]
     pub(crate) fn header(d: &mut impl Disk, id: u32) -> Option<Header> {
         let mut fat = Fat::mount(d).ok()?;

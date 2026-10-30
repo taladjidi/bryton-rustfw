@@ -611,8 +611,8 @@ impl App {
         self.refresh_heading();
         self.catch_up_seconds(sec);
         self.settle_set(b);
+        self.settle_segment(b); // before the climb: a segment that starts with a climb takes the screen
         self.settle_climb(b);
-        self.settle_segment(b);
         if core::mem::take(&mut self.ramp.show) {
             self.open(Screen::RampResult); // the test ended this pass: its result over the page
             self.show(b);

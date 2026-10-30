@@ -56,7 +56,7 @@ pub struct Shown {
     prints: [u32; 2],
     /// The delta, the elapsed time, the distance left: one cell per character, only a changed character is redrawn.
     delta: Cells<6>,
-    time: Cells<6>,
+    time: Cells<7>,
     left: Cells<5>,
     unit: u32,
     rider: Option<u32>,
@@ -127,10 +127,21 @@ pub fn delta_text(d: Option<i32>) -> Line<8> {
     l
 }
 
-/// The time as the card and the banner show it ("1:23").
-pub fn time_text(s: u32) -> Line<8> {
+/// The time as the page, the card and the banner show it: "1:23", and "1:02:03" from an hour (to 99 hours).
+pub fn time_text(s: u32) -> Line<10> {
     let mut l = Line::new();
-    push_ms(&mut l, s);
+    if s >= 3600 {
+        let s = s.min(99 * 3600 + 3599);
+        l.push_u32(s / 3600);
+        l.push_str(":");
+        l.push_str(crate::ui::DIGITS[(s / 600 % 6) as usize]);
+        l.push_str(crate::ui::DIGITS[(s / 60 % 10) as usize]);
+        l.push_str(":");
+        l.push_str(crate::ui::DIGITS[(s / 10 % 6) as usize]);
+        l.push_str(crate::ui::DIGITS[(s % 10) as usize]);
+    } else {
+        push_ms(&mut l, s);
+    }
     l
 }
 
@@ -215,7 +226,7 @@ pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
     }
     let big = Style { fg: delta_color(now.delta_s), ..BIG };
     shown.delta.update(c, &big, (W - 6 * big.width("8")) / 2, DELTA_Y, delta.as_str(), true);
-    shown.time.update(c, &VALUE, W - 8 - 6 * VALUE.width("8"), TIME_Y, time.as_str(), false);
+    shown.time.update(c, &VALUE, W - 8 - 7 * VALUE.width("8"), TIME_Y, time.as_str(), false);
     shown.left.update(c, &VALUE, NUM_X + NUM_W - 5 * VALUE.width("8"), LEFT_Y, left.as_str(), false);
     let u = fnv(5, unit);
     if u != shown.unit {
@@ -250,9 +261,9 @@ pub fn draw_card(c: &mut impl Canvas, card: &Card) {
     text::draw_in(c, &LABEL, 8, NAME_Y + 24, w, Align::Centre, card.name);
     text::draw_in(
         c,
-        &Style { fg: ACCENT, ..BIG },
+        &Style { fg: ACCENT, ..if card.elapsed_s >= 3600 { VALUE } else { BIG } }, // 7 characters from an hour
         8,
-        NAME_Y + 54,
+        NAME_Y + if card.elapsed_s >= 3600 { 64 } else { 54 },
         w,
         Align::Centre,
         time_text(card.elapsed_s).as_str(),
@@ -298,6 +309,9 @@ mod tests {
         assert_eq!(delta_text(Some(8)).as_str(), "+0:08");
         assert_eq!(delta_text(Some(-3599)).as_str(), "-59:59");
         assert_eq!(delta_text(None).as_str(), "--");
+        assert_eq!([62 * 60 + 3, 105 * 60, 3599, 3600].map(|s| time_text(s).as_str().len()), [7, 7, 5, 7]);
+        assert_eq!(time_text(3723).as_str(), "1:02:03");
+        assert_eq!(time_text(6300).as_str(), "1:45:00");
         assert_eq!([-1, 0, 1].map(|d| delta_color(Some(d))), [GREEN, GREEN, ACCENT]);
     }
 
@@ -319,6 +333,14 @@ mod tests {
             let before = f.filled();
             update(&mut f, &now(-67, 601), &mut shown);
             assert!(f.filled() - before < 4000, "{} px for a second", f.filled() - before);
+            let mut h = Frame::new();
+            h.smooth = smooth;
+            let mut shown = draw(&mut h, &now(5, 3723));
+            update(&mut h, &now(5, 6300), &mut shown);
+            let mut whole = Frame::new();
+            whole.smooth = smooth;
+            draw(&mut whole, &now(5, 6300));
+            assert!(h.px == whole.px, "past an hour, smooth {smooth}");
             let mut card = Frame::new();
             card.smooth = smooth;
             let rows = [Some(("PR", -31)), Some(("KOM", 5)), Some(("QOM", -33)), Some(("RECENT", -34))];
@@ -326,6 +348,7 @@ mod tests {
                 &mut card,
                 &Card { name: "A LONG SEGMENT NAME THAT IS CUT", elapsed_s: 5999, rows, new_pr: true },
             );
+            draw_card(&mut Frame::new(), &Card { name: "X", elapsed_s: 6300, rows, new_pr: false });
         }
     }
 }
