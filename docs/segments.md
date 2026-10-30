@@ -212,6 +212,6 @@ dismissed page stays closed; Start and Lap keep their ride meaning on it, any ot
 `Screen::SegmentResult` (any input, or 10 s). The delta, the time and the distance left are drawn per character cell (only a
 changed character), the bar's marks 4 px wide: measured in the simulator 4,400 px and 9 panel windows a second on the page
 (a whole-box redraw of the same boxes was 18,700 px). The approach banner's name and the list's distance and gain come from one
-sector read of the file's header in the pass loop (`Segments::header`), the list only with no ride running and for the 8 rows
+sector read of the file's header in the pass loop (`Segments::header`), the list only with no ride running and for the rows
 around the selection. Settings: LIVE SEGMENTS at data 97 (0 off, 1 on), TARGET at 98 (0 to 4); older files read ON and AUTO.
 MAIN got a seventh row (SEGMENTS, after COURSES), so it scrolls. A TARGET the file lacks falls back to AUTO.

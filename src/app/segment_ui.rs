@@ -11,7 +11,7 @@ use crate::*;
 /// The result card stays this long (ms) unless a key closes it.
 const CARD_MS: u32 = 10_000;
 /// Rows of the list read from the card at a time (a screen of the menu has [`ui::MENU_ROWS`]).
-pub(crate) const LIST_ROWS: usize = 8;
+pub(crate) const LIST_ROWS: usize = 6;
 const _: () = assert!(ui::MENU_ROWS <= LIST_ROWS);
 /// Rows of the SEGMENTS menu before the list: LIVE SEGMENTS and TARGET.
 pub(crate) const FIXED_ROWS: usize = 2;
@@ -19,9 +19,9 @@ pub(crate) const FIXED_ROWS: usize = 2;
 /// A segment of the list: what the header says.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ListRow {
-    name: [u8; 16],
+    name: [u8; 12],
     dist_m: u32,
-    gain_m: u32,
+    gain_m: u16,
     /// The header could not be read (a ride runs, or the file went).
     ok: bool,
 }
@@ -292,11 +292,16 @@ impl App {
                 *row = s.id_at(w + k).and_then(|id| Segments::header(&mut d, id)).map_or_else(
                     ListRow::default,
                     |h: Header| {
-                        let mut name = [0u8; 16];
+                        let mut name = [0u8; 12];
                         for (o, i) in name.iter_mut().zip(h.name()) {
                             *o = *i;
                         }
-                        ListRow { name, dist_m: h.distance_m, gain_m: h.elevation_m, ok: true }
+                        ListRow {
+                            name,
+                            dist_m: h.distance_m,
+                            gain_m: u16::try_from(h.elevation_m).unwrap_or(u16::MAX),
+                            ok: true,
+                        }
                     },
                 );
             }
@@ -322,7 +327,7 @@ impl App {
                 value.push_str(".");
                 value.push_u32(r.dist_m % 1000 / 100);
                 value.push_str("K ");
-                value.push_u32(r.gain_m);
+                value.push_u32(u32::from(r.gain_m));
                 value.push_str("M");
             }
             None => {
