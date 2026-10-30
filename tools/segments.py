@@ -3,8 +3,8 @@
 
   segments.py fetch [--since YYYY-MM-DD] [--refresh]   rides with segment matches, their segment lists and streams -> the cache
   segments.py build [--min-km 0.5] [--min-gain-m 10] [--min-rides 2] [--max 128] [--kom ID=M:SS ...] [--out DIR]
-  segments.py write --volume PATH [--init] [--prune]   the built files -> PATH/Rustfw/Segments/, each read back and compared
-  segments.py own --rides DIR | --volume PATH [--dry-run] [--min-km 1] [--min-gain-m 0] [--max 128] [--out DIR]
+  segments.py write --volume PATH [--init] [--prune] [--out DIR]   (no --out: build's and own's folders) the built files -> PATH/Rustfw/Segments/, each read back and compared
+  segments.py own --rides DIR | --volume PATH [--dry-run] [--min-km 1] [--min-gain-m 0] [--max 128] [--max-per-cell 8] [--out DIR]
                                            stretches the rider rode twice, from the FIT rides (no Strava) -> .seg files
   segments.py fixture [OUT]                the synthetic .seg the Rust tests parse (test-data/segment/synthetic.seg)
   segments.py selftest                     synthetic checks, no network (check.sh)
@@ -372,6 +372,7 @@ def build(a, log=print):
 OWN_TOL_M = 25.0
 OWN_STEP_M = 30.0  # tracks are thinned to this spacing before matching: 1 point in 30 m, not one a second
 OWN_MIN_KM = 1.0  # the overlap of two rides over 1 km (docs/segments.md S7)
+OWN_ID_M = 50.0  # a stretch keeps its id while its ends move less than this and its length less than 10 %
 OWN_FIRST_ID = 4_000_000_000  # own segments count down from here so they never meet Strava ids (docs/segments.md)
 FIT_EPOCH = 631065600  # 1989-12-31 UTC, the FIT timestamps' zero
 
@@ -383,6 +384,8 @@ def fit_records(data):
     out, defs, ts = [], {}, 0
     try:
         i, end = data[0], data[0] + int.from_bytes(data[4:8], 'little')
+        if end > len(data):  # cut short
+            return []
         while i < end:
             b = data[i]
             i += 1
@@ -407,8 +410,8 @@ def fit_records(data):
                 for num, s in fields:
                     f[num] = int.from_bytes(data[at:at + s], bo, signed=num in (0, 1))
                     at += s
-                ts = f.get(253, ts)
-                if f.get(0, 0x7FFFFFFF) != 0x7FFFFFFF and f.get(1, 0x7FFFFFFF) != 0x7FFFFFFF:
+                ts = f[253] if f.get(253, 0) >= 0x10000000 else ts  # below that it is a time since power-on, not a date
+                if 0 in f and 1 in f and abs(f[0]) <= 1 << 30 and abs(f[1]) < 0x7FFFFFFF and (f[0], f[1]) != (0, 0):
                     alt = f[78] / 5 - 500 if f.get(78, 0xFFFFFFFF) != 0xFFFFFFFF else (
                         f[2] / 5 - 500 if f.get(2, 0xFFFF) != 0xFFFF else None)
                     dist = f.get(5, 0xFFFFFFFF)
@@ -448,14 +451,35 @@ def load_rides(folder, log=print):
     return rides
 
 
-def own_find(rides):
-    """Stretches ridden in the same direction by two or more rides: [(length m, {ride: (first, last) index})].
-    Each ride is thinned to a point every OWN_STEP_M and indexed in a grid of cells 3 x OWN_TOL_M wide (the 9 cells
-    around a point hold every candidate: no all-pairs scan). A point matches an earlier ride's point within
-    OWN_TOL_M going the same way (dot product of the headings over 0.7); a run of matches along two rides over
-    OWN_MIN_KM is an overlap. The longest overlap claims its stretch, with every ride that covers 90 % of it;
-    an overlap that is mostly claimed already is the same stretch again and is dropped (ten rides, one segment)."""
+def own_spans(ps):
+    """[(first, last)] of the contiguous pieces of the sorted ordinals `ps` (a gap of one missing point is bridged)."""
+    spans = []
+    for p in ps:
+        if spans and p - spans[-1][1] <= 2:
+            spans[-1] = (spans[-1][0], p)
+        else:
+            spans.append((p, p))
+    return spans
+
+
+def own_find(rides, max_per_cell=8, stats=None):
+    """Stretches ridden in the same direction by two or more rides: [(length m, {ride: (first, last) index}, ends)],
+    `ends` the stretch's (lat, lon) at its start and end. Each ride is thinned to a point every OWN_STEP_M and
+    indexed in a grid of cells 3 x OWN_TOL_M wide: the 9 cells around a point hold every candidate, so there is no
+    all-pairs scan. A cell indexes the points of at most `max_per_cell` rides (the first, oldest ones); a later ride
+    is still matched against those, so the work stays linear in the rides, not quadratic (a road ridden 100 times
+    is compared with 8 rides, not 99), and it joins a stretch through them. A point matches another ride's point
+    within OWN_TOL_M going the same way (dot product of the headings over 0.7); its own ride's points never count
+    (a loop or a repeat inside one ride is not a second ride). A run of matches along two rides over OWN_MIN_KM is
+    an overlap, taken on the earlier ride. The longest overlap claims its stretch with every ride that covers 90 % of
+    it; the stretch is the longest piece of it, still over OWN_MIN_KM, where every member is within the tolerance
+    (a detour of one ride is not in the stretch). An overlap more than half claimed already is the same stretch
+    again and is dropped (ten rides, one segment). `stats['cmp']` counts the candidates looked at."""
     cell, k = 3 * OWN_TOL_M, 111195.0
+    # shortcut: one cos for all rides (the first ride's): cells and heading stay right within a factor 2 of it (tens of
+    # degrees of latitude); upgrade: a cos per ride or a projection
+    c = math.cos(math.radians(rides[0]['lat'][0])) if rides else 1.0
+    lim = (2 * OWN_TOL_M / k) ** 2  # degrees squared: the cheap prefilter before metres(), loose by 2x
     keep, grid, pairs, runs = [], {}, {}, []
     for r, ride in enumerate(rides):
         lat, lon, ks = ride['lat'], ride['lon'], [0]
@@ -465,81 +489,149 @@ def own_find(rides):
         keep.append(ks)
         for p, i in enumerate(ks):
             a, b = (i, ks[p + 1]) if p + 1 < len(ks) else (ks[p - 1] if p else i, i)
-            c = math.cos(math.radians(lat[i]))
             ux, uy = (lon[b] - lon[a]) * c, lat[b] - lat[a]
             norm = math.hypot(ux, uy) or 1.0
             ux, uy = ux / norm, uy / norm
-            cx, cy = int(lon[i] * k * c // cell), int(lat[i] * k // cell)
+            key = (int(lon[i] * k * c // cell), int(lat[i] * k // cell))
             best = {}
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    for q, qp, qlat, qlon, qx, qy in grid.get((cx + dx, cy + dy), ()):
+                    for q, qp, qlat, qlon, qx, qy in grid.get((key[0] + dx, key[1] + dy), ([],))[0]:
+                        if stats is not None:
+                            stats['cmp'] = stats.get('cmp', 0) + 1
+                        if q == r or (lat[i] - qlat) ** 2 + ((lon[i] - qlon) * c) ** 2 > lim:
+                            continue
                         m = metres(lat[i], lon[i], qlat, qlon)
                         if m <= OWN_TOL_M and ux * qx + uy * qy >= 0.7 and m < best.get(q, (1e9,))[0]:
                             best[q] = (m, qp)
             for q, (_, qp) in best.items():
                 pairs.setdefault((r, q), {})[p] = qp
                 pairs.setdefault((q, r), {})[qp] = p
-            grid.setdefault((cx, cy), []).append((r, p, lat[i], lon[i], ux, uy))
+            pts, who = grid.setdefault(key, ([], set()))
+            if r in who or len(who) < max_per_cell:
+                who.add(r)
+                pts.append((r, p, lat[i], lon[i], ux, uy))
     for (r, q), m in pairs.items():
         if q < r:
             ps = sorted(m)
             s = 0
             for n in range(1, len(ps) + 1):  # a run: p advances by at most 2, q forward by at most 4 steps
                 if n == len(ps) or not (ps[n] - ps[n - 1] <= 2 and 0 <= m[ps[n]] - m[ps[n - 1]] <= 4):
-                    p0, p1 = ps[s], ps[n - 1]
-                    ln = rides[r]['d'][keep[r][p1]] - rides[r]['d'][keep[r][p0]]
+                    js = [m[p] for p in ps[s:n]]
+                    q0, q1 = min(js), max(js)  # on the earlier ride q, which is indexed in more cells than r
+                    ln = rides[q]['d'][keep[q][q1]] - rides[q]['d'][keep[q][q0]]
                     if ln >= OWN_MIN_KM * 1000:
-                        runs.append((ln, r, p0, p1))
+                        runs.append((ln, q, q0, q1))
                     s = n
     claimed, found = {}, []
     for ln, r, p0, p1 in sorted(runs, reverse=True):
         if sum(max(0, min(p1, y) - max(p0, w)) for w, y in claimed.get(r, ())) > (p1 - p0) / 2:
             continue
-        members = {r: (p0, p1)}
+        # the overlap with the earlier ride may run past the road the others share (lead-ins that run side by side for
+        # a while): the stretch is first the longest piece of it that most of the rides covering 1 km of it cover
+        cand = {}
         for o in range(len(rides)):
             m = pairs.get((r, o), {})
-            js = [m[p] for p in range(p0, p1 + 1) if p in m]
-            if o != r and len(js) >= 0.9 * (p1 - p0 + 1) and 0.7 * (p1 - p0) <= max(js) - min(js) <= 1.4 * (p1 - p0):
-                members[o] = (min(js), max(js))
-        # the stretch ends where every member is within the tolerance (a lead-in that runs beside the road for a
-        # while does not move one ride's end 60 m from another's)
-        both = [p for p in range(p0, p1 + 1) if all(p in pairs[(r, o)] for o in members if o != r)]
-        if len(both) < 2:
+            cov = [p for p in range(p0, p1 + 1) if p in m] if o != r else []
+            if len(cov) * OWN_STEP_M >= OWN_MIN_KM * 1000:
+                cand[o] = cov
+        seen = {}
+        for cov in cand.values():
+            for p in cov:
+                seen[p] = seen.get(p, 0) + 1
+        need = (len(cand) + 2) // 2 - 1  # a majority of the rides, the pivot among them
+        core = [p for p in range(p0, p1 + 1) if seen.get(p, 0) >= need]
+        spans = own_spans(core)
+        span = max(spans, key=lambda x: x[1] - x[0], default=None)
+        if span is None:
             continue
-        p0, p1 = both[0], both[-1]
-        members = {o: ((p0, p1) if o == r else tuple(sorted((pairs[(r, o)][p0], pairs[(r, o)][p1])))) for o in members}
-        for o, (x, y) in members.items():
+        p0, p1 = span
+        members = {r}
+        for o in cand:
+            m = pairs[(r, o)]
+            js = [m[p] for p in range(p0, p1 + 1) if p in m]
+            if len(js) >= 0.9 * (p1 - p0 + 1) and 0.7 * (p1 - p0) <= max(js) - min(js) <= 1.4 * (p1 - p0):
+                members.add(o)
+        # the stretch is where every member is within the tolerance, its longest contiguous piece
+        both = [p for p in range(p0, p1 + 1) if all(p in pairs[(r, o)] for o in members if o != r)]
+        spans = own_spans(both)
+        dist = rides[r]['d']
+        span = max(spans, key=lambda x: dist[keep[r][x[1]]] - dist[keep[r][x[0]]], default=None)
+        if span is None or dist[keep[r][span[1]]] - dist[keep[r][span[0]]] < OWN_MIN_KM * 1000:
+            continue
+        p0, p1 = span
+        rng = {o: (p0, p1) if o == r else tuple(sorted((pairs[(r, o)][p0], pairs[(r, o)][p1]))) for o in members}
+        for o, (x, y) in rng.items():
             claimed.setdefault(o, []).append((x, y))
-        found.append((rides[r]['d'][keep[r][p1]] - rides[r]['d'][keep[r][p0]], {o: (keep[o][x], keep[o][y]) for o, (x, y) in members.items()}))
+        a, b = keep[r][p0], keep[r][p1]
+        found.append((dist[b] - dist[a], {o: (keep[o][x], keep[o][y]) for o, (x, y) in rng.items()},
+                      (rides[r]['lat'][a], rides[r]['lon'][a], rides[r]['lat'][b], rides[r]['lon'][b])))
     return found
 
 
+def own_ids(book, stretches):
+    """Stable ids: `book` is ids.json's list [{id, start, end, length_m}], `stretches` [(ends, length)] longest first.
+    A stretch takes the id of an entry whose start and end are each within OWN_ID_M and whose length is within 10 %
+    (so a ride added to a stretch does not renumber it); else the next id below every id ever given, dropped
+    entries' included (an id is never reused for another road). The book is updated in place."""
+    used, ids = set(), []
+    for (la0, lo0, la1, lo1), ln in stretches:
+        hit = next((e for e in book if e['id'] not in used and metres(la0, lo0, *e['start']) <= OWN_ID_M
+                    and metres(la1, lo1, *e['end']) <= OWN_ID_M and abs(ln - e['length_m']) <= 0.1 * e['length_m']), None)
+        if hit is None:
+            hit = {'id': min([e['id'] for e in book] + [OWN_FIRST_ID + 1]) - 1}
+            book.append(hit)
+        hit.update(start=[la0, lo0], end=[la1, lo1], length_m=round(ln))
+        used.add(hit['id'])
+        ids.append(hit['id'])
+    return ids
+
+
 def own(a, log=print):
-    """Find the stretches, build each with build_segment (the same writer and targets as `build`), write to a.out."""
+    """Find the stretches, build each with build_segment (the same writer and targets as `build`), write to a.out
+    with ids.json beside them. a.out must not be build's folder: each wipes the .seg files it does not make."""
+    out = Path(a.out)
+    if out.resolve() == (cache_dir() / 'out').resolve():
+        sys.exit("segments.py: own's --out must not be the folder `build` writes (each removes the other's files)")
     rides = load_rides(a.rides, log)
-    stats, built = new_stats(), []
-    found = own_find(rides)
-    for n, (ln, members) in enumerate(found):
-        name = f'OWN {ln / 1000:.1f} KM {n + 1}'
-        efforts = [{'act': rides[o]['act'], 'name': name, 'date': rides[o]['date'],
-                    **{key: rides[o][key][i:j + 1] for key in ('t', 'd', 'lat', 'lon', 'alt')}}
-                   for o, (i, j) in members.items()]
-        f = build_segment(OWN_FIRST_ID - n, efforts, a, stats)
-        if f:
-            built.append((OWN_FIRST_ID - n, f))
-            best = struct.unpack_from('<I', f, 0x17a + 13)[0]  # the first target is the PR
-            log(f'  {name}: {len(members)} rides, best {best // 60}:{best % 60:02d}')
+    stats = new_stats()
+    found = own_find(rides, a.max_per_cell)
+
+    def make(ln, members, sid, name, st):
+        return build_segment(sid, [{'act': rides[o]['act'], 'name': name, 'date': rides[o]['date'],
+                                    **{key: rides[o][key][i:j + 1] for key in ('t', 'd', 'lat', 'lon', 'alt')}}
+                                   for o, (i, j) in members.items()], a, st)
+
+    kept = [s for s in found if make(s[0], s[1], OWN_FIRST_ID, 'OWN', stats)]
+    book_path = out / 'ids.json'
+    try:
+        book = json.loads(book_path.read_text()) if book_path.exists() else []
+        assert all(len(e['start']) == len(e['end']) == 2 and e['id'] == int(e['id']) and e['length_m'] > 0 for e in book)
+    except (ValueError, KeyError, TypeError, AssertionError):
+        log(f'{book_path} is not readable: ids start again')
+        book = []
+    ids = own_ids(book, [(s[2], s[0]) for s in kept])
+    built = []
+    for (ln, members, _), sid in zip(kept, ids):
+        name = f'OWN {ln / 1000:.1f} KM {OWN_FIRST_ID - sid + 1}'
+        f = make(ln, members, sid, name, new_stats())
+        built.append((ln, sid, f))
+        best = struct.unpack_from('<I', f, 0x17a + 13)[0]  # the first target is the PR
+        log(f'  {name}: {len(members)} rides, best {best // 60}:{best % 60:02d}')
+    built.sort(key=lambda x: -x[0])
+    cut = max(0, len(built) - a.max)
     built = built[:a.max]
     if not a.dry_run:
-        out = Path(a.out)
         out.mkdir(parents=True, exist_ok=True)
         for old in out.glob('*.seg'):
             old.unlink()
-        for sid, f in built:
+        for _, sid, f in built:
             (out / f'{sid}.seg').write_bytes(f)
-    log(f'{len(found)} stretches found, {len(built)} kept, {stats["dropped"]} efforts dropped by sanity, '
-        f'{stats["rare"]} too rare, {stats["small"]} too short or flat'
+        tmp = book_path.with_suffix('.tmp')
+        tmp.write_text(json.dumps(book))
+        os.replace(tmp, book_path)
+    log(f'{len(found)} stretches found, {len(built)} kept ({cut} cut by --max), {stats["dropped"]} efforts dropped by '
+        f'sanity, {stats["rare"]} too rare, {stats["small"]} too short or flat'
         + (' (dry run: nothing written)' if a.dry_run else f', files in {a.out}'))
     return 0
 
@@ -564,13 +656,14 @@ def read_back(path):
 
 
 def write(out, volume, log=print, prune=False, init=False):
-    """Copy the built files to <volume>/Rustfw/Segments, each checked before its rename; then delete the `<id>.seg`
+    """`out` is a folder or a list of them (build's and own's: both coexist on the drive). Copy the built files to <volume>/Rustfw/Segments, each checked before its rename; then delete the `<id>.seg`
     files this tool put there earlier (the manifest, per destination) that are no longer wanted. Raises SystemExit
     for a volume that is not a BRYTON drive (no Rustfw/ folder, unless `init`) and for nothing to write (unless `prune`)."""
     root = Path(volume)
     if not root.is_dir() or not ((root / 'Rustfw').is_dir() or init):
         sys.exit(f'segments.py: {root} is not a directory holding Rustfw/ (a mistyped path? --init creates it)')
-    want = {p.name: p.read_bytes() for p in Path(out).glob('*.seg') if NAME.match(p.name)}
+    outs = [out] if isinstance(out, (str, Path)) else out
+    want = {p.name: p.read_bytes() for o in outs for p in Path(o).glob('*.seg') if NAME.match(p.name)}
     if not want and not prune:
         sys.exit('segments.py: nothing built to write (--prune to remove the files of earlier writes)')
     dest = root / 'Rustfw' / 'Segments'
@@ -714,12 +807,14 @@ def selftest():
     print('segments.py selftest: ok')
 
 
-def synth_ride(path, day, lead, shared, speed, back=False, off=0):
+def synth_ride(path, day, lead, shared, speed, back=False, off=0, detour=None):
     """A FIT ride at 0 N 10 E (made up): a lead-in of its own, `shared` metres east along y = 0 (reversed when `back`),
     a lead-out of its own, one point a second at `speed` m/s. `lead` picks the lead-in's bearing so rides share only the stretch."""
     deg = 1 / 111195.0
     xs = [(-1500 + 1500 * i / 300, lead * (1500 - 1500 * i / 300)) for i in range(300)]  # lead-in to (0, 0)
-    xs += [(shared * i / 400, off) for i in range(401)]  # the stretch
+    d0, d1 = detour or (0, 0)  # a detour: the ride leaves the road by up to 100 m between x = d0 and d1
+    xs += [(shared * i / 400, off + (100 * math.sin(math.pi * (shared * i / 400 - d0) / (d1 - d0)) if d0 < shared * i / 400 < d1 else 0))
+           for i in range(401)]  # the stretch
     xs += [(shared + 1500 * i / 300, lead * 1500 * i / 300) for i in range(1, 301)]  # lead-out
     if back:
         xs = xs[::-1]  # the same road, the other way
@@ -733,27 +828,137 @@ def synth_ride(path, day, lead, shared, speed, back=False, off=0):
     path.write_bytes(fit_course(pts, times))
 
 
+def fit_file(body):
+    f = struct.pack('<BBHI4s', 12, 0x10, 2100, len(body), b'.FIT') + bytes(body)
+    return f + struct.pack('<H', sync.fit_crc(f))
+
+
 def own_selftest():
-    a = argparse.Namespace(min_km=1.0, min_gain_m=0, min_rides=2, max=128, kom={}, dry_run=False, out='', rides='')
+    import random
     quiet = lambda *_: None
 
-    def run(rides):
+    def args(d, **kw):
+        return argparse.Namespace(min_km=1.0, min_gain_m=0, min_rides=2, max=128, kom={}, dry_run=False,
+                                  out=str(Path(d, 'out')), rides=d, max_per_cell=8, **kw)
+
+    def put(d, specs, first=0):  # spec: (lead, shared, speed[, back[, off[, detour]]])
+        for k, spec in enumerate(specs, first):
+            synth_ride(Path(d, f'r{k:02d}.fit'), k + 1, *spec)
+
+    def segs(d):
+        out = Path(d, 'out')
+        return [read_seg(f.read_bytes()) + (f.name,) for f in sorted(out.glob('*.seg'))]
+
+    def run(specs):
         with tempfile.TemporaryDirectory() as d:
-            for k, (date, lead, shared, speed, back) in enumerate(rides):
-                synth_ride(Path(d, f'r{k}.fit'), date, lead, shared, speed, back)
-            a.rides, a.out = d, str(Path(d, 'out'))
-            own(a, quiet)
-            return [read_seg(f.read_bytes()) + (f.name,) for f in sorted(Path(a.out).glob('*.seg'))] if Path(a.out).exists() else []
-    two = run([(1, 1, 2000, 6, False), (2, -1, 2000, 7, False)])
+            put(d, specs)
+            own(args(d), quiet)
+            return segs(d)
+
+    def find(specs, **kw):
+        with tempfile.TemporaryDirectory() as d:
+            put(d, specs)
+            return own_find(load_rides(d, quiet), **kw)
+
+    two = run([(1, 2000, 6), (-1, 2000, 7)])
     assert len(two) == 1 and 1900 <= two[0][0]['dist'] <= 2100 and two[0][0]['n'] == 3, two  # PR, RECENT, BEST5
     assert two[0][0]['id'] == OWN_FIRST_ID and two[0][2] == f'{OWN_FIRST_ID}.seg'
-    assert run([(1, 1, 500, 6, False), (2, -1, 500, 7, False)]) == []  # under 1 km
-    assert run([(1, 1, 2000, 6, False), (2, -1, 2000, 7, True)]) == []  # the other way
-    three = run([(1, 1, 2000, 6, False), (2, -1, 2000, 7, False), (3, 0.5, 2000, 5, False)])
+    assert run([(1, 500, 6), (-1, 500, 7)]) == []  # under 1 km
+    assert run([(1, 2000, 6), (-1, 2000, 7, True)]) == []  # the other way
+    three = run([(1, 2000, 6), (-1, 2000, 7), (0.5, 2000, 5)])
     assert len(three) == 1 and 1900 <= three[0][0]['dist'] <= 2100, three
-    h, times = three[0][:2]
-    assert times[-1][0] <= 2000 / 7 + 8, times[-1]  # the PR: the 7 m/s ride's time over the stretch
-    assert fit_records(b'junk') == [] and sync.fit_whole(Path('/dev/null').read_bytes()) is False
+    assert three[0][1][-1][0] <= 2000 / 7 + 8, three[0][1][-1]  # the PR: the 7 m/s ride's time over the stretch
+    # the 90 % claim: a ride on 95 % of the stretch is a member, one on 80 % is not; its overlap, mostly claimed, is dropped
+    assert len(f := find([(1, 2000, 6), (-1, 2000, 7), (0.5, 1900, 5)])) == 1 and set(f[0][1]) == {0, 1, 2}, f
+    assert len(f := find([(1, 2000, 6), (-1, 2000, 7), (0.5, 1600, 5)])) == 1 and set(f[0][1]) == {0, 1}, f
+    # a ride that skips 200 m of the road: the detour is not in its effort, the stretch is the longer piece
+    assert len(f := find([(1, 2000, 6), (-1, 2000, 7), (0.5, 2000, 5, False, 0, (500, 700))])) == 1, f
+    assert set(f[0][1]) == {0, 1, 2} and 1200 <= f[0][0] <= 1400, f  # not the 2000 m with the detour in it
+    # stable ids: a ride added to a stretch keeps its id; a new road gets the next id down; none is reused
+    with tempfile.TemporaryDirectory() as d:
+        put(d, [(1, 2000, 6), (-1, 2000, 7)])
+        own(args(d), quiet)
+        first = segs(d)
+        put(d, [(0.5, 2000, 5)], 2)  # a third ride moves the stretch's ends a little: same id
+        own(args(d), quiet)
+        again = segs(d)
+        assert [x[0]['id'] for x in first] == [x[0]['id'] for x in again] == [OWN_FIRST_ID]
+        for f in Path(d).glob('*.fit'):
+            f.unlink()
+        put(d, [(1, 2000, 6, False, 400), (-1, 2000, 7, False, 400)])  # another road, 400 m north
+        own(args(d), quiet)
+        assert [x[0]['id'] for x in segs(d)] == [OWN_FIRST_ID - 1]
+        assert sorted(e['id'] for e in json.loads(Path(d, 'out', 'ids.json').read_text())) == [OWN_FIRST_ID - 1, OWN_FIRST_ID]
+        own(args(d, ), quiet)  # again: nothing changes
+        assert [x[0]['id'] for x in segs(d)] == [OWN_FIRST_ID - 1]
+        # --max cuts the shortest, and the dry run writes nothing
+        before = sorted(Path(d, 'out').iterdir())
+        a = args(d)
+        a.dry_run = True
+        own(a, quiet)
+        assert sorted(Path(d, 'out').iterdir()) == before
+        a.dry_run, a.out = False, str(cache_dir() / 'out')
+        try:
+            own(a, quiet)
+            raise AssertionError('should refuse build\'s folder')
+        except SystemExit:
+            pass
+    # 30 rides on one road: one stretch with all of them, and the matching is bounded by max_per_cell
+    leads = [math.tan(math.radians(-80 + 160 * k / 29)) for k in range(30)]  # lead-ins 5.5 degrees apart: they share no km
+    specs = [(lead, 2000, 5 + k % 4) for k, lead in enumerate(leads)]
+    with tempfile.TemporaryDirectory() as d:
+        put(d, specs)
+        t0 = time.time()
+        rides = load_rides(d, quiet)
+        capped, full = {}, {}
+        f = own_find(rides, stats=capped)
+        secs = time.time() - t0
+        own_find(rides, max_per_cell=100, stats=full)
+        assert len(f) == 1 and len(f[0][1]) == 30 and 1900 <= f[0][0] <= 2300, (len(f), [len(x[1]) for x in f])
+        assert capped['cmp'] < 0.7 * full['cmp'], (capped, full)  # 0.55 measured: the lead-ins hold few rides per cell
+        assert secs < 20, secs  # about a second; a quadratic version is several times that
+        print(f'segments.py own: 30 same-road rides in {secs:.1f} s, {capped["cmp"]} candidates ({full["cmp"]} unbounded)')
+        own(args(d), quiet)
+        assert len(segs(d)) == 1
+    # both sources on one drive: write takes both folders, and prunes only what neither lists
+    with tempfile.TemporaryDirectory() as d:
+        os.environ['BRYTON_SEGMENTS_CACHE'] = d + '/cache'
+        o1, o2, vol = Path(d, 'o1'), Path(d, 'o2'), Path(d, 'vol')
+        o1.mkdir(), o2.mkdir(), Path(vol, 'Rustfw').mkdir(parents=True)
+        (o1 / '1.seg').write_bytes(b'a'), (o2 / '2.seg').write_bytes(b'b')
+        write([o1, o2], vol, log=quiet)
+        dest = vol / 'Rustfw' / 'Segments'
+        assert sorted(p.name for p in dest.iterdir()) == ['1.seg', '2.seg']
+        (o2 / '2.seg').unlink()
+        write([o1, o2], vol, log=quiet)
+        assert sorted(p.name for p in dest.iterdir()) == ['1.seg']
+    # fit_records: a compressed timestamp, a developer field, junk positions, a truncated file
+    T, deg = 1_000_000_000, lambda x: round(x * SEMI)
+    body = bytes([0x60, 0, 0]) + struct.pack('<H', 20) + bytes([3, 253, 4, 0x86, 0, 4, 0x85, 1, 4, 0x85, 1, 0, 2, 0])
+    body += bytes([0]) + struct.pack('<Iii', T, deg(10), deg(20)) + b'\xaa\xbb'  # + 2 bytes of developer data
+    body += bytes([0]) + struct.pack('<Iii', T + 1, 0, 0) + b'\xaa\xbb'  # no position
+    body += bytes([0]) + struct.pack('<Iii', T + 2, deg(91), deg(20)) + b'\xaa\xbb'  # not a latitude
+    body += bytes([0x41, 0, 0]) + struct.pack('<H', 20) + bytes([2, 0, 4, 0x85, 1, 4, 0x85])
+    body += bytes([0x80 | 1 << 5 | (T + 3) & 31]) + struct.pack('<ii', deg(11), deg(21))
+    got = fit_records(fit_file(body))
+    assert [r[0] for r in got] == [T, T + 3] and abs(got[1][1] - 11) < 1e-6 and abs(got[0][2] - 20) < 1e-6, got
+    assert fit_records(fit_file(body)[:-30]) == [] and fit_records(b'junk') == [] and fit_records(b'') == []
+    # mutation fuzz: flipped and truncated rides never raise; the unmodified one gives all its records
+    with tempfile.TemporaryDirectory() as d:
+        synth_ride(Path(d, 'x.fit'), 1, 1, 500, 5)
+        base = Path(d, 'x.fit').read_bytes()
+    assert len(fit_records(base)) == 300 + 401 + 300
+    alive = 0
+    for seed in range(200):
+        rng = random.Random(seed)
+        b = bytearray(base)
+        if seed % 4 == 0:
+            b = b[:rng.randrange(len(b))]
+        else:
+            for _ in range(rng.randrange(1, 9)):
+                b[rng.randrange(len(b))] ^= 1 << rng.randrange(8)
+        alive += bool(fit_records(bytes(b)))
+    assert alive >= 80, alive  # most flips leave a readable file: the fuzz reaches the record code
     print('segments.py own selftest: ok')
 
 
@@ -774,7 +979,8 @@ def main():
     ap.add_argument('--min-rides', type=int, default=2)
     ap.add_argument('--max', type=int, default=128)
     ap.add_argument('--kom', action='append', metavar='ID=M:SS')
-    ap.add_argument('--out', default=str(cache_dir() / 'out'))
+    ap.add_argument('--out', help='build: DIR (default cache/out); own: DIR (cache/own); write: DIR (default both)')
+    ap.add_argument('--max-per-cell', type=int, default=8, help='own: rides indexed per 75 m cell (bounds the matching)')
     ap.add_argument('--volume', help='write: the drive; own: reads its Activities/')
     ap.add_argument('--rides', help='own: a folder of FIT rides')
     ap.add_argument('--dry-run', '--list', action='store_true', help='own: list the stretches, write nothing')
@@ -791,7 +997,7 @@ def main():
     if a.cmd == 'write':
         if not a.volume:
             sys.exit('segments.py: write needs --volume PATH')
-        sys.exit(write(a.out, a.volume, prune=a.prune, init=a.init))
+        sys.exit(write(a.out or [cache_dir() / 'out', cache_dir() / 'own'], a.volume, prune=a.prune, init=a.init))
     own_mode = a.cmd == 'own'
     a.min_km = a.min_km if a.min_km is not None else (OWN_MIN_KM if own_mode else 0.5)
     a.min_gain_m = a.min_gain_m if a.min_gain_m is not None else (0 if own_mode else 10)
@@ -799,8 +1005,9 @@ def main():
         a.rides = a.rides or (a.volume and str(Path(a.volume) / 'Activities'))
         if not a.rides or not Path(a.rides).is_dir():
             sys.exit('segments.py: own needs --rides DIR or --volume PATH (holding Activities/)')
-        a.kom, a.out = {}, a.out if a.out != str(cache_dir() / 'out') else str(cache_dir() / 'own')
+        a.kom, a.out = {}, a.out or str(cache_dir() / 'own')
         sys.exit(own(a))
+    a.out = a.out or str(cache_dir() / 'out')
     try:
         a.kom = parse_kom(a.kom)
     except ValueError as e:
