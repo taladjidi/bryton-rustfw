@@ -154,9 +154,9 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   (every N, steps of 10) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
   step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
 - **Sunset alert** (ALERTS > SUNSET ALERT: OFF, 15, 30 or 60 MIN; off by default): a red-free reminder "SUNSET SOON" with the
-  three beeps when the sun is that many minutes from its set (the NOAA times the fields use, with a fix). Once a ride,
-  so a pause or a resume does not say it again; no fix or no sun times, no alert. Kept in settings.bin after READY CHECK.
-  Sim only (`sunset_alert_says_once_before_the_set`).
+  three beeps when the sun is that many minutes from its set (the NOAA times the fields use, with a fix). Once a ride:
+  a pause and resume do not say it again; a reset resume may. No fix or no sun times, no alert. Kept in settings.bin
+  at byte 155 (after DATE FORMAT). Sim only (`sunset_alert_says_once_before_the_set`).
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
@@ -893,7 +893,8 @@ weight, bike weight, W', eat, drink, heart rate alert), then the choices, one by
 before the limits (an earlier build's) reads them OFF. A later build appends its settings and raises the length: SOUND,
 UNITS, TEMPERATURE and AUTO PAUSE are bytes 99 to 102 of the data, then the trips and the odometer as five u32 (TRIP 1 m
 and s, TRIP 2 m and s, the odometer m) at 103 to 122, 123 bytes in all; a file that ends before them reads ON, METRIC,
-C, AUTO and zeros. START REMINDER and READY CHECK are the last two bytes (150, 151; 152 in all) and read ON when missing.
+C, AUTO and zeros. START REMINDER and READY CHECK are bytes 150 and 151 and read ON when missing; CLIMBS, CLIMB PAGE and
+DATE FORMAT are 152 to 154; SUNSET ALERT is the last byte (155; 156 in all) and reads OFF when missing.
 
 **Which copy wins at a start** (`Settings::with_registers` in `src/app/settings.rs`):
 - the registers held none of this firmware's settings (a flat backup battery): the file's settings, and the registers
@@ -967,3 +968,19 @@ basemap and the dev link's card commands wait. Ejecting on the computer gives it
 the unit, once the computer has let it go (else EJECT ON COMPUTER). After the computer wrote, the unit restarts so
 that nothing it read before is trusted. Only the FAT volume is offered (sectors 0 .. B-1), never stock's reserved
 area. A build without EMMC_WRITE=1 offers it write protected.
+
+## Climbs and dates
+
+- **CLIMBS** (BIKE, ours): ALL (the default) or MEDIUM+. A climb ahead without a course is kept only if it is
+  category 3 or harder; the scheme is inferred, not checked against ASO: score = length (m) x average grade (%), which
+  is 100 x the gain (m); category 4 from 8000, 3 from 16000, 2 from 32000, 1 from 64000, HC from 80000 (search results
+  citing cyclingmagazine.ca and cycling forums; climbfinder.com uses other points). Course climbs are the route's own
+  and are not filtered.
+- **CLIMB PAGE** (BIKE, ours): ON (the default) or OFF. Off, the climb page is skipped in the paging and a road climb
+  does not open it; the climbs ahead, the pacer and the climb fields keep working. A live segment still opens it (LIVE
+  SEGMENTS has its own switch).
+- **DATE FORMAT** (DISPLAY, ours): D/M/Y (the default, 23/10/2026), M/D/Y or Y-M-D. It applies to the dates of the history
+  and the workouts' rows (numbers, no weekday). The overview, the phone's date and the ride card's title ("SAT 24 OCT")
+  keep the month's name.
+- Still open: TIME ZONE and DAYLIGHT SAVING (the RTC keeps local time, so the zone needs the learned offset; default
+  CLOCK = no change), and the 12 h time format (the strip's layout).

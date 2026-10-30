@@ -203,7 +203,7 @@ pub(crate) fn fnv(h: u32, bytes: &[u8]) -> u32 {
 pub(crate) const MONTHS: [&str; 12] =
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
-/// "FRI 23 OCT".
+/// "FRI 23 OCT": the overview, the phone's date and the ride card keep the month's name.
 pub(crate) fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
     const DAYS: [&str; 7] = ["THU", "FRI", "SAT", "SUN", "MON", "TUE", "WED"]; // 1970-01-01 was a Thursday
     let mut l = Line::new();
@@ -213,6 +213,47 @@ pub(crate) fn date_text((y, m, d): (u16, u8, u8)) -> Line<12> {
     l.push_str(" ");
     l.push_str(MONTHS.get(usize::from(m).wrapping_sub(1)).copied().unwrap_or(""));
     l
+}
+
+/// The date alone, "23/10/2026", "10/23/2026" or "2026-10-23" (DATE FORMAT): the history and workout rows, where
+/// the weekday does not fit the label.
+pub(crate) fn date_numbers((y, m, d): (u16, u8, u8), fmt: crate::DateFormat) -> Line<14> {
+    let mut l = Line::new();
+    push_numbers(&mut l, (y, m, d), fmt);
+    l
+}
+
+/// The date's numbers in the format, two digits for the day and the month.
+fn push_numbers(l: &mut Line<14>, (y, m, d): (u16, u8, u8), fmt: crate::DateFormat) {
+    let two = |l: &mut Line<14>, v: u8| {
+        if v < 10 {
+            l.push_str("0");
+        }
+        l.push_u32(u32::from(v));
+    };
+    match fmt {
+        crate::DateFormat::Dmy => {
+            two(l, d);
+            l.push_str("/");
+            two(l, m);
+            l.push_str("/");
+            l.push_u32(u32::from(y));
+        }
+        crate::DateFormat::Mdy => {
+            two(l, m);
+            l.push_str("/");
+            two(l, d);
+            l.push_str("/");
+            l.push_u32(u32::from(y));
+        }
+        crate::DateFormat::Ymd => {
+            l.push_u32(u32::from(y));
+            l.push_str("-");
+            two(l, m);
+            l.push_str("-");
+            two(l, d);
+        }
+    }
 }
 
 impl App {
@@ -730,5 +771,27 @@ mod tests {
             l
         };
         assert_eq!([t(12_345, false).as_str(), t(12_345, true).as_str(), t(0, true).as_str()], ["12.3", "7.6", "0.0"]);
+    }
+}
+
+#[cfg(test)]
+mod date_format_tests {
+    use super::*;
+    use crate::DateFormat::{Dmy, Mdy, Ymd};
+
+    /// The rows' date in each DATE FORMAT: two digits for the day and the month, the year in full; 10 characters.
+    #[test]
+    fn date_numbers_in_each_format() {
+        assert_eq!(date_numbers((2026, 10, 23), Dmy).as_str(), "23/10/2026");
+        assert_eq!(date_numbers((2026, 10, 23), Mdy).as_str(), "10/23/2026");
+        assert_eq!(date_numbers((2026, 10, 23), Ymd).as_str(), "2026-10-23");
+        assert_eq!(date_numbers((2026, 1, 3), Dmy).as_str(), "03/01/2026");
+        assert_eq!([Dmy, Mdy, Ymd].map(|f| date_numbers((2026, 12, 31), f).as_str().len()), [10, 10, 10]);
+    }
+
+    /// The overview, the phone and the ride card keep the month's name, whatever DATE FORMAT says.
+    #[test]
+    fn date_text_keeps_the_month_name() {
+        assert_eq!(date_text((2026, 10, 23)).as_str(), "FRI 23 OCT");
     }
 }

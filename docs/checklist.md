@@ -358,6 +358,8 @@ Storage, USB and updates
 - [~] Settings kept through power off (stock, all): unit; backup registers, not a file
 - [ ] Time zone, daylight saving, date and time formats (stock, all)
 - [x] Units: metric or imperial, temperature (stock, all): sim
+- [x] Date format D/M/Y, M/D/Y, Y-M-D (ours): sim (fields unit test)
+- [x] Climbs ahead ALL or MEDIUM+, CLIMB PAGE on or off (ours): sim
 - [ ] Language (stock, all)
 - [x] First start setup: stock's settings and pages taken by themselves (ours): sim
 - [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired sensors, backlight, reminders, pages (ours): sim

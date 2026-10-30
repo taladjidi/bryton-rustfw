@@ -330,6 +330,13 @@ pub struct Settings {
     pub ready_check: bool,
     /// SUNSET ALERT: an index into [`SUNSET_LEAD_MIN`]; 0 (OFF) in a file that predates it. Kept in settings.bin only.
     pub sunset_alert: usize,
+    /// CLIMBS (BIKE): the climbs ahead are MEDIUM+ (category 3 and harder, a score of 16000 or more) or all of them
+    /// (data 152); ALL in a file that predates it.
+    pub climbs_medium: bool,
+    /// CLIMB PAGE (BIKE): the climb page is in the paging when on (data 153); ON in a file that predates it.
+    pub climb_page: bool,
+    /// DATE FORMAT (DISPLAY): how every date is drawn (data 154); D/M/Y in a file that predates it.
+    pub date_fmt: DateFormat,
     /// UNITS (DISPLAY): the fields show miles, mph and feet (data 100); the FIT file stays metric. METRIC in a file
     /// that predates it.
     pub imperial: bool,
@@ -435,6 +442,34 @@ impl Settings {
     }
 }
 
+/// DATE FORMAT: how the dates are drawn (`fields::date_numbers`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DateFormat {
+    /// 23/10/2026: the default.
+    #[default]
+    Dmy,
+    /// 10/23/2026.
+    Mdy,
+    /// 2026-10-23.
+    Ymd,
+}
+
+impl DateFormat {
+    /// The next choice (the list wraps).
+    pub fn next(self) -> Self {
+        match self {
+            DateFormat::Dmy => DateFormat::Mdy,
+            DateFormat::Mdy => DateFormat::Ymd,
+            DateFormat::Ymd => DateFormat::Dmy,
+        }
+    }
+
+    /// The choice a settings byte names (its position in the list), None for any other byte.
+    pub fn from_byte(b: u8) -> Option<Self> {
+        [DateFormat::Dmy, DateFormat::Mdy, DateFormat::Ymd].get(usize::from(b)).copied()
+    }
+}
+
 /// GPS POWER: the receiver's power mode ([`crate::gnss::config`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GpsPower {
@@ -514,6 +549,9 @@ impl Settings {
             start_reminder: true,
             ready_check: true,
             sunset_alert: 0,
+            climbs_medium: false,
+            climb_page: true,
+            date_fmt: DateFormat::Dmy,
             imperial: false,
             temp_f: false,
             auto_pause: 0,
@@ -787,6 +825,13 @@ impl Settings {
                     l.push_str(" MIN");
                 }
             },
+            Setting::ClimbsMedium => l.push_str(if self.climbs_medium { "MEDIUM+" } else { "ALL" }),
+            Setting::ClimbPage => l.push_str(if self.climb_page { "ON" } else { "OFF" }),
+            Setting::DateFormat => l.push_str(match self.date_fmt {
+                DateFormat::Dmy => "D/M/Y",
+                DateFormat::Mdy => "M/D/Y",
+                DateFormat::Ymd => "Y-M-D",
+            }),
             Setting::Units => l.push_str(if self.imperial { "IMPERIAL" } else { "METRIC" }),
             Setting::Temp => l.push_str(if self.temp_f { "F" } else { "C" }),
             Setting::AutoPause => match AUTO_PAUSE_KMH.get(self.auto_pause) {
@@ -913,6 +958,9 @@ impl Settings {
             Setting::SegTarget => self.seg_target = (self.seg_target + 1) % SEGMENT_TARGETS.len(),
             Setting::Sound => self.sound = !self.sound,
             Setting::StartReminder => self.start_reminder = !self.start_reminder,
+            Setting::ClimbsMedium => self.climbs_medium = !self.climbs_medium,
+            Setting::ClimbPage => self.climb_page = !self.climb_page,
+            Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
             Setting::ReadyCheck => self.ready_check = !self.ready_check,
             Setting::SunsetAlert => self.sunset_alert = (self.sunset_alert + 1) % SUNSET_LEAD_MIN.len(),
             Setting::ZonesBy => self.zones_lthr = !self.zones_lthr,

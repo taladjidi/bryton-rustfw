@@ -89,9 +89,9 @@ fields of one kind into one step. Settings these need go in the settings file (T
   the distance to the destination is the course's distance to go, not a new field);
 - ~~trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; sound on or off;
   backlight always on (LIGHT OFF NEVER); the auto pause threshold~~ done, sim (features.md "Units, sound, trips"); still open: time
-  zone, daylight saving and the date and time formats; key click (the unit's keys have no beep to switch); the climb filter
-  (all, or medium and above: no climb has a category yet); the CLIMB page's off switch (CLIMBS AHEAD already turns the road
-  ahead off);
+  zone and daylight saving (the RTC keeps local time: a step for the critical agent, default CLOCK = no change); the 12 h
+  time format (the strip's layout, for the owner); key click (the unit's keys have no beep to switch). Done since: CLIMBS
+  ALL or MEDIUM+ (score 16000, inferred scheme), CLIMB PAGE on or off, DATE FORMAT, sim (features.md "Climbs and dates");
 - ~~the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
   to delete (DELETE exists in HISTORY)~~ done, sim (features.md: ABOUT and STORAGE under SYSTEM; the oldest ride's DELETE is HISTORY's).
 

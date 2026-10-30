@@ -231,6 +231,18 @@ pub struct Climb {
 }
 
 impl Climb {
+    /// The climb's score, length (m) x average grade (%): the grade is gain / length, so this is 100 x the gain (m).
+    /// Category scheme (inferred, from search results citing cyclingmagazine.ca and cycling forums, not checked against
+    /// ASO): score 8000 is category 4, 16000 category 3, 32000 category 2, 64000 category 1, 80000 HC.
+    pub fn score(&self) -> u32 {
+        self.gain_m.saturating_mul(100)
+    }
+
+    /// MEDIUM+ (category 3 or harder): a score of 16000 or more (CLIMBS: the climbs ahead keep only these).
+    pub fn medium_plus(&self) -> bool {
+        self.score() >= 16_000
+    }
+
     /// Where it ends, m from the start.
     pub fn end_m(&self) -> u32 {
         self.start_m.saturating_add(self.len_m)
@@ -1180,5 +1192,20 @@ pub(crate) mod tests {
         let mut c = Course::new();
         c.finish();
         assert_eq!((c.len_m(), c.climb_at(0), c.column(0, 100, 10, 3)), (0, None, None));
+    }
+}
+
+#[cfg(test)]
+mod climb_score_tests {
+    use super::Climb;
+
+    /// The score is length x grade = 100 x gain; MEDIUM+ from 16000 (2 km at 8 %), not at 15900.
+    #[test]
+    fn medium_plus_from_a_score_of_16000() {
+        let c = |len_m, gain_m| Climb { start_m: 0, len_m, gain_m };
+        assert_eq!(c(2000, 160).score(), 16_000);
+        assert!(c(2000, 160).medium_plus() && !c(2000, 159).medium_plus());
+        assert!(!c(1000, 80).medium_plus(), "1 km at 8 % is category 4 (8000)");
+        assert_eq!(c(0, 0).score(), 0);
     }
 }

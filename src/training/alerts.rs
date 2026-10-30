@@ -216,7 +216,8 @@ pub struct Alerts {
     /// The distance (km), kcal and kJ at the last call, and whether there was one.
     prev: [u32; 3],
     primed: bool,
-    /// The sunset alert has said its one this ride (a pause and a resume keep it: [`Alerts::new`] is a new ride).
+    /// The sunset alert has said its one this ride (a pause and a resume keep it; a reset-resume is a new [`Alerts`],
+    /// so it says again if still within the window).
     sun_said: bool,
 }
 
