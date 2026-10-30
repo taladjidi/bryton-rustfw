@@ -706,7 +706,10 @@ impl App {
             // row chosen acts (a wet glove or a bump must not do something)
             (Screen::Menu(menu, sel), Input::Touch(Gesture::Tap(_, y))) => {
                 // the bottom rows under the last slot (316 to 319) are the last slot's, not the next screen's
+                // the 4 px under the last slot are its own (316 to 319 at 44 px); a taller pitch leaves a blank band
+                // under the rows, which is no row
                 let slot = (u32::from(y).checked_sub(ui::LIST_Y))
+                    .filter(|&d| d < (self.menu_rows() as u32) * self.theme.menu_row + 4)
                     .map(|d| ((d / self.theme.menu_row) as usize).min(self.menu_rows() - 1));
                 let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
                 let row = match slot.map(|k| first + k) {

@@ -621,8 +621,33 @@ fn a_long_menu_turns_by_the_rows_of_the_pitch() {
         app.press(&mut sim, Press::Short(Key::Start));
         let n = app.menu_rows();
         assert!(app.rows(Menu::Sensors) > n);
-        app.input(&mut sim, Input::Touch(Gesture::Tap(120, (crate::ui::H - 1) as u16)));
-        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, n - 1), "{row} px: the bottom pixel is the last slot");
+        let end = crate::ui::LIST_Y + n as u32 * row;
+        app.input(&mut sim, Input::Touch(Gesture::Tap(120, (end - 1) as u16)));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, n - 1), "{row} px: the bottom edge is the last slot");
+        // the blank band under the rows (past 4 px) is no row: nothing is selected or opened
+        app.input(&mut sim, Input::Touch(Gesture::Tap(120, (end + 5) as u16)));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, n - 1), "{row} px: the blank band is no row");
         super::tests::assert_consistent(&sim, &app);
     }
+}
+
+/// FNV-1a of the panel's pixels.
+fn hash(screen: &[u16]) -> u64 {
+    screen.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &p| (h ^ u64::from(p)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// The built-in themes draw as they did before the metrics: the main menu and a ride page in DARK hash to the values
+/// taken from the same test on the commit before (main, 2026-10-30).
+#[test]
+fn dark_draws_as_before_the_metrics() {
+    let (mut sim, mut app) = unit(None);
+    app.press(&mut sim, Press::Long(Key::Page));
+    run(&mut sim, &mut app, 200);
+    let menu = hash(&sim.screen);
+    app.press(&mut sim, Press::Short(Key::Back));
+    run(&mut sim, &mut app, 200);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1100);
+    let ride = hash(&sim.screen);
+    assert_eq!((menu, ride), (0x61c6_3905_740b_d4e1, 0xa6ce_182a_d71d_10ae));
 }

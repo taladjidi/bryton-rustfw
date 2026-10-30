@@ -268,7 +268,7 @@ version = 1          ; above 1 is refused (THEME TOO NEW)
 name = SUNNY
 base = outdoor       ; dark, outdoor or light: the values the file does not give
 [metrics]            ; whole px, outside the range is clamped, left out keeps the base's (8, 3, 44)
-zone_bar = 8         ; height of a field's zone bar, 4 to 12
+zone_bar = 8         ; height of a field's zone bar, 4 to 8
 frame = 3            ; the page editor's frame round a cell, 1 to 4
 menu_row = 44        ; menu row pitch, 44 to 56 (a taller row shows fewer rows: 4 at 56)
 [colors]             ; #RRGGBB, any key left out keeps the base's

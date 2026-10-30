@@ -121,8 +121,10 @@ pub struct Theme {
 
 /// Bounds of the metrics a theme file may set, as (least, built-in, most) in px. A value outside is clamped (a colour
 /// that does not parse is ignored; a number that does is brought into range: the file stays usable and every screen is
-/// tested at both ends). 44 is the least row a fingertip hits (docs/theming.md).
-pub const ZONE_BAR: (u32, u32, u32) = (4, 8, 12);
+/// tested at both ends). The zone bar stops at 8: the label's ink under it ends at 8 + 14 px and the value band starts
+/// at `FIELD_LABEL_H` (22), so a taller bar would put the label over the value (the layout is the same for every theme
+/// so the editor's fits checks hold). 44 is the least row a fingertip hits (docs/theming.md).
+pub const ZONE_BAR: (u32, u32, u32) = (4, 8, 8);
 /// See [`ZONE_BAR`].
 pub const FRAME: (u32, u32, u32) = (1, 3, 4);
 /// See [`ZONE_BAR`].
@@ -451,10 +453,10 @@ mod tests {
         for t in [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT] {
             assert_eq!((t.zone_bar, t.frame, t.menu_row), (8, 3, 44));
         }
-        let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=12\nframe=1\nmenu_row=56\n").unwrap();
-        assert_eq!((t.zone_bar, t.frame, t.menu_row), (12, 1, 56));
+        let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=7\nframe=1\nmenu_row=56\n").unwrap();
+        assert_eq!((t.zone_bar, t.frame, t.menu_row), (7, 1, 56));
         let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=99\nframe=0\nmenu_row=20\n").unwrap();
-        assert_eq!((t.zone_bar, t.frame, t.menu_row), (12, 1, 44), "out of range: clamped");
+        assert_eq!((t.zone_bar, t.frame, t.menu_row), (8, 1, 44), "out of range: clamped");
         let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=x\nframe=-2\nmenu_row=\n").unwrap();
         assert_eq!((t.zone_bar, t.frame, t.menu_row), (8, 3, 44), "not numbers: ignored");
     }

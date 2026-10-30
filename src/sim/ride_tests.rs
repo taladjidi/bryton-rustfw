@@ -88,16 +88,16 @@ fn the_zone_bar_follows_its_number_and_is_all_that_is_redrawn() {
     sim.save("zone_bar");
 }
 
-/// A zone bar of 12 px (the most a theme sets) over the label: the heart rate box redraws on its own, nothing falls off
-/// the screen (the panel model checks every window), and the bar is 12 rows tall; a shot for the gallery.
+/// A zone bar of 4 px (the least a theme sets): the heart rate box draws with the label under it, nothing falls off
+/// the screen (the panel model checks every window), and the bar is 4 rows tall; a shot for the gallery.
 #[test]
-fn a_ride_page_with_the_tallest_zone_bar() {
+fn a_ride_page_with_the_thinnest_zone_bar() {
     let mut sim = Sim::new(9, 0, 0);
     sim.backup[Kind::Hr.backup()] = STRAP.to_word();
     sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: STRAP.device, data: hr_edge, network: 0, ack: &[] });
     sim.gnss.fix = Some(8000);
     let mut app = App::start(&mut sim, Some(KEY));
-    app.theme = crate::theme::Theme { zone_bar: 12, frame: 4, ..crate::theme::Theme::DARK };
+    app.theme = crate::theme::Theme { zone_bar: 4, frame: 4, ..crate::theme::Theme::DARK };
     app.pages[0] = crate::page::Page::preset(
         1,
         [Field::Hr, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time],
@@ -107,9 +107,9 @@ fn a_ride_page_with_the_tallest_zone_bar() {
     run(&mut sim, &mut app, 6000);
     let bx = app.pages()[0].cell_box(0).unwrap();
     let at = |dy: u32| sim.screen[((bx.1 + dy) * W + bx.0 + 10) as usize];
-    assert!(at(0) == at(11) && at(0) != ui::BLACK && at(12) == ui::BLACK, "twelve rows of the zone's colour");
+    assert!(at(0) == at(3) && at(0) != ui::BLACK && at(4) == ui::BLACK, "four rows of the zone's colour");
     assert_consistent(&sim, &app);
-    sim.save("metrics_ride_bar12");
+    sim.save("metrics_ride_bar4");
 }
 
 /// The live readings on the pages (power, speed, cadence, heart rate) change once a second, in the second's tick,

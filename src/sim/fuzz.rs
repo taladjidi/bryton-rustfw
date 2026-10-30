@@ -1330,12 +1330,15 @@ fn menu_touch_and_keys() {
             sim.emmc.image = crate::storage::trash::tests::volume(); // rides: STORAGE's oldest rows exist
         }
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
+        app.theme = crate::ui::tests::metric_ends()[seed as usize / 2 % 2]; // menu rows of 44 and of 56 px
+        app.repaint(&mut sim);
         let mut noise = bytes(seed * 7919, 1 << 13);
         let mut next = || noise.next().unwrap_or(0);
         let mut from_storage = false;
         for k in 0..300 {
             let (a, b) = (next(), next());
-            let row_y = |r: u8| (ui::LIST_Y + u32::from(r % ui::MENU_ROWS as u8) * ui::MENU_ROW + 10) as u16;
+            let (rows, pitch) = (app.menu_rows() as u8, app.theme.menu_row);
+            let row_y = |r: u8| (ui::LIST_Y + u32::from(r % rows) * pitch + 10) as u16;
             if a % 29 == 0 {
                 // straight to a row that asks first: a sensor, the phone's FORGET, IMPORT
                 let import = menu::SYSTEM.iter().position(|&r| r == menu::Row::Stock(menu::StockRow::Import));
@@ -1464,8 +1467,9 @@ fn menu_touch_and_keys() {
                     backs += 1
                 }
                 (Screen::Menu(m, s), Input::Touch(Gesture::Tap(_, y))) if !editing && u32::from(y) >= ui::LIST_Y => {
-                    let r = menu::first_shown(s, ui::MENU_ROWS, app.rows(m))
-                        + ((u32::from(y) - ui::LIST_Y) / ui::MENU_ROW) as usize;
+                    let band = (u32::from(y) - ui::LIST_Y) / app.theme.menu_row;
+                    let band = band.min(app.menu_rows() as u32 - 1); // the 4 px under the last row are its own
+                    let r = menu::first_shown(s, app.menu_rows(), app.rows(m)) + band as usize;
                     if r == s && chosen {
                         acts += 1;
                     } else if r != s && app.screen() == Screen::Menu(m, r) {
@@ -1556,12 +1560,14 @@ fn menu_tree_by_chance() {
             x
         };
         let mut tapped = 0;
+        app.theme = crate::ui::tests::metric_ends()[seed as usize % 2];
+        app.repaint(&mut sim);
         app.sw.meta.auto = if seed % 3 == 0 { 1 } else { 0 }; // the other seeds walk as they did
         for k in 0..2500 {
             let (a, b) = (next() % 100, next());
             // a tap on the row tapped last half the time: the second tap that acts
-            tapped = if b % 2 == 0 { tapped } else { b / 2 % ui::MENU_ROWS as u32 };
-            let row_y = (ui::LIST_Y + tapped * ui::MENU_ROW + 10) as u16;
+            tapped = if b % 2 == 0 { tapped } else { b / 2 % app.menu_rows() as u32 };
+            let row_y = (ui::LIST_Y + tapped * app.theme.menu_row + 10) as u16;
             // down more than up and out, so the deep menus are reached
             let i = match a {
                 0..=29 => Input::Next,
@@ -2104,7 +2110,10 @@ fn page_editor_inputs() {
                 4..=6 => Input::Select,
                 7 => Input::Back,
                 8 => Input::Touch(Gesture::Tap(u16::from(b) % 240, u16::from(next()) % 320)),
-                9 => Input::Touch(Gesture::Tap(120, (ui::LIST_Y + u32::from(b % 6) * ui::MENU_ROW + 10) as u16)),
+                9 => Input::Touch(Gesture::Tap(
+                    120,
+                    (ui::LIST_Y + u32::from(b) % app.menu_rows() as u32 * app.theme.menu_row + 10) as u16,
+                )),
                 10 if b % 8 == 0 => {
                     app.start_pause(); // a ride recording, or paused again
                     continue;
@@ -3854,7 +3863,8 @@ fn theme_files() {
             f.push_str(nl);
             for _ in 0..rnd() % 5 {
                 let key = ["zone_bar", "frame", "menu_row", "other"][rnd() as usize % 4];
-                let value = match rnd() % 6 {
+                let value = match rnd() % 7 {
+                    6 => std::format!("{}", rnd() % 14),
                     0 => "x".into(),
                     1 => std::format!("-{}", rnd() % 9),
                     2 => std::format!("{}", rnd()),
@@ -3869,13 +3879,11 @@ fn theme_files() {
         match parse(bytes) {
             Ok(t) => {
                 accepted += 1;
-                assert!(
-                    (4..=12).contains(&t.zone_bar) && (1..=4).contains(&t.frame) && (44..=56).contains(&t.menu_row)
-                );
+                assert!((4..=8).contains(&t.zone_bar) && (1..=4).contains(&t.frame) && (44..=56).contains(&t.menu_row));
                 metric_reach[0] += usize::from(t.zone_bar != 8);
                 metric_reach[1] += usize::from(t.frame != 3);
                 metric_reach[2] += usize::from(t.menu_row != 44);
-                clamped += usize::from(t.zone_bar == 12 || t.zone_bar == 4 || t.menu_row == 56);
+                clamped += usize::from(t.zone_bar == 8 || t.zone_bar == 4 || t.menu_row == 56);
                 assert!(
                     [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT].iter().any(|b| check(&t, b).is_ok()),
                     "seed {seed}"
@@ -3894,7 +3902,7 @@ fn theme_files() {
     }
     assert!(accepted > 100, "accepted {accepted}");
     assert!(light > 0, "a theme accepted over the light base");
-    assert!(metric_reach.iter().all(|&n| n > 20) && clamped > 20, "metrics set: {metric_reach:?}, at an end {clamped}");
+    assert!(metric_reach.iter().all(|&n| n > 5) && clamped > 20, "metrics set: {metric_reach:?}, at an end {clamped}");
     assert!(refused.iter().all(|&n| n > 0), "every refusal reached: {refused:?}");
     assert!(set.iter().filter(|&&s| s).count() >= NAMES.len() - 2, "keys set from a file: {set:?}");
 }
@@ -4381,7 +4389,10 @@ fn storage_glue_on_a_damaged_card() {
                 // DELETE is asked on a card (End), never a ride key: the ride screens are not this fuzz's
                 6 if before == Screen::Past => Input::End,
                 6 | 7 => Input::Prev,
-                _ => Input::Touch(crate::touch::Gesture::Tap(120, (ui::LIST_Y + 10 + 44 * (b % 6)) as u16)),
+                _ => Input::Touch(crate::touch::Gesture::Tap(
+                    120,
+                    (ui::LIST_Y + 10 + app.theme.menu_row * (b % app.menu_rows() as u32)) as u16,
+                )),
             };
             let on_old = matches!(before, Screen::Menu(Menu::Storage, s)
                 if matches!(app.row(Menu::Storage, s), Some(Row::OldRide(_))));

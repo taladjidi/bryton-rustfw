@@ -550,8 +550,8 @@ pub const ABOUT_NOTICES: [&str; 6] = [
 // Menus: a title, then rows of a label and a value; the selected row in orange.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Menu row pitch of the built-in themes (a file sets 44 to 56, `Canvas::theme().menu_row`): 44 px, about 8 mm on this panel (0.18 mm a pixel), a fingertip's size (Apple's 44 pt, Material's
-/// 48 dp); 20 px rows (3.6 mm) let a gloved finger cover two or three (UI review, 2026-10-25).
+/// Menu row pitch of the built-in themes (a file sets 44 to 56, `Canvas::theme().menu_row`): 44 px, about 8 mm on
+/// this panel (0.18 mm a pixel), a fingertip's size (Apple's 44 pt, Material's 48 dp); 20 px rows (3.6 mm) let a gloved finger cover two or three (UI review, 2026-10-25).
 pub const MENU_ROW: u32 = 44;
 
 /// Rows a menu shows at most (6); a longer menu turns a screen of rows at a time.
@@ -883,8 +883,17 @@ pub(crate) mod tests {
                     draw_field_frame(&mut f, bx, *field);
                     draw_field_frame_bar(&mut f, bx, *field, GREEN);
                     draw_cell_frame(&mut f, bx, ACCENT);
-                    // the label under the bar leaves room for the value's band
-                    assert!(theme.zone_bar + 1 + LABEL.height() < bx.3, "{n} fields: bar and label inside the box");
+                    // the label's ink, under the bar, ends before the value band (FIELD_LABEL_H)
+                    let mut l = Frame::themed(theme);
+                    draw_field_frame(&mut l, bx, *field);
+                    let last = (bx.1..bx.1 + 40).rev().find(|&y| (bx.0..bx.0 + 100).any(|x| l.at(x, y) == GREY));
+                    if let Some(y) = last.filter(|_| !field.is_picture() && bx.3 > 70) {
+                        assert!(
+                            y - bx.1 <= FIELD_LABEL_H,
+                            "{n} fields, bar {}: the label reaches the value band",
+                            theme.zone_bar
+                        );
+                    }
                     draw_field_value(&mut f, bx, field.widest(), WHITE);
                     assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{n} fields: {field:?} readable");
                     if field.widest().len() as u32 <= VALUE_CHARS {
