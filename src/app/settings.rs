@@ -17,6 +17,7 @@
 //! A setting added from now on lives in the file only: lost to a reset only if it was changed while the file had to
 //! wait.
 
+use crate::text::Face;
 use crate::*;
 use page::Page;
 
@@ -283,8 +284,8 @@ pub struct Settings {
     /// register 11's tag: 0xa7 to 0xa9 on, 0xaa to 0xac off (the same three profiles; an earlier build reads those
     /// as an empty word: defaults).
     pub ahead: bool,
-    /// The smooth font for text (the FONT setting, SMOOTH) instead of the pixel font; kept in register 16, bit 24.
-    pub smooth: bool,
+    /// The face of the text (the FONT setting: PIXEL or BARLOW) instead of the pixel font; kept in register 16, bit 24.
+    pub face: Face,
     /// GPS POWER (BIKE): kept in register 16, bits 25 (SAVER) and 26 (FULL); neither is AUTO.
     pub gps_power: GpsPower,
     /// THEME (DISPLAY): the name of the colour theme, NUL padded; empty is DARK. A built-in's name, or a file's in
@@ -490,7 +491,7 @@ impl Settings {
             alt_m: 500,
             profile: None,
             ahead: true,
-            smooth: false,
+            face: Face::Pixel,
             gps_power: GpsPower::Auto,
             theme: [0; 12],
             power_match: true,
@@ -617,7 +618,7 @@ impl Settings {
     /// These settings with the weight, W', the bike's weight, the workout gauge's window and the single presses' actions
     /// kept in `w` (RTC backup register 16). Tag 0xa in bits 28..31 (this layout), then the rider's weight less 30 kg in
     /// 0..6, W' in 0.5 kJ in 7..13, the gauge's window in 14..15, the bike's weight in 100 g in 16..23 (0:
-    /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; clear in earlier words: PIXEL), GPS POWER in
+    /// [`power::BIKE_HG`]), the smooth font in bit 24 (the FONT setting; set for BARLOW; clear in earlier words: PIXEL), GPS POWER in
     /// bits 25..26 (1 SAVER, 2 FULL, 0 AUTO; earlier words had only bit 25, SAVER, clear for their default FULL, now
     /// read as AUTO), BIKE > PROFILE MTB in bit 27 (earlier builds take bits 24..27 as part of the tag 0xa0 to 0xaf
     /// and ignore it); the single presses' actions are in register 28 ([`Settings::alerts_word`]). Read only,
@@ -647,7 +648,7 @@ impl Settings {
                 weight_kg: ((w & 0x7f) as u16 + 30).clamp(*kg.start(), *kg.end()),
                 wprime_j: (500 * (w >> 7 & 0x7f) as u16).clamp(*wp.start(), *wp.end()),
                 wkt_avg: window(w >> 14),
-                smooth: w >> 24 & 1 != 0,
+                face: if w >> 24 & 1 != 0 { Face::Barlow } else { Face::Pixel },
                 gps_power: match w >> 25 & 3 {
                     1 => GpsPower::Saver,
                     2 => GpsPower::Full,
@@ -689,7 +690,7 @@ impl Settings {
                     bike_hg,
                     wkt_avg: 0,
                     remote,
-                    smooth: false,
+                    face: Face::Pixel,
                     gps_power: GpsPower::Auto,
                     ..self
                 }
@@ -717,7 +718,7 @@ impl Settings {
                 GpsPower::Full => 2,
             }) << 25
             | u32::from(self.profile == Some(ride::Profile::Mtb)) << 27
-            | u32::from(self.smooth) << 24
+            | u32::from(self.face != Face::Pixel) << 24
             | (u32::from(self.bike_hg) & 0xff) << 16
             | (self.wkt_avg as u32 & 3) << 14
             | (u32::from(self.wprime_j / 500) & 0x7f) << 7
@@ -794,7 +795,7 @@ impl Settings {
             }
             Setting::LapKm => l.push_u32(u32::from(self.lap_km)),
             Setting::LapMin => l.push_u32(u32::from(self.lap_min)),
-            Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
+            Setting::Font => l.push_str(self.face.name()),
             Setting::Theme if self.auto_theme => l.push_str("AUTO"),
             Setting::Theme => l.push_str(self.theme_name()),
             Setting::DayTheme => l.push_str(Self::name_of(&self.day_theme)),
@@ -906,7 +907,7 @@ impl Settings {
             Setting::Units => self.imperial = !self.imperial,
             Setting::Temp => self.temp_f = !self.temp_f,
             Setting::AutoPause => self.auto_pause = (self.auto_pause + 1) % AUTO_PAUSE_KMH.len(),
-            Setting::Font => self.smooth = !self.smooth,
+            Setting::Font => self.face = self.face.next(),
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme | Setting::DayTheme | Setting::NightTheme => {
                 let slot = match s {

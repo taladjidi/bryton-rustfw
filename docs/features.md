@@ -124,7 +124,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
     the fit. While the zoom is set by hand, a drag on the map pans instead of changing page or opening the media
     remote; the keys still change pages. Fitted, swipes keep their meanings. A new ride, or a course followed or
     dropped, returns to the default view.
-- Everything is in the project's own dot-matrix font, or in Barlow Semi Condensed Bold with FONT = SMOOTH (Touch,
+- Everything is in the project's own dot-matrix font, or in Barlow Semi Condensed Bold with FONT = BARLOW (Touch,
   below). Only what changes is redrawn, in the smallest box.
 
 - **End of a ride:** Start held while paused (or END RIDE in the ride menu) opens the end-ride screen, which is the
@@ -254,8 +254,8 @@ altogether, for rain: the keys only, the call's buttons included; the touch lock
 quick, temporary switch for a pocket or a glove, and TOUCH stays the permanent one.
 
 **Font.** FONT in SETTINGS > DISPLAY chooses the look of every text: PIXEL (the dot matrix of Ferris and the Game Boy
-era, the default) or SMOOTH (Barlow Semi Condensed Bold, anti-aliased). The cells are the same size, so no page or menu
-moves; the screen is redrawn at once and the choice is kept through a restart (register 16, bit 24). Scale 1 (small
+era, the default) or BARLOW (Barlow Semi Condensed Bold, anti-aliased). The cells are the same size, so no page or menu
+moves; the screen is redrawn at once and the choice is kept in the settings file (T0), and register 16 (bit 24) mirrors it until the file is read. A theme file's `font = pixel | barlow` key is the FONT default when that theme is picked (docs/theming.md). Scale 1 (small
 text), the cue arrows and, from scale 5, characters a value never shows stay pixel. Barlow is under the SIL Open
 Font Licence 1.1 (`tools/fonts/`, LICENSE); `tools/font.py` rasterizes it into the same cell as the pixel font.
 

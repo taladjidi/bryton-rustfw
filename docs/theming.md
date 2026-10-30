@@ -254,7 +254,7 @@ NIGHT THEME (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 
 
 Bounded metrics are done (T4, sim only; fonts are not): `[metrics]` in the file, below.
 
-- `font = pixel | smooth` in the file, as the FONT setting's default.
+- `font = pixel | barlow` in the file, as the FONT setting's default.
 - A few metrics, each a range every test runs at both ends: `zone_bar` 4 to 12 (today 8; built as 4 to 8, see below), `frame` 1 to 4 (3),
   `menu_row` 44 to 56 (44: never under a fingertip). Here `Canvas` gets `fn theme(&self) -> &Theme`, the consts
   become fields read through it, and the touch code reads the same values from `App`.

@@ -7,6 +7,7 @@ use super::tests::{run, to_row};
 use super::*;
 use crate::fat::tests::{Ram, read_all};
 use crate::menu::Setting;
+use crate::text::Face;
 use crate::{PAGES_LOAD_MS, Settings, SettingsCopy};
 use std::vec::Vec;
 
@@ -19,7 +20,7 @@ fn some() -> Settings {
         weight_kg: 68,
         eat_min: 45,
         light_level: 1,
-        smooth: true,
+        face: Face::Barlow,
         gps_power: crate::GpsPower::Saver,
         ..Settings::from_word(0)
     }
@@ -208,20 +209,20 @@ fn aiding_written_before_the_read_keeps_auto_off_unknown() {
 /// register put back as it was at the start rather than left with the undone change.
 #[test]
 fn a_change_undone_before_the_read_leaves_the_files() {
-    let (sim, _) = started(Settings { smooth: false, ..some() }, false);
-    assert!(!file(&sim).unwrap().settings.smooth);
+    let (sim, _) = started(Settings { face: Face::Pixel, ..some() }, false);
+    assert_eq!(file(&sim).unwrap().settings.face, Face::Pixel);
     let mut s2 = Sim::new(9, 5, 0);
     (s2.emmc.image, s2.backup) = (sim.emmc.image.clone(), sim.backup);
     let mut app2 = App::start(&mut s2, None);
     app2.emmc.lend(true);
-    for smooth in [true, false] {
-        app2.settings.smooth = smooth;
+    for face in [Face::Barlow, Face::Pixel] {
+        app2.settings.face = face;
         app2.save_misc(&mut s2);
     }
     run(&mut s2, &mut app2, u64::from(PAGES_LOAD_MS) + 200);
     assert!(!app2.settings_store.loaded, "the drive lent: not read");
     let (_, app3) = reboot(&mut s2, false);
-    assert!(!app3.settings.smooth, "the file's");
+    assert_eq!(app3.settings.face, Face::Pixel, "the file's");
 }
 
 /// Register by register: register 18 rewritten by a build without AUTO OFF (its bits gone) keeps the file's AUTO OFF;
@@ -237,9 +238,9 @@ fn each_register_on_its_own() {
     let file_settings = kept(&app);
     assert_eq!(file(&sim).map(|c| c.settings), Some(file_settings));
     sim.backup[crate::AID_BKP[1]] = 0x0123_4567; // no aiding tag: AUTO OFF unknown
-    sim.backup[crate::POWER_BKP] = Settings { weight_kg: 81, smooth: false, ..file_settings }.power_word();
+    sim.backup[crate::POWER_BKP] = Settings { weight_kg: 81, face: Face::Pixel, ..file_settings }.power_word();
     let (mut sim2, mut app2) = reboot(&mut sim, false);
-    let want = Settings { weight_kg: 81, smooth: false, ..file_settings };
+    let want = Settings { weight_kg: 81, face: Face::Pixel, ..file_settings };
     assert_eq!(kept(&app2), want, "register 16's fields only; AUTO OFF and FTP the file's");
     settle(&mut sim2, &mut app2);
     assert_eq!(file(&sim2).map(|c| c.settings), Some(want), "the file has them");
@@ -284,7 +285,7 @@ fn damaged_copies() {
 fn a_cut_at_every_sector_reads_old_or_new() {
     let change = |app: &mut App, sim: &mut Sim, k: u16| {
         app.settings.ftp = 200 + 5 * k;
-        app.settings.smooth = k % 2 == 1;
+        app.settings.face = if k % 2 == 1 { Face::Barlow } else { Face::Pixel };
         app.save_misc(sim);
     };
     for (writes, reliable) in [(0, false), (1, false), (2, false), (0, true), (1, true), (2, true)] {

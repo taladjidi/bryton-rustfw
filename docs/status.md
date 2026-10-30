@@ -8,6 +8,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **FONT = BARLOW (T3, sim only)**: DISPLAY > FONT cycles PIXEL and BARLOW, and the smooth text draws in the pixel cells. Still to see: the labels and values on the ride page and the menus with BARLOW (no box moves, the strip and the fields redraw whole once), and a restart with BARLOW kept (the file read, then the register mirror).
 - **Heart rate intervals with a power meter paired (sensors.rs `each_interval_once`, radio.rs)**: sim only. Still to see: DFA a1 and the hrv messages on a ride with the strap and a power meter after the fix, each interval once (the count of hrv intervals against the beats).
 - **Sensor names and the strap's battery (drivers/sensors.rs pages 7 and 80, app/menus.rs SENSORS row, app/fields.rs HR BATT)**: sim only. Still to see: the strap's percent on HR BATT (its page 7 on the owner's strap, ANT+ profile layout as openant reads it), a SENSORS row reading "POLAR HR" after the strap sends page 80, and the row back to "HEART RATE" after a forget.
 - **Zones (training/ride.rs `Zones`, app/settings.rs `zones`, training/hrtss.rs, features.md "Zones")**: sim only. Still to see: ME > ZONES

@@ -2,6 +2,7 @@
 //! and switching off. The board only carries the bytes ([`Board::panel_cmd`], [`Board::panel_ram_write`]).
 
 use crate::Board;
+use crate::text::Face;
 use crate::ui::{BLACK, Canvas, H, Theme, W};
 
 /// Software reset.
@@ -115,8 +116,8 @@ impl<B: Board> Canvas for Panel<'_, B> {
         (0, self.1.0, crate::ui::W, self.1.1 - self.1.0)
     }
 
-    fn smooth(&self) -> bool {
-        self.2.smooth
+    fn face(&self) -> Face {
+        self.2.face
     }
 
     fn ink(&self, c: u16) -> u16 {

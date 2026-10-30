@@ -3,6 +3,7 @@
 //! into RAM between rides ([`App::load_day_night`]), so the light's switch never reads the card. A file read only:
 //! this never writes the card (the choice is kept by the settings file, app/settings_file.rs).
 
+use crate::text::Face;
 use crate::*;
 use theme::{Refused, Theme};
 
@@ -19,7 +20,7 @@ impl App {
 
     /// The font and colours every canvas of this app draws with.
     pub(crate) fn look(&self) -> Theme {
-        Theme { smooth: self.settings.smooth, ..self.theme }
+        Theme { face: self.settings.face, ..self.theme }
     }
 
     /// The names of the `.ini` files of the themes folder (up to [`MAX_FILES`], 12 characters of letters, digits, `-`
@@ -129,6 +130,9 @@ impl App {
         let name = self.settings.theme;
         let (t, why) = self.resolve(b, &name, Theme::DARK);
         self.theme = t;
+        if said && t.face != Face::Pixel {
+            self.settings.face = t.face; // a theme file's `font` key is the FONT default when the theme is picked
+        }
         self.repaint(b);
         if let (Some(why), true) = (why, said) {
             self.notice(why);
