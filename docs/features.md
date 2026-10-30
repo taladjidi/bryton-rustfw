@@ -886,8 +886,7 @@ STOCK):
   ride pages and the overview only (a lap on the overview too while riding), never as keys in a menu or on a call;
   play and the tracks work everywhere. The Di2 repeats its last press, so its first button page after a start is
   not a press. IMPORT takes the Di2 and its
-  button actions from stock's Sensor.ini (P12's numbers included). Not done: the gear ratio (needs the chainring
-  and cassette teeth), the ANT+ Shifting remotes' buttons (no public layout).
+  button actions from stock's Sensor.ini (P12's numbers included). **CHAINRINGS** and **CASSETTE** (the DI2 KEYS menu, presets such as 50/34 and 11-30 11S, OFF by default) turn the GEAR field into teeth, "50x17" (the Di2 reports positions only; rear 1 as the largest cog and front 1 as the smallest ring are inferred). Not done: the gear ratio or gear inches as a field, teeth read from the Di2 itself (stock stores them from the Di2 info record, `Sensor_Di2StoreGearConfig`; its layout is not decoded here), the ANT+ Shifting remotes' buttons (no public layout).
 - **GPS** (u-blox M10): speed when no wheel sensor is paired; at power-up it gets the time and the last position,
   for a faster fix.
 - **BLE:** a 10 s scan lists the devices nearby with their signal strength; phones and laptops show their kind

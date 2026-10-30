@@ -326,7 +326,7 @@ A feature not listed here was seen on the unit.
 - **Electronic shifting (sensors.rs, app/radio.rs)**, all simulated only, the owner's Di2 at hand: with
   `di2_key.bin` built in (`tools/ant_key.py`), SENSORS > DI2 reads OFF (not NO KEY: the chip took network 1's key
   and channel 6's assignment); Start finds the Di2 within seconds (turn a crank or shift to wake it), its number
-  shown green. GEAR shows front-rear and follows the shifts (check front and rear are not swapped: inferred from
+  shown green. GEAR shows front-rear and follows the shifts (with CHAINRINGS and CASSETTE set in DI2 KEYS it shows teeth, "50x17": check front 1 is the smallest ring and rear 1 the largest cog, both inferred; stock reads the teeth from the Di2 info record, `Sensor_Di2StoreGearConfig` 0xd02889f2, layout not decoded: open fact) (check front and rear are not swapped: inferred from
   stock's gear ratio code); SHIFT BAT shows the percent stock's Sensor Details showed (60 % on the patch project's
   picture; the byte is inferred to be a percent). DI2 KEYS: set R PRESS to NEXT PAGE, press the right hood button
   once: one page; a long press: its action; the left button too (the sides inferred from stock: byte 1 right,
