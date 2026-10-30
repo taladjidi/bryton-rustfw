@@ -910,6 +910,7 @@ fn the_trainer_screen_is_one_step_from_the_menu_and_the_fields() {
     app.input(&mut sim, at(&app, Field::TrainerTarget));
     assert_eq!(app.screen(), Screen::Ride(0), "the touch lock holds");
     app.strip.locked = false;
+    app.settings.quick_status = false; // else a plain field opens QUICK STATUS
     app.input(&mut sim, at(&app, Field::Power));
     assert_eq!(app.screen(), Screen::Ride(0), "another field: nothing");
     app.input(&mut sim, at(&app, Field::TrainerMode));

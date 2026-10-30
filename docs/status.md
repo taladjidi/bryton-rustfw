@@ -12,6 +12,7 @@ A feature not listed here was seen on the unit.
   The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
   pair it, pedal for a few minutes with the TE L/R box on screen; a value means it sends 0x13, "--" all ride means it
   does not (or its bytes are 0xff, one-sided). Then note which, here.
+- **QUICK STATUS (sim only)**: a tap on a plain field of a ride page opens six chosen fields. Still to see: the tap on a wet or gloved finger (a stray tap only opens a read-only overlay, 10 s), the six values updating each second, the picker in PAGES > QUICK FIELDS, and the choice kept after a restart (settings.bin bytes 158 to 164).
 
 - **Screenshots and the fault log (app/screenshot.rs, app/faultlog.rs, storage/screenshot.rs, storage/faultlog.rs;
   hw.rs's marker now keeps the kind and detail)**: sim only, and both write the card (an `EMMC_WRITE=1` build). Still to

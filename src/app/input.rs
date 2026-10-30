@@ -147,6 +147,8 @@ pub enum Screen {
     Laps(usize),
     /// The phone's media remote (app/phone.rs).
     Media,
+    /// QUICK STATUS (app/status.rs): the rider's six fields over the page a tap opened it on.
+    Status,
     /// The quick panel (app/quick.rs): media, power meter, sensors, status, brightness.
     Quick,
     /// The trainer: mode and target (app/trainer.rs).
@@ -243,6 +245,9 @@ impl App {
 
     /// Opens screen `s` over this one: Back returns here.
     pub(crate) fn open(&mut self, s: Screen) {
+        if s != Screen::Status {
+            self.drop_status(); // a card or menu over QUICK STATUS replaces it: it does not return after
+        }
         if let Some(u) = self.under.get_mut(self.depth) {
             *u = self.screen;
             self.depth += 1;
@@ -356,6 +361,16 @@ impl App {
             }
             _ => None,
         };
+        // a tap that cleared a banner only clears it (a field's own tap above still acts): it must not open QUICK STATUS
+        if cleared
+            && let (Screen::Ride(n), Input::Touch(Gesture::Tap(x, y))) = (self.screen, i)
+            && n < PAGES
+            && self.quick_at(x, y)
+            && !self.wkt_avg_at(x, y)
+            && !self.trainer_field_at(x, y)
+        {
+            return;
+        }
         let call = call_choice(i);
         match (self.screen, i) {
             // during a ride (or on its card), a first hold only warns: switching off ends the riding (the recorder
@@ -382,6 +397,7 @@ impl App {
             Screen::Main | Screen::Ride(_) => self.input_page(b, i, recording, graph_hit, shown),
             Screen::Media => self.input_media(b, i, shown),
             Screen::Quick => self.input_quick(b, i, shown),
+            Screen::Status => self.input_status(b, i),
             Screen::Notif(..) => self.input_notif(b, i),
             Screen::Laps(_) => self.input_laps(b, i),
             Screen::RampResult => self.input_ramp(b, i, shown),
@@ -475,6 +491,12 @@ impl App {
             // above is what stops a stray touch)
             (Screen::Main | Screen::Ride(_), Input::Touch(Gesture::Tap(x, y))) if self.trainer_field_at(x, y) => {
                 self.open(Screen::Trainer)
+            }
+            // a tap on a plain field of a ride page opens QUICK STATUS, even while recording (it only reads): not on a
+            // picture (the map's buttons and zoom, a graph's next plot) nor the fixed pages (course, workout, climb);
+            // the 3 / 10 / 30 s power and the trainer fields above keep their own action
+            (Screen::Ride(n), Input::Touch(Gesture::Tap(x, y))) if n < PAGES && self.quick_at(x, y) => {
+                return self.open_status(b);
             }
             // while recording, touch on a page only turns pages and works the map: no menu by a hold or the gear, no
             // field changed by a tap (a wet glove, a drop of rain; the keys still do all of it)

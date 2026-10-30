@@ -124,6 +124,7 @@ impl App {
         match n {
             EDITED => self.edit.as_ref().map(|e| &e.work),
             OVERVIEW => self.pages.get(OVERVIEW),
+            QUICK => Some(&self.settings.quick_page),
             n => {
                 let (pages, count, _) = self.set_ref(self.view_set());
                 pages.get(n).filter(|_| n < count)
@@ -699,6 +700,10 @@ impl App {
             OVERVIEW => {
                 self.pages[OVERVIEW] = q;
                 save_page(b, OVERVIEW, &q);
+            }
+            QUICK => {
+                self.settings.quick_page = q;
+                self.save_misc(b);
             }
             _ => {
                 let which = self.view_set();

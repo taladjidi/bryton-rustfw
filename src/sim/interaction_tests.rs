@@ -85,6 +85,23 @@ fn power_pages_plain(t: u64) -> [u8; 8] {
     if t / 250 % 4 == 3 { [0x52, 0, 0xff, 0, 0, 0, 0x80, 3 | 3 << 4] } else { [0x10, 1, 0xff, 85, 0, 0, 210, 0] }
 }
 
+/// A single-sided meter: the right torque effectiveness 0xff (not used), the rest as [`power_pages`].
+fn power_pages_one_sided(t: u64) -> [u8; 8] {
+    if t / 250 % 4 == 1 { [0x13, 1, 176, 0xff, 0xff, 0xff, 0, 0] } else { power_pages_plain(t) }
+}
+
+#[test]
+fn a_single_sided_meter_shows_its_left_and_a_dash_for_the_right() {
+    let (mut sim, mut app) = with_meter_and_trainer();
+    for s in sim.nordic.sensors.iter_mut().filter(|s| s.device_type == 0x0b) {
+        s.data = power_pages_one_sided;
+    }
+    run(&mut sim, &mut app, 3000);
+    assert_eq!(app.field_text(Field::TorqueEff).as_str(), "88/--");
+    assert_eq!(app.field_text(Field::PedalSmooth).as_str(), "--/--");
+}
+
+/// Page 0x13 reaches the screen: the fields show the values, then dashes once the meter stops sending the page.
 #[test]
 fn torque_and_smoothness_show_then_dash_when_the_meter_stops_them() {
     let (mut sim, mut app) = with_meter_and_trainer();
@@ -94,8 +111,8 @@ fn torque_and_smoothness_show_then_dash_when_the_meter_stops_them() {
         s.data = power_pages_plain;
     }
     run(&mut sim, &mut app, 6000);
-    assert_eq!(app.field_text(Field::TorqueEff).as_str(), "--", "not sent for 5 s: no value");
-    assert_eq!(app.field_text(Field::PedalSmooth).as_str(), "--");
+    assert_eq!(app.field_text(Field::TorqueEff).as_str(), "--/--", "not sent for 5 s: no value");
+    assert_eq!(app.field_text(Field::PedalSmooth).as_str(), "--/--");
 }
 
 fn hr_pages(t: u64) -> [u8; 8] {

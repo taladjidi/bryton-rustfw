@@ -20,10 +20,10 @@
 //! strap's common pages (0x50 and up, page 82 too) are not beats: they set no interval and no rate.
 //!
 //! Torque effectiveness and pedal smoothness, power meter page 0x13: byte 2 and 3 the left and right torque
-//! effectiveness, bytes 4 and 5 the left and right pedal smoothness, 0.5 % units, 0xff not used, and byte 5 0xfe when
-//! byte 4 is the combined smoothness. Layout from the ANT+ Bicycle Power device profile (data page 0x13, "Torque
-//! Effectiveness and Pedal Smoothness"): inferred, not checked: the profile is an ANT+ members' document, and openant's
-//! `devices/power_meter.py` (checked 2026-10-30) decodes only the power, torque and calibration pages, not 0x13.
+//! effectiveness, bytes 4 and 5 the left and right pedal smoothness, 0.5 % units, 0xff invalid (not used), and byte 5
+//! 0xfe when byte 4 is the combined smoothness. Layout: ANT+ Bicycle Power device profile D00001086 Rev 5.0, page 0x13,
+//! cross-checked with <https://hackingantblog.wordpress.com/2017/06/20/understanding-the-power-data-broadcast/> (example
+//! `[13][19][47][54][47][54][FF][FF]`). 0xFF invalid: per the profile, not independently re-read.
 //! Page 0x12 (crank torque frequency) is not decoded: the meters that send it also send 0x10 (power).
 //!
 //! **Electronic shifting**, two channels as stock opens them (BOARD.md 11):
@@ -686,8 +686,8 @@ mod tests {
         assert_eq!(live.get(Metric::Power), Some(210));
     }
 
-    /// Page 82 on any profile gives its battery status, the last one kept; invalid and charging are no level; a
-    /// silent sensor's status is forgotten for shifting only (its components), the others keep the last.
+    /// Page 0x13 (torque effectiveness, pedal smoothness): valid values, 0xff invalid (dropped), a percent above 100
+    /// dropped, byte 5 0xfe as the combined smoothness, and a power page leaving them alone.
     #[test]
     fn torque_effectiveness_and_pedal_smoothness() {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
@@ -708,6 +708,8 @@ mod tests {
         assert_eq!(live.get(Metric::TorqueR), Some(180));
     }
 
+    /// Page 82 on any profile gives its battery status, the last one kept; invalid and charging are no level; a
+    /// silent sensor's status is forgotten for shifting only (its components), the others keep the last.
     #[test]
     fn battery_page_82() {
         let (mut dec, mut live) = (Decoders::default(), Live::default());

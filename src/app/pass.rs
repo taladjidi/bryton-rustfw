@@ -72,7 +72,7 @@ impl App {
     /// What the screen on needs drawn again this pass (the page's boxes that changed, a list, the card's map).
     pub(crate) fn redraw_screen(&mut self, b: &mut impl Board) {
         match self.screen {
-            Screen::Main | Screen::Ride(_) | Screen::Edit(..) => self.update_page(b),
+            Screen::Main | Screen::Ride(_) | Screen::Edit(..) | Screen::Status => self.update_page(b),
             Screen::Summary => {
                 // the elevation stays as it was; the map keeps up with points still coming (the unit moving on)
                 let (area, look) = (self.area(), self.look());

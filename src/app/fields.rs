@@ -693,15 +693,16 @@ impl App {
     }
 }
 
-/// Two percents as "L/R" (0.5 % units as sent, shown whole), or "--" when either is missing.
+/// Two percents as "L/R" (0.5 % units as sent, shown whole); each side "--" when missing ("88/--").
 fn pair_text(l: &mut Line<8>, a: Option<u16>, b: Option<u16>) {
-    match (a, b) {
-        (Some(a), Some(b)) => {
-            l.push_u32(u32::from(a / 2));
-            l.push_str("/");
-            l.push_u32(u32::from(b / 2));
-        }
-        _ => l.push_str("--"),
+    match a {
+        Some(a) => l.push_u32(u32::from(a / 2)),
+        None => l.push_str("--"),
+    }
+    l.push_str("/");
+    match b {
+        Some(b) => l.push_u32(u32::from(b / 2)),
+        None => l.push_str("--"),
     }
 }
 
