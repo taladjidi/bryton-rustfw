@@ -267,6 +267,10 @@ pub struct App {
     settings_store: SettingsStore,
     /// A write of pages.bin or settings.bin failed since the FAT copies were last compared (app/editor.rs).
     fats_suspect: bool,
+    /// SYSTEM > SCREENSHOT asked for a screenshot at the next pass (app/screenshot.rs).
+    shot_due: bool,
+    /// A fault marker found at the start and its time, its line not yet in the fault log (app/faultlog.rs).
+    fault_due: Option<(u32, recorder::Local)>,
     /// The page editor's work, while it is open.
     edit: Option<Editing>,
     /// The strip's place shows the editor's hint (app/editor.rs), not the strip.
@@ -485,6 +489,8 @@ impl App {
             sw: Switches::new(),
             settings_store,
             fats_suspect: false,
+            shot_due: false,
+            fault_due: None,
             edit: None,
             hint_shown: false,
             date: rtc_date_from_dr(b.rtc().1),
@@ -578,6 +584,7 @@ impl App {
             l.push_str("FAULT RESET ");
             l.push_u32(fault & 0xff);
             self.notice(l.as_str());
+            self.fault_found(fault); // its line to the fault log once the card is quiet
         }
         if b.backup_read(STOCK_BKP19) >> 28 == 0xb {
             // pages kept from register 19 by builds of 2026-10-23: kept where stock does not look, 19 given back
@@ -680,6 +687,7 @@ impl App {
             self.step_thresholds(b);
             self.step_settings(b);
             self.step_pages(b);
+            self.step_fault_log(b);
             t = self.timed(b, Sec::Files, t);
         }
         if self.edit.is_some() && self.ride.state() == ride::State::Running {
@@ -688,6 +696,7 @@ impl App {
         self.redraw_ms = self.redraw_ms.saturating_add(pass_ms);
         self.run_banner(b, pass_ms);
         self.redraw_screen(b);
+        self.step_screenshot(b); // after the draw: the file equals the panel
         t = self.timed(b, Sec::Draw, t);
         let mask = b.keys_down();
         // a key stuck since the start is no use: it does not keep the light on either

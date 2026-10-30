@@ -9,6 +9,8 @@ use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use bryton_rustfw::storage::faultlog::{self, Kind};
+
 // ---------------------------------------------------------------------------------------------------------------
 // Vector table. Word 0x94 (vector 37) must hold "R039": the stock updater (BOARD.md 10) takes an IMG.bin with
 // "R" + 3 digits there as a raw image, and tools/pack.py checks it. Word 0x98 is the image size (the
@@ -29,9 +31,14 @@ __vectors:
     "#
 );
 
-/// RTC backup register 29: a fault's marker, 0xfa in the top byte and the faults in a row in the low byte (lib.rs
-/// `FAULT_BKP`: the app says it restarted, and clears the count after a minute of running).
+/// RTC backup register 29: a fault's marker, 0xfa in the top byte, the kind and its detail, and the faults in a row
+/// in the low byte (lib.rs `FAULT_BKP`, the layout in storage/faultlog.rs: the app says it restarted, logs it to the
+/// card, and clears the count after a minute of running).
 const FAULT_REG: u32 = 0x5800_4050 + 4 * 29;
+
+/// SCB CFSR, the Configurable Fault Status Register (Arm DUI 0646, "Configurable Fault Status Register"): why a CPU
+/// fault happened, read (never cleared: the reset does) for the marker's detail.
+const CFSR: u32 = 0xe000_ed28;
 
 /// A fault or a panic: marked in the RTC backup domain, then a system reset (the firmware starts again, and a ride
 /// will resume from its checkpoint: AGENTS.md, the golden rule). Parked instead after 3 in a row without a minute of
@@ -43,26 +50,32 @@ const FAULT_REG: u32 = 0x5800_4050 + 4 * 29;
 // SAFETY: the vector table refers to this symbol by name; nothing else is called default_handler.
 #[unsafe(no_mangle)]
 extern "C" fn default_handler() -> ! {
-    let v = rd(FAULT_REG);
-    let n = if v >> 24 == 0xfa { (v & 0xff) + 1 } else { 1 };
-    wr(FAULT_REG, 0xfa00_0000 | n.min(0xff)); // PWR_CR1.DBP is left set by the bootloader (BOARD.md 8)
-    if n <= 3 {
+    mark(Kind::Cpu, faultlog::cfsr_detail(rd(CFSR)))
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    mark(Kind::Panic, info.location().map_or(0, |l| l.line()))
+}
+
+/// A fault found by the firmware itself (main.rs: the stack canary overwritten): marked and reset as a CPU fault is.
+pub fn fault() -> ! {
+    mark(Kind::Stack, 0)
+}
+
+/// [`default_handler`]'s marker (storage/faultlog.rs `marker`: plain arithmetic on two words, no memory touched but
+/// the register), then the reset, or the park past 3 in a row.
+#[inline(always)]
+fn mark(kind: Kind, detail: u32) -> ! {
+    let v = faultlog::marker(rd(FAULT_REG), kind, detail);
+    wr(FAULT_REG, v); // PWR_CR1.DBP is left set by the bootloader (BOARD.md 8)
+    if v & 0xff <= 3 {
         barrier();
         wr(0xe000_ed0c, 0x05fa_0004); // AIRCR: SYSRESETREQ
     }
     loop {
         wfi();
     }
-}
-
-#[panic_handler]
-fn panic(_: &PanicInfo) -> ! {
-    default_handler()
-}
-
-/// A fault found by the firmware itself (main.rs: the stack canary overwritten): marked and reset as a CPU fault is.
-pub fn fault() -> ! {
-    default_handler()
 }
 
 /// Where `x` lives (no unsafe: the pointer is only turned into a number), so main.rs's `stack_fault` knows how deep

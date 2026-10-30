@@ -108,7 +108,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power~~ done, sim (features.md "Zones");
 - the heart rate strap's battery (ANT+ page 7); sensor names; Di2 gear teeth and hood button actions (patch P12), the
   media remote from Di2 buttons;
-- screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical).
+- ~~screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical)~~ done, sim
+  (features.md, SYSTEM > SCREENSHOT and "Fault log").
 
 **3c. Medium** (implementer, sonnet):
 - history (phase 4b): the ride index with TSS, the power curve screen, personal records and best efforts, this

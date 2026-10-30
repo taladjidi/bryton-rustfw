@@ -203,8 +203,9 @@ pub(crate) const WHEEL_BKP: usize = 11;
 /// bit 24 (the smooth font) would read as a layout.
 pub(crate) const POWER_BKP: usize = 16;
 
-/// The backup register of the fault marker (hw.rs default_handler): 0xfa in the top byte, the faults in a row in
-/// the low byte; said at start, cleared after [`FAULT_CLEAR_MS`] of running.
+/// The backup register of the fault marker (hw.rs default_handler): 0xfa in the top byte, the kind and its detail,
+/// the logged bit, the faults in a row in the low byte (storage/faultlog.rs); said at start, logged to the card once,
+/// cleared after [`FAULT_CLEAR_MS`] of running.
 pub const FAULT_BKP: usize = 29;
 
 /// Running this long after a fault clears its count (a fault after it is the first in a row again).
