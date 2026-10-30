@@ -167,6 +167,8 @@ pub struct Ahead {
     end: End,
     climbs: [Climb; KEPT],
     n_climbs: usize,
+    /// CLIMBS MEDIUM+: only the climbs of [`Climb::medium_plus`] are kept (set by the app, see [`Ahead::set_medium`]).
+    medium: bool,
     along_m: u32,
     seg: usize,
     off_s: u8,
@@ -264,6 +266,7 @@ impl Ahead {
             end: End::Length,
             climbs: [Climb { start_m: 0, len_m: 0, gain_m: 0 }; KEPT],
             n_climbs: 0,
+            medium: false,
             along_m: 0,
             seg: 0,
             off_s: 0,
@@ -294,6 +297,15 @@ impl Ahead {
     #[cfg(test)]
     pub fn trails(&self) -> bool {
         self.trails
+    }
+
+    /// CLIMBS MEDIUM+ on or off; a change drops the trace (and the climbs found) so it is made again.
+    pub fn set_medium(&mut self, on: bool) {
+        if self.medium != on {
+            self.medium = on;
+            self.maps.abort(&mut self.graph);
+            (self.phase, self.n, self.have, self.n_climbs, self.retry_s) = (Phase::Idle, 0, false, 0, 0);
+        }
     }
 
     /// Trails mode on or off; a change drops the trace (and what it found) so it is made again, the tiles stay.
@@ -712,10 +724,15 @@ impl Ahead {
         self.smooth();
         let total = self.len_m();
         let (all, n) = Course::climbs_of(total, |d| self.alt_at(d));
-        for (slot, c) in self.climbs.iter_mut().zip(all.iter().take(n.min(CLIMBS))) {
-            *slot = *c;
+        // the kept climbs in order; CLIMBS MEDIUM+ drops the easier ones, and a slot past KEPT is never written
+        let mut kept = 0;
+        for c in all.iter().take(n.min(CLIMBS)).filter(|c| !self.medium || c.medium_plus()) {
+            if let Some(slot) = self.climbs.get_mut(kept) {
+                *slot = *c;
+                kept += 1;
+            }
         }
-        (self.n_climbs, self.end, self.have) = (n.min(KEPT), end, true);
+        (self.n_climbs, self.end, self.have) = (kept, end, true);
         (self.seg, self.along_m, self.off_s) = (0, 0, 0);
     }
 

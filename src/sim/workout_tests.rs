@@ -40,7 +40,7 @@ fn workout_from_the_calendar() {
     };
     assert_eq!(
         [0, 1, 2].map(|i| row(&app, Menu::Workouts, i)),
-        ["FRI 23 OCT 0:01", "SUN 25 OCT 1:30", "RAMP TEST FTP 200"]
+        ["FRI 23/10/2026 0:01", "SUN 25/10/2026 1:30", "RAMP TEST FTP 200"]
     );
     run(&mut sim, &mut app, 1000);
     assert_consistent(&sim, &app);

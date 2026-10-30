@@ -49,8 +49,10 @@ impl App {
             speed_mm_s: p.speed_mm_s,
         });
         let mtb = self.mtb();
+        let medium = self.settings.climbs_medium;
         let Some((a, _)) = self.ahead.as_mut() else { return };
         a.set_trails(mtb);
+        a.set_medium(medium);
         if let Some(c) = a.second(on, fix) {
             self.course_event(course::Event::Climb(c));
         }

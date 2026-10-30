@@ -963,3 +963,18 @@ basemap and the dev link's card commands wait. Ejecting on the computer gives it
 the unit, once the computer has let it go (else EJECT ON COMPUTER). After the computer wrote, the unit restarts so
 that nothing it read before is trusted. Only the FAT volume is offered (sectors 0 .. B-1), never stock's reserved
 area. A build without EMMC_WRITE=1 offers it write protected.
+
+## Climbs and dates
+
+- **CLIMBS** (BIKE, ours): ALL (the default) or MEDIUM+. A climb ahead without a course is kept only if it is
+  category 3 or harder; the scheme is inferred, not checked against ASO: score = length (m) x average grade (%), which
+  is 100 x the gain (m); category 4 from 8000, 3 from 16000, 2 from 32000, 1 from 64000, HC from 80000 (search results
+  citing cyclingmagazine.ca and cycling forums; climbfinder.com uses other points). Course climbs are the route's own
+  and are not filtered.
+- **CLIMB PAGE** (BIKE, ours): ON (the default) or OFF. Off, the climb page is skipped in the paging; the climbs ahead,
+  the pacer and the climb fields keep working. Segments on the same page still open it.
+- **DATE FORMAT** (DISPLAY, ours): D/M/Y (the default, 23/10/2026), M/D/Y or Y-M-D. It applies to the history and the
+  workouts' dates and the phone's date. The overview's row is too short for the weekday at its 3x scale, so it shows
+  the numbers alone.
+- Still open: TIME ZONE and DAYLIGHT SAVING (the RTC keeps local time, so the zone needs the learned offset; default
+  CLOCK = no change), and the 12 h time format (the strip's layout).

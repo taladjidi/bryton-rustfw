@@ -138,7 +138,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     );
     let _ = s;
     crate::ui::draw_today(&mut f, crate::ui::Today::Pending);
-    crate::ui::draw_date(&mut f, crate::date_text(rtc_date_from_dr(sim.rtc().1)).as_str());
+    crate::ui::draw_date(&mut f, crate::date_numbers(rtc_date_from_dr(sim.rtc().1), crate::DateFormat::Dmy).as_str());
     // the barometer is read a second after the start: the temperature is there by the time the tests look
     let temp = app.field_text(Field::Temp);
     let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, temp.as_str())];
@@ -636,14 +636,14 @@ fn gps_power_from_the_menu() {
     to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
     app.press(&mut sim, Press::Short(Key::Start));
     to_row(&mut sim, &mut app, menu::Row::Set(Setting::GpsPower));
-    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "AUTO");
+    assert_eq!(app.menu_row(Menu::Bike, 8).unwrap().1.as_str(), "AUTO");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "FULL");
+    assert_eq!(app.menu_row(Menu::Bike, 8).unwrap().1.as_str(), "FULL");
     assert_eq!(count(&sim, full), 2, "sent again");
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.menu_row(Menu::Bike, 6).unwrap().1.as_str(), "SAVER");
+    assert_eq!(app.menu_row(Menu::Bike, 8).unwrap().1.as_str(), "SAVER");
     assert_eq!((count(&sim, saver), sim.gnss.pm_mode), (1, 2), "sent once, at once");
     let kept = Settings::from_word(0).with_power_word(sim.backup[POWER_BKP]).gps_power;
     assert_eq!(kept, crate::GpsPower::Saver, "kept");

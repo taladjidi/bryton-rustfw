@@ -609,7 +609,10 @@ impl App {
             self.draw_screen(&mut p);
             if self.screen == Screen::Main {
                 // the date row left out under the call's banner, drawn again (its top rows come with redraw_top)
-                ui::draw_date(&mut Panel(b, (ui::BANNER_H, ui::CALL_Y), self.look()), date_text(self.date).as_str());
+                ui::draw_date(
+                    &mut Panel(b, (ui::BANNER_H, ui::CALL_Y), self.look()),
+                    date_numbers(self.date, self.settings.date_fmt).as_str(),
+                );
             }
             self.redraw_top(b); // the strip and the page's top, or a banner said meanwhile
         }

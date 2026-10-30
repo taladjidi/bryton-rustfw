@@ -1125,3 +1125,48 @@ mod segment_on_climb {
         assert!(app.drawn.iter().any(|d| matches!(d, Drawn::Profile(_))), "the bar");
     }
 }
+
+/// CLIMB PAGE off: the page is never opened on the road ahead's climb, and the climbs ahead are still found.
+#[test]
+fn climb_page_off_is_skipped() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::route::tests::image_with_map();
+    sim.gnss.route = Some(ahead_route);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+    app.settings.climb_page = false;
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let t0 = sim.ms;
+    while sim.ms - t0 < 120_000 {
+        run(&mut sim, &mut app, 1000);
+        assert!(!app.page_on(crate::CLIMB), "skipped at {}", sim.ms - t0);
+        assert_ne!(app.screen(), Screen::Ride(crate::CLIMB), "never opened at {}", sim.ms - t0);
+    }
+    let (a, _) = app.ahead.as_ref().unwrap();
+    assert!(!a.climbs().is_empty(), "the climbs ahead are still found");
+}
+
+/// CLIMBS MEDIUM+: the climbs ahead that are kept are category 3 and harder only.
+#[test]
+fn climbs_medium_keeps_only_medium_plus() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::route::tests::image_with_map();
+    sim.gnss.route = Some(ahead_route);
+    let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+    [sim.backup[17], sim.backup[18]] = aid.to_words();
+    let mut app = App::start(&mut sim, None);
+    app.set_ahead_memory(crate::climbs_ahead::tests::memory(), crate::climbs_ahead::tests::scratch());
+    app.pages[0] = PageCfg { layout: 1, fields: [Field::Speed; 6] }.into();
+    app.settings.climbs_medium = true;
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 3000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let (a, _) = app.ahead.as_ref().unwrap();
+    assert!(a.climbs().iter().all(|c| c.medium_plus()), "only MEDIUM+ kept: {:?}", a.climbs());
+}

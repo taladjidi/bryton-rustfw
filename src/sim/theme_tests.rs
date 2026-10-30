@@ -698,7 +698,7 @@ fn features_lists_every_theme_key() {
 #[test]
 fn dark_classic_overview_is_as_before() {
     let (sim, _app) = unit(None);
-    assert_eq!(hash(&sim.screen), 0x0736_09c0_d32a_0201);
+    assert_eq!(hash(&sim.screen), 0x7f70_c4df_7d37_ab05);
 }
 
 /// The table's Workout field must not read the card at start: the calendar waits for CALENDAR_MS.

@@ -293,3 +293,18 @@ mod tests {
         assert!(!notice_fit(&style, &std::format!("  {name}"), w).is_empty());
     }
 }
+
+#[cfg(test)]
+mod date_fit_tests {
+    use super::*;
+
+    /// The widest date of the overview (its numbers, "31/12/2026" or "2026-12-31": the weekday is left off so the
+    /// row keeps its 3x scale) fits the row left of the cog, in the DATE style.
+    #[test]
+    fn the_widest_date_fits_the_row() {
+        let room = GEAR_AT.0 - 4 - 4;
+        for s in ["31/12/2026", "2026-12-31"] {
+            assert!(DATE.width(s) <= room, "{s}: {} px in {room}", DATE.width(s));
+        }
+    }
+}
