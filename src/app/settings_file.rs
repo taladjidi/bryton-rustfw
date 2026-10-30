@@ -40,6 +40,7 @@
 //! No file (the first start of a build with it), or no whole copy: the registers' settings are written as its first
 //! copy, once (the migration). A build that may not write the card reads the file but never writes it.
 
+use crate::text::Face;
 use crate::*;
 use menu::Setting;
 
@@ -88,7 +89,7 @@ impl SettingsCopy {
     ///
     /// ```
     /// use bryton_rustfw::{Settings, SettingsCopy};
-    /// let s = Settings { ftp: 265, smooth: true, ..Settings::from_word(0) };
+    /// let s = Settings { ftp: 265, face: bryton_rustfw::text::Face::Barlow, ..Settings::from_word(0) };
     /// let c = SettingsCopy { seq: 3, words: s.register_words(), settings: s };
     /// let mut sector = c.to_sector();
     /// assert_eq!(SettingsCopy::from_sector(&sector), Some(c));
@@ -118,7 +119,7 @@ impl SettingsCopy {
         let gps = GPS_POWERS.iter().position(|&g| g == s.gps_power).unwrap_or(0) as u8;
         let (light, off, auto, avg) = (s.light_level as u8, s.light_timeout as u8, s.auto_off as u8, s.wkt_avg as u8);
         put(&[light, off, auto, avg, r0, r1, r2, r3]);
-        put(&[u8::from(s.touch), profile, u8::from(s.ahead), u8::from(s.smooth), gps]);
+        put(&[u8::from(s.touch), profile, u8::from(s.ahead), s.face as u8, gps]);
         put(&s.theme);
         put(&[u8::from(s.power_match)]);
         for v in s.limits {
@@ -196,7 +197,7 @@ impl SettingsCopy {
         s.touch = byte(2).map_or(d.touch, |v| v == 1);
         s.profile = byte(PROFILES.len()).and_then(|v| PROFILES.get(v).copied()).unwrap_or(d.profile);
         s.ahead = byte(2).map_or(d.ahead, |v| v == 1);
-        s.smooth = byte(2).map_or(d.smooth, |v| v == 1);
+        s.face = byte(Face::ALL.len()).and_then(|v| Face::ALL.get(v).copied()).unwrap_or(d.face);
         s.gps_power = byte(GPS_POWERS.len()).and_then(|v| GPS_POWERS.get(v).copied()).unwrap_or(d.gps_power);
         // THEME (appended after the first build's 31 bytes): a name of letters, digits, - and _, else DARK
         let mut name = [0u8; 12];
@@ -439,7 +440,7 @@ impl Settings {
             took[1] = true;
             (s.weight_kg, s.wprime_j, s.wkt_avg, s.bike_hg) = (r.weight_kg, r.wprime_j, r.wkt_avg, r.bike_hg);
             if tag(1) <= 0xaf {
-                (s.smooth, s.gps_power, s.profile) = (r.smooth, r.gps_power, r.profile);
+                (s.face, s.gps_power, s.profile) = (r.face, r.gps_power, r.profile);
             } else {
                 (s.remote[0], s.remote[1]) = (r.remote[0], r.remote[1]); // earlier builds' single presses
             }
@@ -565,7 +566,7 @@ impl App {
             {
                 self.load_day_night(b);
                 self.apply_theme(b, false);
-            } else if self.settings.smooth != was.smooth {
+            } else if self.settings.face != was.face {
                 self.font_changed(b);
             }
         }
@@ -615,7 +616,7 @@ mod tests {
             touch: false,
             profile: Some(ride::Profile::Mtb),
             ahead: false,
-            smooth: true,
+            face: Face::Barlow,
             gps_power: GpsPower::Saver,
             power_match: false,
             lthr: 158,
@@ -669,7 +670,7 @@ mod tests {
         // the first 18 bytes only (the wheel and the numbers): the choices are the defaults
         let short = with(&|sec| sec[6] = 18).unwrap();
         let d = Settings::from_word(0);
-        assert_eq!((short.ftp, short.hr_alert, short.smooth, short.profile), (265, 175, d.smooth, d.profile));
+        assert_eq!((short.ftp, short.hr_alert, short.face, short.profile), (265, 175, d.face, d.profile));
         let none = with(&|sec| sec[6] = 0).unwrap();
         assert_eq!(none, d, "nothing: the defaults");
         let long = with(&|sec| {
@@ -724,7 +725,7 @@ mod tests {
             (odd.wheel_mm, odd.ftp, odd.light_level, odd.profile),
             (d.wheel_mm, d.ftp, d.light_level, d.profile)
         );
-        assert_eq!((odd.max_hr, odd.smooth), (s.max_hr, s.smooth), "the others kept");
+        assert_eq!((odd.max_hr, odd.face), (s.max_hr, s.face), "the others kept");
         assert_eq!(with(&|sec| sec[4] = 2), None, "another version");
         assert_eq!(with(&|sec| sec[6..8].copy_from_slice(&481u16.to_le_bytes())), None, "longer than a copy holds");
     }
@@ -733,6 +734,35 @@ mod tests {
 #[cfg(test)]
 mod day_night_file_tests {
     use super::*;
+
+    /// FONT's choice is an index in the settings file: PIXEL and BARLOW, and any other index the default.
+    #[test]
+    fn font_face_round_trips_and_older_files_read_as_before() {
+        let copy = |face| SettingsCopy {
+            seq: 3,
+            words: Settings::from_word(0).register_words(),
+            settings: Settings { face, ..Settings::from_word(0) },
+        };
+        let at = (0..508).find(|&i| copy(Face::Pixel).to_sector()[i] != copy(Face::Barlow).to_sector()[i]);
+        let at = at.expect("the face is one byte of the sector");
+        for face in Face::ALL {
+            assert_eq!(SettingsCopy::from_sector(&copy(face).to_sector()).map(|c| c.settings.face), Some(face));
+        }
+        for (index, face) in [(0u8, Face::Pixel), (1, Face::Barlow)] {
+            let mut sec = copy(Face::Pixel).to_sector();
+            sec[at] = index;
+            recrc(&mut sec);
+            assert_eq!(SettingsCopy::from_sector(&sec).map(|c| c.settings.face), Some(face), "index {index}");
+        }
+        let mut sec = copy(Face::Pixel).to_sector();
+        sec[at] = 7;
+        recrc(&mut sec);
+        assert_eq!(
+            SettingsCopy::from_sector(&sec).map(|c| c.settings.face),
+            Some(Face::Pixel),
+            "no such face: the default"
+        );
+    }
 
     /// ZONES BY, the custom zones, SEX, BIRTH YEAR and HEIGHT are kept at data 123..150 and read back; a file of 44 to
     /// 123 bytes reads the computed zones, MAX HR, male and none set; bounds that do not rise read as the computed zones.

@@ -6,6 +6,7 @@ use super::*;
 use crate::storage::workout_file::{
     Calendar, Kind as TargetKind, Length, PROF, PROF_H, Planned, Step, Target, Workout,
 };
+use crate::text::Face;
 use crate::ui::TODAY_BOX;
 
 /// The strip catches up with the second that passed, then the screen is checked.
@@ -17,7 +18,7 @@ fn assert_consistent(sim: &mut Sim, app: &mut App) {
 
 /// The SMOOTH font, strip and page.
 fn smooth(sim: &mut Sim, app: &mut App) {
-    app.settings.smooth = true;
+    app.settings.face = Face::Barlow;
     app.redraw_top(sim);
     app.show(sim);
 }

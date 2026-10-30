@@ -34,6 +34,7 @@
 //!   cached tiles cover the view; black as before when the basemap has no memory. IGN's raster tiles, when packs
 //!   cover the view ([`crate::ign`]), come through the same buffer, their "(c) IGN" drawn into it.
 
+use crate::text::Face;
 use crate::text::{self, Align, Line, Style};
 use crate::tiles::{Basemap, Layer};
 use crate::ui::{self, Canvas, H, LABEL, W};
@@ -584,8 +585,8 @@ impl Canvas for Clip<'_> {
         self.r
     }
 
-    fn smooth(&self) -> bool {
-        self.c.smooth()
+    fn face(&self) -> Face {
+        self.c.face()
     }
 
     fn ink(&self, c: u16) -> u16 {

@@ -19,7 +19,7 @@ impl App {
 
     /// The font and colours every canvas of this app draws with.
     pub(crate) fn look(&self) -> Theme {
-        Theme { smooth: self.settings.smooth, ..self.theme }
+        Theme { face: self.settings.face, ..self.theme }
     }
 
     /// The names of the `.ini` files of the themes folder (up to [`MAX_FILES`], 12 characters of letters, digits, `-`
@@ -129,6 +129,13 @@ impl App {
         let name = self.settings.theme;
         let (t, why) = self.resolve(b, &name, Theme::DARK);
         self.theme = t;
+        if said
+            && let Some(f) = t.font
+            && f != self.settings.face
+        {
+            self.settings.face = f; // the file's `font` key: FONT when the theme is picked, not on an AUTO switch
+            self.save_misc(b);
+        }
         self.repaint(b);
         if let (Some(why), true) = (why, said) {
             self.notice(why);

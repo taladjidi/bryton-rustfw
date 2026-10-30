@@ -45,7 +45,7 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
 - ~~**T2. LIGHT**~~ done, sim only: fix what assumes a black background (the cog's blend, the zone colours tuned for black, the map's
   track and edges), using the scramble test's shots of every screen; then LIGHT built in. Agent: implementer
   (sonnet).
-- **T3. Fonts**: `tools/font.py` generates more smooth fonts into the pixel font's cells (the rule
+- ~~**T3. Fonts**~~ done, sim only: FONT is PIXEL or BARLOW, and a theme's `font` key sets it when the theme is picked. Atkinson Hyperlegible Bold was measured at +154 KB (718180 B to 872408 B, pack.py) and dropped under the 150 KB rule. The step as first written: `tools/font.py` generates more smooth fonts into the pixel font's cells (the rule
   `smooth_fonts_share_the_pixel_cells` keeps every layout true): add Atkinson Hyperlegible Bold (SIL OFL 1.1,
   made for legibility; check the licence and take the TTF from github.com/google/fonts, cite it in the script's
   doc as Barlow is). FONT becomes PIXEL, BARLOW, ATKINSON, in the settings file; a theme's `font` key sets the

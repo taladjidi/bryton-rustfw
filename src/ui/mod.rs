@@ -26,7 +26,7 @@ pub use theme::Theme;
 
 use crate::fonts::PIXEL;
 use crate::storage::workout_file::{PROF_H, unpack_bar};
-use text::{Align, Style};
+use text::{Align, Face, Style};
 
 /// Panel width in pixels (portrait).
 pub const W: u32 = 240;
@@ -97,8 +97,8 @@ pub trait Canvas {
     }
     /// Whether text takes the smooth font where there is one (the FONT setting, [`crate::text`]); the pixel font
     /// otherwise.
-    fn smooth(&self) -> bool {
-        false
+    fn face(&self) -> Face {
+        Face::Pixel
     }
     /// The colour the built-in colour `c` is drawn in: the theme's ([`Theme`]); `c` itself unless a theme is on.
     /// Drawing code that makes colours itself (a blit) asks once before the blit, never per pixel.
@@ -327,7 +327,7 @@ pub struct Row {
     pub y: u32,
     /// Its pixels, RGB565.
     pub px: [u16; W as usize],
-    /// The font and colours ([`Canvas::smooth`], [`Canvas::ink`]).
+    /// The font and colours ([`Canvas::face`], [`Canvas::ink`]).
     pub look: Theme,
 }
 
@@ -357,8 +357,8 @@ impl Canvas for Row {
         (0, self.y, W, 1)
     }
 
-    fn smooth(&self) -> bool {
-        self.look.smooth
+    fn face(&self) -> Face {
+        self.look.face
     }
 
     fn ink(&self, c: u16) -> u16 {
@@ -733,15 +733,15 @@ pub(crate) mod tests {
         pub px: Vec<u16>,
         fills: usize,
         painted: usize,
-        /// Text in the smooth font ([`Canvas::smooth`]).
-        pub smooth: bool,
+        /// Text in the smooth font ([`Canvas::face`]).
+        pub face: Face,
         /// The theme drawn with (DARK).
         pub theme: Theme,
     }
 
     impl Frame {
         pub fn new() -> Self {
-            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0, smooth: false, theme: Theme::DARK }
+            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0, face: Face::Pixel, theme: Theme::DARK }
         }
         /// A frame drawn with the theme `t`.
         pub fn themed(t: Theme) -> Self {
@@ -776,8 +776,8 @@ pub(crate) mod tests {
             }
         }
 
-        fn smooth(&self) -> bool {
-            self.smooth
+        fn face(&self) -> Face {
+            self.face
         }
 
         /// As the panel in DARK draws it, so a test compares the same pixels.

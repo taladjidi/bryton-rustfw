@@ -2,6 +2,7 @@
 //! and switching off. The board only carries the bytes ([`Board::panel_cmd`], [`Board::panel_ram_write`]).
 
 use crate::Board;
+use crate::text::Face;
 use crate::ui::{BLACK, Canvas, H, Theme, W};
 
 /// Software reset.
@@ -70,7 +71,7 @@ pub fn off(b: &mut impl Board) {
 
 /// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels. Only
 /// rows from the second field's first to before its second are drawn (not what a banner covers, or only what it
-/// covered): `(0, H)` for the whole screen. The last field is the FONT setting and the colours ([`Canvas::smooth`], [`Canvas::ink`]).
+/// covered): `(0, H)` for the whole screen. The last field is the FONT setting and the colours ([`Canvas::face`], [`Canvas::ink`]).
 pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32), pub Theme);
 
 impl<B: Board> Panel<'_, B> {
@@ -115,8 +116,8 @@ impl<B: Board> Canvas for Panel<'_, B> {
         (0, self.1.0, crate::ui::W, self.1.1 - self.1.0)
     }
 
-    fn smooth(&self) -> bool {
-        self.2.smooth
+    fn face(&self) -> Face {
+        self.2.face
     }
 
     fn ink(&self, c: u16) -> u16 {

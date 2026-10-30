@@ -128,7 +128,7 @@ pub enum Setting {
     ClimbPage,
     /// DATE FORMAT (DISPLAY): D/M/Y, M/D/Y or Y-M-D.
     DateFormat,
-    /// The font of every text: PIXEL (dot matrix, the default) or SMOOTH ([`crate::fonts::smooth`]).
+    /// The font of every text: PIXEL (dot matrix, the default) or BARLOW ([`crate::fonts::smooth`]).
     Font,
     /// The colour theme: AUTO (day or night by the ambient light), DARK, OUTDOOR or a file of `\Rustfw\Themes`
     /// ([`crate::theme`]).

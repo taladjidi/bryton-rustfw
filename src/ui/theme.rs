@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::ride::ZONE_COLORS;
+use crate::text::Face;
 
 /// How many roles a theme colours.
 pub const N: usize = 20;
@@ -127,8 +128,10 @@ pub enum Overview {
 pub struct Theme {
     /// What each of [`KEYS`] is drawn as.
     pub ink: [u16; N],
-    /// The FONT setting ([`crate::Canvas::smooth`]); not part of a theme file.
-    pub smooth: bool,
+    /// The face text is drawn in: the FONT setting ([`crate::Canvas::face`]), set by the app; the file's key is `font`.
+    pub face: Face,
+    /// The FONT the file's `font` key names (None: no key), set as FONT when the theme is picked (app/themes.rs); not drawn.
+    pub font: Option<Face>,
     /// Height of a field's zone bar, px ([`ZONE_BAR`] range).
     pub zone_bar: u32,
     /// Width of the page editor's frame round a cell, px ([`FRAME`] range).
@@ -154,7 +157,8 @@ impl Theme {
     /// The built-in metrics (the colours of the struct are filled in over them).
     const METRICS: Theme = Theme {
         ink: KEYS,
-        smooth: false,
+        face: Face::Pixel,
+        font: None,
         zone_bar: ZONE_BAR.1,
         frame: FRAME.1,
         menu_row: MENU_ROW.1,
@@ -166,7 +170,7 @@ impl Theme {
         let mut ink = KEYS;
         ink[ON_ACC] = BLACK;
         ink[ON_AL] = WHITE;
-        Theme { ink, smooth: false, ..Theme::METRICS }
+        Theme { ink, face: Face::Pixel, ..Theme::METRICS }
     };
 
     /// OUTDOOR: DARK with a lighter grey for the notes, brighter lines and zones (Intervals.icu's palette x 2).
@@ -181,7 +185,7 @@ impl Theme {
         ink[17] = rgb(248, 64, 118);
         ink[18] = rgb(136, 90, 248);
         ink[19] = rgb(120, 110, 144);
-        Theme { ink, smooth: false, ..Theme::METRICS }
+        Theme { ink, face: Face::Pixel, ..Theme::METRICS }
     };
 
     /// LIGHT: black on white for the sun (the panel is transflective). Every colour is darkened to hold 4.5:1 (text)
@@ -208,7 +212,7 @@ impl Theme {
         ink[17] = rgb(124, 32, 59);
         ink[18] = rgb(68, 45, 124);
         ink[19] = rgb(60, 55, 72);
-        Theme { ink, smooth: false, ..Theme::METRICS }
+        Theme { ink, face: Face::Pixel, ..Theme::METRICS }
     };
 
     /// The built-in theme called `name` (ASCII case ignored).
@@ -372,6 +376,11 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
             *slot = c;
         }
     }
+    if let Some(f) = value("theme", "font")
+        .and_then(|v| Face::ALL.iter().copied().find(|f| f.name().as_bytes().eq_ignore_ascii_case(v)))
+    {
+        t.font = Some(f);
+    }
     match value("theme", overview) {
         Some(v) if v.eq_ignore_ascii_case(b"fields") => t.overview = Overview::Fields,
         Some(v) if v.eq_ignore_ascii_case(b"classic") => t.overview = Overview::Classic,
@@ -476,6 +485,14 @@ impl DayNight {
 mod tests {
     extern crate std;
     use super::*;
+
+    #[test]
+    fn font_key_sets_the_default_face() {
+        let face = |text: &[u8]| parse(text).map(|t| t.font);
+        assert_eq!(face(b"[theme]\nversion=1\nfont = Barlow ; soft\n"), Ok(Some(Face::Barlow)));
+        assert_eq!(face(b"[theme]\nversion=1\nfont = pixel\n"), Ok(Some(Face::Pixel)));
+        assert_eq!(face(b"[theme]\nversion=1\nfont=comic\n"), Ok(None), "a font that is not one: no key");
+    }
 
     /// The example files tools/theme.py writes (test-data/themes) parse back to the built-in themes.
     #[test]
