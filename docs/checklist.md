@@ -274,7 +274,7 @@ Others
 - [ ] Road hazards, crowd-sourced (Garmin)
 - [ ] Bike alarm, find my Edge (Garmin)
 - [ ] Assistance request to contacts (Garmin)
-- [ ] Sunset alert (Garmin)
+- [x] Sunset alert (Garmin): sim (ALERTS > SUNSET ALERT, 15 / 30 / 60 min before the set, once a ride)
 
 ## Phone and connectivity
 

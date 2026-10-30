@@ -81,7 +81,7 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   minute, not per pass. On a course: the time to the end at the average moving speed ("--" under 5 km/h average) and the
   clock of arrival (ETA); the distance to go is the course's own field. Batteries: the unit's percent (the status bar's),
   and the power meter's and the heart-rate strap's ANT+ status (page 82: NEW, GOOD, OK, LOW, CRIT). The Di2 battery is the
-  shifting field. Not yet: the sunset alert.
+  shifting field. The sunset alert is in ALERTS (features.md, reminders).
 - **Value sizes:** one scale per box size, the largest at which five characters ("88.88", "12:34") fit: every value in
   a box of that size has the same digit height (3x in a half-width box, 7x or 8x across the screen; a value's ink
   stays 3 px from its box's rules, so two values side by side never read as one); only a longer
@@ -153,6 +153,10 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   "HEART RATE LOW", "DFA A1 LOW") with the same three beeps and queue. Reminders by distance (every N km, 1 to 99), kcal and kJ
   (every N, steps of 10) say "DISTANCE REMINDER", "KCAL REMINDER", "KJ REMINDER" once each time the ride crosses a multiple of the
   step (the first second of a ride, and a step set mid-ride, do not fire). Speed limits are in km/h whatever the units.
+- **Sunset alert** (ALERTS > SUNSET ALERT: OFF, 15, 30 or 60 MIN; off by default): a red-free reminder "SUNSET SOON" with the
+  three beeps when the sun is that many minutes from its set (the NOAA times the fields use, with a fix). Once a ride,
+  so a pause or a resume does not say it again; no fix or no sun times, no alert. Kept in settings.bin after READY CHECK.
+  Sim only (`sunset_alert_says_once_before_the_set`).
 - **Banners:** at the top of the screen, over the strip and the page's first 20 px (the values below stay in view),
   for 4 s or until a key or a touch; 2x text on one or two lines, black on orange, or white on red for an alarm
   (heart rate high, off course, the battery low, a ride not recording or not saving, the second hold of Back that
@@ -393,7 +397,7 @@ MENU
                    SPEED, CADENCE, SPEED+CAD, POWER, SHIFTING, BT TRAINER; DI2 KEYS >; PHONE >
  +- SETTINGS >
      +- ME >       MAX HR, FTP, WEIGHT, W'
-     +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE
+     +- ALERTS >   EAT, DRINK (every so many minutes), HR ABOVE, SUNSET ALERT
      +- DISPLAY >  BRIGHTNESS (or AUTO), OFF AFTER, TOUCH, FONT, THEME
      +- BIKE >     WHEEL, WEIGHT (the bike's, 5.0 to 25.0 kg), ALTITUDE, FROM GPS (the barometer's calibration),
      |             PROFILE (AUTO / ROAD / INDOOR), CLIMBS AHEAD (ON / OFF), GPS POWER (AUTO / FULL / SAVER)
