@@ -120,19 +120,22 @@ impl App {
     /// ([`history::Ride::stats`]).
     pub(crate) fn ride_card(&self) -> ui::card::Card {
         let (r, p) = (&self.ride, &self.power);
-        ui::card::Card::of(&ui::card::Stats {
-            start: (self.ride_started.date, self.ride_started.time),
-            timer_s: r.timer_s(),
-            dist_m: r.dist_m(),
-            avg_speed_x10: r.avg_speed_x10(),
-            ascent_m: Some(r.ascent_m()),
-            np: p.np(),
-            avg_power: r.avg_power(),
-            avg_hr: r.avg_hr(),
-            max_hr: r.max_hr(),
-            tss: p.tss(self.settings.ftp),
-            kj: Some(p.kj()),
-        })
+        ui::card::Card::of(
+            &ui::card::Stats {
+                start: (self.ride_started.date, self.ride_started.time),
+                timer_s: r.timer_s(),
+                dist_m: r.dist_m(),
+                avg_speed_x10: r.avg_speed_x10(),
+                ascent_m: Some(r.ascent_m()),
+                np: p.np(),
+                avg_power: r.avg_power(),
+                avg_hr: r.avg_hr(),
+                max_hr: r.max_hr(),
+                tss: p.tss(self.settings.ftp),
+                kj: Some(p.kj()),
+            },
+            self.settings.imperial,
+        )
     }
 
     /// The card screen: the track in [`ui::card::MAP`] over the basemap, the whole ride's elevation, the numbers, as
@@ -314,6 +317,7 @@ impl App {
                     bx,
                     self.avg_field(f),
                     if let Drawn::Value(_, _, bar) = d { bar } else { ui::BLACK },
+                    (self.settings.imperial, self.settings.temp_f),
                 );
                 match d {
                     Drawn::Map(m) => {

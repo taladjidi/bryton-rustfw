@@ -64,6 +64,9 @@ pub struct Input {
     /// speed lags, and some trainers report a speed at 0 rpm: inferred); MTB on a speed under [`AUTO_PAUSE_X10`] for
     /// [`MTB_PAUSE_S`] in a row (a slow climb or a trail junction is not a stop); ROAD on the speed at once.
     pub profile: Profile,
+    /// AUTO PAUSE: 0 the profile's own rule, 255 never paused, else the km/h under which the ride is paused
+    /// (`settings::AUTO_PAUSE_KMH`).
+    pub pause_kmh: u8,
 }
 
 /// Words of [`Ride::to_words`].
@@ -260,7 +263,12 @@ impl Ride {
         }
         self.elapsed_s = self.elapsed_s.saturating_add(1);
         // ponytail: no speed at all (no sensor, no fix) keeps the timer running; a trainer with power only works
-        let slow = i.speed_x10.is_some_and(|v| v < AUTO_PAUSE_X10);
+        let under = match i.pause_kmh {
+            0 => AUTO_PAUSE_X10,
+            255 => 0,
+            k => u16::from(k) * 10,
+        };
+        let slow = i.speed_x10.is_some_and(|v| v < under);
         match i.profile {
             Profile::Indoor => {
                 // pedalling is power or cadence; neither reported at all (no sensor) keeps the timer running
@@ -277,6 +285,9 @@ impl Ride {
                 self.still_s = 0;
                 self.moving = !slow;
             }
+        }
+        if i.pause_kmh == 255 {
+            (self.still_s, self.moving) = (0, true); // AUTO PAUSE OFF: the timer runs whatever the profile
         }
         if self.moving {
             self.timer_s = self.timer_s.saturating_add(1);
@@ -1121,6 +1132,7 @@ mod tests {
             alt_ref: 0,
             alt_corr_mm: 0,
             profile: Profile::Road,
+            pause_kmh: 0,
         }
     }
 
@@ -1249,6 +1261,32 @@ mod tests {
         road.start_pause();
         road.second(&at(0));
         assert!(!road.moving(), "road: at once, as before");
+    }
+
+    /// AUTO PAUSE: a chosen speed replaces the profile's 2 km/h, OFF never pauses (indoors too), 0 keeps the rule.
+    #[test]
+    fn auto_pause_threshold() {
+        let moving = |profile, pause_kmh, speed| {
+            let mut r = Ride::new();
+            r.start_pause();
+            for _ in 0..10 {
+                r.second(&Input { profile, pause_kmh, ..at(speed) });
+            }
+            r.moving()
+        };
+        assert!(moving(Profile::Road, 0, 25) && !moving(Profile::Road, 0, 15), "the rule: under 2 km/h");
+        assert!(!moving(Profile::Road, 5, 45) && moving(Profile::Road, 5, 55), "5 km/h");
+        assert!(!moving(Profile::Road, 8, 79) && moving(Profile::Road, 8, 80), "8 km/h");
+        assert!(moving(Profile::Road, 255, 0), "OFF: never");
+        assert!(moving(Profile::Mtb, 255, 0), "OFF on an MTB");
+        assert!(!moving(Profile::Mtb, 3, 29), "3 km/h on an MTB, after its five seconds");
+        let still = Input { profile: Profile::Indoor, power: Some(0), cadence: Some(0), ..at(0) };
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..10 {
+            r.second(&Input { pause_kmh: 255, ..still });
+        }
+        assert!(r.moving(), "OFF: a trainer ride stopped is not paused");
     }
 
     #[test]

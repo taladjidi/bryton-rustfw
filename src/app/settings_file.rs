@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (99 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (123 now, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -131,6 +131,10 @@ impl SettingsCopy {
         put(&s.night_theme);
         put(&[s.auto_lap as u8, s.lap_km as u8, s.lap_min as u8]);
         put(&[u8::from(s.live_segments), s.seg_target as u8]);
+        put(&[u8::from(s.sound), u8::from(s.imperial), u8::from(s.temp_f), s.auto_pause as u8]);
+        for v in [s.trip_m[0], s.trip_s[0], s.trip_m[1], s.trip_s[1], s.odo_m] {
+            put(&v.to_le_bytes());
+        }
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -225,6 +229,21 @@ impl SettingsCopy {
         // range reads its default
         s.live_segments = data.next().map_or(d.live_segments, |v| if v < 2 { v == 1 } else { d.live_segments });
         s.seg_target = data.next().map(usize::from).filter(|&v| v < SEGMENT_TARGETS.len()).unwrap_or(d.seg_target);
+        // SOUND, UNITS, TEMPERATURE, AUTO PAUSE (appended after TARGET): a file without them reads ON, METRIC, C and the
+        // profile's rule; a byte out of its range reads its default
+        let flag = |v: Option<u8>, def: bool| v.map_or(def, |v| if v < 2 { v == 1 } else { def });
+        s.sound = flag(data.next(), d.sound);
+        s.imperial = flag(data.next(), d.imperial);
+        s.temp_f = flag(data.next(), d.temp_f);
+        s.auto_pause = data.next().map(usize::from).filter(|&v| v < AUTO_PAUSE_KMH.len()).unwrap_or(d.auto_pause);
+        // the trips and the odometer (u32 each, after AUTO PAUSE): a file cut inside one reads 0 for it and the rest
+        let mut u32_next = || {
+            let b = [data.next()?, data.next()?, data.next()?, data.next()?];
+            Some(u32::from_le_bytes(b))
+        };
+        (s.trip_m[0], s.trip_s[0]) = (u32_next().unwrap_or(0), u32_next().unwrap_or(0));
+        (s.trip_m[1], s.trip_s[1]) = (u32_next().unwrap_or(0), u32_next().unwrap_or(0));
+        s.odo_m = u32_next().unwrap_or(0);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -290,9 +309,44 @@ pub(crate) struct SettingsStore {
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
     pub(crate) sync: u32,
+    /// The totals (m, s) of the ride the recorder is saving, set when it is ended, and of the one ended behind it (a
+    /// ride held while the last one's save is pending): each is added to the trips once, when its own save is done.
+    pub(crate) saving: Option<(u32, u32)>,
+    /// See `saving`.
+    pub(crate) queued: Option<(u32, u32)>,
+    /// Totals of saved rides not yet added to the trips: they wait for the file to be read ([`App::pay_trips`]).
+    pub(crate) due: (u32, u32),
 }
 
 impl SettingsStore {
+    /// A ride was ended (SAVE): its totals wait for its save.
+    pub(crate) fn ended(&mut self, m: u32, s: u32) {
+        match &mut self.saving {
+            None => self.saving = Some((m, s)),
+            Some(_) => {
+                let q = self.queued.get_or_insert((0, 0));
+                (q.0, q.1) = (q.0.saturating_add(m), q.1.saturating_add(s));
+            }
+        }
+    }
+
+    /// The ride being saved is done: `saved` (a `Saved` outcome) makes its totals due, else (kept, discarded) they are
+    /// dropped. The ride queued behind it is the one being saved now. A save with no totals (a ride the boot's
+    /// recovery saved without the rider ending it) adds nothing to the trips.
+    pub(crate) fn done(&mut self, saved: bool) {
+        if let Some((m, s)) = self.saving.take().filter(|_| saved) {
+            (self.due.0, self.due.1) = (self.due.0.saturating_add(m), self.due.1.saturating_add(s));
+        }
+        self.saving = self.queued.take();
+    }
+
+    /// The totals of rides ended and not yet in the trips (saving, queued, due): a trip field adds them so its value
+    /// does not dip between the end of a ride and its save.
+    pub(crate) fn unpaid(&self) -> (u32, u32) {
+        let (a, b) = (self.saving.unwrap_or((0, 0)), self.queued.unwrap_or((0, 0)));
+        (a.0.saturating_add(b.0).saturating_add(self.due.0), a.1.saturating_add(b.1).saturating_add(self.due.1))
+    }
+
     /// As at a start: the registers read.
     pub(crate) fn at_boot(b: &mut impl Board, read: Settings) -> Self {
         let boot = registers(b);
@@ -387,6 +441,7 @@ impl App {
         if !st.loaded && (st.tries < LOAD_TRIES || st.dirty) && due {
             self.load_settings(b);
         }
+        self.pay_trips();
         let st = self.settings_store;
         if !(self.card_writable && st.loaded && st.dirty && self.ride_settled()) {
             return;
@@ -399,6 +454,20 @@ impl App {
             }
         }
         self.save_settings(b);
+    }
+
+    /// A saved ride's totals go to TRIP 1, TRIP 2 and the ODOMETER, once the file is read (its values are the base) and
+    /// never during a ride: the settings are only written to the card between rides. A discarded ride never gets here.
+    fn pay_trips(&mut self) {
+        let st = &mut self.settings_store;
+        if !(st.due != (0, 0) && st.loaded) {
+            return;
+        }
+        let (m, s) = core::mem::take(&mut st.due);
+        if m != 0 || s != 0 {
+            st.dirty |= self.card_writable;
+            self.settings.add_ride(m, s);
+        }
     }
 
     /// Reads `\Rustfw\settings.bin` (module doc: which wins).
@@ -553,7 +622,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 99);
+        assert_eq!(len, 123);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -635,7 +704,7 @@ mod day_night_file_tests {
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 99);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 123);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -659,7 +728,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 99);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 123);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -693,7 +762,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 99, "the length: 69 + 1 + 12 + 12 + 3 + 2");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 123, "the length: 69 + 1 + 12 + 12 + 3 + 2");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -717,5 +786,46 @@ mod day_night_file_tests {
         recrc(&mut bad);
         let b = SettingsCopy::from_sector(&bad).map(|c| c.settings);
         assert_eq!(b.map(|b| (b.auto_theme, b.day_theme)), Some((false, Settings::name_bytes("OUTDOOR"))));
+    }
+
+    /// SOUND, UNITS, TEMPERATURE, AUTO PAUSE (data 99..102) and the trips and the odometer (103..123) are kept and read
+    /// back; a file of 44, 66, 69, 94, 97 or 99 bytes reads ON, METRIC, C, AUTO and zeros; a byte out of range reads its
+    /// default; a file cut inside the trips reads 0 for the cut one and those after it.
+    #[test]
+    fn units_sound_auto_pause_and_trips_round_trip_and_older_files_read_defaults() {
+        let s = Settings {
+            sound: false,
+            imperial: true,
+            temp_f: true,
+            auto_pause: 4,
+            trip_m: [1234, 5_000_000],
+            trip_s: [99, 70_000],
+            odo_m: 987_654,
+            ..Settings::from_word(0)
+        };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 123);
+        assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
+        let read = |sec: &[u8; 512]| {
+            SettingsCopy::from_sector(sec).map(|c| {
+                let s = c.settings;
+                ((s.sound, s.imperial, s.temp_f, s.auto_pause), (s.trip_m, s.trip_s, s.odo_m))
+            })
+        };
+        assert_eq!(read(&sec), Some(((false, true, true, 4), ([1234, 5_000_000], [99, 70_000], 987_654))));
+        for len in [44u16, 66, 69, 94, 97, 99] {
+            let mut old = sec;
+            old[6..8].copy_from_slice(&len.to_le_bytes());
+            recrc(&mut old);
+            assert_eq!(read(&old), Some(((true, false, false, 0), ([0; 2], [0; 2], 0))), "a {len}-byte file");
+        }
+        let mut cut = sec;
+        cut[6..8].copy_from_slice(&(103u16 + 4 + 4 + 2).to_le_bytes()); // TRIP 1, its time, two bytes of TRIP 2
+        recrc(&mut cut);
+        assert_eq!(read(&cut).map(|r| r.1), Some(([1234, 0], [99, 0], 0)));
+        let mut bad = sec;
+        bad[28 + 99..28 + 103].copy_from_slice(&[2, 7, 255, 9]);
+        recrc(&mut bad);
+        assert_eq!(read(&bad).map(|r| r.0), Some((true, false, false, 0)));
     }
 }

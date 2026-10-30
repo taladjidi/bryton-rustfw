@@ -513,9 +513,23 @@ fn give_up_save_frees_a_stuck_save() {
         app.leave_menus();
         app.show(&mut sim);
         app.press(&mut sim, Press::Short(Key::Start)); // pause
+        let held_s = app.ride.timer_s();
         save_ride(&mut sim, &mut app);
         run(&mut sim, &mut app, 3000);
         assert!(app.notes.list.iter().any(|n| n.as_str().ends_with("RIDE SAVED")));
+        // the ride given up (kept in Rescue, or lost) paid nothing to the trips: only the held ride's time is in
+        assert!(held_s > 0);
+        run(&mut sim, &mut app, 20_000);
+        let st = &app.settings_store;
+        assert_eq!(
+            (st.saving, st.queued),
+            (None, None),
+            "{:?} {:?} {:?}",
+            app.rec.clean.phase(),
+            app.notes.list[0].as_str(),
+            st.due
+        );
+        assert_eq!(st.due.1 + app.settings.trip_s[0], held_s, "nearly_full {nearly_full}");
         assert_eq!(app.drive_on(&mut sim), Ok(()));
         assert_eq!(app.notes.text.as_str(), "USB DRIVE ON", "writable again");
     }

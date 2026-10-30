@@ -24,7 +24,7 @@ impl App {
         let Some(e) = self.survey.oldest(k) else { return };
         let Some(start) = stock::ride_start(e.name()) else { return };
         let r = history::Ride { file: e.file, start, ..history::NONE };
-        self.past.start(&r, self.settings.ftp);
+        self.past.start(&r, self.settings.ftp, self.settings.imperial);
         self.say("READING RIDE");
     }
 }
