@@ -123,6 +123,8 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | LIGHT on a ride page (sim) | LIGHT menu (sim) | LIGHT map page: the basemap stays a picture (sim) |
 | ![Menu, 44 px rows](img/metrics-menu-44.png) | ![Menu, 56 px rows](img/metrics-menu-56.png) | ![Zone bar 4 px](img/metrics-ride-bar4.png) |
 | `menu_row = 44` (the built-ins): six rows (sim) | `menu_row = 56`: four rows, a tap lands on the row drawn (sim) | `zone_bar = 4`, the thinnest, on the heart rate box (sim) |
+| ![Fields overview, bar 8](img/theme-fields-overview-0.png) | ![Fields overview, bar 4](img/theme-fields-overview-1.png) | |
+| `overview = fields`: a 2 x 2 table (time, next workout, year km, week hours) in the card's place (sim) | The same with the metrics at their least (sim) | |
 
 ## Laps
 

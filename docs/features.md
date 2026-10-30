@@ -266,6 +266,7 @@ in the backup registers), and a file is read again at each start. A file is an I
 [theme]
 version = 1          ; above 1 is refused (THEME TOO NEW)
 name = SUNNY
+overview = classic   ; classic (the TODAY card) or fields (a 2 x 2 table of time, next workout, year km, week hours in its place)
 base = outdoor       ; dark, outdoor or light: the values the file does not give
 [metrics]            ; whole px, outside the range is clamped, left out keeps the base's (8, 3, 44)
 zone_bar = 8         ; height of a field's zone bar, 4 to 8

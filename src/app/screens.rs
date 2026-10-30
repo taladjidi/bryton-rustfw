@@ -77,7 +77,7 @@ pub(crate) enum Drawn {
 }
 
 /// Boxes on a page at most.
-pub(crate) const BOXES: usize = 8;
+pub(crate) const BOXES: usize = 10; // the fields overview: date, notices, 4 chosen fields, 4 of the table
 
 impl App {
     /// Memory for the basemap (at least [`tiles::MEM_WORDS`] words); without it the map has no basemap.
@@ -229,7 +229,9 @@ impl App {
     /// one.
     pub(crate) fn widgets(&self) -> impl Iterator<Item = ((u32, u32, u32, u32), Widget)> + Clone + use<> {
         let mut all = [((0, 0, 0, 0), Widget::Today); BOXES];
+        let table = self.screen == Screen::Main && self.theme.overview == ui::theme::Overview::Fields;
         let (page, fixed): (_, &[Widget]) = match self.screen {
+            Screen::Main if table => (OVERVIEW, &[Widget::Date, Widget::Notices]),
             Screen::Main => (OVERVIEW, &[Widget::Today, Widget::Date, Widget::Notices]),
             Screen::Ride(n) => (n, &[]),
             Screen::Edit(..) => (EDITED, &[]),
@@ -256,6 +258,11 @@ impl App {
             let f = tap.unwrap_or(f);
             let bx = if page == OVERVIEW { ui::overview_box(i) } else { p.cell_box(i).map(Into::into) };
             let (Some(bx), Some(slot)) = (bx, all.get_mut(n)) else { break };
+            *slot = (bx, Widget::Field(f));
+            n += 1;
+        }
+        for (i, f) in ui::TABLE.into_iter().enumerate().filter(|_| table) {
+            let (Some(bx), Some(slot)) = (ui::table_box(i), all.get_mut(n)) else { break };
             *slot = (bx, Widget::Field(f));
             n += 1;
         }
@@ -549,7 +556,9 @@ impl App {
             // a menu's rows paint their whole boxes: clearing under them first doubled a menu's cost (2026-10-26)
             Screen::Menu(..) => ui::clear_menu(&mut p),
             // so does the TODAY card (ui::draw_today): a fifth of the overview's (25 288 of 134 745 px)
-            Screen::Main => ui::clear_page_but(&mut p, ui::TODAY_BOX),
+            Screen::Main if self.theme.overview == ui::theme::Overview::Classic => {
+                ui::clear_page_but(&mut p, ui::TODAY_BOX)
+            }
             _ => ui::clear_page(&mut p),
         }
         self.draw_screen(&mut p);

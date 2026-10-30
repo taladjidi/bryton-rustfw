@@ -653,3 +653,43 @@ fn dark_draws_as_before_the_metrics() {
     let ride = hash(&sim.screen);
     assert_eq!((menu, ride), (0x61c6_3905_740b_d4e1, 0xa6ce_182a_d71d_10ae));
 }
+
+/// The overview as the DARK classic theme draws it (the first screen after start) hashes to the value taken on main
+/// before the `overview` key (2026-10-30), so the new variant changed nothing for the built-ins.
+#[test]
+fn dark_classic_overview_is_as_before() {
+    let (sim, _app) = unit(None);
+    assert_eq!(hash(&sim.screen), 0x0736_09c0_d32a_0201);
+}
+
+/// `overview = fields` at both ends of the metrics: the table replaces the card, every box is kept up to date in its
+/// own cell (the screen equals a fresh draw), a tap in the old card's area still opens today's workout or the
+/// calendar, the cog wins its corner, and the shots go to the gallery.
+#[test]
+fn the_fields_overview_at_both_ends_of_the_metrics() {
+    let (_, classic_app) = unit(None);
+    let classic = classic_app.widgets().count();
+    for (end, theme) in crate::ui::tests::metric_ends().into_iter().enumerate() {
+        let (mut sim, mut app) = unit(None);
+        let was = sim.screen.clone();
+        let t = Theme { overview: crate::theme::Overview::Fields, ..theme };
+        set_theme(&mut sim, &mut app, t);
+        run(&mut sim, &mut app, 1200);
+        assert_eq!(app.widgets().count(), classic + 4 - 1, "the table's four boxes in the card's place");
+        assert!(sim.screen != was);
+        super::tests::assert_consistent(&sim, &app);
+        sim.save(&std::format!("theme_fields_overview_{end}"));
+        let (x, y, w, h) = crate::ui::TODAY_BOX;
+        for (tx, ty) in [(x + w / 2, y + h / 2), (x + 8, y + h - 8), (x + w - 8, y + 48)] {
+            app.input(&mut sim, Input::Touch(Gesture::Tap(tx as u16, ty as u16)));
+            assert!(matches!(app.screen(), Screen::Menu(..)), "({tx}, {ty}) opens today");
+            app.input(&mut sim, Input::Back);
+            assert_eq!(app.screen(), Screen::Main);
+        }
+        app.input(&mut sim, Input::Touch(Gesture::Tap(crate::ui::GEAR_C.0 as u16, crate::ui::GEAR_C.1 as u16)));
+        assert!(matches!(app.screen(), Screen::Menu(..)));
+        app.input(&mut sim, Input::Back);
+        run(&mut sim, &mut app, 3100); // seconds pass: the cells follow
+        super::tests::assert_consistent(&sim, &app);
+    }
+}
