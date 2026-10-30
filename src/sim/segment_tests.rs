@@ -254,14 +254,25 @@ fn slower(ms: u64) -> (i32, i32, i32) {
 
 /// Pixels of `color` in the delta's box (the page's big line).
 fn in_delta_box(sim: &Sim, color: u16) -> usize {
-    let (y0, y1) = (ui::PAGE_Y + 26, ui::PAGE_Y + 90);
+    let (y0, y1) = (ui::PAGE_Y + 21, ui::PAGE_Y + 81);
     (y0..y1).map(|y| (0..ui::W).filter(|&x| sim.screen[(y * ui::W + x) as usize] == color).count()).sum()
 }
 
 /// Rides `route` for `seconds`, one second at a time, and collects the banners said and the screens visited.
 fn watch(route: fn(u64) -> (i32, i32, i32), seconds: u64) -> (Sim, App, Vec<String>, Vec<Screen>) {
+    watch_on(good_card(), route, seconds)
+}
+
+/// A card with the segment's file carrying altitudes (8 % over 950 m), for the profile.
+fn alt_card() -> Vec<u8> {
+    let up = |r: usize| Some(((600 + 4 * r) * 5) as u16);
+    card(&[("4000000001.seg", synth_alt(20, &CODES, &up))])
+}
+
+/// [`watch`] on the card `image`.
+fn watch_on(image: Vec<u8>, route: fn(u64) -> (i32, i32, i32), seconds: u64) -> (Sim, App, Vec<String>, Vec<Screen>) {
     let mut sim = Sim::new(9, 0, 0);
-    sim.emmc.image = good_card();
+    sim.emmc.image = image;
     sim.gnss.route = Some(route);
     let mut app = App::start(&mut sim, None);
     app.set_segment_memory(Box::leak(Box::new(Segments::new())));
@@ -288,7 +299,7 @@ fn page_banners_card_and_back() {
     assert!(banners.iter().any(|b| b == "SEGMENT Test climb 300 M"), "{banners:?}");
     let fin = banners.iter().find(|b| b.starts_with("SEGMENT 2:")).unwrap_or_else(|| panic!("{banners:?}"));
     assert!(fin.contains(" -0:"), "ahead: {fin}");
-    assert_eq!(screens.iter().filter(|s| **s == Screen::Segment).count(), 1, "{screens:?}");
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Ride(CLIMB)).count(), 1, "{screens:?}");
     assert_eq!(screens.last(), Some(&Screen::SegmentResult), "{screens:?}");
     sim.save("segment_card");
     app.press(&mut sim, Press::Short(Key::Page)); // any key
@@ -304,20 +315,21 @@ fn page_banners_card_and_back() {
 /// Ahead is green, behind is the accent, never red; the sign is in the text.
 #[test]
 fn delta_sign_and_colour() {
-    let (sim, app, ..) = watch(faster, 120);
-    assert_eq!(app.screen(), Screen::Segment);
+    let (sim, app, ..) = watch_on(alt_card(), faster, 120);
+    assert_eq!(app.screen(), Screen::Ride(CLIMB));
     assert!(app.segment_now().unwrap().delta_s.unwrap() < 0);
     sim.save("segment_ahead");
     assert!(in_delta_box(&sim, ui::GREEN) > 100 && in_delta_box(&sim, ui::ACCENT) == 0);
-    let (sim, app, ..) = watch(slower, 140);
-    assert_eq!(app.screen(), Screen::Segment);
+    let (sim, app, ..) = watch_on(alt_card(), slower, 140);
+    assert_eq!(app.screen(), Screen::Ride(CLIMB));
     assert!(app.segment_now().unwrap().delta_s.unwrap() > 0);
     sim.save("segment_behind");
     assert!(in_delta_box(&sim, ui::ACCENT) > 100 && in_delta_box(&sim, ui::GREEN) == 0);
     assert_eq!(in_delta_box(&sim, ui::RED), 0);
 }
 
-/// LIVE SEGMENTS off: no event, no page, no banner. A key dismisses the page and it does not come back.
+/// LIVE SEGMENTS off: no event, no page, no banner. The page is in the round: a key pages away from it, and paging on
+/// comes back to it.
 #[test]
 fn off_and_dismissed() {
     let mut sim = Sim::new(9, 0, 0);
@@ -330,27 +342,116 @@ fn off_and_dismissed() {
     sim.gnss.fix = Some(8000);
     app.press(&mut sim, Press::Short(Key::Start));
     run(&mut sim, &mut app, 200_000);
-    assert!(events(&app).is_empty() && !matches!(app.screen(), Screen::Segment | Screen::SegmentResult));
+    assert!(events(&app).is_empty() && !matches!(app.screen(), Screen::Ride(CLIMB) | Screen::SegmentResult));
     end_until_settled(&mut sim, &mut app);
     run(&mut sim, &mut app, 2000);
     assert_eq!((app.segments().unwrap().written, csv(&sim.emmc.image)), (0, None));
     let (mut sim, mut app, ..) = watch(pr_pace, 120);
-    assert_eq!(app.screen(), Screen::Segment);
+    assert_eq!(app.screen(), Screen::Ride(CLIMB));
     app.press(&mut sim, Press::Short(Key::Page));
     run(&mut sim, &mut app, 5000);
-    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "dismissed");
+    assert!(matches!(app.screen(), Screen::Ride(n) if n != CLIMB), "paged away, not reopened");
+    assert!(app.page_on(CLIMB), "still in the round");
+    let back = (0..8).any(|_| {
+        app.press(&mut sim, Press::Short(Key::Page));
+        app.screen() == Screen::Ride(CLIMB)
+    });
+    assert!(back, "paging on finds it again");
+}
+
+/// The page is in the round while the segment is ridden, opens once at its start, and is gone at the finish (the
+/// card is shown) and at a loss (no card); the round goes on to the page after the one it joined.
+#[test]
+fn page_leaves_the_round_at_the_finish_and_at_a_loss() {
+    let (mut sim, mut app, _, screens) = watch(faster, 110);
+    assert!(app.page_on(CLIMB) && app.screen() == Screen::Ride(CLIMB));
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Ride(CLIMB)).count(), 1, "opened once: {screens:?}");
+    run(&mut sim, &mut app, 130_000);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    assert!(!app.page_on(CLIMB));
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 500);
+    assert!(matches!(app.screen(), Screen::Ride(n) if n != CLIMB && app.page_on(n)), "{:?}", app.screen());
+    // a loss: the page goes, no card
+    let (mut sim, mut app, _, screens) = watch(leaves, 120);
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Ride(CLIMB)).count(), 1, "{screens:?}");
+    run(&mut sim, &mut app, 100_000);
+    assert!(!app.page_on(CLIMB) && app.segment_now().is_none());
+    assert!(matches!(app.screen(), Screen::Ride(n) if n != CLIMB), "{:?}", app.screen());
+    assert!(events(&app).contains(&Event::Lost(ID)));
+}
+
+/// A menu up at the start: not opened over it for this segment, but the page is in the round.
+#[test]
+fn page_not_over_a_menu() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(faster);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    app.open(Screen::Menu(Menu::Segments, 0));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 110_000);
+    assert!(app.segment_now().is_some());
+    assert!(matches!(app.screen(), Screen::Menu(..)), "not over a menu: {:?}", app.screen());
+    assert!(app.page_on(CLIMB), "but in the round");
+}
+
+/// The profile of a segment with altitudes is its own, the target's place is a grey mark on it and the rider's a
+/// white one; a segment without altitudes shows its bar with both marks.
+#[test]
+fn profile_shows_both_marks() {
+    for (image, name) in [(alt_card(), "profile"), (good_card(), "bar")] {
+        let (sim, app, ..) = watch_on(image, slower, 120);
+        assert_eq!(app.screen(), Screen::Ride(CLIMB));
+        let (bx, p) = app
+            .widgets()
+            .zip(app.drawn.iter())
+            .find_map(|((bx, _), d)| if let Drawn::Profile(p) = d { Some((bx, *p)) } else { None })
+            .unwrap();
+        let (r, g) = (p.rider().unwrap(), p.ghost().unwrap());
+        let a = ui::climb_area(bx);
+        let px = |k: u32, dy: u32| sim.screen[((a.1 + dy) * ui::W + a.0 + k) as usize];
+        assert_eq!((px(r, 40), px(g, 40), px(g + 1, 40)), (ui::WHITE, ui::GREY, ui::GREY), "{name}");
+        // the marks are where the metres are
+        let n = app.segment_now().unwrap();
+        let col = |m: u32| u64::from(m) * u64::from(a.2) / u64::from(n.along_m + n.left_m);
+        // (the page was drawn up to a second ago: a column or two)
+        let near = |a: u64, b: u64| a.abs_diff(b) <= 2;
+        assert!(near(u64::from(r), col(n.along_m)) && near(u64::from(g), col(n.ghost_m.unwrap())), "{name}");
+    }
+}
+
+/// A second with nothing changed paints nothing (the head, the profile, the gauge, the two values).
+#[test]
+fn an_update_with_nothing_changed_paints_nothing() {
+    let (mut sim, mut app, ..) = watch_on(alt_card(), faster, 120);
+    run(&mut sim, &mut app, 300);
+    app.value_due = true;
+    app.update_page(&mut sim); // the time of the pass may have moved a second on
+    let px = sim.pixels;
+    for _ in 0..2 {
+        app.value_due = true;
+        app.update_page(&mut sim);
+    }
+    assert_eq!(sim.pixels, px, "nothing to paint");
 }
 
 /// The page's second costs a few boxes, not a screen (docs/devloop.md: pixels a second).
 #[test]
 fn page_redraw_cost() {
     let (mut sim, mut app, ..) = watch(pr_pace, 110);
-    assert_eq!(app.screen(), Screen::Segment);
+    assert_eq!(app.screen(), Screen::Ride(CLIMB));
     let (px, w0, t0) = (sim.pixels, sim.windows, sim.ms);
     run(&mut sim, &mut app, 20_000);
     let (per_s, win_s) = ((sim.pixels - px) * 1000 / (sim.ms - t0), (sim.windows - w0) * 1000 / (sim.ms - t0));
     std::println!("segment page: {per_s} px/s, {win_s} windows/s");
-    assert!(per_s < 8000, "{per_s} px/s");
+    // 4400 px/s with the old page (delta, time, distance and the bar); the CLIMB page adds the profile, the gauge and
+    // two values, and the PR-pace ghost flips the delta's colour (every character again) most seconds
+    assert!(per_s < 9000, "{per_s} px/s");
 }
 
 /// The SEGMENTS menu: the two settings, the segment with its distance and gain, the skipped files.
@@ -380,11 +481,11 @@ fn segments_menu_lists_the_card() {
 fn keys_and_taps_on_the_page_and_the_card() {
     use crate::touch::Gesture;
     let (mut sim, mut app, ..) = watch(faster, 120);
-    assert_eq!(app.screen(), Screen::Segment);
+    assert_eq!(app.screen(), Screen::Ride(CLIMB));
     let laps = app.ride.laps();
     app.input(&mut sim, Input::Touch(Gesture::Tap(120, 200)));
     app.input(&mut sim, Input::NextHeld);
-    assert_eq!(app.screen(), Screen::Segment, "a tap or a held key does not close it");
+    assert_eq!(app.screen(), Screen::Ride(CLIMB), "a tap or a held key does not close it");
     app.press(&mut sim, Press::Short(Key::Lap));
     assert_eq!(app.ride.laps(), laps + 1, "Lap on the page is a lap");
     app.press(&mut sim, Press::Short(Key::Start));
@@ -497,7 +598,7 @@ fn fuzz_inputs_over_the_page_and_the_card() {
         for _ in 0..330 {
             run(&mut sim, &mut app, 800);
             match app.screen() {
-                Screen::Segment => page += 1,
+                Screen::Ride(CLIMB) => page += 1,
                 Screen::SegmentResult => card += 1,
                 _ => {}
             }

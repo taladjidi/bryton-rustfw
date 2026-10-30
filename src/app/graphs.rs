@@ -31,7 +31,10 @@ pub(crate) struct ProfileShown {
     start: u32,
     span: u32,
     rider: Option<u32>,
-    /// The climb's profile (the CLIMB page): `start` and `span` are the climb's, `id` is 1 (road ahead) or 2 (course).
+    /// The target's column on a live segment (a grey mark two columns wide).
+    ghost: Option<u32>,
+    /// The climb's profile (the CLIMB page): `start` and `span` are the climb's (or the live segment's: `id` is
+    /// 3 and its id), `id` is 1 (road ahead) or 2 (course).
     climb: bool,
 }
 
@@ -95,6 +98,12 @@ impl ProfileShown {
     #[cfg(test)]
     pub(crate) fn rider(&self) -> Option<u32> {
         self.rider
+    }
+
+    /// The target's column (tests).
+    #[cfg(test)]
+    pub(crate) fn ghost(&self) -> Option<u32> {
+        self.ghost
     }
 
     /// The part shown: from m (tests).
@@ -302,7 +311,7 @@ impl App {
     /// What a profile `cols` wide shows now: from the eighth of the course the rider is in to the end (so it is
     /// redrawn whole eight times over a course, and otherwise moves by a column now and then).
     pub(crate) fn profile_now(&self, cols: u32, climb: bool) -> ProfileShown {
-        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None, climb };
+        let none = ProfileShown { id: 0, start: 0, span: 0, rider: None, ghost: None, climb };
         if climb {
             let Some(n) = self.climb_now() else { return none };
             let (start, span) = (n.climb.start_m, n.climb.len_m.max(1));
@@ -311,7 +320,10 @@ impl App {
                 .checked_sub(start)
                 .filter(|&d| d < span)
                 .map(|d| ((u64::from(d) * u64::from(cols) / u64::from(span)) as u32).min(cols.max(1) - 1));
-            return ProfileShown { id: 1 + u32::from(n.course), start, span, rider, climb };
+            let col = |d: u32| (u64::from(d) * u64::from(cols) / u64::from(span)) as u32;
+            let ghost = n.ghost.filter(|&g| g < span).map(|g| col(g).min(cols.max(1) - 1));
+            let id = n.seg.map_or(1 + u32::from(n.course), |s| 3u32.saturating_add(s));
+            return ProfileShown { id, start, span, rider, ghost, climb };
         }
         let Some(c) = self.courses.as_deref().filter(|c| c.on.is_some() && c.course.has_alt()) else { return none };
         let len = c.course.len_m();
@@ -321,7 +333,7 @@ impl App {
         let span = (len - start).max(1);
         let rider =
             at.map(|d| ((u64::from(d - start) * u64::from(cols) / u64::from(span)) as u32).min(cols.max(1) - 1));
-        ProfileShown { id: c.course.id(), start, span, rider, climb }
+        ProfileShown { id: c.course.id(), start, span, rider, ghost: None, climb }
     }
 
     /// Profile column `k` of `p` in a plot `a`: its bar's height and colour (the rider's column white, the ridden
@@ -352,6 +364,16 @@ impl App {
     /// column white.
     fn climb_bar(&self, p: ProfileShown, a: (u32, u32, u32, u32), k: u32) -> (u32, u16) {
         let Some(n) = self.climb_now().filter(|_| p.id != 0) else { return (0, ui::BLACK) };
+        if p.rider == Some(k) {
+            return (a.3, ui::WHITE);
+        }
+        if p.ghost.is_some_and(|g| k == g || k == g + 1) {
+            return (a.3, ui::GREY);
+        }
+        if n.seg.is_some() && self.climb_alt(&n, p.start).is_none() {
+            // a segment without a profile: the bar only, the part done dark
+            return ui::progress_column(p.rider, k, a.3, (a.3 / 5, ui::GREY));
+        }
         let end = p.start.saturating_add(p.span);
         let at = |i: u32| p.start + (u64::from(p.span) * u64::from(i) / u64::from(a.2.max(1))) as u32;
         let (d0, d1) = (at(k), at(k + 1));
@@ -419,11 +441,18 @@ impl App {
         let a = if old.climb { ui::climb_area(bx) } else { ui::plot_area(bx) };
         let now = self.profile_now(a.2, old.climb);
         let mut p = Panel(b, self.area(), self.look());
-        if (ProfileShown { rider: old.rider, ..now }) != old {
+        if (ProfileShown { rider: old.rider, ghost: old.ghost, ..now }) != old {
             p.fill(bx.0, bx.1, bx.2.saturating_sub(1), a.1 - bx.1, ui::BLACK);
             self.draw_profile(&mut p, bx, now);
-        } else if now.rider != old.rider {
-            let cols = moved(old.rider, now.rider);
+        } else if (now.rider, now.ghost) != (old.rider, old.ghost) {
+            // the columns of the rider's move and of the target's (its mark is two wide), as one run
+            let (r, g) = (moved(old.rider, now.rider), moved(old.ghost, now.ghost));
+            let g = g.start..g.end.saturating_add(u32::from(!g.is_empty()));
+            let cols = match (r.is_empty(), g.is_empty()) {
+                (_, true) => r,
+                (true, false) => g,
+                (false, false) => r.start.min(g.start)..r.end.max(g.end),
+            };
             for k in cols.clone().filter(|&k| k < a.2) {
                 ui::draw_graph_column(&mut p, a, k, self.profile_bar(old, a, k), self.profile_bar(now, a, k));
             }

@@ -853,7 +853,7 @@ pub(crate) mod tests {
     /// two characters of one (one blank column of the font at the value's scale), in every layout.
     #[test]
     fn neighbouring_values_keep_apart() {
-        for id in 1..LAYOUTS.len() as u8 {
+        for id in 1..USER_LAYOUTS {
             let b: Vec<_> = (0..8).map_while(|i| field_box(id, RIDE_H, i)).collect();
             for pair in b.windows(2).filter(|p| p[0].1 == p[1].1) {
                 let at = |bx| {
@@ -893,7 +893,7 @@ pub(crate) mod tests {
     #[test]
     fn ride_layouts_tile_and_fit() {
         for (h, theme) in metric_ends().into_iter().map(|t| (RIDE_H, t)) {
-            for n in 1..LAYOUTS.len() as u8 {
+            for n in 1..USER_LAYOUTS {
                 let b: Vec<_> = (0..8).map_while(|i| field_box(n, h, i)).collect();
                 assert_eq!(b.len(), field_count(n));
                 assert!(b.len() <= crate::page::CELLS, "a page keeps eight fields");
@@ -942,9 +942,8 @@ pub(crate) mod tests {
     #[test]
     fn gauge_fits_and_moves_in_place() {
         // a box under 64 px (the rows of BIG+1+2X2) draws the gauge's number smaller: left out
-        let rides = (1..LAYOUTS.len() as u8)
-            .flat_map(|n| (0..6).filter_map(move |i| field_box(n, RIDE_H, i)))
-            .filter(|b| b.3 >= 64);
+        let rides =
+            (1..USER_LAYOUTS).flat_map(|n| (0..6).filter_map(move |i| field_box(n, RIDE_H, i))).filter(|b| b.3 >= 64);
         // the overview's boxes are 60 px since the TODAY card grew: the same rule as a ride page's small boxes
         for bx in rides.chain((0..4).filter_map(overview_box).filter(|b| b.3 >= 64)) {
             let cols = gauge_cols(bx);
@@ -1042,7 +1041,7 @@ pub(crate) mod tests {
             "99.99", "100.0", "1:00|00", "59:59", "12:34|56", "1.6K 6%", "12K 10%", "200-220", "50/50", "-12.5",
             "CRIT", "9999K", "88/88",
         ];
-        let boxes: Vec<_> = (1..LAYOUTS.len() as u8)
+        let boxes: Vec<_> = (1..USER_LAYOUTS)
             .flat_map(|n| (0..8).filter_map(move |i| field_box(n, RIDE_H, i)))
             .chain((0..4).filter_map(overview_box))
             .collect();

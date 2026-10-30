@@ -842,7 +842,7 @@ fn climb_page_picture() {
     app.press(&mut sim, Press::Short(Key::Start));
     let t0 = sim.ms;
     let boxes = |app: &App| {
-        let a = ui::climb_area(ui::field_box(15, ui::RIDE_H, 0).unwrap());
+        let a = ui::climb_area(ui::field_box(16, ui::RIDE_H, 1).unwrap());
         (a, app.climb_text_boxes(a).unwrap().map(|(b, _)| b))
     };
     // the figures just after the climb's start (the bar at its foot: columns 3 on of the left box are clear of it)

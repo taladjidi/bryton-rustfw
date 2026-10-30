@@ -250,9 +250,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
   the screens (S4) read (`segment_now`, `events`); the efforts (S5): each finish's times kept in RAM, written after the
   ride's save (`<id>.pr`, `efforts.csv`), the `.pr` the PR target at the next load. Nothing drawn.
-- `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the SEGMENT page opened
-  at a start and closed at the end, the result card, the SEGMENTS menu's list rows (headers read from the card).
-- `src/ui/segment.rs`: the SEGMENT page (character cells redrawn when they change, the bar's marks) and the result card.
+- `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the head box of the CLIMB page
+  (`head_text`), the result card, the SEGMENTS menu's list rows (headers read from the card).
+- `src/ui/segment.rs`: the CLIMB page's head box (`SegHead`: the name, the delta in big digits, the target; characters
+  redrawn when they change) and the result card.
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
 - `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the

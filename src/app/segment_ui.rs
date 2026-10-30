@@ -1,8 +1,8 @@
 //! What the rider sees of a live segment (docs/segments.md, "Screens"; step S4): the banners for the events of
-//! app/segments.rs, the SEGMENT page that opens at a segment's start and closes at its end (as the CLIMB page does at
-//! a climb: once per start, only over a ride page, only while recording, and not again once the rider dismissed it),
-//! the result card at the finish (any key, or [`CARD_MS`]), and the rows of SETTINGS > SEGMENTS. Drawing is
-//! ui/segment.rs: the page redraws once a second, boxes that changed only. Nothing here writes to the card.
+//! app/segments.rs, the head box of the CLIMB page ([`Field::SegHead`]; the page itself is one with the climb pacer's:
+//! app/profile.rs opens it at a segment's start, and it leaves the round at the finish or the loss), the result card
+//! at the finish (any key, or [`CARD_MS`]), and the rows of SETTINGS > SEGMENTS. Drawing is ui/segment.rs. Nothing
+//! here writes to the card.
 
 use crate::segment::{Effort, Header, KEPT};
 use crate::segment_match::Event;
@@ -30,15 +30,12 @@ pub(crate) struct ListRow {
 pub(crate) struct SegUi {
     /// A segment is being ridden and its page was offered (it stays latched until the segment ends).
     on: bool,
-    /// The screen the page or the card returns to.
+    /// The screen the card returns to.
     prev: Screen,
     /// Events handled ([`Segments::count`]).
     seen: usize,
     /// The segment to say "approaching" for: the pass loop reads its name from the card.
     pub(crate) announce: Option<u32>,
-    shown: ui::segment::Shown,
-    /// The second the page was last updated at.
-    second: u32,
     card_ms: u32,
     /// The finish: segment id, time, and the deltas against the kept targets.
     result: Option<(u32, u32, [Option<i32>; KEPT])>,
@@ -56,8 +53,6 @@ impl SegUi {
             prev: Screen::Main,
             seen: 0,
             announce: None,
-            shown: ui::segment::Shown::default(),
-            second: 0,
             card_ms: 0,
             result: None,
             first: 0,
@@ -95,32 +90,54 @@ impl SegUi {
     }
 }
 
+/// The head box's lines, owned (the box borrows them: [`HeadText::head`]).
+pub(crate) struct HeadText {
+    top: Line<32>,
+    big: Line<8>,
+    ink: u16,
+    sub: Line<16>,
+}
+
+impl HeadText {
+    /// The lines as the box draws them.
+    pub(crate) fn head(&self) -> ui::segment::Head<'_> {
+        ui::segment::Head { top: self.top.as_str(), big: self.big.as_str(), ink: self.ink, sub: self.sub.as_str() }
+    }
+}
+
 impl App {
-    /// `f` over what the SEGMENT page shows now; None when no segment is ridden.
-    fn with_segment_now<R>(&self, f: impl FnOnce(&ui::segment::Now) -> R) -> Option<R> {
-        let n = self.segment_now()?;
-        Some(f(&ui::segment::Now {
-            name: ascii(n.name),
-            delta_s: n.delta_s,
-            target: n.target.map_or("", effort_label),
-            elapsed_s: n.elapsed_s,
-            left_m: n.left_m,
-            along_m: n.along_m,
-            ghost_m: n.ghost_m,
-            total_m: n.along_m.saturating_add(n.left_m),
-        }))
-    }
-
-    /// The page, drawn whole (`show` then notes what it left: [`App::segment_printed`]).
-    pub(crate) fn draw_segment(&self, c: &mut impl Canvas) {
-        self.with_segment_now(|n| ui::segment::draw(c, n));
-    }
-
-    /// What the page shows, as drawn (set when the screen is shown).
-    pub(crate) fn segment_printed(&mut self) {
-        let mut s = ui::segment::Shown::default();
-        self.with_segment_now(|n| ui::segment::update(&mut NoCanvas, n, &mut s));
-        self.seg_ui.shown = s;
+    /// What the head box of the CLIMB page shows: the segment ridden (its name, the delta against the target, the
+    /// target's label), else the climb (its title, the time to the top); None with neither.
+    pub(crate) fn head_text(&self) -> Option<HeadText> {
+        let mut h = HeadText { top: Line::new(), big: Line::new(), ink: ui::WHITE, sub: Line::new() };
+        if let Some(n) = self.segment_now() {
+            h.top.push_str(ascii(n.name.get(..n.name.len().min(32)).unwrap_or(&[])));
+            h.big.push_str(ui::segment::delta_text(n.delta_s).as_str());
+            h.ink = ui::segment::delta_color(n.delta_s);
+            match n.target {
+                Some(e) => {
+                    h.sub.push_str("VS ");
+                    h.sub.push_str(effort_label(e));
+                }
+                None => h.sub.push_str("NO TARGET"),
+            }
+            return Some(h);
+        }
+        let k = self.climb_view()?.climb;
+        h.top.push_str("CLIMB ");
+        ui::card::push_km(&mut h.top, k.len_m);
+        h.top.push_str(" KM ");
+        h.top.push_u32(k.grade_x10().div_ceil(10).max(1));
+        h.top.push_str("%");
+        match self.pace_now(0).pace {
+            // in steps of 5 s: the plan is an estimate, and a big digit a second is the page's dearest redraw
+            Some(s) if self.pace.plan.n > 0 => {
+                h.big.push_str(ui::segment::time_text(u32::from(s).next_multiple_of(5).min(3599)).as_str())
+            }
+            _ => h.big.push_str("--"),
+        }
+        h.sub.push_str("TO THE TOP");
+        Some(h)
     }
 
     /// The result card, drawn whole.
@@ -181,82 +198,55 @@ impl App {
         for (l, kind) in said.into_iter().flatten() {
             self.say_as(l.as_str(), kind);
         }
+        // the page is the CLIMB page: app/profile.rs opens it for `climb.seg`, and it leaves the round when the
+        // segment is over
         let ridden = self.segment_now().is_some();
         if ridden && !self.seg_ui.on {
-            self.seg_ui.on = true;
-            self.open_segment_page(b);
+            (self.seg_ui.on, self.climb.seg) = (true, true);
         } else if !ridden && self.seg_ui.on {
-            self.seg_ui.on = false;
+            (self.seg_ui.on, self.climb.seg) = (false, false);
             self.close_segment_page(b);
         }
-        let second = self.up_ms / 1000;
-        match self.screen {
-            Screen::Segment if second != self.seg_ui.second => {
-                self.seg_ui.second = second;
-                let mut shown = self.seg_ui.shown;
-                let (area, look) = (self.area(), self.look());
-                self.with_segment_now(|n| ui::segment::update(&mut Panel(b, area, look), n, &mut shown));
-                self.seg_ui.shown = shown;
-            }
-            Screen::SegmentResult => {
-                self.seg_ui.card_ms = self.seg_ui.card_ms.saturating_add(self.dt_ms);
-                if self.seg_ui.card_ms >= CARD_MS {
-                    self.leave_segment(b);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The segment started: the page opens over a ride page of a recording ride, once (a menu or other screen up: not
-    /// for this segment; a finger or key down: the next pass tries again, as the CLIMB page does).
-    fn open_segment_page(&mut self, b: &mut impl Board) {
-        if !matches!(self.screen, Screen::Main | Screen::Ride(_)) || self.ride.state() != ride::State::Running {
-            return;
-        }
-        if self.touch.down() || self.keys.any_down() {
-            self.seg_ui.on = false; // tried again at the next pass
-            return;
-        }
-        (self.seg_ui.prev, self.screen) = (self.screen, Screen::Segment);
-        self.seg_ui.second = self.up_ms / 1000;
-        self.show(b);
-    }
-
-    /// The segment ended (finished, lost, dropped, LIVE SEGMENTS off): the card if it finished, else back.
-    fn close_segment_page(&mut self, b: &mut impl Board) {
-        let card = self.seg_ui.result.is_some()
-            && matches!(self.screen, Screen::Segment | Screen::Main | Screen::Ride(_))
-            && self.segments().is_some_and(|s| self.seg_ui.result.is_some_and(|r| s.seg().header.id == r.0));
-        if card {
-            if self.screen != Screen::Segment {
-                self.seg_ui.prev = self.screen;
-            }
-            self.screen = Screen::SegmentResult;
-            self.seg_ui.card_ms = 0;
-            self.show(b);
-        } else {
-            self.seg_ui.result = None;
-            if self.screen == Screen::Segment {
+        if self.screen == Screen::SegmentResult {
+            self.seg_ui.card_ms = self.seg_ui.card_ms.saturating_add(self.dt_ms);
+            if self.seg_ui.card_ms >= CARD_MS {
                 self.leave_segment(b);
             }
         }
     }
 
-    /// Back to the screen the page or the card came from (the first ride page if that one is off now).
+    /// The segment ended (finished, lost, dropped, LIVE SEGMENTS off): the card if it finished, over the screen it
+    /// ends on; else nothing (the CLIMB page leaves the round and the screen moves on).
+    fn close_segment_page(&mut self, b: &mut impl Board) {
+        let card = self.seg_ui.result.is_some()
+            && matches!(self.screen, Screen::Main | Screen::Ride(_))
+            && self.segments().is_some_and(|s| self.seg_ui.result.is_some_and(|r| s.seg().header.id == r.0));
+        if card {
+            self.seg_ui.prev = self.screen;
+            self.screen = Screen::SegmentResult;
+            self.seg_ui.card_ms = 0;
+            self.show(b);
+        } else {
+            self.seg_ui.result = None;
+        }
+    }
+
+    /// Back to the screen the card came from (the page after the CLIMB page's anchor if that one left the round,
+    /// the first ride page if another is off now).
     pub(crate) fn leave_segment(&mut self, b: &mut impl Board) {
         self.seg_ui.result = None;
         self.screen = match self.seg_ui.prev {
+            Screen::Ride(CLIMB) if !self.page_on(CLIMB) => self.ride_page(place(self.climb.after) + 1, 1),
             Screen::Ride(n) if n != OVERVIEW && !self.page_on(n) => self.ride_page(0, 1),
             s => s,
         };
         self.show(b);
     }
 
-    /// The page or the card on screen. Start and Lap are the ride's (pause, lap) on both, never swallowed while a ride
-    /// runs (the card closes first); the long presses (Lap held, Page held, Start held) go to the ride page the
-    /// screen was over, after it closes; Page and Lap still held are ignored; while recording a tap, hold or drag is
-    /// ignored (rain, gloves) and only a swipe closes. Anything else closes.
+    /// The card on screen. Start and Lap are the ride's (pause, lap), never swallowed while a ride runs (the card
+    /// closes first); the long presses (Lap held, Page held, Start held) go to the ride page the screen was over,
+    /// after it closes; Page and Lap still held are ignored; while recording a tap, hold or drag is ignored (rain,
+    /// gloves) and only a swipe closes. Anything else closes.
     pub(crate) fn input_segment(
         &mut self,
         b: &mut impl Board,
@@ -266,14 +256,11 @@ impl App {
         shown: Seen,
     ) {
         let running = self.ride.state() != ride::State::Idle;
-        let card = self.screen == Screen::SegmentResult;
         match i {
             Input::NextHeld | Input::PrevHeld => {}
             Input::Touch(Gesture::Tap(..) | Gesture::Hold(..) | Gesture::Drag(..)) if recording => {}
             Input::Select | Input::Prev if running => {
-                if card {
-                    self.leave_segment(b);
-                }
+                self.leave_segment(b);
                 if i == Input::Select { self.start_key(b) } else { self.lap() }
             }
             Input::Media | Input::Menu | Input::End => {
@@ -365,11 +352,4 @@ impl App {
         }
         Some(())
     }
-}
-
-/// A canvas that draws nothing: what a page would leave on screen, without drawing it.
-struct NoCanvas;
-impl Canvas for NoCanvas {
-    fn fill(&mut self, _: u32, _: u32, _: u32, _: u32, _: u16) {}
-    fn blit(&mut self, _: u32, _: u32, _: u32, _: u32, _: &mut dyn FnMut(u32, u32) -> u16) {}
 }

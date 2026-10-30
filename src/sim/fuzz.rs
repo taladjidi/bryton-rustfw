@@ -1858,14 +1858,16 @@ fn history_by_chance() {
 #[test]
 fn page_edits() {
     use crate::page::{CELLS, Page, ROWS};
-    use crate::ui::{Field, LAYOUTS};
+    use crate::ui::Field;
     let mut done = [0u32; 6];
     let mut refused = [0u32; 6];
     let mut noise = bytes(2024, 1 << 18);
     let mut next = || u32::from(noise.next().unwrap_or(0));
     for _ in 0..2000 {
         let fields: [Field; CELLS] = core::array::from_fn(|_| Field::from_index(next() % Field::ALL.len() as u32));
-        let Some(mut p) = Page::preset(1 + (next() % (LAYOUTS.len() as u32 - 1)) as u8, fields) else { continue };
+        let Some(mut p) = Page::preset(1 + (next() % (u32::from(crate::ui::USER_LAYOUTS) - 1)) as u8, fields) else {
+            continue;
+        };
         for _ in 0..20 {
             let k = next() as usize % (p.cells() + 1); // one past the last too
             let f = Field::from_index(next() % Field::ALL.len() as u32);

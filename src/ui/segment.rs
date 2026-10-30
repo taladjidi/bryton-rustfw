@@ -1,103 +1,55 @@
-//! The live segment screens (docs/segments.md, "Screens"): the SEGMENT page, shown while a segment is ridden, and the
-//! result card at its finish. Pure drawing against [`Canvas`]. The page draws whole once; then each second [`update`]
-//! redraws only the boxes whose text changed (the delta, the target's label, the time, the distance left) and, when
-//! one moved, the marks on the bar, never a whole line. Ahead is GREEN, behind ACCENT; red is for alarms only.
+//! The live segment's head box and the result card (docs/segments.md, "Screens"). The head is a field of the CLIMB
+//! page ([`crate::Field::SegHead`]): the name, the delta in big digits and the target's label; the page's other boxes
+//! (profile, gauge, time, distance left) are the field machinery's. Pure drawing against [`Canvas`]: [`update_head`]
+//! redraws only what changed, a character of the delta at a time. Ahead is GREEN, behind ACCENT; red is for alarms only.
 
-use super::{ACCENT, BLACK, Canvas, DARK, GREEN, GREY, LABEL, PAGE_Y, VALUE, W, WHITE};
+use super::{ACCENT, Canvas, GREEN, GREY, LABEL, VALUE};
 use crate::text::{self, Align, Line, Style};
+use crate::ui::W;
 
 /// The delta, as large as a line of "+99:59" allows (6 characters of 36 px).
 const BIG: Style = Style { scale: 6, ..VALUE };
-const BIG_H: u32 = 60;
-const NAME_Y: u32 = PAGE_Y + 4;
-const DELTA_Y: u32 = NAME_Y + 26;
-const TARGET_Y: u32 = DELTA_Y + BIG_H + 4;
-/// The bar: its track, and the marks (taller than the track, centred on it).
-const BAR_X: u32 = 12;
-const BAR_W: u32 = W - 2 * BAR_X;
-const BAR_Y: u32 = TARGET_Y + 36;
-const TRACK_H: u32 = 12;
-const MARK_W: u32 = 4;
-const MARK_H: u32 = 28;
-const TIME_Y: u32 = BAR_Y + 44;
-const LEFT_Y: u32 = TIME_Y + 46;
-/// The numbers' boxes: a caption on the left, the value right-aligned in a box of its own, a unit after it.
-const NUM_X: u32 = 100;
-const NUM_W: u32 = 104;
-const UNIT_X: u32 = NUM_X + NUM_W + 6;
-/// A colour for the ghost's mark (the rider's is white).
-const GHOST: u16 = GREY;
+/// Rows of the head box: the top line, the big line (60 px) and the small line under it.
+const TOP_Y: u32 = 3;
+const BIG_Y: u32 = TOP_Y + 18;
+const SUB_Y: u32 = BIG_Y + 61;
+/// The card's top.
+const NAME_Y: u32 = crate::ui::PAGE_Y + 4;
+/// Characters in the big line.
+const CELLS: usize = 6;
 
-/// What the page shows.
+/// What the head box shows.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Now<'a> {
-    /// The segment's name.
-    pub name: &'a str,
-    /// Elapsed minus the target's time, s (negative: ahead); None without a target.
-    pub delta_s: Option<i32>,
-    /// The target's label ("PR", "KOM"...), empty without one.
-    pub target: &'a str,
-    /// Seconds since the start.
-    pub elapsed_s: u32,
-    /// Distance left, m.
-    pub left_m: u32,
-    /// The rider's place along the segment, m.
-    pub along_m: u32,
-    /// The target's place now, m (None without a target).
-    pub ghost_m: Option<u32>,
-    /// The segment's length, m.
-    pub total_m: u32,
+pub struct Head<'a> {
+    /// The line on top: the segment's name, or the climb's title.
+    pub top: &'a str,
+    /// The big line (at most 6 characters): the delta, or the time to the top.
+    pub big: &'a str,
+    /// The big line's colour.
+    pub ink: u16,
+    /// The small grey line under it: "VS PR", "TO THE TOP".
+    pub sub: &'a str,
 }
 
-/// What is on screen: one fingerprint per box, then the marks' columns (None: not drawn).
+/// What is on screen of a head box: a fingerprint of each line, the big line's characters and its ink. The default is
+/// nothing drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Shown {
-    /// The name and the target's label (drawn whole, they change once).
+pub struct HeadShown {
     prints: [u32; 2],
-    /// The delta, the elapsed time, the distance left: one cell per character, only a changed character is redrawn.
-    delta: Cells<6>,
-    time: Cells<7>,
-    left: Cells<5>,
-    unit: u32,
-    rider: Option<u32>,
-    ghost: Option<u32>,
-}
-
-/// A number drawn in fixed character cells (the font is monospaced): the characters on screen (0: nothing yet) and
-/// their ink.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Cells<const N: usize> {
-    ch: [u8; N],
+    big: [u8; CELLS],
     ink: u16,
 }
 
-impl<const N: usize> Default for Cells<N> {
-    fn default() -> Self {
-        Cells { ch: [0; N], ink: 0 }
-    }
-}
-
-impl<const N: usize> Cells<N> {
-    /// Draws `s` in `N` cells of `style` from `x`, right-aligned (`centre`: in the middle of them), only the cells
-    /// whose character or ink differ from what is on screen.
-    fn update(&mut self, c: &mut impl Canvas, style: &Style, x: u32, y: u32, s: &str, centre: bool) {
-        let cw = style.width("8");
-        let pad = if centre { N.saturating_sub(s.len()) / 2 } else { N.saturating_sub(s.len()) };
-        let mut want = [b' '; N];
-        for (w, b) in want.iter_mut().skip(pad).zip(s.bytes()) {
+impl Head<'_> {
+    /// What this head shows, as [`HeadShown`] keeps it.
+    pub fn shown(&self) -> HeadShown {
+        let mut big = [b' '; CELLS];
+        // centred in its cells
+        let pad = CELLS.saturating_sub(self.big.len()) / 2;
+        for (w, b) in big.iter_mut().skip(pad).zip(self.big.bytes()) {
             *w = b;
         }
-        let redraw_all = style.fg != self.ink;
-        for (k, (w, old)) in want.iter().zip(&mut self.ch).enumerate() {
-            if *w == *old && !redraw_all {
-                continue;
-            }
-            *old = *w;
-            let mut one = [0u8; 4];
-            let t = (*w as char).encode_utf8(&mut one);
-            text::draw_in(c, style, x + k as u32 * cw, y, cw, Align::Left, t);
-        }
-        self.ink = style.fg;
+        HeadShown { prints: [fnv(1, self.top), fnv(3, self.sub)], big, ink: self.ink }
     }
 }
 
@@ -154,8 +106,8 @@ pub fn delta_color(d: Option<i32>) -> u16 {
     }
 }
 
-/// A distance left: "850" (m) or "1.2" (km), and its unit.
-fn left_text(m: u32) -> (Line<8>, &'static str) {
+/// A distance left, for the page and the field: "850" (m) or "1.2" (km), and its unit.
+pub fn left_text(m: u32) -> (Line<8>, &'static str) {
     let mut l = Line::new();
     if m < 1000 {
         l.push_u32(m);
@@ -168,75 +120,32 @@ fn left_text(m: u32) -> (Line<8>, &'static str) {
     }
 }
 
-/// The bar column (0 to the track's width less a mark) of `m` along a segment of `total` m.
-fn column(m: u32, total: u32) -> u32 {
-    if total == 0 { 0 } else { (u64::from(m.min(total)) * u64::from(BAR_W - MARK_W) / u64::from(total)) as u32 }
+/// The head box `bx` whole.
+pub fn draw_head(c: &mut impl Canvas, bx: (u32, u32, u32, u32), h: &Head) {
+    update_head(c, bx, &HeadShown::default(), h);
 }
 
-fn draw_marks(c: &mut impl Canvas, old: (Option<u32>, Option<u32>), new: (Option<u32>, Option<u32>)) {
-    let y = BAR_Y - (MARK_H - TRACK_H) / 2;
-    // a moved mark: its old column given back to the background and the track, then both marks (the rider on top)
-    for x in [old.0, old.1].into_iter().flatten() {
-        c.fill(BAR_X + x, y, MARK_W, MARK_H, BLACK);
-        c.fill(BAR_X + x, BAR_Y, MARK_W, TRACK_H, DARK);
+/// The head box `bx` as `old` was drawn: the lines whose text changed, and the characters of the big line that did
+/// (all of them in a new colour), never a whole line for one character.
+pub fn update_head(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), old: &HeadShown, h: &Head) {
+    let new = h.shown();
+    let inner = w.saturating_sub(16);
+    if new.prints[0] != old.prints[0] {
+        text::draw_in(c, &LABEL, x + 8, y + TOP_Y, inner, Align::Centre, h.top);
     }
-    for (x, col) in [(new.1, GHOST), (new.0, WHITE)] {
-        if let Some(x) = x {
-            c.fill(BAR_X + x, y, MARK_W, MARK_H, col);
+    if new.prints[1] != old.prints[1] {
+        text::draw_in(c, &Style { fg: GREY, ..LABEL }, x + 8, y + SUB_Y, inner, Align::Centre, h.sub);
+    }
+    let big = Style { fg: h.ink, ..BIG };
+    let cw = big.width("8");
+    let left = x + w.saturating_sub(CELLS as u32 * cw) / 2;
+    for (k, (a, b)) in new.big.iter().zip(&old.big).enumerate() {
+        // a new colour redraws the characters with ink, not the blank cells
+        if a != b || (new.ink != old.ink && (*a != b' ' || *b != b' ')) {
+            let mut one = [0u8; 4];
+            let t = (*a as char).encode_utf8(&mut one);
+            text::draw_in(c, &big, left + k as u32 * cw, y + BIG_Y, cw, Align::Left, t);
         }
-    }
-}
-
-/// The whole page: the track and the captions, then every box.
-pub fn draw(c: &mut impl Canvas, now: &Now) -> Shown {
-    c.fill(BAR_X, BAR_Y, BAR_W, TRACK_H, DARK);
-    let grey = Style { fg: GREY, ..LABEL };
-    text::draw(c, &grey, 8, TIME_Y + 10, Align::Left, "TIME");
-    text::draw(c, &grey, 8, LEFT_Y + 10, Align::Left, "LEFT");
-    let mut shown = Shown::default();
-    update(c, now, &mut shown);
-    shown
-}
-
-/// Redraws the boxes whose text changed since `shown` (all of them when it is the default: a fingerprint is never 0),
-/// and the marks when one moved.
-pub fn update(c: &mut impl Canvas, now: &Now, shown: &mut Shown) {
-    let (time, (left, unit)) = (time_text(now.elapsed_s), left_text(now.left_m));
-    let delta = delta_text(now.delta_s);
-    let prints = [fnv(1, now.name), fnv(3, now.target)];
-    let w = W - 16;
-    let grey = Style { fg: GREY, ..LABEL };
-    for (i, (&p, old)) in prints.iter().zip(&mut shown.prints).enumerate() {
-        if p == *old {
-            continue;
-        }
-        *old = p;
-        if i == 0 {
-            text::draw_in(c, &LABEL, 8, NAME_Y, w, Align::Centre, now.name);
-        } else {
-            let mut l = Line::<16>::new();
-            if now.target.is_empty() {
-                l.push_str("NO TARGET");
-            } else {
-                l.push_str("VS ");
-                l.push_str(now.target);
-            }
-            text::draw_in(c, &grey, 8, TARGET_Y, w, Align::Centre, l.as_str());
-        }
-    }
-    let big = Style { fg: delta_color(now.delta_s), ..BIG };
-    shown.delta.update(c, &big, (W - 6 * big.width("8")) / 2, DELTA_Y, delta.as_str(), true);
-    shown.time.update(c, &VALUE, W - 8 - 7 * VALUE.width("8"), TIME_Y, time.as_str(), false);
-    shown.left.update(c, &VALUE, NUM_X + NUM_W - 5 * VALUE.width("8"), LEFT_Y, left.as_str(), false);
-    let u = fnv(5, unit);
-    if u != shown.unit {
-        shown.unit = u;
-        text::draw_in(c, &grey, UNIT_X, LEFT_Y + 20, W - UNIT_X, Align::Left, unit);
-    }
-    let (rider, ghost) = (Some(column(now.along_m, now.total_m)), now.ghost_m.map(|g| column(g, now.total_m)));
-    if (rider, ghost) != (shown.rider, shown.ghost) {
-        draw_marks(c, (shown.rider, shown.ghost), (rider, ghost));
-        (shown.rider, shown.ghost) = (rider, ghost);
     }
 }
 
@@ -289,17 +198,8 @@ mod tests {
     use super::*;
     use crate::ui::tests::Frame;
 
-    fn now(delta: i32, t: u32) -> Now<'static> {
-        Now {
-            name: "A LONG SEGMENT NAME THAT IS CUT",
-            delta_s: Some(delta),
-            target: "RECENT",
-            elapsed_s: t,
-            left_m: 12_345,
-            along_m: 500,
-            ghost_m: Some(450),
-            total_m: 12_845,
-        }
+    fn head(delta: i32) -> (Line<8>, u16) {
+        (delta_text(Some(delta)), delta_color(Some(delta)))
     }
 
     /// The text of the delta and its colours: ahead green, behind the accent, none grey.
@@ -313,41 +213,45 @@ mod tests {
         assert_eq!(time_text(3723).as_str(), "1:02:03");
         assert_eq!(time_text(6300).as_str(), "1:45:00");
         assert_eq!([-1, 0, 1].map(|d| delta_color(Some(d))), [GREEN, GREEN, ACCENT]);
+        assert_eq!(left_text(850).0.as_str(), "850");
+        assert_eq!(left_text(1250).0.as_str(), "1.2");
     }
 
-    /// Updating cell by cell gives the picture of drawing whole, at both fonts, and a second costs a few cells.
+    /// Updating character by character gives the picture of drawing whole, at both fonts, and a second costs a few
+    /// cells.
     #[test]
     fn update_equals_whole_draw_and_is_small() {
+        let bx = (0, crate::ui::PAGE_Y, W, 98);
+        let name = "A LONG SEGMENT NAME THAT IS CUT";
         for smooth in [false, true] {
             let mut f = Frame::new();
             f.smooth = smooth;
-            let mut shown = draw(&mut f, &now(-69, 599));
+            let (a, b) = (head(-69), head(-68));
+            fn h<'a>(name: &'a str, d: &'a (Line<8>, u16)) -> Head<'a> {
+                Head { top: name, big: d.0.as_str(), ink: d.1, sub: "VS RECENT" }
+            }
+            draw_head(&mut f, bx, &h(name, &a));
             let before = f.filled();
-            update(&mut f, &now(-68, 600), &mut shown);
+            update_head(&mut f, bx, &h(name, &a).shown(), &h(name, &b));
             let cost = f.filled() - before;
             let mut whole = Frame::new();
             whole.smooth = smooth;
-            draw(&mut whole, &now(-68, 600));
+            draw_head(&mut whole, bx, &h(name, &b));
             assert!(f.px == whole.px, "smooth {smooth}");
-            assert!(cost < 12_000, "{cost} px for the carry of a minute");
-            let before = f.filled();
-            update(&mut f, &now(-67, 601), &mut shown);
-            assert!(f.filled() - before < 4000, "{} px for a second", f.filled() - before);
-            let mut h = Frame::new();
-            h.smooth = smooth;
-            let mut shown = draw(&mut h, &now(5, 3723));
-            update(&mut h, &now(5, 6300), &mut shown);
+            assert!(cost < 4000, "{cost} px for a second");
+            update_head(&mut f, bx, &h(name, &b).shown(), &h(name, &b));
+            assert_eq!(f.filled() - before, cost, "nothing changed, nothing drawn");
+            // a new colour: every character again
+            let c = head(5);
+            update_head(&mut f, bx, &h(name, &b).shown(), &h(name, &c));
             let mut whole = Frame::new();
             whole.smooth = smooth;
-            draw(&mut whole, &now(5, 6300));
-            assert!(h.px == whole.px, "past an hour, smooth {smooth}");
+            draw_head(&mut whole, bx, &h(name, &c));
+            assert!(f.px == whole.px, "colour, smooth {smooth}");
             let mut card = Frame::new();
             card.smooth = smooth;
             let rows = [Some(("PR", -31)), Some(("KOM", 5)), Some(("QOM", -33)), Some(("RECENT", -34))];
-            draw_card(
-                &mut card,
-                &Card { name: "A LONG SEGMENT NAME THAT IS CUT", elapsed_s: 5999, rows, new_pr: true },
-            );
+            draw_card(&mut card, &Card { name, elapsed_s: 5999, rows, new_pr: true });
             draw_card(&mut Frame::new(), &Card { name: "X", elapsed_s: 6300, rows, new_pr: false });
         }
     }

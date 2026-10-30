@@ -464,7 +464,7 @@ fn pages_leave_stocks_register() {
 fn every_layout_draws() {
     use Field::*;
     let fields = [Map, Speed, Hr, Power, Cadence, Timer];
-    for id in 1..ui::LAYOUTS.len() as u8 {
+    for id in 1..ui::USER_LAYOUTS {
         let mut sim = Sim::new(9, 0, 0);
         let words = PageCfg { layout: id, fields }.to_words();
         (sim.backup[20], sim.backup[21]) = (words[0], words[1]);

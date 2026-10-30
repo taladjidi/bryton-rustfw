@@ -856,7 +856,7 @@ mod tests {
     /// and back; every number of cells has one.
     #[test]
     fn every_preset_round_trips() {
-        for id in 1..ui::LAYOUTS.len() as u8 {
+        for id in 1..ui::USER_LAYOUTS {
             let p = Page::preset(id, F).unwrap();
             assert!(p.valid(), "layout {id}");
             assert_eq!((p.preset_id(), p.cells()), (Some(id), ui::field_count(id)));
@@ -956,7 +956,7 @@ mod tests {
     /// A page's MORE variant: eight readable cells whatever the page holds, the page's own fields first.
     #[test]
     fn the_default_more_is_dense_and_readable() {
-        for id in 1..ui::LAYOUTS.len() as u8 {
+        for id in 1..ui::USER_LAYOUTS {
             for fields in [F, [Map; CELLS], [Graph, Hr, Map, AltGraph, Power, Cadence, Dist, Timer]] {
                 let m = Page::preset(id, fields).unwrap().more_of();
                 assert!(m.valid() && m.cells() == CELLS, "layout {id}: {m:?}");

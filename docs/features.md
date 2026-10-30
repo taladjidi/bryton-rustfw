@@ -636,7 +636,7 @@ copied over USB into `\Courses`, read only:
   has a wider threshold (half the spacing plus 25 m), since its chords cut the bends.
 - **Climbs** as Garmin's ClimbPro defines them (500 m at 3 % at least), found when the course is read; at a
   climb's start a banner ("CLIMB 2.0 KM 6%") and a beep.
-- **CLIMB page:** opens once at a climb's start (a followed course, or climbs ahead without one): the climb's profile coloured by grade with the part done darker, gain, length and grade on it, the grade and the climb coach below; not added when one of the rider's pages already shows climb fields.
+- **CLIMB page:** one page for a live segment and for a climb (a followed course, or climbs ahead without one), in the round of ride pages. It opens once at each segment's start and each climb's start, over the ride page the rider is on (only while recording), and leaves the round at the segment's finish or loss and at the climb's top. From the top: the head (a segment: its name, the delta in big digits and the target; a climb: its title and the time to the top), the profile coloured by grade with the part done darker, the rider white and, on a segment, the target's place as a grey mark, the climb coach's gauge (power against the band for this section, the time to the top), then the time on it and the distance left. A segment and a climb at once: the segment drives the page (the profile and the distance are the segment's, the coach plans over the segment when its file has altitudes, else over the climb). Not added for a climb alone when one of the rider's pages already shows climb fields; a segment's page always opens.
 - **Climb pacer** (pacing.rs, the TOP field, on the course page in place of the distance): within 5 km of a climb
   and on it (the followed course's, else the road ahead's; and, in a live segment being ridden, the rest of the segment
   from its file's altitudes, on its own 200 m grid, until it ends or is lost), the power to ride each 200 m section to reach the top soonest, from one CP / W' model (the fit of the
@@ -740,11 +740,14 @@ Segment files in `\Rustfw\Segments\` (`<id>.seg`, docs/segments.md) are matched 
 runs (SEGMENTS > LIVE SEGMENTS, ON by default). Put them on the card with `tools/segments.py` (`fetch`, `build`, `write
 --volume`, docs/segments.md): the unit writes there only the rider's efforts (below), after a ride is saved.
 - **Approach**: a banner `SEGMENT <name> 300 M`, once. **Lost** (off the track 10 s, a U-turn, stopped 5 min): `SEGMENT LOST`.
-- **The SEGMENT page** opens by itself at the start, over the ride page the rider was on (only while recording, not over
-  a menu), and goes back at the end or when lost. Name, the delta in big digits (`-0:12` ahead in GREEN, `+0:08` behind in
-  the accent, never red), the target's label (`VS PR`), a bar with two marks (white: the rider, grey: the target's ghost),
-  the time and the distance left. Start and Lap keep their ride meaning; any other key closes the page, and it does not
-  reopen for that segment. Only the changed characters and marks are redrawn, once a second.
+- **The segment's page** is the CLIMB page (above): it opens by itself at the start, over the ride page the rider was on
+  (only while recording, not over a menu), stays in the round when the rider pages away (Page finds it again), and leaves
+  it at the finish (the result card follows) or when lost. Name, the delta in big digits (`-0:12` ahead in GREEN,
+  `+0:08` behind in the accent, never red), the target's label (`VS PR`), the segment's own profile with the rider's place
+  (white) and the target's (grey) and the pacer's gauge (the power to ride for the ideal pacing, from the file's
+  altitudes); a segment file without altitudes shows its bar with both marks instead of the profile. Under them, the time
+  on the segment and the distance left. Keys act as on any ride page. Only the changed characters and marks are redrawn,
+  once a second.
 - **The finish**: a banner with the time and the delta, then the result card (the time, the delta against each target
   the file keeps, NEW PR when the PR is beaten or there was none: the same rule as the `.pr` written), closed by any key or after 10 s.
 - **Efforts:** at a finish the effort (its time at each of the segment's points, as ridden) is kept in RAM, at most 4
@@ -757,7 +760,7 @@ runs (SEGMENTS > LIVE SEGMENTS, ON by default). Put them on the card with `tools
 - **TARGET**: AUTO is the PR if the file has one, else the KOM; a target the file lacks falls back to AUTO.
 - LIVE SEGMENTS and TARGET are in settings.bin at data 97 and 98; an older file reads ON and AUTO.
 
-![Segment page, ahead](img/segment-ahead.png) ![Segment page, behind](img/segment-behind.png) ![Result card](img/segment-card.png) ![SEGMENTS menu](img/segment-menu.png)
+![CLIMB page on a segment, ahead](img/segment-ahead.png) ![CLIMB page on a segment, behind](img/segment-behind.png) ![Result card](img/segment-card.png) ![SEGMENTS menu](img/segment-menu.png)
 
 ## Climbs ahead (no course)
 

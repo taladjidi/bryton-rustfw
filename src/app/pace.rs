@@ -61,7 +61,7 @@ impl App {
             // the source: a segment ridden (with a profile), else the climb in view (course, else road ahead)
             let seg =
                 self.segment_now().filter(|n| self.segments.as_deref().is_some_and(|s| s.alt_at(n.along_m).is_some()));
-            let climb = self.climb_now();
+            let climb = self.climb_view();
             let by_seg = |m| self.segments.as_deref()?.alt_at(m);
             let by_climb = |m| climb.as_ref().and_then(|n| self.climb_alt(n, m));
             let alt: &dyn Fn(u32) -> Option<i32>;

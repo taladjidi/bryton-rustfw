@@ -104,10 +104,14 @@ elapsed time minus the target's. Shown as `-0:12` (ahead) or `+0:08` (behind). C
 for alarms only, features.md).
 
 **Screens.**
-- The SEGMENT page opens by itself at the start, as the CLIMB page does at a climb (reuse that mechanism), and
-  closes at the finish or when lost, back to the page the rider was on. It shows: the name, the delta (largest), the
-  elapsed time, the distance left, a bar with two marks (the rider, the ghost), the target's label. Redraw: the
-  delta's and the numbers' own cells only (AGENTS.md, redraw only what changes).
+- The segment's page is the CLIMB page (one page for segments and climbs, 2026-10-30): it opens by itself at the
+  start, as it does at a climb, stays in the round of ride pages (paging away and on finds it again) and leaves it at
+  the finish or when lost, the card following the finish. It is built of fields (layout 16, `Field::SegHead`,
+  `ClimbProfile`, `ClimbPace`, `ClimbTime`, `ClimbLeft`): the name, the delta (largest) and the target's label; the
+  segment's profile (the file's altitudes, `Segments::alt_at`) with the rider white and the ghost a grey mark, or,
+  without altitudes, the bar with both marks; the pacer's gauge (the power for the ideal pacing over the segment, the
+  time to the top); the time on the segment and the distance left. Redraw: the head's changed characters, and each
+  field's own change (AGENTS.md, redraw only what changes).
 - The result: a banner with the time and the delta, and a result card (time, against each target, the new PR if
   any), closed by any key or after 10 s.
 - MENU > SEGMENTS (the main menu has no NAVIGATION row: it sits beside COURSES): LIVE SEGMENTS on / off; TARGET (AUTO: the
@@ -240,17 +244,19 @@ On the unit after S5 (docs/status.md, "Not yet seen on the unit"): a ride over t
 build: the approach banner, the page opening, the delta against a ride's split, the finish, the `.pr` written after
 the save and used as the target on the next pass.
 
-Decided in S4 (2026-10-30): the page is its own `Screen::Segment` (not a `PageCfg` page: it has a bar), opened as the CLIMB page
-is (once per start, over a ride page of a running ride, not while a key or finger is down), latched until the segment ends so a
-dismissed page stays closed; Start and Lap keep their ride meaning on it, any other input closes it. The result card is
-`Screen::SegmentResult` (any input, or 10 s). The delta, the time and the distance left are drawn per character cell (only a
-changed character), the bar's marks 4 px wide: measured in the simulator 4,400 px and 9 panel windows a second on the page
-(a whole-box redraw of the same boxes was 18,700 px). The approach banner's name and the list's distance and gain come from one
+Decided in S4 (2026-10-30), changed the same day (the owner: the page should be in the round, and share the climb
+coach's layout): the page was its own `Screen::Segment`; it is now the CLIMB page, `Screen::Ride(CLIMB)`, opened by
+app/profile.rs `open_climb` (once per start, over a ride page of a running ride, not while a key or finger is down;
+`climb.seg` is the request app/segment_ui.rs makes), so any key acts as on a ride page. The result card is
+`Screen::SegmentResult` (any input, or 10 s). The delta is drawn per character cell (only a
+changed character): measured in the simulator, with the first design (its own screen: delta, time, distance, a bar) 4,400 px and 9
+panel windows a second (a whole-box redraw of the same boxes was 18,700 px); on the fused page, at the PR's pace where the
+delta flips its colour most seconds, 8,400 px and 17 windows a second (the profile, the gauge and two values added). The approach banner's name and the list's distance and gain come from one
 read of the file's header in the pass loop (`Segments::header`: mount, folder lookup and one sector, 3 KB in the sim's pass), the list only with no ride running and for the rows
 around the selection. Settings: LIVE SEGMENTS at data 97 (0 off, 1 on), TARGET at 98 (0 to 4); older files read ON and AUTO.
 MAIN got a seventh row (SEGMENTS, after COURSES), so it scrolls. A TARGET the file lacks falls back to AUTO.
-A climb and a segment that start together: the SEGMENT page wins (decided in S4); the CLIMB page does not open for that climb
-(the segment page is the screen then, and the CLIMB latch counts it as handled). Times from an hour show as `h:mm:ss` (the
-page's time cell is seven characters wide; the card draws it at the smaller size). Input on the page and the card: Start and
+A climb and a segment at once: the segment drives the one page (its head, profile and distance); the climb's latch counts
+the page as opened for it. Times from an hour show as `h:mm:ss` (the
+page's time cell is seven characters wide; the card draws it at the smaller size). Input on the card: Start and
 Lap are the ride's and never swallowed (the card closes first); Lap held, Page held and Start held go to the ride page after
 the screen closes; Page and Lap still held are ignored; while recording a tap, hold or drag is ignored and only a swipe closes.
