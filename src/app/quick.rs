@@ -126,7 +126,7 @@ impl App {
     pub(crate) fn quick_button(&self) -> (Line<16>, u16, u16) {
         let mut l = Line::<16>::new();
         let now = self.now_s();
-        let armed = self.quick_zero.0.is_some_and(|t| !expired(t, now));
+        let armed = self.quick_zero_ok() && self.quick_zero.0.is_some_and(|t| !expired(t, now));
         let (fg, bg) = match self.powercal.phase() {
             Phase::Asking => {
                 l.push_str("ASKING...");
@@ -178,7 +178,7 @@ impl App {
     /// Takes back an expired arming, and a result shown for [`RESULT_S`].
     fn quick_zero_tick(&mut self) {
         let now = self.now_s();
-        if self.quick_zero.0.is_some_and(|t| expired(t, now)) {
+        if !self.quick_zero_ok() || self.quick_zero.0.is_some_and(|t| expired(t, now)) {
             self.quick_zero.0 = None;
         }
         if matches!(self.powercal.phase(), Phase::Done(..) | Phase::Failed | Phase::NoAnswer) {
@@ -243,11 +243,6 @@ impl App {
                     Some(kind) if (i - B_ROWS).is_multiple_of(3) => {
                         put(&mut l, kind.short());
                         ui::GREY
-                    }
-                    Some(Kind::Power) => {
-                        let (v, c, _) = self.quick_button();
-                        put(&mut l, v.as_str());
-                        c
                     }
                     Some(kind) => {
                         let (v, c) = self.quick_value(kind);

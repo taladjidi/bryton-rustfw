@@ -323,7 +323,7 @@ Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md)
   values are white too, with their state in an edge bar. The graph shows the last
   8 minutes of power (or heart rate) as a filled area, like stock's: one pixel column per 2 s, smoothed (a moving
   average, about 7 s), each column in its zone's colour, scrolling every 10 s.
-- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and CLIMB pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window; 
+- **Power average by tap:** during a ride a tap on any 3 s / 10 s / 30 s power field (ride pages, MORE, workout and CLIMB pages, the overview) cycles the window 3, 10, 30 s; every power-average field, the workout gauge and the climb pacer follow it, and it is kept across a restart (the former GAUGE POWER setting). The page editor shows each field's own window. 
 - Power (src/training/power.rs): NP is Coggan's (30 s average, 4th power mean, 4th root), IF = NP / FTP, TSS from NP and
   FTP, kcal = kJ / (4.184 x 24 % efficiency), about 1 per kJ. W' balance is the differential model (Froncioni and
   Clarke, Skiba 2015, as Golden Cheetah and Intervals.icu), with the FTP as CP; it starts full at each ride and

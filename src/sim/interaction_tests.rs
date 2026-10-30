@@ -144,8 +144,8 @@ fn media_button(b: crate::ui::media::Button) -> (u32, u32, u32, u32) {
 
 /// The quick panel: a swipe down opens it everywhere, with the media remote at its top. Playing or pausing is 2
 /// inputs (a swipe down, a tap) from the overview and from a ride page (the overview's old panel needed the same
-/// two, a ride page's swipe down opened the remote and a gesture or a tap acted); zeroing the power meter is 2 (it
-/// was 6 through SENSORS); the brightness is 2. A swipe up or Back closes it.
+/// two, a ride page's swipe down opened the remote and a gesture or a tap acted); zeroing the power meter is 3 (swipe, two
+/// taps; it was 6 through SENSORS); the brightness is 2. A swipe up or Back closes it.
 #[test]
 fn the_quick_panel_has_the_remote_the_meter_and_the_light() {
     use crate::touch::Dir;
@@ -254,6 +254,15 @@ fn zero_on_the_quick_panel_needs_two_taps_in_time() {
     tap(&mut app, &mut sim, line);
     assert_eq!((app.quick_button().0.as_str(), app.powercal.asking()), ("SURE?", false), "late: only arms again");
     super::tests::assert_consistent(&sim, &app);
+    // armed, then the meter is lost: the button is greyed ZERO, not SURE?, and a tap does nothing
+    app.quick_zero.0 = None;
+    tap(&mut app, &mut sim, line);
+    assert_eq!(app.quick_button().0.as_str(), "SURE?");
+    app.radio.heard_ms[Kind::Power as usize] = u32::MAX; // the meter is lost
+    assert_eq!(app.quick_button().0.as_str(), "ZERO", "cannot calibrate: SURE? is withdrawn");
+    tap(&mut app, &mut sim, line);
+    assert!(app.quick_zero.0.is_none() && !app.powercal.asking());
+    super::tests::assert_consistent(&sim, &app);
     // heard no more: a tap does nothing
     app.quick_zero.0 = None;
     app.radio.heard_ms[Kind::Power as usize] = u32::MAX;
@@ -263,7 +272,7 @@ fn zero_on_the_quick_panel_needs_two_taps_in_time() {
 }
 
 /// The panel left open redraws only the boxes whose value changed: with a meter, a strap, a speed sensor, a trainer
-/// and a phone, a second costs the watts' and values' boxes (a few hundred pixels), not the panel (measured below).
+/// and a phone, a second costs the values' boxes (a few hundred pixels), not the panel (measured below).
 #[test]
 fn the_quick_panel_costs_little_a_second() {
     use crate::touch::Dir;
@@ -277,7 +286,7 @@ fn the_quick_panel_costs_little_a_second() {
     assert!(per_s <= 1000, "{per_s} px/s");
 }
 
-/// Without a meter, a sensor or a phone: no power block, no sensor line, the media buttons greyed and a tap on
+/// Without a meter, a sensor or a phone: no POWER line, no sensor line, the media buttons greyed and a tap on
 /// one says so. The panel shows a low battery in red (the strap's), nothing else red.
 #[test]
 fn the_quick_panel_shows_only_what_is_paired() {
