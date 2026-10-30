@@ -471,7 +471,6 @@ mod tests {
     extern crate std;
     use super::*;
 
-    /// The metrics of `[metrics]`: clamped to their range, a word that is no number ignored, the built-ins as they were.
     #[test]
     fn overview_is_classic_or_fields() {
         let o = |v: &str| parse(std::format!("[theme]\nversion=1\noverview={v}\n").as_bytes()).unwrap().overview;
@@ -482,6 +481,7 @@ mod tests {
         assert_eq!((o("grid"), o(""), Theme::DARK.overview), (Overview::Classic, Overview::Classic, Overview::Classic));
     }
 
+    /// The metrics of `[metrics]`: clamped to their range, a word that is no number ignored, the built-ins as they were.
     #[test]
     fn metrics_are_clamped() {
         for t in [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT] {

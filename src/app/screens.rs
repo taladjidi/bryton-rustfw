@@ -523,7 +523,9 @@ impl App {
         }
         self.strip.more = self.more_shown().is_some();
         // the overview's card waits for the start-up delay; a page with a workout field reads the card at first use
-        let field = self.widgets().any(|(_, w)| w == Widget::Field(Field::Workout));
+        // not on the fields overview: its table's Workout field must not read the card at start (CALENDAR_MS)
+        let table = self.screen == Screen::Main && self.theme.overview == ui::theme::Overview::Fields;
+        let field = self.widgets().any(|(_, w)| w == Widget::Field(Field::Workout)) && !table;
         if field || self.screen == Screen::Main {
             self.refresh_calendar(b, field);
         }

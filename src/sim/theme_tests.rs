@@ -662,6 +662,37 @@ fn dark_classic_overview_is_as_before() {
     assert_eq!(hash(&sim.screen), 0x0736_09c0_d32a_0201);
 }
 
+/// The table's Workout field must not read the card at start: the calendar waits for CALENDAR_MS.
+#[test]
+fn the_fields_overview_leaves_the_card_alone_at_start() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    sim.emmc.image = crate::fat::tests::image(); // plans a workout today
+    let mut app = App::start(&mut sim, None);
+    app.theme = Theme { overview: crate::theme::Overview::Fields, ..Theme::DARK };
+    app.repaint(&mut sim);
+    assert!(app.plan.day.is_none(), "no calendar read yet");
+}
+
+/// THEME AUTO between a classic and a fields theme: the switch redraws the whole overview consistently.
+#[test]
+fn auto_theme_between_classic_and_fields_stays_consistent() {
+    let (mut sim, mut app) = unit(None);
+    app.settings.auto_theme = true;
+    app.auto_themes = [Theme::OUTDOOR, Theme { overview: crate::theme::Overview::Fields, ..Theme::DARK }];
+    app.light.day_night.night = false;
+    sim.bus.lux10 = Some(2000);
+    run(&mut sim, &mut app, 3_000);
+    sim.bus.lux10 = Some(50);
+    run(&mut sim, &mut app, 40_000);
+    assert_eq!(app.theme.overview, crate::theme::Overview::Fields, "night: the fields theme");
+    super::tests::assert_consistent(&sim, &app);
+    sim.bus.lux10 = Some(2000);
+    run(&mut sim, &mut app, 100_000);
+    assert_eq!(app.theme.overview, crate::theme::Overview::Classic, "day: the classic theme");
+    super::tests::assert_consistent(&sim, &app);
+}
+
 /// `overview = fields` at both ends of the metrics: the table replaces the card, every box is kept up to date in its
 /// own cell (the screen equals a fresh draw), a tap in the old card's area still opens today's workout or the
 /// calendar, the cog wins its corner, and the shots go to the gallery.
