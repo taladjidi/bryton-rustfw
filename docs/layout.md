@@ -295,6 +295,9 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
 - `tools/segments.py`: the live segment files (docs/segments.md): fetches the rider's segment efforts from Intervals.icu, builds
   `<id>.seg` files, writes them to the drive verified. `segments.py selftest` (check.sh) is synthetic; its fixture is
   `test-data/segment/synthetic.seg`.
+- `tools/theme.py`: the built-in colour themes as example files (`examples OUT_DIR`, never a mounted drive by default),
+  a theme file drawn through the simulator (`preview FILE`, the ignored test `theme_preview`), and its selftest; the
+  fixture is `test-data/themes/` (docs/theming.md, section 4).
 - `tools/nrf.py`: talks to the Nordic chip from the computer through `peek` / `poke` (BOARD.md 11), to explore the
   protocol before the firmware has a driver. Only with a build that leaves USART2 alone (the installed one, or
   after `tools/dev.py reset`): a firmware that reads the link takes the bytes first.

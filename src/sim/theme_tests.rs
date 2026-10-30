@@ -653,3 +653,42 @@ fn dark_draws_as_before_the_metrics() {
     let ride = hash(&sim.screen);
     assert_eq!((menu, ride), (0x61c6_3905_740b_d4e1, 0xa6ce_182a_d71d_10ae));
 }
+
+/// `THEME_FILE=<file> cargo test-host -- --ignored theme_preview`: the file, parsed as the card would parse it, drawn on
+/// the overview, a ride page and the menu, into target/sim/theme_preview_*.bmp (tools/theme.py preview runs this).
+#[test]
+#[ignore = "run by tools/theme.py preview, with THEME_FILE set"]
+fn theme_preview() {
+    let path = std::env::var("THEME_FILE").expect("THEME_FILE names the theme file");
+    let text = std::fs::read(&path).expect("THEME_FILE can be read");
+    let t = crate::theme::parse(&text).unwrap_or_else(|r| panic!("{path}: refused: {}", r.text()));
+    let (mut sim, mut app) = unit(None);
+    set_theme(&mut sim, &mut app, t);
+    sim.save("theme_preview_overview");
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 1100);
+    sim.save("theme_preview_page");
+    app.press(&mut sim, Press::Long(Key::Page));
+    run(&mut sim, &mut app, 200);
+    sim.save("theme_preview_menu");
+}
+
+/// docs/features.md's theme table lists every key the parser reads, and no other: a key added to the parser without
+/// its row fails here, and so does a row for a key the parser does not read.
+#[test]
+fn features_lists_every_theme_key() {
+    let doc = include_str!("../../docs/features.md");
+    let from = doc.find("**Theme.**").expect("the theme section");
+    let to = from + doc[from..].find("Built-in names cannot").expect("the end of the theme section");
+    let mut listed: Vec<&str> =
+        doc[from..to].lines().filter_map(|l| l.strip_prefix("| `")?.split('`').next()).collect();
+    let mut read: Vec<&str> = crate::theme::THEME_KEYS
+        .iter()
+        .chain(&crate::theme::NAMES)
+        .copied()
+        .chain(crate::theme::METRIC_KEYS.iter().map(|m| m.0))
+        .collect();
+    listed.sort_unstable();
+    read.sort_unstable();
+    assert_eq!(listed, read);
+}

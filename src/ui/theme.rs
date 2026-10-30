@@ -62,6 +62,13 @@ pub const NAMES: [&str; N] = [
     "zone7",
 ];
 
+/// The `[theme]` keys the parser reads: format version, label, base theme.
+pub const THEME_KEYS: [&str; 3] = ["version", "name", "base"];
+
+/// The `[metrics]` keys the parser reads, with their bounds (see [`ZONE_BAR`]).
+pub const METRIC_KEYS: [(&str, (u32, u32, u32)); 3] =
+    [("zone_bar", ZONE_BAR), ("frame", FRAME), ("menu_row", MENU_ROW)];
+
 // positions in KEYS
 const BG: usize = 0;
 const TEXT: usize = 1;
@@ -328,13 +335,14 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
     }
     let value =
         |sec: &str, key: &str| get(text, sec, key).map(|v| v.split(|&b| b == b';').next().unwrap_or(&[]).trim_ascii());
-    if value("theme", "version").is_none() && value("theme", "name").is_none() {
+    let [version, name, base_key] = THEME_KEYS;
+    if value("theme", version).is_none() && value("theme", name).is_none() {
         return Err(Refused::NotATheme);
     }
-    if value("theme", "version").and_then(|v| crate::ini::decimal(v, 0)).is_some_and(|v| v > 1) {
+    if value("theme", version).and_then(|v| crate::ini::decimal(v, 0)).is_some_and(|v| v > 1) {
         return Err(Refused::TooNew);
     }
-    let base = match value("theme", "base") {
+    let base = match value("theme", base_key) {
         Some(b) if b.eq_ignore_ascii_case(b"outdoor") => Theme::OUTDOOR,
         Some(b) if b.eq_ignore_ascii_case(b"light") => Theme::LIGHT,
         _ => Theme::DARK,
@@ -345,11 +353,8 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
             *slot = c;
         }
     }
-    for (key, range, slot) in [
-        ("zone_bar", ZONE_BAR, &mut t.zone_bar),
-        ("frame", FRAME, &mut t.frame),
-        ("menu_row", MENU_ROW, &mut t.menu_row),
-    ] {
+    let slots = [&mut t.zone_bar, &mut t.frame, &mut t.menu_row];
+    for ((key, range), slot) in METRIC_KEYS.into_iter().zip(slots) {
         if let Some(n) = value("metrics", key).and_then(|v| crate::ini::decimal(v, 0)) {
             *slot = n.clamp(range.0, range.2);
         }
@@ -446,6 +451,19 @@ impl DayNight {
 mod tests {
     extern crate std;
     use super::*;
+
+    /// The example files tools/theme.py writes (test-data/themes) parse back to the built-in themes.
+    #[test]
+    fn examples_parse_back_to_the_builtins() {
+        let files: [(&[u8], Theme); 3] = [
+            (include_bytes!("../../test-data/themes/DARK.ini"), Theme::DARK),
+            (include_bytes!("../../test-data/themes/OUTDOOR.ini"), Theme::OUTDOOR),
+            (include_bytes!("../../test-data/themes/LIGHT.ini"), Theme::LIGHT),
+        ];
+        for (text, t) in files {
+            assert_eq!(parse(text), Ok(t));
+        }
+    }
 
     /// The metrics of `[metrics]`: clamped to their range, a word that is no number ignored, the built-ins as they were.
     #[test]
