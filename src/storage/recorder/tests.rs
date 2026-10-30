@@ -96,8 +96,14 @@ fn sample(t: u32) -> Sample {
         trainer: crate::fit::tests::trainer(t),
         profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
-        auto_paused: false,
+        auto_paused: auto_paused(t),
     }
+}
+
+/// Second `t` of the test ride is auto-paused (4 s in every 20, in each lap, before and after any cut): recorded,
+/// out of its lap's averages (fit.rs "Laps").
+fn auto_paused(t: u32) -> bool {
+    t % 20 < 4
 }
 
 /// The strap's beat in second `t` of the test ride, ms: 250 + t, so a file's beats tell which were lost or
@@ -223,8 +229,9 @@ fn saved(img: &[u8], name: &str) -> Result<(Vec<u32>, bool), std::string::String
 }
 
 /// Each lap of the saved file `name` carries the average and maximum heart rate (fields 15, 16) and power (19, 20)
-/// of the file's own records in it (from the lap before's time, excluded, to its own), FIT's invalid when none
-/// had one: after a cut and a resume too, the lap's sums before the cut kept in the recovery record. The laps.
+/// of the file's own records in it (from the lap before's time, excluded, to its own) that were not auto-paused
+/// ([`auto_paused`]), FIT's invalid when none had one: after a cut and a resume too, the lap's sums before the cut
+/// kept in the recovery record. The laps.
 fn laps_match_records(img: &[u8], name: &str, what: &str) -> usize {
     use crate::fit::tests::field;
     let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
@@ -235,8 +242,13 @@ fn laps_match_records(img: &[u8], name: &str, what: &str) -> usize {
     let laps: Vec<_> = m.iter().filter(|x| x.0 == 19).collect();
     for lap in &laps {
         let to = field(lap, 253).unwrap();
-        let recs: Vec<_> =
-            m.iter().filter(|x| x.0 == 20 && (from + 1..=to).contains(&field(x, 253).unwrap())).collect();
+        let recs: Vec<_> = m
+            .iter()
+            .filter(|x| x.0 == 20)
+            .filter(|x| {
+                field(x, 253).is_some_and(|t| (from + 1..=to).contains(&t) && !auto_paused((t - T0 as u64) as u32))
+            })
+            .collect();
         for (f, avg, max, none) in [(3, 15, 16, 0xff), (7, 19, 20, 0xffff)] {
             let x: Vec<u64> = recs.iter().filter_map(|r| field(r, f)).collect();
             let want = if x.is_empty() {
@@ -318,6 +330,44 @@ fn sub_sport(img: &[u8], name: &str) -> Option<u64> {
 #[test]
 fn power_cut_at_every_sector_write() {
     power_cut_at_every_sector(Profile::Road, false);
+}
+
+/// The heart rate and power of the saved file `name`'s laps (fields 15, 16, 19, 20).
+fn lap_values(img: &[u8], name: &str) -> Vec<[Option<u64>; 4]> {
+    let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let v = crate::fat::tests::read_all(&mut fat, &mut d, name).unwrap();
+    let m = crate::fit::tests::decode(&v).unwrap();
+    m.iter().filter(|x| x.0 == 19).map(|l| [15, 16, 19, 20].map(|n| crate::fit::tests::field(l, n))).collect()
+}
+
+/// A reset in the second lap, whose auto-paused seconds fall before the cut and after the resume ([`auto_paused`]):
+/// the resumed ride's laps carry the same heart rate and power as the ride never cut (the seconds after the last
+/// checkpoint ridden again, the lap's sums before it from the recovery record).
+#[test]
+fn a_resume_mid_lap_keeps_its_averages() {
+    let img = crate::fat::tests::image();
+    let mut whole = Card { img: img.clone(), budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
+    ride(&mut Recorder::new(), &mut whole, 0).unwrap();
+    let want = lap_values(&whole.img, SAVED);
+    assert_eq!(want.len(), 2);
+    let mut tried = 0;
+    for cut in (0..whole.written).step_by(7) {
+        let mut d =
+            Card { img: img.clone(), budget: Some(cut), written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
+        assert!(ride(&mut Recorder::new(), &mut d, 0).is_none());
+        let mut d = Card { img: d.img, budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
+        let mut r = Recorder::new();
+        let Outcome::Resumed(w, _) = r.recover(&mut d, local(SECS + 5)) else { continue };
+        // the checkpoint well into the second lap, auto-paused seconds on both sides of it
+        if !(LAP + 30..SECS - 30).contains(&w[0]) {
+            continue;
+        }
+        assert!(ride(&mut r, &mut d, w[0] + 1).is_some());
+        assert_eq!(lap_values(&d.img, SAVED), want, "cut {cut}, resumed at {}", w[0]);
+        tried += 1;
+    }
+    assert!(tried > 3, "{tried} resumes in the second lap");
 }
 
 /// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)

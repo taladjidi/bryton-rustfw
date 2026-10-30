@@ -344,7 +344,7 @@ Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md)
 - **Saved as a FIT file** (`src/storage/recorder.rs`; seen on the unit 2026-10-24, docs/status.md): the ride goes to
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
   rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap and per workout step, with the lap's own average and maximum heart rate, cadence and power
-  over its moving seconds (the lap banner's numbers; the session's over every record), invalid when none had one, kept across a reset by the recovery record), from RAM to the card
+  over its moving seconds (the lap banner's numbers, until a reset: the banner then starts again from the resume; the session's over every record), invalid when none had one, kept across a reset by the recovery record), from RAM to the card
   at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
   the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). Its end card's NP, TSS and kJ
   then cover the part after the restart only (the recovery record keeps the ride's totals, not the power sums); the

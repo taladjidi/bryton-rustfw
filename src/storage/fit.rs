@@ -29,9 +29,9 @@
 //! always had these fields (written invalid before), so no new definition: every file of every build stays as it
 //! was. Records are written every running second, auto-paused ones included, never while paused by hand; a lap's
 //! averages leave out the auto-paused ones too ([`Sample::auto_paused`]), so they are the lap banner's numbers
-//! (`ride::Ride`'s lap power and heart rate, over the moving seconds), while the session's cover every record. The
-//! lap's sums survive a
-//! reset beside the recovery record ([`Writer::lap_words`]: the recorder stores them after the ride words, a record
+//! (`ride::Ride`'s lap power and heart rate, over the moving seconds; until a reset: the banner then starts again
+//! from the resume), while the session's cover every record. The lap's sums survive a reset beside the recovery
+//! record ([`Writer::lap_words`]: the recorder stores them after the ride words, a record
 //! of a build before has zeros there and its lap averages from the resume). The last lap of a ride with one lap
 //! is the session's values.
 //!
