@@ -267,6 +267,10 @@ in the backup registers), and a file is read again at each start. A file is an I
 version = 1          ; above 1 is refused (THEME TOO NEW)
 name = SUNNY
 base = outdoor       ; dark, outdoor or light: the values the file does not give
+[metrics]            ; whole px, outside the range is clamped, left out keeps the base's (8, 3, 44)
+zone_bar = 8         ; height of a field's zone bar, 4 to 8
+frame = 3            ; the page editor's frame round a cell, 1 to 4
+menu_row = 44        ; menu row pitch, 44 to 56 (a taller row shows fewer rows: 4 at 56)
 [colors]             ; #RRGGBB, any key left out keeps the base's
 background = #000000 ; every screen's background
 text = #FFFFFF       ; labels and values
@@ -288,7 +292,7 @@ A value that is not a colour or a key that is not in the list is ignored. A file
 version above 1, or that fails the whole-theme checks is refused, with the reason in a notice, and DARK is drawn:
 Text (`text`, `dim`, `accent`, `alarm`, `ok` and `warn` on `background`; `on_accent` on `accent`, `ok` and `warn`;
 `on_alarm` on `alarm`) needs a contrast ratio of 4.5:1 and the rest (`line`, `ferris`, `cog`, `course`, the zones, on `background`) 3:1 (WCAG 2.1 1.4.3 and 1.4.11; a pair whose two colours are the base's is not checked: DARK's white on red is 4.0:1, its `line` and `zone7` are under 3:1); red is for alarms (`alarm` is no other colour of the file) and no two zones are alike. Pictures (the basemap, IGN tiles) are never recoloured.
-Built-in names cannot be a file's. LIGHT, fonts and metrics in a theme come later (docs/theming.md).
+Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md).
 
 ## Ride
 

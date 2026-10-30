@@ -565,8 +565,8 @@ impl App {
     }
 
     pub(crate) fn draw_menu_rows(&self, c: &mut impl Canvas, menu: Menu, sel: usize) {
-        let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
-        for i in 0..ui::MENU_ROWS {
+        let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
+        for i in 0..self.menu_rows() {
             self.draw_menu_row(c, menu, sel, first, i);
         }
     }
@@ -598,7 +598,7 @@ impl App {
                     ui::draw_split_icon(c, slot, r == menu::EditRow::SplitDown, i == sel);
                 }
             }
-            None => c.fill(0, ui::LIST_Y + slot as u32 * ui::MENU_ROW, ui::W, ui::MENU_ROW, ui::BLACK),
+            None => c.fill(0, ui::LIST_Y + slot as u32 * c.theme().menu_row, ui::W, c.theme().menu_row, ui::BLACK),
         }
     }
 
@@ -639,8 +639,8 @@ impl App {
 
     /// Redraws the menu rows that changed since they were drawn (the selection, a value).
     pub(crate) fn update_menu_rows(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
-        let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
-        for i in 0..ui::MENU_ROWS {
+        let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
+        for i in 0..self.menu_rows() {
             let print = self.menu_row_print(menu, sel, first, i);
             if self.menu_shown[i] != print {
                 let mut p = Panel(b, self.area(), self.look());

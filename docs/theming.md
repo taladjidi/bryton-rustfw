@@ -241,13 +241,21 @@ NIGHT THEME (12 bytes each) after POWER SMOOTH (data bytes 69 to 93); a file of 
 
 ### Phase 2: fonts and bounded metrics
 
+Bounded metrics are done (T4, sim only; fonts are not): `[metrics]` in the file, below.
+
 - `font = pixel | smooth` in the file, as the FONT setting's default.
-- A few metrics, each a range every test runs at both ends: `zone_bar` 4 to 12 (today 8), `frame` 1 to 4 (3),
+- A few metrics, each a range every test runs at both ends: `zone_bar` 4 to 12 (today 8; built as 4 to 8, see below), `frame` 1 to 4 (3),
   `menu_row` 44 to 56 (44: never under a fingertip). Here `Canvas` gets `fn theme(&self) -> &Theme`, the consts
   become fields read through it, and the touch code reads the same values from `App`.
 - New fonts from files: not planned. `Font` holds `&'static` data; a font from the card would need a buffer in a
   static cell as the courses have, a loader to fuzz, and its own fits tests. The two fonts linked today cover the
   wish.
+- Done: `zone_bar`, `frame`, `menu_row` in `[metrics]` of a theme file, whole px, **clamped** into range (a word that
+  is no number is ignored, as a bad colour is: the file stays usable and every value drawn is one the tests ran).
+  `Theme` carries them, `Canvas::theme()` hands them to the drawing code, and `App` reads `theme.menu_row` for the hit
+  test and the rows a screen shows (`App::menu_rows`: 6 at 44, 4 at 56), so a tap lands on the row drawn. The
+  built-ins are 8, 3 and 44. `zone_bar` stops at 8: the label's ink under the bar ends at bar + 14 px and the value
+  band starts at 22 (`FIELD_LABEL_H`, the same layout for every theme), so a bar of 12 put the label 4 px over the value. Not in settings.bin.
 - Tests: the sim suite and the "every row fits" tests at the minimum and maximum of each metric (a theme per end);
   the fuzz above with the new keys.
 - Effort: about a week. Risk: a combination of values never drawn in a test; hence few knobs, each bounded.
