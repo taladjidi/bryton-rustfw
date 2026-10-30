@@ -216,11 +216,12 @@ pub fn bt_from_sector(s: &[u8; 512]) -> Option<([u8; 7], bool)> {
         .then_some((addr, s[10] == b'F'))
 }
 
-/// The short name of an ANT+ manufacturer id (common page 80), for the common makers only: the ids are the FIT SDK's
-/// `manufacturer` list (fitparse's `profile.py` copy of the FIT profile: 1 garmin, 6 srm, 7 quarq, 9 saris, 32
-/// wahoo_fitness, 51 4iiiis, 69 stages_cycling, 70 sigmasport, 107 magene, 112 bryton_sensors, 115 igpsport,
-/// 123 polar_electro, 263 favero_electronics, 267 bryton, 268 sram). Shimano, Sigeyi, Coospo and Decathlon are not in
-/// that list, so they have no name here. Any other id reads as no name, and the menu keeps the device type.
+/// The short name of an ANT+ manufacturer id (common page 80), for the common makers only: the ids are the manufacturer
+/// type of Garmin's FIT SDK profile (garmin/fit-python-sdk, `garmin_fit_sdk/profile.py`, checked 2026-10-30): 1 garmin,
+/// 6 srm, 7 quarq, 9 saris, 32 wahoo_fitness, 41 shimano, 51 4iiiis, 69 stages_cycling, 70 sigmasport, 107 magene,
+/// 112 bryton_sensors, 115 igpsport, 123 polar_electro, 134 sigeyi, 135 coospo, 140 decathlon_byte, 263
+/// favero_electronics, 267 bryton, 268 sram, 310 decathlon. Any other id reads as no name, and the menu keeps the
+/// device type.
 ///
 /// ```
 /// assert_eq!(bryton_rustfw::sensors::maker_name(123), Some("POLAR"));
@@ -233,6 +234,7 @@ pub fn maker_name(id: u16) -> Option<&'static str> {
         7 => "QUARQ",
         9 => "SARIS",
         32 => "WAHOO",
+        41 => "SHIMANO",
         51 => "4IIII",
         69 => "STAGES",
         70 => "SIGMA",
@@ -240,6 +242,9 @@ pub fn maker_name(id: u16) -> Option<&'static str> {
         112 => "BRYTON",
         115 => "IGPSPORT",
         123 => "POLAR",
+        134 => "SIGEYI",
+        135 => "COOSPO",
+        140 | 310 => "DECATH",
         263 => "FAVERO",
         267 => "BRYTON",
         268 => "SRAM",

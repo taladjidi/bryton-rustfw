@@ -307,7 +307,8 @@ fn ant_decoders() {
 #[test]
 fn strap_battery_and_maker_pages() {
     use crate::sensors::{Decoders, Kind, Live, maker_name};
-    const MAKERS: [u16; 15] = [1, 6, 7, 9, 32, 51, 69, 70, 107, 112, 115, 123, 263, 267, 268];
+    const MAKERS: [u16; 22] =
+        [1, 6, 7, 9, 32, 41, 51, 69, 70, 107, 112, 115, 123, 134, 135, 140, 263, 267, 268, 310, 0, 0xffff];
     let (mut percents, mut makers, mut names) = (0usize, 0usize, 0usize);
     for seed in 1..=8u32 {
         let (mut dec, mut live) = (Decoders::default(), Live::default());
