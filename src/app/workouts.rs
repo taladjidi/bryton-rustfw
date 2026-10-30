@@ -43,7 +43,8 @@ impl GaugeShown {
 
     /// Its bar for a gauge `cols` wide: the band's columns, the marker with the number's colour, and the zones of
     /// the reading's kind behind it (for this FTP and maximum heart rate, so they follow a change of either).
-    fn bar(&self, cols: u32, (ftp, max_hr): (u16, u16)) -> Option<ui::GaugeBar> {
+    fn bar(&self, cols: u32, z: &ride::Zones) -> Option<ui::GaugeBar> {
+        let (ftp, max_hr) = (z.ftp, z.max_hr);
         let band = self.band?;
         Some(ui::GaugeBar {
             band: {
@@ -51,7 +52,7 @@ impl GaugeShown {
                 (workout::gauge_x(band.0, scale, cols), workout::gauge_x(band.1, scale, cols))
             },
             marker: self.marker.map(|m| (m, self.color)),
-            zones: workout::gauge_zones(self.kind, band, cols, ftp, max_hr),
+            zones: workout::gauge_zones(self.kind, band, cols, z),
         })
     }
 }
@@ -97,7 +98,7 @@ impl App {
     /// Reads the workouts planned from today on (none if the card cannot be read).
     pub(crate) fn load_calendar(&mut self, b: &mut impl Board) {
         let vol = &mut emmc::Volume(&mut self.emmc, b);
-        let zones = (self.settings.ftp, self.settings.max_hr);
+        let zones = self.settings.zones();
         self.plan.calendar = storage::workout_file::calendar(vol, self.date, zones).unwrap_or_default();
         (self.plan.day, self.plan.zones) = (Some(self.date), zones);
         self.plan.done_key = None;
@@ -107,7 +108,7 @@ impl App {
     /// maximum heart rate recolours the profiles); not while the computer holds the card. Not in the first
     /// [`CALENDAR_MS`] after the start (the card is not touched then) unless `asked`.
     pub(crate) fn refresh_calendar(&mut self, b: &mut impl Board, asked: bool) {
-        let zones = (self.settings.ftp, self.settings.max_hr);
+        let zones = self.settings.zones();
         let stale = self.plan.day != Some(self.date) || self.plan.zones != zones;
         if stale && !self.emmc.lent() && (asked || self.gps.ms >= CALENDAR_MS) {
             self.load_calendar(b);
@@ -296,7 +297,7 @@ impl App {
             if prefix {
                 l.push_str("NEXT ");
             }
-            match s.target.range(self.settings.ftp, self.settings.max_hr) {
+            match s.target.range(&self.settings.zones()) {
                 Some((lo, hi)) => {
                     l.push_u32(u32::from(lo).midpoint(u32::from(hi)));
                     if unit {
@@ -370,7 +371,7 @@ impl App {
     /// Step `s`'s target: "210-230", with its unit if `unit` ("W", "BPM", "RPM"); "OPEN" for none.
     pub(crate) fn push_target<const N: usize>(&self, l: &mut Line<N>, s: &storage::workout_file::Step, unit: bool) {
         use storage::workout_file::Kind;
-        let Some((lo, hi)) = s.target.range(self.settings.ftp, self.settings.max_hr) else {
+        let Some((lo, hi)) = s.target.range(&self.settings.zones()) else {
             return l.push_str("OPEN");
         };
         l.push_u32(u32::from(lo));
@@ -391,7 +392,7 @@ impl App {
     /// value keeps the box's scale (a "200-220" dropped to 2x, the smallest text on the page); one number alone ("150"),
     /// or OPEN, as [`App::push_target`].
     fn push_target_field(&self, l: &mut Line<8>, s: &storage::workout_file::Step) {
-        match s.target.range(self.settings.ftp, self.settings.max_hr) {
+        match s.target.range(&self.settings.zones()) {
             Some((lo, hi)) if hi > lo => {
                 let (lo, hi) = (u32::from(lo), u32::from(hi));
                 l.push_u32((lo + hi) / 2);
@@ -409,7 +410,7 @@ impl App {
     fn push_next(&self, l: &mut Line<8>, s: &storage::workout_file::Step) {
         use storage::workout_file::Length;
         let mut head = Line::<8>::new();
-        match s.target.range(self.settings.ftp, self.settings.max_hr) {
+        match s.target.range(&self.settings.zones()) {
             Some((lo, hi)) => head.push_u32(u32::from(lo).midpoint(u32::from(hi))),
             None => head.push_str("OPEN"),
         }
@@ -452,7 +453,7 @@ impl App {
             Length::Open => label.push_str("LAP"),
         }
         self.push_target(value, s, true);
-        workout::level(s, self.settings.ftp, self.settings.max_hr).1
+        workout::level(s, &self.settings.zones()).1
     }
 
     /// The workout fields' text ([`Field::Workout`], [`Field::StepTarget`], [`Field::StepTime`],
@@ -498,8 +499,7 @@ impl App {
     pub(crate) fn target_bar(&self) -> u16 {
         let steps = self.plan.steps();
         let Some(s) = self.plan.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
-        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
-        match (self.reading(s.target.kind), s.target.range(ftp, max_hr)) {
+        match (self.reading(s.target.kind), s.target.range(&self.settings.zones())) {
             (Some(v), Some(band)) => self.with_second(s, workout::gauge_color(v, band)),
             _ => ui::BLACK,
         }
@@ -520,7 +520,7 @@ impl App {
     /// the secondary speaks only once the primary is met, so the rider fixes one thing at a time. No secondary, or no
     /// reading for it: the primary's.
     fn with_second(&self, s: &storage::workout_file::Step, primary: u16) -> u16 {
-        match (self.reading(s.target2.kind), s.target2.range(self.settings.ftp, self.settings.max_hr)) {
+        match (self.reading(s.target2.kind), s.target2.range(&self.settings.zones())) {
             (Some(v), Some(band)) if primary == ride::ZONE_COLORS[1] => workout::gauge_color(v, band),
             _ => primary,
         }
@@ -533,7 +533,7 @@ impl App {
         use storage::workout_file::Kind;
         let steps = self.plan.steps();
         let step = self.plan.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i));
-        let (kind, band) = workout::gauge_target(step, self.settings.ftp, self.settings.max_hr);
+        let (kind, band) = workout::gauge_target(step, &self.settings.zones());
         let avg = self.settings.wkt_avg;
         let reading = match kind {
             Kind::Hr => self.live.get(Metric::Hr),
@@ -549,13 +549,13 @@ impl App {
             (Some(v), Some(b)) => {
                 step.map_or(workout::gauge_color(v, b), |s| self.with_second(s, workout::gauge_color(v, b)))
             }
-            (Some(w), None) => ride::power_zone_color(w, self.settings.ftp),
+            (Some(w), None) => self.settings.zones().power_color(w),
             (None, _) => ui::WHITE,
         };
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
         let marker =
             reading.zip(band).map(|(v, b)| workout::gauge_x(v, workout::gauge_scale(kind, b, ftp, max_hr), cols));
-        let second = step.and_then(|s| Some((s.target2.kind, s.target2.range(ftp, max_hr)?)));
+        let second = step.and_then(|s| Some((s.target2.kind, s.target2.range(&self.settings.zones())?)));
         GaugeShown { kind, avg, band, step: step.is_some(), second, pace: None, value, color, marker }
     }
 
@@ -618,7 +618,7 @@ impl App {
                 _ => "RPM",
             });
         }
-        let bar = g.bar(ui::gauge_cols(bx), (self.settings.ftp, self.settings.max_hr));
+        let bar = g.bar(ui::gauge_cols(bx), &self.settings.zones());
         ui::draw_gauge(c, bx, (title.as_str(), tag.as_str(), target.as_str()), g.value.as_str(), ui::WHITE, bar);
     }
 
@@ -640,8 +640,8 @@ impl App {
         if now.value != old.value {
             ui::draw_gauge_value(&mut p, bx, old.value.as_str(), now.value.as_str(), ui::WHITE); // the marker has the state
         }
-        let zones = (self.settings.ftp, self.settings.max_hr);
-        if let Some(bar) = now.bar(cols, zones).filter(|_| (now.marker, now.color) != (old.marker, old.color)) {
+        let zones = self.settings.zones();
+        if let Some(bar) = now.bar(cols, &zones).filter(|_| (now.marker, now.color) != (old.marker, old.color)) {
             ui::draw_gauge_marker(&mut p, bx, old.marker.map(|m| (m, old.color)), bar);
         }
         Drawn::Gauge(now)

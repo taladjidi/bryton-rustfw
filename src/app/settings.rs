@@ -318,6 +318,60 @@ pub struct Settings {
     pub live_segments: bool,
     /// TARGET (SEGMENTS menu): the index in [`SEGMENT_TARGETS`]; 0 (AUTO) in a file that predates it.
     pub seg_target: usize,
+    /// SOUND (DISPLAY): the buzzer plays the alerts, the course and workout tones and the start / pause beeps (the
+    /// power-on and power-off melodies stay). Kept in settings.bin only (data 99); ON in a file that predates it.
+    pub sound: bool,
+    /// UNITS (DISPLAY): the fields show miles, mph and feet (data 100); the FIT file stays metric. METRIC in a file
+    /// that predates it.
+    pub imperial: bool,
+    /// TEMPERATURE (DISPLAY): the temperature field in F (data 101); C in a file that predates it.
+    pub temp_f: bool,
+    /// AUTO PAUSE (BIKE): an index in [`AUTO_PAUSE_KMH`] (data 102); 0, the profile's own rule, in a file that predates
+    /// it.
+    pub auto_pause: usize,
+    /// TRIP 1 and TRIP 2: the distance (m) of the rides saved since each was reset (data 103 and 111, u32; 0 in a file
+    /// that predates them), with the moving time (s) beside it (data 107 and 115).
+    pub trip_m: [u32; 2],
+    /// The time of each trip, s of moving time.
+    pub trip_s: [u32; 2],
+    /// ODOMETER: the distance (m) of every ride saved on this unit since this build had it (data 119, u32); never reset.
+    pub odo_m: u32,
+    /// ZONES BY (ME): the heart-rate zones come from the LTHR, not the maximum (data 123; MAX HR in a file that predates it).
+    pub zones_lthr: bool,
+    /// ZONES (ME): the rider's own bounds in `zone_up` are in use (data 124); the computed zones when not.
+    pub zone_custom: bool,
+    /// The upper bound of heart-rate zones 1 to 4 (bpm) then power zones 1 to 6 (W), u16 each (data 125..145); read
+    /// only while `zone_custom` (use [`Settings::zones`]).
+    pub zone_up: [u16; 10],
+    /// SEX (ME): female (data 145); TRIMP's constant for hrTSS ([`crate::hrtss`]).
+    pub female: bool,
+    /// BIRTH YEAR (ME): 0 until set (data 146, u16).
+    pub birth_year: u16,
+    /// HEIGHT (ME), cm: 0 until set (data 148, a byte).
+    pub height_cm: u16,
+    /// MAX HR was worked out from BORN (data 149, a byte); a manual MAX HR edit clears it.
+    pub max_hr_age: bool,
+}
+
+/// AUTO PAUSE's choices as the ride gets them ([`ride::Input::pause_kmh`]): 0 the profile's own rule, 255 never, else
+/// the km/h under which a ride is paused.
+pub const AUTO_PAUSE_KMH: [u8; 6] = [0, 255, 2, 3, 5, 8];
+
+impl Settings {
+    /// A saved ride's distance (m) and moving time (s) added to both trips and the odometer (saturating).
+    pub fn add_ride(&mut self, m: u32, s: u32) {
+        for (tm, ts) in self.trip_m.iter_mut().zip(self.trip_s.iter_mut()) {
+            (*tm, *ts) = (tm.saturating_add(m), ts.saturating_add(s));
+        }
+        self.odo_m = self.odo_m.saturating_add(m);
+    }
+
+    /// Trip `n` (0 or 1) back to zero.
+    pub fn reset_trip(&mut self, n: usize) {
+        if let (Some(m), Some(s)) = (self.trip_m.get_mut(n), self.trip_s.get_mut(n)) {
+            (*m, *s) = (0, 0);
+        }
+    }
 }
 
 /// TARGET's choices: AUTO is the PR if the file has one, else the KOM.
@@ -444,6 +498,20 @@ impl Settings {
             lap_min: 10,
             live_segments: true,
             seg_target: 0,
+            sound: true,
+            imperial: false,
+            temp_f: false,
+            auto_pause: 0,
+            trip_m: [0; 2],
+            trip_s: [0; 2],
+            odo_m: 0,
+            zones_lthr: false,
+            zone_custom: false,
+            zone_up: [0; 10],
+            female: false,
+            birth_year: 0,
+            height_cm: 0,
+            max_hr_age: false,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -679,6 +747,12 @@ impl Settings {
             Setting::PowerMatch => l.push_str(if self.power_match { "ON" } else { "OFF" }),
             Setting::Lthr if self.lthr == 0 => l.push_str("--"),
             Setting::Lthr => l.push_u32(u32::from(self.lthr)),
+            Setting::ZonesBy => l.push_str(if self.zones_lthr { "LTHR" } else { "MAX HR" }),
+            Setting::Zone(n) => l.push_u32(u32::from(self.zones().upper().get(usize::from(n)).copied().unwrap_or(0))),
+            Setting::ZonesReset => l.push_str(if self.zone_custom { "CUSTOM" } else { "DEFAULT" }),
+            Setting::Sex => l.push_str(if self.female { "FEMALE" } else { "MALE" }),
+            Setting::BirthYear | Setting::Height if self.number_get(s) == 0 => l.push_str("--"),
+            Setting::BirthYear | Setting::Height => l.push_u32(u32::from(self.number_get(s))),
             Setting::PowerSmooth => {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
@@ -688,6 +762,26 @@ impl Settings {
             }
             Setting::LiveSegments => l.push_str(if self.live_segments { "ON" } else { "OFF" }),
             Setting::SegTarget => l.push_str(SEGMENT_TARGETS.get(self.seg_target).copied().unwrap_or("AUTO")),
+            Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),
+            Setting::Units => l.push_str(if self.imperial { "IMPERIAL" } else { "METRIC" }),
+            Setting::Temp => l.push_str(if self.temp_f { "F" } else { "C" }),
+            Setting::AutoPause => match AUTO_PAUSE_KMH.get(self.auto_pause) {
+                Some(0) | None => l.push_str("AUTO"), // the profile's own rule
+                Some(255) => l.push_str("OFF"),
+                Some(&k) => {
+                    l.push_u32(u32::from(k));
+                    l.push_str(" KM/H");
+                }
+            },
+            Setting::Trip(n) => {
+                let m = self.trip_m.get(usize::from(n)).copied().unwrap_or(0);
+                super::fields::push_trip(l, m, self.imperial);
+                l.push_str(if self.imperial { " MI" } else { " KM" });
+            }
+            Setting::Odometer => {
+                super::fields::push_trip(l, self.odo_m, self.imperial);
+                l.push_str(if self.imperial { " MI" } else { " KM" });
+            }
             Setting::LapKm => l.push_u32(u32::from(self.lap_km)),
             Setting::LapMin => l.push_u32(u32::from(self.lap_min)),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
@@ -743,6 +837,10 @@ impl Settings {
                     l.push_u32(u32::from(v / 10 % 10));
                     l.push_u32(u32::from(v % 10));
                 }
+                // the speed limits are kept in km/h and shown in mph when UNITS is IMPERIAL
+                Some(&v) if v > 0 && matches!(n, 4 | 5) && self.imperial => {
+                    l.push_u32((u32::from(v) * 6214 + 5000) / 10_000)
+                }
                 Some(&v) if v > 0 => l.push_u32(u32::from(v)),
                 _ => l.push_str("OFF"),
             },
@@ -789,6 +887,13 @@ impl Settings {
             Setting::AutoLap => self.auto_lap = (self.auto_lap + 1) % 3,
             Setting::LiveSegments => self.live_segments = !self.live_segments,
             Setting::SegTarget => self.seg_target = (self.seg_target + 1) % SEGMENT_TARGETS.len(),
+            Setting::Sound => self.sound = !self.sound,
+            Setting::ZonesBy => self.zones_lthr = !self.zones_lthr,
+            Setting::ZonesReset => self.zone_custom = false,
+            Setting::Sex => self.female = !self.female,
+            Setting::Units => self.imperial = !self.imperial,
+            Setting::Temp => self.temp_f = !self.temp_f,
+            Setting::AutoPause => self.auto_pause = (self.auto_pause + 1) % AUTO_PAUSE_KMH.len(),
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme | Setting::DayTheme | Setting::NightTheme => {
@@ -834,8 +939,85 @@ impl Settings {
     /// assert_eq!((s.ftp, s.max_hr), (205, 189));
     /// ```
     pub fn step(&mut self, s: Setting, up: bool) {
+        if let Setting::Zone(n) = s {
+            return self.step_zone(usize::from(n), up);
+        }
+        // a birth year or a height not set yet starts from a typical one, not from the bottom of its range
+        if let (Setting::BirthYear | Setting::Height, Some(v)) = (s, self.number_mut(s))
+            && *v == 0
+        {
+            *v = if s == Setting::Height { 170 } else { 1985 };
+            return;
+        }
         let (Some((range, step)), Some(v)) = (s.number(), self.number_mut(s)) else { return };
         *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(*range.start(), *range.end());
+    }
+
+    /// The maximum heart rate from the age (220 minus the years, Fox and Haskell's rule of thumb, clamped to
+    /// [`menu::MAX_HR_RANGE`]) in `year`, while MAX HR is the unset default ([`ride::MAX_HR`]) or was itself worked out
+    /// from the age (`max_hr_age`, so a changed BORN recomputes it): a maximum the rider set or measured is never
+    /// replaced. None when `year` is not a real clock year (under 2024: the clock is not set) or the age is under 5;
+    /// else whether MAX HR changed.
+    ///
+    /// ```
+    /// use bryton_rustfw::Settings;
+    /// let mut s = Settings { birth_year: 1986, ..Settings::from_word(0) };
+    /// assert_eq!(s.max_hr_from_age(2026), Some(true));
+    /// assert_eq!((s.max_hr, s.max_hr_age), (180, true), "220 - 40");
+    /// s.birth_year = 1996;
+    /// assert_eq!(s.max_hr_from_age(2026), Some(true), "recomputed while it came from the age");
+    /// assert_eq!(s.max_hr, 190);
+    /// s.max_hr = 183;
+    /// s.max_hr_age = false;
+    /// assert_eq!(s.max_hr_from_age(2026), Some(false), "a maximum that was set is kept");
+    /// assert_eq!(s.max_hr_from_age(1970), None, "the clock is not set");
+    /// ```
+    pub fn max_hr_from_age(&mut self, year: u16) -> Option<bool> {
+        let age = year.checked_sub(self.birth_year).filter(|&a| year >= 2024 && a >= 5 && self.birth_year > 0)?;
+        if !self.max_hr_age && self.max_hr != ride::MAX_HR {
+            return Some(false);
+        }
+        let hr = 220u16.saturating_sub(age).clamp(*menu::MAX_HR_RANGE.start(), *menu::MAX_HR_RANGE.end());
+        let changed = hr != self.max_hr;
+        (self.max_hr, self.max_hr_age) = (hr, true);
+        Some(changed)
+    }
+
+    /// The value of a number setting, 0 for none.
+    fn number_get(&self, s: Setting) -> u16 {
+        let mut c = *self;
+        c.number_mut(s).map_or(0, |v| *v)
+    }
+
+    /// The zones every consumer reads: the rider's own bounds (ME > ZONES) while `zone_custom`, else the computed ones
+    /// for ZONES BY.
+    pub fn zones(&self) -> ride::Zones {
+        let by = if self.zones_lthr { ride::ZonesBy::Lthr } else { ride::ZonesBy::MaxHr };
+        let computed = ride::Zones::computed(self.ftp, self.max_hr, self.lthr, by);
+        let custom = Some(self.zone_up).filter(|u| self.zone_custom && Self::zone_bounds_ok(u));
+        custom.and_then(|u| ride::Zones::custom(self.ftp, self.max_hr, u)).unwrap_or(computed)
+    }
+
+    /// Whether `up` (the ten bounds, bpm then W) are in what ZONES offers: heart rate [`menu::ZONE_HR_MIN`] to
+    /// [`menu::ZONE_HR_MAX`], power up to [`menu::ZONE_PW_MAX`]. A file's bounds out of it read as the computed zones.
+    pub(crate) fn zone_bounds_ok(up: &[u16; 10]) -> bool {
+        up[..4].iter().all(|v| (menu::ZONE_HR_MIN..=menu::ZONE_HR_MAX).contains(v))
+            && up[4..].iter().all(|&v| v <= menu::ZONE_PW_MAX)
+    }
+
+    /// Zone bound `n` (0 to 3 heart rate, 4 to 9 power) one step up or down, between its neighbours. The first edit
+    /// takes the computed zones as the rider's own.
+    fn step_zone(&mut self, n: usize, up: bool) {
+        let mut z = self.zones().upper();
+        let (first, last, min, max, step) =
+            if n < 4 { (0, 3, menu::ZONE_HR_MIN, menu::ZONE_HR_MAX, 1) } else { (4, 9, 1, menu::ZONE_PW_MAX, 5) };
+        let lo = if n == first { min } else { z.get(n - 1).map_or(min, |v| v + 1) };
+        let hi = if n == last { max } else { z.get(n + 1).map_or(max, |v| v.saturating_sub(1)) };
+        let Some(v) = z.get_mut(n) else { return };
+        *v = if up { v.saturating_add(step) } else { v.saturating_sub(step) }.clamp(lo, hi.max(lo));
+        if ride::Zones::custom(self.ftp, self.max_hr, z).is_some() && z != self.zones().upper() {
+            (self.zone_custom, self.zone_up) = (true, z);
+        }
     }
 
     pub(crate) fn number_mut(&mut self, s: Setting) -> Option<&mut u16> {
@@ -843,6 +1025,8 @@ impl Settings {
             Setting::MaxHr => Some(&mut self.max_hr),
             Setting::Ftp => Some(&mut self.ftp),
             Setting::Lthr => Some(&mut self.lthr),
+            Setting::BirthYear => Some(&mut self.birth_year),
+            Setting::Height => Some(&mut self.height_cm),
             Setting::Weight => Some(&mut self.weight_kg),
             Setting::BikeWeight => Some(&mut self.bike_hg),
             Setting::WPrime => Some(&mut self.wprime_j),

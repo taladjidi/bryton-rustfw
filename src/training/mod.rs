@@ -3,6 +3,7 @@
 //! their own names (`crate::power`).
 
 pub mod alerts;
+pub mod hrtss;
 pub mod hrv;
 pub mod hrvt;
 pub mod pacing;

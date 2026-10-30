@@ -14,6 +14,7 @@ through the simulator.
 The built-in values below are the RGB565 constants of src/ui/mod.rs, src/training/ride.rs and src/ui/theme.rs,
 written as the same 8-bit channels; the Rust test on the fixture is what keeps them equal to the code.
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -58,6 +59,7 @@ DOC = {
     "version": "format version. A higher number is refused (THEME TOO NEW); 1 today",
     "name": "a label, not shown: THEME lists the file's own name",
     "base": "dark, outdoor or light: the built-in the keys left out are taken from",
+    "overview": "the overview's layout: classic (TODAY card over four fields) or fields (a 2 x 2 table). Range classic or fields",
     "zone_bar": "height of a field's zone bar, px. Range 4 to 8",
     "frame": "frame round a cell in the page editor, px. Range 1 to 4",
     "menu_row": "menu row pitch, px; taller rows show fewer rows. Range 44 to 56",
@@ -110,7 +112,7 @@ def render(name, base, ink):
         "; The file is refused (the reason shows in a notice) when a contrast or the red rule fails.",
         "[theme]",
     ]
-    for key, value in [("version", "1"), ("name", name), ("base", base)]:
+    for key, value in [("version", "1"), ("name", name), ("base", base), ("overview", "classic")]:
         out += ["; " + DOC[key], "%s = %s" % (key, value)]
     out.append("[metrics]")
     for key, v, lo, hi in METRICS:
@@ -162,7 +164,7 @@ def selftest():
         ini = parse_ini(text)
         assert sorted(ini) == ["colors", "metrics", "theme"], fname
         listed = [k for sec in ini.values() for k, _ in sec]
-        want = ["version", "name", "base"] + [k for k, *_ in METRICS] + NAMES
+        want = ["version", "name", "base", "overview"] + [k for k, *_ in METRICS] + NAMES
         assert sorted(listed) == sorted(want), "%s: keys %s" % (fname, sorted(set(want) ^ set(listed)))
     for name, base, ink in BUILTIN:
         for key, value in parse_ini(files[name + ".ini"])["colors"]:
@@ -207,19 +209,27 @@ def preview(path, out=None):
     print(os.path.abspath(out))
 
 
-def main(args):
-    if args[:1] == ["examples"] and len(args) >= 2:
-        out = args[1]
-        if os.path.abspath(out).startswith("/Volumes/") and "--drive" not in args:
-            raise SystemExit("refusing a mounted drive: write a folder and copy it, or pass --drive")
-        write(out, examples())
-    elif args[:1] == ["preview"] and len(args) >= 2:
-        out = args[args.index("--out") + 1] if "--out" in args else None
-        preview(args[1], out)
-    elif args == ["selftest"]:
-        selftest()
+def main(argv):
+    p = argparse.ArgumentParser(prog="theme.py", description="colour themes: example files, preview, selftest")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    e = sub.add_parser("examples", help="write the built-in themes as example files")
+    e.add_argument("out_dir")
+    e.add_argument("--drive", action="store_true", help="allow a mounted drive (/Volumes)")
+    v = sub.add_parser("preview", help="draw a theme file through the simulator")
+    v.add_argument("file")
+    v.add_argument("--out", metavar="PNG", help="one PNG of the three shots (needs PIL)")
+    sub.add_parser("selftest", help="check the examples and the fixture")
+    a = p.parse_args(argv)
+    if a.cmd == "examples":
+        # realpath first: a symlink into /Volumes is still a mounted drive
+        out = os.path.realpath(a.out_dir)
+        if (out == "/Volumes" or out.startswith("/Volumes/")) and not a.drive:
+            p.error("refusing a mounted drive: write a folder and copy it, or pass --drive")
+        write(a.out_dir, examples())
+    elif a.cmd == "preview":
+        preview(a.file, a.out)
     else:
-        raise SystemExit(__doc__)
+        selftest()
 
 
 if __name__ == "__main__":

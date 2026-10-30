@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (99 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (150 now, with ZONES BY, the custom flag, ten zone bounds (u16 each), SEX, BIRTH YEAR (u16) and HEIGHT (a byte) and MAX HR FROM AGE (a byte) at 123..150; 123 before, with SOUND, UNITS, TEMPERATURE, AUTO PAUSE at 99..102 and the trips and odometer at 103..123; 99 before: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes, then LIVE SEGMENTS (data 97) and TARGET (98) appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -98,7 +98,7 @@ impl SettingsCopy {
     pub fn to_sector(&self) -> [u8; 512] {
         let s = self.settings;
         let mut out = [0u8; 512];
-        let mut data = [0u8; 128];
+        let mut data = [0u8; 160];
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             for &b in bytes {
@@ -131,6 +131,17 @@ impl SettingsCopy {
         put(&s.night_theme);
         put(&[s.auto_lap as u8, s.lap_km as u8, s.lap_min as u8]);
         put(&[u8::from(s.live_segments), s.seg_target as u8]);
+        put(&[u8::from(s.sound), u8::from(s.imperial), u8::from(s.temp_f), s.auto_pause as u8]);
+        for v in [s.trip_m[0], s.trip_s[0], s.trip_m[1], s.trip_s[1], s.odo_m] {
+            put(&v.to_le_bytes());
+        }
+        put(&[u8::from(s.zones_lthr), u8::from(s.zone_custom)]);
+        for v in s.zone_up {
+            put(&v.to_le_bytes());
+        }
+        put(&[u8::from(s.female)]);
+        put(&s.birth_year.to_le_bytes());
+        put(&[s.height_cm as u8, u8::from(s.max_hr_age)]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -225,6 +236,40 @@ impl SettingsCopy {
         // range reads its default
         s.live_segments = data.next().map_or(d.live_segments, |v| if v < 2 { v == 1 } else { d.live_segments });
         s.seg_target = data.next().map(usize::from).filter(|&v| v < SEGMENT_TARGETS.len()).unwrap_or(d.seg_target);
+        // SOUND, UNITS, TEMPERATURE, AUTO PAUSE (appended after TARGET): a file without them reads ON, METRIC, C and the
+        // profile's rule; a byte out of its range reads its default
+        let flag = |v: Option<u8>, def: bool| v.map_or(def, |v| if v < 2 { v == 1 } else { def });
+        s.sound = flag(data.next(), d.sound);
+        s.imperial = flag(data.next(), d.imperial);
+        s.temp_f = flag(data.next(), d.temp_f);
+        s.auto_pause = data.next().map(usize::from).filter(|&v| v < AUTO_PAUSE_KMH.len()).unwrap_or(d.auto_pause);
+        // the trips and the odometer (u32 each, after AUTO PAUSE): a file cut inside one reads 0 for it and the rest
+        let mut u32_next = || {
+            let b = [data.next()?, data.next()?, data.next()?, data.next()?];
+            Some(u32::from_le_bytes(b))
+        };
+        (s.trip_m[0], s.trip_s[0]) = (u32_next().unwrap_or(0), u32_next().unwrap_or(0));
+        (s.trip_m[1], s.trip_s[1]) = (u32_next().unwrap_or(0), u32_next().unwrap_or(0));
+        s.odo_m = u32_next().unwrap_or(0);
+        // ZONES BY, the custom flag and the ten bounds, then SEX, BIRTH YEAR, HEIGHT (appended after the odometer): a
+        // file without them reads MAX HR, the computed zones, male, none set. Bounds that are not whole, or do not
+        // rise, read as no custom zones; a year or height out of range reads unset.
+        s.zones_lthr = flag(data.next(), d.zones_lthr);
+        let custom = flag(data.next(), false);
+        let mut up = [0u16; 10];
+        let whole =
+            up.iter_mut().all(|v| data.next().zip(data.next()).map(|(a, b)| *v = u16::from_le_bytes([a, b])).is_some());
+        if whole {
+            s.zone_up = up;
+            s.zone_custom =
+                custom && Settings::zone_bounds_ok(&up) && crate::ride::Zones::custom(s.ftp, s.max_hr, up).is_some();
+        }
+        s.female = flag(data.next(), false);
+        let year = data.next().zip(data.next()).map_or(0, |(a, b)| u16::from_le_bytes([a, b]));
+        s.birth_year = Some(year).filter(|y| (1920..=2020).contains(y)).unwrap_or(0);
+        s.height_cm = data.next().map(u16::from).filter(|h| (100..=230).contains(h)).unwrap_or(0);
+        // MAX HR from age (a byte after HEIGHT): a file without it reads off
+        s.max_hr_age = flag(data.next(), false);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -290,9 +335,44 @@ pub(crate) struct SettingsStore {
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
     pub(crate) sync: u32,
+    /// The totals (m, s) of the ride the recorder is saving, set when it is ended, and of the one ended behind it (a
+    /// ride held while the last one's save is pending): each is added to the trips once, when its own save is done.
+    pub(crate) saving: Option<(u32, u32)>,
+    /// See `saving`.
+    pub(crate) queued: Option<(u32, u32)>,
+    /// Totals of saved rides not yet added to the trips: they wait for the file to be read ([`App::pay_trips`]).
+    pub(crate) due: (u32, u32),
 }
 
 impl SettingsStore {
+    /// A ride was ended (SAVE): its totals wait for its save.
+    pub(crate) fn ended(&mut self, m: u32, s: u32) {
+        match &mut self.saving {
+            None => self.saving = Some((m, s)),
+            Some(_) => {
+                let q = self.queued.get_or_insert((0, 0));
+                (q.0, q.1) = (q.0.saturating_add(m), q.1.saturating_add(s));
+            }
+        }
+    }
+
+    /// The ride being saved is done: `saved` (a `Saved` outcome) makes its totals due, else (kept, discarded) they are
+    /// dropped. The ride queued behind it is the one being saved now. A save with no totals (a ride the boot's
+    /// recovery saved without the rider ending it) adds nothing to the trips.
+    pub(crate) fn done(&mut self, saved: bool) {
+        if let Some((m, s)) = self.saving.take().filter(|_| saved) {
+            (self.due.0, self.due.1) = (self.due.0.saturating_add(m), self.due.1.saturating_add(s));
+        }
+        self.saving = self.queued.take();
+    }
+
+    /// The totals of rides ended and not yet in the trips (saving, queued, due): a trip field adds them so its value
+    /// does not dip between the end of a ride and its save.
+    pub(crate) fn unpaid(&self) -> (u32, u32) {
+        let (a, b) = (self.saving.unwrap_or((0, 0)), self.queued.unwrap_or((0, 0)));
+        (a.0.saturating_add(b.0).saturating_add(self.due.0), a.1.saturating_add(b.1).saturating_add(self.due.1))
+    }
+
     /// As at a start: the registers read.
     pub(crate) fn at_boot(b: &mut impl Board, read: Settings) -> Self {
         let boot = registers(b);
@@ -387,6 +467,7 @@ impl App {
         if !st.loaded && (st.tries < LOAD_TRIES || st.dirty) && due {
             self.load_settings(b);
         }
+        self.pay_trips();
         let st = self.settings_store;
         if !(self.card_writable && st.loaded && st.dirty && self.ride_settled()) {
             return;
@@ -399,6 +480,20 @@ impl App {
             }
         }
         self.save_settings(b);
+    }
+
+    /// A saved ride's totals go to TRIP 1, TRIP 2 and the ODOMETER, once the file is read (its values are the base) and
+    /// never during a ride: the settings are only written to the card between rides. A discarded ride never gets here.
+    fn pay_trips(&mut self) {
+        let st = &mut self.settings_store;
+        if !(st.due != (0, 0) && st.loaded) {
+            return;
+        }
+        let (m, s) = core::mem::take(&mut st.due);
+        if m != 0 || s != 0 {
+            st.dirty |= self.card_writable;
+            self.settings.add_ride(m, s);
+        }
     }
 
     /// Reads `\Rustfw\settings.bin` (module doc: which wins).
@@ -553,7 +648,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 99);
+        assert_eq!(len, 150);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -629,13 +724,64 @@ mod tests {
 mod day_night_file_tests {
     use super::*;
 
+    /// ZONES BY, the custom zones, SEX, BIRTH YEAR and HEIGHT are kept at data 123..150 and read back; a file of 44 to
+    /// 123 bytes reads the computed zones, MAX HR, male and none set; bounds that do not rise read as the computed zones.
+    #[test]
+    fn zones_sex_year_and_height_round_trip_and_older_files_read_defaults() {
+        let up = [100, 120, 140, 160, 90, 130, 170, 210, 250, 300];
+        let s = Settings {
+            zones_lthr: true,
+            zone_custom: true,
+            zone_up: up,
+            female: true,
+            birth_year: 1984,
+            height_cm: 178,
+            lthr: 165,
+            ..Settings::from_word(0)
+        };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
+        assert_eq!(sec[28 + 123..28 + 125], [1, 1]);
+        let back = SettingsCopy::from_sector(&sec).unwrap().settings;
+        assert_eq!((back.zones().upper(), back.zones_lthr, back.female), (up, true, true));
+        assert_eq!((back.birth_year, back.height_cm), (1984, 178));
+        for len in [44u16, 66, 99, 123] {
+            let mut old = sec;
+            old[6..8].copy_from_slice(&len.to_le_bytes());
+            recrc(&mut old);
+            let o = SettingsCopy::from_sector(&old).unwrap().settings;
+            assert_eq!((o.zone_custom, o.zones_lthr, o.female, o.birth_year, o.height_cm), (false, false, false, 0, 0));
+            let want = ride::Zones::computed(o.ftp, o.max_hr, o.lthr, ride::ZonesBy::MaxHr);
+            assert_eq!(o.zones(), want, "a {len}-byte file");
+        }
+        let mut bad = sec;
+        bad[28 + 127..28 + 129].copy_from_slice(&[5, 0]); // zone 3 ends under zone 2
+        recrc(&mut bad);
+        let o = SettingsCopy::from_sector(&bad).unwrap().settings;
+        assert!(!o.zone_custom, "bounds that do not rise: the computed zones");
+        for (at, v) in [(0usize, 30u16), (3, 300), (9, 2500)] {
+            // heart rate under 40 or over 250, power over 2000, still rising
+            let mut wild = sec;
+            let mut b = up;
+            b[at] = v;
+            for (k, x) in b.iter().enumerate() {
+                wild[28 + 125 + 2 * k..28 + 127 + 2 * k].copy_from_slice(&x.to_le_bytes());
+            }
+            recrc(&mut wild);
+            let o = SettingsCopy::from_sector(&wild).unwrap().settings;
+            assert!(!o.zone_custom, "bound {at} = {v} is out of what ZONES offers");
+        }
+        assert!(SettingsCopy::from_sector(&sec).unwrap().settings.zone_custom, "the good ones are read");
+        assert!(o.zones_lthr && o.female, "the rest kept");
+    }
+
     /// AUTO LAP, LAP EVERY km and min are kept at data 94, 95, 96 and read back; a file of 44, 66, 69 or 94 bytes reads
     /// OFF, 5 km and 10 min; a byte out of range reads its default.
     #[test]
     fn auto_lap_round_trips_and_older_files_read_it_off() {
         let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 99);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
         assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
         let read = |sec: &[u8; 512]| {
             SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
@@ -659,7 +805,7 @@ mod day_night_file_tests {
     fn live_segments_round_trip_and_older_files_read_on_and_auto() {
         let s = Settings { live_segments: false, seg_target: 3, ..Settings::from_word(0) };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 99);
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
         assert_eq!(sec[28 + 97..28 + 99], [0, 3]);
         let read =
             |sec: &[u8; 512]| SettingsCopy::from_sector(sec).map(|c| (c.settings.live_segments, c.settings.seg_target));
@@ -693,7 +839,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 99, "the length: 69 + 1 + 12 + 12 + 3 + 2");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150, "the length: 69 + 1 + 12 + 12 + 3 + 2");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");
@@ -717,5 +863,46 @@ mod day_night_file_tests {
         recrc(&mut bad);
         let b = SettingsCopy::from_sector(&bad).map(|c| c.settings);
         assert_eq!(b.map(|b| (b.auto_theme, b.day_theme)), Some((false, Settings::name_bytes("OUTDOOR"))));
+    }
+
+    /// SOUND, UNITS, TEMPERATURE, AUTO PAUSE (data 99..102) and the trips and the odometer (103..123) are kept and read
+    /// back; a file of 44, 66, 69, 94, 97 or 99 bytes reads ON, METRIC, C, AUTO and zeros; a byte out of range reads its
+    /// default; a file cut inside the trips reads 0 for the cut one and those after it.
+    #[test]
+    fn units_sound_auto_pause_and_trips_round_trip_and_older_files_read_defaults() {
+        let s = Settings {
+            sound: false,
+            imperial: true,
+            temp_f: true,
+            auto_pause: 4,
+            trip_m: [1234, 5_000_000],
+            trip_s: [99, 70_000],
+            odo_m: 987_654,
+            ..Settings::from_word(0)
+        };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 150);
+        assert_eq!(sec[28 + 99..28 + 103], [0, 1, 1, 4]);
+        let read = |sec: &[u8; 512]| {
+            SettingsCopy::from_sector(sec).map(|c| {
+                let s = c.settings;
+                ((s.sound, s.imperial, s.temp_f, s.auto_pause), (s.trip_m, s.trip_s, s.odo_m))
+            })
+        };
+        assert_eq!(read(&sec), Some(((false, true, true, 4), ([1234, 5_000_000], [99, 70_000], 987_654))));
+        for len in [44u16, 66, 69, 94, 97, 99] {
+            let mut old = sec;
+            old[6..8].copy_from_slice(&len.to_le_bytes());
+            recrc(&mut old);
+            assert_eq!(read(&old), Some(((true, false, false, 0), ([0; 2], [0; 2], 0))), "a {len}-byte file");
+        }
+        let mut cut = sec;
+        cut[6..8].copy_from_slice(&(103u16 + 4 + 4 + 2).to_le_bytes()); // TRIP 1, its time, two bytes of TRIP 2
+        recrc(&mut cut);
+        assert_eq!(read(&cut).map(|r| r.1), Some(([1234, 0], [99, 0], 0)));
+        let mut bad = sec;
+        bad[28 + 99..28 + 103].copy_from_slice(&[2, 7, 255, 9]);
+        recrc(&mut bad);
+        assert_eq!(read(&bad).map(|r| r.0), Some((true, false, false, 0)));
     }
 }

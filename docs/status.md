@@ -8,6 +8,13 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Heart rate intervals with a power meter paired (sensors.rs `each_interval_once`, radio.rs)**: sim only. Still to see: DFA a1 and the hrv messages on a ride with the strap and a power meter after the fix, each interval once (the count of hrv intervals against the beats).
+- **Sensor names and the strap's battery (drivers/sensors.rs pages 7 and 80, app/menus.rs SENSORS row, app/fields.rs HR BATT)**: sim only. Still to see: the strap's percent on HR BATT (its page 7 on the owner's strap, ANT+ profile layout as openant reads it), a SENSORS row reading "POLAR HR" after the strap sends page 80, and the row back to "HEART RATE" after a forget.
+- **Zones (training/ride.rs `Zones`, app/settings.rs `zones`, training/hrtss.rs, features.md "Zones")**: sim only. Still to see: ME > ZONES
+  on the panel (11 rows, a bound edited and kept in settings.bin data 123..150), ZONES BY LTHR on a ride (bars, HR ZONE field,
+  time in zone move with it), and the TSS field and the end card showing hrTSS on a ride with a strap and no power meter.
+
+- **Units, sound, auto pause, trips (app/fields.rs, app/settings.rs, features.md "Units, sound, trips")**: sim only. Still to see: IMPERIAL on a real ride (the values and labels fit their boxes), SOUND OFF with an alert due, an AUTO PAUSE of 5 km/h at a stop, and a trip and the odometer growing after a save and surviving a restart.
 - **Next-step strip and two targets per step (app/workouts.rs `ahead`, ui/strip.rs `draw_next_strip`, workout_file.rs
   fields 19 to 22)**: sim only. Still to see: the strip over the status strip for the last 9 s of a step and its
   countdown redrawn once a second without flicker, the status strip back at the step change, a banner over it, and

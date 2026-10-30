@@ -42,6 +42,7 @@ impl App {
         if ev == ride::Event::Start {
             self.power.new_ride();
             self.zone_s = ride::ZoneTime::default();
+            self.hrtss = hrtss::Hrtss::default();
             self.rec.model = Some(self.model_now()); // kept for the whole ride (app/fitness.rs)
             (self.profile_by_hand, self.profile) = (false, ride::Profile::Road);
             self.choose_profile(); // after the banner above: INDOOR RIDE replaces it
@@ -99,8 +100,9 @@ impl App {
         l.push_str(" ");
         push_clock(&mut l, s);
         l.push_str(" ");
-        push_km(&mut l, m);
-        l.push_str("KM\n");
+        let imp = self.settings.imperial;
+        push_trip(&mut l, m, imp);
+        l.push_str(if imp { "MI\n" } else { "KM\n" });
         match r.last_lap_avg_power() {
             Some(w) => {
                 l.push_u32(u32::from(w));
@@ -108,10 +110,11 @@ impl App {
             }
             None => {
                 let v = if s > 0 { m * 36 / s } else { 0 }; // km/h x 10
+                let v = if imp { mph_x10(v) } else { v };
                 l.push_u32(v / 10);
                 l.push_str(".");
                 l.push_u32(v % 10);
-                l.push_str("KMH");
+                l.push_str(if imp { "MPH" } else { "KMH" });
             }
         }
         if let Some(hr) = r.last_lap_hr() {
@@ -149,6 +152,8 @@ impl App {
     /// card shows (until Back or Start).
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
+        // the trips get it once this ride's save is done ([`SettingsStore::done`])
+        self.settings_store.ended(self.ride.dist_m(), self.ride.timer_s());
         self.recorder(ev);
         self.plan.player = None;
         (self.depth, self.screen) = (0, Screen::Summary);
@@ -210,11 +215,26 @@ impl App {
         }
         use recorder::{GaveUp, Outcome};
         match clean.or(full) {
-            Some(GaveUp::Named(Outcome::Saved(_))) => self.notice("RIDE SAVED"),
-            Some(GaveUp::Named(Outcome::Discarded(_))) => self.notice("RIDE DISCARDED"),
-            Some(GaveUp::Named(_)) => self.notice("KEPT IN RUSTFW/RIDES"),
-            Some(GaveUp::Rescue(_)) => self.notice("KEPT IN RUSTFW/RESCUE"),
-            Some(GaveUp::Lost) => self.alarm_notice("GIVEN UP: COPY THE CARD"),
+            Some(GaveUp::Named(Outcome::Saved(_))) => {
+                self.settings_store.done(true);
+                self.notice("RIDE SAVED");
+            }
+            Some(GaveUp::Named(Outcome::Discarded(_))) => {
+                self.settings_store.done(false);
+                self.notice("RIDE DISCARDED");
+            }
+            Some(GaveUp::Named(_)) => {
+                self.settings_store.done(false);
+                self.notice("KEPT IN RUSTFW/RIDES");
+            }
+            Some(GaveUp::Rescue(_)) => {
+                self.settings_store.done(false);
+                self.notice("KEPT IN RUSTFW/RESCUE");
+            }
+            Some(GaveUp::Lost) => {
+                self.settings_store.done(false);
+                self.alarm_notice("GIVEN UP: COPY THE CARD");
+            }
             None => {}
         }
     }
@@ -224,8 +244,9 @@ impl App {
         let mut l = Line::new();
         push_clock(&mut l, self.ride.timer_s());
         l.push_str("  ");
-        push_km(&mut l, self.ride.dist_m());
-        l.push_str(" KM");
+        let imp = self.settings.imperial;
+        push_trip(&mut l, self.ride.dist_m(), imp);
+        l.push_str(if imp { " MI" } else { " KM" });
         l
     }
 
@@ -468,7 +489,9 @@ impl App {
                 // cover the part after the restart only (the file has every second's power: the history's and a
                 // computer's cover the whole ride)
                 self.power.new_ride();
-                self.zone_s = ride::ZoneTime::default(); // the zone times restart after a resume, as the laps do
+                // the zone times and the hrTSS restart after a resume, as the laps do
+                self.zone_s = ride::ZoneTime::default();
+                self.hrtss = hrtss::Hrtss::default();
                 self.rec.model = Some(self.model_now()); // what the ride has now: the scan may not have read yet
                 let now = self.now_s();
                 self.alt.ride_start(now);
@@ -476,6 +499,7 @@ impl App {
             }
             recorder::Outcome::Saved(_) => {
                 self.notice("RIDE SAVED");
+                self.settings_store.done(true);
                 if !recovering {
                     // this run's ride, read back whole and named in \Activities: its segment efforts may be written
                     // (app/segments.rs, once both copies are done); never an earlier run's ride the boot saved
@@ -488,8 +512,12 @@ impl App {
                     self.rescan(); // the history again, with this ride
                 }
             }
-            recorder::Outcome::Discarded(_) => self.notice("RIDE DISCARDED"), // the history as it was: no scan
+            recorder::Outcome::Discarded(_) => {
+                self.settings_store.done(false);
+                self.notice("RIDE DISCARDED"); // the history as it was: no scan
+            }
             recorder::Outcome::Kept(_) => {
+                self.settings_store.done(false);
                 // not in \Activities: left in \Rustfw\Rides as it was, or named there again (damaged, or the card
                 // kept failing)
                 self.alarm_notice("SAVE FAILED: KEPT IN RUSTFW/RIDES");
@@ -566,6 +594,7 @@ impl App {
             alt_ref: alt.1,
             alt_corr_mm: self.alt.corr(),
             profile: self.ride_profile(),
+            pause_kmh: AUTO_PAUSE_KMH.get(self.settings.auto_pause).copied().unwrap_or(0),
         };
         let timer = self.ride.timer_s();
         if let Some(ev) = self.ride.second(&input) {
@@ -607,19 +636,21 @@ impl App {
         let (cp, wprime) = self.cp_model();
         self.power.second(input.power, &self.ride, cp, wprime);
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        let zt = self.settings.zones();
         // each bar zones exactly the number its box shows: live power, the 3, 10 and 30 s averages, heart rate
         let p = &self.power;
         let watts = [self.power_now(), p.rolling(0), p.rolling(1), p.rolling(2)];
         let (pm, hm) = ((ftp / 50).max(1), (max_hr / 100).max(1)); // 2 % of FTP, 1 % of max HR
         for (hold, w) in self.zones.iter_mut().zip(watts) {
-            hold.update(w, pm, |w| ride::power_zone(w, ftp));
+            hold.update(w, pm, |w| zt.power_zone(w));
         }
         if let Some(hold) = self.zones.get_mut(4) {
-            hold.update(self.live.shown(Metric::Hr), hm, |v| ride::hr_zone(v, max_hr));
+            hold.update(self.live.shown(Metric::Hr), hm, |v| zt.hr_zone(v));
         }
         // the time in each zone: the moving seconds, in the zone the bars show (a Start or a resume clears it)
         if self.ride.state() == ride::State::Running && self.ride.moving() {
             self.zone_s.second(self.zone_now(4), self.zone_now(0));
+            self.hrtss.second(self.live.shown(Metric::Hr), max_hr, self.settings.female);
         }
         let wbal = self.power.wbal_j().map(|j| (j.max(0) / 10).clamp(1, i32::from(u16::MAX)) as u16);
         let dfa = self.hrv.alpha1().filter(|_| input.hr.is_some()).map(|a| (a * 100.0 + 0.5).clamp(1.0, 999.0) as u16);

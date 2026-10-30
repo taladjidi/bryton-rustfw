@@ -867,6 +867,27 @@ pub(crate) mod tests {
         }
     }
 
+    /// Both overview variants are tables of boxes that tile their area (the TODAY card's, the four fields' below),
+    /// touch nothing else, and hold their values at both ends of the metrics (Frame panics off screen).
+    #[test]
+    fn overview_variants_tile_and_fit() {
+        let table: Vec<_> = (0..).map_while(table_box).collect();
+        let fields: Vec<_> = (0..).map_while(overview_box).collect();
+        assert_eq!((table.len(), fields.len()), (TABLE.len(), 4));
+        for (boxes, (ay, ah)) in [(&table, (TODAY_BOX.1, TODAY_BOX.3)), (&fields, (OVERVIEW_Y, OVERVIEW_H))] {
+            assert_eq!(boxes.iter().map(|b| b.2 * b.3).sum::<u32>(), W * ah, "the boxes tile their area");
+            assert!(boxes.iter().all(|b| b.0 + b.2 <= W && b.1 >= ay && b.1 + b.3 <= ay + ah));
+        }
+        for theme in metric_ends() {
+            let mut f = Frame::themed(theme);
+            for (&bx, field) in table.iter().zip(TABLE) {
+                draw_field_frame_bar(&mut f, bx, field, GREEN, (true, true)); // imperial: the longer unit labels
+                draw_field_value(&mut f, bx, field.widest(), WHITE);
+                assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{field:?} readable at bar {}", theme.zone_bar);
+            }
+        }
+    }
+
     /// The ride boxes tile the field area exactly, every value fits its box, and the top line stays
     /// clear (Frame panics on anything off screen).
     #[test]
@@ -880,12 +901,12 @@ pub(crate) mod tests {
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
                 let mut f = Frame::themed(theme);
                 for (&bx, field) in b.iter().flat_map(|bx| Field::ALL.iter().map(move |f| (bx, f))) {
-                    draw_field_frame(&mut f, bx, *field);
-                    draw_field_frame_bar(&mut f, bx, *field, GREEN);
+                    draw_field_frame(&mut f, bx, *field, (false, false));
+                    draw_field_frame_bar(&mut f, bx, *field, GREEN, (false, false));
                     draw_cell_frame(&mut f, bx, ACCENT);
                     // the label's ink, under the bar, ends before the value band (FIELD_LABEL_H)
                     let mut l = Frame::themed(theme);
-                    draw_field_frame(&mut l, bx, *field);
+                    draw_field_frame(&mut l, bx, *field, (false, false));
                     let last = (bx.1..bx.1 + 40).rev().find(|&y| (bx.0..bx.0 + 100).any(|x| l.at(x, y) == GREY));
                     if let Some(y) = last.filter(|_| !field.is_picture() && bx.3 > 70) {
                         assert!(
@@ -930,8 +951,12 @@ pub(crate) mod tests {
             let band = (cols / 3, cols * 2 / 3);
             let titles = ("POWER 30S", "", "200-220");
             let (mut a, mut b) = (Frame::new(), Frame::new());
-            let zones =
-                crate::workout::gauge_zones(crate::storage::workout_file::Kind::Power, (200, 220), cols, 200, 190);
+            let zones = crate::workout::gauge_zones(
+                crate::storage::workout_file::Kind::Power,
+                (200, 220),
+                cols,
+                &crate::ride::Zones::standard(200, 190),
+            );
             let bar = |m| GaugeBar { band, marker: Some((m, YELLOW)), zones };
             draw_gauge(&mut a, bx, titles, "195", YELLOW, Some(bar(0)));
             draw_gauge_marker(&mut a, bx, Some((0, YELLOW)), bar(cols - 1));

@@ -26,6 +26,8 @@ pub enum Menu {
     Settings,
     /// The rider's numbers ([`menu::ME`]).
     Me,
+    /// The zones' bounds, one by one ([`menu::ZONES`]).
+    Zones,
     /// The backlight, the touch panel, the gauge ([`menu::DISPLAY`]).
     Display,
     /// The wheel ([`menu::BIKE`]).
@@ -89,6 +91,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::PageList(ride::Profile::Mtb) => "MTB PAGES",
         Menu::Settings => "SETTINGS",
         Menu::Me => "ME",
+        Menu::Zones => "ZONES",
         Menu::Display => "DISPLAY",
         Menu::Bike => "BIKE",
         Menu::System => "SYSTEM",
@@ -143,6 +146,7 @@ impl App {
             Menu::Edit(_) => menu::EDIT_ROWS.get(i).map(|&r| Row::Edit(r)),
             Menu::Settings => menu::SETTINGS.get(i).copied(),
             Menu::Me => menu::ME.get(i).copied(),
+            Menu::Zones => menu::ZONES.get(i).copied(),
             Menu::Display => menu::DISPLAY.get(i).copied(),
             Menu::Bike => menu::BIKE.get(i).copied(),
             // GIVE UP SAVE first, only while a save is stuck (app/riding.rs)
@@ -378,14 +382,22 @@ impl App {
                 value.push_str(if edited {
                     " >"
                 } else if number {
-                    s.unit()
+                    s.unit_in(self.settings.imperial)
                 } else {
                     ""
                 });
             }
             Row::Sensor(k) => {
                 let kind = *Kind::ALL.get(k)?;
-                label.push_str(kind.name());
+                // the maker's short name once the paired sensor has sent common page 80 (16 columns: maker, short name)
+                match self.decoders.maker(kind).and_then(sensors::maker_name) {
+                    Some(m) => {
+                        label.push_str(m);
+                        label.push_str(" ");
+                        label.push_str(kind.short());
+                    }
+                    None => label.push_str(kind.name()),
+                }
                 match (self.ant, self.radio.sensors.get(k)?) {
                     (false, _) => value.push_str(if self.ble.is_some() { "NO KEY" } else { "NO BLE" }),
                     (true, _) if kind.network() == 1 && !self.di2 => value.push_str("NO KEY"),
@@ -467,7 +479,7 @@ impl App {
                 let r = self.stock.index.get(n)?;
                 let (y, mo, d, ..) = r.start;
                 label.push_str(date_text((y, mo, d)).as_str());
-                ui::card::push_km(&mut value, r.dist_m);
+                push_trip(&mut value, r.dist_m, self.settings.imperial);
             }
             Row::Notif(k) => {
                 // the sender (the app when it sent no title), and when it came
@@ -690,7 +702,7 @@ impl App {
             Some(Row::Ride(r)) => self.activate_ride(r),
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };
-                self.past.start(&r, self.settings.ftp); // read over the next passes (App::step_past)
+                self.past.start(&r, self.settings.ftp, self.settings.imperial); // read over the next passes (App::step_past)
                 self.say("READING RIDE");
             }
             Some(Row::Workout(k)) => self.open_workout(b, k),
@@ -722,6 +734,17 @@ impl App {
                 self.open(Screen::Nearby);
             }
             Some(Row::AltGps) => self.alt_from_gps(),
+            Some(Row::Set(menu::Setting::Trip(_))) if self.ride.state() != ride::State::Idle => {
+                self.say("END THE RIDE FIRST")
+            }
+            Some(Row::Set(menu::Setting::Trip(n)))
+                if self.confirmed(menu, sel, if n == 0 { "RESET TRIP 1" } else { "RESET TRIP 2" }) =>
+            {
+                self.settings.reset_trip(usize::from(n));
+                self.save_misc(b);
+                self.say(if n == 0 { "TRIP 1 RESET" } else { "TRIP 2 RESET" });
+            }
+            Some(Row::Set(menu::Setting::Trip(_) | menu::Setting::Odometer)) => {}
             Some(Row::Set(s)) => self.activate_setting(b, s),
             Some(Row::Sensor(k)) => self.activate_sensor(b, menu, sel, k),
             Some(Row::Layout(n)) => self.next_layout(b, n),
@@ -844,6 +867,25 @@ impl App {
         }
     }
 
+    /// A number setting's editing ended: what follows from it (BORN gives MAX HR, a MAX HR by hand is no longer the age's).
+    pub(crate) fn setting_edited(&mut self, s: menu::Setting) {
+        match s {
+            menu::Setting::BirthYear => match self.settings.max_hr_from_age(self.date.0) {
+                None if self.settings.birth_year > 0 => self.say("SET THE CLOCK"),
+                Some(true) => {
+                    let mut l = crate::text::Line::<24>::new();
+                    l.push_str("MAX HR ");
+                    l.push_u32(u32::from(self.settings.max_hr));
+                    l.push_str(" FROM AGE");
+                    self.say(l.as_str());
+                }
+                _ => {}
+            },
+            menu::Setting::MaxHr => self.settings.max_hr_age = false, // set by hand: no longer the age's
+            _ => {}
+        }
+    }
+
     /// Select on a setting: a number starts or ends its editing, a choice cycles.
     fn activate_setting(&mut self, b: &mut impl Board, s: menu::Setting) {
         if s.number().is_some() {
@@ -852,6 +894,7 @@ impl App {
                 self.editing = self.alt_edit_start(); // from the altitude the barometer reads
             }
             if !self.editing {
+                self.setting_edited(s);
                 self.save_misc(b);
             }
         } else if matches!(s, menu::Setting::Theme | menu::Setting::DayTheme | menu::Setting::NightTheme) {

@@ -75,11 +75,11 @@ impl App {
         match kind {
             _ if !fresh && kind != Kind::Trainer => l.push_str("SEARCHING"),
             Kind::Hr => with(&mut l, Field::Hr, " BPM"),
-            Kind::Speed => with(&mut l, Field::Speed, " KMH"),
+            Kind::Speed => with(&mut l, Field::Speed, if self.settings.imperial { " MPH" } else { " KMH" }),
             Kind::Cadence => with(&mut l, Field::Cadence, " RPM"),
             Kind::SpeedCadence => {
-                with(&mut l, Field::Speed, "/");
-                with(&mut l, Field::Cadence, "");
+                with(&mut l, Field::Speed, if self.settings.imperial { "MPH " } else { "KMH " });
+                with(&mut l, Field::Cadence, "RPM");
             }
             Kind::Shifting | Kind::Di2 => with(&mut l, Field::Gear, ""),
             Kind::Trainer => {
@@ -237,7 +237,7 @@ impl App {
                 let k = (i - B_ROWS) / 3;
                 match self.quick_kinds().nth(k) {
                     Some(kind) if (i - B_ROWS).is_multiple_of(3) => {
-                        put(&mut l, ["HR", "SPEED", "CAD", "SPD+CAD", "POWER", "SHIFT", "DI2", "TRAIN"][kind as usize]);
+                        put(&mut l, kind.short());
                         ui::GREY
                     }
                     Some(kind) => {

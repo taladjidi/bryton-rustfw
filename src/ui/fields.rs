@@ -228,12 +228,22 @@ pub enum Field {
     PowerBatt,
     /// The heart-rate strap's battery, the ANT+ status (page 82).
     HrBatt,
+    /// TRIP 1: the distance since it was reset (the rides saved, and the one running).
+    Trip1,
+    /// TRIP 2: as TRIP 1, reset on its own.
+    Trip2,
+    /// ODOMETER: the distance of every ride.
+    Odo,
+    /// TRIP 1's moving time, hours.
+    Trip1Time,
+    /// TRIP 2's moving time, hours.
+    Trip2Time,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 100] = {
+    pub const ALL: [Field; 105] = {
         use Field::*;
         [
             Time,
@@ -336,6 +346,11 @@ impl Field {
             UnitBatt,
             PowerBatt,
             HrBatt,
+            Trip1,
+            Trip2,
+            Odo,
+            Trip1Time,
+            Trip2Time,
         ]
     };
 
@@ -447,8 +462,45 @@ impl Field {
             "UNIT BATT",
             "PM BATT",
             "HR BATT",
+            "TRIP1 KM",
+            "TRIP2 KM",
+            "ODO KM",
+            "TRIP1 H",
+            "TRIP2 H",
         ];
         LABELS[self as usize]
+    }
+
+    /// Its label in the units chosen (UNITS, TEMPERATURE): a field the units do not touch keeps [`Field::label`].
+    /// The course fields (TO GO KM, OFF CRS M, CLIMB M, UP LEFT M) stay metric, and so does their label.
+    pub fn label_in(self, imperial: bool, temp_f: bool) -> &'static str {
+        const IMPERIAL: [(&str, &str); 17] = [
+            ("KM/H", "MPH"),
+            ("AVG KM/H", "AVG MPH"),
+            ("MAX KM/H", "MAX MPH"),
+            ("KM", "MI"),
+            ("LAP KM", "LAP MI"),
+            ("ASCENT M", "ASCENT FT"),
+            ("VAM M/H", "VAM FT/H"),
+            ("WEEK KM", "WEEK MI"),
+            ("YEAR KM", "YEAR MI"),
+            ("TOTAL KM", "TOTAL MI"),
+            ("MAX ALT M", "MAX ALT FT"),
+            ("DESCENT M", "DESCENT FT"),
+            ("LAP ASC M", "LAP ASC FT"),
+            ("LAP DSC M", "LAP DSC FT"),
+            ("UP KM", "UP MI"),
+            ("DOWN KM", "DOWN MI"),
+            ("TRIP1 KM", "TRIP1 MI"),
+        ];
+        let l = self.label();
+        match self {
+            Field::Temp if temp_f => "TEMP F",
+            Field::Trip2 if imperial => "TRIP2 MI",
+            Field::Odo if imperial => "ODO MI",
+            _ if imperial => IMPERIAL.iter().find(|(m, _)| *m == l).map_or(l, |&(_, i)| i),
+            _ => l,
+        }
     }
 
     /// The widest value it shows (a time: without its small seconds): the tests draw it in every box of every layout
@@ -469,7 +521,8 @@ impl Field {
             "888|+88", "88:88|88", "", "", // the workout and ERG again, the climb pacer, the climb profile
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
-            "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT",
+            "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
+            "888.8",
         ];
         WIDEST[self as usize]
     }
@@ -563,7 +616,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
         ("GRAPHS", &[Graph, HrGraph, WbalGraph, DfaGraph, AltGraph]),
         ("WORKOUT", &[Workout, StepTarget, StepTime, WorkoutLeft, NextStep, WorkoutGraph, WktPower]),
         ("COURSE", &[ToGo, NextTurn, OffCourse, Climb, ClimbGain, UpToGo, Profile, ClimbPace, ClimbProfile]),
-        ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm]),
+        ("TOTALS", &[WeekKm, WeekH, YearKm, TotalKm, Trip1, Trip2, Odo, Trip1Time, Trip2Time]),
         ("PHONE", &[Music]),
         ("SHIFTING", &[Gear, Shifts, ShiftBattery]),
         ("TRAINER", &[TrainerMode, TrainerTarget, ErgTarget]),
@@ -759,15 +812,21 @@ pub fn draw_zone_bar(c: &mut impl Canvas, (x, y, w, _): (u32, u32, u32, u32), co
 }
 
 /// A field's frame with its zone bar (`bar`; BLACK: none), for the plain power and heart rate fields.
-pub fn draw_field_frame_bar(c: &mut impl Canvas, bx: (u32, u32, u32, u32), field: Field, bar: u16) {
-    draw_field_frame(c, bx, field);
+pub fn draw_field_frame_bar(
+    c: &mut impl Canvas,
+    bx: (u32, u32, u32, u32),
+    field: Field,
+    bar: u16,
+    units: (bool, bool),
+) {
+    draw_field_frame(c, bx, field, units);
     if bar != BLACK {
         draw_zone_bar(c, bx, bar);
     }
 }
 
 /// A field's frame: the lines between boxes (right and bottom edges, inside the box) and its label (none on a map).
-pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field) {
+pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32), field: Field, units: (bool, bool)) {
     if x + w < W {
         c.fill(x + w - 1, y, 1, h, GREY);
     }
@@ -776,7 +835,7 @@ pub fn draw_field_frame(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32),
     }
     if !field.is_picture() {
         let bar = c.theme().zone_bar;
-        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + bar + 1, Align::Left, field.label());
+        text::draw(c, &Style { fg: GREY, ..LABEL }, x + 6, y + bar + 1, Align::Left, field.label_in(units.0, units.1));
     }
 }
 

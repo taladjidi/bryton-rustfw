@@ -57,11 +57,11 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
 - ~~**T5. Day and night**~~ done, sim only (theming.md section 4b): THEME AUTO, DAY THEME and NIGHT THEME, switched from
   the ambient light (ui/theme.rs `DayNight`, app/themes.rs): night under 20 lux, day over 50 lux, each held 30 s, at most
   one switch a minute, a full redraw each. Agent: implementer.
-- **T6. Overview variants** (theming.md phase 3): `overview = classic | fields`, each a table of boxes checked like
-  page.rs. Agent: implementer (sonnet).
+- ~~**T6. Overview variants**~~ done, sim only (theming.md phase 3): `[theme] overview = classic | fields` (ui/overview.rs
+  `TABLE`, `table_box`), each a table of boxes checked like page.rs at both ends of the metrics.
 - ~~**T7. Tools and docs**~~ done, 2026-10-30: `tools/theme.py examples` writes the built-in themes as example files,
   `preview FILE` draws a file through the simulator; features.md's theme table is checked against the parser by a test
-  (theming.md, section 4). Agent: mechanic.
+  (theming.md, section 4).
 - On the unit: OUTDOOR and LIGHT read in the sun, THEME AUTO switching at dusk (status.md lines).
 
 ### Block 2: live segments (docs/segments.md)
@@ -87,9 +87,11 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - ~~heading (from the GNSS course), sunrise, sunset and time to sunset (NOAA's algorithm, cited), time and distance to
   the destination and the arrival time on a course, the unit's and each sensor's battery as fields~~ done, sim (features.md;
   the distance to the destination is the course's distance to go, not a new field);
-- trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; time zone, daylight
-  saving and the date and time formats; key click; sound on or off; backlight always on; the auto pause threshold;
-  the climb filter (all, or medium and above); the CLIMB page's off switch;
+- ~~trip 1 / trip 2 and the odometer, reset by hand; imperial units and the temperature unit; sound on or off;
+  backlight always on (LIGHT OFF NEVER); the auto pause threshold~~ done, sim (features.md "Units, sound, trips"); still open: time
+  zone, daylight saving and the date and time formats; key click (the unit's keys have no beep to switch); the climb filter
+  (all, or medium and above: no climb has a category yet); the CLIMB page's off switch (CLIMBS AHEAD already turns the road
+  ahead off);
 - ~~the About page: version, the map notices (OSM, OpenMapTiles, IGN); the memory page: free space, the oldest rides
   to delete (DELETE exists in HISTORY)~~ done, sim (features.md: ABOUT and STORAGE under SYSTEM; the oldest ride's DELETE is HISTORY's).
 
@@ -102,6 +104,8 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - start reminder when the bike moves; the ready-to-ride check (sensors, battery, GPS) before the start (sonnet);
 - workouts: ~~the next-step strip instead of a popup (patch P3), two targets per step~~ done, sim (features.md);
 - zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power;
+- ~~the heart rate strap's battery (ANT+ page 7); sensor names~~ done, sim (features.md); Di2 gear teeth and hood button actions (patch P12), the
+- ~~zones: HR zones from LTHR, zones edited one by one, the rider's sex, birthday and height; hrTSS without power~~ done, sim (features.md "Zones");
 - the heart rate strap's battery (ANT+ page 7); sensor names; Di2 gear teeth and hood button actions (patch P12), the
   media remote from Di2 buttons;
 - screenshots saved to `\Screenshot\` (critical: a card write), the debug log after a fault (critical).

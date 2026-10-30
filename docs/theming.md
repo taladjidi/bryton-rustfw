@@ -279,6 +279,11 @@ Bounded metrics are done (T4, sim only; fonts are not): `[metrics]` in the file,
   (`fits`, 44 px targets, no overlap) and in the gallery.
 - Coordinates from a file: not recommended. Their checker would be a layout engine, each box is also a dirty box
   and a touch box, and a screen the tests never drew would reach the ride.
+- Done (T6): `[theme] overview = classic | fields` (a word that is neither is ignored, the base's stays). `fields` puts a
+  2 x 2 table of field boxes in the TODAY card's place (time, next workout, year km, week hours: `ui::TABLE`,
+  `table_box`), above the four chosen fields; each box is a field cell redrawn on its own as the fields are. A tap
+  anywhere in the old card's area still opens today's workout (`TODAY_BOX`). Tests: `overview_variants_tile_and_fit`
+  (tiling, fits at both metric ends), the sim test at both ends, a DARK classic hash taken on main, the fuzz.
 - Effort: a day or two per variant. Risk: low once variants are code.
 
 ## Not planned

@@ -79,7 +79,7 @@ impl Card {
 
     /// The card of a ride with these numbers: "23 OCT 09:12", then time, distance, speed, ascent, NP, power,
     /// heart rate, TSS, work.
-    pub fn of(s: &Stats) -> Card {
+    pub fn of(s: &Stats, imperial: bool) -> Card {
         let mut card = Card::default();
         let ((_, mo, d), (h, mi)) = s.start;
         card.title.push_u32(u32::from(d));
@@ -103,22 +103,26 @@ impl Card {
         time.push_str(super::DIGITS[(s.timer_s / 600 % 6) as usize]);
         time.push_str(super::DIGITS[(s.timer_s / 60 % 10) as usize]);
         let mut km = Line::<10>::new();
-        push_km(&mut km, s.dist_m);
+        crate::push_trip(&mut km, s.dist_m, imperial); // 1 decimal, as push_km
         let mut speed = Line::<10>::new();
-        match s.avg_speed_x10 {
+        match s.avg_speed_x10.map(|v| if imperial { crate::mph_x10(u32::from(v)) } else { u32::from(v) }) {
             Some(v) => {
-                speed.push_u32(u32::from(v / 10));
+                speed.push_u32(v / 10);
                 speed.push_str(".");
-                speed.push_u32(u32::from(v % 10));
+                speed.push_u32(v % 10);
             }
             None => speed.push_str("--"),
         }
         let w = |v: Option<u16>| num(v.map(u32::from));
         card.stats = [
             ("TIME", time),
-            ("KM", km),
-            ("AVG KM/H", speed),
-            ("ASCENT M", num(s.ascent_m)),
+            (if imperial { "MI" } else { "KM" }, km),
+            (if imperial { "AVG MPH" } else { "AVG KM/H" }, speed),
+            if imperial {
+                ("ASCENT FT", num(s.ascent_m.map(|m| crate::feet(m.min(i32::MAX as u32) as i32) as u32)))
+            } else {
+                ("ASCENT M", num(s.ascent_m))
+            },
             ("NP", w(s.np)),
             ("AVG W", w(s.avg_power)),
             ("AVG HR", w(s.avg_hr)),

@@ -262,7 +262,7 @@ pub struct Past {
     pub bytes: u32,
     samples: Samples,
     /// The ride being read ([`Past::step`]): it, the FTP for its TSS, its reader and totals so far.
-    reading: Option<(Ride, u16, Reader, Acc)>,
+    reading: Option<(Ride, (u16, bool), Reader, Acc)>,
     /// The ride last asked for (the one the card shows once read): what DELETE moves.
     pub ride: Ride,
 }
@@ -288,10 +288,11 @@ impl Past {
         }
     }
 
-    /// Starts reading `ride`'s file into the card, TSS at `ftp`: over the next [`Past::step`]s.
-    pub fn start(&mut self, ride: &Ride, ftp: u16) {
+    /// Starts reading `ride`'s file into the card, TSS at `ftp`, miles and mph when `imperial`: over the next
+    /// [`Past::step`]s.
+    pub fn start(&mut self, ride: &Ride, ftp: u16, imperial: bool) {
         (self.track, self.samples, self.bytes, self.ride) = (Track::new(), Samples::new(), 0, *ride);
-        self.reading = Some((*ride, ftp, Reader::with_position(), Acc::new()));
+        self.reading = Some((*ride, (ftp, imperial), Reader::with_position(), Acc::new()));
     }
 
     /// A ride is being read.
@@ -351,7 +352,7 @@ impl Past {
         }
         self.track.end();
         let got = acc.ride(ride.file, ride.start).unwrap_or(*ride);
-        self.card = Card::of(&got.stats(*ftp));
+        self.card = Card::of(&got.stats(ftp.0), ftp.1);
         self.samples.columns(&mut self.elev);
         self.scale = alt_scale(self.elev.iter().map(|&v| u32::from(v)));
         self.reading = None;
