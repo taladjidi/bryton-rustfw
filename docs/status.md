@@ -8,6 +8,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **BATT HRS (sim only)**: the time left on the battery, from the drain of the last 20 minutes (drivers/battery.rs). Still to see: on a real ride from full, its value against the strip's percent over the first hour (the drain it reports should match the percent the strip loses, 1 h of ride to about 5 to 10 % at a riding draw, as `tools/dev.py bat` logs it), the value shown at 10 minutes (the first "--" ending) and while the unit is on the charger ("--"), and the model's number before the cell moves (a plateau, the unit idle on the overview).
 - **QUICK STATUS (sim only)**: a tap on a plain field of a ride page opens six chosen fields. Still to see: the tap on a wet or gloved finger (a stray tap only opens a read-only overlay, 10 s), the six values updating each second, the picker in PAGES > QUICK FIELDS, and the choice kept after a restart (settings.bin bytes 158 to 164).
 
 - **Screenshots and the fault log (app/screenshot.rs, app/faultlog.rs, storage/screenshot.rs, storage/faultlog.rs;

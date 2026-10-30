@@ -462,6 +462,25 @@ impl App {
                 }
                 return l;
             }
+            Field::BattHrs => {
+                // the drain of drivers/battery.rs; the charger's minutes are left out there, the strip says it now too
+                match self.battery.minutes_left().filter(|_| !self.strip.charging) {
+                    Some(m) if m < 60 => {
+                        l.push_u32(m);
+                        l.push_str("M");
+                    }
+                    Some(m) if m < 600 => {
+                        push_fixed_u(&mut l, m / 6, 1);
+                        l.push_str("H");
+                    }
+                    Some(m) => {
+                        l.push_u32((m / 60).min(99));
+                        l.push_str("H");
+                    }
+                    None => l.push_str("--"),
+                }
+                return l;
+            }
             Field::UnitBatt => {
                 match self.strip.battery {
                     Some(p) => {
@@ -698,7 +717,8 @@ mod tests {
         assert_eq!([Field::from_index(79), Field::from_index(90)], [Field::PctMaxHr, Field::BalanceAvg]);
         assert_eq!([Field::from_index(91), Field::from_index(99)], [Field::Heading, Field::HrBatt]);
         assert_eq!([Field::from_index(100), Field::from_index(104)], [Field::Trip1, Field::Trip2Time]);
-        assert_eq!(Field::ALL.len(), 108);
+        assert_eq!([Field::from_index(107), Field::from_index(108)], [Field::ClimbLeft, Field::BattHrs]);
+        assert_eq!(Field::ALL.len(), 109);
     }
 
     #[test]

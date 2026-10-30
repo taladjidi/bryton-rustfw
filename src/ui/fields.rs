@@ -246,12 +246,16 @@ pub enum Field {
     ClimbTime,
     /// The distance left to the end of the segment, or to the top of the climb.
     ClimbLeft,
+    // the battery's drain (drivers/battery.rs). Appended, as above.
+    /// The time left on the battery, "45M" under an hour, "9.5H", then "12H"; "--" on the charger or before the drain
+    /// is measured.
+    BattHrs,
 }
 
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 108] = {
+    pub const ALL: [Field; 109] = {
         use Field::*;
         [
             Time,
@@ -362,6 +366,7 @@ impl Field {
             SegHead,
             ClimbTime,
             ClimbLeft,
+            BattHrs,
         ]
     };
 
@@ -481,6 +486,7 @@ impl Field {
             "SEGMENT",
             "ELAPSED",
             "LEFT",
+            "BATT HRS",
         ];
         LABELS[self as usize]
     }
@@ -536,7 +542,7 @@ impl Field {
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
             "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
-            "888.8", "", "88:88", "88.8|KM",
+            "888.8", "", "88:88", "88.8|KM", "88.8H",
         ];
         WIDEST[self as usize]
     }
@@ -594,6 +600,7 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
             &[
                 Time, Timer, TripTime, Laps, LastLap, Speed, Dist, AvgSpeed, MaxSpeed, MaxCadence, Cadence, AvgCadence,
                 LapTime, LapDist, Kcal, Temp, Map, Heading, Sunrise, Sunset, ToSunset, TimeToDest, Eta, UnitBatt,
+                BattHrs,
             ],
         ),
         (
