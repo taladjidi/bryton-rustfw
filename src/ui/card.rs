@@ -2,7 +2,7 @@
 //! of its track, its elevation profile and ten numbers. Drawn once, when shown. The live ride and a past ride both
 //! give their numbers as [`Stats`], which [`Card::of`] writes the same way.
 
-use super::{Canvas, LABEL, PAGE_Y, W};
+use super::{Canvas, H, LABEL, PAGE_Y, W};
 use crate::map;
 use crate::text::{self, Align, Line, Style};
 
@@ -59,6 +59,97 @@ pub struct Stats {
     pub tss: Option<u32>,
     /// Work, kJ.
     pub kj: Option<u32>,
+}
+
+/// The touch box of LAPS, at the left end of a past ride's title line (as [`DELETE_TAP`], over the map's top corner).
+pub const LAPS_TAP: (u32, u32, u32, u32) = (0, PAGE_Y, 64, 44);
+
+/// "LAPS" at the left end of a past ride's title line; a tap in [`LAPS_TAP`] (or Page) opens the list of its laps.
+pub fn draw_laps_label(c: &mut impl Canvas) {
+    let white = Style { scale: 1, ..LABEL };
+    text::draw_in(c, &white, 4, PAGE_Y + 8, 56, Align::Left, "LAPS");
+}
+
+/// Laps a list screen shows at once: rows of 20 px under the title and a column header.
+pub const LAP_ROWS: usize = ((H - LAPS_Y) / LAP_ROW) as usize;
+const LAP_ROW: u32 = 20;
+const LAPS_Y: u32 = super::LIST_Y + 16;
+
+/// One lap of a past ride as its list shows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LapRow {
+    /// Moving time, s.
+    pub timer_s: u32,
+    /// Distance, m.
+    pub dist_m: u32,
+    /// Average speed, km/h x 10.
+    pub speed_x10: Option<u16>,
+    /// Average power, W.
+    pub power: Option<u16>,
+    /// Average heart rate, bpm.
+    pub hr: Option<u8>,
+}
+
+impl LapRow {
+    /// A lap with nothing in it (the array's filler).
+    pub const EMPTY: LapRow = LapRow { timer_s: 0, dist_m: 0, speed_x10: None, power: None, hr: None };
+}
+
+/// The list of a past ride's laps from row `top`: number, time, distance, average speed, power and heart rate (a
+/// missing one "--"); "NO LAPS" for a ride with none. Drawn whole (a screen opens or scrolls).
+pub fn draw_lap_list(c: &mut impl Canvas, laps: &[LapRow], top: usize, imperial: bool) {
+    super::draw_title(c, "LAPS");
+    let grey = Style { fg: super::GREY, scale: 1, ..LABEL };
+    if laps.is_empty() {
+        text::draw_in(c, &grey, 0, super::LIST_Y + 20, W, Align::Centre, "NO LAPS");
+        return;
+    }
+    // (left, width) of each column: #, time, distance, speed, W, HR
+    const COLS: [(u32, u32); 6] = [(2, 22), (28, 48), (80, 34), (118, 34), (156, 34), (194, 34)];
+    let head = ["#", "TIME", if imperial { "MI" } else { "KM" }, if imperial { "MPH" } else { "KMH" }, "W", "HR"];
+    for (&(x, w), h) in COLS.iter().zip(head) {
+        text::draw_in(c, &grey, x, super::LIST_Y + 2, w, Align::Right, h);
+    }
+    let white = Style { scale: 1, ..LABEL };
+    for (r, (i, l)) in laps.iter().enumerate().skip(top).take(LAP_ROWS).enumerate() {
+        let y = LAPS_Y + r as u32 * LAP_ROW + 4;
+        let mut cells = [Line::<10>::new(); 6];
+        let [no, time, dist, speed, power, hr] = &mut cells;
+        no.push_u32(i as u32 + 1);
+        let (h, m, sec) = (l.timer_s / 3600, l.timer_s / 60 % 60, l.timer_s % 60);
+        if h > 0 {
+            time.push_u32(h);
+            time.push_str(":");
+            time.push_str(super::DIGITS[(m / 10) as usize]);
+        }
+        time.push_str(if h > 0 { super::DIGITS[(m % 10) as usize] } else { "" });
+        if h == 0 {
+            time.push_u32(m);
+        }
+        time.push_str(":");
+        time.push_str(super::DIGITS[(sec / 10) as usize]);
+        time.push_str(super::DIGITS[(sec % 10) as usize]);
+        crate::push_trip(dist, l.dist_m, imperial);
+        match l.speed_x10.map(|v| if imperial { crate::mph_x10(u32::from(v)) } else { u32::from(v) }) {
+            Some(v) => {
+                speed.push_u32(v / 10);
+                speed.push_str(".");
+                speed.push_u32(v % 10);
+            }
+            None => speed.push_str("--"),
+        }
+        match l.power {
+            Some(v) => power.push_u32(u32::from(v)),
+            None => power.push_str("--"),
+        }
+        match l.hr {
+            Some(v) => hr.push_u32(u32::from(v)),
+            None => hr.push_str("--"),
+        }
+        for (&(x, w), cell) in COLS.iter().zip(&cells) {
+            text::draw_in(c, &white, x, y, w, Align::Right, cell.as_str());
+        }
+    }
 }
 
 /// A distance in km to 0.1 km, as a card and the history list show it (a card's value box holds 5 characters).

@@ -1541,6 +1541,8 @@ fn run(sim: &mut Sim, app: &mut App, ms: u64) {
 #[cfg(test)]
 mod course_tests;
 #[cfg(test)]
+mod laps_tests;
+#[cfg(test)]
 mod map_tests;
 #[cfg(test)]
 mod menu_tests;

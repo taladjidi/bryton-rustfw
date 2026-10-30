@@ -20,6 +20,10 @@
 //!   forward (fitdecode, github.com/polyvertex/fitdecode `reader.py` `_apply_compressed_accumulation`: the low 5
 //!   bits replaced, plus 32 if the offset is below them).
 //! - an invalid value is all ones for an unsigned type (FIT profile base types); such a field reads as None.
+//! - message 19 `lap`: 8 total_timer_time (ms), 9 total_distance (1/100 m), 13 avg_speed (uint16, mm/s), 15 avg_heart_rate,
+//!   19 avg_power, 110 enhanced_avg_speed (uint32, mm/s; wins over 13) (FIT profile, Profile.xlsx of the SDK; this
+//!   firmware's writer, fit.rs `LAP`, uses the same numbers; stock's laps are read the same way). The card of a
+//!   past ride lists them.
 //! - message 20 `record`: 253 timestamp, 3 heart_rate (bpm), 5 distance (1/100 m), 7 power (W). Message 18
 //!   `session`: 2 start_time, 8 total_timer_time (ms), 9 total_distance (1/100 m), 16 avg_heart_rate,
 //!   20 avg_power, 21 max_power, 22 total_ascent (m) (FIT profile, Profile.xlsx of the SDK). With the position:
@@ -83,6 +87,21 @@ pub struct Session {
     pub ascent_m: Option<u16>,
 }
 
+/// A `lap` message as the card's list shows it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Lap {
+    /// Timer (moving) time, ms.
+    pub timer_ms: Option<u32>,
+    /// Distance, 1/100 m.
+    pub dist_cm: Option<u32>,
+    /// Average speed, mm/s (the enhanced field, else the 16-bit one).
+    pub speed_mm_s: Option<u32>,
+    /// Average power, W.
+    pub avg_power: Option<u16>,
+    /// Average heart rate, bpm.
+    pub avg_hr: Option<u8>,
+}
+
 /// A message the reader gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Msg {
@@ -90,6 +109,8 @@ pub enum Msg {
     Record(Record),
     /// A `session`.
     Session(Session),
+    /// A `lap`.
+    Lap(Lap),
     /// A `course_point` (only from a reader [`Reader::with_position`]): its position (semicircles) and type.
     CoursePoint {
         /// Latitude and longitude, semicircles.
@@ -144,6 +165,12 @@ fn slot(global: u16, num: u8, position: bool) -> Option<u8> {
         (32, 3) if position => 5,  // position_long
         (32, 5) if position => 1,  // type
         (32, 4) if position => 2,  // distance
+        (19, 8) => 1,              // lap: total_timer_time
+        (19, 9) => 2,              // total_distance
+        (19, 13) => 3,             // avg_speed
+        (19, 110) => 4,            // enhanced_avg_speed
+        (19, 19) => 5,             // avg_power
+        (19, 15) => 6,             // avg_heart_rate
         (18, 2) => 1,              // start_time
         (18, 8) => 2,              // total_timer_time
         (18, 9) => 3,              // total_distance
@@ -614,6 +641,13 @@ impl Reader {
                 let pos = get(4).zip(get(5)).map(|(a, b)| (a as i32, b as i32));
                 Some(Msg::CoursePoint { pos, kind: u8_(1), dist_cm: get(2) })
             }
+            19 => Some(Msg::Lap(Lap {
+                timer_ms: get(1),
+                dist_cm: get(2),
+                speed_mm_s: get(4).or(get(3)),
+                avg_power: u16_(5),
+                avg_hr: u8_(6),
+            })),
             18 => Some(Msg::Session(Session {
                 start: get(1),
                 timer_ms: get(2),
@@ -683,6 +717,81 @@ mod tests {
         }
         w.finish(&mut f, T0 + 121).unwrap();
         f
+    }
+
+    /// A FIT file around `body`: a 14-byte header and the file CRC.
+    fn file_of(body: &[u8]) -> Vec<u8> {
+        let mut f = Vec::from([14u8, 0x10, 0, 0]);
+        f.extend((body.len() as u32).to_le_bytes());
+        f.extend(b".FIT");
+        f.extend(crate::fit::crc(0, &f).to_le_bytes());
+        f.extend(body);
+        f.extend(crate::fit::crc(0, &f).to_le_bytes());
+        f
+    }
+
+    fn laps(f: &[u8]) -> Vec<Lap> {
+        read(f).0.into_iter().filter_map(|m| if let Msg::Lap(l) = m { Some(l) } else { None }).collect()
+    }
+
+    /// Our writer's laps (two Lap keys, then the last lap at the end): timer time, distance and speed; no power or
+    /// heart rate (fit.rs leaves a lap's averages out).
+    #[test]
+    fn laps_of_our_writer() {
+        let mut f = Vec::new();
+        let (mut w, _) = Writer::start(&mut f, T0).unwrap();
+        for t in 1..=90u32 {
+            let s =
+                Sample { time: T0 + t, speed_mm_s: Some(5000), hr: Some(130), power: Some(200), ..Sample::default() };
+            w.record(&mut f, &s).unwrap();
+            if t == 30 || t == 60 {
+                w.lap(&mut f, T0 + t).unwrap();
+            }
+        }
+        w.finish(&mut f, T0 + 91).unwrap();
+        let l = laps(&f);
+        assert_eq!(l.len(), 3);
+        assert_eq!((l[0].timer_ms, l[1].timer_ms), (Some(30_000), Some(30_000)));
+        assert_eq!((l[0].dist_cm, l[0].speed_mm_s), (Some(15_000), Some(5000)));
+        assert_eq!((l[0].avg_power, l[0].avg_hr), (None, None));
+        assert!(l[2].timer_ms.is_some_and(|ms| (29_000..=31_000).contains(&ms)), "{l:?}");
+    }
+
+    /// A stock-like file: big endian, a lap defined on local type 3 with the enhanced speed and power and heart
+    /// rate, a developer field, another message between, a compressed-timestamp-free second lap without them.
+    #[test]
+    fn laps_stock_like() {
+        let mut b: Vec<u8> = Vec::new();
+        // definition, big endian: 253 u32, 8 u32, 9 u32, 110 u32, 13 u16, 19 u16, 15 u8; one developer field of 2 bytes
+        b.extend([0x63, 0, 1, 0, 19, 7, 253, 4, 0x86, 8, 4, 0x86, 9, 4, 0x86, 110, 4, 0x86, 13, 2, 0x84, 19, 2, 0x84]);
+        b.extend([15, 1, 2, 1, 0, 2, 0]);
+        b.extend([0x03]);
+        for v in [T0, 600_000, 250_000, 6_000] {
+            b.extend(v.to_be_bytes());
+        }
+        b.extend([0x1f, 0x40, 0x01, 0x2c, 150, 0xaa, 0xbb]); // avg_speed 8000 (ignored for 6000), 300 W, 150 bpm
+        // a second lap with a smaller definition on type 4: little endian, timer and distance only
+        b.extend([0x44, 0, 0, 19, 0, 2, 8, 4, 0x86, 9, 4, 0x86]);
+        b.push(0x04);
+        b.extend(60_000u32.to_le_bytes());
+        b.extend(u32::MAX.to_le_bytes());
+        let l = laps(&file_of(&b));
+        assert_eq!(
+            l,
+            [
+                Lap {
+                    timer_ms: Some(600_000),
+                    dist_cm: Some(250_000),
+                    speed_mm_s: Some(6000),
+                    avg_power: Some(300),
+                    avg_hr: Some(150)
+                },
+                Lap { timer_ms: Some(60_000), ..Lap::default() },
+            ]
+        );
+        // damaged: cut inside the second lap, the first is still given
+        let cut = file_of(&b)[..b.len() + 14 - 5].to_vec();
+        assert_eq!(laps(&cut).len(), 1);
     }
 
     /// `push_slice` gives what `push` gives, byte by byte, on whole and damaged files cut into any chunks.
