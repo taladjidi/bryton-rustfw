@@ -563,7 +563,7 @@ impl App {
             self.list_shown = ui::list_prints(&self.radio.nearby); // drawn whole by draw_screen
         }
         if let Screen::Menu(menu, sel) = self.screen {
-            let first = menu::first_shown(sel, ui::MENU_ROWS, self.rows(menu));
+            let first = menu::first_shown(sel, self.menu_rows(), self.rows(menu));
             self.menu_shown = core::array::from_fn(|i| self.menu_row_print(menu, sel, first, i));
             self.menu_head = core::array::from_fn(|i| self.menu_print(menu, sel, first, i, false));
         }

@@ -51,9 +51,9 @@ becomes a list of fonts (T3); themes switch by day and night (T5, stock has it).
   doc as Barlow is). FONT becomes PIXEL, BARLOW, ATKINSON, in the settings file; a theme's `font` key sets the
   default. Measure the image size per font (write it in the commit); a font over 150 KB is dropped. Per-role fonts
   (labels apart from values) only if the owner asks after seeing it. Agent: implementer.
-- **T4. Bounded metrics** (theming.md phase 2): `zone_bar` 4 to 12, `frame` 1 to 4, `menu_row` 44 to 56, read
-  through `Canvas::theme()` and by the touch code from `App`; every "fits" test and the sim suite at both ends of
-  each range. Agent: implementer (sonnet).
+- ~~**T4. Bounded metrics**~~ done, sim only (theming.md phase 2): `[metrics]` `zone_bar` 4 to 12, `frame` 1 to 4,
+  `menu_row` 44 to 56 (clamped), read through `Canvas::theme()` and by the touch code from `App::menu_rows`; the
+  fits tests, the menu tiling and the taps run at both ends of each range.
 - ~~**T5. Day and night**~~ done, sim only (theming.md section 4b): THEME AUTO, DAY THEME and NIGHT THEME, switched from
   the ambient light (ui/theme.rs `DayNight`, app/themes.rs): night under 20 lux, day over 50 lux, each held 30 s, at most
   one switch a minute, a full redraw each. Agent: implementer.

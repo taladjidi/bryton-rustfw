@@ -122,4 +122,8 @@ impl<B: Board> Canvas for Panel<'_, B> {
     fn ink(&self, c: u16) -> u16 {
         self.2.ink(c)
     }
+
+    fn theme(&self) -> &crate::ui::Theme {
+        &self.2
+    }
 }

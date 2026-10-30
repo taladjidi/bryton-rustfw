@@ -12,6 +12,11 @@ const MAX_FILES: usize = 14;
 const THEMES_DIR: &str = "Rustfw/Themes";
 
 impl App {
+    /// Rows a menu shows at the theme's row pitch ([`ui::theme::MENU_ROW`]); the hit test of a tap uses the same pitch.
+    pub(crate) fn menu_rows(&self) -> usize {
+        ui::menu_rows(self.theme.menu_row)
+    }
+
     /// The font and colours every canvas of this app draws with.
     pub(crate) fn look(&self) -> Theme {
         Theme { smooth: self.settings.smooth, ..self.theme }

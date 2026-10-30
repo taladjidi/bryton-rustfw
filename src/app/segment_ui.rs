@@ -293,7 +293,7 @@ impl App {
         let announce = self.seg_ui.announce.take();
         let window = match self.screen {
             Screen::Menu(Menu::Segments, sel) if self.ride.state() == ride::State::Idle => {
-                let f = menu::first_shown(sel, ui::MENU_ROWS, self.rows(Menu::Segments));
+                let f = menu::first_shown(sel, self.menu_rows(), self.rows(Menu::Segments));
                 Some(f.saturating_sub(FIXED_ROWS))
             }
             _ => {

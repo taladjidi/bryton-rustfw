@@ -563,3 +563,66 @@ fn a_switch_between_equal_themes_keeps_the_theme() {
     assert!(app.light.day_night.night, "the switch is made");
     assert_eq!(app.theme, Theme::OUTDOOR, "the same theme on both sides");
 }
+
+/// A theme with `menu_row` and `zone_bar` / `frame` set (the rest DARK).
+fn metrics(menu_row: u32, zone_bar: u32, frame: u32) -> Theme {
+    Theme { menu_row, zone_bar, frame, ..Theme::DARK }
+}
+
+/// `menu_row` 44 and 56 (theme metrics): the main menu draws with the pitch, and a tap on the first and last pixel of
+/// each row's band lands on that row (as the row drawn), never on its neighbour; shots for the gallery.
+#[test]
+fn a_tap_lands_on_the_row_drawn_at_44_and_56() {
+    for row in [44, 56] {
+        let (mut sim, mut app) = unit(None);
+        set_theme(&mut sim, &mut app, metrics(row, 8, 3));
+        app.press(&mut sim, Press::Long(Key::Page));
+        run(&mut sim, &mut app, 200);
+        assert_eq!(app.menu_rows(), if row == 44 { 6 } else { 4 });
+        sim.save(&std::format!("metrics_menu_{row}"));
+        let mut opened = 0;
+        for slot in 0..app.menu_rows() {
+            let y0 = crate::ui::LIST_Y + slot as u32 * row;
+            // the rule under the row is its last pixel row
+            assert_eq!(sim.screen[((y0 + row - 1) * crate::ui::W + 100) as usize], crate::ui::DARK, "row {row}");
+            for y in [y0, y0 + row / 2, y0 + row - 1] {
+                // the menu turns as the selection moves: the row drawn in this slot is first + slot
+                let Screen::Menu(Menu::Main, sel) = app.screen() else { panic!("{:?}", app.screen()) };
+                let want = menu::first_shown(sel, app.menu_rows(), app.rows(Menu::Main)) + slot;
+                let Some(menu::Row::Open(m)) = app.row(Menu::Main, want) else { continue };
+                app.input(&mut sim, Input::Touch(Gesture::Tap(120, y as u16)));
+                // the row tapped is selected or opened (a tap acts, unless the ride moves): never its neighbour
+                let on = app.screen();
+                assert!(
+                    on == Screen::Menu(m, 0) || on == Screen::Menu(Menu::Main, want),
+                    "{row} px, slot {slot}, y {y}: {on:?}"
+                );
+                super::tests::assert_consistent(&sim, &app);
+                if on != Screen::Menu(Menu::Main, want) {
+                    app.press(&mut sim, Press::Short(Key::Back));
+                    assert_eq!(app.screen(), Screen::Menu(Menu::Main, want), "back to the row");
+                }
+                opened += 1;
+            }
+        }
+        assert!(opened >= 9, "{opened} taps checked at {row} px");
+    }
+}
+
+/// A menu longer than a screen turns by the screen's rows at the theme's pitch (4 at 56 px, 6 at 44): the last row of
+/// a screen is reached by a tap on the bottom pixel, and the first of the next is the row after it.
+#[test]
+fn a_long_menu_turns_by_the_rows_of_the_pitch() {
+    for row in [44u32, 56] {
+        let (mut sim, mut app) = unit(None);
+        set_theme(&mut sim, &mut app, metrics(row, 8, 3));
+        app.press(&mut sim, Press::Long(Key::Page));
+        super::tests::to_row(&mut sim, &mut app, menu::Row::Open(Menu::Sensors));
+        app.press(&mut sim, Press::Short(Key::Start));
+        let n = app.menu_rows();
+        assert!(app.rows(Menu::Sensors) > n);
+        app.input(&mut sim, Input::Touch(Gesture::Tap(120, (crate::ui::H - 1) as u16)));
+        assert_eq!(app.screen(), Screen::Menu(Menu::Sensors, n - 1), "{row} px: the bottom pixel is the last slot");
+        super::tests::assert_consistent(&sim, &app);
+    }
+}

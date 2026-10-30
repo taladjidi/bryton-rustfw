@@ -105,6 +105,11 @@ pub trait Canvas {
     fn ink(&self, c: u16) -> u16 {
         c
     }
+    /// The theme in use: the colours of [`Canvas::ink`] and the metrics (zone bar, frame, menu row). DARK unless a
+    /// canvas carries one.
+    fn theme(&self) -> &Theme {
+        &Theme::DARK
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -243,7 +248,8 @@ pub fn clear_page_but(c: &mut impl Canvas, (x, y, w, h): (u32, u32, u32, u32)) {
 /// is left under the last row.
 pub fn clear_menu(c: &mut impl Canvas) {
     c.fill(0, PAGE_Y, W, LIST_Y - PAGE_Y, BLACK);
-    let end = LIST_Y + MENU_ROWS as u32 * MENU_ROW;
+    let row = c.theme().menu_row;
+    let end = LIST_Y + menu_rows(row) as u32 * row;
     c.fill(0, end, W, H - end, BLACK);
 }
 
@@ -357,6 +363,10 @@ impl Canvas for Row {
 
     fn ink(&self, c: u16) -> u16 {
         self.look.ink(c)
+    }
+
+    fn theme(&self) -> &Theme {
+        &self.look
     }
 }
 
@@ -540,12 +550,17 @@ pub const ABOUT_NOTICES: [&str; 6] = [
 // Menus: a title, then rows of a label and a value; the selected row in orange.
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Menu row pitch: 44 px, about 8 mm on this panel (0.18 mm a pixel), a fingertip's size (Apple's 44 pt, Material's
+/// Menu row pitch of the built-in themes (a file sets 44 to 56, `Canvas::theme().menu_row`): 44 px, about 8 mm on this panel (0.18 mm a pixel), a fingertip's size (Apple's 44 pt, Material's
 /// 48 dp); 20 px rows (3.6 mm) let a gloved finger cover two or three (UI review, 2026-10-25).
 pub const MENU_ROW: u32 = 44;
 
 /// Rows a menu shows at most (6); a longer menu turns a screen of rows at a time.
-pub const MENU_ROWS: usize = ((H - LIST_Y) / MENU_ROW) as usize;
+pub const MENU_ROWS: usize = menu_rows(MENU_ROW);
+
+/// Rows a menu shows at row pitch `row` (6 at 44, 4 at 56).
+pub const fn menu_rows(row: u32) -> usize {
+    ((H - LIST_Y) / row) as usize
+}
 
 /// Where a tap goes back (as Back): the "<" at the left of a menu's title, a finger wide, from the strip's line to
 /// the first row.
@@ -573,12 +588,13 @@ pub(crate) fn menu_label_w(label: &str, value: &str) -> u32 {
 /// in its [`MENU_ROW`], a dark line under it; selected, the row is orange with black text (10:1 against the orange,
 /// where white was 2:1).
 pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
-    let y = LIST_Y + i as u32 * MENU_ROW;
+    let row = c.theme().menu_row;
+    let y = LIST_Y + i as u32 * row;
     // a row with no value and a grey one is a note (an empty list), not a choice
     let note = value.is_empty() && value_color == GREY;
     let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, if note { GREY } else { WHITE }) };
     let name_w = menu_label_w(label, value);
-    let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
+    let ty = y + (row - 1 - LABEL.height()) / 2;
     c.fill(0, y, W, ty - y, bg);
     c.fill(0, ty, NEARBY.0, LABEL.height(), bg);
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0, ty, name_w, Align::Left, label);
@@ -586,17 +602,18 @@ pub fn draw_menu_row(c: &mut impl Canvas, i: usize, label: &str, value: &str, va
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, ty, NEARBY.2 - name_w, Align::Right, value);
     c.fill(NEARBY.0 + NEARBY.2, ty, W - NEARBY.0 - NEARBY.2, LABEL.height(), bg);
     let below = ty + LABEL.height();
-    c.fill(0, below, W, y + MENU_ROW - 1 - below, bg);
-    c.fill(0, y + MENU_ROW - 1, W, 1, DARK);
+    c.fill(0, below, W, y + row - 1 - below, bg);
+    c.fill(0, y + row - 1, W, 1, DARK);
 }
 
 /// Only the value of [`draw_menu_row`]`(i, label, ..)`, in its own box (which `draw_in` clears): the row's label,
 /// selection and colour are as drawn.
 pub fn draw_menu_value(c: &mut impl Canvas, i: usize, label: &str, value: &str, value_color: u16, selected: bool) {
-    let y = LIST_Y + i as u32 * MENU_ROW;
+    let row = c.theme().menu_row;
+    let y = LIST_Y + i as u32 * row;
     let (bg, fg) = if selected { (ACCENT, ON_ACCENT) } else { (BLACK, value_color) };
     let name_w = menu_label_w(label, value);
-    let ty = y + (MENU_ROW - 1 - LABEL.height()) / 2;
+    let ty = y + (row - 1 - LABEL.height()) / 2;
     text::draw_in(c, &Style { fg, bg, ..LABEL }, NEARBY.0 + name_w, ty, NEARBY.2 - name_w, Align::Right, value);
 }
 
@@ -704,6 +721,13 @@ pub(crate) mod tests {
         draw_call(&mut f, "Somebody with a long name");
     }
 
+    /// The two ends of every metric a theme file may set: all at the least, all at the most.
+    pub fn metric_ends() -> [Theme; 2] {
+        use theme::{FRAME, MENU_ROW, ZONE_BAR};
+        [(ZONE_BAR.0, FRAME.0, MENU_ROW.0), (ZONE_BAR.2, FRAME.2, MENU_ROW.2)]
+            .map(|(zone_bar, frame, menu_row)| Theme { zone_bar, frame, menu_row, ..Theme::DARK })
+    }
+
     /// A framebuffer that panics on any fill off screen.
     pub struct Frame {
         pub px: Vec<u16>,
@@ -711,11 +735,17 @@ pub(crate) mod tests {
         painted: usize,
         /// Text in the smooth font ([`Canvas::smooth`]).
         pub smooth: bool,
+        /// The theme drawn with (DARK).
+        pub theme: Theme,
     }
 
     impl Frame {
         pub fn new() -> Self {
-            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0, smooth: false }
+            Frame { px: vec![BLACK; (W * H) as usize], fills: 0, painted: 0, smooth: false, theme: Theme::DARK }
+        }
+        /// A frame drawn with the theme `t`.
+        pub fn themed(t: Theme) -> Self {
+            Frame { theme: t, ..Frame::new() }
         }
         pub fn at(&self, x: u32, y: u32) -> u16 {
             self.px[(y * W + x) as usize]
@@ -752,7 +782,45 @@ pub(crate) mod tests {
 
         /// As the panel in DARK draws it, so a test compares the same pixels.
         fn ink(&self, c: u16) -> u16 {
-            Theme::DARK.ink(c)
+            self.theme.ink(c)
+        }
+
+        fn theme(&self) -> &Theme {
+            &self.theme
+        }
+    }
+
+    /// Menu rows at both ends of `menu_row` (44 and 56): the rows tile from LIST_Y without overlap or gap, each paints
+    /// only its own band (its last line the DARK rule), the last whole row ends on screen, and the title's band and
+    /// the rest under the rows are cleared by `clear_menu`.
+    #[test]
+    fn menu_rows_tile_at_both_ends() {
+        for t in metric_ends() {
+            let row = t.menu_row;
+            let rows = menu_rows(row);
+            assert!(rows >= 4 && LIST_Y + rows as u32 * row <= H, "{row}: {rows} rows");
+            assert!(row >= 44, "a fingertip's size");
+            for selected in [false, true] {
+                for slot in 0..rows {
+                    let mut f = Frame::themed(t);
+                    draw_menu_row(&mut f, slot, "HEART RATE", "PAIRED", WHITE, selected);
+                    draw_menu_value(&mut f, slot, "HEART RATE", "PAIRED", WHITE, selected);
+                    draw_workout_row(&mut f, slot, ("SAT 24", "1:00"), selected, &[3; 20], true);
+                    draw_split_icon(&mut f, slot, true, selected);
+                    let (y0, y1) = (LIST_Y + slot as u32 * row, LIST_Y + (slot as u32 + 1) * row);
+                    // an unselected row is black on black: only a selected one shows its band
+                    for y in (0..H).filter(|_| selected) {
+                        let painted = (0..W).any(|x| f.at(x, y) != BLACK);
+                        assert_eq!(painted, (y0..y1).contains(&y), "{row} px, slot {slot}, y {y}");
+                    }
+                    assert!((0..W).all(|x| f.at(x, y1 - 1) == DARK), "{row} px: the rule under slot {slot}");
+                }
+            }
+            let mut f = Frame::themed(t);
+            f.fill(0, 0, W, H, WHITE);
+            clear_menu(&mut f);
+            assert!((0..W).all(|x| f.at(x, PAGE_Y) == BLACK && f.at(x, H - 1) == BLACK && f.at(x, LIST_Y) == WHITE));
+            assert!((0..W).all(|x| f.at(x, LIST_Y + rows as u32 * row - 1) == WHITE), "rows left alone");
         }
     }
 
@@ -803,16 +871,20 @@ pub(crate) mod tests {
     /// clear (Frame panics on anything off screen).
     #[test]
     fn ride_layouts_tile_and_fit() {
-        for h in [RIDE_H] {
+        for (h, theme) in metric_ends().into_iter().map(|t| (RIDE_H, t)) {
             for n in 1..LAYOUTS.len() as u8 {
                 let b: Vec<_> = (0..8).map_while(|i| field_box(n, h, i)).collect();
                 assert_eq!(b.len(), field_count(n));
                 assert!(b.len() <= crate::page::CELLS, "a page keeps eight fields");
                 let area: u32 = b.iter().map(|&(_, _, w, h)| w * h).sum();
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
-                let mut f = Frame::new();
+                let mut f = Frame::themed(theme);
                 for (&bx, field) in b.iter().flat_map(|bx| Field::ALL.iter().map(move |f| (bx, f))) {
                     draw_field_frame(&mut f, bx, *field);
+                    draw_field_frame_bar(&mut f, bx, *field, GREEN);
+                    draw_cell_frame(&mut f, bx, ACCENT);
+                    // the label under the bar leaves room for the value's band
+                    assert!(theme.zone_bar + 1 + LABEL.height() < bx.3, "{n} fields: bar and label inside the box");
                     draw_field_value(&mut f, bx, field.widest(), WHITE);
                     assert!(value_scale(field.widest(), bx.2, bx.3) >= 2, "{n} fields: {field:?} readable");
                     if field.widest().len() as u32 <= VALUE_CHARS {

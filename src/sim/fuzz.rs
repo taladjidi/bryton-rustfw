@@ -3807,8 +3807,8 @@ fn settings_decision() {
 #[test]
 fn theme_files() {
     use crate::theme::{NAMES, Refused, Theme, check, parse};
-    let (mut accepted, mut light) = (0, 0usize);
-    let mut refused = [0usize; 5];
+    let (mut accepted, mut light, mut clamped) = (0, 0usize, 0usize);
+    let (mut refused, mut metric_reach) = ([0usize; 5], [0usize; 3]);
     let mut set = [false; NAMES.len()];
     for seed in 1..4000u32 {
         let mut rnd = xorshift(seed.wrapping_mul(2_654_435_761));
@@ -3849,11 +3849,33 @@ fn theme_files() {
                 f.push('\0');
             }
         }
+        if rnd().is_multiple_of(2) {
+            f.push_str("[metrics]");
+            f.push_str(nl);
+            for _ in 0..rnd() % 5 {
+                let key = ["zone_bar", "frame", "menu_row", "other"][rnd() as usize % 4];
+                let value = match rnd() % 6 {
+                    0 => "x".into(),
+                    1 => std::format!("-{}", rnd() % 9),
+                    2 => std::format!("{}", rnd()),
+                    3 => std::format!("{} ; px", rnd() % 70),
+                    _ => std::format!("{}", rnd() % 70),
+                };
+                f.push_str(&std::format!("{key} = {value}{nl}"));
+            }
+        }
         let bytes = f.as_bytes();
         let bytes = &bytes[..if rnd().is_multiple_of(10) { rnd() as usize % (bytes.len() + 1) } else { bytes.len() }];
         match parse(bytes) {
             Ok(t) => {
                 accepted += 1;
+                assert!(
+                    (4..=12).contains(&t.zone_bar) && (1..=4).contains(&t.frame) && (44..=56).contains(&t.menu_row)
+                );
+                metric_reach[0] += usize::from(t.zone_bar != 8);
+                metric_reach[1] += usize::from(t.frame != 3);
+                metric_reach[2] += usize::from(t.menu_row != 44);
+                clamped += usize::from(t.zone_bar == 12 || t.zone_bar == 4 || t.menu_row == 56);
                 assert!(
                     [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT].iter().any(|b| check(&t, b).is_ok()),
                     "seed {seed}"
@@ -3872,6 +3894,7 @@ fn theme_files() {
     }
     assert!(accepted > 100, "accepted {accepted}");
     assert!(light > 0, "a theme accepted over the light base");
+    assert!(metric_reach.iter().all(|&n| n > 20) && clamped > 20, "metrics set: {metric_reach:?}, at an end {clamped}");
     assert!(refused.iter().all(|&n| n > 0), "every refusal reached: {refused:?}");
     assert!(set.iter().filter(|&&s| s).count() >= NAMES.len() - 2, "keys set from a file: {set:?}");
 }

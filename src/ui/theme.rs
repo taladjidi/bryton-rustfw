@@ -111,15 +111,34 @@ pub struct Theme {
     pub ink: [u16; N],
     /// The FONT setting ([`crate::Canvas::smooth`]); not part of a theme file.
     pub smooth: bool,
+    /// Height of a field's zone bar, px ([`ZONE_BAR`] range).
+    pub zone_bar: u32,
+    /// Width of the page editor's frame round a cell, px ([`FRAME`] range).
+    pub frame: u32,
+    /// Menu row pitch, px ([`MENU_ROW`] range): what is drawn and the rows a tap lands on.
+    pub menu_row: u32,
 }
 
+/// Bounds of the metrics a theme file may set, as (least, built-in, most) in px. A value outside is clamped (a colour
+/// that does not parse is ignored; a number that does is brought into range: the file stays usable and every screen is
+/// tested at both ends). 44 is the least row a fingertip hits (docs/theming.md).
+pub const ZONE_BAR: (u32, u32, u32) = (4, 8, 12);
+/// See [`ZONE_BAR`].
+pub const FRAME: (u32, u32, u32) = (1, 3, 4);
+/// See [`ZONE_BAR`].
+pub const MENU_ROW: (u32, u32, u32) = (44, 44, 56);
+
 impl Theme {
+    /// The built-in metrics (the colours of the struct are filled in over them).
+    const METRICS: Theme =
+        Theme { ink: KEYS, smooth: false, zone_bar: ZONE_BAR.1, frame: FRAME.1, menu_row: MENU_ROW.1 };
+
     /// DARK: today's colours exactly (the text colours on the accent and the alarm are black and white).
     pub const DARK: Theme = {
         let mut ink = KEYS;
         ink[ON_ACC] = BLACK;
         ink[ON_AL] = WHITE;
-        Theme { ink, smooth: false }
+        Theme { ink, smooth: false, ..Theme::METRICS }
     };
 
     /// OUTDOOR: DARK with a lighter grey for the notes, brighter lines and zones (Intervals.icu's palette x 2).
@@ -134,7 +153,7 @@ impl Theme {
         ink[17] = rgb(248, 64, 118);
         ink[18] = rgb(136, 90, 248);
         ink[19] = rgb(120, 110, 144);
-        Theme { ink, smooth: false }
+        Theme { ink, smooth: false, ..Theme::METRICS }
     };
 
     /// LIGHT: black on white for the sun (the panel is transflective). Every colour is darkened to hold 4.5:1 (text)
@@ -161,7 +180,7 @@ impl Theme {
         ink[17] = rgb(124, 32, 59);
         ink[18] = rgb(68, 45, 124);
         ink[19] = rgb(60, 55, 72);
-        Theme { ink, smooth: false }
+        Theme { ink, smooth: false, ..Theme::METRICS }
     };
 
     /// The built-in theme called `name` (ASCII case ignored).
@@ -289,7 +308,8 @@ pub fn check(t: &Theme, base: &Theme) -> Result<(), Refused> {
 }
 
 /// A theme file's text (an INI, see features.md for the keys) as a theme: the colours of `[colors]` over those of
-/// `[theme] base` (dark, outdoor or light, else dark); a value that is not `#RRGGBB` or a key not in the table is ignored.
+/// `[theme] base` (dark, outdoor or light, else dark) and the metrics of `[metrics]` (`zone_bar`, `frame`, `menu_row`,
+/// whole px clamped to their range); a value that is not `#RRGGBB` or a key not in the table is ignored.
 /// Refused when it is not a theme, is too new, or fails [`check`].
 ///
 /// ```
@@ -321,6 +341,15 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
     for (slot, name) in t.ink.iter_mut().zip(NAMES) {
         if let Some(c) = value("colors", name).and_then(hex) {
             *slot = c;
+        }
+    }
+    for (key, range, slot) in [
+        ("zone_bar", ZONE_BAR, &mut t.zone_bar),
+        ("frame", FRAME, &mut t.frame),
+        ("menu_row", MENU_ROW, &mut t.menu_row),
+    ] {
+        if let Some(n) = value("metrics", key).and_then(|v| crate::ini::decimal(v, 0)) {
+            *slot = n.clamp(range.0, range.2);
         }
     }
     check(&t, &base).map(|()| t)
@@ -416,12 +445,26 @@ mod tests {
     extern crate std;
     use super::*;
 
+    /// The metrics of `[metrics]`: clamped to their range, a word that is no number ignored, the built-ins as they were.
+    #[test]
+    fn metrics_are_clamped() {
+        for t in [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT] {
+            assert_eq!((t.zone_bar, t.frame, t.menu_row), (8, 3, 44));
+        }
+        let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=12\nframe=1\nmenu_row=56\n").unwrap();
+        assert_eq!((t.zone_bar, t.frame, t.menu_row), (12, 1, 56));
+        let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=99\nframe=0\nmenu_row=20\n").unwrap();
+        assert_eq!((t.zone_bar, t.frame, t.menu_row), (12, 1, 44), "out of range: clamped");
+        let t = parse(b"[theme]\nversion=1\n[metrics]\nzone_bar=x\nframe=-2\nmenu_row=\n").unwrap();
+        assert_eq!((t.zone_bar, t.frame, t.menu_row), (8, 3, 44), "not numbers: ignored");
+    }
+
     #[test]
     fn keys_are_distinct_and_dark_is_the_identity() {
         for (i, k) in KEYS.iter().enumerate() {
             assert!(!KEYS[i + 1..].contains(k), "key {i} repeated");
         }
-        let none = Theme { ink: [0; N], smooth: false };
+        let none = Theme { ink: [0; N], ..Theme::DARK };
         assert_eq!(check(&Theme::LIGHT, &none), Ok(()), "LIGHT passes every check on its own, no base to excuse it");
         for t in [Theme::DARK, Theme::OUTDOOR, Theme::LIGHT] {
             assert_eq!(check(&t, &t), Ok(()));
@@ -435,7 +478,7 @@ mod tests {
     /// Which pairs of the built-ins fail on their own (no base to excuse them), for the commit message.
     #[test]
     fn builtin_pairs() {
-        let none = Theme { ink: [0; N], smooth: false };
+        let none = Theme { ink: [0; N], ..Theme::DARK };
         for (name, t) in [("DARK", Theme::DARK), ("OUTDOOR", Theme::OUTDOOR)] {
             let failing: std::vec::Vec<_> = PAIRS
                 .iter()
