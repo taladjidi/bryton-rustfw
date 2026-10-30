@@ -128,8 +128,10 @@ pub enum Overview {
 pub struct Theme {
     /// What each of [`KEYS`] is drawn as.
     pub ink: [u16; N],
-    /// The FONT setting ([`crate::Canvas::smooth`]); not part of a theme file.
+    /// The face text is drawn in: the FONT setting ([`crate::Canvas::face`]), set by the app; the file's key is `font`.
     pub face: Face,
+    /// The FONT the file's `font` key names (None: no key), set as FONT when the theme is picked (app/themes.rs); not drawn.
+    pub font: Option<Face>,
     /// Height of a field's zone bar, px ([`ZONE_BAR`] range).
     pub zone_bar: u32,
     /// Width of the page editor's frame round a cell, px ([`FRAME`] range).
@@ -156,6 +158,7 @@ impl Theme {
     const METRICS: Theme = Theme {
         ink: KEYS,
         face: Face::Pixel,
+        font: None,
         zone_bar: ZONE_BAR.1,
         frame: FRAME.1,
         menu_row: MENU_ROW.1,
@@ -376,7 +379,7 @@ pub fn parse(text: &[u8]) -> Result<Theme, Refused> {
     if let Some(f) = value("theme", "font")
         .and_then(|v| Face::ALL.iter().copied().find(|f| f.name().as_bytes().eq_ignore_ascii_case(v)))
     {
-        t.face = f;
+        t.font = Some(f);
     }
     match value("theme", overview) {
         Some(v) if v.eq_ignore_ascii_case(b"fields") => t.overview = Overview::Fields,
@@ -485,13 +488,10 @@ mod tests {
 
     #[test]
     fn font_key_sets_the_default_face() {
-        let face = |text: &[u8]| parse(text).map(|t| t.face);
-        assert_eq!(face(b"[theme]\nversion=1\nfont = Barlow ; soft\n"), Ok(Face::Barlow));
-        assert_eq!(
-            face(b"[theme]\nversion=1\nfont=comic\n"),
-            Ok(Face::Pixel),
-            "a font that is not one: the pixel font"
-        );
+        let face = |text: &[u8]| parse(text).map(|t| t.font);
+        assert_eq!(face(b"[theme]\nversion=1\nfont = Barlow ; soft\n"), Ok(Some(Face::Barlow)));
+        assert_eq!(face(b"[theme]\nversion=1\nfont = pixel\n"), Ok(Some(Face::Pixel)));
+        assert_eq!(face(b"[theme]\nversion=1\nfont=comic\n"), Ok(None), "a font that is not one: no key");
     }
 
     /// The example files tools/theme.py writes (test-data/themes) parse back to the built-in themes.

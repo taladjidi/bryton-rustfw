@@ -727,6 +727,8 @@ mod tests {
 
 #[cfg(test)]
 mod day_night_file_tests {
+    use super::*;
+
     /// FONT's choice is an index in the settings file: PIXEL and BARLOW, and any other index the default.
     #[test]
     fn font_face_round_trips_and_older_files_read_as_before() {
@@ -755,8 +757,6 @@ mod day_night_file_tests {
             "no such face: the default"
         );
     }
-
-    use super::*;
 
     /// ZONES BY, the custom zones, SEX, BIRTH YEAR and HEIGHT are kept at data 123..150 and read back; a file of 44 to
     /// 123 bytes reads the computed zones, MAX HR, male and none set; bounds that do not rise read as the computed zones.

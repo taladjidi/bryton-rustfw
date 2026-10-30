@@ -4137,7 +4137,7 @@ fn theme_files() {
                 accepted += 1;
                 assert!((4..=8).contains(&t.zone_bar) && (1..=4).contains(&t.frame) && (44..=56).contains(&t.menu_row));
                 fields += usize::from(t.overview == crate::theme::Overview::Fields);
-                barlow += usize::from(t.face == crate::text::Face::Barlow);
+                barlow += usize::from(t.font == Some(crate::text::Face::Barlow));
                 metric_reach[0] += usize::from(t.zone_bar != 8);
                 metric_reach[1] += usize::from(t.frame != 3);
                 metric_reach[2] += usize::from(t.menu_row != 44);

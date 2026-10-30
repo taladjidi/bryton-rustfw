@@ -3,7 +3,6 @@
 //! into RAM between rides ([`App::load_day_night`]), so the light's switch never reads the card. A file read only:
 //! this never writes the card (the choice is kept by the settings file, app/settings_file.rs).
 
-use crate::text::Face;
 use crate::*;
 use theme::{Refused, Theme};
 
@@ -130,8 +129,12 @@ impl App {
         let name = self.settings.theme;
         let (t, why) = self.resolve(b, &name, Theme::DARK);
         self.theme = t;
-        if said && t.face != Face::Pixel {
-            self.settings.face = t.face; // a theme file's `font` key is the FONT default when the theme is picked
+        if said
+            && let Some(f) = t.font
+            && f != self.settings.face
+        {
+            self.settings.face = f; // the file's `font` key: FONT when the theme is picked, not on an AUTO switch
+            self.save_misc(b);
         }
         self.repaint(b);
         if let (Some(why), true) = (why, said) {

@@ -327,7 +327,7 @@ pub struct Row {
     pub y: u32,
     /// Its pixels, RGB565.
     pub px: [u16; W as usize],
-    /// The font and colours ([`Canvas::smooth`], [`Canvas::ink`]).
+    /// The font and colours ([`Canvas::face`], [`Canvas::ink`]).
     pub look: Theme,
 }
 
@@ -733,7 +733,7 @@ pub(crate) mod tests {
         pub px: Vec<u16>,
         fills: usize,
         painted: usize,
-        /// Text in the smooth font ([`Canvas::smooth`]).
+        /// Text in the smooth font ([`Canvas::face`]).
         pub face: Face,
         /// The theme drawn with (DARK).
         pub theme: Theme,

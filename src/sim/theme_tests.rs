@@ -7,6 +7,7 @@ use super::tests::run;
 use super::*;
 use crate::fat::tests::Ram;
 use crate::menu::Setting;
+use crate::text::Face;
 use crate::theme::{KEYS, Theme};
 use crate::{PAGES_LOAD_MS, Settings, SettingsCopy};
 use std::string::{String, ToString};
@@ -762,4 +763,46 @@ fn the_fields_overview_at_both_ends_of_the_metrics() {
         run(&mut sim, &mut app, 3100); // seconds pass: the cells follow
         super::tests::assert_consistent(&sim, &app);
     }
+}
+
+const BARLOW_FONT: &str = "[theme]\nversion = 1\nname = BARLOW\nfont = barlow\n";
+const PIXEL_FONT: &str = "[theme]\nversion = 1\nname = PIXEL\nfont = pixel\n";
+
+/// A file's `font` key is FONT when the theme is picked (kept in the settings file and register 16), and an AUTO
+/// switch between the day and the night theme leaves FONT alone.
+#[test]
+fn theme_font_key_sets_face_on_pick_only() {
+    let (mut sim, mut app) = unit(Some(with_themes(&[("BARLOW.INI", BARLOW_FONT), ("PIXEL.INI", PIXEL_FONT)])));
+    app.press(&mut sim, Press::Long(Key::Page));
+    super::tests::to_row(&mut sim, &mut app, menu::Row::Set(Setting::Theme));
+    // the list: OUTDOOR, LIGHT, BARLOW, PIXEL, AUTO
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Start));
+    }
+    assert_eq!(app.settings.theme_name(), "BARLOW");
+    assert_eq!(app.settings.face, Face::Barlow, "font = barlow sets FONT on the pick");
+    assert_ne!(sim.backup[crate::POWER_BKP] & 1 << 24, 0, "register 16 bit 24");
+    for _ in 0..200 {
+        run(&mut sim, &mut app, 200);
+        if !app.settings_store.dirty {
+            break;
+        }
+    }
+    assert_eq!(kept(&sim).map(|c| c.settings.face), Some(Face::Barlow), "the settings file holds it");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.settings.theme_name(), "PIXEL");
+    assert_eq!(app.settings.face, Face::Pixel, "font = pixel brings it back");
+    assert_eq!(sim.backup[crate::POWER_BKP] & 1 << 24, 0);
+    // AUTO's night theme is the BARLOW file: the switch draws it, FONT stays PIXEL
+    app.settings.day_theme = Settings::name_bytes("PIXEL");
+    app.settings.night_theme = Settings::name_bytes("BARLOW");
+    app.settings.auto_theme = true;
+    app.load_day_night(&mut sim);
+    sim.bus.lux10 = Some(2000);
+    run(&mut sim, &mut app, 3_000);
+    sim.bus.lux10 = Some(50);
+    run(&mut sim, &mut app, 40_000);
+    assert!(app.light.day_night.night, "the switch is made");
+    assert_eq!(app.theme, crate::theme::parse(BARLOW_FONT.as_bytes()).unwrap());
+    assert_eq!(app.settings.face, Face::Pixel, "an AUTO switch leaves FONT alone");
 }

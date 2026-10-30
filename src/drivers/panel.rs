@@ -71,7 +71,7 @@ pub fn off(b: &mut impl Board) {
 
 /// The panel as a [`Canvas`]: each fill or blit is a CASET / RASET window and one RAMWR of `w * h` pixels. Only
 /// rows from the second field's first to before its second are drawn (not what a banner covers, or only what it
-/// covered): `(0, H)` for the whole screen. The last field is the FONT setting and the colours ([`Canvas::smooth`], [`Canvas::ink`]).
+/// covered): `(0, H)` for the whole screen. The last field is the FONT setting and the colours ([`Canvas::face`], [`Canvas::ink`]).
 pub struct Panel<'a, B: Board>(pub &'a mut B, pub (u32, u32), pub Theme);
 
 impl<B: Board> Panel<'_, B> {

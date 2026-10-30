@@ -136,7 +136,7 @@ impl Style {
     }
 }
 
-/// The font, glyph and scale `ch` is drawn with in `style`: with `smooth` (the FONT setting) and a smooth font for
+/// The font, glyph and scale `ch` is drawn with in `style`: with a face other than PIXEL (the FONT setting) and a smooth font for
 /// the style's scale that has the glyph ([`crate::fonts::smooth`]), that glyph 1:1, else the style's own glyph at its
 /// scale. Both have the same cell, so layouts do not depend on the choice.
 fn pick(style: &Style, face: Face, ch: char) -> (&'static Font, &'static Glyph, u32) {
@@ -389,8 +389,8 @@ mod tests {
         assert!((x0..x0 + w).any(|x| (10..10 + h).any(|y| f.at(x, y) == WHITE)), "no fully covered pixel");
     }
 
-    /// Every character of every font into target/sim/fonts.bmp (pixel) and fonts_smooth.bmp (the FONT setting's
-    /// smooth set at the same scales): a sheet to judge sizes and spacing on the host.
+    /// Every character of every font into target/sim/fonts.bmp (pixel) and fonts_barlow.bmp (the BARLOW
+    /// set at the same scales): a sheet to judge sizes and spacing on the host.
     #[test]
     fn font_sheet() {
         extern crate std;

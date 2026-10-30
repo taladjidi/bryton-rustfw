@@ -543,7 +543,7 @@ fn overview_notices_and_fields() {
     app.press(&mut sim, Press::Short(Key::Page));
     app.press(&mut sim, Press::Short(Key::Start)); // WEEK H
     assert_consistent(&sim, &app);
-    for _ in 0..3 {
+    for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Back));
     }
     assert_eq!(app.screen(), Screen::Main);
@@ -1796,7 +1796,7 @@ fn font_choice_register_round_trip() {
 
 /// FONT cycles PIXEL and BARLOW, one step a press.
 #[test]
-fn font_cycles_three_faces() {
+fn font_cycles_two_faces() {
     let mut a = Settings::from_word(0);
     let mut faces = Vec::new();
     for _ in 0..4 {
