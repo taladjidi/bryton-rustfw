@@ -99,8 +99,9 @@ impl App {
         l.push_str(" ");
         push_clock(&mut l, s);
         l.push_str(" ");
-        push_km(&mut l, m);
-        l.push_str("KM\n");
+        let imp = self.settings.imperial;
+        push_trip(&mut l, m, imp);
+        l.push_str(if imp { "MI\n" } else { "KM\n" });
         match r.last_lap_avg_power() {
             Some(w) => {
                 l.push_u32(u32::from(w));
@@ -108,10 +109,11 @@ impl App {
             }
             None => {
                 let v = if s > 0 { m * 36 / s } else { 0 }; // km/h x 10
+                let v = if imp { mph_x10(v) } else { v };
                 l.push_u32(v / 10);
                 l.push_str(".");
                 l.push_u32(v % 10);
-                l.push_str("KMH");
+                l.push_str(if imp { "MPH" } else { "KMH" });
             }
         }
         if let Some(hr) = r.last_lap_hr() {
@@ -149,8 +151,8 @@ impl App {
     /// card shows (until Back or Start).
     pub(crate) fn end_ride(&mut self) {
         let Some(ev) = self.ride.end() else { return };
-        let owed = &mut self.settings_store.owed; // the trips get it once the save is done
-        *owed = (owed.0.saturating_add(self.ride.dist_m()), owed.1.saturating_add(self.ride.timer_s()));
+        // the trips get it once this ride's save is done ([`SettingsStore::done`])
+        self.settings_store.ended(self.ride.dist_m(), self.ride.timer_s());
         self.recorder(ev);
         self.plan.player = None;
         (self.depth, self.screen) = (0, Screen::Summary);
@@ -212,10 +214,22 @@ impl App {
         }
         use recorder::{GaveUp, Outcome};
         match clean.or(full) {
-            Some(GaveUp::Named(Outcome::Saved(_))) => self.notice("RIDE SAVED"),
-            Some(GaveUp::Named(Outcome::Discarded(_))) => self.notice("RIDE DISCARDED"),
-            Some(GaveUp::Named(_)) => self.notice("KEPT IN RUSTFW/RIDES"),
-            Some(GaveUp::Rescue(_)) => self.notice("KEPT IN RUSTFW/RESCUE"),
+            Some(GaveUp::Named(Outcome::Saved(_))) => {
+                self.settings_store.done(true);
+                self.notice("RIDE SAVED");
+            }
+            Some(GaveUp::Named(Outcome::Discarded(_))) => {
+                self.settings_store.done(false);
+                self.notice("RIDE DISCARDED");
+            }
+            Some(GaveUp::Named(_)) => {
+                self.settings_store.done(false);
+                self.notice("KEPT IN RUSTFW/RIDES");
+            }
+            Some(GaveUp::Rescue(_)) => {
+                self.settings_store.done(false);
+                self.notice("KEPT IN RUSTFW/RESCUE");
+            }
             Some(GaveUp::Lost) => self.alarm_notice("GIVEN UP: COPY THE CARD"),
             None => {}
         }
@@ -226,8 +240,9 @@ impl App {
         let mut l = Line::new();
         push_clock(&mut l, self.ride.timer_s());
         l.push_str("  ");
-        push_km(&mut l, self.ride.dist_m());
-        l.push_str(" KM");
+        let imp = self.settings.imperial;
+        push_trip(&mut l, self.ride.dist_m(), imp);
+        l.push_str(if imp { " MI" } else { " KM" });
         l
     }
 
@@ -477,7 +492,7 @@ impl App {
             }
             recorder::Outcome::Saved(_) => {
                 self.notice("RIDE SAVED");
-                self.settings_store.pay = true;
+                self.settings_store.done(true);
                 if let Some(t) = self.thresholds.as_deref_mut() {
                     t.reset(); // its full copy read too, when FITNESS next shows
                 }
@@ -485,8 +500,12 @@ impl App {
                     self.rescan(); // the history again, with this ride
                 }
             }
-            recorder::Outcome::Discarded(_) => self.notice("RIDE DISCARDED"), // the history as it was: no scan
+            recorder::Outcome::Discarded(_) => {
+                self.settings_store.done(false);
+                self.notice("RIDE DISCARDED"); // the history as it was: no scan
+            }
             recorder::Outcome::Kept(_) => {
+                self.settings_store.done(false);
                 // not in \Activities: left in \Rustfw\Rides as it was, or named there again (damaged, or the card
                 // kept failing)
                 self.alarm_notice("SAVE FAILED: KEPT IN RUSTFW/RIDES");

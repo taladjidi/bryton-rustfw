@@ -304,6 +304,14 @@ impl Setting {
         }
     }
 
+    /// [`Setting::unit`] with the speed limits in mph when `imperial` (they are kept in km/h).
+    pub fn unit_in(self, imperial: bool) -> &'static str {
+        match self {
+            Setting::Limit(4 | 5) if imperial => " MPH",
+            _ => self.unit(),
+        }
+    }
+
     /// For a number edited in place (Select, then up and down): its range and step. None for a choice, which
     /// Select moves to the next value.
     pub fn number(self) -> Option<(core::ops::RangeInclusive<u16>, u16)> {

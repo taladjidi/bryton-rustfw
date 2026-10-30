@@ -412,7 +412,9 @@ fn fit_files() {
         }
         let file = crate::fat::File { cluster: 0, size: 0, dir: false };
         if let Some(ride) = acc.ride(file, (2026, 1, 1, 0, 0)) {
-            let _ = crate::ui::card::Card::of(&ride.stats(250));
+            for imperial in [false, true] {
+                let _ = crate::ui::card::Card::of(&ride.stats(250), imperial);
+            }
         }
         let _ = crate::map::View::fit_whole(&track, (0, 0, 240, 110));
         let _ = crate::power_curve::fit_cp(&crate::power_curve::Curve { watts: roll.best, day: [0; 13] });
@@ -930,7 +932,7 @@ fn ride_scan_on_a_damaged_volume() {
         let mut past = crate::history::Past::new();
         for i in 0..scan.index.len() {
             let r = *scan.index.get(i).unwrap();
-            past.start(&r, 250);
+            past.start(&r, 250, true);
             for _ in 0..1000 {
                 if past.step(&mut d, 1 << 16).is_some() {
                     break;

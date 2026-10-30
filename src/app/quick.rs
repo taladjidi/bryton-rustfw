@@ -75,11 +75,11 @@ impl App {
         match kind {
             _ if !fresh && kind != Kind::Trainer => l.push_str("SEARCHING"),
             Kind::Hr => with(&mut l, Field::Hr, " BPM"),
-            Kind::Speed => with(&mut l, Field::Speed, " KMH"),
+            Kind::Speed => with(&mut l, Field::Speed, if self.settings.imperial { " MPH" } else { " KMH" }),
             Kind::Cadence => with(&mut l, Field::Cadence, " RPM"),
             Kind::SpeedCadence => {
-                with(&mut l, Field::Speed, "/");
-                with(&mut l, Field::Cadence, "");
+                with(&mut l, Field::Speed, if self.settings.imperial { "MPH " } else { "KMH " });
+                with(&mut l, Field::Cadence, "RPM");
             }
             Kind::Shifting | Kind::Di2 => with(&mut l, Field::Gear, ""),
             Kind::Trainer => {

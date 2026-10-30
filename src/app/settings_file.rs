@@ -309,13 +309,44 @@ pub(crate) struct SettingsStore {
     pub(crate) sound: bool,
     /// FAT sectors compared so far.
     pub(crate) sync: u32,
-    /// The distance (m) and moving time (s) of the rides ended and not yet added to the trips and the odometer.
-    pub(crate) owed: (u32, u32),
-    /// A ride was saved: `owed` goes to the trips once the file has been read ([`App::pay_trips`]).
-    pub(crate) pay: bool,
+    /// The totals (m, s) of the ride the recorder is saving, set when it is ended, and of the one ended behind it (a
+    /// ride held while the last one's save is pending): each is added to the trips once, when its own save is done.
+    pub(crate) saving: Option<(u32, u32)>,
+    /// See `saving`.
+    pub(crate) queued: Option<(u32, u32)>,
+    /// Totals of saved rides not yet added to the trips: they wait for the file to be read ([`App::pay_trips`]).
+    pub(crate) due: (u32, u32),
 }
 
 impl SettingsStore {
+    /// A ride was ended (SAVE): its totals wait for its save.
+    pub(crate) fn ended(&mut self, m: u32, s: u32) {
+        match &mut self.saving {
+            None => self.saving = Some((m, s)),
+            Some(_) => {
+                let q = self.queued.get_or_insert((0, 0));
+                (q.0, q.1) = (q.0.saturating_add(m), q.1.saturating_add(s));
+            }
+        }
+    }
+
+    /// The ride being saved is done: `saved` (a `Saved` outcome) makes its totals due, else (kept, discarded) they are
+    /// dropped. The ride queued behind it is the one being saved now. A save with no totals (a ride the boot's
+    /// recovery saved without the rider ending it) adds nothing to the trips.
+    pub(crate) fn done(&mut self, saved: bool) {
+        if let Some((m, s)) = self.saving.take().filter(|_| saved) {
+            (self.due.0, self.due.1) = (self.due.0.saturating_add(m), self.due.1.saturating_add(s));
+        }
+        self.saving = self.queued.take();
+    }
+
+    /// The totals of rides ended and not yet in the trips (saving, queued, due): a trip field adds them so its value
+    /// does not dip between the end of a ride and its save.
+    pub(crate) fn unpaid(&self) -> (u32, u32) {
+        let (a, b) = (self.saving.unwrap_or((0, 0)), self.queued.unwrap_or((0, 0)));
+        (a.0.saturating_add(b.0).saturating_add(self.due.0), a.1.saturating_add(b.1).saturating_add(self.due.1))
+    }
+
     /// As at a start: the registers read.
     pub(crate) fn at_boot(b: &mut impl Board, read: Settings) -> Self {
         let boot = registers(b);
@@ -429,11 +460,10 @@ impl App {
     /// never during a ride: the settings are only written to the card between rides. A discarded ride never gets here.
     fn pay_trips(&mut self) {
         let st = &mut self.settings_store;
-        if !(st.pay && st.loaded) {
+        if !(st.due != (0, 0) && st.loaded) {
             return;
         }
-        let (m, s) = core::mem::take(&mut st.owed);
-        st.pay = false;
+        let (m, s) = core::mem::take(&mut st.due);
         if m != 0 || s != 0 {
             st.dirty |= self.card_writable;
             self.settings.add_ride(m, s);

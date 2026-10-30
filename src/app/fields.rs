@@ -298,6 +298,9 @@ impl App {
             Field::Trip1 | Field::Trip2 | Field::Odo | Field::Trip1Time | Field::Trip2Time => {
                 // the rides saved, and the one running (as WEEK KM does)
                 let (live_m, live_s) = if r.state() == ride::State::Idle { (0, 0) } else { (r.dist_m(), r.timer_s()) };
+                // and the rides ended and not yet saved, so the value does not dip at the end of a ride
+                let (un_m, un_s) = self.settings_store.unpaid();
+                let (live_m, live_s) = (live_m.saturating_add(un_m), live_s.saturating_add(un_s));
                 let st = &self.settings;
                 match f {
                     Field::Trip1 => push_trip(&mut l, st.trip_m[0].saturating_add(live_m), imp),

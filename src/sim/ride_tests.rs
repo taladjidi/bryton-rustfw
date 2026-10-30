@@ -743,6 +743,13 @@ fn imperial_units_on_a_ride_page() {
     if metric[4] != "--" {
         assert_ne!(imp[4], metric[4], "F is not C");
     }
+    assert!(app.end_stats().as_str().ends_with(" MI"), "the end-ride screen");
+    let card = app.ride_card();
+    assert_eq!((card.stats[1].0, card.stats[2].0, card.stats[3].0), ("MI", "AVG MPH", "ASCENT FT"), "the summary card");
+    app.settings.limits[4] = 30;
+    let mut l = crate::Line::<12>::new();
+    app.settings.text(crate::menu::Setting::Limit(4), &mut l);
+    assert_eq!((l.as_str(), crate::menu::Setting::Limit(4).unit_in(true)), ("19", " MPH"), "30 km/h in mph");
     app.font_changed(&mut sim); // the page drawn whole again, with the new labels
     run(&mut sim, &mut app, 1000);
     sim.save("imperial_page");

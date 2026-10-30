@@ -809,6 +809,10 @@ impl Settings {
                     l.push_u32(u32::from(v / 10 % 10));
                     l.push_u32(u32::from(v % 10));
                 }
+                // the speed limits are kept in km/h and shown in mph when UNITS is IMPERIAL
+                Some(&v) if v > 0 && matches!(n, 4 | 5) && self.imperial => {
+                    l.push_u32((u32::from(v) * 6214 + 5000) / 10_000)
+                }
                 Some(&v) if v > 0 => l.push_u32(u32::from(v)),
                 _ => l.push_str("OFF"),
             },

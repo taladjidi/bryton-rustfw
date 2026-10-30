@@ -647,17 +647,20 @@ copied over USB into `\Courses`, read only:
 ## Units, sound, trips
 
 - **UNITS** (SETTINGS > DISPLAY): METRIC (the default) or IMPERIAL, and **TEMPERATURE** C or F. One place formats every value (`app/fields.rs`
-  `field_text`, with `mph_x10`, `feet`, `fahrenheit_x10`, `push_dist`): speed (KM/H, AVG, MAX) in mph with one decimal, distance
-  (KM, LAP KM, UP KM, DOWN KM) in miles with 2 decimals under 100 then 1 (truncated, as the metric one is), ascent, descent, lap
-  ascent and descent, max altitude and VAM in feet (rounded), the whole-unit totals (WEEK, YEAR, TOTAL) in miles, the temperature
-  in F. The labels follow (`Field::label_in`: MPH, MI, FT, TEMP F). The FIT file, the history and the summaries stay metric, and
-  so do the course fields (TO GO KM, OFF CRS M, CLIMB M, UP LEFT M), the settings' own units (wheel mm, weight kg, LAP KM, the
-  speed alert limits) and the sensors screens. Feet are 4 or 5 digits where metres were 3 or 4: the value takes a smaller size
-  past the box's width, as every long value does.
+  `field_text`, with `mph_x10`, `feet`, `fahrenheit_x10`, `push_dist`, `push_trip`). UNITS affects: the ride page fields (speed KM/H, AVG,
+  MAX in mph with one decimal; distance KM, LAP KM, UP KM, DOWN KM in miles, 2 decimals under 100 then 1, truncated as the metric
+  one is; ascent, descent, lap ascent and descent, max altitude and VAM in feet, rounded; the whole-unit totals WEEK, YEAR, TOTAL in
+  miles; the trips and the odometer; the temperature in F) with their labels (`Field::label_in`: MPH, MI, FT, TEMP F), the end-ride
+  screen, the lap banner, the summary card and the HISTORY cards and rows (MI, AVG MPH, ASCENT FT), the sensors panel (MPH), and the
+  SPEED ABOVE / BELOW alert rows (shown in mph, kept and compared in km/h, so editing steps 1 km/h). **These stay metric:** the FIT
+  file, the history files and summaries, the map's scale bar, the course fields (TO GO KM, OFF CRS M, CLIMB M, UP LEFT M), the climbs
+  ahead and the CLIMB page, the segment values and banners, the workout steps' distances, the settings' own units (wheel mm, weight kg,
+  LAP KM, AUTO PAUSE km/h), the trainer screen and the stats and storage figures of SETTINGS. Feet are 4 or 5 digits where metres were 3 or 4: the
+  value takes a smaller size past the box's width, as every long value does.
   ![Imperial units](img/imperial-units.png)
 - **SOUND** (DISPLAY, ON): OFF drops every tone the app plays (alerts, course and workout tones, the start and pause beeps) and cuts
-  the one sounding. The alerts' banners still show. The power-on and power-off melodies stay (they play before the settings
-  are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.
+  the one sounding. The alerts' banners still show. It also silences the heart rate alarm, the off-course alarm and the low battery tone: only
+  the banner shows. The power-on and power-off melodies stay (they play before the settings are read and after the screen is off). There is no key click: this unit's keys have no beep today, so a key click was not added.
 - **BACKLIGHT ALWAYS ON** is LIGHT OFF NEVER (SETTINGS > DISPLAY), as before.
 - **AUTO PAUSE** (SETTINGS > BIKE): AUTO (the profile's own rule: road under 2 km/h at once, MTB under 2 km/h for 5 s, indoor
   on no power and cadence for 3 s), OFF (the timer never auto-pauses, any profile), or 2, 3, 5 or 8 km/h replacing the 2
@@ -666,7 +669,7 @@ copied over USB into `\Courses`, read only:
   the distance (and moving time) of the rides saved since each trip was reset, and of every ride saved. A ride is added only
   when its save is done (`App::pay_trips`; a discarded ride adds nothing, a ride kept in `\Rustfw\Rides` adds with the next
   save), and the totals reach `settings.bin` between rides: nothing is written to the card during a ride. The fields show the
-  saved total plus the ride running, as WEEK KM does. Select on a TRIP row asks twice (START: YES) and resets it; the ODOMETER
+  saved total plus the ride running and the rides ended and not yet saved, as WEEK KM does. Select on a TRIP row asks twice (START: YES) and resets it; the ODOMETER
   is never reset. They count from the build that has them: earlier rides are not added.
 - **Not done:** the CLIMB filter (no climb has a category today, so "medium and above" needs thresholds chosen) and the time zone,
   daylight saving and the date and time formats (the clock takes its offset from the GPS fix; a 12 h or DD/MM format touches
