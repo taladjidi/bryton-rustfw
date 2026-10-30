@@ -81,6 +81,10 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The menu: what to ride, what was ridden, then the set-up; 44 px rows, a tap acts on a row (sim) | Page held during a ride: the ride menu, only what a rider does on the road (sim) | SETTINGS > ME: values with their units, edited in place (sim) |
 | ![SETTINGS menu](img/menu-settings.png) | ![BIKE menu](img/menu-bike.png) |  |
 | SETTINGS: a menu per subject, any setting three levels down at most (sim) | SETTINGS > BIKE: wheel, weight, altitude, profile, climbs ahead (sim) |  |
+| | | |
+|:-:|:-:|:-:|
+| ![ABOUT](img/about.png) | ![STORAGE](img/storage.png) | ![STORAGE's oldest ride](img/storage-ride.png) |
+| ABOUT under SYSTEM: the version and the commit, Ferris, the map and font notices (sim) | STORAGE under SYSTEM: the card's size, free space, rides and the five oldest, read over the passes (sim) | The oldest ride's card from STORAGE, DELETE on it as in HISTORY (sim) |
 
 ## Sensors and phone
 

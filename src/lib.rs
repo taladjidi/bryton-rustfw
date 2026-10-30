@@ -26,7 +26,7 @@ pub mod ui;
 pub use drivers::{ambient, battery, ble, emmc, fec, fecble, ftms, gnss, nrf, panel, powercal, sensors, touch};
 pub use link::{dev, msc, phone, prof};
 pub use nav::{altitude, climbs_ahead, course, segment, segment_match};
-pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash};
+pub use storage::{fat, fit, fitread, history, ign, inflate, ini, recorder, route, stock, thresholds, trash, volume};
 pub use training::{alerts, hrv, hrvt, pacing, power, power_curve, power_match, ramp, ride, trainer, workout};
 pub use ui::{fonts, map, menu, page, text, theme, tiles};
 // the app's parts (app/mod.rs), at the root as before the split
@@ -335,6 +335,8 @@ pub struct App {
     dt_ms: u32,
     /// The card of the past ride shown ([`Screen::Past`]).
     past: history::Past,
+    /// The card's survey for STORAGE (app/survey.rs).
+    survey: volume::Survey,
     /// A ride's delete the last run may have left unfinished: looked for when the scan of the rides first runs
     /// ([`trash::finish`]).
     trash_check: bool,
@@ -497,6 +499,7 @@ impl App {
             awake_at: 0,
             dt_ms: POLL_MS,
             past: history::Past::new(),
+            survey: volume::Survey::new(),
             trash_check: false,
             trash_tried: false,
             plan: Plan::new(),
@@ -636,6 +639,7 @@ impl App {
             self.step_ahead(b);
             t = self.timed(b, Sec::Ahead, t);
             self.step_past(b);
+            self.step_survey(b);
             self.step_thresholds(b);
             self.step_settings(b);
             self.step_pages(b);

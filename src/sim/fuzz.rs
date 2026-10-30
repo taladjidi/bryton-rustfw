@@ -1322,7 +1322,7 @@ fn menu_touch_and_keys() {
     let (mut locks, mut locked_touches) = (0, 0);
     let mut reach = [0usize; 5]; // the screen an input found: Quick, PowerCal, RampResult, About, Notif
     let mut arms = [0usize; 5]; // and an arm taken there: left, asked, left, left, scrolled
-    for seed in 1..=12u32 {
+    for seed in 1..=16u32 {
         let mut sim = Sim::new(9, 0, 0);
         let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key: sensor rows act
         let mut noise = bytes(seed * 7919, 1 << 13);
@@ -4049,4 +4049,59 @@ fn segment_matcher() {
         }
     }
     assert!(starts > 100 && finishes > 20 && losts > 20 && by_other > 10, "{starts} {finishes} {losts} {by_other}");
+}
+
+/// STORAGE's survey on a damaged card: FSInfo's count or signature damaged, FAT entries and directory bytes random.
+/// Every seed ends (no panic, no hang), and both the FSInfo path and the FAT count and the listing are reached.
+#[test]
+fn card_survey_on_damaged_volumes() {
+    use crate::fat::tests::Ram;
+    use crate::volume::Survey;
+    let base = crate::storage::trash::tests::volume();
+    let (mut fsinfo_ok, mut counted, mut listed, mut failed) = (0, 0, 0, 0);
+    for seed in 1..=200u32 {
+        let mut next = xorshift(seed);
+        let mut img = base.clone();
+        let le16 = |i: usize| usize::from(u16::from_le_bytes([img[i], img[i + 1]]));
+        let (info, fat0) = (le16(48) * 512, le16(14) * 512);
+        let fat_len = (u32::from_le_bytes([img[36], img[37], img[38], img[39]]) as usize) * 512;
+        match next() % 3 {
+            0 => {}
+            1 => img[info + 488..info + 492].copy_from_slice(&next().to_le_bytes()),
+            _ => img[info] = next() as u8,
+        }
+        // half the seeds: the FAT entry of \Activities' first cluster (its listing follows the chain)
+        if next().is_multiple_of(2) {
+            let mut d = Ram(base.clone(), 0);
+            let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+            let first = fat.open(&mut d, "Activities").unwrap().cluster;
+            img[fat0 + first as usize * 4 + (next() % 4) as usize] = next() as u8;
+        }
+        // one seed in eight: BPB_RootClus out of range, the volume refused
+        if next().is_multiple_of(8) {
+            img[44..48].copy_from_slice(&next().to_le_bytes());
+        }
+        // and a few random FAT bytes
+        for _ in 0..(next() % 64) {
+            let i = fat0 + next() as usize % fat_len.min(2048);
+            img[i] = next() as u8;
+        }
+        let whole_info = crate::fat::Fat::mount(&mut Ram(img.clone(), 0))
+            .is_ok_and(|f| f.fsinfo_free(&mut Ram(img.clone(), 0)).is_some());
+        let mut d = Ram(img, 0);
+        let mut s = Survey::new();
+        let mut passes = 0;
+        while !s.step(&mut d, 1 + seed % 4) {
+            passes += 1;
+            assert!(passes < 100_000, "the survey ends");
+        }
+        fsinfo_ok += u32::from(whole_info);
+        counted += u32::from(s.free().is_some());
+        listed += u32::from(s.rides().is_some());
+        failed += u32::from(s.failed());
+    }
+    assert!(
+        fsinfo_ok > 20 && fsinfo_ok < 180 && counted > 40 && listed > 40 && failed > 10,
+        "{fsinfo_ok} {counted} {listed} {failed}"
+    );
 }

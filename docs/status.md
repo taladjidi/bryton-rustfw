@@ -8,6 +8,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **STORAGE and ABOUT (SYSTEM; storage/volume.rs, app/survey.rs)**: sim only. Still to see: TOTAL, FREE and RIDES against
+  the owner's card (FSInfo's count against the FAT's count there), the survey's passes and their time awake on the unit,
+  and the oldest ride's card opened from STORAGE and its DELETE.
+
 - **THEME AUTO (ui/theme.rs `DayNight`, app/themes.rs; theming.md 4b)**: sim only. Still to see: the switch at dusk
   (night under 20 lux for 30 s, day back over 50 lux for 30 s, at most one switch a minute), the screen redrawn once
   in each theme, and the cost of the light sensor measuring all the time while AUTO is on (its time awake, measured

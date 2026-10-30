@@ -1551,6 +1551,8 @@ mod ride_tests;
 #[cfg(test)]
 mod stock_tests;
 #[cfg(test)]
+mod storage_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod workout_tests;

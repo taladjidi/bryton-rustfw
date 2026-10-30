@@ -34,6 +34,8 @@ pub enum Menu {
     System,
     /// The built-in sensors' readings ([`menu::BUILT_IN`]).
     BuiltIn,
+    /// STORAGE (SYSTEM > STORAGE): the card's size, free space, rides and the oldest of them (storage/volume.rs).
+    Storage,
     /// The ride menu, Page held while a ride records or is paused, over ride page `n` ([`OVERVIEW`] from the
     /// overview): RESUME or PAUSE, END RIDE, WORKOUT and COURSE while one runs, BRIGHTNESS, SENSORS, EDIT THIS PAGE,
     /// ALL SETTINGS (the main menu). Rows that do not apply are not shown.
@@ -89,6 +91,7 @@ pub(crate) fn menu_title(m: Menu) -> &'static str {
         Menu::Bike => "BIKE",
         Menu::System => "SYSTEM",
         Menu::BuiltIn => "BUILT IN",
+        Menu::Storage => "STORAGE",
         Menu::Ride(_) => "RIDE",
         Menu::WorkoutNow => "WORKOUT",
         Menu::CourseNow => "COURSE",
@@ -142,6 +145,11 @@ impl App {
             Menu::System if self.save_stuck_any() && i == 0 => Some(Row::GiveUpSave),
             Menu::System => menu::SYSTEM.get(i - usize::from(self.save_stuck_any())).copied(),
             Menu::BuiltIn => menu::BUILT_IN.get(i).map(|&r| Row::Read(r)),
+            // an oldest ride's row only while the survey has it
+            Menu::Storage => menu::STORAGE
+                .get(i)
+                .copied()
+                .filter(|r| !matches!(r, Row::OldRide(k) if self.survey.oldest(*k).is_none())),
             Menu::Ride(n) => {
                 use menu::RideRow;
                 let rows = [
@@ -307,6 +315,22 @@ impl App {
             }
             Row::Drive => {
                 value.push_str(if self.emmc.lent() { "ON" } else { "OFF" });
+            }
+            Row::Storage(s) => match s {
+                menu::StorageRow::Total => volume::size_text(&mut value, self.survey.total()),
+                menu::StorageRow::Free => volume::size_text(&mut value, self.survey.free()),
+                menu::StorageRow::Rides => match self.survey.rides() {
+                    Some(n) => value.push_u32(n),
+                    None => value.push_str("--"),
+                },
+            },
+            Row::OldRide(k) => {
+                if let Some(e) = self.survey.oldest(k) {
+                    if let Some(start) = stock::ride_start(e.name()) {
+                        volume::day_text(&mut label, start);
+                    }
+                    volume::size_text(&mut value, Some(u64::from(e.file.size)));
+                }
             }
             Row::AltGps => self.alt_gps_row(&mut value),
             Row::Set(menu::Setting::Altitude) if !(self.editing && self.screen == Screen::Menu(menu, i)) => {
@@ -619,7 +643,14 @@ impl App {
     pub(crate) fn activate(&mut self, b: &mut impl Board, menu: Menu, sel: usize) {
         use menu::Row;
         match self.row(menu, sel) {
-            Some(Row::Open(m)) => self.activate_open(b, menu, m),
+            Some(Row::Open(m)) => {
+                if m == Menu::Storage {
+                    self.survey.start(); // read over the next passes (App::step_survey)
+                }
+                self.activate_open(b, menu, m)
+            }
+            Some(Row::OldRide(k)) => self.read_old_ride(k),
+            Some(Row::Storage(_)) => {}
             Some(Row::Ride(r)) => self.activate_ride(r),
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };

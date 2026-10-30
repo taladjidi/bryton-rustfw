@@ -26,6 +26,7 @@ mod pass;
 mod phone;
 mod powercal;
 mod profile;
+mod survey;
 pub use profile::ClimbNow;
 mod quick;
 mod radio;

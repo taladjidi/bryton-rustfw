@@ -1468,7 +1468,8 @@ fn about_screen() {
     app.press(&mut sim, Press::Short(Key::Start));
     assert_eq!(app.screen(), Screen::About);
     let rust = sim.screen.iter().filter(|&&p| p == ui::RUST).count();
-    assert!(rust > 64 * 64, "Ferris, large: {rust} px");
+    // Ferris is 96 px wide now (ui::draw_about: the map and font notices fit under it): large still
+    assert!(rust > 48 * 48, "Ferris, large: {rust} px");
     assert_consistent(&sim, &app);
     sim.save("about");
     app.press(&mut sim, Press::Short(Key::Back));
