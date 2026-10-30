@@ -58,13 +58,18 @@ pub const GRADE_RANGE: core::ops::RangeInclusive<i16> = -1000..=2000;
 /// 0.004 for an asphalt road, developer.garmin.com/connect-iq/api-docs/Toybox/AntPlus/SimulationSettings.html).
 pub const CRR: u8 = 80;
 
+/// The levels of LEVEL mode: level n is n x 5 % of resistance, so 20 is the full 100 % (page 48's 0.5 % units: n x 10).
+pub const LEVELS: u8 = 20;
+
 /// How the trainer is driven.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// A target power.
     Erg,
-    /// A fixed resistance.
+    /// A fixed resistance, in percent.
     Resistance,
+    /// A fixed level, 1 to [`LEVELS`] (5 % of resistance each).
+    Level,
     /// A grade.
     Sim,
 }
@@ -74,7 +79,8 @@ impl Mode {
     pub fn next(self) -> Mode {
         match self {
             Mode::Erg => Mode::Resistance,
-            Mode::Resistance => Mode::Sim,
+            Mode::Resistance => Mode::Level,
+            Mode::Level => Mode::Sim,
             Mode::Sim => Mode::Erg,
         }
     }
@@ -84,6 +90,7 @@ impl Mode {
         match self {
             Mode::Erg => "ERG",
             Mode::Resistance => "RES",
+            Mode::Level => "LVL",
             Mode::Sim => "SIM",
         }
     }
@@ -216,6 +223,8 @@ pub struct Drive {
     pub riding: bool,
     /// The ride is paused or auto-paused: ERG lets go.
     pub paused: bool,
+    /// LEVEL STEP: levels a press moves in LEVEL mode (0 reads as 1).
+    pub level_step: u8,
     /// Power match's ratio, Q16 ([`crate::power_match`]): the ERG target is sent times it. None: 1.0.
     pub match_q16: Option<i32>,
 }
@@ -249,6 +258,7 @@ pub struct Trainer {
     manual_w: u16,
     adjust_w: i16,
     res_half: u8,
+    level: u8,
     grade_x100: i16,
     engaged: bool,
     /// The trainer was held at the last pass ([`Trainer::engaged`]), a ride was open; the free resistance still to
@@ -286,6 +296,7 @@ impl Default for Trainer {
             manual_w: 100,
             adjust_w: 0,
             res_half: 40,
+            level: 5,
             grade_x100: 0,
             engaged: false,
             was_engaged: false,
@@ -342,6 +353,11 @@ impl Trainer {
         self.res_half / 2
     }
 
+    /// The level now, 1 to [`LEVELS`].
+    pub fn level(&self) -> u8 {
+        self.level
+    }
+
     /// The grade now, % x 100.
     pub fn grade(&self, d: &Drive) -> i16 {
         d.grade_x100.unwrap_or(self.grade_x100).clamp(*GRADE_RANGE.start(), *GRADE_RANGE.end())
@@ -362,6 +378,7 @@ impl Trainer {
                 Command::Power(w.min(MAX_W) * 4)
             }
             Mode::Resistance => Command::Resistance(self.res_half),
+            Mode::Level => Command::Resistance(self.level * 10),
             Mode::Sim => Command::Track { grade_x100: self.grade(d), crr: CRR },
         }
     }
@@ -401,6 +418,10 @@ impl Trainer {
             }
             Mode::Erg => self.manual_w = (i32::from(self.manual_w) + 5 * n).clamp(0, i32::from(MAX_W)) as u16,
             Mode::Resistance => self.res_half = (i32::from(self.res_half) + 10 * n).clamp(0, 200) as u8,
+            Mode::Level => {
+                let s = i32::from(d.level_step.max(1)) * n;
+                self.level = (i32::from(self.level) + s).clamp(1, i32::from(LEVELS)) as u8;
+            }
             Mode::Sim => {
                 let g = i32::from(self.grade_x100) + 50 * n;
                 self.grade_x100 = g.clamp(i32::from(*GRADE_RANGE.start()), i32::from(*GRADE_RANGE.end())) as i16;
@@ -630,6 +651,7 @@ mod tests {
         t.step_by(&none, true, false);
         assert_eq!(t.command(&none), Command::Resistance(50));
         t.cycle_mode(&none);
+        t.cycle_mode(&none); // level, then simulation
         t.step_by(&none, true, true);
         assert_eq!(t.command(&none), Command::Track { grade_x100: 100, crr: CRR });
         let course = Drive { grade_x100: Some(-350), ..Drive::default() };
@@ -799,6 +821,25 @@ mod tests {
         let mut t = Trainer::default();
         let n = (0..20).filter(|_| t.due(RESEND_MS, true, &idle).is_some()).count();
         assert_eq!(n, 1, "the boot's release: once (another controller may drive the trainer)");
+    }
+
+    #[test]
+    fn level_mode_sends_five_percent_a_level_and_steps_clamped() {
+        let mut t = Trainer::default();
+        t.cycle_mode(&Drive::default());
+        t.cycle_mode(&Drive::default());
+        let d = Drive { level_step: 2, ..Drive::default() };
+        assert_eq!((t.mode(&d), t.command(&d)), (Mode::Level, Command::Resistance(50)), "level 5 is 25 %");
+        t.step_by(&d, true, false);
+        assert_eq!(t.command(&d), Command::Resistance(70));
+        for _ in 0..20 {
+            t.step_by(&d, true, true);
+        }
+        assert_eq!(t.command(&d), Command::Resistance(200), "level 20 is 100 %");
+        for _ in 0..20 {
+            t.step_by(&Drive::default(), false, true);
+        }
+        assert_eq!((t.level(), t.command(&d)), (1, Command::Resistance(10)), "level 1, 5 %");
     }
 
     #[test]

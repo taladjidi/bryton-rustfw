@@ -272,20 +272,39 @@ fn no_trainer_no_trainer_fields() {
 #[test]
 fn sim_follows_the_course() {
     let (mut sim, mut app) = unit();
+    follow_the_hill(&mut sim, &mut app);
+}
+
+/// SLOPE SCALE 50 %: the trainer is given less of the hill than at 100 % (about half: the trainer's speed, so the distance, differs).
+#[test]
+fn slope_scale_halves_the_course_grade() {
+    let last = |scale: usize| {
+        let (mut sim, mut app) = unit();
+        app.settings.slope_scale = scale;
+        follow_the_hill(&mut sim, &mut app);
+        sim.nordic.trainer.grade_x100
+    };
+    let (full, half) = (last(0), last(2));
+    assert!(full > 100 && half > 0 && half < full * 3 / 4, "full {full}, half {half}");
+}
+
+/// A course ridden on the trainer, up to the middle of its hill.
+fn follow_the_hill(sim: &mut Sim, app: &mut App) {
+    let (sim, app) = (sim, app);
     app.set_course_memory(crate::storage::course_file::tests::memory());
-    run(&mut sim, &mut app, 1000);
-    app.press(&mut sim, Press::Short(Key::Start));
-    app.press(&mut sim, Press::Long(Key::Page));
-    super::tests::to_row(&mut sim, &mut app, Row::Open(Menu::Courses));
-    app.press(&mut sim, Press::Short(Key::Start));
-    run(&mut sim, &mut app, 1000);
-    for _ in 0..super::tests::hill(&app) {
-        app.press(&mut sim, Press::Short(Key::Page));
+    run(sim, app, 1000);
+    app.press(sim, Press::Short(Key::Start));
+    app.press(sim, Press::Long(Key::Page));
+    super::tests::to_row(sim, app, Row::Open(Menu::Courses));
+    app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 1000);
+    for _ in 0..super::tests::hill(app) {
+        app.press(sim, Press::Short(Key::Page));
     }
-    app.press(&mut sim, Press::Short(Key::Start));
-    run(&mut sim, &mut app, 200_000); // 10 m/s on the flat: the hill starts about 1.7 km in
+    app.press(sim, Press::Short(Key::Start));
+    run(sim, app, 200_000); // 10 m/s on the flat: the hill starts about 1.7 km in
     assert_eq!(app.screen(), Screen::Ride(COURSE));
-    let cmds = commands(&sim);
+    let cmds = commands(sim);
     assert!(cmds.iter().any(|p| p[0] == 0x33), "track resistance sent: {cmds:?}");
     let grade = |p: &[u8; 8]| i32::from(u16::from_le_bytes([p[5], p[6]])) - 20_000;
     let g = grade(cmds.last().unwrap());
@@ -326,6 +345,11 @@ fn the_screen_changes_the_target_and_the_mode() {
     run(&mut sim, &mut app, 600);
     assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.resistance), (0x30, 50), "25 %");
     sim.save("trainer_screen_res");
+    app.press(&mut sim, Press::Short(Key::Start)); // level
+    assert_eq!(app.trainer_field(Field::TrainerMode).as_str(), "LVL");
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 600);
+    assert_eq!((sim.nordic.trainer.mode, sim.nordic.trainer.resistance), (0x30, 60), "level 6, 30 % in 0.5 % units");
     app.press(&mut sim, Press::Short(Key::Start)); // simulation
     app.press(&mut sim, Press::Short(Key::Lap));
     run(&mut sim, &mut app, 600);
@@ -411,8 +435,8 @@ fn setup_and_commands_wait_for_the_chip() {
     }
     run(&mut sim, &mut app, 1000);
     assert_eq!(sim.nordic.trainer.target_w, 120);
-    for _ in 0..2 {
-        app.press(&mut sim, Press::Short(Key::Start)); // resistance, then simulation
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Start)); // resistance, level, then simulation
     }
     for _ in 0..4 {
         app.press(&mut sim, Press::Short(Key::Lap)); // -0.5 % each

@@ -115,10 +115,22 @@ impl App {
             .as_deref()
             .filter(|c| c.on.is_some() && self.ride.state() != ride::State::Idle)
             .and_then(|c| c.course.grade_ahead(self.ride.dist_m()))
-            .map(|g| (g * 10).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16);
+            .map(|g| {
+                (g * 10 * i32::from(SLOPE_SCALES.get(self.settings.slope_scale).copied().unwrap_or(100)) / 100)
+                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+            });
         let riding = self.ride.state() != ride::State::Idle;
         let match_q16 = self.settings.power_match.then(|| self.tlink.pm.ratio());
-        Drive { erg_w, step: step.unwrap_or(0), grade_x100, riding, paused: riding && !self.ride.moving(), match_q16 }
+        let level_step = LEVEL_STEPS.get(self.settings.level_step).copied().unwrap_or(1);
+        Drive {
+            erg_w,
+            step: step.unwrap_or(0),
+            grade_x100,
+            level_step,
+            riding,
+            paused: riding && !self.ride.moving(),
+            match_q16,
+        }
     }
 
     /// The trainer's readings into the live values, where nothing better is heard: power from a power meter, cadence
@@ -498,6 +510,10 @@ impl App {
             Mode::Resistance => {
                 l.push_u32(u32::from(t.resistance_pct()));
                 unit(l, "%");
+            }
+            Mode::Level => {
+                l.push_str("LVL ");
+                l.push_u32(u32::from(t.level()));
             }
             Mode::Sim => {
                 let g = i32::from(t.grade(&d));

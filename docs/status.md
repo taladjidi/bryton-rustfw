@@ -188,6 +188,10 @@ A feature not listed here was seen on the unit.
   directory sectors fail to write or read). On the unit it needs a card that really fails, so it may never be seen:
   the row appearing in SYSTEM while stuck, the four banners, and `\Rustfw\Rescue` or the lost chain checked from a
   computer (fsck's `FILE0000.CHK`).
+- **Level mode and the slope scale (training/trainer.rs `Mode::Level`, app/trainer.rs `trainer_drive`)** on the Van Rysel D900:
+  LVL on the trainer screen: level 1 then 20 feel lightest and heaviest, +/- by LEVEL STEP, page 48 (and FTMS op 0x04
+  over BLE) applied; a course followed in SIM with SLOPE SCALE 50 %: the trainer's resistance on the hill is about
+  half of 100 %'s, and the grade stays inside -10 to +20 %. Sim only so far.
 - **The trainer's release (app/trainer.rs, nrf.rs `ant_tx_completed`)** on the Van Rysel D900: the release at stop, end,
   pause and boot (once), and the **switch-off release**: one free resistance sent before the chip goes off, the D900 free
   in the next seconds with the ride saved (ANT+ and over Bluetooth), the 330 ms wait enough. `TX_COMPLETED`'s layout
