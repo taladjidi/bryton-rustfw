@@ -1,6 +1,6 @@
 //! The quick panel's geometry and drawing: what the rider wants to see right away, top to bottom: the media
 //! remote (now playing and five touch buttons), the power meter (watts, battery, ZERO), the paired sensors (one line
-//! each), the status line (GPS, phone, unit battery) and the brightness buttons. Pure drawing against [`Canvas`];
+//! each) and the brightness buttons. Pure drawing against [`Canvas`];
 //! the app (app/quick.rs) decides what each box says and redraws only the ones that changed.
 
 use super::media::{self, Button};
@@ -8,22 +8,24 @@ use super::{ACCENT, BLACK, Canvas, DARK, GREY, LABEL, PAGE_Y, RED, Rect, WHITE};
 use crate::text::{self, Align, Style};
 
 /// Now playing: the title, then the artist, one line each.
-pub const TITLE_Y: u32 = PAGE_Y + 4;
+pub const TITLE_Y: u32 = PAGE_Y;
 /// See [`TITLE_Y`].
-pub const ARTIST_Y: u32 = TITLE_Y + 16;
-/// The media buttons, 44 px targets with 3 px between: previous, play / pause, next, volume down, volume up.
+pub const ARTIST_Y: u32 = TITLE_Y + 20;
+/// The media buttons, 44 px high: the transport row (previous, play / pause, next, 72 wide with 8 px between), then
+/// the volume row (two halves, 8 px between), so a thumb on a bike cannot hit the neighbour.
 pub const MEDIA: [(Button, u32, u32, u32, u32); 5] = {
-    const Y: u32 = ARTIST_Y + 18;
+    const Y: u32 = ARTIST_Y + 20;
+    const VY: u32 = Y + 44 + 4;
     [
-        (Button::Prev, 4, Y, 44, 44),
-        (Button::Play, 51, Y, 44, 44),
-        (Button::Next, 98, Y, 44, 44),
-        (Button::VolDown, 145, Y, 44, 44),
-        (Button::VolUp, 192, Y, 44, 44),
+        (Button::Prev, 4, Y, 72, 44),
+        (Button::Play, 84, Y, 72, 44),
+        (Button::Next, 164, Y, 72, 44),
+        (Button::VolDown, 4, VY, 112, 44),
+        (Button::VolUp, 124, VY, 112, 44),
     ]
 };
-/// The power meter's block starts here (44 px high); the sensors, or the status, follow without it.
-pub const POWER_Y: u32 = MEDIA[0].2 + 44 + 4;
+/// The power meter's block starts here (44 px high); the sensors follow it, or take its place.
+pub const POWER_Y: u32 = MEDIA[3].2 + 44 + 4;
 /// The ZERO button, in the power block's right side.
 pub const ZERO: (u32, u32, u32, u32) = (150, POWER_Y, 86, 44);
 /// The watts (3x): x, y, width.
@@ -36,16 +38,14 @@ pub const RESULT: (u32, u32, u32) = (8, POWER_Y + 28, 138);
 pub const ROW: u32 = 16;
 /// Where the sensor lines start with the power block, and without it.
 pub const SENSORS_Y: [u32; 2] = [POWER_Y + 44 + 4, POWER_Y];
-/// The most sensor lines (one a kind but the power meter).
+/// The most sensor lines (one a kind but the power meter); under the power block, [`ROWS_WITH_POWER`].
 pub const ROWS: usize = 6;
+/// The most sensor lines under the power block.
+pub const ROWS_WITH_POWER: usize = 4;
 /// A sensor line's name, value and battery boxes (x, width).
 pub const SENSOR_BOXES: [(u32, u32); 3] = [(4, 84), (92, 108), (202, 38)];
-/// The status line: GPS, phone, unit battery.
-pub const STATUS_Y: u32 = 248;
-/// The status line's three boxes (x, width).
-pub const STATUS: [(u32, u32); 3] = [(4, 72), (78, 96), (178, 58)];
 /// The brightness row: the two buttons (44 px high), the level between.
-pub const BRIGHT_Y: u32 = 268;
+pub const BRIGHT_Y: u32 = 276;
 /// Darker and brighter.
 pub const BRIGHT: [(u32, u32, u32, u32); 2] = [(8, BRIGHT_Y, 64, 44), (168, BRIGHT_Y, 64, 44)];
 /// The level between the buttons: x, y, width.
@@ -84,6 +84,22 @@ pub fn draw_media_buttons(c: &mut impl Canvas, playing: bool, dim: bool) {
 pub fn fit(s: &str, w: u32) -> &str {
     let end = s.char_indices().map(|(i, _)| i).chain([s.len()]).take_while(|&i| LABEL.width(&s[..i]) <= w).last();
     s.get(..end.unwrap_or(0)).unwrap_or("")
+}
+
+/// Ticks a scrolling line holds at each end (the app ticks every `QUICK_STEP_MS`: 2 s).
+const HOLD: usize = 8;
+
+/// What a line shows `tick` ticks into its scroll in `w` px: all of `s` when it fits, else it holds HOLD ticks at
+/// the start, drops one character a tick until the end shows, holds there, and starts over. Cuts on char boundaries.
+pub fn window(s: &str, w: u32, tick: u32) -> &str {
+    if LABEL.width(s) <= w {
+        return s;
+    }
+    // the first character whose tail fits: the scroll's last position
+    let last = s.char_indices().position(|(i, _)| s.get(i..).is_some_and(|t| LABEL.width(t) <= w)).unwrap_or(0);
+    let t = tick as usize % (last + 2 * HOLD - 1);
+    let k = t.saturating_sub(HOLD - 1).min(last);
+    s.char_indices().nth(k).and_then(|(i, _)| s.get(i..)).unwrap_or(s)
 }
 
 /// A battery level as a small tag.
@@ -167,18 +183,58 @@ mod tests {
     #[test]
     fn layout_fits_and_hits() {
         assert!(BRIGHT[0].1 + BRIGHT[0].3 <= super::super::H, "the brightness row fits");
-        assert!(SENSORS_Y[0] + 5 * ROW <= STATUS_Y, "five sensor lines with the power block");
-        assert!(SENSORS_Y[1] + ROWS as u32 * ROW <= STATUS_Y, "six without");
-        const { assert!(STATUS_Y + 14 <= BRIGHT_Y) };
+        assert!(SENSORS_Y[0] + ROWS_WITH_POWER as u32 * ROW <= BRIGHT_Y, "four sensor lines with the power block");
+        assert!(SENSORS_Y[1] + ROWS as u32 * ROW <= BRIGHT_Y, "six without");
+        assert!(SENSORS_Y[0] + (ROWS_WITH_POWER as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell");
+        assert!(SENSORS_Y[1] + (ROWS as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell, no power");
+        assert!(
+            POWER_Y + 44 <= SENSORS_Y[0]
+                && TITLE_Y + 20 <= ARTIST_Y
+                && ARTIST_Y + 20 <= MEDIA[0].2
+                && MEDIA[4].2 + 44 <= POWER_Y
+        );
+        for (i, a) in MEDIA.iter().enumerate() {
+            for m in &MEDIA[i + 1..] {
+                assert!(a.1 + a.3 <= m.1 || m.1 + m.3 <= a.1 || a.2 + a.4 <= m.2 || m.2 + m.4 <= a.2, "no overlap");
+            }
+        }
         for &(b, x, y, w, h) in &MEDIA {
             assert!(w >= 44 && h >= 44, "a 44 px target");
             assert_eq!(hit((x + w / 2) as u16, (y + h / 2) as u16, true), Some(Hit::Media(b)));
         }
+        // the gaps between buttons hit nothing
+        assert_eq!(hit(80, (MEDIA[0].2 + 20) as u16, true), None);
+        assert_eq!(hit(160, (MEDIA[1].2 + 20) as u16, true), None);
+        assert_eq!(hit(120, (MEDIA[3].2 + 20) as u16, true), None);
+        assert_eq!(hit(100, (MEDIA[0].2 + 47) as u16, true), None);
         assert_eq!(hit(190, (ZERO.1 + 20) as u16, true), Some(Hit::Zero));
         assert_eq!(hit(190, (ZERO.1 + 20) as u16, false), None);
         assert_eq!(hit(40, (BRIGHT_Y + 20) as u16, false), Some(Hit::Light(false)));
         assert_eq!(hit(200, (BRIGHT_Y + 20) as u16, false), Some(Hit::Light(true)));
         assert_eq!(hit(120, TITLE_Y as u16, true), None);
+    }
+
+    #[test]
+    fn a_long_line_holds_steps_holds_and_wraps() {
+        let w = 96;
+        let per = LABEL.width("A");
+        let fits = (w / per) as usize;
+        assert!((0..50).all(|t| window("SHORT", w, t) == "SHORT"), "fits: never moves");
+        let long = "ABCDEFGHIJKLMNOPQRSTUVWX";
+        let last = long.len() - fits;
+        let at = |t| window(long, w, t);
+        assert!((0..HOLD as u32).all(|t| at(t) == long), "held at the start");
+        assert_eq!(at(HOLD as u32), &long[1..]);
+        assert_eq!(at(HOLD as u32 + 1), &long[2..]);
+        let end = (HOLD - 1 + last) as u32;
+        assert_eq!(at(end), &long[last..]);
+        assert_eq!(at(end + HOLD as u32 - 1), &long[last..], "held at the end");
+        assert_eq!(at(end + HOLD as u32), long, "wrapped");
+        let utf = "\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}";
+        let mixed = "AB\u{20ac}\u{20ac}CD\u{20ac}EFGHIJKLMNOP";
+        assert!((0..60).all(|t| window(mixed, w, t).len() <= mixed.len()));
+        assert!((0..60).all(|t| window(mixed, 5, t).len() <= mixed.len()), "narrower than a glyph: no panic");
+        assert!((0..60).all(|t| window(utf, w, t).chars().all(|c| c == '\u{c9}')));
     }
 
     #[test]

@@ -17,18 +17,19 @@ Where to look: checklist.md compares the features with stock, Garmin and others;
   date's row (a ring with eight square teeth and a round hole, anti-aliased, level with the date; a tap anywhere in its
   44 x 44 px box opens the menu). A swipe down, on the overview and on every ride page, opens the **quick panel**, what to see right away and not
   a way to the settings (a swipe up or Back closes it). Top to bottom: **media** (the title and the artist, one line
-  each, and 44 px buttons: previous, play / pause, next, volume down and up, the media remote's actions; greyed without a
-  phone); the **power meter** when one is paired (the 3 s watts, its battery, and ZERO, which runs the zero-offset
+  each, which scroll at 4 characters a second with 2 s holds at each end when wider than the screen; a row of previous,
+  play / pause and next, then VOL- and VOL+ below it, 44 px high with 8 px between, the media remote's actions; greyed
+  without a phone); the **power meter** when one is paired (the 3 s watts, its battery, and ZERO, which runs the zero-offset
   calibration in place and writes "ZERO -12 OK", "FAILED" or "NO ANSWER" on the same block; refused while the ride
-  runs); one line per **paired sensor** (heart rate, speed, cadence, speed and cadence, shifting, trainer: its value or
+  runs); one line per **paired sensor** (at most 4 under the power block, 6 without; heart rate, speed, cadence, speed and cadence, shifting, trainer: its value or
   SEARCHING, and its battery when the sensor said it, ANT+ common page 82: bars, or LOW in red); the heart rate strap's
   battery in percent from its page 7 (HR BATT shows it, else the page 82 status; layout as openant reads it,
   `devices/heart_rate.py`, checked 2026-10-30, not yet against the ANT+ HRM document); SENSORS names a paired sensor
   with its maker's short name from common page 80 (manufacturer id in bytes 4-5, `devices/common.py`; the FIT SDK
   list: POLAR HR, SRAM SPD+CAD; device number as the value; unknown ids keep the type name), and the panel's lines
-  keep their type; **GPS** (satellites),
-  the **phone** link and the unit's battery; and **brightness** buttons (the levels, AUTO at the bright end). Each box
-  is redrawn alone, a second at most. PROFILE, USB DRIVE, NOTIFICATIONS (still a tap on the overview's notices) and
+  keep their type; and **brightness** buttons (the levels, AUTO at the bright end). There is no status line: the
+  top strip already shows the phone link, the time and the battery. Each box is redrawn alone, and the boxes are
+  checked every 250 ms. PROFILE, USB DRIVE, NOTIFICATIONS (still a tap on the overview's notices) and
   TRAINER CONTROL stay in their menus.
   **TODAY card** (the owner's idea, 2026-10-26: the big clock went, the strip has the time): "TODAY" and the planned
   length (H:MM) on one line, the workout's name under it (cut to whole characters), and its profile at the bottom: a
