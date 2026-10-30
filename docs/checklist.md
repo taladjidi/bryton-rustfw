@@ -38,7 +38,7 @@ Source tags: (stock) the S510's own firmware R039; (patch P#) bryton-S510-mods; 
 - [ ] Ready-to-ride dashboard: sensors, battery, GPS before the start (Wahoo)
 - [x] Indoor mode pages (stock, Garmin, Wahoo): unit
 - [ ] Languages other than English (stock)
-- [ ] Imperial units (stock)
+- [~] Imperial units (stock): sim; speed, distance, ascent and altitude, the totals and the trips; the course fields stay metric
 - [x] Redraw only what changes, in the smallest box (ours): unit
 - [ ] Lap list with each lap's numbers in a past ride (stock, Garmin)
 - [ ] Power phase page (stock, Garmin)
@@ -50,7 +50,7 @@ Speed and distance
 
 - [x] Speed, average, maximum (stock, all): unit
 - [x] Distance (stock, all): unit
-- [ ] Trip 1 / Trip 2 counters, reset by hand (stock)
+- [x] Trip 1 / Trip 2 counters, reset by hand (stock): sim
 - [x] Odometer: recorded or all distance (stock, Garmin): unit
 
 Time
@@ -157,7 +157,7 @@ Others
 
 - [x] Start, pause, resume, lap, end (stock, all): unit
 - [x] Auto pause under 2 km/h (stock, all): unit
-- [ ] Auto pause threshold set by hand (Garmin, Wahoo)
+- [x] Auto pause threshold set by hand (Garmin, Wahoo): sim; AUTO, OFF, 2, 3, 5, 8 km/h
 - [~] Auto lap by distance or time (Garmin, Wahoo, Karoo): sim; by position is not in
 - [ ] Start reminder when the bike moves (stock, Garmin)
 - [~] FIT activity file written as the ride goes (stock, all): sim
@@ -261,7 +261,7 @@ Others
 
 - [x] Beeps at power on and off (stock): unit
 - [ ] Key click (stock)
-- [ ] Sound on or off for alerts (stock)
+- [x] Sound on or off for alerts (stock): sim; off silences every tone, the power-on and power-off melodies stay
 - [~] Eat, drink, rest reminders by trip time, clock, distance, kcal, kJ, heart rate (stock, Garmin, Wahoo): sim; ride time, distance, kcal, kJ; no clock or heart rate reminder
 - [x] Heart rate, power, cadence, speed high / low alerts (stock, Garmin, Wahoo): sim
 - [ ] Custom alerts with text (Wahoo, Karoo)
@@ -313,7 +313,7 @@ Backlight and panel
 
 - [~] Backlight levels and time-out (stock, all): unit; the levels and time-out still to see by eye
 - [~] Automatic backlight from the light sensor (stock, all): unit; outdoors still to see by eye
-- [ ] Backlight always on (stock)
+- [x] Backlight always on (stock): LIGHT OFF NEVER (the time-out choice 0)
 - [ ] Panel partial and idle modes (ours)
 
 Touch and buttons
@@ -356,7 +356,7 @@ Storage, USB and updates
 - [x] GPS status: fix, satellites, position, altitude, UTC (stock, Garmin): unit
 - [~] Settings kept through power off (stock, all): unit; backup registers, not a file
 - [ ] Time zone, daylight saving, date and time formats (stock, all)
-- [ ] Units: metric or imperial, temperature (stock, all)
+- [x] Units: metric or imperial, temperature (stock, all): sim
 - [ ] Language (stock, all)
 - [x] First start setup: stock's settings and pages taken by themselves (ours): sim
 - [x] Import stock's settings: FTP, max HR, weight, W', wheel, paired sensors, backlight, reminders, pages (ours): sim

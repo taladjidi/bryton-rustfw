@@ -378,7 +378,7 @@ impl App {
                 value.push_str(if edited {
                     " >"
                 } else if number {
-                    s.unit()
+                    s.unit_in(self.settings.imperial)
                 } else {
                     ""
                 });
@@ -467,7 +467,7 @@ impl App {
                 let r = self.stock.index.get(n)?;
                 let (y, mo, d, ..) = r.start;
                 label.push_str(date_text((y, mo, d)).as_str());
-                ui::card::push_km(&mut value, r.dist_m);
+                push_trip(&mut value, r.dist_m, self.settings.imperial);
             }
             Row::Notif(k) => {
                 // the sender (the app when it sent no title), and when it came
@@ -690,7 +690,7 @@ impl App {
             Some(Row::Ride(r)) => self.activate_ride(r),
             Some(Row::Past(n)) => {
                 let Some(&r) = self.stock.index.get(n) else { return };
-                self.past.start(&r, self.settings.ftp); // read over the next passes (App::step_past)
+                self.past.start(&r, self.settings.ftp, self.settings.imperial); // read over the next passes (App::step_past)
                 self.say("READING RIDE");
             }
             Some(Row::Workout(k)) => self.open_workout(b, k),
@@ -722,6 +722,17 @@ impl App {
                 self.open(Screen::Nearby);
             }
             Some(Row::AltGps) => self.alt_from_gps(),
+            Some(Row::Set(menu::Setting::Trip(_))) if self.ride.state() != ride::State::Idle => {
+                self.say("END THE RIDE FIRST")
+            }
+            Some(Row::Set(menu::Setting::Trip(n)))
+                if self.confirmed(menu, sel, if n == 0 { "RESET TRIP 1" } else { "RESET TRIP 2" }) =>
+            {
+                self.settings.reset_trip(usize::from(n));
+                self.save_misc(b);
+                self.say(if n == 0 { "TRIP 1 RESET" } else { "TRIP 2 RESET" });
+            }
+            Some(Row::Set(menu::Setting::Trip(_) | menu::Setting::Odometer)) => {}
             Some(Row::Set(s)) => self.activate_setting(b, s),
             Some(Row::Sensor(k)) => self.activate_sensor(b, menu, sel, k),
             Some(Row::Layout(n)) => self.next_layout(b, n),

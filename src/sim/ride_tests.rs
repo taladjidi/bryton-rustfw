@@ -738,3 +738,43 @@ fn sun_heading_arrival_and_battery_fields() {
     assert!(text(&app, UnitBatt).ends_with('%'), "the status bar's percent");
     sim.save("sun_fields");
 }
+
+/// UNITS IMPERIAL and TEMPERATURE F: the ride page shows mph, miles, feet and F with their labels; the same ride in
+/// metric shows the km values; the FIT file's units are not a setting (docs/features.md).
+#[test]
+fn imperial_units_on_a_ride_page() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.gnss.fix = Some(8000);
+    let mut app = App::start(&mut sim, Some(KEY));
+    use Field::*;
+    app.pages[0] = PageCfg { layout: 6, fields: [Speed, Dist, MaxSpeed, Ascent, Temp, Trip1] }.into();
+    app.press(&mut sim, Press::Short(Key::Page));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 120_000);
+    let text = |app: &App, f| std::string::String::from(app.field_text(f).as_str());
+    let metric: std::vec::Vec<_> = [Speed, Dist, MaxSpeed, Ascent, Temp, Trip1].map(|f| text(&app, f)).into();
+    assert_eq!(&metric[..3], ["28.8", "0.94", "28.8"], "8 m/s for 120 s");
+    app.settings.imperial = true;
+    app.settings.temp_f = true;
+    let imp: std::vec::Vec<_> = [Speed, Dist, MaxSpeed, Ascent, Temp, Trip1].map(|f| text(&app, f)).into();
+    assert_eq!(&imp[..3], ["17.9", "0.58", "17.9"], "28.8 km/h is 17.9 mph, 940 m is 0.58 mi");
+    assert_eq!(Speed.label_in(true, true), "MPH");
+    assert_eq!(
+        (Dist.label_in(true, false), Temp.label_in(false, true), Temp.label_in(true, false)),
+        ("MI", "TEMP F", "TEMP C")
+    );
+    assert_eq!(Speed.label_in(false, false), "KM/H");
+    if metric[4] != "--" {
+        assert_ne!(imp[4], metric[4], "F is not C");
+    }
+    assert!(app.end_stats().as_str().ends_with(" MI"), "the end-ride screen");
+    let card = app.ride_card();
+    assert_eq!((card.stats[1].0, card.stats[2].0, card.stats[3].0), ("MI", "AVG MPH", "ASCENT FT"), "the summary card");
+    app.settings.limits[4] = 30;
+    let mut l = crate::Line::<12>::new();
+    app.settings.text(crate::menu::Setting::Limit(4), &mut l);
+    assert_eq!((l.as_str(), crate::menu::Setting::Limit(4).unit_in(true)), ("19", " MPH"), "30 km/h in mph");
+    app.font_changed(&mut sim); // the page drawn whole again, with the new labels
+    run(&mut sim, &mut app, 1000);
+    sim.save("imperial_page");
+}

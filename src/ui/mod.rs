@@ -880,12 +880,12 @@ pub(crate) mod tests {
                 assert!(area <= W * h && area + W * 2 >= W * h, "{n} fields cover the area");
                 let mut f = Frame::themed(theme);
                 for (&bx, field) in b.iter().flat_map(|bx| Field::ALL.iter().map(move |f| (bx, f))) {
-                    draw_field_frame(&mut f, bx, *field);
-                    draw_field_frame_bar(&mut f, bx, *field, GREEN);
+                    draw_field_frame(&mut f, bx, *field, (false, false));
+                    draw_field_frame_bar(&mut f, bx, *field, GREEN, (false, false));
                     draw_cell_frame(&mut f, bx, ACCENT);
                     // the label's ink, under the bar, ends before the value band (FIELD_LABEL_H)
                     let mut l = Frame::themed(theme);
-                    draw_field_frame(&mut l, bx, *field);
+                    draw_field_frame(&mut l, bx, *field, (false, false));
                     let last = (bx.1..bx.1 + 40).rev().find(|&y| (bx.0..bx.0 + 100).any(|x| l.at(x, y) == GREY));
                     if let Some(y) = last.filter(|_| !field.is_picture() && bx.3 > 70) {
                         assert!(

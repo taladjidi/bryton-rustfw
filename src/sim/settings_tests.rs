@@ -383,27 +383,51 @@ fn start_until_fat2_written(sim: &mut Sim, app: &mut App) {
     assert!(touched(sim, from, &[24, 25]), "a FAT sector written to the first copy only");
 }
 
+/// The first read of the second FAT (CMD17 / 18) at or after command `from` comes before the first write (CMD24 / 25)
+/// of settings.bin's two sectors.
+fn fat2_read_before_the_settings_write(sim: &Sim, from: usize) {
+    let mut d = Ram(sim.emmc.image.clone(), 0);
+    let mut fat = crate::fat::Fat::mount(&mut d).unwrap();
+    let cluster = fat.open(&mut d, "Rustfw/settings.bin").unwrap().cluster;
+    let lba = fat.lba(cluster);
+    let fat2 = fat2(sim);
+    let at = |pred: &dyn Fn(&(u8, u32)) -> bool| sim.emmc.cmds[from..].iter().position(pred);
+    let read = at(&|c| matches!(c.0, 17 | 18) && fat2.contains(&c.1));
+    let write = at(&|c| matches!(c.0, 24 | 25) && (lba..lba + 2).contains(&c.1));
+    assert!(write.is_some(), "settings.bin written");
+    assert!(
+        read.is_some_and(|r| r < write.unwrap_or(0)),
+        "the FAT copies compared first: read {read:?}, write {write:?}"
+    );
+}
+
 /// The ride paused, saved, its card closed; then GPS POWER changed: written after the FAT copies were compared
-/// (the second one read), and the volume clean.
+/// (the second one read), and the volume clean. The saved ride's trips are the first settings write after the
+/// failure, so they do the comparing; the copies are then made doubtful again for GPS POWER's write.
 fn save_then_settings_compare_the_fats(sim: &mut Sim, app: &mut App) {
+    let from = sim.emmc.cmds.len();
     run(sim, app, 70_000);
     app.press(sim, Press::Short(Key::Start)); // pause
     super::save_ride(sim, app);
     run(sim, app, 10_000);
     assert!(app.notes.list[0].as_str().ends_with("RIDE SAVED"), "{}", app.notes.list[0].as_str());
+    settle(sim, app);
+    assert!(app.settings.trip_s[0] > 0, "the ride's trips written");
+    fat2_read_before_the_settings_write(sim, from);
     app.press(sim, Press::Short(Key::Back)); // the banner
     app.press(sim, Press::Short(Key::Back)); // the summary
-    let from = sim.emmc.cmds.len();
     app.press(sim, Press::Long(Key::Page));
     to_row(sim, app, menu::Row::Open(Menu::Settings));
     app.press(sim, Press::Short(Key::Start));
     to_row(sim, app, menu::Row::Open(Menu::Bike));
     app.press(sim, Press::Short(Key::Start));
     to_row(sim, app, menu::Row::Set(Setting::GpsPower));
+    app.fats_unsure(); // a card error since: the next write compares again
+    let from = sim.emmc.cmds.len();
     app.press(sim, Press::Short(Key::Start));
     settle(sim, app);
     assert_eq!(file(sim).map(|c| c.settings.gps_power), Some(crate::GpsPower::Full), "written");
-    assert!(touched(sim, from, &[17, 18]), "the second FAT read: the copies compared before the write");
+    fat2_read_before_the_settings_write(sim, from);
     assert_eq!(crate::fat::write::tests::fsck(&sim.emmc.image).map(|_| ()), Ok(()));
 }
 
@@ -447,4 +471,103 @@ fn a_failed_folder_at_a_ride_start_has_the_settings_write_compare_the_fats() {
     start_until_fat2_written(&mut sim, &mut app); // the folder made again: its cluster's FAT sector, once
     assert_eq!((app.rec.clean.errors, app.rec.clean.fails()), (errors + 1, 0), "an error gone on after");
     save_then_settings_compare_the_fats(&mut sim, &mut app);
+}
+
+/// TRIP 1, TRIP 2 and the ODOMETER grow by a saved ride's totals once it is saved (never while it runs), are written to
+/// the file, and a trip resets by hand (asked twice) while the odometer stays.
+#[test]
+fn trips_and_the_odometer_grow_at_a_save_and_a_trip_resets_by_hand() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 70_000);
+    assert_eq!((app.settings.trip_m, app.settings.odo_m), ([0; 2], 0), "nothing while the ride runs");
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (m, s) = (app.ride.dist_m(), app.ride.timer_s());
+    assert!(m > 300 && s > 30, "a ride: {m} m {s} s");
+    super::save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 10_000);
+    settle(&mut sim, &mut app);
+    let got = |st: &Settings| (st.trip_m, st.trip_s, st.odo_m);
+    assert_eq!(got(&app.settings), ([m; 2], [s; 2], m), "added at the save");
+    assert_eq!(file(&sim).map(|c| got(&c.settings)), Some(([m; 2], [s; 2], m)), "and written");
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Long(Key::Page));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Settings));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Open(Menu::Bike));
+    app.press(&mut sim, Press::Short(Key::Start));
+    to_row(&mut sim, &mut app, menu::Row::Set(Setting::Trip(0)));
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.settings.trip_m, [m; 2], "asked first");
+    app.press(&mut sim, Press::Short(Key::Start));
+    settle(&mut sim, &mut app);
+    assert_eq!(got(&app.settings), ([0, m], [0, s], m), "TRIP 1 reset, TRIP 2 and the odometer kept");
+    assert_eq!(file(&sim).map(|c| got(&c.settings)), Some(([0, m], [0, s], m)), "written");
+}
+
+/// SOUND OFF silences every tone (an alert's too); ON plays them.
+#[test]
+fn sound_off_silences_the_tones() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    for sound in [false, true] {
+        app.settings.sound = sound;
+        sim.tones.clear();
+        app.tones.play(&crate::BEEP_ALERT);
+        run(&mut sim, &mut app, 1000);
+        assert_eq!(sim.tones.iter().any(|&hz| hz != 0), sound, "sound {sound}: {:?}", sim.tones);
+    }
+}
+
+/// Each saved ride pays the trips once, even when ride B is ended while A's save is pending; a discarded ride pays
+/// nothing.
+#[test]
+fn trips_pay_once_per_saved_ride_and_a_discarded_ride_pays_nothing() {
+    let (mut sim, mut app) = started(Settings::from_word(0), false);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 40_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    let a = app.ride.dist_m();
+    super::save_ride(&mut sim, &mut app); // A ended, its save at the next pass
+    app.press(&mut sim, Press::Short(Key::Start)); // the ride's card closed
+    app.press(&mut sim, Press::Short(Key::Start)); // B starts, held behind A's save
+    run(&mut sim, &mut app, 20_000);
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    let b = app.ride.dist_m();
+    super::save_ride(&mut sim, &mut app);
+    run(&mut sim, &mut app, 20_000);
+    settle(&mut sim, &mut app);
+    assert!(a > 100 && b > 50, "{a} {b}");
+    assert_eq!((app.settings.trip_m[0], app.settings.odo_m), (a + b, a + b), "each once");
+    assert_eq!(app.settings_store.unpaid(), (0, 0), "nothing left waiting");
+    // C is discarded: nothing added
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Back));
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 20_000);
+    assert!(app.ride.state() == crate::ride::State::Running && app.ride.dist_m() > 50, "C is riding");
+    app.press(&mut sim, Press::Short(Key::Start)); // pause
+    assert!(app.ride.dist_m() > 50 && app.ride.state() != crate::ride::State::Idle, "C is paused");
+    app.discard_ride();
+    run(&mut sim, &mut app, 20_000);
+    settle(&mut sim, &mut app);
+    assert_eq!((app.settings.trip_m[0], app.settings.odo_m), (a + b, a + b), "a discarded ride adds nothing");
+    assert_eq!(app.settings_store.unpaid(), (0, 0));
+}
+
+/// The queue of ended rides (`SettingsStore::done`): saved pays, kept or discarded drops, the one behind moves up.
+#[test]
+fn the_ended_rides_queue_pays_saved_ones_only() {
+    let mut st = crate::SettingsStore::default();
+    st.ended(10, 1);
+    st.ended(20, 2);
+    assert_eq!(st.unpaid(), (30, 3), "both count while unpaid");
+    st.done(true);
+    assert_eq!((st.due, st.saving, st.unpaid()), ((10, 1), Some((20, 2)), (30, 3)));
+    st.done(false); // the second was kept
+    assert_eq!((st.due, st.saving, st.queued, st.unpaid()), ((10, 1), None, None, (10, 1)));
+    st.done(true); // a save with nothing ended: nothing
+    assert_eq!(st.due, (10, 1));
 }

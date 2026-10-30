@@ -103,6 +103,48 @@ pub(crate) fn push_km<const N: usize>(l: &mut Line<N>, m: u32) {
     l.push_str(ui::DIGITS[(m / 10 % 10) as usize]);
 }
 
+/// Metres as km (or miles) times 100, truncated as stock's distance is.
+pub(crate) fn dist_x100(m: u32, imperial: bool) -> u32 {
+    if imperial { (u64::from(m) * 621_371 / 10_000_000) as u32 } else { m / 10 }
+}
+
+/// Distance as stock shows it: 2 decimals under 100, then 1 (km, or miles when `imperial`).
+pub(crate) fn push_dist<const N: usize>(l: &mut Line<N>, m: u32, imperial: bool) {
+    let v = dist_x100(m, imperial);
+    l.push_u32(v / 100);
+    l.push_str(".");
+    if v < 10_000 {
+        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
+        l.push_str(ui::DIGITS[(v % 10) as usize]);
+    } else {
+        l.push_str(ui::DIGITS[(v / 10 % 10) as usize]);
+    }
+}
+
+/// A trip or the odometer: always 1 decimal (up to 99999.9).
+pub(crate) fn push_trip<const N: usize>(l: &mut Line<N>, m: u32, imperial: bool) {
+    let v = dist_x100(m, imperial) / 10;
+    l.push_u32(v / 10);
+    l.push_str(".");
+    l.push_str(ui::DIGITS[(v % 10) as usize]);
+}
+
+/// km/h x 10 as mph x 10, rounded.
+pub(crate) fn mph_x10(kmh_x10: u32) -> u32 {
+    ((u64::from(kmh_x10) * 621_371 + 500_000) / 1_000_000) as u32
+}
+
+/// Metres as feet, rounded (a signed altitude or a m/h).
+pub(crate) fn feet(m: i32) -> i32 {
+    ((i64::from(m) * 328_084 + if m < 0 { -50_000 } else { 50_000 }) / 100_000) as i32
+}
+
+/// Celsius x 10 as Fahrenheit x 10, rounded away from zero at the half.
+pub(crate) fn fahrenheit_x10(c_x10: i32) -> i32 {
+    let n = c_x10 * 9;
+    (n + if n < 0 { -2 } else { 2 }) / 5 + 320
+}
+
 /// Speed from which the course over ground is shown as a heading (mm/s): 5 km/h, below it the heading is noise.
 const HEADING_MIN_MM_S: u32 = 1_389;
 
@@ -220,6 +262,10 @@ impl App {
         let mut l = Line::new();
         let (r, live) = (&self.ride, |m| self.live.shown(m).map(u32::from)); // one reading a second
         let (p, ftp) = (&self.power, self.settings.ftp);
+        let imp = self.settings.imperial;
+        // a speed (km/h x 10) or a height (m) in the unit chosen
+        let spd = |v: u32| if imp { mph_x10(v) } else { v };
+        let alt = |v: u32| if imp { feet(v.min(i32::MAX as u32) as i32) as u32 } else { v };
         // the value, and whether it is in tenths
         let (v, tenths) = match f {
             Field::Time => {
@@ -246,19 +292,28 @@ impl App {
                 return l;
             }
             Field::UphillKm | Field::DownhillKm => {
-                push_km(&mut l, if f == Field::UphillKm { r.uphill_m() } else { r.downhill_m() });
+                push_dist(&mut l, if f == Field::UphillKm { r.uphill_m() } else { r.downhill_m() }, imp);
+                return l;
+            }
+            Field::Trip1 | Field::Trip2 | Field::Odo | Field::Trip1Time | Field::Trip2Time => {
+                // the rides saved, and the one running (as WEEK KM does)
+                let (live_m, live_s) = if r.state() == ride::State::Idle { (0, 0) } else { (r.dist_m(), r.timer_s()) };
+                // and the rides ended and not yet saved, so the value does not dip at the end of a ride
+                let (un_m, un_s) = self.settings_store.unpaid();
+                let (live_m, live_s) = (live_m.saturating_add(un_m), live_s.saturating_add(un_s));
+                let st = &self.settings;
+                match f {
+                    Field::Trip1 => push_trip(&mut l, st.trip_m[0].saturating_add(live_m), imp),
+                    Field::Trip2 => push_trip(&mut l, st.trip_m[1].saturating_add(live_m), imp),
+                    Field::Odo => push_trip(&mut l, st.odo_m.saturating_add(live_m), imp),
+                    Field::Trip1Time => push_fixed_u(&mut l, st.trip_s[0].saturating_add(live_s) / 360, 1),
+                    _ => push_fixed_u(&mut l, st.trip_s[1].saturating_add(live_s) / 360, 1),
+                }
                 return l;
             }
             Field::Dist | Field::LapDist => {
                 let m = if f == Field::Dist { r.dist_m() } else { r.lap_dist_m() };
-                // as stock: 2 decimals under 100 km, then 1
-                let (unit, digits) = if m < 100_000 { (10, 2) } else { (100, 1) };
-                l.push_u32(m / 1000);
-                l.push_str(".");
-                let frac = m % 1000 / unit;
-                for d in [frac / 10, frac % 10].get(2 - digits..).unwrap_or(&[]) {
-                    l.push_str(ui::DIGITS[*d as usize % 10]);
-                }
+                push_dist(&mut l, m, imp); // as stock: 2 decimals under 100 km, then 1
                 return l;
             }
             Field::Map
@@ -280,11 +335,12 @@ impl App {
                 }
                 let o = &self.stock.out;
                 let (live_m, live_s) = if r.state() == ride::State::Idle { (0, 0) } else { (r.dist_m(), r.timer_s()) };
+                let whole = |m: u32| dist_x100(m, imp) / 100;
                 match f {
                     Field::WeekH => push_fixed_u(&mut l, (o.week.time_s + live_s) / 360, 1),
-                    Field::WeekKm => l.push_u32((o.week.dist_m + live_m) / 1000),
-                    Field::YearKm => l.push_u32((o.year.dist_m + live_m) / 1000),
-                    _ => l.push_u32((o.all.dist_m + live_m) / 1000),
+                    Field::WeekKm => l.push_u32(whole(o.week.dist_m + live_m)),
+                    Field::YearKm => l.push_u32(whole(o.year.dist_m + live_m)),
+                    _ => l.push_u32(whole(o.all.dist_m + live_m)),
                 }
                 return l;
             }
@@ -386,13 +442,14 @@ impl App {
             }
             Field::Temp => {
                 let t = self.baro.map(|(_, t)| i32::from(t) / 10); // C x 100 to tenths
+                let t = if self.settings.temp_f { t.map(fahrenheit_x10) } else { t };
                 if t.is_some_and(|t| t < 0) {
                     l.push_str("-");
                 }
                 (t.map(i32::unsigned_abs), true)
             }
             Field::Hr => (live(Metric::Hr), false),
-            Field::Speed => (live(Metric::Speed), true),
+            Field::Speed => (live(Metric::Speed).map(spd), true),
             Field::Cadence => (live(Metric::Cadence), false),
             Field::Power => (self.power_now().map(u32::from), false),
             Field::PctMaxHr => (self.live.shown(Metric::Hr).and_then(|b| pct_of(b, self.settings.max_hr)), false),
@@ -417,14 +474,14 @@ impl App {
                 }
                 return l;
             }
-            Field::AvgSpeed => (r.avg_speed_x10().map(u32::from), true),
-            Field::MaxSpeed => (Some(u32::from(r.max_speed_x10())), true),
+            Field::AvgSpeed => (r.avg_speed_x10().map(u32::from).map(spd), true),
+            Field::MaxSpeed => (Some(spd(u32::from(r.max_speed_x10()))), true),
             Field::AvgHr => (r.avg_hr().map(u32::from), false),
             Field::AvgPower => (r.avg_power().map(u32::from), false),
-            Field::Ascent => (Some(r.ascent_m()), false),
-            Field::Descent => (Some(r.descent_m()), false),
-            Field::LapAscent => (Some(r.lap_ascent_m()), false),
-            Field::LapDescent => (Some(r.lap_descent_m()), false),
+            Field::Ascent => (Some(alt(r.ascent_m())), false),
+            Field::Descent => (Some(alt(r.descent_m())), false),
+            Field::LapAscent => (Some(alt(r.lap_ascent_m())), false),
+            Field::LapDescent => (Some(alt(r.lap_descent_m())), false),
             Field::Laps => (Some(r.laps()), false),
             Field::LapAvgPower => (r.lap_avg_power().map(u32::from), false),
             Field::LastLapAvgPower => (r.last_lap_avg_power().map(u32::from), false),
@@ -497,6 +554,7 @@ impl App {
                     Field::MaxAlt => r.max_alt_m(),
                     _ => r.grade_x10(),
                 };
+                let v = if imp && matches!(f, Field::Vam | Field::MaxAlt) { v.map(feet) } else { v };
                 if v.is_some_and(|v| v < 0) {
                     l.push_str("-");
                 }
@@ -576,7 +634,8 @@ mod tests {
         assert_eq!(Field::from_index(66), Field::TripTime);
         assert_eq!([Field::from_index(79), Field::from_index(90)], [Field::PctMaxHr, Field::BalanceAvg]);
         assert_eq!([Field::from_index(91), Field::from_index(99)], [Field::Heading, Field::HrBatt]);
-        assert_eq!(Field::ALL.len(), 100);
+        assert_eq!([Field::from_index(100), Field::from_index(104)], [Field::Trip1, Field::Trip2Time]);
+        assert_eq!(Field::ALL.len(), 105);
     }
 
     #[test]
@@ -629,5 +688,33 @@ mod tests {
             [d(3599, true).as_str(), d(3600, true).as_str(), d(45_296, false).as_str()],
             ["59:59", "1:00|00", "12:34|56"]
         );
+    }
+
+    #[test]
+    fn imperial_units_round() {
+        // 1 mile is 1609.344 m, 1 mph 1.609 km/h
+        assert_eq!([mph_x10(0), mph_x10(100), mph_x10(288), mph_x10(1)], [0, 62, 179, 1]);
+        assert_eq!([feet(0), feet(100), feet(-100), feet(1)], [0, 328, -328, 3]);
+        assert_eq!(
+            [fahrenheit_x10(0), fahrenheit_x10(250), fahrenheit_x10(-100), fahrenheit_x10(-405)],
+            [320, 770, 140, -409]
+        );
+        let d = |m, imp| {
+            let mut l = Line::<8>::new();
+            push_dist(&mut l, m, imp);
+            l
+        };
+        // truncated, 2 decimals under 100 and 1 from there
+        assert_eq!([d(1609, false).as_str(), d(1609, true).as_str(), d(5000, true).as_str()], ["1.60", "0.99", "3.10"]);
+        assert_eq!(
+            [d(99_999, false).as_str(), d(160_934, true).as_str(), d(160_935, true).as_str()],
+            ["99.99", "99.99", "100.0"]
+        );
+        let t = |m, imp| {
+            let mut l = Line::<8>::new();
+            push_trip(&mut l, m, imp);
+            l
+        };
+        assert_eq!([t(12_345, false).as_str(), t(12_345, true).as_str(), t(0, true).as_str()], ["12.3", "7.6", "0.0"]);
     }
 }

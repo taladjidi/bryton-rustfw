@@ -92,7 +92,7 @@ pub(super) fn ride(sim: &mut Sim, app: &App, n: usize, values: &[&str], radio: b
         let bx = <(u32, u32, u32, u32)>::from(page.cell_box(i).unwrap());
         // heart rate and power show their zone as a bar along the box's top, the number white (steady test
         // sensors: the 3 s average the power's box takes equals the live value)
-        crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v));
+        crate::ui::draw_field_frame_bar(&mut f, bx, page.fields[i], zone_bar(page.fields[i], v), (false, false));
         crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     f.px
@@ -139,7 +139,7 @@ fn main_screen(sim: &mut Sim, app: &App, usb: UsbDot) -> Vec<u16> {
     let values = [(Field::WeekKm, "--"), (Field::WeekH, "--"), (Field::TotalKm, "--"), (Field::Temp, temp.as_str())];
     for (i, (field, v)) in values.into_iter().enumerate() {
         let bx = crate::ui::overview_box(i).unwrap();
-        crate::ui::draw_field_frame(&mut f, bx, field);
+        crate::ui::draw_field_frame(&mut f, bx, field, (false, false));
         crate::ui::draw_field_value(&mut f, bx, v, crate::ui::WHITE);
     }
     f.px
