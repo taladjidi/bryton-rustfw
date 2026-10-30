@@ -644,3 +644,121 @@ fn pan_after_zoom_in_moves_with_the_finger() {
     assert_eq!(app.map_centre, centre, "not panned");
     assert_consistent(&sim, &app);
 }
+
+/// HEADING UP (SETTINGS > DISPLAY > MAP): riding west over the synthetic basemap the top of the map turns to the
+/// course in 22.5 degree steps (the wiggle of the ride keeps it within a step either side), the basemap, the track
+/// and the arrow turn together (the arrow still points up), a red north arrow shows, and the panel equals the
+/// screenshot; stopped, the orientation is kept whatever the course says; NORTH UP is the map as before.
+#[test]
+fn map_heading_up_turns_the_map() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.settings.map_up = true;
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 100_000);
+    assert!((11..=13).contains(&app.track.rot()), "riding west: the top points west, 270 degrees: {}", app.track.rot());
+    assert_eq!(app.map_view(0).unwrap().rot, app.track.rot(), "the map shows it");
+    assert_consistent(&sim, &app);
+    sim.save("map_heading_up");
+    let red = sim.screen.iter().filter(|&&p| p == 0xf800).count();
+    assert!(red > 20, "the north arrow: {red} px");
+    let area = crate::map::area(ui::field_box(1, ui::RIDE_H, 0).unwrap());
+    let (x, y) = app.map_view(0).unwrap().px(area, app.track.pos().unwrap());
+    assert_eq!(sim.screen[(y as u32 * W + x as u32) as usize], ui::WHITE, "the arrow at the position");
+    // stopped: the course is noise, the orientation stays
+    let rot = app.track.rot();
+    sim.gnss.fix = Some(300);
+    run(&mut sim, &mut app, 60_000);
+    assert_eq!(app.track.rot(), rot, "stopped: kept");
+    // NORTH UP again: the next fix turns it back, and no north arrow
+    app.settings.map_up = false;
+    run(&mut sim, &mut app, 3000);
+    assert_eq!((app.track.rot(), app.map_view(0).unwrap().rot), (0, 0));
+    assert_consistent(&sim, &app);
+    assert_eq!(sim.screen.iter().filter(|&&p| p == 0xf800).count(), 0, "no north arrow");
+}
+
+/// What a step of HEADING UP costs on the panel, on the full-page map with a basemap: the map is drawn whole at each
+/// new step (once per view, like a re-centre), and nothing more than the usual small boxes between them. The
+/// wiggle of the ride and the 3 fix hold keep the steps few.
+#[test]
+fn map_heading_up_step_cost() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = crate::fat::tests::image();
+    sim.gnss.route = Some(tiles_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    app.set_map_memory(crate::tiles::tests::memory());
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    app.settings.map_up = true;
+    sim.gnss.fix = Some(8000);
+    run(&mut sim, &mut app, 20_000);
+    let (t0, mut steps, mut step_px, mut other_px) = (sim.ms, 0u64, 0u64, 0u64);
+    while sim.ms < t0 + 400_000 {
+        let (rot, px) = (app.track.rot(), sim.pixels);
+        run(&mut sim, &mut app, u64::from(POLL_MS));
+        if app.map_view(0).is_some_and(|v| v.rot != rot) {
+            steps += 1;
+            step_px += sim.pixels - px;
+        } else {
+            other_px += sim.pixels - px;
+        }
+    }
+    let s = (sim.ms - t0) / 1000;
+    std::println!(
+        "heading up: {steps} steps in {s} s, {} px a step (the map is {}), {} px/s between",
+        step_px / steps.max(1),
+        240 * 296,
+        other_px / s
+    );
+    assert!(steps > 0 && steps < 40, "{steps} steps");
+    assert!(step_px / steps.max(1) < 240 * 296 * 2, "a step draws the map once");
+    assert_consistent(&sim, &app);
+}
+
+/// A pinch on the full-page map steps its zoom like "+" and "-": fingers apart one level finer, together one level
+/// coarser; a pinch on a page without a full map does nothing; the first finger's tap or swipe does not fire.
+#[test]
+fn map_pinch_zooms() {
+    let pinch = |t0: u64, from: u16, to: u16| {
+        move |ms: u64| {
+            let k = ms.checked_sub(t0).filter(|&k| k < 700)?;
+            let d = i64::from(from) + (i64::from(to) - i64::from(from)) * k.min(300) as i64 / 300;
+            Some((d as u16, k))
+        }
+    };
+    let (a, b) = (pinch(100_000, 60, 100), pinch(106_000, 100, 40));
+    let f1 = move |ms: u64| a(ms).or(b(ms)).map(|_| (60u16, 200u16));
+    let f2 = move |ms: u64| a(ms).or(b(ms)).map(|(d, _)| (60 + d, 200u16));
+    let mut sim = Sim::new(9, 0, 0).finger(f1).finger2(f2);
+    sim.gnss.route = Some(ride_route);
+    sim.classic_pages();
+    let mut app = App::start(&mut sim, None);
+    for _ in 0..3 {
+        app.press(&mut sim, Press::Short(Key::Page));
+    }
+    sim.gnss.fix = Some(500);
+    let left = 99_000 - sim.ms;
+    run(&mut sim, &mut app, left);
+    let v0 = app.map_view(0).unwrap();
+    assert_eq!(app.map_zoom, None);
+    run(&mut sim, &mut app, 3000); // fingers 60 to 100 apart: 1.67 times
+    let level = app.map_zoom.expect("apart: zoomed in");
+    assert_eq!(crate::map::mpp16(level + 1), v0.mpp16, "one level finer");
+    assert_eq!(app.screen(), Screen::Ride(2), "no tap, no page change");
+    assert_consistent(&sim, &app);
+    sim.save("map_pinch_in");
+    run(&mut sim, &mut app, 5000); // 100 to 40: 0.4 times, two pinches of 1.5 times
+    assert_eq!(app.map_zoom, Some(level + 2), "together: two levels coarser");
+    assert_eq!(app.screen(), Screen::Ride(2));
+    assert_consistent(&sim, &app);
+}

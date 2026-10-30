@@ -912,6 +912,9 @@ stock's reads match. Read on the unit on 2026-10-23 (below).
   after the driver (`tools/dev.py info`). Not checked yet (needs a finger): that INT goes low while a finger is down,
   and the axes (expected: x 0 at the left, y 0 at the top, as the panel; to check, hold a finger near the top left
   corner and run `tools/i2c.py --touch read 0x55 0x12 3`: small x and y, valid bit set).
+- **Two fingers:** the points are 4-byte slots from 0x12 (the second at 0x16), and 0x3f says 5 contacts, so a pinch
+  is possible; the firmware reads 7 bytes (two slots) while a finger is down. Two fingers on the unit are
+  **inferred, not seen** (docs/status.md).
 - **Gestures:** none from the chip (register 0x10, gesture type, exists only on the ST1615 per the protocol doc;
   stock never reads it). Stock recognises them in software (Embedded Wizard handlers): tap, hold, slide (scrolling
   lists), wipe. Its page swipe (`Ui_OnTouchReleaseDetectSwipe` 0xd017c894): on release, if the drag was over 10 px

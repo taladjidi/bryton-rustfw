@@ -246,6 +246,10 @@ pub enum Field {
     ClimbTime,
     /// The distance left to the end of the segment, or to the top of the climb.
     ClimbLeft,
+    /// Left / right torque effectiveness, percent: how well the pedal stroke is applied (power meter page 0x13).
+    TorqueEff,
+    /// Left / right pedal smoothness, percent, or the one combined value a meter gives (page 0x13).
+    PedalSmooth,
     // the battery's drain (drivers/battery.rs). Appended, as above.
     /// The time left on the battery, "45M" under an hour, "9.5H", then "12H"; "--" on the charger or before the drain
     /// is measured.
@@ -255,7 +259,7 @@ pub enum Field {
 impl Field {
     /// Every field, in the order the page menu cycles through them; the index is kept in a byte
     /// ([`crate::PageCfg`]), so new ones go at the end.
-    pub const ALL: [Field; 109] = {
+    pub const ALL: [Field; 111] = {
         use Field::*;
         [
             Time,
@@ -366,6 +370,8 @@ impl Field {
             SegHead,
             ClimbTime,
             ClimbLeft,
+            TorqueEff,
+            PedalSmooth,
             BattHrs,
         ]
     };
@@ -486,6 +492,8 @@ impl Field {
             "SEGMENT",
             "ELAPSED",
             "LEFT",
+            "TE L/R",
+            "PS L/R",
             "BATT HRS",
         ];
         LABELS[self as usize]
@@ -542,7 +550,7 @@ impl Field {
             "88:88", "888", "88:88", "888", "888", "888", "888", "8888", "8888", "8888", "8888", "88.88", "88.88",
             "888", "888", "88", "88", "88:88", "88:88", "888", "888", "888", "888", "888", "88/88", "WW", "88:88",
             "88:88", "88:88|88", "88:88|88", "88:88", "100%", "CRIT", "CRIT", "88888.8", "88888.8", "88888.8", "888.8",
-            "888.8", "", "88:88", "88.8|KM", "8.8H",
+            "888.8", "", "88:88", "88.8|KM", "888/888", "888/888", "8.8H",
         ];
         WIDEST[self as usize]
     }
@@ -630,6 +638,8 @@ pub const FIELD_GROUPS: [(&str, &[Field]); 11] = {
                 PowerZone,
                 PowerZoneTime,
                 BalanceAvg,
+                TorqueEff,
+                PedalSmooth,
                 PowerBatt,
             ],
         ),

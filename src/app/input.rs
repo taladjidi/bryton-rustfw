@@ -468,6 +468,16 @@ impl App {
                 self.map_whole = !self.map_whole;
                 return self.update_page(b);
             }
+            // a pinch on a ride page with a full-size map zooms it a level as "+" and "-" do (fingers apart: in)
+            (Screen::Ride(_), Input::Touch(Gesture::Pinch(apart))) => {
+                if let Some(level) =
+                    self.page_map().and_then(|(a, m)| map::buttons(a).and_then(|_| map::zoom(&m, apart)))
+                {
+                    self.map_zoom = Some(level);
+                    return self.update_page(b);
+                }
+                return;
+            }
             // a tap on the map's "+" or "-" zooms (only the map is drawn again, at its new view)
             (Screen::Ride(_), Input::Touch(Gesture::Tap(..))) if zoom.is_some() => {
                 if let Some(z) = zoom {
@@ -891,9 +901,9 @@ pub(crate) fn sample_touch(
     if !ok || !(always || r.down() || b.touch_int()) {
         return (None, false);
     }
-    let mut buf = [0; 3];
-    let p = if b.touch_read(touch::REG_POINT, &mut buf) { touch::point(buf) } else { None };
-    (r.feed(p, dt_ms), p.is_some())
+    let mut buf = [0; 7]; // the first two point slots: a pinch needs both
+    let [p, q] = if b.touch_read(touch::REG_POINT, &mut buf) { touch::points(buf) } else { [None, None] };
+    (r.feed2(p, q, dt_ms), p.is_some())
 }
 
 /// (`x`, `y`) is in box (left, top, width, height).

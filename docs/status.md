@@ -8,6 +8,10 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Torque effectiveness and pedal smoothness (drivers/sensors.rs page 0x13, the TE L/R and PS L/R fields)**: sim only.
+  The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
+  pair it, pedal for a few minutes with the TE L/R box on screen; a value means it sends 0x13, "--" all ride means it
+  does not (or its bytes are 0xff, one-sided). Then note which, here.
 - **BATT HRS (sim only)**: the time left on the battery, from the drain of the last 20 minutes (drivers/battery.rs). Still to see: on a real ride from full, its value against the strip's percent over the first hour (the drain it reports should match the percent the strip loses, 1 h of ride to about 5 to 10 % at a riding draw, as `tools/dev.py bat` logs it), the value shown at 10 minutes (the first "--" ending) and while the unit is on the charger ("--"), and "--" on the idle overview, where the drain is under 3.4 % an hour until the cell has dropped.
 - **QUICK STATUS (sim only)**: a tap on a plain field of a ride page opens six chosen fields. Still to see: the tap on a wet or gloved finger (a stray tap only opens a read-only overlay, 10 s), the six values updating each second, the picker in PAGES > QUICK FIELDS, and the choice kept after a restart (settings.bin bytes 158 to 164).
 
@@ -384,6 +388,14 @@ A feature not listed here was seen on the unit.
   on the card, with Alpha1 from a real strap; `tools/sync.py` against the real Intervals.icu and Strava (DFA a1
   charted from the upload), and the workouts it writes listed in WORKOUTS (and by stock, which may want the `.json`
   beside them).
+- **Map HEADING UP and PINCH (DISPLAY > MAP, touch.rs `feed2`)**: sim only. Still to see on the unit:
+  - heading up: on a ride, the top follows the course in steps, stays put at a stop, the red north arrow points the
+    right way; the time awake of one step (`tools/dev.py info`, DWT cycle counter). The sim says one map redraw of
+    79 k panel pixels about every 18 s on a winding ride. On an IGN view add `raster_turned`: about 25 cycles a pixel
+    over the tiles' boxes, so about 2.5 M cycles (6 ms at 400 MHz), estimated by counting operations (two divisions
+    a row, then adds), not measured;
+  - two fingers (pinch): whether the chip reports both (slot 2 at 0x16, inferred from the protocol doc and 0x3f = 5)
+    and a pinch steps the zoom one level; the second finger must show in 2 samples in a row.
 - **IGN maps** (`\Rustfw\Maps`): the packs found, a view drawn from them, its time (simulated: one index sector and
   about 45 sectors of tile data per tile, at most 6 tiles, so about 150 KB a view change, as stock's basemap; the
   decoding is 87 us a tile on the computer, about 3 to 6 ms on the unit with the D-cache off, inferred), the

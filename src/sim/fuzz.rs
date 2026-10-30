@@ -393,6 +393,38 @@ fn power_calibration_pages() {
     assert!(zero > 500 && auto > 500 && done > 50, "reached: {zero} {auto} {done}");
 }
 
+/// Random power meter pages (0x10, 0x12 and 0x13 mixed, the pedal smoothness combined with 0xfe, invalid bytes, a short
+/// page with bytes 6-7 zero) into the decoder: no panic, a torque or smoothness kept only as a percent (at most 200),
+/// and the torque page reached (its count over the seeds).
+#[test]
+fn power_pages_mixed() {
+    use crate::sensors::{Decoders, Kind, Live, Metric};
+    let (mut torque, mut combined) = (0, 0);
+    for seed in 13..=16u32 {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        let v: std::vec::Vec<u8> = bytes(seed, 1 << 16).collect();
+        for c in v.chunks_exact(9) {
+            let mut d: [u8; 8] = core::array::from_fn(|i| c[i]);
+            d[0] = [0x10, 0x12, 0x13][usize::from(c[8]) % 3];
+            if d[0] == 0x13 && c[8] & 0x08 != 0 {
+                d[5] = 0xfe;
+            }
+            if c[8] & 0x40 != 0 {
+                d[6] = 0;
+                d[7] = 0;
+            }
+            live.tick(1000); // values age out within 5 messages
+            dec.decode(Kind::Power, d, 2105, &mut live);
+            for m in [Metric::TorqueL, Metric::TorqueR, Metric::SmoothL, Metric::SmoothR, Metric::SmoothC] {
+                assert!(live.get(m).is_none_or(|v| v <= 200), "{m:?} {:?}", live.get(m));
+            }
+            torque += usize::from(live.get(Metric::TorqueL).is_some() && d[0] == 0x13);
+            combined += live.get(Metric::SmoothC).is_some() as usize;
+        }
+    }
+    assert!(torque > 1000 && combined > 100, "reached: {torque} {combined}");
+}
+
 /// Random bytes from the computer, with command words mixed in, into the dev link protocol.
 #[test]
 fn dev_link_input() {
@@ -5246,3 +5278,48 @@ fn settings_file_time_zone_bytes() {
 
 /// Where TIME ZONE is in the settings data.
 const TZ_AT: usize = 165;
+
+/// The two-finger decode (touch.rs `points`, `Recogniser::feed2`): random 7-byte slot pairs through `points`, and
+/// random landings, moves and lifts of two fingers through the recogniser. Never a panic; once a pinch has been
+/// given, the fingers' release gives no tap, swipe or drag; the fuzz reaches pinches both ways, lone-finger gestures
+/// and a second finger lifted first.
+#[test]
+fn two_finger_gestures() {
+    use crate::touch::{Gesture, Recogniser, points};
+    let (mut apart, mut together, mut taps, mut lone) = (0, 0, 0, 0);
+    for seed in 1..=40u32 {
+        let noise: Vec<u8> = bytes(seed, 4096).collect();
+        for c in noise.chunks_exact(7).take(100) {
+            let [p, q] = points([c[0], c[1], c[2], c[3], c[4], c[5], c[6]]);
+            assert!(p.is_some() || q.is_none(), "a lone second finger is given first");
+        }
+        let mut r = Recogniser::default();
+        let (mut a, mut b) = ((120u16, 160u16), (180u16, 160u16));
+        let mut pinched = false;
+        for c in noise.chunks_exact(4) {
+            let step = |v: u16, d: u8| (i32::from(v) + i32::from(d % 41) - 20).clamp(0, 239) as u16;
+            (a, b) = ((step(a.0, c[0]), step(a.1, c[1])), (step(b.0, c[2].wrapping_mul(3)), step(b.1, c[3])));
+            let down = |m: u8, k: u8| m % 16 >= k; // each finger is down most of the time, in runs
+            let (pa, pb) = (down(c[0] >> 4, 3).then_some(a), down(c[2] >> 4, 5).then_some(b));
+            let g = r.feed2(pa, pb, 20);
+            match g {
+                Some(Gesture::Pinch(out)) => {
+                    pinched = true;
+                    if out { apart += 1 } else { together += 1 }
+                }
+                Some(Gesture::Tap(..) | Gesture::Swipe(_)) => {
+                    assert!(!pinched, "seed {seed}: no tap or swipe after a pinch");
+                    taps += 1;
+                }
+                _ => {}
+            }
+            lone += usize::from(pa.is_some() && pb.is_none());
+            if !r.down() {
+                pinched = false;
+                assert_eq!(r.take_drag().filter(|_| false), None);
+            }
+        }
+    }
+    std::println!("two-finger fuzz: {apart} apart, {together} together, {taps} taps and swipes, {lone} lone samples");
+    assert!(apart > 20 && together > 20 && taps > 20 && lone > 100, "the fuzz reaches both pinches and single fingers");
+}

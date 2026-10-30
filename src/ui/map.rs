@@ -1,4 +1,6 @@
-//! The map: the ride's track (breadcrumbs from the GNSS fixes), the position and heading as an arrow, north up,
+//! The map: the ride's track (breadcrumbs from the GNSS fixes), the position and heading as an arrow, north up
+//! (or heading up, [`Track::orient`]: the plane is turned about the view's centre in 22.5 degree steps, `View::px`
+//! for the track, the course and the arrow, [`crate::tiles`] for the basemap, a red north arrow top left),
 //! scaled to fit the whole track, with a scale bar. A ride page field ([`crate::ui::Field::Map`]), so it can fill a
 //! page or share one with values.
 //!
@@ -93,10 +95,28 @@ pub enum Button {
 }
 /// The view is fitted again when the position comes this close to the map's edge (pixels).
 const MARGIN: i32 = 20;
+/// HEADING UP turns the map only above this speed, mm/s (3.6 km/h).
+pub const TURN_MM_S: u32 = 1_000;
+/// ... and when the heading is this many degrees from the step shown (a step is 22.5, so 11.25 is where the nearest
+/// step changes; the margin beyond it stops a heading on the border from flipping).
+pub const TURN_DEG: i32 = 18;
+/// ... and at least this many fixes after the last step.
+pub const TURN_FIXES: u8 = 3;
 /// The arrow's length from its centre to its tip (pixels).
 const ARROW: i32 = 9;
 /// sin of the 16 compass directions (22.5 degrees apart, clockwise from north), x 256.
 const SIN16: [i32; 16] = [0, 98, 181, 237, 256, 237, 181, 98, 0, -98, -181, -237, -256, -237, -181, -98];
+
+/// cos and sin x 256 of map step `rot` (22.5 degrees clockwise from north, `View::rot`), exact at 0, 90, 180 and 270.
+///
+/// ```
+/// use bryton_rustfw::map::rot_cs;
+/// assert_eq!([0, 4, 8, 12].map(rot_cs), [(256, 0), (0, 256), (-256, 0), (0, -256)]);
+/// ```
+pub fn rot_cs(rot: u8) -> (i32, i32) {
+    let r = usize::from(rot % 16);
+    (SIN16[(r + 4) % 16], SIN16[r])
+}
 
 /// A rectangle in screen pixels, signed so shapes may start off it: x, y, width, height.
 pub type Rect = (i32, i32, i32, i32);
@@ -174,6 +194,11 @@ pub struct Track {
     /// The last position and heading of motion (degrees x 1e-5).
     pos: Option<(i32, i32)>,
     heading: i32,
+    /// HEADING UP is on ([`Track::orient`]) and the direction the map's top points to, in 22.5 degree steps clockwise
+    /// from north (0: north up). The step changes only after [`TURN_FIXES`] fixes and a turn past [`TURN_DEG`].
+    up: bool,
+    rot: u8,
+    still: u8,
     /// The position is the last one known from an earlier power-up ([`Track::seed`]), not a fix yet.
     stale: bool,
     /// Everything the track went through: south-west and north-east corners.
@@ -198,6 +223,9 @@ impl Track {
             thinned: 0,
             pos: None,
             heading: 0,
+            up: false,
+            rot: 0,
+            still: TURN_FIXES,
             stale: false,
             min: (0, 0),
             max: (0, 0),
@@ -256,6 +284,41 @@ impl Track {
         }
     }
 
+    /// HEADING UP (`up`) or NORTH UP, from a good fix's heading (degrees x 1e-5) and speed (mm/s). The map's top turns
+    /// to the heading in 22.5 degree steps ([`rot_cs`]) and keeps its orientation below [`TURN_MM_S`] (stopped, the
+    /// course is noise). A new step needs the heading more than [`TURN_DEG`] from the one shown and
+    /// [`TURN_FIXES`] fixes since the last step, so a bend does not redraw the basemap every second.
+    ///
+    /// ```
+    /// use bryton_rustfw::map::Track;
+    /// let mut t = Track::new();
+    /// t.orient(true, 9_000_000, 5_000); // riding east
+    /// assert_eq!(t.rot(), 4, "the top points east: 90 degrees");
+    /// t.orient(true, 0, 0);
+    /// assert_eq!(t.rot(), 4, "stopped: kept");
+    /// t.orient(false, 0, 5_000);
+    /// assert_eq!(t.rot(), 0, "NORTH UP");
+    /// ```
+    pub fn orient(&mut self, up: bool, heading: i32, speed_mm_s: u32) {
+        self.up = up;
+        self.still = self.still.saturating_add(1);
+        if !up {
+            self.rot = 0;
+        } else if speed_mm_s >= TURN_MM_S && self.still >= TURN_FIXES {
+            let to = Arrow::dir(heading) as u8;
+            // degrees x 1e-5 between the heading and the step shown, 0..=18_000_000
+            let off = (heading.rem_euclid(36_000_000) - i32::from(self.rot) * 2_250_000).rem_euclid(36_000_000);
+            if to != self.rot && off.min(36_000_000 - off) > TURN_DEG * 100_000 {
+                (self.rot, self.still) = (to, 0);
+            }
+        }
+    }
+
+    /// The map's top as a step of 22.5 degrees clockwise from north (0 under NORTH UP).
+    pub fn rot(&self) -> u8 {
+        self.rot
+    }
+
     /// A ride read back from its file is whole: its end is shown as a dot (no heading), as a last known position.
     pub fn end(&mut self) {
         self.stale = self.pos.is_some();
@@ -288,6 +351,8 @@ pub struct View {
     pub(crate) cx: i32,
     pub(crate) cy: i32,
     pub(crate) mpp16: i64,
+    /// The direction the top of the map points to, in 22.5 degree steps clockwise from north (0: north up).
+    pub(crate) rot: u8,
 }
 
 impl View {
@@ -325,7 +390,7 @@ impl View {
         let (sx, sy) = (i64::from(max.0) - i64::from(min.0), i64::from(max.1) - i64::from(min.1));
         let fits = |m: i64| sx * 16 / m <= fw && sy * 16 / m <= fh;
         let mpp16 = (FIT_LEVEL..MAX_LEVEL).map(mpp16).find(|&m| fits(m)).unwrap_or(mpp16(MAX_LEVEL));
-        Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16 })
+        Some(View { cx: (i64::from(min.0) + sx / 2) as i32, cy: (i64::from(min.1) + sy / 2) as i32, mpp16, rot: 0 })
     }
 
     /// The view of `track` in `area` at `mpp16`, zoomed in: centred a quarter of the map ahead of the rider (behind
@@ -334,15 +399,20 @@ impl View {
     pub fn follow(track: &Track, area: Rect, mpp16: i64) -> Option<View> {
         let p = track.pos?;
         let ahead = if track.stale { 0 } else { i64::from(area.2.min(area.3) / 4) * mpp16 / 16 };
-        let dir = Arrow::dir(track.heading);
+        // heading up, "ahead" is the top of the map, which may lag the heading by a step
+        let dir = if track.up { usize::from(track.rot) } else { Arrow::dir(track.heading) };
         let at = |s: i32| (i64::from(s) * ahead / 256) as i32;
-        Some(View { cx: p.0 + at(SIN16[dir]), cy: p.1 + at(SIN16[(dir + 4) % 16]), mpp16 })
+        Some(View { cx: p.0 + at(SIN16[dir]), cy: p.1 + at(SIN16[(dir + 4) % 16]), mpp16, rot: track.rot })
     }
 
     /// Where point `p` (metres) falls on screen.
     pub(crate) fn px(&self, area: Rect, p: (i32, i32)) -> (i32, i32) {
-        let px = |d: i32| (i64::from(d) * 16).div_euclid(self.mpp16) as i32;
-        (area.0 + area.2 / 2 + px(p.0 - self.cx), area.1 + area.3 / 2 - px(p.1 - self.cy))
+        // rotated about the view's centre (x256, exact at rot 0: 256 d / 256 = d), then metres to pixels
+        let (c, s) = rot_cs(self.rot);
+        let (dx, dy) = (i64::from(p.0) - i64::from(self.cx), i64::from(p.1) - i64::from(self.cy));
+        let (c, s) = (i64::from(c), i64::from(s));
+        let px = |m256: i64| (m256 * 16).div_euclid(self.mpp16 * 256) as i32;
+        (area.0 + area.2 / 2 + px(dx * c - dy * s), area.1 + area.3 / 2 - px(dx * s + dy * c))
     }
 
     /// Zoomed in, the arrow is still in the middle three fifths of the map: no need to centre again.
@@ -380,7 +450,7 @@ impl Arrow {
     /// The arrow for the track's last position.
     fn of(view: &View, area: Rect, track: &Track) -> Option<Arrow> {
         let (x, y) = view.px(area, track.pos?);
-        Some(Arrow { x, y, dir: Self::dir(track.heading), stale: track.stale })
+        Some(Arrow { x, y, dir: (Self::dir(track.heading) + 16 - usize::from(view.rot % 16)) % 16, stale: track.stale })
     }
 
     /// The nearest of the 16 directions to `heading` (degrees x 1e-5).
@@ -433,7 +503,7 @@ impl Shown {
         let zoomed = zoomed(area, fit, zoom);
         let centre = zoom.and_then(|z| z.centre).filter(|_| zoomed.is_some());
         let view = match (zoomed, centre) {
-            (Some(mpp16), Some((cx, cy))) => Some(View { cx, cy, mpp16 }),
+            (Some(mpp16), Some((cx, cy))) => Some(View { cx, cy, mpp16, rot: track.rot }),
             (Some(m), None) => View::follow(track, area, m),
             _ if follow => View::follow(track, area, default_mpp16(area)),
             _ => fit,
@@ -518,6 +588,9 @@ pub fn pan(
 ) -> Option<(i32, i32)> {
     let v = shown.view.filter(|_| shown.zoomed)?;
     let m = |px: i32| (i64::from(px) * v.mpp16 / 16) as i32;
+    // the finger's move in the plane's axes (x256 turned back by the map's step; the identity at rot 0)
+    let (c, s) = rot_cs(v.rot);
+    let (dx, dy) = ((dx * c - dy * s) / 256, (dx * s + dy * c) / 256);
     let (min, max) = match route.and_then(Route::bounds) {
         Some((a, b)) => ((a.0.min(track.min.0), a.1.min(track.min.1)), (b.0.max(track.max.0), b.1.max(track.max.1))),
         None => (track.min, track.max),
@@ -766,7 +839,10 @@ pub fn draw(
     if let Some(r) = route {
         let o = r.off;
         for (i, b) in r.boxes.iter().enumerate() {
-            let ((x0, y0), (x1, y1)) = (v.px(area, (b.0 + o.0, b.3 + o.1)), v.px(area, (b.2 + o.0, b.1 + o.1)));
+            // the box's four corners: rotated, its screen box is theirs
+            let cs = [(b.0, b.1), (b.2, b.1), (b.0, b.3), (b.2, b.3)].map(|q| v.px(area, (q.0 + o.0, q.1 + o.1)));
+            let (x0, x1) = (cs.iter().map(|q| q.0).min().unwrap_or(0), cs.iter().map(|q| q.0).max().unwrap_or(0));
+            let (y0, y1) = (cs.iter().map(|q| q.1).min().unwrap_or(0), cs.iter().map(|q| q.1).max().unwrap_or(0));
             if x1 + 2 < k.0 || x0 >= k.0 + k.2 || y1 + 2 < k.1 || y0 >= k.1 + k.3 {
                 continue;
             }
@@ -789,6 +865,12 @@ pub fn draw(
         }
     }
     scale_bar(&mut c, k, area, &v);
+    if v.rot != 0 {
+        // heading up: where north is, a red arrow with a black outline, left under "NO MAP"'s line
+        let n = Arrow { x: area.0 + 20, y: area.1 + 40, dir: (16 - usize::from(v.rot % 16)) % 16, stale: false };
+        triangle(&mut c, k, n.corners(ARROW + 3), ui::BLACK);
+        triangle(&mut c, k, n.corners(ARROW), 0xf800);
+    }
     match Arrow::of(&v, area, track) {
         Some(a) if a.stale => {
             // the last known position: a grey dot with a black outline, no direction
@@ -857,7 +939,12 @@ pub fn refit(
         return true;
     }
     let centre = zoom.and_then(|z| z.centre);
-    match zoomed(area, View::fit(track, area, route), zoom) {
+    let zoomed = zoomed(area, View::fit(track, area, route), zoom);
+    // the fit stays north up; a followed or zoomed view turns to the track's step (one basemap per step)
+    if v.rot != if zoomed.is_some() || follow { track.rot } else { 0 } {
+        return true;
+    }
+    match zoomed {
         Some(m) if !shown.zoomed || v.mpp16 != m || shown.panned != centre.is_some() => true,
         Some(_) => centre.map_or(!v.follows(area, track), |c| c != (v.cx, v.cy)),
         None if shown.followed => shown.zoomed || !v.follows(area, track),
@@ -1022,10 +1109,94 @@ mod tests {
         assert_eq!(View::fit(&Track::new(), area, None), None);
     }
 
+    /// HEADING UP: a point north of the rider is straight up in NORTH UP, and turns with the map's step otherwise
+    /// (riding east, north is to the left; west, to the right; backwards, down), exactly at 0, 90, 180 and 270 degrees;
+    /// the rider stays at the centre of the view; the arrow of a rider on course points up.
+    #[test]
+    fn heading_up_turns_the_plane() {
+        let area = (0, 0, 240, 296);
+        let at = |rot: u8, p: (i32, i32)| View { cx: 0, cy: 0, mpp16: 16, rot }.px(area, p);
+        let c = (120, 148);
+        assert_eq!(at(0, (0, 50)), (c.0, c.1 - 50), "north up: north is up");
+        assert_eq!(at(0, (50, 0)), (c.0 + 50, c.1), "east is right");
+        assert_eq!(at(4, (50, 0)), (c.0, c.1 - 50), "riding east: east is up");
+        assert_eq!(at(4, (0, 50)), (c.0 - 50, c.1), "north is left");
+        assert_eq!(at(8, (0, 50)), (c.0, c.1 + 50), "riding south: north is down");
+        assert_eq!(at(12, (0, 50)), (c.0 + 50, c.1), "riding west: north is right");
+        assert_eq!(at(12, (-50, 0)), (c.0, c.1 - 50), "west is up");
+        for rot in 0..16 {
+            assert_eq!(at(rot, (0, 0)), c, "the centre stays");
+        }
+        // a 45 degree step: north-east is up
+        let (x, y) = at(2, (71, 71));
+        assert!((x - c.0).abs() <= 2 && (y - (c.1 - 100)).abs() <= 2, "{x} {y}");
+        // the arrow of a rider on course points up whatever the step; one 90 degrees off points sideways
+        let mut t = Track::new();
+        t.add(0, 0, 9_000_000);
+        t.orient(true, 9_000_000, 5_000);
+        let v = View::follow(&t, area, 16).unwrap();
+        assert_eq!(Arrow::of(&v, area, &t).unwrap().dir, 0, "on course: up");
+        t.heading = 18_000_000;
+        assert_eq!(Arrow::of(&v, area, &t).unwrap().dir, 4, "heading south while the map's top is east: right");
+    }
+
+    /// A drag moves the map with the finger whatever step the map is turned to: finger up moves the content up, and
+    /// at rot 4 (top east) up is east, so the centre goes west; at 12 east; at 8 (top south) north; at 0 south.
+    #[test]
+    fn pan_follows_the_finger_turned() {
+        let area = (0, 0, 240, 296);
+        let mut t = Track::new();
+        t.add(0, 0, 0);
+        for (rot, want) in [(0, (0, -50)), (4, (-50, 0)), (8, (0, 50)), (12, (50, 0))] {
+            let v = View { cx: 0, cy: 0, mpp16: 16, rot };
+            let shown = Shown { zoomed: true, view: Some(v), ..Shown::default() };
+            assert_eq!(pan(&t, area, None, &shown, (0, -50)), Some(want), "rot {rot}, finger up");
+        }
+        let v = View { cx: 0, cy: 0, mpp16: 16, rot: 4 };
+        let shown = Shown { zoomed: true, view: Some(v), ..Shown::default() };
+        assert_eq!(
+            pan(&t, area, None, &shown, (50, 0)),
+            Some((0, 50)),
+            "rot 4, finger right: the top is east, so the centre goes north"
+        );
+    }
+
+    /// The step rule: a few degrees do not turn the map, nor a turn before 3 fixes have passed, nor a stop; a bigger
+    /// turn does, after the hold, and the rule goes the short way across north.
+    #[test]
+    fn heading_up_step_rule() {
+        let mut t = Track::new();
+        t.orient(true, 9_000_000, 5_000);
+        assert_eq!(t.rot(), 4);
+        for h in [9_300_000, 8_700_000, 9_500_000, 8_500_000, 10_000_000, 8_000_000] {
+            t.orient(true, h, 5_000);
+            assert_eq!(t.rot(), 4, "{h}: within 18 degrees of the step: kept");
+        }
+        t.orient(true, 12_000_000, 5_000);
+        assert_eq!(t.rot(), 5, "30 degrees off, held long enough: the next step");
+        t.orient(true, 18_000_000, 5_000);
+        assert_eq!(t.rot(), 5, "held for 3 fixes");
+        t.orient(true, 18_000_000, 5_000);
+        t.orient(true, 18_000_000, 500);
+        assert_eq!(t.rot(), 5, "slow: kept");
+        t.orient(true, 18_000_000, 5_000);
+        assert_eq!(t.rot(), 8);
+        // across north: 350 degrees from 10
+        let mut t = Track::new();
+        t.orient(true, 1_000_000, 5_000);
+        assert_eq!(t.rot(), 0);
+        t.orient(true, 35_000_000, 5_000);
+        assert_eq!(t.rot(), 0, "350 degrees is 10 off north: kept");
+        for _ in 0..3 {
+            t.orient(true, 34_000_000, 5_000);
+        }
+        assert_eq!(t.rot(), 15, "340 is 20 off: the step west of north");
+    }
+
     /// "+" and "-" step one level from the one shown, within MIN_LEVEL (1.5 m) and MAX_LEVEL, whatever the fit.
     #[test]
     fn zoom_levels() {
-        let at = |mpp16| Shown { view: Some(View { cx: 0, cy: 0, mpp16 }), ..Shown::default() };
+        let at = |mpp16| Shown { view: Some(View { cx: 0, cy: 0, mpp16, rot: 0 }), ..Shown::default() };
         assert_eq!(mpp16(MIN_LEVEL), 24, "1.5 m a pixel");
         assert_eq!(zoom(&at(32), true), Some(1), "2 m: 1.5 m");
         assert_eq!(zoom(&at(32), false), Some(3), "2 m: 3 m");
@@ -1044,7 +1215,7 @@ mod tests {
         let all = [plus, minus, centre];
         assert!(all.iter().all(|r| r.2 == 48 && r.3 == 48 && r.0 + r.2 <= 240 && r.1 + r.3 <= 24 + 296));
         assert!(all.windows(2).all(|w| w[1].1 - (w[0].1 + w[0].3) >= 8), "{all:?}");
-        let shown = Shown { zoomed: true, view: Some(View { cx: 0, cy: 0, mpp16: 16 }), ..Shown::default() };
+        let shown = Shown { zoomed: true, view: Some(View { cx: 0, cy: 0, mpp16: 16, rot: 0 }), ..Shown::default() };
         let at = |r: Rect, dy| button_at(area, &shown, r.0 + 10, r.1 + dy);
         assert_eq!(
             [at(plus, 10), at(minus, 10), at(centre, 10)],

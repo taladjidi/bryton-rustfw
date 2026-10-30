@@ -133,6 +133,8 @@ pub enum Setting {
     /// ZONE (DISPLAY), the time zone: CLOCK (the RTC shown as is) or a zone, UTC - 12:00 to + 14:00 in quarter hours (a number,
     /// `tz`; app/clock.rs).
     TimeZone,
+    /// MAP (DISPLAY): NORTH UP or HEADING UP.
+    MapUp,
     /// SUMMER TIME (DISPLAY): OFF, EU or US, with a TIME ZONE ([`crate::Dst`]).
     DaylightSaving,
     /// The font of every text: PIXEL (dot matrix, the default) or BARLOW ([`crate::fonts::smooth`]).
@@ -299,6 +301,7 @@ impl Setting {
             Setting::DateFormat => "DATE FORMAT",
             Setting::TimeZone => "ZONE",
             Setting::DaylightSaving => "SUMMER TIME",
+            Setting::MapUp => "MAP",
             Setting::PowerMatch => "POWER MATCH",
             Setting::Lthr => "LTHR",
             Setting::ZonesBy => "ZONES BY",
@@ -863,7 +866,7 @@ pub const ALERTS: [Row; 15] = [
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.
-pub const DISPLAY: [Row; 13] = [
+pub const DISPLAY: [Row; 14] = [
     Row::Set(Setting::Light),
     Row::Set(Setting::LightOff),
     Row::Set(Setting::Touch),
@@ -875,6 +878,7 @@ pub const DISPLAY: [Row; 13] = [
     Row::Set(Setting::DateFormat),
     Row::Set(Setting::TimeZone),
     Row::Set(Setting::DaylightSaving),
+    Row::Set(Setting::MapUp),
     Row::Set(Setting::Temp),
     Row::Set(Setting::Sound),
 ];
