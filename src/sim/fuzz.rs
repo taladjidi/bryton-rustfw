@@ -5005,3 +5005,29 @@ fn lap_lists() {
         "{laps} laps, {full} with time and speed, {with_power} with power or hr"
     );
 }
+
+/// SUNSET ALERT (settings.bin byte 155, after DATE FORMAT): any length from 152 to 157 and any byte read as the module
+/// doc says (a byte under 4 is the choice, another value or a file cut before it reads OFF). The fuzz reaches a choice,
+/// a wild byte and a file cut before the byte.
+#[test]
+fn settings_file_sunset_byte() {
+    use crate::SettingsCopy;
+    let mut next = xorshift(0x5a1e);
+    let (mut choice, mut wild, mut short) = (0u32, 0u32, 0u32);
+    for _ in 0..20_000 {
+        let mut sec = SettingsCopy { seq: 1, words: [0; 4], settings: crate::Settings::from_word(0) }.to_sector();
+        let len = 152 + (next() % 6) as usize; // 152..=157
+        let byte = (next() % 9) as u8; // 0..=3 the choices, 4..=8 wild
+        sec[28 + 155] = byte;
+        sec[6..8].copy_from_slice(&(len as u16).to_le_bytes());
+        let crc = crate::inflate::crc32(sec[..508].iter().copied());
+        sec[508..].copy_from_slice(&crc.to_le_bytes());
+        let st = SettingsCopy::from_sector(&sec).expect("a whole copy").settings;
+        let want = if len > 155 && byte < 4 { usize::from(byte) } else { 0 };
+        assert_eq!(st.sunset_alert, want, "len {len}, byte {byte}");
+        choice += u32::from(len > 155 && byte < 4);
+        wild += u32::from(len > 155 && byte >= 4);
+        short += u32::from(len <= 155);
+    }
+    assert!(choice > 1000 && wild > 1000 && short > 1000, "{choice} {wild} {short}");
+}

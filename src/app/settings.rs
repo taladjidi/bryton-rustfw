@@ -328,6 +328,8 @@ pub struct Settings {
     /// READY CHECK (BIKE): a new ride's start shows the GPS, sensors and battery for 3 s (data 151); ON in a file that
     /// predates it.
     pub ready_check: bool,
+    /// SUNSET ALERT: an index into [`SUNSET_LEAD_MIN`]; 0 (OFF) in a file that predates it. Kept in settings.bin only.
+    pub sunset_alert: usize,
     /// CLIMBS (BIKE): the climbs ahead are MEDIUM+ (category 3 and harder, a score of 16000 or more) or all of them
     /// (data 152); ALL in a file that predates it.
     pub climbs_medium: bool,
@@ -404,6 +406,9 @@ impl Settings {
 
 /// The big power value's window, seconds, as POWER SMOOTH offers them: the live reading, then 3, 5 and 10 s.
 pub const POWER_SMOOTH_S: [u32; 4] = [1, 3, 5, 10];
+
+/// SUNSET ALERT's choices, minutes before the sunset (0: off); the banner says it once a ride.
+pub const SUNSET_LEAD_MIN: [u16; 4] = [0, 15, 30, 60];
 
 impl Settings {
     /// The theme's name as the menu shows it.
@@ -543,6 +548,7 @@ impl Settings {
             sound: true,
             start_reminder: true,
             ready_check: true,
+            sunset_alert: 0,
             climbs_medium: false,
             climb_page: true,
             date_fmt: DateFormat::Dmy,
@@ -812,6 +818,13 @@ impl Settings {
             Setting::Sound => l.push_str(if self.sound { "ON" } else { "OFF" }),
             Setting::StartReminder => l.push_str(if self.start_reminder { "ON" } else { "OFF" }),
             Setting::ReadyCheck => l.push_str(if self.ready_check { "ON" } else { "OFF" }),
+            Setting::SunsetAlert => match SUNSET_LEAD_MIN.get(self.sunset_alert).copied().unwrap_or(0) {
+                0 => l.push_str("OFF"),
+                m => {
+                    l.push_u32(u32::from(m));
+                    l.push_str(" MIN");
+                }
+            },
             Setting::ClimbsMedium => l.push_str(if self.climbs_medium { "MEDIUM+" } else { "ALL" }),
             Setting::ClimbPage => l.push_str(if self.climb_page { "ON" } else { "OFF" }),
             Setting::DateFormat => l.push_str(match self.date_fmt {
@@ -949,6 +962,7 @@ impl Settings {
             Setting::ClimbPage => self.climb_page = !self.climb_page,
             Setting::DateFormat => self.date_fmt = self.date_fmt.next(),
             Setting::ReadyCheck => self.ready_check = !self.ready_check,
+            Setting::SunsetAlert => self.sunset_alert = (self.sunset_alert + 1) % SUNSET_LEAD_MIN.len(),
             Setting::ZonesBy => self.zones_lthr = !self.zones_lthr,
             Setting::ZonesReset => self.zone_custom = false,
             Setting::Sex => self.female = !self.female,
