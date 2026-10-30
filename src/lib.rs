@@ -710,7 +710,7 @@ impl App {
             self.update_media(b);
             self.redraw_ms = 0;
         }
-        if self.screen == Screen::Quick && self.redraw_ms >= app::QUICK_STEP_MS {
+        if self.screen == Screen::Quick && self.redraw_ms + 10 >= app::QUICK_STEP_MS {
             self.update_quick(b);
             self.redraw_ms = 0;
         }

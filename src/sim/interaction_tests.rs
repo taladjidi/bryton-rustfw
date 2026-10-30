@@ -254,8 +254,8 @@ fn the_quick_panel_shows_only_what_is_paired() {
     sim.save("quick_panel_empty");
 }
 
-/// A title wider than its box scrolls (a step every 250 ms, a hold at each end) and redraws only its own box; a
-/// title that fits never moves.
+/// A title wider than its box scrolls (a step every 250 ms, a hold at each end) and redraws its own box; a title that
+/// fits never moves.
 #[test]
 fn a_long_title_scrolls_and_a_short_one_does_not() {
     use crate::touch::Dir;
@@ -263,21 +263,42 @@ fn a_long_title_scrolls_and_a_short_one_does_not() {
     swipe(&mut app, &mut sim, Dir::Down);
     run(&mut sim, &mut app, 1500);
     assert_eq!(app.quick_text(0).0.as_str(), "Song");
-    let px = sim.pixels;
     run(&mut sim, &mut app, 5000);
-    let quiet = sim.pixels - px;
     let at = sim.ms + 100;
     let song = Act::Track("A VERY LONG SONG TITLE THAT OVERFLOWS", "Band");
     sim.nordic.phone.as_mut().unwrap().script.push((at, song));
     run(&mut sim, &mut app, 1000);
-    let first = std::string::String::from(app.quick_text(0).0.as_str());
+    // the 4th sensor line under the power block, paired under the open panel (the shape changes: a full redraw)
+    app.radio.sensors[Kind::Cadence as usize] = Sensor::Paired(SensorId { device: 13, trans: 1 });
+    run(&mut sim, &mut app, 1000);
+    assert_eq!(app.quick_shape(), 1 << 7 | 4);
     super::tests::assert_consistent(&sim, &app);
-    let px = sim.pixels;
-    run(&mut sim, &mut app, 4000);
-    let later = std::string::String::from(app.quick_text(0).0.as_str());
-    assert_ne!(first, later, "the visible text moved");
-    assert!(sim.pixels - px > quiet, "the scroll redraws its box");
-    run(&mut sim, &mut app, 30_000);
+    // a step every 250 ms: the panel is whole after each, a step is small, a hold sends nothing
+    let (mut first, mut moved, mut held, mut big) = (std::string::String::new(), false, 0, 0);
+    for step in 0..80 {
+        let px = sim.pixels;
+        run(&mut sim, &mut app, 250);
+        let spent = sim.pixels - px;
+        // a step is the title's 224 x 20 box (and the odd value); the rare big one is the strip's minute or the like
+        big += usize::from(spent >= 2 * 224 * 20);
+        super::tests::assert_consistent(&sim, &app);
+        let text = std::string::String::from(app.quick_text(0).0.as_str());
+        if step == 0 {
+            first = text.clone();
+        }
+        moved |= text != first;
+        held += usize::from(spent < 224 * 20);
+    }
+    assert!(moved, "the visible text moved");
+    assert!(big <= 3, "{big} steps cost over {} px", 2 * 224 * 20);
+    assert!(held >= 10, "the holds and the seconds between send nothing ({held} quiet steps)");
+    assert!(app.quick_scroll.1 > 8);
+    // the same title with another artist starts over
+    let at = sim.ms + 100;
+    let song = Act::Track("A VERY LONG SONG TITLE THAT OVERFLOWS", "Other");
+    sim.nordic.phone.as_mut().unwrap().script.push((at, song));
+    run(&mut sim, &mut app, 1000);
+    assert!(app.quick_scroll.1 <= 5, "restarted: {}", app.quick_scroll.1);
     super::tests::assert_consistent(&sim, &app);
 }
 

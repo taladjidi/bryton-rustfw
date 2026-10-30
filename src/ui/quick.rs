@@ -8,14 +8,14 @@ use super::{ACCENT, BLACK, Canvas, DARK, GREY, LABEL, PAGE_Y, RED, Rect, WHITE};
 use crate::text::{self, Align, Style};
 
 /// Now playing: the title, then the artist, one line each.
-pub const TITLE_Y: u32 = PAGE_Y + 4;
+pub const TITLE_Y: u32 = PAGE_Y;
 /// See [`TITLE_Y`].
-pub const ARTIST_Y: u32 = TITLE_Y + 16;
+pub const ARTIST_Y: u32 = TITLE_Y + 20;
 /// The media buttons, 44 px high: the transport row (previous, play / pause, next, 72 wide with 8 px between), then
 /// the volume row (two halves, 8 px between), so a thumb on a bike cannot hit the neighbour.
 pub const MEDIA: [(Button, u32, u32, u32, u32); 5] = {
-    const Y: u32 = ARTIST_Y + 18;
-    const VY: u32 = Y + 44 + 6;
+    const Y: u32 = ARTIST_Y + 20;
+    const VY: u32 = Y + 44 + 4;
     [
         (Button::Prev, 4, Y, 72, 44),
         (Button::Play, 84, Y, 72, 44),
@@ -45,7 +45,7 @@ pub const ROWS_WITH_POWER: usize = 4;
 /// A sensor line's name, value and battery boxes (x, width).
 pub const SENSOR_BOXES: [(u32, u32); 3] = [(4, 84), (92, 108), (202, 38)];
 /// The brightness row: the two buttons (44 px high), the level between.
-pub const BRIGHT_Y: u32 = 274;
+pub const BRIGHT_Y: u32 = 276;
 /// Darker and brighter.
 pub const BRIGHT: [(u32, u32, u32, u32); 2] = [(8, BRIGHT_Y, 64, 44), (168, BRIGHT_Y, 64, 44)];
 /// The level between the buttons: x, y, width.
@@ -185,7 +185,14 @@ mod tests {
         assert!(BRIGHT[0].1 + BRIGHT[0].3 <= super::super::H, "the brightness row fits");
         assert!(SENSORS_Y[0] + ROWS_WITH_POWER as u32 * ROW <= BRIGHT_Y, "four sensor lines with the power block");
         assert!(SENSORS_Y[1] + ROWS as u32 * ROW <= BRIGHT_Y, "six without");
-        assert!(POWER_Y + 44 <= SENSORS_Y[0] && ARTIST_Y + 14 <= MEDIA[0].2 && MEDIA[4].2 + 44 <= POWER_Y);
+        assert!(SENSORS_Y[0] + (ROWS_WITH_POWER as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell");
+        assert!(SENSORS_Y[1] + (ROWS as u32 - 1) * ROW + 20 <= BRIGHT_Y, "the last 20 px cell, no power");
+        assert!(
+            POWER_Y + 44 <= SENSORS_Y[0]
+                && TITLE_Y + 20 <= ARTIST_Y
+                && ARTIST_Y + 20 <= MEDIA[0].2
+                && MEDIA[4].2 + 44 <= POWER_Y
+        );
         for (i, a) in MEDIA.iter().enumerate() {
             for m in &MEDIA[i + 1..] {
                 assert!(a.1 + a.3 <= m.1 || m.1 + m.3 <= a.1 || a.2 + a.4 <= m.2 || m.2 + m.4 <= a.2, "no overlap");
@@ -224,6 +231,9 @@ mod tests {
         assert_eq!(at(end + HOLD as u32 - 1), &long[last..], "held at the end");
         assert_eq!(at(end + HOLD as u32), long, "wrapped");
         let utf = "\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}\u{c9}";
+        let mixed = "AB\u{20ac}\u{20ac}CD\u{20ac}EFGHIJKLMNOP";
+        assert!((0..60).all(|t| window(mixed, w, t).len() <= mixed.len()));
+        assert!((0..60).all(|t| window(mixed, 5, t).len() <= mixed.len()), "narrower than a glyph: no panic");
         assert!((0..60).all(|t| window(utf, w, t).chars().all(|c| c == '\u{c9}')));
     }
 

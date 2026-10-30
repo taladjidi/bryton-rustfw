@@ -11,7 +11,8 @@
 //! whose fingerprint changed, each in its own fixed box. A title or artist wider than its box scrolls (ui::quick::window):
 //! `QUICK_STEP_MS` is one step, 4 characters a second: readable, and the idle pass (250 ms, `IDLE_POLL_MS`) is the
 //! slowest the loop wakes, so a faster step would only be skipped. The window is part of the box's fingerprint, so a
-//! step redraws that one 224 x 14 box, and text that fits never moves.
+//! step redraws the title's 224 x 20 box (the artist's only when its own text moves), and text that fits never moves.
+//! Each text cell is 20 px high: the lines are 20 px apart, so a box never clears the one below.
 
 use crate::*;
 use phone::Media;
@@ -45,7 +46,8 @@ impl App {
         matches!(self.radio.sensors.get(Kind::Power as usize), Some(Sensor::Paired(_)))
     }
 
-    /// The paired sensors with a line (the power meter has its block), at most [`q::ROWS`], [`q::ROWS_WITH_POWER`] under the block.
+    /// The paired sensors with a line (the power meter has its block), at most [`q::ROWS`], or
+    /// [`q::ROWS_WITH_POWER`] under the block.
     fn quick_kinds(&self) -> impl Iterator<Item = Kind> + '_ {
         Kind::ALL
             .into_iter()
@@ -147,9 +149,9 @@ impl App {
     }
 
     /// Box `i`'s text and colour, for the text boxes.
-    pub(crate) fn quick_text(&self, i: usize) -> (Line<24>, u16) {
-        let mut l = Line::<24>::new();
-        let put = |l: &mut Line<24>, s: &str| l.push_str(s);
+    pub(crate) fn quick_text(&self, i: usize) -> (Line<72>, u16) {
+        let mut l = Line::<72>::new(); // a window of up to 18 characters of up to 4 bytes
+        let put = |l: &mut Line<72>, s: &str| l.push_str(s);
         let color = match i {
             B_TITLE | B_ARTIST => {
                 let n = self.media_now();
@@ -252,11 +254,16 @@ impl App {
                 }
             };
         }
-        // The label font's cell is 20 px high, taller than the 16 px step between the lines: a box redrawn alone clears
-        // the top of the one below (and the artist's the buttons'), so each box also changes with the one above it: a scroll step
-        // redraws the title, the artist and the buttons (about 16 k px, 4 times a second, while a long title scrolls).
-        p[B_ARTIST] = fnv(p[B_ARTIST], &p[B_TITLE].to_le_bytes()) | 1;
-        p[B_MEDIA] = fnv(p[B_MEDIA], &p[B_ARTIST].to_le_bytes()) | 1;
+        // A sensor line is 16 px apart but its text cell is 20 px high: redrawing line k's name or value clears the top
+        // of line k + 1's, so line k + 1's box changes with line k's (drawn after it, in index order).
+        for k in 1..q::ROWS {
+            for part in 0..2 {
+                let (cur, up) = (B_ROWS + 3 * k + part, B_ROWS + 3 * (k - 1) + part);
+                if p[cur] != 0 && p[up] != 0 {
+                    p[cur] = fnv(p[cur], &p[up].to_le_bytes()) | 1;
+                }
+            }
+        }
         p
     }
 
@@ -311,7 +318,6 @@ impl App {
 
     /// What the panel shows has been drawn: the fingerprints and the shape to compare with.
     pub(crate) fn quick_drawn(&mut self) {
-        self.quick_scroll = (0, 0); // the panel was drawn from the start of both lines (the track is compared next step)
         (self.quick_shown, self.quick_shape) = (self.quick_prints(), self.quick_shape());
     }
 
