@@ -105,8 +105,13 @@ impl App {
         }
         self.switches_changed(b);
         // the menu is the moved page's now, and its list selects it
-        if let Screen::Menu(Menu::Page(_), sel) = self.screen {
-            self.screen = Screen::Menu(Menu::Page(m), sel);
+        if let Screen::Menu(Menu::Page(_), _) = self.screen {
+            // the same op's row if the moved page still has it, else the other direction, else SHOW
+            let want = if up { [menu::PageOp::Up, menu::PageOp::Down] } else { [menu::PageOp::Down, menu::PageOp::Up] };
+            let at = want.into_iter().chain([menu::PageOp::Show]).find_map(|o| {
+                (0..self.rows(Menu::Page(m))).find(|&r| self.row(Menu::Page(m), r) == Some(menu::Row::PageOp(m, o)))
+            });
+            self.screen = Screen::Menu(Menu::Page(m), at.unwrap_or(0));
         }
         if let Some(Screen::Menu(l @ Menu::PageList(_), _)) =
             self.depth.checked_sub(1).and_then(|d| self.under.get(d)).copied()
@@ -133,7 +138,7 @@ impl App {
         }
     }
 
-    /// An input while a name is typed: Page and Prev (the swipes up and down) change the character, Start (a tap)
+    /// An input while a name is typed: Next and Prev (the swipes up and down) change the character, Start (a tap)
     /// goes to the next one, the last or Back ends. True while still typing.
     pub(crate) fn rename_input(&mut self, b: &mut impl Board, i: Input) -> bool {
         let Some((n, at)) = self.sw.rename else { return false };

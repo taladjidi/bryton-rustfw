@@ -4,6 +4,7 @@ use super::menu_tests::to_row;
 use super::page_tests::{file, press, reboot, started};
 use super::*;
 use crate::page::{Meta, Saved};
+use crate::ui::Field;
 
 /// The menu of road page `n` (PAGES > ROAD PAGES > the page), by the keys.
 fn open_page_menu(sim: &mut Sim, app: &mut App, n: usize) {
@@ -200,6 +201,55 @@ fn auto_scroll_turns_pages_by_itself() {
     app.screen = Screen::Ride(CLIMB);
     run(&mut sim, &mut app, 12_000);
     assert_eq!(app.screen(), Screen::Ride(CLIMB));
+}
+
+/// A rename left behind by a closed menu never captures the next menu's keys.
+#[test]
+fn a_stale_rename_is_dropped() {
+    let (mut sim, mut app) = started();
+    open_page_menu(&mut sim, &mut app, 0);
+    to_row(&mut sim, &mut app, menu::Row::PageOp(0, menu::PageOp::Rename));
+    press(&mut sim, &mut app, Key::Start);
+    assert!(app.sw.rename.is_some());
+    app.leave_menus(); // out by another way than Back
+    app.press(&mut sim, Press::Long(Key::Page));
+    press(&mut sim, &mut app, Key::Page);
+    assert!(app.sw.rename.is_none());
+    assert_eq!(app.sw.meta.names[0], [b' '; 4], "nothing typed into the name");
+    assert!(matches!(app.screen(), Screen::Menu(Menu::Main, 1)), "{:?}", app.screen());
+}
+
+/// MOVE keeps the row of the same op on the moved page, else the other direction (never a second move or a rename).
+#[test]
+fn a_move_keeps_its_row() {
+    let (mut sim, mut app) = started();
+    open_page_menu(&mut sim, &mut app, 1);
+    to_row(&mut sim, &mut app, menu::Row::PageOp(1, menu::PageOp::Up));
+    press(&mut sim, &mut app, Key::Start);
+    let Screen::Menu(Menu::Page(0), sel) = app.screen() else { panic!("{:?}", app.screen()) };
+    assert_eq!(app.row(Menu::Page(0), sel), Some(menu::Row::PageOp(0, menu::PageOp::Down)), "page 0 has no MOVE UP");
+}
+
+/// Registers that win over the file's pages: its names and OFF bits go (they would sit on other pages).
+#[test]
+fn names_do_not_follow_pages_the_registers_changed() {
+    let (mut sim, mut app) = started();
+    app.sw.meta.names[1] = *b"HILL";
+    app.sw.meta.off = 0b100;
+    app.pages_changed(&mut sim);
+    run(&mut sim, &mut app, 400);
+    assert_eq!(file(&sim).unwrap().meta.name(1), "HILL");
+    let p = page::Page::preset(
+        3,
+        [Field::Hr, Field::Power, Field::Cadence, Field::Time, Field::Time, Field::Time, Field::Time, Field::Time],
+    )
+    .unwrap();
+    app.pages[0] = p;
+    app.pages_changed(&mut sim);
+    app.power_off(&mut sim);
+    let (_, app2) = reboot(&mut sim);
+    assert_eq!(app2.pages()[0], p);
+    assert_eq!(app2.sw.meta, Meta::DEFAULT);
 }
 
 /// A swipe up on a ride page shows its MORE variant, a second one goes home (the overview).

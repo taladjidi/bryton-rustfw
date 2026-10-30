@@ -322,6 +322,7 @@ impl App {
         let boot = self.store.boot;
         let mut list: [Option<Page>; PAGES] = core::array::from_fn(|i| (i < s.count).then_some(s.pages[i]));
         let mut more_in = s.more;
+        let mut meta_ok = true; // names and OFF bits belong to the file's pages
         if self.store.newer || (boot != s.words && boot != s.was) {
             // changes the file did not get (a switch-off before it was written), or another build changed the
             // registers since: the registers' pages win where they differ from the file's
@@ -332,6 +333,7 @@ impl App {
                     && let Some(slot) = list.get_mut(i)
                 {
                     let page = Page::from_cfg(c);
+                    meta_ok &= *slot == page;
                     if *slot != page
                         && let Some(m) = more_in.get_mut(i)
                     {
@@ -344,7 +346,7 @@ impl App {
         } else if boot != s.words {
             self.save_page_registers_from(b, &s); // cut between the file and the registers: put right
         }
-        self.sw.meta = s.meta;
+        self.sw.meta = if meta_ok { s.meta } else { page::Meta { auto: s.meta.auto, ..page::Meta::DEFAULT } };
         self.indoor = s.indoor.unwrap_or_else(page::Set::indoor_default);
         self.mtb = s.mtb.unwrap_or_else(page::Set::mtb_default);
         self.set_shown = self.ride_profile(); // the pages on screen are drawn below

@@ -635,6 +635,13 @@ impl App {
 
     /// A menu: a number being edited, the rows (Page and Prev, the swipes, a tap, Start) and Back.
     fn input_menu(&mut self, b: &mut impl Board, i: Input, armed: Option<(Menu, usize)>, shown: Seen) {
+        // a rename left behind (the menu closed by a touch or a pop) never captures another menu's input
+        if let Some((n, _)) = self.sw.rename
+            && !matches!(self.screen, Screen::Menu(Menu::Page(m), _) if m == n)
+        {
+            self.sw.rename = None;
+            self.pages_changed(b);
+        }
         match (self.screen, i) {
             (Screen::Menu(menu, sel), _) if self.sw.rename.is_some() => {
                 self.rename_input(b, i);
