@@ -418,7 +418,13 @@ MENU
   to repeat, Start to keep. A choice (BRIGHTNESS, OFF AFTER, TOUCH, WHEEL) goes to its next value.
 - **SYSTEM:** USB DRIVE (below), IMPORT FROM STOCK (stock's settings, below), GPS (fix, satellites, position,
   altitude, UTC), BLE devices nearby, the built-in sensors' readings, ABOUT (Ferris, the version, the commit the
-  build is made from and its date; `tools/dev.py info` gives the same commit).
+  build is made from and its date; `tools/dev.py info` gives the same commit; the notices of the map data, "(c)
+  OpenStreetMap contributors (ODbL)", "(c) OpenMapTiles", "(c) IGN (Plan IGN v2, Etalab 2.0)", and the font's, "BARLOW,
+  SIL OFL 1.1"; drawn once when it opens), STORAGE (the card: TOTAL and FREE from the volume, FREE shows FSInfo's count with a
+  "~" (only a hint: stale after a power cut) until the FAT is counted over the passes, then the counted value, RIDES in `\Activities`, then the five oldest by name, each as its
+  day and size; a tap opens the ride's HISTORY card, where DELETE is). STORAGE is read only, a pass at a time while the
+  screen is open and no ride runs or waits to be saved (`--` until then, or while the card is lent to the computer);
+  DELETE restarts the count.
 - **Where the rows were** before this tree (2026-10-25), old path -> new path: SENSORS > LUX / TEMP C / HPA -> SYSTEM >
   BUILT IN; RIDER > MAX HR, FTP W, WEIGHT KG, W' KJ -> SETTINGS > ME > MAX HR, FTP, WEIGHT, W'; RIDER > WKT POWER ->
   DISPLAY > GAUGE POWER; DEVICE > LIGHT % / LIGHT OFF / TOUCH -> DISPLAY > BRIGHTNESS / OFF AFTER / TOUCH; DEVICE >

@@ -364,6 +364,10 @@ pub enum Row {
     BtFound(usize),
     /// Opens ABOUT: the firmware's version and commit, and Ferris.
     About,
+    /// A figure of STORAGE (the survey's value, storage/volume.rs): no action.
+    Storage(StorageRow),
+    /// STORAGE's oldest ride `k`: its date and size; Select opens its HISTORY card, where DELETE is.
+    OldRide(usize),
     /// FROM GPS: Select averages the receiver's altitude for 30 s and calibrates the barometer to it.
     AltGps,
     /// The USB drive: Select lends the card to the computer, or takes it back (app/drive.rs).
@@ -427,6 +431,12 @@ impl Row {
             Row::Nearby => "BLE NEARBY",
             Row::BtTrainer => "BT TRAINER",
             Row::About => "ABOUT",
+            Row::Storage(s) => match s {
+                StorageRow::Total => "TOTAL",
+                StorageRow::Free => "FREE",
+                StorageRow::Rides => "RIDES",
+            },
+            Row::OldRide(_) => return None,
             Row::AltGps => "FROM GPS",
             Row::Drive => "USB DRIVE",
             Row::GiveUpSave => "GIVE UP SAVE",
@@ -706,12 +716,13 @@ pub const BIKE: [Row; 12] = [
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.
-pub const SYSTEM: [Row; 7] = [
+pub const SYSTEM: [Row; 8] = [
     Row::Drive,
     Row::Stock(StockRow::Import),
     Row::Open(Menu::Gps),
     Row::Nearby,
     Row::Open(Menu::BuiltIn),
+    Row::Open(Menu::Storage),
     Row::About,
     Row::Set(Setting::AutoOff),
 ];
@@ -763,6 +774,29 @@ pub const EDIT_ROWS: [EditRow; 9] = {
     use EditRow::*;
     [Field, SplitAcross, SplitDown, Merge, Taller, Shorter, Undo, AddPage, DeletePage]
 };
+
+/// The figures of STORAGE (SYSTEM > STORAGE), each read by the card's survey (storage/volume.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageRow {
+    /// The volume's size.
+    Total,
+    /// Its free space.
+    Free,
+    /// The rides in \Activities.
+    Rides,
+}
+
+/// STORAGE: the figures, then the oldest rides (their rows are left out while the card has fewer).
+pub const STORAGE: [Row; 8] = [
+    Row::Storage(StorageRow::Total),
+    Row::Storage(StorageRow::Free),
+    Row::Storage(StorageRow::Rides),
+    Row::OldRide(0),
+    Row::OldRide(1),
+    Row::OldRide(2),
+    Row::OldRide(3),
+    Row::OldRide(4),
+];
 
 /// The built-in sensors' readings (SYSTEM > BUILT IN).
 pub const BUILT_IN: [Reading; 3] = [Reading::Lux, Reading::TempC, Reading::Hpa];
