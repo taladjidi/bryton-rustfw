@@ -243,7 +243,10 @@ What each file holds. The rules (what goes where, the `App` budget, the `Board` 
   logic; step S2, fed by `app/segments.rs`.
 - `src/app/segments.rs`: the live segments on the unit (docs/segments.md, "On the unit"; step S3): the index of `\Rustfw\Segments\`
   read 8 headers a pass, the matcher fed once a second during a ride, the active segment loaded from its file in 1 KB reads, what
-  the screens (S4) read (`segment_now`, `events`). Nothing drawn, nothing written.
+  the screens read (`segment_now`, `events`). Nothing drawn, nothing written.
+- `src/app/segment_ui.rs`: the live segment screens' glue (step S4): the banners for the matcher's events, the SEGMENT page opened
+  at a start and closed at the end, the result card, the SEGMENTS menu's list rows (headers read from the card).
+- `src/ui/segment.rs`: the SEGMENT page (character cells redrawn when they change, the bar's marks) and the result card.
   start, progress by `course::nearest_by`, lost, finish) and the ghost's `target_s` / `delta_s`. Pure logic; step S2,
   nothing on the unit calls it yet.
 - `src/nav/sun.rs`: the sun's rise and set at a place and date (NOAA's solar calculator, Meeus's equations; cited in the

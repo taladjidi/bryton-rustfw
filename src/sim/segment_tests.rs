@@ -6,6 +6,7 @@ use super::tests::run; // not the parent's `run`, which the glob would give
 use super::*;
 use crate::segment::tests::synth;
 use crate::segment_match::{Event, tests::at};
+use std::string::{String, ToString};
 
 const ID: u32 = 4_000_000_001;
 const CODES: [[u8; 2]; 5] = [*b"07", *b"05", *b"06", *b"12", *b"13"];
@@ -215,4 +216,278 @@ fn segment_ends_with_the_ride() {
     app.end_ride();
     run(&mut sim, &mut app, 2000);
     assert!(app.segment_now().is_none());
+}
+
+fn slower(ms: u64) -> (i32, i32, i32) {
+    east(ms, 4.0)
+}
+
+/// Pixels of `color` in the delta's box (the page's big line).
+fn in_delta_box(sim: &Sim, color: u16) -> usize {
+    let (y0, y1) = (ui::PAGE_Y + 26, ui::PAGE_Y + 90);
+    (y0..y1).map(|y| (0..ui::W).filter(|&x| sim.screen[(y * ui::W + x) as usize] == color).count()).sum()
+}
+
+/// Rides `route` for `seconds`, one second at a time, and collects the banners said and the screens visited.
+fn watch(route: fn(u64) -> (i32, i32, i32), seconds: u64) -> (Sim, App, Vec<String>, Vec<Screen>) {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(route);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let (mut banners, mut screens) = (Vec::<String>::new(), Vec::<Screen>::new());
+    for _ in 0..seconds {
+        run(&mut sim, &mut app, 1000);
+        if app.notes.ms.is_some() && banners.last().map(String::as_str) != Some(app.notes.text.as_str()) {
+            banners.push(app.notes.text.as_str().to_string());
+        }
+        if screens.last() != Some(&app.screen()) {
+            screens.push(app.screen());
+        }
+    }
+    (sim, app, banners, screens)
+}
+
+/// The approach banner with the name, the page over the ride page, the finish banner and the card, then back.
+#[test]
+fn page_banners_card_and_back() {
+    let (mut sim, mut app, banners, screens) = watch(faster, 240);
+    assert!(banners.iter().any(|b| b == "SEGMENT Test climb 300 M"), "{banners:?}");
+    let fin = banners.iter().find(|b| b.starts_with("SEGMENT 2:")).unwrap_or_else(|| panic!("{banners:?}"));
+    assert!(fin.contains(" -0:"), "ahead: {fin}");
+    assert_eq!(screens.iter().filter(|s| **s == Screen::Segment).count(), 1, "{screens:?}");
+    assert_eq!(screens.last(), Some(&Screen::SegmentResult), "{screens:?}");
+    sim.save("segment_card");
+    app.press(&mut sim, Press::Short(Key::Page)); // any key
+    run(&mut sim, &mut app, 500);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "{:?}", app.screen());
+    // the card closes by itself after 10 s
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    run(&mut sim, &mut app, 11_000);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "{:?}", app.screen());
+}
+
+/// Ahead is green, behind is the accent, never red; the sign is in the text.
+#[test]
+fn delta_sign_and_colour() {
+    let (sim, app, ..) = watch(faster, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    assert!(app.segment_now().unwrap().delta_s.unwrap() < 0);
+    sim.save("segment_ahead");
+    assert!(in_delta_box(&sim, ui::GREEN) > 100 && in_delta_box(&sim, ui::ACCENT) == 0);
+    let (sim, app, ..) = watch(slower, 140);
+    assert_eq!(app.screen(), Screen::Segment);
+    assert!(app.segment_now().unwrap().delta_s.unwrap() > 0);
+    sim.save("segment_behind");
+    assert!(in_delta_box(&sim, ui::ACCENT) > 100 && in_delta_box(&sim, ui::GREEN) == 0);
+    assert_eq!(in_delta_box(&sim, ui::RED), 0);
+}
+
+/// LIVE SEGMENTS off: no event, no page, no banner. A key dismisses the page and it does not come back.
+#[test]
+fn off_and_dismissed() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    app.settings.live_segments = false;
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    run(&mut sim, &mut app, 200_000);
+    assert!(events(&app).is_empty() && !matches!(app.screen(), Screen::Segment | Screen::SegmentResult));
+    let (mut sim, mut app, ..) = watch(pr_pace, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    app.press(&mut sim, Press::Short(Key::Page));
+    run(&mut sim, &mut app, 5000);
+    assert!(matches!(app.screen(), Screen::Main | Screen::Ride(_)), "dismissed");
+}
+
+/// The page's second costs a few boxes, not a screen (docs/devloop.md: pixels a second).
+#[test]
+fn page_redraw_cost() {
+    let (mut sim, mut app, ..) = watch(pr_pace, 110);
+    assert_eq!(app.screen(), Screen::Segment);
+    let (px, w0, t0) = (sim.pixels, sim.windows, sim.ms);
+    run(&mut sim, &mut app, 20_000);
+    let (per_s, win_s) = ((sim.pixels - px) * 1000 / (sim.ms - t0), (sim.windows - w0) * 1000 / (sim.ms - t0));
+    std::println!("segment page: {per_s} px/s, {win_s} windows/s");
+    assert!(per_s < 8000, "{per_s} px/s");
+}
+
+/// The SEGMENTS menu: the two settings, the segment with its distance and gain, the skipped files.
+#[test]
+fn segments_menu_lists_the_card() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 9000);
+    app.open(Screen::Menu(Menu::Segments, 2));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 1500);
+    let row = |i| app.menu_row(Menu::Segments, i).map(|(l, v, _)| (l.as_str().to_string(), v.as_str().to_string()));
+    assert_eq!(row(0), Some(("LIVE SEGMENTS".into(), "ON".into())));
+    assert_eq!(row(1), Some(("TARGET".into(), "AUTO".into())));
+    let (name, value) = row(2).unwrap();
+    assert_eq!(name, "Test climb");
+    assert!(value.ends_with('M') && value.contains("K "), "{value}");
+    assert_eq!(row(3), Some(("SKIPPED FILES".into(), "3".into())));
+    assert_eq!(row(4), None);
+    sim.save("segment_menu");
+}
+
+/// Start and Lap on the page and on the card act on the ride; a tap on the page while recording does nothing.
+#[test]
+fn keys_and_taps_on_the_page_and_the_card() {
+    use crate::touch::Gesture;
+    let (mut sim, mut app, ..) = watch(faster, 120);
+    assert_eq!(app.screen(), Screen::Segment);
+    let laps = app.ride.laps();
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, 200)));
+    app.input(&mut sim, Input::NextHeld);
+    assert_eq!(app.screen(), Screen::Segment, "a tap or a held key does not close it");
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!(app.ride.laps(), laps + 1, "Lap on the page is a lap");
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!(app.ride.state(), ride::State::Paused, "Start on the page pauses");
+    // the card: Start and Lap close it and still act
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    app.input(&mut sim, Input::Touch(Gesture::Tap(120, 200)));
+    assert_eq!(app.screen(), Screen::SegmentResult, "a tap does not close the card while recording");
+    let laps = app.ride.laps();
+    app.press(&mut sim, Press::Short(Key::Lap));
+    assert_eq!((app.ride.laps(), app.screen() != Screen::SegmentResult), (laps + 1, true));
+    let (mut sim, mut app, ..) = watch(faster, 240);
+    app.press(&mut sim, Press::Short(Key::Start));
+    assert_eq!((app.ride.state(), app.screen() != Screen::SegmentResult), (ride::State::Paused, true));
+}
+
+/// The page opened over a page that is off by the end (a CLIMB whose climb ended): the finish returns to a live page.
+#[test]
+fn return_to_a_page_that_went() {
+    let (mut sim, mut app, ..) = watch(faster, 120);
+    app.seg_ui.set_prev(Screen::Ride(CLIMB));
+    run(&mut sim, &mut app, 125_000);
+    assert_eq!(app.screen(), Screen::SegmentResult);
+    app.press(&mut sim, Press::Short(Key::Page));
+    assert!(matches!(app.screen(), Screen::Ride(n) if app.page_on(n)), "{:?}", app.screen());
+}
+
+/// A name with a byte past ASCII is cut there, not emptied.
+#[test]
+fn utf8_names_are_cut_not_blanked() {
+    let mut f = synth(20, &CODES);
+    f[0x0d..0x0d + 5].copy_from_slice(&[b'A', b'B', 0xc3, 0xa9, 0]);
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = card(&[("4000000001.seg", f)]);
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut banners = Vec::<String>::new();
+    for _ in 0..110 {
+        run(&mut sim, &mut app, 1000);
+        if app.notes.ms.is_some() && banners.last().map(String::as_str) != Some(app.notes.text.as_str()) {
+            banners.push(app.notes.text.as_str().to_string());
+        }
+    }
+    assert!(banners.iter().any(|b| b == "SEGMENT AB 300 M"), "{banners:?}");
+}
+
+/// The list shows the id and "--" while a ride runs (no header is read then).
+#[test]
+fn list_during_a_ride_shows_the_id() {
+    let (mut sim, mut app, ..) = watch(pr_pace, 20);
+    app.open(Screen::Menu(Menu::Segments, 2));
+    app.show(&mut sim);
+    run(&mut sim, &mut app, 2000);
+    let (l, v, _) = app.menu_row(Menu::Segments, 2).unwrap();
+    assert_eq!((l.as_str(), v.as_str()), ("4000000001", "--"));
+}
+
+/// The approach banner's header read: bytes read in its pass (mount, folder, one sector).
+#[test]
+fn approach_read_cost() {
+    let mut sim = Sim::new(9, 0, 0);
+    sim.emmc.image = good_card();
+    sim.gnss.route = Some(pr_pace);
+    let mut app = App::start(&mut sim, None);
+    app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+    run(&mut sim, &mut app, 8000);
+    sim.gnss.fix = Some(8000);
+    app.press(&mut sim, Press::Short(Key::Start));
+    let mut read = 0;
+    for _ in 0..4000 {
+        let before = sim.emmc.bytes_read;
+        app.step(&mut sim);
+        sim.delay_ms(POLL_MS);
+        if app.notes.ms.is_some() && app.notes.text.as_str().ends_with("300 M") {
+            read = sim.emmc.bytes_read - before;
+            break;
+        }
+    }
+    std::println!("approach banner: its pass reads {read} B");
+    assert!(read > 0 && read < 20_000, "{read}");
+}
+
+/// Random inputs over a ride along the segment, the page and the card up at times: no panic, the ride is not ended,
+/// and both screens were reached.
+#[test]
+fn fuzz_inputs_over_the_page_and_the_card() {
+    use crate::touch::{Dir, Gesture};
+    let (mut page, mut card) = (0u32, 0u32);
+    for seed in 1..=60u32 {
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = good_card();
+        sim.gnss.route = Some(faster);
+        let mut app = App::start(&mut sim, None);
+        app.set_segment_memory(Box::leak(Box::new(Segments::new())));
+        run(&mut sim, &mut app, 8000);
+        sim.gnss.fix = Some(8000);
+        app.press(&mut sim, Press::Short(Key::Start));
+        for _ in 0..330 {
+            run(&mut sim, &mut app, 800);
+            match app.screen() {
+                Screen::Segment => page += 1,
+                Screen::SegmentResult => card += 1,
+                _ => {}
+            }
+            if next() % 6 == 0 {
+                let i = match next() % 12 {
+                    0 => Input::Select,
+                    1 => Input::Prev,
+                    2 => Input::Next,
+                    3 => Input::Back,
+                    4 => Input::Media,
+                    5 => Input::NextHeld,
+                    6 => Input::PrevHeld,
+                    7 => Input::Touch(Gesture::Tap(120, 160)),
+                    8 => Input::Touch(Gesture::Swipe(Dir::Left)),
+                    9 => Input::Touch(Gesture::Swipe(Dir::Right)),
+                    10 => Input::Touch(Gesture::Hold(100, 100)),
+                    _ => Input::Touch(Gesture::Drag(100, 100, 5, 5)),
+                };
+                app.input(&mut sim, i);
+            }
+        }
+        assert_ne!(app.ride.state(), ride::State::Idle, "seed {seed}");
+    }
+    std::println!("segment fuzz: {page} page seconds, {card} card seconds");
+    assert!(page > 100 && card > 20, "{page} {card}");
 }

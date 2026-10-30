@@ -206,6 +206,8 @@ impl App {
             }
             Screen::Quick => self.draw_quick(c),
             Screen::Trainer => self.draw_trainer(c),
+            Screen::Segment => self.draw_segment(c),
+            Screen::SegmentResult => self.draw_segment_result(c),
             Screen::RampResult => self.draw_ramp(c),
             Screen::PowerCal => self.draw_powercal(c),
             Screen::Notif(k, top) => self.draw_notif(c, k, top),
@@ -576,6 +578,9 @@ impl App {
         }
         if self.screen == Screen::Trainer {
             self.trainer_printed();
+        }
+        if self.screen == Screen::Segment {
+            self.segment_printed();
         }
         if self.strip.more != self.strip_shown.more {
             self.update_strip(b); // the MORE marker

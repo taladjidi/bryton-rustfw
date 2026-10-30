@@ -131,6 +131,10 @@ pub enum Setting {
     LapKm,
     /// The moving time of a BY TIME auto lap, minutes.
     LapMin,
+    /// LIVE SEGMENTS: the segments of the card are matched during a ride, on or off (`live_segments`).
+    LiveSegments,
+    /// The effort a live segment is ridden against: AUTO, PR, KOM, QOM or RECENT (`seg_target`).
+    SegTarget,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -243,6 +247,8 @@ impl Setting {
             Setting::Lthr => "LTHR",
             Setting::PowerSmooth => "POWER SMOOTH",
             Setting::AutoLap => "AUTO LAP",
+            Setting::LiveSegments => "LIVE SEGMENTS",
+            Setting::SegTarget => "TARGET",
             Setting::LapKm => "LAP KM",
             Setting::LapMin => "LAP MIN",
             Setting::Font => "FONT",
@@ -406,6 +412,10 @@ pub enum Row {
     Step(usize),
     /// Course `n` of the list ([`crate::storage::course_file::List`]): Select follows it, or stops following it.
     Course(usize),
+    /// Segment `n` of the index (SEGMENTS): name, distance and gain; read only.
+    Seg(usize),
+    /// The files the index skipped (SEGMENTS), the count as the value; read only.
+    SegSkipped,
     /// Group `g` of [`crate::ui::FIELD_GROUPS`]: Select lists its fields.
     Group(usize),
     /// A field of a group: Select puts it in the page's box and goes back to the page's menu.
@@ -480,7 +490,9 @@ impl Row {
             | Row::Workout(_)
             | Row::Step(_)
             | Row::Course(_)
+            | Row::Seg(_)
             | Row::Group(_) => return None,
+            Row::SegSkipped => "SKIPPED FILES",
         })
     }
 }
@@ -641,10 +653,11 @@ pub const FITNESS: [StockRow; 17] = {
     ]
 };
 
-/// The main menu (off a ride): what to ride, what was ridden, then the set-up; six rows, one screen.
-pub const MAIN: [Row; 6] = [
+/// The main menu (off a ride): what to ride (workouts, courses, segments), what was ridden, then the set-up; seven rows, the list scrolls.
+pub const MAIN: [Row; 7] = [
     Row::Open(Menu::Workouts),
     Row::Open(Menu::Courses),
+    Row::Open(Menu::Segments),
     Row::Open(Menu::History),
     Row::Open(Menu::Pages),
     Row::Open(Menu::Sensors),
