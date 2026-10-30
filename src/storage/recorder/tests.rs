@@ -96,7 +96,14 @@ fn sample(t: u32) -> Sample {
         trainer: crate::fit::tests::trainer(t),
         profile: PROFILE.get().0,
         by_hand: PROFILE.get().1,
+        auto_paused: auto_paused(t),
     }
+}
+
+/// Second `t` of the test ride is auto-paused (4 s in every 20, in each lap, before and after any cut): recorded,
+/// out of its lap's averages (fit.rs "Laps").
+fn auto_paused(t: u32) -> bool {
+    t % 20 < 4
 }
 
 /// The strap's beat in second `t` of the test ride, ms: 250 + t, so a file's beats tell which were lost or
@@ -221,6 +228,41 @@ fn saved(img: &[u8], name: &str) -> Result<(Vec<u32>, bool), std::string::String
     }
 }
 
+/// Each lap of the saved file `name` carries the average and maximum heart rate (fields 15, 16) and power (19, 20)
+/// of the file's own records in it (from the lap before's time, excluded, to its own) that were not auto-paused
+/// ([`auto_paused`]), FIT's invalid when none had one: after a cut and a resume too, the lap's sums before the cut
+/// kept in the recovery record. The laps.
+fn laps_match_records(img: &[u8], name: &str, what: &str) -> usize {
+    use crate::fit::tests::field;
+    let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let v = crate::fat::tests::read_all(&mut fat, &mut d, name).unwrap();
+    let m = crate::fit::tests::decode(&v).unwrap();
+    let mut from = 0;
+    let laps: Vec<_> = m.iter().filter(|x| x.0 == 19).collect();
+    for lap in &laps {
+        let to = field(lap, 253).unwrap();
+        let recs: Vec<_> = m
+            .iter()
+            .filter(|x| x.0 == 20)
+            .filter(|x| {
+                field(x, 253).is_some_and(|t| (from + 1..=to).contains(&t) && !auto_paused((t - T0 as u64) as u32))
+            })
+            .collect();
+        for (f, avg, max, none) in [(3, 15, 16, 0xff), (7, 19, 20, 0xffff)] {
+            let x: Vec<u64> = recs.iter().filter_map(|r| field(r, f)).collect();
+            let want = if x.is_empty() {
+                (none, none)
+            } else {
+                (x.iter().sum::<u64>() / x.len() as u64, *x.iter().max().unwrap())
+            };
+            assert_eq!((field(lap, avg), field(lap, max)), (Some(want.0), Some(want.1)), "{what}: lap to {to}, {f}");
+        }
+        from = to;
+    }
+    laps.len()
+}
+
 const SAVED: &str = "Activities/261023100000.fit";
 const SAVED_FULL: &str = "Rustfw/Activities/261023100000.fit";
 
@@ -290,6 +332,44 @@ fn power_cut_at_every_sector_write() {
     power_cut_at_every_sector(Profile::Road, false);
 }
 
+/// The heart rate and power of the saved file `name`'s laps (fields 15, 16, 19, 20).
+fn lap_values(img: &[u8], name: &str) -> Vec<[Option<u64>; 4]> {
+    let mut d = crate::fat::tests::Ram(img.to_vec(), 0);
+    let mut fat = Fat::mount(&mut d).unwrap();
+    let v = crate::fat::tests::read_all(&mut fat, &mut d, name).unwrap();
+    let m = crate::fit::tests::decode(&v).unwrap();
+    m.iter().filter(|x| x.0 == 19).map(|l| [15, 16, 19, 20].map(|n| crate::fit::tests::field(l, n))).collect()
+}
+
+/// A reset in the second lap, whose auto-paused seconds fall before the cut and after the resume ([`auto_paused`]):
+/// the resumed ride's laps carry the same heart rate and power as the ride never cut (the seconds after the last
+/// checkpoint ridden again, the lap's sums before it from the recovery record).
+#[test]
+fn a_resume_mid_lap_keeps_its_averages() {
+    let img = crate::fat::tests::image();
+    let mut whole = Card { img: img.clone(), budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
+    ride(&mut Recorder::new(), &mut whole, 0).unwrap();
+    let want = lap_values(&whole.img, SAVED);
+    assert_eq!(want.len(), 2);
+    let mut tried = 0;
+    for cut in (0..whole.written).step_by(7) {
+        let mut d =
+            Card { img: img.clone(), budget: Some(cut), written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
+        assert!(ride(&mut Recorder::new(), &mut d, 0).is_none());
+        let mut d = Card { img: d.img, budget: None, written: 0, dead: false, torn: false, cut_at: 0, now: 0 };
+        let mut r = Recorder::new();
+        let Outcome::Resumed(w, _) = r.recover(&mut d, local(SECS + 5)) else { continue };
+        // the checkpoint well into the second lap, auto-paused seconds on both sides of it
+        if !(LAP + 30..SECS - 30).contains(&w[0]) {
+            continue;
+        }
+        assert!(ride(&mut r, &mut d, w[0] + 1).is_some());
+        assert_eq!(lap_values(&d.img, SAVED), want, "cut {cut}, resumed at {}", w[0]);
+        tried += 1;
+    }
+    assert!(tried > 3, "{tried} resumes in the second lap");
+}
+
 /// The same for an indoor ride: after every cut it comes back indoor (the recovery record keeps the profile)
 /// and is saved with sub_sport indoor_cycling (6), at boot too (ended from the record alone).
 #[test]
@@ -323,6 +403,8 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
     let total = full.written;
     let all: Vec<u32> = (0..SECS).filter(|&t| recorded(t)).map(|t| T0 + t).collect();
     let (mut resumed, mut saved_at_boot, mut nothing, mut max_lost, mut twice_cuts) = (0, 0, 0, 0, 0);
+    assert_eq!(laps_match_records(&full.img, SAVED, "uncut"), 2);
+    let mut mid_lap = 0; // resumed in the second lap, its sums from the record
     for cut in 0..total {
         let what = std::format!("cut {cut} of {total}");
         let mut d =
@@ -362,6 +444,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
                 assert_eq!(name, NAME);
                 assert_eq!((r.profile(), r.by_hand()), (profile, by_hand), "{what}: profile back");
                 resumed += 1;
+                mid_lap += usize::from(w[0] > LAP && best_rec(&cut_img).lap[1] > 0);
                 let from = w[0] + 1;
                 let from = if (PAUSE + 1..RESUME).contains(&from) { RESUME } else { from };
                 assert!(ride(&mut r, &mut d, from).is_some(), "{what}");
@@ -372,12 +455,14 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
                 let lost = all.len() - times.len();
                 assert!(lost <= CHECKPOINT_S as usize, "{what}: {lost} s lost");
                 assert!(times.iter().all(|t| all.contains(t)), "{what}");
+                assert_eq!(laps_match_records(&d.img, SAVED, &what), 2, "{what}");
             }
             Outcome::Saved(name) => {
                 assert_eq!(name, NAME);
                 saved_at_boot += 1;
                 let (times, session) = saved(&d.img, SAVED).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(session && times == all, "{what}: the whole ride");
+                assert_eq!(laps_match_records(&d.img, SAVED, &what), 2, "{what}");
                 assert_eq!(sub_sport(&d.img, SAVED), sub, "{what}");
             }
             Outcome::Nothing => {
@@ -402,6 +487,7 @@ fn power_cut_at_every_sector(profile: Profile, by_hand: bool) {
          checkpoint; lost clusters at most {max_lost}; {twice_cuts} cuts of a reboot"
     );
     assert!(resumed > 50 && saved_at_boot > 0);
+    assert!(mid_lap > 5, "{mid_lap} resumes in the second lap");
     assert!(max_lost <= 2);
 }
 
@@ -1326,7 +1412,17 @@ fn a_ride_resumed_on_a_full_card_is_saved() {
 fn a_damaged_record_is_refused() {
     let r = |seq, phase| {
         let ride = [seq; RIDE_WORDS];
-        Rec { seq, phase, name: NAME, cluster: 7, fit: [0; RECORD_LEN], ride, discard: false, checked: None }
+        Rec {
+            seq,
+            phase,
+            name: NAME,
+            cluster: 7,
+            fit: [0; RECORD_LEN],
+            ride,
+            discard: false,
+            checked: None,
+            lap: [seq; crate::fit::LAP_WORDS],
+        }
     };
     let s = r(5, Phase::Recording).to_sector();
     assert_eq!(Rec::from_sector(&s), Some(r(5, Phase::Recording)));
@@ -1338,6 +1434,12 @@ fn a_damaged_record_is_refused() {
     assert_eq!((c.to_sector()[23], s[23]), (1, 0));
     assert_eq!(Rec::from_sector(&c.to_sector()), Some(c));
     assert_eq!(Rec::from_sector(&d.to_sector()), Some(d));
+    // the lap sums, bytes 192..228: zero in the records of the builds before them, read as no sums (no new tag)
+    let mut old = s;
+    old[192..228].fill(0);
+    let crc = crate::fit::crc(0, &old[..SECTOR - 2]);
+    old[SECTOR - 2..].copy_from_slice(&crc.to_le_bytes());
+    assert_eq!(Rec::from_sector(&old).map(|r| r.lap), Some([0; crate::fit::LAP_WORDS]));
     for at in [0, 4, 8, 9, 24, 40, 100, 511] {
         let mut bad = s;
         bad[at] ^= 0x10;

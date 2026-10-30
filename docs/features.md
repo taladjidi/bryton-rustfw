@@ -354,7 +354,8 @@ Built-in names cannot be a file's. Fonts in a theme come later (docs/theming.md)
   recovers while stopped. VAM over the last minute of moving time, grade over the last 30 s (barometric altitude, else GPS).
 - **Saved as a FIT file** (`src/storage/recorder.rs`; seen on the unit 2026-10-24, docs/status.md): the ride goes to
   `\Rustfw\Rides\YYMMDDhhmmss.fit` as it is ridden (a record a second: time, position, altitude, speed, distance, heart
-  rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap and per workout step), from RAM to the card
+  rate, cadence, power, temperature; timer events at pause and resume; a lap message per Lap and per workout step, with the lap's own average and maximum heart rate, cadence and power
+  over its moving seconds (the lap banner's numbers, until a reset: the banner then starts again from the resume; the session's over every record), invalid when none had one, kept across a reset by the recovery record), from RAM to the card
   at a checkpoint at least every minute, at each pause and when switched off. A reset or a power cut loses at most
   the last minute: at the next start the ride comes back paused ("RIDE RESUMED"). Its end card's NP, TSS and kJ
   then cover the part after the restart only (the recovery record keeps the ride's totals, not the power sums); the
@@ -529,8 +530,8 @@ a long ride takes a few passes, the loop never stalls); the card opens when it i
 
 **Laps of a past ride** (storage/fitread.rs `lap`, ui/card.rs `draw_lap_list`): LAPS, a label at the left of the card's
 title (a 64 x 44 px touch box; or Page), lists the ride's laps from its `lap` messages, read in the same pass as the
-card: number, time, distance, average speed, average power and heart rate ("--" where the lap has none; this firmware's
-laps carry none of the averages, stock's may). The first 99 laps; Page and a swipe up or down scroll, Back, "<" or a swipe
+card: number, time, distance, average speed, average power and heart rate ("--" where the lap has none: no meter or
+strap during it). The first 99 laps; Page and a swipe up or down scroll, Back, "<" or a swipe
 right return to the card. A ride with no lap messages says NO LAPS; a damaged file lists the laps read before the damage.
 
 **Delete** (storage/trash.rs): on a ride's card, Start dismisses the card (as on the ride just ended), and DELETE (a red

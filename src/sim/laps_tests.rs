@@ -62,14 +62,30 @@ fn record_and_open(sim: &mut Sim, app: &mut App, laps: u32, gap_ms: u64) -> ([u8
     (name, row)
 }
 
-/// Three Lap keys during a ride, saved: its card has LAPS, which lists four laps (the last one closed at the end),
-/// each a time and a distance and a speed; Page scrolls (nothing to scroll), Back returns to the card. A ride without
+/// A power meter (210 W) and a heart-rate strap (72 bpm) paired and heard (interaction_tests' pages).
+fn power_and_hr(sim: &mut Sim) {
+    fn power(t: u64) -> [u8; 8] {
+        if t / 250 % 4 == 3 { [0x52, 0, 0xff, 0, 0, 0, 0x80, 3 | 3 << 4] } else { [0x10, 1, 0xff, 85, 0, 0, 210, 0] }
+    }
+    fn hr(t: u64) -> [u8; 8] {
+        if t / 250 % 4 == 3 { [0x52, 0, 0xff, 0, 0, 0, 0x20, 1 | 4 << 4] } else { [0, 0, 0, 0, 0, 0, 0, 72] }
+    }
+    sim.backup[Kind::Power.backup()] = Kind::Power.to_word(SensorId { device: 7, trans: 5 });
+    sim.backup[Kind::Hr.backup()] = Kind::Hr.to_word(SensorId { device: 9, trans: 1 });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data: power, network: 0, ack: &[] });
+    sim.nordic.sensors.push(AntSensor { device_type: 0x78, id: 9, data: hr, network: 0, ack: &[] });
+}
+
+/// Three Lap keys during a ride with a power meter and a strap, saved: its card has LAPS, which lists four laps (the
+/// last one closed at the end), each a time and a distance and a speed, and the lap's own average power and heart
+/// rate from the ride file (fit.rs, "Laps"); Page scrolls (nothing to scroll), Back returns to the card. A ride without
 /// laps (the synthetic volume's) says NO LAPS. Screenshots: history_laps, history_no_laps.
 #[test]
 fn history_lap_list() {
     let mut sim = Sim::new(9, 0, 0);
     sim.emmc.image = crate::fat::tests::image();
-    let mut app = App::start(&mut sim, None);
+    power_and_hr(&mut sim);
+    let mut app = App::start(&mut sim, Some([1, 2, 3, 4, 5, 6, 7, 8])); // a stand-in ANT+ key
     app.set_map_memory(crate::tiles::tests::memory());
     let (_, row) = record_and_open(&mut sim, &mut app, 3, 25_000);
     run(&mut sim, &mut app, 4000);
@@ -79,6 +95,7 @@ fn history_lap_list() {
     let l = app.past.laps();
     assert_eq!(l.len(), 4, "{l:?}");
     assert!(l[..3].iter().all(|r| r.timer_s().is_some_and(|t| (24..=26).contains(&t))), "{l:?}");
+    assert!(l.iter().all(|r| (r.power(), r.hr()) == (Some(210), Some(72))), "{l:?}");
     run(&mut sim, &mut app, 500);
     super::tests::assert_consistent(&sim, &app);
     sim.save("history_laps");
