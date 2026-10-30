@@ -150,6 +150,8 @@ pub enum Setting {
     LapKm,
     /// The moving time of a BY TIME auto lap, minutes.
     LapMin,
+    /// SUNSET ALERT: OFF, or the minutes before the sunset it says so (`sunset_alert`, [`crate::SUNSET_LEAD_MIN`]).
+    SunsetAlert,
     /// LIVE SEGMENTS: the segments of the card are matched during a ride, on or off (`live_segments`).
     LiveSegments,
     /// The effort a live segment is ridden against: AUTO, PR, KOM, QOM or RECENT (`seg_target`).
@@ -300,6 +302,7 @@ impl Setting {
             Setting::Height => "HEIGHT",
             Setting::PowerSmooth => "POWER SMOOTH",
             Setting::AutoLap => "AUTO LAP",
+            Setting::SunsetAlert => "SUNSET ALERT",
             Setting::LiveSegments => "LIVE SEGMENTS",
             Setting::SegTarget => "TARGET",
             Setting::Sound => "SOUND",
@@ -818,7 +821,7 @@ pub const ZONES: [Row; 11] = [
 ];
 
 /// ALERTS: the reminders and the limits (the list scrolls).
-pub const ALERTS: [Row; 14] = [
+pub const ALERTS: [Row; 15] = [
     Row::Set(Setting::Eat),
     Row::Set(Setting::Drink),
     Row::Set(Setting::Limit(7)),
@@ -833,6 +836,7 @@ pub const ALERTS: [Row; 14] = [
     Row::Set(Setting::Limit(4)),
     Row::Set(Setting::Limit(5)),
     Row::Set(Setting::Limit(10)),
+    Row::Set(Setting::SunsetAlert),
 ];
 
 /// DISPLAY: the backlight, the touch panel, the font, the power the workout gauge shows.

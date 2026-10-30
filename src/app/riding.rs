@@ -627,6 +627,12 @@ impl App {
             // ERG: the trainer holds the watts, the resistance climbs as the rider slows
             let slow = self.alerts.cadence(input.cadence, self.erg_on());
             self.alert.push(slow);
+            // the sunset alert: the minutes left to today's sunset by the clock the status bar shows (no fix, no times)
+            let now = u32::from(self.strip.time.0) * 60 + u32::from(self.strip.time.1);
+            let left = super::fields::minutes_to_sunset(now, self.sun_times());
+            let lead = crate::SUNSET_LEAD_MIN.get(self.settings.sunset_alert).copied().unwrap_or(0);
+            let sun = self.alerts.sunset(left, lead);
+            self.alert.push(sun);
         } else {
             self.alerts.reset_limits(); // a pause or a stop starts the holds again
         }
