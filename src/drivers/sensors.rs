@@ -19,6 +19,13 @@
 //! `devices/common.py`, `data[0] == 80`) are kept per kind for the screens. Common pages carry no beat, so the
 //! strap's common pages (0x50 and up, page 82 too) are not beats: they set no interval and no rate.
 //!
+//! Torque effectiveness and pedal smoothness, power meter page 0x13: byte 2 and 3 the left and right torque
+//! effectiveness, bytes 4 and 5 the left and right pedal smoothness, 0.5 % units, 0xff not used, and byte 5 0xfe when
+//! byte 4 is the combined smoothness. Layout from the ANT+ Bicycle Power device profile (data page 0x13, "Torque
+//! Effectiveness and Pedal Smoothness"): inferred, not checked: the profile is an ANT+ members' document, and openant's
+//! `devices/power_meter.py` (checked 2026-10-30) decodes only the power, torque and calibration pages, not 0x13.
+//! Page 0x12 (crank torque frequency) is not decoded: the meters that send it also send 0x10 (power).
+//!
 //! **Electronic shifting**, two channels as stock opens them (BOARD.md 11):
 //! - [`Kind::Shifting`], the public ANT+ Shifting profile (device type 34, 4 Hz; SRAM AXS, Campagnolo, any system
 //!   that implements it). Its pages are ANT+ members' documents; what is decoded here is what an open
@@ -265,6 +272,16 @@ pub enum Metric {
     Power,
     /// The right pedal's share of the power, percent (a dual-sided power meter).
     Balance,
+    /// Left and right torque effectiveness, 0.5 % units as sent (power meter page 0x13).
+    TorqueL,
+    /// Right torque effectiveness, 0.5 % units.
+    TorqueR,
+    /// Left pedal smoothness, 0.5 % units (or the combined one: then [`Metric::SmoothC`] alone).
+    SmoothL,
+    /// Right pedal smoothness, 0.5 % units.
+    SmoothR,
+    /// The combined pedal smoothness, 0.5 % units, when the meter sends one (byte 5 0xfe on page 0x13).
+    SmoothC,
     /// The gear, front in the upper byte and rear in the lower, both from 1 (electronic shifting).
     Gear,
     /// The shifting system's battery: percent (Di2), or [`SHIFT_STATUS`] plus the ANT+ battery status (1 new, 2
@@ -289,16 +306,21 @@ pub enum Press {
     RightLong = 3,
 }
 
+/// A page's byte in 0.5 % units: kept when it is a percent (at most 200), else dropped.
+fn set_half_percent(live: &mut Live, m: Metric, b: u8) {
+    if b <= 200 { live.set(m, u16::from(b)) } else { live.clear(m) }
+}
+
 /// A value older than this is dropped (the sensor stopped or went out of range).
 pub const STALE_MS: u32 = 5000;
 
 /// The latest value of each [`Metric`], and its age.
 #[derive(Default)]
 pub struct Live {
-    values: [Option<u16>; 8],
-    age_ms: [u32; 8],
+    values: [Option<u16>; 16],
+    age_ms: [u32; 16],
     /// The values as of the last [`Live::snapshot`]: what the pages show.
-    shown: [Option<u16>; 8],
+    shown: [Option<u16>; 16],
 }
 
 impl Live {
@@ -306,6 +328,11 @@ impl Live {
     pub fn set(&mut self, m: Metric, v: u16) {
         self.values[m as usize] = Some(v);
         self.age_ms[m as usize] = 0;
+    }
+
+    /// Drops `m`: the sensor sent it invalid.
+    pub fn clear(&mut self, m: Metric) {
+        self.values[m as usize] = None;
     }
 
     /// The current value of `m`, if fresh enough.
@@ -573,6 +600,22 @@ impl Decoders {
                     live.set(Metric::Cadence, u16::from(d[3]));
                 }
             }
+            // page 0x13, torque effectiveness and pedal smoothness (ANT+ Bicycle Power profile, see the module doc):
+            // bytes 2-3 the left and right torque effectiveness, 4-5 the left and right pedal smoothness, 0.5 % units,
+            // 0xff not used; byte 5 0xfe: byte 4 is the combined smoothness. Above 100 % (200) is not a value.
+            Kind::Power if d[0] == 0x13 => {
+                set_half_percent(live, Metric::TorqueL, d[2]);
+                set_half_percent(live, Metric::TorqueR, d[3]);
+                if d[5] == 0xfe {
+                    set_half_percent(live, Metric::SmoothC, d[4]);
+                    live.clear(Metric::SmoothL);
+                    live.clear(Metric::SmoothR);
+                } else {
+                    live.clear(Metric::SmoothC);
+                    set_half_percent(live, Metric::SmoothL, d[4]);
+                    set_half_percent(live, Metric::SmoothR, d[5]);
+                }
+            }
             Kind::Power => {}
             // page 1, shift system status: rear gear in bits 0-4, front in 5-7, from 0 (all ones: no value); a 1x
             // system has no front (7): the rear alone, front 0, as stock keeps it (`Ant_EssHandleMessage`)
@@ -645,6 +688,26 @@ mod tests {
 
     /// Page 82 on any profile gives its battery status, the last one kept; invalid and charging are no level; a
     /// silent sensor's status is forgotten for shifting only (its components), the others keep the last.
+    #[test]
+    fn torque_effectiveness_and_pedal_smoothness() {
+        let (mut dec, mut live) = (Decoders::default(), Live::default());
+        // 88 % and 90 % torque effectiveness, 70 % and 72 % pedal smoothness (0.5 % units)
+        dec.decode(Kind::Power, [0x13, 1, 176, 180, 140, 144, 0, 0], 2105, &mut live);
+        let get = [Metric::TorqueL, Metric::TorqueR, Metric::SmoothL, Metric::SmoothR, Metric::SmoothC];
+        assert_eq!(get.map(|m| live.get(m)), [Some(176), Some(180), Some(140), Some(144), None]);
+        // 0xff: not used; a percent above 100 is no value either
+        dec.decode(Kind::Power, [0x13, 2, 170, 0xff, 0xff, 0xff, 0, 0], 2105, &mut live);
+        assert_eq!(get.map(|m| live.get(m)), [Some(170), None, None, None, None]);
+        dec.decode(Kind::Power, [0x13, 3, 201, 180, 140, 144, 0, 0], 2105, &mut live);
+        assert_eq!(live.get(Metric::TorqueL), None, "201 is 100.5 %");
+        // byte 5 0xfe: byte 4 is the combined smoothness, the left and right ones are no value
+        dec.decode(Kind::Power, [0x13, 4, 170, 180, 150, 0xfe, 0, 0], 2105, &mut live);
+        assert_eq!(get.map(|m| live.get(m)), [Some(170), Some(180), None, None, Some(150)]);
+        // a power page leaves them as they are
+        dec.decode(Kind::Power, [0x10, 1, 0xff, 85, 0, 0, 210, 0], 2105, &mut live);
+        assert_eq!(live.get(Metric::TorqueR), Some(180));
+    }
+
     #[test]
     fn battery_page_82() {
         let (mut dec, mut live) = (Decoders::default(), Live::default());

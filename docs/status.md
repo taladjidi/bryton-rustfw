@@ -8,6 +8,11 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **Torque effectiveness and pedal smoothness (drivers/sensors.rs page 0x13, the TE L/R and PS L/R fields)**: sim only.
+  The owner's Sigeyi spider PM may not send page 0x13 at all, so its fields would stay "--" for a whole ride. To check:
+  pair it, pedal for a few minutes with the TE L/R box on screen; a value means it sends 0x13, "--" all ride means it
+  does not (or its bytes are 0xff, one-sided). Then note which, here.
+
 - **Screenshots and the fault log (app/screenshot.rs, app/faultlog.rs, storage/screenshot.rs, storage/faultlog.rs;
   hw.rs's marker now keeps the kind and detail)**: sim only, and both write the card (an `EMMC_WRITE=1` build). Still to
   see: SYSTEM > SCREENSHOT on the overview and on a ride page, then the drive lent and `\Screenshot\` opened on the

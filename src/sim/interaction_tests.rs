@@ -76,8 +76,26 @@ fn with_meter_and_trainer() -> (Sim, App) {
 }
 
 fn power_pages(t: u64) -> [u8; 8] {
-    // a battery page now and then (status 3, ok), between the power pages
+    // a torque page (88 % and 90 %, pedal smoothness 70 % and 72 %) in every fourth broadcast
+    if t / 250 % 4 == 1 { [0x13, 1, 176, 180, 140, 144, 0, 0] } else { power_pages_plain(t) }
+}
+
+/// The power meter without its torque page: a battery page now and then (status 3, ok), between the power pages.
+fn power_pages_plain(t: u64) -> [u8; 8] {
     if t / 250 % 4 == 3 { [0x52, 0, 0xff, 0, 0, 0, 0x80, 3 | 3 << 4] } else { [0x10, 1, 0xff, 85, 0, 0, 210, 0] }
+}
+
+#[test]
+fn torque_and_smoothness_show_then_dash_when_the_meter_stops_them() {
+    let (mut sim, mut app) = with_meter_and_trainer();
+    assert_eq!(app.field_text(Field::TorqueEff).as_str(), "88/90");
+    assert_eq!(app.field_text(Field::PedalSmooth).as_str(), "70/72");
+    for s in sim.nordic.sensors.iter_mut().filter(|s| s.device_type == 0x0b) {
+        s.data = power_pages_plain;
+    }
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(app.field_text(Field::TorqueEff).as_str(), "--", "not sent for 5 s: no value");
+    assert_eq!(app.field_text(Field::PedalSmooth).as_str(), "--");
 }
 
 fn hr_pages(t: u64) -> [u8; 8] {

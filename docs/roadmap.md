@@ -120,7 +120,7 @@ fields of one kind into one step. Settings these need go in the settings file (T
 - the map: north up or heading up, pinch to zoom; our own OpenStreetMap packs (`tools/map_pack.py`, phase 5);
 - field sizes that follow the box, ring and bar gauges;
 - ride profiles: gravel, cyclocross, commute, three bikes, auto features per profile, component wear;
-- torque effectiveness and pedal smoothness (page 0x13), torque pages; climbs: completed climbs listed with their
+- torque pages (0x11, 0x12); torque effectiveness and pedal smoothness (page 0x13) are in: the TE L/R and PS L/R fields, sim only; climbs: completed climbs listed with their
   times, detection on or off per profile, descents;
 - trainer: level mode, a course ridden on the trainer (slope from the course), a virtual course as a workout;
 - the phone link (phase 8): LE Secure Connections, the bonded phone's whitelist (its IRK kept), a larger ATT MTU,
