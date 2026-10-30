@@ -92,10 +92,10 @@ impl SegUi {
 
 /// The head box's lines, owned (the box borrows them: [`HeadText::head`]).
 pub(crate) struct HeadText {
-    top: Line<32>,
+    pub(crate) top: Line<32>,
     big: Line<8>,
     ink: u16,
-    sub: Line<16>,
+    pub(crate) sub: Line<16>,
     keep: bool,
 }
 

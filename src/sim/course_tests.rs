@@ -1003,3 +1003,125 @@ fn climb_page_opens_once_per_climb() {
     }
     assert_eq!(opens, 1, "opened once");
 }
+
+/// The followed course (a synthetic one on the equator at 10 E, in the live segments' frame) with a 8 % climb from
+/// 1000 m to 2800 m of it, and a live segment lying on 1500 m to 2450 m of that climb: the course and the segment
+/// agree on points and altitudes.
+mod segment_on_climb {
+    use super::*;
+    use crate::segment_match::tests::at;
+
+    const CODES: [[u8; 2]; 5] = [*b"07", *b"05", *b"06", *b"12", *b"13"];
+    const ID: u32 = 4_000_000_001;
+    const FROM: f64 = 1500.0; // the segment's start along the course, m
+
+    /// East along the course at 6 m/s from 1500 m before the segment's start, from 20 s.
+    fn route(ms: u64) -> (i32, i32, i32) {
+        let (lat, lon) = at(-FROM + 6.0 * ms.saturating_sub(20_000) as f64 / 1000.0, 0.0);
+        (lat, lon, 9_000_000)
+    }
+    fn alt_m(s: f64) -> f64 {
+        100.0 + (s - 1000.0).clamp(0.0, 1800.0) * 0.08
+    }
+
+    /// The ride up to `s` m along the course; the segment file with altitudes or without.
+    fn scene(with_alt: bool, s: f64) -> (Sim, App) {
+        let up = |r: usize| Some(((alt_m(FROM + 50.0 * r as f64) + 500.0) * 5.0) as u16);
+        let seg = if with_alt {
+            crate::segment::tests::synth_alt(20, &CODES, &up)
+        } else {
+            crate::segment::tests::synth(20, &CODES)
+        };
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = super::super::segment_tests::card(&[("4000000001.seg", seg)]);
+        let aid = crate::gnss::Aid { offset_15min: Some(8), pos: Some((0, 0)) };
+        [sim.backup[17], sim.backup[18]] = aid.to_words();
+        sim.gnss.route = Some(route);
+        let mut app = App::start(&mut sim, Some(KEY));
+        app.set_course_memory(crate::storage::course_file::tests::memory());
+        app.set_segment_memory(std::boxed::Box::leak(std::boxed::Box::new(crate::Segments::new())));
+        app.press(&mut sim, Press::Long(Key::Page));
+        to_row(&mut sim, &mut app, menu::Row::Open(Menu::Courses));
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 1000);
+        for _ in 0..hill(&app) {
+            app.press(&mut sim, Press::Short(Key::Page));
+        }
+        app.press(&mut sim, Press::Short(Key::Start));
+        run(&mut sim, &mut app, 200);
+        app.press(&mut sim, Press::Short(Key::Page));
+        {
+            let c = app.courses.as_deref_mut().unwrap();
+            assert!(c.on.is_some());
+            c.course.clear();
+            for i in 0..=60 {
+                let (lat, lon) = at(-FROM + 50.0 * i as f64, 0.0);
+                c.course.push(lat, lon, Some((alt_m(50.0 * i as f64) * 10.0) as i32));
+            }
+            c.course.finish();
+            c.at = crate::course::Tracker::new();
+        }
+        sim.gnss.fix = Some(8000);
+        run(&mut sim, &mut app, 4000); // the segment index is built while no ride is open
+        app.press(&mut sim, Press::Short(Key::Start));
+        run_to(&mut sim, &mut app, s);
+        (sim, app)
+    }
+
+    fn run_to(sim: &mut Sim, app: &mut App, s: f64) {
+        let t = 20_000 + (s / 6.0 * 1000.0) as u64;
+        while sim.ms < t {
+            run(sim, app, 1000);
+        }
+    }
+
+    fn head(app: &App) -> (std::string::String, std::string::String) {
+        let h = app.head_text().unwrap();
+        (h.top.as_str().into(), h.sub.as_str().into())
+    }
+
+    #[test]
+    fn a_segment_on_a_course_climb() {
+        // before the segment, on the climb: the climb's key and head
+        let (mut sim, mut app) = scene(true, 1300.0);
+        let start = app.climb_now().map(|n| n.climb.start_m).expect("on the climb");
+        assert!(app.segment_now().is_none());
+        assert_eq!(app.pace.key.map(|k| k.0), Some(start), "keyed by the climb");
+        let (top, sub) = head(&app);
+        assert!(top.starts_with("CLIMB ") && sub == "GAIN LEFT", "{top} {sub}");
+        // inside the segment: its name, a delta, its key and target, its profile
+        run_to(&mut sim, &mut app, 2000.0);
+        let n = app.segment_now().expect("in the segment");
+        assert_eq!(app.pace.key.map(|k| k.0), Some(ID ^ 0x8000_0000), "keyed by the segment");
+        assert!(app.pace.plan.n > 0, "a target");
+        let (top, sub) = head(&app);
+        assert_eq!(top, "Test climb");
+        assert!(sub.starts_with("VS ") && n.delta_s.is_some(), "{sub}");
+        let (bx, p) = app
+            .widgets()
+            .zip(app.drawn.iter())
+            .find_map(|((bx, _), d)| if let Drawn::Profile(p) = d { Some((bx, *p)) } else { None })
+            .unwrap();
+        let a = ui::climb_area(bx);
+        let col = u64::from(n.along_m) * u64::from(a.2) / u64::from(n.along_m + n.left_m);
+        assert!(u64::from(p.rider().unwrap()).abs_diff(col) <= 2, "the segment's profile: {:?} vs {col}", p.rider());
+        sim.save("segment_on_climb");
+        // after the finish, still on the climb: the card, then the climb again at once
+        run_to(&mut sim, &mut app, FROM + 950.0 + 20.0);
+        assert!(app.segment_now().is_none());
+        assert_eq!(app.screen(), Screen::SegmentResult);
+        run(&mut sim, &mut app, 11_000);
+        assert_eq!(app.screen(), Screen::Ride(crate::CLIMB));
+        assert_eq!(app.pace.key.map(|k| k.0), Some(start), "replanned on the climb");
+        assert!(head(&app).0.starts_with("CLIMB "));
+    }
+
+    #[test]
+    fn a_segment_without_altitudes_on_a_course_climb() {
+        let (_, app) = scene(false, 2000.0);
+        assert!(app.segment_now().is_some() && app.climb_now().is_some());
+        assert!(app.pace.key.is_none() && app.pace.plan.n == 0, "no foreign target");
+        assert_eq!(head(&app).0, "Test climb");
+        assert!(app.drawn.iter().any(|d| matches!(d, Drawn::Profile(_))), "the bar");
+    }
+}
