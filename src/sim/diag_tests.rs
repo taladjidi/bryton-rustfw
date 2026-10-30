@@ -384,7 +384,7 @@ fn screenshot_link_failure_keeps_the_chain() {
     let at =
         |img: &[u8], c: u32| u32::from_le_bytes(img[fat0 + 4 * c as usize..][..4].try_into().unwrap()) & 0x0fff_ffff;
     let mut n = 0;
-    while c >= 2 && c < 0x0fff_fff8 && n < 100 {
+    while (2..0x0fff_fff8).contains(&c) && n < 100 {
         let v = at(img, c);
         assert_ne!(v, 0, "cluster {c} of the hidden entry's chain freed");
         (c, n) = (v, n + 1);
