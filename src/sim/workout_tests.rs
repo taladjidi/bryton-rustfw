@@ -70,7 +70,9 @@ fn workout_from_the_calendar() {
         "210 W over 100-120: white digits, the bar says over"
     );
     let (mut ms, start) = (0, sim.ms);
+    let mut was_top = false;
     while app.plan.player.and_then(|p| p.step(app.plan.steps())) == Some(0) {
+        was_top = app.plan.top.is_some();
         run(&mut sim, &mut app, 50);
         ms += 50;
         assert!(ms < 30_000, "the warm-up ends");
@@ -81,7 +83,8 @@ fn workout_from_the_calendar() {
         [1800, 2600, 0, 2500, 0, 2000, 0, 2000, 0, 2500],
         "the ride's start, the step's start, beep at 2 and 1 s left, the next step"
     );
-    assert_eq!(app.notes.text.as_str(), "2/6 200-220W");
+    assert!(was_top, "the strip was up just before the step changed");
+    assert_ne!(app.notes.text.as_str(), "2/6 200-220W", "the next-step strip told it already: no banner");
     run(&mut sim, &mut app, 5000);
     assert_eq!(fields(&app), ["210|+-10", "0:25", "150|0:15", "2/6"]);
     assert_eq!(
@@ -327,7 +330,7 @@ fn gauge_shows_the_zones() {
         let color = crate::workout::gauge_color(w, band);
         let scale = crate::workout::gauge_scale(Kind::Power, band, 200, 190);
         let marker = Some(crate::workout::gauge_x(w, scale, ui::gauge_cols(bx)));
-        GaugeShown { kind: Kind::Power, avg: 0, band: Some(band), step: true, pace, value, color, marker }
+        GaugeShown { kind: Kind::Power, avg: 0, band: Some(band), step: true, second: None, pace, value, color, marker }
     };
     let cases = [((160, 180), 140), ((160, 180), 210), ((215, 235), 190), ((215, 235), 260)];
     // full width: two gauges on top of each other, then the half-width ones side by side
@@ -371,4 +374,144 @@ fn gauge_shows_the_zones() {
     app.settings.ftp = 400;
     let s = screen_of(&mut sim, &app);
     assert!(column(&s, 400).contains(&z(1)) && !column(&s, 400).contains(&z(2)), "FTP 400: zone 1");
+}
+
+/// The next-step strip (patch P3): in the status strip's place for the last 9 s of a timed step, the next step's
+/// target and length at the left and the countdown at the right; across a step change, with the last step ("LAST
+/// STEP"), and not for an open step. At a step change the strip replaces the banner (the beeps stay); a Lap skip,
+/// which the strip did not announce, still says the step. A second changes one cell of the countdown.
+#[test]
+fn next_step_strip() {
+    use crate::storage::workout_file::{Kind as TKind, Length, Step, Target, Workout};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app = App::start(&mut sim, None);
+    let pw = |lo, hi| Target { kind: TKind::Power, lo, hi, pct: false };
+    let st = |len, target| Step { len, target, target2: Target::OPEN, intensity: 0 };
+    app.plan.workout = Workout::built(
+        "STRIP",
+        &[st(Length::Time(15), pw(200, 200)), st(Length::Time(12), pw(150, 170)), st(Length::Time(10), pw(100, 120))],
+    );
+    app.start_workout(0);
+    app.show(&mut sim);
+    assert_eq!(app.screen(), Screen::Ride(0));
+    let mut seen: Vec<(usize, u32, std::string::String)> = Vec::new();
+    for _ in 0..400 {
+        run(&mut sim, &mut app, 100);
+        assert_consistent(&sim, &app);
+        if let Some(a) = app.ahead() {
+            let row = (a.next, a.left, std::string::String::from(app.ahead_head(&a).as_str()));
+            if seen.last() != Some(&row) {
+                seen.push(row);
+            }
+        }
+    }
+    let head = |next, left, h: &str| (next, left, std::string::String::from(h));
+    let mut want: Vec<_> = (1..=9).rev().map(|s| head(1, s, "NEXT 160W 0:12")).collect();
+    want.extend((1..=9).rev().map(|s| head(2, s, "NEXT 110W 0:10")));
+    want.extend((1..=9).rev().map(|s| head(3, s, "LAST STEP")));
+    assert_eq!(seen, want, "a strip per step, counting 9 to 1, none after the last step");
+    run(&mut sim, &mut app, 10_000); // the DONE banner goes
+    assert_consistent(&sim, &app);
+    assert!(app.plan.top.is_none() && !app.plan.running(), "the status strip is back once the workout is done");
+
+    // the strip is on screen while it counts: screenshot, and what a second costs
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app2 = App::start(&mut sim, None);
+    app2.plan.workout =
+        Workout::built("STRIP", &[st(Length::Time(15), pw(200, 200)), st(Length::Time(60), pw(250, 270))]);
+    app2.start_workout(0);
+    app2.show(&mut sim);
+    while app2.ahead().is_none_or(|a| a.left != 6) {
+        run(&mut sim, &mut app2, 100);
+    }
+    run(&mut sim, &mut app2, 200);
+    assert_consistent(&sim, &app2);
+    sim.save("workout_next_strip");
+    let (look, a) = (app2.look(), app2.ahead().unwrap());
+    let head = app2.ahead_head(&a);
+    let (n, o) = (a.count(), {
+        let mut b = a;
+        b.left += 1;
+        b.count()
+    });
+    let px0 = sim.pixels;
+    ui::draw_next_strip(&mut Panel(&mut sim, (0, ui::H), look), head.as_str(), n.as_str(), Some(o.as_str()));
+    let second = sim.pixels - px0;
+    let px0 = sim.pixels;
+    ui::draw_next_strip(&mut Panel(&mut sim, (0, ui::H), look), head.as_str(), n.as_str(), None);
+    std::println!("next-step strip: {second} px for a second, {} px whole", sim.pixels - px0);
+    assert!(second <= 2 * 24 * 14, "{second} px: one cell of the countdown");
+}
+
+fn power150(_: u64) -> [u8; 8] {
+    [0x10, 1, 0xff, 85, 0, 0, 150, 0]
+}
+
+/// A step with two targets (FIT secondary target, fields 19 to 22): 200-250 W and 90-100 RPM. The gauge shows the
+/// secondary after the primary under its bar; its marker says the primary's state, and the secondary's only once
+/// the primary is in range (85 rpm is under 90: not green; at 150 W the primary's blue stays). Screenshot:
+/// `workout_two_targets`.
+#[test]
+fn two_targets_shown() {
+    use crate::storage::workout_file::{Kind as TKind, parse, tests::two_targets};
+    let z = crate::ride::ZONE_COLORS;
+    for (data, want) in [(power210 as fn(u64) -> [u8; 8], z[2]), (power150, z[0])] {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.own_settings();
+        sim.backup[Kind::Power.backup()] = SensorId { device: 7, trans: 5 }.to_word();
+        sim.nordic.sensors.push(AntSensor { device_type: 0x0b, id: 7, data, network: 0, ack: &[] });
+        let mut app = App::start(&mut sim, Some(KEY));
+        let fields = [Field::WktPower, Field::StepTarget, Field::NextStep, Field::Time, Field::Time, Field::Time];
+        app.pages[0] = PageCfg { layout: 3, fields }.into();
+        app.plan.workout = parse(&two_targets()).unwrap();
+        app.start_workout(0);
+        app.show(&mut sim);
+        run(&mut sim, &mut app, 8000);
+        let g = match app.drawn.first() {
+            Some(Drawn::Gauge(g)) => *g,
+            _ => panic!("the gauge's box first"),
+        };
+        assert_eq!(g.second, Some((TKind::Cadence, (90, 100))));
+        assert_eq!(g.band, Some((200, 250)));
+        assert_eq!(g.color, want, "the primary's state, or the secondary's with the primary in range");
+        assert_consistent(&sim, &app);
+        if want == z[2] {
+            sim.save("workout_two_targets");
+        }
+    }
+}
+
+/// The strip's left part keeps every number: "NEXT " goes first, then the unit; a 150 bpm 10:00 step, a 1 h step, a
+/// 12.5 km step. The status strip is whole again once the strip goes.
+#[test]
+fn next_step_strip_text_and_return() {
+    use crate::storage::workout_file::{Kind as TKind, Length, Step, Target, Workout};
+    let mut sim = Sim::new(9, 0, 0);
+    sim.own_settings();
+    let mut app = App::start(&mut sim, None);
+    let t = |kind, lo, len| Step {
+        len,
+        target: Target { kind, lo, hi: lo, pct: false },
+        target2: Target::OPEN,
+        intensity: 0,
+    };
+    app.plan.workout = Workout::built(
+        "T",
+        &[
+            t(TKind::Hr, 150, Length::Time(600)),
+            t(TKind::Power, 275, Length::Time(3600)),
+            t(TKind::Hr, 150, Length::Distance(12_500)),
+            t(TKind::Power, 275, Length::Time(600)),
+        ],
+    );
+    let head = |app: &App, next| {
+        let a = crate::app::Ahead { next, left: 5, metres: false };
+        std::string::String::from(app.ahead_head(&a).as_str())
+    };
+    assert_eq!(head(&app, 0), "150BPM 10:00", "NEXT dropped, no number cut");
+    assert_eq!(head(&app, 1), "275W 1:00:00");
+    assert_eq!(head(&app, 2), "150BPM 12.50K");
+    assert_eq!(head(&app, 3), "NEXT 275W 10:00");
 }

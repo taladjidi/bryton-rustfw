@@ -139,6 +139,13 @@ Every screen of the firmware, grouped by where it is on the bike computer. "sim"
 | The SEGMENT page ahead of the PR: the delta in green, the two marks on the bar (sim) | Behind: the accent, never red (sim) | The result card, a new PR (sim) |
 | ![SEGMENTS menu](img/segment-menu.png) | | |
 | MENU > SEGMENTS: the two settings, the segments of the card, the skipped files (sim) | | |
+## Workouts
+
+| | |
+|:-:|:-:|
+| ![Next-step strip](img/workout-next-strip.png) | ![Two targets](img/workout-two-targets.png) |
+| The next-step strip in the status strip's place, 6 s before the step ends (sim) | A step with two targets: "200-250/90-100RPM" under the bar (sim) |
+
 ## Page switches
 
 | | |

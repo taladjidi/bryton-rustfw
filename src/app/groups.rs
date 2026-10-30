@@ -311,6 +311,8 @@ pub(crate) struct Plan {
     pub(crate) done: u8,
     /// What `done` was computed for (the date, the calendar, the history), None: not yet.
     pub(crate) done_key: Option<u32>,
+    /// The next-step strip as drawn in the status strip's place ([`App::update_strip`]); None: the status strip.
+    pub(crate) top: Option<super::workouts::Ahead>,
 }
 
 impl Plan {
@@ -328,6 +330,7 @@ impl Plan {
             ran_s: 0,
             done: 0,
             done_key: None,
+            top: None,
         }
     }
 

@@ -37,6 +37,7 @@ fn at(secs: u32, pct: u16) -> Step {
     Step {
         len: Length::Time(secs),
         target: Target { kind: TargetKind::Power, lo: pct, hi: pct, pct: true },
+        target2: Target::OPEN,
         intensity: 0,
     }
 }
@@ -270,6 +271,7 @@ fn zones_and_days_read_the_calendar_again() {
         &[Step {
             len: Length::Time(600),
             target: Target { kind: TargetKind::Power, lo: 250, hi: 250, pct: false },
+            target2: Target::OPEN,
             intensity: 0,
         }],
     );

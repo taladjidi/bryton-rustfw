@@ -301,8 +301,12 @@ fn long_target_and_grade_texts_are_not_cut() {
     use crate::storage::workout_file::{Kind, Length, Step, Target, Workout};
     let mut sim = Sim::new(9, 0, 0);
     let mut app = App::start(&mut sim, None);
-    let power =
-        |lo, hi| Step { len: Length::Time(60), target: Target { kind: Kind::Power, lo, hi, pct: false }, intensity: 5 };
+    let power = |lo, hi| Step {
+        len: Length::Time(60),
+        target: Target { kind: Kind::Power, lo, hi, pct: false },
+        target2: Target::OPEN,
+        intensity: 5,
+    };
     app.plan.workout = Workout::built("X", &[power(200, 220), power(950, 1050), power(995, 1005)]);
     for (at, want) in [(0, "210|+-10"), (1, "1000|50"), (2, "1000|+-5")] {
         let steps = app.plan.steps();

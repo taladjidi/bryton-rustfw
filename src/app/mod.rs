@@ -70,4 +70,6 @@ pub use settings::*;
 pub use settings_file::*;
 pub use stock_data::*;
 pub(crate) use trainer::SensorStore;
+#[cfg(test)]
+pub(crate) use workouts::Ahead;
 pub(crate) use workouts::GaugeShown;

@@ -457,6 +457,7 @@ impl App {
         p.fill(0, 0, ui::W, ui::BANNER_H, ui::BLACK);
         if !self.hint_shown {
             self.strip_shown = self.strip; // not drawn while covered (update_strip)
+            self.plan.top = self.ahead();
         }
         self.draw_top(&mut p);
         self.draw_screen(&mut p);

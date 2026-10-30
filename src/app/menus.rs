@@ -871,6 +871,7 @@ impl App {
     pub(crate) fn font_changed(&mut self, b: &mut impl Board) {
         self.notes.drawn = false; // the banner too, if one is up
         self.strip_shown = self.strip;
+        self.plan.top = None; // the next-step strip comes back at the next pass
         ui::draw_strip(&mut Panel(b, (0, ui::H), self.look()), &self.strip);
         self.show(b);
     }

@@ -572,11 +572,22 @@ TrainingPeaks), read only:
 - **DONE:** a planned workout shown as done on the TODAY card (a tick and DONE) and in WORKOUTS (a tick).
 - **START** (or Select on a step: from that step) starts the workout, and the ride if none runs, on page 1. The
   step's clock follows the ride's timer (a pause or an auto-pause stops both); a 500 ms beep at 2 and at 1 s
-  left, then a 1 s one and a banner with the new step and its target ("2/6 200-220W"). Lap goes to the next
+  left, then a 1 s one. The step change says itself through the **next-step strip** (patch P3, stock's popup as a
+  thin line): for the last 9 s of a timed step (stock's window; the last 49 m of a distance one) the status strip is
+  replaced by "NEXT 275W 1:00" (the next step's target middle with its unit and length; "LAST STEP" before the end)
+  and a countdown at the right ("  7S", " 45M"); a second redraws one cell (240 px, sim; the strip whole is 10 560 px,
+  once). The status strip comes back at the step change, with no banner then (the beeps stay). A step that was not
+  announced (the first, a Lap skip) still gets the banner with the new step and its target ("2/6 200-220W"). A banner
+  over the strip hides it, and the status strip's icons (pause, USB, lock, time) wait while it is up, and the strip is drawn again when the banner goes. Lap goes to the next
   step; a step with no end (LAP) waits for it. One workout at a time; it ends with its last step or with the ride.
 - **Fields** to place on a page: TARGET (the step's range, middle +- half-width: the digits white, an edge bar green in it, olive within 5 %, the zone 1 colour (teal) under, the zone 5 colour (wine) over,
   from the power over the tapped window (3, 10 or 30 s), the heart rate or the cadence), STEP LEFT (time, km, or LAP), NEXT (the next step's range, END on the last), and
   WORKOUT (during one, the step of all, "3/14"; otherwise today's planned time, for the overview).
+- **Two targets per step:** a FIT workout step may carry a secondary target (`secondary_target_*`, fields 19 to 22 of
+  `workout_step`: power, heart rate or cadence, the same custom values and zones as the primary; speed targets are not
+  followed). WKT POWER shows it after the primary under its bar ("200-250/90-100RPM"), and its marker colour (and the
+  TARGET edge bar's) is the primary's state, or the secondary's only while the primary is in range (green): one thing
+  to fix at a time. Without a reading for the secondary, the primary's colour stays.
 - **WKT GRAPH**, a graph field: the workout opened over its whole length, each step as high as its target (power
   from 0 to 150 % of FTP, heart rate from half the max to it, a quarter for an open target) in its zone colour; a
   white line where the rider is, the part done dark. A distance step is drawn at 30 km/h, an open step as 5 min.

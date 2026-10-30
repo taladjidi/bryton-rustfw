@@ -205,3 +205,23 @@ pub fn draw_strip_whole(c: &mut impl Canvas, s: &Strip) {
     c.fill(0, 0, W, STRIP_H, BLACK);
     draw_strip(c, s);
 }
+
+/// The characters the next-step strip's countdown takes, right-aligned at the strip's end.
+const NEXT_COUNT: u32 = 4;
+
+/// The next-step strip (patch P3: stock's popup, as a thin line instead) in the status strip's place: `head` ("NEXT
+/// 275W 10:00") at the left in orange, `count` ("  7S") in `NEXT_COUNT` cells at the right. With the countdown that
+/// was `old`, only the cells that changed are drawn (the digit of a second); without, the whole strip.
+pub fn draw_next_strip(c: &mut impl Canvas, head: &str, count: &str, old: Option<&str>) {
+    let top = STRIP_H - LABEL.height();
+    let x = W - NEXT_COUNT * CELL * 2;
+    match old {
+        Some(o) => draw_changed_chars(c, &LABEL, x, top, o, count),
+        None => {
+            c.fill(0, 0, W, STRIP_H, BLACK);
+            text::draw_in(c, &Style { fg: ACCENT, ..LABEL }, 0, top, x, Align::Left, head);
+            text::draw(c, &LABEL, x, top, Align::Left, count);
+            c.fill(0, STRIP_H, W, 2, ACCENT);
+        }
+    }
+}

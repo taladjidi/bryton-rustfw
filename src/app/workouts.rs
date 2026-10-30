@@ -12,6 +12,7 @@ pub(crate) const CALENDAR_MS: u32 = 1_000;
 pub(crate) const OPEN: storage::workout_file::Step = storage::workout_file::Step {
     len: storage::workout_file::Length::Open,
     target: storage::workout_file::Target::OPEN,
+    target2: storage::workout_file::Target::OPEN,
     intensity: 0,
 };
 
@@ -24,6 +25,8 @@ pub(crate) struct GaugeShown {
     pub(crate) avg: usize,
     pub(crate) band: Option<(u16, u16)>,
     pub(crate) step: bool,
+    /// The step's secondary target (its kind and band), drawn after the primary under the bar.
+    pub(crate) second: Option<(storage::workout_file::Kind, (u16, u16))>,
     /// The climb pacer's gauge ([`Field::ClimbPace`]): the predicted time to the top, s (0: no plan).
     pub(crate) pace: Option<u16>,
     pub(crate) value: Line<8>,
@@ -34,8 +37,8 @@ pub(crate) struct GaugeShown {
 impl GaugeShown {
     /// The same field with only the number or the marker moved.
     fn same_frame(&self, o: &GaugeShown) -> bool {
-        (self.kind, self.avg, self.band, self.step, self.pace.is_some())
-            == (o.kind, o.avg, o.band, o.step, o.pace.is_some())
+        (self.kind, self.avg, self.band, self.step, self.second, self.pace.is_some())
+            == (o.kind, o.avg, o.band, o.step, o.second, o.pace.is_some())
     }
 
     /// Its bar for a gauge `cols` wide: the band's columns, the marker with the number's colour, and the zones of
@@ -50,6 +53,32 @@ impl GaugeShown {
             marker: self.marker.map(|m| (m, self.color)),
             zones: workout::gauge_zones(self.kind, band, cols, ftp, max_hr),
         })
+    }
+}
+
+/// The next-step strip's state: the step it announces and the countdown to it ([`App::ahead`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Ahead {
+    /// The step coming (past the last: the end).
+    pub(crate) next: usize,
+    /// Seconds, or metres, left in the step running.
+    pub(crate) left: u32,
+    /// `left` is metres.
+    pub(crate) metres: bool,
+}
+
+impl Ahead {
+    /// The countdown right-aligned in 4 characters ("  7S", " 45M"), so a second changes one cell.
+    pub(crate) fn count(&self) -> Line<4> {
+        let mut n = Line::<4>::new();
+        n.push_u32(self.left);
+        n.push_str(if self.metres { "M" } else { "S" });
+        let mut l = Line::<4>::new();
+        for _ in n.as_str().len()..4 {
+            l.push_str(" ");
+        }
+        l.push_str(n.as_str());
+        l
     }
 }
 
@@ -235,6 +264,69 @@ impl App {
         (self.depth, self.screen) = (0, Screen::Ride(page));
     }
 
+    /// The strip to show now: the last [`workout::AHEAD_S`] seconds of a timed step, or [`workout::AHEAD_M`] metres of a
+    /// distance step (stock's window); None otherwise, and for an open step (it ends on Lap).
+    pub(crate) fn ahead(&self) -> Option<Ahead> {
+        let steps = self.plan.steps();
+        let p = self.plan.player?;
+        let next = p.step(steps)? + 1;
+        match p.left(steps, self.ride.dist_m()) {
+            workout::Left::Time(t) if (1..=workout::AHEAD_S).contains(&t) => {
+                Some(Ahead { next, left: t, metres: false })
+            }
+            workout::Left::Distance(m) if (1..=workout::AHEAD_M).contains(&m) => {
+                Some(Ahead { next, left: m, metres: true })
+            }
+            _ => None,
+        }
+    }
+
+    /// The strip's left part (16 characters at most): the next step's target middle with its unit, and its length
+    /// ("NEXT 275W 10:00", "NEXT OPEN LAP", "LAST STEP" after the last step). Too long: "NEXT " goes, then the unit;
+    /// the numbers are never cut.
+    pub(crate) fn ahead_head(&self, a: &Ahead) -> Line<24> {
+        use storage::workout_file::{Kind, Length};
+        let Some(s) = self.plan.steps().get(a.next) else {
+            let mut l = Line::<24>::new();
+            l.push_str("LAST STEP");
+            return l;
+        };
+        let build = |prefix: bool, unit: bool| {
+            let mut l = Line::<24>::new();
+            if prefix {
+                l.push_str("NEXT ");
+            }
+            match s.target.range(self.settings.ftp, self.settings.max_hr) {
+                Some((lo, hi)) => {
+                    l.push_u32(u32::from(lo).midpoint(u32::from(hi)));
+                    if unit {
+                        l.push_str(match s.target.kind {
+                            Kind::Power => "W",
+                            Kind::Hr => "BPM",
+                            _ => "RPM",
+                        });
+                    }
+                }
+                None => l.push_str("OPEN"),
+            }
+            l.push_str(" ");
+            match s.len {
+                Length::Time(t) => push_clock(&mut l, t),
+                Length::Distance(m) => {
+                    push_km(&mut l, m);
+                    l.push_str("K");
+                }
+                Length::Open => l.push_str("LAP"),
+            }
+            l
+        };
+        [(true, true), (false, true), (false, false)]
+            .into_iter()
+            .map(|(p, u)| build(p, u))
+            .find(|l| l.as_str().len() <= 16)
+            .unwrap_or_else(|| build(false, false))
+    }
+
     /// Shows and sounds what the player said: a banner and a long tone for a new step ("3/14 210-230W"), a short
     /// beep for each of the last 2 seconds.
     pub(crate) fn workout_event(&mut self, ev: workout::Event) {
@@ -253,6 +345,10 @@ impl App {
                     self.plan.played = file.map(|f| (self.date, f));
                 }
                 l.push_str("WORKOUT DONE")
+            }
+            // the strip announced it (a Lap skip or the start had none): no banner, the beep stays
+            workout::Event::Step(_) if self.plan.top.is_some() && !self.hint_shown => {
+                return self.tones.play(&Self::STEP_TONE);
             }
             workout::Event::Step(i) => {
                 l.push_u32(i as u32 + 1);
@@ -400,19 +496,33 @@ impl App {
     /// [`Field::StepTarget`]'s edge bar: how the reading (power over the GAUGE POWER window, heart rate, cadence) sits against the band, as the
     /// gauge's marker ([`workout::gauge_color`]); BLACK without a reading or a target.
     pub(crate) fn target_bar(&self) -> u16 {
-        use storage::workout_file::Kind;
         let steps = self.plan.steps();
         let Some(s) = self.plan.player.and_then(|p| p.step(steps)).and_then(|i| steps.get(i)) else { return ui::BLACK };
-        let reading = match s.target.kind {
-            // the gauge's window (GAUGE POWER), so the bar and the marker agree
+        let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
+        match (self.reading(s.target.kind), s.target.range(ftp, max_hr)) {
+            (Some(v), Some(band)) => self.with_second(s, workout::gauge_color(v, band)),
+            _ => ui::BLACK,
+        }
+    }
+
+    /// The reading a target of `kind` is judged by (power over the GAUGE POWER window, so the bar and the marker agree).
+    fn reading(&self, kind: storage::workout_file::Kind) -> Option<u16> {
+        use storage::workout_file::Kind;
+        match kind {
             Kind::Power => self.power.rolling(self.settings.wkt_avg),
             Kind::Hr => self.live.get(Metric::Hr),
             Kind::Cadence => self.live.get(Metric::Cadence),
             Kind::Open => None,
-        };
-        match (reading, s.target.range(self.settings.ftp, self.settings.max_hr)) {
-            (Some(v), Some(band)) => workout::gauge_color(v, band),
-            _ => ui::BLACK,
+        }
+    }
+
+    /// The cue colour `primary` of step `s`, or the secondary target's when the primary is in range (the green):
+    /// the secondary speaks only once the primary is met, so the rider fixes one thing at a time. No secondary, or no
+    /// reading for it: the primary's.
+    fn with_second(&self, s: &storage::workout_file::Step, primary: u16) -> u16 {
+        match (self.reading(s.target2.kind), s.target2.range(self.settings.ftp, self.settings.max_hr)) {
+            (Some(v), Some(band)) if primary == ride::ZONE_COLORS[1] => workout::gauge_color(v, band),
+            _ => primary,
         }
     }
 
@@ -436,14 +546,17 @@ impl App {
             None => value.push_str("--"),
         }
         let color = match (reading, band) {
-            (Some(v), Some(b)) => workout::gauge_color(v, b),
+            (Some(v), Some(b)) => {
+                step.map_or(workout::gauge_color(v, b), |s| self.with_second(s, workout::gauge_color(v, b)))
+            }
             (Some(w), None) => ride::power_zone_color(w, self.settings.ftp),
             (None, _) => ui::WHITE,
         };
         let (ftp, max_hr) = (self.settings.ftp, self.settings.max_hr);
         let marker =
             reading.zip(band).map(|(v, b)| workout::gauge_x(v, workout::gauge_scale(kind, b, ftp, max_hr), cols));
-        GaugeShown { kind, avg, band, step: step.is_some(), pace: None, value, color, marker }
+        let second = step.and_then(|s| Some((s.target2.kind, s.target2.range(ftp, max_hr)?)));
+        GaugeShown { kind, avg, band, step: step.is_some(), second, pace: None, value, color, marker }
     }
 
     /// A gauge's title, and its tag (the pacer's target in a box too short for the target line). The pacer's: "TOP"
@@ -479,7 +592,7 @@ impl App {
     /// "HR"), the target under the bar ("200-220"; OPEN for a step without one).
     pub(crate) fn draw_gauge(&self, c: &mut impl Canvas, bx: (u32, u32, u32, u32), g: GaugeShown) {
         let (title, tag) = Self::gauge_title(&g, bx.3);
-        let mut target = Line::<12>::new();
+        let mut target = Line::<20>::new();
         match g.band {
             Some((lo, hi)) => {
                 target.push_u32(u32::from(lo));
@@ -490,6 +603,20 @@ impl App {
             }
             None if g.step => target.push_str("OPEN"),
             None => {}
+        }
+        if let Some((kind, (lo, hi))) = g.second {
+            // "200-220/90-100RPM": the secondary after the primary, with its unit
+            target.push_str("/");
+            target.push_u32(u32::from(lo));
+            if hi != lo {
+                target.push_str("-");
+                target.push_u32(u32::from(hi));
+            }
+            target.push_str(match kind {
+                storage::workout_file::Kind::Power => "W",
+                storage::workout_file::Kind::Hr => "BPM",
+                _ => "RPM",
+            });
         }
         let bar = g.bar(ui::gauge_cols(bx), (self.settings.ftp, self.settings.max_hr));
         ui::draw_gauge(c, bx, (title.as_str(), tag.as_str(), target.as_str()), g.value.as_str(), ui::WHITE, bar);
