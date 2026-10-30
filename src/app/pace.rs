@@ -134,6 +134,7 @@ impl App {
             avg,
             band,
             step: target.is_some(),
+            second: None,
             pace,
             value,
             color,

@@ -13,7 +13,9 @@
 //! - `file_id` (0): field 0 `type`, 5 for a workout file;
 //! - `workout` (26): 8 `wkt_name` (string), 6 `num_valid_steps`, 4 `sport`;
 //! - `workout_step` (27): 254 `message_index`, 0 `wkt_step_name`, 1 `duration_type`, 2 `duration_value`,
-//!   3 `target_type`, 4 `target_value`, 5 `custom_target_value_low`, 6 `custom_target_value_high`, 7 `intensity`;
+//!   3 `target_type`, 4 `target_value`, 5 `custom_target_value_low`, 6 `custom_target_value_high`, 7 `intensity`,
+//!   19 `secondary_target_type`, 20 `secondary_target_value`, 21 `secondary_custom_target_value_low`, 22
+//!   `secondary_custom_target_value_high` (same meaning as 3 to 6; confirmed in the Python SDK's profile.py, 2026-10-30);
 //! - `duration_type` (wkt_step_duration): 0 time (`duration_value` in ms), 1 distance (cm), 5 open (until Lap),
 //!   6 repeat_until_steps_cmplt (`duration_value` the step to repeat from, `target_value` the number of times, all
 //!   of them: the cookbook's "5 x 800 m" is `repetitions: 5`), 28 repetition_time (ms);
@@ -136,11 +138,13 @@ pub struct Step {
     pub len: Length,
     /// Its target.
     pub target: Target,
+    /// Its secondary target (FIT `secondary_target_*`, fields 19 to 22): [`Target::OPEN`] for none.
+    pub target2: Target,
     /// FIT intensity (0 active, 1 rest, 2 warmup, 3 cooldown, 4 recovery, 5 interval, 6 other).
     pub intensity: u8,
 }
 
-const OPEN_STEP: Step = Step { len: Length::Open, target: Target::OPEN, intensity: 0 };
+const OPEN_STEP: Step = Step { len: Length::Open, target: Target::OPEN, target2: Target::OPEN, intensity: 0 };
 
 /// A workout: its name and its steps, repeats written out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,7 +224,7 @@ pub enum Error {
 }
 
 /// Fields of a definition kept: the ones read here.
-const PICKED: usize = 9;
+const PICKED: usize = 12;
 
 #[derive(Clone, Copy, Default)]
 struct Def {
@@ -243,11 +247,16 @@ struct Raw {
     lo: Option<u32>,
     hi: Option<u32>,
     intensity: Option<u32>,
+    /// The secondary target's type, value, low and high (fields 19 to 22).
+    tt2: Option<u32>,
+    tv2: Option<u32>,
+    lo2: Option<u32>,
+    hi2: Option<u32>,
 }
 
 /// The fields read, by message: file_id type; workout name; workout_step's.
 fn wanted(global: u16, num: u8) -> bool {
-    matches!((global, num), (0, 0) | (26, 8) | (27, 1..=7))
+    matches!((global, num), (0, 0) | (26, 8) | (27, 1..=7 | 19..=22))
 }
 
 /// An unsigned value of 1, 2 or 4 bytes; None if it is invalid (all ones) or another size.
@@ -360,6 +369,10 @@ pub fn parse(file: &[u8]) -> Result<Workout, Error> {
                         lo: value(5),
                         hi: value(6),
                         intensity: value(7),
+                        tt2: value(19),
+                        tv2: value(20),
+                        lo2: value(21),
+                        hi2: value(22),
                     };
                     n_raw += 1;
                 }
@@ -420,20 +433,17 @@ const fn zone_table<const N: usize>(mut ends: [u16; N], pct: &[u32]) -> [u16; N]
     ends
 }
 
-fn step(r: &Raw) -> Step {
-    let len = match (r.dt, r.dv) {
-        (Some(0 | 28), Some(ms)) => Length::Time(ms.saturating_add(500) / 1000),
-        (Some(1), Some(cm)) => Length::Distance(cm / 100),
-        _ => Length::Open,
-    };
+/// A target from a FIT target type, value, and custom low and high: the primary's fields 3 to 6 or the secondary's
+/// 19 to 22, which mean the same.
+fn target_of(tt: Option<u32>, tv: Option<u32>, lo: Option<u32>, hi: Option<u32>) -> Option<Target> {
     let u = |v: u32| v.min(u32::from(u16::MAX)) as u16;
-    let custom = match (r.lo, r.hi) {
+    let custom = match (lo, hi) {
         (Some(lo), Some(hi)) if lo != 0 || hi != 0 => Some((lo.min(hi), lo.max(hi))),
         (Some(v), None) | (None, Some(v)) if v != 0 => Some((v, v)),
         _ => None,
     };
     let zone = |table: &[u16], kind| {
-        let z = usize::try_from(r.tv?).ok()?;
+        let z = usize::try_from(tv?).ok()?;
         let (lo, hi) = (*table.get(z.checked_sub(1)?)?, *table.get(z)?);
         Some(Target { kind, lo, hi: hi.saturating_sub(1).max(lo), pct: true })
     };
@@ -443,7 +453,7 @@ fn step(r: &Raw) -> Step {
         let v = |x: u32| u(if pct || x <= off { x } else { x - off });
         Target { kind, lo: v(lo), hi: v(hi), pct }
     };
-    let target = match (r.tt, custom) {
+    match (tt, custom) {
         (Some(4 | 7..=10), Some(c)) => Some(offset(Kind::Power, c, 1000)),
         (Some(4 | 7..=10), None) => zone(&POWER_ZONES, Kind::Power),
         (Some(1 | 13), Some(c)) => Some(offset(Kind::Hr, c, 100)),
@@ -454,8 +464,21 @@ fn step(r: &Raw) -> Step {
             Some(Target { kind: Kind::Power, lo: u(lo - 100_000), hi: u(hi - 100_000), pct: true })
         }
         _ => None,
+    }
+}
+
+fn step(r: &Raw) -> Step {
+    let len = match (r.dt, r.dv) {
+        (Some(0 | 28), Some(ms)) => Length::Time(ms.saturating_add(500) / 1000),
+        (Some(1), Some(cm)) => Length::Distance(cm / 100),
+        _ => Length::Open,
     };
-    Step { len, target: target.unwrap_or(Target::OPEN), intensity: r.intensity.map_or(0, |i| i.min(255) as u8) }
+    Step {
+        len,
+        target: target_of(r.tt, r.tv, r.lo, r.hi).unwrap_or(Target::OPEN),
+        target2: target_of(r.tt2, r.tv2, r.lo2, r.hi2).unwrap_or(Target::OPEN),
+        intensity: r.intensity.map_or(0, |i| i.min(255) as u8),
+    }
 }
 
 /// A planned workout: its day, its file, its timed length and step count.
@@ -599,6 +622,14 @@ pub(crate) mod tests {
 
     /// A FIT workout file as an app would write it: file_id (type `kind`), workout (`name`), the steps.
     pub fn file(kind: u8, name: &str, steps: &[S]) -> Vec<u8> {
+        file_with(kind, name, steps, &[])
+    }
+
+    /// A secondary target for [`file_with`]: type, value, low and high (fields 19 to 22).
+    pub type S2 = (u8, u32, u32, u32);
+
+    /// [`file`] with each step's secondary target (`second[i]` for step i; absent: none, all ones).
+    pub fn file_with(kind: u8, name: &str, steps: &[S], second: &[S2]) -> Vec<u8> {
         let mut d = Vec::new();
         d.extend([0x40, 0, 0, 0, 0, 1, 0, 1, 0, 0, kind]); // file_id: type
         let mut n = [0u8; 16];
@@ -607,8 +638,37 @@ pub(crate) mod tests {
         d.extend(n);
         d.extend((steps.len() as u16).to_le_bytes());
         // workout_step, as Bryton's app lays it out, plus a developer field to skip
-        d.extend([0x62, 0, 0, 27, 0, 9, 254, 2, 0x84, 1, 1, 0, 2, 4, 0x86, 3, 1, 0, 4, 4, 0x86, 5, 4, 0x86]);
-        d.extend([6, 4, 0x86, 7, 1, 0, 0, 3, 7, 1, 0, 2, 0]);
+        d.extend([
+            0x62,
+            0,
+            0,
+            27,
+            0,
+            if second.is_empty() { 9 } else { 13 },
+            254,
+            2,
+            0x84,
+            1,
+            1,
+            0,
+            2,
+            4,
+            0x86,
+            3,
+            1,
+            0,
+            4,
+            4,
+            0x86,
+            5,
+            4,
+            0x86,
+        ]);
+        d.extend([6, 4, 0x86, 7, 1, 0, 0, 3, 7]);
+        if !second.is_empty() {
+            d.extend([19, 1, 0, 20, 4, 0x86, 21, 4, 0x86, 22, 4, 0x86]);
+        }
+        d.extend([1, 0, 2, 0]);
         for (i, &(dt, dv, tt, tv, lo, hi, int)) in steps.iter().enumerate() {
             d.push(0x02);
             d.extend((i as u16).to_le_bytes());
@@ -620,6 +680,13 @@ pub(crate) mod tests {
             d.extend(hi.to_le_bytes());
             d.push(int);
             d.extend(b"ab\0");
+            if !second.is_empty() {
+                let (tt, tv, lo, hi) = second.get(i).copied().unwrap_or((255, u32::MAX, u32::MAX, u32::MAX));
+                d.push(tt);
+                for v in [tv, lo, hi] {
+                    d.extend(v.to_le_bytes());
+                }
+            }
             d.extend([9, 9]);
         }
         let mut f = std::vec![14, 0x20, 0x5c, 0x08];
@@ -662,6 +729,7 @@ pub(crate) mod tests {
             Step {
                 len: Length::Time(300),
                 target: Target { kind: Kind::Power, lo: 50, hi: 75, pct: true },
+                target2: Target::OPEN,
                 intensity: 2
             }
         );
@@ -673,6 +741,28 @@ pub(crate) mod tests {
         assert_eq!((s[7].len, s[7].target, s[7].intensity), (Length::Open, Target::OPEN, 3));
         assert_eq!(w.total_s(), 300 + 3 * 180);
         assert!(!w.cut);
+    }
+
+    /// A step with a power target and a cadence one, one with a heart-rate zone as secondary, one with none.
+    pub fn two_targets() -> Vec<u8> {
+        file_with(
+            5,
+            "TWO TARGETS",
+            &[(0, 60_000, 4, 0, 1200, 1250, 5), (0, 60_000, 4, 0, 90, 95, 0), (0, 60_000, 4, 0, 60, 70, 1)],
+            &[(3, 0, 90, 100), (1, 3, 0, 0)],
+        )
+    }
+
+    #[test]
+    fn reads_the_secondary_target() {
+        let w = parse(&two_targets()).unwrap();
+        let s = w.steps();
+        assert_eq!(s[0].target.range(250, 190), Some((200, 250)));
+        assert_eq!(s[0].target2, Target { kind: Kind::Cadence, lo: 90, hi: 100, pct: false });
+        // heart rate zone 3 without custom values
+        assert_eq!(s[1].target2.kind, Kind::Hr);
+        assert!(s[1].target2.pct && s[1].target2.lo < s[1].target2.hi);
+        assert_eq!(s[2].target2, Target::OPEN);
     }
 
     #[test]

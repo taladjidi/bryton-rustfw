@@ -9,6 +9,11 @@ use crate::{ride, ui};
 
 /// Seconds before a timed step ends that each beep (2, 1), then the next step's longer beep.
 pub const COUNTDOWN_S: u32 = 2;
+/// Seconds before a timed step ends that the next-step strip shows (stock's last 9 s: `Workout_CheckStepEndCountdown`
+/// of the stock firmware, read 2026-10-30).
+pub const AHEAD_S: u32 = 9;
+/// Metres before a distance step ends that the strip shows (stock: the last 49 units).
+pub const AHEAD_M: u32 = 49;
 /// An open step's width on the workout graph, s: it lasts until Lap, so its length is unknown.
 // ponytail: a fixed guess; the time actually spent in it would need the graph to grow as it goes
 pub const OPEN_S: u32 = 300;
@@ -153,7 +158,7 @@ pub fn level(s: &Step, ftp: u16, max_hr: u16) -> (u32, u16) {
 /// use bryton_rustfw::storage::workout_file::{Kind, Length, Step, Target};
 /// use bryton_rustfw::{ride, ui, workout::column};
 /// let target = |pct| Target { kind: Kind::Power, lo: pct, hi: pct, pct: true };
-/// let steps = [50, 160].map(|pct| Step { len: Length::Time(60), target: target(pct), intensity: 0 });
+/// let steps = [50, 160].map(|pct| Step { len: Length::Time(60), target: target(pct), target2: Target::OPEN, intensity: 0 });
 /// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 3), (100, ride::ZONE_COLORS[6]), "160 %: the top, Z7");
 /// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 1).1, ui::WHITE, "the rider");
 /// assert_eq!(column(&steps, (200, 190), (4, 100), Some(1), 0), (33, ui::DARK), "done");
@@ -293,7 +298,7 @@ mod tests {
     use std::vec::Vec;
 
     fn st(len: Length) -> Step {
-        Step { len, target: Target::OPEN, intensity: 0 }
+        Step { len, target: Target::OPEN, target2: Target::OPEN, intensity: 0 }
     }
 
     /// Runs `secs` seconds, the timer moving when `moving(s)`, 5 m a moving second: the events with their second.
@@ -360,9 +365,9 @@ mod tests {
     fn graph_columns_and_the_riders_place() {
         let t = |kind, lo, hi| Target { kind, lo, hi, pct: true };
         let steps = [
-            Step { len: Length::Time(300), target: t(Kind::Power, 60, 70), intensity: 2 },
-            Step { len: Length::Distance(2400), target: t(Kind::Hr, 85, 95), intensity: 0 },
-            Step { len: Length::Open, target: Target::OPEN, intensity: 3 },
+            Step { len: Length::Time(300), target: t(Kind::Power, 60, 70), target2: Target::OPEN, intensity: 2 },
+            Step { len: Length::Distance(2400), target: t(Kind::Hr, 85, 95), target2: Target::OPEN, intensity: 0 },
+            Step { len: Length::Open, target: Target::OPEN, target2: Target::OPEN, intensity: 3 },
         ];
         // 300 s, 2400 m at 8 m/s: 300 s, open: 300 s; 9 columns of 100 s each
         assert_eq!(graph_total_s(&steps), 900);
@@ -421,7 +426,7 @@ mod tests {
     #[test]
     fn gauge_follows_the_steps_target() {
         let t = |kind, lo, hi, pct| Target { kind, lo, hi, pct };
-        let step = |target| Step { len: Length::Time(60), target, intensity: 0 };
+        let step = |target| Step { len: Length::Time(60), target, target2: Target::OPEN, intensity: 0 };
         let (power, hr) = (step(t(Kind::Power, 100, 110, true)), step(t(Kind::Hr, 150, 160, false)));
         assert_eq!(gauge_target(Some(&power), 200, 190), (Kind::Power, Some((200, 220))), "% of FTP to W");
         assert_eq!(gauge_target(Some(&hr), 200, 190), (Kind::Hr, Some((150, 160))), "a heart-rate step: bpm");

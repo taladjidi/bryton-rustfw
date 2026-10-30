@@ -514,27 +514,37 @@ fn full_copies() {
 /// header and with its CRC made right, so the decoder (not the CRC check) gets them.
 #[test]
 fn workout_files() {
-    use crate::storage::workout_file::{STEPS, parse, tests::intervals};
+    use crate::storage::workout_file::{
+        Kind, STEPS, parse,
+        tests::{intervals, two_targets},
+    };
     let crc = |f: &mut Vec<u8>| {
         let n = f.len() - 2;
         let c = crate::fit::crc(0, &f[..n]);
         f[n..].copy_from_slice(&c.to_le_bytes());
     };
     let (mut ok, mut noise) = (0, bytes(11, 1 << 20));
-    let good = intervals();
-    for _ in 0..20_000 {
-        let mut bad = good.clone();
-        for _ in 0..1 + noise.next().unwrap_or(0) % 6 {
-            let at = 14 + usize::from(noise.next().unwrap_or(0)) % (bad.len() - 16);
-            bad[at] = noise.next().unwrap_or(0);
-        }
-        crc(&mut bad);
-        if let Ok(w) = parse(&bad) {
-            assert!(w.steps().len() <= STEPS);
-            ok += 1;
+    // the second file has secondary targets (fields 19 to 22): the fuzz must reach them still read after the changes
+    let (mut second, mut seconds) = (0u32, 0u32);
+    for good in [intervals(), two_targets()] {
+        for _ in 0..20_000 {
+            let mut bad = good.clone();
+            for _ in 0..1 + noise.next().unwrap_or(0) % 6 {
+                let at = 14 + usize::from(noise.next().unwrap_or(0)) % (bad.len() - 16);
+                bad[at] = noise.next().unwrap_or(0);
+            }
+            crc(&mut bad);
+            if let Ok(w) = parse(&bad) {
+                assert!(w.steps().len() <= STEPS);
+                ok += 1;
+                second += w.steps().iter().filter(|s| s.target2.kind != Kind::Open).count() as u32;
+                seconds += u32::from(w.steps().iter().any(|s| s.target2.kind != Kind::Open));
+            }
         }
     }
     assert!(ok > 1000, "{ok} still workouts");
+    assert!(second > 5000 && seconds > 2000, "{second} secondary targets read in {seconds} workouts");
+    let good = two_targets();
     for seed in 1..=4u32 {
         for len in [8usize, 64, 600, 4000] {
             let body: Vec<u8> = bytes(seed + len as u32, len)
