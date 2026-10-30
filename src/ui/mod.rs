@@ -847,6 +847,7 @@ pub(crate) mod tests {
             assert_eq!(*f as usize, i, "{f:?}");
         }
         assert_eq!((Field::Power30s.widest(), Field::If.widest(), Field::Dfa.widest()), ("8888", "8.88", "8.88"));
+        assert_eq!(Field::BattHrs.widest(), "8.8H");
     }
 
     /// Two values side by side never run together: the gap between their inks is at least twice the gap between

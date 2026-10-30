@@ -305,7 +305,7 @@ Battery and power
 - [~] Switch off at low battery (stock): sim; the 3.3 V switch-off not reached on the unit
 - [x] Battery history (ours): unit
 - [ ] Charging only in a safe temperature range (stock): charger on whenever USB is in
-- [ ] Battery hours left (Garmin, Coros)
+- [~] Battery hours left (Garmin, Coros): sim; BATT HRS fits the drain of the last 20 minutes on the battery, "--" while it is under 3.4 % an hour; not seen on the unit
 - [ ] Battery saver mode (Garmin, Wahoo, Coros)
 - [ ] Stop mode between seconds (ours): the largest battery gain left
 - [ ] Battery life as stock claims (stock): to measure
