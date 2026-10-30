@@ -10,7 +10,7 @@
 //! ```text
 //! 0    "RSET"          magic
 //! 4    version (u16)   1; a copy of another version is not read (a layout that cannot be appended to gets a new one)
-//! 6    length (u16)    bytes of settings at 28 (94 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names appended; at most 480); a later build appends its settings
+//! 6    length (u16)    bytes of settings at 28 (97 now: 31 in the first build, THEME's 12 bytes, POWER MATCH's byte, the 11 alert limits, then LTHR's 2 bytes, POWER SMOOTH's byte, then AUTO's byte and the DAY and NIGHT THEME names, then AUTO LAP's mode, km and min bytes appended; at most 480); a later build appends its settings
 //!                      and raises it: a reader takes those it knows, the defaults for those past the length
 //! 8    seq (u32)       higher is newer
 //! 12   words (4 x u32) the settings' backup registers as written with this copy (which wins at a start, below)
@@ -98,7 +98,7 @@ impl SettingsCopy {
     pub fn to_sector(&self) -> [u8; 512] {
         let s = self.settings;
         let mut out = [0u8; 512];
-        let mut data = [0u8; 96];
+        let mut data = [0u8; 128];
         let mut n = 0;
         let mut put = |bytes: &[u8]| {
             for &b in bytes {
@@ -129,6 +129,7 @@ impl SettingsCopy {
         put(&[u8::from(s.auto_theme)]);
         put(&s.day_theme);
         put(&s.night_theme);
+        put(&[s.auto_lap as u8, s.lap_km as u8, s.lap_min as u8]);
         out[..4].copy_from_slice(MAGIC);
         out[4..6].copy_from_slice(&VERSION.to_le_bytes());
         out[6..8].copy_from_slice(&(n as u16).to_le_bytes());
@@ -214,6 +215,11 @@ impl SettingsCopy {
         s.auto_theme = data.next().map_or(d.auto_theme, |v| if v < 2 { v == 1 } else { d.auto_theme });
         s.day_theme = theme_name_at(&mut data).map(normal).unwrap_or(d.day_theme);
         s.night_theme = theme_name_at(&mut data).map(normal).unwrap_or(d.night_theme);
+        // AUTO LAP, LAP EVERY km and min (appended after the themes): a file without them reads OFF, 5 km, 10 min; a
+        // byte out of its range reads its default
+        s.auto_lap = data.next().map(usize::from).filter(|&v| v < 3).unwrap_or(d.auto_lap);
+        s.lap_km = data.next().map(u16::from).filter(|v| (1..=50).contains(v)).unwrap_or(d.lap_km);
+        s.lap_min = data.next().map(u16::from).filter(|v| (1..=60).contains(v)).unwrap_or(d.lap_min);
         let words = [le32(WORDS_AT)?, le32(WORDS_AT + 4)?, le32(WORDS_AT + 8)?, le32(WORDS_AT + 12)?];
         Some(SettingsCopy { seq: le32(8)?, words, settings: s })
     }
@@ -542,7 +548,7 @@ mod tests {
         let s = some();
         let full = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
         let len = usize::from(u16::from_le_bytes([full[6], full[7]]));
-        assert_eq!(len, 94);
+        assert_eq!(len, 97);
         let with = |f: &dyn Fn(&mut [u8; 512])| {
             let mut sec = full;
             f(&mut sec);
@@ -618,6 +624,30 @@ mod tests {
 mod day_night_file_tests {
     use super::*;
 
+    /// AUTO LAP, LAP EVERY km and min are kept at data 94, 95, 96 and read back; a file of 44, 66, 69 or 94 bytes reads
+    /// OFF, 5 km and 10 min; a byte out of range reads its default.
+    #[test]
+    fn auto_lap_round_trips_and_older_files_read_it_off() {
+        let s = Settings { auto_lap: 2, lap_km: 12, lap_min: 45, ..Settings::from_word(0) };
+        let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 97);
+        assert_eq!(sec[28 + 94..28 + 97], [2, 12, 45]);
+        let read = |sec: &[u8; 512]| {
+            SettingsCopy::from_sector(sec).map(|c| (c.settings.auto_lap, c.settings.lap_km, c.settings.lap_min))
+        };
+        assert_eq!(read(&sec), Some((2, 12, 45)));
+        for len in [44u16, 66, 69, 94] {
+            let mut old = sec;
+            old[6..8].copy_from_slice(&len.to_le_bytes());
+            recrc(&mut old);
+            assert_eq!(read(&old), Some((0, 5, 10)), "a {len}-byte file");
+        }
+        let mut bad = sec;
+        bad[28 + 94..28 + 97].copy_from_slice(&[9, 0, 61]);
+        recrc(&mut bad);
+        assert_eq!(read(&bad), Some((0, 5, 10)));
+    }
+
     fn recrc(sec: &mut [u8; 512]) {
         let crc = crate::inflate::crc32(sec[..508].iter().copied());
         sec[508..].copy_from_slice(&crc.to_le_bytes());
@@ -635,7 +665,7 @@ mod day_night_file_tests {
             ..Settings::from_word(0)
         };
         let sec = SettingsCopy { seq: 1, words: [0; 4], settings: s }.to_sector();
-        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 94, "the length: 69 + 1 + 12 + 12");
+        assert_eq!(u16::from_le_bytes([sec[6], sec[7]]), 97, "the length: 69 + 1 + 12 + 12 + 3");
         assert_eq!(sec[28 + 69], 1, "AUTO at data 69");
         assert_eq!(sec[28 + 70..28 + 82], Settings::name_bytes("LIGHT"), "DAY THEME at 70");
         assert_eq!(sec[28 + 82..28 + 94], Settings::name_bytes("SUNNY"), "NIGHT THEME at 82");

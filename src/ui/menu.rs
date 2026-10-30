@@ -125,6 +125,12 @@ pub enum Setting {
     PowerMatch,
     /// The window of the big power value: the live reading, 3, 5 or 10 s (app/settings.rs, POWER_SMOOTH_S).
     PowerSmooth,
+    /// AUTO LAP: OFF, BY DISTANCE or BY TIME (`auto_lap`).
+    AutoLap,
+    /// The distance of a BY DISTANCE auto lap, km.
+    LapKm,
+    /// The moving time of a BY TIME auto lap, minutes.
+    LapMin,
 }
 
 /// What a shifter button press does (Di2 hood buttons: [`Setting::Remote`]). Kept in 3 bits ([`crate::Settings`]),
@@ -236,6 +242,9 @@ impl Setting {
             Setting::PowerMatch => "POWER MATCH",
             Setting::Lthr => "LTHR",
             Setting::PowerSmooth => "POWER SMOOTH",
+            Setting::AutoLap => "AUTO LAP",
+            Setting::LapKm => "LAP KM",
+            Setting::LapMin => "LAP MIN",
             Setting::Font => "FONT",
             Setting::Theme => "THEME",
             Setting::DayTheme => "DAY THEME",
@@ -264,6 +273,8 @@ impl Setting {
             Setting::WPrime => " KJ",
             Setting::Eat | Setting::Drink => " MIN",
             Setting::Altitude => " M",
+            Setting::LapKm => " KM",
+            Setting::LapMin => " MIN",
             _ => "",
         }
     }
@@ -289,6 +300,8 @@ impl Setting {
             Setting::Limit(10) => Some((0..=100, 5)),
             // -500 to 9000 m, kept + 500 (the Dead Sea's shore to above Everest); 1 m steps (a known height to the metre; a held key repeats)
             Setting::Altitude => Some((0..=9500, 1)),
+            Setting::LapKm => Some((1..=50, 1)),
+            Setting::LapMin => Some((1..=60, 1)),
             _ => None,
         }
     }
@@ -677,7 +690,7 @@ pub const DISPLAY: [Row; 7] = [
 
 /// BIKE: the wheel, the bike's weight, the ride profile, the barometer's altitude with its calibration from the GPS (a
 /// ride setting, not a diagnostic), the climbs ahead, the GPS receiver's power mode and POWER MATCH.
-pub const BIKE: [Row; 9] = [
+pub const BIKE: [Row; 12] = [
     Row::Set(Setting::Wheel),
     Row::Set(Setting::BikeWeight),
     Row::Set(Setting::Altitude),
@@ -687,6 +700,9 @@ pub const BIKE: [Row; 9] = [
     Row::Set(Setting::GpsPower),
     Row::Set(Setting::PowerMatch),
     Row::Set(Setting::PowerSmooth),
+    Row::Set(Setting::AutoLap),
+    Row::Set(Setting::LapKm),
+    Row::Set(Setting::LapMin),
 ];
 
 /// SYSTEM: the card, stock's settings, the diagnostics (GPS, the BLE devices nearby, the built-in sensors), ABOUT.

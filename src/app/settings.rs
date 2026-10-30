@@ -306,6 +306,24 @@ pub struct Settings {
     pub day_theme: [u8; 12],
     /// NIGHT THEME: the theme AUTO uses in the dark.
     pub night_theme: [u8; 12],
+    /// AUTO LAP (BIKE): 0 OFF, 1 BY DISTANCE, 2 BY TIME. Kept in settings.bin only (data 94, with the two after it); OFF
+    /// in a file that predates it.
+    pub auto_lap: usize,
+    /// LAP EVERY, km (1 to 50) for BY DISTANCE; 5 in a file that predates it.
+    pub lap_km: u16,
+    /// LAP EVERY, minutes of moving time (1 to 60) for BY TIME; 10 in a file that predates it.
+    pub lap_min: u16,
+}
+
+impl Settings {
+    /// The auto lap's limits for [`ride::Ride::lap_reached`]: metres and seconds, 0 for none.
+    pub fn auto_lap_limits(&self) -> (u32, u32) {
+        match self.auto_lap {
+            1 => (u32::from(self.lap_km) * 1000, 0),
+            2 => (0, u32::from(self.lap_min) * 60),
+            _ => (0, 0),
+        }
+    }
 }
 
 /// The big power value's window, seconds, as POWER SMOOTH offers them: the live reading, then 3, 5 and 10 s.
@@ -413,6 +431,9 @@ impl Settings {
             auto_theme: false,
             day_theme: Settings::name_bytes("OUTDOOR"),
             night_theme: [0; 12],
+            auto_lap: 0,
+            lap_km: 5,
+            lap_min: 10,
         };
         match w >> 24 {
             0xa7..=0xac => Settings {
@@ -652,6 +673,11 @@ impl Settings {
                 l.push_u32(POWER_SMOOTH_S.get(self.power_smooth).copied().unwrap_or(1));
                 l.push_str(" S");
             }
+            Setting::AutoLap => {
+                l.push_str(["OFF", "BY DISTANCE", "BY TIME"].get(self.auto_lap).copied().unwrap_or("OFF"))
+            }
+            Setting::LapKm => l.push_u32(u32::from(self.lap_km)),
+            Setting::LapMin => l.push_u32(u32::from(self.lap_min)),
             Setting::Font => l.push_str(if self.smooth { "SMOOTH" } else { "PIXEL" }),
             Setting::Theme if self.auto_theme => l.push_str("AUTO"),
             Setting::Theme => l.push_str(self.theme_name()),
@@ -748,6 +774,7 @@ impl Settings {
             Setting::ClimbsAhead => self.ahead = !self.ahead,
             Setting::PowerMatch => self.power_match = !self.power_match,
             Setting::PowerSmooth => self.power_smooth = (self.power_smooth + 1) % POWER_SMOOTH_S.len(),
+            Setting::AutoLap => self.auto_lap = (self.auto_lap + 1) % 3,
             Setting::Font => self.smooth = !self.smooth,
             // the built-ins only; the card's files are added by the app (App::next_theme)
             Setting::Theme | Setting::DayTheme | Setting::NightTheme => {
@@ -810,6 +837,8 @@ impl Settings {
             Setting::HrAlert => Some(&mut self.hr_alert),
             Setting::Limit(n) => self.limits.get_mut(usize::from(n)),
             Setting::Altitude => Some(&mut self.alt_m),
+            Setting::LapKm => Some(&mut self.lap_km),
+            Setting::LapMin => Some(&mut self.lap_min),
             _ => None,
         }
     }

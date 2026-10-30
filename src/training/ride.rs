@@ -138,6 +138,11 @@ pub struct Ride {
     laps: u32,
     last_lap_s: Option<u32>,
     last_lap_w: Option<u16>,
+    /// The lap that ended: its distance (m) and average heart rate, for the lap banner.
+    last_lap_m: u32,
+    last_lap_hr: Option<u16>,
+    /// This lap's heart rate while moving.
+    lap_hr: Avg,
     /// The lap's power, its own [`Power`]: average and NP over the lap's moving seconds.
     lap_power: crate::power::Power,
     lap_ascent_mm: u32,
@@ -184,6 +189,9 @@ impl Ride {
             laps: 0,
             last_lap_s: None,
             last_lap_w: None,
+            last_lap_m: 0,
+            last_lap_hr: None,
+            lap_hr: Avg { sum: 0, n: 0 },
             lap_power: crate::power::Power::new(),
             lap_ascent_mm: 0,
             lap_descent_mm: 0,
@@ -220,6 +228,8 @@ impl Ride {
         (self.state == State::Running).then(|| {
             // the lap that ends keeps its time and average; the new one starts from zero
             (self.last_lap_s, self.last_lap_w) = (Some(self.lap_s()), self.lap_power.avg());
+            (self.last_lap_m, self.last_lap_hr, self.lap_hr) =
+                (self.lap_dist_m(), self.lap_hr.get(), Avg { sum: 0, n: 0 });
             self.laps = self.laps.saturating_add(1);
             (self.lap_timer_s, self.lap_dist9) = (self.timer_s, self.dist9);
             (self.lap_power, self.lap_ascent_mm, self.lap_descent_mm) = (crate::power::Power::new(), 0, 0);
@@ -275,6 +285,7 @@ impl Ride {
             self.dist9 = self.dist9.saturating_add(step9);
             self.max_speed = self.max_speed.max(v);
             self.hr.add(i.hr);
+            self.lap_hr.add(i.hr);
             self.max_hr = self.max_hr.max(i.hr.unwrap_or(0));
             // an altitude no road has (a receiver's garbage) is no altitude: every difference below stays in range
             let alt_mm = i.alt_mm.filter(|a| ALT_RANGE_MM.contains(a));
@@ -460,6 +471,22 @@ impl Ride {
     /// The last lap's average power, W (None before a lap with power).
     pub fn last_lap_avg_power(&self) -> Option<u16> {
         self.last_lap_w
+    }
+
+    /// The last lap's distance, metres.
+    pub fn last_lap_dist_m(&self) -> u32 {
+        self.last_lap_m
+    }
+
+    /// The last lap's average heart rate (None without one).
+    pub fn last_lap_hr(&self) -> Option<u16> {
+        self.last_lap_hr
+    }
+
+    /// True when this lap passed `m` metres or `s` seconds of moving time (0: no limit). The lap count starts again
+    /// at each lap, manual or auto, so auto laps fall every `m` since the last lap, not at multiples of the total.
+    pub fn lap_reached(&self, m: u32, s: u32) -> bool {
+        (m > 0 && self.lap_dist_m() >= m) || (s > 0 && self.lap_s() >= s)
     }
 
     /// This lap's average power, W (zeros counted, as [`Ride::avg_power`]).
@@ -1317,6 +1344,55 @@ mod tests {
         r.lap();
         assert_eq!((r.laps(), r.last_lap_s(), r.last_lap_avg_power()), (2, Some(60), Some(300)));
         assert_eq!((r.lap_avg_power(), r.lap_ascent_m(), r.lap_descent_m()), (None, 0, 0));
+    }
+
+    /// Auto laps: a distance lap at each step since the last lap (a manual lap at 7 km makes the next at 12 km), a
+    /// time lap on moving time only (a pause does not count), no limit (0) never.
+    #[test]
+    fn lap_reached_counts_from_the_last_lap_and_in_moving_time() {
+        let mut r = Ride::new();
+        r.start_pause();
+        let mut laps = std::vec::Vec::new();
+        // 36 km/h: 10 m a second
+        for s in 1..=1700 {
+            r.second(&at(360));
+            if s == 700 {
+                assert!(r.lap().is_some(), "a manual lap at 7 km");
+            }
+            if r.lap_reached(5000, 0) {
+                r.lap();
+                laps.push(r.dist_m() / 1000);
+            }
+        }
+        assert_eq!(laps, [5, 12, 17], "auto at 5, manual at 7, then 5 km after it (12), not at 10");
+        let mut r = Ride::new();
+        r.start_pause();
+        let mut at_km = std::vec::Vec::new();
+        for _ in 0..1600 {
+            r.second(&at(360));
+            if r.lap_reached(5000, 0) {
+                r.lap();
+                at_km.push(r.dist_m() / 1000);
+            }
+        }
+        assert_eq!(at_km, [5, 10, 15]);
+        assert!(!r.lap_reached(0, 0), "OFF does nothing");
+        let mut r = Ride::new();
+        r.start_pause();
+        for _ in 0..590 {
+            r.second(&at(360));
+        }
+        assert!(!r.lap_reached(0, 600));
+        r.start_pause(); // paused: the clock stops
+        for _ in 0..100 {
+            r.second(&at(360));
+        }
+        r.start_pause();
+        assert!(!r.lap_reached(0, 600), "paused time does not count");
+        for _ in 0..10 {
+            r.second(&at(360));
+        }
+        assert!(r.lap_reached(0, 600));
     }
 
     /// Uphill and downhill: the distance at a grade of +1 % or more, and at -1 % or less; flat riding is neither.

@@ -1013,7 +1013,7 @@ fn lap_on_the_overview_marks_a_lap() {
     app.press(&mut sim, Press::Short(Key::Back));
     assert_eq!(app.screen(), Screen::Main);
     app.press(&mut sim, Press::Short(Key::Lap));
-    assert_eq!(app.notes.text.as_str(), "LAP");
+    assert!(app.notes.text.as_str().starts_with("LAP"));
     run(&mut sim, &mut app, 200);
     assert_eq!(app.screen(), Screen::Main);
     assert_consistent(&sim, &app);

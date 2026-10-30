@@ -8,6 +8,7 @@ Where to look: features.md for what the firmware does, journal.md for the dated 
 
 A feature not listed here was seen on the unit.
 
+- **AUTO LAP and the lap banner (app/riding.rs `auto_lap`, `lap_summary`)**: sim only. Still to see: a lap at each 5 km or 10 min on a real ride, its banner for 8 s, and the lap messages in the saved file on Intervals.icu.
 - **Live segments, detection (app/segments.rs, step S3; nothing drawn, no effort written)**: sim only. Still to see: the index built
   from `\Rustfw\Segments\` on the card 5 s after the start (no pass slower), the load at a start, the events (`dev.py` reads
   them), no lost ride on a segment's start or finish; AXI SRAM has 1.6 KB left.

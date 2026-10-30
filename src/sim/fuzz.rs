@@ -3290,6 +3290,7 @@ fn settings_file() {
     let d = crate::Settings::from_word(0);
     let (mut refused, mut whole, mut short, mut defaulted) = (0u32, 0u32, 0u32, 0u32);
     let (mut kept, mut fell_back) = (0u32, 0u32); // THEME's names
+    let (mut lap_kept, mut lap_fell_back) = (0u32, 0u32); // AUTO LAP's three bytes
     let (mut auto_on, mut day_night_kept, mut day_night_fell_back) = (0u32, 0u32, 0u32); // AUTO, and DAY and NIGHT's names
     let (mut with_limit, mut wild_limit) = (0u32, 0u32); // limits read, and out of range ones read as 0
     let (mut with_lthr, mut wild_lthr, mut with_smooth, mut wild_smooth) = (0u32, 0u32, 0u32, 0u32);
@@ -3305,7 +3306,7 @@ fn settings_file() {
                 0 => (next() % 600) as u16,     // past what a copy holds, or anywhere
                 1 => (next() % 31) as u16,      // an earlier build's
                 2 => 31 + (next() % 60) as u16, // a later build's
-                3 => 44 + (next() % 51) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO and the names: whole or cut
+                3 => 44 + (next() % 54) as u16, // with the alert limits, LTHR, POWER SMOOTH, AUTO and the names: whole or cut
                 _ => 31,
             };
             s[6..8].copy_from_slice(&len.to_le_bytes());
@@ -3319,6 +3320,7 @@ fn settings_file() {
             let mut lthr_w = None::<(u16, bool)>; // LTHR at 66, POWER SMOOTH at 68: written, and in range
             let mut ps_w = None::<(u8, bool)>;
             let mut auto_w = None::<u8>; // AUTO at 69 (a byte: 0, 1, or out of its form)
+            let mut lap_w = [None::<(u8, bool)>; 3]; // AUTO LAP, km, min at 94, 95, 96: written, and in range
             let mut day_w = None::<([u8; 12], bool)>; // DAY THEME at 70, NIGHT THEME at 82: the name, and whether it is one
             let mut night_w = None::<([u8; 12], bool)>;
             // the settings: mostly what a build writes (a wheel offered, numbers in range), else random
@@ -3401,6 +3403,19 @@ fn settings_file() {
                         *w = Some((name, !bad));
                     }
                 }
+                for (k, (slot, top)) in lap_w.iter_mut().zip([2u8, 50, 60]).enumerate() {
+                    if usize::from(len) >= 95 + k {
+                        // in range, or one past it (and 0 for the two numbers)
+                        let v = if next().is_multiple_of(3) {
+                            top + 1 + (next() % 100) as u8 % 100
+                        } else {
+                            (next() % 3) as u8
+                        };
+                        let v = if k > 0 && v == 0 && next().is_multiple_of(2) { top } else { v };
+                        s[28 + 94 + k] = v;
+                        *slot = Some((v, if k == 0 { v <= top } else { (1..=top).contains(&v) }));
+                    }
+                }
             }
             let crc = crate::inflate::crc32(s[..508].iter().copied());
             let crc = if r.is_multiple_of(17) { crc ^ 1 } else { crc };
@@ -3461,6 +3476,21 @@ fn settings_file() {
                             None => {}
                         }
                     }
+                    for (k, (w, got, def)) in
+                        [(lap_w[0], st.auto_lap as u16, 0), (lap_w[1], st.lap_km, 5), (lap_w[2], st.lap_min, 10)]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        match w {
+                            Some((v, ok)) => {
+                                assert_eq!(got, if ok { u16::from(v) } else { def }, "auto lap byte {k} written {v}");
+                                lap_kept += u32::from(ok);
+                                lap_fell_back += u32::from(!ok);
+                            }
+                            None if usize::from(len) < 95 + k => assert_eq!(got, def, "a cut file: the default"),
+                            None => {}
+                        }
+                    }
                     let again = SettingsCopy::from_sector(&SettingsCopy { seq: c.seq, ..c }.to_sector());
                     assert_eq!(again.map(|a| a.settings.limits), Some(st.limits), "the limits round trip");
                     assert!(st.light_level <= crate::LIGHT_AUTO && st.light_timeout < crate::LIGHT_TIMEOUTS_S.len());
@@ -3501,6 +3531,8 @@ fn settings_file() {
     std::println!("settings copies: {refused} refused, {whole} whole, {short} short, {defaulted} with a default");
     std::println!("theme names: {kept} kept, {fell_back} fallen back");
     std::println!("AUTO on {auto_on}, day and night names kept {day_night_kept}, fallen back {day_night_fell_back}");
+    std::println!("AUTO LAP bytes kept {lap_kept}, fallen back {lap_fell_back}");
+    assert!(lap_kept > 0 && lap_fell_back > 0, "AUTO LAP's bytes reached");
     assert!(auto_on > 0 && day_night_kept > 0 && day_night_fell_back > 0, "every new path reached");
     assert!(refused > 1000 && whole > 1000 && short > 1000 && defaulted > 10);
     assert!(kept > 100 && fell_back > 100, "{kept} kept, {fell_back} fell back");
@@ -4049,6 +4081,43 @@ fn segment_matcher() {
         }
     }
     assert!(starts > 100 && finishes > 20 && losts > 20 && by_other > 10, "{starts} {finishes} {losts} {by_other}");
+}
+
+/// AUTO LAP (BY DISTANCE and BY TIME, 1 km and 1 min) on a ride with Lap and pause pressed at random: no panic, a
+/// banner of the lap summary or its replacement always readable, and auto laps fire over the seeds.
+#[test]
+fn auto_lap_on_a_ride_with_keys() {
+    use crate::sim::{Sim, run};
+    use crate::*;
+    let mut auto = 0u32;
+    for seed in 0..8u32 {
+        let mut sim = Sim::new(9, 0, 0);
+        sim.emmc.image = crate::fat::tests::image();
+        sim.own_settings();
+        sim.gnss.route = Some(crate::sim::map_tests::ride_route);
+        sim.gnss.fix = Some(8000);
+        let mut app = App::start(&mut sim, None);
+        run(&mut sim, &mut app, 2000);
+        (app.settings.auto_lap, app.settings.lap_km, app.settings.lap_min) = (1 + seed as usize % 2, 1, 1);
+        app.press(&mut sim, Press::Short(Key::Start));
+        let mut x = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        let mut manual = 0u32;
+        for _ in 0..90 {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            run(&mut sim, &mut app, 5000);
+            match x >> 28 {
+                0 => {
+                    app.press(&mut sim, Press::Short(Key::Lap));
+                    manual += 1;
+                }
+                1 => app.press(&mut sim, Press::Short(Key::Start)),
+                _ => {}
+            }
+            assert!(app.notes.text.as_str().is_ascii());
+        }
+        auto += app.ride.laps().saturating_sub(manual.min(app.ride.laps()));
+    }
+    assert!(auto > 0, "auto laps fired over the seeds");
 }
 
 /// The segment index (app/segments.rs): folders of segment files with broken headers and names (a flipped byte
