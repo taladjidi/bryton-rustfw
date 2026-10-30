@@ -5,7 +5,7 @@
 //! **Memory** (all in the one static [`Segments`], main.rs `make_segments`, AXI SRAM, link.x `.axibss`): the index
 //! of at most [`MAX_INDEX`] segments as [`Entry`] (32 B each: 4 KB), the one active [`Segment`] (about 8.6 KB), the
 //! matcher and some counters. No buffer of the whole file: [`Segment::parse_with`] reads the file 1 KB at a time, so
-//! the load needs about 3 KB of stack, in its own function.
+//! the load needs about 3 KB of stack, in its own function. The screens are app/segment_ui.rs.
 //!
 //! **Index.** Built from the headers only (the first 0x200 bytes of each `.seg` in `\Rustfw\Segments\`), [`SLICE`]
 //! files a pass, not before [`START_AT_MS`] after the start and only while no ride is open (so it is fixed for a
@@ -33,8 +33,6 @@ const START_AT_MS: u32 = 5_000;
 const LOAD_WAIT_S: u32 = 10;
 /// The folder of the segment files.
 pub const DIR: &str = "Rustfw/Segments";
-/// LIVE SEGMENTS (a setting in S4): on.
-const LIVE_SEGMENTS: bool = true;
 /// Events kept for the screens.
 pub const NOTES: usize = 4;
 
@@ -67,6 +65,8 @@ pub struct Segments {
     /// The segment waiting for its file, and the seconds it has waited.
     want: Option<u32>,
     waited: u32,
+    /// TARGET (settings.seg_target, set each second): 0 AUTO, 1 PR, 2 KOM, 3 QOM, 4 RECENT.
+    pub(crate) target: u8,
     /// The last events with the clock (s) they came at; `n` of them in all (a ring).
     notes: [(u32, Event); NOTES],
     n: usize,
@@ -114,6 +114,7 @@ impl Segments {
             loads: 0,
             want: None,
             waited: 0,
+            target: 0,
             // not an Option, and the filler is the variant that holds the others' niche: the static must start as zeros
             notes: [(0, Event::Finish { id: 0, elapsed_s: 0, deltas: [None; crate::segment::KEPT] }); NOTES],
             n: 0,
@@ -143,10 +144,47 @@ impl Segments {
         self.n = self.n.wrapping_add(1);
     }
 
-    /// The column of [`Segment::kept`] AUTO targets: the PR, else the KOM.
-    fn column(&self) -> Option<usize> {
+    /// The column of [`Segment::kept`] the target names; AUTO, and a target the file lacks (shortcut: no message
+    /// about it, the label on the page says which one is used), take the PR, else the KOM.
+    pub(crate) fn column(&self) -> Option<usize> {
         let at = |e| self.seg.kept.iter().position(|&k| k == Some(e));
-        at(Effort::Pr).or_else(|| at(Effort::Kom))
+        let chosen = match self.target {
+            1 => at(Effort::Pr),
+            2 => at(Effort::Kom),
+            3 => at(Effort::Qom),
+            4 => at(Effort::Recent),
+            _ => None,
+        };
+        chosen.or_else(|| at(Effort::Pr)).or_else(|| at(Effort::Kom))
+    }
+
+    /// Events seen in all (the ring keeps the last [`NOTES`]).
+    pub(crate) fn count(&self) -> usize {
+        self.n
+    }
+
+    /// The segment loaded last (the finished one, for the result card).
+    pub(crate) fn seg(&self) -> &Segment {
+        &self.seg
+    }
+
+    /// The id of indexed segment `k`.
+    pub fn id_at(&self, k: usize) -> Option<u32> {
+        self.index.get(..self.len)?.get(k).map(|e| e.id)
+    }
+
+    /// The header of segment `id`'s file (the banner's name, the list's distance and gain): the volume mounted, the folder looked up, the file's first sector read (3 KB in the sim's pass).
+    #[inline(never)]
+    pub(crate) fn header(d: &mut impl Disk, id: u32) -> Option<Header> {
+        let mut fat = Fat::mount(d).ok()?;
+        let dir = fat.open(d, DIR).ok()?;
+        let mut name = Line::<16>::new();
+        name.push_u32(id);
+        name.push_str(".seg");
+        let f = fat.open_in(d, dir, name.as_str()).ok()?;
+        let mut head = [0u8; HEADER];
+        (!f.dir && fat.read_at(d, &f, 0, &mut head).ok()? == HEADER).then_some(())?;
+        Header::parse(&head).ok()
     }
 
     /// One fix (degrees x 1e-7, clock `t` s).
@@ -318,13 +356,15 @@ impl App {
 
     /// One fix of a running ride (once a second, `App::second`): the matcher takes it.
     pub(crate) fn segment_fix(&mut self) {
+        let (live, target) = (self.settings.live_segments, self.settings.seg_target as u8);
         let fix = self.gps.pvt.filter(|p| p.good());
         let clock = self.up_ms / 1000;
         let state = self.ride.state();
         let Some(s) = self.segments.as_deref_mut() else { return };
-        if state == ride::State::Idle {
-            s.stop(); // stopped or saved: a new ride starts with none
-        } else if let (true, ride::State::Running, Some(p)) = (LIVE_SEGMENTS, state, fix) {
+        s.target = target;
+        if state == ride::State::Idle || !live {
+            s.stop(); // stopped or saved: a new ride starts with none; LIVE SEGMENTS off drops the one ridden
+        } else if let (ride::State::Running, Some(p)) = (state, fix) {
             s.fix(p.lat, p.lon, clock);
         }
     }

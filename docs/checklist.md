@@ -199,7 +199,7 @@ Others
 - [ ] Popularity routing (Garmin, Karoo)
 - [ ] Course creator on the unit (Garmin)
 - [ ] POIs and peaks along a course (stock, Garmin)
-- [ ] Live segments (Strava) (stock, Garmin, Wahoo, Karoo)
+- [ ] Live segments (Strava) (stock, Garmin, Wahoo, Karoo) (ours: page, banners, result card, `sim`; the effort is not saved yet)
 - [ ] Segments from the rider's own rides (best sections ridden twice), no Strava (ours)
 - [ ] Road closures and hazards on the route (Garmin)
 - [ ] Favourite and recent places, navigate to one (stock)
