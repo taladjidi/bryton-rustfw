@@ -642,8 +642,10 @@ impl Scan {
             (c.len, c.hint) = (len - 1, 0);
             self.dirty = true;
         }
-        // with rides past the cache, `out` stays as it was (the ride deleted in it) until the scan ends: counted
-        // from the cache alone, the history and the curve would lose the rides left out of it for that while
+        // with rides past the cache, `out` stays as it was until the scan ends (counted from the cache alone, the
+        // history and the curve would lose the rides left out of it for that while), but the history loses the
+        // ride deleted at once, so it cannot be opened or deleted again
+        self.index.remove(file, start);
         let over = self.over;
         if self.status == Status::Running || over {
             self.start(date);
@@ -742,8 +744,10 @@ impl Scan {
             Ok(n) => n,
             Err(_) if self.cache.is_some() => {
                 // the card or the FAT failed (a read error, a chain changed under a FAT sector kept): not kept as
-                // not a ride, or it would stay out for good; read again at the next start (2026-10-25 review)
+                // not a ride, or it would stay out for good; read again at the next start (2026-10-25 review). In
+                // the second pass, `out` now lacks a ride the cache does not hold either: a new day scans again
                 self.file = None;
+                self.over |= self.second;
                 return Ok(());
             }
             Err(_) => {
@@ -1329,7 +1333,7 @@ pub(crate) mod tests {
     /// The test volume with `k` more ride names, each an entry pointing at the 10-minute ride of 2025 (its chain
     /// shared, which a scan does not mind): a minute apart from 2024-01-01 00:00, so a volume past the cache's
     /// capacity is built and read in seconds.
-    fn with_links(k: usize) -> std::vec::Vec<u8> {
+    pub(crate) fn with_links(k: usize) -> std::vec::Vec<u8> {
         let mut d = Ram(image(), 0);
         let mut fat = Fat::mount(&mut d).unwrap();
         let dir = fat.open(&mut d, "Activities").unwrap();
@@ -1386,7 +1390,7 @@ pub(crate) mod tests {
             fat.remove(&mut d, &gone).unwrap();
             let shown = s.index.len();
             s.forget(&r.file, r.start, TODAY);
-            assert_eq!(s.index.len(), shown, "{k}: the history kept until the scan ends, not the cache's alone");
+            assert_eq!(s.index.len(), shown - 1, "{k}: the ride gone from the history at once, not the rides left out");
             while s.step(&mut d, 1 << 20) {}
             let (none, _) = scan(&mut d, None, 1 << 20);
             assert_eq!(Summary { bytes: 0, ..s.out }, Summary { bytes: 0, ..none.out }, "{k} deleted");
