@@ -131,6 +131,12 @@ fn tap(app: &mut App, sim: &mut Sim, (x, y, w, h): (u32, u32, u32, u32)) {
     app.input(sim, Input::Touch(Gesture::Tap((x + w / 2) as u16, (y + h / 2) as u16)));
 }
 
+/// The POWER line of the quick panel, as a rectangle to tap.
+fn power_line(app: &App) -> (u32, u32, u32, u32) {
+    use crate::ui::quick as q;
+    (0, q::SENSORS_Y + app.quick_power().unwrap() as u32 * q::ROW, crate::ui::W, q::ROW)
+}
+
 fn media_button(b: crate::ui::media::Button) -> (u32, u32, u32, u32) {
     let &(_, x, y, w, h) = crate::ui::quick::MEDIA.iter().find(|m| m.0 == b).unwrap();
     (x, y, w, h)
@@ -164,14 +170,22 @@ fn the_quick_panel_has_the_remote_the_meter_and_the_light() {
     super::tests::assert_consistent(&sim, &app);
     sim.save("quick_panel");
 
-    // the meter: ZERO in place, the result on the same block
+    // the meter: the POWER line arms ZERO, a second tap calibrates, the result shows on the button
     n.0 = 1; // the swipe down
+    let line = power_line(&app);
+    let value = |app: &App| app.quick_button().0;
+    assert_eq!(value(&app).as_str(), "ZERO");
     n.0 += 1;
-    tap(&mut app, &mut sim, q::ZERO);
+    tap(&mut app, &mut sim, line);
+    assert_eq!((value(&app).as_str(), app.powercal.asking()), ("SURE?", false), "the first tap only arms");
+    super::tests::assert_consistent(&sim, &app);
+    sim.save("quick_panel_armed");
+    n.0 += 1;
+    tap(&mut app, &mut sim, line);
     run(&mut sim, &mut app, 1500);
-    assert_eq!((app.screen(), n.0), (Screen::Quick, 2), "ZERO: swipe down, tap, and the panel stays");
+    assert_eq!((app.screen(), n.0), (Screen::Quick, 3), "ZERO: swipe down, two taps, and the panel stays");
     assert_eq!(app.powercal.phase(), crate::powercal::Phase::Done(-12, None));
-    assert_eq!(app.quick_text(5).0.as_str(), "ZERO -12 OK");
+    assert_eq!(value(&app).as_str(), "-12 OK");
     super::tests::assert_consistent(&sim, &app);
     sim.save("quick_panel_zero");
 
@@ -180,6 +194,9 @@ fn the_quick_panel_has_the_remote_the_meter_and_the_light() {
     assert_eq!(app.decoders.battery_status(Kind::Speed), Some(2));
     assert_eq!(app.decoders.battery_status(Kind::Power), Some(3));
     sim.save("quick_panel_sensors");
+    run(&mut sim, &mut app, 6000);
+    assert_eq!(value(&app).as_str(), "ZERO", "the result gives way to ZERO after about 5 s");
+    super::tests::assert_consistent(&sim, &app);
 
     // the brightness: brighter, then AUTO at the bright end; darker down to the dimmest
     app.settings.light_level = 1;
@@ -213,10 +230,36 @@ fn the_quick_panel_has_the_remote_the_meter_and_the_light() {
     assert_eq!(sim.nordic.phone.as_ref().unwrap().commands.last(), Some(&3), "next: 2 inputs");
     // riding: ZERO is refused, as the calibration screen is
     assert!(app.ride.state() == ride::State::Running);
-    tap(&mut app, &mut sim, q::ZERO);
-    assert_eq!(app.notes.text.as_str(), "NO CALIBRATION RIDING");
+    let line = power_line(&app);
+    tap(&mut app, &mut sim, line);
+    assert_eq!(app.quick_button().0.as_str(), "ZERO", "riding: no arming, nothing said");
+    assert!(app.quick_zero.0.is_none());
     swipe(&mut app, &mut sim, Dir::Up);
     assert!(matches!(app.screen(), Screen::Ride(_)), "closed over the page it opened on");
+}
+
+/// ZERO is armed by a first tap on the POWER line and runs on a second within 3 s; a second tap later only arms
+/// again; a meter that cannot calibrate (not heard) is not armed. The panel stays consistent throughout.
+#[test]
+fn zero_on_the_quick_panel_needs_two_taps_in_time() {
+    use crate::touch::Dir;
+    let (mut sim, mut app) = quick_unit(true);
+    swipe(&mut app, &mut sim, Dir::Down);
+    run(&mut sim, &mut app, 1500);
+    let line = power_line(&app);
+    tap(&mut app, &mut sim, line);
+    run(&mut sim, &mut app, 4500); // the arming lapses (3 s, the clock counts whole seconds)
+    assert_eq!(app.quick_button().0.as_str(), "ZERO", "reverted");
+    super::tests::assert_consistent(&sim, &app);
+    tap(&mut app, &mut sim, line);
+    assert_eq!((app.quick_button().0.as_str(), app.powercal.asking()), ("SURE?", false), "late: only arms again");
+    super::tests::assert_consistent(&sim, &app);
+    // heard no more: a tap does nothing
+    app.quick_zero.0 = None;
+    app.radio.heard_ms[Kind::Power as usize] = u32::MAX;
+    assert!(!app.power_heard());
+    tap(&mut app, &mut sim, line);
+    assert!(app.quick_zero.0.is_none() && !app.powercal.asking(), "cannot calibrate: no arming");
 }
 
 /// The panel left open redraws only the boxes whose value changed: with a meter, a strap, a speed sensor, a trainer
@@ -245,8 +288,8 @@ fn the_quick_panel_shows_only_what_is_paired() {
     assert_eq!(app.quick_shape(), 0, "no meter, no sensor line");
     tap(&mut app, &mut sim, media_button(crate::ui::media::Button::Play));
     assert_eq!(app.notes.text.as_str(), "NO PHONE");
-    // a tap where the power block would be does nothing
-    tap(&mut app, &mut sim, crate::ui::quick::ZERO);
+    // a tap where the POWER line would be does nothing
+    tap(&mut app, &mut sim, (0, crate::ui::quick::SENSORS_Y, crate::ui::W, 16));
     assert_eq!(app.screen(), Screen::Quick);
     assert!(!app.powercal.asking());
     run(&mut sim, &mut app, 300);
@@ -268,10 +311,10 @@ fn a_long_title_scrolls_and_a_short_one_does_not() {
     let song = Act::Track("A VERY LONG SONG TITLE THAT OVERFLOWS", "Band");
     sim.nordic.phone.as_mut().unwrap().script.push((at, song));
     run(&mut sim, &mut app, 1000);
-    // the 4th sensor line under the power block, paired under the open panel (the shape changes: a full redraw)
+    // the 5th sensor line (POWER among them), paired under the open panel (the shape changes: a full redraw)
     app.radio.sensors[Kind::Cadence as usize] = Sensor::Paired(SensorId { device: 13, trans: 1 });
     run(&mut sim, &mut app, 1000);
-    assert_eq!(app.quick_shape(), 1 << 7 | 4);
+    assert_eq!(app.quick_shape(), 5);
     super::tests::assert_consistent(&sim, &app);
     // a step every 250 ms: the panel is whole after each, a step is small, a hold sends nothing
     let (mut first, mut moved, mut held, mut big) = (std::string::String::new(), false, 0, 0);

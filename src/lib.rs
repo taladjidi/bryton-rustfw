@@ -196,6 +196,8 @@ pub struct App {
     quick_shape: u8,
     /// The title and artist scroll: the track's fingerprint and the steps since it began (app/quick.rs).
     quick_scroll: (u32, u32),
+    /// ZERO armed until, and its result shown until (epoch seconds, app/quick.rs).
+    quick_zero: (Option<u32>, Option<u32>),
     /// The Bluetooth trainer's link (app/ftms.rs).
     ftms: Ftms,
     live: Live,
@@ -549,6 +551,7 @@ impl App {
             quick_shown: [0; app::QUICK_BOXES],
             quick_shape: 0,
             quick_scroll: (0, 0),
+            quick_zero: (None, None),
             ftms: Ftms::default(),
             prof: prof::Prof::default(),
         }
